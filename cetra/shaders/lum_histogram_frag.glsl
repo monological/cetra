@@ -3,14 +3,19 @@ out vec4 FragColor;
 
 // Auto-exposure step 2: bin the measure target's log2 luminances.
 //
-// A GATHER histogram, one fragment per bin, each looping the whole source and
-// counting what lands in it. That is O(bins * texels) where a scatter would be
-// O(texels) -- and it is the right trade here because the source is 64x64. 64
-// bins x 4096 texels is 262144 fetches, which is less work than one 512x512
-// fullscreen pass. GL 4.1 has no compute, no atomics and no imageStore, so the
-// alternative is additive blending of point primitives, which needs a vertex
-// stream, a blend state and a float-blendable target to buy nothing at this
-// size.
+// A GATHER histogram: each fragment owns one (bin, row-slice) pair and walks its
+// slice of the source counting what lands in its bin. O(bins * texels) where a
+// scatter would be O(texels), and the right trade because the source is 64x64.
+// GL 4.1 has no compute, no atomics and no imageStore, so the alternative is
+// additive blending of point primitives -- a vertex stream, a blend state and a
+// float-blendable target, to buy nothing at this size.
+//
+// The fetch COUNT is not what costs. An earlier note here reasoned from it and
+// concluded the pass was cheap; measured, it was occupancy-bound -- one fragment
+// per bin is ~0.4% of this GPU, and the draw cost 0.35 ms standing alone against
+// 1.19 us marginal when ten thousand overlap. LUM_HISTOGRAM_ROWS is the answer:
+// splitting the source across output rows widens the pass without changing the
+// work, and took the metering scope 0.744 -> 0.392 ms.
 //
 // Writes COUNT and SUM, not count alone. The sum is what lets the reduce pass
 // recover the exact mean of the surviving samples rather than approximating it

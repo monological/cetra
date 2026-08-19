@@ -43,12 +43,20 @@ a hypothesis with an effort guess attached, not as a design.
 
 ## Verified architecture facts (from code exploration)
 
-Ground truth that shapes every design below (library at `cetra/src/`, shaders at `cetra/shaders/`):
+Ground truth that shapes every design below (library at `cetra/src/`, shaders at `cetra/shaders/`).
 
-- **G-buffer**: 5 MRT attachments on one MSAA FBO, source-of-truth table `_gbuffer_attachments()`
-  (`cetra/src/engine.c:60-93`): att0 HDR RGBA16F, att1 view-normal+marker RGBA16F, att2
-  motion+linZ+roughness RGBA32F, att3 albedo+metallic RGBA8, att4 SSS-diffuse RGBA16F.
-  **Attachments 5-7 free** on the main FBO (5/6 used only on the separate OIT FBO).
+**Read the dates.** This section was written before Track A started, and the roadmap has since built
+a good deal of what it records as absent — area lights, bent normals, octahedral encoding, froxel
+fog, 3D textures. It is re-checked against the code as of 11.52 and the corrected bullets say what
+they now are; treat any un-annotated line-number reference as approximate, since the tree has moved
+under them.
+
+- **G-buffer**: **6** MRT attachments on one MSAA FBO, source-of-truth table
+  `_gbuffer_attachments()` (`cetra/src/engine.c`, `GBUFFER_ATTACHMENT_COUNT`): att0 HDR RGBA16F,
+  att1 view-normal+marker RGBA16F, att2 motion+linZ+roughness RGBA32F, att3 albedo+metallic RGBA8,
+  att4 SSS-diffuse RGBA16F, **att7 ambient-specular R11F_G11F_B10F** (spec 11.4's split, resolved in
+  postfx). **Attachments 5 and 6 are the free pair**, and both are the OIT locations — this line said
+  "5-7 free" until 11.4 took 7, which would have put a new target on an occupied slot.
   Write-gating via `*_this_frame` flags from postfx `_wants_*` predicates.
   - **RULE, and it is currently violated: nothing categorical or positional may live in a channel
     that gets MSAA-resolved.** An MSAA colour resolve is a box filter
@@ -114,24 +122,39 @@ Ground truth that shapes every design below (library at `cetra/src/`, shaders at
   switch per node. `get_closest_lights` and the per-node `uniform Light lights[64]` upload are both
   **deleted**; any item below still costing them into its budget is over-counting. Everything else
   is still by-name `glUniform*` via `UniformManager`, with no value caching.
-- **No 3D textures exist anywhere**; `GL_TEXTURE_2D_ARRAY` idiom established (raw `glTexImage3D`,
-  no `glTexStorage3D` which is GL 4.2) in `mask_array.c:139` and `shadow.c:146`.
-- **No float-from-memory texture helper** (`load_texture_from_memory` is 8-bit only); GPU-bake LUT
-  precedent exists (BRDF LUT RG16F 512², `ibl.c:496-527`; sky LUTs `sky.c`).
-- **Area lights are fake**: `LIGHT_AREA` shades as a point light; `light.size` only feeds PCSS
-  emitter size. Karis sphere-light lobe widening (`pbr_frag.glsl:967-977`) applies to all lights.
-- **GTAO** is 2023 visibility-bitmask (2 slices × 8 steps, 32-bit sector mask); bent normal is
-  directly derivable from the free sector bits; AO target is R8 today (spare channels discarded).
-  Specular occlusion today = scalar heuristic in `tonemap_frag.glsl:154-175`.
+- **3D textures are now everywhere** — froxel scatter/integrate volumes, the 32³ aerial-perspective
+  volume, cloud shape and detail noise, with `create_texture_3d_float` and
+  `create_texture_3d_rgba8_tiling` in `texture.h`. This bullet read "no 3D textures exist anywhere"
+  and was the premise for the 2D-array advice below it. What survives: raw `glTexImage3D`, never
+  `glTexStorage3D`, which is GL 4.2 — the `GL_TEXTURE_2D_ARRAY` idiom in `mask_array.c` and
+  `shadow.c` still holds for that reason.
+- **Float-from-memory helpers exist**: `create_texture_2d_float` (LTC tables were the first user),
+  `create_texture_3d_float` (froxel fog) and `create_texture_2d_array_float`, all in `texture.h`.
+  Only `load_texture_from_memory` is still 8-bit. GPU-bake LUT precedent: the BRDF LUT is
+  **RGBA16F** 512² (`ibl_bake_brdf_lut`) — the Charlie sheen terms joined it in 10.7, so the RG16F
+  this bullet claimed is two channels short — plus the sky LUTs in `sky.c`.
+- **Area lights are real since spec 9.2** — LTC, with `ltcTex` on unit 7, `upArea` in the light UBO
+  and an area count gating the table fetches. Spec 11.49 then made emissive geometry a *producer* of
+  them. This bullet said they shade as point lights, which stopped being true two tracks ago. Karis
+  sphere-light lobe widening still applies to all lights.
+- **GTAO** is 2023 visibility-bitmask (2 slices × 8 steps, 32-bit sector mask). The bent normal is
+  no longer merely *derivable* — spec 11.3 derives it: the AO target is **RGBA8** and `.gba` carries
+  the encoded bent normal, so the channels are neither spare nor discarded. Specular occlusion has
+  its own pass, `spec_occ_composite_frag.glsl`, consuming that normal and 11.4's attachment-7 split;
+  it was a scalar heuristic in the tonemap when this was written.
 - **Probe capture renders the full scene at arbitrary positions** (`reflection_probe_capture`,
   `probe.c:50-263`, camera save/substitute + 6 faces via `ibl_capture_views`) — the DDGI-reusable
-  machinery. No octahedral encoding exists yet.
+  machinery. Octahedral encoding exists (`include/octahedral.glsl`, used by the DDGI atlas this
+  document books onto unit 14 twenty lines below — the two statements contradicted each other).
 - **Sky**: Hillaire LUTs (transmittance 256×64 once, multiscatter 32×32 once, sky-view 192×108 on
   sun move); `sky_bake()` drives env cube → IBL → key light together. Aerial perspective added by
   9.6 as a 32³ volume — the one sky target rebuilt per frame, since it is the camera's frustum.
-- **Fog**: screen-space half-res raymarch with CSM god rays + volumetric spot; HG phase; all logic
-  portable to froxels. Light data arrives via `shadow_publish_to_postfx`.
-- **TAA**: 8-frame Halton on `draw_projection[2][0/1]`; YCoCg 3×3 clamp + Catmull-Rom history;
+- **Fog is froxel-based since spec 9.5**: `froxel_inject/integrate/composite_frag.glsl` plus
+  `include/froxel.glsl`, folded with aerial perspective into one composite by
+  `postfx_run_atmosphere`. The screen-space half-res march this bullet described, and its
+  `fog_frag.glsl`, are deleted. Light data still arrives via `shadow_publish_to_postfx`.
+- **TAA**: Halton on `draw_projection[2][0/1]` — 8 samples at full scale, **16 under TAAU**;
+  YCoCg 3×3 clamp + Catmull-Rom history;
   internal-vs-display resolution concept already exists (`fx->width` vs `fx->out_width`,
   downsample only at tonemap) — TAAU inverts it.
 - **Shaders**: all `#version 330 core`; build-time `#include` from `cetra/shaders/include/` via
@@ -291,16 +314,18 @@ why its 0-px acceptance bar cannot be met, and why unit 4 (POM height) is a real
 
 ## Track A — Direct Lighting & Global Illumination
 
-### A1. Clustered forward light culling (Olsson et al. 2012) — Effort L
+### A1. Clustered forward light culling (Olsson et al. 2012) — Effort L — **DONE (spec 9.1)**
 Scale past 64 lights and delete the per-node uniform storm. **UBOs, not data textures** (zero
 texture units; kills the 13-glUniform-per-light-per-program-per-node hot loop). Three std140 blocks,
 each <16KB min guarantee: `LightsBlock` (4 directionals outside clustering + 128 packed
 point/spot/area lights, 6 vec4s each), `ClusterBlock` (16×8×24 grid, packed offset|count uints),
-`ClusterIndexBlock` (4096 16-bit indices). CPU cluster assignment in new `light_cluster.c`
+`ClusterIndexBlock` (shipped at **6144** 16-bit indices, not the 4096 sketched). CPU cluster assignment in new `light_cluster.c`
 (frustum cull → tile X/Y + exponential-Z slice ranges, Doom-2016 slicing); 3 `glBufferData` orphans
 per frame. **Deletes** `_update_program_light_uniforms` (`render.c:91-153`) and retires
-`get_closest_lights` from the render path. Only pbr_frag declares `lights[]` (verified) — migration
-scope is one shader. Legacy path kept behind `--clustered` (default off) during the branch for the
+`get_closest_lights` from the render path. Only pbr_frag declared `lights[]` when this was
+written, so migration scope was one shader. **Four** include `lights_ubo.glsl` now — `pbr_frag`,
+`pbr_vert`, `froxel_inject_frag` and `include/froxel.glsl` — which is the consumer set anything
+touching the light layout has to move against. Legacy path kept behind `--clustered` (default off) during the branch for the
 0-diff gate; final commit flips default and deletes legacy. Directional-only raiden baseline expected
 byte-identical (directionals bypass clustering, unchanged evaluation order).
 New: `ubo.c/h`, `light_cluster.c/h`, `include/lights_ubo.glsl`. CLI: `--point-light-grid N`;
@@ -308,7 +333,7 @@ ImGui cluster-heatmap debug view.
 **Owns foundations:** UBO machinery + std140 packing + binding registry; packed light representation;
 CPU light-culling module. **Depends on:** nothing.
 
-### A2. LTC area lights (Heitz/Dupuy/Hill/Neubelt 2016) — Effort M
+### A2. LTC area lights (Heitz/Dupuy/Hill/Neubelt 2016) — Effort M — **DONE (spec 9.2)**
 True polygonal area-light diffuse+specular. Embed the standard 64×64 LTC tables as checked-in C
 float arrays (offline fit — not GPU-bakeable; codegen via new `tools/gen_ltc_lut.py`, run once),
 uploaded via new `create_texture_2d_float()` helper in texture.c. In pbr_frag's light loop,
@@ -323,7 +348,7 @@ New: `ltc_lut.h` (generated), `include/ltc.glsl`. CLI: `--area-light px,py,pz,dx
 (the flag IS the test asset). **Owns foundations:** float-texture-from-C-array helper; `Light.up`
 orientation frame; embedded-table codegen pattern. **Depends on:** A1 preferred (edit final loop once).
 
-### A3. Screen-space contact shadows (Uncharted 4-style) — Effort S
+### A3. Screen-space contact shadows (Uncharted 4-style) — Effort S — **DONE (specs 9.3 + 9.4)**
 8-step per-pixel march along the key light in a new postfx pass at AO res, slotted between
 depth/normal resolve and GTAO. Same-frame application: composited in tonemap as an independent
 multiplier beside `aoVisibility()` (`tonemap_frag.glsl:154`) — matches the engine's existing
@@ -397,10 +422,17 @@ shader set, so a second sampler had nowhere to bind. The directional path is unt
 what kept `froxel_fog`, `contact_debug` and `aerial_fixture` at 0 px throughout.
 **The limiting factor is per-frame scene traversals, not VRAM** — every layer is re-rendered each
 frame, so a point light costs six. Pool of 8, demand-allocated, exhaustion logged by light name.
-**Residual:** a one-texel bright hairline where an object rests on a receiver, inherent to the
-depth pass front-face culling (the map stores the occluder's far surface, which coincides with the
-receiver at the contact). Back-face culling trades it for acne. Untried candidate: receiver-plane
-depth bias.
+**Residual — resolved by 10.3/10.4, and every part of the diagnosis below was wrong.** The text
+said: a one-texel bright hairline, inherent to front-face culling storing the occluder's far
+surface; back-face culling trades it for acne; untried candidate, receiver-plane depth bias.
+
+10.3 shipped **near-side storage for every punctual type**, one policy with no per-type split, so
+the depth pass culls back faces now. The stated mechanism was tested directly — a negative epsilon
+in the shader, then a negative polygon offset — and *neither moved the line by a pixel*, which a
+depth tie would have. The real cause was a near-silhouette sliver missing texel centres, so the
+comparison hit cleared texels. And the "untried candidate" was tried and shipped:
+`include/receiver_plane.glsl`, consumed by this path and by the cascades (10.4 phase 3, 10.5 phase
+2).
 
 ### A6. Moment shadow maps (Peters & Klein 2015) — Effort L — **DONE (spec 11.22)**
 Filterable 4-moment shadows: RGBA16F array beside the DEPTH24 CSM array, Hamburger 4MSM single-tap
@@ -422,7 +454,8 @@ beat 32 stochastic ones is *not* borne out there (churn 7775 px vs PCF's 7545).
 
 ## Track B — Atmosphere, Volumetrics, Character & Post
 
-### B1. Froxel volumetric fog (Wronski 2014 / Hillaire 2016) — Effort L
+### B1. Froxel volumetric fog (Wronski 2014 / Hillaire 2016) — Effort L — **DONE (spec 9.5, then
+9.5.1, 11.11, 11.12, and 11.39/11.40 which added three further media to `froxel_inject_frag`)**
 Replace the screen-space fog march with a camera-frustum 3D froxel volume. GL 4.1 trick: **layered
 rendering via geometry shader** — one `glDrawArraysInstanced(triangle, depth)` draw, trivial GS sets
 `gl_Layer` (GS plumbing proven by `shape_geo.glsl`). Three passes: (1) **inject+light** into
@@ -440,7 +473,9 @@ sun/ambient stay **app-set** in this item — moving them to sky-published lands
 pass keeps a clean A/B against the old screen-space pass (changing the color source at the same time
 would confound the parity gate).
 New: `froxel_inject/integrate/composite_frag.glsl`, `include/froxel.glsl`.
-CLI: `--no-fog-volumetric` (the volume is the default).
+CLI: `--fog` (opt-in; fog is OFF by default). The sketch said `--no-fog-volumetric` "the volume is
+the default" — that flag never existed, because the screen-space march was deleted rather than kept
+behind a toggle. `--no-fog-volumes` is a different feature: spec 11.39's local volumes.
 **Owns foundations:** `create_texture_3d()` (first 3D texture in the codebase); volume-draw
 machinery (`create_volume_fbo`, `draw_volume_slices`); `include/froxel.glsl` frustum mapping.
 **Depends on:** nothing hard; consumes A1's clustered light list for local-light scattering when
@@ -453,7 +488,23 @@ geometry shader to a tree where every shader is `#version 330 core` and none use
 reprojection goes through a PostFX-owned copy of the previous camera, since `prev_view_proj`
 already holds the current frame's matrix by the time postfx runs.
 
-### B2. Volumetric clouds (Schneider/Vos HZD 2015, Nubis) — Effort XL
+### B2. Volumetric clouds (Schneider/Vos HZD 2015, Nubis) — Effort XL — **DONE (spec 11.0)**
+
+**As built, and four of the sketch's claims did not survive.** `cloud_reproject_frag.glsl` was never
+written — temporal blending happens INLINE in the march pass. There is no 128² curl field; the noise
+is `shape_tex` 128³ plus `detail_tex` 32³ and nothing else. The "hard" dependency on B1's
+`create_texture_3d` was not the dependency: the noise needed a *new* tiling sibling,
+`create_texture_3d_rgba8_tiling`. And **cloud shadows are not a deferred follow-up — both halves
+shipped**, into the froxel fog (11.39) and onto the ground (11.41: `pbr_frag`, the shadow catcher
+and water's caustics), with `--no-cloud-shadows` and on by default.
+
+The file set is larger than listed: also `sky_background_clouds_frag.glsl`, `sky_env_clouds_frag.glsl`,
+`cloud_noise_debug_frag.glsl`, `include/sky_radiance.glsl`, `cloud_shadow_frag.glsl`,
+`include/cloud_shadow.glsl` and `sky_clouds.c`; CLI also gained `--cloud-density` and `--cloud-wind`.
+What the sketch got right: `noise_worley3`, dual-lobe HG + powder, and the env bake, so IBL and
+probes really do see clouds.
+
+*Original sketch follows.*
 **Folded into SkyAtmosphere** (`sky->clouds` sub-struct), not a new scene subsystem — clouds share
 sun_dir, transmittance LUT, bake trigger, publish path. **Shared march include with quality knobs**
 (`include/clouds.glsl: cloud_march(ro, rd, steps, light_steps, detail_on)`), not a baked LUT (LUTs
@@ -514,7 +565,9 @@ angular and screen-space sigma are interchangeable, and at the pyramid's ceiling
 
 **Consequence, and it is the honest headline for this row: pre-integrated skin is now inert for
 realistic content.** It fires only where the authored radius exceeds the scatter ceiling, under
-`--no-sss`, and only on materials that opt in — one fixture today. Fixing the blur removed the
+`--no-sss`, and only on materials that opt in — one fixture when written, **three now**
+(`skin_curvature_fixture`, `skin_area_fixture`, `skin_shadow_fixture`, the latter two being the
+fixtures B3.1 and B3.2 were written against). Fixing the blur removed the
 shortfall B3 existed to fill, which is the composition law working correctly, not a regression. The
 machinery, the fit tool, the fixture and the gates all remain correct and are what B3.1 and B3.2
 build on; but anyone reading this row expecting B3 to be carrying a terminator today should not.
@@ -700,7 +753,9 @@ built a second one beside it. Nobody looked before building.
 Do not re-open the fibre lobes on raiden. What survives is a general anisotropic-specular feature
 that hair motivated.
 
-### B9. Aerial perspective (Hillaire 2016) — Effort S
+### B9. Aerial perspective (Hillaire 2016) — Effort ~~S~~ **M — DONE (spec 9.6)**. The S estimate
+assumed B1's machinery made this small; the sequencing table records why that answered the wrong
+question.
 The distance haze that sells outdoor scale: geometry fading into the atmosphere's own colour rather
 than a flat fog tint. A 32×32×32 volume marches Rayleigh/Mie via the atmosphere include against the
 existing transmittance + multiscatter LUTs, rebuilt every frame (negligible at this size), applied to
@@ -914,8 +969,13 @@ time measured around the whole frame."*
 
 ## Track C — Lighting completeness
 
-What the light path still cannot express. Every item here is UBO-only or postfx-only, so **Track C
-does not touch Wall 1** — which is exactly why it is the track to start with.
+What the light path still cannot express. **Track C does not touch Wall 1** — no item here has cost
+a sampler unit, and that is why it was the track to start with.
+
+The other half of this sentence used to read "every item here is UBO-only or postfx-only", and two of
+the five falsified it: C1 shipped as a SHADOW-pass feature (`tsm_resolve_frag.glsl`,
+`shadow_absorb_frag.glsl`, a `tsmEnabled` uniform read in the shading path), and C2's own text below
+records that "no new shading code" held for five phases and then did not.
 
 ### C1. Translucent shadow maps — Effort M → **L, DONE (spec 11.26)**
 Shipped as **deep opacity maps** (transmittance storage), not the four-moment
@@ -1114,6 +1174,9 @@ octahedral resampling is lossy in a way that matters and the item should stop.
 half and measured the ground at RMSE 0.0013 against the air's 0.0353, so the dappled light on
 terrain that D2 was written to deliver is entirely on the far side of this item. It is now the only
 thing standing between the engine and that look, which makes it the highest-leverage entry in D.
+*(Both figures are retro-dated by 11.41, which found the shadow MAP itself wrong — see D2. They are
+left here because the framing they support is withdrawn below on separate grounds, but they are not
+current readings and no replacement pair has been taken.)*
 
 ***And that framing is now withdrawn.*** *D2's surface half is read in the OPAQUE pass, where unit 6
 is idle and free for an alias, so the dappled terrain light is NOT on the far side of this item and
@@ -1177,7 +1240,10 @@ free: every texture in the engine loads `GL_UNSIGNED_BYTE` (`texture.c:470`) and
 **VRAM is exactly neutral on the corpus's real POM asset, for a reason worth recording.** `pilot.fbm`
 is five materials of 4096² 8-bit **grayscale**, so a height map is `GL_RED` at 4096²×1 B = 16.78 MB
 standalone, and an array layer is 2048²×4 B = 16.78 MB — the 4× waste of a scalar in RGBA8 exactly
-cancels the 4× area cut from `MASK_ARRAY_CAP 2048`. Whole asset, with mips: **335.5 MB either way**.
+cancels the 4× area cut from `MASK_ARRAY_CAP 2048`. Whole asset, with mips: **111.9 MB either way**
+(five 4096² 8-bit height maps at 16.78 MB each, ×4/3 for mips). The equality is the point and it
+holds; the absolute figure read 335.5 MB, which is exactly 3× too high — computed as though the
+height were 3-byte RGB, where `texture_gl_formats` maps a 1-channel PNG to `GL_RED`.
 The real price is **resolution**: POM would march 2048² instead of 4096², on the one asset that most
 wants the detail.
 
@@ -1275,8 +1341,8 @@ measurement says so more sharply than the entry below expected.**
 
 | band, aerial fixture with `--clouds --fog` | RMSE on/off |
 |---|---|
-| sky and air | **0.0353** |
-| ground | **0.0013** |
+| sky and air | **0.0353** *(retro-dated — see below)* |
+| ground | **0.0013** *(retro-dated — see below)* |
 
 The froxel half shadows *in-scattered light*, so it lands where the sight line crosses the most air
 and puts essentially nothing underfoot. The entry below called the froxel half "where the visible
@@ -1559,7 +1625,7 @@ this subsystem's arms have twice been green over a defect they structurally coul
    0.38 m wide. See the 11.44 bullet above.
 
 6. **The gate corpus has no coverage of breaking whitewater at all, and 11.48 measured that
-   rather than inferring it.** Two shader edits to the surf path left **all 33 water arms at
+   rather than inferring it.** Two shader edits to the surf path left **all 31 water arms at
    numbers identical to before them** — `water_fixture` is Gerstner at amplitude 0.06, which never
    reaches the depth-limited criterion, so the group was measuring containment and reporting it as
    coverage. `beach_fixture` reaches it only incidentally, through arms written for shoaling and
@@ -1587,7 +1653,10 @@ the CPU wave query buoyancy would consume, and — since 11.45 — the shore cha
 solver published to the shading stage through a std140 block rather than a texture.
 
 ### D4. Terrain — Effort XL
-No terrain system exists. Real gap, but only for outdoor scale, and it depends on Wall 2 far more
+No terrain STREAMING system exists. `cetra/src/procedural/terrain.c/h` does -- an fbm-over-Perlin
+heightfield with `terrain_height_at` and tiled mesh generation, landed for `apps/forest` -- and this
+entry cited it by path 25 lines below while opening with "no terrain system exists". What is unbuilt
+is D4's actual scope: rings as windows into a streamed mip pyramid. `terrain.h` says so itself. Real gap, but only for outdoor scale, and it depends on Wall 2 far more
 than on any rendering technique — a clipmap without instancing, LOD and a streaming story is a
 mega-mesh with extra steps, which `apps/tree`'s grass already demonstrates the cost of. **Do not
 schedule this before Track E's E5** — now satisfied.
@@ -1697,7 +1766,7 @@ item is most likely to violate quietly.
 **Depends on:** 10.1-10.2's working-space contract (shipped). **Wall 1:** unaffected.
 
 ### E3. Histogram auto-exposure — Effort M — **DONE (11.52)**
-A 64-bin gather histogram over the existing 64² measure target, collapsed by a percentile-clipped
+A 128-bin gather histogram over the existing 64² measure target, collapsed by a percentile-clipped
 reduce: two raster passes replacing `glGenerateMipmap`, since GL 4.1 has no compute and 4096 source
 texels make a gather cheaper than any scatter trick. Plus metering modes, min/max EV bounds, split
 adaptation rates, and the controls to drive all of it.
@@ -1729,15 +1798,18 @@ for one was read by nothing. `--exposure-probe` went in first, and the meter tur
 linear in scene radiance** — scaling every emitter by 1000 moved the metered value 8.36 stops instead
 of 9.97. The cause was the absolute floor pinned at the key: a scene metering near 0.18 has most of
 its frame clamped *up*, inflating the mean 3.05×, which is `log2 = 1.608` and exactly the deficit.
-Percentile rejection is scene-relative and fixes it: **−1.61 stops → −0.005**.
+Percentile rejection is scene-relative and fixes it: **−1.61 stops → +0.021**.
 
 Two traps found on the way, both recorded in the spec because both produced a confident wrong answer
-first. Removing the *ceiling* as well caused a **runaway** — a bright scene drives the gain to the
+first. Removing the *ceiling* as well produced a **runaway** — a bright scene drives the gain to the
 20-stop floor, pre-exposure collapses past fp16 subnormals in the HDR buffer, and the meter, which
-divides pre-exposure back out, amplifies the remainder into 1.15e7 nits and pins there; the fix is
-that bound moved onto the metered *scalar*, where it is scale-safe. And the `SCALE_GATES` shape
-**cannot** be used to test a live meter at all: scaling emitters by K while dividing the camera by K
-double-compensates, so `pre_exposure` lands K² off.
+divides pre-exposure back out, amplifies the remainder into 1.15e7 nits and pins there. The metered
+bound was credited with fixing that and **review showed it had not**: `exposure_auto_gain` floors the
+gain at 2^-20, which pins once the metered value passes log2 17.53 — below the bound — so the gain
+was already bounded and the bound only made the recorded luminance saner. It changed no pixel.
+
+And the `SCALE_GATES` shape **cannot** be used to test a live meter at all: scaling emitters by K
+while dividing the camera by K double-compensates, so `pre_exposure` lands K² off.
 
 **Defaults 0.70/0.95**, aggressive at the bottom for the reason UE's Low Percent defaults to 80 — a
 meter that includes the black background is measuring the background, and zero times a thousand is
@@ -1806,8 +1878,13 @@ Four things the specs established that no fixture had shown before, all in 11.29
 by default, `--no-sort-opaque`), one shared object-position chunk with `invariant gl_Position`, and a
 position-only depth prepass (`--depth-prepass`, off by default).
 
-**On `apps/forest`, the shipping AA path:** opaque **397 → 234 ms (−41%)** with both, depth complexity
-**3.87 → 1.94**. Ordering alone is −36%, the prepass alone −11%, and they are worth more together.
+**On `apps/forest`, the shipping AA path — SUPERSEDED, see 11.31.** This read: opaque
+**397 → 234 ms (−41%)** with both, depth complexity **3.87 → 1.94**, ordering alone −36%, prepass
+alone −11%, "worth more together". 11.31 re-measured the whole table on a corrected budget and got
+**306.0 ms @ 1.93 neither; sort only 168.6 ms (−45%) @ 1.08; prepass only 173.2 ms (−43%) @ 0.72;
+both 173.0 ms (−43%)** — so the two are substitutes, not complements, and "worth more together" was
+an artefact of the masked exclusion. Tier-4 row 31 quotes the replacement pair; these are kept only
+so the older numbers are not mistaken for current ones.
 
 **The interior is where the prepass is actually decisive**: `abandoned_window_shadowed` goes
 **31.5 → 11.2 ms (−64%)** and reaches depth complexity **exactly 1.00** — every hidden fragment
@@ -2005,18 +2082,19 @@ not scheduled.
 | 23 | C2 Emissive → area lights | S/M | **DONE (11.49).** A fit plus a registration, as sketched — but it ships **off by default**, because measuring the corpus found **30 of 32 emissive materials are the unlit-flat-colour trick** rather than lamps, and on-by-default turns every one into a light. "No new shading code" held five phases and then cost one uniform (no unit — Wall 1 never in play). The planned covariance principal axis is wrong on a SQUARE panel, whose covariance is isotropic, and `cornell_light` is exactly square — the corpus's only real lamp is the case it fails on. The stated "one rectangle per mesh" limit had no working test: planarity measures FLATNESS, so an L, a ring and two strips five metres apart all read exactly 1.0 and got one rectangle spanning the lot. Three arms went red on things no frame shows — a DDGI capture counting the first bounce twice (**1.31× → 0.98×**), a panel lighting through a solid partition (**0.41 → 0.00**), and a placement compounding 29 units of drift over 40 frames. Cost lands on the LIGHT, not the machinery: reconcile 0.017–0.021 ms CPU, but +2–3 ms of shading per panel. |
 | 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
 | 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
-| 26 | C5 Contact shadows for local lights | S | A3 generalised from one light to N. Postfx-only. |
-| 27 | E3 Histogram exposure | M | **DONE (11.52).** A 64-bin gather histogram plus a percentile-clipped reduce, two raster passes replacing the mip chain; metering modes, EV bounds, split adapt rates, and the controls. **Both reasons this row gave were wrong**: the bright-pixel failure was already defended by a geometric mean AND an explicit clamp, and the determinism claim was already collected by `EXPOSURE_ADAPT_SNAP`, after which the adaptation holds no history and two runs are bit-identical over 200 frames. Capability parity was the whole reason and it sufficed. The instrument found what the row had not: the meter was **not linear in radiance**, 8.36 stops against 9.97 at x1000, because the absolute floor at the key inflated a dim scene's mean 3.05x. Percentiles fix it, **-1.61 stops to -0.005**. Removing the ceiling too produced a measured **runaway** to 1.15e7 nits via fp16 underflow -- though review then showed the GAIN was already bounded by the 20-stop floor, so the metered bound recorded a saner number and changed no pixel. And the SCALE_GATES shape cannot test a live meter -- scaling emitters by K while dividing the camera by K double-compensates. No golden moves (all 24 pin exposure), which is why this was the least-tested subsystem shipping on by default; six new arms now cover it. |
+| 26 | C5 Screen-space shadows for local lights | S | A3 generalised from one light to N. Postfx-only. |
+| 27 | E3 Histogram exposure | M | **DONE (11.52).** A 128-bin gather histogram plus a percentile-clipped reduce, two raster passes replacing the mip chain; metering modes, EV bounds, split adapt rates, and the controls. **Both reasons this row gave were wrong**: the bright-pixel failure was already defended by a geometric mean AND an explicit clamp, and the determinism claim was already collected by `EXPOSURE_ADAPT_SNAP`, after which the adaptation holds no history and two runs are bit-identical over 200 frames. Capability parity was the whole reason and it sufficed. The instrument found what the row had not: the meter was **not linear in radiance**, 8.36 stops against 9.97 at x1000, because the absolute floor at the key inflated a dim scene's mean 3.05x. Percentiles fix it, **-1.61 stops to +0.021**. Removing the ceiling too produced a measured **runaway** to 1.15e7 nits via fp16 underflow -- though review then showed the GAIN was already bounded by the 20-stop floor, so the metered bound recorded a saner number and changed no pixel. And the SCALE_GATES shape cannot test a live meter -- scaling emitters by K while dividing the camera by K double-compensates. **The review then changed the implementation twice more**: the bin pass turned out to be OCCUPANCY-bound rather than fetch-bound (64 fragments is ~0.4% of the GPU; splitting the source across 8 output rows took the scope 0.744 -> 0.392 ms), and the bin ceiling could not be a constant at all, since the measure pass clamps in working space and divides by pre-exposure so its largest emittable value moves with the exposure. No golden moves (all 24 pin exposure), which is why this was the least-tested subsystem shipping on by default; six new arms now cover it. |
 | 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
 | 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it — **shipped without it in 11.41, so that is now demonstrated rather than predicted** — and D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
 | 33 | D1 Clustered decals | L | Largest environment-art gap. ~~Hard-blocked on D0.~~ **Blocked by a texture-layout choice, not by the ledger**: decals read in the opaque pass where unit 6 is idle, so a flat 2D atlas with computed tile UVs takes the alias and needs no freed unit. Only the `sampler2DArray` form is blocked. Price the flat atlas first. |
-| 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. |
+| 34 | E8 Fix the wind cull | S | Small, self-contained, closes a real hole in E5's culling — wind geometry is currently exempt from the camera frustum *and* every cascade. Unblocks wind on scattered content, which `apps/forest` gave up to avoid it. **11.51 raised the stakes**: the ivy arcade is the first asset to author UV1 wind data, so there is now shipped content on the exempt path. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
 | 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. **Six more specs have landed on the surface since and none of them were rows here** (11.43 the fixture's sun, 11.44 world scale, 11.45 the swash film, 11.46 → row 35b, 11.47 whitecaps, 11.48 two wave trains); D3 carries them. |
 | 35b | **D5 By-example texturing** | S/M | **DONE (11.46), and it was never booked.** Would have been assumed blocked — a transformed copy of a texture plus an inverse table, in the most saturated program in the tree — and cost **zero** units: the shader never reads the original so the transform is baked over it, and the table is 768 bytes of uniform space. The ledger's fifth escape. Contrast held to 0.15% (0.02876 → 0.02881), which is the measurement that matters, because a broken blend flattens variance rather than shifting colour. **Two of the three defects it fixed were not rendering bugs at all** — a noise field sampled on an unbounded lattice, so forty tile boundaries were discontinuities in the data; and a circular tangent frame under planar UVs, creasing along every triangle edge. Both were reported as water bugs for most of a session. |
+| 35c | **Unbooked, shipped anyway** | — | **11.50 and 11.51 appear nowhere else in this document.** 11.50 made `foliage_shadows` a material row, so alpha-masked foliage arriving through a FILE can shadow — it had worked only for meshes built in C. 11.51 is the ivy arcade: the first asset authoring UV1 wind data, and a new `wind-uv` gate group. Both are content-driven work with no roadmap row, which is the same pattern D5 records — the table is a backlog, and the work keeps arriving from outside it. |
 | 36 | D4 Terrain | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. **Inherits D3's clipmap at `8d04658`** — the rings-over-a-mip-pyramid half water never used is the half terrain needs — and its T-junction stitch, which is a better fix for the crack risk E5 left open than locking borders. |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 
@@ -2064,12 +2142,12 @@ found the defect the row *should* have been arguing from, which no one had looke
 could see the metered value at all.
 
 **And the honest observation this table should carry: it has not driven the work since 11.32.**
-Seventeen specs have shipped since D3 opened, and **ten of them are the water and shore series
+Twenty-one specs have shipped since D3 opened, and **ten of them are the water and shore series
 (11.32, 11.33, 11.35, 11.36, 11.42–11.45, 11.47, 11.48), against which this table has exactly one
 row — D3 — and it covers three of the ten.** That is not a failure of the roadmap — the surface
 turned out to have far more in it than one XL row could hold, and every one of those specs measured
 something before it changed anything, which is the standard this document exists to enforce. But it
-does mean the table above describes a *backlog*, not a plan, and that four of the five items in its
+does mean the table above describes a *backlog*, not a plan, and that all five items in its
 own shortlist were finished while the actual work went somewhere else entirely. Anyone reading the
 tier order as a schedule should read this paragraph first.
 
@@ -2109,7 +2187,8 @@ scheduled.
   a `glGetIntegerv` per set, about 6% of the frame, and is off by default. Neither Godot nor Unreal has
   this problem, and not by asserting harder: neither lets app code call `glUseProgram` at all, so
   "what is bound" is a mirrored variable and the check is a compare rather than a driver round trip.
-  Cetra calls it from ~30 sites. The fix is one function; the cost is touching all 30.
+  Cetra calls it from **123 sites across 13 files** (105 excluding `glUseProgram(0)` resets) -- this
+said ~30, which understates the cost by about 3.5x. The fix is still one function.
 - **Skinned meshes cannot instance.** Blocked on the single global `g_current_animation_state`, so
   `raiden` and every other rig submits one draw per mesh regardless. 11.28's `skinned-nobatch` and
   `skinned-identity` arms hold the line deliberately: a program without an `InstanceBlock` may never
@@ -2167,8 +2246,10 @@ scheduled.
 
 ## Cross-track integration contracts
 
-- **`froxel_inject_frag` is the single agreed integration point** for A1's clustered light data —
-  local-light scattering with it, today's sun+spot coverage without it.
+- **`froxel_inject_frag` is the single agreed integration point** for A1's clustered light data, and
+  the option has been **taken**: it walks `clusterLights` per cell and accumulates
+  `colorIntensity * atten * phase`, so local lights scatter. This was phrased as an open choice —
+  "local-light scattering with it, today's sun+spot coverage without it" — long after it was made.
 - Fog/cloud ambient defaults to sky-derived values. **A4 has landed and this swap was deliberately
   NOT taken**: `froxel_inject` could now trade its ambient term for one GI-volume tap, but doing so
   changes fog output and would have dragged the fog golden into 9.7's gates. It is a genuine
@@ -2187,8 +2268,10 @@ scheduled.
    raiden cross-build baseline (`-x -f 120 --no-springs --no-auto-exposure -E 1.0`). Measure the
    same-build noise floor first, per CLAUDE.md.
 2. **On-reference:** deterministic headless golden committed per feature (fixed frame count converges
-   temporal effects; static-jitter paths keep headless byte-deterministic). TAAU alone uses a PSNR
-   threshold (≥32 dB vs native) since reconstruction differs by design.
+   temporal effects; static-jitter paths keep headless byte-deterministic). TAAU alone was to use a PSNR
+   threshold (≥32 dB vs native) since reconstruction differs by design -- **that never reached the
+   corpus.** `gates.py` contains no PSNR anywhere and there is no `taau` or `render-scale` group among
+   its 40; the threshold exists only in spec 11.7. This bullet describes a check nothing runs.
 3. Every feature gets a CLI flag in the render app (`parse_args` pattern) + an ImGui toggle
    (`igCheckbox` bound to Engine/PostFX field pattern).
 4. New test content needed along the way: `--area-light` CLI flag (A2), ~~cornell-box GLB~~ **(A4:
@@ -2198,7 +2281,7 @@ scheduled.
 
 ## Execution workflow
 
-1. **This master plan → `specs/aaa-rendering-roadmap.md`**, committed on a new branch
+1. **This master plan lives at `docs/aaa-rendering-roadmap.md` and always has**, committed on a new branch
    `aaa-rendering-roadmap` created off `master` (user-confirmed; the uncommitted
    `remote-build-orchestration` work stays untouched in the working tree).
 2. **Per item, later:** its own subplan session → spec in `specs/` → feature branch → implement →
@@ -2217,8 +2300,16 @@ scheduled.
 - `cetra/src/sky.c/h` — B9 aerial perspective + sky-published fog colors, B2 clouds
 - `cetra/src/probe.c` — A4 capture-core extraction
 - `apps/render/src/render.c` — CLI flags for every feature
+- `apps/render/src/render_args.h` — the struct behind those flags; it moves with every one of them
+- `cetra/src/water.c` — D3, which turned out to be eleven specs rather than one row
 
-Tier 4 adds three that Tiers 1-3 barely touched:
+Both of the last two outrank entries already listed here and were absent; counted by commits since
+2025, `apps/render/src/render.c` is 228, `cetra/src/render.c` 184, `pbr_frag.glsl` 160,
+`postfx.c` 157, `render_args.h` 75, `water.c` 49 — against `tonemap_frag.glsl` at 38 and
+`ocean.glsl` at 35. Note that ranking measures "touched", not "touched by roadmap work".
+
+Tier 4 adds three that Tiers 1-3 barely touched (`cetra/src/render.c` is listed twice — once above
+for A1, once below for E5, which is two different rewrites of the same file):
 
 - `cetra/src/shadow.c` — C1 caster filtering + the transmittance resolve (the hair exclusion at
   `shadow.c:485` is C1's starting point)
