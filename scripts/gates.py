@@ -8769,6 +8769,131 @@ def run_exposure_gate(workdir):
     return failures
 
 
+def run_cull_gate(workdir):
+    """Wind and skinned geometry is bounded, so it can be culled (spec 11.53).
+
+    Both fixtures pair a MUST-CULL arm with a MUST-NOT-CULL one, because the two
+    fail in opposite directions and neither is safe alone. The old exemption
+    passes every "nothing visible was dropped" test trivially -- it dropped
+    nothing because it culled nothing -- and a bound that is too tight passes
+    every "it culls" test while deleting geometry that is on screen.
+
+    Six arms: cull-wind (three wind quads behind the camera, exactly 3 rejected),
+    cull-cascade (the cascade culls against its OWN volume, not the camera's),
+    cull-sum (the submission identity), cull-margin (a wind quad outside the
+    frustum at bind and blown back in), cull-skin (a posed panel outside its bind
+    bounds is still drawn) and cull-skin-away (the same rig aimed away, every
+    mesh rejected).
+
+    Written as prose rather than as the line-initial list gate-arm-docs checks,
+    for the same reason run_submission_gate and run_forest_gate are: cull-sum is
+    printed by _submit_sum_ok, so a list naming it would read as stale to a
+    checker that scans this function's own source. Duplicating the identity check
+    here to satisfy that is the worse trade -- a second copy is what the shared
+    helper exists to prevent.
+    """
+    failures = []
+    WIND = "wind_cull_fixture.cscn"
+    SKIN = "skinned_cull_fixture.cscn"
+    SIZE = ("400", "300")
+
+    wind = _profiled_run(workdir, "cullwind", [], fixture=WIND, size=SIZE)
+    if wind is None:
+        return ["cull-wind", "cull-margin", "cull-cascade", "cull-skin", "cull-skin-away",
+                "cull-sum"]
+
+    # --- cull-wind: the quads behind the camera are rejected ----------------
+    # Exact, not an inequality. The fixture has five meshes and three of them are
+    # behind the eye, so a build that culls "some" of them is as wrong as one
+    # that culls none -- and before 11.53 a wind material was exempt and the
+    # answer here was 0.
+    o = wind["submit"].get("opaque", {})
+    ok = (o.get("meshes seen") == 5 and o.get("meshes culled") == 3
+          and o.get("draws") == 2)
+    print(f"  cull-wind    {'PASS' if ok else 'FAIL'}  {o.get('meshes culled')} of "
+          f"{o.get('meshes seen')} wind meshes culled in {o.get('draws')} draws "
+          f"(want exactly 3 of 5 and 2 draws)")
+    if not ok:
+        failures.append("cull-wind")
+
+    # --- cull-cascade: each pass culls against its own volume ---------------
+    # The inverse arm, in the shadowcull-draws idiom. Every mesh here is inside
+    # the cascade fit, so the SAME predicate that rejected three of them for the
+    # camera must reject none of them for the light. A cull wired to the wrong
+    # frustum passes the arm above and fails this one.
+    c = wind["submit"].get("shadow cascades", {})
+    ok = c.get("meshes seen") == 15 and c.get("meshes culled") == 0
+    print(f"  cull-cascade {'PASS' if ok else 'FAIL'}  cascades saw {c.get('meshes seen')} "
+          f"and culled {c.get('meshes culled')} (want 15 seen, 0 culled: the fit covers the "
+          f"whole scene, where the camera rejected 3)")
+    if not ok:
+        failures.append("cull-cascade")
+
+    _submit_sum_ok(wind, "wind fixture", failures, "cull-sum")
+
+    # --- cull-margin: the wind margin is not too small ----------------------
+    # The marginal quad's IMPORT AABB is entirely left of the frustum; only the
+    # displacement brings it back. So this compares a culled frame against an
+    # unculled one and wants them identical -- a margin of zero culls the quad
+    # and the frame loses it. Measured at 3,114 px when the margin is zeroed.
+    on = os.path.join(workdir, "cull_wind_on.ppm")
+    off = os.path.join(workdir, "cull_wind_off.ppm")
+    scene = os.path.join(ROOT, "assets", WIND)
+    err = render(scene, on, ["--no-auto-exposure", "-E", "1.0"])
+    err = err or render(scene, off, ["--no-auto-exposure", "-E", "1.0", "--no-frustum-cull"])
+    if err:
+        print(f"  cull-margin  ERROR render failed: {err.strip()[-200:]}")
+        failures.append("cull-margin")
+    else:
+        ae, _ = compare(on, off)
+        ok = ae == 0
+        print(f"  cull-margin  {'PASS' if ok else 'FAIL'}  {ae} px between culled and "
+              f"--no-frustum-cull with a wind quad outside its bind bounds (want exactly 0)")
+        if not ok:
+            failures.append("cull-margin")
+
+    # --- cull-skin: a posed mesh is bounded by its pose ---------------------
+    # The panel's bind position is far outside the frustum and its posed position
+    # is centre frame, so culling on mesh->aabb drops it. Measured at 10,000 px
+    # when the bound ignores the pose.
+    son = os.path.join(workdir, "cull_skin_on.ppm")
+    soff = os.path.join(workdir, "cull_skin_off.ppm")
+    sscene = os.path.join(ROOT, "assets", SKIN)
+    err = render(sscene, son, ["--no-auto-exposure", "-E", "1.0"])
+    err = err or render(sscene, soff, ["--no-auto-exposure", "-E", "1.0", "--no-frustum-cull"])
+    if err:
+        print(f"  cull-skin    ERROR render failed: {err.strip()[-200:]}")
+        failures.append("cull-skin")
+    else:
+        ae, _ = compare(son, soff)
+        ok = ae == 0
+        print(f"  cull-skin    {'PASS' if ok else 'FAIL'}  {ae} px between culled and "
+              f"--no-frustum-cull with the panel swung outside its bind bounds (want exactly 0)")
+        if not ok:
+            failures.append("cull-skin")
+
+    # --- cull-skin-away: and it does reject when it should ------------------
+    # The presence floor for the arm above: a bound that always answered
+    # "visible" would satisfy cull-skin perfectly.
+    away = _profiled_run(workdir, "cullskinaway",
+                         ["--cam-eye", "0,6,4", "--cam-target", "0,6,60"],
+                         fixture=SKIN, size=SIZE)
+    if away is None:
+        failures.append("cull-skin-away")
+    else:
+        a = away["submit"].get("opaque", {})
+        ok = (a.get("meshes seen", 0) > 0
+              and a.get("meshes culled") == a.get("meshes seen")
+              and a.get("draws") == 0)
+        print(f"  cull-skin-away {'PASS' if ok else 'FAIL'}  aimed away: "
+              f"{a.get('meshes culled')} of {a.get('meshes seen')} culled and "
+              f"{a.get('draws')} draws (want all culled, 0 draws)")
+        if not ok:
+            failures.append("cull-skin-away")
+
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -8806,6 +8931,7 @@ GATE_GROUPS = [
     ("translucent-offpath", "translucent shadows (off-path identity and the inverse arm):",
      run_translucent_offpath_gate),
     ("profiler", "gpu timing (per-pass queries, spec 11.27 / E4):", run_profiler_gate),
+    ("cull", "wind and skinned geometry is cullable (spec 11.53):", run_cull_gate),
     ("submission", "submission (draw counts + the CPU column, spec 11.28 / E5):",
      run_submission_gate),
     ("draw-list", "draw list (submission order, spec 11.28 Phase 3):", run_draw_list_gate),

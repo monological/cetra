@@ -1,0 +1,257 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "gen_wind_cull_fixture.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "backdrop",
+   "mesh": 2
+  },
+  {
+   "name": "wind_marginal",
+   "mesh": 0,
+   "translation": [
+    -5.138277998646347,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "name": "wind_behind_0",
+   "mesh": 1,
+   "translation": [
+    -2.0,
+    0.0,
+    20.0
+   ]
+  },
+  {
+   "name": "wind_behind_1",
+   "mesh": 1,
+   "translation": [
+    0.0,
+    0.0,
+    20.0
+   ]
+  },
+  {
+   "name": "wind_behind_2",
+   "mesh": 1,
+   "translation": [
+    2.0,
+    0.0,
+    20.0
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "wind_marginal",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 3,
+      "TEXCOORD_0": 4
+     },
+     "indices": 5,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "wind_behind",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 1,
+      "NORMAL": 3,
+      "TEXCOORD_0": 4
+     },
+     "indices": 5,
+     "material": 1
+    }
+   ]
+  },
+  {
+   "name": "backdrop",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 2,
+      "NORMAL": 3,
+      "TEXCOORD_0": 4
+     },
+     "indices": 5,
+     "material": 2
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "cull_marginal",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.9,
+     0.75,
+     0.1,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  },
+  {
+   "name": "cull_behind",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.8,
+     0.2,
+     0.2,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  },
+  {
+   "name": "cull_backdrop",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.04,
+     0.04,
+     0.05,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -0.3,
+    0.0,
+    0.0
+   ],
+   "max": [
+    0.3,
+    1.6,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -0.3,
+    0.0,
+    0.0
+   ],
+   "max": [
+    0.3,
+    1.6,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -9.0,
+    -5.0,
+    -3.0
+   ],
+   "max": [
+    9.0,
+    5.0,
+    -3.0
+   ]
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 144,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 192,
+   "byteLength": 32,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 224,
+   "byteLength": 12,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "data:application/octet-stream;base64,mpmZvgAAAAAAAAAAmpmZPgAAAAAAAAAAmpmZPs3MzD8AAAAAmpmZvs3MzD8AAAAAmpmZvgAAAAAAAAAAmpmZPgAAAAAAAAAAmpmZPs3MzD8AAAAAmpmZvs3MzD8AAAAAAAAQwQAAoMAAAEDAAAAQQQAAoMAAAEDAAAAQQQAAoEAAAEDAAAAQwQAAoEAAAEDAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAEAAgAAAAIAAwA=",
+   "byteLength": 236
+  }
+ ]
+}

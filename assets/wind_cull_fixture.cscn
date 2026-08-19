@@ -1,0 +1,67 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "wind_cull_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "CullSun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.25,
+    -0.97
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": true
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   1.0,
+   8.0
+  ],
+  "target": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false,
+  "bloom": {
+   "enabled": false
+  }
+ },
+ "wind": {
+  "direction": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "strength": 1.2,
+  "speed": 3.141592653589793,
+  "gustFrequency": 0.15,
+  "gustAmount": 0.0,
+  "turbulence": 0.0
+ },
+ "materials": {
+  "cull_marginal": {
+   "windResponse": 1.0
+  },
+  "cull_behind": {
+   "windResponse": 1.0
+  }
+ }
+}
