@@ -385,3 +385,49 @@ int ies_library_load(IesLibrary* lib, const char* path) {
              p->h_taps == 1 ? "symmetric" : "asymmetric", (double)p->span, (double)p->peak_cd);
     return lib->count++;
 }
+
+// ---- the probe --------------------------------------------------------------
+
+void ies_library_probe(const IesLibrary* lib) {
+    int count = ies_library_count(lib);
+    // Header FIRST with available=/reason=, the water/wind shape rather than the
+    // emissive one: nothing here is produced by the walk below, so there is no
+    // number the rows could contradict.
+    if (count == 0) {
+        printf("ies-probe header available=0 reason=%s\n",
+               lib ? "no-profiles-loaded" : "no-library");
+        fflush(stdout);
+        return;
+    }
+    printf("ies-probe header available=1 profiles=%d pool_used=%d pool_cap=%d\n", count,
+           ies_library_pool_used(lib), IES_POOL_FLOATS);
+
+    for (int i = 0; i < count; i++) {
+        const IesProfile* p = ies_library_at(lib, i);
+        printf("ies-probe profile index=%d path=%s v_taps=%d h_taps=%d span=%.1f "
+               "v_lo=%.3f v_hi=%.3f support=%.3f peak_cd=%.4f symmetric=%d\n",
+               i, p->path, p->v_taps, p->h_taps, (double)p->span, (double)p->v_lo,
+               (double)p->v_hi, (double)p->support_deg, (double)p->peak_cd, p->h_taps == 1 ? 1 : 0);
+
+        // A sweep in ABSOLUTE candela, which is what the file states and so what
+        // a gate can check against a generator's own arithmetic. Normalised
+        // times peak IS absolute -- that identity is the whole reason the
+        // normalised reading loses nothing, so printing it here is also what
+        // holds that claim up.
+        //
+        // Sampled at the TAPS rather than at round angles: an interpolated value
+        // between two taps tests the lerp, where a value AT one tests the table,
+        // and it is the table a resample can get wrong.
+        for (int iv = 0; iv < p->v_taps; iv++) {
+            float v = p->v_lo + (p->v_hi - p->v_lo) * (float)iv / (float)(p->v_taps - 1);
+            for (int ih = 0; ih < p->h_taps; ih++) {
+                float h = p->h_taps == 1 ? 0.0f
+                                         : p->span * (float)ih / (float)(p->h_taps - 1);
+                float rel = ies_profile_sample(p, v, h);
+                printf("ies-probe sample index=%d v=%.4f h=%.4f rel=%.6f cd=%.6f\n", i,
+                       (double)v, (double)h, (double)rel, (double)(rel * p->peak_cd));
+            }
+        }
+    }
+    fflush(stdout);
+}

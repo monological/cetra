@@ -27,6 +27,7 @@
 #include "cetra/gi_volume.h"
 #include "cetra/emissive_light.h"
 #include "cetra/water.h"
+#include "cetra/ies.h"
 #include "cetra/wind.h"
 // For SHORE_CHAIN_HISTORY and SHORE_TAP_PERIODS, which --shore-probe reports the film's
 // history window against.
@@ -176,6 +177,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
     fprintf(stderr, "      --wind-bound-probe Print measured wind travel beside its cull bound\n");
+    fprintf(stderr, "      --ies-probe        Print every loaded IES profile and its angle sweep\n");
     fprintf(stderr, "      --emissive-lights  Emissive meshes become LTC area lights\n");
     fprintf(stderr, "      --emissive-light-probe  Print the panel every emissive mesh derives\n");
     fprintf(stderr,
@@ -783,6 +785,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->water_fft_probe = 1;
         } else if (strcmp(argv[i], "--wind-bound-probe") == 0) {
             args->wind_bound_probe = 1;
+        } else if (strcmp(argv[i], "--ies-probe") == 0) {
+            args->ies_probe = 1;
         } else if (strcmp(argv[i], "--emissive-lights") == 0) {
             args->emissive_lights = 1;
         } else if (strcmp(argv[i], "--emissive-light-probe") == 0) {
@@ -3314,6 +3318,13 @@ int main(int argc, char** argv) {
     // whose output a reader has to place before trusting.
     if (args.wind_bound_probe)
         wind_bound_probe(scene);
+
+    // Needs no GL and no frame either -- the profiles are parsed and resampled at
+    // scene load and nothing since has touched them. Beside the others for the
+    // same reason as the wind bound: a probe that runs at a different point in
+    // the sequence is a probe whose output a reader has to place before trusting.
+    if (args.ies_probe)
+        ies_library_probe(scene->ies_library);
 
     // AFTER the loop, for a reason the fit does not have but its RADIANCE does:
     // an emissive texture's mean is read from its top mip, and textures stream in

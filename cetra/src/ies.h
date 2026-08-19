@@ -125,4 +125,14 @@ float ies_fold_horizontal(float angle_deg, float span_deg);
 // iesProfile, used by the probe and by the cull-radius solve.
 float ies_profile_sample(const IesProfile* p, float v_deg, float h_deg);
 
+// Print every loaded profile and a sweep of its angles, in the --water-fft-probe
+// idiom (`ies-probe <tag> k=v k=v`, header first with available=/reason=).
+//
+// The instrument exists because a profile's correctness is a NUMERIC claim a
+// frame cannot make: a table resampled from the wrong plane, folded with a
+// modulo instead of a mirror, or scaled by the wrong multiplier still lights a
+// room plausibly. What the gate compares these rows against is candela the
+// fixture generator KNEW before the render, not values read back off itself.
+void ies_library_probe(const IesLibrary* lib);
+
 #endif // _IES_H_

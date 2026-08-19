@@ -103,6 +103,7 @@ typedef struct {
     int water_probe;            // Print the CPU wave query over a grid, then continue
     int water_fft_probe;        // Print the transformed spectrum's measured statistics
     int wind_bound_probe;       // Print the measured wind displacement beside its cull bound
+    int ies_probe;              // Print every loaded IES profile and a sweep of its angles
     int emissive_lights;        // Derive an LTC area panel from every emissive mesh
     int emissive_light_probe;   // Print the area panel every emissive mesh would derive
     int exposure_probe;         // Print what the meter decided, per metered frame
