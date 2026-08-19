@@ -67,7 +67,8 @@ static void print_usage(const char* prog) {
         stderr,
         "      --cam-target x,y,z Explicit look-at target (overrides --yaw/--pitch/--distance)\n");
     fprintf(stderr, "      --cam-up x,y,z     Explicit up vector (default: 0,1,0)\n");
-    fprintf(stderr, "  -E, --exposure <f>     Fixed tonemap exposure (disables auto-exposure)\n");
+    fprintf(stderr, "  -E, --exposure <f>     Fixed exposure: a linear multiplier, or an EV bias\n"
+            "                         (any sign) under a post.camera. Pins the frame\n");
     fprintf(stderr, "      --no-auto-exposure Fixed exposure instead of eye adaptation\n");
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
@@ -295,6 +296,34 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  %s -m character.fbx -a walk.fbx -s mixamo_tpose.fbx\n", prog);
 }
 
+// Smallest spot that still contains a measure texel. The target is 64x64, so the
+// closest texel centre sits sqrt(2)/128 UV from the middle, which against the
+// half-diagonal is 0.015625. Anything under that selects nothing: the histogram
+// comes back empty, the reduce emits its refusal NaN, and the adaptation freezes
+// for the rest of the session with no log line. Refused rather than allowed to
+// become a silently dead meter.
+#define METER_RADIUS_MIN 0.02f
+
+// One bounded float flag. Bounded because the six metering knobs use a negative
+// sentinel for "not given", so an out-of-range value would otherwise be swallowed
+// by the same test that means absence -- which is the shape this file just spent a
+// commit removing from -E. Rejected here, matching post.metering's parser.
+static int _meter_arg(int argc, char** argv, int* i, float lo, float hi, float* out) {
+    const char* flag = argv[*i];
+    if (++(*i) >= argc) {
+        fprintf(stderr, "Error: %s requires an argument\n", flag);
+        return -1;
+    }
+    float v = (float)atof(argv[*i]);
+    if (!(v >= lo && v <= hi)) {
+        fprintf(stderr, "Error: %s %g is outside [%g, %g]\n", flag, (double)v, (double)lo,
+                (double)hi);
+        return -1;
+    }
+    *out = v;
+    return 0;
+}
+
 static int parse_args(int argc, char** argv, RenderArgs* args) {
     memset(args, 0, sizeof(RenderArgs));
     args->width = DEFAULT_WIDTH;
@@ -333,13 +362,13 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->msm_blur = -1.0f;             // -1 = keep the engine default
     args->msm_bleed = -1.0f;            // -1 = keep the engine default
-    args->auto_exposure_override = -1;
+    args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
     args->meter_low = -1.0f;
     args->meter_high = -1.0f;
     args->meter_mode = -1;
     args->meter_radius = -1.0f;
     args->adapt_up = -1.0f;
-    args->adapt_down = -1.0f;  // -1 = unset; an authored exposure then pins
+    args->adapt_down = -1.0f;
     args->oit = -1;                     // -1 = unset; both default ON in the engine
     args->oit_moments = -1;
     args->sun_elevation = -999.0f; // -999 = keep the sky default
@@ -743,45 +772,30 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             if (strcmp(argv[i], "uniform") == 0)
-                args->meter_mode = 0;
+                args->meter_mode = METERING_UNIFORM;
             else if (strcmp(argv[i], "centre") == 0 || strcmp(argv[i], "center") == 0)
-                args->meter_mode = 1;
+                args->meter_mode = METERING_CENTRE;
             else if (strcmp(argv[i], "spot") == 0)
-                args->meter_mode = 2;
+                args->meter_mode = METERING_SPOT;
             else {
                 fprintf(stderr, "Error: unknown meter mode '%s'\n", argv[i]);
                 return -1;
             }
         } else if (strcmp(argv[i], "--adapt-up") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: --adapt-up expects a per-frame rate\n");
+            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->adapt_up) != 0)
                 return -1;
-            }
-            args->adapt_up = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--adapt-down") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: --adapt-down expects a per-frame rate\n");
+            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->adapt_down) != 0)
                 return -1;
-            }
-            args->adapt_down = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--meter-radius") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: --meter-radius expects a fraction\n");
+            if (_meter_arg(argc, argv, &i, METER_RADIUS_MIN, 1.0f, &args->meter_radius) != 0)
                 return -1;
-            }
-            args->meter_radius = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--meter-low") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: --meter-low expects a fraction\n");
+            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->meter_low) != 0)
                 return -1;
-            }
-            args->meter_low = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--meter-high") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: --meter-high expects a fraction\n");
+            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->meter_high) != 0)
                 return -1;
-            }
-            args->meter_high = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-water") == 0) {
             // Does NOT imply --water, obviously, and it wins over it: this is the
             // escape hatch from a scene file that authors a surface.
@@ -1995,7 +2009,20 @@ int main(int argc, char** argv) {
     // sitting next to a bare model) and merge its look into args, leaving
     // CLI-given values untouched. See cscene_setup above main.
     CetraSceneDesc* cscn = NULL;
+    // -E's SIGN can only be judged once the scene file has been merged, because
+    // what it means depends on whether a post.camera arrived -- a linear
+    // multiplier, which must be positive, or an EV bias, where negative is
+    // stopping down. Checked here rather than at the exposure block below, which
+    // runs after create_engine and init_engine: failing there opens a window and
+    // builds a GL context before returning, and returns without freeing either.
     if (cscene_setup(&args, &cscn) != 0) {
+        return -1;
+    }
+    if (args.has_exposure && args.aperture <= 0.0f && args.exposure <= 0.0f) {
+        fprintf(stderr,
+                "Error: exposure %g is not a valid linear multiplier "
+                "(negative stops are an EV bias and need a post.camera)\n",
+                (double)args.exposure);
         return -1;
     }
 
@@ -2055,16 +2082,6 @@ int main(int argc, char** argv) {
 
     {
         Exposure* ex = &engine->exposure;
-        // Now that the scene file has been merged, -E's meaning is settled and
-        // its sign can be judged. A linear multiplier of zero is a black frame
-        // and a negative one is meaningless; under a camera the same number is
-        // an EV bias and any sign is legal.
-        if (args.has_exposure && args.aperture <= 0.0f && args.exposure <= 0.0f) {
-            fprintf(stderr, "Error: exposure %g is not a valid linear multiplier "
-                            "(negative stops need a post.camera)\n",
-                    (double)args.exposure);
-            return -1;
-        }
         if (args.aperture > 0.0f) {
             ex->physical = true;
             ex->aperture = args.aperture;
@@ -2085,7 +2102,9 @@ int main(int argc, char** argv) {
                 ex->automatic = false;
             printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n", ex->aperture,
                    ex->shutter_speed, ex->iso, exposure_ev100(ex));
-        } else if (args.has_exposure && args.exposure > 0.0f) {
+        } else if (args.has_exposure) {
+            // Positive by construction: the check above rejects any other value
+            // once we know no camera is in play.
             ex->multiplier = args.exposure;
         }
         // An explicit override wins; failing that, naming an exposure pins the

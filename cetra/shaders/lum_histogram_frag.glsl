@@ -21,9 +21,10 @@ out vec4 FragColor;
 uniform sampler2D lumTex; // LUM_MEASURE_SIZE^2, R16F, log2 luminance
 uniform int srcSize;      // edge of lumTex in texels
 uniform int binCount;
+uniform int rowCount; // output rows the source is split across
 uniform vec2 binRange;   // log2 luminance at bin 0's floor and the last bin's ceiling
-uniform int meterMode;   // MeteringMode (exposure.h)
-uniform float meterRadius; // spot / falloff radius, fraction of the half-diagonal
+uniform int meterMode;     // MeteringMode (exposure.h)
+uniform float meterRadius; // spot / falloff radius; 1.0 covers the whole frame
 
 // How much this texel's vote is worth. Weighting the POPULATION and not the
 // value is deliberate: a mode has to be a framing choice, so weighting a flat
@@ -32,9 +33,20 @@ uniform float meterRadius; // spot / falloff radius, fraction of the half-diagon
 float meterWeight(vec2 uv) {
     if (meterMode == 0) // METERING_UNIFORM
         return 1.0;
-    // Normalised distance from centre, in UV. On a non-square frame the disc is
-    // an ellipse in pixels, which is the convention a mask texture carries too.
-    float r = length(uv - vec2(0.5)) / max(meterRadius, 1e-4);
+    // Normalised distance from centre, against the UV HALF-DIAGONAL so that a
+    // radius of 1.0 reaches the corners and covers the frame exactly.
+    //
+    // Dividing by the radius alone -- which this did until reviewed -- makes the
+    // unit raw UV distance instead, where coverage saturates at 0.7071 and every
+    // larger value is the same picture. Measured: radius 0.72 and radius 1.0 both
+    // metered bit-identically to uniform, so the top half of the authored range
+    // was inert and the default 0.4 sat 57% of the way to the corner rather than
+    // the 40% every comment claimed.
+    //
+    // On a non-square frame the disc is an ellipse in pixels, which is the
+    // convention a mask texture carries too.
+    const float UV_HALF_DIAGONAL = 0.70710678;
+    float r = length(uv - vec2(0.5)) / (max(meterRadius, 1e-4) * UV_HALF_DIAGONAL);
     if (meterMode == 2) // METERING_SPOT: a hard edge, so nothing outside votes
         return r <= 1.0 ? 1.0 : 0.0;
     // METERING_CENTRE: full weight inside the radius, easing to a floor rather
@@ -45,13 +57,20 @@ float meterWeight(vec2 uv) {
 
 void main() {
     int bin = int(gl_FragCoord.x);
+    int row = int(gl_FragCoord.y);
     float lo = binRange.x;
     float span = max(binRange.y - binRange.x, 1e-6);
+
+    // This fragment's slice of the source rows. Splitting the walk is what keeps
+    // the pass from being 64 fragments wide; see LUM_HISTOGRAM_ROWS.
+    int rows = max(rowCount, 1);
+    int y0 = (srcSize * row) / rows;
+    int y1 = (srcSize * (row + 1)) / rows;
 
     float count = 0.0;
     float sum = 0.0;
     float invSize = 1.0 / float(srcSize);
-    for (int y = 0; y < srcSize; y++) {
+    for (int y = y0; y < y1; y++) {
         for (int x = 0; x < srcSize; x++) {
             float w = meterWeight((vec2(x, y) + 0.5) * invSize);
             if (w <= 0.0)

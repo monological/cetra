@@ -259,6 +259,16 @@ typedef struct CSceneFogVolume {
     float tint[3];
 } CSceneFogVolume;
 
+// Mirrors MeteringMode in cetra/src/exposure.h. Kept as its own enum for the
+// reason CSceneTonemap is: this header carries no engine headers, and the values
+// must agree numerically -- which is unwritten anywhere if both sides use bare
+// integer literals instead.
+enum {
+    CSCENE_METER_UNIFORM = 0,
+    CSCENE_METER_CENTRE = 1,
+    CSCENE_METER_SPOT = 2,
+};
+
 typedef struct CetraSceneDesc {
     // Paths are resolved against the scene file's directory at load time;
     // consumers receive directly usable paths.
@@ -304,7 +314,9 @@ typedef struct CetraSceneDesc {
     // carrying one, so a scene can author a mode without also pinning the
     // percentiles a later default change would otherwise stop reaching it.
     bool has_meter_mode;
-    int meter_mode; // MeteringMode; int here since cscene.h carries no engine headers
+    // CSCENE_METER_* below; int here since cscene.h carries no engine headers, the
+    // same reason CSceneEnvMode and CSceneTonemap exist.
+    int meter_mode;
     bool has_meter_radius;
     float meter_radius;
     bool has_meter_low;

@@ -20,7 +20,17 @@
 // reduce pass loops this many texels. 64 is far more resolution than the
 // percentile cut needs; the cost of a bin is one more iteration in a loop that
 // runs once per frame.
-#define LUM_HISTOGRAM_BINS 64
+#define LUM_HISTOGRAM_BINS 128
+
+// Output rows the source is split across, so the bin pass is BINS x ROWS
+// fragments instead of BINS. Fragment (bin, r) walks only its slice of the
+// source rows and the reduce sums the column.
+//
+// This is a LATENCY fix, not a work one: the total fetch count is unchanged. 64
+// fragments is ~0.4% occupancy, which measured ~0.35 ms standing alone against
+// 1.19 us marginal when 10000 draws overlap. At 8 the serial depth is
+// 4096/8 + 64*8 = 1024 against 4160, which is near the minimum for this shape.
+#define LUM_HISTOGRAM_ROWS 8
 
 // The binned range, as log2 luminance in absolute cd/m^2. Roughly starlight
 // (1e-4) to well past a sunlit surface (1e5), which is the photometric span the
@@ -30,8 +40,21 @@
 // resolution the percentile does not need, while the cost of being too narrow
 // is a scene pinned against an end bin. Samples outside it still contribute
 // their true value to the mean -- only their percentile position is clamped.
-#define LUM_HISTOGRAM_MIN_LOG2 (-14.0f)
-#define LUM_HISTOGRAM_MAX_LOG2 (18.0f)
+// The floor is the measure pass's numeric guard (log2(1e-8)), NOT a round
+// number, and they must agree. lum_histogram_frag clamps an out-of-range
+// sample's BIN index while still summing its true value, so a sample below the
+// floor drags bin 0's mean below the bin it represents -- and the reduce pass
+// interpolates a split bin using that mean. With the guard 12.5 stops under the
+// floor, every black-background texel did exactly that, which is why a frame of
+// mostly background metered the same whatever the percentiles were.
+#define LUM_HISTOGRAM_MIN_LOG2 (-26.575425f)
+// And the ceiling covers the largest value the measure pass can emit, which is
+// NOT a constant: it clamps in working space at WS_SCENE_MAX and then divides by
+// preExposure, so the largest absolute radiance it can report is
+// log2(60000) + 20 ~= 35.9 once the gain sits on its 20-stop floor. A fixed 18
+// left bin 127 spanning nine stops while claiming its share, and a percentile
+// cut landing there interpolates against a mean that is nowhere near it.
+#define LUM_HISTOGRAM_MAX_LOG2 (36.0f)
 // Motion-blur tile size (px): tile-max reduces velocity to one dominant vector
 // per MOTION_BLUR_TILE^2 tile, which also bounds the max blur radius. Must match
 // TILE_SIZE reasoning in motion_blur_frag.glsl (MAX_PIXELS clamp).
@@ -735,8 +758,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // that pass was deleted in f98ab0a.
     if (!create_color_fbo(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
                           &fx->lum_texture) ||
-        !create_color_fbo(LUM_HISTOGRAM_BINS, 1, GL_RG32F, &fx->lum_hist_fbo,
-                          &fx->lum_hist_texture) ||
+        !create_color_fbo(LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS, GL_RG32F,
+                          &fx->lum_hist_fbo, &fx->lum_hist_texture) ||
         !create_color_fbo(1, 1, GL_R32F, &fx->lum_reduce_fbo, &fx->lum_reduce_texture)) {
         free_postfx(fx);
         return NULL;
@@ -3299,11 +3322,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             scene_tex = fx->dof_texture;
         }
 
-        // Auto-exposure, measurement half: draw log2 luminance at 64x64 and mip
-        // it down, so the top mip is the geometric mean. The adaptation half --
-        // the blend toward it, and the deadband -- is exposure.c's, because the
-        // value has to reach the CPU anyway: nothing on the GPU consumes it now
-        // that the tonemap applies no exposure.
+        // Auto-exposure, measurement half: draw log2 luminance at 64x64, bin it,
+        // and collapse the bins with the tails cut. The adaptation half -- the
+        // blend toward it, and the deadband -- is exposure.c's, because the value
+        // has to reach the CPU anyway: nothing on the GPU consumes it now that
+        // the tonemap applies no exposure.
         //
         // This replaced a second fullscreen pass that blended into a 1x1
         // ping-pong pair, purely so the tonemap could sample the result. Reading
@@ -3330,14 +3353,24 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glBindTexture(GL_TEXTURE_2D, scene_tex);
             draw_fullscreen_quad(fx->quad_vao);
 
-            // Bin, then collapse. Two draws of 64 and 1 fragments -- the cost
-            // that matters in this block is the blocking read below, not these.
+            // Bin, then collapse.
+            //
+            // The bin pass is the expensive half of this block and it is not the
+            // fetch count that makes it so. LUM_HISTOGRAM_ROWS exists because 64
+            // fragments is around 0.4% occupancy on this GPU: measured standing
+            // alone the draw costs ~0.35 ms, while 10000 of them back to back
+            // cost 1.19 us each -- a 300x gap, which is what latency rather than
+            // work looks like. Splitting the source rows across output rows cuts
+            // the serial depth from 4160 to about 1024. Count and sum are
+            // associative, so the reduce summing R rows per bin is the same
+            // statistic.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_hist_fbo);
-            glViewport(0, 0, LUM_HISTOGRAM_BINS, 1);
+            glViewport(0, 0, LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS);
             glUseProgram(fx->lum_histogram_program->id);
             glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
             uniform_set_int(fx->lum_histogram_program->uniforms, "srcSize", LUM_MEASURE_SIZE);
             uniform_set_int(fx->lum_histogram_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+            uniform_set_int(fx->lum_histogram_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
             uniform_set_vec2(fx->lum_histogram_program->uniforms, "binRange",
                              (vec2){LUM_HISTOGRAM_MIN_LOG2, LUM_HISTOGRAM_MAX_LOG2});
             uniform_set_int(fx->lum_histogram_program->uniforms, "meterMode",
@@ -3351,6 +3384,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             glUseProgram(fx->lum_reduce_program->id);
             glBindTexture(GL_TEXTURE_2D, fx->lum_hist_texture);
             uniform_set_int(fx->lum_reduce_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+            uniform_set_int(fx->lum_reduce_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
             uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles",
                              (vec2){fx->exposure->meter_low, fx->exposure->meter_high});
             draw_fullscreen_quad(fx->quad_vao);

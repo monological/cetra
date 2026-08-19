@@ -101,24 +101,36 @@ def cscn_copy(src, dst, mutate):
         json.dump(d, f, indent=1)
 
 
+def _scale_emitters(d, factor):
+    """Multiply every authored emitter in a .cscn dict by `factor`, in place.
+
+    One copy, because two callers need the same answer to "what counts as an
+    authored intensity" and a scene that scales in one and not the other is a
+    scene neither can reason about. Fog's in-scatter is on the list because it
+    is a real emitter -- and it was the branch a second, hand-copied version of
+    this rule silently omitted.
+    """
+    for light in d.get("lights", []):
+        if "intensity" in light:
+            light["intensity"] *= factor
+
+    env = d.get("environment")
+    if env:
+        if "intensity" in env:
+            env["intensity"] *= factor
+        if "ambient" in env:
+            env["ambient"] = [c * factor for c in env["ambient"]]
+
+    fog = d.get("post", {}).get("fog")
+    if fog and "ambient" in fog:
+        fog["ambient"] = [c * factor for c in fog["ambient"]]
+
+
 def scaled_copy(src, dst, factor):
     """Multiply every authored intensity by `factor` and divide exposure by it."""
     def scale(d):
-        for light in d.get("lights", []):
-            if "intensity" in light:
-                light["intensity"] *= factor
-
-        env = d.get("environment")
-        if env:
-            if "intensity" in env:
-                env["intensity"] *= factor
-            if "ambient" in env:
-                env["ambient"] = [c * factor for c in env["ambient"]]
-
+        _scale_emitters(d, factor)
         post = d.setdefault("post", {})
-        fog = post.get("fog")
-        if fog and "ambient" in fog:
-            fog["ambient"] = [c * factor for c in fog["ambient"]]
         post["exposure"] = post.get("exposure", 1.0) / factor
 
     cscn_copy(src, dst, scale)
@@ -8470,6 +8482,11 @@ EXPOSURE_LINEAR_EPS = 0.05
 # second, both traded for exactly this.
 EXPOSURE_STABLE_FRAMES = 60
 
+# The snap makes adapted EXACTLY equal the target, so the true converged gap is
+# 0. This is only float slack on two %.6f fields the engine prints in log2 --
+# not a tolerance on the convergence itself.
+EXPOSURE_CONVERGE_EPS = 1e-5
+
 # A gain of exactly 1.0 is auto-exposure declining to act. Compared with ==
 # rather than a tolerance because the cap is an fminf, so the value is the
 # literal 1.0f or it is not the cap.
@@ -8521,7 +8538,7 @@ def _exposure_probe(workdir, scene, extra=None, frames=EXPOSURE_FRAMES, tag="exp
     return rows, r.stdout + r.stderr
 
 
-def _exposure_live(src, dst, scale=1.0, extra_post=None):
+def _exposure_live(src, dst, scale=1.0):
     """A .cscn twin with the meter LIVE, optionally with its emitters scaled.
 
     Every fixture in the corpus pins exposure -- by CLI or by authoring
@@ -8530,20 +8547,10 @@ def _exposure_live(src, dst, scale=1.0, extra_post=None):
     two halves identical in everything this does not touch.
     """
     def mutate(d):
-        for light in d.get("lights", []):
-            if "intensity" in light:
-                light["intensity"] *= scale
-        env = d.get("environment")
-        if env:
-            if "intensity" in env:
-                env["intensity"] *= scale
-            if "ambient" in env:
-                env["ambient"] = [c * scale for c in env["ambient"]]
+        _scale_emitters(d, scale)
         post = d.setdefault("post", {})
         post.pop("exposure", None)
         post["auto_exposure"] = True
-        if extra_post:
-            post.update(extra_post)
     cscn_copy(src, dst, mutate)
 
 
@@ -8591,6 +8598,11 @@ def run_exposure_gate(workdir):
         print(f"  exposure-darkens SKIP ({EXPOSURE_FIXTURE} not present)")
         return failures
 
+    scale_src = os.path.join(ROOT, "assets", EXPOSURE_SCALE_FIXTURE)
+    if not os.path.exists(scale_src):
+        print(f"  exposure-darkens SKIP ({EXPOSURE_SCALE_FIXTURE} not present)")
+        return failures
+
     live = os.path.join(workdir, "exposure_live.cscn")
     _exposure_live(src, live)
 
@@ -8600,7 +8612,6 @@ def run_exposure_gate(workdir):
     # sub-key mean could not exist and the cap was never reached.
     dark, _ = _exposure_probe(workdir, live, ["--meter-low", "0.05", "--meter-high", "0.20"],
                               frames=120, tag="dark")
-    scale_src = os.path.join(ROOT, "assets", EXPOSURE_SCALE_FIXTURE)
     bright = os.path.join(workdir, "exposure_bright.cscn")
     _exposure_live(scale_src, bright, scale=EXPOSURE_SCALE)
     bright_rows, _ = _exposure_probe(workdir, bright, frames=EXPOSURE_LINEAR_FRAMES, tag="bright")
@@ -8608,13 +8619,21 @@ def run_exposure_gate(workdir):
         print("  exposure-darkens ERROR no probe output")
         failures.append("exposure-darkens")
     else:
-        dark_gain = dark[-1]["gain"]
+        d = dark[-1]
+        dark_gain = d["gain"]
         bright_gain = bright_rows[-1]["gain"]
-        ok = dark_gain == EXPOSURE_GAIN_CAP and bright_gain <= EXPOSURE_DARKEN_MAX
+        # `valid` and the sub-key reading are not decoration. exposure_auto_gain
+        # returns exactly 1.0 from THREE early exits -- !automatic, !adapted_valid
+        # and adapted <= 0 -- so gain == 1.0 alone means "the cap engaged OR
+        # nothing was measured". Written without these, the arm passes on a meter
+        # whose histogram came back empty, which --meter-radius 0.0001 produces.
+        measured = d["valid"] == 1.0 and d["raw_nits"] < d["key"]
+        ok = measured and dark_gain == EXPOSURE_GAIN_CAP and bright_gain <= EXPOSURE_DARKEN_MAX
         print(f"  exposure-darkens {'PASS' if ok else 'FAIL'} sub-key scene gain={dark_gain:.6f} "
-              f"want exactly {EXPOSURE_GAIN_CAP} (metered {dark[-1]['raw_nits']:.3g} cd/m2, key "
-              f"{dark[-1]['key']}); bright scene gain={bright_gain:.6f} want "
-              f"<={EXPOSURE_DARKEN_MAX} (it must still stop down)")
+              f"want exactly {EXPOSURE_GAIN_CAP}; metered {d['raw_nits']:.3g} cd/m2 want "
+              f"< key {d['key']} and valid={int(d['valid'])} want 1 (or the cap was never "
+              f"reached); bright scene gain={bright_gain:.6f} want <={EXPOSURE_DARKEN_MAX} "
+              "(it must still stop down)")
         if not ok:
             failures.append("exposure-darkens")
 
@@ -8624,14 +8643,23 @@ def run_exposure_gate(workdir):
         print("  exposure-converge ERROR too few probe lines")
         failures.append("exposure-converge")
     else:
+        # Against the CLAMPED target, and both sides in log2 as the engine reports
+        # them. Two traps this avoids, each of which made a converged meter look
+        # broken: comparing against RAW never closes on a frame the metered bounds
+        # clamp, and log2()-ing the %.6f nits field measures print precision --
+        # a floor that grows as the scene darkens, reaching 2.5e-4 on this
+        # group's own dark configuration, 25x the threshold.
         def gap(rec):
-            return abs(math.log2(max(rec["adapted_nits"], 1e-30)) - rec["raw_log2"])
+            return abs(rec["adapted_log2"] - rec["target_log2"])
+        # Frame 0 is skipped because its gap is structurally zero -- the first
+        # measurement is taken whole, with no blend to converge from.
         early = max(gap(r) for r in rows[1:8])
         late = gap(rows[-1])
-        ok = late <= 1e-5 and early > 1e-5
-        print(f"  exposure-converge {'PASS' if ok else 'FAIL'} adapted-vs-raw gap "
-              f"{late:.2e} at frame {int(rows[-1]['frame'])} want <=1e-5 (the snap); "
-              f"early gap {early:.2e} want >1e-5 (it had somewhere to converge from)")
+        ok = late <= EXPOSURE_CONVERGE_EPS and early > EXPOSURE_CONVERGE_EPS
+        print(f"  exposure-converge {'PASS' if ok else 'FAIL'} adapted-vs-target gap "
+              f"{late:.2e} at frame {int(rows[-1]['frame'])} want <={EXPOSURE_CONVERGE_EPS} "
+              f"(the snap); early gap {early:.2e} want >{EXPOSURE_CONVERGE_EPS} "
+              "(it had somewhere to converge from)")
         if not ok:
             failures.append("exposure-converge")
 
@@ -8642,7 +8670,12 @@ def run_exposure_gate(workdir):
         print(f"  exposure-stable FAIL  {len(a)} lines vs {len(b)}")
         failures.append("exposure-stable")
     else:
-        diffs = [k for x, y in zip(a, b) for k in x if x[k] != y.get(k)]
+        # NaN compares unequal to itself, and a refused measurement is a NaN the
+        # engine emits deliberately -- so a bare != would report a designed path
+        # as a determinism regression.
+        def same(u, v):
+            return u == v or (isinstance(v, float) and math.isnan(u) and math.isnan(v))
+        diffs = [k for x, y in zip(a, b) for k in x if not same(x[k], y.get(k, None))]
         ok = not diffs
         print(f"  exposure-stable {'PASS' if ok else 'FAIL'} {len(a)} frames x "
               f"{len(a[0])} fields identical across two runs"
@@ -8689,12 +8722,20 @@ def run_exposure_gate(workdir):
 
     # --- exposure-mask ------------------------------------------------------
     uni, _ = _exposure_probe(workdir, live, frames=EXPOSURE_FRAMES, tag="mask_uni")
-    wide, _ = _exposure_probe(workdir, live, ["--meter-mode", "spot", "--meter-radius", "8.0"],
-                              frames=EXPOSURE_FRAMES, tag="mask_wide")
+    # 1.0 exactly, not an arbitrarily large number: the radius is a fraction of
+    # the UV half-diagonal, so 1.0 reaches the corners and covers the frame by
+    # definition. This arm used 8.0 while the shader divided by the radius alone
+    # and coverage saturated at 0.7071 -- so it passed without ever pinning what
+    # the unit meant, and any value above 0.71 would have done.
+    wide, wide_text = _exposure_probe(workdir, live,
+                                      ["--meter-mode", "spot", "--meter-radius", "1.0"],
+                                      frames=EXPOSURE_FRAMES, tag="mask_wide")
     spot, _ = _exposure_probe(workdir, live, ["--meter-mode", "spot", "--meter-radius", "0.4"],
                               frames=EXPOSURE_FRAMES, tag="mask_spot")
     if not (uni and wide and spot):
-        print("  exposure-mask  ERROR no probe output")
+        # The probe helper already collected the renderer's output; printing its
+        # tail is the difference between "something went wrong" and knowing what.
+        print(f"  exposure-mask  ERROR no probe output: {wide_text.strip()[-160:]}")
         failures.append("exposure-mask")
     else:
         identity = wide[-1]["raw_log2"] == uni[-1]["raw_log2"]

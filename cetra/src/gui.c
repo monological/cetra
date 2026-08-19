@@ -732,8 +732,18 @@ static void _engine_gui_panel(Engine* engine) {
         {
             Exposure* ex = &engine->exposure;
             float gain = exposure_auto_gain(ex);
-            igText("Metered %.4g cd/m2   gain %.4f   EV100 %.2f", (double)ex->adapted_luminance,
-                   (double)gain, (double)exposure_ev100(ex));
+            // `--` rather than 0 when nothing has been metered. Printing the
+            // uninitialised luminance shows "Metered 0 cd/m2", which is a real
+            // reading and a wrong one -- the same argument lum_reduce_frag makes
+            // about not emitting 0 for an empty histogram, and the state it is
+            // describing is exactly that one.
+            if (ex->adapted_valid)
+                igText("Metered %.4g cd/m2   gain %.4f   EV100 %.2f",
+                       (double)ex->adapted_luminance, (double)gain,
+                       (double)exposure_ev100(ex));
+            else
+                igText("Metered --   gain %.4f   EV100 %.2f", (double)gain,
+                       (double)exposure_ev100(ex));
             if (igIsItemHovered(0))
                 igSetTooltip("Metered scene luminance, the adaptation gain it produced, and the "
                              "camera's EV100. Gain is capped at 1: auto-exposure only darkens.");
@@ -746,7 +756,8 @@ static void _engine_gui_panel(Engine* engine) {
                                 (int)(sizeof(meter_names) / sizeof(meter_names[0])), -1))
                 engine->exposure.meter_mode = (MeteringMode)mode;
             if (engine->exposure.meter_mode != METERING_UNIFORM) {
-                igSliderFloat("Radius", &engine->exposure.meter_radius, 0.05f, 1.5f, "%.2f", 0);
+                igSliderFloat("Radius", &engine->exposure.meter_radius, 0.05f, 1.0f, "%.2f",
+                              ImGuiSliderFlags_AlwaysClamp);
                 if (igIsItemHovered(0))
                     igSetTooltip("Fraction of the frame's half-diagonal, in UV -- an ellipse in "
                                  "pixels on a non-square frame.");
@@ -755,18 +766,23 @@ static void _engine_gui_panel(Engine* engine) {
             // shader falls back to the whole population if they cross, so a
             // slider drag through the middle degrades to a plain mean instead of
             // to a black frame.
-            igSliderFloat("Low %", &engine->exposure.meter_low, 0.0f, 0.95f, "%.2f", 0);
+            igSliderFloat("Low %", &engine->exposure.meter_low, 0.0f, 0.95f, "%.2f",
+                          ImGuiSliderFlags_AlwaysClamp);
             if (igIsItemHovered(0))
                 igSetTooltip("Fraction of the DARKEST pixels ignored. High by default: a meter "
                              "that includes the black background is measuring the background.");
-            igSliderFloat("High %", &engine->exposure.meter_high, 0.05f, 1.0f, "%.2f", 0);
+            igSliderFloat("High %", &engine->exposure.meter_high, 0.05f, 1.0f, "%.2f",
+                          ImGuiSliderFlags_AlwaysClamp);
             if (igIsItemHovered(0))
                 igSetTooltip("Everything above this fraction is ignored -- the highlight tail.");
-            igSliderFloat("Adapt Up", &engine->exposure.adapt_rate_up, 0.001f, 1.0f, "%.3f", 0);
-            igSliderFloat("Adapt Down", &engine->exposure.adapt_rate_down, 0.001f, 1.0f, "%.3f", 0);
-            if (igIsItemHovered(0))
-                igSetTooltip("Per FRAME, not per second: a headless run of N frames must adapt "
-                             "identically every time.");
+            // Per FRAME, not per second, and said once above both rather than in a
+            // tooltip -- igIsItemHovered refers to the LAST item, so a single
+            // tooltip after two sliders describes only the second.
+            igTextDisabled("Adaptation rate, per frame");
+            igSliderFloat("Adapt Up", &engine->exposure.adapt_rate_up, 0.001f, 1.0f, "%.3f",
+                          ImGuiSliderFlags_AlwaysClamp);
+            igSliderFloat("Adapt Down", &engine->exposure.adapt_rate_down, 0.001f, 1.0f, "%.3f",
+                          ImGuiSliderFlags_AlwaysClamp);
             igTreePop();
         }
 

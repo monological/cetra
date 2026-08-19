@@ -3,9 +3,14 @@ in vec2 TexCoords;
 out vec4 FragColor;
 
 // Auto-exposure step 1: down-measure the linear HDR scene into a small target
-// storing log2 luminance. Mipmapping this target afterwards averages the logs,
-// so the top mip holds the scene's geometric-mean (photographic) luminance --
-// robust to a few very bright pixels, unlike an arithmetic mean.
+// storing log2 luminance, for lum_histogram_frag to bin and lum_reduce_frag to
+// collapse.
+//
+// This target used to be mipped down instead, its top mip holding the scene's
+// geometric mean. A mean cannot have a tail cut off it after the fact, which is
+// what a percentile needs, so 11.52 replaced the mip chain with the two passes
+// above -- and the sum each bin carries makes keeping the whole population
+// reproduce that mean exactly.
 #include "view.glsl"
 
 uniform sampler2D hdrTex; // Resolved linear HDR scene
@@ -15,19 +20,25 @@ void main()
     // Back to absolute scene radiance first. The buffer is pre-exposed
     // (view.glsl), and metering it in working space would measure this pass's
     // own contribution to the exposure that produced it -- a feedback loop that
-    // ratchets toward the clamp instead of settling. autoKey below is an
-    // absolute middle grey and only means anything against absolute input.
-    // Sanitize BEFORE converting: a +INF texel would poison the whole average
-    // through the mip chain, and the ceiling is the one pbr_frag already wrote
+    // ratchets toward the clamp instead of settling. Everything downstream --
+    // the bin range, the percentiles, the key -- is stated in absolute cd/m^2
+    // and only means anything against absolute input.
+    // Sanitize BEFORE converting: a +INF texel would poison the bin sum it lands
+    // in, and the ceiling is the one pbr_frag already wrote
     // under, so it clips nothing a shading pass let through. Applying it after
     // the conversion would instead cap absolute radiance at 60000, which a noon
     // sun legitimately exceeds -- the meter would read it as overcast.
     vec3 hdr = min(texture(hdrTex, TexCoords).rgb, vec3(WS_SCENE_MAX)) * oneOverPreExposure;
     float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
-    // A NUMERIC guard, and nothing else. log2(0) is -INF, which would poison the
-    // histogram's sum and reach the CPU as a measurement it can only refuse; the
-    // value is twenty-odd stops below anything a scene contains, so it decides
-    // nothing about metering.
+    // A numeric guard: log2(0) is -INF, which would poison the histogram's sum
+    // and reach the CPU as a measurement it can only refuse.
+    //
+    // Its VALUE is load-bearing, though, and a comment here once said it decided
+    // nothing. Every texel with no geometry behind it lands on it, which on a
+    // scene with a black surround is a large fraction of the population sitting
+    // far below everything else -- and it is why meter_low defaults as high as
+    // it does. LUM_HISTOGRAM_MIN_LOG2 is this value, so that population lands in
+    // bin 0 rather than below it; see the note there for what breaks otherwise.
     //
     // Both real bounds used to live here and both were ABSOLUTE cd/m^2. The
     // floor was the key itself -- texels darker than the key metered AS the key,

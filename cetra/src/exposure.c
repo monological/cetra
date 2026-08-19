@@ -29,8 +29,14 @@
 // An exponential blend never quite arrives, so without a snap the resting value
 // depends on the approach path -- which async texture-load timing perturbs, and
 // which would make two equal-length headless runs differ. Snapping inside ~1%
-// makes steady state a pure function of the scene. Measured: it engages by
-// frame 12 and the adaptation then holds no history at all (spec 11.52 P0).
+// makes steady state a pure function of the scene, after which the adaptation
+// holds no history at all.
+//
+// WHEN it settles depends on the scene, not on the deadband: the value has to
+// stop moving too. On postfx_convergence_fixture it first touches the deadband
+// around frame 18 and is pushed back out twice as the scene keeps brightening,
+// settling at frame 91. An earlier note here said frame 12, measured before the
+// percentiles changed what the meter reads and never re-taken.
 #define EXPOSURE_ADAPT_SNAP 0.01f
 
 void exposure_init(Exposure* ex) {
@@ -62,20 +68,18 @@ void exposure_init(Exposure* ex) {
     ex->meter_mode = METERING_UNIFORM;
     ex->meter_radius = 0.4f;
 
-    // 1e-4 to 1e6 cd/m^2. The upper bound is the old per-texel metering ceiling,
-    // moved here: it is the same protection expressed on the metered SCALAR
-    // rather than on every texel, which is what makes it compatible with a
-    // percentile (a per-texel clamp is not scale-covariant; a bound on the
-    // answer is a different statement and a legitimate one -- it is UE's Max
-    // Brightness).
+    // Genuinely inert: outside the histogram's own range at both ends, so a
+    // scene has to author its way into being clamped. UE's Min/Max Brightness.
     //
-    // NOT inert, and the reason is a measured runaway. Without an upper bound a
-    // bright scene drives the gain to the 20-stop floor, pre-exposure collapses
-    // past fp16's subnormals in the HDR buffer, and the meter -- which divides
-    // pre-exposure back out -- amplifies what is left into millions of nits and
-    // holds the gain pinned there. That is a stable fixed point and it is wrong.
-    ex->meter_min_log2 = -13.3f;
-    ex->meter_max_log2 = 19.93f;
+    // They shipped at -13.3 / 19.93 for one review cycle, described as inert and
+    // as stopping a runaway, and were neither. -13.3 sat INSIDE the bin range
+    // and silently clamped any dark frame by up to thirteen stops. And the upper
+    // bound never reached the gain at all: exposure_auto_gain floors the gain at
+    // 2^-20, which pins once the metered value passes log2 17.53 -- below 19.93 --
+    // so the bound moved the recorded luminance and left the exposure untouched.
+    // The runaway it was credited with stopping was already bounded by that floor.
+    ex->meter_min_log2 = -30.0f;
+    ex->meter_max_log2 = 24.0f;
 
     ex->adapt_rate_up = EXPOSURE_ADAPT_RATE;
     ex->adapt_rate_down = EXPOSURE_ADAPT_RATE;
@@ -153,6 +157,8 @@ void exposure_submit_measurement(Exposure* ex, float log2_luminance) {
     // bound while the real measurement walked further away, and then crawl back
     // at the adaptation rate once the frame recovered.
     float target = fminf(fmaxf(log2_luminance, ex->meter_min_log2), ex->meter_max_log2);
+    ex->last_raw_log2 = log2_luminance;
+    ex->last_target_log2 = target;
 
     float adapted = target;
     if (ex->adapted_valid) {
@@ -185,10 +191,17 @@ void exposure_probe_report(const Exposure* ex, float raw_log2, int frame) {
     // of the same scene.
     float camera = exposure_camera_multiplier(ex);
     float gain = exposure_auto_gain(ex);
-    printf("exposure-probe frame=%d raw_log2=%.6f raw_nits=%.6f adapted_nits=%.6f "
-           "gain=%.6f camera=%.6f pre_exposure=%.6f ev100=%.6f key=%.6f valid=%d\n",
-           frame, raw_log2, exp2f(raw_log2), ex->adapted_luminance, gain, camera, camera * gain,
-           exposure_ev100(ex), ex->key, ex->adapted_valid ? 1 : 0);
+    // adapted in LOG2 as well as nits, because a reader comparing it against
+    // raw_log2 otherwise has to log2 a value already rounded to six decimals --
+    // and the quantisation that introduces grows as the scene darkens, which is
+    // exactly where a convergence check needs to be tightest.
+    float adapted_log2 = ex->adapted_luminance > 0.0f ? log2f(ex->adapted_luminance) : 0.0f;
+    printf("exposure-probe frame=%d raw_log2=%.6f raw_nits=%.6f target_log2=%.6f "
+           "adapted_log2=%.6f adapted_nits=%.6f gain=%.6f camera=%.6f pre_exposure=%.6f "
+           "ev100=%.6f key=%.6f valid=%d\n",
+           frame, raw_log2, exp2f(raw_log2), ex->last_target_log2, adapted_log2,
+           ex->adapted_luminance, gain, camera, camera * gain, exposure_ev100(ex), ex->key,
+           ex->adapted_valid ? 1 : 0);
 }
 
 void exposure_reset_adaptation(Exposure* ex) {

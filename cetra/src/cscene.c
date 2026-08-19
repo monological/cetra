@@ -301,6 +301,23 @@ static void parse_light_overrides(CetraSceneDesc* d, const cJSON* root) {
     }
 }
 
+// A post.metering float, refused if it is outside the range the meter can act
+// on. Absent leaves the engine default; out of range warns by name and is
+// ignored, so the author sees the key they typed rather than a frame that is
+// subtly wrong.
+static bool _meter_range(const cJSON* obj, const char* key, float lo, float hi, float* out) {
+    float v = 0.0f;
+    if (!get_float(obj, key, &v))
+        return false;
+    if (!(v >= lo && v <= hi)) {
+        log_warn("cscene: post.metering.%s %g is outside [%g, %g]; ignored", key, (double)v,
+                 (double)lo, (double)hi);
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
 static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* post = cJSON_GetObjectItemCaseSensitive(root, "post");
     if (!cJSON_IsObject(post))
@@ -342,27 +359,34 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* meter = cJSON_GetObjectItemCaseSensitive(post, "metering");
     if (cJSON_IsObject(meter)) {
         const cJSON* mode = cJSON_GetObjectItemCaseSensitive(meter, "mode");
-        if (cJSON_IsString(mode) && mode->valuestring) {
-            if (strcmp(mode->valuestring, "uniform") == 0) {
-                d->meter_mode = 0;
+        if (cJSON_IsString(mode)) {
+            // strcasecmp, like the tonemap and environment-mode parses above:
+            // vocabulary validation is schema knowledge, so "Spot" is the same
+            // word as "spot" here rather than a key that warns and vanishes.
+            const char* m = mode->valuestring;
+            int v = strcasecmp(m, "uniform") == 0 ? CSCENE_METER_UNIFORM
+                    : (strcasecmp(m, "centre") == 0 || strcasecmp(m, "center") == 0)
+                        ? CSCENE_METER_CENTRE
+                    : strcasecmp(m, "spot") == 0 ? CSCENE_METER_SPOT
+                                                 : -1;
+            if (v < 0)
+                log_warn("cscene: unknown metering mode '%s' (uniform|centre|center|spot)", m);
+            else {
+                d->meter_mode = v;
                 d->has_meter_mode = true;
-            } else if (strcmp(mode->valuestring, "centre") == 0 ||
-                       strcmp(mode->valuestring, "center") == 0) {
-                d->meter_mode = 1;
-                d->has_meter_mode = true;
-            } else if (strcmp(mode->valuestring, "spot") == 0) {
-                d->meter_mode = 2;
-                d->has_meter_mode = true;
-            } else {
-                log_warn("cscene: unknown metering mode '%s' (uniform|centre|spot)",
-                         mode->valuestring);
             }
         }
-        d->has_meter_radius = get_float(meter, "radius", &d->meter_radius);
-        d->has_meter_low = get_float(meter, "low", &d->meter_low);
-        d->has_meter_high = get_float(meter, "high", &d->meter_high);
-        d->has_adapt_up = get_float(meter, "adapt_up", &d->adapt_up);
-        d->has_adapt_down = get_float(meter, "adapt_down", &d->adapt_down);
+        // Refused rather than clamped, which is this parser's stated rule a few
+        // lines below for render_scale: silently moving an authored number into
+        // range hides a typo behind a slightly wrong frame, and the author never
+        // learns the value they wrote is not the value they got.
+        // 0.02 lower bound: a smaller spot contains no texel of the 64x64 measure
+        // target at all, and an empty histogram freezes the meter silently.
+        d->has_meter_radius = _meter_range(meter, "radius", 0.02f, 1.0f, &d->meter_radius);
+        d->has_meter_low = _meter_range(meter, "low", 0.0f, 1.0f, &d->meter_low);
+        d->has_meter_high = _meter_range(meter, "high", 0.0f, 1.0f, &d->meter_high);
+        d->has_adapt_up = _meter_range(meter, "adapt_up", 0.0f, 1.0f, &d->adapt_up);
+        d->has_adapt_down = _meter_range(meter, "adapt_down", 0.0f, 1.0f, &d->adapt_down);
         static const char* const meter_known[] = {"mode", "radius",    "low",
                                                   "high", "adapt_up", "adapt_down"};
         warn_unknown_keys(meter, meter_known, sizeof(meter_known) / sizeof(meter_known[0]),

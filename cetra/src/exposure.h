@@ -75,11 +75,13 @@ typedef struct Exposure {
     // distinction is the whole reason these exist: the absolute floor they
     // replaced cost 1.61 stops of scale-covariance on a dim scene (spec 11.52).
     //
-    // The defaults TRIM TAILS rather than re-centre the metering, which is a
-    // deliberate divergence from UE's 0.80/0.983. Those are tuned against UE's
-    // own key and tonemapper; metering the brightest fifth of the scene against
-    // a 0.18 key here would darken every frame substantially, and re-keying to
-    // match is a look decision this spec did not take.
+    // The low default is BACKGROUND REJECTION, not a tail trim -- 0.70 discards
+    // most of the population, and it has to. Where no geometry was drawn the
+    // buffer holds exactly 0, and zero times a thousand is still zero, so that
+    // population never scales with the scene; a meter that keeps it is metering
+    // the background. exposure_init carries the measurements. Setting a mild
+    // 0.02 expecting an analogous trim gets a meter dominated by the void, which
+    // is the reading this comment used to invite.
     float meter_low;
     float meter_high;
 
@@ -92,10 +94,15 @@ typedef struct Exposure {
     float meter_radius;
 
     // Bounds on the metered luminance, as log2 cd/m^2 (UE's Min/Max Brightness).
-    // Inert by default -- they span wider than the histogram does, so a scene has
-    // to opt into being clamped. Their job is to stop a pathological frame (a
-    // camera inside geometry, a fully black loading frame) walking the exposure
-    // somewhere it cannot walk back from within the adaptation rate.
+    // Inert by default -- wider than the histogram's own range at both ends, so
+    // nothing is clamped until a scene asks for it. Their job is to stop a
+    // pathological frame (a camera inside geometry, a fully black loading frame)
+    // walking the exposure somewhere it cannot walk back from within the
+    // adaptation rate.
+    //
+    // Settable in code only for now; no CLI flag, .cscn key or slider reaches
+    // them, unlike the six knobs above. Said plainly because the defaults being
+    // inert is what makes that gap survivable rather than invisible.
     float meter_min_log2;
     float meter_max_log2;
 
@@ -119,6 +126,18 @@ typedef struct Exposure {
     // what keeps the first frame from adapting to uninitialised memory.
     float adapted_luminance;
     bool adapted_valid;
+
+    // What the last submitted measurement was, and what it became after the
+    // metered bounds were applied. Diagnostic, but they are the only record:
+    // exposure_submit_measurement folds the reading into adapted_luminance and
+    // drops both, so nothing outside that call could otherwise see either.
+    //
+    // `last_target_log2` is the value the adaptation is actually converging TO.
+    // Comparing `adapted` against the RAW reading instead looks equivalent and is
+    // not -- on a frame the bounds clamp, the two never meet however long it
+    // runs, which reads as an adaptation that never settles.
+    float last_raw_log2;
+    float last_target_log2;
 
     // Print what the meter decided, every frame it decides it. Diagnostic only;
     // nothing downstream reads it.

@@ -16,20 +16,47 @@ out vec4 FragColor;
 // whole number of bins, so two scaled copies of one scene do not land on the
 // same offsets and a bin-granular cut would report them differently.
 
-uniform sampler2D histTex; // binCount x 1, RG32F: (count, sum of log2 values)
+uniform sampler2D histTex; // binCount x rowCount, RG32F: (count, sum of log2)
 uniform int binCount;
+uniform int rowCount; // rows the bin pass split the source across
 uniform vec2 percentiles; // fraction of the population to keep, low and high edge
 
+// A bin's true (count, sum): the bin pass splits the source across rowCount
+// rows, and both accumulators are associative, so a bin is the sum down its
+// column.
+//
+// Re-fetched rather than cached in an array. An array would have to be sized by
+// a constant while binCount is a uniform, which is exactly the C-to-GLSL size
+// agreement this pipeline deleted when it stopped reading a named mip level --
+// and the cost of refetching is 512 texels in a ONE-fragment pass.
+vec2 binColumn(int bin) {
+    vec2 acc = vec2(0.0);
+    for (int r = 0; r < rowCount; r++)
+        acc += texelFetch(histTex, ivec2(bin, r), 0).rg;
+    return acc;
+}
+
 void main() {
+    // One walk, both accumulators. The fallback at the bottom needs the total
+    // sum, and taking it here rather than re-walking costs nothing.
     float total = 0.0;
-    for (int i = 0; i < binCount; i++)
-        total += texelFetch(histTex, ivec2(i, 0), 0).r;
+    float totalSum = 0.0;
+    for (int i = 0; i < binCount; i++) {
+        vec2 b = binColumn(i);
+        total += b.x;
+        totalSum += b.y;
+    }
 
     if (total <= 0.0) {
-        // No samples at all. Emitting 0 would be log2(1 nit) -- a real reading,
-        // and a wrong one. exposure_submit_measurement refuses non-finite input,
-        // so this hands it something it will decline rather than latch.
-        FragColor = vec4(0.0 / 0.0, 0.0, 0.0, 1.0);
+        // No samples at all -- reachable, since a spot smaller than one source
+        // texel excludes every one of them. Emitting 0 would be log2(1 nit), a
+        // real reading and a wrong one, so this hands the CPU something its
+        // isfinite check refuses.
+        //
+        // Constructed rather than divided. `0.0 / 0.0` is UNSPECIFIED in GLSL,
+        // not guaranteed NaN -- and it is exactly the expression a compiler is
+        // most likely to fold, to 0.0, which is the outcome this is avoiding.
+        FragColor = vec4(uintBitsToFloat(0x7FC00000u), 0.0, 0.0, 1.0);
         return;
     }
 
@@ -40,12 +67,13 @@ void main() {
     float keptSum = 0.0;
     float keptCount = 0.0;
     for (int i = 0; i < binCount; i++) {
-        vec2 b = texelFetch(histTex, ivec2(i, 0), 0).rg;
+        vec2 b = binColumn(i);
         float c = b.x;
         float binLo = walked;
         walked += c;
-        if (c <= 0.0)
-            continue;
+        // An empty bin needs no guard of its own: c == 0 means walked == binLo,
+        // so `take` below is <= 0 in every ordering and the next line catches it
+        // before the divide.
         float take = min(walked, hi) - max(binLo, lo);
         if (take <= 0.0)
             continue;
@@ -61,10 +89,7 @@ void main() {
     // fall back to the whole population rather than to a NaN, since a user who
     // sets low >= high wants a mean, not a black frame.
     if (keptCount <= 0.0) {
-        float s = 0.0;
-        for (int i = 0; i < binCount; i++)
-            s += texelFetch(histTex, ivec2(i, 0), 0).g;
-        FragColor = vec4(s / total, 0.0, 0.0, 1.0);
+        FragColor = vec4(totalSum / total, 0.0, 0.0, 1.0);
         return;
     }
     FragColor = vec4(keptSum / keptCount, 0.0, 0.0, 1.0);
