@@ -1,4 +1,5 @@
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -100,6 +101,9 @@ Mesh* create_mesh() {
     mesh->bone_weight_vbo = 0;
     mesh->skeleton = NULL;
     mesh->is_skinned = false;
+    mesh->bone_aabb = NULL;
+    mesh->bone_aabb_count = 0;
+    mesh->has_bone_rest = false;
 
     return mesh;
 }
@@ -152,6 +156,8 @@ void free_mesh(Mesh* mesh) {
         glDeleteBuffers(1, &mesh->bone_id_vbo);
     if (mesh->bone_weight_vbo)
         glDeleteBuffers(1, &mesh->bone_weight_vbo);
+    if (mesh->bone_aabb)
+        free(mesh->bone_aabb);
     // Do not free skeleton - it's shared and managed by Scene
 
     // Do not free material. Same material can be shared by multiple meshes.
@@ -210,6 +216,56 @@ static void measure_wind_extremes(Mesh* mesh) {
     }
 }
 
+// Each bone's own vertices, in bind space (see mesh.h). Runs beside the wind
+// maxima and for the same reason: this is where the vertex data is final.
+static void measure_bone_bounds(Mesh* mesh) {
+    free(mesh->bone_aabb);
+    mesh->bone_aabb = NULL;
+    mesh->bone_aabb_count = 0;
+    mesh->has_bone_rest = false;
+
+    if (!mesh->is_skinned || !mesh->bone_ids || !mesh->bone_weights || !mesh->skeleton)
+        return;
+    size_t bones = mesh->skeleton->bone_count;
+    if (bones == 0 || bones > MAX_BONES)
+        return;
+
+    mesh->bone_aabb = malloc(bones * sizeof(AABB));
+    if (!mesh->bone_aabb)
+        return;
+    mesh->bone_aabb_count = bones;
+
+    // An empty box per bone, marked by min > max, so a bone this mesh does not
+    // bind is skipped at cull rather than contributing a box around the origin.
+    for (size_t b = 0; b < bones; ++b) {
+        glm_vec3_fill(mesh->bone_aabb[b].min, FLT_MAX);
+        glm_vec3_fill(mesh->bone_aabb[b].max, -FLT_MAX);
+    }
+    glm_vec3_fill(mesh->bone_rest_aabb.min, FLT_MAX);
+    glm_vec3_fill(mesh->bone_rest_aabb.max, -FLT_MAX);
+
+    for (size_t i = 0; i < mesh->vertex_count; ++i) {
+        vec3 v = {mesh->vertices[i * 3 + 0], mesh->vertices[i * 3 + 1], mesh->vertices[i * 3 + 2]};
+        float total = 0.0f;
+        for (int j = 0; j < BONES_PER_VERTEX; ++j) {
+            int id = mesh->bone_ids[i * BONES_PER_VERTEX + j];
+            float w = mesh->bone_weights[i * BONES_PER_VERTEX + j];
+            if (id < 0 || (size_t)id >= bones || w <= 0.0f)
+                continue;
+            total += w;
+            glm_vec3_minv(mesh->bone_aabb[id].min, v, mesh->bone_aabb[id].min);
+            glm_vec3_maxv(mesh->bone_aabb[id].max, v, mesh->bone_aabb[id].max);
+        }
+        // The shader's own threshold, mirrored: below it skinMatrix hands back
+        // identity and this vertex draws where it sits.
+        if (total < 0.001f) {
+            glm_vec3_minv(mesh->bone_rest_aabb.min, v, mesh->bone_rest_aabb.min);
+            glm_vec3_maxv(mesh->bone_rest_aabb.max, v, mesh->bone_rest_aabb.max);
+            mesh->has_bone_rest = true;
+        }
+    }
+}
+
 void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     if (!mesh)
         return;
@@ -218,6 +274,7 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     scene_graph_touched();
 
     measure_wind_extremes(mesh);
+    measure_bone_bounds(mesh);
 
     // Bind the Vertex Array Object (vao)
     glBindVertexArray(mesh->vao);

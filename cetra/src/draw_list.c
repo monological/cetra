@@ -3,6 +3,7 @@
 
 #include "draw_list.h"
 
+#include "animation.h"
 #include "ext/log.h"
 #include "material.h"
 #include "scene.h"
@@ -234,6 +235,59 @@ static bool _item_bounds(const DrawItem* item, const CullView* view, vec3 out_mi
     const Mesh* mesh = item->mesh;
     glm_vec3_copy((float*)mesh->aabb.min, out_min);
     glm_vec3_copy((float*)mesh->aabb.max, out_max);
+
+    // A skinned mesh's import AABB describes its BIND pose, which is a
+    // different shape from the one being drawn -- so it is replaced rather than
+    // widened. The three cases are the three the shader takes:
+    //
+    //   no live pose      -> render_update_skinning_uniforms sets skinned = 0
+    //                        and the mesh draws at bind, so the import AABB is
+    //                        EXACT here rather than a fallback
+    //   pose is this rig  -> the union below
+    //   pose is some      -> a foreign rig's matrices are about to be uploaded
+    //   other rig            for this mesh; nothing here can bound that, and
+    //                        saying so is better than bounding it wrongly
+    if (mesh->is_skinned && view->pose && view->pose->active_bone_count > 0) {
+        if (mesh->skeleton != view->pose->skeleton || !mesh->bone_aabb)
+            return false;
+
+        size_t bones = mesh->bone_aabb_count;
+        if (bones > view->pose->active_bone_count)
+            bones = view->pose->active_bone_count;
+
+        bool any = false;
+        for (size_t b = 0; b < bones; ++b) {
+            const AABB* box = &mesh->bone_aabb[b];
+            if (box->min[0] > box->max[0])
+                continue; // no vertex binds this bone
+            vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
+            // The casts are cglm's const-incorrectness, the same one
+            // item_world_bounds carries: it reads these and declares them
+            // non-const anyway.
+            aabb_transform((float*)box->min, (float*)box->max,
+                           (vec4*)view->pose->bone_matrices[b], lo, hi);
+            if (any) {
+                glm_vec3_minv(out_min, lo, out_min);
+                glm_vec3_maxv(out_max, hi, out_max);
+            } else {
+                glm_vec3_copy(lo, out_min);
+                glm_vec3_copy(hi, out_max);
+                any = true;
+            }
+        }
+        if (mesh->has_bone_rest) {
+            if (any) {
+                glm_vec3_minv(out_min, (float*)mesh->bone_rest_aabb.min, out_min);
+                glm_vec3_maxv(out_max, (float*)mesh->bone_rest_aabb.max, out_max);
+            } else {
+                glm_vec3_copy((float*)mesh->bone_rest_aabb.min, out_min);
+                glm_vec3_copy((float*)mesh->bone_rest_aabb.max, out_max);
+                any = true;
+            }
+        }
+        if (!any)
+            return false;
+    }
 
     // Wind is added in OBJECT space (object_position.glsl) and the caller
     // transforms this box afterwards, so the margin lands in the same space the

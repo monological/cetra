@@ -97,6 +97,22 @@ typedef struct Mesh {
     struct Skeleton* skeleton; // Shared skeleton pointer (not owned)
     bool is_skinned;
 
+    // Where each bone's own vertices sit in BIND space, so a posed mesh can be
+    // bounded and therefore culled. NULL until the upload measures them, and
+    // only ever for a skinned mesh.
+    //
+    // Per bone rather than one box per mesh because skin weights are convex --
+    // a posed vertex lies in the convex hull of its bones acting on it alone --
+    // so the union of each bone's own box, transformed, bounds the pose. Asking
+    // every bone to bound the WHOLE mesh instead needs no measurement and
+    // inflates 2-4x, which is loose enough that a character never culls.
+    AABB* bone_aabb;
+    size_t bone_aabb_count;
+    // Vertices whose weights sum to nothing. skinMatrix falls back to identity
+    // for them, so they draw at bind position and no bone's box covers them.
+    AABB bone_rest_aabb;
+    bool has_bone_rest;
+
     // This mesh's emissive surface is also an LTC area panel (spec 11.49), so a
     // capture whose output is irradiance must not see it emit -- the panel
     // already carries that light analytically.
