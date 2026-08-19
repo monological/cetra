@@ -37,6 +37,11 @@ uniform vec3 stochasticLut[STOCHASTIC_LUT_SIZE];
 // distance -- too small and the blend itself becomes the visible texture.
 uniform float stochasticScale;
 
+// NOT include/noise.glsl's hash21, and this file must never be the SOURCE of a
+// shared one: it is vec2 -> vec2, and the chunk it lives in declares
+// stochasticLut/stochasticScale and uses dFdx/dFdy -- so splicing it into a
+// vertex program would drag 768 bytes of uniform in and might not compile.
+// It could become a CONSUMER of hash21 if anyone wants the reuse.
 vec2 _stochasticHash(vec2 p) {
     // Only has to spread offsets over the tile; a collision here shows up as two lattice cells
     // sampling the same place, which reads as a patch of ordinary tiling.

@@ -432,8 +432,7 @@ void main()
     // Film grain: display-space, weighted toward midtones (invisible in flat
     // black/white), animated by a deterministic per-frame seed
     if (grainEnabled == 1) {
-        float n =
-            fract(sin(dot(gl_FragCoord.xy + grainSeed, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        float n = hash21(gl_FragCoord.xy + grainSeed, vec2(12.9898, 78.233)) - 0.5;
         float luma = dot(color, vec3(0.299, 0.587, 0.114));
         float w = 1.0 - abs(2.0 * luma - 1.0);
         color = clamp(color + n * grainStrength * w, 0.0, 1.0);

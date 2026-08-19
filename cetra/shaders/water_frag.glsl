@@ -111,6 +111,7 @@ uniform float maxReflectionLOD;
 #include "velocity.glsl"
 #include "fresnel.glsl"
 #include "depth.glsl"
+#include "noise.glsl" // hash21, for the foam value noise below
 // The surface definition, for its cascade samplers and its wave-model switch. The
 // fragment stage does not re-evaluate the surface -- the vertex stage's position
 // and normal are interpolated in -- but it reads the SHORT band, which by design
@@ -389,7 +390,7 @@ const float WATER_GLITTER_MAX = 400.0;
  * the derivative is continuous and the pattern has no lattice creases in it.
  */
 float waterHash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    return hash21(p, vec2(127.1, 311.7));
 }
 
 float waterValueNoise(vec2 p) {

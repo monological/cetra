@@ -40,6 +40,9 @@ out vec4 oLife;
 // --- Hash-based 3D gradient noise (no permutation table; a GPU-native stand-in
 // for noise_perlin3 -- the field differs slightly from the CPU version, which is
 // fine for an organic cloud). ---
+// NOT include/noise.glsl's hash13: this is vec3 -> vec3 with three distinct
+// constant vectors and a signed -1+2*fract remap, and it has one caller.
+// Promoting it would put a private helper in a shared header.
 vec3 hash33(vec3 p) {
     p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)),
              dot(p, vec3(113.5, 271.9, 124.6)));

@@ -21,6 +21,10 @@ uniform float uWindPhaseVariation; // 0 = every object sways in lockstep
 // The amplitude coefficients, shared with the CPU-side bound (wind.c) that lets
 // a displaced mesh be frustum-culled.
 #include "wind_bounds.glsl"
+// hash13, for the per-object phase below. Pure arithmetic -- no uniforms, no
+// samplers, no derivatives -- so it is safe in the four vertex programs this
+// chunk reaches.
+#include "noise.glsl"
 
 // A per-object phase, in radians, from where the object stands. Derived rather
 // than stored: an InstanceBlock field would cost a kilobyte of std140 padding
@@ -35,7 +39,7 @@ uniform float uWindPhaseVariation; // 0 = every object sways in lockstep
 float windObjectPhase(vec3 origin) {
     if (uWindPhaseVariation <= 0.0)
         return 0.0;
-    float h = fract(sin(dot(origin, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float h = hash13(origin, vec3(12.9898, 78.233, 37.719));
     return h * uWindPhaseVariation * 6.2831853;
 }
 
