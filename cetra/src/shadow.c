@@ -14,7 +14,6 @@
 #include "engine.h"
 #include "intersect.h"
 #include "shadow.h"
-#include "light_cluster.h"
 #include "profiler.h"
 #include "texture.h"
 #include "render.h"
@@ -201,6 +200,14 @@ void free_shadow_map_array(ShadowSystem* system) {
 
     free_depth_array(&system->shadow_map_array, &system->cascade_fbo);
     system->initialized = false;
+}
+
+int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* light) {
+    if (!system || !light || !system->enabled || light->shadow_layer < 0 ||
+        light->shadow_layer >= system->punctual_layer_count) {
+        return -1;
+    }
+    return light->shadow_layer;
 }
 
 // Largest power-of-two edge the VRAM budget affords for `layers` depth layers.
@@ -1570,18 +1577,26 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     }
 
     // The population no shadow map can serve: point and spot lights holding no
-    // punctual layer. Counted BEFORE the directional early-out below, because a
-    // scene lit only by practicals has no directional and this is the whole
-    // reason it still needs a contact-shadow pass (spec 11.56). The cull radius
-    // is the same test the cluster build applies -- a light that never reaches
-    // epsilon is not a light the march can shadow.
+    // LIVE punctual layer. Counted BEFORE the directional early-out below,
+    // because a scene lit only by practicals has no directional and this is the
+    // whole reason it still needs a contact-shadow pass (spec 11.56). The cull
+    // radius is the same test the cluster build applies -- a light that never
+    // reaches epsilon is not a light the march can shadow.
+    //
+    // A SCENE count, not a visible one: the march itself walks the cluster list,
+    // so a scene whose practicals are all off screen arms a pass that answers 1
+    // everywhere. Counting the visible ones means reading the cluster build's own
+    // tally, which a reflection-probe capture face overwrites with its own
+    // frustum -- a bigger coupling than the frame it saves.
     fx->cs_mapless_lights = 0;
     for (size_t i = 0; scene && i < scene->light_count; i++) {
         const Light* l = scene->lights[i];
         if (!l || (l->type != LIGHT_POINT && l->type != LIGHT_SPOT))
             continue;
-        if (l->shadow_layer < 0 && light_cull_radius(l) != 0.0f)
+        if (shadow_live_punctual_layer(scene->shadow_system, l) < 0 &&
+            light_cull_radius(l) != 0.0f) {
             fx->cs_mapless_lights++;
+        }
     }
 
     // Spot shadow (Phase 2): occludes the beam by geometry. Published

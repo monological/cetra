@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <cglm/cglm.h>
 
 #include "util.h"
@@ -192,6 +193,41 @@ void set_light_range(Light* light, float range) {
     if (!light)
         return;
     light->range = range;
+}
+
+// Radiance below this reads as black at the project-standard -E 1.0 (one LDR
+// LSB); the derived cull radius is where attenuation crosses it.
+#define LIGHT_CULL_EPSILON (1.0f / 256.0f)
+
+float light_cull_radius(const struct Light* light) {
+    if (light->range > 0.0f)
+        return light->range;
+
+    float peak = fmaxf(light->color[0], fmaxf(light->color[1], light->color[2]));
+    float i_eff = light->intensity * peak;
+    if (i_eff <= 0.0f)
+        return 0.0f;
+
+    // Area panels ignore the attenuation coefficients entirely -- the LTC
+    // form factor carries the falloff, and `intensity` is emitted radiance.
+    // Bound the reach by the head-on far-field irradiance I*A/(pi*d^2),
+    // solved against the same 1/256 visibility floor the point path uses.
+    // Head-on is the directional maximum (real response is that times NdotL),
+    // so this is conservative; the half-diagonal covers the panel's own extent.
+    if (light->type == LIGHT_AREA) {
+        float area = light->size[0] * light->size[1];
+        if (area <= 0.0f)
+            return 0.0f;
+        float half_diagonal =
+            0.5f * sqrtf(light->size[0] * light->size[0] + light->size[1] * light->size[1]);
+        return sqrtf(i_eff * area / (LIGHT_CULL_EPSILON * (float)M_PI)) + half_diagonal;
+    }
+
+    // No authored range: fall back to where bare inverse-square drops under the
+    // visibility floor, i_eff/d^2 = epsilon. An authored one returned above --
+    // the window makes a light exactly zero past its range, so the range IS the
+    // cull radius and there is nothing to solve.
+    return sqrtf(i_eff / LIGHT_CULL_EPSILON);
 }
 
 /**

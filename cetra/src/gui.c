@@ -830,7 +830,7 @@ static void _engine_gui_panel(Engine* engine) {
         // The pass needs something to march toward -- a shadow-casting
         // directional, or a local light that has no shadow map to be sharpened
         // against. Say so rather than let the toggle look inert.
-        if (fx->fog_light_count == 0 && fx->cs_mapless_lights == 0)
+        if (!postfx_contact_shadows_have_light(fx))
             igTextDisabled("(needs a directional or a map-less local light)");
         _end_effect_group();
 

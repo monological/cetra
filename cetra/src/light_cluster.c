@@ -9,10 +9,7 @@
 #include "intersect.h"
 #include "light.h"
 #include "scene.h"
-
-// Radiance below this reads as black at the project-standard -E 1.0 (one LDR
-// LSB); the derived cull radius is where attenuation crosses it.
-#define LC_CULL_EPSILON (1.0f / 256.0f)
+#include "shadow.h"
 
 // View-dependent constants shared by the assignment and fill phases.
 typedef struct ClusterFrame {
@@ -48,37 +45,6 @@ void free_light_cluster_context(LightClusterContext* ctx) {
     free_ubo(ctx->clusters_ubo);
     free_ubo(ctx->cluster_indices_ubo);
     free(ctx);
-}
-
-float light_cull_radius(const struct Light* light) {
-    if (light->range > 0.0f)
-        return light->range;
-
-    float peak = fmaxf(light->color[0], fmaxf(light->color[1], light->color[2]));
-    float i_eff = light->intensity * peak;
-    if (i_eff <= 0.0f)
-        return 0.0f;
-
-    // Area panels ignore the attenuation coefficients entirely -- the LTC
-    // form factor carries the falloff, and `intensity` is emitted radiance.
-    // Bound the reach by the head-on far-field irradiance I*A/(pi*d^2),
-    // solved against the same 1/256 visibility floor the point path uses.
-    // Head-on is the directional maximum (real response is that times NdotL),
-    // so this is conservative; the half-diagonal covers the panel's own extent.
-    if (light->type == LIGHT_AREA) {
-        float area = light->size[0] * light->size[1];
-        if (area <= 0.0f)
-            return 0.0f;
-        float half_diagonal =
-            0.5f * sqrtf(light->size[0] * light->size[0] + light->size[1] * light->size[1]);
-        return sqrtf(i_eff * area / (LC_CULL_EPSILON * (float)M_PI)) + half_diagonal;
-    }
-
-    // No authored range: fall back to where bare inverse-square drops under the
-    // visibility floor, i_eff/d^2 = epsilon. An authored one returned above --
-    // the window makes a light exactly zero past its range, so the range IS the
-    // cull radius and there is nothing to solve.
-    return sqrtf(i_eff / LC_CULL_EPSILON);
 }
 
 // slice(z) for view depth z, matching clusterLightList in lights_ubo.glsl
@@ -205,7 +171,8 @@ static void _area_panel_up(const struct Light* light, const vec3 dir, vec3 out) 
     glm_vec3_normalize(out);
 }
 
-static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius) {
+static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius,
+                                int live_layer) {
     glm_vec3_copy((float*)light->global_position, dst->pos_range);
     dst->pos_range[3] = radius > 0.0f ? radius : 0.0f; // 0 = unbounded
     dst->dir_type[3] = (float)light->type; // 1 point / 2 spot / 3 area
@@ -217,7 +184,13 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     dst->shadow_misc[0] = light->outerCutOff;
     // The punctual base layer, not the CSM slot: only directionals reach the
     // cascade array and they never arrive through this list.
-    dst->shadow_misc[1] = (float)light->shadow_layer;
+    //
+    // The LIVE layer, resolved by the shadow system rather than read off the
+    // light: shadow_layer keeps its last value when the depth pass stops running,
+    // so packing it raw hands every consumer a map that is no longer drawn. One
+    // site, so the shading lookup and anything using this field as an eligibility
+    // test cannot disagree about which lights have a map.
+    dst->shadow_misc[1] = (float)live_layer;
     glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
 
     // Area panels also ship a height axis; other light types leave it zeroed.
@@ -302,7 +275,8 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
             sphere[3] = radius;
         }
 
-        _pack_cluster_light(&ctx->lights.cluster_lights[num_packed], light, radius);
+        _pack_cluster_light(&ctx->lights.cluster_lights[num_packed], light, radius,
+                            shadow_live_punctual_layer(scene->shadow_system, light));
         num_packed++;
         if (light->type == LIGHT_AREA)
             num_area++;

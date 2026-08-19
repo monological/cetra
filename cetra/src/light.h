@@ -107,6 +107,21 @@ void set_light_up(Light* light, vec3 up);
 void set_light_color(Light* light, vec3 color);
 void set_light_intensity(Light* light, float intensity);
 void set_light_range(Light* light, float range);
+
+// Cull radius for a light: the authored range if set, else the distance where
+// the light falls under ~1/256 (LDR LSB at the project-standard -E 1.0).
+// Punctual lights solve that against their attenuation coefficients; area
+// panels ignore those entirely (the LTC form factor carries the falloff) and
+// instead invert the head-on far-field irradiance, plus half the panel
+// diagonal to cover its own extent. Returns 0 for a light that never reaches
+// the epsilon (drop it) and a negative value for an uncullable light
+// (constant-only attenuation: assign everywhere).
+//
+// Lives here rather than with the cluster grid because it is a pure function of
+// one light and part of what `range` above MEANS -- the culler is its largest
+// consumer, not its owner, and two of its callers have nothing to do with
+// clustering.
+float light_cull_radius(const struct Light* light);
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
 void set_light_cast_shadows(Light* light, bool cast_shadows);
 void set_light_size(Light* light, float width, float height);

@@ -2160,6 +2160,10 @@ bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
     return fx && fx->ssr_enabled && normals_written;
 }
 
+bool postfx_contact_shadows_have_light(const PostFX* fx) {
+    return fx && (fx->fog_light_count > 0 || fx->cs_mapless_lights > 0);
+}
+
 // Resolve one color attachment of the MSAA framebuffer into a single-sample FBO,
 // then restore the read buffer to attachment 0 (the sticky selection would
 // otherwise break the next frame's color resolve).
@@ -3055,14 +3059,16 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         bool cs_accum_ran = false;
         const bool cs_key_light = fx->fog_light_count > 0;
         const bool cs_active = fx->contact_shadows_enabled && aux_written &&
-                               (cs_key_light || fx->cs_mapless_lights > 0) &&
-                               fx->cs_distance > 0.0f && postfx_ensure_contact_targets(fx);
+                               postfx_contact_shadows_have_light(fx) && fx->cs_distance > 0.0f &&
+                               postfx_ensure_contact_targets(fx);
         if (cs_active) {
             profiler_scope_begin(fx->profiler, "contact shadows");
             // World-space travel direction -> view-space TOWARD-light unit vector
             // (pbr uses L = -light->direction; fog_light_dir[0] is that direction).
-            // Left at zero with no directional published: fog_light_dir holds
-            // whatever the last scene that had one left there.
+            // Zeroed rather than left indeterminate, since the uniform is uploaded
+            // either way and hasKeyLight is what tells the shader to ignore it.
+            // Same for keyRadiance below, which reads a slot the publish step
+            // leaves untouched when it reports no caster.
             vec3 toward, cs_dir_vs = {0.0f, 0.0f, 0.0f};
             if (cs_key_light) {
                 glm_vec3_negate_to(fx->fog_light_dir[0], toward);

@@ -120,16 +120,6 @@ typedef struct LightClusterContext {
 LightClusterContext* create_light_cluster_context(void);
 void free_light_cluster_context(LightClusterContext* ctx);
 
-// Cull radius for a light: the authored range if set, else the distance where
-// the light falls under ~1/256 (LDR LSB at the project-standard -E 1.0).
-// Punctual lights solve that against their attenuation coefficients; area
-// panels ignore those entirely (the LTC form factor carries the falloff) and
-// instead invert the head-on far-field irradiance, plus half the panel
-// diagonal to cover its own extent. Returns 0 for a light that never reaches
-// the epsilon (drop it) and a negative value for an uncullable light
-// (constant-only attenuation: assign everywhere).
-float light_cull_radius(const struct Light* light);
-
 // Build the three blocks from scene->lights for this invocation's camera and
 // upload them. fb_width/fb_height are the render-target dimensions
 // gl_FragCoord is measured in (the current viewport).

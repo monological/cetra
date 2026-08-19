@@ -270,6 +270,18 @@ typedef struct ShadowSystem {
     bool tsm_live;
 } ShadowSystem;
 
+struct Light;
+
+// The punctual base layer a consumer may actually sample, or -1 for none.
+//
+// Light.shadow_layer is maintained ONLY while the depth pass runs, so switching
+// the shadow system off at runtime leaves every previously-mapped light claiming
+// a layer that is no longer drawn. Anything deciding "does this light have a
+// map" has to apply punctual_layer_count as well, which is the same bound
+// punctual_shadow.glsl puts on the lookup itself -- read the raw field and a
+// light silently keeps a map it lost.
+int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* light);
+
 // Creation and destruction
 ShadowSystem* create_shadow_system(int default_map_size);
 void free_shadow_system(ShadowSystem* system);

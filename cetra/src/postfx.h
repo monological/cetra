@@ -244,17 +244,11 @@ typedef struct PostFX {
     // default; enabled false leaves the frame untouched. Targets are lazily
     // allocated (cs_ready) and freed unconditionally.
     bool contact_shadows_enabled;
-    float cs_strength; // Composite darkening weight [0,1]
-    float cs_distance; // March reach in view-space units (0 = off, C-gated)
-    // Point/spot lights in the scene holding no punctual layer -- the population
-    // that has no other occlusion at all, and the second half of the run gate:
-    // 0 here with no shadow-casting directional means the pass has nothing to
-    // march. A scene count, not a visible one, so it can arm the pass for a lamp
-    // that turns out to be off screen; the cluster list is empty there and the
-    // march answers 1.
-    int cs_mapless_lights;
-    bool cs_ready;    // Lazy-alloc guard for the targets below
-    GLuint cs_fbo[2]; // R8 at full internal res: [0] raw march, [1] bilateral-blurred
+    float cs_strength;     // Composite darkening weight [0,1]
+    float cs_distance;     // March reach in view-space units (0 = off, C-gated)
+    int cs_mapless_lights; // Point/spot lights with no live punctual map (0 = none)
+    bool cs_ready;         // Lazy-alloc guard for the targets below
+    GLuint cs_fbo[2];      // R8 at full internal res: [0] raw march, [1] bilateral-blurred
     GLuint cs_texture[2];
     PingPong cs_history;  // R16F temporal accumulation (0.9 feedback bands in 8 bits)
     bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
@@ -735,6 +729,13 @@ bool postfx_wants_spec_split(const PostFX* fx);
 // The postfx pass and the shadow catcher's floor marker both derive from
 // it so they cannot disagree about whether the floor is reflected.
 bool postfx_ssr_active(const PostFX* fx, bool normals_written);
+
+// The single "the contact march has something to march toward" predicate: a
+// shadow-casting directional, or a local light no shadow map can serve. The run
+// gate and the GUI's inert-toggle advisory both derive from it, so they cannot
+// disagree about whether the feature can do anything -- which is the failure
+// postfx_has_medium exists to prevent, one arming source later.
+bool postfx_contact_shadows_have_light(const PostFX* fx);
 
 // Switch SSR tracing between full-res (sharp) and half-res, reallocating the
 // reflection buffer + Hi-Z pyramid at the new resolution. Safe to call at runtime.
