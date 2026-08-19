@@ -1696,16 +1696,56 @@ which space the LUT is authored in — the working-space contract from 10.1/10.2
 item is most likely to violate quietly.
 **Depends on:** 10.1-10.2's working-space contract (shipped). **Wall 1:** unaffected.
 
-### E3. Histogram auto-exposure — Effort M
-`lum_measure_frag.glsl:44` writes `log2(lum)` and the mip chain averages it: a flat, unweighted,
-whole-frame log-average with no metering mask and no percentile clipping. One bright practical, one
-sun disc, one specular highlight drags the entire frame dark — and because exposure multiplies every
-pixel, that is also the single largest source of cross-build non-determinism this repo has measured
-(99.77% of pixels, per CLAUDE.md). A histogram with low/high percentile rejection fixes the image and
-narrows that noise source at the same time.
+### E3. Histogram auto-exposure — Effort M — **DONE (11.52)**
+A 64-bin gather histogram over the existing 64² measure target, collapsed by a percentile-clipped
+reduce: two raster passes replacing `glGenerateMipmap`, since GL 4.1 has no compute and 4096 source
+texels make a gather cheaper than any scatter trick. Plus metering modes, min/max EV bounds, split
+adaptation rates, and the controls to drive all of it.
+
+**Both reasons this entry gave were wrong, and the item was right anyway.** The text below is the
+original; it is kept rather than rewritten because the correction is the useful part.
+
+> `lum_measure_frag.glsl:44` writes `log2(lum)` and the mip chain averages it: a flat, unweighted,
+> whole-frame log-average with no metering mask and no percentile clipping. One bright practical, one
+> sun disc, one specular highlight drags the entire frame dark — and because exposure multiplies every
+> pixel, that is also the single largest source of cross-build non-determinism this repo has measured
+> (99.77% of pixels, per CLAUDE.md).
+
+The bright-pixel failure was **already defended twice**: the average is a geometric mean (the
+shader's own comment says it is "robust to a few very bright pixels, unlike an arithmetic mean") and
+there was an explicit clamp whose comment reads "stops one sun pixel from crushing everything else"
+— a ceiling already raised once from 10000 after exactly this class of bug. And the determinism
+claim was **already collected by `EXPOSURE_ADAPT_SNAP`**: measured, the snap engages at **frame 12**,
+after which the adaptation holds no history at all and exposure is a pure function of that frame's
+measurement. Two runs of one build are bit-identical over 200 frames.
+
+So the justification is **capability parity** — every comparable engine ships this and Cetra shipped
+the tier UE calls *Basic* — and that was enough on its own.
+
+**What the instrument found instead, which nobody had looked for.** Nothing could observe the metered
+value from outside the process: no log line, no readout, and the `exposureEV100` UBO slot reserved
+for one was read by nothing. `--exposure-probe` went in first, and the meter turned out **not to be
+linear in scene radiance** — scaling every emitter by 1000 moved the metered value 8.36 stops instead
+of 9.97. The cause was the absolute floor pinned at the key: a scene metering near 0.18 has most of
+its frame clamped *up*, inflating the mean 3.05×, which is `log2 = 1.608` and exactly the deficit.
+Percentile rejection is scene-relative and fixes it: **−1.61 stops → −0.005**.
+
+Two traps found on the way, both recorded in the spec because both produced a confident wrong answer
+first. Removing the *ceiling* as well caused a **runaway** — a bright scene drives the gain to the
+20-stop floor, pre-exposure collapses past fp16 subnormals in the HDR buffer, and the meter, which
+divides pre-exposure back out, amplifies the remainder into 1.15e7 nits and pins there; the fix is
+that bound moved onto the metered *scalar*, where it is scale-safe. And the `SCALE_GATES` shape
+**cannot** be used to test a live meter at all: scaling emitters by K while dividing the camera by K
+double-compensates, so `pre_exposure` lands K² off.
+
+**Defaults 0.70/0.95**, aggressive at the bottom for the reason UE's Low Percent defaults to 80 — a
+meter that includes the black background is measuring the background, and zero times a thousand is
+still zero. It costs 0.61 stops on a sky-lit fixture, accepted rather than hidden. No golden moves:
+all 24 pin exposure, which is also why **auto-exposure was the least-tested subsystem shipping on by
+default**, and the new `exposure` gate group is six arms over it.
 **Refs.** Lagarde & de Rousiers, *Moving Frostbite to Physically Based Rendering* (SIGGRAPH 2014
 course) — the exposure section.
-**Depends on:** nothing. **Wall 1:** unaffected.
+**Depends on:** nothing. **Wall 1:** unaffected — it cost no sampler unit.
 
 ### E4. GPU timer queries + per-pass HUD — Effort S — **DONE (spec 11.27)**
 **Wall 3 removed.** `GL_TIME_ELAPSED` works on the GL-over-Metal driver; `GL_TIMESTAMP` returns 0,
@@ -1965,7 +2005,7 @@ not scheduled.
 | 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
 | 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
 | 26 | C5 Contact shadows for local lights | S | A3 generalised from one light to N. Postfx-only. |
-| 27 | E3 Histogram exposure | M | Fixes the image *and* narrows the largest measured source of cross-build non-determinism. |
+| 27 | E3 Histogram exposure | M | **DONE (11.52).** A 64-bin gather histogram plus a percentile-clipped reduce, two raster passes replacing the mip chain; metering modes, EV bounds, split adapt rates, and the controls. **Both reasons this row gave were wrong**: the bright-pixel failure was already defended by a geometric mean AND an explicit clamp, and the determinism claim was already collected by `EXPOSURE_ADAPT_SNAP`, which measurement shows engaging at frame 12 -- after which the adaptation holds no history and two runs are bit-identical over 200 frames. Capability parity was the whole reason and it sufficed. The instrument found what the row had not: the meter was **not linear in radiance**, 8.36 stops against 9.97 at x1000, because the absolute floor at the key inflated a dim scene's mean 3.05x. Percentiles fix it, **-1.61 stops to -0.005**. Removing the ceiling too caused a measured **runaway** to 1.15e7 nits via fp16 underflow, so that bound moved onto the metered scalar. And the SCALE_GATES shape cannot test a live meter -- scaling emitters by K while dividing the camera by K double-compensates. No golden moves (all 24 pin exposure), which is why this was the least-tested subsystem shipping on by default; six new arms now cover it. |
 | 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
@@ -1993,26 +2033,34 @@ worst case and the withdrawn claims all recorded. **37 (E7, occlusion culling) s
 against them**: it was booked as not-yet-justified on the grounds that E6 would get most of the
 benefit for less, and E6 doing so on opaque content is now measured rather than assumed.
 
-**23 (C2) was what's next for a long time and is now built (11.49), which leaves this table with no
+**23 (C2) was what's next for a long time, and with it and 27 (E3) both built this table has no
 obvious head.** What remains is either small and self-contained (25 C3 IES, 26 C5 local contact
-shadows, 27 E3 histogram exposure, 28 E2 grading, 34 E8 the wind cull) or L/XL with no measurement
-demanding it yet (29 C4, 32 D0, 33 D1, 36 D4, 37 E7). Nothing in the first group is blocked and
-nothing in the second has a number behind it, so the next pick is a judgement rather than a
-consequence — which is a different situation from the one this table has described since 11.24, and
-worth saying plainly rather than nominating a successor by default.
+shadows, 28 E2 grading, 34 E8 the wind cull) or L/XL with no measurement demanding it yet (29 C4,
+32 D0, 33 D1, 36 D4, 37 E7). Nothing in the first group is blocked and nothing in the second has a
+number behind it, so the next pick is a judgement rather than a consequence — which is a different
+situation from the one this table has described since 11.24, and worth saying plainly rather than
+nominating a successor by default.
 
-Two of the small ones have a claim beyond size. **27 (E3, histogram exposure)** is the only unbuilt
-item that fixes the image *and* narrows the largest measured source of cross-build
-non-determinism — this document's own determinism section puts auto-exposure at 99.77% of pixels
-moved on a provable no-op. **34 (E8, the wind cull)** closes a hole E5 left open, where wind geometry
-is exempt from the camera frustum and every cascade; `apps/forest` gave up wind on scattered content
-to avoid it, so the gap has already cost content once.
+Of the small ones, **34 (E8, the wind cull)** has the clearest claim beyond size: it closes a hole E5
+left open, where wind geometry is exempt from the camera frustum and every cascade, and `apps/forest`
+gave up wind on scattered content to avoid it — so the gap has already cost content once. **26 (C5,
+contact shadows for local lights)** gained a claim it did not have when it was written: 11.49 shipped
+a *producer* of local area lights, so any scene with practicals now has more of them than C5's row
+assumed.
 
-**11.49 also leaves an observation about this table rather than an item in it.** Three of its four
-real defects were invisible in every frame — a first bounce counted twice, a panel lighting through a
-solid wall, a placement drifting 29 units over 40 frames — and each was found by an arm reading an
-instrument, not by looking. The two that a picture *did* show were both found by the user looking at
-the picture. That split is worth carrying into whatever is picked next.
+**Two observations about this table rather than items in it**, both from the last two specs.
+
+11.49: three of its four real defects were invisible in every frame — a first bounce counted twice, a
+panel lighting through a solid wall, a placement drifting 29 units over 40 frames — and each was found
+by an arm reading an instrument, not by looking. The two that a picture *did* show were both found by
+the user looking at the picture.
+
+11.52: **a row's stated reasons can rot while the row stays right.** Both of E3's arguments had been
+overtaken by commits that fixed them, and the item was still worth building on parity grounds alone —
+but a spec that had inherited those reasons would have claimed benefits its own tests could not show.
+The habit that catches it is cheap: read the code the row describes before believing the row. It also
+found the defect the row *should* have been arguing from, which no one had looked for because nothing
+could see the metered value at all.
 
 **And the honest observation this table should carry: it has not driven the work since 11.32.**
 Seventeen specs have shipped since D3 opened, and **ten of them are the water and shore series
