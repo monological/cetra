@@ -7823,6 +7823,41 @@ def _emissive_worst(base, other):
     return ratios, name, ratios[name]
 
 
+def _probe_render(workdir, scene, flag, prefix, extra=None, frames=30, out_name="probe.ppm"):
+    """Run a --*-probe flag headless and return ([{key: str}], combined output).
+
+    Probe lines are `<prefix> [tag] k=v k=v ...`, and every probe in the tree
+    emits that shape -- so parsing it lives here rather than being written out
+    per subsystem, which it was six times before this existed.
+
+    Values stay STRINGS. Callers cast what they need: the emissive probe carries
+    `center=1,2,3`, which a blanket float() would drop on the floor.
+    """
+    out = os.path.join(workdir, out_name)
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300",
+           "-S", out, flag]
+    r = subprocess.run(cmd + (extra or []), capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith(prefix + " "):
+            continue
+        parts = line.split()[1:]
+        rec = {}
+        # A leading bare token is the line's TAG, which is how a probe says which
+        # kind of row this is. Dispatching on that rather than on whether some
+        # field happens to parse is the lesson _water_fft_probe records.
+        if parts and "=" not in parts[0]:
+            rec["kind"] = parts[0]
+            parts = parts[1:]
+        for tok in parts:
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                rec[k] = v
+        rows.append(rec)
+    return rows, text
+
+
 def _emissive_probe(workdir, scene, extra=None, frames=8):
     """Run --emissive-light-probe and parse its lines into dicts.
 
@@ -7830,23 +7865,8 @@ def _emissive_probe(workdir, scene, extra=None, frames=8):
     out or sqrt(2) too wide still lights a room, so a frame cannot tell a correct
     fit from a plausible one. Every geometric arm here goes through this.
     """
-    out = os.path.join(workdir, "emissive_probe.ppm")
-    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300",
-           "-S", out, "--emissive-light-probe"]
-    r = subprocess.run(cmd + (extra or []), capture_output=True, text=True)
-    rows = []
-    for line in (r.stdout + r.stderr).splitlines():
-        if not line.startswith("emissive-light-probe "):
-            continue
-        parts = line.split()
-        rec = {"kind": parts[1]}
-        for tok in parts[2:]:
-            if "=" not in tok:
-                continue
-            k, v = tok.split("=", 1)
-            rec[k] = v
-        rows.append(rec)
-    return rows, r.stdout + r.stderr
+    return _probe_render(workdir, scene, "--emissive-light-probe", "emissive-light-probe",
+                         extra=extra, frames=frames, out_name="emissive_probe.ppm")
 
 
 def _emissive_vec(rec, key):
@@ -8453,12 +8473,19 @@ EXPOSURE_FIXTURE = "postfx_convergence_fixture.cscn"
 EXPOSURE_SCALE_FIXTURE = "cornell_point.cscn"
 
 # Frames. The meter reads a PRE-EXPOSED frame, so its own reading sits inside a
-# feedback loop until the adaptation snap engages and the scene itself settles;
-# anything measured before that is measuring the approach, not the answer. The
-# snap engages at frame 12 on this fixture and the scene is still moving past
-# 45, so nothing here reads earlier than 150.
+# feedback loop until the adaptation settles; anything measured before that is
+# measuring the approach, not the answer.
+#
+# On this fixture the gap first touches the deadband around frame 18 and is
+# pushed back out twice as the scene keeps brightening, settling at frame 91 --
+# so 150 is margin over THAT, not over the deadband's first touch. An earlier
+# note here said frame 12, measured before the percentiles changed what the meter
+# reads and never re-taken.
 EXPOSURE_FRAMES = 150
-EXPOSURE_LINEAR_FRAMES = 250
+# Both legs of the linearity arm read identically at 60, 120, 150 and 200 frames,
+# so this is the converged value plus headroom rather than a guess. Longer than
+# EXPOSURE_FRAMES because the x1000 leg starts ~10 stops from its answer.
+EXPOSURE_LINEAR_FRAMES = 120
 
 # Meter linearity: emitters x1000 with EXPOSURE LEFT ALONE must move the raw
 # metered value by exactly log2(1000) stops, because the meter reads absolute
@@ -8515,27 +8542,13 @@ def _exposure_probe(workdir, scene, extra=None, frames=EXPOSURE_FRAMES, tag="exp
     Reads the INSTRUMENT rather than the image, for the reason the probe exists:
     a wrong exposure hides inside a plausible frame, and the metered value
     appears nowhere else -- no log line, no readout, and every golden pins it.
+
+    Every field is a float here, unlike the emissive probe's, so the cast is this
+    wrapper's whole job.
     """
-    out = os.path.join(workdir, f"exposure_{tag}.ppm")
-    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300",
-           "-S", out, "--exposure-probe"]
-    r = subprocess.run(cmd + (extra or []), capture_output=True, text=True)
-    rows = []
-    for line in (r.stdout + r.stderr).splitlines():
-        if not line.startswith("exposure-probe "):
-            continue
-        rec = {}
-        for tok in line.split()[1:]:
-            if "=" not in tok:
-                continue
-            k, v = tok.split("=", 1)
-            try:
-                rec[k] = float(v)
-            except ValueError:
-                pass
-        if "raw_log2" in rec:
-            rows.append(rec)
-    return rows, r.stdout + r.stderr
+    rows, text = _probe_render(workdir, scene, "--exposure-probe", "exposure-probe",
+                               extra=extra, frames=frames, out_name=f"exposure_{tag}.ppm")
+    return [{k: float(v) for k, v in r.items()} for r in rows], text
 
 
 def _exposure_live(src, dst, scale=1.0):
@@ -8564,10 +8577,11 @@ def run_exposure_gate(workdir):
     SHIPPED WRONG and were found by hand.
 
       exposure-darkens  the gain is capped at 1.0, so auto-exposure only ever
-                        darkens. Both halves in one arm: a scene metering fifteen
-                        stops under the key reads exactly 1.0, and a bright one
-                        actually stops down. Without the second, the arm passes on
-                        a build where the gain is hardwired to 1.
+                        darkens. Three readings, not one: a scene metering ~6
+                        stops under the key reads exactly 1.0, it reports having
+                        MEASURED that (gain 1.0 is also what three early exits
+                        return), and a bright scene still stops down. Drop any of
+                        the three and the arm passes on a broken build.
       exposure-converge the snap engages -- adapted reaches raw EXACTLY, not
                         nearly. Asserted against an early frame where the gap is
                         still open, so a build that never adapted at all cannot
@@ -8721,7 +8735,11 @@ def run_exposure_gate(workdir):
             failures.append("exposure-tail")
 
     # --- exposure-mask ------------------------------------------------------
-    uni, _ = _exposure_probe(workdir, live, frames=EXPOSURE_FRAMES, tag="mask_uni")
+    # `rows` is the default configuration at the same frame count -- the byte
+    # identical command this used to issue a second time. Reused rather than
+    # re-rendered, the way exposure-linear already reads exposure-darkens' bright
+    # run: 150 frames is ~3 s and this group is 7% of the suite.
+    uni = rows
     # 1.0 exactly, not an arbitrarily large number: the radius is a fraction of
     # the UV half-diagonal, so 1.0 reaches the corners and covers the frame by
     # definition. This arm used 8.0 while the shader divided by the radius alone
