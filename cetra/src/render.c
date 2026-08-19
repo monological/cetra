@@ -625,12 +625,12 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, SubmitState
 // submits whatever the chunk holds and skipping one would draw the next in its
 // place. Cutting the run short is always safe: the remainder starts a new one.
 static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
-                           const Frustum* frustum) {
+                           const CullView* cull) {
     const DrawItem* head = &list->items[first];
     size_t n = 1;
     while (first + n < list->count && n < UBO_INSTANCE_MAX) {
         const DrawItem* next = &list->items[first + n];
-        if (!(lanes & (1u << next->lane)) || !draw_run_can_join(head, next, frustum))
+        if (!(lanes & (1u << next->lane)) || !draw_run_can_join(head, next, cull))
             break;
         n++;
     }
@@ -756,7 +756,7 @@ static bool item_is_prepassable(const DrawItem* item) {
 // reach the coverage decision at all.
 static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* list,
                                   Camera* camera, mat4 view, mat4 projection,
-                                  const Frustum* frustum) {
+                                  const CullView* cull) {
     if (!engine->depth_prepass_program || !scene || !list)
         return false;
 
@@ -802,7 +802,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
             continue;
         if (stats)
             stats->meshes_seen++;
-        if (!draw_item_visible(item, frustum)) {
+        if (!draw_item_visible(item, cull)) {
             if (stats)
                 stats->meshes_culled++;
             continue;
@@ -810,7 +810,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
 
         size_t run = 1;
         if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
-            run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, frustum);
+            run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, cull);
         if (stats)
             stats->meshes_seen += run - 1;
         if (run > 1)
@@ -849,7 +849,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
             continue;
         if (stats)
             stats->meshes_seen++;
-        if (!draw_item_visible(item, frustum)) {
+        if (!draw_item_visible(item, cull)) {
             if (stats)
                 stats->meshes_culled++;
             continue;
@@ -861,7 +861,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         const ShaderProgram* masked_program = item->mesh->material->shader_program;
         size_t run = 1;
         if (engine->instancing_enabled && engine->instance_ubo && masked_program->instanced)
-            run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, frustum);
+            run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, cull);
         if (stats)
             stats->meshes_seen += run - 1;
         // Uploaded as SHADING, not depth-only: pbr_vert reads the normal matrix
@@ -894,7 +894,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
 // whichever of BLEND and TRANSMISSIVE the OIT routing left for it.
 static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* list, Camera* camera,
                           mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                          const Frustum* frustum, unsigned lanes, SubmitPass pass) {
+                          const CullView* cull, unsigned lanes, SubmitPass pass) {
     if (!scene || !list)
         return;
 
@@ -911,7 +911,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         // the run can still be cut short.
         if (stats)
             stats->meshes_seen++;
-        if (!draw_item_visible(item, frustum)) {
+        if (!draw_item_visible(item, cull)) {
             if (stats)
                 stats->meshes_culled++;
             continue;
@@ -929,7 +929,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         bool batchable = mat && mat->shader_program && mat->shader_program->instanced;
         size_t run = 1;
         if (batchable && engine->instancing_enabled && engine->instance_ubo)
-            run = _visible_run(list, i, lanes, frustum);
+            run = _visible_run(list, i, lanes, cull);
         // The run's own items were counted as seen above only for the first;
         // the rest are counted here so the identity still holds. A no-op at
         // run == 1.
@@ -961,7 +961,7 @@ static void _submit_gizmos(const DrawList* list, mat4 view, mat4 projection, Sub
 // The transmissive count is frustum-gated and the other two are not, which is
 // deliberate: it triggers a full-frame resolve that off-screen glass must not
 // pay for, where the late pass the other two gate is cheap to enter.
-static void _count_late_meshes(Scene* scene, const DrawList* list, const Frustum* frustum) {
+static void _count_late_meshes(Scene* scene, const DrawList* list, const CullView* cull) {
     scene->transparent_mesh_count = 0;
     scene->transmissive_mesh_count = 0;
     scene->oit_mesh_count = 0;
@@ -981,9 +981,11 @@ static void _count_late_meshes(Scene* scene, const DrawList* list, const Frustum
         const DrawItem* item = &list->items[i];
         if (item->lane != DRAW_LANE_TRANSMISSIVE)
             continue;
-        if (!frustum ||
-            frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
-                                          item->node->global_transform))
+        // Through the same predicate the lane that DRAWS these uses. It used to
+        // test the import AABB directly, so a swaying or posed transmissive
+        // mesh was counted out here while still being drawn -- and this count
+        // gates the refraction resolve it samples.
+        if (draw_item_visible(item, cull))
             scene->transmissive_mesh_count++;
     }
 }
@@ -1034,6 +1036,13 @@ void render_current_scene(Engine* engine) {
     glm_mat4_mul(*projection, *view, engine->view_proj);
     Frustum frustum;
     frustum_extract_from_vp(engine->view_proj, &frustum);
+
+    // Built here, after the app's callback has stepped the animation, so the
+    // pose these passes cull against is the pose they are about to upload. The
+    // shadow pass builds its own for the same reason and gets a different
+    // answer, which is correct: it draws a different pose.
+    CullView cull = {engine->frustum_cull_enabled ? &frustum : NULL, scene->wind,
+                     get_render_animation_state()};
 
     // Flatten once. Cube captures re-enter here six times with their own
     // camera; the stamp makes those five reuses rather than five rebuilds,
@@ -1172,7 +1181,7 @@ void render_current_scene(Engine* engine) {
     // Bound state the draw loop skips re-setting; see render.h
     SubmitState submit_state = {0};
 
-    _count_late_meshes(scene, &scene->draw_list, &frustum);
+    _count_late_meshes(scene, &scene->draw_list, &cull);
 
     // Pass 1: opaque and alpha-masked meshes. The only pass that publishes the
     // normals G-buffer; every later pass (skybox, translucents, catcher,
@@ -1249,7 +1258,7 @@ void render_current_scene(Engine* engine) {
                 add_shader_program_to_engine(engine, engine->depth_prepass_program);
         }
         prepassed = _submit_depth_prepass(engine, scene, opaque_list, camera, *view,
-                                          draw_projection, &frustum);
+                                          draw_projection, &cull);
     }
     // Both halves of the bracket here, adjacent, rather than the relax inside the
     // prepass and the restore 400 lines away in the caller. GL_LEQUAL and not
@@ -1263,7 +1272,7 @@ void render_current_scene(Engine* engine) {
     // lower it was switched on (3.87 to 5.27, measured).
     profiler_samples_begin(engine->profiler);
     _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
-                  &submit_state, &frustum, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_SHADE);
+                  &submit_state, &cull, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_SHADE);
     profiler_samples_end(engine->profiler);
     if (prepassed)
         glDepthFunc(GL_LESS);
@@ -1469,7 +1478,7 @@ void render_current_scene(Engine* engine) {
             if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
                 profiler_scope_begin(engine->profiler, "oit moments");
                 _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
-                              render_mode, &submit_state, &frustum, 1u << DRAW_LANE_BLEND,
+                              render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
                               SUBMIT_PASS_OIT_MOMENTS);
                 profiler_scope_end(engine->profiler);
                 engine_end_moment_pass(engine);
@@ -1485,7 +1494,7 @@ void render_current_scene(Engine* engine) {
                 engine->moments_this_frame = moments_ready;
                 profiler_scope_begin(engine->profiler, "oit accumulate");
                 _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
-                              render_mode, &submit_state, &frustum, 1u << DRAW_LANE_BLEND,
+                              render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
                               SUBMIT_PASS_OIT_ACCUMULATE);
                 profiler_scope_end(engine->profiler);
                 engine_end_oit_pass(engine);
@@ -1499,7 +1508,7 @@ void render_current_scene(Engine* engine) {
                                   : ((1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE));
         profiler_scope_begin(engine->profiler, "transparent");
         _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection, render_mode,
-                      &submit_state, &frustum, late_lanes, SUBMIT_PASS_SHADE);
+                      &submit_state, &cull, late_lanes, SUBMIT_PASS_SHADE);
         profiler_scope_end(engine->profiler);
         glDepthMask(GL_TRUE);
     }

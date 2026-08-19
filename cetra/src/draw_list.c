@@ -6,6 +6,7 @@
 #include "ext/log.h"
 #include "material.h"
 #include "scene.h"
+#include "wind.h"
 
 // Never reset, so a stamp taken before a mutation can never compare equal to one
 // taken after -- including across a scene teardown and reload.
@@ -104,11 +105,6 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
         *flags |= DRAW_FOLIAGE;
     if (mat->doubleSided)
         *flags |= DRAW_DOUBLE_SIDED;
-    // Neither is bounded by mesh->aabb: calculate_aabb runs once at import, so
-    // a skinned mesh carries bind-pose bounds, and wind displacement is computed
-    // in the shader after the fact.
-    if (mesh->is_skinned || mat->wind_response > 0.0f)
-        *flags |= DRAW_UNBOUNDED;
 }
 
 // Projected size at which a level gives way to the next, as the ratio of a
@@ -227,15 +223,44 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     return true;
 }
 
-bool draw_item_visible(const DrawItem* item, const Frustum* frustum) {
-    if (!frustum || (item->flags & DRAW_UNBOUNDED))
-        return true;
-    return frustum_test_aabb_transformed(frustum, item->mesh->aabb.min, item->mesh->aabb.max,
-                                         item->node->global_transform);
+// The object-space box the geometry this item draws actually occupies, which is
+// mesh->aabb only for a mesh that neither sways nor poses.
+//
+// Returns false when no bound can be established, which the caller reads as
+// visible. That is the honest answer rather than a fallback: culling on a bound
+// the geometry can leave drops something on screen, and there is no test in the
+// corpus that would catch it.
+static bool _item_bounds(const DrawItem* item, const CullView* view, vec3 out_min, vec3 out_max) {
+    const Mesh* mesh = item->mesh;
+    glm_vec3_copy((float*)mesh->aabb.min, out_min);
+    glm_vec3_copy((float*)mesh->aabb.max, out_max);
+
+    // Wind is added in OBJECT space (object_position.glsl) and the caller
+    // transforms this box afterwards, so the margin lands in the same space the
+    // displacement does and picks up the node's scale exactly as it does.
+    float margin = wind_max_offset(view->wind, mesh->material->wind_response,
+                                   mesh->material->wind_mode, mesh->wind_flex_max,
+                                   mesh->wind_leaf_max);
+    if (margin > 0.0f) {
+        glm_vec3_subs(out_min, margin, out_min);
+        glm_vec3_adds(out_max, margin, out_max);
+    }
+    return true;
 }
 
-bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum) {
-    return next->mesh == head->mesh && next->lod == head->lod && draw_item_visible(next, frustum);
+bool draw_item_visible(const DrawItem* item, const CullView* view) {
+    if (!view || !view->frustum)
+        return true;
+    // Zeroed for the same reason item_world_bounds zeroes its out-params:
+    // static analysis reads a write through a pointer as a use before write.
+    vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
+    if (!_item_bounds(item, view, lo, hi))
+        return true;
+    return frustum_test_aabb_transformed(view->frustum, lo, hi, item->node->global_transform);
+}
+
+bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullView* view) {
+    return next->mesh == head->mesh && next->lod == head->lod && draw_item_visible(next, view);
 }
 
 // Distance from `eye` to an item's world-space bound centre, through the same

@@ -37,4 +37,18 @@ void set_wind_name(Wind* wind, const char* name);
 // every wind-aware shader early-outs and nothing moves.
 void wind_upload_to_program(const Wind* wind, UniformManager* u);
 
+// An upper bound, in OBJECT space, on how far windOffset() can move any vertex
+// of a mesh with this response and mode -- so a wind-driven mesh can be bounded
+// and therefore culled, instead of being exempted from every frustum test.
+//
+// Object space because that is where the displacement is added (see
+// object_position.glsl); the caller's existing transformed-AABB test then
+// carries the node's scale, which is also the scale the displacement gets.
+//
+// `flex_max` and `leaf_max` are the mesh's own measured vertex maxima
+// (Mesh.wind_flex_max / wind_leaf_max) and are ignored for mode 0, which reads
+// no vertex data. Returns exactly 0 wherever the shader early-outs, so a
+// rigid mesh and a windless scene both keep their import bounds untouched.
+float wind_max_offset(const Wind* wind, float response, int mode, float flex_max, float leaf_max);
+
 #endif // _WIND_H_

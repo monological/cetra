@@ -1,4 +1,5 @@
 
+#include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -88,6 +89,9 @@ Mesh* create_mesh() {
     mesh->aabb.max[0] = 0.0f;
     mesh->aabb.max[1] = 0.0f;
     mesh->aabb.max[2] = 0.0f;
+
+    mesh->wind_flex_max = 0.0f;
+    mesh->wind_leaf_max = 0.0f;
 
     // Initialize skinning data
     mesh->bone_ids = NULL;
@@ -185,12 +189,35 @@ void calculate_aabb(Mesh* mesh) {
     }
 }
 
+// The vertex maxima the wind bound needs (see mesh.h). Here rather than beside
+// calculate_aabb because this runs once per mesh with every attribute final,
+// which is what makes the answer a description of what the shader will read.
+static void measure_wind_extremes(Mesh* mesh) {
+    mesh->wind_flex_max = 0.0f;
+    mesh->wind_leaf_max = 0.0f;
+    if (!mesh->tex_coords2)
+        return;
+
+    for (size_t i = 0; i < mesh->vertex_count; ++i) {
+        float flex = fabsf(mesh->tex_coords2[i * 2 + 1]);
+        if (flex > mesh->wind_flex_max)
+            mesh->wind_flex_max = flex;
+        // The leaf term is flex * uv0.y in one product, so the max OF the
+        // product bounds it more tightly than the product of the maxima.
+        float leaf = mesh->tex_coords ? flex * fabsf(mesh->tex_coords[i * 2 + 1]) : 0.0f;
+        if (leaf > mesh->wind_leaf_max)
+            mesh->wind_leaf_max = leaf;
+    }
+}
+
 void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     if (!mesh)
         return;
     // A mesh with no VAO is not drawable and the list refuses it, so the upload
     // that makes it drawable has to invalidate.
     scene_graph_touched();
+
+    measure_wind_extremes(mesh);
 
     // Bind the Vertex Array Object (vao)
     glBindVertexArray(mesh->vao);

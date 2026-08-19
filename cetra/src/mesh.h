@@ -72,6 +72,23 @@ typedef struct Mesh {
 
     AABB aabb;
 
+    // The vertex maxima windOffset()'s vegetation modes scale their
+    // displacement by, so a wind-driven mesh can be given a conservative bound
+    // and culled rather than exempted. Both are RAW attribute values: nothing in
+    // the shader, the importer or the upload clamps UV1 to [0,1], so assuming
+    // it would build a bound the geometry can leave.
+    //
+    // Measured in upload_mesh_buffers_to_gpu rather than beside the AABB,
+    // because that is the one point every drawable mesh passes with its vertex
+    // data final -- calculate_aabb is called by each builder in turn and a mesh
+    // that gained UV1 afterwards would carry a zero here against a shader
+    // reading real flex. Zero when there is no UV1, which is what the shader
+    // sees too: a disabled attribute reads (0,0,0,1).
+    float wind_flex_max; // max |uv1.y|
+    float wind_leaf_max; // max |uv1.y * uv0.y|, the joint max rather than the
+                         // product of the two, which is tighter and still an
+                         // upper bound on the term that uses them together
+
     // Skinning data (NULL if not skinned)
     int* bone_ids;             // BONES_PER_VERTEX ints per vertex (ivec4)
     float* bone_weights;       // BONES_PER_VERTEX floats per vertex (vec4)

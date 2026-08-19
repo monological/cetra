@@ -10,6 +10,8 @@
 
 struct Scene;
 struct SceneNode;
+struct Wind;
+struct AnimationState;
 
 // One frame's drawable meshes, flattened out of the scene graph once.
 //
@@ -43,16 +45,6 @@ enum {
     DRAW_ALPHA_MASKED = 1u << 0,
     DRAW_FOLIAGE = 1u << 1, // alpha-masked and opted back into casting
     DRAW_DOUBLE_SIDED = 1u << 2,
-    // The AABB does not bound where this mesh actually draws, so a frustum test
-    // on it would reject geometry that is really inside. Skinned meshes carry
-    // their BIND-POSE bounds (calculate_aabb runs once at import, never per
-    // animated frame) and wind displaces vertices the shader computes.
-    //
-    // The camera pass has always culled both anyway, and the visible artefact
-    // is the same either way -- but on the camera the wrong answer costs a
-    // popped object at the screen edge, where in a shadow map it costs a
-    // missing shadow in the middle of a lit scene. Not worth inheriting.
-    DRAW_UNBOUNDED = 1u << 3,
 };
 
 // How a view picks a level out of a mesh's LOD chain.
@@ -122,8 +114,26 @@ void scene_graph_touched(void);
 // no camera to measure against should pass rather than inventing one.
 bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod);
 
-// Whether this item survives the frustum. A NULL frustum accepts everything,
-// which is how a pass says it does not cull.
+// What a pass culls against: its frustum, plus the two things that move
+// geometry off the import bounds a frustum test would otherwise use.
+//
+// Carried as a struct rather than left implicit because both members are
+// PER PASS, not per frame. The shadow pass runs before the app steps the
+// animation and the camera pass after, and each uploads the pose that is live
+// when it draws -- so a bound is only correct if it is built where it is used.
+// Passing this by value everywhere a Frustum* used to go is also what makes
+// the compiler find every cull site: a site left on the old signature does not
+// build, where a site left on the old bound would silently pop geometry.
+//
+// A NULL view, or a NULL frustum inside one, accepts everything -- which is how
+// a pass says it does not cull.
+typedef struct CullView {
+    const Frustum* frustum;
+    const struct Wind* wind;           // the scene's field; NULL = nothing sways
+    const struct AnimationState* pose; // the live pose; NULL = every mesh is at bind
+} CullView;
+
+// Whether this item survives the frustum.
 //
 // One function rather than the expression, because every pass has to reach the
 // same answer twice -- once deciding whether to draw an item and once deciding
@@ -132,7 +142,7 @@ bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const 
 // whatever the chunk holds, so an item accepted by one test and rejected by
 // the other shifts every instance behind it. Four hand-written copies of this
 // had already drifted on the null guard.
-bool draw_item_visible(const DrawItem* item, const Frustum* frustum);
+bool draw_item_visible(const DrawItem* item, const CullView* view);
 
 // Whether `next` can ride in the same draw as the run that `head` started:
 // same geometry AT THE SAME LEVEL, and visible under the same frustum. The
@@ -141,7 +151,7 @@ bool draw_item_visible(const DrawItem* item, const Frustum* frustum);
 //
 // The level joins the key because one draw submits one index range, so two
 // instances of a mesh at different distances cannot share a draw.
-bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const Frustum* frustum);
+bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullView* view);
 
 // Copy one lane out of `src` into `dst`, ordered coarsely front-to-back so early
 // depth rejection has something to reject with, then by material and mesh so the

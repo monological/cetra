@@ -238,6 +238,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // the same shader arithmetic, so there is nothing to opt into.
     // --no-instancing is the escape hatch.
     engine->instancing_enabled = true;
+    engine->frustum_cull_enabled = true;
     engine->oit_moments_enabled = true;
     engine->emissive_lights_enabled = false; // see engine.h: emissive is mostly not a lamp
     engine->lod_enabled = true;
