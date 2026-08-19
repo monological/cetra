@@ -93,8 +93,11 @@ CS_DISTANCE = 0.8
 MAX_UV_LEN = 0.15     # the march's screen-reach clamp
 GRAZE_LIFT = 4.0      # slope-scaled start-offset gain
 
-OPEN_X = 1.5          # the in-frame control: ground the cube cannot reach
-OPEN_Z = 0.7
+# The in-frame control: ground on the SAME scan line as the strip that the cube
+# cannot reach. Same line because that makes the two reads one row of pixels, so
+# a projection off by a texel moves both together.
+OPEN_X = 1.5
+OPEN_HALF_X = 0.20
 
 
 def _sub(a, b):
@@ -188,20 +191,22 @@ def _check_geometry():
     #    strip reads 1 because the march never ran.
     assert ndl_back > 0.30, "the occluded ray grazes: N.L %.3f" % ndl_back
 
-    # 6. The in-frame control must be out of reach of the cube in the ONE
-    #    direction that could reach it. Its whole job is to read exactly 1 in the
-    #    same frame that the strip reads dark.
-    open_pt = (OPEN_X, 0.0, OPEN_Z)
-    _, open_dir, _ = _march_start(open_pt, LIGHT_BACK)
-    x_at_reach = OPEN_X + CS_DISTANCE * open_dir[0]
+    # 6. The in-frame control must be out of reach of the cube along its whole
+    #    span, in the ONE direction that could reach it. Its job is to read
+    #    exactly 1 in the same frame -- and on the same scan line -- that the
+    #    strip reads dark.
+    open_near = (OPEN_X - OPEN_HALF_X, 0.0, STRIP_Z)
+    _, open_dir, _ = _march_start(open_near, LIGHT_BACK)
+    x_at_reach = open_near[0] + CS_DISTANCE * open_dir[0]
     assert x_at_reach > CUBE_HALF + 0.5, (
         "the control's march comes within %.2f of the cube in x" % (x_at_reach - CUBE_HALF))
 
-    # 7. Everything an arm reads has to be ON SCREEN, with margin for the sample
-    #    box the arm insets. Off-frame is a silent zero.
+    # 7. Everything an arm reads has to be ON SCREEN, with margin. Off-frame is a
+    #    silent zero.
     for name, pt in (("strip -x", (-STRIP_HALF_X, 0.0, STRIP_Z)),
                      ("strip +x", (STRIP_HALF_X, 0.0, STRIP_Z)),
-                     ("control", open_pt)):
+                     ("control -x", open_near),
+                     ("control +x", (OPEN_X + OPEN_HALF_X, 0.0, STRIP_Z))):
         u, v, vz = project(pt)
         assert vz < 0.0 and 0.04 < u < 0.96 and 0.04 < v < 0.96, (
             "%s lands off frame at uv (%.3f, %.3f)" % (name, u, v))
