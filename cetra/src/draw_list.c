@@ -1,3 +1,4 @@
+#include <float.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -126,10 +127,22 @@ static const float LOD_SWITCH[] = {0.045f, 0.022f, 0.011f};
 _Static_assert(sizeof(LOD_SWITCH) / sizeof(LOD_SWITCH[0]) == CETRA_LOD_MAX - 1,
                "LOD_SWITCH needs one threshold per level below the top");
 
-// Where a mesh sits in the world and how big it is, from the same world bound
-// the culler tests against -- so "how big is this mesh" has ONE definition
-// rather than one per consumer free to drift from the others. `out_radius` may
-// be NULL for a caller that only wants the centre.
+// Where a mesh sits in the world and how big it is, from its IMPORT bound --
+// undisplaced, and at bind pose for a skinned mesh. `out_radius` may be NULL
+// for a caller that only wants the centre.
+//
+// That is deliberately NOT the bound the culler tests (_item_bounds), and the
+// two answer different questions: culling needs the envelope the geometry can
+// reach, where LOD and depth ordering want the size and place of the geometry
+// itself. Feeding them the envelope would pick a level from a grass blade's
+// sway rather than from the blade, which on apps/tree is an 8-unit margin on a
+// mesh far smaller than that.
+//
+// What the split costs, stated so nobody has to rediscover it: a skinned mesh
+// depth-sorts from its BIND centre, which a pose can move far from where it
+// draws. That is early-Z efficiency, not correctness -- the opaque lane is
+// order-independent apart from coplanar ties -- and LOD is unaffected either
+// way, since lod.c refuses skinned meshes a chain at all.
 //
 // Zeroed because they are out-params of a call in another translation unit,
 // which static analysis reads as a use before write.
@@ -231,6 +244,35 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
 // visible. That is the honest answer rather than a fallback: culling on a bound
 // the geometry can leave drops something on screen, and there is no test in the
 // corpus that would catch it.
+// The box a skinned mesh's POSE occupies, in object space: each bone's own
+// bind-space vertices under that bone's matrix, plus the vertices no bone
+// claims. Left EMPTY (min > max) when nothing contributed, which is the same
+// sentinel the per-bone boxes carry.
+static void _posed_bounds(const Mesh* mesh, const AnimationState* pose, vec3 out_min,
+                          vec3 out_max) {
+    glm_vec3_fill(out_min, FLT_MAX);
+    glm_vec3_fill(out_max, -FLT_MAX);
+
+    size_t bones = mesh->bone_aabb_count < pose->active_bone_count ? mesh->bone_aabb_count
+                                                                   : pose->active_bone_count;
+    for (size_t b = 0; b < bones; ++b) {
+        const AABB* box = &mesh->bone_aabb[b];
+        if (box->min[0] > box->max[0])
+            continue; // no vertex binds this bone, and FLT_MAX cannot be transformed
+        // The casts are cglm's const-incorrectness, the same one
+        // item_world_bounds carries: it reads these and declares them non-const
+        // anyway.
+        vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
+        aabb_transform((float*)box->min, (float*)box->max, (vec4*)pose->bone_matrices[b], lo, hi);
+        glm_vec3_minv(out_min, lo, out_min);
+        glm_vec3_maxv(out_max, hi, out_max);
+    }
+    // Already in this space, so no transform -- and an empty one unions to a
+    // no-op, which is why it needs no flag saying whether it is there.
+    glm_vec3_minv(out_min, (float*)mesh->bone_rest_aabb.min, out_min);
+    glm_vec3_maxv(out_max, (float*)mesh->bone_rest_aabb.max, out_max);
+}
+
 static bool _item_bounds(const DrawItem* item, const CullView* view, vec3 out_min, vec3 out_max) {
     const Mesh* mesh = item->mesh;
     glm_vec3_copy((float*)mesh->aabb.min, out_min);
@@ -243,50 +285,16 @@ static bool _item_bounds(const DrawItem* item, const CullView* view, vec3 out_mi
     //   no live pose      -> render_update_skinning_uniforms sets skinned = 0
     //                        and the mesh draws at bind, so the import AABB is
     //                        EXACT here rather than a fallback
-    //   pose is this rig  -> the union below
+    //   pose is this rig  -> the posed union
     //   pose is some      -> a foreign rig's matrices are about to be uploaded
     //   other rig            for this mesh; nothing here can bound that, and
     //                        saying so is better than bounding it wrongly
     if (mesh->is_skinned && view->pose && view->pose->active_bone_count > 0) {
         if (mesh->skeleton != view->pose->skeleton || !mesh->bone_aabb)
             return false;
-
-        size_t bones = mesh->bone_aabb_count;
-        if (bones > view->pose->active_bone_count)
-            bones = view->pose->active_bone_count;
-
-        bool any = false;
-        for (size_t b = 0; b < bones; ++b) {
-            const AABB* box = &mesh->bone_aabb[b];
-            if (box->min[0] > box->max[0])
-                continue; // no vertex binds this bone
-            vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-            // The casts are cglm's const-incorrectness, the same one
-            // item_world_bounds carries: it reads these and declares them
-            // non-const anyway.
-            aabb_transform((float*)box->min, (float*)box->max,
-                           (vec4*)view->pose->bone_matrices[b], lo, hi);
-            if (any) {
-                glm_vec3_minv(out_min, lo, out_min);
-                glm_vec3_maxv(out_max, hi, out_max);
-            } else {
-                glm_vec3_copy(lo, out_min);
-                glm_vec3_copy(hi, out_max);
-                any = true;
-            }
-        }
-        if (mesh->has_bone_rest) {
-            if (any) {
-                glm_vec3_minv(out_min, (float*)mesh->bone_rest_aabb.min, out_min);
-                glm_vec3_maxv(out_max, (float*)mesh->bone_rest_aabb.max, out_max);
-            } else {
-                glm_vec3_copy((float*)mesh->bone_rest_aabb.min, out_min);
-                glm_vec3_copy((float*)mesh->bone_rest_aabb.max, out_max);
-                any = true;
-            }
-        }
-        if (!any)
-            return false;
+        _posed_bounds(mesh, view->pose, out_min, out_max);
+        if (out_min[0] > out_max[0])
+            return false; // a skinned mesh that binds nothing
     }
 
     // Wind is added in OBJECT space (object_position.glsl) and the caller
@@ -318,8 +326,8 @@ bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullVie
 }
 
 // Distance from `eye` to an item's world-space bound centre, through the same
-// helper select_lod uses -- which is what makes the claim above true rather than
-// merely asserted.
+// helper select_lod uses -- so the two consumers of "where is this mesh" cannot
+// disagree with each other, whatever they both differ from.
 static float item_distance(const DrawItem* item, const vec3 eye) {
     vec3 centre = {0.0f, 0.0f, 0.0f};
     item_world_bounds(item->mesh, item->node, centre, NULL);

@@ -44,6 +44,12 @@
 // evaluated against rather than the posed result: the height mask that pins a
 // cloth top and frees its hem is authored in rest space, and re-measuring it
 // against an animated pose makes the mask slide as the mesh moves.
+// ANYTHING ADDED HERE NEEDS A BOUND. draw_list.c's _item_bounds is the CPU
+// mirror of this function -- it bounds the box these two displacers can move a
+// vertex into, which is what lets a swaying or posed mesh be frustum-culled
+// instead of exempted. A third displacer compiles fine, bounds nothing, and
+// culls geometry that is on screen; the symptom is a mesh popping at the frame
+// edge, and no golden or gate in the corpus watches for it.
 vec4 cetra_local_position(vec3 rest, mat4 bone, bool isSkinned, vec2 uv0, vec2 uv1, float t,
                           vec3 origin) {
     vec4 local = isSkinned ? bone * vec4(rest, 1.0) : vec4(rest, 1.0);

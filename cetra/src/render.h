@@ -118,6 +118,16 @@ AnimationState* get_render_animation_state(void);
 // the active animation state; shared by the scene and shadow depth passes
 void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh);
 
+// What a pass culls against, assembled in the ONE place that knows what a cull
+// view is made of -- which is also the one place `frustum_cull_enabled` is read.
+// Three sites built this by hand in two different spellings, and the third only
+// honoured the toggle because its caller happened to pass NULL.
+//
+// Call it AT the pass: the pose it reads is a process-global the app writes from
+// inside its own render callback, so a view built anywhere else can describe a
+// pose the pass is not about to upload.
+CullView render_cull_view(const Engine* engine, const struct Scene* scene, const Frustum* frustum);
+
 // What a draw loop has already bound, so it can skip re-binding it. Shared by
 // the scene and shadow depth walkers.
 //

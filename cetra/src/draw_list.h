@@ -117,13 +117,19 @@ bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const 
 // What a pass culls against: its frustum, plus the two things that move
 // geometry off the import bounds a frustum test would otherwise use.
 //
-// Carried as a struct rather than left implicit because both members are
-// PER PASS, not per frame. The shadow pass runs before the app steps the
-// animation and the camera pass after, and each uploads the pose that is live
-// when it draws -- so a bound is only correct if it is built where it is used.
-// Passing this by value everywhere a Frustum* used to go is also what makes
-// the compiler find every cull site: a site left on the old signature does not
-// build, where a site left on the old bound would silently pop geometry.
+// Carried as a struct for two reasons, and neither is that the members vary by
+// pass -- the wind field never does. First, it keeps this file out of the
+// scene's wind field and out of render.c's animation-state global, so the
+// culler depends on what it is handed rather than on what it can reach.
+// Second, and the load-bearing one: replacing the `const Frustum*` this
+// REPLACED is what makes the compiler find every cull site. A site left on the
+// old signature does not build, where a site left on the old BOUND would
+// silently pop geometry.
+//
+// Build one with render_cull_view, at the pass. The pose is written by the app
+// from inside its own render callback, so the shadow pass and the camera pass
+// legitimately see different ones -- and a view built anywhere but the pass can
+// describe a pose that pass is not about to upload.
 //
 // A NULL view, or a NULL frustum inside one, accepts everything -- which is how
 // a pass says it does not cull.

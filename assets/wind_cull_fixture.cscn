@@ -54,7 +54,7 @@
   "speed": 3.141592653589793,
   "gustFrequency": 0.15,
   "gustAmount": 0.0,
-  "turbulence": 0.0
+  "turbulence": 0.35
  },
  "materials": {
   "cull_marginal": {
@@ -62,6 +62,10 @@
   },
   "cull_behind": {
    "windResponse": 1.0
+  },
+  "cull_vegetation": {
+   "windResponse": 1.0,
+   "windMode": "vegetation leaf"
   }
  }
 }

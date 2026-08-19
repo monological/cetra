@@ -163,10 +163,11 @@ typedef struct Engine {
     bool instancing_enabled; // false = every run submits one draw per mesh
     bool lod_enabled;        // false = every draw takes LOD level 0
     float lod_bias;          // > 1 holds detail longer, < 1 drops it sooner
-    // false = no camera-side frustum rejection; every item in the list is
-    // submitted. A bisect lever, not a feature: culling only ever removes
-    // geometry that contributed nothing, so this is expected to be 0 px and its
-    // job is to say so when it is not.
+    // false = no frustum rejection anywhere -- camera, shadow cascades and the
+    // TSM walks alike, since all four build their view through the same helper.
+    // A bisect lever, not a feature: culling only ever removes geometry that
+    // contributed nothing, so this is expected to be 0 px and its job is to say
+    // so when it is not.
     bool frustum_cull_enabled;
     // true = the opaque lane is drawn coarsely front-to-back, grouped by
     // material and mesh, instead of in graph order. Opaque geometry is

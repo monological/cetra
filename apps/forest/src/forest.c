@@ -685,18 +685,21 @@ static void on_init(Game* game) {
 
     bake_vegetation_textures(g_scene);
 
-    // A breeze across the valley. phase_variation is what makes 2,000 copies of
-    // five prototypes look like trees rather than one tree drawn 2,000 times:
-    // wind is evaluated in object space, so without it every instance sways on
-    // the same beat.
-    g_scene->wind = create_wind("valley breeze");
-    glm_vec3_copy((vec3){0.82f, 0.0f, 0.57f}, g_scene->wind->direction);
-    g_scene->wind->strength = 3.0f;
-    g_scene->wind->speed = 0.9f;
-    g_scene->wind->gust_frequency = 0.18f;
-    g_scene->wind->gust_amount = 0.5f;
-    g_scene->wind->turbulence = 0.35f;
-    g_scene->wind->phase_variation = 1.0f;
+    // A breeze across the valley. phase_variation is what makes TREE_COUNT copies
+    // of TREE_PROTOTYPES meshes look like trees rather than one tree drawn two
+    // thousand times: wind is evaluated in object space, so without it every
+    // instance sways on the same beat.
+    Wind* wind = create_wind("valley breeze");
+    if (wind) {
+        glm_vec3_copy((vec3){0.82f, 0.0f, 0.57f}, wind->direction);
+        wind->strength = 3.0f;
+        wind->speed = 0.9f;
+        wind->gust_frequency = 0.18f;
+        wind->gust_amount = 0.5f;
+        wind->turbulence = 0.35f;
+        wind->phase_variation = 1.0f;
+        set_scene_wind(g_scene, wind);
+    }
 
     PhysicsConfig pc = physics_default_config();
     PhysicsWorld* physics = create_physics_world(&pc);

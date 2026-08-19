@@ -73,16 +73,9 @@ typedef struct Mesh {
     AABB aabb;
 
     // The vertex maxima windOffset()'s vegetation modes scale their
-    // displacement by, so a wind-driven mesh can be given a conservative bound
-    // and culled rather than exempted. Both are RAW attribute values: nothing in
-    // the shader, the importer or the upload clamps UV1 to [0,1], so assuming
-    // it would build a bound the geometry can leave.
-    //
-    // Measured in upload_mesh_buffers_to_gpu rather than beside the AABB,
-    // because that is the one point every drawable mesh passes with its vertex
-    // data final -- calculate_aabb is called by each builder in turn and a mesh
-    // that gained UV1 afterwards would carry a zero here against a shader
-    // reading real flex. Zero when there is no UV1, which is what the shader
+    // displacement by, over this mesh's own vertices. Both are RAW attribute
+    // values -- nothing in the shader, the importer or the upload clamps UV1 to
+    // [0,1] -- and both are 0 when there is no UV1, which is what the shader
     // sees too: a disabled attribute reads (0,0,0,1).
     float wind_flex_max; // max |uv1.y|
     float wind_leaf_max; // max |uv1.y * uv0.y|, the joint max rather than the
@@ -110,8 +103,9 @@ typedef struct Mesh {
     size_t bone_aabb_count;
     // Vertices whose weights sum to nothing. skinMatrix falls back to identity
     // for them, so they draw at bind position and no bone's box covers them.
+    // EMPTY (min > max) when there are none -- the same sentinel the per-bone
+    // boxes carry, rather than a second flag saying the same thing.
     AABB bone_rest_aabb;
-    bool has_bone_rest;
 
     // This mesh's emissive surface is also an LTC area panel (spec 11.49), so a
     // capture whose output is irradiance must not see it emit -- the panel

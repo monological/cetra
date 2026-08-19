@@ -63,7 +63,14 @@ void wind_upload_to_program(const Wind* wind, UniformManager* u) {
 // |vec3(sin a, 0, cos b)| at its worst, which is what both turbulence terms
 // displace along -- the two sines are independently phased, so they can peak
 // together and the bound has to assume they do.
-#define WIND_LATERAL_MAX 1.4142136f
+#define WIND_LATERAL_MAX GLM_SQRT2f
+
+// |vec3(1, WIND_LEAF_FLUTTER_Y, -WIND_LEAF_FLUTTER_Z)|, the fixed direction the
+// leaf flutter rides along. Constant-folded, and out here rather than inside
+// the branch that uses it because it is a property of the model, not of a call.
+#define WIND_LEAF_DIR_MAX                                                                      \
+    sqrtf(1.0f + WIND_LEAF_FLUTTER_Y * WIND_LEAF_FLUTTER_Y +                                   \
+          WIND_LEAF_FLUTTER_Z * WIND_LEAF_FLUTTER_Z)
 
 float wind_max_offset(const Wind* wind, float response, int mode, float flex_max, float leaf_max) {
     // The shader's own early-out, mirrored. Not just an optimisation: a
@@ -97,10 +104,8 @@ float wind_max_offset(const Wind* wind, float response, int mode, float flex_max
                flex_max * (WIND_VEG_SWAY + WIND_LATERAL_MAX * WIND_VEG_TURB * turb));
 
     if (mode == 2) {
-        // Leaf flutter rides on top, along a fixed vec3(1, 0.4, -0.6).
-        const float leaf_dir = sqrtf(1.0f + WIND_LEAF_FLUTTER_Y * WIND_LEAF_FLUTTER_Y +
-                                     WIND_LEAF_FLUTTER_Z * WIND_LEAF_FLUTTER_Z);
-        bound += amp * leaf_max * leaf_dir * turb;
+        // Leaf flutter rides on top of that.
+        bound += amp * leaf_max * WIND_LEAF_DIR_MAX * turb;
     }
     return bound;
 }

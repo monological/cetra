@@ -822,19 +822,16 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 
 // The body both depth-pass loops share, once a layer is bound: aim the depth
 // program at one light-space matrix and walk the scene into it.
-static void draw_shadow_layer(ShadowSystem* ss, const DrawList* list, mat4 matrix,
-                              SubmitState* state, ShadowCasterSet set, const Engine* engine,
-                              CullView cull) {
+static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawList* list,
+                              mat4 matrix, SubmitState* state, ShadowCasterSet set,
+                              const Engine* engine) {
     uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", (const float*)matrix);
     // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
     // care whether it is ortho or perspective -- so cascades and punctual faces
     // cull through the same six planes.
     Frustum layer_frustum;
     frustum_extract_from_vp(matrix, &layer_frustum);
-    // The caller supplies the half that is the same for every layer -- the
-    // wind field and the pose -- and this is the half that is not.
-    if (engine->frustum_cull_enabled)
-        cull.frustum = &layer_frustum;
+    CullView cull = render_cull_view(engine, scene, &layer_frustum);
     _draw_shadow_items(list, ss->depth_program, state, set, &cull, engine);
     end_shadow_pass(ss);
 }
@@ -1112,8 +1109,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         // the layers this cascade owns.
         Frustum tsm_frustum;
         frustum_extract_from_vp(ss->cascade_matrices[c], &tsm_frustum);
-        CullView tsm_cull = {engine->frustum_cull_enabled ? &tsm_frustum : NULL, scene->wind,
-                             get_render_animation_state()};
+        CullView tsm_cull = render_cull_view(engine, scene, &tsm_frustum);
         SubmitState state = {0};
 
         // --- accumulate absorbance -----------------------------------------
@@ -1465,11 +1461,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     SubmitState state = {0};
     submit_use_program(&state, ss->depth_program->id);
 
-    // The wind and pose half of every layer's cull, built once. This pass runs
-    // BEFORE the app steps the animation, so the pose here is last frame's --
-    // which is also the pose these draws upload, since both read the same
-    // global. Each layer substitutes its own matrix as the frustum.
-    const CullView pass_cull = {NULL, scene->wind, get_render_animation_state()};
 
     profiler_scope_begin_if(engine->profiler, ss->directional_count > 0, "shadow cascades");
     for (size_t i = 0; i < ss->directional_count; ++i) {
@@ -1479,8 +1470,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
-            draw_shadow_layer(ss, &scene->draw_list, ss->cascade_matrices[layer], &state, set,
-                              engine, pass_cull);
+            draw_shadow_layer(ss, scene, &scene->draw_list, ss->cascade_matrices[layer], &state,
+                              set, engine);
         }
     }
     profiler_scope_end(engine->profiler);
@@ -1508,8 +1499,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // the directional cascades only (unit 15 has no room for a
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
-                draw_shadow_layer(ss, &scene->draw_list, ss->punctual_matrices[layer], &state,
-                                  SHADOW_CASTERS_OPAQUE, engine, pass_cull);
+                draw_shadow_layer(ss, scene, &scene->draw_list, ss->punctual_matrices[layer],
+                                  &state, SHADOW_CASTERS_OPAQUE, engine);
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;

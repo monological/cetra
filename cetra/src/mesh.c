@@ -103,7 +103,10 @@ Mesh* create_mesh() {
     mesh->is_skinned = false;
     mesh->bone_aabb = NULL;
     mesh->bone_aabb_count = 0;
-    mesh->has_bone_rest = false;
+    // Seeded EMPTY, not left to the allocator: this box is read whenever it is
+    // not empty, so garbage here is a bound the geometry can leave.
+    glm_vec3_fill(mesh->bone_rest_aabb.min, FLT_MAX);
+    glm_vec3_fill(mesh->bone_rest_aabb.max, -FLT_MAX);
 
     return mesh;
 }
@@ -222,7 +225,8 @@ static void measure_bone_bounds(Mesh* mesh) {
     free(mesh->bone_aabb);
     mesh->bone_aabb = NULL;
     mesh->bone_aabb_count = 0;
-    mesh->has_bone_rest = false;
+    glm_vec3_fill(mesh->bone_rest_aabb.min, FLT_MAX);
+    glm_vec3_fill(mesh->bone_rest_aabb.max, -FLT_MAX);
 
     if (!mesh->is_skinned || !mesh->bone_ids || !mesh->bone_weights || !mesh->skeleton)
         return;
@@ -241,8 +245,6 @@ static void measure_bone_bounds(Mesh* mesh) {
         glm_vec3_fill(mesh->bone_aabb[b].min, FLT_MAX);
         glm_vec3_fill(mesh->bone_aabb[b].max, -FLT_MAX);
     }
-    glm_vec3_fill(mesh->bone_rest_aabb.min, FLT_MAX);
-    glm_vec3_fill(mesh->bone_rest_aabb.max, -FLT_MAX);
 
     for (size_t i = 0; i < mesh->vertex_count; ++i) {
         vec3 v = {mesh->vertices[i * 3 + 0], mesh->vertices[i * 3 + 1], mesh->vertices[i * 3 + 2]};
@@ -261,7 +263,6 @@ static void measure_bone_bounds(Mesh* mesh) {
         if (total < 0.001f) {
             glm_vec3_minv(mesh->bone_rest_aabb.min, v, mesh->bone_rest_aabb.min);
             glm_vec3_maxv(mesh->bone_rest_aabb.max, v, mesh->bone_rest_aabb.max);
-            mesh->has_bone_rest = true;
         }
     }
 }

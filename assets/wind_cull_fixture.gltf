@@ -11,7 +11,8 @@
     1,
     2,
     3,
-    4
+    4,
+    5
    ]
   }
  ],
@@ -55,6 +56,15 @@
     0.0,
     20.0
    ]
+  },
+  {
+   "name": "wind_vegetation",
+   "mesh": 3,
+   "translation": [
+    -4.806729651617756,
+    0.0,
+    0.0
+   ]
   }
  ],
  "meshes": [
@@ -67,7 +77,7 @@
       "NORMAL": 3,
       "TEXCOORD_0": 4
      },
-     "indices": 5,
+     "indices": 6,
      "material": 0
     }
    ]
@@ -81,7 +91,7 @@
       "NORMAL": 3,
       "TEXCOORD_0": 4
      },
-     "indices": 5,
+     "indices": 6,
      "material": 1
     }
    ]
@@ -95,8 +105,23 @@
       "NORMAL": 3,
       "TEXCOORD_0": 4
      },
-     "indices": 5,
+     "indices": 6,
      "material": 2
+    }
+   ]
+  },
+  {
+   "name": "wind_vegetation",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 3,
+      "TEXCOORD_0": 4,
+      "TEXCOORD_1": 5
+     },
+     "indices": 6,
+     "material": 3
     }
    ]
   }
@@ -135,6 +160,19 @@
      0.04,
      0.04,
      0.05,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  },
+  {
+   "name": "cull_vegetation",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.25,
+     0.85,
+     0.2,
      1.0
     ],
     "metallicFactor": 0.0,
@@ -205,6 +243,12 @@
   },
   {
    "bufferView": 5,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 6,
    "componentType": 5123,
    "count": 6,
    "type": "SCALAR"
@@ -244,14 +288,20 @@
   {
    "buffer": 0,
    "byteOffset": 224,
+   "byteLength": 32,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 256,
    "byteLength": 12,
    "target": 34963
   }
  ],
  "buffers": [
   {
-   "uri": "data:application/octet-stream;base64,mpmZvgAAAAAAAAAAmpmZPgAAAAAAAAAAmpmZPs3MzD8AAAAAmpmZvs3MzD8AAAAAmpmZvgAAAAAAAAAAmpmZPgAAAAAAAAAAmpmZPs3MzD8AAAAAmpmZvs3MzD8AAAAAAAAQwQAAoMAAAEDAAAAQQQAAoMAAAEDAAAAQQQAAoEAAAEDAAAAQwQAAoEAAAEDAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAEAAgAAAAIAAwA=",
-   "byteLength": 236
+   "uri": "data:application/octet-stream;base64,mpmZvgAAAAAAAAAAmpmZPgAAAAAAAAAAmpmZPs3MzD8AAAAAmpmZvs3MzD8AAAAAmpmZvgAAAAAAAAAAmpmZPgAAAAAAAAAAmpmZPs3MzD8AAAAAmpmZvs3MzD8AAAAAAAAQwQAAoMAAAEDAAAAQQQAAoMAAAEDAAAAQQQAAoEAAAEDAAAAQwQAAoEAAAEDAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAzcxMPgAAAADNzEw+AAAAAM3MTD4AAAAAzcxMPgAAAQACAAAAAgADAA==",
+   "byteLength": 268
   }
  ]
 }

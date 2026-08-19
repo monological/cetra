@@ -72,6 +72,12 @@ AnimationState* get_render_animation_state(void) {
     return g_current_animation_state;
 }
 
+CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustum* frustum) {
+    CullView view = {engine->frustum_cull_enabled ? frustum : NULL, scene ? scene->wind : NULL,
+                     get_render_animation_state()};
+    return view;
+}
+
 void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
     if (!program || !program->uniforms)
         return;
@@ -1041,8 +1047,7 @@ void render_current_scene(Engine* engine) {
     // pose these passes cull against is the pose they are about to upload. The
     // shadow pass builds its own for the same reason and gets a different
     // answer, which is correct: it draws a different pose.
-    CullView cull = {engine->frustum_cull_enabled ? &frustum : NULL, scene->wind,
-                     get_render_animation_state()};
+    CullView cull = render_cull_view(engine, scene, &frustum);
 
     // Flatten once. Cube captures re-enter here six times with their own
     // camera; the stamp makes those five reuses rather than five rebuilds,
