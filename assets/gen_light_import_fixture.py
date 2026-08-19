@@ -196,3 +196,49 @@ with open(out, "w") as f:
     json.dump(point, f, indent=1)
     f.write("\n")
 print("wrote", out, "( point light, intensity 500 cd, range 25 m )")
+
+# Third fixture, same geometry, SPOT light with an authored cone.
+#
+# Until 11.57 nothing in the corpus authored a spot through glTF -- cornell_leak
+# is the only spot anywhere and it comes through a .cscn -- so nothing exercised
+# import.c's cone path, and it had been writing assimp's RADIAN half-angles
+# straight into the engine's COSINE fields since it was written.
+#
+# The angles are chosen so the defect is unmistakable in the import log rather
+# than subtle in a frame. Correct: cos(20) = 0.9397 inner, cos(30) = 0.8660
+# outer, ordered inner > outer because cosine decreases with angle. Broken: the
+# raw radians 0.3491 and 0.5236, which are not only wrong but INVERTED -- and
+# spotConeFactor's epsilon = max(cutOff - outerCutOff, 1e-4) then collapses to
+# 1e-4 and turns the soft 20-30 degree edge into a hard step at 58.4 degrees.
+SPOT_INNER_DEG = 20.0
+SPOT_OUTER_DEG = 30.0
+spot = json.loads(json.dumps(gltf))  # deep copy; geometry and buffers are shared
+spot["asset"]["generator"] = "gen_light_import_fixture.py (spot variant)"
+spot["extensions"]["KHR_lights_punctual"]["lights"] = [
+    {
+        "name": "coned_lamp",
+        "type": "spot",
+        "color": [1.0, 1.0, 1.0],
+        "intensity": 500.0,
+        "range": 25.0,
+        # glTF authors cone half-angles in RADIANS, which is also what assimp
+        # hands on; the engine stores their cosines.
+        "spot": {
+            "innerConeAngle": math.radians(SPOT_INNER_DEG),
+            "outerConeAngle": math.radians(SPOT_OUTER_DEG),
+        },
+    }
+]
+spot["nodes"][1] = {
+    "name": "coned_lamp",
+    "translation": [0.0, 2.0, 0.0],
+    "extensions": {"KHR_lights_punctual": {"light": 0}},
+}
+
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spot_import_fixture.gltf")
+with open(out, "w") as f:
+    json.dump(spot, f, indent=1)
+    f.write("\n")
+print("wrote %s ( spot light, cone %.0f/%.0f deg -> cos %.4f/%.4f )"
+      % (out, SPOT_INNER_DEG, SPOT_OUTER_DEG,
+         math.cos(math.radians(SPOT_INNER_DEG)), math.cos(math.radians(SPOT_OUTER_DEG))))

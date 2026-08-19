@@ -148,9 +148,10 @@ static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
     glm_vec2_copy((float*)light->size, dst->size_misc);
 }
 
-// Normalized emitting normal for a panel, substituting the default -Y for a
-// degenerate authored direction so the frame below is always buildable.
-static void _area_panel_dir(const struct Light* light, vec3 out) {
+// The unit axis a light emits along -- a panel's normal, a spot's beam, a
+// point's IES orientation -- substituting the default -Y for a degenerate
+// authored direction so anything building a frame from it always can.
+static void _light_axis(const struct Light* light, vec3 out) {
     glm_vec3_copy((float*)light->direction, out);
     if (glm_vec3_norm(out) < 1e-6f)
         glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, out);
@@ -194,20 +195,31 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
 
     // Area panels also ship a height axis; other light types leave it zeroed.
-    // The panel's direction is normalized (the LTC plane test and corner frame
-    // both assume a unit normal); spot/point ship theirs as authored, which is
-    // what spotConeFactor has always consumed.
+    //
+    // EVERY type ships a unit direction. It used to be panels only -- the LTC
+    // plane test and corner frame assume a unit normal -- while spot and point
+    // shipped theirs as authored, which spotConeFactor got away with because it
+    // normalizes at use. An IES profile does not get away with it: the lookup is
+    // acos(dot(L, axis)), and a non-unit axis skews that angle non-linearly
+    // rather than merely scaling it. One CPU normalize per light per frame
+    // against a per-fragment one in three shaders.
+    //
+    // A degenerate authored direction falls back to -Y, the same substitution
+    // _light_axis makes and for the same reason: something downstream has to
+    // build a frame from it.
     if (light->type == LIGHT_AREA) {
         // Zero-init is dead -- both helpers write unconditionally -- but
         // cppcheck cannot see through cglm's inlines to know that
         vec3 dir = {0.0f, 0.0f, 0.0f}, up = {0.0f, 0.0f, 0.0f};
-        _area_panel_dir(light, dir);
+        _light_axis(light, dir);
         _area_panel_up(light, dir, up);
         glm_vec3_copy(dir, dst->dir_type);
         glm_vec3_copy(up, dst->up_area);
         dst->up_area[3] = 0.0f;
     } else {
-        glm_vec3_copy((float*)light->direction, dst->dir_type);
+        vec3 dir = {0.0f, 0.0f, 0.0f};
+        _light_axis(light, dir);
+        glm_vec3_copy(dir, dst->dir_type);
     }
 }
 

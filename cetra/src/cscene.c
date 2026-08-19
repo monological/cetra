@@ -278,6 +278,19 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
                 continue;
             }
         }
+
+        // The lights block was the ONLY parse block without this, against twelve
+        // that had it -- so a misspelled key on a light was silently ignored and
+        // the light rendered at its default. That is the failure water_fixture
+        // shipped for four specs with a flat `sun_elevation` nothing read.
+        //
+        // Checked last, after every `continue` above: a light that was refused
+        // has already been reported by name, and warning twice about the same
+        // entry reads as two problems.
+        static const char* const known[] = {
+            "name",  "type",         "position", "color", "intensity", "intensity_unit",
+            "direction", "cast_shadows", "attenuation", "range", "size", "up", "cone"};
+        warn_unknown_keys(l, known, sizeof(known) / sizeof(known[0]), "light");
         d->light_count++;
     }
 }

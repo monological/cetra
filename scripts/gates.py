@@ -7283,6 +7283,62 @@ def run_range_gate():
     return [] if ok else ["gltf-range"]
 
 
+# Mirrors gen_light_import_fixture.py's spot variant and has to match it, or the
+# gate predicts a cone the asset does not author.
+CONE_INNER_DEG = 20.0
+CONE_OUTER_DEG = 30.0
+
+
+def run_cone_gate():
+    """A glTF spot's cone half-angles must arrive as COSINES, and in order.
+
+      gltf-cone   an imported 20/30 degree cone reads cos 0.9397 / 0.8660, inner
+                  above outer
+
+    import.c wrote assimp's RADIAN half-angles straight into the engine's cosine
+    fields until 11.57. Nothing caught it because nothing in the corpus authored a
+    spot through glTF -- cornell_leak is the only spot anywhere and it comes
+    through a .cscn, which has always converted.
+
+    The ORDERING is asserted beside the values because it is the half that breaks
+    the shader rather than merely detuning it: cosine decreases with angle, so
+    correct data has inner > outer, and spotConeFactor's
+    epsilon = max(cutOff - outerCutOff, 1e-4) collapses to 1e-4 when that
+    inverts -- turning a soft edge into a hard step. Falsified by hand at 11.57:
+    the raw radians read 0.3491 / 0.5236, wrong AND inverted.
+    """
+    fixture = os.path.join(ROOT, "assets", "spot_import_fixture.gltf")
+    if not os.path.exists(fixture):
+        print("  gltf-cone    SKIP  (missing spot_import_fixture.gltf)")
+        return []
+    line = None
+    for text in (_import_log(fixture, ["--no-scene-file"]),):
+        for candidate in text.splitlines():
+            if "<Light name='coned_lamp'" in candidate:
+                line = candidate
+    if line is None:
+        print("  gltf-cone    ERROR (no spot light imported)")
+        return ["gltf-cone"]
+
+    inner = _light_field(line, "cutOff")
+    outer = _light_field(line, "outerCutOff")
+    if inner is None or outer is None:
+        print("  gltf-cone    ERROR (light print carries no parseable cone)")
+        return ["gltf-cone"]
+    # outerCutOff is the last field, so it arrives with the closing '>'.
+    got_inner = float(inner)
+    got_outer = float(outer.rstrip(">"))
+    want_inner = math.cos(math.radians(CONE_INNER_DEG))
+    want_outer = math.cos(math.radians(CONE_OUTER_DEG))
+    ok = (abs(got_inner - want_inner) < 1e-4 and abs(got_outer - want_outer) < 1e-4
+          and got_inner > got_outer)
+    print(f"  gltf-cone    {'PASS' if ok else 'FAIL'}  {CONE_INNER_DEG:.0f}/{CONE_OUTER_DEG:.0f} "
+          f"degree cone imported as cos {got_inner:.4f}/{got_outer:.4f} "
+          f"(want {want_inner:.4f}/{want_outer:.4f}, inner above outer -- radians would "
+          f"read 0.3491/0.5236 and inverted)")
+    return [] if ok else ["gltf-cone"]
+
+
 def _import_log(fixture, extra=()):
     """Two-frame headless render, combined stdout+stderr (log_* goes to stderr)."""
     r = subprocess.run([RENDER, "-m", fixture, *extra, "-x", "-f", "2"],
@@ -7375,8 +7431,8 @@ def run_fbx_unit_gate():
 
 
 def _run_import_gates(workdir):
-    del workdir # both drive the importer directly rather than a render
-    return run_range_gate() + run_fbx_unit_gate()
+    del workdir # all three drive the importer directly rather than a render
+    return run_range_gate() + run_cone_gate() + run_fbx_unit_gate()
 
 
 # A line-initial two-space name, which is the shape an arm's printed line and a

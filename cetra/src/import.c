@@ -1349,8 +1349,18 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
                 break;
             case aiLightSource_SPOT:
                 light->type = LIGHT_SPOT;
-                light->cutOff = ai_light->mAngleInnerCone;
-                light->outerCutOff = ai_light->mAngleOuterCone;
+                // assimp reports HALF-ANGLES IN RADIANS; the engine stores their
+                // COSINES, which is what spotConeFactor and the shadow frustum
+                // both read. Assigning the radians raw made a 30 degree cone
+                // arrive as cos-1(0.524) = 58.4 degrees -- and INVERTED, since
+                // cosine decreases with angle, so spotConeFactor's
+                // epsilon = max(cutOff - outerCutOff, 1e-4) collapsed to 1e-4
+                // and turned the soft edge into a hard step. shadow.c's
+                // 2*acos(outerCutOff)*1.15 then fitted a 117 degree frustum to
+                // it. The .cscn path has always converted (cscene_apply.c), so
+                // the two authoring routes disagreed until 11.57.
+                light->cutOff = cosf(ai_light->mAngleInnerCone);
+                light->outerCutOff = cosf(ai_light->mAngleOuterCone);
                 break;
             case aiLightSource_AREA:
                 light->type = LIGHT_AREA;
