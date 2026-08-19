@@ -349,8 +349,9 @@ New: `ltc_lut.h` (generated), `include/ltc.glsl`. CLI: `--area-light px,py,pz,dx
 orientation frame; embedded-table codegen pattern. **Depends on:** A1 preferred (edit final loop once).
 
 ### A3. Screen-space contact shadows (Uncharted 4-style) — Effort S — **DONE (specs 9.3 + 9.4)**
-8-step per-pixel march along the key light in a new postfx pass at AO res, slotted between
-depth/normal resolve and GTAO. Same-frame application: composited in tonemap as an independent
+A per-pixel march along the key light in a new postfx pass, slotted between depth/normal resolve and
+GTAO. It shipped 8-step at AO res in 9.3 and 9.4 took it to 16-step at full internal res, which this
+line went on claiming for eight specs; C5 marches the map-less local lights through it too. Same-frame application: composited in tonemap as an independent
 multiplier beside `aoVisibility()` (`tonemap_frag.glsl:154`) — matches the engine's existing
 "screen-space occlusion multiplies HDR in tonemap" contract, costs zero pbr_frag units, no frame
 latency. Reuses `include/depth.glsl` reconstruction, 4×4 noise dither, existing `ssao_blur`
@@ -1137,15 +1138,47 @@ literally zero — is available here too and is probably right, but a probe re-c
 Illumination using Precomputed Light Field Probes* (I3D 2017) for the atlas/visibility structure.
 **Depends on:** A1 (shipped), A4 (shipped). **Wall 1:** unaffected (one atlas sampler, reusing A4's).
 
-### C5. Screen-space shadows for local lights — Effort S
-A3 marches contact shadows along **one** light — the key. Every other light in the scene lands on
-CSM/punctual maps whose texel footprint loses the millimetre-scale contact, which is the specific
-artifact A3 exists to fix. Extending the march to the N nearest cluster lights per pixel is the
-cheapest remaining grounding win, and it is postfx-only: A3 already publishes the key light's
-view-space direction, and A1's cluster grid already answers "which lights touch this pixel".
-Cost scales linearly in N, so v1 is N=2 with a per-light distance cap.
+### C5. Screen-space shadows for local lights — Effort S — **DONE (spec 11.56)**
+A3 marched contact shadows along **one** light — the key. The march now walks the cluster list a
+fragment sits in and marches every point or spot light with **no punctual shadow map**, folding the
+visibilities weighted by each light's own contribution (radiance, `getDistanceAtt` falloff, N.L) —
+the fraction of direct light the pixel loses, which is what one R8 channel can honestly carry.
+
+**The justification this row shipped with was false and is left here corrected rather than
+deleted.** It said every other light lands on a map "whose texel footprint loses the
+millimetre-scale contact". A punctual map is a PERSPECTIVE map fitted to one light: 2048² over a 90°
+cube face is ~1 mm/texel at 1 m, finer than the gaps A3 draws, and it runs 3×3 PCF with per-tap
+plane bias. The contact hairline that did exist was found in 9.8 and root-caused to far-side depth
+STORAGE, not resolution; 10.3 (near-side storage) and 10.4 (receiver-plane bias) fixed it, with
+`cornell_box`'s box/floor contact as the visual gate. Where a map exists the contact is already
+sharp — so the row's premise had been obsolete for six specs.
+
+The real gap is bigger. `MAX_PUNCTUAL_SHADOW_LAYERS` is **8** and a point light spends **6**, against
+`LC_MAX_CLUSTER_LIGHTS` **128** — so ~120 of 128 clusterable lights can never have a map, the second
+point light in a scene silently gets nothing, and every C2-derived emissive panel is ineligible
+because `create_light` defaults `cast_shadows` false (measured at 41% of the lit level leaking
+through a solid wall, `specs/11.49:787`). For that population this is not a sharpening of an existing
+shadow; it is the only occlusion there is. The froxel pass already conceded the same population in a
+comment.
+
+That flips the cull the row proposed: **skip lights that already have a map** rather than march the N
+nearest. One line, and it is the performance cap and the reason the pass cannot double-shadow
+anything, at once. Area panels are skipped — `posRange.xyz` is a panel CENTRE and `pbr_frag` shades
+one through an LTC branch that never computes a single direction, so marching to the centre would
+approximate something the shading does not.
+
+The run gate widened with it: `cs_active` required a shadow-casting DIRECTIONAL, so a room lit only
+by practicals never ran the pass at all.
+
+**Cost.** 2.43 ms per additional fully-covering light at 3200×2000 internal (0.38 ms per megapixel
+per light), linear past two. But cost tracks COVERAGE rather than count — sixteen lights spread
+across a scene cost +0.77 ms against the +38 ms sixteen coincident ones would, because a pixel
+marches only the lights whose cluster entry reaches it. No per-pixel cap, deliberately: a cap is a
+silent truncation that goes wrong in exactly the crowded scenes where the term is largest.
+New: `assets/contact_local_fixture` (+ its bare twin), `gates.py`'s `contact` group.
 **Refs.** the Uncharted 4 contact-shadow technique already cited by A3.
-**Depends on:** A1 (shipped), A3 (shipped). **Wall 1:** unaffected (postfx).
+**Depends on:** A1 (shipped), A3 (shipped). **Wall 1:** unaffected (postfx — `create_post_program`
+links through `ubo_wire_blocks`, so the cluster list arrives with no C-side binding at all).
 
 ## Track D — Surfaces & environment
 
@@ -2158,7 +2191,7 @@ not scheduled.
 | 23 | C2 Emissive → area lights | S/M | **DONE (11.49).** A fit plus a registration, as sketched — but it ships **off by default**, because measuring the corpus found **30 of 32 emissive materials are the unlit-flat-colour trick** rather than lamps, and on-by-default turns every one into a light. "No new shading code" held five phases and then cost one uniform (no unit — Wall 1 never in play). The planned covariance principal axis is wrong on a SQUARE panel, whose covariance is isotropic, and `cornell_light` is exactly square — the corpus's only real lamp is the case it fails on. The stated "one rectangle per mesh" limit had no working test: planarity measures FLATNESS, so an L, a ring and two strips five metres apart all read exactly 1.0 and got one rectangle spanning the lot. Three arms went red on things no frame shows — a DDGI capture counting the first bounce twice (**1.31× → 0.98×**), a panel lighting through a solid partition (**0.41 → 0.00**), and a placement compounding 29 units of drift over 40 frames. Cost lands on the LIGHT, not the machinery: reconcile 0.017–0.021 ms CPU, but +2–3 ms of shading per panel. |
 | 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
 | 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
-| 26 | C5 Screen-space shadows for local lights | S | A3 generalised from one light to N. Postfx-only. |
+| 26 | C5 Screen-space shadows for local lights | S | **DONE (11.56).** Postfx-only as booked, and the cluster list arrived with no C-side binding at all — `create_post_program` already links through `ubo_wire_blocks`. But **the row's reason was false and had been for six specs**: it blamed a punctual map's "texel footprint" for losing the contact, where a 2048² perspective cube face is ~1 mm/texel at 1 m, and the hairline that did exist was a far-side depth STORAGE defect fixed in 10.3/10.4 with `cornell_box` as its gate. The real gap is that **~120 of 128 clusterable lights can never have a map** (8 punctual layers, 6 per point light), which flips the cull from "the N nearest" to "skip the ones that already have a map" — one line that is the performance cap and the anti-double-shadow guarantee at once. The gate widened too: a room lit only by practicals never ran the pass. Cost tracks COVERAGE, not count — 2.43 ms per fully-covering light at 3200×2000 internal, but sixteen SPREAD lights cost +0.77 ms against the +38 ms sixteen coincident ones would. No per-pixel cap, deliberately. Area panels excluded and the shader says why. |
 | 27 | E3 Histogram exposure | M | **DONE (11.52).** A 128-bin gather histogram plus a percentile-clipped reduce, two raster passes replacing the mip chain; metering modes, EV bounds, split adapt rates, and the controls. **Both reasons this row gave were wrong**: the bright-pixel failure was already defended by a geometric mean AND an explicit clamp, and the determinism claim was already collected by `EXPOSURE_ADAPT_SNAP`, after which the adaptation holds no history and two runs are bit-identical over 200 frames. Capability parity was the whole reason and it sufficed. The instrument found what the row had not: the meter was **not linear in radiance**, 8.36 stops against 9.97 at x1000, because the absolute floor at the key inflated a dim scene's mean 3.05x. Percentiles fix it, **-1.61 stops to +0.021**. Removing the ceiling too produced a measured **runaway** to 1.15e7 nits via fp16 underflow -- though review then showed the GAIN was already bounded by the 20-stop floor, so the metered bound recorded a saner number and changed no pixel. And the SCALE_GATES shape cannot test a live meter -- scaling emitters by K while dividing the camera by K double-compensates. **The review then changed the implementation twice more**: the bin pass turned out to be OCCUPANCY-bound rather than fetch-bound (64 fragments is ~0.4% of the GPU; splitting the source across 8 output rows took the scope 0.744 -> 0.392 ms), and the bin ceiling could not be a constant at all, since the measure pass clamps in working space and divides by pre-exposure so its largest emittable value moves with the exposure. No golden moves (all 24 pin exposure), which is why this was the least-tested subsystem shipping on by default; six new arms now cover it. |
 | 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
@@ -2202,10 +2235,10 @@ number behind it, so the next pick is a judgement rather than a consequence — 
 situation from the one this table has described since 11.24, and worth saying plainly rather than
 nominating a successor by default.
 
-Of the small ones, **34 (E8, the wind cull) was the pick and is now built** (11.53). What remains
-unblocked and small is **26 (C5, contact shadows for local lights)**, which gained a claim it did not
-have when it was written — 11.49 shipped a *producer* of local area lights, so any scene with
-practicals now has more of them than C5's row assumed — plus **25 (C3, IES)** and **28 (E2, grading)**.
+Of the small ones, **34 (E8, the wind cull) was the pick and is now built** (11.53), and **26 (C5,
+contact shadows for local lights) followed it** (11.56) — it had gained a claim it did not have when
+it was written, since 11.49 shipped a *producer* of local lights that are ineligible for a map by
+construction. What remains unblocked and small is **25 (C3, IES)** and **28 (E2, grading)**.
 
 11.53 adds a third entry to the observation below, and the sharpest one: **a row can be wrong about
 what it is describing, not merely about why.** E8's row and section both named wind alone where the
@@ -2224,7 +2257,19 @@ green test, a duplicated mechanism and a false citation**, and only the first of
 success. What caught all three was reading the neighbours: the other 39 generators, the other
 `include/` files, the other gate groups.
 
-**Two observations about this table rather than items in it**, both from the last two specs.
+**11.56 is the third table-driven spec in a row and it completes the pattern.** 11.52 recorded that a
+row's stated reasons can rot while the row stays right; 11.53 that a row can be wrong about what it
+describes, not merely about why. C5 is both at once, and the sharper form: its reason named a defect
+that **another spec in this same document had already fixed** — 10.3 and 10.4, six specs earlier,
+with a named visual gate — while the row went on citing it as the thing to build for. Reading the
+code the row describes would not have been enough here; what was needed was reading the *specs the
+row's premise depends on*. And the correction made the item bigger rather than smaller: the
+population C5 actually serves is ~120 of 128 clusterable lights, not a sharpening of the eight that
+already have maps. **A row whose justification is stale is not a row to delete — the three so far
+have each been worth more than they claimed, and finding out why is what the exploration phase is
+for.**
+
+**Two observations about this table rather than items in it**, both from two earlier specs.
 
 11.49: three of its four real defects were invisible in every frame — a first bounce counted twice, a
 panel lighting through a solid wall, a placement drifting 29 units over 40 frames — and each was found
@@ -2248,8 +2293,8 @@ does mean the table above describes a *backlog*, not a plan, and that all five i
 own shortlist were finished while the actual work went somewhere else entirely. Anyone reading the
 tier order as a schedule should read this paragraph first.
 
-**The last two are the exception, and worth naming as one.** 11.53 came straight off row 34 and 11.54
-off its review — the first table-driven pair since the water series began. What that produced is also
+**The last few are the exception, and worth naming as one.** 11.53 came straight off row 34, 11.54
+off its review and 11.56 off row 26 — the first table-driven run since the water series began. What that produced is also
 the argument for reading a row against the code before believing it: row 34 described half of what
 the flag it named actually did, its fixture then tested a fraction of what the spec built, and the
 instrument that finally checked the whole thing had to be rebuilt once after the first version was
