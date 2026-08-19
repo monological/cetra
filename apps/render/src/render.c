@@ -88,6 +88,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --show-lights      Light gizmos (position + cull radius)\n");
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
+    fprintf(stderr,
+            "      --shadows-off-at <frame>  Diagnostic: clear the shadow system's master\n"
+            "                         switch mid-run, exercising the runtime transition that\n"
+            "                         --no-shadows (which clears it before frame 0) cannot\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr,
             "      --translucent-shadows  Partial shadows from hair/glass/foliage casters\n");
@@ -363,6 +367,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->point_light_grid = 0;    // off
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
+    args->shadows_off_at = -1;          // -1 = never; the transition is the diagnostic
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->msm_blur = -1.0f;             // -1 = keep the engine default
     args->msm_bleed = -1.0f;            // -1 = keep the engine default
@@ -601,6 +606,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_key_light = 1;
         } else if (strcmp(argv[i], "--no-shadows") == 0) {
             args->no_shadows = 1;
+        } else if (strcmp(argv[i], "--shadows-off-at") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->shadows_off_at = atoi(argv[i]);
+            if (args->shadows_off_at < 0) {
+                fprintf(stderr, "Error: --shadows-off-at wants a frame number\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--no-pcss") == 0) {
             args->no_pcss = 1;
         } else if (strcmp(argv[i], "--translucent-shadows") == 0) {
@@ -1655,16 +1670,31 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
-// engine_run's per-frame update hook, running before any scene GL work. Only
-// job today is the --render-scale-at diagnostic: request any scale due this
-// frame. The engine defers the rebuild to the next frame top, so a switch
-// named for frame N takes effect on N+1.
+// engine_run's per-frame update hook, running before any scene GL work. Carries
+// the two mid-run diagnostics: --render-scale-at requests any scale due this
+// frame (the engine defers the rebuild to the next frame top, so a switch named
+// for frame N takes effect on N+1), and --shadows-off-at clears the shadow
+// system's master switch.
 //
-// Matched by equality, not ">=", so an entry fires on exactly the frame named
+// Both match by equality, not ">=", so an entry fires on exactly the frame named
 // and once -- which is what lets a switched run be compared against a straight
 // one at a fixed frame (the equivalence gate, specs/11.8).
 static void render_frame_update(Engine* engine, float dt) {
     (void)dt;
+    // The TRANSITION is the whole point, and it is what --no-shadows cannot
+    // reach: that flag clears `enabled` before the first depth pass, so every
+    // index the pass maintains is still at its initial value. Turning it off
+    // after the pass has run is what leaves those indices pointing at layers
+    // nothing draws, which is the state the GUI checkbox produces and the state
+    // anything reading Light.shadow_layer has to survive.
+    if (scale_schedule->shadows_off_at == (int)engine->total_frames) {
+        Scene* scene = get_current_scene(engine);
+        if (scene && scene->shadow_system) {
+            scene->shadow_system->enabled = false;
+            fprintf(stderr, "frame %d: shadow system disabled\n",
+                    scale_schedule->shadows_off_at);
+        }
+    }
     for (int i = 0; i < scale_schedule->scale_at_count; i++) {
         if (scale_schedule->scale_at_frame[i] != (int)engine->total_frames)
             continue;

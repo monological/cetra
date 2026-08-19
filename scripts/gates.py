@@ -1768,6 +1768,27 @@ CONTACT_FOLD_SEPARATION_MIN = 0.25
 # one build are byte-identical here, so this is quantization on the sample line only.
 CONTACT_SKIP_TOL = 0.004
 
+# A shadow-casting directional for the MIXED path -- a key light and local lights folded
+# together, which the fixture cannot author because it exists to have no directional at all.
+# Travel direction is up-and-toward-the-camera reversed, so the strip's ray to it leaves
+# over the open ground and the sun contributes weight WITHOUT occlusion of its own: the arm
+# then reads dilution alone. Intensity is chosen so its weight lands near the two
+# practicals' combined weight, which keeps both steps visible in 8 bits.
+CONTACT_SUN = {"name": "key_sun", "type": "directional",
+               "direction": [0.0, -0.70710678, -0.70710678],
+               "color": [1.0, 1.0, 1.0], "intensity": 1.0, "cast_shadows": True}
+# The mapped lamp is a copy of practical_front -- same place, so it is unoccluded too and
+# can only enter the denominator -- at this multiple of its intensity.
+CONTACT_MAPPED_GAIN = 3.0
+# Measured 0.1866 and 0.0765. Each step is a light joining the DENOMINATOR and nothing
+# else, so a build that drops either reads exactly 0.0000 rather than a smaller number --
+# these floors are generous because the failure is total, not gradual.
+CONTACT_KEY_STEP_MIN = 0.08
+CONTACT_MAPPED_STEP_MIN = 0.03
+# The frame --shadows-off-at fires on. Anything after the first depth pass reaches the
+# transition; 5 leaves 25 frames rendering in the stale state before the capture.
+CONTACT_SHADOWS_OFF_FRAME = "5"
+
 
 def _contact_light(d, name):
     return next(light for light in d["lights"] if light["name"] == name)
@@ -1828,6 +1849,12 @@ def run_contact_gate(workdir):
       contact-fold    the fold is weighted by contribution: scaling the unoccluded light
                       16x recovers the same occluder to under a percent, which an
                       unweighted fold cannot do
+      contact-mixed   a key directional and local lights fold TOGETHER, and each light
+                      that reaches the pixel divides the term -- including a mapped one,
+                      which is never marched but still lights the pixel
+      contact-stale   a mapped light whose shadow system is switched off MID-RUN is
+                      marched again, because shadow_layer is only maintained while the
+                      depth pass runs and --no-shadows cannot reach that transition
 
     The occluder-removed half of the first arm is a committed twin rather than a mutation,
     because a .cscn cannot delete a node: gen_contact_local_fixture.py emits the bare
@@ -1838,7 +1865,10 @@ def run_contact_gate(workdir):
     map contributed nothing" is satisfied perfectly by a build that marches no local light
     at all. Falsified by hand at 11.56 -- stubbing the cluster list empty fails
     contact-local and contact-fold and leaves contact-mapped green; removing the map skip
-    fails contact-mapped alone; making the fold unweighted fails contact-fold alone.
+    fails contact-mapped alone; making the fold unweighted fails contact-fold alone;
+    dropping skipped lights from the denominator collapses contact-mixed's second step to
+    exactly 0.0000; packing the raw shadow_layer takes contact-stale from the map-less
+    reading to 1.0000.
     """
     fixture = os.path.join(ROOT, "assets", CONTACT_FIXTURE)
     if not os.path.exists(fixture):
@@ -1928,6 +1958,60 @@ def run_contact_gate(workdir):
               f"frames would agree perfectly)")
         if not ok:
             failures.append("contact-fold")
+
+    # THE MIXED PATH: a key directional folded together with local lights, which the
+    # fixture cannot author itself. Two steps, each adding exactly one light that
+    # contributes to the DENOMINATOR and nothing else -- the sun is unoccluded at the
+    # strip by construction, and the mapped lamp is never marched at all. So each step
+    # measures the denominator alone, and a build that omits either reads 0.0000 for it.
+    def _add_sun(d):
+        d["lights"].append(dict(CONTACT_SUN))
+
+    def _add_sun_and_mapped(d):
+        _add_sun(d)
+        front = _contact_light(d, "practical_front")
+        d["lights"].append(dict(front, name="mapped_lamp", cast_shadows=True,
+                                intensity=front["intensity"] * CONTACT_MAPPED_GAIN))
+
+    keyed, err = _contact_read(workdir, "keyed", _add_sun)
+    keyed_mapped, err2 = _contact_read(workdir, "keyed_mapped", _add_sun_and_mapped)
+    if err or err2:
+        print(f"  contact-mixed ERROR render failed: {(err or err2).strip()[-200:]}")
+        failures.append("contact-mixed")
+    else:
+        key_step = keyed[0] - base[0]
+        mapped_step = keyed_mapped[0] - keyed[0]
+        ok = (key_step >= CONTACT_KEY_STEP_MIN and mapped_step >= CONTACT_MAPPED_STEP_MIN
+              and keyed_mapped[1] >= CONTACT_LIT_MIN)
+        print(f"  contact-mixed {'PASS' if ok else 'FAIL'}  strip {base[0]:.4f} local-only -> "
+              f"{keyed[0]:.4f} with a key directional (step {key_step:.4f}, want >= "
+              f"{CONTACT_KEY_STEP_MIN}) -> {keyed_mapped[0]:.4f} with a MAPPED lamp beside it "
+              f"(step {mapped_step:.4f}, want >= {CONTACT_MAPPED_STEP_MIN}: a light with its "
+              f"own map still lights the pixel, so it still divides the term); control "
+              f"{keyed_mapped[1]:.4f}")
+        if not ok:
+            failures.append("contact-mixed")
+
+    # Light.shadow_layer is maintained only while the depth pass runs, so turning the
+    # shadow system off AFTER it has run leaves a mapped light claiming a layer nothing
+    # draws. --no-shadows cannot reach that state -- it clears the switch before frame 0,
+    # so no layer was ever assigned -- which is why --shadows-off-at exists.
+    stale, err = _contact_read(workdir, "stale", _map_back,
+                               ["--shadows-off-at", CONTACT_SHADOWS_OFF_FRAME])
+    if err or mapped is None:
+        # mapped is the shadows-ON half of this comparison, so losing it above takes
+        # this arm with it rather than leaving it to read one number against nothing.
+        print(f"  contact-stale ERROR render failed: {(err or 'the mapped read').strip()[-200:]}")
+        failures.append("contact-stale")
+    else:
+        ok = abs(stale[0] - base[0]) <= CONTACT_SKIP_TOL and mapped[0] >= CONTACT_LIT_MIN
+        print(f"  contact-stale {'PASS' if ok else 'FAIL'}  the same mapped light after the "
+              f"shadow system is switched off mid-run: strip {stale[0]:.4f} vs {base[0]:.4f} "
+              f"map-less (want within {CONTACT_SKIP_TOL}); with the system left ON it reads "
+              f"{mapped[0]:.4f} (want >= {CONTACT_LIT_MIN:.4f}, or the two states are the "
+              f"same and this measures nothing)")
+        if not ok:
+            failures.append("contact-stale")
 
     return failures
 

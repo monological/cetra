@@ -198,6 +198,12 @@ typedef struct {
     int scale_at_count;
     int scale_at_frame[RENDER_SCALE_AT_MAX];
     float scale_at_value[RENDER_SCALE_AT_MAX];
+    // Diagnostic (--shadows-off-at): clear shadow_system->enabled on this frame,
+    // -1 for never. The GUI checkbox reaches the same field, and nothing else
+    // headless does -- --no-shadows clears it before the first depth pass, so
+    // every index the pass maintains is still at its initial value and the
+    // TRANSITION, which is what leaves those indices stale, is unreachable.
+    int shadows_off_at;
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;
