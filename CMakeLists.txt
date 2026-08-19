@@ -180,6 +180,28 @@ set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_SAMPLES      OFF CACHE BOOL "" FORCE)
 set(ASSIMP_INSTALL            OFF CACHE BOOL "" FORCE)
 set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+# KHR_draco_mesh_compression, which assimp implements but leaves compiled out.
+# Vertex-heavy geometry is otherwise stored raw: assets/ivy_arcade is 2.5M
+# vertices of leaf card at 74 bytes each, which is a 169 MB external buffer --
+# past GitHub's 100 MB file limit, never mind sensible. draco is vendored at
+# contrib/draco, so this pulls in no network fetch.
+#
+# It is the ONLY compression this importer can read. EXT_meshopt_compression,
+# EXT_mesh_gpu_instancing and KHR_mesh_quantization appear nowhere in
+# code/AssetLib/glTF2 -- an exporter that emits them produces a file this engine
+# loads as empty, which is why the asset builders disable them explicitly.
+#
+# STATIC, or the configure fails outright: assimp's default branch names a
+# `draco_shared` target, and the vendored draco only emits `draco_static` in a
+# tree that builds everything statically (assimp CMakeLists.txt:749-761).
+set(ASSIMP_BUILD_DRACO        ON  CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_DRACO_STATIC ON  CACHE BOOL "" FORCE)
+# draco_features.h is GENERATED into the build tree, and assimp adds only
+# draco's source dir to the include path (its CMakeLists.txt:779), so the
+# glTF2 importer fails to compile on `#include "draco/draco_features.h"`.
+# Handing it the binary dir here rather than patching vendored assimp:
+# include_directories() is inherited by subdirectories added after it.
+include_directories(${CMAKE_BINARY_DIR})
 add_subdirectory(cetra/src/ext/assimp)
 
 target_link_libraries(cetra_deps INTERFACE

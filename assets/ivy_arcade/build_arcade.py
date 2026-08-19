@@ -556,13 +556,33 @@ def main():
     out = os.path.join(here, "ivy_arcade.gltf")
     # NORMAL always: import.c dereferences mNormals with no null check, so a
     # primitive without them crashes the importer rather than shading badly.
+    #
+    # TANGENTS OFF. They orient a normal map and nothing here has one; at 16
+    # bytes on each of 2.5M vertices they were 41 MB, 22% of the buffer, that no
+    # shader reads.
+    #
+    # DRACO ON, which needs ASSIMP_BUILD_DRACO in the top-level CMakeLists --
+    # assimp ships the decoder compiled out. Uncompressed, this asset's external
+    # buffer is 169 MB and cannot even be pushed to GitHub. Quantization is left
+    # at the exporter defaults: 14 bits of position over a 40 m tunnel is
+    # sub-millimetre, and these are leaf cards.
+    #
+    # It is the ONLY compression this importer can read. EXT_meshopt_compression,
+    # EXT_mesh_gpu_instancing and KHR_mesh_quantization are absent from assimp's
+    # glTF2 code entirely, so exporting them yields a file that loads as empty.
     # No Draco, no meshopt, no GPU instances -- the vendored assimp supports none
     # of them and drops EXT_mesh_gpu_instancing silently.
     bpy.ops.export_scene.gltf(filepath=out, export_format='GLTF_SEPARATE',
                               export_normals=True,
-                              export_tangents=True, export_texcoords=True,
+                              export_tangents=False, export_texcoords=True,
                               export_yup=True, use_selection=False, export_apply=True,
-                              export_draco_mesh_compression_enable=False)
+                              export_draco_mesh_compression_enable=True,
+                              export_draco_mesh_compression_level=6,
+                              export_draco_position_quantization=14,
+                              export_draco_normal_quantization=10,
+                              export_draco_texcoord_quantization=12,
+                              export_draco_color_quantization=10,
+                              export_draco_generic_quantization=12)
     masked = force_alpha_mask(out, {"ivy_leaf": 0.4})
     print(f"wrote {out}: {RIBS} ribs of {len(rib.polygons)} faces, "
           f"{SHELL_VARIANTS} ivy shells of {len(shells[0].polygons)}, "
