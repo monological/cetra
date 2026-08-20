@@ -48,7 +48,9 @@ struct InFlightLoad {
 // by both decode sources so file and embedded textures cannot drift.
 static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pixels, int width,
                                     int height, int channels, bool is_srgb) {
-    if (channels == 4) {
+    // Colour only -- see texture.c. A linear RGBA texture's alpha is data, and
+    // dilating it overwrites the three channels beside it.
+    if (channels == 4 && is_srgb) {
         texture_dilate_transparent_rgb(pixels, width, height);
     }
     result->pixel_data = pixels;

@@ -729,13 +729,17 @@ static void parse_material_layers(CSceneMaterialOverride* out, const cJSON* m) {
 
         CSceneMaterialLayer* out_layer = &out->layers[out->layer_count];
         memset(out_layer, 0, sizeof(*out_layer));
+        // An albedo-less layer KEEPS ITS SLOT. The splat channel is the slot
+        // index, so skipping one here renumbers every layer after it and the
+        // scene renders the wrong ground in every channel -- silently, since the
+        // result is still a plausible terrain.
         const cJSON* albedo = cJSON_GetObjectItemCaseSensitive(l, "albedo");
-        if (!cJSON_IsString(albedo) || !albedo->valuestring || !albedo->valuestring[0]) {
-            log_warn("cscene: material '%s' layer %d has no albedo; skipped", out->material,
-                     out->layer_count);
-            continue;
-        }
-        copy_string(out_layer->albedo, CSCENE_MAX_PATH, albedo);
+        if (!cJSON_IsString(albedo) || !albedo->valuestring || !albedo->valuestring[0])
+            log_warn("cscene: material '%s' layer %d has no albedo; it keeps its slot and "
+                     "renders its fallback",
+                     out->material, out->layer_count);
+        else
+            copy_string(out_layer->albedo, CSCENE_MAX_PATH, albedo);
         const cJSON* surface = cJSON_GetObjectItemCaseSensitive(l, "surface");
         if (cJSON_IsString(surface) && surface->valuestring && surface->valuestring[0])
             copy_string(out_layer->surface, CSCENE_MAX_PATH, surface);

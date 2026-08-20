@@ -498,7 +498,14 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bo
         return NULL;
     }
 
-    if (nrChannels == 4) {
+    // Only a COLOUR texture. The dilate repairs the rgb of transparent texels so
+    // a cutout's edge does not bleed the atlas background, which is a statement
+    // about colour beside an OPACITY -- and `is_srgb` is exactly "this is colour
+    // data" (import.c). A linear RGBA texture's alpha means something else:
+    // spec 11.60 stores a layer's HEIGHT there and its ambient occlusion in the
+    // surface map's, and dilating those overwrites the albedo, the packed normal
+    // and the roughness of every texel whose relief dips below 3.1%.
+    if (nrChannels == 4 && is_srgb) {
         texture_dilate_transparent_rgb(data, width, height);
     }
 
@@ -568,10 +575,11 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
         return NULL;
     }
 
-    // RGBA sources need their transparent texels' color repaired; work on a
-    // mutable copy since the caller owns the pixel data
+    // RGBA COLOUR sources need their transparent texels' color repaired; work on
+    // a mutable copy since the caller owns the pixel data. See the note above on
+    // why a linear RGBA texture is left alone.
     unsigned char* dilated = NULL;
-    if (channels == 4) {
+    if (channels == 4 && is_srgb) {
         size_t size = (size_t)width * (size_t)height * 4;
         dilated = malloc(size);
         if (dilated) {

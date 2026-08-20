@@ -16,25 +16,37 @@ typedef struct LayerRecipe {
     float shade;       // how far relief darkens and lightens the base
     float rough_lo;    // roughness in a trough
     float rough_hi;    // roughness on a crest
-    float relief_scale; // normal strength, in code units per texel of slope
+    // Relief AMPLITUDE, as a fraction of one texture tile.
+    //
+    // A fraction of the TILE rather than a slope multiplier, because that is what
+    // makes the normal independent of `size`: the central difference below spans
+    // two texels, so the world run between them is 2/size of a tile, and a height
+    // of `amplitude` tiles over that run is a slope of amplitude*size/2 whatever
+    // the map resolution is.
+    //
+    // This shipped as a bare multiplier on the raw per-texel difference, which is
+    // ~0.05 on a 1024 map -- so the encoded normal spanned about 128 +/- 14 codes,
+    // a six-degree tilt, and the ground rendered as flat-shaded geometry however
+    // good the albedo was. The relief was mathematically present and visually nil.
+    float relief_amplitude;
 } LayerRecipe;
 
 // The four grounds. These are the numbers that decide what the terrain looks
 // like, which is why they sit together in one table rather than being spread
 // through four near-identical functions.
 static const LayerRecipe RECIPES[] = {
-    // grass: fine and busy, matte everywhere, barely any relief contrast
-    [TERRAIN_LAYER_GRASS] = {5, 0.55f, 16, 24, 0.35f, {0.17f, 0.21f, 0.11f}, 0.45f, 0.86f,
-                             0.95f, 2.2f},
+    // grass: fine and busy, matte everywhere, shallow relief
+    [TERRAIN_LAYER_GRASS] = {5, 0.55f, 16, 24, 0.35f, {0.17f, 0.21f, 0.11f}, 0.45f, 0.80f,
+                             0.97f, 0.010f},
     // rock: fractured, so the cellular term dominates and the fbm only roughens it
-    [TERRAIN_LAYER_ROCK] = {4, 0.50f, 8, 6, 0.75f, {0.31f, 0.30f, 0.28f}, 0.55f, 0.62f, 0.80f,
-                            4.5f},
+    [TERRAIN_LAYER_ROCK] = {4, 0.50f, 8, 6, 0.75f, {0.31f, 0.30f, 0.28f}, 0.55f, 0.45f, 0.82f,
+                            0.030f},
     // silt: smooth and pale, faint bedding from a low-octave fbm alone
-    [TERRAIN_LAYER_SILT] = {3, 0.45f, 6, 0, 0.0f, {0.36f, 0.32f, 0.25f}, 0.30f, 0.70f, 0.82f,
-                            1.4f},
+    [TERRAIN_LAYER_SILT] = {3, 0.45f, 6, 0, 0.0f, {0.36f, 0.32f, 0.25f}, 0.30f, 0.58f, 0.84f,
+                            0.006f},
     // gravel: coarse cells with real depth between them
-    [TERRAIN_LAYER_GRAVEL] = {3, 0.60f, 12, 10, 0.85f, {0.26f, 0.25f, 0.23f}, 0.60f, 0.72f,
-                              0.88f, 5.0f},
+    [TERRAIN_LAYER_GRAVEL] = {3, 0.60f, 12, 10, 0.85f, {0.26f, 0.25f, 0.23f}, 0.60f, 0.50f,
+                              0.90f, 0.045f},
 };
 
 static float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
@@ -112,8 +124,10 @@ void terrain_layer_maps(TerrainLayerKind kind, int size, unsigned int seed,
             int ym = (y + size - 1) % size, yp = (y + 1) % size;
             float dx = field[(size_t)y * size + xp] - field[(size_t)y * size + xm];
             float dz = field[(size_t)yp * size + x] - field[(size_t)ym * size + x];
-            surface[i * 4 + 0] = to_code(0.5f - dx * r->relief_scale * 0.5f);
-            surface[i * 4 + 1] = to_code(0.5f - dz * r->relief_scale * 0.5f);
+            // amplitude (tiles) over a 2/size run (tiles) = the tangent slope.
+            float slope_scale = r->relief_amplitude * (float)size * 0.5f;
+            surface[i * 4 + 0] = to_code(0.5f - dx * slope_scale * 0.5f);
+            surface[i * 4 + 1] = to_code(0.5f - dz * slope_scale * 0.5f);
             surface[i * 4 + 2] = to_code(r->rough_lo + (r->rough_hi - r->rough_lo) * h);
             // Troughs are occluded by what stands around them.
             surface[i * 4 + 3] = to_code(0.55f + 0.45f * h);

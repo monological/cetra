@@ -498,7 +498,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         return;
     for (int k = 0; k < cscn->material_count; k++) {
         const CSceneMaterialOverride* mo = &cscn->materials[k];
-        if (mo->param_count == 0 && mo->texture_count == 0)
+        if (mo->param_count == 0 && mo->texture_count == 0 && mo->layer_count == 0)
             continue; // sss-only entries belong to configure_sss_materials
 
         // Resolve and report the vocabulary once per override, not once per
@@ -589,9 +589,15 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         }
 
         // The layer set, loaded once here for the same reason the textures above
-        // are. A layer whose albedo will not load is DROPPED rather than left
-        // half-resolved: layer 0 takes the splat's remainder, so a hole in the
-        // middle of the list would silently reassign every layer after it.
+        // are. A layer whose albedo will not load KEEPS ITS SLOT and renders its
+        // fallback -- it is not dropped, and the first version of this dropped it
+        // while its comment claimed the opposite.
+        //
+        // The splat CHANNEL is the slot index, so compacting the list renumbers
+        // the mapping: drop layer 1 of 4 and green now selects what blue
+        // selected, blue is never read, and blue's weight migrates silently into
+        // layer 0's remainder. That is a plausible-looking terrain with the wrong
+        // ground in every channel. Positions here are data.
         struct {
             Texture* albedo;
             Texture* surface;
@@ -601,25 +607,23 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         for (int l = 0; l < mo->layer_count; l++) {
             const CSceneMaterialLayer* src = &mo->layers[l];
             Texture* albedo = load_texture_path_into_pool(scene->tex_pool, src->albedo, false);
-            if (!albedo) {
+            if (!albedo)
                 fprintf(stderr,
-                        "Warning: material '%s': layer %d cannot load albedo '%s'; the layer "
-                        "is dropped and the ones after it move up\n",
+                        "Warning: material '%s': layer %d cannot load albedo '%s'; it renders "
+                        "its fallback and the splat mapping is unchanged\n",
                         mo->material, l, src->albedo);
-                continue;
-            }
-            layers[layer_count].albedo = albedo;
+            layers[l].albedo = albedo;
             if (src->surface[0]) {
-                layers[layer_count].surface =
+                layers[l].surface =
                     load_texture_path_into_pool(scene->tex_pool, src->surface, false);
-                if (!layers[layer_count].surface)
+                if (!layers[l].surface)
                     fprintf(stderr,
                             "Warning: material '%s': layer %d cannot load surface map '%s'; "
                             "shading it flat\n",
                             mo->material, l, src->surface);
             }
-            layers[layer_count].uv_scale = src->has_uv_scale ? src->uv_scale : 1.0f;
-            layer_count++;
+            layers[l].uv_scale = src->has_uv_scale ? src->uv_scale : 1.0f;
+            layer_count = l + 1;
             usable++;
         }
 
