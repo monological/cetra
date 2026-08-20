@@ -954,42 +954,6 @@ void main() {
         FragColor = vec4(clamp(excursion * EXTRAP_GAIN, 0.0, 1.0), 1.0);
         return;
     }
-    if (renderMode == 6) {
-        // Albedo Only - only sample albedo texture
-        vec2 uvAlbedo = transformUV(TexCoords);
-        vec3 albedoMapOnly = albedo;
-        float texAlphaOnly = 1.0;
-        if (layerCount > 0) {
-            // The layered blend has to reach this view, and not as a courtesy:
-            // apps/forest is not pixel-deterministic on its ordinary path (the
-            // Hillaire sky moves ~35,000 px between two runs of one build) and
-            // this is the view that is, so it is the only frame of a real
-            // terrain a gate can compare at all.
-            vec2 splatUV = texCoords2Exists > 0 ? TexCoords2 : vec2(0.0);
-            LayerSurface ls = sampleLayeredSurface(maskArray, WorldPos, normalize(Normal), splatUV);
-            albedoMapOnly = albedo * sRGBToLinear(ls.albedo);
-        } else if (albedoTexExists > 0) {
-            // sRGB texture: the hardware already decoded the sample to linear
-            vec4 albedoSample = texture(albedoTex, uvAlbedo);
-            albedoMapOnly = albedo * albedoSample.rgb;
-            texAlphaOnly = albedoSample.a;
-        }
-        // Apply vertex color
-        if (vertexColorExists > 0) {
-            albedoMapOnly *= sRGBToLinear(VertexColor.rgb);
-            texAlphaOnly *= VertexColor.a;
-        }
-        // Alpha cutoff for hair/foliage
-        if (alphaBelowCutoff(texAlphaOnly)) {
-            discard;
-        }
-        vec3 color = linearToSRGB(albedoMapOnly);
-        // coverage * materialOpacity, and no Fresnel: this view answers "what is
-        // authored here", so lifting it at grazing would be the wrong question.
-        FragColor = vec4(color, materialOpacity * texAlphaOnly);
-        return;
-    }
-
     // Apply UV transform for KHR_texture_transform
     vec2 uv = transformUV(TexCoords);
 
@@ -1079,6 +1043,25 @@ void main() {
     // Alpha cutoff for hair/foliage - discard early before expensive lighting
     if (alphaBelowCutoff(texAlpha)) {
         discard;
+    }
+
+    /*
+     * ALBEDO ONLY -- and it sits HERE, apart from the other debug views, because
+     * it has to read the same albedoMap the shading path is about to use: the POM
+     * offset, the stochastic transform, the vertex colour and the layer blend all
+     * of them.
+     *
+     * It carried its own copy of that resolution until 11.60, which made it a
+     * second implementation of the material -- and one that a gate reading this
+     * view could not distinguish from the real one. That is not hypothetical:
+     * deleting the layered path's sRGB decode left every arm green, because the
+     * arms read this view and this view had its own decode.
+     */
+    if (renderMode == 6) {
+        // coverage * materialOpacity, and no Fresnel: this view answers "what is
+        // authored here", so lifting it at grazing would be the wrong question.
+        FragColor = vec4(linearToSRGB(albedoMap), materialOpacity * texAlpha);
+        return;
     }
 
     // The prepass is done here whenever the answer is binary. Surviving the test

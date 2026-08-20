@@ -12,22 +12,22 @@
     {
      "albedo": "layer_fixture_grey.png",
      "surface": "layer_fixture_surface.png",
-     "uvScale": 1.0
+     "uvScale": 2.0
     },
     {
      "albedo": "layer_fixture_checker.png",
      "surface": "layer_fixture_surface.png",
-     "uvScale": 1.0
+     "uvScale": 2.0
     },
     {
      "albedo": "layer_fixture_dark.png",
      "surface": "layer_fixture_surface.png",
-     "uvScale": 1.0
+     "uvScale": 2.0
     },
     {
      "albedo": "layer_fixture_light.png",
      "surface": "layer_fixture_surface.png",
-     "uvScale": 1.0
+     "uvScale": 2.0
     }
    ]
   }

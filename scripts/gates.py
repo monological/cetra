@@ -22,6 +22,7 @@ import argparse
 import base64
 import functools
 import glob
+import importlib.util
 import inspect
 import json
 import math
@@ -10561,6 +10562,235 @@ def run_cull_gate(workdir):
     return failures
 
 
+# --- Layered surfaces (spec 11.60 / D9) --------------------------------------
+#
+# Every arm here reads `--render-mode 6`, the albedo view, and that is the whole
+# reason the fixture is legible. In that view the shader returns
+# linearToSRGB(albedoFactor * sRGBToLinear(blend)) and the fixture's factor is
+# white, so a correct renderer hands back the exact byte the generator painted --
+# no lighting, no exposure, no tonemap in the path to argue about. A lit read
+# would be a claim about the BRDF as much as about the blend.
+#
+# The fixture's constants are IMPORTED rather than restated. gen_layer_fixture
+# paints the ground truth, so the gate asserting the renderer reproduces it is
+# not circular -- the renderer is what is under test. The lut gate declines the
+# same move for the opposite reason worth keeping straight: there the generator
+# owns a closed form for the ANSWER, and importing it would make ground truth a
+# function of the interpolator being measured.
+
+_LAYER_GEN = None
+
+
+def _layer_gen():
+    """The fixture generator, imported for its constants. Writes nothing on import."""
+    global _LAYER_GEN
+    if _LAYER_GEN is None:
+        path = os.path.join(ROOT, "assets", "gen_layer_fixture.py")
+        spec = importlib.util.spec_from_file_location("gen_layer_fixture", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _LAYER_GEN = mod
+    return _LAYER_GEN
+
+
+def _layer_floor(u, v):
+    """World point on the floor plate at splat coordinate (u, v)."""
+    g = _layer_gen()
+    return (-g.HALF + u * 2.0 * g.HALF, 0.0, g.HALF - v * 2.0 * g.HALF)
+
+
+def _layer_wall(u, v):
+    """World point on the wall plate at splat coordinate (u, v)."""
+    g = _layer_gen()
+    return (-g.HALF + u * 2.0 * g.HALF, v * g.WALL_H, -g.HALF)
+
+
+def _layer_sample(pix, w, h, project, world):
+    """The raw sRGB byte at a world point -- the painted code, in the albedo view."""
+    px, py = project(world)
+    x = max(0, min(w - 1, int(round(px))))
+    y = max(0, min(h - 1, int(round(py))))
+    o = (y * w + x) * 3
+    return (pix[o] + pix[o + 1] + pix[o + 2]) / 3.0
+
+
+def _layer_scan(pix, w, h, project, points):
+    """Mean byte at each of a list of world points."""
+    return [_layer_sample(pix, w, h, project, p) for p in points]
+
+
+def _layer_transitions(vals, lo, hi):
+    """Count crossings of the midpoint between lo and hi, with hysteresis.
+
+    Hysteresis rather than a bare threshold because a mip-softened checker edge
+    wanders either side of the midpoint over a pixel or two, and a bare compare
+    would count each wobble as a fresh cell.
+    """
+    mid = 0.5 * (lo + hi)
+    band = 0.2 * (hi - lo)
+    state = None
+    count = 0
+    for v in vals:
+        if v > mid + band:
+            new = True
+        elif v < mid - band:
+            new = False
+        else:
+            continue
+        if state is not None and new != state:
+            count += 1
+        state = new
+    return count
+
+
+def _layer_edge_width(vals, positions, lo, hi):
+    """Width, in the scan's own units, between the 10% and 90% crossings."""
+    def crossing(frac):
+        t = lo + frac * (hi - lo)
+        for i in range(1, len(vals)):
+            a, b = vals[i - 1], vals[i]
+            if (a - t) * (b - t) <= 0.0 and a != b:
+                k = (t - a) / (b - a)
+                return positions[i - 1] + k * (positions[i] - positions[i - 1])
+        return None
+
+    first, last = crossing(0.1), crossing(0.9)
+    if first is None or last is None:
+        return None
+    return abs(last - first)
+
+
+def run_layers_gate(workdir):
+    """Layered surfaces: selection, the sRGB round trip, the height blend, triplanar."""
+    print("  arms:")
+    print("      layers-select     each splat column resolves the layer it selects")
+    print("      layers-srgb       a mid-grey layer round-trips through the decode")
+    print("      layers-height     the height blend interlocks where linear smears")
+    print("      layers-triplanar  the wall is textured by its own axis, at the right size")
+
+    failures = []
+    src = os.path.join(ROOT, "assets", "layer_fixture.cscn")
+    if not os.path.exists(src):
+        print("  layers-select     SKIP  (missing layer_fixture.cscn)")
+        return []
+    g = _layer_gen()
+
+    ALBEDO = ["--render-mode", "6", "--no-auto-exposure", "-E", "1.0"]
+
+    def shot(name, overrides=None, extra=None):
+        out = os.path.join(workdir, f"layers_{name}.ppm")
+        scene = src
+        if overrides:
+            scene = os.path.join(workdir, f"layers_{name}.cscn")
+            cscn_copy(src, scene, overrides)
+        err = render(scene, out, ALBEDO + (extra or []), frames=4)
+        if err:
+            return None
+        w, h, pix = _read_ppm(out)
+        cam = {"eye": g.CSCN["camera"]["eye"], "target": g.CSCN["camera"]["target"],
+               "fovy_deg": g.CSCN["camera"]["fov"]}
+        return w, h, pix, _projector(cam, w, h)
+
+    base = shot("base")
+    if base is None:
+        print("  layers-select     ERROR while rendering the fixture")
+        return ["layers-select"]
+    w, h, pix, project = base
+
+    # --- layers-select -------------------------------------------------------
+    # The three FLAT columns, read at the centre of each so no bilinear bleed
+    # from a neighbouring column reaches the sample. Column 1 is the checker and
+    # is not a flat colour; the triplanar arm is what verifies it got selected.
+    codes = {0: g.GREY_CODE, 2: g.DARK_CODE, 3: g.LIGHT_CODE}
+    LAYER_SELECT_TOL = 4.0
+    readings = []
+    for col, expect in sorted(codes.items()):
+        u = (col + 0.5) / 4.0
+        got = _layer_sample(pix, w, h, project, _layer_floor(u, 0.25))
+        readings.append((col, expect, got))
+    worst = max(abs(got - expect) for _, expect, got in readings)
+    ok = worst <= LAYER_SELECT_TOL
+    detail = ", ".join(f"col{c} {got:.0f} (want {e})" for c, e, got in readings)
+    print(f"  layers-select     {'PASS' if ok else 'FAIL'}  {detail}; worst off by "
+          f"{worst:.1f} (want <= {LAYER_SELECT_TOL})")
+    if not ok:
+        failures.append("layers-select")
+
+    # --- layers-srgb ---------------------------------------------------------
+    # 128 is as far from both endpoints as a code gets, where sRGB's curvature is
+    # steepest. A hardware decode left on the upload reads ~56 here and a missing
+    # shader decode reads ~187, so one number catches both directions.
+    grey = _layer_sample(pix, w, h, project, _layer_floor(0.125, 0.25))
+    ok = abs(grey - g.GREY_CODE) <= 2.0
+    print(f"  layers-srgb       {'PASS' if ok else 'FAIL'}  mid-grey layer reads "
+          f"{grey:.1f} (want {g.GREY_CODE} +/- 2; a doubled decode reads ~56, a missing "
+          f"one ~187)")
+    if not ok:
+        failures.append("layers-srgb")
+
+    # --- layers-height -------------------------------------------------------
+    # The wall's upper band ramps layer 2 into layer 3 across the full width. The
+    # dark layer stands proud, so a height blend holds it well past the halfway
+    # point and then gives way over a few texels; a linear blend crosses over
+    # gradually across the whole ramp. Measured as the 10%-to-90% width, and the
+    # linear leg is rendered rather than predicted so the two share everything
+    # except the one authored knob.
+    SCAN = 140
+    us = [0.02 + i * (0.96 / (SCAN - 1)) for i in range(SCAN)]
+    line = [_layer_wall(u, 0.78) for u in us]
+
+    def ramp_width(frame):
+        vals = _layer_scan(frame[2], frame[0], frame[1], frame[3], line)
+        return _layer_edge_width(vals, us, g.DARK_CODE, g.LIGHT_CODE)
+
+    linear = shot("linear", lambda d: d["materials"]["layered_surface"].update(
+        {"layerBlend": 0.0}))
+    if linear is None:
+        print("  layers-height     ERROR while rendering the linear leg")
+        failures.append("layers-height")
+    else:
+        w_height = ramp_width(base)
+        w_linear = ramp_width(linear)
+        if w_height is None or w_linear is None:
+            print("  layers-height     FAIL  the ramp has no measurable transition")
+            failures.append("layers-height")
+        else:
+            ratio = w_height / w_linear
+            ok = ratio <= 0.35
+            print(f"  layers-height     {'PASS' if ok else 'FAIL'}  transition width "
+                  f"{w_height:.3f} of the ramp against linear's {w_linear:.3f}, ratio "
+                  f"{ratio:.3f} (want <= 0.35)")
+            if not ok:
+                failures.append("layers-height")
+
+    # --- layers-triplanar ----------------------------------------------------
+    # The wall's normal is +Z, so only the Z projection can give it structure
+    # along y. A projection frozen on Y reads the wall's constant z as its second
+    # coordinate and returns a wall that varies with x alone -- which is why the
+    # count here is taken VERTICALLY, and why the fixture's layer 1 is a checker
+    # rather than stripes.
+    ys = [0.06 + i * (0.38 / 63) for i in range(64)]  # v in the lower band only
+    col_u = 0.375  # centre of the checker column
+    wall_vals = _layer_scan(pix, w, h, project, [_layer_wall(col_u, v) for v in ys])
+    crossings = _layer_transitions(wall_vals, g.STRIPE_DARK, g.STRIPE_LIGHT)
+
+    span = 0.38 * g.WALL_H  # the scan's length in world units
+    expected = span / g.CHECKER_CELL_WORLD
+    floor_vals = _layer_scan(pix, w, h, project,
+                             [_layer_floor(col_u, 0.05 + i * (0.4 / 63)) for i in range(64)])
+    floor_range = max(floor_vals) - min(floor_vals)
+
+    ok = crossings >= expected * 0.6 and floor_range >= 100.0
+    print(f"  layers-triplanar  {'PASS' if ok else 'FAIL'}  wall shows {crossings} vertical "
+          f"checker crossings over {span:.2f} units (want >= {expected * 0.6:.1f}; a "
+          f"projection frozen on Y shows 0), floor control range {floor_range:.0f} "
+          f"(want >= 100)")
+    if not ok:
+        failures.append("layers-triplanar")
+
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -10599,6 +10829,8 @@ GATE_GROUPS = [
     ("dither", "output dither (8-bit contour bands, spec 11.24 / E1):", run_dither_gate),
     ("lut", "3D LUT colour grading (spec 11.58 / E2):", run_lut_gate),
     ("terrain", "Heightfield terrain and erosion (spec 11.59 / D6-D8):", run_terrain_gate),
+    ("layers", "layered surfaces (splat, height blend, triplanar; spec 11.60 / D9):",
+     run_layers_gate),
     ("translucent", "translucent shadows (analytic layer stack, spec 11.26 / C1):",
      run_translucent_shadow_gate),
     ("translucent-offpath", "translucent shadows (off-path identity and the inverse arm):",

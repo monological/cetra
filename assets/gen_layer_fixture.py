@@ -66,13 +66,21 @@ TEX = 64  # every map, so the array's canonical size is 64 and the blit is 1:1
 HALF = 2.0
 WALL_H = 4.0
 
-# World units per texture tile. At 1.0 a plate carries exactly four tiles, so
-# every count the arms make is a small integer rather than a fraction.
-UV_SCALE = 1.0
+# World units per texture tile. At 2.0 a checker cell is a quarter of a world
+# unit, so a scan across one splat column crosses four of them -- coarse enough
+# to survive mip selection at the gate's render size, which the same pattern at
+# 1.0 does not.
+UV_SCALE = 2.0
 
 STRIPE_PERIOD = 16  # texels; divides TEX exactly, so the tiling has no seam
 STRIPE_DARK = 32
 STRIPE_LIGHT = 224
+
+# One checker cell, in WORLD units -- half a period, scaled out of texture space.
+# Derived rather than written down because the triplanar arm predicts the size it
+# should measure from exactly this, and a second literal is a second thing to
+# forget when any of the three inputs moves.
+CHECKER_CELL_WORLD = UV_SCALE * (STRIPE_PERIOD / 2) / TEX
 
 GREY_CODE = 128  # layer 0, and the sRGB round trip's whole subject
 DARK_CODE = 48   # layer 2
