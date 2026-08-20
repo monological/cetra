@@ -340,6 +340,14 @@ static void stage_transport(const Planes* pl, int j0, int j1) {
                     continue;
                 // The same clamp the giving side applies, so the two halves agree
                 // exactly rather than nearly.
+                //
+                // It is a ROUNDING GUARD and not a real branch: stage_flux already
+                // scaled these four so that their total over dt cannot exceed the
+                // water this cell held, and w_prev is that same depth, so n_out is
+                // 1 by construction at worst. Only float rounding can put it over.
+                // Kept because the two halves must agree BITWISE for the budget to
+                // close -- if the giving side clamps on a rounding excursion and
+                // this side does not, the difference is real material.
                 float scale = n_out > 1.0f ? 1.0f / n_out : 1.0f;
                 // The neighbour's pipe pointing AT this cell: its right pipe if it
                 // sits to our left, and so on round.

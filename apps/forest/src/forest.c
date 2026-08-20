@@ -494,6 +494,18 @@ static void height_probe(void) {
             float v = (float)(j + 1) / (float)(PROBE_GRID + 1);
             float x = -extent + 2.0f * extent * u;
             float z = -extent + 2.0f * extent * v;
+            // SNAPPED ONTO A NODE when there is a field, so these rows read the
+            // stored value and not the interpolant. That splits two questions that
+            // otherwise contaminate each other: whether the field is MAPPED right
+            // -- axis order, node convention, world range -- and how well it is
+            // FILTERED between nodes. On the lattice every correct sampler agrees
+            // exactly, so a mapping error has nowhere to hide behind interpolation
+            // error, and the bar can stay at a couple of quantisation codes.
+            if (f) {
+                float snap = (2.0f * extent) / (float)(f->res - 1);
+                x = -extent + floorf((x + extent) / snap + 0.5f) * snap;
+                z = -extent + floorf((z + extent) / snap + 0.5f) * snap;
+            }
             vec3 n;
             terrain_normal_at(&g_terrain, x, z, n);
             printf("terrain-height-probe sample x=%.4f z=%.4f h=%.6f ny=%.6f "
@@ -508,8 +520,19 @@ static void height_probe(void) {
     // Outside the domain, paired with the edge point each one should clamp ONTO.
     // The camera really does query out here, so "returns something finite" is not
     // the assertion -- "returns the edge" is.
-    const float out[4][2] = {{-1.35f, 0.20f}, {1.35f, -0.40f}, {0.10f, 1.60f}, {-0.70f, -1.90f}};
-    for (int k = 0; k < 4; ++k) {
+    //
+    // HALF OF THESE SIT LESS THAN A CELL OUTSIDE, and that is the whole reason the
+    // set is not four far-away points. Catmull-Rom over four EQUAL taps returns
+    // that value exactly, so once a query is far enough out that all four taps
+    // clamp to the same edge column, an unclamped sampler returns the edge anyway
+    // and cannot be told from a clamped one. The difference lives in the first
+    // cell beyond the boundary, where the taps still differ.
+    float step = f ? (2.0f * extent) / (float)(f->res - 1) : 1.0f;
+    float near_u = (extent + 0.4f * step) / extent;
+    const float out[8][2] = {{-1.35f, 0.20f},   {1.35f, -0.40f}, {0.10f, 1.60f},
+                             {-0.70f, -1.90f}, {-near_u, 0.15f}, {near_u, -0.55f},
+                             {0.35f, near_u},  {-0.25f, -near_u}};
+    for (int k = 0; k < 8; ++k) {
         float x = out[k][0] * extent, z = out[k][1] * extent;
         float cx = x < -extent ? -extent : (x > extent ? extent : x);
         float cz = z < -extent ? -extent : (z > extent ? extent : z);
@@ -519,10 +542,29 @@ static void height_probe(void) {
                (double)cz, (double)terrain_height_at(&g_terrain, cx, cz));
     }
 
-    // A short line crossing several cell boundaries. This is the only way to see
-    // the filter: a C0 sampler and a C1 one agree at every node and differ only in
-    // how the normal behaves BETWEEN them.
+    // CELL MIDPOINTS, which is where the filter is decided and the only place it
+    // can be seen. Every interpolant agrees exactly at a node, so a probe that
+    // samples on the lattice tests the storage and not the filter -- and a probe
+    // that samples the NORMAL cannot see it either, because terrain_normal_at
+    // central-differences over less than a cell and a bilinear surface is locally
+    // the linearisation the difference is estimating. Halfway between two nodes is
+    // where a chord is furthest from the curve it cuts.
     float cell = f ? (2.0f * extent) / (float)(f->res - 1) : 1.0f;
+    for (int k = 0; k < PROBE_GRID * PROBE_GRID; ++k) {
+        int gi = k % PROBE_GRID, gj = k / PROBE_GRID;
+        // Land on a node first, then step half a cell in x, so the offset is
+        // exactly half however the extent and resolution are chosen.
+        float u = (float)(gi + 1) / (float)(PROBE_GRID + 1);
+        float v = (float)(gj + 1) / (float)(PROBE_GRID + 1);
+        float nx = floorf((u * 2.0f * extent) / cell);
+        float nz = floorf((v * 2.0f * extent) / cell);
+        float x = -extent + (nx + 0.5f) * cell;
+        float z = -extent + nz * cell;
+        printf("terrain-height-probe mid x=%.6f z=%.6f h=%.6f\n", (double)x, (double)z,
+               (double)terrain_height_at(&g_terrain, x, z));
+    }
+
+    // A short line crossing several cell boundaries, kept for reading by eye.
     float x0 = 0.0f, z0 = 0.0f;
     for (int k = 0; k < PROBE_SCAN; ++k) {
         float t = (float)k / (float)(PROBE_SCAN - 1);
