@@ -1,6 +1,7 @@
 #include <stdlib.h>
 
 #include "terrain_tex.h"
+#include "../thread.h"
 #include "vegetation_tex.h"
 
 // Noise frequencies are in CELLS, whole numbers, because the periodic variants
@@ -53,10 +54,24 @@ static float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); 
 
 static unsigned char to_code(float v) { return (unsigned char)(clamp01(v) * 255.0f + 0.5f); }
 
-// The layer's relief in [0,1], one field behind every channel below.
-static void relief_field(const LayerRecipe* r, float* out, int size, unsigned int seed) {
+// The rows of one bake, handed to each worker. `seed` is read-only here: the
+// permutation table veg_noise_seed builds is a file static, seeded once BEFORE
+// the split, and the tiled noise only reads it.
+typedef struct ReliefBand {
+    const LayerRecipe* r;
+    float* out;
+    int size;
+    unsigned int seed;
+} ReliefBand;
+
+static void relief_rows(void* ctx, int begin, int end) {
+    const ReliefBand* b = (const ReliefBand*)ctx;
+    const LayerRecipe* r = b->r;
+    int size = b->size;
+    unsigned int seed = b->seed;
+    float* out = b->out;
     float inv = 1.0f / (float)size;
-    for (int y = 0; y < size; y++) {
+    for (int y = begin; y < end; y++) {
         for (int x = 0; x < size; x++) {
             float u = (float)x * inv;
             float v = (float)y * inv;
@@ -72,9 +87,22 @@ static void relief_field(const LayerRecipe* r, float* out, int size, unsigned in
                                             r->cell_freq, r->cell_freq);
                 f = f * (1.0f - r->cell_weight) + (1.0f - clamp01(c)) * r->cell_weight;
             }
-            out[y * size + x] = clamp01(f);
+            out[(size_t)y * (size_t)size + (size_t)x] = clamp01(f);
         }
     }
+}
+
+// The layer's relief in [0,1], one field behind every channel below.
+//
+// Threaded on the cloud bake's and the erosion sim's shape: disjoint row bands,
+// no synchronisation, so the result is identical at any worker count. Rows
+// WITHIN one layer rather than the four layers across workers, because
+// veg_noise_seed rewrites a file-static permutation table -- the seeding has to
+// happen once before the split, and only reads may cross it.
+static void relief_field(const LayerRecipe* r, float* out, int size, unsigned int seed) {
+    veg_noise_seed(seed);
+    ReliefBand band = {r, out, size, seed};
+    cetra_bake_bands(size, cetra_bake_workers(0, size), relief_rows, &band);
 }
 
 void terrain_layer_maps(TerrainLayerKind kind, int size, unsigned int seed,
@@ -98,7 +126,7 @@ void terrain_layer_maps(TerrainLayerKind kind, int size, unsigned int seed,
         return;
     }
 
-    veg_noise_seed(seed);
+    // relief_field seeds; the packing loop below reads no noise.
     relief_field(r, field, size, seed);
 
     for (int y = 0; y < size; y++) {

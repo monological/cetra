@@ -451,31 +451,40 @@ static Texture* bake(Scene* scene, unsigned char* data, int w, int h, int channe
 // The four grounds, in splat order: layer 0 takes the remainder, then r, g, b.
 // terrain_bake_splat decides which mask feeds which channel; this decides what
 // each channel LOOKS like, which is the half an app gets to choose.
-static const TerrainLayerKind TERRAIN_LAYER_KINDS[] = {
-    TERRAIN_LAYER_GRASS, TERRAIN_LAYER_ROCK, TERRAIN_LAYER_SILT, TERRAIN_LAYER_GRAVEL};
-static const char* const TERRAIN_LAYER_NAMES[] = {"grass", "rock", "silt", "gravel"};
+//
+// One table rather than two parallel arrays and a ternary. `uv_scale` is world
+// units per tile, and it belongs beside the kind for the same reason the kinds
+// are ordered here: a coarse ground repeats over a longer distance than a fine
+// one, which is a fact about that ground and not about the loop that bakes it.
+static const struct {
+    TerrainLayerKind kind;
+    const char* name;
+    float uv_scale;
+} TERRAIN_LAYERS[] = {
+    {TERRAIN_LAYER_GRASS, "grass", 4.0f},
+    {TERRAIN_LAYER_ROCK, "rock", 6.0f},
+    {TERRAIN_LAYER_SILT, "silt", 4.0f},
+    {TERRAIN_LAYER_GRAVEL, "gravel", 3.0f},
+};
+_Static_assert(sizeof(TERRAIN_LAYERS) / sizeof(TERRAIN_LAYERS[0]) <= MATERIAL_MAX_LAYERS,
+               "a fifth ground would arm a layer count the shader silently clamps away");
 
 // The ground, as a layered surface (spec 11.60). Replaces a white albedo times a
 // per-vertex tint at 2.6 units, which is why the terrain did not hold up at
 // walking distance whatever the palette was.
 static void bake_terrain_layers(Scene* scene) {
     const int T = TERRAIN_LAYER_TEX_SIZE;
-    int count = (int)(sizeof(TERRAIN_LAYER_KINDS) / sizeof(TERRAIN_LAYER_KINDS[0]));
+    int count = (int)(sizeof(TERRAIN_LAYERS) / sizeof(TERRAIN_LAYERS[0]));
     for (int i = 0; i < count; i++) {
         unsigned char *albedo = NULL, *surface = NULL;
-        terrain_layer_maps(TERRAIN_LAYER_KINDS[i], T, g_args.seed + (unsigned)i * 977u, &albedo,
+        terrain_layer_maps(TERRAIN_LAYERS[i].kind, T, g_args.seed + (unsigned)i * 977u, &albedo,
                            &surface);
         char key[64];
-        snprintf(key, sizeof(key), "forest_layer_%s_a", TERRAIN_LAYER_NAMES[i]);
+        snprintf(key, sizeof(key), "forest_layer_%s_a", TERRAIN_LAYERS[i].name);
         set_material_layer_albedo_tex(g_mat_terrain, i, bake(scene, albedo, T, T, 4, false, key));
-        snprintf(key, sizeof(key), "forest_layer_%s_s", TERRAIN_LAYER_NAMES[i]);
+        snprintf(key, sizeof(key), "forest_layer_%s_s", TERRAIN_LAYERS[i].name);
         set_material_layer_surface_tex(g_mat_terrain, i, bake(scene, surface, T, T, 4, false, key));
-        // World units per tile. Coarse grounds repeat over a longer distance than
-        // fine ones, which is the whole reason this is per layer.
-        g_mat_terrain->layers[i].uv_scale = (TERRAIN_LAYER_KINDS[i] == TERRAIN_LAYER_ROCK) ? 6.0f
-                                            : (TERRAIN_LAYER_KINDS[i] == TERRAIN_LAYER_GRAVEL)
-                                                ? 3.0f
-                                                : 4.0f;
+        g_mat_terrain->layers[i].uv_scale = TERRAIN_LAYERS[i].uv_scale;
     }
 
     int res = g_terrain.field ? g_terrain.field->res : TERRAIN_SPLAT_FALLBACK_RES;
