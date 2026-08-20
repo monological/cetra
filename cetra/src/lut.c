@@ -74,15 +74,17 @@ static bool _three_floats(const char* s, const char* eol, float out[3]) {
     return true;
 }
 
-// Resolve the header and return where the numbers start, or NULL if the file
-// never declared a 3D size. `size` is left at 0 unless one was found, so a
-// refusal below can tell "no size" from "bad size".
-static const char* _parse_header(const char* text, size_t len, const char* path, int* size,
-                                 char* title, size_t title_cap, bool* refused) {
+// Resolve the header and return where the numbers start, or NULL on a refusal
+// (which has already been named). `size` is 0 if the file declared none, and
+// -1 if it declared one that is not a number -- two different refusals, and
+// they were one until the distinction was measured: strtol maps both a missing
+// value and "abc" to 0, so this reported a file that plainly declares a size as
+// declaring none.
+static const char* _parse_header(const char* text, size_t len, const char* path, long* size,
+                                 char* title, size_t title_cap) {
     const char* end = text + len;
     const char* data_start = text;
     *size = 0;
-    *refused = false;
 
     for (const char* line = text; line < end;) {
         const char* eol = line;
@@ -93,12 +95,39 @@ static const char* _parse_header(const char* text, size_t len, const char* path,
         while (s < eol && (*s == ' ' || *s == '\t'))
             s++;
 
+        // WHERE THE DATA BEGINS IS DECIDED BY THE LINE'S FIRST TOKEN, not by
+        // whether a keyword matched. A .cube keyword can never start with a
+        // digit, sign or dot and a data line always does, so this is an exact
+        // discriminator -- where "no keyword matched" is not. That version
+        // treated any header this reader does not know as the start of the
+        // numbers, so `LUT_3D_INPUT_RANGE` (a real Iridas-era extension) and a
+        // UTF-8 BOM both refused a loadable file as "truncated or malformed".
+        // Naming the wrong reason is worse than not refusing: it sends the
+        // reader to the data block to look for a fault that is in line 2.
+        if (s < eol && *s != '#') {
+            char* probe = NULL;
+            strtod(s, &probe);
+            if (probe != s) {
+                data_start = line;
+                break;
+            }
+        }
+
         const char* rest = NULL;
         bool consumed = false;
         if (s == eol || *s == '#') {
             consumed = true; // blank or comment; keep scanning
         } else if (_keyword(s, eol, "LUT_3D_SIZE", &rest)) {
-            *size = (int)strtol(rest, NULL, 10);
+            // Stays a `long` all the way to the caller's range check. Narrowing
+            // here let an out-of-range declaration wrap back INTO range --
+            // measured: LUT_3D_SIZE 4294967298 loaded as size 2, past a bound
+            // whose own header promises a size is "refused by name rather than
+            // clamped". The end pointer separates "not a number" from a
+            // literal 0, which strtol alone maps to the same value.
+            char* stop = NULL;
+            *size = strtol(rest, &stop, 10);
+            if (stop == rest)
+                *size = -1;
             consumed = true;
         } else if (_keyword(s, eol, "LUT_1D_SIZE", &rest)) {
             // Refused by name. A 1D LUT is a per-channel curve -- exactly what
@@ -106,7 +135,6 @@ static const char* _parse_header(const char* text, size_t len, const char* path,
             // degenerate 3D table would grade nothing and look like the feature
             // failing.
             log_warn("lut: '%s' is a 1D LUT; this path takes 3D .cube tables only", path);
-            *refused = true;
             return NULL;
         } else if (_keyword(s, eol, "TITLE", &rest)) {
             const char* te = eol;
@@ -135,16 +163,18 @@ static const char* _parse_header(const char* text, size_t len, const char* path,
                 log_warn("lut: '%s' declares a %s other than %g; only the 0..1 domain is "
                          "supported (a log-encoded LUT needs a log input this pass does not have)",
                          path, is_min ? "DOMAIN_MIN" : "DOMAIN_MAX", (double)want);
-                *refused = true;
                 return NULL;
             }
             consumed = true;
         }
 
-        if (!consumed) {
-            data_start = line; // first line that is not header: the data begins
-            break;
-        }
+        // A keyword this reader does not know. The numeric probe above already
+        // established the line is not data, so the file is well-formed and
+        // carries something we have no use for -- note it and keep scanning
+        // rather than refusing a table that is otherwise perfectly loadable.
+        if (!consumed)
+            log_warn("lut: '%s' has an unrecognised header line, ignored: %.*s", path,
+                     (int)(eol - s), s);
 
         line = eol;
         while (line < end && (*line == '\n' || *line == '\r'))
@@ -159,12 +189,19 @@ static const char* _parse_header(const char* text, size_t len, const char* path,
 // contrast build can land 0.5 near 0.38 or 0.62 -- so this sits well outside
 // that. A log-to-Rec709 show LUT is nowhere near: LogC's 0.5 is roughly 2.5
 // stops over mid-grey, which lands near 0.9.
+// TRILINEAR, and static, and both matter. The shipped default is TETRAHEDRAL,
+// so a CPU sampler that disagrees with it is only safe while its one caller is
+// the heuristic below -- which asks a yes/no question about mid-grey where the
+// two interpolants agree. Exported, it would be the "an implementation that
+// agrees with itself" hazard the gate's own oracle is built to avoid.
+static void _sample_trilinear(const ColorLut* lut, const float in[3], float out[3]);
+
 #define LUT_MIDGREY_SUSPECT 0.25f
 
 static void _warn_if_not_display_referred(const ColorLut* lut, const char* path) {
     const float mid[3] = {0.5f, 0.5f, 0.5f};
     float out[3];
-    lut_sample(lut, mid, out);
+    _sample_trilinear(lut, mid, out);
     float worst = 0.0f;
     for (int i = 0; i < 3; i++)
         worst = fmaxf(worst, fabsf(out[i] - 0.5f));
@@ -185,12 +222,21 @@ bool lut_load_cube(const char* path, ColorLut* out) {
         return false;
     }
 
-    int size = 0;
-    char title[sizeof(out->title)];
-    title[0] = '\0';
-    bool refused = false;
-    const char* data = _parse_header(text, (size_t)len, path, &size, title, sizeof(title),
-                                     &refused);
+    // A UTF-8 BOM is what any Windows editor writes, and it is not a keyword,
+    // a comment or a number -- so without this the first line reads as neither
+    // header nor data and the file is refused for a reason it has nothing to
+    // do with.
+    const char* body = text;
+    long body_len = len;
+    if (body_len >= 3 && (unsigned char)body[0] == 0xEF && (unsigned char)body[1] == 0xBB &&
+        (unsigned char)body[2] == 0xBF) {
+        body += 3;
+        body_len -= 3;
+    }
+
+    long size = 0;
+    char title[sizeof(out->title)] = {0};
+    const char* data = _parse_header(body, (size_t)body_len, path, &size, title, sizeof(title));
     if (!data) {
         free(text);
         return false; // _parse_header already named the reason
@@ -200,8 +246,13 @@ bool lut_load_cube(const char* path, ColorLut* out) {
         free(text);
         return false;
     }
+    if (size < 0) {
+        log_warn("lut: '%s' declares a LUT_3D_SIZE that is not a number", path);
+        free(text);
+        return false;
+    }
     if (size < LUT_MIN_SIZE || size > LUT_MAX_SIZE) {
-        log_warn("lut: '%s' declares LUT_3D_SIZE %d, outside the supported %d..%d", path, size,
+        log_warn("lut: '%s' declares LUT_3D_SIZE %ld, outside the supported %d..%d", path, size,
                  LUT_MIN_SIZE, LUT_MAX_SIZE);
         free(text);
         return false;
@@ -210,12 +261,12 @@ bool lut_load_cube(const char* path, ColorLut* out) {
     size_t entries = (size_t)size * (size_t)size * (size_t)size;
     float* values = malloc(entries * 3 * sizeof(float));
     if (!values) {
-        log_error("lut: out of memory for '%s' (%d^3)", path, size);
+        log_error("lut: out of memory for '%s' (%ld^3)", path, size);
         free(text);
         return false;
     }
 
-    Lexer lx = {data, text + len};
+    Lexer lx = {data, body + body_len};
     for (size_t i = 0; i < entries * 3; i++) {
         if (!_next_float(&lx, &values[i])) {
             log_warn("lut: '%s' ended after %zu of %zu values; truncated or malformed", path, i,
@@ -224,8 +275,14 @@ bool lut_load_cube(const char* path, ColorLut* out) {
             free(text);
             return false;
         }
-        if (!isfinite(values[i])) {
-            log_warn("lut: '%s' carries a non-finite value at entry %zu", path, i / 3);
+        // Finite is not enough: the table uploads as GL_RGB16F, whose largest
+        // value is 65504, so a finite-but-enormous entry becomes +inf in the
+        // texture and NaN pixels through the rest of the chain. This is the
+        // last place that sees the number before the driver does.
+        if (!isfinite(values[i]) || fabsf(values[i]) > LUT_MAX_VALUE) {
+            log_warn("lut: '%s' carries an out-of-range value %g at entry %zu; a .cube may go "
+                     "outside 0..1 but not past what the fp16 table can hold",
+                     path, (double)values[i], i / 3);
             free(values);
             free(text);
             return false;
@@ -237,7 +294,7 @@ bool lut_load_cube(const char* path, ColorLut* out) {
     // table and the resulting image is plausible either way.
     float extra = 0.0f;
     if (_next_float(&lx, &extra)) {
-        log_warn("lut: '%s' carries more than the %zu values LUT_3D_SIZE %d declares", path,
+        log_warn("lut: '%s' carries more than the %zu values LUT_3D_SIZE %ld declares", path,
                  entries * 3, size);
         free(values);
         free(text);
@@ -245,12 +302,13 @@ bool lut_load_cube(const char* path, ColorLut* out) {
     }
 
     free(text);
-    out->size = size;
+    out->size = (int)size;
     out->data = values;
     memcpy(out->title, title, sizeof(out->title));
 
     _warn_if_not_display_referred(out, path);
-    log_info("LUT '%s': %d^3%s%s", path, size, title[0] ? ", " : "", title);
+    log_info("LUT '%s': %d^3%s%s", path, out->size, out->title[0] ? ", " : "",
+             out->title);
     return true;
 }
 
@@ -263,7 +321,7 @@ void lut_free(ColorLut* lut) {
     lut->title[0] = '\0';
 }
 
-void lut_sample(const ColorLut* lut, const float in[3], float out[3]) {
+static void _sample_trilinear(const ColorLut* lut, const float in[3], float out[3]) {
     if (!lut || !lut->data || lut->size < 2) {
         out[0] = in[0];
         out[1] = in[1];

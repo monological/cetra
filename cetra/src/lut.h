@@ -18,12 +18,25 @@
 // mid-grey heuristic in lut.c turns the common case of that into a named
 // warning; it is a suspicion, not a test.
 
-// Bounds on LUT_3D_SIZE. The format allows 2..256; 64 is the ceiling here
-// because a 64-cubed table is already 3 MB of transient float and no look LUT
-// ships above 65. Refused by name rather than clamped -- a table resampled to a
-// size it was not written for is a different table.
+// Bounds on LUT_3D_SIZE. The format allows 2..256.
+//
+// 65, NOT 64, and the difference is the whole point: .cube sizes are
+// conventionally 2^n + 1, so what actually ships is 17, 33 and 65. A ceiling of
+// 64 refuses the largest real size while admitting one the format essentially
+// never produces -- the same off-by-one as the roadmap's "32 cubed", picked
+// again while correcting it. 65^3 is 3.3 MB of transient float and 1.6 MB on
+// the GPU at RGB16F, which buys the precision tier outright.
+//
+// Refused by name rather than clamped -- a table resampled to a size it was not
+// written for is a different table.
 #define LUT_MIN_SIZE 2
-#define LUT_MAX_SIZE 64
+#define LUT_MAX_SIZE 65
+
+// The largest magnitude an entry may carry. A .cube is allowed to go outside
+// 0..1 (a look can push past white), but the table uploads as GL_RGB16F, so
+// anything past half-float's maximum arrives as +inf and turns the rest of the
+// finishing chain into NaN. isfinite() alone does not catch that.
+#define LUT_MAX_VALUE 65504.0f
 
 // A loaded table, CPU-side and transient: the consumer uploads it and frees it.
 typedef struct ColorLut {
@@ -48,10 +61,5 @@ typedef struct ColorLut {
 bool lut_load_cube(const char* path, ColorLut* out);
 
 void lut_free(ColorLut* lut);
-
-// Trilinear sample, for callers that need a value without a GPU. Used by the
-// loader's own mid-grey heuristic; the shading path samples on the GPU and this
-// is deliberately not the reference for it.
-void lut_sample(const ColorLut* lut, const float in[3], float out[3]);
 
 #endif // _LUT_H_
