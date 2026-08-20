@@ -36,13 +36,19 @@ FOUR TABLES, each answering something no other does:
                 right" from "is the interpolation right", which are otherwise
                 two unknowns in one measurement.
 
-  lut_steep     a hard S-curve plus a channel rotation.
-                The interpolants must DISAGREE here. Without a table that
-                separates them, a tetrahedral path that silently degenerates to
-                trilinear passes every other arm in the group.
+  lut_steep     a hard S-curve plus a channel rotation, at 33 -- the size real
+                files ship at. Curvature is what makes an interpolator's job
+                hard, so this is the table lut-agree runs on: the shader is
+                checked against an independent reading of the WORST case rather
+                than one every interpolant reproduces exactly.
+                It is NOT the table that separates the two interpolants. It was
+                described that way for a spec cycle while the arm that separates
+                them used lut_neutral, and the spec's own measurement says why
+                -- 0.076 of a code here against 7.841 there.
 
-  lut_neutral   identity on the grey diagonal, cross-channel off it.
-                The arm that justifies tetrahedral existing at all.
+  lut_neutral   identity on the grey diagonal, cross-channel off it, and COARSE.
+                The arm that justifies tetrahedral existing at all, and the only
+                table on which the two interpolants visibly disagree.
 
 WHY lut_neutral IS BUILT THE WAY IT IS, because the obvious construction does
 not work. The intuitive "steep curve applied identically to all three channels"
@@ -88,8 +94,11 @@ LUT_N_SMALL = 17
 # Coarse on purpose -- see the module docstring. 9 puts the cell at 1/8, where
 # the neutral-axis tint is worth several 8-bit codes instead of a fraction of one.
 LUT_N_NEUTRAL = 9
-# Scales the cross-channel term. Fixed by measurement in phase 0, then asserted
-# below so a later edit cannot quietly take the arm back under the noise floor.
+# Scales the cross-channel term. Fixed by measurement in phase 0 and bounded at
+# the bottom of this file against the tint the arm actually reads -- the first
+# version claimed that and asserted only that the term was NON-ZERO, which left
+# a 20x window (amp 0.07 to 1.5) where the generator was happy and lut-neutral
+# was red.
 NEUTRAL_AMP = 4.0
 
 
@@ -365,9 +374,11 @@ for name, title, n, fn in TABLES:
 # arm; failing here means the fixture stopped testing what the arm believes.
 for v in (0.0, 0.25, 0.5, 0.75, 1.0):
     assert lut_identity(v, v, v) == (v, v, v)
-    assert lut_swap(0.2, 0.5, 0.9) == (0.9, 0.5, 0.2)
     r, g, b = lut_neutral(v, v, v)
     assert r == g == b == v, f"lut_neutral must be identity on the diagonal, got {(r, g, b)} at {v}"
+# OFF the diagonal too: asserted only on it, `lambda r, g, b: (r, r, r)` passes.
+assert lut_identity(0.2, 0.5, 0.9) == (0.2, 0.5, 0.9)
+assert lut_swap(0.2, 0.5, 0.9) == (0.9, 0.5, 0.2)
 # ...and non-separable off it, or it degenerates to the separable construction
 # that measures the two interpolants as identical.
 off = lut_neutral(0.8, 0.2, 0.5)
@@ -378,6 +389,31 @@ assert abs(off[0] - 0.8) > 1e-3, "lut_neutral has no cross-channel term; see the
 a = lut_neutral(0.7, 0.3, 0.1)
 sw = lut_neutral(0.3, 0.7, 0.1)
 assert abs(a[0] - sw[1]) > 1e-3, "lut_neutral is channel-symmetric; the tint will cancel"
+
+# THE BOUND THE ARM READS, not merely a non-zero check. The trilinear grey tint
+# scales as amp / (N-1)^2, so both constants above steer it and either can take
+# lut-neutral under its floor with every other assert here still passing. 3.0
+# against the arm's LUT_TINT_MIN of 2 leaves the margin measurement showed (the
+# rendered value is 5).
+_tint_codes = 0.5 * NEUTRAL_AMP / (LUT_N_NEUTRAL - 1) ** 2 * 0.5 * 255.0
+assert _tint_codes >= 3.0, (
+    f"the neutral probe would tint greys by only {_tint_codes:.1f} codes; lut-neutral wants >= 2")
+
+# lut_steep must be CURVED, or lut-agree runs on a table every interpolant
+# reproduces exactly and the arm stops being about interpolation at all. Nothing
+# guarded this: making s_curve the identity leaves the table a linear channel
+# rotation and every arm still passes.
+_mid = lut_steep(0.35, 0.35, 0.35)[0]
+_chord = 0.5 * (lut_steep(0.20, 0.20, 0.20)[0] + lut_steep(0.50, 0.50, 0.50)[0])
+assert abs(_mid - _chord) > 0.02, "lut_steep has no curvature; see the docstring"
+
+# ...and lut_swap must be LINEAR, which is what lets lut-interp use it as the
+# leg where the two interpolants are required to agree.
+_a, _b = (0.2, 0.5, 0.9), (0.8, 0.1, 0.3)
+_half = tuple(0.5 * (x + y) for x, y in zip(_a, _b))
+_lerp = tuple(0.5 * (x + y) for x, y in zip(lut_swap(*_a), lut_swap(*_b)))
+assert all(abs(x - y) < 1e-6 for x, y in zip(lut_swap(*_half), _lerp)), \
+    "lut_swap is not linear; lut-interp's agreement leg depends on it"
 
 print("wrote", out, "and", scn, f"({COLS}x{ROWS} chart: {COLS} greys + {len(COLOURS)} colours)")
 print("wrote", ", ".join(written))

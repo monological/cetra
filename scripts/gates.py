@@ -2736,6 +2736,10 @@ LUT_AGREE_CODES = 1.5
 # tolerance here would let a half-broken decomposition through.
 LUT_TINT_MIN = 2
 LUT_TINT_MAX = 0
+# The coarse probe's measured tri-vs-tet separation is 7.841 codes; half of it,
+# so the arm discriminates a PARTLY wrong decomposition rather than only a fully
+# degenerate one.
+LUT_PROBE_MIN_CODES = 4
 
 
 def _lut_render(workdir, name, extra, scene=None):
@@ -2870,10 +2874,19 @@ def run_lut_gate(workdir):
                     off take one path and the check passes against a dead
                     feature (11.21 shipped exactly that arm).
       lut-off       a scene authoring post.lut renders identically to passing
-                    the same file to --lut, and --no-lut returns the ungraded
-                    frame exactly. Both halves: the first says the two authoring
-                    paths are one path, the second that the escape hatch reaches
-                    all the way off.
+                    the same file to --lut, --no-lut returns the ungraded frame
+                    exactly, and the CLI beats an authored strength and interp.
+                    The authored path is RELATIVE on purpose: that is the only
+                    way cscn_copy's absolutizer and cscene.c's resolve_in_place
+                    ever run, and both fail silently -- the table does not load
+                    and the frame renders ungraded.
+      lut-refuse    eight malformed tables each refused BY NAME, and two
+                    odd-but-valid ones (an unknown header keyword, a UTF-8 BOM)
+                    accepted. A fifth of the reader is refusal logic and every
+                    fixture is well-formed, so none of it ran; a review found
+                    four wrong-reason refusals and two wrong accepts in there.
+                    Meaningful only beside lut-agree, which is what stops a
+                    reader that refuses everything from passing.
       lut-interp    the two interpolants AGREE on the linear table and DISAGREE
                     on the coarse probe. The disagreement is the half that
                     matters: without it a tetrahedral path that silently
@@ -2968,78 +2981,170 @@ def run_lut_gate(workdir):
     # lut-strength -- and the middle reading that makes it falsifiable
     zero, e0 = _lut_render(workdir, "lut_s0", ["--lut", cubes["steep"], "--lut-strength", "0"])
     half, e5 = _lut_render(workdir, "lut_s5", ["--lut", cubes["steep"], "--lut-strength", "0.5"])
-    if e0 or e5:
+    if e0 or e5 or not steep:
         print("  lut-strength ERROR (strength renders failed)\n" + (e0 or e5)[-800:])
         failures.append("lut-strength")
     else:
         ae0, _ = compare(base, zero)
         mid = _lut_read_patches(half)
         full = _lut_read_patches(steep)
-        # Every patch must sit between ungraded and fully graded, and at least
-        # one must be strictly inside -- "between" is satisfied trivially by a
-        # build where strength does nothing at all.
-        inside, worst_out = 0, 0.0
+        # 0.5 must land on the MIDPOINT, not merely inside the band. The band
+        # form was written first and is satisfied by any wrong blend curve that
+        # stays between the endpoints -- mix(c, graded, s*s) lands at 0.25 of
+        # the way and passes it. The exact answer is free here: mix is linear in
+        # the display-encoded value and both endpoints are read after the same
+        # encode, so the midpoint is (a + b) / 2 to within the three roundings.
+        #
+        # `moved` is the floor that stops a chart with nothing to blend from
+        # satisfying the midpoint trivially -- at a == b every strength agrees.
+        worst_mid, moved = 0.0, 0
         for (_, a), (_, m), (_, b) in zip(ungraded, mid, full):
             for k in range(3):
-                lo, hi = min(a[k], b[k]), max(a[k], b[k])
-                if m[k] < lo - 1 or m[k] > hi + 1:
-                    worst_out = max(worst_out, min(abs(m[k] - lo), abs(m[k] - hi)))
-                if lo + 2 <= m[k] <= hi - 2:
-                    inside += 1
-        ok = ae0 == 0 and worst_out == 0.0 and inside >= 8
+                if abs(a[k] - b[k]) >= 4:
+                    moved += 1
+                    worst_mid = max(worst_mid, abs(m[k] - 0.5 * (a[k] + b[k])))
+        ok = ae0 == 0 and worst_mid <= 1.5 and moved >= 40
         print(f"  lut-strength {'PASS' if ok else 'FAIL'}  strength 0 is {ae0} px want exactly 0; "
-              f"0.5 leaves the ungraded..graded band by {worst_out:.0f} want 0, and lands "
-              f"strictly inside it on {inside} channels want >=8 (or strength does nothing)")
+              f"0.5 is off the midpoint by {worst_mid:.2f} codes want <=1.5 on {moved} channels "
+              f"the table actually moves, want >=40 (a squared or smoothstep blend reads ~25%)")
         if not ok:
             failures.append("lut-strength")
 
     # lut-off -- the two authoring paths are one path, and --no-lut is the way out
     authored = os.path.join(workdir, "lut_authored.cscn")
 
+    # All three keys, and the path RELATIVE. Authoring only an absolute `path`
+    # left two things this branch added unreachable: cscn_copy's absolutizer
+    # (which only fires on a relative one) and cscene.c's resolve_in_place. Both
+    # fail the IES way rather than the model way -- the LUT silently does not
+    # load and the frame renders ungraded -- so an arm that never exercises them
+    # is exactly the shape this group exists to avoid.
+    shutil.copy(cubes["swap"], os.path.join(workdir, "lut_swap.cube"))
+
     def _author(d):
-        d.setdefault("post", {})["lut"] = {"path": cubes["swap"]}
+        d.setdefault("post", {})["lut"] = {"path": "lut_swap.cube", "strength": 1.0,
+                                           "interp": "tetrahedral"}
 
     cscn_copy(scene, authored, _author)
-    by_scene, e1 = _lut_render(workdir, "lut_scene", [], scene=authored)
-    forced_off, e2 = _lut_render(workdir, "lut_scene_off", ["--no-lut"], scene=authored)
-    if e1 or e2:
-        print("  lut-off      ERROR (scene-authored renders failed)\n" + (e1 or e2)[-800:])
+    by_scene, e_scene = _lut_render(workdir, "lut_scene", [], scene=authored)
+    forced_off, e_off = _lut_render(workdir, "lut_scene_off", ["--no-lut"], scene=authored)
+    # The CLI must beat all three authored keys, not just the path: a scene
+    # authoring trilinear at half strength, overridden on the command line,
+    # has to reach the same pixels as the pure-CLI render.
+    beaten = os.path.join(workdir, "lut_beaten.cscn")
+
+    def _author_weak(d):
+        d.setdefault("post", {})["lut"] = {"path": "lut_swap.cube", "strength": 0.25,
+                                           "interp": "trilinear"}
+
+    cscn_copy(scene, beaten, _author_weak)
+    by_cli, e_cli = _lut_render(workdir, "lut_cli_wins",
+                                ["--lut", cubes["swap"], "--lut-strength", "1",
+                                 "--lut-interp", "tetrahedral"], scene=beaten)
+    if e_scene or e_off or e_cli or not swap:
+        print("  lut-off      ERROR (scene-authored renders failed)\n"
+              + ((e_scene or e_off or e_cli) or "the swap render above failed")[-800:])
         failures.append("lut-off")
     else:
         ae_same, _ = compare(swap, by_scene)
         ae_off, _ = compare(base, forced_off)
-        ok = ae_same == 0 and ae_off == 0
-        print(f"  lut-off      {'PASS' if ok else 'FAIL'}  post.lut vs --lut {ae_same} px want 0; "
-              f"--no-lut vs no LUT at all {ae_off} px want 0")
+        ae_cli, _ = compare(swap, by_cli)
+        ok = ae_same == 0 and ae_off == 0 and ae_cli == 0
+        print(f"  lut-off      {'PASS' if ok else 'FAIL'}  post.lut vs --lut {ae_same} px want 0 "
+              f"(via a RELATIVE path, so the scene-file resolver runs); --no-lut vs no LUT at all "
+              f"{ae_off} px want 0; CLI over an authored strength+interp {ae_cli} px want 0")
         if not ok:
             failures.append("lut-off")
 
+    # lut-refuse -- the reader's whole thesis, which nothing was testing
+    #
+    # Roughly a fifth of lut.c is refusal logic and the commit that landed it is
+    # titled "a .cube reader that refuses by name". Every fixture is well-formed,
+    # so none of it ran. A review pass found four wrong-reason refusals and two
+    # wrong accepts in that uncovered code; this is what stops the next four.
+    #
+    # Cheap by construction: a refusal happens at LOAD, so one frame at 100x100
+    # is enough to reach it, and the assertion is on the named reason rather
+    # than on pixels. The pair with lut-agree is what makes it meaningful -- a
+    # reader that refused EVERYTHING would pass this and fail that.
+    bad = [
+        ("a 1D LUT", 'TITLE "1d"\nLUT_1D_SIZE 4\n0 0 0\n1 1 1\n', "is a 1D LUT"),
+        ("a log-domain table", "LUT_3D_SIZE 2\nDOMAIN_MAX 4 4 4\n" + "0 0 0\n" * 8,
+         "only the 0..1 domain"),
+        ("no declared size", 'TITLE "nosize"\n0 0 0\n1 1 1\n', "declares no LUT_3D_SIZE"),
+        ("a non-numeric size", "LUT_3D_SIZE abc\n0 0 0\n", "not a number"),
+        ("a size that wraps int", "LUT_3D_SIZE 4294967298\n" + "0 0 0\n" * 8,
+         "outside the supported"),
+        ("a truncated block", "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n", "truncated or malformed"),
+        ("a trailing value", "LUT_3D_SIZE 2\n" + "0 0 0\n" * 9, "carries more than"),
+        ("a value past fp16", "LUT_3D_SIZE 2\n1e30 0 0\n" + "0 0 0\n" * 7, "out-of-range value"),
+    ]
+    # ...and two the reader must ACCEPT. Both were refused before the review:
+    # an unknown keyword ended the header, so a real Iridas extension and a
+    # Windows BOM each read as a truncated data block.
+    good = [
+        ("an unknown keyword", "LUT_3D_SIZE 2\nLUT_3D_INPUT_RANGE 0.0 1.0\n"
+         + "".join(f"{r} {g} {b}\n" for b in (0, 1) for g in (0, 1) for r in (0, 1))),
+        ("a UTF-8 BOM", "﻿LUT_3D_SIZE 2\n"
+         + "".join(f"{r} {g} {b}\n" for b in (0, 1) for g in (0, 1) for r in (0, 1))),
+    ]
+    missed, wrongly_refused = [], []
+    for label, body, want in bad:
+        p = os.path.join(workdir, "bad_%d.cube" % len(missed + wrongly_refused))
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        r = subprocess.run([RENDER, "-m", scene, "-x", "-f", "1", "-W", "100", "-H", "100",
+                            "--lut", p], capture_output=True, text=True)
+        if want not in (r.stdout + r.stderr):
+            missed.append(label)
+    for label, body in good:
+        p = os.path.join(workdir, "good_%d.cube" % len(wrongly_refused))
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        r = subprocess.run([RENDER, "-m", scene, "-x", "-f", "1", "-W", "100", "-H", "100",
+                            "--lut", p], capture_output=True, text=True)
+        if "2^3" not in (r.stdout + r.stderr):
+            wrongly_refused.append(label)
+    ok = not missed and not wrongly_refused
+    print(f"  lut-refuse   {'PASS' if ok else 'FAIL'}  {len(bad)} malformed tables each refused "
+          f"BY NAME ({len(missed)} misnamed: {', '.join(missed) or 'none'}); "
+          f"{len(good)} odd-but-valid tables loaded ({len(wrongly_refused)} wrongly refused: "
+          f"{', '.join(wrongly_refused) or 'none'})")
+    if not ok:
+        failures.append("lut-refuse")
+
     # lut-interp -- agree where the table is linear, differ where it is not
-    tri_lin, e1 = _lut_render(workdir, "lut_tri_lin",
-                              ["--lut", cubes["swap"], "--lut-interp", "trilinear"])
-    tri_n, e2 = _lut_render(workdir, "lut_tri_n",
-                            ["--lut", cubes["neutral"], "--lut-interp", "trilinear"])
-    tet_n, e3 = _lut_render(workdir, "lut_tet_n",
-                            ["--lut", cubes["neutral"], "--lut-interp", "tetrahedral"])
-    if e1 or e2 or e3:
-        print("  lut-interp   ERROR (interp renders failed)\n" + (e1 or e2 or e3)[-800:])
+    tri_lin, e_tri_lin = _lut_render(workdir, "lut_tri_lin",
+                                     ["--lut", cubes["swap"], "--lut-interp", "trilinear"])
+    tri_n, e_tri_n = _lut_render(workdir, "lut_tri_n",
+                                 ["--lut", cubes["neutral"], "--lut-interp", "trilinear"])
+    tet_n, e_tet_n = _lut_render(workdir, "lut_tet_n",
+                                 ["--lut", cubes["neutral"], "--lut-interp", "tetrahedral"])
+    if e_tri_lin or e_tri_n or e_tet_n or not swap:
+        print("  lut-interp   ERROR (interp renders failed)\n"
+              + ((e_tri_lin or e_tri_n or e_tet_n) or "the swap render above failed")[-800:])
         failures.append("lut-interp")
     else:
         ae_lin, pae_lin = compare(swap, tri_lin)
-        ae_probe, _ = compare(tri_n, tet_n)
+        ae_probe, pae_probe = compare(tri_n, tet_n)
         # The linear half is a bound on PEAK error, not a pixel count: the two
         # interpolants reach the same value by different arithmetic, so a
         # handful of pixels rounding apart is expected and a visible difference
         # is not.
-        ok = pae_lin <= LSB and ae_probe > 0
+        # A MAGNITUDE on the probe, not `> 0`. The spec measured 7.841 codes
+        # there, so a bar of one differing pixel catches full degeneration and
+        # nothing short of it -- a partially wrong decomposition would clear it.
+        # 4 codes keeps 2x headroom against the measurement.
+        ok = pae_lin <= LSB and pae_probe >= LUT_PROBE_MIN_CODES / 255.0
         print(f"  lut-interp   {'PASS' if ok else 'FAIL'}  on the LINEAR table the two agree to "
               f"PAE {pae_lin:.6f} want <={LSB:.6f} ({ae_lin} px); on the coarse probe they "
-              f"differ on {ae_probe} px want >0 (or tetrahedral is trilinear)")
+              f"differ by PAE {pae_probe:.6f} want >={LUT_PROBE_MIN_CODES / 255.0:.6f} "
+              f"({ae_probe} px; or tetrahedral is trilinear)")
         if not ok:
             failures.append("lut-interp")
 
     # lut-neutral -- the claim tetrahedral is bought for
-    if e2 or e3:
+    if e_tri_n or e_tet_n:
         print("  lut-neutral  SKIP  (the interp renders failed above)")
     else:
         def _grey_spread(path):
@@ -3049,11 +3154,19 @@ def run_lut_gate(workdir):
                     worst = max(worst, max(rgb) - min(rgb))
             return worst
 
-        tint_tri, tint_tet = _grey_spread(tri_n), _grey_spread(tet_n)
+        # Measured as an INCREASE over the ungraded frame's own grey spread.
+        # The absolute form reads whatever chroma the pipeline already put on a
+        # grey patch -- bloom is on in this group, and a colour patch sits ~47 px
+        # away -- so it would move with the bloom radius or the chart pitch for
+        # reasons that have nothing to do with the interpolant. The in-frame
+        # control is the same idiom contact_local_fixture's exact 1.0000 uses.
+        tint_base = _grey_spread(base)
+        tint_tri = _grey_spread(tri_n) - tint_base
+        tint_tet = _grey_spread(tet_n) - tint_base
         ok = tint_tri >= LUT_TINT_MIN and tint_tet <= LUT_TINT_MAX
         print(f"  lut-neutral  {'PASS' if ok else 'FAIL'}  through a table that is identity on "
-              f"the grey diagonal, trilinear tints greys by {tint_tri} codes want "
-              f">={LUT_TINT_MIN} and tetrahedral by {tint_tet} want <={LUT_TINT_MAX} (exact, "
+              f"the grey diagonal, trilinear ADDS {tint_tri} codes of grey tint want "
+              f">={LUT_TINT_MIN} and tetrahedral adds {tint_tet} want <={LUT_TINT_MAX} (exact, "
               f"since all six tetrahedra share that diagonal as an edge)")
         if not ok:
             failures.append("lut-neutral")
@@ -8254,12 +8367,17 @@ def run_fixture_gen_gate(workdir):
     gens = sorted(glob.glob(os.path.join(src_dir, "gen_*.py")))
     inputs = [p for p in sorted(glob.glob(os.path.join(src_dir, "*.png")))
               if not p.endswith("_golden.png")]
-    # Byte equality is the contract a .gltf, .cscn or .ies has -- all three are text a
-    # generator writes deterministically. It is NOT the contract a .png has, whose bytes
+    # Byte equality is the contract a .gltf, .cscn, .ies or .cube has -- all four are text
+    # a generator writes deterministically. It is NOT the contract a .png has, whose bytes
     # come out of PIL and zlib and move with those libraries rather than with the fixture.
     # Binary outputs are held to being emitted and non-empty, and the count is printed so
     # the weaker check does not read as coverage it is not.
-    text_ext = (".gltf", ".cscn", ".ies")
+    #
+    # .cube joined late and that is the point of listing them here rather than defaulting
+    # to text: 11.58 committed 1.2 MB of tables, verified their regeneration by hand, and
+    # left them in the BINARY bucket -- so the printed "N binary emitted non-empty" read
+    # as PNG coverage while four tables had none at all.
+    text_ext = (".gltf", ".cscn", ".ies", ".cube")
 
     drifted, missing_dep, compared, binary = [], [], 0, 0
     for gen in gens:
