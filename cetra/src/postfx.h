@@ -37,6 +37,21 @@ typedef enum PostFXTonemapMode {
                                     // climbs; no hue skew on saturated highlights
 } PostFXTonemapMode;
 
+// How a 3D colour-grading LUT interpolates between its lattice points
+// (spec 11.58). Tetrahedral is the default and what Resolve, Nuke and Baselight
+// use; trilinear is one hardware fetch and is kept because tetrahedral cannot
+// be falsified without it -- an implementation that degenerates toward trilinear
+// passes every arm written against it alone, since nothing in the frame is a
+// reference.
+//
+// On a realistic table the two are indistinguishable: measured 0.076 of one
+// 8-bit code at 33^3. What tetrahedral buys is the NEUTRAL AXIS, where
+// trilinear's eight-corner blend reaches off the grey diagonal and tints it.
+typedef enum PostFXLutInterp {
+    POSTFX_LUT_TRILINEAR = 0,
+    POSTFX_LUT_TETRAHEDRAL = 1,
+} PostFXLutInterp;
+
 // A two-target render pair for temporal accumulators (indexed by frame
 // parity) and iterative ping-pong blurs (indexed by iteration parity).
 // `valid` says tex[] holds a previous frame's accumulation: it is cleared
@@ -490,7 +505,20 @@ typedef struct PostFX {
     // to contour bands. Screen-space static: it carries no frame term.
     bool dither_enabled;
     float dither_strength; // Peak amplitude in 8-bit LSB (1 = textbook TPDF)
-    int frame_index;       // Copied from engine->total_frames; seeds deterministic grain
+    // 3D colour-grading LUT (spec 11.58). Sits between the gamma encode and the
+    // grain, because it is the creative look: grain is sensor noise applied over
+    // a finished look, and dither is quantization after both.
+    //
+    // The texture is resolution-independent, so it is created and destroyed with
+    // the PostFX itself and NOT by postfx_alloc_targets / postfx_free_targets --
+    // a window resize must not drop a table the app loaded from a file it no
+    // longer has the path to.
+    GLuint lut_texture; // 0 = none loaded, which is what disables the branch
+    int lut_size;       // LUT_3D_SIZE of the loaded table; the inset divides by it
+    float lut_strength; // Blend toward the graded result; 0 is a bit-exact identity
+    PostFXLutInterp lut_interp;
+    char lut_name[64]; // Basename of the loaded file, for the GUI readout
+    int frame_index;   // Copied from engine->total_frames; seeds deterministic grain
 
     // Temporal anti-aliasing. Consumes the per-pixel velocity buffer and a
     // reprojected history to resolve sub-pixel-jittered frames. History buffers
@@ -651,7 +679,22 @@ int postfx_add_sss_profile(PostFX* fx, const float* color, float radius);
 
 // Enable the whole finishing stack at a cinematic "film" look (stronger
 // vignette, visible grain, extra sharpen, teal-cool shadows / warm highlights).
+//
+// Deliberately does NOT touch the LUT: there is no sane default for one, since
+// it needs a file.
 void postfx_apply_film_look(PostFX* fx);
+
+// Load a .cube colour-grading LUT and upload it (spec 11.58). Returns false and
+// leaves any previously loaded table in place on a refusal, each of which
+// log_warns naming the file -- a bad path should cost the frame its grade, not
+// its previous grade as well.
+//
+// Called after create_postfx rather than from it: the path arrives from a CLI
+// flag or a scene file, both of which are read after the engine has a context.
+bool postfx_load_lut(PostFX* fx, const char* path);
+
+// Drop the loaded table. The frame reverts to ungraded, byte for byte.
+void postfx_clear_lut(PostFX* fx);
 
 // Resolve msaa_fbo, run SSAO and bloom, and tone map (fx->tonemap_mode) into
 // target_fbo (0 = default framebuffer). projection is the camera projection

@@ -47,9 +47,16 @@ uniform vec2 texelSize; // Display-pixel size, for the sharpen taps
 
 // Finishing grade — a "look" stack applied after tone mapping. Each stage is
 // gated by its own toggle; with all off the output is the plain tonemapped
-// frame. Order: sharpen -> grade -> vignette -> gamma -> grain -> dither.
+// frame. Order: sharpen -> grade -> vignette -> gamma -> LUT -> grain -> dither.
 // Dither is last and must stay last: it is the quantization stage, so anything
 // appended after it reaches the 8-bit target undithered.
+//
+// The LUT sits AFTER the gamma encode, and that placement is the feature's
+// contract rather than a detail. A .cube is authored against what a monitor was
+// showing — display-encoded values — so applying it to the LDR-linear numbers
+// toneSelect returns would produce a plausible frame that is not the look the
+// colourist made. It goes before the grain because grain is sensor noise laid
+// over a finished look, not something a look should be graded through.
 uniform int sharpenEnabled;
 uniform float sharpenStrength;
 uniform int gradeEnabled;
@@ -66,6 +73,12 @@ uniform float grainStrength;
 uniform float grainSeed; // Per-frame, deterministic across equal --frames runs
 uniform int ditherEnabled;
 uniform float ditherStrength; // Peak dither amplitude in 8-bit LSB (1 = textbook TPDF)
+// 3D colour-grading LUT (spec 11.58), display-referred; see the note above.
+uniform sampler3D lutTex;
+uniform int lutEnabled;
+uniform float lutSize;     // LUT_3D_SIZE of the loaded table, read from the file
+uniform float lutStrength; // Blend toward the graded result (0 = bit-exact identity)
+uniform int lutInterp;     // 0 trilinear, 1 tetrahedral
 
 // ACES filmic fit (Narkowicz 2015). High contrast: crushes shadows,
 // desaturates highlights — the cinematic look.
@@ -147,6 +160,95 @@ vec3 agxTonemap(vec3 c)
 vec3 displayEncode(vec3 c)
 {
     return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
+// A 3D LUT's lattice points are at TEXEL CENTRES, so [0,1] has to be remapped
+// into [0.5/N, (N-0.5)/N] before sampling. Without this the table is addressed
+// by texel EDGE and the whole grade slides half a cell: an identity table stops
+// being an identity, by a few 8-bit codes at the ends, which reads as a faint
+// wash rather than as anything being wrong.
+//
+// N comes from the file. Inlining a size here would work on every table that
+// happened to share it and silently mis-address the rest.
+vec3 lutCoord(vec3 c)
+{
+    return (clamp(c, 0.0, 1.0) * (lutSize - 1.0) + 0.5) / lutSize;
+}
+
+// Hardware trilinear: one fetch, and the texture unit does the eight-corner
+// blend. Kept alongside tetrahedral below rather than replaced by it, because
+// it is the only reference a frame contains for what tetrahedral is supposed to
+// differ from.
+vec3 lutTrilinear(vec3 c)
+{
+    return texture(lutTex, lutCoord(c)).rgb;
+}
+
+// Tetrahedral: the cube cell is cut into six tetrahedra, the ordering of the
+// three fractional coordinates picks which one the sample is in, and four
+// corners are blended by barycentric weights. What Resolve, Nuke and Baselight
+// do, and it differs from trilinear in two ways that matter here.
+//
+// The NEUTRAL AXIS is the reason it is the default. All six tetrahedra share
+// the (0,0,0)-(1,1,1) diagonal as an edge, so a grey sample puts all its weight
+// on the two grey corners and none on the six that are not — r == g == b in
+// gives r == g == b out, exactly. Trilinear's eight-corner blend always reaches
+// off the diagonal and tints it.
+//
+// And the weights are computed HERE, in the shader, where trilinear's come from
+// the texture unit's fixed-point subtexel fraction. That is the precision that
+// decides whether an identity table is an identity, and it is not a precision
+// this code controls.
+vec3 lutTetrahedral(vec3 c)
+{
+    float d = lutSize - 1.0;
+    vec3 p = clamp(c, 0.0, 1.0) * d;
+    vec3 base = min(floor(p), vec3(d - 1.0));
+    vec3 f = p - base;
+    ivec3 i = ivec3(base);
+
+    vec3 c000 = texelFetch(lutTex, i, 0).rgb;
+    vec3 c111 = texelFetch(lutTex, i + ivec3(1, 1, 1), 0).rgb;
+    vec3 ca, cb, w;
+    if (f.r > f.g) {
+        if (f.g > f.b) { // r > g > b
+            ca = texelFetch(lutTex, i + ivec3(1, 0, 0), 0).rgb;
+            cb = texelFetch(lutTex, i + ivec3(1, 1, 0), 0).rgb;
+            w = vec3(f.r - f.g, f.g - f.b, f.b);
+        } else if (f.r > f.b) { // r > b > g
+            ca = texelFetch(lutTex, i + ivec3(1, 0, 0), 0).rgb;
+            cb = texelFetch(lutTex, i + ivec3(1, 0, 1), 0).rgb;
+            w = vec3(f.r - f.b, f.b - f.g, f.g);
+        } else { // b > r > g
+            ca = texelFetch(lutTex, i + ivec3(0, 0, 1), 0).rgb;
+            cb = texelFetch(lutTex, i + ivec3(1, 0, 1), 0).rgb;
+            w = vec3(f.b - f.r, f.r - f.g, f.g);
+        }
+    } else {
+        if (f.b > f.g) { // b > g > r
+            ca = texelFetch(lutTex, i + ivec3(0, 0, 1), 0).rgb;
+            cb = texelFetch(lutTex, i + ivec3(0, 1, 1), 0).rgb;
+            w = vec3(f.b - f.g, f.g - f.r, f.r);
+        } else if (f.b > f.r) { // g > b > r
+            ca = texelFetch(lutTex, i + ivec3(0, 1, 0), 0).rgb;
+            cb = texelFetch(lutTex, i + ivec3(0, 1, 1), 0).rgb;
+            w = vec3(f.g - f.b, f.b - f.r, f.r);
+        } else { // g > r > b
+            ca = texelFetch(lutTex, i + ivec3(0, 1, 0), 0).rgb;
+            cb = texelFetch(lutTex, i + ivec3(1, 1, 0), 0).rgb;
+            w = vec3(f.g - f.r, f.r - f.b, f.b);
+        }
+    }
+    return (1.0 - (w.x + w.y + w.z)) * c000 + w.x * ca + w.y * cb + w.z * c111;
+}
+
+// Colour-grade with the loaded table. Applied to a display-encoded value.
+vec3 lutApply(vec3 c)
+{
+    vec3 graded = lutInterp == 1 ? lutTetrahedral(c) : lutTrilinear(c);
+    // mix(a, b, 0.0) is exactly `a`, so strength 0 is a bit-exact identity and
+    // not merely a small one.
+    return mix(c, graded, lutStrength);
 }
 
 // The frame's selected tonemap curve, shared by the scene path and the
@@ -428,6 +530,10 @@ void main()
 
     // Gamma-encode to display space
     color = displayEncode(color);
+
+    // Colour-grading LUT: display-referred, so it lands here and not earlier
+    if (lutEnabled == 1)
+        color = lutApply(color);
 
     // Film grain: display-space, weighted toward midtones (invisible in flat
     // black/white), animated by a deterministic per-frame seed

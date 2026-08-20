@@ -224,10 +224,17 @@ typedef struct {
     float grade_lift[3];
     float grade_gamma[3];
     float grade_gain[3];
-    int dof;         // --dof: enable depth of field
-    int no_dof;      // Force DoF off (e.g. --film --no-dof)
-    float dof_focus; // Focus distance in view units (-1 = auto: subject)
-    float dof_range; // Ramp-to-full-blur width (-1 = scene-scaled default)
+    // 3D colour-grading LUT (spec 11.58). A .cube from a colourist, applied
+    // after the gamma encode -- the general map lift/gamma/gain cannot be,
+    // since three per-channel knobs cannot rotate a hue or mix channels.
+    const char* lut_path;
+    int no_lut;         // Force off a LUT a .cscn asked for; the only way off one
+    float lut_strength; // -1 = keep the default
+    int lut_interp;     // -1 unset, else PostFXLutInterp
+    int dof;            // --dof: enable depth of field
+    int no_dof;         // Force DoF off (e.g. --film --no-dof)
+    float dof_focus;    // Focus distance in view units (-1 = auto: subject)
+    float dof_range;    // Ramp-to-full-blur width (-1 = scene-scaled default)
     float dof_max_coc;
     int dof_blades;          // Aperture blade count (-1 = keep engine default)
     float dof_rotation;      // Aperture rotation in degrees (< 0 = keep default)

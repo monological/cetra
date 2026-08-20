@@ -277,6 +277,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --chromatic-aberration <px> Channel split at the corner (enables it)\n");
     fprintf(stderr, "      --grade-lift/gamma/gain r,g,b  Colour grade (enables it)\n");
+    fprintf(stderr, "      --lut <f.cube>     3D colour-grading LUT (display-referred)\n");
+    fprintf(stderr, "      --no-lut           Force off a LUT a scene file asked for\n");
+    fprintf(stderr, "      --lut-strength <s> Blend toward the graded look, 0..1\n");
+    fprintf(stderr, "      --lut-interp <trilinear|tetrahedral>  LUT interpolation\n");
     fprintf(stderr, "      --dof              Depth of field, autofocused on the subject\n");
     fprintf(stderr, "      --no-dof           Force depth of field off (e.g. with --film)\n");
     fprintf(stderr, "      --dof-focus <m>    Pin focus distance (disables autofocus)\n");
@@ -361,6 +365,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->chromatic = -1.0f;
     args->grade_gamma[0] = args->grade_gamma[1] = args->grade_gamma[2] = 1.0f;
     args->grade_gain[0] = args->grade_gain[1] = args->grade_gain[2] = 1.0f;
+    args->lut_strength = -1.0f;
+    args->lut_interp = -1;
     args->dof_focus = -1.0f;
     args->dof_range = -1.0f;
     args->dof_max_coc = -1.0f;
@@ -1313,6 +1319,42 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->grade_set = 1;
+        } else if (strcmp(argv[i], "--lut") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->lut_path = argv[i];
+        } else if (strcmp(argv[i], "--no-lut") == 0) {
+            args->no_lut = 1;
+        } else if (strcmp(argv[i], "--lut-strength") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            // strtod with an end-pointer rather than atof: the value doubles as
+            // an enable, so a typo silently reading 0 would turn the grade off
+            // and look like the LUT failing to load. --dither's reasoning.
+            char* end = NULL;
+            double v = strtod(argv[i], &end);
+            if (end == argv[i] || *end != '\0' || v < 0.0 || v > 1.0) {
+                fprintf(stderr, "Error: --lut-strength expects a number in [0, 1]\n");
+                return -1;
+            }
+            args->lut_strength = (float)v;
+        } else if (strcmp(argv[i], "--lut-interp") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (strcasecmp(argv[i], "trilinear") == 0) {
+                args->lut_interp = POSTFX_LUT_TRILINEAR;
+            } else if (strcasecmp(argv[i], "tetrahedral") == 0) {
+                args->lut_interp = POSTFX_LUT_TETRAHEDRAL;
+            } else {
+                fprintf(stderr, "Error: --lut-interp expects trilinear or tetrahedral\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--dof") == 0) {
             args->dof = 1;
         } else if (strcmp(argv[i], "--no-dof") == 0) {
@@ -2360,6 +2402,18 @@ int main(int argc, char** argv) {
             glm_vec3_copy(args.grade_gamma, fx->grade_gamma);
             glm_vec3_copy(args.grade_gain, fx->grade_gain);
         }
+        // The two knobs before the table, so --lut-strength 0 is honoured on the
+        // very first graded frame rather than one frame late.
+        if (args.lut_strength >= 0.0f)
+            fx->lut_strength = args.lut_strength;
+        if (args.lut_interp >= 0)
+            fx->lut_interp = (PostFXLutInterp)args.lut_interp;
+        // --no-lut wins over a path from either source, which is what makes it
+        // the only way off a LUT a .cscn asked for.
+        if (args.no_lut)
+            postfx_clear_lut(fx);
+        else if (args.lut_path)
+            postfx_load_lut(fx, args.lut_path);
     }
     if (args.render_mode > 0) {
         engine->current_render_mode = (RenderMode)args.render_mode;

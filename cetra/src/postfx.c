@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "postfx.h"
+#include "lut.h"
 #include "profiler.h"
 #include "texture.h"
 #include "uniform.h"
@@ -663,6 +664,13 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // On by default: banding is a defect of the 8-bit write, not a look.
     fx->dither_enabled = true;
     fx->dither_strength = 1.0f;
+    // No LUT until an app loads one. `lut_texture` 0 is what gates the branch,
+    // so there is no separate enable to keep in step with it.
+    fx->lut_texture = 0;
+    fx->lut_size = 0;
+    fx->lut_strength = 1.0f;
+    fx->lut_interp = POSTFX_LUT_TETRAHEDRAL;
+    fx->lut_name[0] = '\0';
     fx->frame_index = 0;
 
     fx->taa_enabled = false; // Enabled per-app (the render app turns it on when windowed)
@@ -862,6 +870,10 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // is applied whole at the scene passes now, so nothing samples it here.
     uniform_set_int(fx->tonemap_program->uniforms, "auxTex", 9); // linZ + roughness for spec-occ
     uniform_set_int(fx->tonemap_program->uniforms, "csTex", 10); // contact-shadow visibility
+    // 11, not the free 7: this program's unit space is its own, and a sampler3D
+    // on a unit a sampler2D also names is INVALID_OPERATION at draw. Appending
+    // keeps that unrepresentable rather than depending on unit 7 staying unused.
+    uniform_set_int(fx->tonemap_program->uniforms, "lutTex", 11);
 
     glUseProgram(fx->lum_measure_program->id);
     uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
@@ -1993,6 +2005,7 @@ void free_postfx(PostFX* fx) {
     // The three the resize deliberately keeps, and so are only freed here.
     gl_delete_texture(&fx->noise_texture);
     gl_delete_texture(&fx->white_tex);
+    gl_delete_texture(&fx->lut_texture);
     gl_delete_fbo(&fx->lum_fbo);
     gl_delete_texture(&fx->lum_texture);
     gl_delete_fbo(&fx->lum_hist_fbo);
@@ -2067,6 +2080,48 @@ void postfx_apply_film_look(PostFX* fx) {
     glm_vec3_copy((vec3){0.0f, 0.0f, 0.01f}, fx->grade_lift); // whisper-cool shadows
     glm_vec3_one(fx->grade_gamma);
     glm_vec3_copy((vec3){1.05f, 1.0f, 0.95f}, fx->grade_gain); // warm highlights
+}
+
+bool postfx_load_lut(PostFX* fx, const char* path) {
+    if (!fx || !path || !path[0])
+        return false;
+
+    ColorLut lut;
+    memset(&lut, 0, sizeof(lut));
+    if (!lut_load_cube(path, &lut))
+        return false; // lut_load_cube named the reason; keep whatever was loaded
+
+    int size = lut.size; // lut_free zeroes the struct, so read it first
+    // 16F, and 32F was tried. An identity table is a bit-exact no-op at 16F on
+    // the tetrahedral path and stays 12,000-odd pixels off at 32F on the
+    // trilinear one, so the precision that decides that claim is the
+    // INTERPOLANT's weights, not the storage -- and doubling the bytes bought
+    // exactly nothing.
+    GLuint tex = create_texture_3d_float(size, size, size, GL_RGB16F, GL_RGB, lut.data);
+    // The CPU copy has done its job the moment the driver has the bytes -- the
+    // same shape sky_clouds.c uses for its baked noise volumes.
+    lut_free(&lut);
+    if (!tex) {
+        log_warn("lut: '%s' parsed but could not be uploaded", path);
+        return false;
+    }
+
+    gl_delete_texture(&fx->lut_texture);
+    fx->lut_texture = tex;
+    fx->lut_size = size;
+
+    const char* base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    snprintf(fx->lut_name, sizeof(fx->lut_name), "%s", base);
+    return true;
+}
+
+void postfx_clear_lut(PostFX* fx) {
+    if (!fx)
+        return;
+    gl_delete_texture(&fx->lut_texture);
+    fx->lut_size = 0;
+    fx->lut_name[0] = '\0';
 }
 
 float postfx_sss_max_sigma_per_depth(const PostFX* fx, const mat4 projection) {
@@ -3491,6 +3546,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                       aux_written ? fx->aux_texture : 0); // linZ + roughness (spec-occ)
         glActiveTexture(GL_TEXTURE10);
         glBindTexture(GL_TEXTURE_2D, cs_active ? cs_result_tex : 0); // contact-shadow visibility
+        glActiveTexture(GL_TEXTURE11);
+        glBindTexture(GL_TEXTURE_3D, fx->lut_texture); // 0 when no table is loaded
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
@@ -3555,6 +3612,13 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_float(tm, "grainStrength", fx->grain_strength);
         // % 4096: same float-hash conditioning bound as PCSS/SSR
         uniform_set_float(tm, "grainSeed", (float)(fx->frame_index % 4096));
+        // The loaded texture IS the enable: there is no second flag that could
+        // disagree with it, so a failed load cannot leave the branch sampling
+        // unit 11 with nothing bound to it.
+        uniform_set_int(tm, "lutEnabled", fx->lut_texture ? 1 : 0);
+        uniform_set_float(tm, "lutSize", (float)fx->lut_size);
+        uniform_set_float(tm, "lutStrength", fx->lut_strength);
+        uniform_set_int(tm, "lutInterp", (int)fx->lut_interp);
         // No frame term here, deliberately -- see the shader's dither block.
         uniform_set_int(tm, "ditherEnabled", fx->dither_enabled ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->dither_strength);
