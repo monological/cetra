@@ -1849,12 +1849,47 @@ noise (2014), already in the tree.
 **Residual:** dither reaches only the finishing block, so `--cs-debug` and the other debug views
 are un-dithered by construction (they return from `main()` early — correct, they are data).
 
-### E2. 3D LUT colour grading — Effort S
-`tonemap_frag.glsl:52-55` grades with lift/gamma/gain and nothing else. A 32³ `.cube` LUT is the
-format a colourist actually hands back, and post shaders are nowhere near their sampler budget, so
-this is a self-contained pass with a real workflow payoff. Sequence it *after* the tonemap, and pin
-which space the LUT is authored in — the working-space contract from 10.1/10.2 is the thing this
-item is most likely to violate quietly.
+### E2. 3D LUT colour grading — Effort S — **DONE (11.58)**
+A `.cube` reader, a `sampler3D` on the tonemap program's unit 11, and the table applied after
+`displayEncode`. `--lut` / `--no-lut` / `--lut-strength` / `--lut-interp`, plus a `post.lut` block.
+All 24 goldens 0 px: the loaded texture is the enable, so with no table the frame is unchanged.
+
+The text below is the original entry. Three of its five sentences held; the two that did not are
+worth keeping visible.
+
+> `tonemap_frag.glsl:52-55` grades with lift/gamma/gain and nothing else. A 32³ `.cube` LUT is the
+> format a colourist actually hands back, and post shaders are nowhere near their sampler budget, so
+> this is a self-contained pass with a real workflow payoff. Sequence it *after* the tonemap, and pin
+> which space the LUT is authored in — the working-space contract from 10.1/10.2 is the thing this
+> item is most likely to violate quietly.
+
+**The premise held and the sampler claim held** — `tonemap_frag` declared 10 of 16, and unit 11 was
+free. **The warning was the single most useful sentence in the entry**: "after the tonemap" is not
+precise enough, because the frame passes through *two* display-referred states in this shader.
+`toneSelect` returns LDR-linear and `displayEncode` gamma-encodes it, and a `.cube` is authored
+against the second. The lift/gamma/gain grade sits in the first, so the obvious placement — beside
+the grade it extends — is the wrong one.
+
+**The size was wrong.** 32³ is not a size `.cube` produces. 33³ is Resolve's export default, 17³ is
+common for small looks, 65³ for precision ones; the loader reads `LUT_3D_SIZE` and bounds it 2–64,
+and the fixtures deliberately carry three different sizes so a hardcoded one cannot pass.
+
+**And the entry did not anticipate the interpolant question, which is where the measurement went.**
+Tetrahedral against trilinear is **0.076 of one 8-bit code** at 33³ — invisible on any real table.
+It is the default anyway, for two properties that are checkable rather than aesthetic: greys stay
+exactly grey (trilinear tints them 5 codes through a table that is identity on the diagonal), and an
+identity table is a bit-exact no-op (0 px, against trilinear's 12,088 px at PAE 1/255 — the texture
+unit's fixed-point filter weights, which fp32 storage does not fix and was rejected for). Trilinear
+is kept behind a flag because **tetrahedral alone cannot be falsified**: nothing in a frame is a
+reference for it, and a path that silently degenerated would pass every arm written against it.
+
+**Log/pre-tonemap was declined, and not for the reason it first looked like.** It is not
+structurally hard here — `agxTonemap` already log-encodes with an EV window, transforms, and
+linearizes back to `toneSelect`'s contract, so a log LUT is a fourth branch in exactly that shape.
+It is declined because no off-the-shelf `.cube` can be authored against a log window we invent, it
+would replace the tonemap rather than compose with it, and it would reach the GI debug view, which
+calls `toneSelect` where the display path's early return does not.
+
 **Depends on:** 10.1-10.2's working-space contract (shipped). **Wall 1:** unaffected.
 
 ### E3. Histogram auto-exposure — Effort M — **DONE (11.52)**
@@ -2230,7 +2265,7 @@ not scheduled.
 | 25 | C3 IES profiles | S | **DONE (11.57).** Collected the payoff for 9.9/10.0's photometric work, and the premise held — `Light.intensity` really is canonical candela and every one of those lights really did radiate through a bare smoothstep. Zero texture units, as booked. **But the row deferred asymmetric profiles by pricing a 2D table in SAMPLER units, and its own placement removes that price**: in a UBO block the symmetric and asymmetric cases differ only in stride, so full LM-63 shipped with no v1/v2 split. **Its storage plan was also broken as written** — "alongside the packed lights" lands after the live prefix `ubo_upload` rewrites, so the table would have been undefined every frame; it took its own block at binding 6, uploaded once. The profile is a normalised shape multiplying `intensity`, with `intensity` seeded from the file's peak when unauthored, so it is absolute by default while `_scale_emitters` stays true. It REPLACES the cone, which moved the spot shadow frustum onto the profile's support — and the cull radius needed nothing, since normalising makes `profile ≤ 1` and the existing solve already bounds it. Applied at all FIVE places the falloff is evaluated, through one shared decision, which also folded in `pbr_frag`'s hand-duplicated debug copy that no golden can see -- though it shipped reaching only FOUR of them and claiming five in a comment, which its review round caught and split into `punctualAngularOf` (values) and `punctualAngular` (the cluster-list adapter) so the fog's standalone spot shaft could stop restating the rule. **Its review round is the entry worth reading**, below. Followed by `--ies-profile`, added from use: a `.cscn` was the only way to attach a profile, which made the feature unreachable without editing a committed asset. |
 | 26 | C5 Screen-space shadows for local lights | S | **DONE (11.56).** Postfx-only as booked, and the cluster list arrived with no C-side binding at all — `create_post_program` already links through `ubo_wire_blocks`. But **the row's reason was false and had been for six specs**: it blamed a punctual map's "texel footprint" for losing the contact, where that map is ~1 mm/texel at 1 m for a point light (2048² at 2–6 layers) and ~2 mm at its 1024² floor, and the hairline that did exist was a far-side depth STORAGE defect fixed in 10.3/10.4 with `cornell_box` as its gate. The real gap is that **~120 of 128 clusterable lights can never have a map** (8 punctual layers, 6 per point light), which flips the cull from "the N nearest" to "skip the ones that already have a map" — one line that is the performance cap and, once the fold's denominator counts them, the anti-double-shadow guarantee too. The gate widened as well: a room lit only by practicals never ran the pass. Cost tracks COVERAGE, not count — 2.43 ms per fully-covering light at 3200×2000 internal, but sixteen SPREAD lights cost +0.77 ms against the +38 ms sixteen coincident ones would. No per-pixel cap, deliberately. **Area panels are still not served** — the 41% wall leak below is NOT what this fixed; a panel counts in the fold's denominator but is never marched, because the only direction available is its centre and marching that would be a different approximation from the LTC integral the shading used. **Its own review then found three defects an eight-agent pass caught and the spec had not**: the fold's denominator omitting every skipped light (one blocked practical took 23% off a pixel that should have lost 1%), `shadow_layer` read raw when it goes stale the moment the shadow system is toggled off, and a per-pixel cluster walk nothing gated. Plus a fixture assert that could not fail. |
 | 27 | E3 Histogram exposure | M | **DONE (11.52).** A 128-bin gather histogram plus a percentile-clipped reduce, two raster passes replacing the mip chain; metering modes, EV bounds, split adapt rates, and the controls. **Both reasons this row gave were wrong**: the bright-pixel failure was already defended by a geometric mean AND an explicit clamp, and the determinism claim was already collected by `EXPOSURE_ADAPT_SNAP`, after which the adaptation holds no history and two runs are bit-identical over 200 frames. Capability parity was the whole reason and it sufficed. The instrument found what the row had not: the meter was **not linear in radiance**, 8.36 stops against 9.97 at x1000, because the absolute floor at the key inflated a dim scene's mean 3.05x. Percentiles fix it, **-1.61 stops to +0.021**. Removing the ceiling too produced a measured **runaway** to 1.15e7 nits via fp16 underflow -- though review then showed the GAIN was already bounded by the 20-stop floor, so the metered bound recorded a saner number and changed no pixel. And the SCALE_GATES shape cannot test a live meter -- scaling emitters by K while dividing the camera by K double-compensates. **The review then changed the implementation twice more**: the bin pass turned out to be OCCUPANCY-bound rather than fetch-bound (64 fragments is ~0.4% of the GPU; splitting the source across 8 output rows took the scope 0.744 -> 0.392 ms), and the bin ceiling could not be a constant at all, since the measure pass clamps in working space and divides by pre-exposure so its largest emittable value moves with the exposure. No golden moves (all 24 pin exposure), which is why this was the least-tested subsystem shipping on by default; six new arms now cover it. |
-| 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
+| 28 | E2 3D LUT grading | S | **DONE (11.58).** Colourist workflow, as booked, and the working-space warning was the right thing to warn about -- the contract is that a `.cube` is applied AFTER `displayEncode`, because that is the space one is authored in. **But the row's own number was wrong for the format it names**: 32³ is not a size `.cube` produces (33³ is Resolve's default), so the size comes from the file and the fixtures carry three of them. Log/pre-tonemap LUTs were declined -- not as too hard, since `agxTonemap` already log-encodes and linearizes back so one would be a fourth branch of `toneSelect`, but because no off-the-shelf table can be authored against a log window we invent, and it would replace the tonemap rather than compose with it. **Tetrahedral is the default and it is invisible**: measured 0.076 of one 8-bit code against trilinear at 33³. What buys it is the neutral axis (trilinear tints greys 5 codes through a table that touches them not at all) and an exact identity (0 px, against trilinear's 12,088 at PAE 1/255 -- the texture unit's fixed-point filter weights, which 32F storage does not fix and was rejected for). Trilinear stays reachable because tetrahedral alone is unfalsifiable. **Its gate's first draft claimed coverage it did not have** -- the identity arm said it caught the half-texel inset and was green with the inset deleted, since `lutCoord` is trilinear-only and tetrahedral fetches by integer index. |
 | 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
@@ -2275,8 +2310,12 @@ nominating a successor by default.
 Of the small ones, **34 (E8, the wind cull) was the pick and is now built** (11.53), and **26 (C5,
 contact shadows for local lights) followed it** (11.56) — it had gained a claim it did not have when
 it was written, since 11.49 shipped a *producer* of local lights that are ineligible for a map by
-construction. **25 (C3, IES) followed both** (11.57), leaving **28 (E2, 3D LUT grading)** as the last
-unblocked-and-small item on the table.
+construction. **25 (C3, IES) followed both** (11.57), and **28 (E2, 3D LUT grading) is now built too**
+(11.58). That empties the small-and-unblocked column: what is left is 29 (C4), 32 (D0),
+33 (D1), 36 (D4) and 37 (E7), all L or XL, plus 38 (E10, integer-bit hashes), which is S
+and is the only remaining item that arrives with a measured price already attached --
+11.54 booked it against `ssr_frag`'s 31,800 px, so it can be judged on a number rather
+than on tidiness.
 
 11.53 adds a third entry to the observation below, and the sharpest one: **a row can be wrong about
 what it is describing, not merely about why.** E8's row and section both named wind alone where the
@@ -2337,6 +2376,32 @@ Worth recording the inverse too, because it is the same discipline: one review f
 wrong (a budget compared in MB against MiB), and taking it would have replaced a correct number with
 a wrong one in two permanent documents. **Verify a correction before applying it, exactly as you
 would verify a row.**
+
+**11.58 is the fifth in a row, and it moves the pattern down a level: from rows that are wrong to
+TESTS that are wrong in the same way.** E2's row was mostly right — its one-line warning about the
+working-space contract was the most useful sentence in the entry — and it still carried a wrong
+number (32³, a size `.cube` does not produce) in the sentence right beside the warning. That is
+familiar. What is new is where the same failure turned up next.
+
+The gate's identity arm was written to catch the half-texel inset, said so in its docstring, **and
+was green with the inset deleted.** Not because the arm was weak, but because it ran on a path that
+structurally cannot see that mistake: the inset belongs to trilinear, and the default tetrahedral
+path addresses texels by integer index. The arm was measuring something real and reporting something
+false about what it covered.
+
+Nothing detected it except deleting the mechanism and watching the arm stay green. A passing run,
+seven passing arms and a full green suite all said the opposite. So the practice that matters is not
+"write an arm per claim" — it is **falsify every arm against the specific mutation its docstring
+names**, because an arm that cannot fail is indistinguishable from one that works right up until it
+matters. 11.21, 11.22 and 11.40 each recorded a version of this about features; this is the first
+time it landed on a claim about *coverage itself*, which is the harder one to notice because the
+number the arm prints is correct.
+
+The same spec's fixture failed twice in the same shape and both were silent: the probe table that
+separates the two interpolants measured **exactly zero** as a separable construction and **exactly
+zero again** as a channel-symmetric one, for two different and individually obvious reasons. Building
+it by reasoning produced a green instrument that tested nothing, twice; only measuring it caught
+either.
 
 And the sharpest detail is why one of the three survived so long: **the state it goes wrong in was
 unreachable from the harness.** `Light.shadow_layer` only goes stale when the shadow system is
