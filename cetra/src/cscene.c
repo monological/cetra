@@ -691,6 +691,59 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     warn_unknown_keys(water, known, sizeof(known) / sizeof(known[0]), "water");
 }
 
+/*
+ * layers[] on a material -- an ordered set of surfaces the splat map blends between.
+ *
+ * ORDERED, which is why it is an array and not an object: layer 0 is the one that takes
+ * whatever weight the splat map does not spend, so the position in the list is data. An
+ * object keyed by name would leave that to whatever order the JSON happened to be written
+ * in.
+ *
+ * `albedo` is REQUIRED and `surface` is not. A layer with no albedo has nothing to
+ * contribute and defaulting it would blend in a grey nobody asked for, where a layer with
+ * no surface map is an ordinary matte one -- the shader falls back to the geometric normal
+ * and the scalar roughness, which is a real material rather than a placeholder.
+ */
+static void parse_material_layers(CSceneMaterialOverride* out, const cJSON* m) {
+    static const char* const known[] = {"albedo", "surface", "uvScale"};
+    const cJSON* layers = cJSON_GetObjectItemCaseSensitive(m, "layers");
+    if (!layers)
+        return;
+    if (!cJSON_IsArray(layers)) {
+        log_warn("cscene: material '%s' key 'layers' is not an array; ignored", out->material);
+        return;
+    }
+    const cJSON* l = NULL;
+    cJSON_ArrayForEach(l, layers) {
+        if (out->layer_count >= CSCENE_MAX_MATERIAL_LAYERS) {
+            log_warn("cscene: material '%s' has more than %d layers; extras ignored",
+                     out->material, CSCENE_MAX_MATERIAL_LAYERS);
+            break;
+        }
+        if (!cJSON_IsObject(l)) {
+            log_warn("cscene: material '%s' has a layer that is not an object; skipped",
+                     out->material);
+            continue;
+        }
+        warn_unknown_keys(l, known, sizeof(known) / sizeof(known[0]), "material layer");
+
+        CSceneMaterialLayer* out_layer = &out->layers[out->layer_count];
+        memset(out_layer, 0, sizeof(*out_layer));
+        const cJSON* albedo = cJSON_GetObjectItemCaseSensitive(l, "albedo");
+        if (!cJSON_IsString(albedo) || !albedo->valuestring || !albedo->valuestring[0]) {
+            log_warn("cscene: material '%s' layer %d has no albedo; skipped", out->material,
+                     out->layer_count);
+            continue;
+        }
+        copy_string(out_layer->albedo, CSCENE_MAX_PATH, albedo);
+        const cJSON* surface = cJSON_GetObjectItemCaseSensitive(l, "surface");
+        if (cJSON_IsString(surface) && surface->valuestring && surface->valuestring[0])
+            copy_string(out_layer->surface, CSCENE_MAX_PATH, surface);
+        out_layer->has_uv_scale = get_float(l, "uvScale", &out_layer->uv_scale);
+        out->layer_count++;
+    }
+}
+
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* mats = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (!cJSON_IsObject(mats))
@@ -713,6 +766,9 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         out->has_sss = cJSON_IsObject(sss) && get_vec3(sss, "color", out->sss_color) &&
                        get_float(sss, "radius", &out->sss_radius);
 
+        out->layer_count = 0;
+        parse_material_layers(out, m);
+
         // Everything else is recorded by NAME and SHAPE only. Whether a key
         // exists is the application's business (cscene_apply.c owns the table),
         // so a parameter added there needs no change here -- and an unknown key
@@ -723,7 +779,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         cJSON_ArrayForEach(p, m) {
             if (!p->string || p->string[0] == '_') // _comment and friends
                 continue;
-            if (strcmp(p->string, "sss") == 0)
+            if (strcmp(p->string, "sss") == 0 || strcmp(p->string, "layers") == 0)
                 continue;
             // A string value is a texture path. Recorded apart from the numeric
             // params only because a float array cannot hold one; the key still
@@ -777,7 +833,8 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
             out->param_count++;
         }
 
-        if (!out->has_sss && out->param_count == 0 && out->texture_count == 0) {
+        if (!out->has_sss && out->layer_count == 0 && out->param_count == 0 &&
+            out->texture_count == 0) {
             log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }

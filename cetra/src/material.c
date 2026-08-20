@@ -96,6 +96,20 @@ const MaterialParam MATERIAL_PARAMS[] = {
      .type = MATERIAL_PARAM_INT, .enum_labels = WIND_MODE_NAMES,
      .enum_count = (int)(sizeof(WIND_MODE_NAMES) / sizeof(WIND_MODE_NAMES[0]))},
 
+    // The layer SET is an ordered array and cannot ride this table -- the scene
+    // file parses it directly. What is here is the rest of a layered material:
+    // the weights that select between the layers, and the two knobs that decide
+    // how the blend and the projection behave.
+    {"splat", "Layers", .type = MATERIAL_PARAM_TEXTURE,
+     .offset = offsetof(Material, splat_tex), .set_tex = set_material_splat_tex},
+    // 0 is a plain weighted average and reachable on purpose: it is what the
+    // height blend has to be measured against.
+    {"layerBlend", "Layers", MP(layer_blend_sharpness, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
+    // Below 1 the projections smear into each other over most of the surface;
+    // the useful range starts where one axis begins to dominate.
+    {"layerTriplanar", "Layers",
+     MP(layer_triplanar_sharpness, MATERIAL_PARAM_FLOAT, 1.0f, 16.0f)},
+
     // Its own group rather than "Base": this says nothing about how the surface
     // shades, only whether the shadow map may see it. Inert unless the material
     // is ALPHA_MASK with a positive alphaCutoff and an albedo texture.

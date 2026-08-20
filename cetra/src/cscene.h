@@ -138,6 +138,25 @@ typedef struct CSceneMaterialTexture {
     char path[CSCENE_MAX_PATH]; // resolved by the texture pool, not by the scene file
 } CSceneMaterialTexture;
 
+// Most layers a layered material can author. Must equal MATERIAL_MAX_LAYERS in
+// material.h; the app's resolver drops anything past it with a warning rather
+// than clamping, so the two disagreeing is loud instead of silent.
+#define CSCENE_MAX_MATERIAL_LAYERS 4
+
+// One authored layer of a layered surface (spec 11.60). Compound like `sss`
+// above and for the same reason: the two maps and the scale describe a single
+// material, and a flat key per layer would have to encode the index in its name.
+//
+// Both paths go through the texture pool exactly as CSceneMaterialTexture does,
+// and both load LINEAR -- the albedo is stored in un-decoded codes on purpose,
+// because the shader decodes after the blend.
+typedef struct CSceneMaterialLayer {
+    char albedo[CSCENE_MAX_PATH];  // rgb albedo in stored codes, a = height
+    char surface[CSCENE_MAX_PATH]; // rg = normal xy, b = roughness, a = AO
+    float uv_scale;                // world units per texture tile
+    bool has_uv_scale;
+} CSceneMaterialLayer;
+
 // Per-material overrides, keyed on the AUTHORED material name. Absent keys keep
 // whatever the model imported, so this is an override sheet rather than a
 // material definition. Formats that cannot express a property at all (glTF has
@@ -155,6 +174,10 @@ typedef struct CSceneMaterialOverride {
     bool has_sss;
     float sss_color[3]; // per-channel scatter WIDTH weight, not a tint
     float sss_radius;   // world units
+    // Layered surface. Compound for the same reason sss is, and an ARRAY on top
+    // of that, so it cannot ride the key/value table at all.
+    CSceneMaterialLayer layers[CSCENE_MAX_MATERIAL_LAYERS];
+    int layer_count; // 0 = an ordinary material
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a

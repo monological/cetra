@@ -588,6 +588,41 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             usable++;
         }
 
+        // The layer set, loaded once here for the same reason the textures above
+        // are. A layer whose albedo will not load is DROPPED rather than left
+        // half-resolved: layer 0 takes the splat's remainder, so a hole in the
+        // middle of the list would silently reassign every layer after it.
+        struct {
+            Texture* albedo;
+            Texture* surface;
+            float uv_scale;
+        } layers[CSCENE_MAX_MATERIAL_LAYERS] = {0};
+        int layer_count = 0;
+        for (int l = 0; l < mo->layer_count; l++) {
+            const CSceneMaterialLayer* src = &mo->layers[l];
+            Texture* albedo = load_texture_path_into_pool(scene->tex_pool, src->albedo, false);
+            if (!albedo) {
+                fprintf(stderr,
+                        "Warning: material '%s': layer %d cannot load albedo '%s'; the layer "
+                        "is dropped and the ones after it move up\n",
+                        mo->material, l, src->albedo);
+                continue;
+            }
+            layers[layer_count].albedo = albedo;
+            if (src->surface[0]) {
+                layers[layer_count].surface =
+                    load_texture_path_into_pool(scene->tex_pool, src->surface, false);
+                if (!layers[layer_count].surface)
+                    fprintf(stderr,
+                            "Warning: material '%s': layer %d cannot load surface map '%s'; "
+                            "shading it flat\n",
+                            mo->material, l, src->surface);
+            }
+            layers[layer_count].uv_scale = src->has_uv_scale ? src->uv_scale : 1.0f;
+            layer_count++;
+            usable++;
+        }
+
         if (usable == 0)
             continue;
 
@@ -595,7 +630,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         // array next rebuilds, and until then each material reads its fallback.
         // A label string rides the texture array but is not a texture, so it must
         // not dirty the mask array -- that would rebuild it for a scalar write.
-        if (mo->texture_count > enum_count)
+        if (mo->texture_count > enum_count || layer_count > 0)
             scene->mask_array_dirty = true;
 
         int tagged = 0;
@@ -613,6 +648,16 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             }
             for (int e = 0; e < enum_count; e++)
                 material_param_set(m, enums[e].slot, &enums[e].value);
+            for (int l = 0; l < layer_count; l++) {
+                set_material_layer_albedo_tex(m, l, layers[l].albedo);
+                set_material_layer_surface_tex(m, l, layers[l].surface);
+                m->layers[l].uv_scale = layers[l].uv_scale;
+            }
+            // Assigned last, since it is what arms the shader: a count raised
+            // before its layers are attached is a frame sampling layer indices
+            // that are still -1.
+            if (layer_count > 0)
+                m->layer_count = layer_count;
             tagged++;
         }
         printf("Scene file: %d override(s) on material '%s' (%d material(s))\n", usable,
