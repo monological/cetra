@@ -125,7 +125,7 @@ GLuint create_texture_2d_float(int width, int height, GLenum internal_format, GL
 // GL_FLOAT, so a byte buffer here would be read as floats. A consumer needing
 // integer or tiling volumes (noise) wants its own entry point.
 // glTexImage3D (not glTexStorage3D, which is GL 4.2) allocates level 0 only,
-// matching mask_array.c / shadow.c. pixels may be NULL for a render target.
+// matching material_texture_array.c / shadow.c. pixels may be NULL for a render target.
 GLuint create_texture_3d_float(int width, int height, int depth, GLenum internal_format,
                                GLenum data_format, const float* pixels) {
     GLuint tex = 0;

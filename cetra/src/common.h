@@ -32,8 +32,10 @@
 // engine queries at init (get_gl_max_texture_image_units).
 //
 // The seven scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
-// subsurface) collapsed into ONE sampler2DArray (TEXUNIT_MASKS, mask_array.h),
-// freeing the mid material units. The relocated shadow and IBL engine units took
+// subsurface) collapsed into ONE sampler2DArray (TEXUNIT_MATERIAL_ARRAY,
+// material_texture_array.h), freeing the mid material units -- and since spec
+// 11.60 that array carries a layered material's maps too, for no further unit.
+// The relocated shadow and IBL engine units took
 // 10-14 (shadow.h / ibl.h). Spec 9.2 claimed 7 + 9 for the two LTC area-light
 // tables; 10.7.1 packed them into one array on 7 and gave 9 to the Charlie
 // sheen environment (IBL_CHARLIE_TEXTURE_UNIT, ibl.h). Unit 15 is the spot
@@ -41,7 +43,7 @@
 // in render.c.
 #define TEXUNIT_ALBEDO           0
 #define TEXUNIT_NORMAL           1
-#define TEXUNIT_MASKS            2 // sampler2DArray: packed scalar masks
+#define TEXUNIT_MATERIAL_ARRAY   2 // sampler2DArray: packed masks and layer maps
 #define TEXUNIT_CLEARCOAT_NORMAL 3 // clearcoat normal map (a freed mask unit)
 #define TEXUNIT_HEIGHT           4 // POM height map (a freed mask unit, §4.11)
 #define TEXUNIT_EMISSIVE         5

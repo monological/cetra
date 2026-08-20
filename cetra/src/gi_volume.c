@@ -5,7 +5,6 @@
 #include "engine.h"
 #include "async_loader.h"
 #include "ibl.h"
-#include "mask_array.h"
 #include "render.h"
 #include "scene.h"
 #include "shadow.h"

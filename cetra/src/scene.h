@@ -186,11 +186,12 @@ typedef struct Scene {
     FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES];
     int fog_volume_count;
 
-    // Scalar material masks packed into one GL_TEXTURE_2D_ARRAY (built lazily
-    // once the source textures have loaded; see mask_array.h). dirty triggers a
-    // (re)build in the render loop when the async loader is idle.
-    struct MaterialMaskArray* mask_array;
-    bool mask_array_dirty;
+    // The scene's unique per-texel material images -- masks and layer maps --
+    // packed into one GL_TEXTURE_2D_ARRAY (built lazily once the source textures
+    // have loaded; see material_texture_array.h). dirty triggers a (re)build in
+    // the render loop when the async loader is idle.
+    struct MaterialTextureArray* material_textures;
+    bool material_textures_dirty;
     // POM (§4.11): height maps are resolved by filename convention once the async
     // texture loader drains (so the albedo/normal paths are populated); set after
     // the one-time resolve so the render loop does not re-scan every frame.

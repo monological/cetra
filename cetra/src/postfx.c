@@ -98,7 +98,7 @@ static bool create_color_fbo(int width, int height, GLenum internal_format, GLui
 
 // Render every slice of the froxel volume: attach the layer, tell the shader
 // which slice it is, draw the fullscreen quad. One draw per layer -- the
-// codebase's established idiom (shadow.c cascades, mask_array.c layers,
+// codebase's established idiom (shadow.c cascades, material_texture_array.c layers,
 // ibl.c cube faces) -- so no geometry shader and no new shader stage.
 // The VAO is bound once around the loop rather than per draw; the shared
 // draw_fullscreen_quad rebinds it every call, which is 63 redundant bind pairs

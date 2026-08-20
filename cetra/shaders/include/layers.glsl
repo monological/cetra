@@ -180,7 +180,7 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
     // rather than four decodes here -- the height blend hands almost every pixel
     // to a single layer, so the band where the space could matter is a couple of
     // texels wide. Note this does NOT extend to the mip chain, which averages
-    // the same codes at every minified texel; see mask_array.h.
+    // the same codes at every minified texel; see material_texture_array.h.
     vec3 albedo = vec3(0.0);
     vec3 normal = vec3(0.0);
     float rough = 0.0;

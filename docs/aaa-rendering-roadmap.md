@@ -126,7 +126,7 @@ under them.
   volume, cloud shape and detail noise, with `create_texture_3d_float` and
   `create_texture_3d_rgba8_tiling` in `texture.h`. This bullet read "no 3D textures exist anywhere"
   and was the premise for the 2D-array advice below it. What survives: raw `glTexImage3D`, never
-  `glTexStorage3D`, which is GL 4.2 — the `GL_TEXTURE_2D_ARRAY` idiom in `mask_array.c` and
+  `glTexStorage3D`, which is GL 4.2 — the `GL_TEXTURE_2D_ARRAY` idiom in `material_texture_array.c` and
   `shadow.c` still holds for that reason.
 - **Float-from-memory helpers exist**: `create_texture_2d_float` (LTC tables were the first user),
   `create_texture_3d_float` (froxel fog) and `create_texture_2d_array_float`, all in `texture.h`.
@@ -218,7 +218,7 @@ storage: the FFT impulse test's scratch reported 4.8e-4 at fp16 against 1.9e-7 a
 arithmetic, which is the storage's error masquerading as the transform's.
 
 **How much this offers `pbr_frag` is a separate question and the answer is "less".** Its four
-`sampler2DArray`s are `maskArray`, `shadowMaps`, `punctualShadowMaps` and `ltcTex`. The two shadow
+`sampler2DArray`s are `materialArray`, `shadowMaps`, `punctualShadowMaps` and `ltcTex`. The two shadow
 arrays are the closest pair — both `GL_DEPTH_COMPONENT24` through the same `init_depth_array` — but
 they are sized independently (`punctual_size_for` scales with layer count), so merging them means
 one of the two changing resolution. That is a quality trade, not the free consolidation water got,
@@ -579,7 +579,7 @@ Curvature-aware diffuse falloff under the existing screen-space SSS. **Analytic 
 pbr_frag units 7/9 go to LTC, and Penner's lookup has well-behaved analytic approximations (~10 ALU
 on skin pixels, fully deterministic). Curvature = `length(fwidth(N))/length(fwidth(P)) *
 curvature_scale` (silhouette noise smoothed by the downstream SSS blur; artist curvature mask
-reserved as future mask_array layer). Wiring: when `sssEnabled && subsurface > 0`, the Lambert term
+reserved as future material-array layer). Wiring: when `sssEnabled && subsurface > 0`, the Lambert term
 feeding att4 DiffuseOut is replaced by `skin_diffuse(NdotL_unclamped, curvature, subsurface_color)`;
 specular and `subsurfaceTransmission` back-light untouched. Material gains `curvature_scale` via the
 4-step scalar recipe.
@@ -803,7 +803,7 @@ cheap *because* of this wall, not in spite of it.
 
 **That list overstates the wall by one item, and its remaining entries are not interchangeable.**
 A unit buys a *declaration*, and a `sampler2DArray` declaration holds many layers — unit 2 already
-serves six masks that way, and `mask_array.h` says in as many words that the array exists to "scale
+serves six masks that way, and `material_texture_array.h` says in as many words that the array exists to "scale
 to new data by adding a layer". So:
 
 | blocked item | what it actually needs |
@@ -1318,15 +1318,15 @@ The real price is **resolution**: POM would march 2048² instead of 4096², on t
 wants the detail.
 
 Three preconditions, all inert today and all biting the instant height becomes a layer:
-- **The frame loop runs them in the wrong order.** `mask_array_ensure_built` (`engine.c:2430`) precedes
+- **The frame loop runs them in the wrong order.** `material_texture_array_ensure_built` (`engine.c:2430`) precedes
   `heights_ensure_resolved` (`:2433`), both defer until the loader is idle and both are run-once — so
   the array would be built with no height layer and never rebuilt. Swap them, and re-arm the rebuild
   on height discovery.
 - **Height arrives after the streaming path closes.** `resolve_height_maps` loads synchronously
-  (`import.c:1718`) *after* the async loader reports idle, outside the precondition `mask_array_build`
+  (`import.c:1718`) *after* the async loader reports idle, outside the precondition the array build
   is written against.
 - **One large layer is charged to all of them.** The canonical size is the largest present mask capped
-  at 2048, and every layer shares it (`mask_array.c:118-132`). Guard: fold only when the height map is
+  at 2048, and every layer shares it (`material_texture_array.c:118-132`). Guard: fold only when the height map is
   not the largest texture in the set — masks at 512² with a 2048² height map would take six existing
   layers from 8 MB to 134 MB for nothing.
 
@@ -1346,7 +1346,7 @@ derived by stripping a known base-map suffix, and finding one **auto-enables POM
 **6. A sixth mechanism exists that this entry never listed, and it is the one that actually worked —
 on the other program.** Consolidating identical declarations into an array took `water_frag` from
 16/16 to 10/16 in a single spec (11.45), which is six units where D0's best mechanism frees one. It
-does **not** transfer cheaply: `pbr_frag`'s four `sampler2DArray`s are `maskArray`, `shadowMaps`,
+does **not** transfer cheaply: `pbr_frag`'s four `sampler2DArray`s are `materialArray`, `shadowMaps`,
 `punctualShadowMaps` and `ltcTex`, and the closest pair — the two shadow arrays, both
 `GL_DEPTH_COMPONENT24` through the same `init_depth_array` — are sized independently, so merging them
 means one of the two changing resolution. That is a quality trade rather than the free consolidation
@@ -1820,7 +1820,7 @@ exactly. Same space D3's far-field handover works in, for the same reason: slope
 and a normal does not. Relief contrast measured 0.02881 → 0.02893, i.e. preserved rather than
 softened, which is the failure it was watched for.
 
-**Roughness is deliberately not done.** It comes off the shared `maskArray` layer rather than a
+**Roughness is deliberately not done.** It comes off the shared `materialArray` layer rather than a
 `sampler2D`, so stochastic sampling means transforming a packed multi-material `sampler2DArray` that
 six scalar masks share — much larger, and the least valuable of the three, since the visible tiling
 was carried by albedo and relief. **Also unmeasured: the cost.** Six fetches on the ground where
@@ -1954,8 +1954,8 @@ found by reading the code the entry describes:
    no clustered lights, no punctual shadows, no LTC, no GI. Right for an ocean, ruinous for the
    largest opaque surface in a scene.
 3. The declaration it says is missing already exists. `pbr_frag` is at exactly 16/16, so the entry is
-   right that there is no room for a NEW one — but `maskArray` is a `sampler2DArray` already declared,
-   already built and already bound on every draw, and `mask_layer_for` dedups by GL id and knows
+   right that there is no room for a NEW one — but `materialArray` is a `sampler2DArray` already declared,
+   already built and already bound on every draw, and `material_texture_layer_for` dedups by GL id and knows
    nothing about masks.
 
 **What shipped is a material feature, not a program**: N layers as further tenants of the material
@@ -2483,7 +2483,7 @@ not scheduled.
 | 39 | **D6 Heightfield backend** | S | **DONE (11.59).** The unlock, and it exists only to serve 40. `terrain_height_at` gains a SOURCE — analytic fbm or a filtered sample of a stored grid — while staying a pure function of `(state, x, z)`, so all **eight** consumers keep working unchanged and a NULL field is today's path byte-identical. Three contracts, not details: the filter is **C1** (bilinear's piecewise-constant derivative would facet normals at cell boundaries and reach the scatter's slope gate), out of domain **clamps to edge** (`forest.c:939` queries at a camera eye that can leave the extent), and thread-safety is **not** improved — the analytic path memoizes into file statics and stays unsafe. |
 | 40 | **D7 Erosion bake** | M | **DONE (11.59).** The largest visual gap against a shipped AAA terrain, and the reason 39 exists. **Erosion is a simulation over a grid, not a function of position** — the height at a point depends on the whole upstream watershed, so there is no `f(x,z)` to write and terrain must become DATA. That is why UE/Unity/Frostbite/Decima all consume a baked heightfield. **The silhouette is the smaller half**: the sim knows where water flowed, so its flow/deposit/wear masks put gravel in stream beds and bare rock on ridges — where `terrain_tint` today guesses from slope+altitude+noise, which is exactly why it reads as procedural. CPU, Eulerian, double-buffered, threaded like the cloud bake, whose zero-sync disjoint-slab shape gives **bytes identical at any thread count**. Droplet/Lagrangian erosion is refused on that same test. **Two corrections from building it.** Mei's own semi-Lagrangian transport LEAKS -- 3.06% of the sediment budget, since a bilinear gather conserves mass only for a divergence-free field -- so the load rides the fluxes instead and closure is 5e-09. And rain over evaporation IS the equilibrium depth: the first defaults flooded the whole terrain and the mask came out uniform. 452 ms at 512² x 220 on eight threads, release. |
 | 41 | **D8 Heightmap import/export** | S | **DONE (11.59).** Unifies the two producers by making them meet at one format: **the bake writes what the importer reads**, so dev-time bakes, ship-time loads, and a Gaea export drops into the same slot. `.r16` (headerless 16-bit, the literal UE/World Machine/Gaea interchange) plus 16-bit PNG on the read side via **`stbi_load_16`, vendored and called nowhere in this repo**. Deliberately not routed through `texture.c`, whose `texture_gl_formats` hard-wires *unsized* internal formats and has no path that can request 16-bit at all. **The masks are the half that is easy to drop and 11.59 dropped them first**: the save wrote height only, so a shipping load got eroded geometry shaded by the guess erosion exists to replace -- 40's opening failure, reached through 41's own round trip, with every arm green. A round-trip arm comparing only the geometry is not one. |
-| 42 | **D9 Terrain material layers** | M | **DONE (11.60).** By 11.45's rule (`ocean.glsl:63-78`) N layers are ONE shape — and the row was still one step short: it wanted "a program with room", when the declaration was already there. `maskArray` is bound on every draw and `mask_layer_for` knows nothing about masks, so layers became further tenants of it for **zero new declarations, zero new units and zero new programs**. The `pbr_skinned` precedent it cited is a second VERTEX shader over the same fragment shader; the only real second surface program, `water_frag`, has no clustered lights, punctual shadows, LTC or GI, which is right for an ocean and ruinous for terrain. **The test is whether the LIGHTING MODEL differs, not the texture count.** Shipped world-aligned (triplanar) with a height-weighted blend and a splat whose coordinate SPACE the material states — because world XZ cannot address a vertical surface and a mesh-local reading makes the weights swim on a moving prop. It also shipped inert in `apps/forest` and was caught in review: terrain writes UV1 as a literal zero, so the ground sampled one splat texel, through a green suite. |
+| 42 | **D9 Terrain material layers** | M | **DONE (11.60).** By 11.45's rule (`ocean.glsl:63-78`) N layers are ONE shape — and the row was still one step short: it wanted "a program with room", when the declaration was already there. `materialArray` is bound on every draw and `material_texture_layer_for` knows nothing about masks, so layers became further tenants of it for **zero new declarations, zero new units and zero new programs**. The `pbr_skinned` precedent it cited is a second VERTEX shader over the same fragment shader; the only real second surface program, `water_frag`, has no clustered lights, punctual shadows, LTC or GI, which is right for an ocean and ruinous for terrain. **The test is whether the LIGHTING MODEL differs, not the texture count.** Shipped world-aligned (triplanar) with a height-weighted blend and a splat whose coordinate SPACE the material states — because world XZ cannot address a vertical surface and a mesh-local reading makes the weights swim on a moving prop. It also shipped inert in `apps/forest` and was caught in review: terrain writes UV1 as a literal zero, so the ground sampled one splat texel, through a green suite. |
 | 43 | **D10 Virtual-texture compositing** | XL | What UE actually does, and **the destination rather than the next step**: 42 gets N layers for three declarations and four layers cost eight taps, so building a cache before there is anything to cache is the wrong order. Earns its keep when one of three things happens first — layer count past ~8, roads/decals compositing into the ground, or a terrain too large for one atlas (which is 36). Stage it: a baked composite atlas first (4096² covers forest's 1 km²), then true RVT. GL 4.1 has **no sparse textures**, so the cache is an ordinary atlas and feedback is a low-res MRT plus a readback. |
 | 44 | **D11 Large-world origin rebasing** | M/L | Independent of 39-43 and needed by anything wanting a world past a few kilometres: fp32 world coordinates cannot hold still, which is why UE4 capped at ~20 km and UE5 shipped fp64 Large World Coordinates. **It also fixes a defect that is already live and has nothing to do with world size** — the outermost shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) while the inner ones follow the camera, so terrain placed away from the origin loses its far shadows with no diagnostic. `terrain.h` already warns about this and works around it by centring the terrain. |
 

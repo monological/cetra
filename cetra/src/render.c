@@ -18,7 +18,7 @@
 #include "shader.h"
 #include "mesh.h"
 #include "material.h"
-#include "mask_array.h"
+#include "material_texture_array.h"
 #include "light.h"
 #include "camera.h"
 #include "common.h"
@@ -223,7 +223,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "clearcoatNormalTex", TEXUNIT_CLEARCOAT_NORMAL);
     uniform_set_int(u, "heightTex", TEXUNIT_HEIGHT); // POM height map (§4.11)
 
-    // Per-mask layer into the mask array (-1 = no texture -> scalar factor)
+    // Per-mask layer into the material texture array (-1 = none -> scalar factor)
     uniform_set_int(u, "roughnessLayer", material->roughness_layer);
     uniform_set_int(u, "metallicLayer", material->metallic_layer);
     uniform_set_int(u, "aoLayer", material->ao_layer);
@@ -492,12 +492,18 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             else
                 uniform_set_int(u, "numShadowLights", 0);
 
-            // Bind the material mask array (roughness/metallic/ao/opacity/
-            // microsurface/anisotropy/subsurface packed into one layered
-            // texture). Always bind to satisfy the sampler2DArray; each
-            // material's per-mask layer indices select or skip a layer.
-            mask_array_bind(scene ? scene->mask_array : NULL, TEXUNIT_MASKS);
-            uniform_set_int(u, "maskArray", TEXUNIT_MASKS);
+            // Bind the material texture array -- the scene's unique per-texel
+            // material images, masks and layer maps alike, packed into one
+            // layered texture. Always bind to satisfy the sampler2DArray; each
+            // material's layer indices select or skip a layer.
+            //
+            // The string and the GLSL identifier move TOGETHER. Nothing couples
+            // them at compile time, and a one-sided rename leaves the sampler
+            // defaulted to unit 0 -- where a sampler2D lives, which is undefined
+            // for the whole program and measured at 62,009 px a few lines down.
+            material_texture_array_bind(scene ? scene->material_textures : NULL,
+                                        TEXUNIT_MATERIAL_ARRAY);
+            uniform_set_int(u, "materialArray", TEXUNIT_MATERIAL_ARRAY);
 
             // NOT skipped for a depth-only draw, though it looks like free money
             // and was tried: the lighting environment below is a dozen
@@ -812,7 +818,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     // interleave freely, and a single loop switched program 64 times a frame on
     // apps/forest. Every switch back into the shading program re-runs its whole
     // per-program block -- the uniform writes are value-cached, but the shadow
-    // map, mask array, LTC, BRDF LUT, IBL, probe and GI binds are not -- inside
+    // map, material array, LTC, BRDF LUT, IBL, probe and GI binds are not -- inside
     // the one pass whose entire justification is being cheaper than the pass it
     // shields. Sweeping by class costs one extra walk of a flat array and binds
     // each program once.
@@ -1619,9 +1625,9 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // them.
     profiler_suspend(engine->profiler);
 
-    // The mask array must be packed before the first face: a capture taken with
+    // The material array must be packed before the first face: a capture taken with
     // the scalar fallbacks still in place bakes them into the cubemap forever.
-    mask_array_ensure_built(scene, engine);
+    material_texture_array_ensure_built(scene, engine);
 
     // Flatten from the CAMERA before the capture substitutes camera->position
     // with its own. The list is stamped per frame, so whoever builds it first

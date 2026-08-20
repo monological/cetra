@@ -23,7 +23,7 @@
 #include "sky.h"
 #include "water.h"
 #include "gi_volume.h"
-#include "mask_array.h"
+#include "material_texture_array.h"
 #include "texture.h"
 #include "import.h" // resolve_height_maps (POM height convention)
 #include "render.h"
@@ -2187,7 +2187,7 @@ void engine_end_moment_pass(Engine* engine) {
 
 // POM (§4.11): resolve "<name>_height" sibling maps once the async texture
 // loader drains (so albedo/normal paths are populated). Mirrors
-// mask_array_ensure_built's defer-until-idle idiom: owns its own idle-check and
+// material_texture_array_ensure_built's defer-until-idle idiom: owns its own idle-check and
 // the run-once flag, so the render loop reads as one symmetric call.
 static void heights_ensure_resolved(Scene* scene, Engine* engine) {
     if (!scene || scene->heights_resolved)
@@ -2442,9 +2442,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             async_loader_process_pending(engine->async_loader, current_scene->tex_pool, 5);
         }
 
-        // (Re)build the material mask array once its source masks have loaded
+        // (Re)build the material texture array once its sources have loaded
         // (a no-op until then; masks fall back to their scalar factors).
-        mask_array_ensure_built(current_scene, engine);
+        material_texture_array_ensure_built(current_scene, engine);
 
         // POM (§4.11): resolve height maps once the async texture loader drains.
         heights_ensure_resolved(current_scene, engine);

@@ -15,7 +15,7 @@
 #include "gi_volume.h"
 #include "water.h"
 #include "postfx.h"
-#include "mask_array.h"
+#include "material_texture_array.h"
 #include "program.h"
 #include "shader.h"
 #include "mesh.h"
@@ -199,9 +199,9 @@ void free_scene(Scene* scene) {
     }
 
     // Free the material mask texture array
-    if (scene->mask_array) {
-        free_material_mask_array(scene->mask_array);
-        scene->mask_array = NULL;
+    if (scene->material_textures) {
+        free_material_texture_array(scene->material_textures);
+        scene->material_textures = NULL;
     }
 
     // Free all skeletons
@@ -386,7 +386,7 @@ int add_material_to_scene(Scene* scene, Material* material) {
     scene->materials = new_materials;
     scene->materials[scene->material_count] = material;
     scene->material_count = new_count;
-    scene->mask_array_dirty = true; // a new material's masks must be (re)packed
+    scene->material_textures_dirty = true; // a new material's textures must be (re)packed
     return 0;
 }
 
@@ -409,7 +409,7 @@ static void _register_node_materials(Scene* scene, SceneNode* node) {
 // an EMPTY registry no matter how many meshes it drew. Four things read that
 // registry and all four were silently wrong for such a scene: subsurface
 // detection (so `apps/tree` authored subsurface on leaves and grass and never
-// once ran the SSS pass), mask-array packing, lookup by material name, and
+// once ran the SSS pass), material-texture-array packing, lookup by name, and
 // free_scene -- which meant those materials were also leaked, since nothing else
 // in the tree calls free_material.
 //

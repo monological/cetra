@@ -26,7 +26,7 @@
 // A depth array texture plus the one FBO that renders into its layers. Both
 // shadow arrays are built from here: they differ only in size and layer count.
 // glTexImage3D, never glTexStorage3D -- that is GL 4.2 and this targets 4.1,
-// the constraint mask_array.c writes down at its own allocation.
+// the constraint material_texture_array.c writes down at its own allocation.
 static void init_depth_array(GLuint* tex, GLuint* fbo, int size, int layers) {
     glGenTextures(1, tex);
     glBindTexture(GL_TEXTURE_2D_ARRAY, *tex);

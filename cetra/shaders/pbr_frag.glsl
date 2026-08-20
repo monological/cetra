@@ -131,7 +131,7 @@ uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); whit
 // reads .g and metallic reads .b (glTF ORM); the rest read .r. Anisotropy is
 // the one that is not a scalar mask: .rg carry a doubled-angle grain direction
 // and .b a per-strand identity.
-uniform sampler2DArray maskArray;
+uniform sampler2DArray materialArray;
 uniform int roughnessLayer;
 uniform int metallicLayer;
 uniform int aoLayer;
@@ -223,7 +223,7 @@ uniform float uShoreWetness;
 
 /*
  * Layered surfaces (spec 11.60). Declares no sampler either -- its layers are tenants of
- * maskArray, which this program has bound on every draw since 4.10, so N material layers
+ * materialArray, which this program has bound on every draw since 4.10, so N material layers
  * cost the ledger nothing at all. Gated on layerCount, which is 0 for every material that
  * has not asked, making the whole path an exact identity.
  */
@@ -1003,7 +1003,7 @@ void main() {
     bool layered = layerCount > 0;
     vec2 splatUV1 = (texCoords2Exists > 0 && uWindMode == 0) ? TexCoords2 : vec2(0.0);
     LayerSurface layerSurf =
-        sampleLayeredSurface(maskArray, WorldPos, normalize(Normal), splatUV1);
+        sampleLayeredSurface(materialArray, WorldPos, normalize(Normal), splatUV1);
 
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
@@ -1125,7 +1125,7 @@ void main() {
         roughnessMap = roughness * layerSurf.roughness;
     } else if (roughnessLayer >= 0) {
         // glTF: G channel contains roughness (works for grayscale too since R=G=B)
-        roughnessMap = roughness * texture(maskArray, vec3(uv, float(roughnessLayer))).g;
+        roughnessMap = roughness * texture(materialArray, vec3(uv, float(roughnessLayer))).g;
     }
     // Clamp roughness to avoid division issues
     roughnessMap = clamp(roughnessMap, 0.04, 1.0);
@@ -1133,7 +1133,7 @@ void main() {
     float metallicMap = metallic;
     if (metallicLayer >= 0) {
         // glTF: B channel contains metallic (works for grayscale too since R=G=B)
-        metallicMap = metallic * texture(maskArray, vec3(uv, float(metallicLayer))).b;
+        metallicMap = metallic * texture(materialArray, vec3(uv, float(metallicLayer))).b;
     }
 
     float aoMap = ao;
@@ -1147,7 +1147,7 @@ void main() {
         // with nothing to warn about, so those materials fall back to UV0.
         vec2 aoUV = (texCoords2Exists > 0 && uWindMode == 0) ? TexCoords2 : uv;
         // Apply occlusion strength (glTF occlusionTexture.strength)
-        float sampledAo = texture(maskArray, vec3(aoUV, float(aoLayer))).r;
+        float sampledAo = texture(materialArray, vec3(aoUV, float(aoLayer))).r;
         aoMap = mix(1.0, sampledAo, aoStrength);
     }
 
@@ -1175,12 +1175,12 @@ void main() {
     // material carrying both.
     float coverage = texAlpha;
     if (opacityLayer >= 0)
-        coverage *= texture(maskArray, vec3(uv, float(opacityLayer))).r;
+        coverage *= texture(materialArray, vec3(uv, float(opacityLayer))).r;
     float opacity = coverage * materialOpacity;
 
     // Microsurface detail - modulates roughness for fine surface detail
     if (microsurfaceLayer >= 0) {
-        float detail = texture(maskArray, vec3(uv, float(microsurfaceLayer))).r;
+        float detail = texture(materialArray, vec3(uv, float(microsurfaceLayer))).r;
         roughnessMap = clamp(roughnessMap * (0.5 + detail), 0.04, 1.0);
     }
 
@@ -1193,7 +1193,7 @@ void main() {
     vec2 anisoDir = vec2(1.0, 0.0);
     float anisoCoherence = 0.0;
     if (anisotropyLayer >= 0) {
-        vec3 texel = texture(maskArray, vec3(uv, float(anisotropyLayer))).rgb;
+        vec3 texel = texture(materialArray, vec3(uv, float(anisotropyLayer))).rgb;
         vec2 doubled = texel.rg * 2.0 - 1.0;
         anisoCoherence = min(length(doubled), 1.0);
         float grain = 0.5 * atan(doubled.y, doubled.x);

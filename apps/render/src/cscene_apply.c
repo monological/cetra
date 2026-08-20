@@ -633,9 +633,9 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         // Scene state, not per-material: the layer indices are assigned when the
         // array next rebuilds, and until then each material reads its fallback.
         // A label string rides the texture array but is not a texture, so it must
-        // not dirty the mask array -- that would rebuild it for a scalar write.
+        // not dirty the array -- that would rebuild it for a scalar write.
         if (mo->texture_count > enum_count || layer_count > 0)
-            scene->mask_array_dirty = true;
+            scene->material_textures_dirty = true;
 
         int tagged = 0;
         for (size_t i = 0; i < scene->material_count; i++) {

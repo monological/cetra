@@ -1,7 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#include "mask_array.h"
+#include "material_texture_array.h"
 #include "scene.h"
 #include "material.h"
 #include "texture.h"
@@ -13,10 +13,10 @@
 
 // Largest canonical layer size; masks bigger than this are downsampled. Keeps
 // the array's memory bounded (layer_count * size^2 * 4 bytes).
-#define MASK_ARRAY_CAP 2048
+#define MATERIAL_TEXTURE_ARRAY_CAP 2048
 
-static void mask_array_alloc_dummy(MaterialMaskArray* arr) {
-    // A 1x1 single-layer array so mask_array_bind always points the unit at a
+static void material_texture_array_alloc_dummy(MaterialTextureArray* arr) {
+    // A 1x1 single-layer array so material_texture_array_bind always points the unit at a
     // COMPLETE texture. The shader gates every read on layer >= 0 (so a scene
     // with no masks never samples it), but a sampler2DArray bound to a unit
     // should still reference a complete texture at draw time.
@@ -33,17 +33,17 @@ static void mask_array_alloc_dummy(MaterialMaskArray* arr) {
     arr->layer_count = 0;
 }
 
-MaterialMaskArray* create_material_mask_array(void) {
-    MaterialMaskArray* arr = calloc(1, sizeof(MaterialMaskArray));
+MaterialTextureArray* create_material_texture_array(void) {
+    MaterialTextureArray* arr = calloc(1, sizeof(MaterialTextureArray));
     if (!arr) {
-        log_error("Failed to allocate material mask array");
+        log_error("Failed to allocate material texture array");
         return NULL;
     }
-    mask_array_alloc_dummy(arr);
+    material_texture_array_alloc_dummy(arr);
     return arr;
 }
 
-void free_material_mask_array(MaterialMaskArray* arr) {
+void free_material_texture_array(MaterialTextureArray* arr) {
     if (!arr)
         return;
     if (arr->texture)
@@ -64,7 +64,7 @@ void free_material_mask_array(MaterialMaskArray* arr) {
 // Find texture t's layer in the dedup list (by GL id, so a shared glTF ORM
 // texture yields one layer), appending it if new. Returns -1 for an absent map.
 // The list is pre-sized to the upper bound, so no growth is needed.
-static int mask_layer_for(GLuint* ids, Texture** texs, int* count, Texture* t) {
+static int material_texture_layer_for(GLuint* ids, Texture** texs, int* count, Texture* t) {
     if (!t || t->id == 0)
         return -1;
     for (int i = 0; i < *count; i++)
@@ -75,7 +75,7 @@ static int mask_layer_for(GLuint* ids, Texture** texs, int* count, Texture* t) {
     return (*count)++;
 }
 
-int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine* engine) {
+int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene, struct Engine* engine) {
     if (!arr || !scene || !engine)
         return -1;
 
@@ -95,19 +95,19 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         Material* mat = scene->materials[m];
         if (!mat)
             continue;
-        mat->roughness_layer = mask_layer_for(ids, texs, &count, mat->roughness_tex);
-        mat->metallic_layer = mask_layer_for(ids, texs, &count, mat->metalness_tex);
-        mat->ao_layer = mask_layer_for(ids, texs, &count, mat->ambient_occlusion_tex);
-        mat->opacity_layer = mask_layer_for(ids, texs, &count, mat->opacity_tex);
-        mat->microsurface_layer = mask_layer_for(ids, texs, &count, mat->microsurface_tex);
-        mat->anisotropy_layer = mask_layer_for(ids, texs, &count, mat->anisotropy_tex);
+        mat->roughness_layer = material_texture_layer_for(ids, texs, &count, mat->roughness_tex);
+        mat->metallic_layer = material_texture_layer_for(ids, texs, &count, mat->metalness_tex);
+        mat->ao_layer = material_texture_layer_for(ids, texs, &count, mat->ambient_occlusion_tex);
+        mat->opacity_layer = material_texture_layer_for(ids, texs, &count, mat->opacity_tex);
+        mat->microsurface_layer = material_texture_layer_for(ids, texs, &count, mat->microsurface_tex);
+        mat->anisotropy_layer = material_texture_layer_for(ids, texs, &count, mat->anisotropy_tex);
 
         // The layered-surface tenants. Every slot is cleared before the live
         // prefix is filled, because lowering layer_count leaves the slots above
         // it still holding their textures: walking only the prefix would leave
         // stale indices pointing into a rebuilt array, and walking all of them
         // would spend layers on maps nothing samples.
-        mat->splat_layer = mask_layer_for(ids, texs, &count, mat->splat_tex);
+        mat->splat_layer = material_texture_layer_for(ids, texs, &count, mat->splat_tex);
         for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
             mat->layers[i].albedo_layer = -1;
             mat->layers[i].surface_layer = -1;
@@ -115,9 +115,9 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         int live = mat->layer_count < MATERIAL_MAX_LAYERS ? mat->layer_count : MATERIAL_MAX_LAYERS;
         for (int i = 0; i < live; i++) {
             mat->layers[i].albedo_layer =
-                mask_layer_for(ids, texs, &count, mat->layers[i].albedo_tex);
+                material_texture_layer_for(ids, texs, &count, mat->layers[i].albedo_tex);
             mat->layers[i].surface_layer =
-                mask_layer_for(ids, texs, &count, mat->layers[i].surface_tex);
+                material_texture_layer_for(ids, texs, &count, mat->layers[i].surface_tex);
         }
     }
 
@@ -129,7 +129,7 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     }
 
     if (count > engine->max_array_texture_layers) {
-        log_error("mask_array_build: %d unique textures exceeds GL_MAX_ARRAY_TEXTURE_LAYERS (%d)",
+        log_error("material_texture_array_build: %d unique textures exceeds GL_MAX_ARRAY_TEXTURE_LAYERS (%d)",
                   count, engine->max_array_texture_layers);
         free(ids);
         free(texs);
@@ -141,7 +141,7 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     //    largest (no detail loss unless a source exceeds the cap). Every layer
     //    shares these dimensions, so a mix of a large and several small sources
     //    over-allocates the small ones (memory = layers * w * h * 4 bytes);
-    //    lowering MASK_ARRAY_CAP trades detail for VRAM if that ever bites.
+    //    lowering MATERIAL_TEXTURE_ARRAY_CAP trades detail for VRAM if that ever bites.
     //
     //    Two dimensions rather than one square, and it is worth stating why: a
     //    non-square source forced a square at its LONGEST side, so apps/forest's
@@ -162,10 +162,10 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         if (texs[i]->height > height)
             height = texs[i]->height;
     }
-    if (width > MASK_ARRAY_CAP)
-        width = MASK_ARRAY_CAP;
-    if (height > MASK_ARRAY_CAP)
-        height = MASK_ARRAY_CAP;
+    if (width > MATERIAL_TEXTURE_ARRAY_CAP)
+        width = MATERIAL_TEXTURE_ARRAY_CAP;
+    if (height > MATERIAL_TEXTURE_ARRAY_CAP)
+        height = MATERIAL_TEXTURE_ARRAY_CAP;
 
     // 3. Allocate the array (mip 0; glGenerateMipmap fills the chain after the
     //    layers are drawn -- glTexStorage3D is GL 4.2, unavailable here).
@@ -185,7 +185,7 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     //    at the canonical size copies 1:1 (byte-exact).
     ShaderProgram* copy = get_engine_shader_program_by_name(engine, "mask_copy");
     if (!copy) {
-        log_error("mask_array_build: mask_copy program missing");
+        log_error("material_texture_array_build: mask_copy program missing");
         free(ids);
         free(texs);
         return -1;
@@ -245,21 +245,21 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     return 0;
 }
 
-void mask_array_bind(const MaterialMaskArray* arr, int unit) {
+void material_texture_array_bind(const MaterialTextureArray* arr, int unit) {
     glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(GL_TEXTURE_2D_ARRAY, arr ? arr->texture : 0);
 }
 
-void mask_array_ensure_built(struct Scene* scene, struct Engine* engine) {
-    if (!scene || !engine || !scene->mask_array_dirty)
+void material_texture_array_ensure_built(struct Scene* scene, struct Engine* engine) {
+    if (!scene || !engine || !scene->material_textures_dirty)
         return;
     // Defer until streaming finishes so every source mask is present; the
     // materials render with their scalar factors in the meantime. Covers the
     // sync path too (loader never busy -> builds the first frame).
     if (engine->async_loader && async_loader_is_busy(engine->async_loader))
         return;
-    if (!scene->mask_array)
-        scene->mask_array = create_material_mask_array();
-    if (scene->mask_array && mask_array_build(scene->mask_array, scene, engine) == 0)
-        scene->mask_array_dirty = false;
+    if (!scene->material_textures)
+        scene->material_textures = create_material_texture_array();
+    if (scene->material_textures && material_texture_array_build(scene->material_textures, scene, engine) == 0)
+        scene->material_textures_dirty = false;
 }

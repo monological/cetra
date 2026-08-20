@@ -4,7 +4,6 @@
 #include "probe.h"
 #include "thread.h" // cetra_sleep_ms
 #include "engine.h"
-#include "mask_array.h"
 #include "render.h"
 #include "shadow.h"
 #include "postfx.h"
