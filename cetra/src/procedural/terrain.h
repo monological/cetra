@@ -155,6 +155,16 @@ float terrain_height_at(const TerrainParams* p, float x, float z);
 // than to a special case. Same clamp policy as the height.
 float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z);
 
+// The drainage band over which the ground becomes a channel bed, as
+// terrain_bake_splat paints it. Exported because a consumer deciding what may
+// stand on that ground has to agree with what the ground looks like, and the
+// first version of the scatter's threshold stated the coupling in a comment.
+//
+// Flow is a LOG of drainage normalised to the catchment peak, so its mean sits
+// near 0.4 -- a threshold anywhere near that paints most of the map as riverbed.
+#define TERRAIN_CHANNEL_FLOW_LO 0.58f
+#define TERRAIN_CHANNEL_FLOW_HI 0.88f
+
 // Bake the erosion masks into a splat map -- `res` square, row-major, RGB,
 // `res * res * 3` bytes the caller allocates -- where .r/.g/.b are the weights
 // of a layered material's layers 1, 2 and 3 and layer 0 takes the remainder.

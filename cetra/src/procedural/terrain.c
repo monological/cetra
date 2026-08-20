@@ -278,7 +278,8 @@ bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb)
             // Flow is a LOG of drainage normalised to the catchment's peak, so
             // its mean sits near 0.4 and a threshold anywhere near that paints
             // the whole map as riverbed. The gravel band is the top few per cent.
-            float gravel = smoothstep01(0.58f, 0.88f, flow);
+            float gravel =
+                smoothstep01(TERRAIN_CHANNEL_FLOW_LO, TERRAIN_CHANNEL_FLOW_HI, flow);
 
             // A channel bed is a channel bed even where it is also flat and
             // silty, so gravel wins its share outright and the other two divide

@@ -22,20 +22,21 @@ WHAT EACH MAP IS FOR, since none of them is decoration:
            moves this band and nothing else. 128 is chosen because it is as far
            from both endpoints as a code can be, where sRGB's curvature is
            steepest and a spurious decode is worth ~55 codes.
-  layer 1  stripes at an exact period.  The triplanar read. The same texture must
-           appear at the same SIZE on the floor and on the wall; a top-down
-           projection stretches it by 1/cos(slope), which on a vertical wall is
-           unbounded. Counting stripes is a size measurement that survives any
-           change to exposure or shading.
+  layer 1  a CHECKER at an exact period, and the only layer with a relief
+           surface map. The triplanar read twice over: the same texture must
+           appear at the same SIZE on the floor and on the wall (a top-down
+           projection stretches it by 1/cos(slope), unbounded on a vertical
+           wall), and its relief is the only thing in the fixture that can make
+           triplanarBlendNormal's axis-sign flips move a pixel.
   layer 2  flat dark, height HIGH.      The height blend's winner.
   layer 3  flat light, height LOW.      Its loser. Two flat colours rather than
            two patterns, so the transition between them is the only structure in
            that band and its WIDTH is directly measurable.
 
-The surface map is SHARED by all four layers, deliberately: `mask_layer_for`
-dedups by GL id, so one file used four times must occupy exactly one array layer.
-That is the dedup path, exercised by a fixture that would otherwise never touch
-it.
+The flat surface map is SHARED by layers 0, 2 and 3, deliberately:
+`mask_layer_for` dedups by GL id, so one file used three times must occupy
+exactly one array layer. That is the dedup path, exercised by a fixture that
+would otherwise never touch it.
 
 THE SPLAT IS THE FIXTURE'S OTHER HALF. Its lower band selects the four layers in
 four hard columns -- each a single layer at full weight, so `layers-select` reads
@@ -95,6 +96,21 @@ SURFACE_NORMAL_XY = 128
 SURFACE_ROUGHNESS = 230
 SURFACE_AO = 255
 
+# Layer 1's relief. The tilt is large enough that the shading gradient across a
+# checker cell is unmistakable; the roughness and AO are far from the shared
+# map's so a layer-selection error in the surface pass has somewhere to show.
+RELIEF_TILT = 0.7
+RELIEF_ROUGHNESS = 90
+RELIEF_AO = 200
+RELIEF_NAME = "layer_fixture_relief.png"
+
+# Authored rather than left to create_material's default, because the gate
+# predicts the height blend's crossover position in closed form from it: a
+# prediction against an unstated default is a prediction about two things.
+LAYER_BLEND_SHARPNESS = 0.5
+# Must match LAYER_BLEND_RANGE in layers.glsl. Only the width read uses it.
+LAYER_BLEND_RANGE = 0.12
+
 
 def _albedo(rgb, height):
     """One layer map: rgb in stored codes, alpha carrying the layer's height."""
@@ -132,6 +148,31 @@ def _surface():
     return img
 
 
+def _surface_relief():
+    """Layer 1's own surface map, and the only one in the fixture with relief.
+
+    Without it the whole normal half of the feature is untestable. A flat tangent
+    normal is an exact algebraic identity through triplanarBlendNormal -- the
+    three swizzled terms collapse to the geometric normal times the weights,
+    which sum to one -- so the three axis-sign flips, the subtlest arithmetic in
+    the include, could be deleted and the lit golden would not move by a pixel.
+    Same for per-layer roughness and AO while every layer shares one map.
+
+    A diagonal ramp rather than a bump: it varies on both axes, so a projection
+    that has swapped or frozen a coordinate produces a visibly different shading
+    gradient, and it is monotone, so its sign is readable rather than symmetric.
+    """
+    img = np.zeros((TEX, TEX, 4), dtype=np.uint8)
+    t = np.linspace(-1.0, 1.0, TEX)
+    nx = np.tile(t[None, :], (TEX, 1))
+    nz = np.tile(t[:, None], (1, TEX))
+    img[:, :, 0] = np.round((nx * RELIEF_TILT * 0.5 + 0.5) * 255).astype(np.uint8)
+    img[:, :, 1] = np.round((nz * RELIEF_TILT * 0.5 + 0.5) * 255).astype(np.uint8)
+    img[:, :, 2] = RELIEF_ROUGHNESS
+    img[:, :, 3] = RELIEF_AO
+    return img
+
+
 def _splat():
     """rgb = weights for layers 1..3; layer 0 is whatever is left over."""
     img = np.zeros((TEX, TEX, 3), dtype=np.uint8)
@@ -158,7 +199,7 @@ def _splat():
 
 LAYERS = [
     ("layer_fixture_grey.png", _albedo(GREY_CODE, 128)),
-    ("layer_fixture_checker.png", _checker()),
+    ("layer_fixture_checker.png", _checker()),  # pairs with RELIEF_NAME, not SURFACE_NAME
     ("layer_fixture_dark.png", _albedo(DARK_CODE, DARK_HEIGHT)),
     ("layer_fixture_light.png", _albedo(LIGHT_CODE, LIGHT_HEIGHT)),
 ]
@@ -179,9 +220,15 @@ def _assert_fixture_still_tests_something():
                 f"layers {flats[a]} and {flats[b]} are too close to tell apart; "
                 "layers-select would pass against a renderer that picked either")
 
-    assert DARK_HEIGHT - LIGHT_HEIGHT >= 150, (
-        "the two height-blend layers barely differ in height, so the height blend "
-        "has nothing to decide and layers-height would read the same as linear")
+    # The height blend moves the crossover, it does NOT narrow the transition --
+    # the 10-90 width is 0.889 x LAYER_BLEND_RANGE and is algebraically
+    # independent of the heights. The first version of this assert claimed the
+    # opposite and was the reason layers-height could not see the height term at
+    # all. What must be guaranteed is that the two crossovers are far apart.
+    _shift = (DARK_HEIGHT - LIGHT_HEIGHT) / 255.0 * LAYER_BLEND_SHARPNESS * 0.5
+    assert _shift >= 0.15, (
+        f"the height blend shifts the crossover by only {_shift:.3f} of the ramp; "
+        "layers-height cannot separate that from the linear leg's 0.5")
 
     assert GREY_CODE == 128, (
         "layer 0 is no longer mid-code; layers-srgb's expected value is the whole "
@@ -227,6 +274,7 @@ def _write_maps():
     for name, arr in LAYERS:
         Image.fromarray(arr, "RGBA").save(os.path.join(HERE, name))
     Image.fromarray(_surface(), "RGBA").save(os.path.join(HERE, SURFACE_NAME))
+    Image.fromarray(_surface_relief(), "RGBA").save(os.path.join(HERE, RELIEF_NAME))
     Image.fromarray(_splat(), "RGB").save(os.path.join(HERE, SPLAT_NAME))
 
 
@@ -245,7 +293,10 @@ wall_nrm = [(0.0, 0.0, 1.0)] * 4
 wall_uv1 = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
 
 indices = [0, 1, 2, 0, 2, 3]
-uv0 = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+# DELIBERATELY not the same as UV1. Authored identically, "the splat reads UV1"
+# is untestable -- swapping the shader to TexCoords moves zero pixels. Doubled
+# and v-flipped, so a slip to UV0 shows as four splat tiles upside down.
+uv0 = [(0.0, 2.0), (2.0, 2.0), (2.0, 0.0), (0.0, 0.0)]
 
 _chunks = [
     (b"".join(struct.pack("<3f", *p) for p in floor_pos), 34962),
@@ -327,9 +378,15 @@ CSCN = {
     "materials": {
         "layered_surface": {
             "splat": SPLAT_NAME,
+            "layerBlend": LAYER_BLEND_SHARPNESS,
+            # Layer 1 takes the relief map; the rest share the flat one, which is
+            # also what exercises mask_layer_for's dedup (one file, three uses,
+            # one array layer).
             "layers": [
-                {"albedo": name, "surface": SURFACE_NAME, "uvScale": UV_SCALE}
-                for name, _ in LAYERS
+                {"albedo": name,
+                 "surface": RELIEF_NAME if i == 1 else SURFACE_NAME,
+                 "uvScale": UV_SCALE}
+                for i, (name, _) in enumerate(LAYERS)
             ],
         },
     },
@@ -353,7 +410,7 @@ def main():
     with open(os.path.join(HERE, "layer_fixture.cscn"), "w") as f:
         json.dump(CSCN, f, indent=1)
         f.write("\n")
-    print(f"wrote layer_fixture.gltf, layer_fixture.cscn and {len(LAYERS) + 2} maps at {TEX}x{TEX}")
+    print(f"wrote layer_fixture.gltf, layer_fixture.cscn and {len(LAYERS) + 3} maps at {TEX}x{TEX}")
 
 
 if __name__ == "__main__":

@@ -312,15 +312,17 @@ static float clump_density(float x, float z, float freq) {
     return n < 0.0f ? 0.0f : (n > 1.0f ? 1.0f : n);
 }
 
-// The drainage a tree tolerates standing in.
+// The drainage a tree tolerates standing in: the MIDPOINT of the band over which
+// terrain_bake_splat turns the ground into a channel bed, i.e. where gravel
+// stops being a tint and starts being what the surface is made of.
 //
-// Below the gravel band's own low edge in terrain_bake_splat (0.58), so the
-// exclusion begins before the splat starts painting a stream bed rather than
-// after -- a tree standing at the exact threshold would be knee-deep in the
-// first gravel texel. Flow is a LOG of drainage normalised to the catchment
-// peak, so its mean sits near 0.4 and this rejects a few per cent of the map
-// rather than half of it.
-#define TREE_MAX_FLOW 0.52f
+// Derived from the band rather than written down beside it. The first version
+// was a literal 0.52 whose comment claimed it sat "below the gravel band's low
+// edge... rejecting a few per cent of the map" -- and --scatter-probe measured
+// it rejecting 43.9%, because flow's mean is near 0.49 and 0.52 is barely above
+// it. A number that has to agree with another module's calibration should be
+// computed from it.
+#define TREE_MAX_FLOW ((TERRAIN_CHANNEL_FLOW_LO + TERRAIN_CHANNEL_FLOW_HI) * 0.5f)
 
 /*
  * Where the scatter put things, against the drainage it was placing into.
@@ -345,24 +347,31 @@ static void scatter_probe(const Placement* items, int count) {
     // The terrain's own distribution, on a coarse grid over the same margin the
     // scatter draws from -- sampling the whole extent would include an edge the
     // scatter never reaches and report a range no tree could have hit.
+    //
+    // The FRACTION over the limit is the number that matters, not the peak.
+    // erosion.c normalises flow to its own maximum, so a peak near 1.0 is true of
+    // any sim that ran at all; what says candidates existed to reject is how much
+    // of the domain the rule actually excludes.
     const int G = 64;
-    float land_max = 0.0f, land_sum = 0.0f;
+    float land_sum = 0.0f;
+    int land_over = 0;
     float margin = g_terrain.extent * 0.96f;
     for (int j = 0; j < G; j++) {
         for (int i = 0; i < G; i++) {
-            float x = -margin + (2.0f * margin) * ((float)i / (float)(G - 1));
-            float z = -margin + (2.0f * margin) * ((float)j / (float)(G - 1));
+            float x = terrain_field_node(margin, G, i);
+            float z = terrain_field_node(margin, G, j);
             float f = terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z);
             land_sum += f;
-            if (f > land_max)
-                land_max = f;
+            if (f > TREE_MAX_FLOW)
+                land_over++;
         }
     }
 
     printf("scatter-probe trees=%d tree_flow_max=%.4f tree_flow_mean=%.4f "
-           "land_flow_max=%.4f land_flow_mean=%.4f limit=%.4f\n",
+           "land_flow_mean=%.4f land_frac_over=%.4f limit=%.4f\n",
            count, (double)tree_max, count ? (double)(tree_sum / (float)count) : 0.0,
-           (double)land_max, (double)(land_sum / (float)(G * G)), (double)TREE_MAX_FLOW);
+           (double)(land_sum / (float)(G * G)), (double)land_over / (double)(G * G),
+           (double)TREE_MAX_FLOW);
 }
 
 // Rejection sampling against slope, against drainage, and against that density.

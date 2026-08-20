@@ -10582,13 +10582,25 @@ _LAYER_GEN = None
 
 
 def _layer_gen():
-    """The fixture generator, imported for its constants. Writes nothing on import."""
+    """The fixture generator, imported for its constants. Writes nothing on import.
+
+    Returns None if its dependencies are absent. The rest of gates.py is
+    stdlib-only and this is its single import of anything else -- the generator
+    pulls in numpy and Pillow -- so an environment without them would otherwise
+    abort a seven-minute run partway through with a ModuleNotFoundError, after
+    the GPU time is already spent. The arm SKIPs instead, like it does for a
+    missing fixture or an unbuilt binary.
+    """
     global _LAYER_GEN
     if _LAYER_GEN is None:
         path = os.path.join(ROOT, "assets", "gen_layer_fixture.py")
-        spec = importlib.util.spec_from_file_location("gen_layer_fixture", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        try:
+            spec = importlib.util.spec_from_file_location("gen_layer_fixture", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except ImportError as exc:
+            print(f"  layers            SKIP  (gen_layer_fixture needs {exc.name})")
+            return None
         _LAYER_GEN = mod
     return _LAYER_GEN
 
@@ -10605,18 +10617,26 @@ def _layer_wall(u, v):
     return (-g.HALF + u * 2.0 * g.HALF, v * g.WALL_H, -g.HALF)
 
 
-def _layer_sample(pix, w, h, project, world):
-    """The raw sRGB byte at a world point -- the painted code, in the albedo view."""
+def _layer_sample(frame, world):
+    """The raw sRGB byte at a world point -- the painted code, in the albedo view.
+
+    RAISES for a point that projects off-screen rather than clamping to the
+    border. A clamp returns a number, and a number is what an arm reads: a
+    fixture whose framing has drifted would go on passing against whatever pixel
+    happened to sit at the edge.
+    """
+    w, h, pix, project = frame
     px, py = project(world)
-    x = max(0, min(w - 1, int(round(px))))
-    y = max(0, min(h - 1, int(round(py))))
+    x, y = int(round(px)), int(round(py))
+    if x < 0 or y < 0 or x >= w or y >= h:
+        raise ValueError(f"layer sample at {world} projects to ({x}, {y}), outside {w}x{h}")
     o = (y * w + x) * 3
     return (pix[o] + pix[o + 1] + pix[o + 2]) / 3.0
 
 
-def _layer_scan(pix, w, h, project, points):
+def _layer_scan(frame, points):
     """Mean byte at each of a list of world points."""
-    return [_layer_sample(pix, w, h, project, p) for p in points]
+    return [_layer_sample(frame, p) for p in points]
 
 
 def _layer_transitions(vals, lo, hi):
@@ -10643,8 +10663,24 @@ def _layer_transitions(vals, lo, hi):
     return count
 
 
-def _layer_edge_width(vals, positions, lo, hi):
-    """Width, in the scan's own units, between the 10% and 90% crossings."""
+def _layer_ramp(vals, positions, lo, hi):
+    """(10-90 width, 50% crossover position) for a monotone ramp from lo to hi.
+
+    The CROSSOVER is the half that matters and the first version of this did not
+    return it. The 10-90 width of a height blend is 0.889 x LAYER_BLEND_RANGE and
+    is algebraically independent of the layer heights -- so an arm reading only
+    the width is measuring one shader constant, and deleting the height term
+    entirely leaves it unchanged. The height decides WHERE the two layers trade
+    places, not how fast.
+
+    Returns None if the scan is not monotone, rather than measuring it anyway: a
+    single sample the wrong side of a threshold inside a plateau otherwise
+    returns a spuriously narrow or wide width and passes silently.
+    """
+    drops = sum(1 for i in range(1, len(vals)) if vals[i] < vals[i - 1] - 8.0)
+    if drops:
+        return None
+
     def crossing(frac):
         t = lo + frac * (hi - lo)
         for i in range(1, len(vals)):
@@ -10654,10 +10690,10 @@ def _layer_edge_width(vals, positions, lo, hi):
                 return positions[i - 1] + k * (positions[i] - positions[i - 1])
         return None
 
-    first, last = crossing(0.1), crossing(0.9)
-    if first is None or last is None:
+    first, mid, last = crossing(0.1), crossing(0.5), crossing(0.9)
+    if first is None or mid is None or last is None:
         return None
-    return abs(last - first)
+    return (last - first, mid)
 
 
 def run_layers_gate(workdir):
@@ -10675,6 +10711,8 @@ def run_layers_gate(workdir):
         print("  layers-select     SKIP  (missing layer_fixture.cscn)")
         return []
     g = _layer_gen()
+    if g is None:
+        return []
 
     ALBEDO = ["--render-mode", "6", "--no-auto-exposure", "-E", "1.0"]
 
@@ -10688,9 +10726,10 @@ def run_layers_gate(workdir):
         if err:
             return None
         w, h, pix = _read_ppm(out)
-        cam = {"eye": g.CSCN["camera"]["eye"], "target": g.CSCN["camera"]["target"],
-               "fovy_deg": g.CSCN["camera"]["fov"]}
-        return w, h, pix, _projector(cam, w, h)
+        # From the COMMITTED scene file, which is what was rendered. Reading the
+        # generator's in-memory dict instead would let the gate keep passing
+        # while predicting a different scene than it measured.
+        return w, h, pix, _projector(_cscn_camera("layer_fixture.cscn"), w, h)
 
     base = shot("base")
     if base is None:
@@ -10707,7 +10746,7 @@ def run_layers_gate(workdir):
     readings = []
     for col, expect in sorted(codes.items()):
         u = (col + 0.5) / 4.0
-        got = _layer_sample(pix, w, h, project, _layer_floor(u, 0.25))
+        got = _layer_sample(base, _layer_floor(u, 0.25))
         readings.append((col, expect, got))
     worst = max(abs(got - expect) for _, expect, got in readings)
     ok = worst <= LAYER_SELECT_TOL
@@ -10718,14 +10757,20 @@ def run_layers_gate(workdir):
         failures.append("layers-select")
 
     # --- layers-srgb ---------------------------------------------------------
-    # 128 is as far from both endpoints as a code gets, where sRGB's curvature is
-    # steepest. A hardware decode left on the upload reads ~56 here and a missing
-    # shader decode reads ~187, so one number catches both directions.
-    grey = _layer_sample(pix, w, h, project, _layer_floor(0.125, 0.25))
-    ok = abs(grey - g.GREY_CODE) <= 2.0
-    print(f"  layers-srgb       {'PASS' if ok else 'FAIL'}  mid-grey layer reads "
-          f"{grey:.1f} (want {g.GREY_CODE} +/- 2; a doubled decode reads ~56, a missing "
-          f"one ~187)")
+    # TWO codes, on the WALL. The first version of this read the same pixel as
+    # layers-select's column 0, so nothing could fail it without also failing
+    # that -- four arms wearing five names. Two points are also what separates a
+    # curve from a line: a decode error that happens to be affine reproduces one
+    # sample and cannot reproduce two. The wall additionally routes the read
+    # through the Z projection, which no other known-code read touches.
+    srgb_reads = [(0.125, g.GREY_CODE), (0.625, g.DARK_CODE)]
+    got = [(_layer_sample(base, _layer_wall(u, 0.25)), want) for u, want in srgb_reads]
+    worst_srgb = max(abs(a - b) for a, b in got)
+    ok = worst_srgb <= 3.0
+    print(f"  layers-srgb       {'PASS' if ok else 'FAIL'}  wall reads "
+          + ", ".join(f"{a:.0f} (want {b})" for a, b in got)
+          + f"; worst off by {worst_srgb:.1f} (want <= 3. A doubled decode reads ~56 for "
+            f"128, a missing one ~187)")
     if not ok:
         failures.append("layers-srgb")
 
@@ -10740,27 +10785,34 @@ def run_layers_gate(workdir):
     us = [0.02 + i * (0.96 / (SCAN - 1)) for i in range(SCAN)]
     line = [_layer_wall(u, 0.78) for u in us]
 
-    def ramp_width(frame):
-        vals = _layer_scan(frame[2], frame[0], frame[1], frame[3], line)
-        return _layer_edge_width(vals, us, g.DARK_CODE, g.LIGHT_CODE)
+    def ramp(frame):
+        vals = _layer_scan(frame, line)
+        return _layer_ramp(vals, us, g.DARK_CODE, g.LIGHT_CODE)
 
+    # Closed form: the two layers trade places where their weights plus their
+    # scaled heights meet, i.e. at (1 + (dark - light)/255 * sharpness) / 2. The
+    # linear leg has no height term at all and crosses at exactly 0.5.
+    expect_mid = (1.0 + (g.DARK_HEIGHT - g.LIGHT_HEIGHT) / 255.0 * g.LAYER_BLEND_SHARPNESS) / 2.0
     linear = shot("linear", lambda d: d["materials"]["layered_surface"].update(
         {"layerBlend": 0.0}))
     if linear is None:
         print("  layers-height     ERROR while rendering the linear leg")
         failures.append("layers-height")
     else:
-        w_height = ramp_width(base)
-        w_linear = ramp_width(linear)
-        if w_height is None or w_linear is None:
-            print("  layers-height     FAIL  the ramp has no measurable transition")
+        rh, rl = ramp(base), ramp(linear)
+        if rh is None or rl is None:
+            print("  layers-height     FAIL  the ramp is not a measurable monotone transition")
             failures.append("layers-height")
         else:
-            ratio = w_height / w_linear
-            ok = ratio <= 0.35
-            print(f"  layers-height     {'PASS' if ok else 'FAIL'}  transition width "
-                  f"{w_height:.3f} of the ramp against linear's {w_linear:.3f}, ratio "
-                  f"{ratio:.3f} (want <= 0.35)")
+            w_height, mid_height = rh
+            w_linear, mid_linear = rl
+            ok = (abs(mid_height - expect_mid) <= 0.03 and abs(mid_linear - 0.5) <= 0.03
+                  and w_height / w_linear <= 0.35)
+            print(f"  layers-height     {'PASS' if ok else 'FAIL'}  crossover at "
+                  f"{mid_height:.3f} (want {expect_mid:.3f} +/- 0.03; the linear leg reads "
+                  f"{mid_linear:.3f}, want 0.500) -- the crossover is what the HEIGHTS "
+                  f"decide, where the width {w_height:.3f} vs {w_linear:.3f} only reads "
+                  f"LAYER_BLEND_RANGE")
             if not ok:
                 failures.append("layers-height")
 
@@ -10770,22 +10822,43 @@ def run_layers_gate(workdir):
     # coordinate and returns a wall that varies with x alone -- which is why the
     # count here is taken VERTICALLY, and why the fixture's layer 1 is a checker
     # rather than stripes.
-    ys = [0.06 + i * (0.38 / 63) for i in range(64)]  # v in the lower band only
+    # The SAME world length on both plates, or the two counts are not comparable.
+    # The wall's v spans WALL_H and the floor's spans 2*HALF, so the fractions
+    # differ; the span in world units is what has to match.
+    SPAN = 1.5
     col_u = 0.375  # centre of the checker column
-    wall_vals = _layer_scan(pix, w, h, project, [_layer_wall(col_u, v) for v in ys])
+    N = 96
+    wall_v0, wall_dv = 0.06, SPAN / g.WALL_H
+    floor_v0, floor_dv = 0.06, SPAN / (2.0 * g.HALF)
+    wall_vals = _layer_scan(
+        base, [_layer_wall(col_u, wall_v0 + wall_dv * i / (N - 1)) for i in range(N)])
+    floor_vals = _layer_scan(
+        base, [_layer_floor(col_u, floor_v0 + floor_dv * i / (N - 1)) for i in range(N)])
     crossings = _layer_transitions(wall_vals, g.STRIPE_DARK, g.STRIPE_LIGHT)
+    floor_cross = _layer_transitions(floor_vals, g.STRIPE_DARK, g.STRIPE_LIGHT)
 
-    span = 0.38 * g.WALL_H  # the scan's length in world units
-    expected = span / g.CHECKER_CELL_WORLD
-    floor_vals = _layer_scan(pix, w, h, project,
-                             [_layer_floor(col_u, 0.05 + i * (0.4 / 63)) for i in range(64)])
+    span = SPAN
+    # CROSSINGS, not cells: a scan of n cells crosses between them n-1 times, and
+    # where the scan starts relative to a cell boundary moves that by one either
+    # way. Comparing crossings against a cell count is what left this arm's lower
+    # bound below the value a correct renderer produces.
+    expected = span / g.CHECKER_CELL_WORLD - 1.0
     floor_range = max(floor_vals) - min(floor_vals)
 
-    ok = crossings >= expected * 0.6 and floor_range >= 100.0
-    print(f"  layers-triplanar  {'PASS' if ok else 'FAIL'}  wall shows {crossings} vertical "
-          f"checker crossings over {span:.2f} units (want >= {expected * 0.6:.1f}; a "
-          f"projection frozen on Y shows 0), floor control range {floor_range:.0f} "
-          f"(want >= 100)")
+    # Two-sided, and counted on BOTH plates. A lower bound alone passes a
+    # projection that has dropped layerUvScale (cells half the size, twice the
+    # count) and one frozen on X rather than Y (same count, wrong axis). What the
+    # feature actually claims is that ONE texture appears at ONE size on two
+    # perpendicular surfaces, so the two counts have to agree with each other and
+    # with the closed form.
+    lo, hi = expected - 1.5, expected + 1.5
+    ok = (lo <= crossings <= hi and lo <= floor_cross <= hi
+          and abs(crossings - floor_cross) <= 1 and floor_range >= 100.0)
+    print(f"  layers-triplanar  {'PASS' if ok else 'FAIL'}  wall {crossings} / floor "
+          f"{floor_cross} checker crossings over {span:.2f} units (want each in "
+          f"[{lo:.1f}, {hi:.1f}] and within 1 of each other; a projection frozen on Y "
+          f"reads 0 on the wall, a dropped uvScale roughly doubles both), floor range "
+          f"{floor_range:.0f} (want >= 100)")
     if not ok:
         failures.append("layers-triplanar")
 
@@ -10793,9 +10866,15 @@ def run_layers_gate(workdir):
     return failures
 
 
+# Stated here rather than read out of the app: see the arm below. It is the
+# midpoint of terrain.h's TERRAIN_CHANNEL_FLOW_LO/HI band -- where gravel stops
+# being a tint and becomes what the ground is made of -- and the arm asserts the
+# app agrees, so the two can drift apart loudly rather than silently.
+LAYERS_SCATTER_LIMIT = 0.73
+
 _SCATTER_PROBE = re.compile(
     r"scatter-probe trees=(\d+) tree_flow_max=([\d.]+) tree_flow_mean=([\d.]+) "
-    r"land_flow_max=([\d.]+) land_flow_mean=([\d.]+) limit=([\d.]+)")
+    r"land_flow_mean=([\d.]+) land_frac_over=([\d.]+) limit=([\d.]+)")
 
 
 def _layers_scatter_arm():
@@ -10822,18 +10901,27 @@ def _layers_scatter_arm():
 
     trees = int(m.group(1))
     tree_max, tree_mean = float(m.group(2)), float(m.group(3))
-    land_max, land_mean = float(m.group(4)), float(m.group(5))
+    land_mean, land_over = float(m.group(4)), float(m.group(5))
     limit = float(m.group(6))
 
-    # Three conditions, and the middle one is the anti-vacuity check.
-    holds = tree_max <= limit + 1e-4
-    has_channels = land_max >= 0.85
+    # The bar is stated HERE, not read out of the process under test. Taking it
+    # from the probe's own `limit=` meant raising TREE_MAX_FLOW -- the exact
+    # weakening this arm exists to prevent -- also raised the bar it was checked
+    # against, so the arm could never fail that way.
+    holds = tree_max <= LAYERS_SCATTER_LIMIT + 1e-4
+    agrees = abs(limit - LAYERS_SCATTER_LIMIT) < 1e-4
+    # And the anti-vacuity check is the FRACTION of the scatter's domain the rule
+    # rejects, not the peak. erosion.c normalises flow to its own maximum, so a
+    # peak near 1.0 is true of any sim that ran at all and says nothing about
+    # whether there were candidates to reject.
+    has_channels = land_over >= 0.02
     prefers_dry = tree_mean < land_mean
-    ok = trees > 0 and holds and has_channels and prefers_dry
+    ok = trees > 0 and holds and agrees and has_channels and prefers_dry
     print(f"  layers-scatter    {'PASS' if ok else 'FAIL'}  {trees} trees, drainage max "
-          f"{tree_max:.4f} against a limit of {limit:.4f}; the land itself reaches "
-          f"{land_max:.4f} (want >= 0.85, or the masks are flat and this proves nothing), "
-          f"tree mean {tree_mean:.4f} vs land {land_mean:.4f}")
+          f"{tree_max:.4f} against a gate-side limit of {LAYERS_SCATTER_LIMIT:.4f} (the app "
+          f"says {limit:.4f}); {land_over * 100:.1f}% of the scatter's domain is above it "
+          f"(want >= 2%, or the rule rejected nothing and this proves nothing), tree mean "
+          f"{tree_mean:.4f} vs land {land_mean:.4f}")
     return [] if ok else ["layers-scatter"]
 
 

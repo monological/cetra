@@ -8,6 +8,7 @@
  "materials": {
   "layered_surface": {
    "splat": "layer_fixture_splat.png",
+   "layerBlend": 0.5,
    "layers": [
     {
      "albedo": "layer_fixture_grey.png",
@@ -16,7 +17,7 @@
     },
     {
      "albedo": "layer_fixture_checker.png",
-     "surface": "layer_fixture_surface.png",
+     "surface": "layer_fixture_relief.png",
      "uvScale": 2.0
     },
     {
