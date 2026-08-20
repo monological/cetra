@@ -2699,6 +2699,29 @@ ORIGIN_UMBRA_MAX = 0.05
 # not at all; there is no near miss to calibrate against.
 ORIGIN_LIT_MIN = 0.90
 
+# Where the shift arms place the world. NEAR is chosen so that fp32 costs almost
+# nothing there -- which is the whole point of it: a correct shift must be nearly
+# free at a distance where there is nothing to recover, while anything that failed
+# to follow the delta costs the same at every distance, because a wrong address is
+# not a small error. Both are multiples of the app's 256-unit shift lattice, so
+# the new origin lands exactly on the camera rather than near it.
+ORIGIN_NEAR = 256.0
+ORIGIN_FAR = 262144.0
+# A shift at ORIGIN_NEAR may move this much of the frame. Measured 0.22%; a splat
+# that stayed behind reads 76%, and a camera re-pinned to an absolute reads the
+# same, so the gap between pass and fail here is two orders of magnitude.
+ORIGIN_SHIFT_MAX = 0.02
+# ... and at ORIGIN_FAR it must move a LOT, because there the shift is recovering
+# real precision. Measured 39.9%. Without this the arm above is also satisfied by
+# a build where --world-offset does nothing at all.
+ORIGIN_DEGRADE_MIN = 0.20
+# The velocity arm. The frame after a shift is compared against the steady state
+# two frames later, which is the same pair of runs still differing by precision
+# alone -- so the ratio asks whether the TRANSITION cost anything beyond what the
+# frames on either side of it already cost. Measured 1.08; leaving prev_view_proj
+# uncorrected reads 4.48, and there is nothing in between.
+ORIGIN_VELOCITY_MAX_RATIO = 2.0
+
 
 # 800x600 on a HiDPI display and 400x300 everywhere else -- so absolute counts
 # calibrated on one machine sit at zero margin on the other. Measured both ways:
@@ -2762,14 +2785,68 @@ def _origin_umbra_samples():
     return pts
 
 
+def _origin_forest(workdir, tag, offset, extra, frames="40", mode="6", size=("800", "450")):
+    """One forest run with the world placed `offset` units out, and its log.
+
+    The camera moves with the world, so every arm here compares two frames of the
+    same view and the only variable is how large the coordinates are. Framing is
+    given explicitly rather than left to the follow camera because a follow camera
+    reads the player's position, and the player is a physics body -- which is a
+    different subsystem's correctness, not this one's.
+
+    --render-mode 6 for the reason AGENTS.md gives: forest's Hillaire sky moves
+    tens of thousands of pixels run to run, and the albedo view is the only mode
+    with a 0 px floor. Every arm below measures its own floor anyway.
+    """
+    path = os.path.join(workdir, f"origin_{tag}.ppm")
+    cmd = [FOREST, "-x", "-f", frames, "-W", size[0], "-H", size[1], "--no-fog",
+           "--render-mode", mode, "--seed", "1337", "--world-offset", repr(offset),
+           "--cam-eye", f"{offset},40,{offset + 120}",
+           "--cam-target", f"{offset},10,{offset}", "-S", path] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(path):
+        return None, ""
+    return path, r.stdout + r.stderr
+
+
+def _origin_diff(a, b):
+    """Differing PIXELS and the worst channel step, as a fraction of the frame.
+
+    Not magick's AE, which counts differing CHANNELS on these frames and so reports
+    fractions above 1.0 -- readable as a comparison, wrong as a coverage figure.
+    """
+    wa, ha, pa = _read_ppm(a)
+    _, _, pb = _read_ppm(b)
+    n = worst = 0
+    for k in range(0, len(pa), 3):
+        d = max(abs(pa[k] - pb[k]), abs(pa[k + 1] - pb[k + 1]), abs(pa[k + 2] - pb[k + 2]))
+        if d:
+            n += 1
+            worst = max(worst, d)
+    return n / float(wa * ha), worst
+
+
 def run_origin_gate(workdir):
-    """A world placed away from the origin is still lit like one placed on it.
+    """A world away from the origin, and a world that moves under one.
 
       shadow-offset   the scene-fit shadow map covers the scene it belongs to rather
                       than the origin. Renders the cascade fixture where it was
                       authored, then translated by 16384 with --shadow-center
                       following, then translated with the centre pinned back at the
                       origin. The first two must shadow; the third must not.
+      origin-shift    a mid-run shift at a NEAR offset changes almost nothing. It is
+                      only where coordinates are measured from, so anything that
+                      failed to follow it shows here -- and shows at full size,
+                      since a wrong address is not a small error.
+      origin-degrade  the same comparison at a FAR offset changes a lot, because
+                      there the shift is recovering precision that was really lost.
+                      Without it the arm above passes on a build where placing the
+                      world does nothing at all.
+      origin-velocity the frame after a shift reports no more motion than the frames
+                      either side of it. The velocity buffer is a DIFFERENCE of two
+                      transforms, so a previous-frame twin that missed the delta
+                      prints the whole translation as one frame of screen-wide
+                      motion -- which no other arm here can see.
 
     Read at --shadow-cascades 1, and that is a requirement rather than a default.
     The inner cascades are fitted to the camera frustum, so they follow an offset
@@ -2783,9 +2860,10 @@ def run_origin_gate(workdir):
     the map is centred, so "the map followed the scene" is measured against "it did
     not" instead of against a remembered number.
     """
+    failures = []
     if not os.path.exists(os.path.join(ROOT, "assets", "dir_shadow_fixture.gltf")):
         print("  shadow-offset SKIP  (missing dir_shadow_fixture.gltf)")
-        return []
+        return failures
 
     off = ORIGIN_SHADOW_OFFSET
     far = _origin_offset_fixture(workdir, off)
@@ -2805,7 +2883,7 @@ def run_origin_gate(workdir):
     }
     if not all(frames.values()):
         print("  shadow-offset ERROR while rendering the fixture")
-        return ["shadow-offset"]
+        return failures + ["shadow-offset"]
 
     pts = _origin_umbra_samples()
     try:
@@ -2820,14 +2898,80 @@ def run_origin_gate(workdir):
         pin_worst = min(pin_t(p) for p in pts)
     except ValueError as exc:
         print(f"  shadow-offset ERROR {exc}")
-        return ["shadow-offset"]
+        return failures + ["shadow-offset"]
 
     ok = (home_worst <= ORIGIN_UMBRA_MAX and far_worst <= ORIGIN_UMBRA_MAX
           and pin_worst >= ORIGIN_LIT_MIN)
     print(f"  shadow-offset {'PASS' if ok else 'FAIL'}  umbra at origin {home_worst:.4f}, "
           f"at {off:.0f} {far_worst:.4f} (want <= {ORIGIN_UMBRA_MAX}); "
           f"centre pinned back {pin_worst:.4f} (want >= {ORIGIN_LIT_MIN})")
-    return [] if ok else ["shadow-offset"]
+    if not ok:
+        failures.append("shadow-offset")
+
+    # --- the shift itself: near, far, and the frame it lands on ---------------
+    if not os.path.exists(FOREST):
+        print("  origin-shift  SKIP  (forest not built)")
+        return failures
+
+    shift20 = ["--origin-shift-at", "20"]
+    moved = {}
+    for label, dist in (("near", ORIGIN_NEAR), ("far", ORIGIN_FAR)):
+        plain, _ = _origin_forest(workdir, f"{label}_plain", dist, [])
+        shifted, log = _origin_forest(workdir, f"{label}_shift", dist, shift20)
+        if not (plain and shifted):
+            print(f"  origin-shift  ERROR while rendering forest at {dist:.0f}")
+            return failures + ["origin-shift"]
+        # An arm asserting a shift changed nothing is satisfied perfectly by a
+        # shift that never happened, so the log line is read, not assumed.
+        fired = sum(1 for ln in log.splitlines() if "origin shift:" in ln)
+        moved[label] = (_origin_diff(plain, shifted)[0], fired)
+
+    near_frac, near_fired = moved["near"]
+    far_frac, far_fired = moved["far"]
+
+    ok = near_fired == 1 and near_frac <= ORIGIN_SHIFT_MAX
+    print(f"  origin-shift  {'PASS' if ok else 'FAIL'}  at {ORIGIN_NEAR:.0f} a shift moves "
+          f"{100.0 * near_frac:.2f}% of the frame (want <= {100.0 * ORIGIN_SHIFT_MAX:.0f}%; a splat "
+          f"or a camera left behind reads 76%), and fired {near_fired} time (want exactly 1)")
+    if not ok:
+        failures.append("origin-shift")
+
+    ok = far_fired == 1 and far_frac >= ORIGIN_DEGRADE_MIN
+    print(f"  origin-degrade {'PASS' if ok else 'FAIL'}  at {ORIGIN_FAR:.0f} the same shift moves "
+          f"{100.0 * far_frac:.2f}% (want >= {100.0 * ORIGIN_DEGRADE_MIN:.0f}%: that is the "
+          f"precision it recovers, and without it the arm above passes on a no-op)")
+    if not ok:
+        failures.append("origin-degrade")
+
+    # --- Rule 1: the shift frame must not print the translation as motion -----
+    # forest has no --screenshot-every, so each frame is its own run ending on it.
+    # 400x300 and render mode 9: the velocity buffer, where a missed previous-frame
+    # transform is the only thing that can spike.
+    vel = {}
+    for frames in (21, 23):
+        plain, _ = _origin_forest(workdir, f"vel{frames}_plain", ORIGIN_NEAR, [], str(frames), "9",
+                                  ("400", "300"))
+        shifted, _ = _origin_forest(workdir, f"vel{frames}_shift", ORIGIN_NEAR, shift20,
+                                    str(frames), "9", ("400", "300"))
+        if not (plain and shifted):
+            print("  origin-velocity ERROR while rendering the velocity buffer")
+            return failures + ["origin-velocity"]
+        vel[frames] = _origin_diff(plain, shifted)[0]
+
+    # Frame 21 is the first after the shift; 23 is the same pair of runs two frames
+    # later, still differing by precision alone. The ratio is what isolates the
+    # TRANSITION from the steady state either side of it.
+    steady = max(vel[23], 1e-6)
+    ratio = vel[21] / steady
+    ok = ratio <= ORIGIN_VELOCITY_MAX_RATIO
+    print(f"  origin-velocity {'PASS' if ok else 'FAIL'}  the shift frame moves "
+          f"{100.0 * vel[21]:.2f}% of the velocity buffer against a steady {100.0 * steady:.2f}% "
+          f"two frames later, ratio {ratio:.2f} (want <= {ORIGIN_VELOCITY_MAX_RATIO}; leaving "
+          f"prev_view_proj uncorrected reads 4.48)")
+    if not ok:
+        failures.append("origin-velocity")
+
+    return failures
 
 
 def _flat_run_and_span(pix, w, h):
@@ -11124,7 +11268,8 @@ GATE_GROUPS = [
     ("sss-banding", "subsurface blur (kernel not visible as rings):", run_sss_banding_gate),
     ("dither", "output dither (8-bit contour bands, spec 11.24 / E1):", run_dither_gate),
     ("lut", "3D LUT colour grading (spec 11.58 / E2):", run_lut_gate),
-    ("origin", "a world away from the origin (spec 11.62 / D11):", run_origin_gate),
+    ("origin", "a world away from the origin, and one that moves under it (spec 11.62 / D11):",
+     run_origin_gate),
     ("terrain", "Heightfield terrain and erosion (spec 11.59 / D6-D8):", run_terrain_gate),
     ("layers", "layered surfaces (splat, height blend, triplanar; spec 11.60 / D9):",
      run_layers_gate),
