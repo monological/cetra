@@ -1838,7 +1838,7 @@ natural for the mesh is wrong unless the UVs agree with it.
 Operator* (HPG 2018).
 **Depends on:** nothing. **Wall 1:** avoided by construction (the fifth escape).
 
-### D6. Heightfield backend for terrain — Effort S/M
+### D6. Heightfield backend for terrain — Effort S/M — **DONE (spec 11.59)**
 `terrain_height_at(params, x, z)` is a pure function of position, and five documents assert that
 purity as a contract (`terrain.h:11-13, 42-45`, `forest.c:719-721`, D4 below, `specs/11.35:564`,
 `specs/11.36:489`). It is what lets **eight** consumers agree with nothing shared between them: the
@@ -1864,8 +1864,13 @@ analytic path memoizes a permutation table in file statics (`terrain.c:52-63`) a
 the header must say the field path is incidentally safe rather than imply a new guarantee.
 
 **Depends on:** nothing. **Owns foundations:** the grid D7, D8 and D9 all read.
+**Shipped as written**, and the seam held: all eight consumers took a field with no change, and
+the analytic path measured **0 px** on forest against a 0 px floor. The one thing the entry did
+not anticipate is that a field has to carry its own HEIGHT RANGE — `terrain_tint` normalised
+altitude by `TerrainParams.height`, which is the fbm's amplitude and inert once a field exists, so
+a 0..1200 import into a params that says 95 put the whole terrain over the snow line.
 
-### D7. Hydraulic + thermal erosion bake — Effort M
+### D7. Hydraulic + thermal erosion bake — Effort M — **DONE (spec 11.59)**
 The item that closes the largest visual gap against a shipped AAA terrain, and the reason D6 exists.
 
 **Erosion is a simulation over a grid, not a function of position.** The height at a point depends on
@@ -1897,9 +1902,20 @@ the result depends on scheduling and no thread count agrees with another. If 409
 GPU, `_water_fft_transform` (`water.c:1292-1315`) is the tree's worked N-stage ping-pong template.
 
 **Refs.** Mei, Decaudin & Hu, *Fast Hydraulic Erosion Simulation and Visualization on GPU* (2007).
-**Depends on:** D6 (hard). **Owns foundations:** the flow/deposit/wear masks D9 blends by.
+**Depends on:** D6 (hard). **Owns foundations:** the flow/deposit/wear masks D9 blends by, and the
+band-parallel bake primitive, now shared with the cloud noise bake it was copied from.
 
-### D8. Heightmap + mask import / export — Effort S
+**Two things this entry could not have known, both found by measurement.** Mei's own
+**semi-Lagrangian sediment transport leaks** — 3.06% of the budget over 220 iterations, because a
+bilinear gather conserves mass only for a divergence-free field. Moving the load by the FLUXES
+instead closes it to 5e-09. And **rain over evaporation IS the equilibrium water depth**: the
+first defaults put ten units of standing water over two-unit cells, so every cell drained into
+every other and the mask painted a kilometre of ground one colour. Cost, release build: **452 ms
+at 512² × 220 on eight threads, 1839 ms on one.** The same bake on the default debug preset is
+2.3 s / 14.8 s, because `build.sh` passes no `-O` at all — a fact worth knowing before quoting any
+CPU figure from this tree.
+
+### D8. Heightmap + mask import / export — Effort S — **DONE (spec 11.59)**
 The authoring path in and out, and the item that unifies the two producers: **the bake writes what
 the importer reads.** Dev-time bakes and saves; ship-time loads with no sim; a Gaea or World Machine
 export drops into the same slot. Without it, D7 is a demo and cetra has no answer to "an artist made
@@ -1915,6 +1931,13 @@ throughout; `stbi_loadf` appears only at `ibl.c:261`), because Gaea exports PNG1
 or float at all. This is CPU-side height data, not a texture load, and conflating the two would put a
 format the GL never sees behind a function whose whole job is choosing GL formats.
 **Depends on:** D6 (hard).
+
+**The masks are the half that is easy to drop, and 11.59 dropped them first.** The save wrote
+height only, so a shipping load got the eroded GEOMETRY and then shaded it with the
+slope-and-altitude guess this whole track exists to replace — the failure D7 opens by describing,
+arrived at through D8's own round trip, with every gate arm green. Measured flow 0.684 out, 0.000
+back. **A round-trip arm that compares only the geometry is not a round-trip arm**, which is the
+transferable part.
 
 ### D9. Terrain material layers — Effort M
 No layer-blending system of any kind exists in this engine — a sweep for splat, decal, detail-map,
@@ -2427,9 +2450,9 @@ not scheduled.
 | 36 | D4 Terrain **streaming** | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. **Inherits D3's clipmap at `8d04658`** — the rings-over-a-mip-pyramid half water never used is the half terrain needs — and its T-junction stitch, which is a better fix for the crack risk E5 left open than locking borders. **Re-scoped: this row was the only booked terrain item and it is the LAST of them, not the first.** Its own entry demanded streamed height DATA while depending on the surface being ANALYTIC for that stitch, and today there is nothing to stream at all — the height is a pure function with no stored grid. What turns terrain into data is erosion (39/40), not scale, so this now sits downstream of 39-43 and gets a figure when they land: 4096² fp32 is 67 MB, 8192² is 268 MB. |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 | 38 | E10 Integer-bit hashes | S | **Booked by 11.54, which deliberately did not do it.** Every stochastic site in the tree keys off `fract(sin(x) · 43758.5453)`, which is precision-sensitive and driver-variable — `sin` at a large argument is implementation-defined in its last bits and `fract` of the product amplifies that across the whole range. A PCG or Wang integer hash would be exactly reproducible; GLSL 330 has `uint` and bitwise ops, so nothing blocks it. Not folded into 11.54 because it is a **behaviour** change wherever a hash is live, where that spec's hash phase was a 0 px assertion — and because `ssr_frag.glsl:187` has already measured what re-forming a hash costs on a ray-marching consumer: **31,800 px**. Price it against that, not against tidiness. |
-| 39 | **D6 Heightfield backend** | S | The unlock, and it exists only to serve 40. `terrain_height_at` gains a SOURCE — analytic fbm or a filtered sample of a stored grid — while staying a pure function of `(state, x, z)`, so all **eight** consumers keep working unchanged and a NULL field is today's path byte-identical. Three contracts, not details: the filter is **C1** (bilinear's piecewise-constant derivative would facet normals at cell boundaries and reach the scatter's slope gate), out of domain **clamps to edge** (`forest.c:939` queries at a camera eye that can leave the extent), and thread-safety is **not** improved — the analytic path memoizes into file statics and stays unsafe. |
-| 40 | **D7 Erosion bake** | M | The largest visual gap against a shipped AAA terrain, and the reason 39 exists. **Erosion is a simulation over a grid, not a function of position** — the height at a point depends on the whole upstream watershed, so there is no `f(x,z)` to write and terrain must become DATA. That is why UE/Unity/Frostbite/Decima all consume a baked heightfield. **The silhouette is the smaller half**: the sim knows where water flowed, so its flow/deposit/wear masks put gravel in stream beds and bare rock on ridges — where `terrain_tint` today guesses from slope+altitude+noise, which is exactly why it reads as procedural. CPU, Eulerian, double-buffered, threaded like the cloud bake, whose zero-sync disjoint-slab shape gives **bytes identical at any thread count**. Droplet/Lagrangian erosion is refused on that same test. |
-| 41 | **D8 Heightmap import/export** | S | Unifies the two producers by making them meet at one format: **the bake writes what the importer reads**, so dev-time bakes, ship-time loads, and a Gaea export drops into the same slot. `.r16` (headerless 16-bit, the literal UE/World Machine/Gaea interchange) plus 16-bit PNG on the read side via **`stbi_load_16`, vendored and called nowhere in this repo**. Deliberately not routed through `texture.c`, whose `texture_gl_formats` hard-wires *unsized* internal formats and has no path that can request 16-bit at all. |
+| 39 | **D6 Heightfield backend** | S | **DONE (11.59).** The unlock, and it exists only to serve 40. `terrain_height_at` gains a SOURCE — analytic fbm or a filtered sample of a stored grid — while staying a pure function of `(state, x, z)`, so all **eight** consumers keep working unchanged and a NULL field is today's path byte-identical. Three contracts, not details: the filter is **C1** (bilinear's piecewise-constant derivative would facet normals at cell boundaries and reach the scatter's slope gate), out of domain **clamps to edge** (`forest.c:939` queries at a camera eye that can leave the extent), and thread-safety is **not** improved — the analytic path memoizes into file statics and stays unsafe. |
+| 40 | **D7 Erosion bake** | M | **DONE (11.59).** The largest visual gap against a shipped AAA terrain, and the reason 39 exists. **Erosion is a simulation over a grid, not a function of position** — the height at a point depends on the whole upstream watershed, so there is no `f(x,z)` to write and terrain must become DATA. That is why UE/Unity/Frostbite/Decima all consume a baked heightfield. **The silhouette is the smaller half**: the sim knows where water flowed, so its flow/deposit/wear masks put gravel in stream beds and bare rock on ridges — where `terrain_tint` today guesses from slope+altitude+noise, which is exactly why it reads as procedural. CPU, Eulerian, double-buffered, threaded like the cloud bake, whose zero-sync disjoint-slab shape gives **bytes identical at any thread count**. Droplet/Lagrangian erosion is refused on that same test. **Two corrections from building it.** Mei's own semi-Lagrangian transport LEAKS -- 3.06% of the sediment budget, since a bilinear gather conserves mass only for a divergence-free field -- so the load rides the fluxes instead and closure is 5e-09. And rain over evaporation IS the equilibrium depth: the first defaults flooded the whole terrain and the mask came out uniform. 452 ms at 512² x 220 on eight threads, release. |
+| 41 | **D8 Heightmap import/export** | S | **DONE (11.59).** Unifies the two producers by making them meet at one format: **the bake writes what the importer reads**, so dev-time bakes, ship-time loads, and a Gaea export drops into the same slot. `.r16` (headerless 16-bit, the literal UE/World Machine/Gaea interchange) plus 16-bit PNG on the read side via **`stbi_load_16`, vendored and called nowhere in this repo**. Deliberately not routed through `texture.c`, whose `texture_gl_formats` hard-wires *unsized* internal formats and has no path that can request 16-bit at all. **The masks are the half that is easy to drop and 11.59 dropped them first**: the save wrote height only, so a shipping load got eroded geometry shaded by the guess erosion exists to replace -- 40's opening failure, reached through 41's own round trip, with every arm green. A round-trip arm comparing only the geometry is not one. |
 | 42 | **D9 Terrain material layers** | M | No layer-blending system of any kind exists here — splat, decal, detail-map, triplanar and blend-weight all return zero hits outside vendored trees. Terrain is tinted per VERTEX at ~2.6 units, which is why the ground does not hold up close. **This was going to be booked L against Wall 1 and that would have been wrong**: by 11.45's rule (`ocean.glsl:63-78`) N layers are ONE shape, so two `sampler2DArray`s plus a weight source is **three declarations regardless of N**. Multi-layer terrain never needed virtual texturing — it needed a texture array and a program with room. Terrain tiles are ordinary Meshes, so the program follows `pbr_skinned`'s pattern, not `water_frag`'s bespoke VAO. |
 | 43 | **D10 Virtual-texture compositing** | XL | What UE actually does, and **the destination rather than the next step**: 42 gets N layers for three declarations and four layers cost eight taps, so building a cache before there is anything to cache is the wrong order. Earns its keep when one of three things happens first — layer count past ~8, roads/decals compositing into the ground, or a terrain too large for one atlas (which is 36). Stage it: a baked composite atlas first (4096² covers forest's 1 km²), then true RVT. GL 4.1 has **no sparse textures**, so the cache is an ordinary atlas and feedback is a low-res MRT plus a readback. |
 | 44 | **D11 Large-world origin rebasing** | M/L | Independent of 39-43 and needed by anything wanting a world past a few kilometres: fp32 world coordinates cannot hold still, which is why UE4 capped at ~20 km and UE5 shipped fp64 Large World Coordinates. **It also fixes a defect that is already live and has nothing to do with world size** — the outermost shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) while the inner ones follow the camera, so terrain placed away from the origin loses its far shadows with no diagnostic. `terrain.h` already warns about this and works around it by centring the terrain. |
@@ -2480,12 +2503,37 @@ backwards in a way worth recording: streaming is a problem you get once terrain 
 turns terrain into data is **erosion** -- a simulation over a grid, with no `f(x,z)` to write -- not
 scale. So 36 moves to the end of its own chain and 39 (S) and 41 (S) join 38 in the small column.
 
+**All three of those are now built** (11.59), which leaves the table with **42 (D9, terrain material
+layers, M)** as the next thing to do and the only booked item with a producer already shipped
+waiting on it: the flow / deposit / wear masks exist, round-trip through the heightmap format, and
+are consumed today by a per-VERTEX tint at 2.6 units. Everything else outstanding is 29 (C4), 32
+(D0), 37 (E7), 43 (D10), 44 (D11) and the re-scoped 36 -- all L or XL and none with a measurement
+demanding it -- plus 38 (E10), still S and still carrying `ssr_frag`'s 31,800 px.
+
 **The generalisable part is not about terrain.** 11.52 recorded that a row's stated reasons can rot;
 11.53 that a row can be wrong about what it describes; 11.56 that a row's premise can name a defect
 another spec already fixed. This is the fourth kind and the largest: **a table can be complete with
 respect to itself and still be missing a subject**, and no amount of reading the rows finds it,
 because the absence is not written anywhere. What found it was comparing against engines outside this
 document. Worth doing again for the tracks that have never had that comparison.
+
+**39, 40 and 41 are now built (11.59), and the fifth lesson is about the TEST rather than the row.**
+Three of that spec's eight planned arms were green against the exact mutation each existed to catch,
+and one arm the plan listed was never written at all. The sharpest was the filter arm: it was
+rewritten twice -- as a smoothness ratio, then against an analytic normal -- and passed a bilinear
+sampler both times, because `terrain_normal_at` differences over less than a cell and inside a cell a
+bilinear surface IS the linearisation that difference estimates. **The instrument could not see the
+property by construction, and nothing about it looked wrong.** The FIXTURE had the same defect a
+level down: at 85 samples per cycle the two interpolants differ by five 16-bit codes, so it could not
+have separated them whatever the arm did.
+
+**And the review found two functional defects that no arm could see, one of which the spec had
+specified and not built.** The mask round trip is the one to remember: the save wrote geometry and
+dropped the masks, so the shipping path produced eroded terrain shaded by the guess erosion exists to
+replace -- the feature's own opening failure, reached through its own save path, with the whole suite
+green. The transferable rule is narrow and hard: **a round-trip arm that compares only the payload it
+finds easiest to compare is not a round-trip arm**, and the half it skips is the half the feature was
+for.
 
 11.53 adds a third entry to the observation below, and the sharpest one: **a row can be wrong about
 what it is describing, not merely about why.** E8's row and section both named wind alone where the
