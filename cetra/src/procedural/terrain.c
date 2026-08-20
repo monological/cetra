@@ -245,6 +245,37 @@ float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
+/*
+ * What the ground is MADE OF here, in [0,1] per class: bare rock, dropped silt,
+ * channel bed. Grass is whatever is left.
+ *
+ * One function because there are two consumers and they must not disagree: the
+ * splat map decides what a layered terrain looks like, the vertex tint decides
+ * what an un-layered one looks like, and the scatter decides what may stand on
+ * either. All four thresholds lived in both consumers as literals, so a re-tune
+ * of the tint would silently stop matching the layer under it -- and the two are
+ * never live in the same frame, so there would be no in-frame contradiction to
+ * notice.
+ *
+ * `extra_rock` is the tint's patch-field boost, folded in before the max with
+ * wear so the combination stays exactly what it was. The splat passes 0.
+ */
+static void terrain_ground_classes(const TerrainParams* p, float x, float z, float slope,
+                                   float extra_rock, float out[3]) {
+    float wear = terrain_mask_at(p, TERRAIN_MASK_WEAR, x, z);
+    float deposit = terrain_mask_at(p, TERRAIN_MASK_DEPOSIT, x, z);
+    float flow = terrain_mask_at(p, TERRAIN_MASK_FLOW, x, z);
+
+    float steep = 1.0f - smoothstep01(0.62f, 0.88f, slope);
+    steep = steep + (1.0f - steep) * extra_rock;
+    // Combined with max rather than added: a steep face that also eroded is not
+    // twice as rocky.
+    float scoured = smoothstep01(0.10f, 0.45f, wear);
+    out[0] = steep > scoured ? steep : scoured;
+    out[1] = smoothstep01(0.05f, 0.28f, deposit);
+    out[2] = smoothstep01(TERRAIN_CHANNEL_FLOW_LO, TERRAIN_CHANNEL_FLOW_HI, flow);
+}
+
 bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb) {
     if (!p || !out_rgb || res < 2)
         return false;
@@ -262,24 +293,10 @@ bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb)
 
             vec3 n = {0.0f, 1.0f, 0.0f};
             terrain_normal_at(p, x, z, n);
-            float slope = n[1]; // 1 flat, 0 vertical
 
-            float wear = terrain_mask_at(p, TERRAIN_MASK_WEAR, x, z);
-            float deposit = terrain_mask_at(p, TERRAIN_MASK_DEPOSIT, x, z);
-            float flow = terrain_mask_at(p, TERRAIN_MASK_FLOW, x, z);
-
-            // Rock takes the steep ground AND the scoured ground, combined with
-            // max rather than added for the reason terrain_tint states: a face
-            // that is both steep and eroded is not twice as rocky.
-            float steep = 1.0f - smoothstep01(0.62f, 0.88f, slope);
-            float scoured = smoothstep01(0.10f, 0.45f, wear);
-            float rock = steep > scoured ? steep : scoured;
-            float silt = smoothstep01(0.05f, 0.28f, deposit);
-            // Flow is a LOG of drainage normalised to the catchment's peak, so
-            // its mean sits near 0.4 and a threshold anywhere near that paints
-            // the whole map as riverbed. The gravel band is the top few per cent.
-            float gravel =
-                smoothstep01(TERRAIN_CHANNEL_FLOW_LO, TERRAIN_CHANNEL_FLOW_HI, flow);
+            float cls[3];
+            terrain_ground_classes(p, x, z, n[1], 0.0f, cls);
+            float rock = cls[0], silt = cls[1], gravel = cls[2];
 
             // A channel bed is a channel bed even where it is also flat and
             // silty, so gravel wins its share outright and the other two divide
@@ -419,40 +436,29 @@ static void terrain_tint(const TerrainParams* p, float x, float z, float height,
     float patch = noise_perlin3_tiled(t, ox * 0.011f, 11.3f, oz * 0.011f, TERRAIN_NOISE_PERIOD);
     float grain = noise_perlin3_tiled(t, ox * 0.09f, 23.9f, oz * 0.09f, TERRAIN_NOISE_PERIOD);
 
-    float rockiness = 1.0f - smoothstep01(0.62f, 0.88f, slope);
-    // Bare ground creeps in where the patch field is high, independent of slope.
-    rockiness = rockiness + (1.0f - rockiness) * smoothstep01(0.30f, 0.62f, patch) * 0.45f;
     // Snow needs altitude AND a surface shallow enough to hold it, or peaks come
     // out frosted on their overhangs.
     float snowiness = smoothstep01(0.34f, 0.62f, alt) * smoothstep01(0.55f, 0.80f, slope);
     float dirtiness = 1.0f - smoothstep01(-0.35f, -0.05f, alt);
 
-    // WHERE WATER PUT THINGS, when a sim has run and said so.
+    // WHERE WATER PUT THINGS, when a sim has run and said so, through the same
+    // classification the splat map is baked from -- so the tinted look and the
+    // layered look cannot drift apart.
     //
-    // Everything above this line guesses at the answer from shape alone, which is
-    // the best a closed form can do and is why terrain shaded that way reads as
-    // procedural: the dirt is not where water would put dirt. These three come
-    // from the process that cut the valleys, so they agree with them by
-    // construction.
+    // Everything else here guesses at the answer from shape alone, which is the
+    // best a closed form can do and is why terrain shaded that way reads as
+    // procedural: the dirt is not where water would put dirt.
     //
-    // All three read 0 with no field installed, and every term below collapses to
-    // an exact identity at 0 -- smoothstep01 returns 0 below its low edge, and
-    // lerping by 0 returns the first operand unchanged in IEEE. So the analytic
-    // path is byte-for-byte what it was.
-    float wear = terrain_mask_at(p, TERRAIN_MASK_WEAR, x, z);
-    float deposit = terrain_mask_at(p, TERRAIN_MASK_DEPOSIT, x, z);
-    float flow = terrain_mask_at(p, TERRAIN_MASK_FLOW, x, z);
-
-    // Scoured ground shows its bedrock whatever its slope says. Combined with max
-    // rather than added: a steep face that also eroded is not twice as rocky.
-    float scoured = smoothstep01(0.10f, 0.45f, wear);
-    rockiness = rockiness > scoured ? rockiness : scoured;
-    float siltiness = smoothstep01(0.05f, 0.28f, deposit);
-    // High, and it has to be. Flow is a log of drainage volume normalised to the
-    // catchment's peak, so its MEAN sits near 0.4 -- every cell drains something.
-    // A threshold placed near that mean paints the whole map as riverbed, which is
-    // what the first pass did. A channel is the top few per cent, not the top half.
-    float wetness = smoothstep01(0.58f, 0.88f, flow);
+    // Every class reads 0 with no field installed except the slope term, and every
+    // term below collapses to an exact identity at 0 -- smoothstep01 returns 0
+    // below its low edge, and lerping by 0 returns the first operand unchanged in
+    // IEEE. So the analytic path is byte-for-byte what it was.
+    //
+    // The patch boost rides in as `extra_rock`: bare ground creeps in where that
+    // field is high, independent of slope.
+    float cls[3];
+    terrain_ground_classes(p, x, z, slope, smoothstep01(0.30f, 0.62f, patch) * 0.45f, cls);
+    float rockiness = cls[0], siltiness = cls[1], wetness = cls[2];
 
     vec3 c;
     // Grass to moss first, at the fine frequency: it is what stops a hillside
