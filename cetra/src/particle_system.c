@@ -67,6 +67,28 @@ void particle_system_update(ParticleSystem* s, float dt, float t) {
     }
 }
 
+void particle_system_shift_origin(ParticleSystem* s, const vec3 delta) {
+    if (!s)
+        return;
+    for (size_t i = 0; i < s->emitter_count; i++) {
+        ParticleEmitter* e = s->emitters[i];
+        if (!e)
+            continue;
+        // The spawn frame is re-synced from the node each tick, but not before
+        // this frame's spawns: leaving it stale puts one frame of new particles
+        // a whole delta from the emitter.
+        glm_vec3_sub(e->local_to_world[3], (float*)delta, e->local_to_world[3]);
+        if (e->pool) {
+            for (size_t k = 0; k < e->pool->count; k++)
+                glm_vec3_sub(e->pool->position[k], (float*)delta, e->pool->position[k]);
+        }
+        // The pool is the CPU backend's storage; a GPU backend keeps its own and
+        // says so through the vtable, the same split live_count already makes.
+        if (s->backend && s->backend->shift_origin)
+            s->backend->shift_origin(s->backend, e, delta);
+    }
+}
+
 void particle_system_render(ParticleSystem* s, const ParticleRenderContext* ctx) {
     if (!s || !s->backend)
         return;

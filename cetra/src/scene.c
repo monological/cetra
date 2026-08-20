@@ -70,7 +70,6 @@ Scene* create_scene() {
     glm_vec3_zero(scene->ambient_radiance); // no IBL and no authored ambient = black
     glm_vec3_zero(scene->world_origin);
     glm_vec3_zero(scene->pending_origin);
-    scene->origin_shift_pending = false;
     scene->on_origin_shift = NULL;
     scene->origin_shift_ctx = NULL;
     scene->origin_shift_distance = 0.0f;
@@ -373,32 +372,6 @@ void scene_update_particle_systems(Scene* scene, float dt, float t) {
         particle_system_update(scene->particle_systems[i], dt, t);
 }
 
-// Particles are spawned into WORLD space and integrated there, so a live
-// population does not follow its emitter's node the way a mesh follows its
-// parent -- it has to be moved itself, or it stays at the old origin until every
-// particle has aged out.
-static void scene_shift_particle_systems(Scene* scene, const vec3 delta) {
-    for (size_t i = 0; i < scene->particle_system_count; i++) {
-        ParticleSystem* sys = scene->particle_systems[i];
-        if (!sys)
-            continue;
-        for (size_t j = 0; j < sys->emitter_count; j++) {
-            ParticleEmitter* e = sys->emitters[j];
-            if (!e)
-                continue;
-            // The spawn frame is re-synced from the node each tick, but not
-            // before this frame's spawns: leaving it stale puts one frame of
-            // new particles a whole delta away from the emitter.
-            glm_vec3_sub(e->local_to_world[3], (float*)delta, e->local_to_world[3]);
-            if (e->pool) {
-                for (size_t k = 0; k < e->pool->count; k++)
-                    glm_vec3_sub(e->pool->position[k], (float*)delta, e->pool->position[k]);
-            }
-            if (sys->backend && sys->backend->shift_origin)
-                sys->backend->shift_origin(sys->backend, e, delta);
-        }
-    }
-}
 
 int add_material_to_scene(Scene* scene, Material* material) {
     if (!scene || !material)
@@ -482,12 +455,7 @@ void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, 
 void scene_set_world_origin(Scene* scene, const vec3 new_origin) {
     if (!scene)
         return;
-    if (glm_vec3_eqv((float*)new_origin, scene->world_origin)) {
-        scene->origin_shift_pending = false;
-        return;
-    }
     glm_vec3_copy((float*)new_origin, scene->pending_origin);
-    scene->origin_shift_pending = true;
 }
 
 // Only the ROOT's own children carry an absolute: original_transform is local, so
@@ -504,56 +472,56 @@ static void shift_node_tree(SceneNode* node, const vec3 delta) {
         shift_node_tree(node->children[i], delta);
 }
 
+/*
+ * Every absolute the scene owns, each moved by the subsystem that owns it.
+ *
+ * The delegation is the point rather than tidiness. A hand-written list in one
+ * file gives whoever adds a world-anchored field to probe.h or gi_volume.h no
+ * reason to ever open this one; a `*_shift_origin` beside the field they just
+ * added is in the file they are already editing. This is the same inversion the
+ * `*_publish_to_postfx` functions already use, and for the same reason.
+ *
+ * Two whole categories are deliberately absent, and knowing why is what keeps the
+ * list from growing back:
+ *
+ *  - Anything DERIVED per frame. Lights recompute global_position from their node
+ *    on every walk; emissive panels are re-placed from current transforms. The
+ *    graph shift below carries them.
+ *  - Anything the GPU addresses per texel from a world position -- a layered
+ *    material's splat rectangle, its tiling lattice. Those stay in AUTHORING
+ *    space forever and the shader reconstructs (include/world_origin.glsl). A
+ *    material shifted here would also have to be chased through every scene that
+ *    shares it, and a mesh added after a shift would arrive carrying an
+ *    unshifted one.
+ */
 void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
     if (!scene)
         return;
 
+    // Only the ROOT's own children carry an absolute local; the walk below them
+    // already describes the same world. Start the cache recursion at the children
+    // too: the root's own global is recomputed from its local by the next walk,
+    // so shifting it here would be undone while its prev_ kept the shift -- one
+    // frame of delta-sized velocity on anything parented directly to the root.
     if (scene->root_node) {
         for (size_t i = 0; i < scene->root_node->children_count; ++i) {
             SceneNode* child = scene->root_node->children[i];
-            if (child)
-                glm_vec3_sub(child->original_transform[3], (float*)delta,
-                             child->original_transform[3]);
+            if (!child)
+                continue;
+            glm_vec3_sub(child->original_transform[3], (float*)delta,
+                         child->original_transform[3]);
+            shift_node_tree(child, delta);
         }
-        shift_node_tree(scene->root_node, delta);
-    }
-
-    // Lights are NOT here: global_position is recomputed from the owning node on
-    // every walk, so the graph shift above already carries them.
-
-    for (size_t i = 0; i < scene->camera_count; ++i) {
-        Camera* cam = scene->cameras[i];
-        if (!cam)
-            continue;
-        glm_vec3_sub(cam->position, (float*)delta, cam->position);
-        glm_vec3_sub(cam->look_at, (float*)delta, cam->look_at);
     }
 
     for (int i = 0; i < scene->fog_volume_count; ++i)
         glm_vec3_sub(scene->fog_volumes[i].center, (float*)delta, scene->fog_volumes[i].center);
 
-    // The map is fitted about this, so it has to move with what it covers or the
-    // first shifted frame drops its far shadows -- the defect spec 11.62 phase 1
-    // gave this field to fix.
-    if (scene->shadow_system)
-        glm_vec3_sub(scene->shadow_system->scene_center, (float*)delta,
-                     scene->shadow_system->scene_center);
-
-    // A layered material's splat is addressed by a WORLD rectangle, so it is an
-    // absolute like any other and moves with the world it describes. Missing it
-    // does not degrade the ground, it re-addresses it: every texel of the splat
-    // reads somewhere else, and the surface comes back made of different
-    // materials entirely.
-    scene_sync_materials(scene);
-    for (size_t i = 0; i < scene->material_count; ++i) {
-        Material* m = scene->materials[i];
-        if (!m || m->splat_space != SPLAT_SPACE_WORLD_XZ)
-            continue;
-        m->splat_origin[0] -= delta[0];
-        m->splat_origin[1] -= delta[2];
-    }
-
-    scene_shift_particle_systems(scene, delta);
+    shadow_system_shift_origin(scene->shadow_system, delta);
+    reflection_probe_shift_origin(scene->probe, delta);
+    gi_volume_shift_origin(scene->gi_volume, delta);
+    for (size_t i = 0; i < scene->particle_system_count; ++i)
+        particle_system_shift_origin(scene->particle_systems[i], delta);
 
     glm_vec3_add(scene->world_origin, (float*)delta, scene->world_origin);
 }

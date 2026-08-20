@@ -221,8 +221,11 @@ typedef struct Scene {
      * positions and before others, which is the one state every rule here forbids.
      */
     vec3 world_origin;
+    // The origin scheduled for the next frame top. Equal to world_origin means
+    // nothing is pending, which is why there is no separate flag: the setter
+    // maintains exactly that invariant, so a boolean beside it would be a second
+    // statement of one fact.
     vec3 pending_origin;
-    bool origin_shift_pending;
     // Called after a shift has been applied, with the delta that was subtracted.
     // The honest admission that "hold nothing in world space" is not a contract
     // this engine can impose on an app: physics bodies, cached scatter positions

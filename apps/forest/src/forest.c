@@ -951,43 +951,18 @@ static void build_sky_and_sun(Engine* engine) {
 
 // --- callbacks -------------------------------------------------------------
 
-// Everything this app holds in world space that the engine cannot reach
-// (spec 11.62). The scene graph, the camera and the lights move themselves; what
-// is left is another subsystem's storage and this app's own idea of where the
-// ground is.
+// The one absolute this app owns that no library can reach (spec 11.62): the
+// terrain's HEIGHT FUNCTION, which is what the collider build, the scatter, the
+// water bed and the camera's floor clamp all ask where the ground is. Its mesh
+// moved with the graph, so leaving this behind separates the surface the player
+// walks on from the one that gets drawn.
+//
+// Everything else -- physics bodies, characters, their entities' cached
+// positions -- is the game framework's own state and is handled there.
 static void forest_on_origin_shift(const vec3 delta, void* ctx) {
-    Game* game = (Game*)ctx;
-
-    // The terrain's HEIGHT FUNCTION, which is the ground truth the collider, the
-    // scatter and the camera all query. Its mesh moved with the graph, so leaving
-    // this behind puts the surface the player walks on a whole delta from the one
-    // that gets drawn -- the two would not even disagree visibly, since neither
-    // is rendered.
+    game_on_origin_shift_default(delta, ctx);
     g_terrain.center[0] -= delta[0];
     g_terrain.center[1] -= delta[2];
-
-    // Jolt stores world positions and is single precision, so it does not follow
-    // a scene shift. The CharacterVirtual is separate from every body and has to
-    // be moved on its own.
-    PhysicsWorld* physics = game ? game_get_physics_world(game) : NULL;
-    if (physics) {
-        physics_world_shift_origin(physics, delta);
-        CharacterController* cc = g_player ? entity_get_character_controller(g_player) : NULL;
-        if (cc) {
-            vec3 p;
-            character_controller_get_position(cc, p);
-            glm_vec3_sub(p, (float*)delta, p);
-            character_controller_set_position(cc, p);
-        }
-    }
-
-    // The entity's OWN copy, which is what the follow camera reads. It is
-    // refreshed from the controller each step, but not before this frame draws --
-    // and a camera that reads the old value places itself a whole delta away,
-    // which the automatic shift then reads as more drift and shifts again. The
-    // symptom is an origin that oscillates rather than one that is merely late.
-    if (g_player)
-        glm_vec3_sub(g_player->position, (float*)delta, g_player->position);
 }
 
 static void on_init(Game* game) {
@@ -1100,6 +1075,15 @@ static void on_init(Game* game) {
     // WaterHeightFn directly and the surface can shoal against real terrain with
     // no heightmap stored anywhere and no data copied.
     if (g_args.water) {
+        // Water's bed domain is a half-size about the STORAGE origin with no
+        // centre of its own, so a world placed elsewhere shoals against terrain
+        // that is not under it. Refused rather than approximated: the two flags
+        // together produce a plausible frame that is wrong everywhere.
+        if (g_args.world_offset != 0.0f || g_args.origin_shift_distance > 0.0f)
+            fprintf(stderr, "forest: --water needs the world at the origin; "
+                            "--world-offset / --origin-shift-distance skip it\n");
+    }
+    if (g_args.water && g_args.world_offset == 0.0f && g_args.origin_shift_distance <= 0.0f) {
         Water* water = create_water();
         if (water) {
             water->level = g_args.water_level;
@@ -1220,23 +1204,21 @@ static void on_init(Game* game) {
     printf("Forest: %zu LOD chains built, %zu refused\n", g_chains_built, g_chains_refused);
 }
 
-// Snap the new origin to a coarse power-of-two lattice rather than taking the
-// camera exactly. An arbitrary camera position makes the delta an arbitrary
-// float, so every position in the world takes a fresh rounding on every shift;
-// a lattice point is exactly representable and, where it matters most -- within
-// a factor of two of the coordinates being moved -- the subtraction is exact.
+// The lattice the diagnostic shift snaps to. Matches what the engine derives
+// from ORIGIN_SHIFT_DISTANCE's default so the hand-driven and automatic paths
+// land on the same point; the snap itself belongs to the engine.
 #define ORIGIN_SHIFT_LATTICE 256.0f
 
 static void on_update(Game* game, double dt) {
-    // Diagnostic (--origin-shift-at), before the player guard so it runs on a
-    // scene with no character: this is about the world, not about who is in it.
-    if (g_args.origin_shift_at > 0 && g_scene && game->engine && game->engine->camera &&
-        game->engine->total_frames == (size_t)g_args.origin_shift_at) {
-        vec3 origin;
-        for (int i = 0; i < 3; ++i)
-            origin[i] = floorf(game->engine->camera->position[i] / ORIGIN_SHIFT_LATTICE + 0.5f) *
-                        ORIGIN_SHIFT_LATTICE;
-        scene_set_world_origin(g_scene, origin);
+    // Diagnostic (--origin-shift-at). Before the player guard, and `>=` with a
+    // latch rather than `==`: this runs on the FIXED-step clock, which may take
+    // zero or two steps in a frame, so an equality test can miss the frame it
+    // was asked for entirely.
+    static bool origin_shift_fired;
+    if (g_args.origin_shift_at > 0 && !origin_shift_fired && game->engine &&
+        game->engine->total_frames >= (size_t)g_args.origin_shift_at) {
+        origin_shift_fired = true;
+        engine_recentre_on_camera(game->engine, ORIGIN_SHIFT_LATTICE);
     }
 
     if (!g_player)

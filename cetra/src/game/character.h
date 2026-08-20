@@ -135,4 +135,13 @@ void update_all_character_controllers(struct EntityManager* em, const struct Phy
 /// Sync character positions to entities (call after physics update)
 void sync_character_controllers_to_entities(struct EntityManager* em);
 
+/// Subtract a world-origin shift from every character (spec 11.62).
+///
+/// A CharacterVirtual is not a body, so shifting the physics world does not
+/// reach it. The owning entity's cached position moves too: it is refreshed from
+/// the controller each step but not before this frame draws, and a follow camera
+/// reading the stale value places itself a whole delta away -- which an automatic
+/// threshold then reads as more drift and shifts again.
+void shift_all_character_controllers(struct EntityManager* em, const vec3 delta);
+
 #endif // _CHARACTER_H_

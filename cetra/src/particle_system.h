@@ -36,6 +36,13 @@ size_t particle_system_live_count(const ParticleSystem* s);
 // Step every emitter through the backend (call from the fixed-timestep update).
 void particle_system_update(ParticleSystem* s, float dt, float t);
 
+// Subtract a world-origin shift from every position this system holds
+// (spec 11.62): the spawn frame, each pool, and whatever the backend keeps of
+// its own. Particles are spawned into WORLD space and integrated there, so a
+// live population does not follow its emitter's node the way a mesh follows its
+// parent -- it stays at the old origin until every particle has aged out.
+void particle_system_shift_origin(ParticleSystem* s, const vec3 delta);
+
 // Acquire each emitter's instances and draw them. The caller sets up blend /
 // depth-mask state around this (particles are transparent).
 void particle_system_render(ParticleSystem* s, const ParticleRenderContext* ctx);

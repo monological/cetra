@@ -2,6 +2,9 @@
 #define LAYERS_GLSL
 
 #include "triplanar.glsl"
+// authoredPos: the tiling lattice and the splat rectangle are both locked to the
+// WORLD, so both read a position as an identity rather than as a location.
+#include "world_origin.glsl"
 
 /*
  * Layered surfaces, spec 11.60.
@@ -69,9 +72,13 @@ LayerSurface layerSurfaceNeutral(vec3 worldNormal) {
 
 // Where the splat is read, in its own space. See Material.splat_space: neither
 // reading generalises, so the material states which one it means.
+//
+// The world rectangle is authored, and stays authored: reconstructing here is
+// what lets `splat_origin` be a fixed property of the material rather than
+// something an origin shift has to chase across every material in the scene.
 vec2 layerSplatUV(vec3 worldPos, vec2 uv1) {
     if (splatSpace == 1)
-        return (worldPos.xz - splatDomain.xy) / max(splatDomain.zw, vec2(1e-4));
+        return (authoredPos(worldPos).xz - splatDomain.xy) / max(splatDomain.zw, vec2(1e-4));
     return uv1;
 }
 
@@ -119,6 +126,12 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
 
     vec4 w = layerWeights(arr, layerSplatUV(worldPos, uv1), n);
     vec3 tw = triplanarWeights(worldNormal, layerTriplanarSharpness);
+    // The tiling lattice is locked to the world, so it reads the AUTHORED
+    // position: a ground whose gravel slides a third of a tile because the
+    // engine re-centred is a ground that is not locked to anything. Taken once
+    // here rather than per layer -- the derivatives below are of the same value
+    // and a constant offset does not change them.
+    vec3 tilePos = authoredPos(worldPos);
     vec3 sgn = triplanarAxisSign(worldNormal);
 
     // The two world-position derivatives every tap's gradients are built from,
@@ -135,7 +148,7 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
     for (int i = 0; i < LAYERS_MAX; i++) {
         alb[i] = vec4(1.0, 1.0, 1.0, 0.5);
         float s2 = 1.0 / max(layerUvScale[i], 1e-4);
-        p[i] = worldPos * s2;
+        p[i] = tilePos * s2;
         if (w[i] <= 0.0 || layerAlbedoLayer[i] < 0)
             continue;
         alb[i] = triplanarSampleArray(arr, float(layerAlbedoLayer[i]), p[i], tw, sgn,

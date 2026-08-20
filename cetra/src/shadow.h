@@ -306,6 +306,11 @@ void free_shadow_map_array(ShadowSystem* system);
 void begin_shadow_pass(ShadowSystem* system, size_t caster_index);
 void end_shadow_pass(ShadowSystem* system);
 
+// Re-express the fit centre after a world-origin shift (spec 11.62). The map is
+// built around it, so it has to move with what it covers or the first shifted
+// frame drops its far shadows.
+void shadow_system_shift_origin(ShadowSystem* system, const vec3 delta);
+
 // Light space matrix computation
 void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, float ortho_size,
                                             float near_plane, float far_plane, mat4 dest);

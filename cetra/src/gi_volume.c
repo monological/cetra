@@ -104,6 +104,12 @@ void gi_volume_mark_dirty(GIVolume* gi) {
     gi->next_probe = 0;
 }
 
+void gi_volume_shift_origin(GIVolume* gi, const vec3 delta) {
+    if (!gi)
+        return;
+    glm_vec3_sub(gi->grid_min, (float*)delta, gi->grid_min);
+}
+
 bool gi_volume_active(const GIVolume* gi) {
     // Not merely allocated: a volume mid-first-sweep holds tiles that were never
     // written, and sampling those would show as black blotches that resolve over

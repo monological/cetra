@@ -163,6 +163,14 @@ void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program)
 // environment answer is only right when a probe's parallax box re-grounds
 // it; a probe-less miss stays empty and the march's own fades hide the
 // reach limits.
+void reflection_probe_shift_origin(ReflectionProbe* probe, const vec3 delta) {
+    if (!probe)
+        return;
+    glm_vec3_sub(probe->position, (float*)delta, probe->position);
+    glm_vec3_sub(probe->box_min, (float*)delta, probe->box_min);
+    glm_vec3_sub(probe->box_max, (float*)delta, probe->box_max);
+}
+
 void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, PostFX* fx) {
     if (!fx)
         return;

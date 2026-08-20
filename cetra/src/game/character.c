@@ -412,6 +412,27 @@ void update_all_character_controllers(EntityManager* em, const PhysicsWorld* wor
     }
 }
 
+void shift_all_character_controllers(EntityManager* em, const vec3 delta) {
+    if (!em)
+        return;
+
+    for (size_t i = 0; i < em->count; i++) {
+        Entity* e = em->entities[i];
+        if (!e || !e->active)
+            continue;
+
+        CharacterController* cc = entity_get_character_controller(e);
+        if (!cc || !cc->jolt_character)
+            continue;
+
+        vec3 pos = GLM_VEC3_ZERO_INIT;
+        character_controller_get_position(cc, pos);
+        glm_vec3_sub(pos, (float*)delta, pos);
+        character_controller_set_position(cc, pos);
+        glm_vec3_copy(pos, e->position);
+    }
+}
+
 void sync_character_controllers_to_entities(EntityManager* em) {
     if (!em)
         return;

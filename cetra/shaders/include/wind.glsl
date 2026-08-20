@@ -17,13 +17,12 @@ uniform float uWindMaskMinY;   // local-space AABB Y bounds of the mesh
 uniform float uWindMaskMaxY;
 uniform int uWindMode;         // 0 = cloth, 1 = vegetation branch, 2 = vegetation leaf
 uniform float uWindPhaseVariation; // 0 = every object sways in lockstep
-// How far the world origin has been shifted since the world was authored
-// (spec 11.62). Zero on a scene that never moves.
-uniform vec3 uWorldOrigin;
 
 // The amplitude coefficients, shared with the CPU-side bound (wind.c) that lets
 // a displaced mesh be frustum-culled.
 #include "wind_bounds.glsl"
+// authoredPos, for the per-object phase below.
+#include "world_origin.glsl"
 // hash13, for the per-object phase below. Pure arithmetic -- no uniforms, no
 // samplers, no derivatives -- so it is safe in the four vertex programs this
 // chunk reaches.
@@ -61,8 +60,7 @@ uniform vec3 uWorldOrigin;
 float windObjectPhase(vec3 origin) {
     if (uWindPhaseVariation <= 0.0)
         return 0.0;
-    vec3 authored = floor(origin + uWorldOrigin + 0.5);
-    float h = hash13(authored, vec3(12.9898, 78.233, 37.719));
+    float h = hash13(floor(authoredPos(origin) + 0.5), vec3(12.9898, 78.233, 37.719));
     return h * uWindPhaseVariation * 6.2831853;
 }
 

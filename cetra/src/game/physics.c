@@ -833,10 +833,10 @@ void physics_world_shift_origin(PhysicsWorld* world, const vec3 delta) {
                                                  vec3_to_jpc_r(p), rot,
                                                  JPC_ACTIVATION_DONT_ACTIVATE);
     }
-    // The broadphase tree holds the old bounds until it is told otherwise, and
-    // every body in it moved at once -- which is the one case a rebuild is
-    // cheaper than the incremental updates it replaces.
-    physics_world_optimize(world);
+    // No broadphase rebuild. SetPositionAndRotation already notifies the tree of
+    // each body's new bounds, and a uniform translation preserves the partition's
+    // quality exactly -- a rebuild would discard every one of those incremental
+    // updates to reproduce the split it already had.
 }
 
 typedef struct {

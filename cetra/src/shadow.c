@@ -297,6 +297,12 @@ static void light_space_up(const vec3 light_dir, vec3 up) {
     }
 }
 
+void shadow_system_shift_origin(ShadowSystem* system, const vec3 delta) {
+    if (!system)
+        return;
+    glm_vec3_sub(system->scene_center, (float*)delta, system->scene_center);
+}
+
 void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, float ortho_size,
                                             float near_plane, float far_plane, mat4 dest) {
     vec3 light_dir;
@@ -1156,7 +1162,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         UniformManager* au = ss->tsm_absorb_program->uniforms;
         uniform_set_mat4(au, "lightSpaceMatrix", matrix);
         uniform_set_int(au, "albedoTex", 0);
-        wind_upload_to_program(scene->wind, au);
+        wind_upload_to_program(scene->wind, (const float*)scene->world_origin, au);
         uniform_set_float(au, "time", (float)engine->render_time);
         _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine);
@@ -1470,7 +1476,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // node walk). render_time is the frame's single render clock, which the
     // shading pass reads too -- that is what keeps a swaying caster and its
     // shadow in lockstep rather than merely close.
-    wind_upload_to_program(scene->wind, ss->depth_program->uniforms);
+    wind_upload_to_program(scene->wind, (const float*)scene->world_origin,
+                           ss->depth_program->uniforms);
     uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->render_time);
 
     // Resolved HERE, after the caster classification that tells it whether any

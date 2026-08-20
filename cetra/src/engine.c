@@ -2213,60 +2213,85 @@ static bool scene_has_subsurface(const Scene* scene) {
 }
 
 /*
- * Apply a scheduled origin shift (spec 11.62), scene half and engine half together.
+ * The lattice an origin shift snaps to, derived from the drift a scene tolerates.
  *
- * The engine half is what the Scene cannot reach: the live camera, the previous
- * view-projection, and the froxel volume's own stored camera. The last two are
- * MATRICES and the correction is not a subtraction. We need
- * M_new * p_new == M_old * p_old with p_old = p_new + delta, so the fix is a
- * right-multiply by a translation of +delta. Subtracting delta from the matrix's
- * own translation column is a different operation and gives a different answer
- * under any rotation -- which is to say, always.
- *
- * Getting it wrong is one frame of screen-wide velocity: every pixel reports the
- * whole shift as motion, TAA reprojects to nothing, and motion blur smears it.
- */
-/*
- * Automatic re-centring (spec 11.62 phase 5): once the camera has drifted further
- * than the scene asks to tolerate, schedule a shift onto a lattice point near it.
- *
- * SNAPPED, not taken from the camera exactly, and the reason is arithmetic rather
- * than tidiness. An arbitrary camera position makes the delta an arbitrary float,
- * so every position in the world takes a fresh rounding at every shift and the
- * error accumulates over a long traversal. A power-of-two lattice point is exactly
+ * SNAPPED rather than taken from the camera exactly, and the reason is arithmetic.
+ * An arbitrary camera position makes the delta an arbitrary float, so every
+ * position in the world takes a fresh rounding at every shift and the error
+ * accumulates over a long traversal. A power-of-two lattice point is exactly
  * representable, and within a factor of two of the coordinates being moved the
  * subtraction is exact (Sterbenz) -- which covers everything near the camera,
- * where every bit matters. Far outside it the subtraction rounds at the new
- * magnitude, which is the precision those coordinates were always going to have.
+ * where every bit matters.
  *
- * The lattice is derived from the threshold rather than fixed, so an app that
- * tightens one gets a proportionally finer other; a lattice coarser than the
- * threshold would let the snap land back where it started and never shift at all.
+ * Derived from the threshold rather than fixed, so tightening one tightens the
+ * other; a lattice coarser than the threshold would let the snap land back where
+ * it started and never shift at all. Half the threshold also bounds the residual
+ * at sqrt(3)/2 lattice < threshold, which is what stops a shift from immediately
+ * qualifying for another one.
+ *
+ * Returns 0 for a threshold that cannot produce one, including the subnormal and
+ * NaN inputs that would make log2f return -inf or NaN.
  */
-static void engine_schedule_origin_shift(Engine* engine, Scene* scene) {
+static float engine_origin_lattice(float threshold) {
+    if (!(threshold > 0.0f) || !isfinite(threshold))
+        return 0.0f;
+    float lattice = ldexpf(1.0f, (int)floorf(log2f(threshold * 0.5f)));
+    return isfinite(lattice) && lattice > 0.0f ? lattice : 0.0f;
+}
+
+void engine_recentre_on_camera(const Engine* engine, float lattice) {
+    if (!engine || !engine->camera)
+        return;
+    Scene* scene = get_current_scene(engine);
+    if (!scene || !(lattice > 0.0f))
+        return;
+    // The camera is in STORAGE space and the origin is authored, so the current
+    // origin has to be added back -- without it a second shift moves the world by
+    // snap(camera) - world_origin and drags it toward where it started.
+    //
+    // Y is deliberately left alone. Nothing in this engine is unbounded
+    // vertically, and several things are pinned to a world height that a vertical
+    // shift would leave behind: the water plane, the shadow catcher, the sky's
+    // ground projection, and any terrain whose centre is an XZ pair.
+    vec3 target;
+    glm_vec3_copy(scene->world_origin, target);
+    target[0] += floorf(engine->camera->position[0] / lattice + 0.5f) * lattice;
+    target[2] += floorf(engine->camera->position[2] / lattice + 0.5f) * lattice;
+    scene_set_world_origin(scene, target);
+}
+
+// Automatic re-centring (spec 11.62 phase 5): once the camera has drifted further
+// than the scene tolerates, re-centre on it.
+static void engine_schedule_origin_shift(const Engine* engine, const Scene* scene) {
     if (!scene || scene->origin_shift_distance <= 0.0f || !engine->camera)
         return;
     if (glm_vec3_distance(engine->camera->position, GLM_VEC3_ZERO) <=
         scene->origin_shift_distance)
         return;
-
-    float lattice = ldexpf(1.0f, (int)floorf(log2f(scene->origin_shift_distance * 0.5f)));
-    if (!(lattice > 0.0f))
-        return;
-    vec3 target;
-    for (int i = 0; i < 3; ++i)
-        target[i] = scene->world_origin[i] +
-                    floorf(engine->camera->position[i] / lattice + 0.5f) * lattice;
-    scene_set_world_origin(scene, target);
+    engine_recentre_on_camera(engine, engine_origin_lattice(scene->origin_shift_distance));
 }
 
+/*
+ * Apply a scheduled origin shift, the scene's half and the engine's together.
+ *
+ * The engine half is only what no owner republishes: the live camera, the
+ * previous view-projection, and the froxel volume's stored camera. Anything that
+ * IS republished every frame -- the fog volumes, the water plane, the reflection
+ * probe's parallax proxy -- must be shifted at its owner instead, because a
+ * correction applied to PostFX's mirror is overwritten before it is read.
+ *
+ * The two matrices are MATRICES and the correction is not a subtraction. We need
+ * M_new * p_new == M_old * p_old with p_old = p_new + delta, so the fix is a
+ * right-multiply by a translation of +delta. Subtracting delta from the matrix's
+ * own translation column is a different operation and gives a different answer
+ * under any rotation -- which is to say, always. Getting it wrong is one frame of
+ * screen-wide velocity: every pixel reports the whole shift as motion, TAA
+ * reprojects to nothing, and motion blur smears it.
+ */
 static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
     if (!scene)
         return;
     engine_schedule_origin_shift(engine, scene);
-    if (!scene->origin_shift_pending)
-        return;
-    scene->origin_shift_pending = false;
 
     vec3 delta;
     glm_vec3_sub(scene->pending_origin, scene->world_origin, delta);
@@ -2280,26 +2305,14 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
         glm_vec3_sub(engine->camera->look_at, delta, engine->camera->look_at);
     }
 
-    mat4 back;
-    glm_translate_make(back, delta);
-    glm_mat4_mul(engine->prev_view_proj, back, engine->prev_view_proj);
-    if (engine->postfx) {
-        PostFX* fx = engine->postfx;
-        glm_mat4_mul(fx->froxel_prev_view, back, fx->froxel_prev_view);
-        // The SSR parallax proxy is published at probe capture time and not per
-        // frame, so unlike the fog volumes and the water plane it does not follow
-        // on its own.
-        glm_vec3_sub(fx->probe_pos, delta, fx->probe_pos);
-        glm_vec3_sub(fx->probe_box_min, delta, fx->probe_box_min);
-        glm_vec3_sub(fx->probe_box_max, delta, fx->probe_box_max);
-    }
+    glm_translate(engine->prev_view_proj, delta);
+    if (engine->postfx)
+        glm_translate(engine->postfx->froxel_prev_view, delta);
 
-    // Captured RADIANCE and IRRADIANCE are wrong in CONTENT after a shift, not
-    // merely mis-addressed: both were rendered from a world position that has
-    // moved. The volume re-arms every probe; the reflection probe is re-captured
-    // by whoever owns its schedule.
-    if (scene->gi_volume)
-        gi_volume_mark_dirty(scene->gi_volume);
+    // The captures are NOT re-armed. A rigid translation moves every probe by the
+    // same delta as everything it sees, so the irradiance and radiance they hold
+    // are still what a probe at that point would record -- only the address
+    // changed, and their owners moved it above.
 
     // Last, so an app's callback sees a world that has fully moved: physics
     // bodies and cached positions are usually reconciled against the graph, and

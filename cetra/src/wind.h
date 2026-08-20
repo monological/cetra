@@ -43,7 +43,13 @@ void set_wind_name(Wind* wind, const char* name);
 // Location-guarded upload of the global wind uniforms to a program (mirrors
 // shadow_upload_cascade_uniforms). A NULL wind uploads uWindStrength = 0, so
 // every wind-aware shader early-outs and nothing moves.
-void wind_upload_to_program(const Wind* wind, UniformManager* u);
+//
+// `world_origin` is the scene's accumulated origin shift, and it is uploaded
+// whether or not there is wind -- it is the coordinate frame the program reads,
+// not part of the wind model. NULL means the origin has never moved. Every
+// program that displaces or depth-tests geometry comes through here, which is
+// what keeps them from disagreeing about where the world is.
+void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformManager* u);
 
 // An upper bound, in OBJECT space, on how far windOffset() can move any vertex
 // of a mesh with this response and mode -- so a wind-driven mesh can be bounded

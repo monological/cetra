@@ -108,6 +108,15 @@ void gi_volume_fit(GIVolume* gi, const vec3 aabb_min, const vec3 aabb_max);
 // move, a light edit, a material change.
 void gi_volume_mark_dirty(GIVolume* gi);
 
+// Re-express the grid's origin after a world-origin shift (spec 11.62).
+//
+// The ATLAS is deliberately kept: a rigid translation moves every probe by the
+// same delta as everything it sees, so the irradiance each one recorded is still
+// correct. Only where the grid SITS changed. Re-arming instead would re-capture
+// every probe -- six scene renders each -- to reproduce what is already stored,
+// and would do it at the un-shifted positions unless this ran first anyway.
+void gi_volume_shift_origin(GIVolume* gi, const vec3 delta);
+
 // Capture up to `rate` probes if any remain dirty. No-op on a converged volume,
 // which is the steady state. Must run BEFORE the frame's scene pass: it renders
 // the scene internally and leaves the default framebuffer bound.

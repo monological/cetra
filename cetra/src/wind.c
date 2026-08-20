@@ -46,9 +46,19 @@ void set_wind_name(Wind* wind, const char* name) {
     wind->name = safe_strdup(name);
 }
 
-void wind_upload_to_program(const Wind* wind, UniformManager* u) {
+void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformManager* u) {
     if (!u)
         return;
+    // Before the no-wind early-out, and not part of the wind model at all: it is
+    // the coordinate frame every geometry program has to agree on, and a scene
+    // with no wind still has a layered ground that tiles on it.
+    //
+    // It rides here because this is the one function every program that displaces
+    // or depth-tests geometry already calls, and those are exactly the programs
+    // that must not disagree about where the world is. A shading pass and a depth
+    // pass that reconstruct different positions do not merely look different --
+    // the depth test is one-sided, so the shading fragment loses.
+    uniform_set_vec3(u, "uWorldOrigin", world_origin ? (const float*)world_origin : GLM_VEC3_ZERO);
     // No wind (or none on this scene): strength 0 makes every wind-aware shader
     // early-out, so the scene renders exactly as it did before the feature.
     if (!wind) {
@@ -333,7 +343,7 @@ static void _wind_probe_row(WindProbeRig* rig, const char* kind, const Wind* win
     // Through the SAME function the real passes use, so the probe cannot be fed
     // a wind the renderer would not have -- including the normalize the struct
     // does not do and the shader does.
-    wind_upload_to_program(wind, u);
+    wind_upload_to_program(wind, NULL, u);
     uniform_set_float(u, "uWindResponse", mat->wind_response);
     uniform_set_int(u, "uWindMode", mat->wind_mode);
     uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);

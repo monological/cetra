@@ -149,6 +149,16 @@ bool game_is_paused(const Game* game) {
     return game ? game->paused : false;
 }
 
+void game_on_origin_shift_default(const vec3 delta, void* ctx) {
+    Game* game = (Game*)ctx;
+    if (!game)
+        return;
+    if (game->physics_world)
+        physics_world_shift_origin(game->physics_world, delta);
+    if (game->entity_manager)
+        shift_all_character_controllers(game->entity_manager, delta);
+}
+
 void game_set_scene(Game* game, Scene* scene) {
     if (!game)
         return;
@@ -156,6 +166,10 @@ void game_set_scene(Game* game, Scene* scene) {
     game->scene = scene;
     if (scene) {
         add_scene_to_engine(game->engine, scene);
+        // An app that needs more than this replaces it and calls back here; the
+        // hook is a single slot, and the framework's own state is what an app
+        // has no business remembering.
+        scene_set_origin_callback(scene, game_on_origin_shift_default, game);
     }
 }
 

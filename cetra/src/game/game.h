@@ -118,8 +118,16 @@ void game_unpause(Game* game);
 void game_toggle_pause(Game* game);
 bool game_is_paused(const Game* game);
 
-// Scene management
+// Scene management. Installs the default origin-shift callback below, so a game
+// gets large-world shifting correct without writing any of it.
 void game_set_scene(Game* game, Scene* scene);
+
+// Move the FRAMEWORK's world-space state after an origin shift (spec 11.62):
+// physics bodies, character controllers, and the entity positions cached from
+// them. Installed by game_set_scene; exposed so an app that needs to move
+// something of its OWN can replace the callback and still chain to this rather
+// than reimplement it. `ctx` is the Game.
+void game_on_origin_shift_default(const vec3 delta, void* ctx);
 Scene* game_get_scene(const Game* game);
 
 // Get fixed timestep (for physics calculations)

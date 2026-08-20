@@ -411,6 +411,13 @@ void set_engine_ss_scale(Engine* engine, int ss_scale);
 // frame top. Forced to 1 in headless without headless_jitter, which TAAU
 // needs to reconstruct from.
 void set_engine_render_scale(Engine* engine, float render_scale);
+// Re-centre the world on the camera, snapped to `lattice` (spec 11.62). Applies
+// at the next frame top like the render-scale switch above, and only on X and Z.
+//
+// The one place the snap is spelled, so a caller driving this by hand and the
+// automatic threshold cannot disagree about where the origin lands -- they did,
+// and the hand-driven copy was the one missing the current origin.
+void engine_recentre_on_camera(const Engine* engine, float lattice);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
 // 1 disables MSAA. Safe to call before init_engine (stored) or at runtime
 // (rebuilds the multisample attachments).

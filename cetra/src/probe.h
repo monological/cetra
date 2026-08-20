@@ -82,4 +82,14 @@ void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program)
 // for the SSR fallback; postfx never learns about Scene.
 void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, struct PostFX* fx);
 
+// Re-express the parallax origin and proxy box after a world-origin shift
+// (spec 11.62). Both are world absolutes, and both are re-published to PostFX
+// and re-bound to the surface program every frame -- so this has to happen HERE,
+// at the owner. Correcting either copy downstream is overwritten before it is read.
+//
+// The CAPTURE is not invalidated: a rigid translation moves the probe by exactly
+// the delta that moved everything it sees, so the radiance it recorded is still
+// what a mirror at that point would show. Only the address changed.
+void reflection_probe_shift_origin(ReflectionProbe* probe, const vec3 delta);
+
 #endif // _PROBE_H_
