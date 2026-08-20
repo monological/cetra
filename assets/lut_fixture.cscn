@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "lut_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "LutFill",
+   "type": "directional",
+   "direction": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   0.0,
+   7.4
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "fov": 40
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}

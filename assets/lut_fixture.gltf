@@ -1,0 +1,1117 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "gen_lut_fixture.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "backdrop",
+   "mesh": 24,
+   "translation": [
+    0.0,
+    0.0,
+    -0.8
+   ]
+  },
+  {
+   "name": "patch_00_grey",
+   "mesh": 0,
+   "translation": [
+    -2.55,
+    1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_01_grey",
+   "mesh": 1,
+   "translation": [
+    -1.53,
+    1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_02_grey",
+   "mesh": 2,
+   "translation": [
+    -0.51,
+    1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_03_grey",
+   "mesh": 3,
+   "translation": [
+    0.51,
+    1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_04_grey",
+   "mesh": 4,
+   "translation": [
+    1.53,
+    1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_05_grey",
+   "mesh": 5,
+   "translation": [
+    2.55,
+    1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_06_colour",
+   "mesh": 6,
+   "translation": [
+    -2.55,
+    0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_07_colour",
+   "mesh": 7,
+   "translation": [
+    -1.53,
+    0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_08_colour",
+   "mesh": 8,
+   "translation": [
+    -0.51,
+    0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_09_colour",
+   "mesh": 9,
+   "translation": [
+    0.51,
+    0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_10_colour",
+   "mesh": 10,
+   "translation": [
+    1.53,
+    0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_11_colour",
+   "mesh": 11,
+   "translation": [
+    2.55,
+    0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_12_colour",
+   "mesh": 12,
+   "translation": [
+    -2.55,
+    -0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_13_colour",
+   "mesh": 13,
+   "translation": [
+    -1.53,
+    -0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_14_colour",
+   "mesh": 14,
+   "translation": [
+    -0.51,
+    -0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_15_colour",
+   "mesh": 15,
+   "translation": [
+    0.51,
+    -0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_16_colour",
+   "mesh": 16,
+   "translation": [
+    1.53,
+    -0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_17_colour",
+   "mesh": 17,
+   "translation": [
+    2.55,
+    -0.51,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_18_colour",
+   "mesh": 18,
+   "translation": [
+    -2.55,
+    -1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_19_colour",
+   "mesh": 19,
+   "translation": [
+    -1.53,
+    -1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_20_colour",
+   "mesh": 20,
+   "translation": [
+    -0.51,
+    -1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_21_colour",
+   "mesh": 21,
+   "translation": [
+    0.51,
+    -1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_22_colour",
+   "mesh": 22,
+   "translation": [
+    1.53,
+    -1.53,
+    0.0
+   ]
+  },
+  {
+   "name": "patch_23_colour",
+   "mesh": 23,
+   "translation": [
+    2.55,
+    -1.53,
+    0.0
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "patch_00",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "patch_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 1
+    }
+   ]
+  },
+  {
+   "name": "patch_02",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 2
+    }
+   ]
+  },
+  {
+   "name": "patch_03",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 3
+    }
+   ]
+  },
+  {
+   "name": "patch_04",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 4
+    }
+   ]
+  },
+  {
+   "name": "patch_05",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 5
+    }
+   ]
+  },
+  {
+   "name": "patch_06",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 6
+    }
+   ]
+  },
+  {
+   "name": "patch_07",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 7
+    }
+   ]
+  },
+  {
+   "name": "patch_08",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 8
+    }
+   ]
+  },
+  {
+   "name": "patch_09",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 9
+    }
+   ]
+  },
+  {
+   "name": "patch_10",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 10
+    }
+   ]
+  },
+  {
+   "name": "patch_11",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 11
+    }
+   ]
+  },
+  {
+   "name": "patch_12",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 12
+    }
+   ]
+  },
+  {
+   "name": "patch_13",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 13
+    }
+   ]
+  },
+  {
+   "name": "patch_14",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 14
+    }
+   ]
+  },
+  {
+   "name": "patch_15",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 15
+    }
+   ]
+  },
+  {
+   "name": "patch_16",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 16
+    }
+   ]
+  },
+  {
+   "name": "patch_17",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 17
+    }
+   ]
+  },
+  {
+   "name": "patch_18",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 18
+    }
+   ]
+  },
+  {
+   "name": "patch_19",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 19
+    }
+   ]
+  },
+  {
+   "name": "patch_20",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 20
+    }
+   ]
+  },
+  {
+   "name": "patch_21",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 21
+    }
+   ]
+  },
+  {
+   "name": "patch_22",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 22
+    }
+   ]
+  },
+  {
+   "name": "patch_23",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 23
+    }
+   ]
+  },
+  {
+   "name": "backdrop",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 2,
+      "NORMAL": 1
+     },
+     "indices": 3,
+     "material": 24
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "lut_patch_00",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.04,
+    0.04,
+    0.04
+   ]
+  },
+  {
+   "name": "lut_patch_01",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.12,
+    0.12,
+    0.12
+   ]
+  },
+  {
+   "name": "lut_patch_02",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.28,
+    0.28,
+    0.28
+   ]
+  },
+  {
+   "name": "lut_patch_03",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "name": "lut_patch_04",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.78,
+    0.78,
+    0.78
+   ]
+  },
+  {
+   "name": "lut_patch_05",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    1.15,
+    1.15,
+    1.15
+   ]
+  },
+  {
+   "name": "lut_patch_06",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.9,
+    0.1,
+    0.1
+   ]
+  },
+  {
+   "name": "lut_patch_07",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.1,
+    0.85,
+    0.15
+   ]
+  },
+  {
+   "name": "lut_patch_08",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.12,
+    0.2,
+    0.95
+   ]
+  },
+  {
+   "name": "lut_patch_09",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.9,
+    0.8,
+    0.1
+   ]
+  },
+  {
+   "name": "lut_patch_10",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.85,
+    0.15,
+    0.8
+   ]
+  },
+  {
+   "name": "lut_patch_11",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.1,
+    0.8,
+    0.85
+   ]
+  },
+  {
+   "name": "lut_patch_12",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.62,
+    0.3,
+    0.18
+   ]
+  },
+  {
+   "name": "lut_patch_13",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.28,
+    0.55,
+    0.24
+   ]
+  },
+  {
+   "name": "lut_patch_14",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.22,
+    0.3,
+    0.62
+   ]
+  },
+  {
+   "name": "lut_patch_15",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.7,
+    0.55,
+    0.38
+   ]
+  },
+  {
+   "name": "lut_patch_16",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.55,
+    0.32,
+    0.52
+   ]
+  },
+  {
+   "name": "lut_patch_17",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.34,
+    0.58,
+    0.6
+   ]
+  },
+  {
+   "name": "lut_patch_18",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.3,
+    0.08,
+    0.06
+   ]
+  },
+  {
+   "name": "lut_patch_19",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.06,
+    0.26,
+    0.09
+   ]
+  },
+  {
+   "name": "lut_patch_20",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.05,
+    0.09,
+    0.32
+   ]
+  },
+  {
+   "name": "lut_patch_21",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.46,
+    0.44,
+    0.2
+   ]
+  },
+  {
+   "name": "lut_patch_22",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.4,
+    0.18,
+    0.36
+   ]
+  },
+  {
+   "name": "lut_patch_23",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.16,
+    0.38,
+    0.42
+   ]
+  },
+  {
+   "name": "lut_backdrop",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.02,
+     0.02,
+     0.025,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -0.42,
+    -0.42,
+    0.0
+   ],
+   "max": [
+    0.42,
+    0.42,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -3.66,
+    -2.64,
+    0.0
+   ],
+   "max": [
+    3.66,
+    2.64,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 144,
+   "byteLength": 12,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "data:application/octet-stream;base64,PQrXvj0K174AAAAAPQrXPj0K174AAAAAPQrXPj0K1z4AAAAAPQrXvj0K1z4AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/cT1qwMP1KMAAAAAAcT1qQMP1KMAAAAAAcT1qQMP1KEAAAAAAcT1qwMP1KEAAAAAAAAABAAIAAAACAAMA",
+   "byteLength": 156
+  }
+ ]
+}
