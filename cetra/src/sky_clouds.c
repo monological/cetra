@@ -112,32 +112,19 @@ static void* cloud_bake_worker(void* arg) {
 // Bake one field across worker threads; returns the worker count so the log
 // reports the policy actually applied. The perm table is read-only by the
 // time threads start (initialized on this thread), so no synchronization is
-// needed beyond the joins.
-static int bake_field(unsigned char* out, const NoisePerm* perm, int size, int detail) {
-    int workers = get_cpu_cores();
-    if (workers > 8)
-        workers = 8;
-    if (workers > size)
-        workers = size;
-    if (workers < 1)
-        workers = 1;
+// needed beyond the joins -- which is the property cetra_bake_bands is written
+// around, and why the band split now lives there rather than here.
+static void cloud_bake_band(void* ctx, int z0, int z1) {
+    CloudBakeSlab slab = *(CloudBakeSlab*)ctx;
+    slab.z_begin = z0;
+    slab.z_end = z1;
+    cloud_bake_worker(&slab);
+}
 
-    CloudBakeSlab slabs[8];
-    cetra_thread_t threads[8];
-    bool running[8] = {false};
-    for (int i = 0; i < workers; i++) {
-        // Remainder-free split: never overshoots, every worker gets a slab
-        int z0 = size * i / workers;
-        int z1 = size * (i + 1) / workers;
-        slabs[i] = (CloudBakeSlab){out, perm, size, z0, z1, detail};
-        running[i] = cetra_thread_create(&threads[i], cloud_bake_worker, &slabs[i]);
-        if (!running[i])
-            cloud_bake_worker(&slabs[i]); // could not start: bake the slab inline
-    }
-    for (int i = 0; i < workers; i++) {
-        if (running[i])
-            cetra_thread_join(threads[i]);
-    }
+static int bake_field(unsigned char* out, const NoisePerm* perm, int size, int detail) {
+    int workers = cetra_bake_workers(0, size);
+    CloudBakeSlab slab = {out, perm, size, 0, size, detail};
+    cetra_bake_bands(size, workers, cloud_bake_band, &slab);
     return workers;
 }
 

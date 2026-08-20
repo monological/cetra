@@ -126,3 +126,58 @@ void cetra_sleep_ms(unsigned milliseconds) {
 }
 
 #endif
+
+// --- band-parallel bake, one implementation for both backends ---------------
+
+#include "util.h" // get_cpu_cores
+
+typedef struct {
+    void (*fn)(void*, int, int);
+    void* ctx;
+    int begin;
+    int end;
+} CetraBandJob;
+
+static void* cetra_band_worker(void* arg) {
+    CetraBandJob* job = (CetraBandJob*)arg;
+    job->fn(job->ctx, job->begin, job->end);
+    return NULL;
+}
+
+int cetra_bake_workers(int requested, int rows) {
+    int workers = requested > 0 ? requested : get_cpu_cores();
+    if (workers > CETRA_BAKE_MAX_WORKERS)
+        workers = CETRA_BAKE_MAX_WORKERS;
+    if (workers > rows)
+        workers = rows;
+    return workers < 1 ? 1 : workers;
+}
+
+void cetra_bake_bands(int rows, int workers, void (*fn)(void* ctx, int begin, int end), void* ctx) {
+    if (!fn || rows <= 0)
+        return;
+    if (workers < 2) {
+        fn(ctx, 0, rows);
+        return;
+    }
+    if (workers > CETRA_BAKE_MAX_WORKERS)
+        workers = CETRA_BAKE_MAX_WORKERS;
+
+    CetraBandJob jobs[CETRA_BAKE_MAX_WORKERS];
+    cetra_thread_t threads[CETRA_BAKE_MAX_WORKERS];
+    bool running[CETRA_BAKE_MAX_WORKERS] = {false};
+
+    for (int i = 0; i < workers; i++) {
+        jobs[i].fn = fn;
+        jobs[i].ctx = ctx;
+        jobs[i].begin = rows * i / workers;
+        jobs[i].end = rows * (i + 1) / workers;
+        running[i] = cetra_thread_create(&threads[i], cetra_band_worker, &jobs[i]);
+        if (!running[i])
+            cetra_band_worker(&jobs[i]); // could not start: run the band inline
+    }
+    for (int i = 0; i < workers; i++) {
+        if (running[i])
+            cetra_thread_join(threads[i]);
+    }
+}

@@ -7059,11 +7059,17 @@ TERRAIN_RANGE = ("-40", "85")
 
 # The fixture's closed form, RESTATED here rather than imported.
 #
-# assets/gen_terrain_fixture.py writes its files at module scope, so importing it
-# would rewrite the committed asset in the middle of a gate run -- and it would
-# make ground truth a function of the thing under test. Same reasoning the LUT
-# fixture records. The cost is that the two copies can drift, which is exactly
-# what terrain-closed-form fails on.
+# NOT for the reason the LUT group gives. That one imports nothing because
+# gen_lut_fixture.py really does write at module scope, so importing it would
+# rewrite a committed asset mid-run; this generator writes only inside main()
+# under a __main__ guard, and importing it would be perfectly safe. An earlier
+# version of this comment claimed otherwise and was simply wrong about the file
+# beside it.
+#
+# The real reason is narrower: the gate should be able to fail when the generator
+# and the committed asset disagree, which it cannot if it derives its expectation
+# from the generator. The cost is that these constants can drift from the
+# generator's -- and terrain-closed-form failing is what that drift looks like.
 _T_BASE, _T_AMP, _T_UC, _T_VC, _T_UT, _T_VT = 0.50, 0.24, 3.0, 2.0, 0.12, -0.09
 _T_FA, _T_FU, _T_FV = 0.08, 34.0, 29.0
 
@@ -7076,38 +7082,14 @@ def _terrain_truth(u, v, lo=-40.0, hi=85.0):
     return lo + h01 * (hi - lo)
 
 
-def _terrain_truth_ny(u, v, extent, lo=-40.0, hi=85.0):
-    """The y component of the surface normal, from the closed form's derivative.
-
-    This is what makes the filter arm a test of the filter rather than of the
-    height: two interpolants that agree closely on VALUE can disagree sharply on
-    SLOPE, which is the entire reason the sampler is bicubic. Analytic, so a
-    bilinear sampler has nothing to hide behind.
-    """
-    du01 = (_T_AMP * _T_UC * math.pi * math.cos(_T_UC * math.pi * u) * math.cos(_T_VC * math.pi * v)
-            + _T_FA * 2.0 * math.pi * _T_FU * math.cos(2.0 * math.pi * _T_FU * u)
-            * math.cos(2.0 * math.pi * _T_FV * v)
-            + _T_UT)
-    dv01 = (-_T_AMP * _T_VC * math.pi * math.sin(_T_UC * math.pi * u) * math.sin(_T_VC * math.pi * v)
-            - _T_FA * 2.0 * math.pi * _T_FV * math.sin(2.0 * math.pi * _T_FU * u)
-            * math.sin(2.0 * math.pi * _T_FV * v)
-            + _T_VT)
-    world_per_u = (hi - lo) / (2.0 * extent)
-    dx, dz = du01 * world_per_u, dv01 * world_per_u
-    return 1.0 / math.sqrt(dx * dx + 1.0 + dz * dz)
-
-
 _TERRAIN_SAMPLE = re.compile(
-    r"terrain-height-probe sample x=(-?[\d.]+) z=(-?[\d.]+) h=(-?[\d.]+) ny=(-?[\d.]+) "
-    r"flow=(-?[\d.]+) deposit=(-?[\d.]+) wear=(-?[\d.]+)")
+    r"terrain-height-probe sample x=(-?[\d.]+) z=(-?[\d.]+) h=(-?[\d.]+) fbm=(-?[\d.]+) "
+    r"ny=(-?[\d.]+) flow=(-?[\d.]+) deposit=(-?[\d.]+) wear=(-?[\d.]+)")
 _TERRAIN_CLAMP = re.compile(
     r"terrain-height-probe clamp x=(-?[\d.]+) z=(-?[\d.]+) h=(-?[\d.]+) "
     r"edge_x=(-?[\d.]+) edge_z=(-?[\d.]+) edge_h=(-?[\d.]+)")
 _TERRAIN_MID = re.compile(
     r"terrain-height-probe mid x=(-?[\d.]+) z=(-?[\d.]+) h=(-?[\d.]+)")
-_TERRAIN_SCAN = re.compile(
-    r"terrain-height-probe scan k=(\d+) x=(-?[\d.]+) h=(-?[\d.]+) "
-    r"nx=(-?[\d.]+) ny=(-?[\d.]+) nz=(-?[\d.]+)")
 _TERRAIN_HEADER = re.compile(
     r"terrain-height-probe header source=(\w+) res=(\d+) extent=([\d.]+) cell=([\d.]+)")
 _TERRAIN_DIGEST = re.compile(r"terrain-erosion-probe digest value=([0-9a-f]+)")
@@ -7125,8 +7107,9 @@ def _terrain_run(workdir, tag, extra):
     reads printed numbers and none of them looks at a pixel, so any time spent
     rendering is time the sim is not running.
     """
-    out = os.path.join(workdir, f"terrain_{tag}.ppm")
-    cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--no-fog", "-S", out] + extra
+    # No -S: every arm here reads printed numbers and none looks at a pixel, so a
+    # screenshot is a full readback and a file write for nothing.
+    cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--no-fog"] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     if r.returncode != 0:
@@ -7139,8 +7122,6 @@ def _terrain_run(workdir, tag, extra):
                     for m in _TERRAIN_SAMPLE.finditer(text)],
         "clamps": [tuple(float(g) for g in m.groups())
                    for m in _TERRAIN_CLAMP.finditer(text)],
-        "scan": [tuple(float(g) for g in m.groups()[1:])
-                 for m in _TERRAIN_SCAN.finditer(text)],
         "mids": [tuple(float(g) for g in m.groups())
                  for m in _TERRAIN_MID.finditer(text)],
         "digest": (_TERRAIN_DIGEST.search(text).group(1)
@@ -7155,13 +7136,14 @@ def _terrain_run(workdir, tag, extra):
 def run_terrain_gate(workdir):
     """Heightfield terrain and its erosion bake (spec 11.59 / D6-D8):
 
+      terrain-seed         a field seeded from the fbm agrees with it at the nodes
       terrain-closed-form  a loaded field samples what the fixture painted
       terrain-clamp        outside the domain reads the edge, exactly
       terrain-bicubic      the normal stays smooth across cell boundaries
       terrain-masks        masks come from the SIM, not from the geometry
       terrain-threads      the bake is bit-identical at 1, 3 and 8 workers
       terrain-budget       the sediment budget closes
-      terrain-roundtrip    save then load costs under half a 16-bit step
+      terrain-roundtrip    save then load carries the height AND the three masks
       terrain-refuse       a bad heightmap is refused, not half-loaded
 
     Read as PRINTED NUMBERS rather than as pixels, and that is forced rather than
@@ -7190,6 +7172,36 @@ def run_terrain_gate(workdir):
     extent = float(loaded["header"].group(3))
     lo, hi = float(TERRAIN_RANGE[0]), float(TERRAIN_RANGE[1])
 
+    # --- terrain-seed --------------------------------------------------------
+    # The invariant the whole design rests on, and the only arm that can state it
+    # from inside a gate: installing a field must not change what the terrain IS.
+    #
+    # A byte comparison against a pre-11.59 build is the direct form and no gate
+    # can hold one. This is the reachable equivalent -- seed a field from the fbm,
+    # run no sim, and require the field and the fbm to agree at the nodes the seed
+    # wrote. Both numbers come from ONE process at ONE point, because the probe
+    # snaps its samples onto the lattice and two runs would not be asking about
+    # the same places. It fails on a transposed seed, a res-vs-res-1 slip either
+    # way, and a sampler whose node convention disagrees with the seeder's -- none
+    # of which any other arm sees, since they all run against a LOADED field the
+    # fbm never touched.
+    seeded = _terrain_run(workdir, "seeded", ["--erode", "--erode-res", "257",
+                                              "--erode-iterations", "-1",
+                                              "--terrain-height-probe"])
+    if seeded is None or not seeded["samples"]:
+        print("  terrain-seed FAIL  the seeded run printed no probe rows")
+        failures.append("terrain-seed")
+    else:
+        worst = max(abs(h - fbm) for _x, _z, h, fbm, *_ in seeded["samples"])
+        span = max(abs(h) for _x, _z, h, *_ in seeded["samples"]) or 1.0
+        ok = worst / span < 1e-5
+        print(f"  terrain-seed {'PASS' if ok else 'FAIL'}  {len(seeded['samples'])} nodes, "
+              f"field vs fbm worst {worst:.6f} against a {span:.1f} range "
+              f"({worst / span:.2e} relative, want < 1e-5; a transposed or off-by-one "
+              f"lattice reads whole units)")
+        if not ok:
+            failures.append("terrain-seed")
+
     # --- terrain-closed-form ------------------------------------------------
     # The bar is one 16-bit code of the loaded range plus the cubic's own error
     # on a smooth field, which at 256 across is far below it. Tight enough that a
@@ -7201,7 +7213,7 @@ def run_terrain_gate(workdir):
     # enough to admit that is a bar that no longer says much.
     step = (hi - lo) / 65535.0
     worst, worst_at = 0.0, None
-    for x, z, h, _ny, _f, _d, _w in loaded["samples"]:
+    for x, z, h, _fbm, _ny, _f, _d, _w in loaded["samples"]:
         u = (x + extent) / (2.0 * extent)
         v = (z + extent) / (2.0 * extent)
         d = abs(h - _terrain_truth(u, v, lo, hi))
@@ -7274,9 +7286,9 @@ def run_terrain_gate(workdir):
         print("  terrain-masks FAIL  the eroded run printed no probe rows")
         failures.append("terrain-masks")
     else:
-        pre = max(max(s[4], s[5], s[6]) for s in loaded["samples"])
-        flows = [s[4] for s in eroded["samples"]]
-        post = max(max(s[4], s[5], s[6]) for s in eroded["samples"])
+        pre = max(max(s[5], s[6], s[7]) for s in loaded["samples"])
+        flows = [s[5] for s in eroded["samples"]]
+        post = max(max(s[5], s[6], s[7]) for s in eroded["samples"])
         spread = max(flows) - min(flows)
         ok = pre == 0.0 and post > 0.2 and spread > 0.2
         print(f"  terrain-masks {'PASS' if ok else 'FAIL'}  un-eroded peak {pre:.6f} (want "
@@ -7345,11 +7357,21 @@ def run_terrain_gate(workdir):
         else:
             rstep = (float(smax) - float(smin)) / 65535.0
             worst = max(abs(a[2] - b[2]) for a, b in zip(rt["samples"], back["samples"]))
-            ok = worst <= 0.5 * rstep
-            print(f"  terrain-roundtrip {'PASS' if ok else 'FAIL'}  worst "
+            # The MASKS as well, and this half is why the arm exists in this shape.
+            # It first compared heights only, and the save wrote heights only, so a
+            # shipping load got the eroded geometry shaded by the slope-and-altitude
+            # guess erosion was built to replace -- the feature's own opening failure,
+            # arrived at through its own round trip, with every arm green.
+            mask_before = max(max(a[5], a[6], a[7]) for a in rt["samples"])
+            mask_worst = max(abs(a[i] - b[i])
+                             for a, b in zip(rt["samples"], back["samples"]) for i in (5, 6, 7))
+            mstep = 1.0 / 255.0
+            ok = worst <= 0.5 * rstep and mask_before > 0.2 and mask_worst <= mstep
+            print(f"  terrain-roundtrip {'PASS' if ok else 'FAIL'}  height worst "
                   f"{worst / rstep:.3f} of one 16-bit step (want <= 0.5, which is what "
-                  f"round-to-nearest owes; a byte-order or endpoint error is a whole step "
-                  f"or more)")
+                  f"round-to-nearest owes); masks peak {mask_before:.4f} before (want > 0.2, "
+                  f"or there is nothing to carry) and worst {mask_worst / mstep:.3f} of one "
+                  f"8-bit step across the trip (want <= 1)")
             if not ok:
                 failures.append("terrain-roundtrip")
 

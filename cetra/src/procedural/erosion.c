@@ -1,16 +1,11 @@
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "erosion.h"
 
 #include "../thread.h"
-#include "../util.h"
-
-// The largest worker count this bake will use. Matches the cloud noise bake's
-// ceiling and for the same reason: the slab arrays are stack-allocated, so the
-// bound has to be a constant, and past eight the stages are memory-bound anyway.
-#define EROSION_MAX_WORKERS 8
 
 ErosionParams erosion_default_params(void) {
     ErosionParams p;
@@ -61,7 +56,9 @@ typedef struct Planes {
     float* vx; // flow velocity
     float* vz;
 
-    float* scratch; // per-stage intermediate: capacity, then thermal deltas
+    float* scratch;       // per-stage intermediate: capacity, then thermal deltas
+    float* thermal_shed;  // what a cell gives away this thermal pass
+    float* thermal_total; // and the excess it splits that across
 
     float* flow_acc; // mask accumulators
     float* dep_acc;
@@ -70,58 +67,36 @@ typedef struct Planes {
     ErosionParams p;
 } Planes;
 
-typedef struct Band {
-    const Planes* pl;
-    int j0;
-    int j1;
-} Band;
-
-// Stages are written as one of these and run over disjoint row bands.
+// Stages are written as one of these and run over disjoint row bands. Every
+// stage reads only planes no stage-mate writes, which is what makes the bands
+// independent and the result identical at any worker count.
 typedef void (*StageFn)(const Planes*, int j0, int j1);
 
-typedef struct BandJob {
-    Band band;
+typedef struct StageJob {
+    const Planes* pl;
     StageFn fn;
-} BandJob;
+} StageJob;
 
-static void* band_worker(void* arg) {
-    BandJob* job = (BandJob*)arg;
-    job->fn(job->band.pl, job->band.j0, job->band.j1);
-    return NULL;
+static void stage_band(void* ctx, int j0, int j1) {
+    const StageJob* job = (const StageJob*)ctx;
+    job->fn(job->pl, j0, j1);
 }
 
-// Run one stage across worker threads and join before returning.
+// One stage across the workers, joining before it returns.
 //
 // The join between stages IS the double buffer's enforcement: within a stage no
 // cell reads a value another cell writes, and across stages every read is of a
 // plane the previous stage finished. Remove the join and the sim still produces
-// eroded-looking terrain, which is why the gate asserts thread counts against each
-// other rather than trusting the output to look wrong.
+// eroded-looking terrain, which is why the gate asserts thread counts against
+// each other rather than trusting the output to look wrong.
+//
+// The band split itself lives in cetra_bake_bands, shared with the cloud noise
+// bake. It was copied from there originally, and a copy of the one mechanism two
+// callers depend on for bitwise-identical output is a fix that can land in one
+// and miss the other.
 static void run_stage(const Planes* pl, StageFn fn, int workers) {
-    if (workers < 2) {
-        fn(pl, 0, pl->res);
-        return;
-    }
-
-    BandJob jobs[EROSION_MAX_WORKERS];
-    cetra_thread_t threads[EROSION_MAX_WORKERS];
-    bool running[EROSION_MAX_WORKERS] = {false};
-
-    for (int i = 0; i < workers; i++) {
-        // Remainder-free split, the cloud bake's form: never overshoots and every
-        // worker gets a band whatever res and workers are.
-        jobs[i].band.pl = pl;
-        jobs[i].band.j0 = pl->res * i / workers;
-        jobs[i].band.j1 = pl->res * (i + 1) / workers;
-        jobs[i].fn = fn;
-        running[i] = cetra_thread_create(&threads[i], band_worker, &jobs[i]);
-        if (!running[i])
-            band_worker(&jobs[i]); // could not start: run the band inline
-    }
-    for (int i = 0; i < workers; i++) {
-        if (running[i])
-            cetra_thread_join(threads[i]);
-    }
+    StageJob job = {pl, fn};
+    cetra_bake_bands(pl->res, workers, stage_band, &job);
 }
 
 static inline size_t idx(const Planes* pl, int i, int j) {
@@ -338,8 +313,15 @@ static void stage_transport(const Planes* pl, int j0, int j1) {
                 float n_out = (pl->fl[n] + pl->fr[n] + pl->ft[n] + pl->fb[n]) * dt / n_held;
                 if (n_out <= 0.0f)
                     continue;
-                // The same clamp the giving side applies, so the two halves agree
-                // exactly rather than nearly.
+                // The same clamp the giving side applies, so the two halves put
+                // the same fraction on the same pipe.
+                //
+                // Not bitwise-equal totals, and an earlier comment here claimed
+                // they were: the giving side is one product and the receiving side
+                // is a sum of four separately-rounded ones, so the budget closes to
+                // rounding (5e-09 relative) rather than to zero. What the shared
+                // clamp buys is that neither side can decide a DIFFERENT fraction
+                // left, which is a leak of real material rather than of last bits.
                 //
                 // It is a ROUNDING GUARD and not a real branch: stage_flux already
                 // scaled these four so that their total over dt cannot exceed the
@@ -370,77 +352,83 @@ static void stage_evaporate(const Planes* pl, int j0, int j1) {
     }
 }
 
-// Thermal erosion, gather form: a cell works out how much it OWES its lower
-// neighbours and how much it is owed by its higher ones, and settles both at once
-// into scratch. Written as a gather so no cell writes another's height, which the
-// scatter form of this algorithm does and which is what makes the usual
-// implementation non-deterministic under threads.
-static void stage_thermal(const Planes* pl, int j0, int j1) {
-    const float talus_drop = pl->p.talus * pl->cell;
-    const int nx[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
-    const int nz[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+// Thermal erosion, gather form, in two passes.
+//
+// Written as a gather because the scatter form of this algorithm writes its
+// neighbours' heights, and two threads settling adjacent cliffs then race -- the
+// whole reason this sim can claim a thread count does not reach its output.
+//
+// TWO passes rather than one, and that is the shape the algorithm actually has.
+// A single pass has to work out what each cell RECEIVES, which means knowing how
+// much each higher neighbour is shedding and how it splits that between its own
+// neighbours -- so it recomputed every neighbour's full eight-way excess scan
+// inline. Every cell in the grid therefore scanned itself nine times: once for
+// its own shed, and once more from each of eight neighbours. `h` does not change
+// between them, so all nine agreed by construction and eight were waste. Pass A
+// writes the two numbers pass B needs, and neighbour evaluations per cell go from
+// 72 to 16. Bit-identical: the same operands in the same association, and the
+// digest arm confirms it.
+static const int THERMAL_NX[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int THERMAL_NZ[8] = {0, 0, -1, 1, -1, -1, 1, 1};
 
+// Diagonal neighbours are a longer run for the same drop, so they get the
+// diagonal threshold -- without it a cliff comes out with eight-fold symmetry
+// stamped into it. Symmetric under direction reversal, which is what lets pass B
+// derive a neighbour's excess toward this cell without rescanning it.
+static inline float thermal_run(const Planes* pl, int k) {
+    float drop = pl->p.talus * pl->cell;
+    return (k < 4) ? drop : drop * 1.41421356f;
+}
+
+// Pass A: what each cell sheds, and the total it splits that across.
+static void stage_thermal_shed(const Planes* pl, int j0, int j1) {
     for (int j = j0; j < j1; j++) {
         for (int i = 0; i < pl->res; i++) {
             size_t c = idx(pl, i, j);
             float here = pl->h[c];
-            float delta = 0.0f;
-
-            // What this cell sheds. Diagonal neighbours are a longer run for the
-            // same drop, so they get the diagonal threshold or a cliff comes out
-            // with eight-fold symmetry stamped into it.
-            float excess[8];
-            float excess_total = 0.0f;
+            float total = 0.0f, largest = 0.0f;
             for (int k = 0; k < 8; k++) {
-                excess[k] = 0.0f;
-                if (!inside(pl, i + nx[k], j + nz[k]))
+                if (!inside(pl, i + THERMAL_NX[k], j + THERMAL_NZ[k]))
                     continue;
-                float run = (k < 4) ? talus_drop : talus_drop * 1.41421356f;
-                float diff = here - pl->h[idx(pl, i + nx[k], j + nz[k])];
+                float diff = here - pl->h[idx(pl, i + THERMAL_NX[k], j + THERMAL_NZ[k])];
+                float run = thermal_run(pl, k);
                 if (diff > run) {
-                    excess[k] = diff - run;
-                    excess_total += excess[k];
+                    float e = diff - run;
+                    total += e;
+                    largest = e > largest ? e : largest;
                 }
             }
-            if (excess_total > 0.0f) {
-                // Move a fraction of the single largest excess, split among the
-                // neighbours in proportion. Moving the SUM would let one cell
-                // shed more than its own relief in a step and invert the slope.
-                float largest = 0.0f;
-                for (int k = 0; k < 8; k++)
-                    largest = excess[k] > largest ? excess[k] : largest;
-                delta -= pl->p.thermal_rate * 0.5f * largest;
-            }
+            // A fraction of the single largest excess, not of the sum: shedding
+            // the sum would let one cell move more than its own relief in a step
+            // and invert the slope it was smoothing.
+            pl->thermal_shed[c] = total > 0.0f ? pl->p.thermal_rate * 0.5f * largest : 0.0f;
+            pl->thermal_total[c] = total;
+        }
+    }
+}
 
-            // What it receives, recomputed from each higher neighbour's point of
-            // view. The arithmetic is duplicated on purpose: a shared pass would
-            // have to write both cells, which is the hazard this form avoids.
+// Pass B: what each cell receives, into scratch, from the two planes above.
+static void stage_thermal(const Planes* pl, int j0, int j1) {
+    for (int j = j0; j < j1; j++) {
+        for (int i = 0; i < pl->res; i++) {
+            size_t c = idx(pl, i, j);
+            float here = pl->h[c];
+            float delta = -pl->thermal_shed[c];
+
             for (int k = 0; k < 8; k++) {
-                int ni = i + nx[k], nj = j + nz[k];
+                int ni = i + THERMAL_NX[k], nj = j + THERMAL_NZ[k];
                 if (!inside(pl, ni, nj))
                     continue;
-                float up = pl->h[idx(pl, ni, nj)];
-                if (up - here <= 0.0f)
+                size_t n = idx(pl, ni, nj);
+                float total = pl->thermal_total[n];
+                if (!(total > 0.0f))
                     continue;
-
-                float up_excess_total = 0.0f, up_largest = 0.0f, mine = 0.0f;
-                for (int m = 0; m < 8; m++) {
-                    int mi = ni + nx[m], mj = nj + nz[m];
-                    if (!inside(pl, mi, mj))
-                        continue;
-                    float run = (m < 4) ? talus_drop : talus_drop * 1.41421356f;
-                    float diff = up - pl->h[idx(pl, mi, mj)];
-                    if (diff <= run)
-                        continue;
-                    float e = diff - run;
-                    up_excess_total += e;
-                    up_largest = e > up_largest ? e : up_largest;
-                    if (mi == i && mj == j)
-                        mine = e;
-                }
-                if (up_excess_total > 0.0f && mine > 0.0f) {
-                    delta += pl->p.thermal_rate * 0.5f * up_largest * (mine / up_excess_total);
-                }
+                // This cell's share of what the neighbour sheds. thermal_run is
+                // symmetric under reversal, so the threshold the neighbour used
+                // for us is the one we compute for it.
+                float mine = (pl->h[n] - here) - thermal_run(pl, k);
+                if (mine > 0.0f)
+                    delta += pl->thermal_shed[n] * (mine / total);
             }
 
             pl->scratch[c] = delta;
@@ -509,17 +497,20 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
     int res = field->res;
     size_t n = (size_t)res * (size_t)res;
 
-    // One allocation for every scratch plane. Ten separate callocs would be ten
-    // failure paths and ten frees; this is one of each.
-    const int scratch_planes = 11;
+    // One allocation for every scratch plane, so there is one failure path and
+    // one free rather than thirteen of each.
+    const int scratch_planes = 13;
     float* pool = calloc(n * (size_t)scratch_planes, sizeof(float));
     if (!pool)
         return false;
 
-    Planes pl;
-    memset(&pl, 0, sizeof(pl));
+    // Zero-initialised even though every field is assigned below, so it zeroes
+    // nothing that stays zero. It is here for the field that gets ADDED later and
+    // not assigned: a forgotten pointer is then NULL rather than a stack address
+    // the stages write through.
+    Planes pl = {0};
     pl.res = res;
-    pl.cell = (2.0f * terrain->extent) / (float)(res - 1);
+    pl.cell = terrain_field_cell(terrain->extent, res);
     pl.inv_cell = 1.0f / pl.cell;
     pl.p = *params;
     pl.h = field->height;
@@ -537,6 +528,8 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
     pl.vx = pool + n * 8;
     pl.vz = pool + n * 9;
     pl.scratch = pool + n * 10;
+    pl.thermal_shed = pool + n * 11;
+    pl.thermal_total = pool + n * 12;
 
     memset(field->flow, 0, n * sizeof(float));
     memset(field->deposit, 0, n * sizeof(float));
@@ -544,13 +537,7 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
 
     double height_before = sum_plane(field->height, n);
 
-    int workers = params->workers > 0 ? params->workers : get_cpu_cores();
-    if (workers > EROSION_MAX_WORKERS)
-        workers = EROSION_MAX_WORKERS;
-    if (workers > res)
-        workers = res;
-    if (workers < 1)
-        workers = 1;
+    int workers = cetra_bake_workers(params->workers, res);
 
     for (int it = 0; it < params->iterations; it++) {
         run_stage(&pl, stage_rain, workers);
@@ -566,6 +553,7 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
         run_stage(&pl, stage_evaporate, workers);
 
         if (params->thermal_every > 0 && (it % params->thermal_every) == 0) {
+            run_stage(&pl, stage_thermal_shed, workers);
             run_stage(&pl, stage_thermal, workers);
             run_stage(&pl, stage_thermal_apply, workers);
         }
@@ -579,6 +567,9 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
         stats->eroded_total = sum_plane(field->wear, n);
         stats->deposited_total = sum_plane(field->deposit, n);
         stats->workers = workers;
+        stats->closure = (stats->height_after + stats->sediment_left) - stats->height_before;
+        double scale = stats->height_before != 0.0 ? fabs(stats->height_before) : 1.0;
+        stats->closure_rel = fabs(stats->closure) / scale;
     }
 
     // Flow is compressed before it is scaled, and the other two are not.
@@ -591,6 +582,11 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
     // material a cell had -- so compressing them would only flatten them.
     for (size_t k = 0; k < n; k++)
         field->flow[k] = log1pf(field->flow[k]);
+    // The sim moved material, so the field's stated range is stale. Recorded now
+    // rather than left for a caller: terrain_tint normalises altitude against it,
+    // and every path that installs a field has to leave it true.
+    terrain_field_measure(field);
+
     float flow_peak = normalise(field->flow, n);
     float deposit_peak = normalise(field->deposit, n);
     float wear_peak = normalise(field->wear, n);
@@ -610,4 +606,28 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
 
     free(pool);
     return true;
+}
+
+void erosion_stats_probe(const ErosionStats* stats, const ErosionParams* params, int res,
+                         float cell, double ms) {
+    if (!stats || !params)
+        return;
+    printf("terrain-erosion-probe header res=%d iterations=%d workers=%d cell=%.4f ms=%.0f\n", res,
+           params->iterations, stats->workers, (double)cell, ms);
+    // Nothing in a rendered frame can check this: terrain with a silently leaking
+    // sediment budget still looks like eroded terrain.
+    printf("terrain-erosion-probe budget before=%.6f after=%.6f suspended=%.6f closure=%.6f "
+           "rel=%.3e\n",
+           stats->height_before, stats->height_after, stats->sediment_left, stats->closure,
+           stats->closure_rel);
+    printf("terrain-erosion-probe moved eroded=%.6f deposited=%.6f\n", stats->eroded_total,
+           stats->deposited_total);
+    // Pre-normalisation peaks. A peak of zero means the sim ran and did nothing,
+    // which normalising to the peak would otherwise hide by scaling noise to 1.
+    printf("terrain-erosion-probe peaks flow=%.6f deposit=%.6f wear=%.6f\n",
+           (double)stats->flow_peak, (double)stats->deposit_peak, (double)stats->wear_peak);
+    // The determinism claim in one number. The budget rows above cannot make it:
+    // addition hides compensating differences, so two thread counts that disagree
+    // cell by cell can still report identical totals.
+    printf("terrain-erosion-probe digest value=%016llx\n", stats->digest);
 }

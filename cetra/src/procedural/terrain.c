@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -70,6 +71,26 @@ bool terrain_field_alloc(TerrainField* field, int res) {
     return true;
 }
 
+void terrain_field_measure(TerrainField* field) {
+    if (!field || !field->height || field->res < 1) {
+        if (field) {
+            field->min_y = 0.0f;
+            field->max_y = 0.0f;
+        }
+        return;
+    }
+    size_t n = (size_t)field->res * (size_t)field->res;
+    float lo = field->height[0], hi = field->height[0];
+    for (size_t k = 1; k < n; k++) {
+        if (field->height[k] < lo)
+            lo = field->height[k];
+        if (field->height[k] > hi)
+            hi = field->height[k];
+    }
+    field->min_y = lo;
+    field->max_y = hi;
+}
+
 bool terrain_field_seed(TerrainField* field, const TerrainParams* params) {
     if (!field || !field->height || field->res < 2 || !params)
         return false;
@@ -82,16 +103,22 @@ bool terrain_field_seed(TerrainField* field, const TerrainParams* params) {
     TerrainParams analytic = *params;
     analytic.field = NULL;
 
-    float span = 2.0f * params->extent;
-    float last = (float)(field->res - 1);
     for (int j = 0; j < field->res; ++j) {
-        float z = -params->extent + span * (float)j / last;
+        // terrain_field_node, not a hand-written `-extent + span*j/last`. Those
+        // are the same value in exact arithmetic and NOT in floats -- the sampler
+        // divides by `cell`, so the seed multiplies by the same `cell` and a node
+        // pushed through the sampler lands on its own index. Re-associating it
+        // moved the bake's digest and nothing else, which is how the two halves
+        // of that claim were told apart: with the old seed restored, the thermal
+        // rewrite below reads bit-identical to the version it replaced.
+        float z = terrain_field_node(params->extent, field->res, j);
         for (int i = 0; i < field->res; ++i) {
-            float x = -params->extent + span * (float)i / last;
+            float x = terrain_field_node(params->extent, field->res, i);
             field->height[(size_t)j * (size_t)field->res + (size_t)i] =
                 terrain_height_at(&analytic, x, z);
         }
     }
+    terrain_field_measure(field);
     return true;
 }
 
@@ -162,14 +189,18 @@ static float plane_texel(const TerrainField* f, const float* plane, int i, int j
 // the silt somewhere other than where the sim deposited it.
 static float sample_plane(const TerrainParams* p, const float* plane, float x, float z) {
     const TerrainField* f = p->field;
-    float span = 2.0f * p->extent;
-    if (!f || !plane || f->res < 2 || !(span > 0.0f))
+    // res >= 2 and a non-NULL height plane are terrain_field_alloc's invariants,
+    // so they are not re-asked here. `plane` can still be NULL -- it is the
+    // fall-through for a TerrainMask outside the enum -- and `extent` is
+    // caller-owned and never validated on the way in.
+    float cell = terrain_field_cell(p->extent, f->res);
+    if (!plane || !(cell > 0.0f))
         return 0.0f;
 
     // Texels sit on NODES: 0 lands on -extent and res-1 on +extent.
     float last = (float)(f->res - 1);
-    float gx = (x + p->extent) / span * last;
-    float gz = (z + p->extent) / span * last;
+    float gx = (x + p->extent) / cell;
+    float gz = (z + p->extent) / cell;
     // Clamp the COORDINATE rather than only the taps. Clamping taps alone still
     // interpolates between them with an out-of-range t, which extrapolates the
     // cubic past the edge -- the failure this policy exists to avoid.
@@ -271,7 +302,22 @@ void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out) {
 static void terrain_tint(const TerrainParams* p, float x, float z, float height, const vec3 normal,
                          float* rgba) {
     float slope = normal[1]; // 1 flat, 0 vertical
-    float alt = p->height > 0.0f ? height / p->height : 0.0f;
+
+    // Altitude in [-1, 1], against whatever is actually setting the relief.
+    //
+    // params->height is the fbm's AMPLITUDE, and it goes inert the moment a field
+    // is installed -- so using it for a loaded field measured altitude against a
+    // number with no relationship to the terrain. A Gaea export loaded over
+    // 0..1200 into an app whose params say 95 read alt up to 12.6, which put
+    // every surface above y = 32 fully under snow and left the dirt band
+    // unreachable. A field states its own range, and that is what normalises here.
+    float relief = p->height;
+    float centre = 0.0f;
+    if (p->field && p->field->max_y > p->field->min_y) {
+        relief = 0.5f * (p->field->max_y - p->field->min_y);
+        centre = 0.5f * (p->field->max_y + p->field->min_y);
+    }
+    float alt = relief > 0.0f ? (height - centre) / relief : 0.0f;
 
     // Two extra noise fields, at frequencies unrelated to the height's, so the
     // ground does not simply restate its own shape in colour. Without them every
@@ -335,6 +381,116 @@ static void terrain_tint(const TerrainParams* p, float x, float z, float height,
     rgba[1] = c[1];
     rgba[2] = c[2];
     rgba[3] = 1.0f;
+}
+
+// Sample points the height probe reports. A fixed set, because an arm asserting
+// against ground truth needs to know where the ground truth was taken -- and a
+// grid derived from the extent moves the moment a caller changes it.
+#define PROBE_GRID 5
+
+// Print what the height function actually returns, which nothing else can show.
+// A field wired to the wrong world scale, read with the axes swapped, or clamped
+// to zero outside its domain still renders as terrain.
+//
+// In the library beside the sampler it tests, not in an app: this is the falsifier
+// for everything above, and every other probe in this tree -- water_fft_probe,
+// wind_bound_probe, emissive_lights_probe -- sits beside its own data for the same
+// reason. apps/forest is only the first terrain consumer, not the last.
+void terrain_height_probe(const TerrainParams* p) {
+    if (!p)
+        return;
+    const TerrainField* f = p->field;
+    float extent = p->extent;
+    printf("terrain-height-probe header source=%s res=%d extent=%.4f cell=%.6f\n",
+           f ? "field" : "analytic", f ? f->res : 0, (double)extent,
+           f ? (double)terrain_field_cell(extent, f->res) : 0.0);
+
+    for (int j = 0; j < PROBE_GRID; ++j) {
+        for (int i = 0; i < PROBE_GRID; ++i) {
+            // Interior fractions, not the corners: a corner is where clamping and
+            // sampling give the same answer, so it cannot tell them apart.
+            float u = (float)(i + 1) / (float)(PROBE_GRID + 1);
+            float v = (float)(j + 1) / (float)(PROBE_GRID + 1);
+            float x = -extent + 2.0f * extent * u;
+            float z = -extent + 2.0f * extent * v;
+            // SNAPPED ONTO A NODE when there is a field, so these rows read the
+            // stored value and not the interpolant. That splits two questions that
+            // otherwise contaminate each other: whether the field is MAPPED right
+            // -- axis order, node convention, world range -- and how well it is
+            // FILTERED between nodes. On the lattice every correct sampler agrees
+            // exactly, so a mapping error has nowhere to hide behind interpolation
+            // error, and the bar can stay at a couple of quantisation codes.
+            if (f) {
+                float snap = terrain_field_cell(extent, f->res);
+                x = terrain_field_node(extent, f->res, (int)floorf((x + extent) / snap + 0.5f));
+                z = terrain_field_node(extent, f->res, (int)floorf((z + extent) / snap + 0.5f));
+            }
+            vec3 n = {0.0f, 1.0f, 0.0f};
+            terrain_normal_at(p, x, z, n);
+            // The fbm at the SAME point, alongside whatever the active source
+            // says. With a field seeded from the fbm and no sim run over it the
+            // two must agree, which is the node convention asserted end to end --
+            // and comparing them in one process is what avoids matching
+            // coordinates across two runs whose sample points do not coincide.
+            TerrainParams analytic = *p;
+            analytic.field = NULL;
+            printf("terrain-height-probe sample x=%.4f z=%.4f h=%.6f fbm=%.6f ny=%.6f "
+                   "flow=%.6f deposit=%.6f wear=%.6f\n",
+                   (double)x, (double)z, (double)terrain_height_at(p, x, z),
+                   (double)terrain_height_at(&analytic, x, z), (double)n[1],
+                   (double)terrain_mask_at(p, TERRAIN_MASK_FLOW, x, z),
+                   (double)terrain_mask_at(p, TERRAIN_MASK_DEPOSIT, x, z),
+                   (double)terrain_mask_at(p, TERRAIN_MASK_WEAR, x, z));
+        }
+    }
+
+    // Outside the domain, paired with the edge point each one should clamp ONTO.
+    // The camera really does query out here, so "returns something finite" is not
+    // the assertion -- "returns the edge" is.
+    //
+    // HALF OF THESE SIT LESS THAN A CELL OUTSIDE, and that is the whole reason the
+    // set is not four far-away points. Catmull-Rom over four EQUAL taps returns
+    // that value exactly, so once a query is far enough out that all four taps
+    // clamp to the same edge column, an unclamped sampler returns the edge anyway
+    // and cannot be told from a clamped one. The difference lives in the first
+    // cell beyond the boundary, where the taps still differ.
+    float step = f ? terrain_field_cell(extent, f->res) : 1.0f;
+    float near_u = (extent + 0.4f * step) / extent;
+    const float out[8][2] = {{-1.35f, 0.20f},   {1.35f, -0.40f}, {0.10f, 1.60f},
+                             {-0.70f, -1.90f}, {-near_u, 0.15f}, {near_u, -0.55f},
+                             {0.35f, near_u},  {-0.25f, -near_u}};
+    for (int k = 0; k < 8; ++k) {
+        float x = out[k][0] * extent, z = out[k][1] * extent;
+        float cx = x < -extent ? -extent : (x > extent ? extent : x);
+        float cz = z < -extent ? -extent : (z > extent ? extent : z);
+        printf("terrain-height-probe clamp x=%.4f z=%.4f h=%.6f edge_x=%.4f edge_z=%.4f "
+               "edge_h=%.6f\n",
+               (double)x, (double)z, (double)terrain_height_at(p, x, z), (double)cx,
+               (double)cz, (double)terrain_height_at(p, cx, cz));
+    }
+
+    // CELL MIDPOINTS, which is where the filter is decided and the only place it
+    // can be seen. Every interpolant agrees exactly at a node, so a probe that
+    // samples on the lattice tests the storage and not the filter -- and a probe
+    // that samples the NORMAL cannot see it either, because terrain_normal_at
+    // central-differences over less than a cell and a bilinear surface is locally
+    // the linearisation the difference is estimating. Halfway between two nodes is
+    // where a chord is furthest from the curve it cuts.
+    float cell = f ? terrain_field_cell(extent, f->res) : 1.0f;
+    for (int k = 0; k < PROBE_GRID * PROBE_GRID; ++k) {
+        int gi = k % PROBE_GRID, gj = k / PROBE_GRID;
+        // Land on a node first, then step half a cell in x, so the offset is
+        // exactly half however the extent and resolution are chosen.
+        float u = (float)(gi + 1) / (float)(PROBE_GRID + 1);
+        float v = (float)(gj + 1) / (float)(PROBE_GRID + 1);
+        float nx = floorf((u * 2.0f * extent) / cell);
+        float nz = floorf((v * 2.0f * extent) / cell);
+        float x = -extent + (nx + 0.5f) * cell;
+        float z = -extent + nz * cell;
+        printf("terrain-height-probe mid x=%.6f z=%.6f h=%.6f\n", (double)x, (double)z,
+               (double)terrain_height_at(p, x, z));
+    }
+
 }
 
 // The shared grid builder. Both the visual tiles and the collider are a regular

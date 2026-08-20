@@ -391,9 +391,15 @@ static float forest_bed_height(void* ctx, float x, float z) {
     return terrain_height_at((const TerrainParams*)ctx, x, z);
 }
 
-// Half the visual mesh's spacing at the default sizing (1.96 units against 2.60),
-// so the field resolves everything the tiles can draw and the bake stays around a
-// second. Raising it is a straight quadratic on the bake.
+// 1.96 units between cells at the default sizing, against the visual mesh's 2.60,
+// so the field resolves everything the tiles can draw with a little to spare.
+// Raising it is a straight quadratic on the bake: 452 ms at this size on eight
+// threads, 1839 on one.
+//
+// RELEASE figures. build.sh defaults to the debug preset, which passes no -O at
+// all, and the same bake there is 2.3 s and 14.8 s -- five times slower, because
+// none of the sim's small helpers inline. Any timing taken from `out/bin` rather
+// than `out/release/bin` is measuring that.
 #define EROSION_DEFAULT_RES 512
 
 // Seed a field from the fbm, erode it, and install it. Everything downstream --
@@ -417,6 +423,19 @@ static void bake_erosion(void) {
         ep.iterations = g_args.erode_iterations;
     ep.workers = g_args.erode_workers;
 
+    // Zero iterations installs the SEEDED field and runs no sim. Not a degenerate
+    // case to tolerate but the one configuration in which the field and the fbm
+    // must agree exactly, which is what makes it worth a flag value: sampling a
+    // field at a node has to return the fbm value that was written there, and
+    // that is the whole node convention asserted end to end.
+    if (g_args.erode_iterations < 0) {
+        terrain_field_measure(&g_field);
+        g_terrain.field = &g_field;
+        printf("Terrain seeded: %dx%d cells at %.2f units, no erosion\n", res, res,
+               (double)terrain_field_cell(g_terrain.extent, res));
+        return;
+    }
+
     ErosionStats st;
     double t0 = glfwGetTime();
     bool ok = terrain_erode(&g_field, &g_terrain, &ep, &st);
@@ -430,13 +449,12 @@ static void bake_erosion(void) {
     // Installed only now. Seeding through a params that already pointed at the
     // field would have sampled the plane it was filling.
     g_terrain.field = &g_field;
-    float cell = (2.0f * g_terrain.extent) / (float)(res - 1);
+    float cell = terrain_field_cell(g_terrain.extent, res);
     printf("Terrain eroded: %dx%d cells at %.2f units, %d iterations, %d threads, %.0f ms\n", res,
            res, cell, ep.iterations, st.workers, ms);
 
     if (g_args.erode_save) {
-        float lo = 0.0f, hi = 1.0f;
-        heightmap_height_range(&g_field, &lo, &hi);
+        float lo = g_field.min_y, hi = g_field.max_y;
         if (heightmap_save(&g_field, g_args.erode_save, lo, hi) && g_args.erode_probe) {
             // At full precision, and this row is why: the range is not recorded in
             // a headerless file, so reading the terrain back needs a number the
@@ -446,135 +464,8 @@ static void bake_erosion(void) {
         }
     }
 
-    if (!g_args.erode_probe)
-        return;
-
-    // The hydraulic stages only MOVE material, so ground plus suspended load has
-    // to come back to what it started as. Nothing in a rendered frame can check
-    // that: terrain with a silently leaking sediment budget still looks eroded.
-    double closure = (st.height_after + st.sediment_left) - st.height_before;
-    double scale = st.height_before != 0.0 ? fabs(st.height_before) : 1.0;
-    printf("terrain-erosion-probe header res=%d iterations=%d workers=%d cell=%.4f ms=%.0f\n", res,
-           ep.iterations, st.workers, cell, ms);
-    printf("terrain-erosion-probe budget before=%.6f after=%.6f suspended=%.6f closure=%.6f "
-           "rel=%.3e\n",
-           st.height_before, st.height_after, st.sediment_left, closure, fabs(closure) / scale);
-    printf("terrain-erosion-probe moved eroded=%.6f deposited=%.6f\n", st.eroded_total,
-           st.deposited_total);
-    // Pre-normalisation peaks. A peak of zero means the sim ran and did nothing,
-    // which normalising to the peak would otherwise hide by scaling noise to 1.
-    printf("terrain-erosion-probe peaks flow=%.6f deposit=%.6f wear=%.6f\n", (double)st.flow_peak,
-           (double)st.deposit_peak, (double)st.wear_peak);
-    // The determinism claim in one number. The budget rows above cannot make it:
-    // addition hides compensating differences.
-    printf("terrain-erosion-probe digest value=%016llx\n", st.digest);
-}
-
-// Sample points the height probe reports. A fixed set, because an arm asserting
-// against ground truth needs to know where the ground truth was taken -- and a
-// grid derived from the extent moves the moment a caller changes it.
-#define PROBE_GRID 5
-#define PROBE_SCAN 40
-
-// Print what the height function actually returns, which nothing else can show.
-// A field wired to the wrong world scale, read with the axes swapped, or clamped
-// to zero outside its domain still renders as terrain.
-static void height_probe(void) {
-    const TerrainField* f = g_terrain.field;
-    float extent = g_terrain.extent;
-    printf("terrain-height-probe header source=%s res=%d extent=%.4f cell=%.6f\n",
-           f ? "field" : "analytic", f ? f->res : 0, (double)extent,
-           f ? (double)((2.0f * extent) / (float)(f->res - 1)) : 0.0);
-
-    for (int j = 0; j < PROBE_GRID; ++j) {
-        for (int i = 0; i < PROBE_GRID; ++i) {
-            // Interior fractions, not the corners: a corner is where clamping and
-            // sampling give the same answer, so it cannot tell them apart.
-            float u = (float)(i + 1) / (float)(PROBE_GRID + 1);
-            float v = (float)(j + 1) / (float)(PROBE_GRID + 1);
-            float x = -extent + 2.0f * extent * u;
-            float z = -extent + 2.0f * extent * v;
-            // SNAPPED ONTO A NODE when there is a field, so these rows read the
-            // stored value and not the interpolant. That splits two questions that
-            // otherwise contaminate each other: whether the field is MAPPED right
-            // -- axis order, node convention, world range -- and how well it is
-            // FILTERED between nodes. On the lattice every correct sampler agrees
-            // exactly, so a mapping error has nowhere to hide behind interpolation
-            // error, and the bar can stay at a couple of quantisation codes.
-            if (f) {
-                float snap = (2.0f * extent) / (float)(f->res - 1);
-                x = -extent + floorf((x + extent) / snap + 0.5f) * snap;
-                z = -extent + floorf((z + extent) / snap + 0.5f) * snap;
-            }
-            vec3 n;
-            terrain_normal_at(&g_terrain, x, z, n);
-            printf("terrain-height-probe sample x=%.4f z=%.4f h=%.6f ny=%.6f "
-                   "flow=%.6f deposit=%.6f wear=%.6f\n",
-                   (double)x, (double)z, (double)terrain_height_at(&g_terrain, x, z), (double)n[1],
-                   (double)terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z),
-                   (double)terrain_mask_at(&g_terrain, TERRAIN_MASK_DEPOSIT, x, z),
-                   (double)terrain_mask_at(&g_terrain, TERRAIN_MASK_WEAR, x, z));
-        }
-    }
-
-    // Outside the domain, paired with the edge point each one should clamp ONTO.
-    // The camera really does query out here, so "returns something finite" is not
-    // the assertion -- "returns the edge" is.
-    //
-    // HALF OF THESE SIT LESS THAN A CELL OUTSIDE, and that is the whole reason the
-    // set is not four far-away points. Catmull-Rom over four EQUAL taps returns
-    // that value exactly, so once a query is far enough out that all four taps
-    // clamp to the same edge column, an unclamped sampler returns the edge anyway
-    // and cannot be told from a clamped one. The difference lives in the first
-    // cell beyond the boundary, where the taps still differ.
-    float step = f ? (2.0f * extent) / (float)(f->res - 1) : 1.0f;
-    float near_u = (extent + 0.4f * step) / extent;
-    const float out[8][2] = {{-1.35f, 0.20f},   {1.35f, -0.40f}, {0.10f, 1.60f},
-                             {-0.70f, -1.90f}, {-near_u, 0.15f}, {near_u, -0.55f},
-                             {0.35f, near_u},  {-0.25f, -near_u}};
-    for (int k = 0; k < 8; ++k) {
-        float x = out[k][0] * extent, z = out[k][1] * extent;
-        float cx = x < -extent ? -extent : (x > extent ? extent : x);
-        float cz = z < -extent ? -extent : (z > extent ? extent : z);
-        printf("terrain-height-probe clamp x=%.4f z=%.4f h=%.6f edge_x=%.4f edge_z=%.4f "
-               "edge_h=%.6f\n",
-               (double)x, (double)z, (double)terrain_height_at(&g_terrain, x, z), (double)cx,
-               (double)cz, (double)terrain_height_at(&g_terrain, cx, cz));
-    }
-
-    // CELL MIDPOINTS, which is where the filter is decided and the only place it
-    // can be seen. Every interpolant agrees exactly at a node, so a probe that
-    // samples on the lattice tests the storage and not the filter -- and a probe
-    // that samples the NORMAL cannot see it either, because terrain_normal_at
-    // central-differences over less than a cell and a bilinear surface is locally
-    // the linearisation the difference is estimating. Halfway between two nodes is
-    // where a chord is furthest from the curve it cuts.
-    float cell = f ? (2.0f * extent) / (float)(f->res - 1) : 1.0f;
-    for (int k = 0; k < PROBE_GRID * PROBE_GRID; ++k) {
-        int gi = k % PROBE_GRID, gj = k / PROBE_GRID;
-        // Land on a node first, then step half a cell in x, so the offset is
-        // exactly half however the extent and resolution are chosen.
-        float u = (float)(gi + 1) / (float)(PROBE_GRID + 1);
-        float v = (float)(gj + 1) / (float)(PROBE_GRID + 1);
-        float nx = floorf((u * 2.0f * extent) / cell);
-        float nz = floorf((v * 2.0f * extent) / cell);
-        float x = -extent + (nx + 0.5f) * cell;
-        float z = -extent + nz * cell;
-        printf("terrain-height-probe mid x=%.6f z=%.6f h=%.6f\n", (double)x, (double)z,
-               (double)terrain_height_at(&g_terrain, x, z));
-    }
-
-    // A short line crossing several cell boundaries, kept for reading by eye.
-    float x0 = 0.0f, z0 = 0.0f;
-    for (int k = 0; k < PROBE_SCAN; ++k) {
-        float t = (float)k / (float)(PROBE_SCAN - 1);
-        float x = x0 + t * cell * 4.0f;
-        vec3 n;
-        terrain_normal_at(&g_terrain, x, z0, n);
-        printf("terrain-height-probe scan k=%d x=%.6f h=%.6f nx=%.6f ny=%.6f nz=%.6f\n", k,
-               (double)x, (double)terrain_height_at(&g_terrain, x, z0), (double)n[0], (double)n[1],
-               (double)n[2]);
-    }
+    if (g_args.erode_probe)
+        erosion_stats_probe(&st, &ep, res, cell, ms);
 }
 
 // Install a heightfield from a file, in place of baking one. This is the AAA path
@@ -881,12 +772,18 @@ static void on_init(Game* game) {
     // have to see the same surface, and they see it through g_terrain.
     // A loaded field wins over a baked one: the file is a statement about what
     // the terrain IS, and re-eroding it would be eroding someone's finished work.
+    // Said out loud, because every --erode-* flag also SETS --erode, so a command
+    // line asking to bake and save alongside a --heightmap would otherwise get no
+    // bake, no file and no explanation.
+    if (g_args.heightmap && g_args.erode)
+        fprintf(stderr, "forest: --heightmap wins over --erode; the bake and any --erode-save "
+                        "are skipped\n");
     if (g_args.heightmap)
         load_heightfield();
     else if (g_args.erode)
         bake_erosion();
     if (g_args.height_probe)
-        height_probe();
+        terrain_height_probe(&g_terrain);
 
     // Albedo white on the textured materials: the shader multiplies factor by
     // map, so any factor below one darkens the whole range.

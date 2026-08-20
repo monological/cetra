@@ -24,22 +24,29 @@
 // or float at all; and this is CPU-side height data that the GL never sees.
 
 // Load into a freshly allocated field, mapping the file's full range onto
-// [min_y, max_y]. Accepts `.r16` and 16-bit PNG, chosen by extension. Refuses,
-// with a log line naming the path and the reason, on: a non-square byte count, a
-// resolution under 2, a PNG that is not square, or an unreadable file. The masks
-// are allocated and left zero -- an import carries no erosion history, which is
-// the truth about it.
+// [min_y, max_y] and recording it on the field. Accepts `.r16` and 16-bit PNG,
+// chosen by extension. Refuses, with a log line naming the path and the reason,
+// on: a non-square byte count, a resolution under 2, a PNG that is not square, an
+// 8-bit PNG, or an unreadable file.
+//
+// SIBLING MASKS ARE PICKED UP AUTOMATICALLY when they sit beside the height as
+// `<stem>_flow.r8`, `_deposit.r8` and `_wear.r8`. Missing ones stay zero, which
+// is the truth about a Gaea or World Machine export -- it carries geometry and no
+// erosion history. What it must NOT be is the truth about this module's own save,
+// which is why heightmap_save writes them.
 bool heightmap_load(TerrainField* field, const char* path, float min_y, float max_y);
 
-// Write field->height as `.r16`, mapping [min_y, max_y] onto the full 16-bit
-// range and clamping outside it. Bytes are written little-endian explicitly, so a
-// file written on either endianness reads the same on both.
+// Write the field as `.r16` plus its three `_flow` / `_deposit` / `_wear` 8-bit
+// siblings, mapping [min_y, max_y] onto the full 16-bit range and clamping
+// outside it. Bytes are little-endian explicitly, so a file written on either
+// endianness reads the same on both.
+//
+// The masks are written because without them the round trip is not the one this
+// module exists to provide. A shipping load would get the eroded GEOMETRY and
+// then shade it with the slope-and-altitude guess erosion was built to replace --
+// which is the exact failure the feature opens by describing, arrived at through
+// its own save path. Eight bits because a mask is a blend weight read through a
+// smoothstep, where 1/255 is far below what any threshold resolves.
 bool heightmap_save(const TerrainField* field, const char* path, float min_y, float max_y);
-
-// The tightest [min_y, max_y] that loses nothing to clamping. Separate from the
-// save so a CALLER can choose a range shared across several fields -- two
-// terrains saved against their own peaks are not comparable, which is a mistake
-// worth having to make on purpose.
-void heightmap_height_range(const TerrainField* field, float* min_y, float* max_y);
 
 #endif // _HEIGHTMAP_H_

@@ -75,9 +75,20 @@ typedef struct ErosionStats {
 
     // How the work was split. Reported because it is the one input to the bake a
     // caller did not choose, and the whole determinism claim is that it does not
-    // reach the output. There is deliberately no TIMING here: this module owns no
-    // clock, so the caller measures the call with the one it already has.
+    // reach the output. THAT CLAIM IS WITHIN ONE BUILD: the digest below is
+    // identical across worker counts and differs between an -O0 and an -O2 build
+    // of the same source, which is the same "two runs of one build is not two
+    // builds" rule the render side already lives under. There is deliberately no TIMING here: this
+    // module owns no clock, so the caller measures the call with the one it already has.
     int workers;
+
+    // (height_after + sediment_left) - height_before, and the same relative to the
+    // starting mass. The hydraulic stages only MOVE material, so this is the sim's
+    // own conservation claim -- computed here rather than left to a caller, since
+    // a second consumer would restate the formula slightly differently and the
+    // contract belongs to the module that has to satisfy it.
+    double closure;
+    double closure_rel;
 
     // FNV-1a over the raw bytes of all four planes, in index order.
     //
@@ -98,5 +109,15 @@ ErosionParams erosion_default_params(void);
 // stats may be NULL. False leaves the field untouched.
 bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const ErosionParams* params,
                    ErosionStats* stats);
+
+// Print the bake's own numbers to stdout, in the --water-fft-probe idiom.
+//
+// Here rather than in a caller because that is where every other probe in this
+// tree lives -- water_fft_probe, wind_bound_probe, emissive_lights_probe -- and
+// for the same reason: the probe is the falsifier for THIS module, and an app is
+// the wrong place to strand the only instrument that can see a sediment budget
+// leaking. `ms` comes from the caller because this module owns no clock.
+void erosion_stats_probe(const ErosionStats* stats, const ErosionParams* params, int res,
+                         float cell, double ms);
 
 #endif // _EROSION_H_

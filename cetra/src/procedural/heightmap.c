@@ -5,43 +5,58 @@
 
 #include "heightmap.h"
 
-#include "../ext/stb_image.h"
+#include "../compat.h" // strcasecmp
 #include "../ext/log.h"
+#include "../ext/stb_image.h"
 #include "../util.h"
 
 // The full range of the storage. A 16-bit sample of 65535 IS max_y, not one step
 // short of it, which is what makes a save/load round trip land on the endpoints
 // rather than drifting inward by a texel every time it is repeated.
 #define HEIGHTMAP_R16_MAX 65535.0f
+#define HEIGHTMAP_R8_MAX  255.0f
 
-static bool ends_with_ci(const char* s, const char* suffix) {
-    size_t ls = strlen(s), lx = strlen(suffix);
-    if (lx > ls)
-        return false;
-    const char* tail = s + (ls - lx);
-    for (size_t i = 0; i < lx; i++) {
-        char a = tail[i], b = suffix[i];
-        if (a >= 'A' && a <= 'Z')
-            a = (char)(a - 'A' + 'a');
-        if (a != b)
-            return false;
+// The three mask siblings, in the order TerrainMask declares them so a loop over
+// one can index the other.
+static const char* const MASK_SUFFIX[3] = {"_flow.r8", "_deposit.r8", "_wear.r8"};
+
+static float* mask_plane(const TerrainField* field, int which) {
+    switch (which) {
+    case 0:
+        return field->flow;
+    case 1:
+        return field->deposit;
+    default:
+        return field->wear;
     }
+}
+
+// "<dir>/<stem>.r16" -> "<dir>/<stem>_flow.r8". Writes into `out`, returns false
+// if it would not fit rather than producing a truncated neighbour of some other
+// file.
+static bool sibling_path(char* out, size_t cap, const char* path, const char* suffix) {
+    const char* dot = strrchr(path, '.');
+    size_t stem = dot ? (size_t)(dot - path) : strlen(path);
+    if (stem + strlen(suffix) + 1 > cap)
+        return false;
+    memcpy(out, path, stem);
+    strcpy(out + stem, suffix);
     return true;
 }
 
-// Largest r with r*r <= n, by integer bisection. Not sqrtf: a double rounding at
-// 4096 would silently accept a file one row short, which is exactly the corruption
-// a headerless format cannot otherwise detect.
-static int isqrt_floor(size_t n) {
-    size_t lo = 0, hi = 65536;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo + 1) / 2;
-        if (mid * mid <= n)
-            lo = mid;
-        else
-            hi = mid - 1;
+static bool write_all(const char* path, const unsigned char* bytes, size_t len) {
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        log_warn("heightmap: cannot open %s for writing", path);
+        return false;
     }
-    return (int)lo;
+    size_t wrote = fwrite(bytes, 1, len, f);
+    fclose(f);
+    if (wrote != len) {
+        log_warn("heightmap: short write to %s (%zu of %zu bytes)", path, wrote, len);
+        return false;
+    }
+    return true;
 }
 
 static bool fill_from_u16(TerrainField* field, const unsigned short* src, int res, float min_y,
@@ -52,7 +67,38 @@ static bool fill_from_u16(TerrainField* field, const unsigned short* src, int re
     size_t n = (size_t)res * (size_t)res;
     for (size_t k = 0; k < n; k++)
         field->height[k] = min_y + ((float)src[k] / HEIGHTMAP_R16_MAX) * span;
+    field->min_y = min_y;
+    field->max_y = max_y;
     return true;
+}
+
+// Read whichever mask siblings exist beside `path` into the field. Silent when a
+// file is absent -- that is a heightmap with no erosion history, which is the
+// normal case for anything a DCC tool produced -- and loud when one is present
+// but the wrong size, which is a mismatched pair rather than a missing one.
+static void load_masks(const TerrainField* field, const char* path) {
+    size_t want = (size_t)field->res * (size_t)field->res;
+    for (int m = 0; m < 3; m++) {
+        char sib[1024];
+        if (!sibling_path(sib, sizeof(sib), path, MASK_SUFFIX[m]))
+            continue;
+        long len = 0;
+        char* raw = read_entire_file(sib, &len);
+        if (!raw)
+            continue;
+        if ((size_t)len != want) {
+            log_warn("heightmap: %s holds %ld bytes against the height's %zu -- ignoring a "
+                     "mask that does not match the field it sits beside",
+                     sib, len, want);
+            free(raw);
+            continue;
+        }
+        const unsigned char* bytes = (const unsigned char*)raw;
+        float* plane = mask_plane(field, m);
+        for (size_t k = 0; k < want; k++)
+            plane[k] = (float)bytes[k] / HEIGHTMAP_R8_MAX;
+        free(raw);
+    }
 }
 
 static bool load_r16(TerrainField* field, const char* path, float min_y, float max_y) {
@@ -69,7 +115,10 @@ static bool load_r16(TerrainField* field, const char* path, float min_y, float m
     }
 
     size_t samples = (size_t)len / 2u;
-    int res = isqrt_floor(samples);
+    // sqrt is exactly rounded for every integer below 2^52, and the equality on
+    // the next line is the real guard either way: a sloppy root can only cause a
+    // false REJECTION here, never a silent accept.
+    int res = (int)sqrt((double)samples);
     if ((size_t)res * (size_t)res != samples) {
         log_warn("heightmap: %s holds %zu samples, which is not a square -- a headerless "
                  ".r16 must be one, and a truncated file looks exactly like this",
@@ -82,28 +131,43 @@ static bool load_r16(TerrainField* field, const char* path, float min_y, float m
         free(raw);
         return false;
     }
-
-    // Assembled from bytes rather than cast, so the file reads the same whatever
-    // the host's endianness is.
-    unsigned short* samples16 = malloc(samples * sizeof(unsigned short));
-    if (!samples16) {
+    if (!terrain_field_alloc(field, res)) {
         free(raw);
         return false;
     }
-    const unsigned char* bytes = (const unsigned char*)raw;
-    for (size_t k = 0; k < samples; k++)
-        samples16[k] = (unsigned short)(bytes[k * 2] | ((unsigned)bytes[k * 2 + 1] << 8));
 
-    bool ok = fill_from_u16(field, samples16, res, min_y, max_y);
-    free(samples16);
+    // Assembled from bytes and mapped in one pass. The two are together because
+    // an intermediate u16 buffer would be a second allocation of the file's whole
+    // size -- 33 MB on a 4096 square export -- to reach a helper the PNG path
+    // needs and this one does not.
+    const unsigned char* bytes = (const unsigned char*)raw;
+    float span = max_y - min_y;
+    for (size_t k = 0; k < samples; k++) {
+        unsigned v = (unsigned)bytes[k * 2] | ((unsigned)bytes[k * 2 + 1] << 8);
+        field->height[k] = min_y + ((float)v / HEIGHTMAP_R16_MAX) * span;
+    }
+    field->min_y = min_y;
+    field->max_y = max_y;
     free(raw);
-    if (ok)
-        log_info("heightmap: loaded %s, %dx%d, range %.3f..%.3f", path, res, res, (double)min_y,
-                 (double)max_y);
-    return ok;
+
+    load_masks(field, path);
+    log_info("heightmap: loaded %s, %dx%d, range %.3f..%.3f", path, res, res, (double)min_y,
+             (double)max_y);
+    return true;
 }
 
 static bool load_png16(TerrainField* field, const char* path, float min_y, float max_y) {
+    // Refused by name rather than up-converted. stb widens an 8-bit file to 16
+    // silently, so the whole justification for this path -- that a DCC tool
+    // exports PNG16 -- would be satisfied by a 256-level terraced heightfield
+    // that renders as terrain and steps like a staircase.
+    if (!stbi_is_16_bit(path)) {
+        log_warn("heightmap: %s is an 8-bit PNG. A heightfield needs 16, and stb would widen "
+                 "this one silently into 256 terraces",
+                 path);
+        return false;
+    }
+
     int w = 0, h = 0, channels = 0;
     // Forced to one channel: a heightmap's colour is not a thing, and a grey PNG
     // saved with an alpha would otherwise arrive interleaved.
@@ -121,9 +185,11 @@ static bool load_png16(TerrainField* field, const char* path, float min_y, float
 
     bool ok = fill_from_u16(field, pixels, w, min_y, max_y);
     stbi_image_free(pixels);
-    if (ok)
+    if (ok) {
+        load_masks(field, path);
         log_info("heightmap: loaded %s, %dx%d, range %.3f..%.3f", path, w, w, (double)min_y,
                  (double)max_y);
+    }
     return ok;
 }
 
@@ -135,35 +201,10 @@ bool heightmap_load(TerrainField* field, const char* path, float min_y, float ma
                  (double)min_y, (double)max_y);
         return false;
     }
-    if (ends_with_ci(path, ".png"))
+    const char* dot = strrchr(path, '.');
+    if (dot && strcasecmp(dot, ".png") == 0)
         return load_png16(field, path, min_y, max_y);
     return load_r16(field, path, min_y, max_y);
-}
-
-void heightmap_height_range(const TerrainField* field, float* min_y, float* max_y) {
-    if (!field || !field->height || field->res < 1) {
-        if (min_y)
-            *min_y = 0.0f;
-        if (max_y)
-            *max_y = 1.0f;
-        return;
-    }
-    size_t n = (size_t)field->res * (size_t)field->res;
-    float lo = field->height[0], hi = field->height[0];
-    for (size_t k = 1; k < n; k++) {
-        if (field->height[k] < lo)
-            lo = field->height[k];
-        if (field->height[k] > hi)
-            hi = field->height[k];
-    }
-    // A perfectly flat field has no range to normalise against, and dividing by
-    // it would put every sample at infinity rather than at a plane.
-    if (!(hi > lo))
-        hi = lo + 1.0f;
-    if (min_y)
-        *min_y = lo;
-    if (max_y)
-        *max_y = hi;
 }
 
 bool heightmap_save(const TerrainField* field, const char* path, float min_y, float max_y) {
@@ -190,22 +231,32 @@ bool heightmap_save(const TerrainField* field, const char* path, float min_y, fl
         out[k * 2] = (unsigned char)(v & 0xFFu);
         out[k * 2 + 1] = (unsigned char)((v >> 8) & 0xFFu);
     }
+    bool ok = write_all(path, out, n * 2u);
 
-    FILE* f = fopen(path, "wb");
-    if (!f) {
-        log_warn("heightmap: cannot open %s for writing", path);
-        free(out);
-        return false;
+    // The masks, into siblings. Written even when a bake left one flat -- an
+    // absent file means "no erosion history" on the load side, and a field that
+    // was eroded and simply has no wear anywhere is a different statement.
+    for (int m = 0; ok && m < 3; m++) {
+        const float* plane = mask_plane(field, m);
+        if (!plane)
+            continue;
+        char sib[1024];
+        if (!sibling_path(sib, sizeof(sib), path, MASK_SUFFIX[m])) {
+            log_warn("heightmap: %s is too long to hang a %s sibling off", path, MASK_SUFFIX[m]);
+            ok = false;
+            break;
+        }
+        for (size_t k = 0; k < n; k++) {
+            float t = plane[k];
+            t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+            out[k] = (unsigned char)(t * HEIGHTMAP_R8_MAX + 0.5f);
+        }
+        ok = write_all(sib, out, n);
     }
-    size_t wrote = fwrite(out, 1, n * 2u, f);
-    fclose(f);
+
     free(out);
-
-    if (wrote != n * 2u) {
-        log_warn("heightmap: short write to %s (%zu of %zu bytes)", path, wrote, n * 2u);
-        return false;
-    }
-    log_info("heightmap: wrote %s, %dx%d, range %.3f..%.3f", path, field->res, field->res,
-             (double)min_y, (double)max_y);
-    return true;
+    if (ok)
+        log_info("heightmap: wrote %s + 3 masks, %dx%d, range %.3f..%.3f", path, field->res,
+                 field->res, (double)min_y, (double)max_y);
+    return ok;
 }

@@ -37,6 +37,30 @@ typedef pthread_cond_t cetra_cond_t;
 bool cetra_thread_create(cetra_thread_t* thread, void* (*start)(void*), void* arg);
 void cetra_thread_join(cetra_thread_t thread);
 
+// Ceiling on a bake's worker count. A constant because the callers below size
+// their slab arrays on the stack.
+#define CETRA_BAKE_MAX_WORKERS 8
+
+// How many workers to split `rows` across. `requested` of 0 sizes from the
+// machine; the result is clamped to [1, min(CETRA_BAKE_MAX_WORKERS, rows)].
+int cetra_bake_workers(int requested, int rows);
+
+// Split [0, rows) into `workers` disjoint contiguous bands and run `fn` on each,
+// joining before returning.
+//
+// The split is remainder-free -- band i is [rows*i/workers, rows*(i+1)/workers) --
+// so it never overshoots and every worker gets a band whatever the two numbers
+// are. A worker that fails to start runs its band inline rather than being
+// dropped, which is what makes the result independent of whether the OS could
+// spawn anything.
+//
+// THE POINT IS THAT THE BAND SPLIT IS ONE PIECE OF CODE. Two callers rely on it
+// for bitwise-identical output at any worker count -- the cloud noise bake and
+// the erosion sim -- and both had their own copy, so a fix to one would silently
+// have missed the other. `fn` must write only within its own band; nothing here
+// synchronises, and nothing needs to when that holds.
+void cetra_bake_bands(int rows, int workers, void (*fn)(void* ctx, int begin, int end), void* ctx);
+
 // init returns false on failure; the rest cannot fail on either backend.
 bool cetra_mutex_init(cetra_mutex_t* mutex);
 void cetra_mutex_destroy(cetra_mutex_t* mutex);

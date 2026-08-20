@@ -49,11 +49,44 @@ typedef struct TerrainField {
     float* flow;   // the three masks, each nominally [0,1]
     float* deposit;
     float* wear;
+
+    // The height range this field actually spans, maintained by whoever fills it.
+    //
+    // It is here because a field is not obliged to cover the range the fbm would
+    // have: an imported heightmap declares its own, and erosion moves the
+    // extremes. Without it terrain_tint normalised altitude against
+    // TerrainParams.height -- the AMPLITUDE of a noise field that is inert once a
+    // field is installed -- so a file loaded over 0..1200 into an app whose params
+    // say 95 put the whole terrain twelve times over the snow line. max_y <= min_y
+    // means "not stated" and the tint falls back to the params.
+    float min_y;
+    float max_y;
 } TerrainField;
+
+// Distance between adjacent field nodes, in world units.
+//
+// One definition because it is a contract rather than a convenience: the node
+// convention above puts texel res-1 ON +extent, so the divisor is res-1 and not
+// res, and a consumer that gets that wrong is off by one cell across the whole
+// terrain. It was hand-written in seven places before this existed.
+static inline float terrain_field_cell(float extent, int res) {
+    return res > 1 ? (2.0f * extent) / (float)(res - 1) : 0.0f;
+}
+
+// World coordinate of node i along either axis -- the exact inverse of the
+// mapping the sampler uses, sharing terrain_field_cell so a seed and a sample
+// cannot disagree about where a node is.
+static inline float terrain_field_node(float extent, int res, int i) {
+    return -extent + terrain_field_cell(extent, res) * (float)i;
+}
 
 // Allocate (zeroed) / release all four planes. False leaves the struct zeroed.
 bool terrain_field_alloc(TerrainField* field, int res);
 void terrain_field_free(TerrainField* field);
+
+// Recompute min_y/max_y from the heights currently stored. Every path that fills
+// or edits a field owes this call, since the tint reads the result.
+void terrain_field_measure(TerrainField* field);
 
 typedef struct TerrainParams {
     float extent; // half-width; the terrain spans [-extent, +extent] on X and Z
@@ -109,6 +142,12 @@ float terrain_height_at(const TerrainParams* p, float x, float z);
 // installed, so a caller blending by these degrades to the un-eroded look rather
 // than to a special case. Same clamp policy as the height.
 float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z);
+
+// Print sampled heights, normals and masks to stdout, in the --water-fft-probe
+// idiom. The only way to see a field wired to the wrong world scale, read with
+// its axes transposed, or clamped to zero outside its domain -- all of which
+// render as perfectly plausible terrain.
+void terrain_height_probe(const TerrainParams* p);
 
 // Surface normal at a world XZ, by central difference on the height function.
 // Used for slope-aware scatter as well as for shading.
