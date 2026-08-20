@@ -51,6 +51,7 @@
 #include "cetra/game/input.h"
 #include "cetra/game/physics.h"
 
+#include "cetra/procedural/erosion.h"
 #include "cetra/procedural/rock.h"
 #include "cetra/procedural/terrain.h"
 #include "cetra/procedural/tree_gen.h"
@@ -104,11 +105,19 @@ typedef struct ForestArgs {
     vec3 cam_target;
     int water;         // flood the terrain to --water-level (spec 11.32)
     float water_level; // world Y of the still surface
+    int erode;         // bake a heightfield and run erosion over it (spec 11.59)
+    int erode_res;     // field resolution; 0 = EROSION_DEFAULT_RES
+    int erode_iterations;
+    int erode_workers; // 0 = size from the machine
+    int erode_probe;   // print the bake's own numbers; implies --erode
 } ForestArgs;
 
 static ForestArgs g_args;
 
 static TerrainParams g_terrain;
+// The eroded field, when --erode is on. File-static because g_terrain borrows it
+// for the process's lifetime -- the terrain is built once and never rebuilt.
+static TerrainField g_field;
 static Scene* g_scene;
 static SceneNode* g_root;
 static Entity* g_player;
@@ -374,6 +383,70 @@ static Material* make_material(const char* name, vec3 albedo, float roughness, f
 // out where a reader can see the two agree.
 static float forest_bed_height(void* ctx, float x, float z) {
     return terrain_height_at((const TerrainParams*)ctx, x, z);
+}
+
+// Half the visual mesh's spacing at the default sizing (1.96 units against 2.60),
+// so the field resolves everything the tiles can draw and the bake stays around a
+// second. Raising it is a straight quadratic on the bake.
+#define EROSION_DEFAULT_RES 512
+
+// Seed a field from the fbm, erode it, and install it. Everything downstream --
+// tiles, collider, scatter, water bed, camera -- then reads the eroded surface
+// through the same terrain_height_at they already called, which is the whole
+// point of the field being a source rather than a subsystem.
+static void bake_erosion(void) {
+    int res = g_args.erode_res > 0 ? g_args.erode_res : EROSION_DEFAULT_RES;
+    if (!terrain_field_alloc(&g_field, res)) {
+        fprintf(stderr, "forest: erosion field %dx%d allocation failed\n", res, res);
+        return;
+    }
+    if (!terrain_field_seed(&g_field, &g_terrain)) {
+        terrain_field_free(&g_field);
+        fprintf(stderr, "forest: erosion field seed refused\n");
+        return;
+    }
+
+    ErosionParams ep = erosion_default_params();
+    if (g_args.erode_iterations > 0)
+        ep.iterations = g_args.erode_iterations;
+    ep.workers = g_args.erode_workers;
+
+    ErosionStats st;
+    double t0 = glfwGetTime();
+    bool ok = terrain_erode(&g_field, &g_terrain, &ep, &st);
+    double ms = (glfwGetTime() - t0) * 1000.0;
+    if (!ok) {
+        terrain_field_free(&g_field);
+        fprintf(stderr, "forest: erosion bake refused\n");
+        return;
+    }
+
+    // Installed only now. Seeding through a params that already pointed at the
+    // field would have sampled the plane it was filling.
+    g_terrain.field = &g_field;
+    float cell = (2.0f * g_terrain.extent) / (float)(res - 1);
+    printf("Terrain eroded: %dx%d cells at %.2f units, %d iterations, %d threads, %.0f ms\n", res,
+           res, cell, ep.iterations, st.workers, ms);
+
+    if (!g_args.erode_probe)
+        return;
+
+    // The hydraulic stages only MOVE material, so ground plus suspended load has
+    // to come back to what it started as. Nothing in a rendered frame can check
+    // that: terrain with a silently leaking sediment budget still looks eroded.
+    double closure = (st.height_after + st.sediment_left) - st.height_before;
+    double scale = st.height_before != 0.0 ? fabs(st.height_before) : 1.0;
+    printf("terrain-erosion-probe header res=%d iterations=%d workers=%d cell=%.4f ms=%.0f\n", res,
+           ep.iterations, st.workers, cell, ms);
+    printf("terrain-erosion-probe budget before=%.6f after=%.6f suspended=%.6f closure=%.6f "
+           "rel=%.3e\n",
+           st.height_before, st.height_after, st.sediment_left, closure, fabs(closure) / scale);
+    printf("terrain-erosion-probe moved eroded=%.6f deposited=%.6f\n", st.eroded_total,
+           st.deposited_total);
+    // Pre-normalisation peaks. A peak of zero means the sim ran and did nothing,
+    // which normalising to the peak would otherwise hide by scaling noise to 1.
+    printf("terrain-erosion-probe peaks flow=%.6f deposit=%.6f wear=%.6f\n", (double)st.flow_peak,
+           (double)st.deposit_peak, (double)st.wear_peak);
 }
 
 static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
@@ -654,6 +727,11 @@ static void on_init(Game* game) {
     g_terrain.octaves = 6;
     g_rng = g_args.seed * 2654435761u + 1u;
     noise_perm_init(&g_clump, g_args.seed ^ 0x5bf03635u);
+
+    // Before anything reads a height. The scatter, the collider and the tiles all
+    // have to see the same surface, and they see it through g_terrain.
+    if (g_args.erode)
+        bake_erosion();
 
     // Albedo white on the textured materials: the shader multiplies factor by
     // map, so any factor below one darkens the whole range.
@@ -961,6 +1039,10 @@ static void on_shutdown(Game* game) {
     // because the whole app exists to be read off these tables.
     if (game && game->engine)
         profiler_report(game->engine->profiler);
+    // g_terrain borrows this, so it outlives every consumer by construction and
+    // is released only once nothing can ask for a height again.
+    g_terrain.field = NULL;
+    terrain_field_free(&g_field);
 }
 
 // --- entry point -----------------------------------------------------------
@@ -990,6 +1072,11 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --lod-bias F        >1 holds detail longer\n");
     fprintf(stderr, "      --water             Flood the terrain (spec 11.32)\n");
     fprintf(stderr, "      --water-level <f>   Still-water world Y (implies --water)\n");
+    fprintf(stderr, "      --erode             Bake a heightfield and erode it\n");
+    fprintf(stderr, "      --erode-res <n>     Field resolution (default 512)\n");
+    fprintf(stderr, "      --erode-iterations <n>  Sim steps (default 220)\n");
+    fprintf(stderr, "      --erode-workers <n> Pin the thread count (0 = machine)\n");
+    fprintf(stderr, "      --terrain-erosion-probe  Print the bake's own numbers\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
     fprintf(stderr, "      --cam-target x,y,z  Pinned camera aim point\n");
@@ -1045,6 +1132,20 @@ int main(int argc, char** argv) {
         } else if (!strcmp(a, "--water-level") && i + 1 < argc) {
             g_args.water_level = strtof(argv[++i], NULL);
             g_args.water = 1;
+        } else if (!strcmp(a, "--erode")) {
+            g_args.erode = 1;
+        } else if (!strcmp(a, "--erode-res") && i + 1 < argc) {
+            g_args.erode_res = atoi(argv[++i]);
+            g_args.erode = 1;
+        } else if (!strcmp(a, "--erode-iterations") && i + 1 < argc) {
+            g_args.erode_iterations = atoi(argv[++i]);
+            g_args.erode = 1;
+        } else if (!strcmp(a, "--erode-workers") && i + 1 < argc) {
+            g_args.erode_workers = atoi(argv[++i]);
+            g_args.erode = 1;
+        } else if (!strcmp(a, "--terrain-erosion-probe")) {
+            g_args.erode_probe = 1;
+            g_args.erode = 1;
         } else if (!strcmp(a, "--trace-player")) {
             g_args.trace_player = 1;
         } else if (!strcmp(a, "--no-aerial")) {

@@ -82,6 +82,12 @@ typedef struct TerrainParams {
 // shadows with no diagnostic.
 TerrainParams terrain_default_params(void);
 
+// Fill field->height by evaluating the ANALYTIC fbm at every node, ignoring any
+// field already installed on params. This is how a field is seeded before a sim
+// runs over it, and it is why erosion does not replace the noise: the landscape
+// still comes from the fbm, and the sim only decides what water did to it.
+bool terrain_field_seed(TerrainField* field, const TerrainParams* params);
+
 // Surface height at a world XZ. A pure function of (params, x, z): the same
 // arguments always give the same answer, and nothing has to be initialised first.
 //

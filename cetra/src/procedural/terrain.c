@@ -61,6 +61,31 @@ bool terrain_field_alloc(TerrainField* field, int res) {
     return true;
 }
 
+bool terrain_field_seed(TerrainField* field, const TerrainParams* params) {
+    if (!field || !field->height || field->res < 2 || !params)
+        return false;
+    if (!(params->extent > 0.0f))
+        return false;
+
+    // Evaluate through a copy with no field installed, so seeding a field that is
+    // ALREADY installed on the caller's params reads the fbm rather than reading
+    // the plane it is about to overwrite.
+    TerrainParams analytic = *params;
+    analytic.field = NULL;
+
+    float span = 2.0f * params->extent;
+    float last = (float)(field->res - 1);
+    for (int j = 0; j < field->res; ++j) {
+        float z = -params->extent + span * (float)j / last;
+        for (int i = 0; i < field->res; ++i) {
+            float x = -params->extent + span * (float)i / last;
+            field->height[(size_t)j * (size_t)field->res + (size_t)i] =
+                terrain_height_at(&analytic, x, z);
+        }
+    }
+    return true;
+}
+
 void terrain_field_free(TerrainField* field) {
     if (!field)
         return;
