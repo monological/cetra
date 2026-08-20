@@ -52,6 +52,7 @@ Game* create_game(const GameConfig* config) {
     // The engine now owns the frame loop, so route the game's CI/headless + GUI
     // config onto it (screenshot capture, frame-limit exit, debug panel).
     set_engine_screenshot_path(game->engine, config->screenshot_path);
+    set_engine_screenshot_every(game->engine, config->screenshot_every);
     set_engine_exit_after_frames(game->engine, config->exit_after_frames);
     set_engine_show_gui(game->engine, config->show_debug_gui);
 

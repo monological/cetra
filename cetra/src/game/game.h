@@ -34,6 +34,13 @@ typedef struct GameConfig {
     bool headless;               // Hidden window, no vsync (set before init_engine)
     int exit_after_frames;       // Exit cleanly after N rendered frames (0 = run forever)
     const char* screenshot_path; // Save the final frame here as PPM (NULL = off)
+    // Also save numbered frames every N (0 = only the final one), as
+    // <screenshot_path minus .ppm>_000060.ppm. Inert without screenshot_path.
+    //
+    // What it buys is a TRANSITION: comparing a run against itself at two frame
+    // counts costs two full startups, and for an app that bakes terrain and
+    // scatters thousands of props that dominates the measurement.
+    int screenshot_every;
     // Per-pass GPU/CPU timing and the submission counters. A config field rather
     // than something an app sets afterwards, because the profiler is built
     // during init_engine and create_game owns that call -- so a game-framework

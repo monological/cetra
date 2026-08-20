@@ -83,6 +83,7 @@ typedef struct ForestArgs {
     int headless;
     int frames;
     const char* screenshot;
+    int screenshot_every; // also save numbered frames every N (0 = only the final one)
     int profiler;
     int no_lod;
     int no_instancing;
@@ -1401,6 +1402,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
+    fprintf(stderr, "      --screenshot-every N  Also save numbered frames every N frames\n");
     fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
     fprintf(stderr, "      --origin-shift-at F Re-centre the world on the camera at frame F\n");
     fprintf(stderr, "      --origin-shift-distance D  Re-centre whenever the camera drifts D\n");
@@ -1427,6 +1429,8 @@ int main(int argc, char** argv) {
             g_args.frames = atoi(argv[++i]);
         } else if ((!strcmp(a, "-S") || !strcmp(a, "--screenshot")) && i + 1 < argc) {
             g_args.screenshot = argv[++i];
+        } else if (!strcmp(a, "--screenshot-every") && i + 1 < argc) {
+            g_args.screenshot_every = atoi(argv[++i]);
         } else if (!strcmp(a, "--profiler")) {
             g_args.profiler = 1;
         } else if (!strcmp(a, "--no-lod")) {
@@ -1526,6 +1530,7 @@ int main(int argc, char** argv) {
     config.headless = g_args.headless != 0;
     config.exit_after_frames = g_args.frames;
     config.screenshot_path = g_args.screenshot;
+    config.screenshot_every = g_args.screenshot_every;
     config.profiler = g_args.profiler != 0;
 
     Game* game = create_game(&config);

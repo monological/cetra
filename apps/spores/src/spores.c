@@ -368,6 +368,8 @@ int main(int argc, char** argv) {
         } else if ((strcmp(argv[i], "--screenshot") == 0 || strcmp(argv[i], "-S") == 0) &&
                    i + 1 < argc) {
             config.screenshot_path = argv[++i];
+        } else if (strcmp(argv[i], "--screenshot-every") == 0 && i + 1 < argc) {
+            config.screenshot_every = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cpu") == 0) {
             g_use_cpu = true;
         }

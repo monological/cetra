@@ -2849,7 +2849,10 @@ def _origin_trace(offset, extra):
     character is, and pinning the camera would leave the one subsystem under test
     unobserved.
     """
-    cmd = [FOREST, "-x", "-f", "120", "-W", "200", "-H", "150", "--no-fog",
+    # 70 frames, not 120: --trace-player prints every 30 steps, the shift lands at
+    # 40, and the arm reads the last row before it (step 30) and the first after
+    # (step 60). The rest was 50 frames of physics nobody looked at.
+    cmd = [FOREST, "-x", "-f", "70", "-W", "200", "-H", "150", "--no-fog",
            "--render-mode", "6", "--seed", "1337", "--world-offset", repr(offset),
            "--trace-player"] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -3005,30 +3008,42 @@ def run_origin_gate(workdir):
         failures.append("origin-degrade")
 
     # --- Rule 1: the shift frame must not print the translation as motion -----
-    # forest has no --screenshot-every, so each frame is its own run ending on it.
-    # 400x300 and render mode 9: the velocity buffer, where a missed previous-frame
-    # transform is the only thing that can spike.
-    vel = {}
-    for vel_frames in (21, 23):
-        n = str(vel_frames)
-        plain, _ = _origin_forest(workdir, f"vel{n}_plain", ORIGIN_NEAR, [], n, "9", ("400", "300"))
-        shifted, _ = _origin_forest(workdir, f"vel{n}_shift", ORIGIN_NEAR, shift20, n, "9",
-                                    ("400", "300"))
-        if not (plain and shifted):
-            print("  origin-velocity ERROR while rendering the velocity buffer")
-            return failures + ["origin-velocity"]
-        vel[vel_frames] = _origin_diff(plain, shifted)[0]
+    # Render mode 9 is the velocity buffer, where a previous-frame transform that
+    # missed the delta is the only thing that can spike. ONE pair of runs with
+    # --screenshot-every, not one run per frame: forest bakes a terrain and
+    # scatters 5,000 props at startup, so a per-frame run measures the startup.
+    #
+    # Three frames rather than two, which the single pair also buys. 19 is BEFORE
+    # the shift, so the two runs are the same run and must agree exactly -- a
+    # control that says they differ in nothing but the shift.
+    plain, _ = _origin_forest(workdir, "vel_plain", ORIGIN_NEAR, ["--screenshot-every", "1"],
+                              "24", "9", ("400", "300"))
+    shifted, _ = _origin_forest(workdir, "vel_shift", ORIGIN_NEAR,
+                                shift20 + ["--screenshot-every", "1"], "24", "9", ("400", "300"))
+    if not (plain and shifted):
+        print("  origin-velocity ERROR while rendering the velocity buffer")
+        return failures + ["origin-velocity"]
 
-    # Frame 21 is the first after the shift; 23 is the same pair of runs two frames
-    # later, still differing by precision alone. The ratio is what isolates the
-    # TRANSITION from the steady state either side of it.
+    vel = {}
+    for f in (19, 21, 23):
+        pa = plain[:-4] + f"_{f:06d}.ppm"
+        pb = shifted[:-4] + f"_{f:06d}.ppm"
+        if not (os.path.exists(pa) and os.path.exists(pb)):
+            print(f"  origin-velocity ERROR frame {f} was not captured")
+            return failures + ["origin-velocity"]
+        vel[f] = _origin_diff(pa, pb)[0]
+
+    # 21 is the first frame after the shift; 23 is the same pair two frames later,
+    # still differing by precision alone. The ratio isolates the TRANSITION from
+    # the steady state either side of it.
     steady = max(vel[23], 1e-6)
     ratio = vel[21] / steady
-    ok = ratio <= ORIGIN_VELOCITY_MAX_RATIO
-    print(f"  origin-velocity {'PASS' if ok else 'FAIL'}  the shift frame moves "
-          f"{100.0 * vel[21]:.2f}% of the velocity buffer against a steady {100.0 * steady:.2f}% "
-          f"two frames later, ratio {ratio:.2f} (want <= {ORIGIN_VELOCITY_MAX_RATIO}; leaving "
-          f"prev_view_proj uncorrected reads 4.48)")
+    ok = ratio <= ORIGIN_VELOCITY_MAX_RATIO and vel[19] == 0.0
+    print(f"  origin-velocity {'PASS' if ok else 'FAIL'}  before the shift the two runs agree at "
+          f"{100.0 * vel[19]:.2f}% (want exactly 0); the shift frame moves {100.0 * vel[21]:.2f}% "
+          f"of the velocity buffer against a steady {100.0 * steady:.2f}% two frames later, ratio "
+          f"{ratio:.2f} (want <= {ORIGIN_VELOCITY_MAX_RATIO}; leaving prev_view_proj uncorrected "
+          f"reads 4.48)")
     if not ok:
         failures.append("origin-velocity")
 
