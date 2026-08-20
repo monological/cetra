@@ -2212,6 +2212,67 @@ static bool scene_has_subsurface(const Scene* scene) {
     return false;
 }
 
+/*
+ * Apply a scheduled origin shift (spec 11.62), scene half and engine half together.
+ *
+ * The engine half is what the Scene cannot reach: the live camera, the previous
+ * view-projection, and the froxel volume's own stored camera. The last two are
+ * MATRICES and the correction is not a subtraction. We need
+ * M_new * p_new == M_old * p_old with p_old = p_new + delta, so the fix is a
+ * right-multiply by a translation of +delta. Subtracting delta from the matrix's
+ * own translation column is a different operation and gives a different answer
+ * under any rotation -- which is to say, always.
+ *
+ * Getting it wrong is one frame of screen-wide velocity: every pixel reports the
+ * whole shift as motion, TAA reprojects to nothing, and motion blur smears it.
+ */
+static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
+    if (!scene || !scene->origin_shift_pending)
+        return;
+    scene->origin_shift_pending = false;
+
+    vec3 delta;
+    glm_vec3_sub(scene->pending_origin, scene->world_origin, delta);
+    if (glm_vec3_eq(delta, 0.0f))
+        return;
+
+    scene_apply_origin_delta(scene, delta);
+
+    if (engine->camera) {
+        glm_vec3_sub(engine->camera->position, delta, engine->camera->position);
+        glm_vec3_sub(engine->camera->look_at, delta, engine->camera->look_at);
+    }
+
+    mat4 back;
+    glm_translate_make(back, delta);
+    glm_mat4_mul(engine->prev_view_proj, back, engine->prev_view_proj);
+    if (engine->postfx) {
+        PostFX* fx = engine->postfx;
+        glm_mat4_mul(fx->froxel_prev_view, back, fx->froxel_prev_view);
+        // The SSR parallax proxy is published at probe capture time and not per
+        // frame, so unlike the fog volumes and the water plane it does not follow
+        // on its own.
+        glm_vec3_sub(fx->probe_pos, delta, fx->probe_pos);
+        glm_vec3_sub(fx->probe_box_min, delta, fx->probe_box_min);
+        glm_vec3_sub(fx->probe_box_max, delta, fx->probe_box_max);
+    }
+
+    // Captured RADIANCE and IRRADIANCE are wrong in CONTENT after a shift, not
+    // merely mis-addressed: both were rendered from a world position that has
+    // moved. The volume re-arms every probe; the reflection probe is re-captured
+    // by whoever owns its schedule.
+    if (scene->gi_volume)
+        gi_volume_mark_dirty(scene->gi_volume);
+
+    // Logged because a shift is otherwise unobservable from outside the process,
+    // and an arm asserting that one changed nothing is satisfied perfectly by a
+    // shift that never happened.
+    log_info("origin shift: delta (%.1f, %.1f, %.1f), world origin now (%.1f, %.1f, %.1f)",
+             (double)delta[0], (double)delta[1], (double)delta[2],
+             (double)scene->world_origin[0], (double)scene->world_origin[1],
+             (double)scene->world_origin[2]);
+}
+
 void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render) {
     if (!engine)
         return;
@@ -2334,6 +2395,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         if (frame_clock) {
             engine_set_render_time(engine, frame_clock->time, frame_clock->delta);
         }
+
+        // Origin shift (spec 11.62), after the update callback so it sees the
+        // camera and physics this frame produced, and before the GI capture and
+        // the shadow pass, which are the first things to read world positions.
+        // Anywhere later and the first shifted frame fits its shadows and its
+        // probes around an origin the rest of the frame no longer uses.
+        engine_apply_origin_shift(engine, get_current_scene(engine));
 
         // Wireframe mode: use albedo-only rendering for performance
         RenderMode saved_render_mode = engine->current_render_mode;

@@ -307,6 +307,27 @@ static size_t tf_live_count(ParticleSimBackend* b, ParticleEmitter* e) {
     return s ? s->emitted : 0;
 }
 
+// The live half of the ping-pong only: the other buffer is written wholesale by
+// the next feedback pass before anything reads it, so shifting it would be work
+// nothing can observe. `emitted` and not `capacity`, for the same reason -- slots
+// past the high-water mark have never held a position.
+static void tf_shift_origin(ParticleSimBackend* b, ParticleEmitter* e, const vec3 delta) {
+    (void)b;
+    TfEmitterState* s = e->sim_state;
+    if (!s || !s->emitted || !s->vbo[s->parity])
+        return;
+    glBindBuffer(GL_ARRAY_BUFFER, s->vbo[s->parity]);
+    ParticleGpuState* gpu = glMapBufferRange(
+        GL_ARRAY_BUFFER, 0, (GLsizeiptr)(s->emitted * sizeof(ParticleGpuState)),
+        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+    if (gpu) {
+        for (size_t i = 0; i < s->emitted; ++i)
+            glm_vec3_sub(gpu[i].center, (float*)delta, gpu[i].center);
+        glUnmapBuffer(GL_ARRAY_BUFFER);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
 static void tf_backend_free(ParticleSimBackend* b) {
     TfSimBackend* self = (TfSimBackend*)b;
     if (self->program)
@@ -322,6 +343,7 @@ ParticleSimBackend* create_tf_particle_sim_backend(void) {
     self->base.simulate = tf_simulate;
     self->base.acquire_instances = tf_acquire_instances;
     self->base.live_count = tf_live_count;
+    self->base.shift_origin = tf_shift_origin;
     self->base.free_fn = tf_backend_free;
     self->program = create_particle_sim_program();
     if (!self->program) {

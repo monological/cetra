@@ -394,6 +394,13 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // and stops entirely when paused, so a wall-clock delta would report
             // wind motion on geometry that never moved.
             uniform_set_float(u, "uDeltaTime", (float)engine->render_delta);
+            // What the origin has been shifted BY since the world was authored
+            // (spec 11.62), so anything using a world position as an IDENTITY --
+            // a hash, a tiling lattice -- can add it back and get the same answer
+            // it got before the shift. Zero on a scene that never moves, which is
+            // every scene by default.
+            uniform_set_vec3(u, "uWorldOrigin",
+                             scene ? (const float*)scene->world_origin : GLM_VEC3_ZERO);
             wind_upload_to_program(scene ? scene->wind : NULL, u);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);

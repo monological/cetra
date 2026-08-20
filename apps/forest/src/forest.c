@@ -122,6 +122,14 @@ typedef struct ForestArgs {
     // The instrument fp32's relative precision is measured with: at 0 this is
     // the frame the app has always rendered.
     float world_offset;
+    // Diagnostic (--origin-shift-at): re-centre the world on the camera at this
+    // frame, 0 = never. A shift is a TRANSITION, and a transition is invisible to
+    // every headless arm until something can ask for one at a known frame -- the
+    // same reason --shadows-off-at exists rather than being reachable by a state
+    // flag. What it buys is an exact test: the shift changes only where
+    // coordinates are measured from, so the frames after it must be identical to
+    // a run that never shifted.
+    int origin_shift_at;
 } ForestArgs;
 
 static ForestArgs g_args;
@@ -1167,7 +1175,25 @@ static void on_init(Game* game) {
     printf("Forest: %zu LOD chains built, %zu refused\n", g_chains_built, g_chains_refused);
 }
 
+// Snap the new origin to a coarse power-of-two lattice rather than taking the
+// camera exactly. An arbitrary camera position makes the delta an arbitrary
+// float, so every position in the world takes a fresh rounding on every shift;
+// a lattice point is exactly representable and, where it matters most -- within
+// a factor of two of the coordinates being moved -- the subtraction is exact.
+#define ORIGIN_SHIFT_LATTICE 256.0f
+
 static void on_update(Game* game, double dt) {
+    // Diagnostic (--origin-shift-at), before the player guard so it runs on a
+    // scene with no character: this is about the world, not about who is in it.
+    if (g_args.origin_shift_at > 0 && g_scene && game->engine && game->engine->camera &&
+        game->engine->total_frames == (size_t)g_args.origin_shift_at) {
+        vec3 origin;
+        for (int i = 0; i < 3; ++i)
+            origin[i] = floorf(game->engine->camera->position[i] / ORIGIN_SHIFT_LATTICE + 0.5f) *
+                        ORIGIN_SHIFT_LATTICE;
+        scene_set_world_origin(g_scene, origin);
+    }
+
     if (!g_player)
         return;
     CharacterController* cc = entity_get_character_controller(g_player);
@@ -1242,8 +1268,17 @@ static void on_render(Game* game, double alpha) {
     Camera* camera = engine->camera;
     if (camera) {
         if (g_args.cam_set) {
-            set_camera_position(camera, g_args.cam_eye);
-            set_camera_look_at(camera, g_args.cam_target);
+            // Re-pinned every frame, so it has to be expressed in the frame the
+            // world is CURRENTLY stored in: the flag is a world coordinate
+            // somebody typed, which is authoring space, and after an origin shift
+            // that is no longer the same as storage. Writing the absolute back
+            // each frame would silently undo the shift for the camera alone and
+            // leave it looking at where the world used to be.
+            vec3 eye, target;
+            glm_vec3_sub(g_args.cam_eye, g_scene->world_origin, eye);
+            glm_vec3_sub(g_args.cam_target, g_scene->world_origin, target);
+            set_camera_position(camera, eye);
+            set_camera_look_at(camera, target);
         } else if (g_player) {
             if (input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_LEFT) ||
                 input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_RIGHT)) {
@@ -1339,6 +1374,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
+    fprintf(stderr, "      --origin-shift-at F Re-centre the world on the camera at frame F\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
     fprintf(stderr, "      --cam-target x,y,z  Pinned camera aim point\n");
 }
@@ -1435,6 +1471,8 @@ int main(int argc, char** argv) {
             g_args.seed = (unsigned)strtoul(argv[++i], NULL, 10);
         } else if (!strcmp(a, "--world-offset") && i + 1 < argc) {
             g_args.world_offset = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--origin-shift-at") && i + 1 < argc) {
+            g_args.origin_shift_at = atoi(argv[++i]);
         } else if (!strcmp(a, "--cam-eye") && i + 1 < argc) {
             cam_eye_set = parse_vec3(argv[++i], g_args.cam_eye);
         } else if (!strcmp(a, "--cam-target") && i + 1 < argc) {

@@ -204,6 +204,26 @@ typedef struct Scene {
     // either space -- see spec 10.1 phase 5.
     vec3 ambient_radiance;
 
+    /*
+     * Large-world origin shifting (spec 11.62).
+     *
+     * world_origin is the world point that STORAGE (0,0,0) stands for, and it is
+     * the accumulated shift since the world was authored -- zero until something
+     * moves it, so a scene that never asks is byte-identical to one from before
+     * this existed. Storage plus this is the authored position, which is what
+     * anything treating a coordinate as an IDENTITY rather than a location has to
+     * be handed back: a hash is discontinuous, so a shifted object re-phases
+     * completely rather than slightly (measured at 43% of the frame, from twelve
+     * units out).
+     *
+     * The setter SCHEDULES and the engine applies at the frame top. A shift run
+     * from wherever an app happened to call would land after some passes had read
+     * positions and before others, which is the one state every rule here forbids.
+     */
+    vec3 world_origin;
+    vec3 pending_origin;
+    bool origin_shift_pending;
+
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
     bool skybox_ground_projection; // Project env onto finite dome + ground
@@ -275,6 +295,19 @@ void scene_mark_materials_dirty(Scene* scene);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void set_scene_wind(Scene* scene, struct Wind* wind);
+
+// Ask for the world to be re-centred so `new_origin` becomes storage (0,0,0).
+//
+// Takes effect at the top of the next frame, not here -- see the field comment.
+// Idempotent: asking for the origin the scene already has cancels the request
+// rather than scheduling a zero shift, so a caller may say this every frame.
+void scene_set_world_origin(Scene* scene, const vec3 new_origin);
+
+// Subtract `delta` from every absolute position the SCENE owns, and advance
+// world_origin. The engine calls this from its frame top as half of a shift; the
+// other half is the engine's own (the camera, the previous view-projection, and
+// PostFX's captured probe), which is why this is not the public entry point.
+void scene_apply_origin_delta(Scene* scene, const vec3 delta);
 
 // fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);

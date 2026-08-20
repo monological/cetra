@@ -71,6 +71,12 @@ typedef struct ParticleSimBackend {
     // resolve. CPU backends return the pool count; GPU backends that keep their
     // state off-CPU return their own count. NULL falls back to pool->count.
     size_t (*live_count)(struct ParticleSimBackend* b, struct ParticleEmitter* e);
+    // Subtract a world-origin shift (spec 11.62) from every position the BACKEND
+    // holds. NULL where a backend keeps none of its own: the CPU backend's live
+    // in the emitter's pool, which the scene shifts directly. A GPU backend's do
+    // not, and a shift that misses them leaves the population permanently behind
+    // the world it was emitted into.
+    void (*shift_origin)(struct ParticleSimBackend* b, struct ParticleEmitter* e, const vec3 delta);
     void (*free_fn)(struct ParticleSimBackend* b);
 } ParticleSimBackend;
 

@@ -17,6 +17,9 @@ uniform float uWindMaskMinY;   // local-space AABB Y bounds of the mesh
 uniform float uWindMaskMaxY;
 uniform int uWindMode;         // 0 = cloth, 1 = vegetation branch, 2 = vegetation leaf
 uniform float uWindPhaseVariation; // 0 = every object sways in lockstep
+// How far the world origin has been shifted since the world was authored
+// (spec 11.62). Zero on a scene that never moves.
+uniform vec3 uWorldOrigin;
 
 // The amplitude coefficients, shared with the CPU-side bound (wind.c) that lets
 // a displaced mesh be frustum-culled.
@@ -36,10 +39,30 @@ uniform float uWindPhaseVariation; // 0 = every object sways in lockstep
 //
 // Exactly 0 when uWindPhaseVariation is 0, so a scene that never asked for this
 // is bit-identical rather than merely close.
+// Hashed in AUTHORING space, not in storage. An origin shift subtracts a delta
+// from where the object stands, and a hash of the moved position has nothing to
+// do with a hash of the original -- not approximately, but in the way a hash is
+// meant not to: every object re-phases at once, which is a whole forest changing
+// its beat mid-run. Measured at 43% of the frame from twelve units out.
+//
+// SNAPPED to a whole unit first, because reconstructing is not exact. The sum
+// rounds at uWorldOrigin's own ulp, and stored positions change on every shift,
+// so the reconstructed value can move by an ulp between one shift and the next.
+// A tiling lookup shifts by that ulp and nobody sees it; a hash reads it as a
+// different object.
+//
+// The snap does not make it exact, it makes it rare, and the trade is worth
+// stating. At an origin a quarter-million units out the ulp is 1/32, so about 3%
+// of objects sit close enough to a boundary to cross it on a given shift; at
+// 4,096 out it is 0.05%. Against that, two objects less than a unit apart share a
+// phase -- which for anything with a trunk is the same object twice. If exactness
+// is ever needed, the fix is to carry the phase rather than derive it, and the
+// reason that was declined is a kilobyte of std140 padding, not principle.
 float windObjectPhase(vec3 origin) {
     if (uWindPhaseVariation <= 0.0)
         return 0.0;
-    float h = hash13(origin, vec3(12.9898, 78.233, 37.719));
+    vec3 authored = floor(origin + uWorldOrigin + 0.5);
+    float h = hash13(authored, vec3(12.9898, 78.233, 37.719));
     return h * uWindPhaseVariation * 6.2831853;
 }
 
