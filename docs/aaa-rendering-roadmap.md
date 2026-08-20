@@ -193,7 +193,9 @@ declaration through a `#define` when the two consumers are mutually exclusive (m
 
 **The uniform-space escape has turned out to be the widest of the five, and it was priced as the
 narrowest.** 11.13 took it for a 16-row skin table and this entry recorded it as a curiosity. Since
-then it has carried A1's entire light path, C3's IES profiles by design, **11.45's `ShoreFilmBlock`**
+then it has carried A1's entire light path, C3's IES profiles **in fact as of 11.57 — a 3968-float
+pool at binding 6, holding fully asymmetric 2D distributions the row had deferred for want of a
+sampler unit it was never going to spend**, **11.45's `ShoreFilmBlock`**
 (a CPU shallow-water solver's per-column tips, 2.3 KB, read by both the sea's lens and the sand's
 wetness so they agree by construction) and **11.46's inverse CDF** (64 entries × 3 channels, 768
 bytes). The rule that falls out: ask how many BYTES a feature needs in the shader before asking for a
@@ -791,8 +793,10 @@ scene in the corpus had overdraw. The first one that did inverted it in a single
 
 **Wall 1 — `pbr_frag` is sampler-saturated (16/16).** Detailed in the ledger section above. It blocks,
 today, every feature whose data has to reach the *forward shading* stage as a texture: decals, light
-cookies, IES textures, detail/wetness maps, a cloud shadow map, and sampling the froxel volume from
-the transparent pass. It does NOT block anything that lives in postfx (which has its own budget and
+cookies, detail/wetness maps, a cloud shadow map, and sampling the froxel volume from
+the transparent pass. **"IES textures" was on this list and should never have been** — 11.57 shipped
+the full 2D distribution in a UBO block, so the entry was naming an implementation nobody had chosen
+and pricing the feature against a wall it does not touch. It does NOT block anything that lives in postfx (which has its own budget and
 is nowhere near full), anything that fits in a UBO, or anything small enough to be a `const` table.
 Note which Tier 4 items below are postfx-only or UBO-only: those are the cheap ones, and they are
 cheap *because* of this wall, not in spite of it.
@@ -1104,22 +1108,44 @@ be: `ssr_frag.glsl:152` traces only surfaces the shadow catcher marked reflectiv
 Cosines* (SIGGRAPH 2016) — already shipped as A2; this item is a producer for it.
 **Depends on:** A1 (shipped), A2 (shipped). **Wall 1:** unaffected.
 
-### C3. IES photometric profiles — Effort S
+### C3. IES photometric profiles — Effort S — **DONE (spec 11.57)**
 9.9/10.0 made punctual lights genuinely photometric — candela and lux imported as authored, an EV100
-camera — and then every one of those lights radiates through a bare analytic cone. IES profiles are
-the payoff for work already done, and they are what makes an architectural interior read as lit
-rather than as shaded.
+camera — and then every one of those lights radiated through a bare analytic cone. That premise held
+and, unusually for this table, was checkable before building: `Light.intensity` really is canonical
+candela, and `spotConeFactor` really did push it through a smoothstep between two cosines.
 
-**This one fits Wall 1 rather than fighting it.** Most real IES profiles are near rotationally
-symmetric about the luminaire axis, so a 32- or 64-tap intensity-vs-angle table per *profile* (not
-per light) lives in the existing std140 light UBO alongside the packed lights, costing **zero texture
-units**. That is the same escape 11.13 took for the skin table, and it generalises: the ledger
-constrains *texture* lookups only. Asymmetric profiles (wall-washers) are the v2 case and do need a
-2D table; defer them rather than paying a unit for the symmetric 90%.
+**This one fits Wall 1 rather than fighting it**, which was right, and the escape is the uniform-space
+one. **But the row deferred asymmetric profiles — "the v2 case … defer them rather than paying a unit
+for the symmetric 90%" — and that deferral does not survive its own placement.** It prices the 2D
+case in TEXTURE units, which assumes a 2D table means a texture. It does not. Once the table is a
+UBO block the two cases differ only in stride, so **11.57 shipped full LM-63 with no v1/v2 split**:
+rotational, quadrant, bilateral and fully asymmetric, all four read off the *declared* horizontal
+sweep rather than guessed from the values.
+
+**And the row's storage plan is broken as literally written.** "Lives in the existing std140 light
+UBO alongside the packed lights" collides with how that block is uploaded: `ubo_upload` orphans the
+whole allocation and `light_cluster.c` rewrites only the live light prefix, so a table appended after
+`clusterLights` is **undefined every frame**, and one placed before them is re-sent on every
+`render_current_scene` invocation — seven times on a probe-capture frame. It went in its own block at
+binding 6 (the `ShoreFilmBlock` shape), uploaded once when the profile set changes. Bindings 0–5 were
+in use against a GL minimum of 36, so the seventh cost nothing anyone was saving.
+
+Shipped shape: the profile is a NORMALISED [0,1] table that multiplies `intensity`, with `intensity`
+seeded from the file's own peak candela when the scene authors none — so it is absolute by default
+(`normalised × peak IS absolute`) while `intensity` stays the one brightness control and
+`_scale_emitters` stays true. It REPLACES the analytic cone rather than multiplying it, which drags
+the spot shadow frustum onto the profile's angular support; the cull radius needed nothing, because
+normalising makes `profile ≤ 1` and the existing solve is already an upper bound.
+**Two independent limits**, since one sized for the worst case wastes the budget on the common one:
+8 descriptors and 3968 shared pool floats, holding seven fully asymmetric profiles or ~125 symmetric
+ones. Ceiling 32×16 taps, at or above what real files carry.
+New: `cetra/src/ies.c/h`, `tools/gen_ies_table.py`, `assets/gen_ies_fixture.py` (four `.ies` files
+whose candela are closed forms), the `ies` gate group, `--ies-probe`.
 **Refs.** Karis, *Real Shading in Unreal Engine 4* (SIGGRAPH 2013 course) — the IES section;
 IESNA LM-63 for the file format.
 **Depends on:** A1's UBO machinery (shipped), 10.0's photometric units (shipped). **Wall 1:** avoided
-by construction.
+by construction — and the deferral above shows how easily "avoided by construction" turns into
+"priced against it anyway" one paragraph later.
 
 ### C4. Clustered specular probes — Effort L
 `scene->probe` is singular (`scene.h:127`) — **one** parallax-corrected reflection probe for an entire
@@ -2199,7 +2225,7 @@ not scheduled.
 | 22 | D2 Local fog + cloud shadows | M | **DONE, both halves (11.39 + 11.40 froxel, 11.41 surface).** The surface half was booked as hard-blocked on D0 for a whole spec cycle and never was — it reads in the opaque pass, where unit 6 is idle, so it took a `#define` alias and cost the ledger nothing (Wall 1's third escape). Ground RMSE **0.0072 → 0.1241** with the air band unchanged to four decimals as the control. 11.41's arms then found the shadow MAP itself blank below ~10° of sun and truncated above it, so **every cloud figure from 11.39/11.40 was taken through a map crossing 4-48% of the deck**; fixing it moved both cloud goldens. The review's through-line was **green results that could not have gone red** — four arms passed over a feature dead under `--no-ssao`, and 23 goldens were cited as evidence for a change no golden could see. 11.40 closed three of the four filed items by making those claims falsifiable, and found a shipped map saturated to zero at every texel on the first use of its new debug tile. |
 | 23 | C2 Emissive → area lights | S/M | **DONE (11.49).** A fit plus a registration, as sketched — but it ships **off by default**, because measuring the corpus found **30 of 32 emissive materials are the unlit-flat-colour trick** rather than lamps, and on-by-default turns every one into a light. "No new shading code" held five phases and then cost one uniform (no unit — Wall 1 never in play). The planned covariance principal axis is wrong on a SQUARE panel, whose covariance is isotropic, and `cornell_light` is exactly square — the corpus's only real lamp is the case it fails on. The stated "one rectangle per mesh" limit had no working test: planarity measures FLATNESS, so an L, a ring and two strips five metres apart all read exactly 1.0 and got one rectangle spanning the lot. Three arms went red on things no frame shows — a DDGI capture counting the first bounce twice (**1.31× → 0.98×**), a panel lighting through a solid partition (**0.41 → 0.00**), and a placement compounding 29 units of drift over 40 frames. Cost lands on the LIGHT, not the machinery: reconcile 0.017–0.021 ms CPU, but +2–3 ms of shading per panel. |
 | 24 | E4 GPU timer queries | S | **DONE (11.27).** Wall 3 removed. It paid for itself immediately and twice: E4's own first draft drew a conclusion the instrument reversed, and Wall 4 exists at all because the instrument said "opaque 312 ms" in a single run. |
-| 25 | C3 IES profiles | S | Collects the payoff for 9.9/10.0's photometric work. Fits Wall 1 by living in the light UBO — zero texture units. |
+| 25 | C3 IES profiles | S | **DONE (11.57).** Collected the payoff for 9.9/10.0's photometric work, and the premise held — `Light.intensity` really is canonical candela and every one of those lights really did radiate through a bare smoothstep. Zero texture units, as booked. **But the row deferred asymmetric profiles by pricing a 2D table in SAMPLER units, and its own placement removes that price**: in a UBO block the symmetric and asymmetric cases differ only in stride, so full LM-63 shipped with no v1/v2 split. **Its storage plan was also broken as written** — "alongside the packed lights" lands after the live prefix `ubo_upload` rewrites, so the table would have been undefined every frame; it took its own block at binding 6, uploaded once. The profile is a normalised shape multiplying `intensity`, with `intensity` seeded from the file's peak when unauthored, so it is absolute by default while `_scale_emitters` stays true. It REPLACES the cone, which moved the spot shadow frustum onto the profile's support — and the cull radius needed nothing, since normalising makes `profile ≤ 1` and the existing solve already bounds it. Applied at all FIVE places the falloff is evaluated, through one shared `punctualAngular`, which also folded in `pbr_frag`'s hand-duplicated debug copy that no golden can see. |
 | 26 | C5 Screen-space shadows for local lights | S | **DONE (11.56).** Postfx-only as booked, and the cluster list arrived with no C-side binding at all — `create_post_program` already links through `ubo_wire_blocks`. But **the row's reason was false and had been for six specs**: it blamed a punctual map's "texel footprint" for losing the contact, where that map is ~1 mm/texel at 1 m for a point light (2048² at 2–6 layers) and ~2 mm at its 1024² floor, and the hairline that did exist was a far-side depth STORAGE defect fixed in 10.3/10.4 with `cornell_box` as its gate. The real gap is that **~120 of 128 clusterable lights can never have a map** (8 punctual layers, 6 per point light), which flips the cull from "the N nearest" to "skip the ones that already have a map" — one line that is the performance cap and, once the fold's denominator counts them, the anti-double-shadow guarantee too. The gate widened as well: a room lit only by practicals never ran the pass. Cost tracks COVERAGE, not count — 2.43 ms per fully-covering light at 3200×2000 internal, but sixteen SPREAD lights cost +0.77 ms against the +38 ms sixteen coincident ones would. No per-pixel cap, deliberately. **Area panels are still not served** — the 41% wall leak below is NOT what this fixed; a panel counts in the fold's denominator but is never marched, because the only direction available is its centre and marching that would be a different approximation from the LTC integral the shading used. **Its own review then found three defects an eight-agent pass caught and the spec had not**: the fold's denominator omitting every skipped light (one blocked practical took 23% off a pixel that should have lost 1%), `shadow_layer` read raw when it goes stale the moment the shadow system is toggled off, and a per-pixel cluster walk nothing gated. Plus a fixture assert that could not fail. |
 | 27 | E3 Histogram exposure | M | **DONE (11.52).** A 128-bin gather histogram plus a percentile-clipped reduce, two raster passes replacing the mip chain; metering modes, EV bounds, split adapt rates, and the controls. **Both reasons this row gave were wrong**: the bright-pixel failure was already defended by a geometric mean AND an explicit clamp, and the determinism claim was already collected by `EXPOSURE_ADAPT_SNAP`, after which the adaptation holds no history and two runs are bit-identical over 200 frames. Capability parity was the whole reason and it sufficed. The instrument found what the row had not: the meter was **not linear in radiance**, 8.36 stops against 9.97 at x1000, because the absolute floor at the key inflated a dim scene's mean 3.05x. Percentiles fix it, **-1.61 stops to +0.021**. Removing the ceiling too produced a measured **runaway** to 1.15e7 nits via fp16 underflow -- though review then showed the GAIN was already bounded by the 20-stop floor, so the metered bound recorded a saner number and changed no pixel. And the SCALE_GATES shape cannot test a live meter -- scaling emitters by K while dividing the camera by K double-compensates. **The review then changed the implementation twice more**: the bin pass turned out to be OCCUPANCY-bound rather than fetch-bound (64 fragments is ~0.4% of the GPU; splitting the source across 8 output rows took the scope 0.744 -> 0.392 ms), and the bin ceiling could not be a constant at all, since the measure pass clamps in working space and divides by pre-exposure so its largest emittable value moves with the exposure. No golden moves (all 24 pin exposure), which is why this was the least-tested subsystem shipping on by default; six new arms now cover it. |
 | 28 | E2 3D LUT grading | S | Colourist workflow. Watch the working-space contract. |
@@ -2247,7 +2273,8 @@ nominating a successor by default.
 Of the small ones, **34 (E8, the wind cull) was the pick and is now built** (11.53), and **26 (C5,
 contact shadows for local lights) followed it** (11.56) — it had gained a claim it did not have when
 it was written, since 11.49 shipped a *producer* of local lights that are ineligible for a map by
-construction. What remains unblocked and small is **25 (C3, IES)** and **28 (E2, grading)**.
+construction. **25 (C3, IES) followed both** (11.57), leaving **28 (E2, 3D LUT grading)** as the last
+unblocked-and-small item on the table.
 
 11.53 adds a third entry to the observation below, and the sharpest one: **a row can be wrong about
 what it is describing, not merely about why.** E8's row and section both named wind alone where the
@@ -2277,6 +2304,21 @@ population C5 actually serves is ~120 of 128 clusterable lights, not a sharpenin
 already have maps. **A row whose justification is stale is not a row to delete — the three so far
 have each been worth more than they claimed, and finding out why is what the exploration phase is
 for.**
+
+**11.57 is the fourth in a row, and its failure mode is a new one: the row was wrong about its own
+constraint.** C3 correctly identified that a table in uniform space costs zero sampler units, said so
+in bold, and then in the next sentence deferred the asymmetric case "rather than paying a unit" — an
+argument that only makes sense if the table were a texture, which its own preceding sentence had just
+established it is not. The premise and the deferral were **two paragraphs apart and contradicted each
+other**, and the deferral is what four specs' worth of readers carried forward. So the growing list
+is: reasons that rot (11.52), a row wrong about what it describes (11.53), a row citing a defect this
+document had already fixed (11.56), and now **a row that argues against itself inside one entry**.
+
+The cheap habit that catches all four is the same and worth stating once: **re-derive the row's
+constraint from the code before accepting what the row concludes from it.** In this case that took one
+grep — bindings 0–5 used against a GL minimum of 36 — and it turned a v1/v2 split into a single spec.
+It also caught the row's storage plan being unimplementable as written, which no amount of agreeing
+with its conclusion would have.
 
 **And 11.56's own review is the counterpart observation, about specs rather than rows.** The spec
 that corrected C5's stale justification shipped three defects and a dead test of its own, and every
