@@ -248,6 +248,23 @@ void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* 
         glUniform3fv(loc, (GLsizei)count, values);
 }
 
+void uniform_set_int_array(UniformManager* mgr, const char* name, const int* values, int count) {
+    if (!mgr || !values || count <= 0)
+        return;
+    const GLint loc = uniform_location(mgr, name);
+    if (loc >= 0)
+        glUniform1iv(loc, (GLsizei)count, values);
+}
+
+void uniform_set_float_array(UniformManager* mgr, const char* name, const float* values,
+                             int count) {
+    if (!mgr || !values || count <= 0)
+        return;
+    const GLint loc = uniform_location(mgr, name);
+    if (loc >= 0)
+        glUniform1fv(loc, (GLsizei)count, values);
+}
+
 void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value) {
     GLint loc;
     if (uniform_write_wanted(mgr, name, value, 4, &loc))

@@ -274,10 +274,16 @@ Material* create_material() {
     material->microsurface_layer = -1;
     material->anisotropy_layer = -1;
 
-    // Not a layered surface. calloc already zeroed layer_count, which is the
-    // whole gate, but the layer indices need the -1 sentinel like the masks.
+    // Not a layered surface. Every field is written out because this function
+    // MALLOCs -- a layer pointer left uninitialised is released at teardown, and
+    // an uninitialised layer_count arms the shader's layered path on a material
+    // that has none.
+    material->layer_count = 0;
+    material->splat_tex = NULL;
     material->splat_layer = -1;
     for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
+        material->layers[i].albedo_tex = NULL;
+        material->layers[i].surface_tex = NULL;
         material->layers[i].albedo_layer = -1;
         material->layers[i].surface_layer = -1;
         material->layers[i].uv_scale = 1.0f;

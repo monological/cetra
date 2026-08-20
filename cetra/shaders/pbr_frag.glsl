@@ -221,6 +221,14 @@ uniform float uShoreWetness;
  */
 #include "stochastic.glsl"
 
+/*
+ * Layered surfaces (spec 11.60). Declares no sampler either -- its layers are tenants of
+ * maskArray, which this program has bound on every draw since 4.10, so N material layers
+ * cost the ledger nothing at all. Gated on layerCount, which is 0 for every material that
+ * has not asked, making the whole path an exact identity.
+ */
+#include "layers.glsl"
+
 // Open porosity of sand that the swash fills, from Lagarde's 25-50% band for natural
 // materials. What the diffuse albedo loses when the pores are full.
 const float SHORE_POROSITY = 0.38;
@@ -951,7 +959,16 @@ void main() {
         vec2 uvAlbedo = transformUV(TexCoords);
         vec3 albedoMapOnly = albedo;
         float texAlphaOnly = 1.0;
-        if (albedoTexExists > 0) {
+        if (layerCount > 0) {
+            // The layered blend has to reach this view, and not as a courtesy:
+            // apps/forest is not pixel-deterministic on its ordinary path (the
+            // Hillaire sky moves ~35,000 px between two runs of one build) and
+            // this is the view that is, so it is the only frame of a real
+            // terrain a gate can compare at all.
+            vec2 splatUV = texCoords2Exists > 0 ? TexCoords2 : vec2(0.0);
+            LayerSurface ls = sampleLayeredSurface(maskArray, WorldPos, normalize(Normal), splatUV);
+            albedoMapOnly = albedo * sRGBToLinear(ls.albedo);
+        } else if (albedoTexExists > 0) {
             // sRGB texture: the hardware already decoded the sample to linear
             vec4 albedoSample = texture(albedoTex, uvAlbedo);
             albedoMapOnly = albedo * albedoSample.rgb;
@@ -1006,9 +1023,31 @@ void main() {
     // Sample material properties. glTF semantics: the scalar factors
     // modulate the texture (effective value = factor * texture), so a
     // material can globally tint or gloss up its maps
+    // A layered surface resolves its albedo, normal, roughness and AO from ONE
+    // set of taps, taken here before anything consumes them. Sampling per
+    // consumer would cost the taps three times over and, worse, would let the
+    // four disagree -- the height blend picks a winning layer per texel, so an
+    // albedo and a normal chosen by two separate blends can come from different
+    // layers on the same pixel.
+    //
+    // UV1 carries the splat coordinate. Under the vegetation wind modes it means
+    // something else entirely, which is why a layered material and a vegetation
+    // material are mutually exclusive; the AO lookup below makes the same
+    // exclusion for the same reason.
+    bool layered = layerCount > 0;
+    LayerSurface layerSurf = layerSurfaceNeutral(normalize(Normal));
+    if (layered) {
+        vec2 splatUV = texCoords2Exists > 0 ? TexCoords2 : vec2(0.0);
+        layerSurf = sampleLayeredSurface(maskArray, WorldPos, normalize(Normal), splatUV);
+    }
+
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
-    if (albedoTexExists > 0) {
+    if (layered) {
+        // Decoded once here rather than per layer inside the blend, the same
+        // arrangement the stochastic path uses two branches down.
+        albedoMap = albedo * sRGBToLinear(layerSurf.albedo);
+    } else if (albedoTexExists > 0) {
         if (stochasticScale > 0.0) {
             /*
              * The map is stored NON-sRGB on this path, and the decode happens here instead.
@@ -1056,7 +1095,12 @@ void main() {
         return;
 
     vec3 N;
-    if (normalTexExists > 0) {
+    if (layered) {
+        // Already world-space: the triplanar whiteout blend rotates each
+        // projection's tangent normal into world before combining, so there is
+        // no TBN to apply and the interpolated tangent frame is not consulted.
+        N = layerSurf.normal;
+    } else if (normalTexExists > 0) {
         // Re-orthonormalize the interpolated TBN (Gram-Schmidt) before
         // applying the normal map. Vertex interpolation — and especially
         // skinning, where cross-rig retargeting puts non-uniform scale/shear
@@ -1094,7 +1138,9 @@ void main() {
     }
 
     float roughnessMap = roughness;
-    if (roughnessLayer >= 0) {
+    if (layered) {
+        roughnessMap = roughness * layerSurf.roughness;
+    } else if (roughnessLayer >= 0) {
         // glTF: G channel contains roughness (works for grayscale too since R=G=B)
         roughnessMap = roughness * texture(maskArray, vec3(uv, float(roughnessLayer))).g;
     }
@@ -1108,7 +1154,9 @@ void main() {
     }
 
     float aoMap = ao;
-    if (aoLayer >= 0) {
+    if (layered) {
+        aoMap = mix(1.0, layerSurf.ao, aoStrength);
+    } else if (aoLayer >= 0) {
         // Use UV1 for AO if available (common glTF lightmap pattern), otherwise
         // UV0 -- but only when UV1 actually holds texture coordinates. Under
         // the vegetation wind modes it holds (branch phase, flex weight), and
