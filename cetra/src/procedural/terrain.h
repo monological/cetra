@@ -90,6 +90,15 @@ void terrain_field_measure(TerrainField* field);
 
 typedef struct TerrainParams {
     float extent; // half-width; the terrain spans [-extent, +extent] on X and Z
+    // World XZ the domain is centred on, so the terrain spans
+    // [center - extent, center + extent]. Zero is every terrain built before
+    // this field existed.
+    //
+    // The height function is what the collider, the scatter and the camera all
+    // ask where the ground is, and they ask in WORLD coordinates -- so a terrain
+    // that does not know where it sits can only be at the origin, which is what
+    // it was.
+    vec2 center;
     float height; // peak displacement, in the same units as extent
 
     // Lowest octave, in cycles per world unit. Each further octave multiplies
@@ -122,9 +131,31 @@ typedef struct TerrainParams {
     bool layered;
 } TerrainParams;
 
-// Centred on the origin deliberately: the outermost shadow cascade is fitted
-// around a hardcoded {0,0,0}, so terrain placed anywhere else loses its far
-// shadows with no diagnostic.
+// World XZ -> the domain's own coordinate, running 0 .. 2*extent from the
+// -X,-Z corner. Every field lookup and every noise lattice in here is indexed
+// from that corner, so this is the ONE place a terrain's placement is applied.
+//
+// The subtraction comes FIRST and the order is load-bearing far from the
+// origin: (x - center) is exact while the two are within a factor of two of
+// each other, and adding extent to a small difference keeps it exact. Adding
+// extent to x first rounds at x's magnitude and then subtracts, which loses
+// the low bits of a coordinate the caller still has.
+static inline void terrain_to_domain(const TerrainParams* p, float x, float z, float* out_x,
+                                     float* out_z) {
+    *out_x = (x - p->center[0]) + p->extent;
+    *out_z = (z - p->center[1]) + p->extent;
+}
+
+// ... and back, from a coordinate running -extent .. +extent about the terrain's
+// own middle. The generators walk the domain and have to say where in the world
+// each step landed.
+static inline float terrain_world_x(const TerrainParams* p, float local_x) {
+    return local_x + p->center[0];
+}
+static inline float terrain_world_z(const TerrainParams* p, float local_z) {
+    return local_z + p->center[1];
+}
+
 TerrainParams terrain_default_params(void);
 
 // Fill field->height by evaluating the ANALYTIC fbm at every node, ignoring any

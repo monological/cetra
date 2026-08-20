@@ -36,6 +36,7 @@ static const vec3 TINT_CHANNEL = {0.15f, 0.14f, 0.12f};
 TerrainParams terrain_default_params(void) {
     TerrainParams p;
     p.extent = 500.0f;
+    glm_vec2_zero(p.center);
     p.height = 55.0f;
     // Chosen together: the finest octave is base_freq * lacunarity^(octaves-1) =
     // 0.064, whose lattice repeats every 256/0.064 = 4000 units -- four times the
@@ -112,9 +113,9 @@ bool terrain_field_seed(TerrainField* field, const TerrainParams* params) {
         // moved the bake's digest and nothing else, which is how the two halves
         // of that claim were told apart: with the old seed restored, the thermal
         // rewrite below reads bit-identical to the version it replaced.
-        float z = terrain_field_node(params->extent, field->res, j);
+        float z = terrain_world_z(params, terrain_field_node(params->extent, field->res, j));
         for (int i = 0; i < field->res; ++i) {
-            float x = terrain_field_node(params->extent, field->res, i);
+            float x = terrain_world_x(params, terrain_field_node(params->extent, field->res, i));
             field->height[(size_t)j * (size_t)field->res + (size_t)i] =
                 terrain_height_at(&analytic, x, z);
         }
@@ -200,8 +201,10 @@ static float sample_plane(const TerrainParams* p, const float* plane, float x, f
 
     // Texels sit on NODES: 0 lands on -extent and res-1 on +extent.
     float last = (float)(f->res - 1);
-    float gx = (x + p->extent) / cell;
-    float gz = (z + p->extent) / cell;
+    float dx, dz;
+    terrain_to_domain(p, x, z, &dx, &dz);
+    float gx = dx / cell;
+    float gz = dz / cell;
     // Clamp the COORDINATE rather than only the taps. Clamping taps alone still
     // interpolates between them with an out-of-range t, which extrapolates the
     // cubic past the edge -- the failure this policy exists to avoid.
@@ -287,9 +290,9 @@ bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb)
     // stretch between the splat and the terrain it describes.
     float texel = (2.0f * p->extent) / (float)res;
     for (int j = 0; j < res; j++) {
-        float z = -p->extent + ((float)j + 0.5f) * texel;
+        float z = terrain_world_z(p, -p->extent + ((float)j + 0.5f) * texel);
         for (int i = 0; i < res; i++) {
-            float x = -p->extent + ((float)i + 0.5f) * texel;
+            float x = terrain_world_x(p, -p->extent + ((float)i + 0.5f) * texel);
 
             vec3 n = {0.0f, 1.0f, 0.0f};
             terrain_normal_at(p, x, z, n);
@@ -337,8 +340,8 @@ float terrain_height_at(const TerrainParams* p, float x, float z) {
     // Offset into positive coordinates before scaling: the lattice is indexed
     // from zero, and feeding it negatives would fold the terrain about its own
     // origin rather than continuing it.
-    float ox = x + p->extent;
-    float oz = z + p->extent;
+    float ox, oz;
+    terrain_to_domain(p, x, z, &ox, &oz);
 
     float sum = 0.0f, amp = 1.0f, norm = 0.0f, freq = p->base_freq;
     for (int i = 0; i < p->octaves; ++i) {
@@ -390,7 +393,8 @@ void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out) {
 
 static void terrain_macro(const TerrainParams* p, float x, float z, float* rgba) {
     const NoisePerm* t = perm_for(p->seed);
-    float ox = x + p->extent, oz = z + p->extent;
+    float ox, oz;
+    terrain_to_domain(p, x, z, &ox, &oz);
     // The LOW-frequency field alone. The fine one exists to break up a flat hue,
     // which is a job the layer maps now do at their own resolution and do better;
     // what is left for 2.6-unit vertices is the drift a tiling texture cannot
@@ -432,7 +436,8 @@ static void terrain_tint(const TerrainParams* p, float x, float z, float height,
     // vertex at one slope and altitude is the same hue, and a kilometre of it
     // reads as a single flat green whatever the palette.
     const NoisePerm* t = perm_for(p->seed);
-    float ox = x + p->extent, oz = z + p->extent;
+    float ox, oz;
+    terrain_to_domain(p, x, z, &ox, &oz);
     float patch = noise_perlin3_tiled(t, ox * 0.011f, 11.3f, oz * 0.011f, TERRAIN_NOISE_PERIOD);
     float grain = noise_perlin3_tiled(t, ox * 0.09f, 23.9f, oz * 0.09f, TERRAIN_NOISE_PERIOD);
 
@@ -508,8 +513,8 @@ void terrain_height_probe(const TerrainParams* p) {
             // sampling give the same answer, so it cannot tell them apart.
             float u = (float)(i + 1) / (float)(PROBE_GRID + 1);
             float v = (float)(j + 1) / (float)(PROBE_GRID + 1);
-            float x = -extent + 2.0f * extent * u;
-            float z = -extent + 2.0f * extent * v;
+            float x = terrain_world_x(p, -extent + 2.0f * extent * u);
+            float z = terrain_world_z(p, -extent + 2.0f * extent * v);
             // SNAPPED ONTO A NODE when there is a field, so these rows read the
             // stored value and not the interpolant. That splits two questions that
             // otherwise contaminate each other: whether the field is MAPPED right
@@ -519,8 +524,12 @@ void terrain_height_probe(const TerrainParams* p) {
             // error, and the bar can stay at a couple of quantisation codes.
             if (f) {
                 float snap = terrain_field_cell(extent, f->res);
-                x = terrain_field_node(extent, f->res, (int)floorf((x + extent) / snap + 0.5f));
-                z = terrain_field_node(extent, f->res, (int)floorf((z + extent) / snap + 0.5f));
+                float dx, dz;
+                terrain_to_domain(p, x, z, &dx, &dz);
+                x = terrain_world_x(p, terrain_field_node(extent, f->res,
+                                                          (int)floorf(dx / snap + 0.5f)));
+                z = terrain_world_z(p, terrain_field_node(extent, f->res,
+                                                          (int)floorf(dz / snap + 0.5f)));
             }
             vec3 n = {0.0f, 1.0f, 0.0f};
             terrain_normal_at(p, x, z, n);
@@ -557,9 +566,10 @@ void terrain_height_probe(const TerrainParams* p) {
                              {-0.70f, -1.90f}, {-near_u, 0.15f}, {near_u, -0.55f},
                              {0.35f, near_u},  {-0.25f, -near_u}};
     for (int k = 0; k < 8; ++k) {
-        float x = out[k][0] * extent, z = out[k][1] * extent;
-        float cx = x < -extent ? -extent : (x > extent ? extent : x);
-        float cz = z < -extent ? -extent : (z > extent ? extent : z);
+        float lx = out[k][0] * extent, lz = out[k][1] * extent;
+        float x = terrain_world_x(p, lx), z = terrain_world_z(p, lz);
+        float cx = terrain_world_x(p, lx < -extent ? -extent : (lx > extent ? extent : lx));
+        float cz = terrain_world_z(p, lz < -extent ? -extent : (lz > extent ? extent : lz));
         printf("terrain-height-probe clamp x=%.4f z=%.4f h=%.6f edge_x=%.4f edge_z=%.4f "
                "edge_h=%.6f\n",
                (double)x, (double)z, (double)terrain_height_at(p, x, z), (double)cx,
@@ -582,8 +592,8 @@ void terrain_height_probe(const TerrainParams* p) {
         float v = (float)(gj + 1) / (float)(PROBE_GRID + 1);
         float nx = floorf((u * 2.0f * extent) / cell);
         float nz = floorf((v * 2.0f * extent) / cell);
-        float x = -extent + (nx + 0.5f) * cell;
-        float z = -extent + nz * cell;
+        float x = terrain_world_x(p, -extent + (nx + 0.5f) * cell);
+        float z = terrain_world_z(p, -extent + nz * cell);
         printf("terrain-height-probe mid x=%.6f z=%.6f h=%.6f\n", (double)x, (double)z,
                (double)terrain_height_at(p, x, z));
     }
@@ -654,13 +664,14 @@ bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh) {
         return false;
 
     float tile_span = (2.0f * p->extent) / (float)p->tiles;
-    float x0 = -p->extent + tile_span * (float)tx;
-    float z0 = -p->extent + tile_span * (float)tz;
+    float x0 = terrain_world_x(p, -p->extent + tile_span * (float)tx);
+    float z0 = terrain_world_z(p, -p->extent + tile_span * (float)tz);
     return build_grid(p, x0, z0, tile_span, p->tile_segments, true, mesh);
 }
 
 bool terrain_build_collider(const TerrainParams* p, int segments, Mesh* mesh) {
     if (!p || !mesh)
         return false;
-    return build_grid(p, -p->extent, -p->extent, 2.0f * p->extent, segments, false, mesh);
+    return build_grid(p, terrain_world_x(p, -p->extent), terrain_world_z(p, -p->extent),
+                      2.0f * p->extent, segments, false, mesh);
 }

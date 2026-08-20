@@ -118,6 +118,10 @@ typedef struct ForestArgs {
     float heightmap_max;     // world Y the file's 65535 maps to
     int height_probe;        // print sampled heights, normals and masks
     int scatter_probe;       // print where the scatter put things, against the drainage
+    // Place the whole world this far from the origin on X and Z (spec 11.62).
+    // The instrument fp32's relative precision is measured with: at 0 this is
+    // the frame the app has always rendered.
+    float world_offset;
 } ForestArgs;
 
 static ForestArgs g_args;
@@ -248,8 +252,10 @@ static unsigned part1by1(unsigned n) {
 // batching; --no-spatial-sort exists so the difference can be measured rather
 // than asserted, and specs/11.29 records the figures.
 static unsigned morton_key(const TerrainParams* p, float x, float z) {
-    float u = (x + p->extent) / (2.0f * p->extent);
-    float v = (z + p->extent) / (2.0f * p->extent);
+    float dx, dz;
+    terrain_to_domain(p, x, z, &dx, &dz);
+    float u = dx / (2.0f * p->extent);
+    float v = dz / (2.0f * p->extent);
     u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
     v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
     unsigned cx = (unsigned)(u * 1023.0f);
@@ -305,8 +311,10 @@ static NoisePerm g_clump;
 // scatter of one prototype reads as an orchard however good the tree is --
 // clearings and thickets are what make it a forest.
 static float clump_density(float x, float z, float freq) {
-    float u = (x + g_terrain.extent) * freq;
-    float v = (z + g_terrain.extent) * freq;
+    float dx, dz;
+    terrain_to_domain(&g_terrain, x, z, &dx, &dz);
+    float u = dx * freq;
+    float v = dz * freq;
     float n = noise_perlin3_tiled(&g_clump, u, 3.7f, v, 256);
     n = n * 0.5f + 0.5f;
     return n < 0.0f ? 0.0f : (n > 1.0f ? 1.0f : n);
@@ -358,8 +366,8 @@ static void scatter_probe(const Placement* items, int count) {
     float margin = g_terrain.extent * 0.96f;
     for (int j = 0; j < G; j++) {
         for (int i = 0; i < G; i++) {
-            float x = terrain_field_node(margin, G, i);
-            float z = terrain_field_node(margin, G, j);
+            float x = terrain_world_x(&g_terrain, terrain_field_node(margin, G, i));
+            float z = terrain_world_z(&g_terrain, terrain_field_node(margin, G, j));
             float f = terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z);
             land_sum += f;
             if (f > TREE_MAX_FLOW)
@@ -390,8 +398,8 @@ static void scatter_probe(const Placement* items, int count) {
 static bool sample_ground(float max_slope, float max_flow, float clump_freq, float clump_power,
                           vec3 out_pos) {
     float margin = g_terrain.extent * 0.96f;
-    float x = rnd_range(-margin, margin);
-    float z = rnd_range(-margin, margin);
+    float x = terrain_world_x(&g_terrain, rnd_range(-margin, margin));
+    float z = terrain_world_z(&g_terrain, rnd_range(-margin, margin));
     vec3 n = {0.0f, 1.0f, 0.0f};
     terrain_normal_at(&g_terrain, x, z, n);
     if (n[1] < max_slope)
@@ -499,7 +507,8 @@ static void bake_terrain_layers(Scene* scene) {
     // writes a literal zero), so a mesh-local reading samples one texel and the
     // whole kilometre resolves to layer 0.
     g_mat_terrain->splat_space = SPLAT_SPACE_WORLD_XZ;
-    g_mat_terrain->splat_origin[0] = g_mat_terrain->splat_origin[1] = -g_terrain.extent;
+    g_mat_terrain->splat_origin[0] = terrain_world_x(&g_terrain, -g_terrain.extent);
+    g_mat_terrain->splat_origin[1] = terrain_world_z(&g_terrain, -g_terrain.extent);
     g_mat_terrain->splat_size[0] = g_mat_terrain->splat_size[1] = 2.0f * g_terrain.extent;
 
     // Last, because it is what arms the shader.
@@ -943,6 +952,12 @@ static void on_init(Game* game) {
 
     g_terrain = terrain_default_params();
     g_terrain.seed = g_args.seed;
+    // Everything else here places itself relative to the terrain, so this one
+    // assignment is what moves the world (spec 11.62). The offset is
+    // MATERIALISED -- it lands in every vertex, every collider triangle and
+    // every scatter position as an fp32 world coordinate -- which is the point:
+    // what this measures is what a large world costs before an origin shift.
+    g_terrain.center[0] = g_terrain.center[1] = g_args.world_offset;
     // Taller and broader than the library default: at 55 over a 250-unit
     // wavelength the ground reads as flat from anywhere a person stands, and
     // terrain that reads flat gives LOD and culling nothing to work with.
@@ -1055,9 +1070,10 @@ static void on_init(Game* game) {
     // means the first second of every run is a fall -- which reads as the
     // character sliding before it settles.
     const float capsule_rest = 0.9f + 0.4f;
-    float spawn_y = terrain_height_at(&g_terrain, 0.0f, 0.0f) + capsule_rest + 0.02f;
+    float spawn_x = g_terrain.center[0], spawn_z = g_terrain.center[1];
+    float spawn_y = terrain_height_at(&g_terrain, spawn_x, spawn_z) + capsule_rest + 0.02f;
     g_player = create_entity(em, "player");
-    entity_set_position(g_player, (vec3){0.0f, spawn_y, 0.0f});
+    entity_set_position(g_player, (vec3){spawn_x, spawn_y, spawn_z});
     CharacterControllerConfig cc = character_controller_default_config();
     cc.capsule_radius = 0.4f;
     cc.capsule_half_height = 0.9f;
@@ -1074,12 +1090,14 @@ static void on_init(Game* game) {
 
     physics_world_optimize(physics);
 
-    // Shadows sized to the terrain, not left at the library defaults (ortho 2000
-    // and a single origin-centred map). The outermost cascade is fitted around a
-    // hardcoded origin, which is why the terrain is centred there.
+    // Shadows sized AND placed to the terrain, not left at the library defaults
+    // (ortho 2000 about the origin). The scene-fit map covers ortho_size about
+    // its centre, so a terrain that is not at the origin needs both.
     ShadowSystem* ss = g_scene->shadow_system;
     if (ss) {
         ss->enabled = true;
+        ss->scene_center[0] = g_terrain.center[0];
+        ss->scene_center[2] = g_terrain.center[1];
         ss->ortho_size = g_terrain.extent;
         ss->near_plane = 0.5f;
         ss->far_plane = g_terrain.extent * 6.0f;
@@ -1093,8 +1111,8 @@ static void on_init(Game* game) {
     // needs the far plane, and 0.1 near against it is a 20000:1 depth ratio that
     // z-fights across the whole distance.
     set_camera_perspective(camera, glm_rad(58.0f), 0.5f, 2000.0f);
-    set_camera_position(camera, (vec3){0.0f, spawn_y + 6.0f, 16.0f});
-    set_camera_look_at(camera, (vec3){0.0f, spawn_y, 0.0f});
+    set_camera_position(camera, (vec3){spawn_x, spawn_y + 6.0f, spawn_z + 16.0f});
+    set_camera_look_at(camera, (vec3){spawn_x, spawn_y, spawn_z});
     set_camera_up_vector(camera, (vec3){0.0f, 1.0f, 0.0f});
     set_engine_camera(engine, camera);
     set_engine_camera_mode(engine, CAMERA_MODE_FREE);
@@ -1320,6 +1338,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
+    fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
     fprintf(stderr, "      --cam-target x,y,z  Pinned camera aim point\n");
 }
@@ -1414,6 +1433,8 @@ int main(int argc, char** argv) {
             g_args.render_mode = atoi(argv[++i]);
         } else if (!strcmp(a, "--seed") && i + 1 < argc) {
             g_args.seed = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (!strcmp(a, "--world-offset") && i + 1 < argc) {
+            g_args.world_offset = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--cam-eye") && i + 1 < argc) {
             cam_eye_set = parse_vec3(argv[++i], g_args.cam_eye);
         } else if (!strcmp(a, "--cam-target") && i + 1 < argc) {
