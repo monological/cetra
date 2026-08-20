@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <string.h>
+
 #include "postfx.h"
 #include "lut.h"
 #include "profiler.h"
@@ -459,9 +461,10 @@ static bool postfx_alloc_targets(PostFX* fx) {
 }
 
 // Delete every resolution-dependent target: what postfx_alloc_targets built,
-// plus every lazily-allocated group. Excludes the three resolution-INDEPENDENT
-// resources -- the luminance measure target, the noise texture, and the froxel
-// volumes (frustum-sized by design) -- so a resize keeps them.
+// plus every lazily-allocated group. Excludes the resolution-INDEPENDENT
+// resources -- the luminance measure target, the noise texture, the froxel
+// volumes (frustum-sized by design) and the colour-grading LUT (whose path the
+// app may no longer hold) -- so a resize keeps them.
 //
 // For teardown only. Anything that keeps the PostFX alive afterwards wants
 // postfx_invalidate_targets, which does this and then clears the flags saying
@@ -870,9 +873,13 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // is applied whole at the scene passes now, so nothing samples it here.
     uniform_set_int(fx->tonemap_program->uniforms, "auxTex", 9); // linZ + roughness for spec-occ
     uniform_set_int(fx->tonemap_program->uniforms, "csTex", 10); // contact-shadow visibility
-    // 11, not the free 7: this program's unit space is its own, and a sampler3D
-    // on a unit a sampler2D also names is INVALID_OPERATION at draw. Appending
-    // keeps that unrepresentable rather than depending on unit 7 staying unused.
+    // 11, not the free 7, and the reason is NOT that 7 would be an error today:
+    // no sampler in this program names it, so a sampler3D there would link and
+    // draw perfectly well. Unit 7 carries a BINDING (the retired adapted-
+    // luminance slot, bound to 2D 0 each frame) and the INVALID_OPERATION rule
+    // is about two sampler DECLARATIONS of different types sharing a unit.
+    // Appending is what keeps that unrepresentable if a 2D sampler is ever
+    // restored to 7 -- it is insurance, not a fix.
     uniform_set_int(fx->tonemap_program->uniforms, "lutTex", 11);
 
     glUseProgram(fx->lum_measure_program->id);
@@ -2002,7 +2009,7 @@ void free_postfx(PostFX* fx) {
     // (all 0 and no-op if never allocated -- this doubles as create_postfx's
     // error-unwind over a half-built PostFX).
     postfx_free_targets(fx);
-    // The three the resize deliberately keeps, and so are only freed here.
+    // The ones the resize deliberately keeps, and so are only freed here.
     gl_delete_texture(&fx->noise_texture);
     gl_delete_texture(&fx->white_tex);
     gl_delete_texture(&fx->lut_texture);

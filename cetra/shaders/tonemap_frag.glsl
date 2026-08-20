@@ -51,12 +51,27 @@ uniform vec2 texelSize; // Display-pixel size, for the sharpen taps
 // Dither is last and must stay last: it is the quantization stage, so anything
 // appended after it reaches the 8-bit target undithered.
 //
-// The LUT sits AFTER the gamma encode, and that placement is the feature's
-// contract rather than a detail. A .cube is authored against what a monitor was
-// showing — display-encoded values — so applying it to the LDR-linear numbers
-// toneSelect returns would produce a plausible frame that is not the look the
-// colourist made. It goes before the grain because grain is sensor noise laid
-// over a finished look, not something a look should be graded through.
+// THE GAMMA ENCODE IS THIS STACK'S DIVIDING LINE, and it is what decides where
+// a new stage goes. There are now two grading stages on opposite sides of it,
+// which looks arbitrary and is not:
+//
+//   Before it, on LDR-linear values, live the operators this engine DEFINES.
+//   Nothing external constrains their space, so we pick one and calibrate the
+//   defaults to it -- lift/gamma/gain and the vignette are both this kind, and
+//   postfx_apply_film_look's hand-tuned values only mean what they mean here.
+//
+//   After it, on display-encoded values, live stages whose DATA was authored in
+//   that space. They are not sited by preference; the file decides.
+//
+// The LUT is the second kind. A .cube is authored against what a monitor was
+// showing, so applying it to the LDR-linear numbers toneSelect returns would
+// produce a plausible frame that is not the look the colourist made. It goes
+// before the grain because grain is sensor noise laid over a finished look, not
+// something a look should be graded through.
+//
+// Note the two compose rather than replace: --film turns the lift/gamma/gain
+// grade ON, so --film with a .cube applies this engine's look underneath the
+// colourist's. Defensible, and worth knowing before blaming the table.
 uniform int sharpenEnabled;
 uniform float sharpenStrength;
 uniform int gradeEnabled;
@@ -552,8 +567,8 @@ void main()
 
     // Dither the 8-bit write: a shallow gradient otherwise quantizes to contour
     // bands (sky, fog, bloom falloff). Last stage of this pass — anything added
-    // after it would itself be quantized undithered. (The GUI and the LUT debug
-    // overlays do draw to the same target afterwards; they are flat UI fills,
+    // after it would itself be quantized undithered. (The GUI and the SKY LUT
+    // debug tiles draw to the same target afterwards; they are flat UI fills,
     // not image-forming, so they are deliberately left alone.)
     //
     // Static, with no frame term. An animated pattern would put roughly half the

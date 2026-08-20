@@ -2402,14 +2402,12 @@ int main(int argc, char** argv) {
             glm_vec3_copy(args.grade_gamma, fx->grade_gamma);
             glm_vec3_copy(args.grade_gain, fx->grade_gain);
         }
-        // The two knobs before the table, so --lut-strength 0 is honoured on the
-        // very first graded frame rather than one frame late.
         if (args.lut_strength >= 0.0f)
             fx->lut_strength = args.lut_strength;
         if (args.lut_interp >= 0)
             fx->lut_interp = (PostFXLutInterp)args.lut_interp;
         // --no-lut wins over a path from either source, which is what makes it
-        // the only way off a LUT a .cscn asked for.
+        // the only way to stop a scene-authored LUT from loading.
         if (args.no_lut)
             postfx_clear_lut(fx);
         else if (args.lut_path)

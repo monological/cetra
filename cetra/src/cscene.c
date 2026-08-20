@@ -415,19 +415,20 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         // learns the value they wrote is not the value they got.
         // 0.02 lower bound: a smaller spot contains no texel of the 64x64 measure
         // target at all, and an empty histogram freezes the meter silently.
-        d->has_meter_radius = _ranged_float(meter, "post.metering", "radius", 0.02f, 1.0f, &d->meter_radius);
-        d->has_meter_low = _ranged_float(meter, "post.metering", "low", 0.0f, 1.0f, &d->meter_low);
-        d->has_meter_high = _ranged_float(meter, "post.metering", "high", 0.0f, 1.0f, &d->meter_high);
-        d->has_adapt_up = _ranged_float(meter, "post.metering", "adapt_up", 0.0f, 1.0f, &d->adapt_up);
-        d->has_adapt_down = _ranged_float(meter, "post.metering", "adapt_down", 0.0f, 1.0f, &d->adapt_down);
+        static const char* const blk = "post.metering";
+        d->has_meter_radius = _ranged_float(meter, blk, "radius", 0.02f, 1.0f, &d->meter_radius);
+        d->has_meter_low = _ranged_float(meter, blk, "low", 0.0f, 1.0f, &d->meter_low);
+        d->has_meter_high = _ranged_float(meter, blk, "high", 0.0f, 1.0f, &d->meter_high);
+        d->has_adapt_up = _ranged_float(meter, blk, "adapt_up", 0.0f, 1.0f, &d->adapt_up);
+        d->has_adapt_down = _ranged_float(meter, blk, "adapt_down", 0.0f, 1.0f, &d->adapt_down);
         static const char* const meter_known[] = {"mode", "radius",    "low",
                                                   "high", "adapt_up", "adapt_down"};
-        warn_unknown_keys(meter, meter_known, sizeof(meter_known) / sizeof(meter_known[0]),
-                          "post.metering");
+        warn_unknown_keys(meter, meter_known, sizeof(meter_known) / sizeof(meter_known[0]), blk);
     }
 
     // post.lut: a .cube colour-grading table. The only way to attach one to a
-    // scene; --lut overrides it and --no-lut is the only way off it.
+    // scene; --lut overrides the path and --no-lut is the only way to stop it
+    // loading at all.
     const cJSON* lut = cJSON_GetObjectItemCaseSensitive(post, "lut");
     if (cJSON_IsObject(lut)) {
         copy_string(d->lut_path, sizeof(d->lut_path),

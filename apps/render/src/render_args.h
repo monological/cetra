@@ -228,7 +228,10 @@ typedef struct {
     // after the gamma encode -- the general map lift/gamma/gain cannot be,
     // since three per-channel knobs cannot rotate a hue or mix channels.
     const char* lut_path;
-    int no_lut;         // Force off a LUT a .cscn asked for; the only way off one
+    // The only way to stop a LUT from LOADING -- and it cancels a --lut on the
+    // same command line too. Not the only way off a grade: --lut-strength 0 is
+    // a bit-exact identity, which the lut-strength arm asserts at 0 px.
+    int no_lut;
     float lut_strength; // -1 = keep the default
     int lut_interp;     // -1 unset, else PostFXLutInterp
     int dof;            // --dof: enable depth of field
