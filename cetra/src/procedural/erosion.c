@@ -460,6 +460,19 @@ static float normalise(float* plane, size_t n) {
     return peak;
 }
 
+// FNV-1a over raw bytes. Single-threaded and in index order, because a digest
+// computed in a varying order would answer a different question from the one
+// asked -- and would be the one part of this file whose result depended on the
+// thread count.
+static void digest_plane(unsigned long long* h, const float* plane, size_t n) {
+    const unsigned char* bytes = (const unsigned char*)plane;
+    size_t total = n * sizeof(float);
+    for (size_t k = 0; k < total; k++) {
+        *h ^= (unsigned long long)bytes[k];
+        *h *= 1099511628211ull;
+    }
+}
+
 static double sum_plane(const float* plane, size_t n) {
     double total = 0.0;
     for (size_t k = 0; k < n; k++)
@@ -556,6 +569,14 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
         stats->flow_peak = flow_peak;
         stats->deposit_peak = deposit_peak;
         stats->wear_peak = wear_peak;
+        // Taken AFTER normalisation, so it covers what a consumer will actually
+        // read rather than an intermediate no caller ever sees.
+        unsigned long long h = 14695981039346656037ull;
+        digest_plane(&h, field->height, n);
+        digest_plane(&h, field->flow, n);
+        digest_plane(&h, field->deposit, n);
+        digest_plane(&h, field->wear, n);
+        stats->digest = h;
     }
 
     free(pool);

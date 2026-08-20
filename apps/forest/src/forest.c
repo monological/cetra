@@ -52,6 +52,7 @@
 #include "cetra/game/physics.h"
 
 #include "cetra/procedural/erosion.h"
+#include "cetra/procedural/heightmap.h"
 #include "cetra/procedural/rock.h"
 #include "cetra/procedural/terrain.h"
 #include "cetra/procedural/tree_gen.h"
@@ -110,6 +111,11 @@ typedef struct ForestArgs {
     int erode_iterations;
     int erode_workers; // 0 = size from the machine
     int erode_probe;   // print the bake's own numbers; implies --erode
+    const char* erode_save;  // write the baked field here as .r16
+    const char* heightmap;   // load a field from here instead of baking
+    float heightmap_min;     // world Y the file's 0 maps to
+    float heightmap_max;     // world Y the file's 65535 maps to
+    int height_probe;        // print sampled heights, normals and masks
 } ForestArgs;
 
 static ForestArgs g_args;
@@ -428,6 +434,18 @@ static void bake_erosion(void) {
     printf("Terrain eroded: %dx%d cells at %.2f units, %d iterations, %d threads, %.0f ms\n", res,
            res, cell, ep.iterations, st.workers, ms);
 
+    if (g_args.erode_save) {
+        float lo = 0.0f, hi = 1.0f;
+        heightmap_height_range(&g_field, &lo, &hi);
+        if (heightmap_save(&g_field, g_args.erode_save, lo, hi) && g_args.erode_probe) {
+            // At full precision, and this row is why: the range is not recorded in
+            // a headerless file, so reading the terrain back needs a number the
+            // log's three decimals cannot carry.
+            printf("terrain-erosion-probe saved path=%s min=%.9g max=%.9g\n", g_args.erode_save,
+                   (double)lo, (double)hi);
+        }
+    }
+
     if (!g_args.erode_probe)
         return;
 
@@ -447,6 +465,95 @@ static void bake_erosion(void) {
     // which normalising to the peak would otherwise hide by scaling noise to 1.
     printf("terrain-erosion-probe peaks flow=%.6f deposit=%.6f wear=%.6f\n", (double)st.flow_peak,
            (double)st.deposit_peak, (double)st.wear_peak);
+    // The determinism claim in one number. The budget rows above cannot make it:
+    // addition hides compensating differences.
+    printf("terrain-erosion-probe digest value=%016llx\n", st.digest);
+}
+
+// Sample points the height probe reports. A fixed set, because an arm asserting
+// against ground truth needs to know where the ground truth was taken -- and a
+// grid derived from the extent moves the moment a caller changes it.
+#define PROBE_GRID 5
+#define PROBE_SCAN 40
+
+// Print what the height function actually returns, which nothing else can show.
+// A field wired to the wrong world scale, read with the axes swapped, or clamped
+// to zero outside its domain still renders as terrain.
+static void height_probe(void) {
+    const TerrainField* f = g_terrain.field;
+    float extent = g_terrain.extent;
+    printf("terrain-height-probe header source=%s res=%d extent=%.4f cell=%.6f\n",
+           f ? "field" : "analytic", f ? f->res : 0, (double)extent,
+           f ? (double)((2.0f * extent) / (float)(f->res - 1)) : 0.0);
+
+    for (int j = 0; j < PROBE_GRID; ++j) {
+        for (int i = 0; i < PROBE_GRID; ++i) {
+            // Interior fractions, not the corners: a corner is where clamping and
+            // sampling give the same answer, so it cannot tell them apart.
+            float u = (float)(i + 1) / (float)(PROBE_GRID + 1);
+            float v = (float)(j + 1) / (float)(PROBE_GRID + 1);
+            float x = -extent + 2.0f * extent * u;
+            float z = -extent + 2.0f * extent * v;
+            vec3 n;
+            terrain_normal_at(&g_terrain, x, z, n);
+            printf("terrain-height-probe sample x=%.4f z=%.4f h=%.6f ny=%.6f "
+                   "flow=%.6f deposit=%.6f wear=%.6f\n",
+                   (double)x, (double)z, (double)terrain_height_at(&g_terrain, x, z), (double)n[1],
+                   (double)terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z),
+                   (double)terrain_mask_at(&g_terrain, TERRAIN_MASK_DEPOSIT, x, z),
+                   (double)terrain_mask_at(&g_terrain, TERRAIN_MASK_WEAR, x, z));
+        }
+    }
+
+    // Outside the domain, paired with the edge point each one should clamp ONTO.
+    // The camera really does query out here, so "returns something finite" is not
+    // the assertion -- "returns the edge" is.
+    const float out[4][2] = {{-1.35f, 0.20f}, {1.35f, -0.40f}, {0.10f, 1.60f}, {-0.70f, -1.90f}};
+    for (int k = 0; k < 4; ++k) {
+        float x = out[k][0] * extent, z = out[k][1] * extent;
+        float cx = x < -extent ? -extent : (x > extent ? extent : x);
+        float cz = z < -extent ? -extent : (z > extent ? extent : z);
+        printf("terrain-height-probe clamp x=%.4f z=%.4f h=%.6f edge_x=%.4f edge_z=%.4f "
+               "edge_h=%.6f\n",
+               (double)x, (double)z, (double)terrain_height_at(&g_terrain, x, z), (double)cx,
+               (double)cz, (double)terrain_height_at(&g_terrain, cx, cz));
+    }
+
+    // A short line crossing several cell boundaries. This is the only way to see
+    // the filter: a C0 sampler and a C1 one agree at every node and differ only in
+    // how the normal behaves BETWEEN them.
+    float cell = f ? (2.0f * extent) / (float)(f->res - 1) : 1.0f;
+    float x0 = 0.0f, z0 = 0.0f;
+    for (int k = 0; k < PROBE_SCAN; ++k) {
+        float t = (float)k / (float)(PROBE_SCAN - 1);
+        float x = x0 + t * cell * 4.0f;
+        vec3 n;
+        terrain_normal_at(&g_terrain, x, z0, n);
+        printf("terrain-height-probe scan k=%d x=%.6f h=%.6f nx=%.6f ny=%.6f nz=%.6f\n", k,
+               (double)x, (double)terrain_height_at(&g_terrain, x, z0), (double)n[0], (double)n[1],
+               (double)n[2]);
+    }
+}
+
+// Install a heightfield from a file, in place of baking one. This is the AAA path
+// and the reason the bake writes what this reads: a Gaea or World Machine export
+// arrives through exactly here.
+static void load_heightfield(void) {
+    float lo = g_args.heightmap_min, hi = g_args.heightmap_max;
+    if (!(hi > lo)) {
+        // The fbm this replaces produces roughly [-height, +height], so a file
+        // with no stated range is read as covering the same span.
+        lo = -g_terrain.height;
+        hi = g_terrain.height;
+    }
+    if (!heightmap_load(&g_field, g_args.heightmap, lo, hi)) {
+        fprintf(stderr, "forest: heightmap %s refused; keeping the analytic terrain\n",
+                g_args.heightmap);
+        return;
+    }
+    g_terrain.field = &g_field;
+    printf("Terrain loaded: %s, %dx%d, range %.3f..%.3f\n", g_args.heightmap, g_field.res,
+           g_field.res, (double)lo, (double)hi);
 }
 
 static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
@@ -730,8 +837,14 @@ static void on_init(Game* game) {
 
     // Before anything reads a height. The scatter, the collider and the tiles all
     // have to see the same surface, and they see it through g_terrain.
-    if (g_args.erode)
+    // A loaded field wins over a baked one: the file is a statement about what
+    // the terrain IS, and re-eroding it would be eroding someone's finished work.
+    if (g_args.heightmap)
+        load_heightfield();
+    else if (g_args.erode)
         bake_erosion();
+    if (g_args.height_probe)
+        height_probe();
 
     // Albedo white on the textured materials: the shader multiplies factor by
     // map, so any factor below one darkens the whole range.
@@ -1077,6 +1190,10 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --erode-iterations <n>  Sim steps (default 220)\n");
     fprintf(stderr, "      --erode-workers <n> Pin the thread count (0 = machine)\n");
     fprintf(stderr, "      --terrain-erosion-probe  Print the bake's own numbers\n");
+    fprintf(stderr, "      --erode-save <p>    Write the baked field as .r16\n");
+    fprintf(stderr, "      --heightmap <p>     Load a field (.r16 / 16-bit PNG) instead\n");
+    fprintf(stderr, "      --heightmap-range <lo> <hi>  World Y the file's range maps to\n");
+    fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
     fprintf(stderr, "      --cam-target x,y,z  Pinned camera aim point\n");
@@ -1146,6 +1263,16 @@ int main(int argc, char** argv) {
         } else if (!strcmp(a, "--terrain-erosion-probe")) {
             g_args.erode_probe = 1;
             g_args.erode = 1;
+        } else if (!strcmp(a, "--erode-save") && i + 1 < argc) {
+            g_args.erode_save = argv[++i];
+            g_args.erode = 1;
+        } else if (!strcmp(a, "--heightmap") && i + 1 < argc) {
+            g_args.heightmap = argv[++i];
+        } else if (!strcmp(a, "--heightmap-range") && i + 2 < argc) {
+            g_args.heightmap_min = strtof(argv[++i], NULL);
+            g_args.heightmap_max = strtof(argv[++i], NULL);
+        } else if (!strcmp(a, "--terrain-height-probe")) {
+            g_args.height_probe = 1;
         } else if (!strcmp(a, "--trace-player")) {
             g_args.trace_player = 1;
         } else if (!strcmp(a, "--no-aerial")) {

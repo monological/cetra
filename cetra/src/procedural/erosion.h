@@ -78,6 +78,16 @@ typedef struct ErosionStats {
     // reach the output. There is deliberately no TIMING here: this module owns no
     // clock, so the caller measures the call with the one it already has.
     int workers;
+
+    // FNV-1a over the raw bytes of all four planes, in index order.
+    //
+    // This is the determinism claim reduced to one printable number, and it exists
+    // because the SUMS above cannot make it: addition hides compensating
+    // differences, so two thread counts that disagree cell by cell can still
+    // report identical totals to every digit. Two runs agreeing here agree bit for
+    // bit. Note it covers the masks as well as the height -- a sim that erodes
+    // identically while accumulating its masks in a racy order is still wrong.
+    unsigned long long digest;
 } ErosionStats;
 
 ErosionParams erosion_default_params(void);
