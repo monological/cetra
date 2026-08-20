@@ -107,6 +107,13 @@ def cscn_copy(src, dst, mutate):
         p = light.get("profile")
         if p and not os.path.isabs(p):
             light["profile"] = os.path.join(base, p)
+    # post.lut.path is the third of these and fails the IES way, not the model
+    # way: a relative path in an out-of-tree copy loads nothing, the frame
+    # renders ungraded, and an arm asserting "the LUT changed the frame" reports
+    # the feature broken when the path was.
+    lut = d.get("post", {}).get("lut")
+    if lut and lut.get("path") and not os.path.isabs(lut["path"]):
+        lut["path"] = os.path.join(base, lut["path"])
     with open(dst, "w") as f:
         json.dump(d, f, indent=1)
 
@@ -2704,6 +2711,354 @@ def _flat_run_and_span(pix, w, h):
                 if v not in (0, 255):
                     worst = max(worst, sum(1 for _ in run))
     return worst, hi - lo
+
+
+# ---- 3D LUT colour grading (spec 11.58) ------------------------------------
+#
+# Every arm renders with --no-dither and --no-vignette. Not tidiness: the reads
+# are single patch centres and per-channel spreads of a few 8-bit codes, which
+# is exactly the size of one dither LSB -- the eight existing --no-dither sites
+# are here for the same reason. The vignette is off so the outer patches are not
+# darkened toward each other, which would compress the range the table is
+# sampled over.
+LUT_FIXTURE = "lut_fixture.gltf"
+LUT_SCENE = "lut_fixture.cscn"
+# Tolerance for "the shader agrees with an independent interpolator", in 8-bit
+# codes. Not zero: the gate's reference reads the frame AFTER it was quantized
+# to 8 bits, so a value the shader computed at .49 of a code and rounded down is
+# re-graded here from the rounded number. One code is that requantization and
+# nothing else -- a wrong axis order, a missing inset or a wrong interpolant all
+# move whole tens of codes.
+LUT_AGREE_CODES = 1.5
+# What the neutral probe must show. Trilinear measured 5 codes of tint on the
+# rendered chart and tetrahedral exactly 0, so the floor sits below the first
+# and the ceiling AT the second -- tetrahedral's exactness is the claim, and a
+# tolerance here would let a half-broken decomposition through.
+LUT_TINT_MIN = 2
+LUT_TINT_MAX = 0
+
+
+def _lut_render(workdir, name, extra, scene=None):
+    out = os.path.join(workdir, name + ".ppm")
+    src = scene or os.path.join(ROOT, "assets", LUT_SCENE)
+    err = render(src, out, ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-vignette"]
+                 + extra)
+    return (None, err) if err else (out, None)
+
+
+def _lut_patch_points():
+    """Patch centres, read out of the fixture's own glTF node translations.
+
+    Read rather than restated for _cscn_camera's reason: a transcribed copy
+    agrees with the asset only until someone edits the generator, and the
+    failure is silent -- the gate keeps passing while sampling the backdrop.
+
+    Deliberately NOT by importing gen_lut_fixture.py, which would make the
+    ground truth a function of the thing under test and, since that generator
+    writes at module scope, would rewrite the committed assets mid-gate.
+    """
+    with open(os.path.join(ROOT, "assets", LUT_FIXTURE)) as f:
+        nodes = json.load(f)["nodes"]
+    return [(n["name"], tuple(n["translation"])) for n in nodes
+            if n.get("name", "").startswith("patch_")]
+
+
+def _lut_read_patches(path):
+    """(name, (r, g, b)) per patch, sampled at its projected centre."""
+    w, h, pix = _read_ppm(path)
+    proj = _projector(_cscn_camera(LUT_SCENE), w, h)
+    out = []
+    for name, centre in _lut_patch_points():
+        x, y = proj(centre)
+        o = (int(y) * w + int(x)) * 3
+        out.append((name, (pix[o], pix[o + 1], pix[o + 2])))
+    return out
+
+
+def _lut_read_cube(path):
+    """(size, [(r, g, b), ...]) with the file's own red-fastest ordering kept."""
+    size, data = None, []
+    with open(path) as f:
+        for line in f:
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if s.upper().startswith("LUT_3D_SIZE"):
+                size = int(s.split()[1])
+                continue
+            if s.upper().startswith(("TITLE", "DOMAIN_", "LUT_1D_SIZE")):
+                continue
+            parts = s.split()
+            if len(parts) == 3:
+                data.append(tuple(float(v) for v in parts))
+    return size, data
+
+
+def _lut_tetrahedral(size, data, c):
+    """The gate's own tetrahedral interpolator.
+
+    An INDEPENDENT implementation on purpose. The whole point of lut-agree is
+    that a second reading of the same .cube reaches the same pixel, so sharing
+    code with the shader -- or with the generator's closed forms -- would make
+    the arm agree with itself.
+    """
+    def fetch(ir, ig, ib):
+        d = size - 1
+        ir, ig, ib = min(ir, d), min(ig, d), min(ib, d)
+        return data[ib * size * size + ig * size + ir]
+
+    d = size - 1
+    p = [max(0.0, min(1.0, v)) * d for v in c]
+    i = [min(int(v), d - 1) for v in p]
+    fr, fg, fb = (p[k] - i[k] for k in range(3))
+    c000, c111 = fetch(*i), fetch(i[0] + 1, i[1] + 1, i[2] + 1)
+    if fr > fg:
+        if fg > fb:
+            a, b, w = fetch(i[0] + 1, i[1], i[2]), fetch(i[0] + 1, i[1] + 1, i[2]), \
+                (fr - fg, fg - fb, fb)
+        elif fr > fb:
+            a, b, w = fetch(i[0] + 1, i[1], i[2]), fetch(i[0] + 1, i[1], i[2] + 1), \
+                (fr - fb, fb - fg, fg)
+        else:
+            a, b, w = fetch(i[0], i[1], i[2] + 1), fetch(i[0] + 1, i[1], i[2] + 1), \
+                (fb - fr, fr - fg, fg)
+    else:
+        if fb > fg:
+            a, b, w = fetch(i[0], i[1], i[2] + 1), fetch(i[0], i[1] + 1, i[2] + 1), \
+                (fb - fg, fg - fr, fr)
+        elif fb > fr:
+            a, b, w = fetch(i[0], i[1] + 1, i[2]), fetch(i[0], i[1] + 1, i[2] + 1), \
+                (fg - fb, fb - fr, fr)
+        else:
+            a, b, w = fetch(i[0], i[1] + 1, i[2]), fetch(i[0] + 1, i[1] + 1, i[2]), \
+                (fg - fr, fr - fb, fb)
+    w0 = 1.0 - sum(w)
+    return tuple(w0 * c000[k] + w[0] * a[k] + w[1] * b[k] + w[2] * c111[k] for k in range(3))
+
+
+def run_lut_gate(workdir):
+    """3D LUT colour grading: is it the artist's table, applied where it belongs?
+
+    A LUT is a table of answers rather than a formula, so nothing about it can
+    be checked by looking -- a table read in the wrong axis order, addressed by
+    texel edge instead of centre, or interpolated off the neutral axis all
+    produce a graded frame that looks like a grade. Every arm here is against a
+    number known before the render.
+
+      lut-agree     the decisive arm. Read the UNGRADED patch, push it through
+                    the .cube with the gate's own tetrahedral interpolator, and
+                    require the graded patch to match. Independent of the
+                    scene's absolute values, so it cannot be fooled by exposure
+                    or a tonemap change, and independent of the shader's own
+                    arithmetic. Run on the steep table, the hardest one.
+      lut-swap      R and B exchanged on every patch. The one arm that can catch
+                    the data block being read blue-fastest: .cube stores red
+                    fastest, and the transpose is a perfectly plausible image.
+                    Linear, so both interpolants agree on it exactly, which
+                    isolates "is the table right" from "is the interpolation".
+      lut-identity  an identity table is a no-op. BOTH interpolants, because
+                    they cover different mistakes and the default cannot see
+                    the one that matters here: the half-texel inset is a
+                    trilinear-only concern -- tetrahedral addresses texels by
+                    integer index -- so the tetrahedral leg is 0 px whether the
+                    inset is right or wrong, and only the trilinear leg moves
+                    (1 code with it, 8 without). CANNOT STAND ALONE either way:
+                    a LUT that never loaded is also 0 px, which is 11.22's
+                    lesson, so it is meaningful only beside lut-agree above.
+      lut-strength  0 is bit-exact off, 1 is full, and 0.5 lands between. The
+                    C-side short-circuit arm: without the middle reading, on and
+                    off take one path and the check passes against a dead
+                    feature (11.21 shipped exactly that arm).
+      lut-off       a scene authoring post.lut renders identically to passing
+                    the same file to --lut, and --no-lut returns the ungraded
+                    frame exactly. Both halves: the first says the two authoring
+                    paths are one path, the second that the escape hatch reaches
+                    all the way off.
+      lut-interp    the two interpolants AGREE on the linear table and DISAGREE
+                    on the coarse probe. The disagreement is the half that
+                    matters: without it a tetrahedral path that silently
+                    degenerated to trilinear would pass every other arm here.
+      lut-neutral   through a table that is identity on the grey diagonal,
+                    tetrahedral holds r == g == b EXACTLY while trilinear tints.
+                    The whole justification for tetrahedral being the default,
+                    and the reason trilinear is kept reachable at all.
+    """
+    failures = []
+    scene = os.path.join(ROOT, "assets", LUT_SCENE)
+    if not os.path.exists(scene):
+        print("  lut          SKIP  (missing %s)" % LUT_SCENE)
+        return []
+    cubes = {n: os.path.join(ROOT, "assets", "lut_%s.cube" % n)
+             for n in ("identity", "swap", "steep", "neutral")}
+    missing = [p for p in cubes.values() if not os.path.exists(p)]
+    if missing:
+        print("  lut          SKIP  (missing %s)" % os.path.basename(missing[0]))
+        return []
+
+    base, err = _lut_render(workdir, "lut_base", [])
+    if err:
+        print("  lut          ERROR (ungraded render failed)\n" + err[-800:])
+        return ["lut-render"]
+    ungraded = _lut_read_patches(base)
+
+    # lut-agree -- the shader against an independent reading of the same table
+    steep, err = _lut_render(workdir, "lut_steep", ["--lut", cubes["steep"]])
+    if err:
+        print("  lut-agree    ERROR (steep render failed)\n" + err[-800:])
+        failures.append("lut-agree")
+    else:
+        size, data = _lut_read_cube(cubes["steep"])
+        graded = _lut_read_patches(steep)
+        worst, where = 0.0, ""
+        for (name, before), (_, after) in zip(ungraded, graded):
+            want = _lut_tetrahedral(size, data, tuple(v / 255.0 for v in before))
+            for k in range(3):
+                d = abs(want[k] * 255.0 - after[k])
+                if d > worst:
+                    worst, where = d, name
+        ok = worst <= LUT_AGREE_CODES
+        print(f"  lut-agree    {'PASS' if ok else 'FAIL'}  worst {worst:.2f} codes at {where} "
+              f"want <={LUT_AGREE_CODES} (an independent tetrahedral read of the same "
+              f"{size}^3 table; a transposed or edge-addressed table moves tens of codes)")
+        if not ok:
+            failures.append("lut-agree")
+
+    # lut-swap -- red-fastest, in the one form that cannot be mistaken
+    swap, err = _lut_render(workdir, "lut_swap", ["--lut", cubes["swap"]])
+    if err:
+        print("  lut-swap     ERROR (swap render failed)\n" + err[-800:])
+        failures.append("lut-swap")
+    else:
+        graded = _lut_read_patches(swap)
+        worst, spread = 0.0, 0
+        for (_, before), (_, after) in zip(ungraded, graded):
+            want = (before[2], before[1], before[0])
+            worst = max(worst, max(abs(want[k] - after[k]) for k in range(3)))
+            spread = max(spread, abs(before[0] - before[2]))
+        # The floor is what stops a chart of greys satisfying a swap trivially.
+        ok = worst <= LUT_AGREE_CODES and spread >= 40
+        print(f"  lut-swap     {'PASS' if ok else 'FAIL'}  worst {worst:.0f} codes "
+              f"want <={LUT_AGREE_CODES}, and the chart separates R from B by {spread} "
+              f"want >=40 (or swapping them proves nothing)")
+        if not ok:
+            failures.append("lut-swap")
+
+    # lut-identity -- both legs, because they cover different mistakes
+    ident, err = _lut_render(workdir, "lut_ident", ["--lut", cubes["identity"]])
+    ident_tri, err2 = _lut_render(workdir, "lut_ident_tri",
+                                  ["--lut", cubes["identity"], "--lut-interp", "trilinear"])
+    if err or err2:
+        print("  lut-identity ERROR (identity renders failed)\n" + (err or err2)[-800:])
+        failures.append("lut-identity")
+    else:
+        ae, pae = compare(base, ident)
+        ae_tri, pae_tri = compare(base, ident_tri)
+        # The trilinear leg is a PEAK bound, not a pixel count, and it is the
+        # only thing in the group that can see the half-texel inset: tetrahedral
+        # addresses texels by integer index, so the default path is exactly 0
+        # whether the inset is right or not. Dropping it takes this reading from
+        # 1 code to 8.
+        ok = ae == 0 and pae_tri <= LSB
+        print(f"  lut-identity {'PASS' if ok else 'FAIL'}  tetrahedral {ae} px want exactly 0 "
+              f"(PAE {pae:.6f}); trilinear PAE {pae_tri:.6f} want <={LSB:.6f} on {ae_tri} px "
+              f"-- that leg is the half-texel inset, which reads 0.031373 without it")
+        if not ok:
+            failures.append("lut-identity")
+
+    # lut-strength -- and the middle reading that makes it falsifiable
+    zero, e0 = _lut_render(workdir, "lut_s0", ["--lut", cubes["steep"], "--lut-strength", "0"])
+    half, e5 = _lut_render(workdir, "lut_s5", ["--lut", cubes["steep"], "--lut-strength", "0.5"])
+    if e0 or e5:
+        print("  lut-strength ERROR (strength renders failed)\n" + (e0 or e5)[-800:])
+        failures.append("lut-strength")
+    else:
+        ae0, _ = compare(base, zero)
+        mid = _lut_read_patches(half)
+        full = _lut_read_patches(steep)
+        # Every patch must sit between ungraded and fully graded, and at least
+        # one must be strictly inside -- "between" is satisfied trivially by a
+        # build where strength does nothing at all.
+        inside, worst_out = 0, 0.0
+        for (_, a), (_, m), (_, b) in zip(ungraded, mid, full):
+            for k in range(3):
+                lo, hi = min(a[k], b[k]), max(a[k], b[k])
+                if m[k] < lo - 1 or m[k] > hi + 1:
+                    worst_out = max(worst_out, min(abs(m[k] - lo), abs(m[k] - hi)))
+                if lo + 2 <= m[k] <= hi - 2:
+                    inside += 1
+        ok = ae0 == 0 and worst_out == 0.0 and inside >= 8
+        print(f"  lut-strength {'PASS' if ok else 'FAIL'}  strength 0 is {ae0} px want exactly 0; "
+              f"0.5 leaves the ungraded..graded band by {worst_out:.0f} want 0, and lands "
+              f"strictly inside it on {inside} channels want >=8 (or strength does nothing)")
+        if not ok:
+            failures.append("lut-strength")
+
+    # lut-off -- the two authoring paths are one path, and --no-lut is the way out
+    authored = os.path.join(workdir, "lut_authored.cscn")
+
+    def _author(d):
+        d.setdefault("post", {})["lut"] = {"path": cubes["swap"]}
+
+    cscn_copy(scene, authored, _author)
+    by_scene, e1 = _lut_render(workdir, "lut_scene", [], scene=authored)
+    forced_off, e2 = _lut_render(workdir, "lut_scene_off", ["--no-lut"], scene=authored)
+    if e1 or e2:
+        print("  lut-off      ERROR (scene-authored renders failed)\n" + (e1 or e2)[-800:])
+        failures.append("lut-off")
+    else:
+        ae_same, _ = compare(swap, by_scene)
+        ae_off, _ = compare(base, forced_off)
+        ok = ae_same == 0 and ae_off == 0
+        print(f"  lut-off      {'PASS' if ok else 'FAIL'}  post.lut vs --lut {ae_same} px want 0; "
+              f"--no-lut vs no LUT at all {ae_off} px want 0")
+        if not ok:
+            failures.append("lut-off")
+
+    # lut-interp -- agree where the table is linear, differ where it is not
+    tri_lin, e1 = _lut_render(workdir, "lut_tri_lin",
+                              ["--lut", cubes["swap"], "--lut-interp", "trilinear"])
+    tri_n, e2 = _lut_render(workdir, "lut_tri_n",
+                            ["--lut", cubes["neutral"], "--lut-interp", "trilinear"])
+    tet_n, e3 = _lut_render(workdir, "lut_tet_n",
+                            ["--lut", cubes["neutral"], "--lut-interp", "tetrahedral"])
+    if e1 or e2 or e3:
+        print("  lut-interp   ERROR (interp renders failed)\n" + (e1 or e2 or e3)[-800:])
+        failures.append("lut-interp")
+    else:
+        ae_lin, pae_lin = compare(swap, tri_lin)
+        ae_probe, _ = compare(tri_n, tet_n)
+        # The linear half is a bound on PEAK error, not a pixel count: the two
+        # interpolants reach the same value by different arithmetic, so a
+        # handful of pixels rounding apart is expected and a visible difference
+        # is not.
+        ok = pae_lin <= LSB and ae_probe > 0
+        print(f"  lut-interp   {'PASS' if ok else 'FAIL'}  on the LINEAR table the two agree to "
+              f"PAE {pae_lin:.6f} want <={LSB:.6f} ({ae_lin} px); on the coarse probe they "
+              f"differ on {ae_probe} px want >0 (or tetrahedral is trilinear)")
+        if not ok:
+            failures.append("lut-interp")
+
+    # lut-neutral -- the claim tetrahedral is bought for
+    if e2 or e3:
+        print("  lut-neutral  SKIP  (the interp renders failed above)")
+    else:
+        def _grey_spread(path):
+            worst = 0
+            for name, rgb in _lut_read_patches(path):
+                if "grey" in name:
+                    worst = max(worst, max(rgb) - min(rgb))
+            return worst
+
+        tint_tri, tint_tet = _grey_spread(tri_n), _grey_spread(tet_n)
+        ok = tint_tri >= LUT_TINT_MIN and tint_tet <= LUT_TINT_MAX
+        print(f"  lut-neutral  {'PASS' if ok else 'FAIL'}  through a table that is identity on "
+              f"the grey diagonal, trilinear tints greys by {tint_tri} codes want "
+              f">={LUT_TINT_MIN} and tetrahedral by {tint_tet} want <={LUT_TINT_MAX} (exact, "
+              f"since all six tetrahedra share that diagonal as an edge)")
+        if not ok:
+            failures.append("lut-neutral")
+
+    return failures
 
 
 def run_dither_gate(workdir):
@@ -9773,6 +10128,7 @@ GATE_GROUPS = [
     ("sss-invariance", "subsurface blur (world width vs frame size):", run_sss_invariance_gate),
     ("sss-banding", "subsurface blur (kernel not visible as rings):", run_sss_banding_gate),
     ("dither", "output dither (8-bit contour bands, spec 11.24 / E1):", run_dither_gate),
+    ("lut", "3D LUT colour grading (spec 11.58 / E2):", run_lut_gate),
     ("translucent", "translucent shadows (analytic layer stack, spec 11.26 / C1):",
      run_translucent_shadow_gate),
     ("translucent-offpath", "translucent shadows (off-path identity and the inverse arm):",

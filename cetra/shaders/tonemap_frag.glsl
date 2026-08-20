@@ -170,6 +170,12 @@ vec3 displayEncode(vec3 c)
 //
 // N comes from the file. Inlining a size here would work on every table that
 // happened to share it and silently mis-address the rest.
+//
+// TRILINEAR ONLY. lutTetrahedral addresses texels by integer index and never
+// needs this, so an identity table stays an identity there whatever this
+// function does -- which means the default path cannot see a mistake in it, and
+// the trilinear leg of the identity arm is what covers it. Measured at 8 codes
+// with the remap dropped, against 1 code with it.
 vec3 lutCoord(vec3 c)
 {
     return (clamp(c, 0.0, 1.0) * (lutSize - 1.0) + 0.5) / lutSize;
