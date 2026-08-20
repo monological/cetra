@@ -207,6 +207,70 @@ void material_param_set(Material* material, const MaterialParam* param, const fl
 // draws by allocator address and differ run to run.
 static unsigned g_next_material_id = 1;
 
+/*
+ * Every field of a fresh Material that is not zero. `static const` + a whole-
+ * struct copy, matching WATER_DEFAULT_WIND_SEA in water.c and for its stated
+ * reasons -- a macro cannot carry a `//` on the field it explains, and a
+ * compound literal has automatic storage where the name reads like a constant.
+ *
+ * THE POINT IS WHAT IS ABSENT. This function used to assign all seventy-one
+ * fields by hand, and nothing enforced that the list was complete -- so adding a
+ * field and forgetting a line gave a malloc'd material an indeterminate value.
+ * That is not hypothetical: it is the bug 11.60 shipped. An uninitialised
+ * layer_count armed the shader's layered path on random materials and
+ * free_material released junk pointers at teardown, AFTER the screenshot was
+ * written, so 21 goldens reported a render failure with a correct image on disk.
+ *
+ * With a template, a field added and not mentioned here is initialised by the
+ * LANGUAGE -- C zero-fills every member a designated initialiser omits. The
+ * remaining hazard is the copy itself: the allocation is still malloc, so
+ * `*material = MATERIAL_DEFAULTS` is load-bearing. Assigning fields piecemeal
+ * from this would leave the omitted ones indeterminate again.
+ */
+static const Material MATERIAL_DEFAULTS = {
+    .albedo = {1.0f, 1.0f, 1.0f},
+    .emissive_strength = 1.0f,
+    .roughness = 1.0f,
+    .ao = 1.0f,
+    .opacity = 1.0f,
+    .normalScale = 1.0f,
+    .aoStrength = 1.0f,
+    .ior = 1.5f,
+    .attenuation_color = {1.0f, 1.0f, 1.0f},
+    // -1 means KHR_materials_specular was ABSENT, which is not the same as an
+    // explicit zero weight -- so the sentinel has to sit outside [0,1].
+    .specular_factor = -1.0f,
+    .specular_color_factor = {1.0f, 1.0f, 1.0f},
+    .subsurface_color = {1.0f, 0.3f, 0.2f}, // skin-ish, until a material says otherwise
+    .subsurface_profile = -1,               // no scatter profile until configured
+    .uvScale = {1.0f, 1.0f},
+    // No array layer until the material texture array is built from loaded
+    // textures; -1 is what makes the shader fall back to the scalar factor.
+    .roughness_layer = -1,
+    .metallic_layer = -1,
+    .ao_layer = -1,
+    .opacity_layer = -1,
+    .microsurface_layer = -1,
+    .anisotropy_layer = -1,
+    .splat_layer = -1,
+    .splat_size = {1.0f, 1.0f},
+    // layer_count 0 is what gates the whole layered path, so the four slots are
+    // inert; the sentinels still have to be right, because lowering a count
+    // later leaves the slots above it holding whatever was here.
+    .layers = {{.uv_scale = 1.0f, .albedo_layer = -1, .surface_layer = -1},
+               {.uv_scale = 1.0f, .albedo_layer = -1, .surface_layer = -1},
+               {.uv_scale = 1.0f, .albedo_layer = -1, .surface_layer = -1},
+               {.uv_scale = 1.0f, .albedo_layer = -1, .surface_layer = -1}},
+    // Not zero, and deliberately: a sharpness of 0 is the LINEAR blend, so a
+    // layered material nobody tuned should interlock -- that is the behaviour
+    // the feature exists for.
+    .layer_blend_sharpness = 0.5f,
+    .layer_triplanar_sharpness = 4.0f,
+};
+_Static_assert(MATERIAL_MAX_LAYERS == 4,
+               "MATERIAL_DEFAULTS spells out four layer slots; a fifth would be left zeroed, "
+               "which makes its layer indices 0 rather than the -1 that means absent");
+
 Material* create_material() {
     Material* material = (Material*)malloc(sizeof(Material));
     if (!material) {
@@ -214,104 +278,26 @@ Material* create_material() {
         return NULL;
     }
 
+    // Load-bearing: this writes the WHOLE object, which is what lets
+    // MATERIAL_DEFAULTS omit every zero field after a malloc.
+    *material = MATERIAL_DEFAULTS;
+
+    // Per-instance, not a default.
     material->id = g_next_material_id++;
-    material->name = NULL;
-    glm_vec3_fill(material->albedo, 1.0f);
-    glm_vec3_zero(material->emissive);
-    material->emissive_strength = 1.0f;
-    material->metallic = 0.0f;
-    material->roughness = 1.0f;
-    material->ao = 1.0f;
-    material->opacity = 1.0f;
-    material->alpha_mode = ALPHA_OPAQUE;
-    material->alphaCutoff = 0.0f; // Disabled by default
-    material->normalScale = 1.0f;
-    material->aoStrength = 1.0f;
-    material->ior = 1.5f;
-    material->transmission = 0.0f;
-    material->thickness = 0.0f;
-    glm_vec3_one(material->attenuation_color);
-    material->attenuation_distance = 0.0f; // glTF's infinity: absorption off until imported
-    material->filmThickness = 0.0f;
-    material->clearcoat = 0.0f;
-    material->clearcoat_roughness = 0.0f;
-    material->specular_factor = -1.0f; // KHR_materials_specular absent until imported
-    glm_vec3_one(material->specular_color_factor);
-    glm_vec3_zero(material->sheen_color_factor); // (0,0,0) = no sheen until imported
-    material->sheen_roughness_factor = 0.0f;
-    material->parallax_scale = 0.0f; // POM off until a material opts in (§4.11)
-    material->subsurface = 0.0f;     // SSS off until a material opts in
-    glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, material->subsurface_color); // skin-ish default tint
-    material->subsurface_profile = -1; // no scatter profile until configured
-    material->curvature_scale = 0.0f;  // pre-integrated skin off until a material opts in
-    material->anisotropy = 0.0f; // isotropic until a material opts in
-    glm_vec2_zero(material->uvOffset);
-    glm_vec2_one(material->uvScale);
-    material->uvRotation = 0.0f;
-    material->doubleSided = false;
-    material->foliage_shadows = 0; // masked surfaces stay out of the shadow map
-    material->wind_response = 0.0f;    // rigid until a material opts into wind
-    material->shore_wetness = 0.0f;    // never wetted by the swash until a material asks
-    material->wind_mode = 0;           // cloth displacement unless a material asks for vegetation
-    material->emissive_light = 0;      // an emissive surface lights, unless it says otherwise
-    // A plain albedo lookup until a material both asks and supplies a transformed map. The
-    // identity table below is what the shader would apply if it ran anyway, so a half-wired
-    // material renders its texture rather than a black one.
-    material->stochastic_scale = 0.0f;
+
+    // The one DERIVED table, and the reason it is not in the template: C has no
+    // initialiser-list arithmetic, so the alternative is 192 spelled literals.
+    //
+    // The identity inverse-CDF. stochastic_scale is 0, so nothing reads this
+    // until a material both asks and supplies a transformed map -- but it is the
+    // transform the shader would apply if it ran anyway, so a half-wired material
+    // renders its texture rather than a black one.
     for (int i = 0; i < STOCHASTIC_LUT_SIZE; i++) {
         const float v = ((float)i + 0.5f) / (float)STOCHASTIC_LUT_SIZE;
         material->stochastic_lut[i * 3 + 0] = v;
         material->stochastic_lut[i * 3 + 1] = v;
         material->stochastic_lut[i * 3 + 2] = v;
     }
-
-    material->albedo_tex = NULL;
-    material->normal_tex = NULL;
-    material->roughness_tex = NULL;
-    material->metalness_tex = NULL;
-    material->ambient_occlusion_tex = NULL;
-    material->emissive_tex = NULL;
-    material->height_tex = NULL;
-
-    material->opacity_tex = NULL;
-    material->microsurface_tex = NULL;
-    material->anisotropy_tex = NULL;
-    material->sheen_tex = NULL;
-    material->reflectance_tex = NULL;
-    material->clearcoat_normal_tex = NULL;
-
-    // No mask array layers until the array is built from loaded textures
-    material->roughness_layer = -1;
-    material->metallic_layer = -1;
-    material->ao_layer = -1;
-    material->opacity_layer = -1;
-    material->microsurface_layer = -1;
-    material->anisotropy_layer = -1;
-
-    // Not a layered surface. Every field is written out because this function
-    // MALLOCs -- a layer pointer left uninitialised is released at teardown, and
-    // an uninitialised layer_count arms the shader's layered path on a material
-    // that has none.
-    material->layer_count = 0;
-    material->splat_tex = NULL;
-    material->splat_layer = -1;
-    material->splat_space = SPLAT_SPACE_UV1;
-    material->splat_origin[0] = material->splat_origin[1] = 0.0f;
-    material->splat_size[0] = material->splat_size[1] = 1.0f;
-    for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
-        material->layers[i].albedo_tex = NULL;
-        material->layers[i].surface_tex = NULL;
-        material->layers[i].albedo_layer = -1;
-        material->layers[i].surface_layer = -1;
-        material->layers[i].uv_scale = 1.0f;
-    }
-    // A sharpness of zero is the linear blend, so the default has to be stated
-    // rather than inherited from calloc: a layered material nobody tuned should
-    // interlock, since that is the behaviour the feature exists for.
-    material->layer_blend_sharpness = 0.5f;
-    material->layer_triplanar_sharpness = 4.0f;
-
-    material->shader_program = NULL;
 
     return material;
 }
