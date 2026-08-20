@@ -274,6 +274,20 @@ Material* create_material() {
     material->microsurface_layer = -1;
     material->anisotropy_layer = -1;
 
+    // Not a layered surface. calloc already zeroed layer_count, which is the
+    // whole gate, but the layer indices need the -1 sentinel like the masks.
+    material->splat_layer = -1;
+    for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
+        material->layers[i].albedo_layer = -1;
+        material->layers[i].surface_layer = -1;
+        material->layers[i].uv_scale = 1.0f;
+    }
+    // A sharpness of zero is the linear blend, so the default has to be stated
+    // rather than inherited from calloc: a layered material nobody tuned should
+    // interlock, since that is the behaviour the feature exists for.
+    material->layer_blend_sharpness = 0.5f;
+    material->layer_triplanar_sharpness = 4.0f;
+
     material->shader_program = NULL;
 
     return material;
@@ -310,6 +324,17 @@ void free_material(Material* material) {
             texture_release(material->reflectance_tex);
         if (material->clearcoat_normal_tex)
             texture_release(material->clearcoat_normal_tex);
+        if (material->splat_tex)
+            texture_release(material->splat_tex);
+        // Every slot, not layer_count of them: lowering the count leaves the
+        // textures above it retained, and releasing only the live prefix would
+        // leak exactly the layers somebody edited away.
+        for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
+            if (material->layers[i].albedo_tex)
+                texture_release(material->layers[i].albedo_tex);
+            if (material->layers[i].surface_tex)
+                texture_release(material->layers[i].surface_tex);
+        }
 
         // Shader program managed by engine. Do not free here.
         free(material);
@@ -431,5 +456,44 @@ void set_material_anisotropy_tex(Material* material, Texture* texture) {
     if (material->anisotropy_tex)
         texture_release(material->anisotropy_tex);
     material->anisotropy_tex = texture_retain(texture);
+}
+
+void set_material_splat_tex(Material* material, Texture* texture) {
+    if (!material)
+        return;
+    if (material->splat_tex)
+        texture_release(material->splat_tex);
+    material->splat_tex = texture_retain(texture);
+}
+
+// Bounds-checked because the index reaches these from a scene file and from an
+// app's own loop, neither of which the material can see. Out of range is dropped
+// with a warning rather than clamped: clamping would silently overwrite layer 3
+// with what layer 7 was meant to be, which renders as a plausible surface.
+static bool layer_slot_ok(const Material* material, int index, const char* what) {
+    if (!material)
+        return false;
+    if (index < 0 || index >= MATERIAL_MAX_LAYERS) {
+        log_warn("material: layer %d is outside the %d slots a material has, ignoring its %s",
+                 index, MATERIAL_MAX_LAYERS, what);
+        return false;
+    }
+    return true;
+}
+
+void set_material_layer_albedo_tex(Material* material, int index, Texture* texture) {
+    if (!layer_slot_ok(material, index, "albedo"))
+        return;
+    if (material->layers[index].albedo_tex)
+        texture_release(material->layers[index].albedo_tex);
+    material->layers[index].albedo_tex = texture_retain(texture);
+}
+
+void set_material_layer_surface_tex(Material* material, int index, Texture* texture) {
+    if (!layer_slot_ok(material, index, "surface map"))
+        return;
+    if (material->layers[index].surface_tex)
+        texture_release(material->layers[index].surface_tex);
+    material->layers[index].surface_tex = texture_retain(texture);
 }
 

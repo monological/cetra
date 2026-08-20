@@ -54,9 +54,11 @@ void free_material_mask_array(MaterialMaskArray* arr) {
     free(arr);
 }
 
-// Number of mask slots per material (roughness/metallic/ao/opacity/
-// microsurface/anisotropy); bounds the unique-texture buffer.
-#define MASKS_PER_MATERIAL 6
+// Most layers ONE material can contribute: six masks (roughness/metallic/ao/
+// opacity/microsurface/anisotropy), two maps for each of its surface layers,
+// and the splat. Bounds the unique-texture buffer, which is why it is an upper
+// bound rather than a count -- dedup only ever takes the real total lower.
+#define TEXTURES_PER_MATERIAL (6 + MATERIAL_MAX_LAYERS * 2 + 1)
 
 // Find texture t's layer in the dedup list (by GL id, so a shared glTF ORM
 // texture yields one layer), appending it if new. Returns -1 for an absent map.
@@ -76,10 +78,10 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     if (!arr || !scene || !engine)
         return -1;
 
-    // 1. Dedup the scene's unique mask textures and assign each material's
-    //    per-mask layer indices in one pass. The unique count is bounded by
-    //    MASKS_PER_MATERIAL per material, so one up-front allocation suffices.
-    size_t bound = scene->material_count * MASKS_PER_MATERIAL;
+    // 1. Dedup the scene's unique source textures and assign each material's
+    //    layer indices in one pass. The unique count is bounded by
+    //    TEXTURES_PER_MATERIAL per material, so one up-front allocation suffices.
+    size_t bound = scene->material_count * TEXTURES_PER_MATERIAL;
     GLuint* ids = malloc(bound * sizeof(GLuint));
     Texture** texs = malloc(bound * sizeof(Texture*));
     if (bound && (!ids || !texs)) {
@@ -98,6 +100,24 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         mat->opacity_layer = mask_layer_for(ids, texs, &count, mat->opacity_tex);
         mat->microsurface_layer = mask_layer_for(ids, texs, &count, mat->microsurface_tex);
         mat->anisotropy_layer = mask_layer_for(ids, texs, &count, mat->anisotropy_tex);
+
+        // The layered-surface tenants. Every slot is cleared before the live
+        // prefix is filled, because lowering layer_count leaves the slots above
+        // it still holding their textures: walking only the prefix would leave
+        // stale indices pointing into a rebuilt array, and walking all of them
+        // would spend layers on maps nothing samples.
+        mat->splat_layer = mask_layer_for(ids, texs, &count, mat->splat_tex);
+        for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
+            mat->layers[i].albedo_layer = -1;
+            mat->layers[i].surface_layer = -1;
+        }
+        int live = mat->layer_count < MATERIAL_MAX_LAYERS ? mat->layer_count : MATERIAL_MAX_LAYERS;
+        for (int i = 0; i < live; i++) {
+            mat->layers[i].albedo_layer =
+                mask_layer_for(ids, texs, &count, mat->layers[i].albedo_tex);
+            mat->layers[i].surface_layer =
+                mask_layer_for(ids, texs, &count, mat->layers[i].surface_tex);
+        }
     }
 
     if (count == 0) {
@@ -108,19 +128,25 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     }
 
     if (count > engine->max_array_texture_layers) {
-        log_error("mask_array_build: %d unique masks exceeds GL_MAX_ARRAY_TEXTURE_LAYERS (%d)",
+        log_error("mask_array_build: %d unique textures exceeds GL_MAX_ARRAY_TEXTURE_LAYERS (%d)",
                   count, engine->max_array_texture_layers);
         free(ids);
         free(texs);
         return -1;
     }
 
-    // 2. Canonical size = the largest present mask dimension, capped. Smaller
-    //    masks upsample; nothing downsamples below the largest (no detail loss
-    //    unless a mask exceeds the cap). Every layer shares this size, so a mix
-    //    of a large and several small masks over-allocates the small ones
+    // 2. Canonical size = the largest present source dimension, capped. Smaller
+    //    sources upsample; nothing downsamples below the largest (no detail loss
+    //    unless a source exceeds the cap). Every layer shares this size, so a mix
+    //    of a large and several small sources over-allocates the small ones
     //    (memory = layer_count * size^2 * 4 bytes); lowering MASK_ARRAY_CAP
-    //    trades mask detail for VRAM if that ever bites.
+    //    trades detail for VRAM if that ever bites.
+    //
+    //    This is the one real cost of putting layered-surface maps in here, and
+    //    it is why the build LOGS its size and total: a scene whose masks are
+    //    256 and whose surface layers are 1024 pays 1024 for the masks too. The
+    //    number is reported rather than assumed, because the coupling is
+    //    invisible from either material on its own.
     int size = 1;
     for (int i = 0; i < count; i++) {
         if (texs[i]->width > size)
@@ -198,7 +224,10 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
 
     arr->size = size;
     arr->layer_count = count;
-    log_info("Material mask array: %d layers at %dx%d", count, size, size);
+    // The 4/3 is the mip chain, which glGenerateMipmap has just filled.
+    double bytes = (double)count * (double)size * (double)size * 4.0 * (4.0 / 3.0);
+    log_info("Material texture array: %d layers at %dx%d, %.1f MB", count, size, size,
+             bytes / (1024.0 * 1024.0));
 
     free(ids);
     free(texs);

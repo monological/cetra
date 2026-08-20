@@ -42,6 +42,43 @@ typedef enum AlphaMode {
     ALPHA_BLEND,      // Translucent pass after the skybox, no depth writes
 } AlphaMode;
 
+// How many material layers a layered surface can blend between.
+//
+// Four because the splat map carries three weights and the first layer is the
+// remainder -- a fourth weight would be redundant with 1 - sum, and a fifth
+// needs a second splat texture, which is a different feature rather than a
+// larger number here.
+#define MATERIAL_MAX_LAYERS 4
+
+// One layer of a layered surface (spec 11.60).
+//
+// Two textures, not three, and the packing is the reason a layer is affordable:
+// every layer is a tenant of the material texture array, which is RGBA8, so the
+// alpha channel of each map is free storage that would otherwise be spent on a
+// third tenant. `albedo_tex.a` carries the layer's HEIGHT, which is what lets
+// gravel interlock with sand instead of averaging into mud, and `surface_tex.a`
+// carries ambient occlusion.
+//
+// The albedo is stored NON-sRGB and decoded in the shader. That is not a
+// workaround for the array's format -- it is the same arrangement the stochastic
+// path already uses (pbr_frag.glsl), because a transform applied to stored codes
+// has to be undone in the space it was applied in.
+typedef struct MaterialLayer {
+    Texture* albedo_tex;  // rgb albedo (linear-stored, shader-decoded), a = height
+    Texture* surface_tex; // rg = normal xy, b = roughness, a = ambient occlusion
+
+    // World units per texture tile. Per LAYER rather than per material because
+    // the whole point of a layer set is that its members have different natural
+    // scales -- gravel repeats over centimetres where a cliff face repeats over
+    // metres, and one shared scale makes one of them wrong.
+    float uv_scale;
+
+    // Resolved when the material texture array is (re)built; -1 = absent, which
+    // makes the layer contribute its scalar fallback rather than dropping out.
+    int albedo_layer;
+    int surface_layer;
+} MaterialLayer;
+
 typedef struct Material {
     // Creation order. Same contract and same reason as Mesh.id: a stable key for
     // grouping draws that share a material, where the pointer would order them
@@ -210,6 +247,41 @@ typedef struct Material {
     int microsurface_layer;
     int anisotropy_layer;
 
+    /*
+     * Layered surface (spec 11.60). 0 = an ordinary material, and the shader
+     * skips the whole path -- which is what keeps every frame authored before
+     * this byte-identical.
+     *
+     * The layers are WORLD-ALIGNED, sampled triplanar from world position and
+     * world normal rather than from UV0. One coordinate model rather than two,
+     * because the alternative is a UV projection that stretches by 1/cos(slope)
+     * exactly where terrain is most interesting -- 5.8x on an 80-degree face.
+     */
+    MaterialLayer layers[MATERIAL_MAX_LAYERS];
+    int layer_count;
+
+    // Per-texel layer weights: .r/.g/.b select layers 1..3 and layer 0 takes the
+    // remainder, so the weights always sum to one and no normalisation can drift.
+    //
+    // Addressed by UV1, not by world position. UV1 because a splat coordinate is
+    // per-vertex data the mesh already carries a slot for, and because world
+    // position would break the moment the mesh is transformed or instanced --
+    // the weights would swim across the surface as it moved. Note this makes a
+    // layered material a second claimant on UV1 alongside wind_mode >= 1, and
+    // the two are therefore mutually exclusive on one material.
+    Texture* splat_tex;
+    int splat_layer;
+
+    // Height-blend contrast, in weight units. 0 = a plain linear blend, which is
+    // reachable on purpose: it is what the height blend has to be measured
+    // against, and a gate arm that cannot compare against the naive form is not
+    // measuring the feature.
+    float layer_blend_sharpness;
+
+    // How sharply the triplanar projection favours the dominant axis. Higher is
+    // a narrower seam between projections and a harder transition across it.
+    float layer_triplanar_sharpness;
+
     ShaderProgram* shader_program;
 } Material;
 
@@ -335,5 +407,11 @@ void set_material_reflectance_tex(Material* material, Texture* texture);
 void set_material_clearcoat_normal_tex(Material* material, Texture* texture);
 void set_material_microsurface_tex(Material* material, Texture* texture);
 void set_material_anisotropy_tex(Material* material, Texture* texture);
+
+void set_material_splat_tex(Material* material, Texture* texture);
+// `index` outside [0, MATERIAL_MAX_LAYERS) is dropped with a warning, not
+// clamped -- a clamp would silently write one layer's map over another's.
+void set_material_layer_albedo_tex(Material* material, int index, Texture* texture);
+void set_material_layer_surface_tex(Material* material, int index, Texture* texture);
 
 #endif // _MATERIAL_H_

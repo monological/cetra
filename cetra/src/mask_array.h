@@ -15,6 +15,22 @@ struct Engine;
 // layer. Each material records a per-slot layer index (Material *_layer;
 // -1 = absent, shader falls back to the scalar factor), resolved at build time.
 //
+// SINCE SPEC 11.60 IT ALSO HOLDS LAYERED-SURFACE MAPS -- albedo, packed
+// normal/roughness/AO, and the splat weights -- and the name did not change,
+// for the same reason `anisotropy_tex` still carries the hair strand map
+// (11.20): a slot that grows a second tenant is documented where it is
+// declared, not renamed across every call site. What the array actually holds
+// is a scene's unique per-texel material IMAGES, of which the masks were merely
+// the first kind.
+//
+// That an albedo can live here at all is not a loophole. The array's real
+// contract is the paragraph below -- linear data that survives being averaged --
+// and an albedo stored NON-sRGB, decoded in the shader, satisfies it exactly.
+// The alternative was a second sampler2DArray declaration, which `pbr_frag` at
+// 16/16 has nowhere to put. This is 11.45's rule (ocean.glsl) applied a second
+// time: N textures of one SHAPE cost one declaration, whatever N is and whatever
+// the textures mean.
+//
 // Mostly scalar masks, but not by definition -- a layer may carry a vector
 // field. Whatever it carries must AVERAGE meaningfully, because every layer is
 // resampled through a linear filter and then mipped: a quantity with a sign
@@ -35,10 +51,10 @@ typedef struct MaterialMaskArray {
 MaterialMaskArray* create_material_mask_array(void);
 void free_material_mask_array(MaterialMaskArray* arr);
 
-// (Re)build from scene->materials: dedup unique mask textures, resample each
+// (Re)build from scene->materials: dedup unique source textures, resample each
 // into a layer at the canonical size (GPU copy through the engine's mask_copy
-// program), mip, and write each material's *_layer indices. Requires the mask
-// source textures to be loaded. Returns 0 on success (incl. the no-mask case).
+// program), mip, and write each material's *_layer indices. Requires the source
+// textures to be loaded. Returns 0 on success (incl. the no-texture case).
 int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine* engine);
 
 // Bind the array to a texture unit. Always valid -- a 1x1 dummy layer exists
