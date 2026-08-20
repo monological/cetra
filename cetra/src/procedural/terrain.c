@@ -14,14 +14,23 @@
 
 // Surface tints, blended per vertex. There is no splat-map system, so this is
 // what stops a kilometre of ground reading as one flat hue.
-// Measured-ish albedos rather than picked-by-eye ones. Exposure is pinned, so
-// these land where a real surface would: grass around 0.2, dry earth 0.25,
-// weathered granite 0.3.
+//
+// THESE ARE DISPLAY-SPACE NUMBERS, NOT LINEAR ALBEDOS, and the distinction is
+// worth stating because this comment used to claim the opposite -- "measured-ish
+// albedos, grass around 0.2". pbr_frag runs sRGBToLinear over VertexColor
+// (pbr_frag.glsl:1036), so 0.15 arrives at the BRDF as 0.019. They were tuned by
+// eye through that decode and are correct as they stand; what was wrong was the
+// label. Re-tuning them to be literal albedos would relight the whole app for a
+// documentation claim, so it is deliberately not done here.
 static const vec3 TINT_GRASS = {0.15f, 0.21f, 0.10f};
 static const vec3 TINT_MOSS = {0.11f, 0.17f, 0.08f};
 static const vec3 TINT_DIRT = {0.25f, 0.20f, 0.14f};
 static const vec3 TINT_ROCK = {0.30f, 0.29f, 0.27f};
 static const vec3 TINT_SNOW = {0.78f, 0.81f, 0.86f};
+// Only reachable through an erosion bake: pale outwash where the sim dropped its
+// load, dark wet gravel where water collected and kept running.
+static const vec3 TINT_SILT = {0.34f, 0.30f, 0.23f};
+static const vec3 TINT_CHANNEL = {0.15f, 0.14f, 0.12f};
 
 TerrainParams terrain_default_params(void) {
     TerrainParams p;
@@ -276,12 +285,41 @@ static void terrain_tint(const TerrainParams* p, float x, float z, float height,
     float snowiness = smoothstep01(0.34f, 0.62f, alt) * smoothstep01(0.55f, 0.80f, slope);
     float dirtiness = 1.0f - smoothstep01(-0.35f, -0.05f, alt);
 
+    // WHERE WATER PUT THINGS, when a sim has run and said so.
+    //
+    // Everything above this line guesses at the answer from shape alone, which is
+    // the best a closed form can do and is why terrain shaded that way reads as
+    // procedural: the dirt is not where water would put dirt. These three come
+    // from the process that cut the valleys, so they agree with them by
+    // construction.
+    //
+    // All three read 0 with no field installed, and every term below collapses to
+    // an exact identity at 0 -- smoothstep01 returns 0 below its low edge, and
+    // lerping by 0 returns the first operand unchanged in IEEE. So the analytic
+    // path is byte-for-byte what it was.
+    float wear = terrain_mask_at(p, TERRAIN_MASK_WEAR, x, z);
+    float deposit = terrain_mask_at(p, TERRAIN_MASK_DEPOSIT, x, z);
+    float flow = terrain_mask_at(p, TERRAIN_MASK_FLOW, x, z);
+
+    // Scoured ground shows its bedrock whatever its slope says. Combined with max
+    // rather than added: a steep face that also eroded is not twice as rocky.
+    float scoured = smoothstep01(0.10f, 0.45f, wear);
+    rockiness = rockiness > scoured ? rockiness : scoured;
+    float siltiness = smoothstep01(0.05f, 0.28f, deposit);
+    float wetness = smoothstep01(0.14f, 0.45f, flow);
+
     vec3 c;
     // Grass to moss first, at the fine frequency: it is what stops a hillside
     // of one hue from looking painted.
     glm_vec3_lerp((float*)TINT_GRASS, (float*)TINT_MOSS, grain * 0.5f + 0.5f, c);
     glm_vec3_lerp(c, (float*)TINT_DIRT, dirtiness, c);
     glm_vec3_lerp(c, (float*)TINT_ROCK, rockiness, c);
+    // Silt after rock, because deposition BURIES bedrock -- an outwash fan over a
+    // scoured shelf is sand, not stone with sand mixed in.
+    glm_vec3_lerp(c, (float*)TINT_SILT, siltiness, c);
+    // The channel last but for snow: a stream cutting through rock is still a
+    // stream, so this wins over everything it runs across.
+    glm_vec3_lerp(c, (float*)TINT_CHANNEL, wetness, c);
     glm_vec3_lerp(c, (float*)TINT_SNOW, snowiness, c);
 
     rgba[0] = c[0];
