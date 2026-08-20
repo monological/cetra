@@ -131,6 +131,15 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->adapt_up = cscn->adapt_up;
     if (cscn->has_adapt_down && args->adapt_down < 0.0f)
         args->adapt_down = cscn->adapt_down;
+    // The LUT path is a non-empty string rather than a has_ flag, the same
+    // presence test env_hdr uses; the desc outlives args, so this points at its
+    // resolved buffer directly.
+    if (cscn->lut_path[0] && !args->lut_path)
+        args->lut_path = cscn->lut_path;
+    if (cscn->has_lut_strength && args->lut_strength < 0.0f)
+        args->lut_strength = cscn->lut_strength;
+    if (cscn->has_lut_interp && args->lut_interp < 0)
+        args->lut_interp = cscn->lut_interp;
     if (cscn->has_camera_exposure && args->aperture <= 0.0f) {
         args->aperture = cscn->aperture;
         args->shutter_speed = cscn->shutter_speed;

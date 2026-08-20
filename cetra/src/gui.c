@@ -970,6 +970,22 @@ static void _engine_gui_panel(Engine* engine) {
         igDragFloat3("Gain", fx->grade_gain, 0.01f, 0.0f, 4.0f, "%.3f", 0);
         _end_effect_group();
 
+        // The LUT has no enable checkbox because the loaded texture IS the
+        // enable, and no file picker because loading one is the only control
+        // here that would need a file read rather than a uniform write --
+        // --lut and a scene file's post.lut are the two ways in. What is
+        // exposed is what a uniform can carry.
+        if (fx->lut_texture) {
+            igSeparatorText("Color LUT");
+            igTextDisabled("%s (%d\xc2\xb3)", fx->lut_name, fx->lut_size);
+            igSliderFloat("LUT Strength", &fx->lut_strength, 0.0f, 1.0f, "%.2f", 0);
+            int interp = (int)fx->lut_interp;
+            static const char* const interp_names[] = {"Trilinear", "Tetrahedral"};
+            if (igCombo_Str_arr("LUT Interp", &interp, interp_names,
+                                (int)(sizeof(interp_names) / sizeof(interp_names[0])), -1))
+                fx->lut_interp = (PostFXLutInterp)interp;
+        }
+
         _begin_effect_group("Depth of Field", &fx->dof_enabled);
         igCheckbox("Autofocus", &fx->dof_autofocus);
         // Manual focus distance is only meaningful when autofocus is off.

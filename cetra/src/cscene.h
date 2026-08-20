@@ -285,6 +285,12 @@ enum {
     CSCENE_METER_SPOT = 2,
 };
 
+// Mirrors PostFXLutInterp in cetra/src/postfx.h, for the same reason.
+enum {
+    CSCENE_LUT_TRILINEAR = 0,
+    CSCENE_LUT_TETRAHEDRAL = 1,
+};
+
 typedef struct CetraSceneDesc {
     // Paths are resolved against the scene file's directory at load time;
     // consumers receive directly usable paths.
@@ -343,6 +349,17 @@ typedef struct CetraSceneDesc {
     float adapt_up;
     bool has_adapt_down;
     float adapt_down;
+    // post.lut: a .cube colour-grading table, applied after the gamma encode.
+    // Path is inline and fixed-size like model_path and env_hdr above, never a
+    // pointer -- cscene_free is a bare free(desc). Resolved against the scene
+    // file's directory, since a .cube is not a pooled texture and so has no
+    // second resolver that would win.
+    char lut_path[CSCENE_MAX_PATH];
+    bool has_lut_strength;
+    float lut_strength;
+    bool has_lut_interp;
+    // CSCENE_LUT_* below; int for the reason meter_mode is one.
+    int lut_interp;
     // TAAU render-resolution scale in [0.5, 1). Everything before the TAA seam
     // renders at this fraction and the upscale resolve brings it to post res.
     // It rides TAA, which windowed sessions turn on and headless ones do not --

@@ -329,16 +329,21 @@ static void parse_light_overrides(CetraSceneDesc* d, const cJSON* root) {
     }
 }
 
-// A post.metering float, refused if it is outside the range the meter can act
-// on. Absent leaves the engine default; out of range warns by name and is
-// ignored, so the author sees the key they typed rather than a frame that is
-// subtly wrong.
-static bool _meter_range(const cJSON* obj, const char* key, float lo, float hi, float* out) {
+// A float from a nested post block, refused if it is outside the range the
+// consumer can act on. Absent leaves the engine default; out of range warns by
+// its FULL key and is ignored, so the author sees the key they typed rather
+// than a frame that is subtly wrong.
+//
+// `block` is passed rather than baked in: this started as a post.metering
+// helper with that name in its format string, and the second caller would
+// otherwise have reported a bad post.lut value as a metering one.
+static bool _ranged_float(const cJSON* obj, const char* block, const char* key, float lo, float hi,
+                          float* out) {
     float v = 0.0f;
     if (!get_float(obj, key, &v))
         return false;
     if (!(v >= lo && v <= hi)) {
-        log_warn("cscene: post.metering.%s %g is outside [%g, %g]; ignored", key, (double)v,
+        log_warn("cscene: %s.%s %g is outside [%g, %g]; ignored", block, key, (double)v,
                  (double)lo, (double)hi);
         return false;
     }
@@ -410,15 +415,40 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         // learns the value they wrote is not the value they got.
         // 0.02 lower bound: a smaller spot contains no texel of the 64x64 measure
         // target at all, and an empty histogram freezes the meter silently.
-        d->has_meter_radius = _meter_range(meter, "radius", 0.02f, 1.0f, &d->meter_radius);
-        d->has_meter_low = _meter_range(meter, "low", 0.0f, 1.0f, &d->meter_low);
-        d->has_meter_high = _meter_range(meter, "high", 0.0f, 1.0f, &d->meter_high);
-        d->has_adapt_up = _meter_range(meter, "adapt_up", 0.0f, 1.0f, &d->adapt_up);
-        d->has_adapt_down = _meter_range(meter, "adapt_down", 0.0f, 1.0f, &d->adapt_down);
+        d->has_meter_radius = _ranged_float(meter, "post.metering", "radius", 0.02f, 1.0f, &d->meter_radius);
+        d->has_meter_low = _ranged_float(meter, "post.metering", "low", 0.0f, 1.0f, &d->meter_low);
+        d->has_meter_high = _ranged_float(meter, "post.metering", "high", 0.0f, 1.0f, &d->meter_high);
+        d->has_adapt_up = _ranged_float(meter, "post.metering", "adapt_up", 0.0f, 1.0f, &d->adapt_up);
+        d->has_adapt_down = _ranged_float(meter, "post.metering", "adapt_down", 0.0f, 1.0f, &d->adapt_down);
         static const char* const meter_known[] = {"mode", "radius",    "low",
                                                   "high", "adapt_up", "adapt_down"};
         warn_unknown_keys(meter, meter_known, sizeof(meter_known) / sizeof(meter_known[0]),
                           "post.metering");
+    }
+
+    // post.lut: a .cube colour-grading table. The only way to attach one to a
+    // scene; --lut overrides it and --no-lut is the only way off it.
+    const cJSON* lut = cJSON_GetObjectItemCaseSensitive(post, "lut");
+    if (cJSON_IsObject(lut)) {
+        copy_string(d->lut_path, sizeof(d->lut_path),
+                    cJSON_GetObjectItemCaseSensitive(lut, "path"));
+        d->has_lut_strength =
+            _ranged_float(lut, "post.lut", "strength", 0.0f, 1.0f, &d->lut_strength);
+        const cJSON* interp = cJSON_GetObjectItemCaseSensitive(lut, "interp");
+        if (cJSON_IsString(interp)) {
+            const char* m = interp->valuestring;
+            int v = strcasecmp(m, "trilinear") == 0      ? CSCENE_LUT_TRILINEAR
+                    : strcasecmp(m, "tetrahedral") == 0 ? CSCENE_LUT_TETRAHEDRAL
+                                                        : -1;
+            if (v < 0)
+                log_warn("cscene: unknown lut interp '%s' (trilinear|tetrahedral)", m);
+            else {
+                d->lut_interp = v;
+                d->has_lut_interp = true;
+            }
+        }
+        static const char* const lut_known[] = {"path", "strength", "interp"};
+        warn_unknown_keys(lut, lut_known, sizeof(lut_known) / sizeof(lut_known[0]), "post.lut");
     }
 
     // Refused rather than clamped: silently moving an authored number into
@@ -466,6 +496,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     static const char* const known[] = {
         "tonemap", "exposure", "auto_exposure",        "camera", "render_scale",
         "flare",   "bloom",    "chromatic_aberration", "fog",     "metering",
+        "lut",
     };
     warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }
@@ -828,6 +859,9 @@ CetraSceneDesc* cscene_load(const char* path) {
     // second resolver that would win. Empty paths pass through untouched.
     for (int i = 0; i < d->light_count; i++)
         resolve_in_place(d->lights[i].ies_path, CSCENE_MAX_PATH, dir);
+    // A .cube is the same kind of thing as the two above and for the same
+    // reason: not a texture, never through the pool, no second resolver.
+    resolve_in_place(d->lut_path, CSCENE_MAX_PATH, dir);
     // Material texture paths are deliberately NOT resolved here. Every texture
     // the engine loads resolves against the texture pool's directory (the -t
     // argument) through find_existing_subpath, and a material's textures are
