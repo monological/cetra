@@ -28,7 +28,8 @@ static void mask_array_alloc_dummy(MaterialMaskArray* arr) {
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-    arr->size = 1;
+    arr->width = 1;
+    arr->height = 1;
     arr->layer_count = 0;
 }
 
@@ -135,27 +136,36 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         return -1;
     }
 
-    // 2. Canonical size = the largest present source dimension, capped. Smaller
-    //    sources upsample; nothing downsamples below the largest (no detail loss
-    //    unless a source exceeds the cap). Every layer shares this size, so a mix
-    //    of a large and several small sources over-allocates the small ones
-    //    (memory = layer_count * size^2 * 4 bytes); lowering MASK_ARRAY_CAP
-    //    trades detail for VRAM if that ever bites.
+    // 2. Canonical size = the largest present source WIDTH by the largest source
+    //    HEIGHT, capped. Smaller sources upsample; nothing downsamples below the
+    //    largest (no detail loss unless a source exceeds the cap). Every layer
+    //    shares these dimensions, so a mix of a large and several small sources
+    //    over-allocates the small ones (memory = layers * w * h * 4 bytes);
+    //    lowering MASK_ARRAY_CAP trades detail for VRAM if that ever bites.
+    //
+    //    Two dimensions rather than one square, and it is worth stating why: a
+    //    non-square source forced a square at its LONGEST side, so apps/forest's
+    //    leaf atlas -- 8 cells of 256 laid out along u, 2048 x 256 -- promoted
+    //    every layer to 2048 x 2048 and was itself stretched eightfold vertically
+    //    into a layer it had no detail for. 234.7 MB became 117.4 MB with no
+    //    source downsampled and no read changed.
     //
     //    This is the one real cost of putting layered-surface maps in here, and
     //    it is why the build LOGS its size and total: a scene whose masks are
-    //    256 and whose surface layers are 1024 pays 1024 for the masks too. The
+    //    256 and whose surface layers are 1024 still pays 1024 for the masks. The
     //    number is reported rather than assumed, because the coupling is
     //    invisible from either material on its own.
-    int size = 1;
+    int width = 1, height = 1;
     for (int i = 0; i < count; i++) {
-        if (texs[i]->width > size)
-            size = texs[i]->width;
-        if (texs[i]->height > size)
-            size = texs[i]->height;
+        if (texs[i]->width > width)
+            width = texs[i]->width;
+        if (texs[i]->height > height)
+            height = texs[i]->height;
     }
-    if (size > MASK_ARRAY_CAP)
-        size = MASK_ARRAY_CAP;
+    if (width > MASK_ARRAY_CAP)
+        width = MASK_ARRAY_CAP;
+    if (height > MASK_ARRAY_CAP)
+        height = MASK_ARRAY_CAP;
 
     // 3. Allocate the array (mip 0; glGenerateMipmap fills the chain after the
     //    layers are drawn -- glTexStorage3D is GL 4.2, unavailable here).
@@ -163,8 +173,8 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
         glDeleteTextures(1, &arr->texture);
     glGenTextures(1, &arr->texture);
     glBindTexture(GL_TEXTURE_2D_ARRAY, arr->texture);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, size, size, count, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                 NULL);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, width, height, count, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -196,7 +206,7 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     GLuint fbo = 0;
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glViewport(0, 0, size, size);
+    glViewport(0, 0, width, height);
     glUseProgram(copy->id);
     uniform_set_int(copy->uniforms, "src", 0);
     glActiveTexture(GL_TEXTURE0);
@@ -222,11 +232,12 @@ int mask_array_build(MaterialMaskArray* arr, struct Scene* scene, struct Engine*
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    arr->size = size;
+    arr->width = width;
+    arr->height = height;
     arr->layer_count = count;
     // The 4/3 is the mip chain, which glGenerateMipmap has just filled.
-    double bytes = (double)count * (double)size * (double)size * 4.0 * (4.0 / 3.0);
-    log_info("Material texture array: %d layers at %dx%d, %.1f MB", count, size, size,
+    double bytes = (double)count * (double)width * (double)height * 4.0 * (4.0 / 3.0);
+    log_info("Material texture array: %d layers at %dx%d, %.1f MB", count, width, height,
              bytes / (1024.0 * 1024.0));
 
     free(ids);

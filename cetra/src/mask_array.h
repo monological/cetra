@@ -37,13 +37,17 @@ struct Engine;
 // ambiguity has to be encoded in a form that survives being averaged with its
 // own negation, or it vanishes exactly where the surface is minified.
 //
-// Layers share one size, so masks smaller than the canonical size are
+// Layers share one width and one height -- two dimensions, not a square. A
+// square at the longest side promotes every layer to the largest single
+// dimension in the scene, which a non-square atlas (foliage cells laid out along
+// u) makes expensive for no detail: halving apps/forest's array cost nothing but
+// the assumption. Masks smaller than the canonical size are
 // upsampled (a mask already AT the canonical size copies 1:1, byte-exact);
 // masks are uncompressed 8-bit and read as data (linear), so RGBA8 is lossless
 // per channel and the per-mask channel reads (.g/.b/.r) are preserved.
 typedef struct MaterialMaskArray {
     GLuint texture;            // GL_TEXTURE_2D_ARRAY, RGBA8, linear, mipped (never 0 once created)
-    int size;                  // canonical square layer size in texels
+    int width, height;         // canonical layer size in texels, shared by every layer
     int layer_count;           // populated layers (0 = a scene with no mask textures)
     GLuint quad_vao, quad_vbo; // fullscreen quad for the resample pass (created once)
 } MaterialMaskArray;
