@@ -117,6 +117,7 @@ typedef struct ForestArgs {
     float heightmap_min;     // world Y the file's 0 maps to
     float heightmap_max;     // world Y the file's 65535 maps to
     int height_probe;        // print sampled heights, normals and masks
+    int scatter_probe;       // print where the scatter put things, against the drainage
 } ForestArgs;
 
 static ForestArgs g_args;
@@ -311,15 +312,85 @@ static float clump_density(float x, float z, float freq) {
     return n < 0.0f ? 0.0f : (n > 1.0f ? 1.0f : n);
 }
 
-// Rejection sampling against slope and against that density. Returns false when
-// a candidate is unusable and the caller should draw another.
-static bool sample_ground(float max_slope, float clump_freq, float clump_power, vec3 out_pos) {
+// The drainage a tree tolerates standing in.
+//
+// Below the gravel band's own low edge in terrain_bake_splat (0.58), so the
+// exclusion begins before the splat starts painting a stream bed rather than
+// after -- a tree standing at the exact threshold would be knee-deep in the
+// first gravel texel. Flow is a LOG of drainage normalised to the catchment
+// peak, so its mean sits near 0.4 and this rejects a few per cent of the map
+// rather than half of it.
+#define TREE_MAX_FLOW 0.52f
+
+/*
+ * Where the scatter put things, against the drainage it was placing into.
+ *
+ * The instrument exists because the defect it guards is invisible in a frame: a
+ * tree standing in a stream bed looks exactly like a tree, and the only thing
+ * wrong with it is a number nothing prints. It reports the terrain's OWN flow
+ * range beside the trees', which is what stops the arm being vacuous -- with no
+ * erosion bake every mask reads zero, the placement rule is trivially satisfied,
+ * and an arm checking only the trees would pass against a build that had never
+ * implemented any of this.
+ */
+static void scatter_probe(const Placement* items, int count) {
+    float tree_max = 0.0f, tree_sum = 0.0f;
+    for (int i = 0; i < count; i++) {
+        float f = terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, items[i].pos[0], items[i].pos[2]);
+        tree_sum += f;
+        if (f > tree_max)
+            tree_max = f;
+    }
+
+    // The terrain's own distribution, on a coarse grid over the same margin the
+    // scatter draws from -- sampling the whole extent would include an edge the
+    // scatter never reaches and report a range no tree could have hit.
+    const int G = 64;
+    float land_max = 0.0f, land_sum = 0.0f;
+    float margin = g_terrain.extent * 0.96f;
+    for (int j = 0; j < G; j++) {
+        for (int i = 0; i < G; i++) {
+            float x = -margin + (2.0f * margin) * ((float)i / (float)(G - 1));
+            float z = -margin + (2.0f * margin) * ((float)j / (float)(G - 1));
+            float f = terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z);
+            land_sum += f;
+            if (f > land_max)
+                land_max = f;
+        }
+    }
+
+    printf("scatter-probe trees=%d tree_flow_max=%.4f tree_flow_mean=%.4f "
+           "land_flow_max=%.4f land_flow_mean=%.4f limit=%.4f\n",
+           count, (double)tree_max, count ? (double)(tree_sum / (float)count) : 0.0,
+           (double)land_max, (double)(land_sum / (float)(G * G)), (double)TREE_MAX_FLOW);
+}
+
+// Rejection sampling against slope, against drainage, and against that density.
+// Returns false when a candidate is unusable and the caller should draw another.
+//
+// `max_flow` is the drainage a prop tolerates standing in, and it is the half
+// that was missing until spec 11.60. The ground already knew where its streams
+// were -- terrain_bake_splat paints them gravel -- while the scatter placed by
+// SLOPE alone, and a channel bed is flat, so it passed the slope gate with room
+// to spare and the frame grew trees down the middle of a watercourse. Scoured
+// bedrock had the same problem in reverse: the splat paints it rock precisely
+// where the surface is shallow enough to plant on.
+//
+// 1.0 means "anywhere", which is right for a boulder: a rock in a stream bed is
+// where rocks actually are.
+static bool sample_ground(float max_slope, float max_flow, float clump_freq, float clump_power,
+                          vec3 out_pos) {
     float margin = g_terrain.extent * 0.96f;
     float x = rnd_range(-margin, margin);
     float z = rnd_range(-margin, margin);
-    vec3 n;
+    vec3 n = {0.0f, 1.0f, 0.0f};
     terrain_normal_at(&g_terrain, x, z, n);
     if (n[1] < max_slope)
+        return false;
+    // Reads 0 with no erosion bake, so this degrades to exactly the pre-11.60
+    // placement rather than to a special case -- the same property that lets
+    // terrain_tint blend by the masks unconditionally.
+    if (max_flow < 1.0f && terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z) > max_flow)
         return false;
     if (clump_freq > 0.0f) {
         float d = clump_density(x, z, clump_freq);
@@ -658,8 +729,10 @@ static void build_trees(void) {
     int placed = 0;
     for (int attempt = 0; attempt < TREE_COUNT * 12 && placed < TREE_COUNT; ++attempt) {
         vec3 p = {0.0f, 0.0f, 0.0f}; // out-param; zeroed for static analysis
-        // Tight clumps: groves with real clearings between them.
-        if (!sample_ground(0.86f, 0.0022f, 2.2f, p))
+        // Tight clumps: groves with real clearings between them. Below the
+        // gravel band's own low edge, so no tree stands where the splat has
+        // started painting a stream bed.
+        if (!sample_ground(0.86f, TREE_MAX_FLOW, 0.0022f, 2.2f, p))
             continue;
         float s = TREE_WORLD_SCALE * rnd_range(0.65f, 1.6f);
         glm_vec3_copy(p, items[placed].pos);
@@ -670,6 +743,9 @@ static void build_trees(void) {
         placed++;
     }
     qsort(items, (size_t)placed, sizeof(Placement), placement_cmp);
+
+    if (g_args.scatter_probe)
+        scatter_probe(items, placed);
 
     // Bark and leaves go into SEPARATE group sets. A node holding both would put
     // a leaf item between every pair of bark items, and the run finder breaks on
@@ -708,8 +784,10 @@ static void build_rocks(void) {
     for (int attempt = 0; attempt < ROCK_COUNT * 12 && placed < ROCK_COUNT; ++attempt) {
         vec3 p = {0.0f, 0.0f, 0.0f}; // out-param; zeroed for static analysis
         // Looser and at a different frequency, so rock fields do not simply
-        // mirror the tree groves.
-        if (!sample_ground(0.55f, 0.0035f, 1.3f, p))
+        // mirror the tree groves. No drainage limit: a boulder in a stream bed
+        // is where boulders are, and excluding them would leave the one place
+        // the terrain is painted gravel conspicuously swept clean.
+        if (!sample_ground(0.55f, 1.0f, 0.0035f, 1.3f, p))
             continue;
         // Non-uniform scale on purpose: it sits the rock into the ground and,
         // less decoratively, makes each instance's normal matrix differ from
@@ -1207,6 +1285,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --heightmap <p>     Load a field (.r16 / 16-bit PNG) instead\n");
     fprintf(stderr, "      --heightmap-range <lo> <hi>  World Y the file's range maps to\n");
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
+    fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
     fprintf(stderr, "      --cam-target x,y,z  Pinned camera aim point\n");
@@ -1284,6 +1363,8 @@ int main(int argc, char** argv) {
         } else if (!strcmp(a, "--heightmap-range") && i + 2 < argc) {
             g_args.heightmap_min = strtof(argv[++i], NULL);
             g_args.heightmap_max = strtof(argv[++i], NULL);
+        } else if (!strcmp(a, "--scatter-probe")) {
+            g_args.scatter_probe = 1;
         } else if (!strcmp(a, "--terrain-height-probe")) {
             g_args.height_probe = 1;
         } else if (!strcmp(a, "--trace-player")) {

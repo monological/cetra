@@ -10667,6 +10667,7 @@ def run_layers_gate(workdir):
     print("      layers-srgb       a mid-grey layer round-trips through the decode")
     print("      layers-height     the height blend interlocks where linear smears")
     print("      layers-triplanar  the wall is textured by its own axis, at the right size")
+    print("      layers-scatter    the scatter stops planting trees in the stream beds")
 
     failures = []
     src = os.path.join(ROOT, "assets", "layer_fixture.cscn")
@@ -10788,7 +10789,52 @@ def run_layers_gate(workdir):
     if not ok:
         failures.append("layers-triplanar")
 
+    failures += _layers_scatter_arm()
     return failures
+
+
+_SCATTER_PROBE = re.compile(
+    r"scatter-probe trees=(\d+) tree_flow_max=([\d.]+) tree_flow_mean=([\d.]+) "
+    r"land_flow_max=([\d.]+) land_flow_mean=([\d.]+) limit=([\d.]+)")
+
+
+def _layers_scatter_arm():
+    """The scatter places into ground the splat has not painted as a stream bed.
+
+    Runs with --erode because the whole claim is about the erosion masks, and
+    without a bake they read zero: the placement rule is then trivially satisfied
+    and an arm checking only the trees would pass against a build that never
+    implemented any of it. So the terrain's OWN drainage range is asserted too,
+    and that is what makes this a test rather than a tautology.
+    """
+    forest = os.path.join(ROOT, "out", "bin", "forest")
+    if not os.path.exists(forest):
+        print("  layers-scatter    SKIP  (forest not built)")
+        return []
+
+    cmd = [forest, "-x", "-f", "1", "-W", "200", "-H", "120", "--erode", "--erode-res", "256",
+           "--erode-iterations", "120", "--scatter-probe"]
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    m = _SCATTER_PROBE.search(r.stdout + r.stderr)
+    if not m:
+        print("  layers-scatter    ERROR  the run printed no probe row")
+        return ["layers-scatter"]
+
+    trees = int(m.group(1))
+    tree_max, tree_mean = float(m.group(2)), float(m.group(3))
+    land_max, land_mean = float(m.group(4)), float(m.group(5))
+    limit = float(m.group(6))
+
+    # Three conditions, and the middle one is the anti-vacuity check.
+    holds = tree_max <= limit + 1e-4
+    has_channels = land_max >= 0.85
+    prefers_dry = tree_mean < land_mean
+    ok = trees > 0 and holds and has_channels and prefers_dry
+    print(f"  layers-scatter    {'PASS' if ok else 'FAIL'}  {trees} trees, drainage max "
+          f"{tree_max:.4f} against a limit of {limit:.4f}; the land itself reaches "
+          f"{land_max:.4f} (want >= 0.85, or the masks are flat and this proves nothing), "
+          f"tree mean {tree_mean:.4f} vs land {land_mean:.4f}")
+    return [] if ok else ["layers-scatter"]
 
 
 GATE_GROUPS = [
