@@ -177,6 +177,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-probe      Print the CPU wave query over a grid\n");
     fprintf(stderr, "      --water-fft-probe  Print the transformed spectrum's statistics\n");
     fprintf(stderr, "      --wind-bound-probe Print measured wind travel beside its cull bound\n");
+    fprintf(stderr,
+            "      --ies-profile <f>  Apply an IES photometric file to every point/spot light\n");
     fprintf(stderr, "      --ies-probe        Print every loaded IES profile and its angle sweep\n");
     fprintf(stderr, "      --emissive-lights  Emissive meshes become LTC area lights\n");
     fprintf(stderr, "      --emissive-light-probe  Print the panel every emissive mesh derives\n");
@@ -785,6 +787,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->water_fft_probe = 1;
         } else if (strcmp(argv[i], "--wind-bound-probe") == 0) {
             args->wind_bound_probe = 1;
+        } else if (strcmp(argv[i], "--ies-profile") == 0 && i + 1 < argc) {
+            args->ies_profile_path = argv[++i];
         } else if (strcmp(argv[i], "--ies-probe") == 0) {
             args->ies_probe = 1;
         } else if (strcmp(argv[i], "--emissive-lights") == 0) {
@@ -2889,6 +2893,34 @@ int main(int argc, char** argv) {
         // Scene-file per-light overrides run after the global sizing so an
         // authored softness (e.g. a sun's angular size) wins for its light.
         apply_cscene_light_overrides(scene, cscn, scene_radius);
+    }
+
+    // ...and the CLI profile last, so it wins over whatever a .cscn attached.
+    // Applied to every point and spot rather than to one named light: this is
+    // the "look at a luminaire" lever, and a scene file is the way to say which
+    // lamp is which. A directional has no position to measure a distribution
+    // from and a panel is shaded by an area integral, so both are left alone.
+    if (args.ies_profile_path) {
+        if (!scene->ies_library)
+            scene->ies_library = create_ies_library();
+        int idx = ies_library_load(scene->ies_library, args.ies_profile_path);
+        const IesProfile* profile = ies_library_at(scene->ies_library, idx);
+        int applied = 0;
+        for (size_t i = 0; profile && i < scene->light_count; i++) {
+            Light* light = scene->lights[i];
+            if (light->type != LIGHT_POINT && light->type != LIGHT_SPOT)
+                continue;
+            light->ies_profile = idx;
+            // Same seeding rule the scene-file path uses: normalised x peak IS
+            // absolute, so a light left at the fallback 1 cd would otherwise
+            // render the right SHAPE at an unusable brightness.
+            if (light->intensity <= 1.0f)
+                set_light_intensity_units(light, profile->peak_cd, LIGHT_UNITS_CANDELA);
+            applied++;
+        }
+        if (profile)
+            printf("--ies-profile: '%s' applied to %d point/spot light(s)\n",
+                   args.ies_profile_path, applied);
     }
 
     // Position camera to view the entire scene; fallback only on a degenerate

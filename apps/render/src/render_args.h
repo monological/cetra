@@ -19,10 +19,15 @@ typedef struct {
     const char* anim_files[MAX_ANIM_FILES];
     int anim_count;
     const char* source_skeleton_path; // Source skeleton for retargeting
-    const char* screenshot_path;      // Save final frame here (PPM)
-    int screenshot_every;             // Also save numbered frames every N frames
-    float fov_deg;                    // Camera FOV in degrees (0 = default 50)
-    float exposure;                   // Tonemap exposure override; see has_exposure
+    // IESNA LM-63 file applied to every point and spot light, overriding what
+    // the scene authored. A `.cscn` is the only way to attach a profile
+    // otherwise, so without this the feature cannot be pointed at a real
+    // luminaire without editing a committed asset first.
+    const char* ies_profile_path;
+    const char* screenshot_path; // Save final frame here (PPM)
+    int screenshot_every;        // Also save numbered frames every N frames
+    float fov_deg;               // Camera FOV in degrees (0 = default 50)
+    float exposure;              // Tonemap exposure override; see has_exposure
     // Presence flag rather than testing `exposure > 0`, which six sites did.
     // Under a physical camera the value is an EV BIAS, where negative is a legal
     // and useful setting -- stopping down -- so sign cannot double as presence.

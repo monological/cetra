@@ -346,11 +346,12 @@ void main() {
         // about it or a shaped downlight scatters a halo its own pool does not
         // have (spec 11.57). punctualAngular answers 1 for an unprofiled point,
         // so the un-profiled fog is unchanged.
-        float atten_angular = atten * punctualAngular(li, toL / max(d, 1e-4));
-        // toL points at the light, so -toL/d is the direction it travels -- the
-        // punctual analogue of the directional phase above.
-        float phase = phaseHG(dot(-toL / max(d, 1e-4), -rayDir), anisotropy) * sunBoost;
-        S += clusterLights[li].colorIntensity.xyz * (atten_angular * phase);
+        vec3 pointL = toL / max(d, 1e-4);
+        float attenAngular = atten * punctualAngular(li, pointL);
+        // pointL points at the light, so its negation is the direction the light
+        // travels -- the punctual analogue of the directional phase above.
+        float phase = phaseHG(dot(-pointL, -rayDir), anisotropy) * sunBoost;
+        S += clusterLights[li].colorIntensity.xyz * (attenAngular * phase);
     }
 
     /*

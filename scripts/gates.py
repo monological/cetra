@@ -1756,13 +1756,17 @@ IES_FILES = [
     # guarantee pbr_frag's early-out rests on.
     ("ies_tinytail.ies", 360.0, True),
 ]
-# How far a tap may sit from its closed form, RELATIVE to the peak. The fixture's own
+# How far a tap may sit from its closed form, in units of the PEAK. The fixture's own
 # angles are a subset of the resampled grid, so the agreement is exact arithmetic rather
 # than a fit and the residual is float32 round-trip alone: the table is stored normalised
-# and the probe multiplies the peak back in, so a value carries ~1e-6 of relative error by
-# construction. Measured 9.5e-7. An ABSOLUTE bound was the first draft and it is wrong on
-# its face -- the error scales with the value, so a fixture at 1200 cd and one at 12 cd
-# would need different numbers for the same correctness.
+# and the probe multiplies the peak back in. Measured 9.5e-7.
+#
+# Relative to the peak rather than to the tap's own value, which is the choice worth
+# stating because the obvious reading is the other one. The residual is quantisation of the
+# NORMALISED table, so it is uniform in units of peak and does NOT scale with how bright
+# the tap is -- dividing by the expected value would demand ever-tighter agreement down the
+# tail and reduce to 0/0 at the zeros. Dividing by a bare candela figure would be wrong
+# too: a fixture at 1200 cd and one at 12 cd would then need different numbers.
 IES_TAP_REL_EPS = 1e-5
 
 
@@ -1968,6 +1972,8 @@ def run_ies_gate(workdir):
       ies-mirror    a PARTIAL sweep mirrors rather than repeats -- read off the frame,
                     since the fold is unreachable from the probe
       ies-replace   ...and the profile REPLACES the cone rather than multiplying it
+      ies-flag      --ies-profile overrides what a scene authored, and reaches a scene
+                    that authored nothing
 
     The first three read --ies-probe and the last three render. That split is deliberate:
     the probe exists because a table resampled off the wrong plane still lights a room, so
@@ -1995,7 +2001,7 @@ def run_ies_gate(workdir):
 
     if err:
         arms = ("ies-table", "ies-symmetry", "ies-seed", "ies-mirror", "ies-shape",
-                "ies-replace")
+                "ies-replace", "ies-flag")
         for arm in arms:
             print(f"  {arm} ERROR the probe returned nothing usable: {err}")
         return list(arms)
@@ -2159,6 +2165,51 @@ def run_ies_gate(workdir):
               "nothing)")
         if not ok:
             failures.append("ies-replace")
+
+    # --ies-profile, the only route to a profile that does not go through a scene file.
+    # Two claims, and the second is the one that can rot: the flag must WIN over what the
+    # scene authored, and it must reach a light the scene never gave a profile at all.
+    #
+    # Read as pixels against the authored frame rather than off the probe, because a flag
+    # that loaded the file and applied it to nothing prints an identical probe -- the
+    # library is scene state, and loading is not applying.
+    flag_shots, flag_err = {}, None
+    flag_runs = (
+        # The fixture authors ies_symmetric; overriding with the asymmetric file must move
+        # the frame, and must land on the SAME frame the authored asymmetric variant gives.
+        ("override", fixture, ["--ies-profile", os.path.join(ROOT, "assets",
+                                                             "ies_asymmetric.ies")]),
+        # ...and a scene with two point lights and no profile anywhere in it.
+        ("bare", os.path.join(ROOT, "assets", "contact_local_fixture.cscn"), []),
+        ("bare_ies", os.path.join(ROOT, "assets", "contact_local_fixture.cscn"),
+         ["--ies-profile", os.path.join(ROOT, "assets", "ies_asymmetric.ies")]),
+    )
+    for tag, scene, extra in flag_runs:
+        if not os.path.exists(scene):
+            flag_err = f"missing {os.path.basename(scene)}"
+            break
+        out = os.path.join(workdir, f"ies_flag_{tag}.ppm")
+        flag_err = render(scene, out, ["-W", "400", "-H", "300", "--no-auto-exposure",
+                                       "-E", "0.02"] + extra)
+        if flag_err:
+            break
+        flag_shots[tag] = out
+
+    if flag_err:
+        print(f"  ies-flag     ERROR render failed: {flag_err.strip()[-200:]}")
+        failures.append("ies-flag")
+    else:
+        # The authored asymmetric variant was rendered above by ies-shape.
+        same = compare(flag_shots["override"], shots["asymmetric"])[0]
+        moved = compare(flag_shots["override"], shots["symmetric"])[0]
+        reached = compare(flag_shots["bare"], flag_shots["bare_ies"])[0]
+        ok = same == 0 and moved > 0 and reached > 0
+        print(f"  ies-flag     {'PASS' if ok else 'FAIL'}  --ies-profile over an authored "
+              f"one: {same} px against the same file authored (want exactly 0) and {moved} "
+              f"px against the file it replaced (want > 0, or the flag did nothing); on a "
+              f"scene that authors no profile at all: {reached} px (want > 0)")
+        if not ok:
+            failures.append("ies-flag")
 
     return failures
 
