@@ -1576,7 +1576,6 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     fx->fog_spot_enabled = sp != NULL;
     if (sp) {
         glm_vec3_copy((float*)sp->global_position, fx->fog_spot_pos);
-        glm_vec3_normalize_to((float*)sp->direction, fx->fog_spot_dir);
         glm_vec3_scale((float*)sp->color, sp->intensity, fx->fog_spot_color);
         // Same packing the clustered path uses (light_cluster.c): x = 1/range^2
         // for getDistanceAtt's window, yz unused. The beam and the pool it casts
@@ -1587,16 +1586,10 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         fx->fog_spot_cos_inner = sp->cutOff;
         fx->fog_spot_cos_outer = sp->outerCutOff;
         // ...and the same for the angular half: a profiled spot's shaft has to
-        // read the profile the floor pool reads, or the beam and the pool
-        // disagree. The roll comes from `up` orthonormalised against the axis,
-        // which is what light_cluster.c packs for the clustered path.
+        // read the profile the floor pool reads, through the same frame, or the
+        // beam and the pool turn the lamp different ways.
         fx->fog_spot_ies_profile = sp->ies_profile;
-        vec3 proj;
-        glm_vec3_proj((float*)sp->up, fx->fog_spot_dir, proj);
-        glm_vec3_sub((float*)sp->up, proj, fx->fog_spot_up);
-        if (glm_vec3_norm(fx->fog_spot_up) < 1e-4f)
-            glm_vec3_ortho(fx->fog_spot_dir, fx->fog_spot_up);
-        glm_vec3_normalize(fx->fog_spot_up);
+        light_emission_frame(sp, fx->fog_spot_dir, fx->fog_spot_up);
     }
 
     // The population no shadow map can serve: point and spot lights holding no

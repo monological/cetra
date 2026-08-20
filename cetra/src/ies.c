@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> // strncasecmp: POSIX, and _POSIX_C_SOURCE is set for this target
 
 #include "ext/log.h"
 #include "util.h"
@@ -12,13 +13,26 @@ struct IesLibrary {
     IesProfile profiles[IES_MAX_PROFILES];
     int count;
     int pool_used; // floats of IES_POOL_FLOATS the loaded tables occupy
+    uint64_t revision;
 };
+
+// Never reset and never reused, so a number identifies a SET rather than a
+// count: two libraries can hold one profile each and must not look alike to a
+// consumer caching what it packed.
+static uint64_t g_ies_revision;
 
 IesLibrary* create_ies_library(void) {
     IesLibrary* lib = calloc(1, sizeof(IesLibrary));
-    if (!lib)
+    if (!lib) {
         log_error("Failed to allocate IES library");
+        return NULL;
+    }
+    lib->revision = ++g_ies_revision;
     return lib;
+}
+
+uint64_t ies_library_revision(const IesLibrary* lib) {
+    return lib ? lib->revision : 0;
 }
 
 void free_ies_library(IesLibrary* lib) {
@@ -33,14 +47,19 @@ int ies_library_count(const IesLibrary* lib) {
     return lib ? lib->count : 0;
 }
 
-int ies_library_pool_used(const IesLibrary* lib) {
+static int ies_library_pool_used(const IesLibrary* lib) {
     return lib ? lib->pool_used : 0;
 }
 
 bool ies_library_pack(const IesLibrary* lib, GpuIesBlock* block) {
-    if (!lib || !block || lib->count == 0)
+    if (!block)
         return false;
+    // An EMPTY library packs successfully, as a zeroed block. Refusing instead
+    // would leave whatever the previous scene uploaded in place, with a profile
+    // count that outlives the profiles it counted.
     memset(block, 0, sizeof(*block));
+    if (!lib || lib->count == 0)
+        return true;
     block->ies_counts[0] = lib->count;
     for (int i = 0; i < lib->count; i++) {
         const IesProfile* p = &lib->profiles[i];
@@ -62,7 +81,19 @@ const IesProfile* ies_library_at(const IesLibrary* lib, int index) {
     return &lib->profiles[index];
 }
 
-float ies_fold_horizontal(float angle_deg, float span_deg) {
+// Fold a horizontal angle into the measured sweep [0, span].
+//
+// A partial sweep MIRRORS rather than repeats: a bilateral file measured 0..180
+// describes 190 degrees as 170, not as 10, which is what a modulo would give and
+// which reads the far side of the luminaire as the near side. Quadrant files
+// mirror twice; a full 360 sweep passes through untouched.
+//
+// The same arithmetic as the shader's iesFold and the tool's fold_horizontal,
+// and it cannot be shared with either -- fmodf, mod() and % differ on negative
+// input, which is why only this copy needs the branch below. The tool's copy is
+// asserted directly by gen_ies_fixture.py; this one by the probe's mirror rows,
+// which exist because nothing else ever asks for an angle outside the sweep.
+static float ies_fold_horizontal(float angle_deg, float span_deg) {
     float period = 2.0f * span_deg;
     float f = fmodf(angle_deg, period);
     if (f < 0.0f)
@@ -197,14 +228,47 @@ static float _sample_irregular(const float* angles, const float* values, int n, 
 #define IES_MAX_FILE_VERT 256
 #define IES_MAX_FILE_HORIZ 256
 
+// The TILT line, and the start of the numeric stream after it.
+//
+// Anchored to a line start and case-folded, matching tools/gen_ies_table.py --
+// the keyword header is free text and may mention TILT in a [MORE] line, and
+// exporters are inconsistent about case. A substring search finds the first of
+// those and refuses a file the reference accepts, which is the drift two
+// implementations of one format exist to avoid.
+static const char* _find_tilt(const char* text, size_t len, bool* is_none) {
+    const char* end = text + len;
+    for (const char* line = text; line < end;) {
+        const char* eol = line;
+        while (eol < end && *eol != '\n' && *eol != '\r')
+            eol++;
+
+        const char* s = line;
+        while (s < eol && (*s == ' ' || *s == '\t'))
+            s++;
+        if ((size_t)(eol - s) >= 5 && strncasecmp(s, "TILT=", 5) == 0) {
+            const char* v = s + 5;
+            const char* ve = eol;
+            while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t'))
+                ve--;
+            *is_none = (ve - v) == 4 && strncasecmp(v, "NONE", 4) == 0;
+            return eol;
+        }
+
+        line = eol;
+        while (line < end && (*line == '\n' || *line == '\r'))
+            line++;
+    }
+    return NULL;
+}
+
 static bool _parse_and_resample(const char* text, size_t len, const char* path, IesProfile* out) {
-    // TILT is line-structured and comes before the numeric stream.
-    const char* tilt = strstr(text, "TILT=");
-    if (!tilt) {
+    bool tilt_none = false;
+    const char* after_tilt = _find_tilt(text, len, &tilt_none);
+    if (!after_tilt) {
         log_warn("ies: '%s' has no TILT= line; not an LM-63 file", path);
         return false;
     }
-    if (strncmp(tilt, "TILT=NONE", 9) != 0) {
+    if (!tilt_none) {
         // TILT=INCLUDE embeds a second table describing how output varies with
         // mounting angle. Refused rather than ignored: dropping it silently
         // renders a tilted luminaire at its untilted output.
@@ -212,7 +276,7 @@ static bool _parse_and_resample(const char* text, size_t len, const char* path, 
         return false;
     }
 
-    Lexer lx = {tilt + 9, text + len};
+    Lexer lx = {after_tilt, text + len};
     float head[13];
     if (!_read_floats(&lx, head, 13)) {
         log_warn("ies: '%s' is truncated before the photometric header", path);
@@ -264,22 +328,24 @@ static bool _parse_and_resample(const char* text, size_t len, const char* path, 
     float peak = 0.0f;
     static float column[IES_MAX_FILE_VERT];
     static float plane[IES_MAX_FILE_HORIZ];
-    for (int iv = 0; iv < v_taps; iv++) {
-        float a_v = vert[0] + (vert[n_vert - 1] - vert[0]) * (float)iv / (float)(v_taps - 1);
-        for (int ih = 0; ih < h_taps; ih++) {
-            const float* col;
-            if (symmetric) {
-                col = cd; // the file's single plane, already v-ordered
-            } else {
-                float a_h = span * (float)ih / (float)(h_taps - 1);
-                float folded = ies_fold_horizontal(a_h, span);
-                for (int v = 0; v < n_vert; v++) {
-                    for (int h = 0; h < n_horiz; h++)
-                        plane[h] = cd[h * n_vert + v];
-                    column[v] = _sample_irregular(horiz, plane, n_horiz, folded);
-                }
-                col = column;
+    // Horizontal outside: a column is a function of the horizontal tap alone, so
+    // nesting it under the vertical one rebuilt each of them v_taps times over
+    // and stated a dependency the arithmetic does not have. No fold here -- a_h
+    // is inside [0, span] by construction, and the fold exists for the LOOKUP,
+    // which is the only place an out-of-range azimuth can arrive.
+    for (int ih = 0; ih < h_taps; ih++) {
+        const float* col = cd; // symmetric: the file's single plane, already v-ordered
+        if (!symmetric) {
+            float a_h = span * (float)ih / (float)(h_taps - 1);
+            for (int v = 0; v < n_vert; v++) {
+                for (int h = 0; h < n_horiz; h++)
+                    plane[h] = cd[h * n_vert + v];
+                column[v] = _sample_irregular(horiz, plane, n_horiz, a_h);
             }
+            col = column;
+        }
+        for (int iv = 0; iv < v_taps; iv++) {
+            float a_v = vert[0] + (vert[n_vert - 1] - vert[0]) * (float)iv / (float)(v_taps - 1);
             float value = _sample_irregular(vert, col, n_vert, a_v) * scale;
             out->table[iv * h_taps + ih] = value;
             if (value > peak)
@@ -337,32 +403,16 @@ int ies_library_load(IesLibrary* lib, const char* path) {
         return -1;
     }
 
-    FILE* fh = fopen(path, "rb");
-    if (!fh) {
-        log_warn("ies: cannot open '%s'; the light keeps its analytic cone", path);
-        return -1;
-    }
-    fseek(fh, 0, SEEK_END);
-    long size = ftell(fh);
-    fseek(fh, 0, SEEK_SET);
-    if (size <= 0) {
-        fclose(fh);
-        log_warn("ies: '%s' is empty", path);
-        return -1;
-    }
-    char* text = malloc((size_t)size + 1);
+    long size = 0;
+    char* text = read_entire_file(path, &size);
     if (!text) {
-        fclose(fh);
-        log_error("ies: out of memory reading '%s'", path);
+        log_warn("ies: cannot read '%s'; the light keeps its analytic cone", path);
         return -1;
     }
-    size_t got = fread(text, 1, (size_t)size, fh);
-    fclose(fh);
-    text[got] = '\0';
 
     IesProfile* p = &lib->profiles[lib->count];
     memset(p, 0, sizeof(*p));
-    bool ok = _parse_and_resample(text, got, path, p);
+    bool ok = _parse_and_resample(text, (size_t)size, path, p);
     free(text);
     if (!ok)
         return -1;
@@ -381,6 +431,7 @@ int ies_library_load(IesLibrary* lib, const char* path) {
     lib->pool_used += taps;
 
     p->path = safe_strdup(path);
+    lib->revision = ++g_ies_revision;
     log_info("IES '%s': %dx%d taps, %s, span %g deg, peak %.1f cd", path, p->v_taps, p->h_taps,
              p->h_taps == 1 ? "symmetric" : "asymmetric", (double)p->span, (double)p->peak_cd);
     return lib->count++;
@@ -426,6 +477,24 @@ void ies_library_probe(const IesLibrary* lib) {
                 float rel = ies_profile_sample(p, v, h);
                 printf("ies-probe sample index=%d v=%.4f h=%.4f rel=%.6f cd=%.6f\n", i,
                        (double)v, (double)h, (double)rel, (double)(rel * p->peak_cd));
+            }
+        }
+
+        // ...and PAST the sweep, which is the only place the horizontal fold
+        // does anything. Every row above lies inside [0, span], where a mirror
+        // and a modulo agree exactly -- so without these the fold is unreachable
+        // from outside the process and a wrap reads as correct.
+        //
+        // A mirror is the claim: span+d must read as span-d. Paired so the gate
+        // compares the two rather than trusting either.
+        if (p->h_taps > 1 && p->span < 360.0f) {
+            float d = p->span * 0.25f;
+            for (int iv = 0; iv < p->v_taps; iv++) {
+                float v = p->v_lo + (p->v_hi - p->v_lo) * (float)iv / (float)(p->v_taps - 1);
+                printf("ies-probe mirror index=%d v=%.4f h=%.4f inside=%.6f "
+                       "beyond=%.6f\n",
+                       i, (double)v, (double)d, (double)ies_profile_sample(p, v, p->span - d),
+                       (double)ies_profile_sample(p, v, p->span + d));
             }
         }
     }

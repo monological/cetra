@@ -67,10 +67,15 @@ typedef struct CSceneLight {
     bool has_intensity;
     float intensity;
     LightUnits units;
-    float direction[3]; // directional/spot/area (travel direction)
+    // Required for directional/spot/area, optional for a point -- which has no
+    // cone to aim but does have an IES profile's measurement axis.
+    bool has_direction;
+    float direction[3]; // travel direction
     float size[2];      // area: width x height
+    // The roll about `direction`: a panel's height axis, or an asymmetric
+    // profile's azimuth zero. Optional for every type.
     bool has_up;
-    float up[3]; // area, optional
+    float up[3];
     bool has_attenuation;
     float attenuation[3]; // point/spot: constant, linear, quadratic
     bool has_range;

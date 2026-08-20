@@ -285,14 +285,13 @@ void main() {
     if (spotEnabled == 1) {
         vec3 toL = spotPos - P;
         float d = length(toL);
-        // spotConeFactor's own ramp, so shaft and floor pool share one formula --
-        // or the light's IES profile where it has one, for the same reason: the
-        // beam has to agree with the pool it casts, and a profile REPLACES the
-        // cone rather than multiplying it (spec 11.57).
+        // Through the same decision as the floor pool, on values because this
+        // light is not in the cluster list: the beam has to agree with the pool
+        // it casts, which is exactly what a second copy of the rule stops
+        // guaranteeing.
         vec3 spotL = toL / max(d, 1e-4);
-        float cone = spotIesProfile >= 0 ? iesProfile(spotIesProfile, spotL, spotDir, spotUp)
-                                         : spotConeFactor(2.0, spotDir, spotCosInner,
-                                                          spotCosOuter, spotL);
+        float cone = punctualAngularOf(spotIesProfile, 2.0, spotDir, spotUp,
+                                       spotCosInner, spotCosOuter, spotL);
         if (cone > 0.0) {
             float atten = getDistanceAtt(d * d, spotAtten.x);
             float vis = 1.0;

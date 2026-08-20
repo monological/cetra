@@ -237,12 +237,24 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
             }
         }
 
-        // Direction (travel direction) defines directional/spot/area; point ignores it.
-        if (out->type != CSCENE_LIGHT_POINT && !get_vec3(l, "direction", out->direction)) {
+        // Direction (travel direction) defines directional/spot/area, and is
+        // REQUIRED for those. Read for a point light too, and optional there: a
+        // point has no analytic cone to aim, but an IES profile is measured about
+        // an axis, so the key is meaningful on one. Reading it only for the types
+        // that require it accepted the key and dropped the value, which is the
+        // silent-ignore failure warn_unknown_keys below exists to end.
+        out->has_direction = get_vec3(l, "direction", out->direction);
+        if (out->type != CSCENE_LIGHT_POINT && !out->has_direction) {
             log_warn("cscene: %s light '%s' missing direction; skipped", type->valuestring,
                      out->name);
             continue;
         }
+
+        // The roll about `direction`: a panel's height axis, or an asymmetric
+        // profile's azimuth zero. Read for every type for the same reason
+        // `direction` is -- a wall-washer aimed down still has to say which wall,
+        // and it is a point or spot that carries the profile.
+        out->has_up = get_vec3(l, "up", out->up);
 
         // Optional everywhere they apply: absent = keep the engine default.
         get_bool(l, "cast_shadows", &out->cast_shadows);
@@ -267,7 +279,6 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
                 log_warn("cscene: area light '%s' has non-positive size; skipped", out->name);
                 continue;
             }
-            out->has_up = get_vec3(l, "up", out->up);
         } else if (out->type == CSCENE_LIGHT_SPOT) {
             // A cone with no angles has no shape; require [inner, outer] degrees.
             if (!get_floats(l, "cone", out->cone, 2)) {

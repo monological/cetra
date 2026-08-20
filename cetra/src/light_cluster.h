@@ -45,11 +45,16 @@ typedef struct GpuPackedLight {
     // exists for the position regardless) and it is what a range-windowed
     // falloff would read.
     float pos_range[4];
-    float dir_type[4];        // xyz = direction, w = 1 point / 2 spot / 3 area
+    float dir_type[4];        // xyz = direction (world, UNIT), w = 1 point / 2 spot / 3 area
     float color_intensity[4]; // xyz = color * intensity (premultiplied)
-    float atten_cutoff[4];    // constant, linear, quadratic, cos inner cone
-    float shadow_misc[4];     // cos outer cone, punctual shadow layer, size.xy
-    float up_area[4];         // AREA only: panel height axis, orthonormal to dir (spec 9.2)
+    // The attenuation triple this used to carry is gone -- punctual falloff is
+    // inverse-square windowed by `range`, and slot [1] now holds a live index.
+    float atten_cutoff[4]; // 1/range^2 (0 = unbounded), IES profile index
+                           // (-1 = none), reserved, cos inner cone
+    float shadow_misc[4];  // cos outer cone, punctual shadow layer, size.xy
+    // Roll reference, unit and orthonormal to dir: a panel's height axis
+    // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57).
+    float up_area[4];
 } GpuPackedLight;
 
 typedef struct GpuLightsBlock {
@@ -98,7 +103,7 @@ typedef struct LightClusterContext {
     // binding registry keeps the light blocks together, but it is uploaded from
     // the SCENE's library when that changes, never by the per-frame build.
     struct Ubo* ies_ubo;
-    int ies_uploaded_count; // profiles last packed; 0 = nothing uploaded yet
+    uint64_t ies_uploaded_revision; // library+set last packed; 0 = nothing uploaded yet
 
     GpuLightsBlock lights;
     GpuClusterBlock grid;

@@ -54,16 +54,21 @@ VERT_STEP = 10.0
 PEAK_CD = 1200.0
 
 
-def lobe(v_deg):
-    """Vertical falloff: a cosine lobe to 90 degrees, exactly zero at the edge.
+def lobe(v_deg, tail=0.0):
+    """Vertical falloff: a cosine lobe to 90 degrees, `tail` at the edge.
 
     Exactly zero matters. pbr_frag skips nine shadow taps and the whole GGX chain
     on `attenuation <= 0.0`, and its comment records that this is only safe
     because every factor reaches zero EXACTLY -- so a profile whose tail merely
     got small would silently change which fragments take that path.
+
+    Which is why `tail` exists and why one file sets it. A file painting a literal
+    0 arrives as 0/peak = 0 and reads back exactly zero with the SNAP DELETED from
+    both readers -- so four files that all do that measure the arithmetic and never
+    the guarantee. A residual below the snap threshold is the only input that does.
     """
     if v_deg >= 90.0:
-        return 0.0
+        return tail
     return math.cos(math.radians(v_deg))
 
 
@@ -77,11 +82,11 @@ def ramp(h_deg, span):
     return 1.0 - h_deg / span
 
 
-def candela(v_deg, h_deg, span):
-    return PEAK_CD * lobe(v_deg) * ramp(h_deg, span)
+def candela(v_deg, h_deg, span, tail=0.0):
+    return PEAK_CD * lobe(v_deg, tail) * ramp(h_deg, span)
 
 
-def write_ies(path, horiz, span, note):
+def write_ies(path, horiz, span, note, tail=0.0):
     """One LM-63 file. Horizontal-major candela, as the standard orders them."""
     verts = [i * VERT_STEP for i in range(int(90.0 / VERT_STEP) + 1)]
     lines = [
@@ -96,23 +101,30 @@ def write_ies(path, horiz, span, note):
         " ".join("%g" % h for h in horiz),
     ]
     for h in horiz:
-        lines.append(" ".join("%.6g" % candela(v, h, span) for v in verts))
+        lines.append(" ".join("%.6g" % candela(v, h, span, tail) for v in verts))
     with open(path, "w") as fh:
         fh.write("\n".join(lines) + "\n")
     return verts
 
 
+# name, horizontal angles, declared span, note, residual tail (relative to peak)
 FILES = [
-    # name, horizontal angles, declared span
-    ("ies_symmetric.ies", [0.0], 360.0, "rotationally symmetric downlight"),
-    ("ies_bilateral.ies", [0.0, 45.0, 90.0, 135.0, 180.0], 180.0, "bilateral wall-washer"),
-    ("ies_quadrant.ies", [0.0, 30.0, 60.0, 90.0], 90.0, "quadrant-symmetric luminaire"),
+    ("ies_symmetric.ies", [0.0], 360.0, "rotationally symmetric downlight", 0.0),
+    ("ies_bilateral.ies", [0.0, 45.0, 90.0, 135.0, 180.0], 180.0, "bilateral wall-washer",
+     0.0),
+    ("ies_quadrant.ies", [0.0, 30.0, 60.0, 90.0], 90.0, "quadrant-symmetric luminaire", 0.0),
     ("ies_asymmetric.ies", [0.0, 60.0, 120.0, 180.0, 240.0, 300.0, 360.0], 360.0,
-     "fully asymmetric luminaire"),
+     "fully asymmetric luminaire", 0.0),
+    # A real cutoff luminaire's tail is small, not absent -- stray light off the
+    # reflector, measured and reported. The four above paint a literal 0 and so
+    # test the arithmetic that carries it; this one is the only input the SNAP in
+    # ies.c and gen_ies_table.py acts on, and therefore the only one that can
+    # tell an enforced exact zero from an inherited one.
+    ("ies_tinytail.ies", [0.0], 360.0, "cutoff luminaire with a residual tail", 1e-9),
 ]
 
-for name, horiz, span, note in FILES:
-    write_ies(os.path.join(HERE, name), horiz, span, note)
+for name, horiz, span, note, tail in FILES:
+    write_ies(os.path.join(HERE, name), horiz, span, note, tail)
 
 # ---- run the real tool over them, and check it against what we painted -------
 #
@@ -124,7 +136,7 @@ _spec = importlib.util.spec_from_file_location(
 _tool = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_tool)
 
-for name, horiz, span, note in FILES:
+for name, horiz, span, note, tail in FILES:
     table, meta = _tool.load(os.path.join(HERE, name))
     symmetric = len(horiz) == 1
 
@@ -144,7 +156,9 @@ for name, horiz, span, note in FILES:
         v = meta["v_lo"] + (meta["v_hi"] - meta["v_lo"]) * iv / (meta["v_taps"] - 1)
         for ih in range(meta["h_taps"]):
             h = 0.0 if meta["h_taps"] == 1 else span * ih / (meta["h_taps"] - 1)
-            want = candela(v, h, span) / PEAK_CD
+            want = candela(v, h, span, tail) / PEAK_CD
+            if v >= 90.0 - 1e-9:
+                want = 0.0  # the snap: a residual below 1e-6 becomes an exact zero
             got = table[iv * meta["h_taps"] + ih]
             assert abs(got - want) < 1e-5, \
                 "%s: tap v=%g h=%g read %.6f, constructed %.6f" % (name, v, h, got, want)

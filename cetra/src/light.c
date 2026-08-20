@@ -231,15 +231,35 @@ float light_cull_radius(const struct Light* light) {
     return sqrtf(i_eff / LIGHT_CULL_EPSILON);
 }
 
+void light_emission_frame(const struct Light* light, vec3 axis, vec3 up) {
+    glm_vec3_copy((float*)light->direction, axis);
+    if (glm_vec3_norm(axis) < 1e-6f)
+        glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, axis);
+    glm_vec3_normalize(axis);
+
+    // Gram-Schmidt the authored `up` against the axis rather than trusting it.
+    // Parallel (or degenerate) leaves no roll to recover -- it is genuinely
+    // undefined there -- so take the canonical perpendicular and stay buildable.
+    vec3 proj;
+    glm_vec3_proj((float*)light->up, axis, proj);
+    glm_vec3_sub((float*)light->up, proj, up);
+    if (glm_vec3_norm(up) < 1e-4f)
+        glm_vec3_ortho(axis, up);
+    glm_vec3_normalize(up);
+}
+
 /**
  * Sets the cutoff angles for a spotlight.
  *
+ * Both are COSINES of the half-angles, never the angles themselves. Every
+ * consumer compares them against dot(L, -axis) directly, so an angle passed here
+ * is not merely mis-scaled -- it is monotonically backwards, and a wide cone
+ * arrives narrow.
+ *
  * @param light A pointer to the Light structure.
- * @param cutOff The inner cutoff angle, inside of which the light is at full
- *               intensity. This is typically expressed in radians or as a
- *               cosine of the angle for efficiency.
- * @param outerCutOff The outer cutoff angle, beyond which the light intensity
- *                    falls off to zero. Also typically in radians or as a cosine.
+ * @param cutOff Cosine of the inner half-angle, inside which the light is at
+ *               full intensity.
+ * @param outerCutOff Cosine of the outer half-angle, beyond which it is zero.
  */
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff) {
     if (!light)

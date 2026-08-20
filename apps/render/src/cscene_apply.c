@@ -218,27 +218,32 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         set_light_color(light, (float*)sl->color);
         set_light_intensity_units(light, sl->intensity, sl->units);
         set_light_type(light, cscene_light_type(sl->type));
+        // The emission frame, type-independent since 11.57: a point light aims
+        // nothing analytically but does carry an IES profile's measurement axis
+        // and roll, so both keys mean something on every type. Only what
+        // genuinely varies by type stays in the switch.
+        if (sl->has_direction)
+            set_light_direction(light, (float*)sl->direction);
+        if (sl->has_up)
+            set_light_up(light, (float*)sl->up);
+
         switch (sl->type) {
         case CSCENE_LIGHT_AREA:
-            set_light_direction(light, (float*)sl->direction);
             set_light_size(light, sl->size[0], sl->size[1]);
-            if (sl->has_up)
-                set_light_up(light, (float*)sl->up);
             printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f%s)\n", light->name,
                    sl->size[0], sl->size[1], sl->intensity, sl->cast_shadows ? ", shadows" : "");
             break;
         case CSCENE_LIGHT_DIRECTIONAL:
-            set_light_direction(light, (float*)sl->direction);
             printf("Scene file light '%s' (directional, intensity %.2f%s)\n", light->name,
                    sl->intensity, sl->cast_shadows ? ", shadows" : "");
             break;
         case CSCENE_LIGHT_SPOT:
-            set_light_direction(light, (float*)sl->direction);
             // The engine stores cutoffs as cosines of the half-angles; authors
             // write degrees (see spec 6.2).
             set_light_cutoff(light, cosf(glm_rad(sl->cone[0])), cosf(glm_rad(sl->cone[1])));
-            printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s)\n", light->name,
-                   sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "");
+            printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s%s)\n", light->name,
+                   sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "",
+                   sl->ies_path[0] ? ", cone superseded by its profile" : "");
             break;
         default: // CSCENE_LIGHT_POINT
             printf("Scene file light '%s' (point, intensity %.2f%s)\n", light->name, sl->intensity,
@@ -257,9 +262,18 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         if (sl->cast_shadows)
             set_light_cast_shadows(light, true);
 
-        // Type-independent for the same reason: a profile is an angular
-        // distribution, and point and spot both have an axis to measure it from.
-        if (sl->ies_path[0]) {
+        // A profile is a POINT-LIKE emitter's angular distribution. A panel is
+        // shaded by an LTC integral over its rectangle and a directional has no
+        // position to measure from, so on either the file describes something
+        // the shading does not do -- refused by name rather than accepted and
+        // dropped, which is how an author finds out.
+        if (sl->ies_path[0] &&
+            (sl->type == CSCENE_LIGHT_AREA || sl->type == CSCENE_LIGHT_DIRECTIONAL)) {
+            log_warn("cscene: light '%s' is %s and authors a profile; an IES file measures a "
+                     "point-like emitter and is ignored here",
+                     light->name,
+                     sl->type == CSCENE_LIGHT_AREA ? "an area panel" : "directional");
+        } else if (sl->ies_path[0]) {
             if (!scene->ies_library)
                 scene->ies_library = create_ies_library();
             light->ies_profile = ies_library_load(scene->ies_library, sl->ies_path);
@@ -275,13 +289,6 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                     set_light_intensity_units(light, p->peak_cd, LIGHT_UNITS_CANDELA);
                     printf("Scene file: light '%s' takes its %.1f cd from '%s'\n", light->name,
                            (double)p->peak_cd, sl->ies_path);
-                }
-                if (sl->type == CSCENE_LIGHT_SPOT) {
-                    // The profile carries the whole distribution, cutoff
-                    // included, so the authored cone no longer reaches anything.
-                    log_warn("cscene: spot '%s' authors both a cone and a profile; the profile "
-                             "carries the distribution and the cone is ignored",
-                             light->name);
                 }
             }
         }

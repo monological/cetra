@@ -83,9 +83,13 @@ int ies_library_load(IesLibrary* lib, const char* path);
 int ies_library_count(const IesLibrary* lib);
 const IesProfile* ies_library_at(const IesLibrary* lib, int index);
 
-// Floats of the shared pool the loaded profiles occupy, for the probe and for
-// anything reporting how close a scene sits to the block's budget.
-int ies_library_pool_used(const IesLibrary* lib);
+// Changes whenever the SET does, and is never reused across libraries -- so a
+// consumer caching an upload compares one number instead of assuming the library
+// it packed last is the library it is holding now. 0 for NULL.
+//
+// A count cannot do this job: an engine outlives a scene, so two scenes holding
+// one profile each read alike and the second renders the first one's table.
+uint64_t ies_library_revision(const IesLibrary* lib);
 
 // The std140 IesBlock, mirrored by lights_ubo.glsl. Uploaded ONCE when the
 // library changes, never by the per-frame cluster path -- which is the whole
@@ -108,21 +112,14 @@ typedef struct GpuIesBlock {
     float ies_pool[IES_POOL_FLOATS];
 } GpuIesBlock;
 
-// Fill `block` from the library. Returns false when there is nothing to upload,
-// so a scene with no profiles allocates and uploads nothing at all.
+// Fill `block` from the library, zeroed first so an EMPTY one is a complete
+// answer rather than a refusal -- a count that outlives its profiles is how a
+// stale table survives a scene change. False only on a null destination.
 bool ies_library_pack(const IesLibrary* lib, GpuIesBlock* block);
 
-// Fold a horizontal angle into the measured sweep [0, span].
-//
-// A partial sweep MIRRORS rather than repeats: a bilateral file measured 0..180
-// describes 190 degrees as 170, not as 10. Shared with the shader's iesFold and
-// with the tool; the probe's angle-by-angle read is what holds the three
-// together.
-float ies_fold_horizontal(float angle_deg, float span_deg);
-
 // The profile's value at a direction, in [0,1]. `v_deg` is the angle from the
-// luminaire axis, `h_deg` the angle about it. The CPU twin of the shader's
-// iesProfile, used by the probe and by the cull-radius solve.
+// luminaire axis, `h_deg` the angle about it, folded into the measured sweep.
+// The CPU twin of the shader's iesProfile.
 float ies_profile_sample(const IesProfile* p, float v_deg, float h_deg);
 
 // Print every loaded profile and a sweep of its angles, in the --water-fft-probe

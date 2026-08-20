@@ -44,11 +44,13 @@ typedef struct Light {
     vec3 original_direction;
     vec3 direction;
 
-    // Area-light panel orientation: `up` spans the height axis, `direction`
-    // the panel normal, and width follows from cross(up, direction). Same
-    // authored/rotated split as direction. Orthonormalized against direction
-    // at pack time (light_cluster.c), so a sloppy authored up is fine.
-    // Ignored by every other light type.
+    // The luminaire's roll about `direction`. On a panel it spans the height
+    // axis, with the normal along `direction` and width from cross(up,
+    // direction); on a point or spot it is an asymmetric IES profile's azimuth
+    // zero, which is the only thing that says which way such a lamp is turned.
+    // Same authored/rotated split as direction, and orthonormalized against it
+    // (light_emission_frame), so a sloppy authored up is fine.
+    // Read only by those two -- a symmetric profile and a bare cone never ask.
     vec3 original_up;
     vec3 up;
     vec3 color;
@@ -66,9 +68,14 @@ typedef struct Light {
     // visibility floor.
     float range;
 
-    // Spot light specific properties
-    float cutOff;      // Cut-off angle
-    float outerCutOff; // Outer cut-off angle
+    // Spot cone, as COSINES of the half-angles -- not radians, and not degrees.
+    // Stating the unit here because the ambiguity has cost once already: the
+    // glTF importer assigned assimp's half-angles in radians straight into these
+    // for several specs, which read cos-1(0.524) = 58 degrees for an authored 30
+    // and built a 117 degree shadow frustum, and looked like a plausible spot
+    // the whole time.
+    float cutOff;
+    float outerCutOff;
 
     // Area
     vec2 size;
@@ -133,6 +140,18 @@ void set_light_range(Light* light, float range);
 // consumer, not its owner, and two of its callers have nothing to do with
 // clustering.
 float light_cull_radius(const struct Light* light);
+
+// The luminaire's orthonormal emission frame: `axis` the unit direction it emits
+// along, `up` the roll reference orthogonal to it. Both are always buildable --
+// a degenerate authored direction falls back to -Y and a degenerate or parallel
+// `up` to the canonical perpendicular -- which every consumer assumes, from the
+// LTC corner construction to an asymmetric profile's azimuth zero.
+//
+// One function because two consumers derive it and they must agree: a frame that
+// differs between them turns the same lamp a different way in each, and both
+// halves still render a plausible beam while doing it.
+void light_emission_frame(const struct Light* light, vec3 axis, vec3 up);
+
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
 void set_light_cast_shadows(Light* light, bool cast_shadows);
 void set_light_size(Light* light, float width, float height);

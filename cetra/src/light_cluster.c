@@ -152,30 +152,6 @@ static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
     glm_vec2_copy((float*)light->size, dst->size_misc);
 }
 
-// The unit axis a light emits along -- a panel's normal, a spot's beam, a
-// point's IES orientation -- substituting the default -Y for a degenerate
-// authored direction so anything building a frame from it always can.
-static void _light_axis(const struct Light* light, vec3 out) {
-    glm_vec3_copy((float*)light->direction, out);
-    if (glm_vec3_norm(out) < 1e-6f)
-        glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, out);
-    glm_vec3_normalize(out);
-}
-
-// Orthonormal height axis for a panel, so the shader can build corners without
-// trusting the authored `up`. Gram-Schmidt against the normal; if the two are
-// parallel (or up is degenerate) any orthogonal vector will do -- the panel's
-// roll is undefined in that case -- so take the canonical one.
-static void _area_panel_up(const struct Light* light, const vec3 dir, vec3 out) {
-    vec3 proj;
-    glm_vec3_proj((float*)light->up, (float*)dir, proj);
-    glm_vec3_sub((float*)light->up, proj, out);
-
-    if (glm_vec3_norm(out) < 1e-4f)
-        glm_vec3_ortho((float*)dir, out);
-    glm_vec3_normalize(out);
-}
-
 static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius,
                                 int live_layer) {
     glm_vec3_copy((float*)light->global_position, dst->pos_range);
@@ -186,7 +162,14 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // The IES profile index, -1 for none -- the same "a float carrying an index
     // or a sentinel" convention shadow_misc[1] uses for the punctual layer, in a
     // slot that was already reserved and read by nothing.
-    dst->atten_cutoff[1] = (float)light->ies_profile;
+    //
+    // Never for a panel. An IES file describes a point-like emitter's angular
+    // distribution, and a panel is shaded by an LTC integral over its rectangle
+    // instead -- so the index has no meaning there, and shipping it anyway lets
+    // a consumer that WEIGHTS lights before it classifies them scale a panel by
+    // a distribution its shading never applies. The contact-shadow fold is
+    // exactly that consumer, and a wrong denominator is invisible in the frame.
+    dst->atten_cutoff[1] = light->type == LIGHT_AREA ? -1.0f : (float)light->ies_profile;
     dst->atten_cutoff[2] = 0.0f;
     dst->atten_cutoff[3] = light->cutOff;
     dst->shadow_misc[0] = light->outerCutOff;
@@ -201,30 +184,22 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     dst->shadow_misc[1] = (float)live_layer;
     glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
 
-    // Area panels also ship a height axis; other light types leave it zeroed.
+    // EVERY type ships the full frame. Both halves used to be panels-only -- the
+    // LTC plane test and corner frame assume a unit normal and a height axis --
+    // while spot and point shipped their direction as authored and nothing at
+    // all for roll.
     //
-    // EVERY type ships a unit direction. It used to be panels only -- the LTC
-    // plane test and corner frame assume a unit normal -- while spot and point
-    // shipped theirs as authored, which spotConeFactor got away with because it
-    // normalizes at use. An IES profile does not get away with it: the lookup is
-    // acos(dot(L, axis)), and a non-unit axis skews that angle non-linearly
-    // rather than merely scaling it. One CPU normalize per light per frame
-    // against a per-fragment one in three shaders.
-    //
-    // A degenerate authored direction falls back to -Y, the same substitution
-    // _light_axis makes and for the same reason: something downstream has to
-    // build a frame from it.
-    // Zero-init is dead -- both helpers write unconditionally -- but cppcheck
-    // cannot see through cglm's inlines to know that
+    // The axis has to be unit because an IES lookup is acos(dot(L, axis)), and a
+    // non-unit axis skews that angle non-linearly rather than merely scaling it;
+    // spotConeFactor got away with it only by normalizing at use. The roll has
+    // to be there because an ASYMMETRIC profile is not rotationally invariant --
+    // a wall-washer aimed down still has to say which wall. Three floats that
+    // were being zeroed anyway, and a symmetric profile never reads them.
+    // Zero-init is dead -- light_emission_frame writes both unconditionally --
+    // but cppcheck cannot see through cglm's inlines to know that
     vec3 dir = {0.0f, 0.0f, 0.0f}, up = {0.0f, 0.0f, 0.0f};
-    _light_axis(light, dir);
-    _area_panel_up(light, dir, up);
+    light_emission_frame(light, dir, up);
     glm_vec3_copy(dir, dst->dir_type);
-    // The height axis used to be packed for panels alone. Every type ships it
-    // now, because an ASYMMETRIC IES profile is not rotationally invariant and
-    // needs to know which way the luminaire is turned -- a wall-washer aimed
-    // down still has to say which wall. It costs three floats that were being
-    // zeroed anyway, and a symmetric profile never reads it.
     glm_vec3_copy(up, dst->up_area);
     dst->up_area[3] = 0.0f;
 }
@@ -418,15 +393,22 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     frustum_extract_from_vp(view_proj, &frustum);
 
     // Uploaded when the SET changes, not per frame -- profiles are static once
-    // loaded, and this path re-enters seven times on a probe-capture frame. The
-    // count is the whole test because the library only ever grows: a profile is
-    // cached by path and never evicted, so a changed count is a changed set.
-    int ies_count = ies_library_count(scene->ies_library);
-    if (ies_count != ctx->ies_uploaded_count) {
+    // loaded, and this path re-enters seven times on a probe-capture frame.
+    //
+    // Keyed on the library's revision rather than its profile COUNT. This
+    // context belongs to the engine and the library to the scene, so a count
+    // compares two scenes' libraries as if they were one: switch between scenes
+    // holding one profile each and every light samples the other's table, which
+    // renders as a plausible luminaire with the wrong skirt.
+    uint64_t ies_rev = ies_library_revision(scene->ies_library);
+    if (ies_rev != ctx->ies_uploaded_revision) {
         GpuIesBlock block;
-        if (ies_library_pack(scene->ies_library, &block))
+        // Only on success: a failed pack leaves iesCounts.x holding the previous
+        // library's count, and committing the revision would keep it.
+        if (ies_library_pack(scene->ies_library, &block)) {
             ubo_upload(ctx->ies_ubo, &block, sizeof(block));
-        ctx->ies_uploaded_count = ies_count;
+            ctx->ies_uploaded_revision = ies_rev;
+        }
     }
 
     _gather_lights(ctx, scene, &frustum, view, projection, &cf);

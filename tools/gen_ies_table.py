@@ -55,7 +55,6 @@ which is only safe because every factor reaches zero exactly. A profile that
 merely got small there would silently change which fragments take that path.
 """
 
-import math
 import sys
 
 # The engine's ceiling, mirrored from cetra/src/ies.h. 32 vertical taps is 5.6
@@ -172,8 +171,10 @@ def fold_horizontal(a, span):
     Both fall out of reflecting within a period of 2*span, and a full 360 sweep
     passes through untouched because nothing in [0, 360) exceeds its span.
 
-    Mirrored here AND in lights_ubo.glsl's iesFold; the two have to agree, which
-    is what the gate's angle-by-angle probe read is for.
+    Mirrored in cetra/src/ies.c and in lights_ubo.glsl's iesFold, and the three
+    cannot share a token: %, fmodf and mod() disagree on negative input. This
+    copy is asserted directly by assets/gen_ies_fixture.py, which is the only
+    one of the three a Python test can reach.
     """
     period = 2.0 * span
     f = a % period
@@ -216,20 +217,24 @@ def resample(doc, max_vert=IES_MAX_VERT, max_horiz=IES_MAX_HORIZ):
     h_taps = 1 if symmetric else min(max_horiz, max(2, len(horiz)))
 
     v_lo, v_hi = vert[0], vert[-1]
+    # A column depends on the horizontal tap alone, so build them all first --
+    # nested under the vertical loop each was rebuilt v_taps times over. No fold:
+    # a_h is inside [0, span] by construction, and the fold exists for the
+    # LOOKUP, which is the only place an out-of-range azimuth can arrive.
+    by_v = list(zip(*candela))
+    columns = []
+    for ih in range(h_taps):
+        if symmetric:
+            columns.append(candela[0])
+            continue
+        a_h = span * ih / (h_taps - 1)
+        columns.append([_sample(horiz, by_v[v], a_h) for v in range(len(vert))])
+
     table = []
     for iv in range(v_taps):
         a_v = v_lo + (v_hi - v_lo) * iv / (v_taps - 1)
         for ih in range(h_taps):
-            a_h = 0.0 if h_taps == 1 else span * ih / (h_taps - 1)
-            if symmetric:
-                col = candela[0]
-            else:
-                # Fold the query into the measured sweep, then interpolate
-                # between the two bracketing planes at that vertical angle.
-                folded = fold_horizontal(a_h, span)
-                col = [_sample(horiz, [candela[h][v] for h in range(len(horiz))], folded)
-                       for v in range(len(vert))]
-            table.append(_sample(vert, col, a_v))
+            table.append(_sample(vert, columns[ih], a_v))
 
     peak = max(table)
     if peak <= 0.0:

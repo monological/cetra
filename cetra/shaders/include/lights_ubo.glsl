@@ -31,7 +31,9 @@ struct PackedLight {
                          //     (-1 = none), z = reserved, w = cos inner cone
     vec4 shadowMisc;     // x = cos outer cone, y = float(punctual shadow base layer),
                          //     -1 = casts no shadow, zw = emitter/panel size
-    vec4 upArea;     // AREA only: panel height axis, orthonormal to dir (spec 9.2)
+    vec4 upArea;         // xyz = roll reference, unit and orthonormal to dir: a panel's
+                         //     height axis (spec 9.2), an asymmetric IES profile's
+                         //     azimuth zero (spec 11.57)
 };
 
 layout(std140) uniform LightsBlock {
@@ -84,8 +86,10 @@ float iesTap(int i) {
 // describes 190 degrees as 170, not as 10, which is what a modulo would give and
 // which reads the far side of the luminaire as the near side. Quadrant files
 // mirror twice; a full 360 sweep passes through untouched. Same arithmetic as
-// ies_fold_horizontal (ies.c) and fold_horizontal (tools/gen_ies_table.py) --
-// three copies, held together by the probe reading the angles one at a time.
+// ies_fold_horizontal (ies.c) and fold_horizontal (tools/gen_ies_table.py); the
+// three cannot share a token, since mod(), fmodf and % disagree on negatives.
+// This copy is the one that decides pixels, and the only thing that reads it is
+// a rendered frame -- which is why a gate arm has to look at one.
 float iesFold(float angle, float span) {
     float period = 2.0 * span;
     float f = mod(angle, period);
@@ -107,6 +111,11 @@ float iesFold(float angle, float span) {
  * precisely so the runtime lookup is two multiplies rather than a search.
  */
 float iesProfile(int idx, vec3 L, vec3 axis, vec3 refUp) {
+    // "Nobody asked for a profile" -- the neutral for a MULTIPLIER, which is
+    // what this is to a caller sampling it on its own. A caller choosing between
+    // a profile and a cone must make that choice before arriving, because 1.0 is
+    // the wrong answer to "the profile you asked for is not loaded"; that is
+    // punctualAngularOf's bounds test, not this one.
     if (idx < 0 || idx >= iesCounts.x)
         return 1.0;
     vec4 d = iesDesc[idx * 2];
@@ -138,10 +147,13 @@ float iesProfile(int idx, vec3 L, vec3 axis, vec3 refUp) {
     }
 
     // Horizontal: the ray's azimuth about the axis, in the luminaire's own frame.
-    vec3 right = normalize(cross(refUp, axis));
-    vec3 fwd = cross(axis, right);
+    // refUp arrives orthonormal to a unit axis, so the cross is already unit and
+    // `axis x right` expands to refUp itself -- the frame is one cross, not two
+    // and a normalize, and refUp IS the azimuth zero rather than a vector the
+    // second cross recovers.
+    vec3 right = cross(refUp, axis);
     vec3 r = -L;
-    float hDeg = degrees(atan(dot(r, right), dot(r, fwd)));
+    float hDeg = degrees(atan(dot(r, right), dot(r, refUp)));
     if (hDeg < 0.0)
         hDeg += 360.0;
     float hx = iesFold(hDeg, d.w) / d.w * float(hTaps - 1);
@@ -200,16 +212,19 @@ uvec2 clusterLightListUv(vec2 uv, float viewZ) {
 float spotConeFactor(float typeF, vec3 lightDir, float cutOff, float outerCutOff, vec3 L) {
     if (typeF != 2.0)
         return 1.0;
-    float theta = dot(L, normalize(-lightDir));
+    // lightDir is unit at every call site -- light_cluster.c normalizes what it
+    // packs and shadow.c what it publishes, which is the whole point of moving
+    // that normalize off the per-fragment path.
+    float theta = dot(L, -lightDir);
     float epsilon = max(cutOff - outerCutOff, 1e-4);
     return clamp((theta - outerCutOff) / epsilon, 0.0, 1.0);
 }
 
 /*
- * The ANGULAR half of a clustered punctual light's falloff: its IES profile when
- * it has one, the analytic cone when it does not.
+ * The ANGULAR half of a punctual light's falloff: its IES profile when it has
+ * one, the analytic cone when it does not.
  *
- * One function because the falloff is evaluated in five places -- the shading
+ * One decision because the falloff is evaluated in five places -- the shading
  * loop, its hand-duplicated debug twin, the fog's clustered point walk, the fog's
  * spot shaft, and the contact-shadow fold weight -- and a profile applied in some
  * but not all of them means the beam disagrees with the pool it casts. That is
@@ -219,17 +234,32 @@ float spotConeFactor(float typeF, vec3 lightDir, float cutOff, float outerCutOff
  * A profile REPLACES the cone rather than multiplying it: the profile is the
  * whole distribution, cutoff included, so applying both renders a falloff
  * matching neither the file nor the authored cone (spec 11.57).
+ *
+ * Split in two along the axis the fifth site differs on. The shaft is published
+ * standalone so it can carry its shadow map, so it has the VALUES and not a
+ * cluster index -- taking those directly is what lets it share the decision
+ * rather than restate it.
  */
+// An index past the loaded set is not a profile. Falling through to the cone is
+// the only answer that leaves a spot a spot: iesProfile answers 1.0 there, which
+// is the neutral for something MULTIPLIED and wrong for something that replaces,
+// and it would also strand pbr_frag's exact-zero early-out on a light that can
+// no longer reach zero.
+float punctualAngularOf(int iesIdx, float typeF, vec3 axis, vec3 refUp,
+                        float cosInner, float cosOuter, vec3 L) {
+    if (iesIdx >= 0 && iesIdx < iesCounts.x)
+        return iesProfile(iesIdx, L, axis, refUp);
+    return spotConeFactor(typeF, axis, cosInner, cosOuter, L);
+}
+
 // The general form takes the light's frame explicitly, because a consumer
 // working in VIEW space (the contact-shadow pass) has to transform the axis and
 // the roll reference itself -- view is rigid, so every angle here survives that
 // unchanged, but the vectors must be in the same space as `L`.
 float punctualAngular(uint li, vec3 L, vec3 axis, vec3 refUp) {
-    int idx = int(clusterLights[li].attenCutoff.y);
-    if (idx >= 0)
-        return iesProfile(idx, L, axis, refUp);
-    return spotConeFactor(clusterLights[li].dirType.w, axis, clusterLights[li].attenCutoff.w,
-                          clusterLights[li].shadowMisc.x, L);
+    return punctualAngularOf(int(clusterLights[li].attenCutoff.y), clusterLights[li].dirType.w,
+                             axis, refUp, clusterLights[li].attenCutoff.w,
+                             clusterLights[li].shadowMisc.x, L);
 }
 
 // ...and the world-space one, which is every consumer but that.

@@ -120,6 +120,12 @@ _Static_assert(IES_POOL_FLOATS >= UBO_IES_TAPS,
                "the IES pool must hold at least one profile at the ceiling");
 _Static_assert(UBO_IES_BLOCK_SIZE <= 16384,
                "the IES block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
+// ...and the C mirror against that size, the way light_cluster.h pins its three.
+// ubo_upload rejects only an OVER-size write, so a struct that drifted SHORT
+// would upload a partial pool and leave its tail at whatever the orphan gave it,
+// with every check above still green.
+_Static_assert(sizeof(GpuIesBlock) == UBO_IES_BLOCK_SIZE,
+               "IesBlock's C mirror must match its std140 size");
 
 typedef struct Ubo {
     GLuint id;
