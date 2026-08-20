@@ -131,6 +131,14 @@ RECIPES = [
     {"name": "mask_fixture", "scene": "assets/mask_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
 
+    # The layered surface, LIT (spec 11.60). The gate arms all read the albedo
+    # view, which has no BRDF in it at all -- so without this nothing covers a
+    # layered material actually being shaded: its world-space normal reaching the
+    # lighting, its per-layer roughness, or the blend holding together across the
+    # floor/wall seam where two projections meet.
+    {"name": "layer_fixture", "scene": "assets/layer_fixture.cscn", "size": (800, 600),
+     "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
+
     # --- global illumination and punctual shadows -----------------------------
     {"name": "cornell_box", "scene": "assets/cornell_box.gltf", "size": (1600, 1200),
      "flags": ["--gi-volume", "-f", "30", "--no-auto-exposure", "-E", "1.0",
