@@ -994,16 +994,16 @@ void main() {
     // albedo and a normal chosen by two separate blends can come from different
     // layers on the same pixel.
     //
-    // UV1 carries the splat coordinate. Under the vegetation wind modes it means
-    // something else entirely, which is why a layered material and a vegetation
-    // material are mutually exclusive; the AO lookup below makes the same
-    // exclusion for the same reason.
+    // UV1 carries the splat coordinate for a material whose splat is mesh-local.
+    // Under the vegetation wind modes UV1 means something else entirely, so the
+    // guard is the same one the AO lookup below makes, for the same reason --
+    // and it has to be made HERE too, which the first draft of this claimed in a
+    // comment and did not do. A material sampling (branch phase, flex weight) as
+    // a splat coordinate renders plausible garbage.
     bool layered = layerCount > 0;
-    LayerSurface layerSurf = layerSurfaceNeutral(normalize(Normal));
-    if (layered) {
-        vec2 splatUV = texCoords2Exists > 0 ? TexCoords2 : vec2(0.0);
-        layerSurf = sampleLayeredSurface(maskArray, WorldPos, normalize(Normal), splatUV);
-    }
+    vec2 splatUV1 = (texCoords2Exists > 0 && uWindMode == 0) ? TexCoords2 : vec2(0.0);
+    LayerSurface layerSurf =
+        sampleLayeredSurface(maskArray, WorldPos, normalize(Normal), splatUV1);
 
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)

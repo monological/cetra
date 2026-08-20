@@ -479,6 +479,14 @@ static void bake_terrain_layers(Scene* scene) {
         fprintf(stderr, "forest: splat bake failed; the ground falls back to layer 0\n");
     }
 
+    // The splat is a function of world XZ over the terrain's own square, which
+    // is what makes it work at all here: terrain tiles carry no UV1 (build_grid
+    // writes a literal zero), so a mesh-local reading samples one texel and the
+    // whole kilometre resolves to layer 0.
+    g_mat_terrain->splat_space = SPLAT_SPACE_WORLD_XZ;
+    g_mat_terrain->splat_origin[0] = g_mat_terrain->splat_origin[1] = -g_terrain.extent;
+    g_mat_terrain->splat_size[0] = g_mat_terrain->splat_size[1] = 2.0f * g_terrain.extent;
+
     // Last, because it is what arms the shader.
     g_mat_terrain->layer_count = count;
     // And the mesh side of the same switch, which must be set before

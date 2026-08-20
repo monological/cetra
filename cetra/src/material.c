@@ -295,6 +295,9 @@ Material* create_material() {
     material->layer_count = 0;
     material->splat_tex = NULL;
     material->splat_layer = -1;
+    material->splat_space = SPLAT_SPACE_UV1;
+    material->splat_origin[0] = material->splat_origin[1] = 0.0f;
+    material->splat_size[0] = material->splat_size[1] = 1.0f;
     for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
         material->layers[i].albedo_tex = NULL;
         material->layers[i].surface_tex = NULL;

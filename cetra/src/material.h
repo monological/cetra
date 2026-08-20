@@ -42,6 +42,14 @@ typedef enum AlphaMode {
     ALPHA_BLEND,      // Translucent pass after the skybox, no depth writes
 } AlphaMode;
 
+// Which coordinate addresses a layered material's splat map. See Material.
+// Zero is UV1 so a calloc'd or partially-authored material keeps the mesh-local
+// reading, which is the one that cannot silently sample a single texel.
+typedef enum MaterialSplatSpace {
+    SPLAT_SPACE_UV1 = 0,
+    SPLAT_SPACE_WORLD_XZ,
+} MaterialSplatSpace;
+
 // How many material layers a layered surface can blend between.
 //
 // Four because the splat map carries three weights and the first layer is the
@@ -262,15 +270,36 @@ typedef struct Material {
 
     // Per-texel layer weights: .r/.g/.b select layers 1..3 and layer 0 takes the
     // remainder, so the weights always sum to one and no normalisation can drift.
-    //
-    // Addressed by UV1, not by world position. UV1 because a splat coordinate is
-    // per-vertex data the mesh already carries a slot for, and because world
-    // position would break the moment the mesh is transformed or instanced --
-    // the weights would swim across the surface as it moved. Note this makes a
-    // layered material a second claimant on UV1 alongside wind_mode >= 1, and
-    // the two are therefore mutually exclusive on one material.
     Texture* splat_tex;
     int splat_layer;
+
+    /*
+     * WHICH COORDINATE ADDRESSES THE SPLAT, and it has to be a choice rather
+     * than a policy.
+     *
+     * This shipped as UV1-only and the feature was inert in the app it was
+     * written for: `build_grid` writes UV1 as a literal (0,0) at every terrain
+     * vertex, so a kilometre of ground sampled one splat texel and resolved to
+     * layer 0 everywhere. The bake, the erosion mapping and three of four
+     * grounds did nothing, through a green suite -- the fixture authors UV1 by
+     * hand and no forest arm reads a pixel.
+     *
+     * The two spaces answer different meshes and neither generalises:
+     *   UV1       a prop, an instanced mesh, anything that MOVES -- world
+     *             position would make the weights swim across the surface as it
+     *             travelled. Costs the material its UV1, so it is mutually
+     *             exclusive with wind_mode >= 1, which claims the same slot.
+     *   WORLD_XZ  terrain, and anything else whose splat is baked as a function
+     *             of world position. Needs no vertex data at all, and survives a
+     *             mesh being rebuilt or retessellated.
+     *
+     * WORLD_XZ cannot address a vertical surface -- z is constant up a wall --
+     * which is exactly why this is not simply "always world".
+     */
+    MaterialSplatSpace splat_space;
+    // World-space domain the splat covers, for SPLAT_WORLD_XZ: uv = (xz - origin) / size.
+    float splat_origin[2];
+    float splat_size[2];
 
     // Height-blend contrast, in weight units. 0 = a plain linear blend, which is
     // reachable on purpose: it is what the height blend has to be measured

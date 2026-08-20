@@ -77,9 +77,8 @@ void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value)
 // changes rarely and not for anything set per draw.
 void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* values, int count);
 
-// `count` consecutive ints / floats. UNCACHED for the same reason the vec3 array above is,
-// and with the same consequence: fine for a per-material table, wrong for anything per draw.
-void uniform_set_int_array(UniformManager* mgr, const char* name, const int* values, int count);
-void uniform_set_float_array(UniformManager* mgr, const char* name, const float* values, int count);
+// Four ints from a tightly packed array. CACHED, unlike the vec3 array above -- four
+// values fit the cache slot, so a repeated upload of an unchanged set costs no GL call.
+void uniform_set_ivec4(UniformManager* mgr, const char* name, const int* value);
 
 #endif // _UNIFORM_H_

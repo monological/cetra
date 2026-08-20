@@ -164,10 +164,13 @@ float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z
 // MEAN as materials. An app choosing four different grounds re-authors the
 // layers; it does not re-derive which mask implies which.
 //
-// Sampled at the field's own nodes through terrain_mask_at, so a splat baked at
-// the field's resolution is an exact resample rather than an interpolation of an
-// interpolation. Slope joins the masks here because a cliff is bare rock whether
-// or not any water ever ran down it, and no erosion mask says so.
+// Sampled at TEXEL CENTRES -- (i + 0.5) / res over [-extent, +extent] -- because
+// that is where a texture read lands. Sampling on field NODES instead, which the
+// first version did, offsets the whole map by half a texel and stretches it by
+// (res-1)/res against the terrain it describes.
+//
+// Slope joins the masks here because a cliff is bare rock whether or not any
+// water ever ran down it, and no erosion mask says so.
 bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb);
 
 // Print sampled heights, normals and masks to stdout, in the --water-fft-probe

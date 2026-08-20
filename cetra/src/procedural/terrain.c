@@ -249,10 +249,16 @@ bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb)
     if (!p || !out_rgb || res < 2)
         return false;
 
+    // TEXEL CENTRES, not field nodes, and the difference is the whole reason
+    // this loop does not call terrain_field_node. A texture read of texel j
+    // happens at (j + 0.5) / res; a node sits at j / (res - 1). Sampling on
+    // nodes and reading at centres is a half-texel shift AND a (res-1)/res
+    // stretch between the splat and the terrain it describes.
+    float texel = (2.0f * p->extent) / (float)res;
     for (int j = 0; j < res; j++) {
-        float z = terrain_field_node(p->extent, res, j);
+        float z = -p->extent + ((float)j + 0.5f) * texel;
         for (int i = 0; i < res; i++) {
-            float x = terrain_field_node(p->extent, res, i);
+            float x = -p->extent + ((float)i + 0.5f) * texel;
 
             vec3 n = {0.0f, 1.0f, 0.0f};
             terrain_normal_at(p, x, z, n);
