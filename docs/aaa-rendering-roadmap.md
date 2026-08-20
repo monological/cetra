@@ -2361,25 +2361,6 @@ grep — bindings 0–5 used against a GL minimum of 36 — and it turned a v1/v
 It also caught the row's storage plan being unimplementable as written, which no amount of agreeing
 with its conclusion would have.
 
-**11.58's review round sharpens the fifth entry into a sixth, and it is the one to carry.** The
-spec had already recorded that a probe table built by reasoning can measure exactly zero — twice, on
-`lut_neutral`, for two different reasons — and then took **both of its headline measurements on
-constructions with the same defect**. The tri-vs-tet number came off a table whose every output
-channel is a ridge function of two inputs, so the three-way cross term tetrahedral drops is
-identically zero on it; the real figure is 28x larger. The fp16-vs-fp32 storage test came off an
-identity table whose every lattice value is exactly representable in fp16, so storage error was
-structurally zero. Both conclusions survived re-measurement; neither piece of evidence did.
-
-So the list is now: reasons that rot (11.52), a row wrong about what it describes (11.53), a row
-citing a defect this document had already fixed (11.56), a row arguing against itself (11.57), and
-**a spec that documented a measurement trap at length and then fell into it twice in the same
-file** (11.58). The generator asserted three anti-degeneracy properties on the table it had been
-burned by and none on the two either side of it.
-
-The habit that catches this one is narrower than "read the code": **before believing a measurement,
-ask what construction it was taken on and whether that construction can exhibit the effect.** A
-number is not evidence until its instrument is.
-
 **And 11.56's own review is the counterpart observation, about specs rather than rows.** The spec
 that corrected C5's stale justification shipped three defects and a dead test of its own, and every
 one was a claim running ahead of the code in exactly the way it was written to complain about: a
@@ -2421,6 +2402,25 @@ separates the two interpolants measured **exactly zero** as a separable construc
 zero again** as a channel-symmetric one, for two different and individually obvious reasons. Building
 it by reasoning produced a green instrument that tested nothing, twice; only measuring it caught
 either.
+
+**11.58's review round sharpens the fifth entry into a sixth, and it is the one to carry.** The
+spec had already recorded that a probe table built by reasoning can measure exactly zero — twice, on
+`lut_neutral`, for two different reasons — and then took **both of its headline measurements on
+constructions with the same defect**. The tri-vs-tet number came off a table whose every output
+channel is a ridge function of two inputs, so the three-way cross term tetrahedral drops is
+identically zero on it; the real figure is 28x larger. The fp16-vs-fp32 storage test came off an
+identity table whose every lattice value is exactly representable in fp16, so storage error was
+structurally zero. Both conclusions survived re-measurement; neither piece of evidence did.
+
+So the list is now: reasons that rot (11.52), a row wrong about what it describes (11.53), a row
+citing a defect this document had already fixed (11.56), a row arguing against itself (11.57), and
+**a spec that documented a measurement trap at length and then fell into it twice in the same
+file** (11.58). The generator asserted three anti-degeneracy properties on the table it had been
+burned by and none on the two either side of it.
+
+The habit that catches this one is narrower than "read the code": **before believing a measurement,
+ask what construction it was taken on and whether that construction can exhibit the effect.** A
+number is not evidence until its instrument is.
 
 And the sharpest detail is why one of the three survived so long: **the state it goes wrong in was
 unreachable from the harness.** `Light.shadow_layer` only goes stale when the shadow system is
