@@ -55,6 +55,7 @@
 #include "cetra/procedural/heightmap.h"
 #include "cetra/procedural/rock.h"
 #include "cetra/procedural/terrain.h"
+#include "cetra/procedural/terrain_tex.h"
 #include "cetra/procedural/tree_gen.h"
 #include "cetra/procedural/vegetation_tex.h"
 #include "cetra/texture.h"
@@ -343,6 +344,78 @@ static Texture* bake(Scene* scene, unsigned char* data, int w, int h, int channe
     Texture* t = load_texture_from_memory(scene->tex_pool, key, data, w, h, channels, srgb);
     free(data);
     return t;
+}
+
+// One layer map is this square, and the number is NOT a memory decision even
+// though it looks like one.
+//
+// Every tenant of the material texture array is resampled to one canonical size,
+// which is the largest dimension of any source in the scene -- and in this app
+// that is the leaf atlas, 8 cells of 256 laid out along u, so 2048. The array
+// therefore costs 234.7 MB whatever this says, and a 512 map was being upsampled
+// four times over in each axis to fill a layer it had no detail for. Measured
+// both ways: 234.7 MB at 512 and at 1024, +1.7 s of bake in a DEBUG build (the
+// preset build.sh defaults to, which passes no -O at all).
+//
+// So this buys detail that is already paid for. Raising it further is free in
+// VRAM too, up to 2048, and stops being free the moment something else in the
+// scene is larger than the leaf atlas.
+#define TERRAIN_LAYER_TEX_SIZE 1024
+
+// The splat is baked at the erosion field's own resolution when there is one, so
+// it is an exact resample of the masks rather than an interpolation of an
+// interpolation. With no field the masks read zero everywhere and this degrades
+// to slope alone, which is the un-eroded look and is the point.
+#define TERRAIN_SPLAT_FALLBACK_RES 512
+
+// The four grounds, in splat order: layer 0 takes the remainder, then r, g, b.
+// terrain_bake_splat decides which mask feeds which channel; this decides what
+// each channel LOOKS like, which is the half an app gets to choose.
+static const TerrainLayerKind TERRAIN_LAYER_KINDS[] = {
+    TERRAIN_LAYER_GRASS, TERRAIN_LAYER_ROCK, TERRAIN_LAYER_SILT, TERRAIN_LAYER_GRAVEL};
+static const char* const TERRAIN_LAYER_NAMES[] = {"grass", "rock", "silt", "gravel"};
+
+// The ground, as a layered surface (spec 11.60). Replaces a white albedo times a
+// per-vertex tint at 2.6 units, which is why the terrain did not hold up at
+// walking distance whatever the palette was.
+static void bake_terrain_layers(Scene* scene) {
+    const int T = TERRAIN_LAYER_TEX_SIZE;
+    int count = (int)(sizeof(TERRAIN_LAYER_KINDS) / sizeof(TERRAIN_LAYER_KINDS[0]));
+    for (int i = 0; i < count; i++) {
+        unsigned char *albedo = NULL, *surface = NULL;
+        terrain_layer_maps(TERRAIN_LAYER_KINDS[i], T, g_args.seed + (unsigned)i * 977u, &albedo,
+                           &surface);
+        char key[64];
+        snprintf(key, sizeof(key), "forest_layer_%s_a", TERRAIN_LAYER_NAMES[i]);
+        set_material_layer_albedo_tex(g_mat_terrain, i, bake(scene, albedo, T, T, 4, false, key));
+        snprintf(key, sizeof(key), "forest_layer_%s_s", TERRAIN_LAYER_NAMES[i]);
+        set_material_layer_surface_tex(g_mat_terrain, i, bake(scene, surface, T, T, 4, false, key));
+        // World units per tile. Coarse grounds repeat over a longer distance than
+        // fine ones, which is the whole reason this is per layer.
+        g_mat_terrain->layers[i].uv_scale = (TERRAIN_LAYER_KINDS[i] == TERRAIN_LAYER_ROCK) ? 6.0f
+                                            : (TERRAIN_LAYER_KINDS[i] == TERRAIN_LAYER_GRAVEL)
+                                                ? 3.0f
+                                                : 4.0f;
+    }
+
+    int res = g_terrain.field ? g_terrain.field->res : TERRAIN_SPLAT_FALLBACK_RES;
+    unsigned char* splat = malloc((size_t)res * (size_t)res * 3u);
+    if (splat && terrain_bake_splat(&g_terrain, res, splat)) {
+        set_material_splat_tex(g_mat_terrain,
+                               bake(scene, splat, res, res, 3, false, "forest_terrain_splat"));
+    } else {
+        free(splat);
+        fprintf(stderr, "forest: splat bake failed; the ground falls back to layer 0\n");
+    }
+
+    // Last, because it is what arms the shader.
+    g_mat_terrain->layer_count = count;
+    // And the mesh side of the same switch, which must be set before
+    // build_terrain writes a single vertex colour: the layers carry the ground's
+    // colour now, so the tint has to become macro variation or the two multiply
+    // and the ground comes out near black.
+    g_terrain.layered = true;
+    printf("Terrain layers: %d at %dx%d, splat %dx%d\n", count, T, T, res, res);
 }
 
 // Bark and foliage, synthesised rather than loaded -- the app ships no assets.
@@ -814,6 +887,7 @@ static void on_init(Game* game) {
     g_mat_rock = make_material("rock", (vec3){0.085f, 0.082f, 0.078f}, 0.88f, 0.0f);
 
     bake_vegetation_textures(g_scene);
+    bake_terrain_layers(g_scene);
 
     // A breeze across the valley. phase_variation is what makes TREE_COUNT copies
     // of TREE_PROTOTYPES meshes look like trees rather than one tree drawn two

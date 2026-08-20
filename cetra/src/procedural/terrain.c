@@ -48,6 +48,7 @@ TerrainParams terrain_default_params(void) {
     p.tiles = 8;
     p.tile_segments = 48;
     p.field = NULL;
+    p.layered = false;
     return p;
 }
 
@@ -244,6 +245,59 @@ float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
+bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb) {
+    if (!p || !out_rgb || res < 2)
+        return false;
+
+    for (int j = 0; j < res; j++) {
+        float z = terrain_field_node(p->extent, res, j);
+        for (int i = 0; i < res; i++) {
+            float x = terrain_field_node(p->extent, res, i);
+
+            vec3 n = {0.0f, 1.0f, 0.0f};
+            terrain_normal_at(p, x, z, n);
+            float slope = n[1]; // 1 flat, 0 vertical
+
+            float wear = terrain_mask_at(p, TERRAIN_MASK_WEAR, x, z);
+            float deposit = terrain_mask_at(p, TERRAIN_MASK_DEPOSIT, x, z);
+            float flow = terrain_mask_at(p, TERRAIN_MASK_FLOW, x, z);
+
+            // Rock takes the steep ground AND the scoured ground, combined with
+            // max rather than added for the reason terrain_tint states: a face
+            // that is both steep and eroded is not twice as rocky.
+            float steep = 1.0f - smoothstep01(0.62f, 0.88f, slope);
+            float scoured = smoothstep01(0.10f, 0.45f, wear);
+            float rock = steep > scoured ? steep : scoured;
+            float silt = smoothstep01(0.05f, 0.28f, deposit);
+            // Flow is a LOG of drainage normalised to the catchment's peak, so
+            // its mean sits near 0.4 and a threshold anywhere near that paints
+            // the whole map as riverbed. The gravel band is the top few per cent.
+            float gravel = smoothstep01(0.58f, 0.88f, flow);
+
+            // A channel bed is a channel bed even where it is also flat and
+            // silty, so gravel wins its share outright and the other two divide
+            // what is left. Without this a stream through a depositional fan
+            // comes out as silt, which is the one place it certainly is not.
+            float room = 1.0f - gravel;
+            rock *= room;
+            silt *= room;
+            float sum = rock + silt + gravel;
+            if (sum > 1.0f) {
+                float inv = 1.0f / sum;
+                rock *= inv;
+                silt *= inv;
+                gravel *= inv;
+            }
+
+            size_t o = ((size_t)j * (size_t)res + (size_t)i) * 3u;
+            out_rgb[o + 0] = (unsigned char)(rock * 255.0f + 0.5f);
+            out_rgb[o + 1] = (unsigned char)(silt * 255.0f + 0.5f);
+            out_rgb[o + 2] = (unsigned char)(gravel * 255.0f + 0.5f);
+        }
+    }
+    return true;
+}
+
 float terrain_height_at(const TerrainParams* p, float x, float z) {
     if (!p)
         return 0.0f;
@@ -299,8 +353,38 @@ void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out) {
     glm_vec3_normalize_to(n, out);
 }
 
+// The macro-variation half of the tint, for a layered material (spec 11.60).
+//
+// Grey, not coloured, and centred so the BRIGHT end is exactly 1.0 -- pbr_frag
+// multiplies albedo by this, so anything above white would brighten a layer past
+// what it authored and the layer set would stop meaning what it says. The band
+// is stated in DISPLAY space because pbr_frag runs sRGBToLinear over vertex
+// colour: 0.94 arrives at the BRDF as 0.87, so the swing is about 13% and not
+// the 6% the numbers look like.
+#define TERRAIN_MACRO_LO 0.94f
+#define TERRAIN_MACRO_HI 1.0f
+
+static void terrain_macro(const TerrainParams* p, float x, float z, float* rgba) {
+    const NoisePerm* t = perm_for(p->seed);
+    float ox = x + p->extent, oz = z + p->extent;
+    // The LOW-frequency field alone. The fine one exists to break up a flat hue,
+    // which is a job the layer maps now do at their own resolution and do better;
+    // what is left for 2.6-unit vertices is the drift a tiling texture cannot
+    // have at all.
+    float patch = noise_perlin3_tiled(t, ox * 0.011f, 11.3f, oz * 0.011f, TERRAIN_NOISE_PERIOD);
+    float v = 0.5f + 0.5f * patch;
+    float lift = TERRAIN_MACRO_LO + (TERRAIN_MACRO_HI - TERRAIN_MACRO_LO) * v;
+    rgba[0] = rgba[1] = rgba[2] = lift;
+    rgba[3] = 1.0f;
+}
+
 static void terrain_tint(const TerrainParams* p, float x, float z, float height, const vec3 normal,
                          float* rgba) {
+    if (p->layered) {
+        terrain_macro(p, x, z, rgba);
+        return;
+    }
+
     float slope = normal[1]; // 1 flat, 0 vertical
 
     // Altitude in [-1, 1], against whatever is actually setting the relief.

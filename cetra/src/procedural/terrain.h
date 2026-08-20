@@ -108,6 +108,18 @@ typedef struct TerrainParams {
     // noise field in this struct becomes inert for HEIGHT (the tint's own two
     // still run). Borrowed, never owned: whoever baked or loaded it frees it.
     const TerrainField* field;
+
+    // Whether a tile's vertex colours carry MACRO VARIATION or the ground's
+    // colour itself (spec 11.60).
+    //
+    // false is every frame built before layers existed: the tint IS the terrain's
+    // colour, blended from slope, altitude and the erosion masks. true is for a
+    // layered material, where the layers already carry what the ground is made
+    // of -- so a tint here would multiply one colour by another and the ground
+    // comes out near black. What vertex colour is still good for at 2.6 units is
+    // the thing layers cannot do: the slow drift that stops a kilometre of one
+    // layer reading as one flat colour.
+    bool layered;
 } TerrainParams;
 
 // Centred on the origin deliberately: the outermost shadow cascade is fitted
@@ -142,6 +154,21 @@ float terrain_height_at(const TerrainParams* p, float x, float z);
 // installed, so a caller blending by these degrades to the un-eroded look rather
 // than to a special case. Same clamp policy as the height.
 float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z);
+
+// Bake the erosion masks into a splat map -- `res` square, row-major, RGB,
+// `res * res * 3` bytes the caller allocates -- where .r/.g/.b are the weights
+// of a layered material's layers 1, 2 and 3 and layer 0 takes the remainder.
+//
+// The mapping is rock / silt / gravel over a grass remainder, and it is HERE
+// rather than in the app because it is the statement of what the erosion masks
+// MEAN as materials. An app choosing four different grounds re-authors the
+// layers; it does not re-derive which mask implies which.
+//
+// Sampled at the field's own nodes through terrain_mask_at, so a splat baked at
+// the field's resolution is an exact resample rather than an interpolation of an
+// interpolation. Slope joins the masks here because a cliff is bare rock whether
+// or not any water ever ran down it, and no erosion mask says so.
+bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb);
 
 // Print sampled heights, normals and masks to stdout, in the --water-fft-probe
 // idiom. The only way to see a field wired to the wrong world scale, read with
