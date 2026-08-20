@@ -1,4 +1,6 @@
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "terrain.h"
 
@@ -35,7 +37,38 @@ TerrainParams terrain_default_params(void) {
     p.seed = 1337u;
     p.tiles = 8;
     p.tile_segments = 48;
+    p.field = NULL;
     return p;
+}
+
+bool terrain_field_alloc(TerrainField* field, int res) {
+    if (!field)
+        return false;
+    memset(field, 0, sizeof(*field));
+    if (res < 2)
+        return false;
+
+    size_t n = (size_t)res * (size_t)res;
+    field->height = calloc(n, sizeof(float));
+    field->flow = calloc(n, sizeof(float));
+    field->deposit = calloc(n, sizeof(float));
+    field->wear = calloc(n, sizeof(float));
+    if (!field->height || !field->flow || !field->deposit || !field->wear) {
+        terrain_field_free(field);
+        return false;
+    }
+    field->res = res;
+    return true;
+}
+
+void terrain_field_free(TerrainField* field) {
+    if (!field)
+        return;
+    free(field->height);
+    free(field->flow);
+    free(field->deposit);
+    free(field->wear);
+    memset(field, 0, sizeof(*field));
 }
 
 // One-entry memo of the permutation table.
@@ -70,8 +103,86 @@ static float smoothstep01(float edge0, float edge1, float x) {
     return t * t * (3.0f - 2.0f * t);
 }
 
+// Catmull-Rom over four samples. Bicubic rather than bilinear, and the reason is
+// terrain_normal_at rather than the look of the surface: that function central-
+// differences this one over half a visual quad -- 1.30 units at the default
+// sizing, the same order as a field cell -- and bilinear's derivative is piecewise
+// constant, so the difference would step at every cell boundary. Those facets land
+// in the shading AND in the scatter's slope gate, where a rejected band reads as
+// rows of missing trees rather than as a filtering choice.
+static float catmull_rom(float a, float b, float c, float d, float t) {
+    float t2 = t * t;
+    float t3 = t2 * t;
+    return 0.5f * (2.0f * b + (c - a) * t + (2.0f * a - 5.0f * b + 4.0f * c - d) * t2 +
+                   (3.0f * b - 3.0f * c + d - a) * t3);
+}
+
+static float plane_texel(const TerrainField* f, const float* plane, int i, int j) {
+    i = i < 0 ? 0 : (i >= f->res ? f->res - 1 : i);
+    j = j < 0 ? 0 : (j >= f->res ? f->res - 1 : j);
+    return plane[(size_t)j * (size_t)f->res + (size_t)i];
+}
+
+// Shared by the height and all three masks so a mapping cannot drift between
+// them: a mask read at a different place from the height it describes would put
+// the silt somewhere other than where the sim deposited it.
+static float sample_plane(const TerrainParams* p, const float* plane, float x, float z) {
+    const TerrainField* f = p->field;
+    float span = 2.0f * p->extent;
+    if (!f || !plane || f->res < 2 || !(span > 0.0f))
+        return 0.0f;
+
+    // Texels sit on NODES: 0 lands on -extent and res-1 on +extent.
+    float last = (float)(f->res - 1);
+    float gx = (x + p->extent) / span * last;
+    float gz = (z + p->extent) / span * last;
+    // Clamp the COORDINATE rather than only the taps. Clamping taps alone still
+    // interpolates between them with an out-of-range t, which extrapolates the
+    // cubic past the edge -- the failure this policy exists to avoid.
+    gx = gx < 0.0f ? 0.0f : (gx > last ? last : gx);
+    gz = gz < 0.0f ? 0.0f : (gz > last ? last : gz);
+
+    int i = (int)floorf(gx);
+    int j = (int)floorf(gz);
+    float tx = gx - (float)i;
+    float tz = gz - (float)j;
+
+    float rows[4];
+    for (int r = 0; r < 4; ++r) {
+        int jr = j - 1 + r;
+        rows[r] = catmull_rom(plane_texel(f, plane, i - 1, jr), plane_texel(f, plane, i, jr),
+                              plane_texel(f, plane, i + 1, jr), plane_texel(f, plane, i + 2, jr), tx);
+    }
+    return catmull_rom(rows[0], rows[1], rows[2], rows[3], tz);
+}
+
+float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z) {
+    if (!p || !p->field)
+        return 0.0f;
+    const float* plane = NULL;
+    switch (mask) {
+    case TERRAIN_MASK_FLOW:
+        plane = p->field->flow;
+        break;
+    case TERRAIN_MASK_DEPOSIT:
+        plane = p->field->deposit;
+        break;
+    case TERRAIN_MASK_WEAR:
+        plane = p->field->wear;
+        break;
+    }
+    return sample_plane(p, plane, x, z);
+}
+
 float terrain_height_at(const TerrainParams* p, float x, float z) {
-    if (!p || p->octaves <= 0)
+    if (!p)
+        return 0.0f;
+    // Tested before the octave count, deliberately: a field with octaves 0 is a
+    // legitimate configuration -- the fbm is simply inert -- and folding the two
+    // guards together would return a flat 0 for it.
+    if (p->field && p->field->height)
+        return sample_plane(p, p->field->height, x, z);
+    if (p->octaves <= 0)
         return 0.0f;
     const NoisePerm* t = perm_for(p->seed);
 
