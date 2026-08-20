@@ -166,6 +166,18 @@ typedef struct ShadowSystem {
     bool dir_slot_warned;
     int default_map_size;
     ShaderProgram* depth_program;
+    // World point the scene-fit map is built around: the outermost cascade
+    // looks at it, and the texel snap quantises relative to it. Zero (the
+    // default) is the origin, which is where every scene sat when this was a
+    // hardcoded local.
+    //
+    // Two things depend on it and they fail differently. The look-at decides
+    // WHAT IS COVERED -- ortho_size laterally and far_plane/2 along the light,
+    // measured from here -- so a scene far from this point falls out of the map
+    // with no diagnostic, since the outermost cascade is the fallback every
+    // tighter one clips into. The snap anchor decides only whether the lattice
+    // arithmetic stays exact, and degrades gradually.
+    vec3 scene_center;
     float ortho_size;
     float near_plane;
     float far_plane;
@@ -312,9 +324,16 @@ typedef struct CascadeCamera {
 // snapped to shadow-texel increments in light view space, eye pushed back by
 // scene_pad so out-of-slice geometry toward the light still casts. Writes
 // the matrix and (width, orthoNear, orthoFar) into out_params; .w is unused.
+//
+// snap_anchor is the world point the texel lattice is PHASED at, not a bound:
+// it never changes which cascade covers what, only whether floor(x/texel)*texel
+// still resolves a texel. Far from the anchor the quantum of a float overtakes
+// the texel and the snap stops holding edges still, which is the shimmer it
+// exists to prevent. Pass the scene centre; the origin reproduces the arithmetic
+// from before it was a parameter.
 void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
-                                        float slice_far, float scene_pad, int map_size, mat4 dest,
-                                        vec4 out_params);
+                                        float slice_far, float scene_pad, int map_size,
+                                        vec3 snap_anchor, mat4 dest, vec4 out_params);
 
 // Upload the cascade uniform contract (cascadeCount, cascadeSplits, and the
 // count-strided lightSpaceMatrix/cascadeParams layers as ranged array

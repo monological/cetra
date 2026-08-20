@@ -123,6 +123,7 @@ ShadowSystem* create_shadow_system(int default_map_size) {
 
     system->default_map_size = default_map_size;
     system->directional_count = 0;
+    glm_vec3_zero(system->scene_center);
     system->ortho_size = 2000.0f;
     system->near_plane = 1.0f;
     system->far_plane = 7500.0f;
@@ -319,8 +320,8 @@ void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, f
 }
 
 void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
-                                        float slice_far, float scene_pad, int map_size, mat4 dest,
-                                        vec4 out_params) {
+                                        float slice_far, float scene_pad, int map_size,
+                                        vec3 snap_anchor, mat4 dest, vec4 out_params) {
     vec3 light_dir;
     glm_vec3_normalize_to(direction, light_dir);
 
@@ -346,14 +347,21 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
     // Snap the sphere center to shadow-texel increments in light view space:
     // with the diameter constant, the box then slides in whole texels and
     // shadow edges stay put while the camera translates (Valient)
+    //
+    // Quantised RELATIVE to the anchor, because floorf(x / texel) * texel is
+    // only a texel-accurate operation while x is small enough that a float
+    // still resolves one. The offset from the anchor is the small quantity
+    // here; the anchor's own coordinate never enters the division.
     mat4 snap_view;
     vec3 origin = {0.0f, 0.0f, 0.0f};
     glm_lookat(origin, light_dir, up, snap_view);
     vec3 center_ls;
+    vec3 anchor_ls;
     glm_mat4_mulv3(snap_view, center, 1.0f, center_ls);
+    glm_mat4_mulv3(snap_view, snap_anchor, 1.0f, anchor_ls);
     float texel = (2.0f * radius) / (float)map_size;
-    center_ls[0] = floorf(center_ls[0] / texel) * texel;
-    center_ls[1] = floorf(center_ls[1] / texel) * texel;
+    center_ls[0] = anchor_ls[0] + floorf((center_ls[0] - anchor_ls[0]) / texel) * texel;
+    center_ls[1] = anchor_ls[1] + floorf((center_ls[1] - anchor_ls[1]) / texel) * texel;
     mat4 inv_snap;
     glm_mat4_inv(snap_view, inv_snap);
     glm_mat4_mulv3(inv_snap, center_ls, 1.0f, center);
@@ -1247,7 +1255,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
     const Light* dir_overflow = NULL;
-    vec3 scene_center = {0.0f, 0.0f, 0.0f};
 
     for (size_t i = 0; i < scene->light_count; ++i) {
         Light* light = scene->lights[i];
@@ -1390,7 +1397,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
         if (light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
             if (cc == 1) {
-                compute_directional_light_space_matrix(light->direction, scene_center,
+                compute_directional_light_space_matrix(light->direction, ss->scene_center,
                                                        ss->ortho_size, ss->near_plane,
                                                        ss->far_plane, ss->cascade_matrices[slot]);
                 ss->cascade_params[slot][0] = 2.0f * ss->ortho_size;
@@ -1413,11 +1420,12 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                     vec4* params = &ss->cascade_params[layer];
                     compute_cascade_light_space_matrix(
                         light->direction, &cam, slice_near, ss->cascade_splits[c], scene_pad,
-                        ss->default_map_size, ss->cascade_matrices[layer], *params);
+                        ss->default_map_size, ss->scene_center, ss->cascade_matrices[layer],
+                        *params);
                     slice_near = ss->cascade_splits[c];
                 }
                 int last = (int)slot * cc + (cc - 1);
-                compute_directional_light_space_matrix(light->direction, scene_center,
+                compute_directional_light_space_matrix(light->direction, ss->scene_center,
                                                        ss->ortho_size, ss->near_plane,
                                                        ss->far_plane, ss->cascade_matrices[last]);
                 ss->cascade_params[last][0] = legacy_width;

@@ -113,6 +113,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
     fprintf(stderr, "      --shadow-softness <f> PCSS softness multiplier (default: 1)\n");
     fprintf(stderr, "      --shadow-cascades <n> Shadow cascades per caster, 1-3 (default: 3)\n");
+    fprintf(stderr,
+            "      --shadow-center <x,y,z|auto>  World point the scene-fit map covers "
+            "(default: origin)\n");
     fprintf(stderr, "      --csm-debug        Tint fragments by selected shadow cascade\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
@@ -523,6 +526,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->cam_eye_set = 1;
+        } else if (strcmp(argv[i], "--shadow-center") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (strcmp(argv[i], "auto") == 0) {
+                args->shadow_center_mode = 2;
+            } else if (sscanf(argv[i], "%f,%f,%f", &args->shadow_center[0],
+                              &args->shadow_center[1], &args->shadow_center[2]) == 3) {
+                args->shadow_center_mode = 1;
+            } else {
+                fprintf(stderr, "Error: --shadow-center expects x,y,z or auto\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--cam-target") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2931,6 +2948,16 @@ int main(int argc, char** argv) {
         // under orbit. --shadow-cascades 1 restores the classic single map.
         scene->shadow_system->cascade_count =
             args.shadow_cascades > 0 ? args.shadow_cascades : SHADOW_CASCADES;
+        // Left at the engine default (the origin) unless asked: moving it
+        // changes which geometry the scene-fit map covers, so it cannot be
+        // inferred without changing every existing frame. `auto` takes the
+        // bounds centre already computed above -- post-recenter, which is the
+        // only value that describes where the geometry actually ended up.
+        if (args.shadow_center_mode == 1) {
+            glm_vec3_copy(args.shadow_center, scene->shadow_system->scene_center);
+        } else if (args.shadow_center_mode == 2) {
+            glm_vec3_copy(scene_center, scene->shadow_system->scene_center);
+        }
         if (args.csm_debug) {
             scene->shadow_system->csm_debug = true;
         }

@@ -2022,7 +2022,7 @@ Cetra has no origin rebasing and no world-partition cells.
 shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) at a fixed ortho size, while
 the inner cascades follow the camera — deliberately, since the outermost is the camera-independent
 fallback that guarantees no shadow ends at a boundary that moves. The consequence is that terrain
-placed away from the origin loses its far shadows with no diagnostic, which `terrain.h:36-38` already
+placed away from the origin loses its far shadows with no diagnostic, which `terrain.h:125-127` already
 warns about and works around by centring the terrain.
 **Depends on:** nothing.
 

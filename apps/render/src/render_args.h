@@ -70,29 +70,35 @@ typedef struct {
     float light_size;           // Emitter size override (-1 = scene default)
     float shadow_softness;      // PCSS softness override (-1 = default)
     int shadow_cascades;        // Cascades per caster (0 = keep engine default)
-    int csm_debug;              // Tint fragments by selected cascade
-    int no_springs;             // Disable spring-bone secondary motion
-    int no_ssao;                // Disable screen-space ambient occlusion
-    int ssao_debug;             // Show the raw SSAO buffer
-    int spec_occ_mode;          // PostFXSpecOccMode override (-1 = keep engine default)
-    int spec_occ_debug;         // Show the AO visibility the scene is multiplied by
-    int bent_debug;             // Show the bent normal from the AO chain
-    int no_ao_edge_filter;      // Disable the depth-aware AO blur (allow silhouette bleed)
-    int ssgi;                   // Enable screen-space GI (indirect diffuse)
-    int ssgi_debug;             // Show the raw gathered GI radiance
-    int probe;                  // Enable the local reflection probe
-    int probe_pos_set;          // --probe-pos given
-    float probe_pos[3];         // Probe capture position override
-    int probe_scene;            // Capture the scene meshes too (interiors)
-    int probe_debug;            // Show the raw capture as the background
-    int gi_volume;              // Enable the DDGI irradiance probe volume
-    int gi_probes[3];           // Probe grid counts (0,0,0 = default)
-    int water;                  // Enable the water surface (spec 11.32)
-    float water_level;          // Still-water plane, world Y (-9999 = keep default)
-    float water_extent;         // Half-size of the shoaling bed's domain (0 = keep default)
-    int water_waves;            // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
-    int no_water_caustics;      // Bisect lever: drop the surface's light focusing
-    int no_water_glitter;       // Bisect lever: drop the analytic sun lobe
+    // World point the scene-fit shadow map is built around. 0 = the engine
+    // default, which is the origin; 1 = the explicit vector below; 2 = the
+    // scene's own bounds centre. A scene authored away from the origin needs
+    // this or it falls out of the map, and no other lever reaches the field.
+    int shadow_center_mode;
+    float shadow_center[3];
+    int csm_debug;         // Tint fragments by selected cascade
+    int no_springs;        // Disable spring-bone secondary motion
+    int no_ssao;           // Disable screen-space ambient occlusion
+    int ssao_debug;        // Show the raw SSAO buffer
+    int spec_occ_mode;     // PostFXSpecOccMode override (-1 = keep engine default)
+    int spec_occ_debug;    // Show the AO visibility the scene is multiplied by
+    int bent_debug;        // Show the bent normal from the AO chain
+    int no_ao_edge_filter; // Disable the depth-aware AO blur (allow silhouette bleed)
+    int ssgi;              // Enable screen-space GI (indirect diffuse)
+    int ssgi_debug;        // Show the raw gathered GI radiance
+    int probe;             // Enable the local reflection probe
+    int probe_pos_set;     // --probe-pos given
+    float probe_pos[3];    // Probe capture position override
+    int probe_scene;       // Capture the scene meshes too (interiors)
+    int probe_debug;       // Show the raw capture as the background
+    int gi_volume;         // Enable the DDGI irradiance probe volume
+    int gi_probes[3];      // Probe grid counts (0,0,0 = default)
+    int water;             // Enable the water surface (spec 11.32)
+    float water_level;     // Still-water plane, world Y (-9999 = keep default)
+    float water_extent;    // Half-size of the shoaling bed's domain (0 = keep default)
+    int water_waves;       // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
+    int no_water_caustics; // Bisect lever: drop the surface's light focusing
+    int no_water_glitter;  // Bisect lever: drop the analytic sun lobe
     // WaterFoamDebug (water.h), as an int since args structs here don't carry engine
     // headers. The instrument whitecap coverage is measured with; see Water.foam_debug.
     int water_foam_debug;

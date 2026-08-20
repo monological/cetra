@@ -2681,6 +2681,25 @@ def run_dir_shadow_gate(workdir):
 #
 # Bounds are FRACTIONS OF FRAME HEIGHT, not pixel counts. A run length scales
 # with the frame, and `render()` asks for a 400x300 window whose framebuffer is
+# Where the shadow-offset arm places the fixture. Two requirements, and both are
+# lower bounds rather than taste. It has to exceed the scene-fit map's own reach
+# -- the fixture's radius is about 6 units and the viewer sets ortho_size to
+# twice that -- or a map anchored at the origin still covers the scene and the
+# arm measures nothing. And it has to be an exact power of two, so that
+# translating the fixture is not itself a precision experiment: every authored
+# coordinate here lands on a representable value at 16384, which keeps this a
+# test of what the map COVERS rather than of what fp32 rounds.
+ORIGIN_SHADOW_OFFSET = 16384.0
+# A shadowed sample must stay this dark once the map follows the scene. Sized
+# off the same umbra the dir-shadow hole arm reads at DIR_ERODE, with room for
+# the map resolving a fraction of a texel differently out at the offset.
+ORIGIN_UMBRA_MAX = 0.05
+# ... and an unshadowed one this bright. A map that misses the scene entirely
+# leaves the shadow term at exactly 1.0, so this bar is met by a wide margin or
+# not at all; there is no near miss to calibrate against.
+ORIGIN_LIT_MIN = 0.90
+
+
 # 800x600 on a HiDPI display and 400x300 everywhere else -- so absolute counts
 # calibrated on one machine sit at zero margin on the other. Measured both ways:
 # 115/20/4 px at 800x600 and 60/14/4 at 400x300, i.e. ~19%/3.3%/0.7% of height
@@ -2689,6 +2708,126 @@ DITHER_MAX_RUN_FRAC = 0.08   # dithered: the band must collapse past this
 DITHER_MIN_BAND_FRAC = 0.10  # undithered: the fixture must still BAND
 DITHER_MIN_SPAN = 24         # 8-bit levels the sampled columns must cover
 DITHER_MEAN_TOL = 0.05       # LSB the frame mean may move when dither turns on
+
+
+def _origin_offset_fixture(workdir, offset):
+    """A translated twin of dir_shadow_fixture, and the scene file that frames it.
+
+    The glTF's four nodes carry no `translation` -- gen_dir_shadow_fixture.py bakes
+    positions into the vertex buffer -- so adding one moves the whole scene without
+    touching the base64 buffer. That is the only way to translate GEOMETRY from a
+    gate: a .cscn's models[] carries a path and nothing else, so cscn_copy can move
+    the camera and the lights but never the meshes (spec 11.35 dropped an arm over
+    exactly this).
+
+    The camera moves with it, so the two frames are the same PICTURE from the same
+    relative pose. That is what lets the sample points below stay in unshifted
+    coordinates: the projector subtracts eye from point, and both took the same
+    offset.
+    """
+    src = os.path.join(ROOT, "assets", "dir_shadow_fixture.gltf")
+    with open(src) as fh:
+        doc = json.load(fh)
+    for node in doc["nodes"]:
+        node["translation"] = [offset, 0.0, offset]
+    gltf = os.path.join(workdir, "origin_dir_shadow.gltf")
+    with open(gltf, "w") as fh:
+        json.dump(doc, fh)
+
+    with open(os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")) as fh:
+        scene = json.load(fh)
+    scene["models"] = [{"path": gltf}]
+    for key in ("eye", "target"):
+        v = scene["camera"][key]
+        scene["camera"][key] = [v[0] + offset, v[1], v[2] + offset]
+    cscn = os.path.join(workdir, "origin_dir_shadow.cscn")
+    with open(cscn, "w") as fh:
+        json.dump(scene, fh)
+    return cscn
+
+
+def _origin_umbra_samples():
+    """Ground points inside both umbrae, in UNSHIFTED fixture coordinates."""
+    pts = []
+    for centre in (DIR_SHADOW["float_c"], DIR_SHADOW["rest_c"]):
+        cx, cz, sx, sz = _dir_ellipse(centre, DIR_SHADOW["elev_deg"])
+        for iu in range(-2, 3):
+            for iv in range(-2, 3):
+                u, v = iu / 2.0, iv / 2.0
+                if u * u + v * v > 1.0:
+                    continue
+                p = (cx + DIR_ERODE * sx * u, 0.0, cz + DIR_ERODE * sz * v)
+                if _dir_visible(p):
+                    pts.append(p)
+    return pts
+
+
+def run_origin_gate(workdir):
+    """A world placed away from the origin is still lit like one placed on it.
+
+      shadow-offset   the scene-fit shadow map covers the scene it belongs to rather
+                      than the origin. Renders the cascade fixture where it was
+                      authored, then translated by 16384 with --shadow-center
+                      following, then translated with the centre pinned back at the
+                      origin. The first two must shadow; the third must not.
+
+    Read at --shadow-cascades 1, and that is a requirement rather than a default.
+    The inner cascades are fitted to the camera frustum, so they follow an offset
+    scene perfectly well on their own -- only the outermost fallback map is anchored
+    at scene_center. At the viewer's default of 3 the shadow this arm samples is
+    resolved by an inner cascade and survives the offset whatever scene_center says,
+    which reads green against a build where the fix does not exist.
+
+    The pinned arm is the falsification and it is in-frame rather than a mutation:
+    it renders the same geometry through the same binary and differs only in where
+    the map is centred, so "the map followed the scene" is measured against "it did
+    not" instead of against a remembered number.
+    """
+    if not os.path.exists(os.path.join(ROOT, "assets", "dir_shadow_fixture.gltf")):
+        print("  shadow-offset SKIP  (missing dir_shadow_fixture.gltf)")
+        return []
+
+    off = ORIGIN_SHADOW_OFFSET
+    far = _origin_offset_fixture(workdir, off)
+    # --no-pcss for the dir-shadow gate's reason: the default emitter size smears
+    # the analytic edge, and every reading here is positional.
+    cc1 = ["--no-pcss", "--shadow-cascades", "1"]
+    centred = cc1 + ["--shadow-center", f"{off},0,{off}"]
+    pinned = cc1 + ["--shadow-center", "0,0,0"]
+
+    frames = {
+        "home": _dir_render(workdir, "dir_shadow_fixture.cscn", "org_home", cc1),
+        "home_ns": _dir_render(workdir, "dir_shadow_fixture.cscn", "org_home_ns",
+                               cc1 + ["--no-shadows"]),
+        "far": _dir_render(workdir, far, "org_far", centred),
+        "far_ns": _dir_render(workdir, far, "org_far_ns", centred + ["--no-shadows"]),
+        "pin": _dir_render(workdir, far, "org_pin", pinned),
+    }
+    if not all(frames.values()):
+        print("  shadow-offset ERROR while rendering the fixture")
+        return ["shadow-offset"]
+
+    pts = _origin_umbra_samples()
+    try:
+        home = _term_reader(frames["home"], frames["home_ns"])
+        far_t = _term_reader(frames["far"], frames["far_ns"])
+        # The pinned frame shares the offset scene's unshadowed reference: the two
+        # differ only in the shadow map, so dividing by the same denominator is
+        # what makes the pair a measurement of the map alone.
+        pin_t = _term_reader(frames["pin"], frames["far_ns"])
+        home_worst = max(home(p) for p in pts)
+        far_worst = max(far_t(p) for p in pts)
+        pin_worst = min(pin_t(p) for p in pts)
+    except ValueError as exc:
+        print(f"  shadow-offset ERROR {exc}")
+        return ["shadow-offset"]
+
+    ok = (home_worst <= ORIGIN_UMBRA_MAX and far_worst <= ORIGIN_UMBRA_MAX
+          and pin_worst >= ORIGIN_LIT_MIN)
+    print(f"  shadow-offset {'PASS' if ok else 'FAIL'}  umbra at origin {home_worst:.4f}, "
+          f"at {off:.0f} {far_worst:.4f} (want <= {ORIGIN_UMBRA_MAX}); "
+          f"centre pinned back {pin_worst:.4f} (want >= {ORIGIN_LIT_MIN})")
+    return [] if ok else ["shadow-offset"]
 
 
 def _flat_run_and_span(pix, w, h):
@@ -10985,6 +11124,7 @@ GATE_GROUPS = [
     ("sss-banding", "subsurface blur (kernel not visible as rings):", run_sss_banding_gate),
     ("dither", "output dither (8-bit contour bands, spec 11.24 / E1):", run_dither_gate),
     ("lut", "3D LUT colour grading (spec 11.58 / E2):", run_lut_gate),
+    ("origin", "a world away from the origin (spec 11.62 / D11):", run_origin_gate),
     ("terrain", "Heightfield terrain and erosion (spec 11.59 / D6-D8):", run_terrain_gate),
     ("layers", "layered surfaces (splat, height blend, triplanar; spec 11.60 / D9):",
      run_layers_gate),
