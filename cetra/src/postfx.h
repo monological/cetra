@@ -39,14 +39,27 @@ typedef enum PostFXTonemapMode {
 
 // How a 3D colour-grading LUT interpolates between its lattice points
 // (spec 11.58). Tetrahedral is the default and what Resolve, Nuke and Baselight
-// use; trilinear is one hardware fetch and is kept because tetrahedral cannot
-// be falsified without it -- an implementation that degenerates toward trilinear
-// passes every arm written against it alone, since nothing in the frame is a
-// reference.
+// use. Trilinear is the hardware path -- one filtered fetch against
+// tetrahedral's four point fetches and a branch -- and is what most real-time
+// engines ship, so it is a genuine quality/cost choice and not a test hook.
 //
-// On a realistic table the two are indistinguishable: measured 0.076 of one
-// 8-bit code at 33^3. What tetrahedral buys is the NEUTRAL AXIS, where
-// trilinear's eight-corner blend reaches off the grey diagonal and tints it.
+// WHAT THE DIFFERENCE ACTUALLY IS, and the first published figure was wrong.
+// 11.58 measured 0.076 of an 8-bit code at 33^3 and called it invisible; that
+// was taken on a table whose every output channel is a ridge function of TWO
+// inputs, so the b-axis weights factor out, trilinear degenerates to bilinear,
+// and the three-way cross term -- the term tetrahedral drops -- is identically
+// zero. On a table with a real three-way term (a saturation rolloff, which
+// every gamut-compression look has) the same sweep reads **2.7 codes**. Not
+// invisible. Storage is not the variable: fp16 against fp64 moves it 0.004.
+//
+// Tetrahedral also buys two things that are exact rather than small: the NEUTRAL
+// AXIS, where trilinear's eight-corner blend reaches off the grey diagonal and
+// tints it, and an identity table, which is a bit-exact no-op tetrahedrally and
+// 12,088 px off trilinearly (the texture unit's fixed-point subtexel fraction).
+//
+// Keeping both reachable is ALSO what makes tetrahedral falsifiable -- an
+// implementation degenerating toward trilinear would pass every arm written
+// against tetrahedral alone, since nothing in a frame is a reference for it.
 typedef enum PostFXLutInterp {
     POSTFX_LUT_TRILINEAR = 0,
     POSTFX_LUT_TETRAHEDRAL = 1,

@@ -2099,11 +2099,18 @@ bool postfx_load_lut(PostFX* fx, const char* path) {
         return false; // lut_load_cube named the reason; keep whatever was loaded
 
     int size = lut.size; // lut_free zeroes the struct, so read it first
-    // 16F, and 32F was tried. An identity table is a bit-exact no-op at 16F on
-    // the tetrahedral path and stays 12,000-odd pixels off at 32F on the
-    // trilinear one, so the precision that decides that claim is the
-    // INTERPOLANT's weights, not the storage -- and doubling the bytes bought
-    // exactly nothing.
+    // 16F, and the evidence for it had to be taken twice. The first experiment
+    // compared 16F against 32F on an IDENTITY table -- 17^3, so every lattice
+    // value is k/16 and exactly representable in fp16. Storage error there is
+    // structurally zero, so the test could not have detected storage error, and
+    // it was then generalised into a decision for all tables.
+    //
+    // Re-measured on a table with a real three-way term, where fp16 rounding is
+    // live: it costs **0.004 of an 8-bit code** against fp64. The decision
+    // stands; the reasoning is now the measurement rather than a coincidence.
+    // What DOES decide an exact identity is the interpolant's weights, not the
+    // bytes -- tetrahedral computes them in the shader, trilinear takes them
+    // from the texture unit's fixed-point subtexel fraction.
     GLuint tex = create_texture_3d_float(size, size, size, GL_RGB16F, GL_RGB, lut.data);
     // The CPU copy has done its job the moment the driver has the bytes -- the
     // same shape sky_clouds.c uses for its baked noise volumes.
