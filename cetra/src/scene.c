@@ -73,6 +73,7 @@ Scene* create_scene() {
     scene->origin_shift_pending = false;
     scene->on_origin_shift = NULL;
     scene->origin_shift_ctx = NULL;
+    scene->origin_shift_distance = 0.0f;
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;

@@ -2727,6 +2727,13 @@ ORIGIN_VELOCITY_MAX_RATIO = 2.0
 # margin is for a controller that resolves a contact differently on the frame the
 # broadphase is rebuilt.
 ORIGIN_CLEARANCE_MAX = 0.05
+# Where the automatic arm places the world, and the drift it allows. The world sits
+# outside the threshold from frame 0, so a correct engine shifts immediately and
+# then never again -- which is what makes "exactly once" a real assertion rather
+# than a restatement of the flag. The threshold is a power of two so the lattice
+# derived from it is one too.
+ORIGIN_AUTO = 4096.0
+ORIGIN_AUTO_THRESHOLD = 512.0
 
 
 # 800x600 on a HiDPI display and 400x300 everywhere else -- so absolute counts
@@ -2882,6 +2889,13 @@ def run_origin_gate(workdir):
                       positions, so it does not follow the scene and has to be told;
                       read as height above terrain, which is the one quantity that
                       must NOT change while both of its terms do.
+      origin-auto     the engine re-centres on its own once the camera has drifted,
+                      exactly ONCE, and reaches the frame the hand-driven shift
+                      reaches. The count is the assertion that matters: a threshold
+                      compared against a camera that has not been told the world
+                      moved reads its own shift as more drift and oscillates, which
+                      a picture cannot show and a pass/fail on "did it shift" cannot
+                      either.
 
     Read at --shadow-cascades 1, and that is a requirement rather than a default.
     The inner cascades are fitted to the camera frustum, so they follow an offset
@@ -3033,6 +3047,27 @@ def run_origin_gate(workdir):
           f"both sides {bool(b['grounded'])}/{bool(a['grounded'])}")
     if not ok:
         failures.append("origin-physics")
+
+    # --- Phase 5: the engine re-centres on its own ----------------------------
+    # At ORIGIN_AUTO the camera starts outside the threshold, so a correct engine
+    # shifts once on the first frame and never again. Compared against the
+    # hand-driven shift rather than against a remembered number: both take the
+    # world to the same origin, so if the automatic trigger is the same mechanism
+    # the two frames are the SAME frame.
+    manual, _ = _origin_forest(workdir, "auto_manual", ORIGIN_AUTO, ["--origin-shift-at", "20"])
+    auto, autolog = _origin_forest(workdir, "auto_auto", ORIGIN_AUTO,
+                                   ["--origin-shift-distance", repr(ORIGIN_AUTO_THRESHOLD)])
+    if not (manual and auto):
+        print("  origin-auto   ERROR while rendering the automatic shift")
+        return failures + ["origin-auto"]
+    shifts = sum(1 for ln in autolog.splitlines() if "origin shift:" in ln)
+    frac, worst = _origin_diff(manual, auto)
+    ok = shifts == 1 and frac == 0.0
+    print(f"  origin-auto   {'PASS' if ok else 'FAIL'}  fired {shifts} time(s) over 40 frames "
+          f"(want exactly 1; an oscillating threshold fires ~30), and reaches the hand-driven "
+          f"shift's frame at {100.0 * frac:.2f}% differing, worst {worst} (want exactly 0)")
+    if not ok:
+        failures.append("origin-auto")
 
     return failures
 

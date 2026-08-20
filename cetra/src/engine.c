@@ -2226,8 +2226,45 @@ static bool scene_has_subsurface(const Scene* scene) {
  * Getting it wrong is one frame of screen-wide velocity: every pixel reports the
  * whole shift as motion, TAA reprojects to nothing, and motion blur smears it.
  */
+/*
+ * Automatic re-centring (spec 11.62 phase 5): once the camera has drifted further
+ * than the scene asks to tolerate, schedule a shift onto a lattice point near it.
+ *
+ * SNAPPED, not taken from the camera exactly, and the reason is arithmetic rather
+ * than tidiness. An arbitrary camera position makes the delta an arbitrary float,
+ * so every position in the world takes a fresh rounding at every shift and the
+ * error accumulates over a long traversal. A power-of-two lattice point is exactly
+ * representable, and within a factor of two of the coordinates being moved the
+ * subtraction is exact (Sterbenz) -- which covers everything near the camera,
+ * where every bit matters. Far outside it the subtraction rounds at the new
+ * magnitude, which is the precision those coordinates were always going to have.
+ *
+ * The lattice is derived from the threshold rather than fixed, so an app that
+ * tightens one gets a proportionally finer other; a lattice coarser than the
+ * threshold would let the snap land back where it started and never shift at all.
+ */
+static void engine_schedule_origin_shift(Engine* engine, Scene* scene) {
+    if (!scene || scene->origin_shift_distance <= 0.0f || !engine->camera)
+        return;
+    if (glm_vec3_distance(engine->camera->position, GLM_VEC3_ZERO) <=
+        scene->origin_shift_distance)
+        return;
+
+    float lattice = ldexpf(1.0f, (int)floorf(log2f(scene->origin_shift_distance * 0.5f)));
+    if (!(lattice > 0.0f))
+        return;
+    vec3 target;
+    for (int i = 0; i < 3; ++i)
+        target[i] = scene->world_origin[i] +
+                    floorf(engine->camera->position[i] / lattice + 0.5f) * lattice;
+    scene_set_world_origin(scene, target);
+}
+
 static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
-    if (!scene || !scene->origin_shift_pending)
+    if (!scene)
+        return;
+    engine_schedule_origin_shift(engine, scene);
+    if (!scene->origin_shift_pending)
         return;
     scene->origin_shift_pending = false;
 

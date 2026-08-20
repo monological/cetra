@@ -130,6 +130,9 @@ typedef struct ForestArgs {
     // coordinates are measured from, so the frames after it must be identical to
     // a run that never shifted.
     int origin_shift_at;
+    // Camera drift the engine tolerates before re-centring on its own, 0 = never.
+    // The automatic half of the same mechanism --origin-shift-at drives by hand.
+    float origin_shift_distance;
 } ForestArgs;
 
 static ForestArgs g_args;
@@ -977,6 +980,14 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
             character_controller_set_position(cc, p);
         }
     }
+
+    // The entity's OWN copy, which is what the follow camera reads. It is
+    // refreshed from the controller each step, but not before this frame draws --
+    // and a camera that reads the old value places itself a whole delta away,
+    // which the automatic shift then reads as more drift and shifts again. The
+    // symptom is an origin that oscillates rather than one that is merely late.
+    if (g_player)
+        glm_vec3_sub(g_player->position, (float*)delta, g_player->position);
 }
 
 static void on_init(Game* game) {
@@ -1130,6 +1141,7 @@ static void on_init(Game* game) {
     physics_world_optimize(physics);
 
     scene_set_origin_callback(g_scene, forest_on_origin_shift, game);
+    g_scene->origin_shift_distance = g_args.origin_shift_distance;
 
     // Shadows sized AND placed to the terrain, not left at the library defaults
     // (ortho 2000 about the origin). The scene-fit map covers ortho_size about
@@ -1408,6 +1420,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
     fprintf(stderr, "      --origin-shift-at F Re-centre the world on the camera at frame F\n");
+    fprintf(stderr, "      --origin-shift-distance D  Re-centre whenever the camera drifts D\n");
     fprintf(stderr, "      --cam-eye x,y,z     Pin the camera (disables follow)\n");
     fprintf(stderr, "      --cam-target x,y,z  Pinned camera aim point\n");
 }
@@ -1506,6 +1519,8 @@ int main(int argc, char** argv) {
             g_args.world_offset = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--origin-shift-at") && i + 1 < argc) {
             g_args.origin_shift_at = atoi(argv[++i]);
+        } else if (!strcmp(a, "--origin-shift-distance") && i + 1 < argc) {
+            g_args.origin_shift_distance = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--cam-eye") && i + 1 < argc) {
             cam_eye_set = parse_vec3(argv[++i], g_args.cam_eye);
         } else if (!strcmp(a, "--cam-target") && i + 1 < argc) {

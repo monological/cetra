@@ -230,6 +230,16 @@ typedef struct Scene {
     // engine cannot enumerate them.
     void (*on_origin_shift)(const vec3 delta, void* ctx);
     void* origin_shift_ctx;
+    // How far the camera may drift from the storage origin before the engine
+    // re-centres on it, in world units. 0 (the default) never shifts, so this is
+    // opt-in and every existing app is unaffected.
+    //
+    // A THRESHOLD rather than a target, and the two differ by more than wording:
+    // shifting whenever the camera has moved at all would shift every frame, and
+    // a shift is a full walk of the graph plus a physics rebuild plus a GI
+    // re-arm. What sets the floor is that cost, not precision -- precision
+    // degrades smoothly and forgives a late shift.
+    float origin_shift_distance;
 
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
