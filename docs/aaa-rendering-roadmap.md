@@ -2012,18 +2012,28 @@ textures** (`ARB_sparse_texture` is 4.3), so the physical cache is an ordinary a
 buffer is an extra low-resolution MRT plus a readback.
 **Depends on:** D9 (hard).
 
-### D11. Large-world origin rebasing — Effort M/L
+### D11. Large-world origin rebasing — Effort M/L — **DONE (spec 11.62)**
 Independent of the terrain chain and needed by anything that wants a world bigger than a few
 kilometres. fp32 world coordinates lose the precision to hold still: UE4 capped its world at ~20 km
 for exactly this reason and UE5 shipped Large World Coordinates (fp64 positions) to break the cap.
-Cetra has no origin rebasing and no world-partition cells.
+
+Shipped as origin SHIFTING, not fp64: `scene_set_world_origin` schedules, the engine applies at the
+frame top, and `Scene.origin_shift_distance` re-centres automatically once the camera drifts. The
+measurement that shaped it is that the dominant cost of moving a world is NOT precision — it is
+anything that reads a world position as an IDENTITY. Forest's wind phase hash re-phased 43% of the
+frame from twelve units out, flat with distance, where the precision curve underneath is 0.10% at 12
+and 45% at 262,140. So the feature is two rules, and the second is the larger: everything linear
+takes the delta, and everything that hashes or tiles is handed the authored position back through
+`include/world_origin.glsl`. World partition cells remain D4.
 
 **It also fixes a defect that is already live and has nothing to do with world size.** The outermost
 shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) at a fixed ortho size, while
 the inner cascades follow the camera — deliberately, since the outermost is the camera-independent
 fallback that guarantees no shadow ends at a boundary that moves. The consequence is that terrain
-placed away from the origin loses its far shadows with no diagnostic, which `terrain.h:125-127` already
-warns about and works around by centring the terrain.
+placed away from the origin lost its far shadows with no diagnostic, which `procedural/terrain.h`
+used to warn about and work around by centring the terrain. Fixed in 11.62: the hardcoded local is a
+`ShadowSystem.scene_center` field, defaulting to the origin so every existing frame is unchanged, and
+the terrain's centring workaround is gone.
 **Depends on:** nothing.
 
 ## Track E — Image finishing & the perf floor

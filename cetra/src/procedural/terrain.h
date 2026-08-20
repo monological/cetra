@@ -33,7 +33,7 @@ typedef enum TerrainMask {
     TERRAIN_MASK_WEAR,    // material removed -- exposed bedrock
 } TerrainMask;
 
-// A stored heightfield, spanning the same [-extent, +extent] square the analytic
+// A stored heightfield, spanning the same square about `center` the analytic
 // terrain does, sampled at NODES: texel 0 sits exactly on -extent and texel res-1
 // exactly on +extent, so a field's corners are the terrain's corners. This is the
 // convention every heightmap tool uses and the one that keeps an imported field
@@ -73,9 +73,10 @@ static inline float terrain_field_cell(float extent, int res) {
     return res > 1 ? (2.0f * extent) / (float)(res - 1) : 0.0f;
 }
 
-// World coordinate of node i along either axis -- the exact inverse of the
-// mapping the sampler uses, sharing terrain_field_cell so a seed and a sample
-// cannot disagree about where a node is.
+// Node i's coordinate along either axis, running -extent..+extent about the
+// terrain's own middle -- the exact inverse of the mapping the sampler uses,
+// sharing terrain_field_cell so a seed and a sample cannot disagree about
+// where a node is.
 static inline float terrain_field_node(float extent, int res, int i) {
     return -extent + terrain_field_cell(extent, res) * (float)i;
 }
@@ -89,15 +90,14 @@ void terrain_field_free(TerrainField* field);
 void terrain_field_measure(TerrainField* field);
 
 typedef struct TerrainParams {
-    float extent; // half-width; the terrain spans [-extent, +extent] on X and Z
+    float extent; // half-width on X and Z, measured from `center`
     // World XZ the domain is centred on, so the terrain spans
     // [center - extent, center + extent]. Zero is every terrain built before
     // this field existed.
     //
-    // The height function is what the collider, the scatter and the camera all
-    // ask where the ground is, and they ask in WORLD coordinates -- so a terrain
-    // that does not know where it sits can only be at the origin, which is what
-    // it was.
+    // The height function answers in WORLD coordinates because that is what its
+    // callers hold, so a terrain that does not know where it sits can only be at
+    // the origin -- which is what it was.
     vec2 center;
     float height; // peak displacement, in the same units as extent
 
@@ -137,18 +137,22 @@ typedef struct TerrainParams {
 //
 // The subtraction comes FIRST and the order is load-bearing far from the
 // origin: (x - center) is exact while the two are within a factor of two of
-// each other, and adding extent to a small difference keeps it exact. Adding
-// extent to x first rounds at x's magnitude and then subtracts, which loses
-// the low bits of a coordinate the caller still has.
+// each other, so the add that follows rounds at the DIFFERENCE's magnitude
+// rather than at x's. Adding extent to x first rounds at x's magnitude and
+// then subtracts, which loses low bits the caller still has.
 static inline void terrain_to_domain(const TerrainParams* p, float x, float z, float* out_x,
                                      float* out_z) {
     *out_x = (x - p->center[0]) + p->extent;
     *out_z = (z - p->center[1]) + p->extent;
 }
 
-// ... and back, from a coordinate running -extent .. +extent about the terrain's
-// own middle. The generators walk the domain and have to say where in the world
-// each step landed.
+// A CENTRED coordinate (-extent .. +extent about the terrain's middle) to world.
+// The generators walk the domain and have to say where in the world each step
+// landed.
+//
+// NOT the inverse of terrain_to_domain, which answers in CORNER coordinates
+// (0 .. 2*extent). The two differ by `extent`, so composing them is a silent
+// half-domain error -- terrain_field_node is what produces the form these take.
 static inline float terrain_world_x(const TerrainParams* p, float local_x) {
     return local_x + p->center[0];
 }
@@ -167,7 +171,7 @@ bool terrain_field_seed(TerrainField* field, const TerrainParams* params);
 // Surface height at a world XZ. A pure function of (params, x, z): the same
 // arguments always give the same answer, and nothing has to be initialised first.
 //
-// OUTSIDE [-extent, +extent] the two sources answer differently in form but not in
+// OUTSIDE the domain the two sources answer differently in form but not in
 // kind. The fbm continues, because it is defined everywhere. A field CLAMPS to its
 // edge row -- callers do query outside the domain (the third-person camera eye
 // trails the player and leaves it), so returning zero would drop the camera through
@@ -205,7 +209,7 @@ float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z
 // MEAN as materials. An app choosing four different grounds re-authors the
 // layers; it does not re-derive which mask implies which.
 //
-// Sampled at TEXEL CENTRES -- (i + 0.5) / res over [-extent, +extent] -- because
+// Sampled at TEXEL CENTRES -- (i + 0.5) / res across the domain -- because
 // that is where a texture read lands. Sampling on field NODES instead, which the
 // first version did, offsets the whole map by half a texel and stretches it by
 // (res-1)/res against the terrain it describes.

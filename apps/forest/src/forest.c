@@ -126,12 +126,13 @@ typedef struct ForestArgs {
     // frame, 0 = never. A shift is a TRANSITION, and a transition is invisible to
     // every headless arm until something can ask for one at a known frame -- the
     // same reason --shadows-off-at exists rather than being reachable by a state
-    // flag. What it buys is an exact test: the shift changes only where
-    // coordinates are measured from, so the frames after it must be identical to
-    // a run that never shifted.
+    // flag. What it buys is a comparison: a shift changes only where coordinates
+    // are measured FROM, so afterwards the frame differs from an unshifted run by
+    // the precision it recovered and by nothing else.
     int origin_shift_at;
     // Camera drift the engine tolerates before re-centring on its own, 0 = never.
-    // The automatic half of the same mechanism --origin-shift-at drives by hand.
+    // Reaches the same engine entry point the flag above does, on a threshold
+    // instead of a frame number.
     float origin_shift_distance;
 } ForestArgs;
 

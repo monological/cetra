@@ -2681,6 +2681,16 @@ def run_dir_shadow_gate(workdir):
 #
 # Bounds are FRACTIONS OF FRAME HEIGHT, not pixel counts. A run length scales
 # with the frame, and `render()` asks for a 400x300 window whose framebuffer is
+# 800x600 on a HiDPI display and 400x300 everywhere else -- so absolute counts
+# calibrated on one machine sit at zero margin on the other. Measured both ways:
+# 115/20/4 px at 800x600 and 60/14/4 at 400x300, i.e. ~19%/3.3%/0.7% of height
+# either way. The fractions below sit about halfway between those.
+DITHER_MAX_RUN_FRAC = 0.08   # dithered: the band must collapse past this
+DITHER_MIN_BAND_FRAC = 0.10  # undithered: the fixture must still BAND
+DITHER_MIN_SPAN = 24         # 8-bit levels the sampled columns must cover
+DITHER_MEAN_TOL = 0.05       # LSB the frame mean may move when dither turns on
+
+
 # Where the shadow-offset arm places the fixture. Two requirements, and both are
 # lower bounds rather than taste. It has to exceed the scene-fit map's own reach
 # -- the fixture's radius is about 6 units and the viewer sets ortho_size to
@@ -2698,6 +2708,7 @@ ORIGIN_UMBRA_MAX = 0.05
 # leaves the shadow term at exactly 1.0, so this bar is met by a wide margin or
 # not at all; there is no near miss to calibrate against.
 ORIGIN_LIT_MIN = 0.90
+
 
 # Where the shift arms place the world. NEAR is chosen so that fp32 costs almost
 # nothing there -- which is the whole point of it: a correct shift must be nearly
@@ -2734,16 +2745,6 @@ ORIGIN_CLEARANCE_MAX = 0.05
 # derived from it is one too.
 ORIGIN_AUTO = 4096.0
 ORIGIN_AUTO_THRESHOLD = 512.0
-
-
-# 800x600 on a HiDPI display and 400x300 everywhere else -- so absolute counts
-# calibrated on one machine sit at zero margin on the other. Measured both ways:
-# 115/20/4 px at 800x600 and 60/14/4 at 400x300, i.e. ~19%/3.3%/0.7% of height
-# either way. The fractions below sit about halfway between those.
-DITHER_MAX_RUN_FRAC = 0.08   # dithered: the band must collapse past this
-DITHER_MIN_BAND_FRAC = 0.10  # undithered: the fixture must still BAND
-DITHER_MIN_SPAN = 24         # 8-bit levels the sampled columns must cover
-DITHER_MEAN_TOL = 0.05       # LSB the frame mean may move when dither turns on
 
 
 def _origin_offset_fixture(workdir, offset):
@@ -2823,20 +2824,17 @@ def _origin_forest(workdir, tag, offset, extra, frames="40", mode="6", size=("80
 
 
 def _origin_diff(a, b):
-    """Differing PIXELS and the worst channel step, as a fraction of the frame.
+    """Differing pixels as a FRACTION of the frame, and the worst channel step.
 
-    Not magick's AE, which counts differing CHANNELS on these frames and so reports
-    fractions above 1.0 -- readable as a comparison, wrong as a coverage figure.
+    Both numbers come from compare(); this only supplies the denominator, which
+    the arms want because a count means nothing without the resolution it was
+    taken at -- and these frames render at twice the requested size on a HiDPI
+    display, which is the arithmetic that made an early draft here report
+    fractions above 1.0 and misread AE as counting channels.
     """
-    wa, ha, pa = _read_ppm(a)
-    _, _, pb = _read_ppm(b)
-    n = worst = 0
-    for k in range(0, len(pa), 3):
-        d = max(abs(pa[k] - pb[k]), abs(pa[k + 1] - pb[k + 1]), abs(pa[k + 2] - pb[k + 2]))
-        if d:
-            n += 1
-            worst = max(worst, d)
-    return n / float(wa * ha), worst
+    w, h, _ = _read_ppm(a)
+    ae, pae = compare(a, b)
+    return ae / float(w * h), int(round(pae * 255.0))
 
 
 _ORIGIN_TRACE = re.compile(
@@ -2844,14 +2842,13 @@ _ORIGIN_TRACE = re.compile(
     r"grounded (\d)\s+ground_n\.y\s+[\d.]+\s+terrain\s+(-?[\d.]+)")
 
 
-def _origin_trace(workdir, offset, extra):
+def _origin_trace(offset, extra):
     """--trace-player rows for a forest run with the world placed `offset` out.
 
     The follow camera is deliberately NOT pinned here: this arm is about where the
     character is, and pinning the camera would leave the one subsystem under test
     unobserved.
     """
-    del workdir  # nothing is written; the trace is stdout
     cmd = [FOREST, "-x", "-f", "120", "-W", "200", "-H", "150", "--no-fog",
            "--render-mode", "6", "--seed", "1337", "--world-offset", repr(offset),
            "--trace-player"] + extra
@@ -2896,6 +2893,21 @@ def run_origin_gate(workdir):
                       moved reads its own shift as more drift and oscillates, which
                       a picture cannot show and a pass/fail on "did it shift" cannot
                       either.
+
+    WHAT THIS GROUP CANNOT SEE, since every arm renders apps/forest and a green run
+    should not be read as a claim it does not make. Forest has no reflection probe,
+    no GI volume, no water and no fog, so those four shift functions are exercised
+    by nothing here. Nor is the world-space TILING of a layered surface: it is wired
+    (layers.glsl reads authoredPos), but at forest's seed and framing the two layers
+    whose periods do not divide the 256-unit shift lattice, rock at 6 and gravel at
+    3, cover too little of the frame to register -- reverting the fix moves 13 px,
+    while grass and silt tile at 4, which any multiple of the lattice preserves.
+    Nor is the transform-feedback particle backend, since no app that uses it shifts.
+
+    On origin-shift's residual, because it looks like a tolerated defect and is not:
+    it is PRECISION. It grows with DISTANCE rather than with the lattice, 0.22% at
+    256 against 0.40% at 768, which is the curve spec 11.62 phase 2 measured for a
+    materialised offset -- and reverting the tiling fix does not move it.
 
     Read at --shadow-cascades 1, and that is a requirement rather than a default.
     The inner cascades are fitted to the camera frustum, so they follow an offset
@@ -2997,15 +3009,15 @@ def run_origin_gate(workdir):
     # 400x300 and render mode 9: the velocity buffer, where a missed previous-frame
     # transform is the only thing that can spike.
     vel = {}
-    for frames in (21, 23):
-        plain, _ = _origin_forest(workdir, f"vel{frames}_plain", ORIGIN_NEAR, [], str(frames), "9",
-                                  ("400", "300"))
-        shifted, _ = _origin_forest(workdir, f"vel{frames}_shift", ORIGIN_NEAR, shift20,
-                                    str(frames), "9", ("400", "300"))
+    for vel_frames in (21, 23):
+        n = str(vel_frames)
+        plain, _ = _origin_forest(workdir, f"vel{n}_plain", ORIGIN_NEAR, [], n, "9", ("400", "300"))
+        shifted, _ = _origin_forest(workdir, f"vel{n}_shift", ORIGIN_NEAR, shift20, n, "9",
+                                    ("400", "300"))
         if not (plain and shifted):
             print("  origin-velocity ERROR while rendering the velocity buffer")
             return failures + ["origin-velocity"]
-        vel[frames] = _origin_diff(plain, shifted)[0]
+        vel[vel_frames] = _origin_diff(plain, shifted)[0]
 
     # Frame 21 is the first after the shift; 23 is the same pair of runs two frames
     # later, still differing by precision alone. The ratio is what isolates the
@@ -3025,7 +3037,7 @@ def run_origin_gate(workdir):
     # the ground because the terrain's centre moved with it -- so their difference
     # is the only thing here that is supposed to be invariant, and a body left
     # behind breaks it while leaving both terms individually plausible.
-    rows = _origin_trace(workdir, ORIGIN_NEAR, ["--origin-shift-at", "40"])
+    rows = _origin_trace(ORIGIN_NEAR, ["--origin-shift-at", "40"])
     if rows is None:
         print("  origin-physics ERROR while tracing the player")
         return failures + ["origin-physics"]
@@ -3038,8 +3050,8 @@ def run_origin_gate(workdir):
 
     b, a = before[-1], after[-1]
     clearance_drift = abs((a["y"] - a["terrain"]) - (b["y"] - b["terrain"]))
-    moved = abs((b["x"] - a["x"]) - ORIGIN_NEAR)
-    ok = (clearance_drift <= ORIGIN_CLEARANCE_MAX and moved <= ORIGIN_CLEARANCE_MAX
+    x_moved = abs((b["x"] - a["x"]) - ORIGIN_NEAR)
+    ok = (clearance_drift <= ORIGIN_CLEARANCE_MAX and x_moved <= ORIGIN_CLEARANCE_MAX
           and a["grounded"] and b["grounded"])
     print(f"  origin-physics {'PASS' if ok else 'FAIL'}  height above terrain {b['y'] - b['terrain']:.3f} "
           f"before the shift and {a['y'] - a['terrain']:.3f} after (drift {clearance_drift:.3f}, want "
