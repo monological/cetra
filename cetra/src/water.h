@@ -66,12 +66,14 @@
 /*
  * The cascade shadow array, for the sun glitter (spec 11.42).
  *
- * NOT SHADOW_MAP_TEXTURE_UNIT, which is 10 and already carries cascadePrev1. Those are a
- * sampler2DArray and a sampler2D, and a program that declares BOTH types against one image
- * unit is an INVALID_OPERATION at draw -- so the array needs a unit whose 2D_ARRAY binding
- * point this program leaves alone. 11's other tenant is the IBL irradiance CUBE, a third
- * binding point, and water declares no cube there -- its own prefiltered cube is on 12.
- * Same aliasing the depth and bed units above already rest on.
+ * NOT SHADOW_MAP_TEXTURE_UNIT, which is 10. When this was chosen (11.42) unit 10 carried
+ * cascadePrev1 as a sampler2D, and a program declaring BOTH a sampler2D and a sampler2DArray
+ * against one image unit is an INVALID_OPERATION at draw -- so the array needed a unit whose
+ * 2D_ARRAY binding point this program leaves alone. 11.45 folded the previous cascades into
+ * one array on unit 1, so that specific collision is gone; the unit stays because moving it
+ * buys nothing and 11 is already asserted against. 11's other tenant is the IBL irradiance
+ * CUBE, a third binding point, and water declares no cube there -- its own prefiltered cube
+ * is on 12. Same aliasing the depth and bed units above already rest on.
  */
 #define WATER_SHADOW_UNIT 11
 // The accumulated foam, three bands in three channels (spec 11.42). 15 is the punctual
