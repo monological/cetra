@@ -223,6 +223,13 @@ typedef struct Scene {
     vec3 world_origin;
     vec3 pending_origin;
     bool origin_shift_pending;
+    // Called after a shift has been applied, with the delta that was subtracted.
+    // The honest admission that "hold nothing in world space" is not a contract
+    // this engine can impose on an app: physics bodies, cached scatter positions
+    // and a player's own idea of where it is are all outside the graph, and the
+    // engine cannot enumerate them.
+    void (*on_origin_shift)(const vec3 delta, void* ctx);
+    void* origin_shift_ctx;
 
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
@@ -308,6 +315,10 @@ void scene_set_world_origin(Scene* scene, const vec3 new_origin);
 // other half is the engine's own (the camera, the previous view-projection, and
 // PostFX's captured probe), which is why this is not the public entry point.
 void scene_apply_origin_delta(Scene* scene, const vec3 delta);
+
+// Register what to run after a shift, for the absolutes the engine cannot reach.
+void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, void* ctx),
+                               void* ctx);
 
 // fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);

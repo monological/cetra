@@ -948,6 +948,37 @@ static void build_sky_and_sun(Engine* engine) {
 
 // --- callbacks -------------------------------------------------------------
 
+// Everything this app holds in world space that the engine cannot reach
+// (spec 11.62). The scene graph, the camera and the lights move themselves; what
+// is left is another subsystem's storage and this app's own idea of where the
+// ground is.
+static void forest_on_origin_shift(const vec3 delta, void* ctx) {
+    Game* game = (Game*)ctx;
+
+    // The terrain's HEIGHT FUNCTION, which is the ground truth the collider, the
+    // scatter and the camera all query. Its mesh moved with the graph, so leaving
+    // this behind puts the surface the player walks on a whole delta from the one
+    // that gets drawn -- the two would not even disagree visibly, since neither
+    // is rendered.
+    g_terrain.center[0] -= delta[0];
+    g_terrain.center[1] -= delta[2];
+
+    // Jolt stores world positions and is single precision, so it does not follow
+    // a scene shift. The CharacterVirtual is separate from every body and has to
+    // be moved on its own.
+    PhysicsWorld* physics = game ? game_get_physics_world(game) : NULL;
+    if (physics) {
+        physics_world_shift_origin(physics, delta);
+        CharacterController* cc = g_player ? entity_get_character_controller(g_player) : NULL;
+        if (cc) {
+            vec3 p;
+            character_controller_get_position(cc, p);
+            glm_vec3_sub(p, (float*)delta, p);
+            character_controller_set_position(cc, p);
+        }
+    }
+}
+
 static void on_init(Game* game) {
     Engine* engine = game->engine;
     g_pbr = get_engine_shader_program_by_name(engine, "pbr");
@@ -1097,6 +1128,8 @@ static void on_init(Game* game) {
     entity_add_character_controller(g_player, physics, &cc);
 
     physics_world_optimize(physics);
+
+    scene_set_origin_callback(g_scene, forest_on_origin_shift, game);
 
     // Shadows sized AND placed to the terrain, not left at the library defaults
     // (ortho 2000 about the origin). The scene-fit map covers ortho_size about

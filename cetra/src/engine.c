@@ -2264,6 +2264,12 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
     if (scene->gi_volume)
         gi_volume_mark_dirty(scene->gi_volume);
 
+    // Last, so an app's callback sees a world that has fully moved: physics
+    // bodies and cached positions are usually reconciled against the graph, and
+    // reconciling against a half-shifted one is worse than not reconciling.
+    if (scene->on_origin_shift)
+        scene->on_origin_shift(delta, scene->origin_shift_ctx);
+
     // Logged because a shift is otherwise unobservable from outside the process,
     // and an arm asserting that one changed nothing is satisfied perfectly by a
     // shift that never happened.

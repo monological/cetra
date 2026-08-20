@@ -275,6 +275,15 @@ void free_physics_world(PhysicsWorld* world);
 uint32_t physics_world_update(PhysicsWorld* world, float dt, int collision_steps);
 void physics_world_optimize(PhysicsWorld* world);
 
+// Subtract a world-origin shift from every body (spec 11.62). Jolt is single
+// precision and holds its own world positions, so it does not follow a scene
+// shift and has to be told; a CharacterVirtual is separate from any body and is
+// NOT covered here -- see character_controller_set_position.
+//
+// Velocities are left alone on purpose: a velocity is a difference, and moving
+// where it is measured from does not change it.
+void physics_world_shift_origin(PhysicsWorld* world, const vec3 delta);
+
 // Shape creation helpers
 JPC_Shape* physics_create_box_shape(vec3 half_extents, float density);
 JPC_Shape* physics_create_sphere_shape(float radius, float density);

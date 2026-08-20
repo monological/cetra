@@ -2721,6 +2721,12 @@ ORIGIN_DEGRADE_MIN = 0.20
 # frames on either side of it already cost. Measured 1.08; leaving prev_view_proj
 # uncorrected reads 4.48, and there is nothing in between.
 ORIGIN_VELOCITY_MAX_RATIO = 2.0
+# World units the character's height above the terrain may drift across a shift,
+# and the tolerance on the shift moving it by exactly the delta. Measured 0.000 on
+# both: the capsule and the ground move together, so this is an equality, and the
+# margin is for a controller that resolves a contact differently on the frame the
+# broadphase is rebuilt.
+ORIGIN_CLEARANCE_MAX = 0.05
 
 
 # 800x600 on a HiDPI display and 400x300 everywhere else -- so absolute counts
@@ -2826,6 +2832,30 @@ def _origin_diff(a, b):
     return n / float(wa * ha), worst
 
 
+_ORIGIN_TRACE = re.compile(
+    r"player t=\s*([\d.]+) pos\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+).*?"
+    r"grounded (\d)\s+ground_n\.y\s+[\d.]+\s+terrain\s+(-?[\d.]+)")
+
+
+def _origin_trace(workdir, offset, extra):
+    """--trace-player rows for a forest run with the world placed `offset` out.
+
+    The follow camera is deliberately NOT pinned here: this arm is about where the
+    character is, and pinning the camera would leave the one subsystem under test
+    unobserved.
+    """
+    del workdir  # nothing is written; the trace is stdout
+    cmd = [FOREST, "-x", "-f", "120", "-W", "200", "-H", "150", "--no-fog",
+           "--render-mode", "6", "--seed", "1337", "--world-offset", repr(offset),
+           "--trace-player"] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    return [{"t": float(m.group(1)), "x": float(m.group(2)), "y": float(m.group(3)),
+             "z": float(m.group(4)), "grounded": int(m.group(5)), "terrain": float(m.group(6))}
+            for m in _ORIGIN_TRACE.finditer(r.stdout + r.stderr)]
+
+
 def run_origin_gate(workdir):
     """A world away from the origin, and a world that moves under one.
 
@@ -2847,6 +2877,11 @@ def run_origin_gate(workdir):
                       transforms, so a previous-frame twin that missed the delta
                       prints the whole translation as one frame of screen-wide
                       motion -- which no other arm here can see.
+      origin-physics  the character is standing on the same ground after a shift as
+                      before it. Jolt is single precision and holds its own world
+                      positions, so it does not follow the scene and has to be told;
+                      read as height above terrain, which is the one quantity that
+                      must NOT change while both of its terms do.
 
     Read at --shadow-cascades 1, and that is a requirement rather than a default.
     The inner cascades are fitted to the camera frustum, so they follow an offset
@@ -2970,6 +3005,34 @@ def run_origin_gate(workdir):
           f"prev_view_proj uncorrected reads 4.48)")
     if not ok:
         failures.append("origin-velocity")
+
+    # --- Phase 4: the character crosses the shift still standing ---------------
+    # Read as HEIGHT ABOVE TERRAIN. Both terms move -- the capsule by the delta,
+    # the ground because the terrain's centre moved with it -- so their difference
+    # is the only thing here that is supposed to be invariant, and a body left
+    # behind breaks it while leaving both terms individually plausible.
+    rows = _origin_trace(workdir, ORIGIN_NEAR, ["--origin-shift-at", "40"])
+    if rows is None:
+        print("  origin-physics ERROR while tracing the player")
+        return failures + ["origin-physics"]
+    before = [r for r in rows if r["t"] < 0.7]
+    after = [r for r in rows if r["t"] > 0.9]
+    if not before or not after:
+        print(f"  origin-physics ERROR trace has {len(before)} samples before the shift and "
+              f"{len(after)} after (want at least one of each)")
+        return failures + ["origin-physics"]
+
+    b, a = before[-1], after[-1]
+    clearance_drift = abs((a["y"] - a["terrain"]) - (b["y"] - b["terrain"]))
+    moved = abs((b["x"] - a["x"]) - ORIGIN_NEAR)
+    ok = (clearance_drift <= ORIGIN_CLEARANCE_MAX and moved <= ORIGIN_CLEARANCE_MAX
+          and a["grounded"] and b["grounded"])
+    print(f"  origin-physics {'PASS' if ok else 'FAIL'}  height above terrain {b['y'] - b['terrain']:.3f} "
+          f"before the shift and {a['y'] - a['terrain']:.3f} after (drift {clearance_drift:.3f}, want "
+          f"<= {ORIGIN_CLEARANCE_MAX}); x moved {b['x'] - a['x']:.1f} of {ORIGIN_NEAR:.0f}; grounded "
+          f"both sides {bool(b['grounded'])}/{bool(a['grounded'])}")
+    if not ok:
+        failures.append("origin-physics")
 
     return failures
 

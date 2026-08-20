@@ -71,6 +71,8 @@ Scene* create_scene() {
     glm_vec3_zero(scene->world_origin);
     glm_vec3_zero(scene->pending_origin);
     scene->origin_shift_pending = false;
+    scene->on_origin_shift = NULL;
+    scene->origin_shift_ctx = NULL;
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;
@@ -467,6 +469,14 @@ void set_scene_wind(Scene* scene, struct Wind* wind) {
 // cannot diverge; the parser must not be able to author more than the scene can hold.
 _Static_assert(SCENE_MAX_FOG_VOLUMES <= POSTFX_MAX_FOG_VOLUMES,
                "postfx fog-volume mirror must be at least the scene slot count");
+
+void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, void* ctx),
+                               void* ctx) {
+    if (!scene)
+        return;
+    scene->on_origin_shift = on_shift;
+    scene->origin_shift_ctx = ctx;
+}
 
 void scene_set_world_origin(Scene* scene, const vec3 new_origin) {
     if (!scene)

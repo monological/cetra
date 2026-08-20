@@ -798,6 +798,47 @@ void sync_physics_to_entities(PhysicsWorld* world, EntityManager* em) {
                                 sync_physics_entity_callback, world);
 }
 
+/*
+ * Jolt is single precision and stores world positions, so an origin shift has to
+ * be handed to it explicitly (spec 11.62). JoltC exposes BaseOffset, but that is
+ * a contact-manifold precision offset rather than a world shift and moves nothing.
+ *
+ * The body->entity map is walked as the body LIST. That is not a convenience: it
+ * is the complete set, because entity_add_rigid_body is the only site that ever
+ * calls CreateBody and it always registers here. Walking the EntityManager
+ * instead would be a list of entities that happen to have bodies, which is the
+ * same set today and not the same statement.
+ *
+ * Velocities are deliberately untouched -- a velocity is a difference and a
+ * translation does not change it. Warm-start contact impulses are left alone for
+ * the same reason: they are forces, and the geometry that generated them has
+ * moved by exactly the amount the bodies did.
+ */
+void physics_world_shift_origin(PhysicsWorld* world, const vec3 delta) {
+    if (!world || !world->initialized)
+        return;
+    BodyEntityEntry** map = (BodyEntityEntry**)&world->body_entity_map;
+    BodyEntityEntry *entry, *tmp;
+    HASH_ITER(hh, *map, entry, tmp) {
+        JPC_RVec3 pos;
+        JPC_Quat rot;
+        JPC_BodyInterface_GetPositionAndRotation(world->body_interface, entry->body_id, &pos, &rot);
+        vec3 p = GLM_VEC3_ZERO_INIT;
+        jpc_r_to_vec3(pos, p);
+        glm_vec3_sub(p, (float*)delta, p);
+        // Without activation: a sleeping body that is only being re-expressed has
+        // not been disturbed, and waking the world's static geometry to tell it
+        // so would cost a broadphase update of everything at once.
+        JPC_BodyInterface_SetPositionAndRotation(world->body_interface, entry->body_id,
+                                                 vec3_to_jpc_r(p), rot,
+                                                 JPC_ACTIVATION_DONT_ACTIVATE);
+    }
+    // The broadphase tree holds the old bounds until it is told otherwise, and
+    // every body in it moved at once -- which is the one case a rebuild is
+    // cheaper than the incremental updates it replaces.
+    physics_world_optimize(world);
+}
+
 typedef struct {
     float dt;
 } SyncToPhysicsContext;
