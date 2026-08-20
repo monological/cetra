@@ -205,7 +205,12 @@ float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z
         plane = p->field->wear;
         break;
     }
-    return sample_plane(p, plane, x, z);
+    // Clamped because the sampler is a CUBIC: Catmull-Rom overshoots either side
+    // of a sharp step, so a mask that is 0 across a whole neighbourhood still
+    // reads slightly negative next to a peak. The header promises [0,1] and four
+    // consumers would each have to re-establish it otherwise.
+    float v = sample_plane(p, plane, x, z);
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
 float terrain_height_at(const TerrainParams* p, float x, float z) {
@@ -306,7 +311,11 @@ static void terrain_tint(const TerrainParams* p, float x, float z, float height,
     float scoured = smoothstep01(0.10f, 0.45f, wear);
     rockiness = rockiness > scoured ? rockiness : scoured;
     float siltiness = smoothstep01(0.05f, 0.28f, deposit);
-    float wetness = smoothstep01(0.14f, 0.45f, flow);
+    // High, and it has to be. Flow is a log of drainage volume normalised to the
+    // catchment's peak, so its MEAN sits near 0.4 -- every cell drains something.
+    // A threshold placed near that mean paints the whole map as riverbed, which is
+    // what the first pass did. A channel is the top few per cent, not the top half.
+    float wetness = smoothstep01(0.58f, 0.88f, flow);
 
     vec3 c;
     // Grass to moss first, at the fine frequency: it is what stops a hillside

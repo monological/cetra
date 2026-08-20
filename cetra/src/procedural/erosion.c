@@ -16,8 +16,15 @@ ErosionParams erosion_default_params(void) {
     ErosionParams p;
     p.iterations = 220;
     p.dt = 0.02f;
-    p.rain = 0.55f;
-    p.evaporation = 0.055f;
+    // RAIN OVER EVAPORATION IS THE EQUILIBRIUM WATER DEPTH, and that is the one
+    // number to get right before any of the others mean anything. Uniform rain
+    // against proportional evaporation settles at rain/evaporation everywhere, so
+    // the first draft's 0.55 over 0.055 put TEN UNITS of standing water over a
+    // terrain whose cells are two units across -- an ocean, not a catchment. Every
+    // cell then drained into every other, flow came out uniform, and the mask
+    // painted the whole map one colour. 0.02 over 0.5 is 40 mm, a wet hillside.
+    p.rain = 0.02f;
+    p.evaporation = 0.5f;
     p.capacity = 0.32f;
     p.dissolve = 0.45f;
     p.deposit = 0.45f;
@@ -278,10 +285,14 @@ static void stage_erode(const Planes* pl, int j0, int j1) {
                 pl->dep_acc[c] += amount;
             }
 
-            // Water depth is the drainage signal, not velocity: a mask built from
-            // speed lights up every steep face, where what a stream bed needs is
-            // where water COLLECTED.
-            pl->flow_acc[c] += pl->w[c];
+            // DRAINAGE, not depth and not speed. Rain falls on every cell, so
+            // standing depth is high everywhere and paints the whole map one
+            // colour -- measured, and it washed every trace of the network out.
+            // Speed instead lights up every steep face, channel or not. What makes
+            // a stream bed is how much water PASSED THROUGH, which is the outflow
+            // volume, and it is the only one of the three that accumulates along a
+            // drainage path the way a river does.
+            pl->flow_acc[c] += (pl->fl[c] + pl->fr[c] + pl->ft[c] + pl->fb[c]) * pl->p.dt;
         }
     }
 }
@@ -562,6 +573,16 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
         stats->workers = workers;
     }
 
+    // Flow is compressed before it is scaled, and the other two are not.
+    //
+    // Drainage is heavy-tailed by nature: a trunk channel carries orders of
+    // magnitude more than the hillside beside it, so scaling linearly to the peak
+    // leaves everything except the single largest river at nearly zero. log1p is
+    // what every terrain tool displays flow accumulation through, for this reason.
+    // Erosion and deposition are not heavy-tailed -- they are bounded by how much
+    // material a cell had -- so compressing them would only flatten them.
+    for (size_t k = 0; k < n; k++)
+        field->flow[k] = log1pf(field->flow[k]);
     float flow_peak = normalise(field->flow, n);
     float deposit_peak = normalise(field->deposit, n);
     float wear_peak = normalise(field->wear, n);
