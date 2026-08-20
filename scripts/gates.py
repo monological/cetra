@@ -5295,6 +5295,29 @@ def _cscn_wave_train_parse_fields():
     return set(re.findall(r"out->has_([a-z0-9_]+)\s*=", body))
 
 
+def _c_function_body(src, signature):
+    """The braced body of one C function, by brace matching from its signature.
+
+    Bounding a body at the next `static ` instead -- which this file did until
+    11.60 -- is only correct when the next function is also static. It was not:
+    apply_wave_train is followed by four NON-static functions, so its "body" ran
+    to the end of them and the scraper had been reading four extra functions all
+    along. It went unnoticed because nothing else in that stretch used the
+    src->has_/dst-> idiom, until a layered material's `has_uv_scale` did.
+    """
+    start = src.index(signature) + len(signature)
+    open_brace = src.index("{", start)
+    depth = 0
+    for i in range(open_brace, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_brace:i + 1]
+    raise ValueError(f"unbalanced braces after {signature!r}")
+
+
 def _cscn_wave_train_apply_fields():
     """Return (fields apply_wave_train GUARDS on, fields it WRITES), from the C source.
 
@@ -5308,7 +5331,7 @@ def _cscn_wave_train_apply_fields():
     one, and neither shows up if you only count lines.
     """
     src = open(os.path.join(ROOT, "apps", "render", "src", "cscene_apply.c")).read()
-    body = src.split("static void apply_wave_train(")[1].split("\nstatic ")[0]
+    body = _c_function_body(src, "static void apply_wave_train(")
     return (set(re.findall(r"src->has_([a-z0-9_]+)", body)),
             set(re.findall(r"dst->([a-z0-9_]+)\s*=", body)))
 
