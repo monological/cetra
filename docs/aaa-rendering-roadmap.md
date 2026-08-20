@@ -1939,7 +1939,37 @@ arrived at through D8's own round trip, with every gate arm green. Measured flow
 back. **A round-trip arm that compares only the geometry is not a round-trip arm**, which is the
 transferable part.
 
-### D9. Terrain material layers — Effort M
+### D9. Terrain material layers — Effort M — **DONE (spec 11.60)**
+
+**This entry called for a second surface program and that was wrong on three counts**, all of them
+found by reading the code the entry describes:
+
+1. *"Lights, shadows and IBL arrive with no call-site work"* is true and counts the wrong half. The
+   UBO binding is free; the SHADING is ~740 lines written inline in `pbr_frag.glsl` with no include
+   behind it — PCSS/CSM, the clustered light loop body, the IBL split-sum block. A second surface
+   program duplicates those or extracts them first.
+2. The precedent it names is not one. `create_pbr_skinned_program` compiles **`pbr_frag_shader_str`**
+   — a different VERTEX shader over the same fragment shader. The tree's only real second surface
+   fragment shader is `water_frag`, which does not include `lights_ubo.glsl` at all and pays for it:
+   no clustered lights, no punctual shadows, no LTC, no GI. Right for an ocean, ruinous for the
+   largest opaque surface in a scene.
+3. The declaration it says is missing already exists. `pbr_frag` is at exactly 16/16, so the entry is
+   right that there is no room for a NEW one — but `maskArray` is a `sampler2DArray` already declared,
+   already built and already bound on every draw, and `mask_layer_for` dedups by GL id and knows
+   nothing about masks.
+
+**What shipped is a material feature, not a program**: N layers as further tenants of the material
+texture array, for **zero new sampler declarations, zero new units and zero new programs**. The test
+that separates the two cases is whether the LIGHTING MODEL differs, not whether the texture count
+does. Water's does. Terrain's does not — it is the most ordinary PBR surface in the engine, it just
+has more than one albedo.
+
+The feature also shipped **inert in `apps/forest`** and was caught in review: the splat was addressed
+by UV1, and `build_grid` writes UV1 as a literal zero at every terrain vertex, so a kilometre of
+ground sampled one texel. See 11.60's as-built for that and six more defects, and for the three gate
+arms that passed their own falsification while measuring something else.
+
+### D9. Terrain material layers — the original entry
 No layer-blending system of any kind exists in this engine — a sweep for splat, decal, detail-map,
 triplanar and blend-weight returns zero hits outside vendored trees, and `specs/11.29:111` states the
 absence directly. Terrain is tinted per VERTEX, at ~2.6 units between vertices, which is why the
@@ -2453,7 +2483,7 @@ not scheduled.
 | 39 | **D6 Heightfield backend** | S | **DONE (11.59).** The unlock, and it exists only to serve 40. `terrain_height_at` gains a SOURCE — analytic fbm or a filtered sample of a stored grid — while staying a pure function of `(state, x, z)`, so all **eight** consumers keep working unchanged and a NULL field is today's path byte-identical. Three contracts, not details: the filter is **C1** (bilinear's piecewise-constant derivative would facet normals at cell boundaries and reach the scatter's slope gate), out of domain **clamps to edge** (`forest.c:939` queries at a camera eye that can leave the extent), and thread-safety is **not** improved — the analytic path memoizes into file statics and stays unsafe. |
 | 40 | **D7 Erosion bake** | M | **DONE (11.59).** The largest visual gap against a shipped AAA terrain, and the reason 39 exists. **Erosion is a simulation over a grid, not a function of position** — the height at a point depends on the whole upstream watershed, so there is no `f(x,z)` to write and terrain must become DATA. That is why UE/Unity/Frostbite/Decima all consume a baked heightfield. **The silhouette is the smaller half**: the sim knows where water flowed, so its flow/deposit/wear masks put gravel in stream beds and bare rock on ridges — where `terrain_tint` today guesses from slope+altitude+noise, which is exactly why it reads as procedural. CPU, Eulerian, double-buffered, threaded like the cloud bake, whose zero-sync disjoint-slab shape gives **bytes identical at any thread count**. Droplet/Lagrangian erosion is refused on that same test. **Two corrections from building it.** Mei's own semi-Lagrangian transport LEAKS -- 3.06% of the sediment budget, since a bilinear gather conserves mass only for a divergence-free field -- so the load rides the fluxes instead and closure is 5e-09. And rain over evaporation IS the equilibrium depth: the first defaults flooded the whole terrain and the mask came out uniform. 452 ms at 512² x 220 on eight threads, release. |
 | 41 | **D8 Heightmap import/export** | S | **DONE (11.59).** Unifies the two producers by making them meet at one format: **the bake writes what the importer reads**, so dev-time bakes, ship-time loads, and a Gaea export drops into the same slot. `.r16` (headerless 16-bit, the literal UE/World Machine/Gaea interchange) plus 16-bit PNG on the read side via **`stbi_load_16`, vendored and called nowhere in this repo**. Deliberately not routed through `texture.c`, whose `texture_gl_formats` hard-wires *unsized* internal formats and has no path that can request 16-bit at all. **The masks are the half that is easy to drop and 11.59 dropped them first**: the save wrote height only, so a shipping load got eroded geometry shaded by the guess erosion exists to replace -- 40's opening failure, reached through 41's own round trip, with every arm green. A round-trip arm comparing only the geometry is not one. |
-| 42 | **D9 Terrain material layers** | M | No layer-blending system of any kind exists here — splat, decal, detail-map, triplanar and blend-weight all return zero hits outside vendored trees. Terrain is tinted per VERTEX at ~2.6 units, which is why the ground does not hold up close. **This was going to be booked L against Wall 1 and that would have been wrong**: by 11.45's rule (`ocean.glsl:63-78`) N layers are ONE shape, so two `sampler2DArray`s plus a weight source is **three declarations regardless of N**. Multi-layer terrain never needed virtual texturing — it needed a texture array and a program with room. Terrain tiles are ordinary Meshes, so the program follows `pbr_skinned`'s pattern, not `water_frag`'s bespoke VAO. |
+| 42 | **D9 Terrain material layers** | M | **DONE (11.60).** By 11.45's rule (`ocean.glsl:63-78`) N layers are ONE shape — and the row was still one step short: it wanted "a program with room", when the declaration was already there. `maskArray` is bound on every draw and `mask_layer_for` knows nothing about masks, so layers became further tenants of it for **zero new declarations, zero new units and zero new programs**. The `pbr_skinned` precedent it cited is a second VERTEX shader over the same fragment shader; the only real second surface program, `water_frag`, has no clustered lights, punctual shadows, LTC or GI, which is right for an ocean and ruinous for terrain. **The test is whether the LIGHTING MODEL differs, not the texture count.** Shipped world-aligned (triplanar) with a height-weighted blend and a splat whose coordinate SPACE the material states — because world XZ cannot address a vertical surface and a mesh-local reading makes the weights swim on a moving prop. It also shipped inert in `apps/forest` and was caught in review: terrain writes UV1 as a literal zero, so the ground sampled one splat texel, through a green suite. |
 | 43 | **D10 Virtual-texture compositing** | XL | What UE actually does, and **the destination rather than the next step**: 42 gets N layers for three declarations and four layers cost eight taps, so building a cache before there is anything to cache is the wrong order. Earns its keep when one of three things happens first — layer count past ~8, roads/decals compositing into the ground, or a terrain too large for one atlas (which is 36). Stage it: a baked composite atlas first (4096² covers forest's 1 km²), then true RVT. GL 4.1 has **no sparse textures**, so the cache is an ordinary atlas and feedback is a low-res MRT plus a readback. |
 | 44 | **D11 Large-world origin rebasing** | M/L | Independent of 39-43 and needed by anything wanting a world past a few kilometres: fp32 world coordinates cannot hold still, which is why UE4 capped at ~20 km and UE5 shipped fp64 Large World Coordinates. **It also fixes a defect that is already live and has nothing to do with world size** — the outermost shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) while the inner ones follow the camera, so terrain placed away from the origin loses its far shadows with no diagnostic. `terrain.h` already warns about this and works around it by centring the terrain. |
 
@@ -2503,12 +2533,26 @@ backwards in a way worth recording: streaming is a problem you get once terrain 
 turns terrain into data is **erosion** -- a simulation over a grid, with no `f(x,z)` to write -- not
 scale. So 36 moves to the end of its own chain and 39 (S) and 41 (S) join 38 in the small column.
 
-**All three of those are now built** (11.59), which leaves the table with **42 (D9, terrain material
-layers, M)** as the next thing to do and the only booked item with a producer already shipped
-waiting on it: the flow / deposit / wear masks exist, round-trip through the heightmap format, and
-are consumed today by a per-VERTEX tint at 2.6 units. Everything else outstanding is 29 (C4), 32
-(D0), 37 (E7), 43 (D10), 44 (D11) and the re-scoped 36 -- all L or XL and none with a measurement
-demanding it -- plus 38 (E10), still S and still carrying `ssr_frag`'s 31,800 px.
+**All three of those are now built** (11.59), which left the table with **42 (D9, terrain material
+layers, M)** as the next thing to do and the only booked item with a producer already shipped waiting
+on it: the flow / deposit / wear masks existed, round-tripped through the heightmap format, and were
+consumed by a per-VERTEX tint at 2.6 units. **42 is now built too** (11.60), and the masks have a
+consumer that resolves per texel.
+
+What is left is 29 (C4), 32 (D0), 37 (E7), 43 (D10), 44 (D11) and the re-scoped 36 -- all L or XL and
+none with a measurement demanding it -- plus 38 (E10), still S and still carrying `ssr_frag`'s 31,800
+px. **43 (D10) is the only one 11.60 moved the case for, and it moved it DOWN**: the entry earns its
+keep past ~8 layers or with roads and decals compositing in, and four layers now cost three sampler
+declarations and 4-25 taps. Nothing is waiting on a cache.
+
+**The lesson 11.60 adds is about this table rather than about terrain.** 11.52 recorded that a row's
+stated reasons can rot; 11.53 that a row can be wrong about what it describes; 11.56 that a row's
+premise can name a defect another spec already fixed; 11.59 that the table can be missing an entire
+subject. This is the fifth kind: **a row can reason correctly from a real constraint and stop one
+step short of the answer.** Row 42 knew the sampler ledger was full, knew N textures of one shape cost
+one declaration, and concluded it needed a program with room -- without asking whether the
+declaration it wanted was already bound on every draw. It was. The item cost an M as booked and would
+have cost an L as described.
 
 **The generalisable part is not about terrain.** 11.52 recorded that a row's stated reasons can rot;
 11.53 that a row can be wrong about what it describes; 11.56 that a row's premise can name a defect

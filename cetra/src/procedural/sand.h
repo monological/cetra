@@ -22,9 +22,15 @@ void sand_height_field(float* out, int width, int height, float ripple_angle);
 
 // RGB. Near-neutral by design, and that is the whole reason this file is small:
 // the large-scale colour -- dry sand, wet sand, the upland it grades into -- comes
-// from VERTEX COLOUR, because pbr_frag declares sixteen of sixteen samplers and a
-// second terrain albedo cannot be bound. So this map carries grain and relief
-// shading only, and multiplying it by any hue has to land on plausible sand.
+// from VERTEX COLOUR. So this map carries grain and relief shading only, and
+// multiplying it by any hue has to land on plausible sand.
+//
+// The reason given here used to be that pbr_frag declares sixteen of sixteen
+// samplers and a second terrain albedo cannot be bound. That stopped being true
+// in spec 11.60: a second albedo goes in the material texture array as a LAYER,
+// for no declaration at all. What remains true is that this map is authored to be
+// tinted, so a caller wanting a per-texel ground should reach for a layer set
+// rather than trying to make this one carry colour.
 unsigned char* sand_albedo(int width, int height, const float* field);
 unsigned char* sand_normal(int width, int height, const float* field);
 // RGB, and not flat: wet-looking specular comes from the vertex-colour band, but
