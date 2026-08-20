@@ -68,20 +68,6 @@ static Texture* island_roughness_tex = NULL;
 static float sand_stochastic_lut[STOCHASTIC_LUT_SIZE * 3];
 static bool sand_stochastic_ready = false;
 
-// Bake one CPU buffer into a pooled texture and release the buffer. Going
-// through the pool (rather than a hand-rolled glTexImage2D) is what gets the
-// albedo maps decoded as sRGB and, for the leaf cutout, gets the transparent
-// texels' RGB dilated so mipping doesn't fringe the leaf edges with black.
-static Texture* bake_texture(Scene* scene, unsigned char* data, int width, int height,
-                             int channels, bool is_srgb, const char* key) {
-    if (!data)
-        return NULL;
-    Texture* tex =
-        load_texture_from_memory(scene->tex_pool, key, data, width, height, channels, is_srgb);
-    free(data);
-    return tex;
-}
-
 static void generate_procedural_textures(Scene* scene) {
     const int B = BARK_TEXTURE_SIZE;
     const int T = TEXTURE_SIZE;
@@ -95,29 +81,29 @@ static void generate_procedural_textures(Scene* scene) {
     float* bark_field = malloc((size_t)B * B * sizeof(float));
     if (bark_field) {
         veg_bark_height_field(bark_field, B, B);
-        bark_albedo_tex =
-            bake_texture(scene, veg_bark_albedo(B, B, bark_field), B, B, 3, true,
-                         "proc_bark_albedo");
-        bark_normal_tex =
-            bake_texture(scene, veg_bark_normal(B, B, bark_field), B, B, 3, false,
-                         "proc_bark_normal");
+        bark_albedo_tex = load_texture_from_memory_owned(
+            scene->tex_pool, "proc_bark_albedo", veg_bark_albedo(B, B, bark_field), B, B, 3, true);
+        bark_normal_tex = load_texture_from_memory_owned(
+            scene->tex_pool, "proc_bark_normal", veg_bark_normal(B, B, bark_field), B, B, 3, false);
         bark_roughness_tex =
-            bake_texture(scene, veg_bark_roughness(B, B, bark_field), B, B, 3, false,
-                         "proc_bark_roughness");
-        bark_height_tex =
-            bake_texture(scene, veg_bark_height(B, B, bark_field), B, B, 1, false,
-                         "proc_bark_height");
+            load_texture_from_memory_owned(scene->tex_pool, "proc_bark_roughness",
+                                           veg_bark_roughness(B, B, bark_field), B, B, 3, false);
+        bark_height_tex = load_texture_from_memory_owned(
+            scene->tex_pool, "proc_bark_height", veg_bark_height(B, B, bark_field), B, B, 1, false);
         free(bark_field);
     }
 
     printf("Generating procedural leaf cluster atlas...\n");
     unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
     veg_leaf_cluster_maps(LW, LH, &leaf_a, &leaf_n, &leaf_r);
-    leaf_albedo_tex = bake_texture(scene, leaf_a, LW, LH, 4, true, "proc_leaf_albedo");
-    leaf_normal_tex = bake_texture(scene, leaf_n, LW, LH, 3, false, "proc_leaf_normal");
-    leaf_roughness_tex = bake_texture(scene, leaf_r, LW, LH, 3, false, "proc_leaf_roughness");
-    leaf_sprite_tex =
-        bake_texture(scene, veg_leaf_sprite(T), T, T, 4, true, "proc_leaf_sprite");
+    leaf_albedo_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_albedo", leaf_a,
+                                                     LW, LH, 4, true);
+    leaf_normal_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_normal", leaf_n,
+                                                     LW, LH, 3, false);
+    leaf_roughness_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_roughness",
+                                                        leaf_r, LW, LH, 3, false);
+    leaf_sprite_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_sprite",
+                                                     veg_leaf_sprite(T), T, T, 4, true);
 
     /*
      * The ground is SAND (spec 11.44), and its colour is not in this texture.
@@ -149,11 +135,14 @@ static void generate_procedural_textures(Scene* scene) {
         unsigned char* sand_alb = sand_albedo(T, T, sand_field);
         stochastic_gaussianize(sand_alb, T, T, sand_stochastic_lut);
         sand_stochastic_ready = sand_alb != NULL;
-        island_albedo_tex = bake_texture(scene, sand_alb, T, T, 3, false, "proc_sand_albedo");
+        island_albedo_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_sand_albedo",
+                                                           sand_alb, T, T, 3, false);
         island_normal_tex =
-            bake_texture(scene, sand_normal(T, T, sand_field), T, T, 3, false, "proc_sand_normal");
-        island_roughness_tex = bake_texture(scene, sand_roughness(T, T, sand_field), T, T, 3,
-                                            false, "proc_sand_roughness");
+            load_texture_from_memory_owned(scene->tex_pool, "proc_sand_normal",
+                                           sand_normal(T, T, sand_field), T, T, 3, false);
+        island_roughness_tex =
+            load_texture_from_memory_owned(scene->tex_pool, "proc_sand_roughness",
+                                           sand_roughness(T, T, sand_field), T, T, 3, false);
         free(sand_field);
     }
 

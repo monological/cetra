@@ -135,8 +135,31 @@ void texture_set_default_sampler_state(void);
 void texture_dilate_transparent_rgb(unsigned char* data, int width, int height);
 
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb);
+
+// The pool does NOT keep `pixels`. glTexImage2D takes GL's own copy and Texture
+// stores no pixel pointer, so the caller's buffer is dead the moment this
+// returns and the caller frees it. Stated here because the only place that said
+// so was an implementation comment, and a caller reading the header could not
+// learn it.
+//
+// Cached by `key`: a repeat key returns the existing Texture WITHOUT looking at
+// `pixels` at all, so a duplicate key silently discards a freshly generated
+// image.
 Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
                                   int width, int height, int channels, bool is_srgb);
+
+// The same, but TAKING OWNERSHIP: uploads and then frees `pixels`.
+//
+// For a procedural bake, which is every caller that generates into a malloc'd
+// buffer and has no use for it afterwards. Both apps that do this had grown
+// their own identical copy of it -- what the helper encodes is a fact about the
+// pool above, not about either app.
+//
+// A NULL `pixels` returns NULL, so a generator that failed needs no guard at the
+// call site.
+Texture* load_texture_from_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
+                                        int width, int height, int channels, bool is_srgb);
+
 void remove_texture_from_pool(TexturePool* pool, const char* filepath);
 void clear_texture_pool(TexturePool* pool);
 

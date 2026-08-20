@@ -625,6 +625,15 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     return new_texture;
 }
 
+Texture* load_texture_from_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
+                                        int width, int height, int channels, bool is_srgb) {
+    if (!pixels)
+        return NULL;
+    Texture* tex = load_texture_from_memory(pool, key, pixels, width, height, channels, is_srgb);
+    free(pixels);
+    return tex;
+}
+
 void remove_texture_from_pool(TexturePool* pool, const char* filepath) {
     if (pool && filepath) {
         Texture* to_remove = NULL;
