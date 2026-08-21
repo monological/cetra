@@ -48,6 +48,13 @@ typedef struct SceneNode {
     mat4 original_transform;
     mat4 global_transform;
     mat4 prev_global_transform; // Last frame's global_transform, for motion vectors
+    // Whether prev_global_transform describes a frame this node was actually
+    // drawn in. False until the first transform walk reaches it, and what that
+    // buys is a node created mid-run: its prev is the identity, so a motion
+    // vector taken from it reports the object as having travelled from the world
+    // origin this frame. One node doing that is a smear; a region's worth of
+    // them arriving at once is the whole frame.
+    bool prev_valid;
 
     Mesh** meshes;
     size_t mesh_count;

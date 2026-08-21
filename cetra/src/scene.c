@@ -665,6 +665,7 @@ SceneNode* create_node() {
     glm_mat4_identity(node->original_transform);
     glm_mat4_identity(node->global_transform);
     glm_mat4_identity(node->prev_global_transform);
+    node->prev_valid = false;
     glm_mat3_identity(node->normal_matrix);
 
     node->meshes = NULL;
@@ -982,6 +983,13 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         // Remember last frame's transform for motion vectors, then recompute.
         glm_mat4_copy(node->global_transform, node->prev_global_transform);
         glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
+        // A node reached for the first time has no previous frame, and the
+        // identity it was created with is not one -- it would report the object
+        // as having arrived from the world origin. Standing still is the truth.
+        if (!node->prev_valid) {
+            glm_mat4_copy(node->global_transform, node->prev_global_transform);
+            node->prev_valid = true;
+        }
 
         // Only for nodes that actually moved. The copy above makes
         // prev_global_transform the previous frame's value, so this comparison

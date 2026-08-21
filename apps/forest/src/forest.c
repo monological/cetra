@@ -66,14 +66,37 @@
 
 #define TREE_PROTOTYPES 6
 #define ROCK_PROTOTYPES 8
-#define TREE_COUNT      2000
-#define ROCK_COUNT      3000
+// Props over the whole DOMAIN, which since 11.63 is not the same as props in the
+// world: a region gets its share by area and the ones past the shore place
+// nothing, so the island keeps about half. These are set so what stands on the
+// land is the ~2000 trees and ~3000 rocks this app has always been about — a
+// forest is the thing it exists to draw, and thinning it by half because the
+// world grew a coastline would make every batching and LOD reading here a
+// measurement of a sparser scene.
+#define TREE_COUNT      3900
+#define ROCK_COUNT      5900
 
 // Collider resolution. Higher than it needs to be for Jolt and lower than the
 // visual tiles, which is the trade: the character stands on this while the eye
 // sees the tiles, and they diverge by about the height change across one
 // collider quad.
 #define COLLIDER_SEGMENTS 256
+
+// The island (spec 11.63). Start is a fraction of the half-extent, so the shape
+// is the same however big the world is; depth and sea level are world units,
+// which they have to be -- they are measured against the fbm's own amplitude and
+// not against the domain.
+// Where the ground starts falling, as a fraction of the half-extent. The
+// SHORELINE lands well outside it -- the falloff has only to carry the ground
+// down to sea level, not to the sea floor -- so this is the number that decides
+// how much of the domain is land, and 0.72 puts the waterline near 0.85.
+#define ISLAND_START     0.72f
+#define ISLAND_DEPTH     140.0f
+#define ISLAND_SEA_LEVEL -35.0f
+// How far above the waterline a prop's base has to be, in world units. Over the
+// 1.21 the rock scatter can sink a boulder after sample_ground has answered, so
+// the outermost props stand on the beach and not in the surf.
+#define PROP_SHORE_MARGIN 2.5f
 
 // Trees are generated at the generator's native scale (trunk_length ~125) and
 // scaled down per instance rather than generated small. Leaf density is quoted
@@ -101,6 +124,17 @@ typedef struct ForestArgs {
     // Domain half-width in world units; 0 keeps the app default. The only way to
     // ask what a bigger world costs, and what the quadtree is for.
     float terrain_extent;
+    // Bisect lever (spec 11.63): one region over the whole domain, always
+    // resident, which is what this app did before residency existed.
+    int no_regions;
+    int region_probe;
+    float region_radius; // 0 keeps REGION_LOAD_RADIUS
+    float region_span;   // 0 keeps REGION_SPAN_DEFAULT
+    float walk;          // scripted forward speed for --player; 0 = keyboard only
+    // The island is what this app IS since spec 11.63: ground that falls to a
+    // shoreline and open sea past it. --no-island is the flat-domain terrain
+    // every arm written before it measures, and it takes the sea with it.
+    int no_island;
     int no_instancing;
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int depth_prepass;    // position-only depth before shading; off by default
@@ -277,19 +311,6 @@ static void set_node_trs(SceneNode* node, const vec3 pos, float yaw, const vec3 
     glm_mat4_copy(m, node->original_transform);
 }
 
-// One instance of a shared prototype. Every holder takes its own reference; the
-// creator drops the one create_mesh handed out after emitting, so the plain rule
-// holds -- whoever creates it releases it -- and a prototype that ends up with
-// no instances is freed rather than leaked.
-static void add_instance(SceneNode* group, Mesh* mesh, const vec3 pos, float yaw,
-                         const vec3 scale) {
-    SceneNode* node = create_node();
-    add_mesh_to_node(node, mesh_ref(mesh));
-    set_node_trs(node, pos, yaw, scale);
-    add_child_node(group, node);
-    g_node_count++;
-}
-
 static SceneNode* make_group(const char* name) {
     SceneNode* g = create_node();
     set_node_name(g, name);
@@ -358,24 +379,6 @@ static int placement_cmp(const void* a, const void* b) {
     return 0;
 }
 
-// Emits one group per prototype, in the order the sort already put them.
-static void emit_placements(const Placement* items, int count, Mesh* const* protos, int proto_count,
-                            const char* prefix) {
-    for (int i = 0; i < proto_count; ++i) {
-        if (!protos[i])
-            continue;
-        char name[40];
-        snprintf(name, sizeof(name), "%s_%d", prefix, i);
-        SceneNode* group = NULL;
-        for (int k = 0; k < count; ++k) {
-            if (items[k].proto != i)
-                continue;
-            if (!group)
-                group = make_group(name);
-            add_instance(group, protos[i], items[k].pos, items[k].yaw, items[k].scale);
-        }
-    }
-}
 
 // Its own table, not the global one: the texture bake reseeds the shared
 // srand-backed generator, and a scatter that shifted depending on whether
@@ -418,6 +421,39 @@ static float clump_density(float x, float z, float freq) {
  * and an arm checking only the trees would pass against a build that had never
  * implemented any of this.
  */
+// Accumulate a region's trees for the scatter probe, which reads the whole
+// distribution: a region is a sixteenth of it and says nothing on its own.
+static Placement* g_probe_items;
+static size_t g_probe_count, g_probe_cap;
+
+static void probe_collect(const Placement* items, int count) {
+    if (g_probe_count + (size_t)count > g_probe_cap) {
+        size_t cap = g_probe_cap ? g_probe_cap * 2 : 1024;
+        while (cap < g_probe_count + (size_t)count)
+            cap *= 2;
+        Placement* grown = realloc(g_probe_items, cap * sizeof(Placement));
+        if (!grown)
+            return;
+        g_probe_items = grown;
+        g_probe_cap = cap;
+    }
+    memcpy(&g_probe_items[g_probe_count], items, (size_t)count * sizeof(Placement));
+    g_probe_count += (size_t)count;
+}
+
+// The lowest prop of ANY kind, which is the whole of "nothing stands below the
+// waterline". Rocks and not just trees, and that is the point: a tree is turned
+// away from the shoal by the slope test long before the waterline matters, where
+// a rock tolerates 57 degrees and the rim is 45, so the rock is the one the rule
+// is actually for. Only maintained under --scatter-probe.
+static float g_lowest_prop_y = FLT_MAX;
+
+static void probe_low(const Placement* items, int count) {
+    for (int i = 0; i < count; ++i)
+        if (items[i].pos[1] < g_lowest_prop_y)
+            g_lowest_prop_y = items[i].pos[1];
+}
+
 static void scatter_probe(const Placement* items, int count) {
     float tree_max = 0.0f, tree_sum = 0.0f;
     for (int i = 0; i < count; i++) {
@@ -426,6 +462,8 @@ static void scatter_probe(const Placement* items, int count) {
         if (f > tree_max)
             tree_max = f;
     }
+    printf("scatter-probe shore trees=%d low_y=%.6f water=%d water_level=%.6f\n", count,
+           (double)g_lowest_prop_y, g_args.water ? 1 : 0, (double)g_args.water_level);
 
     // The terrain's own distribution, on a coarse grid over the same margin the
     // scatter draws from -- sampling the whole extent would include an edge the
@@ -471,10 +509,16 @@ static void scatter_probe(const Placement* items, int count) {
 // 1.0 means "anywhere", which is right for a boulder: a rock in a stream bed is
 // where rocks actually are.
 static bool sample_ground(float max_slope, float max_flow, float clump_freq, float clump_power,
-                          vec3 out_pos) {
+                          float x0, float z0, float span, vec3 out_pos) {
+    float x = rnd_range(x0, x0 + span);
+    float z = rnd_range(z0, z0 + span);
+    // The domain's own margin still applies, and clipping rather than rejecting:
+    // a rejection here would thin the edge regions rather than trim them.
     float margin = g_terrain.extent * 0.96f;
-    float x = terrain_world_x(&g_terrain, rnd_range(-margin, margin));
-    float z = terrain_world_z(&g_terrain, rnd_range(-margin, margin));
+    float lo_x = terrain_world_x(&g_terrain, -margin), hi_x = terrain_world_x(&g_terrain, margin);
+    float lo_z = terrain_world_z(&g_terrain, -margin), hi_z = terrain_world_z(&g_terrain, margin);
+    if (x < lo_x || x > hi_x || z < lo_z || z > hi_z)
+        return false;
     vec3 n = {0.0f, 1.0f, 0.0f};
     terrain_normal_at(&g_terrain, x, z, n);
     if (n[1] < max_slope)
@@ -489,8 +533,21 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
         if (rnd() > powf(d, clump_power))
             return false;
     }
+    float y = terrain_height_at(&g_terrain, x, z);
+    // Nothing STANDS below the waterline. The sea floor is terrain like any other
+    // as far as the height function is concerned, and without this an island's
+    // whole shoal is a drowned forest.
+    //
+    // The margin has to clear the deepest a caller sinks its prop AFTER this
+    // returns: the rock scatter drops a boulder 0.22 of its scale into the
+    // ground, which at the largest scale is 1.21 units. And the rock is what this
+    // is really for -- a tree is turned away from the shoal by the slope test
+    // long before the waterline matters, where a rock tolerates 57 degrees and
+    // the rim is 45.
+    if (g_args.water && y < g_args.water_level + PROP_SHORE_MARGIN)
+        return false;
     out_pos[0] = x;
-    out_pos[1] = terrain_height_at(&g_terrain, x, z);
+    out_pos[1] = y;
     out_pos[2] = z;
     return true;
 }
@@ -820,9 +877,17 @@ static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
     free_mesh(collider);
 }
 
-static void build_trees(void) {
-    Mesh* bark[TREE_PROTOTYPES];
-    Mesh* leaf[TREE_PROTOTYPES];
+// The prototypes, built once and shared by every instance in every region. Held
+// as file statics rather than returned, because a region that loads three
+// seconds into the run has to find them and rebuilding a tree per region would
+// cost more than the instances do.
+static Mesh* g_bark[TREE_PROTOTYPES];
+static Mesh* g_leaf[TREE_PROTOTYPES];
+static Mesh* g_rocks[ROCK_PROTOTYPES];
+
+static void build_tree_prototypes(void) {
+    Mesh** bark = g_bark;
+    Mesh** leaf = g_leaf;
 
     for (int i = 0; i < TREE_PROTOTYPES; ++i) {
         TreeParams tp;
@@ -871,17 +936,18 @@ static void build_trees(void) {
         }
         tree_skeleton_free(&skel);
     }
+}
 
-    // Placements drawn once and used for BOTH halves, so a tree's bark and its
-    // leaves stand in the same place.
-    static Placement items[TREE_COUNT];
+// Fill `items` with up to `count` trees inside [x0, x0+span] x [z0, z0+span],
+// drawing from whatever generator the caller seeded.
+static int scatter_trees(Placement* items, int count, float x0, float z0, float span) {
     int placed = 0;
-    for (int attempt = 0; attempt < TREE_COUNT * 12 && placed < TREE_COUNT; ++attempt) {
+    for (int attempt = 0; attempt < count * 12 && placed < count; ++attempt) {
         vec3 p = {0.0f, 0.0f, 0.0f}; // out-param; zeroed for static analysis
         // Tight clumps: groves with real clearings between them. Below the
         // gravel band's own low edge, so no tree stands where the splat has
         // started painting a stream bed.
-        if (!sample_ground(0.86f, TREE_MAX_FLOW, 0.0022f, 2.2f, p))
+        if (!sample_ground(0.86f, TREE_MAX_FLOW, 0.0022f, 2.2f, x0, z0, span, p))
             continue;
         float s = TREE_WORLD_SCALE * rnd_range(0.65f, 1.6f);
         glm_vec3_copy(p, items[placed].pos);
@@ -892,27 +958,11 @@ static void build_trees(void) {
         placed++;
     }
     qsort(items, (size_t)placed, sizeof(Placement), placement_cmp);
-
-    if (g_args.scatter_probe)
-        scatter_probe(items, placed);
-
-    // Bark and leaves go into SEPARATE group sets. A node holding both would put
-    // a leaf item between every pair of bark items, and the run finder breaks on
-    // the first item this pass does not want -- so every run would be length one
-    // and batching would silently do nothing.
-    emit_placements(items, placed, bark, TREE_PROTOTYPES, "bark");
-    emit_placements(items, placed, leaf, TREE_PROTOTYPES, "leaf");
-    // Release the creation reference now that every holder has taken its own.
-    // A prototype that drew no placements is destroyed here rather than leaked.
-    for (int i = 0; i < TREE_PROTOTYPES; ++i) {
-        free_mesh(bark[i]);
-        free_mesh(leaf[i]);
-    }
-    printf("Trees: %d instances over %d prototypes\n", placed, TREE_PROTOTYPES);
+    return placed;
 }
 
-static void build_rocks(void) {
-    Mesh* rocks[ROCK_PROTOTYPES];
+static void build_rock_prototypes(void) {
+    Mesh** rocks = g_rocks;
     for (int i = 0; i < ROCK_PROTOTYPES; ++i) {
         RockParams rp = rock_default_params();
         rp.seed = 7u + (unsigned)i * 13u;
@@ -928,15 +978,17 @@ static void build_rocks(void) {
         finalize_mesh(rocks[i], g_mat_rock, true);
     }
 
-    static Placement items[ROCK_COUNT];
+}
+
+static int scatter_rocks(Placement* items, int count, float x0, float z0, float span) {
     int placed = 0;
-    for (int attempt = 0; attempt < ROCK_COUNT * 12 && placed < ROCK_COUNT; ++attempt) {
+    for (int attempt = 0; attempt < count * 12 && placed < count; ++attempt) {
         vec3 p = {0.0f, 0.0f, 0.0f}; // out-param; zeroed for static analysis
         // Looser and at a different frequency, so rock fields do not simply
         // mirror the tree groves. No drainage limit: a boulder in a stream bed
         // is where boulders are, and excluding them would leave the one place
         // the terrain is painted gravel conspicuously swept clean.
-        if (!sample_ground(0.55f, 1.0f, 0.0035f, 1.3f, p))
+        if (!sample_ground(0.55f, 1.0f, 0.0035f, 1.3f, x0, z0, span, p))
             continue;
         // Non-uniform scale on purpose: it sits the rock into the ground and,
         // less decoratively, makes each instance's normal matrix differ from
@@ -961,10 +1013,398 @@ static void build_rocks(void) {
         placed++;
     }
     qsort(items, (size_t)placed, sizeof(Placement), placement_cmp);
-    emit_placements(items, placed, rocks, ROCK_PROTOTYPES, "rock");
+    return placed;
+}
+
+// --- regions ---------------------------------------------------------------
+
+/*
+ * Residency, which is the half of a large world that LOD cannot do.
+ *
+ * A cluster DAG makes each prop cheaper and a quadtree makes the ground cheaper;
+ * neither makes a prop three kilometres away cost nothing, and at constant
+ * density there are eighty thousand of them at four kilometres. So the world is
+ * cut into squares and only the ones near the camera exist at all -- their props
+ * are not in the scene graph and their collision is not in the physics world.
+ *
+ * A region's scatter is seeded from its own CELL COORDINATES rather than drawn
+ * from one global stream, which is what lets it be freed and rebuilt identically.
+ * The clump field it rejects against is a function of position, so groves still
+ * run across a border: what is per region is the sequence, not the shape.
+ *
+ * The instance nodes go under the GLOBAL per-prototype groups, not under a node
+ * of their own. A group per region would put a foreign mesh between every pair of
+ * instances the batcher wants to join, and the run finder breaks on the first one
+ * it does not want -- so every run would be length one. What a region keeps
+ * instead is the list of nodes it added, which is what it needs to take them out
+ * again.
+ */
+// The nominal side of a region, in world units. Runtime rather than a constant
+// because --no-regions is the same machinery with one region over the whole
+// domain, which is the configuration every residency arm compares against.
+#define REGION_SPAN_DEFAULT 250.0f
+static float g_region_span = REGION_SPAN_DEFAULT;
+// One region covering everything, always resident: --no-regions, and the reason
+// regions_update has an early out rather than an enormous radius.
+static bool g_regions_pinned;
+
+// Load inside this, free outside the second, both in world units. The gap is
+// hysteresis: without it a camera sitting on the boundary rebuilds a region's
+// scatter and its collider every frame.
+//
+// The default is deliberately larger than a kilometre world's own diagonal, so
+// this app's historical configuration has every region resident at all times and
+// nothing about it moves. Residency is for the world that needs it, and 11.63's
+// own table is the argument: 5,000 props at a kilometre, 80,000 at four.
+#define REGION_LOAD_RADIUS 1500.0f
+// Hysteresis as a FRACTION of the radius, not a fixed distance: a run that dials
+// the radius down to force churn would otherwise inherit a margin wider than the
+// world it is churning, and nothing would ever be freed.
+#define REGION_UNLOAD_SCALE 1.2f
+
+// One instance node and the prototype group it hangs under, so unloading can
+// detach it from the right parent.
+typedef struct RegionNode {
+    SceneNode* group;
+    SceneNode* node;
+} RegionNode;
+
+typedef struct Region {
+    int rx, rz;
+    bool resident;
+    RegionNode* nodes;
+    size_t node_count, node_cap;
+    Entity* collider;
+    int trees, rocks;
+} Region;
+
+static Region* g_regions;
+static int g_region_side; // regions per axis; the grid is side x side
+static SceneNode* g_group_bark[TREE_PROTOTYPES];
+static SceneNode* g_group_leaf[TREE_PROTOTYPES];
+static SceneNode* g_group_rock[ROCK_PROTOTYPES];
+static PhysicsWorld* g_physics;
+static EntityManager* g_entities;
+static size_t g_regions_loaded, g_regions_freed;
+
+static Region* region_at(int rx, int rz) {
+    if (rx < 0 || rz < 0 || rx >= g_region_side || rz >= g_region_side)
+        return NULL;
+    return &g_regions[(size_t)rz * (size_t)g_region_side + (size_t)rx];
+}
+
+static void region_origin(const Region* r, float* x0, float* z0) {
+    *x0 = terrain_world_x(&g_terrain, -g_terrain.extent + g_region_span * (float)r->rx);
+    *z0 = terrain_world_z(&g_terrain, -g_terrain.extent + g_region_span * (float)r->rz);
+}
+
+// A region's own generator seed, from its cell coordinates and the run's seed.
+//
+// The hash matters more than it looks: adjacent regions differ by 1 in one
+// coordinate, and a seed that varied smoothly with position would give
+// neighbouring regions correlated sequences -- visible as the same tree spacing
+// repeating across a border.
+static unsigned region_seed(int rx, int rz) {
+    unsigned h = g_args.seed * 2654435761u;
+    h ^= (unsigned)(rx * 73856093) ^ (unsigned)(rz * 19349663);
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15;
+    return h ? h : 1u; // the xorshift generator has no state at zero
+}
+
+// How many of a global count belong to one region, at constant DENSITY. A bigger
+// world gets proportionally more props rather than the same number spread
+// thinner, which is what makes residency worth having.
+static int region_share(int total) {
+    float domain = 2.0f * g_terrain.extent;
+    float share = (float)total * (g_region_span * g_region_span) / (domain * domain);
+    int n = (int)(share + 0.5f);
+    return n > 0 ? n : 1;
+}
+
+static void region_track(Region* r, SceneNode* group, SceneNode* node) {
+    if (r->node_count == r->node_cap) {
+        size_t cap = r->node_cap ? r->node_cap * 2 : 64;
+        RegionNode* grown = realloc(r->nodes, cap * sizeof(RegionNode));
+        if (!grown)
+            return;
+        r->nodes = grown;
+        r->node_cap = cap;
+    }
+    r->nodes[r->node_count].group = group;
+    r->nodes[r->node_count].node = node;
+    r->node_count++;
+}
+
+// Emit one prototype's share of `items` into its global group, remembering what
+// was added so the region can take it back out.
+static void region_emit(Region* r, const Placement* items, int count, Mesh* const* protos,
+                        int proto_count, SceneNode** groups, const char* prefix) {
+    for (int i = 0; i < proto_count; ++i) {
+        if (!protos[i])
+            continue;
+        for (int k = 0; k < count; ++k) {
+            if (items[k].proto != i)
+                continue;
+            if (!groups[i]) {
+                char name[40];
+                snprintf(name, sizeof(name), "%s_%d", prefix, i);
+                groups[i] = make_group(name);
+            }
+            SceneNode* node = create_node();
+            add_mesh_to_node(node, mesh_ref(protos[i]));
+            set_node_trs(node, items[k].pos, items[k].yaw, items[k].scale);
+            add_child_node(groups[i], node);
+            region_track(r, groups[i], node);
+            g_node_count++;
+        }
+    }
+}
+
+static void region_load(Region* r) {
+    if (r->resident)
+        return;
+    float x0, z0;
+    region_origin(r, &x0, &z0);
+
+    // From its own coordinates, so this is the same scatter every time the
+    // region is entered rather than a function of how many regions came before.
+    g_rng = region_seed(r->rx, r->rz);
+
+    int tree_n = region_share(TREE_COUNT);
+    int rock_n = region_share(ROCK_COUNT);
+    Placement* items = malloc((size_t)(tree_n > rock_n ? tree_n : rock_n) * sizeof(Placement));
+    if (items) {
+        r->trees = scatter_trees(items, tree_n, x0, z0, g_region_span);
+        // Bark and leaves go into SEPARATE group sets, from the SAME placements
+        // so a tree's two halves stand in one place. A group holding both would
+        // put a leaf item between every pair of bark items and every run would be
+        // length one.
+        region_emit(r, items, r->trees, g_bark, TREE_PROTOTYPES, g_group_bark, "bark");
+        region_emit(r, items, r->trees, g_leaf, TREE_PROTOTYPES, g_group_leaf, "leaf");
+        if (g_args.scatter_probe) {
+            probe_collect(items, r->trees);
+            probe_low(items, r->trees);
+        }
+
+        r->rocks = scatter_rocks(items, rock_n, x0, z0, g_region_span);
+        region_emit(r, items, r->rocks, g_rocks, ROCK_PROTOTYPES, g_group_rock, "rock");
+        if (g_args.scatter_probe)
+            probe_low(items, r->rocks);
+        free(items);
+    }
+
+    // One static body per region. The mesh is CPU geometry whose only job is
+    // done once Jolt has copied it into its own BVH.
+    Mesh* collider = create_mesh();
+    int segments = (int)(g_region_span / (2.0f * g_terrain.extent) * (float)COLLIDER_SEGMENTS + 0.5f);
+    if (segments < 2)
+        segments = 2;
+    if (g_physics && g_entities &&
+        terrain_build_collider_region(&g_terrain, x0, z0, g_region_span, segments, collider)) {
+        char name[32];
+        snprintf(name, sizeof(name), "terrain_%d_%d", r->rx, r->rz);
+        Entity* e = create_entity(g_entities, name);
+        entity_set_position(e, (vec3){0.0f, 0.0f, 0.0f});
+        PhysicsShapeDesc desc = {.type = SHAPE_MESH, .density = 0.0f};
+        desc.mesh.vertices = collider->vertices;
+        desc.mesh.vertex_count = collider->vertex_count;
+        desc.mesh.indices = collider->indices;
+        desc.mesh.index_count = collider->index_count;
+        if (entity_add_rigid_body(e, g_physics, &desc, MOTION_STATIC, OBJ_LAYER_STATIC))
+            r->collider = e;
+        else
+            destroy_entity(g_entities, e);
+    }
+    free_mesh(collider);
+
+    r->resident = true;
+    g_regions_loaded++;
+}
+
+static void region_free(Region* r) {
+    if (!r->resident)
+        return;
+    for (size_t i = 0; i < r->node_count; ++i) {
+        // Detached before it is freed. free_node releases a subtree without
+        // unlinking it, which would leave its group holding a dangling pointer.
+        remove_child_node(r->nodes[i].group, r->nodes[i].node);
+        free_node(r->nodes[i].node);
+        g_node_count--;
+    }
+    free(r->nodes);
+    r->nodes = NULL;
+    r->node_count = r->node_cap = 0;
+    if (r->collider) {
+        destroy_entity(g_entities, r->collider);
+        r->collider = NULL;
+    }
+    r->trees = r->rocks = 0;
+    r->resident = false;
+    g_regions_freed++;
+}
+
+// Residency against `eye`, with the load and free radii separated so a camera on
+// a boundary does not rebuild a region every frame.
+static void regions_update(const vec3 eye) {
+    if (!g_regions)
+        return;
+    if (g_regions_pinned) {
+        region_load(&g_regions[0]);
+        return;
+    }
+    float radius = g_args.region_radius > 0.0f ? g_args.region_radius : REGION_LOAD_RADIUS;
+    float load2 = radius * radius;
+    float free_r = radius * REGION_UNLOAD_SCALE;
+    float free2 = free_r * free_r;
+    for (int rz = 0; rz < g_region_side; ++rz) {
+        for (int rx = 0; rx < g_region_side; ++rx) {
+            Region* r = region_at(rx, rz);
+            float x0, z0;
+            region_origin(r, &x0, &z0);
+            // Distance to the region's SQUARE, not to its centre: a camera just
+            // inside a region is zero from it whatever its span is.
+            float dx = x0 - eye[0];
+            if (dx < 0.0f) {
+                dx = eye[0] - (x0 + g_region_span);
+                if (dx < 0.0f)
+                    dx = 0.0f;
+            }
+            float dz = z0 - eye[2];
+            if (dz < 0.0f) {
+                dz = eye[2] - (z0 + g_region_span);
+                if (dz < 0.0f)
+                    dz = 0.0f;
+            }
+            float d2 = dx * dx + dz * dz;
+            if (d2 <= load2)
+                region_load(r);
+            else if (d2 > free2)
+                region_free(r);
+        }
+    }
+}
+
+/*
+ * Residency and what each region actually placed, in the --water-fft-probe idiom.
+ *
+ * The instrument exists because both things that can be wrong here are invisible
+ * in a frame. A region that reloads with a DIFFERENT scatter looks exactly like a
+ * region that reloaded correctly -- one tree is much like another, and the walk
+ * that would show it is the walk that made it happen. And a residency that never
+ * frees anything renders perfectly; it just runs out of memory a kilometre later.
+ *
+ * The digest is FNV-1a over the placements' bytes, which is the erosion probe's
+ * argument for a digest over a sum: two scatters can agree on their count, their
+ * mean position and their prototype histogram while being different scatters.
+ */
+static unsigned region_digest(const Region* r) {
+    const size_t bytes = sizeof(mat4);
+    unsigned h = 2166136261u;
+    for (size_t i = 0; i < r->node_count; ++i) {
+        const SceneNode* n = r->nodes[i].node;
+        const unsigned char* b = (const unsigned char*)n->original_transform;
+        for (size_t k = 0; k < bytes; ++k) {
+            h ^= b[k];
+            h *= 16777619u;
+        }
+    }
+    return h;
+}
+
+static void region_probe(void) {
+    int resident = 0;
+    for (int i = 0; i < g_region_side * g_region_side; ++i)
+        resident += g_regions[i].resident ? 1 : 0;
+    printf("region-probe side=%d span=%.4f resident=%d of %d loaded=%zu freed=%zu nodes=%zu\n",
+           g_region_side, (double)g_region_span, resident, g_region_side * g_region_side,
+           g_regions_loaded, g_regions_freed, g_node_count);
+    for (int rz = 0; rz < g_region_side; ++rz) {
+        for (int rx = 0; rx < g_region_side; ++rx) {
+            const Region* r = region_at(rx, rz);
+            if (!r->resident)
+                continue;
+            printf("region-probe cell rx=%d rz=%d trees=%d rocks=%d nodes=%zu collider=%d "
+                   "digest=%08x\n",
+                   rx, rz, r->trees, r->rocks, r->node_count, r->collider ? 1 : 0,
+                   region_digest(r));
+        }
+    }
+}
+
+static void regions_create_sized(PhysicsWorld* physics, EntityManager* em, float span) {
+    g_physics = physics;
+    g_entities = em;
+    g_region_span = span;
+    g_region_side = (int)((2.0f * g_terrain.extent) / span + 0.5f);
+    if (g_region_side < 1)
+        g_region_side = 1;
+    // The span is then DERIVED back from the count, so the grid tiles the domain
+    // exactly. A remainder strip would be ground with no collider under it.
+    g_region_span = (2.0f * g_terrain.extent) / (float)g_region_side;
+    g_regions = calloc((size_t)g_region_side * (size_t)g_region_side, sizeof(Region));
+    if (!g_regions) {
+        g_region_side = 0;
+        return;
+    }
+    for (int rz = 0; rz < g_region_side; ++rz)
+        for (int rx = 0; rx < g_region_side; ++rx) {
+            Region* r = region_at(rx, rz);
+            r->rx = rx;
+            r->rz = rz;
+        }
+}
+
+static void regions_create(PhysicsWorld* physics, EntityManager* em) {
+    regions_create_sized(physics, em, g_args.region_span > 0.0f ? g_args.region_span
+                                                                : REGION_SPAN_DEFAULT);
+}
+
+static void regions_create_single(PhysicsWorld* physics, EntityManager* em) {
+    regions_create_sized(physics, em, 2.0f * g_terrain.extent);
+    g_regions_pinned = true;
+}
+
+// Free every region and reload around `eye`, for an origin shift.
+//
+// A prop's node carries an ABSOLUTE local transform, and the shift has already
+// translated the prototype groups those nodes hang under -- which is right for
+// instances placed before it and wrong for any placed after, since those come out
+// of terrain_world_x against a centre that has already moved. So the groups go
+// back to identity and everything resident is placed again.
+//
+// It costs a full scatter, on a frame that is already rebuilding the terrain and
+// reconciling physics. The scatter is a pure function of the cell, so what comes
+// back is what was there.
+static void regions_rebuild(const vec3 eye) {
+    if (!g_regions)
+        return;
+    for (int i = 0; i < g_region_side * g_region_side; ++i)
+        region_free(&g_regions[i]);
+    for (int i = 0; i < TREE_PROTOTYPES; ++i) {
+        if (g_group_bark[i])
+            glm_mat4_identity(g_group_bark[i]->original_transform);
+        if (g_group_leaf[i])
+            glm_mat4_identity(g_group_leaf[i]->original_transform);
+    }
     for (int i = 0; i < ROCK_PROTOTYPES; ++i)
-        free_mesh(rocks[i]);
-    printf("Rocks: %d instances over %d prototypes\n", placed, ROCK_PROTOTYPES);
+        if (g_group_rock[i])
+            glm_mat4_identity(g_group_rock[i]->original_transform);
+    regions_update(eye);
+}
+
+static void regions_free_all(void) {
+    if (!g_regions)
+        return;
+    for (int i = 0; i < g_region_side * g_region_side; ++i)
+        region_free(&g_regions[i]);
+    free(g_regions);
+    g_regions = NULL;
+    g_region_side = 0;
+    free(g_probe_items);
+    g_probe_items = NULL;
+    g_probe_count = g_probe_cap = 0;
 }
 
 // The lighting when --no-sky takes the atmosphere away. Not merely "skip the
@@ -1064,13 +1504,17 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
     // there. There is no correction to apply, so they are rebuilt -- and rebuilt
     // HERE rather than at the next descent, because this runs before the shadow
     // pass and the GI captures.
-    if (g_terrain_qt) {
-        Game* game = ctx;
-        Camera* camera = game && game->engine ? game->engine->camera : NULL;
-        vec3 zero = {0.0f, 0.0f, 0.0f};
-        terrain_quadtree_rebuild(g_terrain_qt, g_terrain_group,
-                                 camera ? camera->position : zero);
-    }
+    Game* game = ctx;
+    Camera* camera = game && game->engine ? game->engine->camera : NULL;
+    vec3 eye = {0.0f, 0.0f, 0.0f};
+    if (camera)
+        glm_vec3_copy(camera->position, eye);
+    if (g_terrain_qt)
+        terrain_quadtree_rebuild(g_terrain_qt, g_terrain_group, eye);
+    // Same hazard, same repair: an instance placed after the shift comes out of a
+    // centre that has already moved, under a group the shift has already
+    // translated.
+    regions_rebuild(eye);
 }
 
 static void on_init(Game* game) {
@@ -1108,6 +1552,25 @@ static void on_init(Game* game) {
         g_terrain.tiles = (int)((2.0f * g_terrain.extent) / 125.0f + 0.5f);
         if (g_terrain.tiles < 1)
             g_terrain.tiles = 1;
+    }
+    if (!g_args.no_island) {
+        // Half the half-extent inland before the ground starts falling, so the
+        // shore is a broad shoal rather than a cliff into the sea, and a sea
+        // floor deeper than the fbm's own amplitude so the rim is under water
+        // whatever the noise does there.
+        g_terrain.island_start = ISLAND_START;
+        g_terrain.island_depth = ISLAND_DEPTH;
+        // The fbm is symmetric about zero, so sea level at zero would flood half
+        // the interior. Below it, and the number is what decides how much of the
+        // island is land: at -35 against a 95-unit amplitude the ground is dry
+        // wherever the noise is above about a third of the way down.
+        // Not asked for where water is refused anyway (see the create_water call
+        // below): the island still SHAPES there, and a warning about a flag the
+        // app set for itself is noise.
+        if (g_args.world_offset == 0.0f && g_args.origin_shift_distance <= 0.0f)
+            g_args.water = 1;
+        if (g_args.water_level == 0.0f)
+            g_args.water_level = ISLAND_SEA_LEVEL;
     }
     g_rng = g_args.seed * 2654435761u + 1u;
     noise_perm_init(&g_clump, g_args.seed ^ 0x5bf03635u);
@@ -1191,8 +1654,32 @@ static void on_init(Game* game) {
     game_set_entity_manager(game, em);
 
     build_terrain(physics, em);
-    build_trees();
-    build_rocks();
+    build_tree_prototypes();
+    build_rock_prototypes();
+    if (g_args.no_regions) {
+        // One region covering the whole domain, always resident. The scatter and
+        // the collider then run exactly once, which is what this app did before
+        // residency existed and what every residency arm compares against.
+        regions_create_single(physics, em);
+    } else {
+        regions_create(physics, em);
+    }
+    // The first residency pass, here rather than at the first frame: the water
+    // bed, the player spawn and the initial camera all want a world that exists.
+    vec3 home = {g_terrain.center[0], 0.0f, g_terrain.center[1]};
+    if (g_args.cam_set)
+        glm_vec3_copy(g_args.cam_eye, home);
+    regions_update(home);
+    if (g_args.scatter_probe && g_probe_items)
+        scatter_probe(g_probe_items, (int)g_probe_count);
+    printf("Trees and rocks: %d prototypes, %d region(s) of %d resident\n",
+           TREE_PROTOTYPES + ROCK_PROTOTYPES, (int)g_regions_loaded,
+           g_region_side * g_region_side);
+    // The creation reference is NOT released here, unlike the one-shot scatter
+    // this replaced. A region that loads three seconds from now takes its own
+    // ref from these pointers, so dropping the last one when the near regions
+    // happen not to use a prototype would free the mesh and leave the pointer
+    // behind. They are released at shutdown instead.
     if (g_args.no_sky)
         build_fallback_sun();
     else
@@ -1359,6 +1846,18 @@ static void on_update(Game* game, double dt) {
     vec3 input_dir;
     input_wasd_direction(&game->input, input_dir);
 
+    // Scripted walk (--walk), which is the only way a headless run can cross a
+    // region boundary: residency follows the camera and the camera follows the
+    // player, and no key is ever pressed. Turns about-face at the halfway frame,
+    // so a run is a ROUND TRIP -- what leaves has to come back, which is what
+    // makes the determinism and the leak readable off one capture.
+    if (g_args.walk > 0.0f && game->engine) {
+        input_dir[2] = -1.0f;
+        input_dir[0] = 0.0f;
+        if (g_args.frames > 0 && game->engine->total_frames * 2 >= (size_t)g_args.frames)
+            input_dir[2] = 1.0f;
+    }
+
     // Rotated into the camera's yaw. gametest's is world-axis-aligned, which
     // stops making sense the moment the camera is not facing -Z.
     vec3 fwd = {sinf(g_cam_yaw), 0.0f, cosf(g_cam_yaw)};
@@ -1367,7 +1866,9 @@ static void on_update(Game* game, double dt) {
     vec3 vel;
     character_controller_get_velocity(cc, vel);
 
-    const float speed = input_key_down(&game->input, GLFW_KEY_LEFT_SHIFT) ? 16.0f : 7.0f;
+    const float speed = g_args.walk > 0.0f
+                            ? g_args.walk
+                            : (input_key_down(&game->input, GLFW_KEY_LEFT_SHIFT) ? 16.0f : 7.0f);
     vec3 move = {0.0f, 0.0f, 0.0f};
     glm_vec3_muladds(fwd, -input_dir[2] * speed, move);
     glm_vec3_muladds(right, input_dir[0] * speed, move);
@@ -1478,10 +1979,18 @@ static void on_render(Game* game, double alpha) {
     // Against the camera the frame will actually use, which is why it is here and
     // not in the fixed-step update: at a fixed step the selection would lag the
     // view by up to a frame, and the morph is a function of exactly this eye.
-    if (g_terrain_qt && camera) {
-        terrain_quadtree_update(g_terrain_qt, g_terrain_group, camera->position);
-        if (g_args.quadtree_probe && engine->total_frames + 1 == (size_t)g_args.frames)
-            terrain_quadtree_probe(g_terrain_qt);
+    if (camera) {
+        // Residency first: the quadtree hangs its patches under a node of its
+        // own and does not care, but a region that loads here has to be in the
+        // graph before the transform walk below reaches it.
+        regions_update(camera->position);
+        if (g_terrain_qt) {
+            terrain_quadtree_update(g_terrain_qt, g_terrain_group, camera->position);
+            if (g_args.quadtree_probe && engine->total_frames + 1 == (size_t)g_args.frames)
+                terrain_quadtree_probe(g_terrain_qt);
+        }
+        if (g_args.region_probe && engine->total_frames + 1 == (size_t)g_args.frames)
+            region_probe();
     }
 
     Transform t = {.position = {0, 0, 0}, .rotation = {0, 0, 0}, .scale = {1, 1, 1}};
@@ -1517,6 +2026,17 @@ static void on_shutdown(Game* game) {
     free_terrain_quadtree(g_terrain_qt, g_terrain_group);
     g_terrain_qt = NULL;
     g_terrain_group = NULL;
+    // Before the scene: a region holds instance nodes parented under groups the
+    // scene root owns, and they have to be detached before either is freed.
+    regions_free_all();
+    // The prototypes' creation reference, held for the process lifetime so a
+    // region loading at any moment could take one from it.
+    for (int i = 0; i < TREE_PROTOTYPES; ++i) {
+        free_mesh(g_bark[i]);
+        free_mesh(g_leaf[i]);
+    }
+    for (int i = 0; i < ROCK_PROTOTYPES; ++i)
+        free_mesh(g_rocks[i]);
     // g_terrain borrows this, so it outlives every consumer by construction and
     // is released only once nothing can ask for a height again.
     g_terrain.field = NULL;
@@ -1565,6 +2085,11 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --cluster-probe          Print each clustered prototype's DAG\n");
     fprintf(stderr, "      --terrain-quadtree-probe Print the patch selection and morph windows\n");
     fprintf(stderr, "      --terrain-extent <f>     Domain half-width; the world grows with it\n");
+    fprintf(stderr, "      --no-regions             One resident region over the whole domain\n");
+    fprintf(stderr, "      --region-radius <f>      Load radius; --region-span <f> the cell side\n");
+    fprintf(stderr, "      --region-probe           Print residency and each region's scatter\n");
+    fprintf(stderr, "      --walk <speed>           Drive --player forward, about-face at half\n");
+    fprintf(stderr, "      --no-island              Flat domain and no sea, as before 11.63\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --screenshot-every N  Also save numbered frames every N frames\n");
     fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
@@ -1605,6 +2130,18 @@ int main(int argc, char** argv) {
             g_args.quadtree_probe = 1;
         } else if (!strcmp(a, "--terrain-extent") && i + 1 < argc) {
             g_args.terrain_extent = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--no-regions")) {
+            g_args.no_regions = 1;
+        } else if (!strcmp(a, "--region-probe")) {
+            g_args.region_probe = 1;
+        } else if (!strcmp(a, "--region-radius") && i + 1 < argc) {
+            g_args.region_radius = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--region-span") && i + 1 < argc) {
+            g_args.region_span = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--walk") && i + 1 < argc) {
+            g_args.walk = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--no-island")) {
+            g_args.no_island = 1;
         } else if (!strcmp(a, "--no-lod")) {
             g_args.no_lod = 1;
         } else if (!strcmp(a, "--no-instancing")) {

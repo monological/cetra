@@ -151,6 +151,23 @@ typedef struct TerrainParams {
     // still run). Borrowed, never owned: whoever baked or loaded it frees it.
     const TerrainField* field;
 
+    // Island shaping (spec 11.63): where the ground starts falling toward the
+    // sea, as a fraction of the half-extent, and how far below zero it has got
+    // by the domain's edge. `island_start` outside (0,1) is OFF, which is every
+    // terrain built before this existed.
+    //
+    // Applied to the ANALYTIC height only, which is what makes it a shape rather
+    // than a post-process: terrain_field_seed writes the fbm into a field, so a
+    // baked or eroded island is eroded AS an island -- water cuts its valleys
+    // down to a shoreline that exists. A field loaded from a file is left alone,
+    // because a file is a statement about what the terrain is.
+    //
+    // The radius is Euclidean and normalised by the half-extent, so it passes 1
+    // at the edge MIDPOINTS and reaches sqrt(2) at the corners: a square domain
+    // with a round island in it, and the corners are open sea.
+    float island_start;
+    float island_depth;
+
     // Whether a tile's vertex colours carry MACRO VARIATION or the ground's
     // colour itself (spec 11.60).
     //
@@ -332,5 +349,16 @@ bool terrain_build_patch(const TerrainParams* p, float x0, float z0, float span,
 // MUCH coarser: the character stands on this while the eye sees the tiles, and
 // the two diverge by roughly the height change across one collider quad.
 bool terrain_build_collider(const TerrainParams* p, int segments, Mesh* mesh);
+
+// The same, over one square of it, for a world whose collision is resident in
+// pieces (spec 11.63). Adjacent squares share their edge vertices exactly, since
+// both evaluate the same height function at the same world coordinates -- which
+// is what stops a character finding a seam between two bodies.
+//
+// Level 0 always, whatever a patch overhead is drawing: the character stands on
+// this while the eye sees the mesh, and letting collision coarsen with distance
+// would move the ground under a player who walked toward it.
+bool terrain_build_collider_region(const TerrainParams* p, float x0, float z0, float span,
+                                   int segments, Mesh* mesh);
 
 #endif // _TERRAIN_H_

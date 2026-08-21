@@ -4270,6 +4270,15 @@ _FOREST_TRACE = re.compile(
 # numbers mean something rather than measuring an empty or a fully-visible frame.
 FOREST_CAM = ["--cam-eye", "0,40,120", "--cam-target", "0,10,0"]
 
+# Off the island and above it, so the whole of it is in frame and the props run
+# from a couple of hundred units out to eleven hundred. For the two arms that are
+# about DISTANCE, and they need their own framing since 11.63 made the app an
+# island: standing on it, everything is inside a 425-unit disc and there is no far
+# field for LOD to save anything in. Measured 5% saved at FOREST_CAM against 44%
+# here, on the same scene -- the first is not LOD failing, it is a camera with
+# nothing distant in front of it.
+FOREST_CAM_WIDE = ["--cam-eye", "0,300,700", "--cam-target", "0,-20,0"]
+
 # Above the terrain aimed up and away, so nothing the scatter placed is in front
 # of the camera and forest-cull can assert exact numbers instead of a direction.
 FOREST_CAM_AWAY = ["--cam-eye", "0,300,0", "--cam-target", "600,900,600"]
@@ -8084,7 +8093,7 @@ def run_prepass_gate(workdir):
     return failures
 
 
-_D4_PROBE = re.compile(
+_CLUSTER_PROBE = re.compile(
     r"cluster-probe mesh=(\d+) clusters=(\d+) groups=(\d+) dag_levels=(\d+) bands=(\d+) "
     r"max_index=(\d+) vertex_count=(\d+) permissive=(\d+)((?: band\d+=\d+)+)")
 
@@ -8093,36 +8102,36 @@ _D4_PROBE = re.compile(
 # 277x and well over what a leaf card manages, which is the point: the arm has to
 # pass on the geometry that CAN simplify without demanding it of the geometry that
 # cannot.
-D4_BAND_REDUCTION_MIN = 8.0
+CLUSTER_BAND_REDUCTION_MIN = 8.0
 
 # How far the DAG's drawn triangles may sit from the chain's at one framing. The
 # two are at PARITY on this corpus (measured -2.7% near, -0.1% mid, -1.4% far), and
 # this arm pins that rather than claiming a win the measurement does not support.
-D4_PARITY_TOLERANCE = 0.06
+CLUSTER_PARITY_TOLERANCE = 0.06
 
 # Both builders must still beat drawing every triangle. The chain measures 15.2%
 # here and the DAG 13.0%; the bar sits below both so it reads "LOD happened", not
 # "this build's tuning".
-D4_LOD_SAVING_MIN = 0.10
+CLUSTER_LOD_SAVING_MIN = 0.10
 
 
-def run_d4_gate(workdir):
+def run_cluster_gate(workdir):
     """Cluster-DAG level of detail, and what it does and does not buy.
 
-      d4-cluster-seal    every cluster at every level indexes the ORIGINAL vertex
+      cluster-seal    every cluster at every level indexes the ORIGINAL vertex
                          buffer, and destructive simplification never ran. That is
                          what makes a crack between levels impossible, and it is
                          structural -- no frame can show it, so it is read off the
                          probe rather than rendered.
-      d4-cluster-bands   the cut actually coarsens with distance: band triangle
+      cluster-bands   the cut actually coarsens with distance: band triangle
                          counts never rise, and the geometry that CAN simplify
                          reaches a large reduction. Leaf cards are expected not to
                          and are not held to it.
-      d4-cluster-batch   instancing survives. A per-instance cut would have ended
+      cluster-batch   instancing survives. A per-instance cut would have ended
                          batching; the band quantisation exists so it does not, and
                          this is the arm that says so -- identical draw and instance
                          counts against the chain, and 0 px against --no-instancing.
-      d4-cluster-parity  the DAG draws about as many triangles as the chain, and
+      cluster-parity  the DAG draws about as many triangles as the chain, and
                          both beat --no-lod. Parity is the honest claim on this
                          corpus: boundary locking costs roughly what error-driven
                          selection gains, and the DAG's win is the seal above.
@@ -8133,27 +8142,27 @@ def run_d4_gate(workdir):
     at the same triangle count. Terrain gets the quadtree instead.
     """
     if not os.path.exists(FOREST):
-        print("  d4-cluster-seal SKIP  (forest not built)")
+        print("  cluster-seal SKIP  (forest not built)")
         return []
     failures = []
 
     probe = subprocess.run(
         [FOREST, "-x", "-f", "1", "-W", "200", "-H", "150", "--no-fog", "--seed", "1337",
          "--cluster-probe"], capture_output=True, text=True)
-    rows = [m for m in _D4_PROBE.finditer(probe.stdout + probe.stderr)]
+    rows = [m for m in _CLUSTER_PROBE.finditer(probe.stdout + probe.stderr)]
     if not rows:
-        print("  d4-cluster-seal ERROR the cluster probe produced no rows")
-        return ["d4-cluster-seal"]
+        print("  cluster-seal ERROR the cluster probe produced no rows")
+        return ["cluster-seal"]
 
     # --- seal ---------------------------------------------------------------
     escaped = [r for r in rows if int(r.group(6)) >= int(r.group(7))]
     permissive = [r for r in rows if int(r.group(8)) != 0]
     ok = not escaped and not permissive
-    print(f"  d4-cluster-seal {'PASS' if ok else 'FAIL'}  {len(rows)} clustered prototypes, "
+    print(f"  cluster-seal {'PASS' if ok else 'FAIL'}  {len(rows)} clustered prototypes, "
           f"{len(escaped)} with an index outside the original vertex buffer (want 0) and "
           f"{len(permissive)} built with destructive simplification (want 0)")
     if not ok:
-        failures.append("d4-cluster-seal")
+        failures.append("cluster-seal")
 
     # --- bands --------------------------------------------------------------
     worst_rise, best_reduction = 0, 0.0
@@ -8163,34 +8172,37 @@ def run_d4_gate(workdir):
             worst_rise = max(worst_rise, bands[i] - bands[i - 1])
         if bands[-1] > 0:
             best_reduction = max(best_reduction, bands[0] / float(bands[-1]))
-    ok = worst_rise <= 0 and best_reduction >= D4_BAND_REDUCTION_MIN
-    print(f"  d4-cluster-bands {'PASS' if ok else 'FAIL'}  worst band-to-band rise "
+    ok = worst_rise <= 0 and best_reduction >= CLUSTER_BAND_REDUCTION_MIN
+    print(f"  cluster-bands {'PASS' if ok else 'FAIL'}  worst band-to-band rise "
           f"{worst_rise} triangles (want <= 0), best prototype reduction {best_reduction:.0f}x "
-          f"(want >= {D4_BAND_REDUCTION_MIN:.0f}x; a leaf card manages ~2x and is not the one "
+          f"(want >= {CLUSTER_BAND_REDUCTION_MIN:.0f}x; a leaf card manages ~2x and is not the one "
           f"this reads)")
     if not ok:
-        failures.append("d4-cluster-bands")
+        failures.append("cluster-bands")
 
     # --- batching and parity ------------------------------------------------
-    dag = _forest_run(workdir, "d4_dag", [])
-    chain = _forest_run(workdir, "d4_chain", ["--no-clusters"])
-    nolod = _forest_run(workdir, "d4_nolod", ["--no-lod"])
-    uninst = _forest_run(workdir, "d4_uninst", ["--no-instancing"])
+    # FOREST_CAM_WIDE, because the parity arm is about DISTANCE: standing on the
+    # island there is no far field for either builder to coarsen, and the two agree
+    # trivially on a scene where neither had anything to do.
+    dag = _forest_run(workdir, "cluster_dag", [], cam=FOREST_CAM_WIDE)
+    chain = _forest_run(workdir, "cluster_chain", ["--no-clusters"], cam=FOREST_CAM_WIDE)
+    nolod = _forest_run(workdir, "cluster_nolod", ["--no-lod"], cam=FOREST_CAM_WIDE)
+    uninst = _forest_run(workdir, "cluster_uninst", ["--no-instancing"], cam=FOREST_CAM_WIDE)
     if not all((dag, chain, nolod, uninst)):
-        print("  d4-cluster-batch ERROR while rendering forest")
-        return failures + ["d4-cluster-batch", "d4-cluster-parity"]
+        print("  cluster-batch ERROR while rendering forest")
+        return failures + ["cluster-batch", "cluster-parity"]
 
     same_draws = dag["opaque"]["draws"] == chain["opaque"]["draws"]
     same_inst = dag["opaque"]["instances"] == chain["opaque"]["instances"]
     unbatched = uninst["opaque"]["draws"] == uninst["opaque"]["instances"]
     ok = same_draws and same_inst and unbatched
-    print(f"  d4-cluster-batch {'PASS' if ok else 'FAIL'}  DAG draws {dag['opaque']['draws']} vs "
+    print(f"  cluster-batch {'PASS' if ok else 'FAIL'}  DAG draws {dag['opaque']['draws']} vs "
           f"chain {chain['opaque']['draws']} and instances {dag['opaque']['instances']} vs "
           f"{chain['opaque']['instances']} (want equal: a per-instance cut would split every "
           f"run); --no-instancing gives {uninst['opaque']['draws']} draws for "
           f"{uninst['opaque']['instances']} instances (want equal)")
     if not ok:
-        failures.append("d4-cluster-batch")
+        failures.append("cluster-batch")
 
     d_tris = dag["opaque"]["triangles"]
     c_tris = chain["opaque"]["triangles"]
@@ -8198,14 +8210,14 @@ def run_d4_gate(workdir):
     drift = abs(d_tris - c_tris) / float(max(c_tris, 1))
     d_save = 1.0 - d_tris / float(max(n_tris, 1))
     c_save = 1.0 - c_tris / float(max(n_tris, 1))
-    ok = (drift <= D4_PARITY_TOLERANCE and d_save >= D4_LOD_SAVING_MIN
-          and c_save >= D4_LOD_SAVING_MIN)
-    print(f"  d4-cluster-parity {'PASS' if ok else 'FAIL'}  DAG {d_tris} triangles vs chain "
-          f"{c_tris}, drift {100.0 * drift:.1f}% (want <= {100.0 * D4_PARITY_TOLERANCE:.0f}%); "
+    ok = (drift <= CLUSTER_PARITY_TOLERANCE and d_save >= CLUSTER_LOD_SAVING_MIN
+          and c_save >= CLUSTER_LOD_SAVING_MIN)
+    print(f"  cluster-parity {'PASS' if ok else 'FAIL'}  DAG {d_tris} triangles vs chain "
+          f"{c_tris}, drift {100.0 * drift:.1f}% (want <= {100.0 * CLUSTER_PARITY_TOLERANCE:.0f}%); "
           f"against --no-lod's {n_tris} that is {100.0 * d_save:.1f}% and {100.0 * c_save:.1f}% "
-          f"saved (want >= {100.0 * D4_LOD_SAVING_MIN:.0f}% each)")
+          f"saved (want >= {100.0 * CLUSTER_LOD_SAVING_MIN:.0f}% each)")
     if not ok:
-        failures.append("d4-cluster-parity")
+        failures.append("cluster-parity")
 
     return failures
 
@@ -8227,26 +8239,26 @@ _QT_FIELD_LEVELS = re.compile(r"Terrain field: (\d+) level\(s\)")
 # bar is two orders above that and four below the mutations it has to catch:
 # flipping the coarse quad's diagonal reads 2.92 world units, and dropping the
 # split factor to 2.0 opens a seam at coarse_max 0.173.
-D4_QUADTREE_GAP_MAX = 1.0e-3
+QUADTREE_GAP_MAX = 1.0e-3
 
 # Patches, for a SIXTEENFOLD increase in ground area. The claim is that a
 # quadtree's cost is logarithmic in world size where a fixed grid's is quadratic,
 # so the bar is nowhere near tight -- 16x area really did cost 1.94x, and the
 # thing this catches is the growth going quadratic, which would be 16x.
-D4_QUADTREE_GROWTH_MAX = 4.0
+QUADTREE_GROWTH_MAX = 4.0
 
 # How much the depth prepass may move on the quadtree, as a multiple of how much
 # it moves on the fixed grid. The residual is pre-existing and belongs to masked
 # foliage taking its own program; the morph is supposed to add nothing to it.
 # Starving one program of uMorphEye reads 9x.
-D4_PREPASS_TOLERANCE = 2.5
+QUADTREE_PREPASS_TOLERANCE = 2.5
 
 # World units of relief a coarse level must actually give up. Well above float
 # noise and well under what either source drops in practice -- 4.9 for the fbm,
 # 6.2 for a filtered field -- so the thing it catches is the drop being ZERO,
 # which is what a level selector that always answers 0 gives, and what a
 # SUBSAMPLED pyramid gives on a lattice the patches align with.
-D4_MIP_DROP_MIN = 0.5
+QUADTREE_MIP_DROP_MIN = 0.5
 
 
 # Far enough back that the descent stops at the root: one patch, at the coarsest
@@ -8292,29 +8304,47 @@ def _quadtree_probe(extra, cam=None):
     }
 
 
-def run_d4_terrain_gate(workdir):
+def _grid_tiles(workdir, tag, extra):
+    """How many tiles the FIXED grid builds, or None.
+
+    One frame at a postage stamp: the number is printed at startup and nothing
+    here looks at a pixel. It still has to be a real run rather than arithmetic on
+    the extent, or an app that quietly stopped growing its grid would be read as
+    the quadtree's win.
+    """
+    out = os.path.join(workdir, f"grid_{tag}.ppm")
+    cmd = ([FOREST, "-x", "-f", "1", "-W", "160", "-H", "120", "--no-fog", "--seed", "1337",
+            "--no-quadtree", "-S", out] + extra)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    m = _FOREST_TERRAIN.search(r.stdout + r.stderr)
+    if r.returncode != 0 or not m:
+        return None
+    return int(m.group(1) or m.group(2))
+
+
+def run_quadtree_gate(workdir):
     """The terrain quadtree: does the CDLOD selection hold together (spec 11.63).
 
-      d4-patch-seam    adjacent patches never differ by more than one level, and
+      quadtree-seam    adjacent patches never differ by more than one level, and
                        at every seam the fine side is fully morphed while the
                        coarse side has not started -- so both are evaluating the
                        same coarse surface there and no crack is possible. Read
                        off the probe, at two world sizes.
-      d4-morph-parent  a fully morphed patch really is the surface its parent
+      quadtree-morph  a fully morphed patch really is the surface its parent
                        DRAWS, measured against the parent's own triangles. This
                        is the pop, and the seam arm cannot see it: every boundary
                        vertex is even-indexed and therefore its own morph target,
                        so the interior can be wrong with every seam clean.
-      d4-patch-count   the selection grows logarithmically with the world and the
+      quadtree-scale   the selection grows logarithmically with the world and the
                        fixed grid grows quadratically. The whole reason the
                        quadtree exists, and the only arm that varies the domain.
-      d4-mip           a coarse patch reads a coarse SOURCE, and reading it
+      quadtree-mip           a coarse patch reads a coarse SOURCE, and reading it
                        actually removes detail. Both sources: the fbm drops
                        octaves, a stored field reads a filtered level. The second
                        half is the arm -- picking a coarser level is free to be a
                        no-op, and with a subsampled pyramid on an aligned lattice
                        it is exactly that.
-      d4-morph-depth   the morph reaches the DEPTH PREPASS. It rasterizes the
+      quadtree-depth   the morph reaches the DEPTH PREPASS. It rasterizes the
                        same triangles and the shading pass tests against its
                        depth with LEQUAL, so a program that displaces differently
                        does not shade wrong, it deletes the surface.
@@ -8325,60 +8355,63 @@ def run_d4_terrain_gate(workdir):
     removes terrain only where the coarse surface happens to sit in front.
     """
     if not os.path.exists(FOREST):
-        print("  d4-patch-seam SKIP  (forest not built)")
+        print("  quadtree-seam SKIP  (forest not built)")
         return []
     failures = []
 
     near = _quadtree_probe([])
     far = _quadtree_probe(["--terrain-extent", "2000"])
     if not near or not far:
-        print("  d4-patch-seam ERROR the quadtree probe produced no rows")
-        return ["d4-patch-seam", "d4-morph-parent", "d4-patch-count"]
+        print("  quadtree-seam ERROR the quadtree probe produced no rows")
+        return ["quadtree-seam", "quadtree-morph", "quadtree-scale"]
 
     # --- seam ---------------------------------------------------------------
     # fine_min == 1 exactly and coarse_max == 0 exactly, not approximately: both
     # are clamped, so the correct answer is the clamp's own endpoint and anything
     # between them is a seam that is genuinely open.
     ok = all(p["unbalanced"] == 0 and p["fine_min"] == 1.0 and p["coarse_max"] == 0.0
-             and p["gap"] <= D4_QUADTREE_GAP_MAX and p["seams"] > 0 for p in (near, far))
-    print(f"  d4-patch-seam {'PASS' if ok else 'FAIL'}  {near['seams']} seams at 1 km and "
+             and p["gap"] <= QUADTREE_GAP_MAX and p["seams"] > 0 for p in (near, far))
+    print(f"  quadtree-seam {'PASS' if ok else 'FAIL'}  {near['seams']} seams at 1 km and "
           f"{far['seams']} at 4 km, {near['unbalanced'] + far['unbalanced']} more than one level "
           f"apart (want 0); fine side {near['fine_min']:.4f}/{far['fine_min']:.4f} (want 1), "
           f"coarse side {near['coarse_max']:.4f}/{far['coarse_max']:.4f} (want 0), worst gap "
-          f"{max(near['gap'], far['gap']):.2e} units (want <= {D4_QUADTREE_GAP_MAX:.0e})")
+          f"{max(near['gap'], far['gap']):.2e} units (want <= {QUADTREE_GAP_MAX:.0e})")
     if not ok:
-        failures.append("d4-patch-seam")
+        failures.append("quadtree-seam")
 
     # --- interior -----------------------------------------------------------
     worst = max(near["interior_gap"], far["interior_gap"])
-    ok = worst <= D4_QUADTREE_GAP_MAX
-    print(f"  d4-morph-parent {'PASS' if ok else 'FAIL'}  a fully morphed patch sits "
+    ok = worst <= QUADTREE_GAP_MAX
+    print(f"  quadtree-morph {'PASS' if ok else 'FAIL'}  a fully morphed patch sits "
           f"{worst:.2e} world units off the surface its parent draws (want <= "
-          f"{D4_QUADTREE_GAP_MAX:.0e}; the wrong coarse-quad diagonal reads 2.92)")
+          f"{QUADTREE_GAP_MAX:.0e}; the wrong coarse-quad diagonal reads 2.92)")
     if not ok:
-        failures.append("d4-morph-parent")
+        failures.append("quadtree-morph")
 
     # --- world size ---------------------------------------------------------
     # The fixed-grid counts come from the app rather than from the ratio of the
     # extents, so an app that quietly stopped growing its tile grid is caught
     # here instead of flattering the quadtree.
-    grid_near = _forest_run(workdir, "qt_grid_near", ["--no-quadtree"])
-    grid_far = _forest_run(workdir, "qt_grid_far",
-                           ["--no-quadtree", "--terrain-extent", "2000"])
+    #
+    # One frame at a postage stamp, not a profiled render: what is read is the
+    # tile COUNT, and a 4 km grid builds 1,024 tiles before it can draw one -- a
+    # 20-frame 800x450 run to learn an integer the app prints at startup.
+    grid_near = _grid_tiles(workdir, "qt_grid_near", [])
+    grid_far = _grid_tiles(workdir, "qt_grid_far", ["--terrain-extent", "2000"])
     if not grid_near or not grid_far:
-        print("  d4-patch-count ERROR while rendering the fixed grid")
-        failures.append("d4-patch-count")
+        print("  quadtree-scale ERROR while rendering the fixed grid")
+        failures.append("quadtree-scale")
     else:
         qt_growth = far["selected"] / float(max(near["selected"], 1))
-        grid_growth = (grid_far["terrain_meshes"] / float(max(grid_near["terrain_meshes"], 1)))
-        ok = qt_growth <= D4_QUADTREE_GROWTH_MAX and grid_growth > qt_growth * 2.0
-        print(f"  d4-patch-count {'PASS' if ok else 'FAIL'}  16x the ground area takes the "
+        grid_growth = grid_far / float(max(grid_near, 1))
+        ok = qt_growth <= QUADTREE_GROWTH_MAX and grid_growth > qt_growth * 2.0
+        print(f"  quadtree-scale {'PASS' if ok else 'FAIL'}  16x the ground area takes the "
               f"quadtree from {near['selected']} patches to {far['selected']} ({qt_growth:.2f}x, "
-              f"want <= {D4_QUADTREE_GROWTH_MAX:.0f}x) while the fixed grid goes "
-              f"{grid_near['terrain_meshes']} -> {grid_far['terrain_meshes']} "
+              f"want <= {QUADTREE_GROWTH_MAX:.0f}x) while the fixed grid goes "
+              f"{grid_near} -> {grid_far} "
               f"({grid_growth:.1f}x, want more than twice the quadtree's)")
         if not ok:
-            failures.append("d4-patch-count")
+            failures.append("quadtree-scale")
 
     # --- the band limit -----------------------------------------------------
     # Read from a camera far enough back that the descent stops at the root, so
@@ -8388,8 +8421,8 @@ def run_d4_terrain_gate(workdir):
     analytic = _quadtree_probe([], cam=FOREST_CAM_HIGH)
     stored = _quadtree_probe(["--erode", "--erode-iterations", "20"], cam=FOREST_CAM_HIGH)
     if not analytic or not stored:
-        print("  d4-mip       ERROR the band-limit probe produced no rows")
-        failures.append("d4-mip")
+        print("  quadtree-mip       ERROR the band-limit probe produced no rows")
+        failures.append("quadtree-mip")
     else:
         def coarsest(p):
             rows = [r for r in p["by_level"] if r["selected"] > 0]
@@ -8402,34 +8435,39 @@ def run_d4_terrain_gate(workdir):
         ordered = all(p["by_level"][k]["source_level"] >= p["by_level"][k - 1]["source_level"]
                       for p in (analytic, stored) for k in range(1, len(p["by_level"])))
         ok = (a_row and s_row and ordered and stored["field_levels"] > 1
-              and a_row["source_level"] > 0 and a_row["dropped"] > D4_MIP_DROP_MIN
-              and s_row["source_level"] > 0 and s_row["dropped"] > D4_MIP_DROP_MIN)
-        print(f"  d4-mip       {'PASS' if ok else 'FAIL'}  the coarsest selected patch reads "
+              and a_row["source_level"] > 0 and a_row["dropped"] > QUADTREE_MIP_DROP_MIN
+              and s_row["source_level"] > 0 and s_row["dropped"] > QUADTREE_MIP_DROP_MIN)
+        print(f"  quadtree-mip       {'PASS' if ok else 'FAIL'}  the coarsest selected patch reads "
               f"source level {a_row['source_level'] if a_row else '?'} of the fbm and drops "
               f"{a_row['dropped'] if a_row else 0:.2f} world units, and level "
               f"{s_row['source_level'] if s_row else '?'} of a "
               f"{stored['field_levels']}-level stored field dropping "
-              f"{s_row['dropped'] if s_row else 0:.2f} (want > {D4_MIP_DROP_MIN} each, a field "
+              f"{s_row['dropped'] if s_row else 0:.2f} (want > {QUADTREE_MIP_DROP_MIN} each, a field "
               f"pyramid deeper than 1, and source levels non-decreasing: {ordered})")
         if not ok:
-            failures.append("d4-mip")
+            failures.append("quadtree-mip")
 
     # --- the prepass --------------------------------------------------------
     # --no-sky, because the Hillaire atmosphere is what makes forest not
     # pixel-deterministic; the arm reads a difference between two frames and
     # needs the difference to be the prepass.
+    #
+    # Four frames at 400x240, and the size is affordable because what the arm
+    # reads is a RATIO of two pixel counts taken at the same size. Starving a
+    # program of uMorphEye deletes surface wherever the coarse ground sits in
+    # front of the fine, which is a fraction of the frame and not a speck count.
     shots = {}
     for tag, extra in (("qt", []), ("qt_pp", ["--depth-prepass"]),
                        ("grid", ["--no-quadtree"]),
                        ("grid_pp", ["--no-quadtree", "--depth-prepass"])):
-        out = os.path.join(workdir, f"d4t_{tag}.ppm")
-        cmd = ([FOREST, "-x", "-f", "20", "-W", "800", "-H", "450", "--no-fog", "--no-sky",
+        out = os.path.join(workdir, f"quadtree_{tag}.ppm")
+        cmd = ([FOREST, "-x", "-f", "12", "-W", "400", "-H", "240", "--no-fog", "--no-sky",
                 "--seed", "1337", "-S", out] + FOREST_CAM + extra)
         r = subprocess.run(cmd, capture_output=True, text=True)
         shots[tag] = out if r.returncode == 0 and os.path.exists(out) else None
     if not all(shots.values()):
-        print("  d4-morph-depth ERROR while rendering the prepass comparison")
-        return failures + ["d4-morph-depth"]
+        print("  quadtree-depth ERROR while rendering the prepass comparison")
+        return failures + ["quadtree-depth"]
 
     qt_move, _ = compare(shots["qt"], shots["qt_pp"])
     grid_move, _ = compare(shots["grid"], shots["grid_pp"])
@@ -8437,13 +8475,297 @@ def run_d4_terrain_gate(workdir):
     # morphs: some patch has to have reached factor 1 for the prepass to have
     # anything to disagree about.
     morphing = near["fine_min"] == 1.0 and near["seams"] > 0
-    ok = morphing and qt_move <= grid_move * D4_PREPASS_TOLERANCE
-    print(f"  d4-morph-depth {'PASS' if ok else 'FAIL'}  --depth-prepass moves {qt_move} px on "
+    ok = morphing and qt_move <= grid_move * QUADTREE_PREPASS_TOLERANCE
+    print(f"  quadtree-depth {'PASS' if ok else 'FAIL'}  --depth-prepass moves {qt_move} px on "
           f"the quadtree against {grid_move} on the fixed grid, whose terrain does not morph at "
-          f"all (want <= {D4_PREPASS_TOLERANCE:.1f}x it; starving one program of uMorphEye reads "
+          f"all (want <= {QUADTREE_PREPASS_TOLERANCE:.1f}x it; starving one program of uMorphEye reads "
           f"9x), with {near['seams']} seams morphing")
     if not ok:
-        failures.append("d4-morph-depth")
+        failures.append("quadtree-depth")
+
+    return failures
+
+
+_REGION_SUMMARY = re.compile(
+    r"region-probe side=(\d+) span=([\d.]+) resident=(\d+) of (\d+) loaded=(\d+) freed=(\d+) "
+    r"nodes=(\d+)")
+_REGION_CELL = re.compile(
+    r"region-probe cell rx=(\d+) rz=(\d+) trees=(\d+) rocks=(\d+) nodes=(\d+) collider=(\d+) "
+    r"digest=([0-9a-f]+)")
+
+# A region small enough, and a load radius short enough, that a walk of a few
+# hundred frames crosses several boundaries. The shipping radius is larger than a
+# kilometre world's own diagonal on purpose -- at this size nothing would ever be
+# freed and every arm here would read a scene that never churned.
+REGION_CHURN = ["--region-span", "40", "--region-radius", "60"]
+# Fast enough to cross several 40-unit regions inside a three-second leg, so a
+# 400-frame round trip leaves and comes back rather than shuffling inside one
+# cell -- the seam arm needs boundaries CROSSED, not merely approached.
+# --trace-player rides along: the seam arm reads the same run the residency arms
+# do, so "it crossed a boundary" and "it stayed grounded" are the same walk rather
+# than two that merely used the same flags.
+REGION_WALK = ["--walk", "40", "--trace-player"]
+
+
+def _region_run(workdir, tag, extra, frames="400"):
+    """One forest run with the region probe, parsed into (summary, {cell: row})."""
+    out = os.path.join(workdir, f"region_{tag}.ppm")
+    cmd = ([FOREST, "-x", "-f", frames, "-W", "320", "-H", "200", "--no-fog", "--seed", "1337",
+            "--region-probe", "-S", out] + extra)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    m = _REGION_SUMMARY.search(text)
+    if r.returncode != 0 or not m:
+        return None, None, text
+    summary = {"side": int(m.group(1)), "span": float(m.group(2)), "resident": int(m.group(3)),
+               "total": int(m.group(4)), "loaded": int(m.group(5)), "freed": int(m.group(6)),
+               "nodes": int(m.group(7))}
+    cells = {}
+    for c in _REGION_CELL.finditer(text):
+        cells[(int(c.group(1)), int(c.group(2)))] = {
+            "trees": int(c.group(3)), "rocks": int(c.group(4)), "nodes": int(c.group(5)),
+            "collider": int(c.group(6)), "digest": c.group(7)}
+    return summary, cells, text
+
+
+_ISLAND_HEADER = re.compile(r"terrain-height-probe island start=([\d.]+) depth=([\d.]+)")
+_ISLAND_ROW = re.compile(
+    r"terrain-height-probe island az=(\d+) r=([\d.]+) h=(-?[\d.]+) flat=(-?[\d.]+) "
+    r"drop=(-?[\d.]+) t=([\d.]+) floor=(-?[\d.]+)")
+_SCATTER_SHORE = re.compile(
+    r"scatter-probe shore trees=(\d+) low_y=(-?[\d.]+) water=(\d+) water_level=(-?[\d.]+)")
+
+# World units. The falloff is a smoothstep, so it is exactly flat inside its start
+# and the drop there is a true zero rather than a small number -- but the height it
+# is subtracted from is the fbm at ~95 units, so the bar is loose enough to survive
+# the subtraction's own rounding and tight enough that a falloff leaking inland by
+# any visible amount fails.
+ISLAND_INLAND_MAX = 1e-3
+# The falloff is a smoothstep in fp32, so its saturated value is an exact 1 and
+# its steps are far larger than this. The slack is for the read, not the value.
+ISLAND_FALLOFF_EPS = 1e-4
+# How deep the rim has to be by the domain's edge, as a fraction of the island's
+# depth. Not 1.0, because the sea floor deliberately keeps a QUARTER of the
+# terrain's own relief rather than going exactly flat -- a run of exactly coplanar
+# triangles is a collider Jolt's tree builder cannot split, and its fallback
+# TRACES into a handler that aborts the process.
+ISLAND_RIM_FRACTION = 0.6
+
+
+def _island_probe(extra):
+    """The height probe's island rows, as (header, rows) or (None, [])."""
+    cmd = ([FOREST, "-x", "-f", "1", "-W", "200", "-H", "150", "--no-fog", "--seed", "1337",
+            "--terrain-height-probe"] + extra)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    head = _ISLAND_HEADER.search(text)
+    rows = [{"az": int(m.group(1)), "r": float(m.group(2)), "h": float(m.group(3)),
+             "flat": float(m.group(4)), "drop": float(m.group(5)), "t": float(m.group(6)),
+             "floor": float(m.group(7))}
+            for m in _ISLAND_ROW.finditer(text)]
+    if r.returncode != 0:
+        return None, []
+    if not head:
+        return None, rows
+    return {"start": float(head.group(1)), "depth": float(head.group(2))}, rows
+
+
+def run_island_gate(workdir):
+    """The island: ground that falls to a shoreline, and a sea past it.
+
+      island-shore  the falloff is exactly nothing inland of where it starts,
+                       grows without reversing outside it, and has reached the sea
+                       floor by the domain's edge -- on every azimuth, so the shore
+                       is a ring and not a band that happens to cross the frame.
+                       Read as the DROP against the same terrain unshaped, which is
+                       what makes it a statement about the falloff rather than
+                       about this seed's noise.
+      island-dry       no prop of any kind stands below the waterline, on terrain
+                       that reaches the sea floor -- so the rule had drowned ground
+                       to reject rather than passing on a world with none. ROCKS
+                       and not just trees: a tree is turned away from the shoal by
+                       the slope test long before the waterline matters, where a
+                       rock tolerates 57 degrees and the rim is 45.
+
+    --no-island is the control on the first, and a real one: it prints no island
+    rows at all, which is what says the shaping is off rather than merely small.
+    """
+    if not os.path.exists(FOREST):
+        print("  island-shore SKIP  (forest not built)")
+        return []
+    failures = []
+
+    head, rows = _island_probe([])
+    _, flat_rows = _island_probe(["--no-island"])
+    if not head or not rows:
+        print("  island-shore ERROR the height probe produced no island rows")
+        return ["island-shore", "island-dry"]
+
+    # The FALLOFF is read off the row rather than recovered from the drop. The
+    # drop is the falloff times a span that includes the noise AND the sea floor's
+    # share of it, so it follows every dip in the terrain and is not monotone in r
+    # -- and reconstructing it here would restate arithmetic only terrain.c can
+    # see.
+    inland = max((abs(x["drop"]) for x in rows if x["r"] <= head["start"]), default=0.0)
+    azimuths = sorted({x["az"] for x in rows})
+    reversals, rim_short = 0, 0
+    for az in azimuths:
+        seq = sorted((x for x in rows if x["az"] == az), key=lambda x: x["r"])
+        outside = [x for x in seq if x["r"] > head["start"]]
+        for a, b in zip(outside, outside[1:]):
+            if b["t"] < a["t"] - ISLAND_FALLOFF_EPS:
+                reversals += 1
+        # Two bars at the rim, and they answer different questions: the falloff has
+        # to have RUN OUT (t == 1, exactly what the smoothstep owes past its upper
+        # edge), and the ground has to be deep water rather than merely damp. The
+        # second is not implied by the first -- a floor that kept all of the
+        # terrain's relief instead of a quarter of it would satisfy t and surface.
+        rim = [x for x in seq if x["r"] >= 1.0]
+        if (not rim or min(x["t"] for x in rim) < 1.0 - ISLAND_FALLOFF_EPS
+                or max(x["h"] for x in rim) > -head["depth"] * ISLAND_RIM_FRACTION):
+            rim_short += 1
+    ok = (inland <= ISLAND_INLAND_MAX and reversals == 0 and rim_short == 0
+          and len(azimuths) >= 8 and not flat_rows)
+    print(f"  island-shore {'PASS' if ok else 'FAIL'}  worst drop inland of r "
+          f"{head['start']:.2f} is {inland:.2e} units (want <= {ISLAND_INLAND_MAX:.0e}), "
+          f"{reversals} reversals over {len(azimuths)} azimuths (want 0 over 8), {rim_short} "
+          f"azimuths short of the {-head['depth']:.0f}-unit sea floor at the edge (want 0), and "
+          f"--no-island prints {len(flat_rows)} island rows (want 0)")
+    if not ok:
+        failures.append("island-shore")
+
+    def shore(extra):
+        cmd = ([FOREST, "-x", "-f", "1", "-W", "200", "-H", "150", "--no-fog", "--seed", "1337",
+                "--scatter-probe"] + extra)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        m = _SCATTER_SHORE.search(r.stdout + r.stderr)
+        if r.returncode != 0 or not m:
+            return None
+        return {"trees": int(m.group(1)), "low_y": float(m.group(2)), "water": int(m.group(3)),
+                "level": float(m.group(4))}
+
+    isle = shore([])
+    if not isle:
+        print("  island-dry ERROR the scatter probe produced no shore row")
+        return failures + ["island-dry"]
+    # The GROUND's own minimum is the control, not the props of an unshaped run.
+    # An unshaped forest has almost no terrain below the waterline either -- its
+    # heights are the fbm about zero -- so comparing the two would compare two
+    # numbers that are equal because neither had anywhere to go. What says the
+    # rule had work is that the island's rim reaches the sea floor, which is well
+    # below where anything is allowed to stand.
+    ground_low = min(x["h"] for x in rows)
+    ok = (isle["water"] == 1 and isle["trees"] > 0 and isle["low_y"] >= isle["level"]
+          and ground_low < isle["level"])
+    print(f"  island-dry {'PASS' if ok else 'FAIL'}  the lowest prop of any kind stands at y "
+          f"{isle['low_y']:.1f} against a waterline at {isle['level']:.1f} (want above it), on "
+          f"terrain that reaches {ground_low:.1f} (want below it, or there was no drowned ground "
+          f"to reject) -- over {isle['trees']} trees and the rocks beside them")
+    if not ok:
+        failures.append("island-dry")
+
+    return failures
+
+
+def run_region_gate(workdir):
+    """Region residency: props and collision that exist only near the camera.
+
+      region-scatter  a region places the same props whether it loaded alone or
+                         with fifteen neighbours. It is seeded from its own CELL
+                         COORDINATES, not drawn from one global stream, and that is
+                         the whole difference between a world you can re-enter and
+                         one that reshuffles behind you.
+      region-return   after a round trip the regions that come back are the ones
+                         that left, byte for byte. Read as digests against a run
+                         that never moved.
+      region-leak     every region ever loaded is either resident or was freed,
+                         and the node total is the sum over the resident ones. A
+                         residency that frees nothing renders perfectly and runs
+                         out of memory a kilometre later.
+      region-collider   the character crosses region boundaries without losing
+                         ground contact. Collision is per region now, so the seam
+                         between two static bodies is a place a character can fall
+                         through and nothing else would notice.
+
+    The shipping load radius is deliberately wider than a kilometre world's own
+    diagonal, so this app's historical configuration keeps every region resident
+    and nothing about it moved. Every arm here dials it down to force the churn it
+    is measuring -- which is also why none of them is a pixel comparison.
+    """
+    if not os.path.exists(FOREST):
+        print("  region-scatter SKIP  (forest not built)")
+        return []
+    failures = []
+
+    # --- scatter: the same cells, loaded two different ways -----------------
+    few, few_cells, _ = _region_run(workdir, "few", ["--region-radius", "200"], frames="5")
+    many, many_cells, _ = _region_run(workdir, "many", [], frames="5")
+    if not few or not many:
+        print("  region-scatter ERROR the region probe produced no rows")
+        return ["region-scatter", "region-return", "region-leak", "region-collider"]
+
+    shared = sorted(set(few_cells) & set(many_cells))
+    same = [k for k in shared if few_cells[k]["digest"] == many_cells[k]["digest"]]
+    ok = len(shared) >= 4 and len(same) == len(shared) and few["resident"] < many["resident"]
+    print(f"  region-scatter {'PASS' if ok else 'FAIL'}  {few['resident']} regions resident at "
+          f"a short radius against {many['resident']} at the shipping one (want fewer), and "
+          f"{len(same)} of {len(shared)} shared cells carry the same placement digest "
+          f"(want all, on at least 4)")
+    if not ok:
+        failures.append("region-scatter")
+
+    # --- the round trip ------------------------------------------------------
+    walk, walk_cells, walk_text = _region_run(workdir, "walk", REGION_CHURN + REGION_WALK)
+    # Thirty frames for the run that never moves: its resident set is settled on
+    # the first descent and 370 more frames of standing still say nothing.
+    still, still_cells, _ = _region_run(workdir, "still", REGION_CHURN, frames="30")
+    if not walk or not still:
+        print("  region-return ERROR while walking")
+        return failures + ["region-return", "region-leak", "region-collider"]
+
+    shared = sorted(set(walk_cells) & set(still_cells))
+    same = [k for k in shared if walk_cells[k]["digest"] == still_cells[k]["digest"]]
+    churned = walk["freed"] > 0 and walk["loaded"] > walk["resident"]
+    ok = churned and len(shared) >= 4 and len(same) == len(shared)
+    print(f"  region-return {'PASS' if ok else 'FAIL'}  the walk loaded {walk['loaded']} "
+          f"regions and freed {walk['freed']} (want both moving), and {len(same)} of "
+          f"{len(shared)} cells it shares with a run that never moved carry the same digest "
+          f"(want all, on at least 4)")
+    if not ok:
+        failures.append("region-return")
+
+    # --- leak ----------------------------------------------------------------
+    # Exact, and it is the accounting rather than a threshold: a region that was
+    # loaded and is neither resident nor freed is a region whose nodes are still
+    # in the graph with nothing owning them.
+    balanced = walk["loaded"] - walk["freed"] == walk["resident"]
+    node_sum = sum(c["nodes"] for c in walk_cells.values())
+    colliders = all(c["collider"] == 1 for c in walk_cells.values())
+    ok = balanced and node_sum == walk["nodes"] and colliders
+    print(f"  region-leak {'PASS' if ok else 'FAIL'}  loaded {walk['loaded']} - freed "
+          f"{walk['freed']} = {walk['loaded'] - walk['freed']} against {walk['resident']} "
+          f"resident (want equal); {node_sum} nodes over the resident regions against the "
+          f"{walk['nodes']} the app counts (want equal); every resident region has a collider: "
+          f"{colliders}")
+    if not ok:
+        failures.append("region-leak")
+
+    # --- the seam ------------------------------------------------------------
+    samples = _FOREST_TRACE.findall(walk_text)
+    if len(samples) < 4:
+        print(f"  region-collider FAIL  {len(samples)} trace samples, want a walk")
+        return failures + ["region-collider"]
+    # The first sample is the spawn drop, which is legitimately airborne.
+    settled = samples[1:]
+    cells = {(int(math.floor(float(x) / walk["span"])), int(math.floor(float(z) / walk["span"])))
+             for x, _, z, _, _ in settled}
+    grounded = all(int(g) == 1 for _, _, _, g, _ in settled)
+    ok = grounded and len(cells) >= 3
+    print(f"  region-collider {'PASS' if ok else 'FAIL'}  grounded on all {len(settled)} "
+          f"settled samples: {grounded}, over {len(cells)} distinct region cells (want >= 3, or "
+          f"the walk never left one and the seam was never crossed)")
+    if not ok:
+        failures.append("region-collider")
 
     return failures
 
@@ -8533,7 +8855,6 @@ def run_forest_gate(workdir):
     nolod = _forest_run(workdir, "nolod", ["--no-lod", "--no-sort-opaque"])
     if nolod is None:
         failures.append("forest-batch")
-        failures.append("forest-lod")
     else:
         n = nolod["opaque"]
         n_draws, n_inst = n["draws"], n["instances"]
@@ -8544,23 +8865,30 @@ def run_forest_gate(workdir):
         if not ok:
             failures.append("forest-batch")
 
-        # --- forest-lod: level selection fires on generated geometry --------
-        # A fixed camera comparing on against off, NOT a distance sweep: pulling
-        # back over scattered content reveals more world, so triangles rise with
-        # distance however well LOD works. Identical instances is what proves the
-        # difference is level selection and not visibility.
-        #
-        # The two runs also differ in --no-sort-opaque, which the shared nolod
-        # run carries for forest-batch above. That is safe HERE and only here:
-        # sorting reorders draws without changing which meshes survive the
-        # frustum, so it moves neither instances nor triangles -- the only two
-        # columns this arm reads.
-        same_vis = n_inst == inst
-        saving = 1.0 - (opaque["triangles"] / n["triangles"]) if n["triangles"] else 0.0
+    # --- forest-lod: level selection fires on generated geometry ------------
+    # A fixed camera comparing on against off, NOT a distance sweep: pulling back
+    # over scattered content reveals more world, so triangles rise with distance
+    # however well LOD works. Identical instances is what proves the difference is
+    # level selection and not visibility.
+    #
+    # Its OWN framing since 11.63, and its own pair of runs with it. The app is an
+    # island now: standing on it at FOREST_CAM every prop is inside a 425-unit disc
+    # and LOD has almost nothing to coarsen — the same scene reads 5% saved there
+    # and 44% from off the shore. Five per cent is not LOD failing, it is a camera
+    # with nothing distant in front of it, and an arm about DISTANCE needs a
+    # framing that has some.
+    lod_on = _forest_run(workdir, "lod_on", [], cam=FOREST_CAM_WIDE)
+    lod_off = _forest_run(workdir, "lod_off", ["--no-lod"], cam=FOREST_CAM_WIDE)
+    if not lod_on or not lod_off:
+        failures.append("forest-lod")
+    else:
+        w_on, w_off = lod_on["opaque"], lod_off["opaque"]
+        same_vis = w_on["instances"] == w_off["instances"]
+        saving = 1.0 - (w_on["triangles"] / w_off["triangles"]) if w_off["triangles"] else 0.0
         ok = same_vis and saving >= 0.10
-        print(f"  forest-lod   {'PASS' if ok else 'FAIL'}  {opaque['triangles']} triangles with "
-              f"LOD vs {n['triangles']} without ({saving * 100.0:.0f}% saved, want >= 10%), both "
-              f"carrying {inst} instances")
+        print(f"  forest-lod   {'PASS' if ok else 'FAIL'}  {w_on['triangles']} triangles with "
+              f"LOD vs {w_off['triangles']} without ({saving * 100.0:.0f}% saved, want >= 10%), "
+              f"both carrying {w_on['instances']} instances")
         if not ok:
             failures.append("forest-lod")
 
@@ -11798,8 +12126,10 @@ GATE_GROUPS = [
      run_overdraw_gate),
     ("prepass", "depth prepass (identical picture, less shading, spec 11.30 / E6):",
      run_prepass_gate),
-    ("d4", "cluster-DAG level of detail (spec 11.63 / D4):", run_d4_gate),
-    ("d4-terrain", "the terrain quadtree (spec 11.63 / D4):", run_d4_terrain_gate),
+    ("cluster", "cluster-DAG level of detail (spec 11.63):", run_cluster_gate),
+    ("quadtree", "the terrain quadtree (spec 11.63):", run_quadtree_gate),
+    ("region", "region residency (spec 11.63):", run_region_gate),
+    ("island", "the island (spec 11.63):", run_island_gate),
     ("forest", "forest (scattered content: batching, ordering, LOD, spec 11.29):",
      run_forest_gate),
     ("import", "import:", _run_import_gates),

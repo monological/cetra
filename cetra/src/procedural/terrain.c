@@ -49,6 +49,8 @@ TerrainParams terrain_default_params(void) {
     p.tiles = 8;
     p.tile_segments = 48;
     p.field = NULL;
+    p.island_start = 0.0f;
+    p.island_depth = 0.0f;
     p.layered = false;
     return p;
 }
@@ -467,6 +469,43 @@ static int analytic_octaves(const TerrainParams* p, float cell) {
     return kept > 0 ? kept : 1;
 }
 
+// How far this point has fallen toward the sea, in [0,1]: 0 inland of
+// island_start, 1 at the domain's edge midpoints and beyond.
+//
+// Smoothstep and not a linear ramp, because the join at island_start is a place
+// the eye finds instantly -- a crease running in a circle round the whole island
+// is more obviously artificial than any amount of noise.
+//
+// Takes DOMAIN coordinates, which is what the caller already has.
+/*
+ * What the ground becomes once the falloff has fully run: the sea floor, keeping
+ * a share of the terrain's own relief rather than going exactly flat.
+ *
+ * Partly because a sea floor is not a plane. Mostly because a large run of
+ * EXACTLY COPLANAR triangles is a collider no BVH can index -- Jolt's tree
+ * builder falls back to a random split and TRACES, and its default trace handler
+ * is an assert, so the process dies while building a mesh shape. JoltC exposes no
+ * hook to replace that handler, which is why this is fixed at the geometry rather
+ * than at the report.
+ *
+ * A quarter, so the floor is unmistakably not a plane while the rim still reads
+ * as deep water against a sea level a fraction of `island_depth` down.
+ */
+#define ISLAND_FLOOR_RELIEF 0.25f
+
+static float island_floor(const TerrainParams* p, float h) {
+    return -p->island_depth + h * ISLAND_FLOOR_RELIEF;
+}
+
+static float island_falloff(const TerrainParams* p, float ox, float oz) {
+    if (!(p->island_start > 0.0f) || !(p->island_start < 1.0f) || !(p->extent > 0.0f))
+        return 0.0f;
+    float dx = (ox - p->extent) / p->extent;
+    float dz = (oz - p->extent) / p->extent;
+    float r = sqrtf(dx * dx + dz * dz);
+    return smoothstep01(p->island_start, 1.0f, r);
+}
+
 float terrain_level_cell(const TerrainParams* p, int level) {
     if (!p)
         return 0.0f;
@@ -527,6 +566,7 @@ float terrain_height_at_level(const TerrainParams* p, float x, float z, int leve
     terrain_to_domain(p, x, z, &ox, &oz);
 
     int kept = level > 0 ? analytic_octaves(p, terrain_level_cell(p, level)) : p->octaves;
+    float shore = island_falloff(p, ox, oz);
     float sum = 0.0f, amp = 1.0f, norm = 0.0f, freq = p->base_freq;
     for (int i = 0; i < p->octaves; ++i) {
         // A different constant Y plane per octave, the trick grass.c uses, so
@@ -545,7 +585,11 @@ float terrain_height_at_level(const TerrainParams* p, float x, float z, int leve
         amp *= p->gain;
         freq *= p->lacunarity;
     }
-    return norm > 0.0f ? (sum / norm) * p->height : 0.0f;
+    float h = norm > 0.0f ? (sum / norm) * p->height : 0.0f;
+    // Lerped toward the sea floor rather than multiplied down to zero: a shore
+    // has to keep going once it is under water, or the sea meets a flat plate at
+    // exactly its own level and there is no beach, only a waterline.
+    return h + (island_floor(p, h) - h) * shore;
 }
 
 float terrain_height_at(const TerrainParams* p, float x, float z) {
@@ -757,6 +801,40 @@ void terrain_height_probe(const TerrainParams* p) {
                    (double)terrain_mask_at(p, TERRAIN_MASK_FLOW, x, z),
                    (double)terrain_mask_at(p, TERRAIN_MASK_DEPOSIT, x, z),
                    (double)terrain_mask_at(p, TERRAIN_MASK_WEAR, x, z));
+        }
+    }
+
+    // The island's shape, as a radial sweep against the SAME terrain unshaped.
+    //
+    // The drop and not the height, because the height is the noise: a run at
+    // another seed would need a different number for the same shape, and what is
+    // under test is the falloff. Silent with no island, where the two would be
+    // the same number by construction and the rows would assert nothing.
+    //
+    // `t` is the falloff ITSELF, reported rather than left to be reconstructed
+    // from the drop. The drop is the falloff times a span that includes the noise
+    // AND the floor's share of it, so recovering t outside this file means
+    // restating island_floor's arithmetic somewhere that cannot see it.
+    if (p->island_start > 0.0f && p->island_start < 1.0f) {
+        TerrainParams flat = *p;
+        flat.island_start = 0.0f;
+        printf("terrain-height-probe island start=%.4f depth=%.4f\n", (double)p->island_start,
+               (double)p->island_depth);
+        for (int a2 = 0; a2 < 8; ++a2) {
+            float ang = 6.2831853f * (float)a2 / 8.0f;
+            for (int k = 0; k <= 14; ++k) {
+                float r = 0.1f * (float)k;
+                float lx = extent * r * cosf(ang), lz = extent * r * sinf(ang);
+                float x = terrain_world_x(p, lx), z = terrain_world_z(p, lz);
+                float h = terrain_height_at(p, x, z);
+                float hf = terrain_height_at(&flat, x, z);
+                float ox, oz;
+                terrain_to_domain(p, x, z, &ox, &oz);
+                printf("terrain-height-probe island az=%d r=%.4f h=%.6f flat=%.6f drop=%.6f "
+                       "t=%.6f floor=%.6f\n",
+                       a2, (double)r, (double)h, (double)hf, (double)(hf - h),
+                       (double)island_falloff(p, ox, oz), (double)island_floor(p, hf));
+            }
         }
     }
 
@@ -1009,6 +1087,14 @@ bool terrain_build_patch(const TerrainParams* p, float x0, float z0, float span,
 bool terrain_build_collider(const TerrainParams* p, int segments, Mesh* mesh) {
     if (!p || !mesh)
         return false;
-    return build_grid(p, terrain_world_x(p, -p->extent), terrain_world_z(p, -p->extent),
-                      2.0f * p->extent, segments, false, 0, mesh);
+    return terrain_build_collider_region(p, terrain_world_x(p, -p->extent),
+                                         terrain_world_z(p, -p->extent), 2.0f * p->extent,
+                                         segments, mesh);
+}
+
+bool terrain_build_collider_region(const TerrainParams* p, float x0, float z0, float span,
+                                   int segments, Mesh* mesh) {
+    if (!p || !mesh || !(span > 0.0f))
+        return false;
+    return build_grid(p, x0, z0, span, segments, false, 0, mesh);
 }
