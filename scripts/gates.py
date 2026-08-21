@@ -4284,6 +4284,9 @@ FOREST_CAM_WIDE = ["--cam-eye", "0,300,700", "--cam-target", "0,-20,0"]
 FOREST_CAM_AWAY = ["--cam-eye", "0,300,0", "--cam-target", "600,900,600"]
 
 
+_FOREST_RUN_CACHE = {}
+
+
 def _forest_run(workdir, tag, extra, cam=None):
     """One profiled forest run, or None if it did not produce a readable report.
 
@@ -4295,7 +4298,18 @@ def _forest_run(workdir, tag, extra, cam=None):
     caller then has to .get() its way around -- is what lets the arms index
     columns directly. An arm reading a missing column as 0 does not fail loudly;
     it compares 0 against 0 and passes.
+
+    MEMOIZED on (extra, cam), because two pairs of these are byte-identical
+    across gate groups -- cluster-parity's baseline and lod's, and their two
+    --no-lod runs -- differing only in the output filename. The arms already
+    require those results to be equal, so serving one run to both is not an
+    assumption, it is the assumption they are built on. `tag` is deliberately
+    NOT part of the key: it names the file, and two runs that differ only in
+    where the screenshot lands are the same run.
     """
+    key = (tuple(extra), tuple(cam) if cam else None)
+    if key in _FOREST_RUN_CACHE:
+        return _FOREST_RUN_CACHE[key]
     out = os.path.join(workdir, f"forest_{tag}.ppm")
     # --no-fog because the app defaults it on: it is a froxel volume with its own
     # accumulator and it costs real time per run, while contributing nothing to
@@ -4331,6 +4345,7 @@ def _forest_run(workdir, tag, extra, cam=None):
     tables["terrain_meshes"] = int(mt.group(1) or mt.group(2))
     tables["shading"] = shading
     tables["opaque"] = tables["submit"]["opaque"]
+    _FOREST_RUN_CACHE[key] = tables
     return tables
 
 
@@ -8372,6 +8387,14 @@ def _grid_tiles(workdir, tag, extra):
     here looks at a pixel. It still has to be a real run rather than arithmetic on
     the extent, or an app that quietly stopped growing its grid would be read as
     the quadtree's win.
+
+    THE COST IS DELIBERATE AND HAS BEEN RE-FILED ONCE. At --terrain-extent 2000
+    this builds 1,024 tiles, which is millions of fbm evaluations to read one
+    integer, and the obvious fix -- print the count before building -- is exactly
+    the arithmetic the paragraph above rejects, since on_init builds either way.
+    Making it genuinely cheap needs an early-exit flag on the app, i.e. a small
+    feature rather than a cleanup. Measured in release it is a fraction of a
+    second; the number that made it look worth fixing came from a debug build.
     """
     out = os.path.join(workdir, f"grid_{tag}.ppm")
     cmd = ([FOREST, "-x", "-f", "1", "-W", "160", "-H", "120", "--no-fog", "--seed", "1337",
