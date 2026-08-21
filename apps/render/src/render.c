@@ -237,6 +237,10 @@ static void print_usage(const char* prog) {
                     "material (0 = off)\n");
     fprintf(stderr,
             "      --no-oit           Unsorted alpha-blend late pass instead of OIT (OIT is on)\n");
+    fprintf(stderr,
+            "      --no-layers-vt     Per-texel layered blend instead of the composite cache\n");
+    fprintf(stderr,
+            "      --layers-vt-res N  Composite-cache resolution override (diagnostic)\n");
     fprintf(stderr, "      --no-oit-moments   Weighted-blended OIT: the depth curve, not the "
                     "measured moments\n");
     fprintf(stderr, "      --oit / --oit-moments  Restate the defaults (both are already on)\n");
@@ -1129,6 +1133,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--no-oit-moments") == 0) {
             // Back to the McGuire depth weight, still inside OIT
             args->oit_moments = 0;
+        } else if (strcmp(argv[i], "--no-layers-vt") == 0) {
+            args->no_layers_vt = 1;
+        } else if (strcmp(argv[i], "--layers-vt-res") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->layers_vt_res = atoi(argv[i]);
         } else if (strcmp(argv[i], "--area-light") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2342,6 +2354,12 @@ int main(int argc, char** argv) {
     }
     if (args.oit_moments >= 0) {
         engine->oit_moments_enabled = args.oit_moments != 0;
+    }
+    if (args.no_layers_vt) {
+        engine->layers_vt_enabled = false;
+    }
+    if (args.layers_vt_res > 0) {
+        engine->layers_vt_res = args.layers_vt_res;
     }
     engine->show_lights = args.show_lights != 0;
     engine->cluster_debug = args.cluster_heatmap != 0;

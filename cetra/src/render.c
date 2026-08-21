@@ -250,6 +250,26 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glBindTexture(GL_TEXTURE_2D, material->normal_tex->id);
     }
 
+    // Composite cache (spec 11.66): rides units 0/1, which the layered path
+    // never reads as albedo/normal. Bound AFTER those two binds, so a layered
+    // material that also authors either map cannot clobber the cache. The gate
+    // is uploaded unconditionally, like layerCount above, or a material with no
+    // cache inherits the last cached material's arm.
+    if (material->layers_vt && material->layers_vt->baked) {
+        const MaterialLayersVt* vt = material->layers_vt;
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);
+        glBindTexture(GL_TEXTURE_2D, vt->albedo_tex);
+        glActiveTexture(GL_TEXTURE0 + TEXUNIT_NORMAL);
+        glBindTexture(GL_TEXTURE_2D, vt->surface_tex);
+        uniform_set_int(u, "layersVtActive", 1);
+        uniform_set_vec3_array(u, "layerMeanAlbedo", (const float*)vt->mean_albedo,
+                               MATERIAL_MAX_LAYERS);
+        uniform_set_vec4(u, "layerMeanRough", vt->mean_rough);
+        uniform_set_vec4(u, "layerMeanAo", vt->mean_ao);
+    } else {
+        uniform_set_int(u, "layersVtActive", 0);
+    }
+
     if (material->emissive_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_EMISSIVE);
         glBindTexture(GL_TEXTURE_2D, material->emissive_tex->id);

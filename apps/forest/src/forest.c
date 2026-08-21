@@ -145,6 +145,8 @@ typedef struct ForestArgs {
     // every arm written before it measures, and it takes the sea with it.
     int no_island;
     int no_instancing;
+    int no_layers_vt;     // per-texel layered blend instead of the composite cache
+    int layers_vt_res;    // composite-cache resolution override; 0 = derived
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int depth_prepass;    // position-only depth before shading; off by default
     int force_taa;        // TAA headless too; diagnostic, costs determinism
@@ -1913,6 +1915,10 @@ static void on_init(Game* game) {
         engine->instancing_enabled = false;
     if (g_args.no_morph)
         engine->morph_enabled = false;
+    if (g_args.no_layers_vt)
+        engine->layers_vt_enabled = false;
+    if (g_args.layers_vt_res > 0)
+        engine->layers_vt_res = g_args.layers_vt_res;
     if (g_args.no_sort_opaque)
         engine->opaque_sort_enabled = false;
     if (g_args.depth_prepass)
@@ -2191,6 +2197,9 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --no-clusters       Build LOD chains instead of cluster DAGs\n");
     fprintf(stderr, "      --no-quadtree       Fixed terrain tile grid, not the CDLOD quadtree\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
+    fprintf(stderr,
+            "      --no-layers-vt      Per-texel layered blend instead of the composite cache\n");
+    fprintf(stderr, "      --layers-vt-res N   Composite-cache resolution override (diagnostic)\n");
     fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
     fprintf(stderr, "      --depth-prepass     Depth-only pass before shading\n");
     fprintf(stderr, "      --taa               TAA headless too (diagnostic)\n");
@@ -2284,6 +2293,10 @@ int main(int argc, char** argv) {
             g_args.no_lod = 1;
         } else if (!strcmp(a, "--no-instancing")) {
             g_args.no_instancing = 1;
+        } else if (!strcmp(a, "--no-layers-vt")) {
+            g_args.no_layers_vt = 1;
+        } else if (!strcmp(a, "--layers-vt-res") && i + 1 < argc) {
+            g_args.layers_vt_res = atoi(argv[++i]);
         } else if (!strcmp(a, "--no-sort-opaque")) {
             g_args.no_sort_opaque = 1;
         } else if (!strcmp(a, "--depth-prepass")) {

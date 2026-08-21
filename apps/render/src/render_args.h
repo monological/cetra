@@ -181,6 +181,8 @@ typedef struct {
     float curvature_scale;      // Pre-integration strength override (< 0 = keep the material's)
     int oit;                    // OIT for blend meshes; -1 unset, 0 off, 1 on (engine default ON)
     int oit_moments;            // Absorbance-moment weight in the accumulate; same tri-state
+    int no_layers_vt;           // Per-texel blend on every layered material (cache off)
+    int layers_vt_res;          // Composite-cache resolution override; 0 = derived
     int show_lights;            // Draw light gizmos (position + cull radius)
     int cluster_heatmap;        // Tint by cluster light count
     int area_light;             // --area-light given: spawn one LTC panel

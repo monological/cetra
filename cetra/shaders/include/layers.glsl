@@ -255,4 +255,98 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
     return s;
 }
 
+/*
+ * The composite-cache read (spec 11.66): the blend above, pre-resolved into two
+ * 2D textures over the material's world-XZ splat domain, plus ONE triplanar
+ * detail tap of the dominant layer's own maps at full tiling density.
+ *
+ * The macro holds the blend with every layer at its tile MEAN (the bake's
+ * layerGrainFrozen), and the detail term is the dominant layer's map over that
+ * same mean -- so on a flat map the ratio is exactly one and the macro passes
+ * through byte-exact, and where the atlas is coarse the grain still arrives at
+ * full density because it never lived in the atlas at all.
+ */
+uniform int layersVtActive; // 0 = take the per-texel blend above
+uniform vec3 layerMeanAlbedo[LAYERS_MAX]; // per-layer top-mip means, STORED codes
+uniform vec4 layerMeanRough;              // component i = layer i's mean roughness
+uniform vec4 layerMeanAo;
+
+LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sampler2DArray arr,
+                                 vec3 worldPos, vec3 worldNormal) {
+    LayerSurface s = layerSurfaceNeutral(worldNormal);
+    int n = min(layerCount, LAYERS_MAX);
+    if (n <= 0)
+        return s;
+
+    // The same authored rectangle the splat read uses; CLAMP_TO_EDGE on the
+    // cache makes the half-texel inset that read needs unnecessary here.
+    vec2 uv = (authoredPos(worldPos).xz - splatDomain.xy) / max(splatDomain.zw, vec2(1e-4));
+    // Implicit LOD on purpose, against this file's own rule: the caller's gate
+    // is a uniform, so this is uniform control flow, and implicit gradients are
+    // what keep the cache's anisotropic filtering intact.
+    vec4 macroA = texture(vtAlbedo, uv);
+    vec4 macroS = texture(vtSurface, uv);
+
+    // The dominant layer index rides the alpha and is read UNFILTERED: bilinear
+    // between two indices passes through every index between them, and a mip
+    // average of indices is not an index at all.
+    ivec2 vtSize = textureSize(vtAlbedo, 0);
+    ivec2 tc = clamp(ivec2(uv * vec2(vtSize)), ivec2(0), vtSize - ivec2(1));
+    int k = clamp(int(round(texelFetch(vtAlbedo, tc, 0).a * 3.0)), 0, n - 1);
+
+    // The macro's normal, composed onto the geometric normal exactly as a
+    // Y-projection tangent normal is -- which is what the bake stored it as.
+    vec3 mtn = vec3(macroS.rg * 2.0 - 1.0, 0.0);
+    mtn.z = sqrt(max(1.0 - dot(mtn.xy, mtn.xy), 0.0));
+    vec3 tw = triplanarWeights(worldNormal, layerTriplanarSharpness);
+    vec3 sgn = triplanarAxisSign(worldNormal);
+    vec3 normal = triplanarBlendNormal(mtn, mtn, mtn, worldNormal, vec3(0.0, 1.0, 0.0), sgn);
+
+    vec3 albedo = macroA.rgb;
+    float rough = macroS.b;
+    float occ = macroS.a;
+
+    // The detail term. k is fragment-varying, so from here on the file's
+    // textureGrad rule is load-bearing again; the gradients are hoisted here in
+    // flow that is still uniform.
+    vec3 dpx = dFdx(worldPos);
+    vec3 dpy = dFdy(worldPos);
+    float s2 = 1.0 / max(layerUvScale[k], 1e-4);
+    vec3 p = authoredPos(worldPos) * s2;
+
+    int ka = layerAlbedoLayer[k];
+    if (ka >= 0) {
+        vec4 d = triplanarSampleArray(arr, float(ka), p, tw, sgn, dpx * s2, dpy * s2);
+        albedo = min(albedo * (d.rgb / max(layerMeanAlbedo[k], vec3(1.0 / 255.0))), vec3(1.0));
+    }
+
+    int ks = layerSurfaceLayer[k];
+    if (ks >= 0) {
+        vec4 sx, sy, sz;
+        triplanarTapsArray(arr, float(ks), p, tw, sgn, dpx * s2, dpy * s2, sx, sy, sz);
+        vec3 tnx = vec3(sx.rg * 2.0 - 1.0, 0.0);
+        vec3 tny = vec3(sy.rg * 2.0 - 1.0, 0.0);
+        vec3 tnz = vec3(sz.rg * 2.0 - 1.0, 0.0);
+        tnx.z = sqrt(max(1.0 - dot(tnx.xy, tnx.xy), 0.0));
+        tny.z = sqrt(max(1.0 - dot(tny.xy, tny.xy), 0.0));
+        tnz.z = sqrt(max(1.0 - dot(tnz.xy, tnz.xy), 0.0));
+        // Detail composes onto the macro-composed normal, not the geometric
+        // one, so the two perturbations stack instead of competing.
+        normal = triplanarBlendNormal(tnx, tny, tnz, normal, tw, sgn);
+        // Roughness and AO are ADDITIVE deviations from the layer mean, where
+        // the albedo is a ratio: an additive grain survives a dark mean, and a
+        // ratio near zero would amplify quantisation instead of detail.
+        rough = clamp(rough + (tw.x * sx.b + tw.y * sy.b + tw.z * sz.b) - layerMeanRough[k],
+                      0.0, 1.0);
+        occ = clamp(occ + (tw.x * sx.a + tw.y * sy.a + tw.z * sz.a) - layerMeanAo[k], 0.0, 1.0);
+    }
+
+    s.albedo = albedo;
+    s.normal = normalize(normal);
+    s.roughness = rough;
+    s.ao = occ;
+    s.dominant = float(k);
+    return s;
+}
+
 #endif // LAYERS_GLSL

@@ -226,7 +226,15 @@ uniform float uShoreWetness;
  * materialArray, which this program has bound on every draw since 4.10, so N material layers
  * cost the ledger nothing at all. Gated on layerCount, which is 0 for every material that
  * has not asked, making the whole path an exact identity.
+ *
+ * The composite cache (spec 11.66) rides albedoTex and normalTex, which are provably unread
+ * whenever layerCount > 0 -- both are sampled only inside the else-arms the layered gate
+ * skips. Strongest of this file's three alias arguments: it rests on the MATERIAL, not on a
+ * pass or a routing convention, since the same bit that arms the cache is the one that skips
+ * both reads.
  */
+#define vtAlbedoTex albedoTex   // unit 0, unread when layerCount > 0
+#define vtSurfaceTex normalTex  // unit 1, unread when layerCount > 0
 #include "layers.glsl"
 
 // Open porosity of sand that the swash fills, from Lagarde's 25-50% band for natural
@@ -1002,8 +1010,14 @@ void main() {
     // a splat coordinate renders plausible garbage.
     bool layered = layerCount > 0;
     vec2 splatUV1 = (texCoords2Exists > 0 && uWindMode == 0) ? TexCoords2 : vec2(0.0);
-    LayerSurface layerSurf =
-        sampleLayeredSurface(materialArray, WorldPos, normalize(Normal), splatUV1);
+    // Cached against per-texel is a UNIFORM branch, so the derivative-taking
+    // inside either arm stays well-defined.
+    LayerSurface layerSurf;
+    if (layersVtActive > 0)
+        layerSurf = sampleCachedSurface(vtAlbedoTex, vtSurfaceTex, materialArray, WorldPos,
+                                        normalize(Normal));
+    else
+        layerSurf = sampleLayeredSurface(materialArray, WorldPos, normalize(Normal), splatUV1);
 
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)
