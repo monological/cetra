@@ -16,6 +16,7 @@ void check_gl_error(const char* where);
 // sampler units and the mask texture array explicitly.
 GLint get_gl_max_texture_image_units(void);
 GLint get_gl_max_array_texture_layers(void);
+GLint get_gl_max_texture_size(void);
 
 // Fullscreen NDC quad (loc0 vec3 position, loc1 vec2 uv, GL_TRIANGLE_STRIP).
 // The caller owns and deletes the returned VAO/VBO.

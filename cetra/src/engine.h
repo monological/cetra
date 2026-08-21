@@ -56,6 +56,9 @@ typedef struct Engine {
     int fb_height;
     GLint max_texture_image_units;  // GL_MAX_TEXTURE_IMAGE_UNITS (queried at init)
     GLint max_array_texture_layers; // GL_MAX_ARRAY_TEXTURE_LAYERS (mask array budget)
+    GLint max_texture_size;         // GL_MAX_TEXTURE_SIZE (composite-cache bound)
+    bool layers_vt_enabled;         // false = every layered material takes the per-texel blend
+    int layers_vt_res;              // composite-cache resolution override; 0 = derived
     int ss_scale;                   // Supersampling factor: scene + post render at ss_scale x
                                     // display resolution, box-downsampled at tone map.
                                     // 1 = off, 2 = 2x SSAA. Changing it at runtime rebuilds

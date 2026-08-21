@@ -743,6 +743,18 @@ ShaderProgram* create_mask_copy_program() {
     return program;
 }
 
+ShaderProgram* create_layers_vt_bake_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("layers_vt_bake", post_vert_shader_str,
+                                              layers_vt_bake_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize layers VT bake shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_msm_resolve_program() {
     ShaderProgram* program = NULL;
 

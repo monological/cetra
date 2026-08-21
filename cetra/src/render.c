@@ -8,6 +8,7 @@
 
 #include "animation.h"
 #include "ext/log.h"
+#include "layers_vt.h"
 #include "scene.h"
 #include "sky.h"
 #include "wind.h"
@@ -231,33 +232,13 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "microsurfaceLayer", material->microsurface_layer);
     uniform_set_int(u, "anisotropyLayer", material->anisotropy_layer);
 
-    // Layered surface (spec 11.60). layerCount is what the shader gates on, so it
-    // is uploaded for EVERY material -- a material that does not layer has to
-    // reset it, exactly as wind_response and stochastic_scale above do, or it
-    // inherits the last layered material's count and samples that one's layers.
-    uniform_set_int(u, "layerCount", material->layer_count);
-    if (material->layer_count > 0) {
-        // ivec4/vec4, so these go through the CACHED setters -- which matters
-        // because apps/forest draws 64 terrain tiles off one material, and an
-        // uncached array upload would repeat per tile.
-        int albedo_layers[4], surface_layers[4];
-        float uv_scales[4];
-        for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
-            albedo_layers[i] = material->layers[i].albedo_layer;
-            surface_layers[i] = material->layers[i].surface_layer;
-            uv_scales[i] = material->layers[i].uv_scale;
-        }
-        uniform_set_ivec4(u, "layerAlbedoLayer", albedo_layers);
-        uniform_set_ivec4(u, "layerSurfaceLayer", surface_layers);
-        uniform_set_vec4(u, "layerUvScale", uv_scales);
-        uniform_set_int(u, "splatLayer", material->splat_layer);
-        uniform_set_int(u, "splatSpace", (int)material->splat_space);
-        const float domain[4] = {material->splat_origin[0], material->splat_origin[1],
-                                 material->splat_size[0], material->splat_size[1]};
-        uniform_set_vec4(u, "splatDomain", domain);
-        uniform_set_float(u, "layerBlendSharpness", material->layer_blend_sharpness);
-        uniform_set_float(u, "layerTriplanarSharpness", material->layer_triplanar_sharpness);
-    }
+    // Layered surface (spec 11.60). layerCount is what the shader gates on, so
+    // it is uploaded for EVERY material -- a material that does not layer has
+    // to reset it, exactly as wind_response and stochastic_scale above do, or
+    // it inherits the last layered material's count and samples that one's
+    // layers. Shared with the composite-cache bake so the two programs cannot
+    // upload different values for the same material.
+    material_upload_layer_uniforms(material, u);
 
     if (material->albedo_tex) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);

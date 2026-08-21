@@ -54,6 +54,12 @@ GLint get_gl_max_array_texture_layers(void) {
     return n;
 }
 
+GLint get_gl_max_texture_size(void) {
+    GLint n = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &n);
+    return n;
+}
+
 void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo) {
     // positions        // texCoords
     static const float quad_vertices[] = {

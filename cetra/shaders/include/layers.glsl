@@ -53,12 +53,20 @@ uniform int splatSpace;            // 0 = UV1, 1 = world XZ (MaterialSplatSpace)
 uniform vec4 splatDomain;          // world XZ origin.xy, size.zw
 uniform float layerBlendSharpness; // 0 = a plain weighted average
 uniform float layerTriplanarSharpness;
+// Bake-only (spec 11.66): every layer tap reads its own top mip -- its mean --
+// so the composite the cache stores carries no tile grain at ANY atlas
+// resolution. Without this the runtime detail ratio would re-apply grain the
+// atlas already resolved, squaring the pattern wherever the two densities meet.
+// The splat tap is untouched: it goes through texture() above, and the splat IS
+// the content being cached.
+uniform int layerGrainFrozen;
 
 struct LayerSurface {
     vec3 albedo; // STORED codes, not linear -- the caller decodes (see below)
     vec3 normal; // world space
     float roughness;
     float ao;
+    float dominant; // index of the layer with the largest blend weight
 };
 
 LayerSurface layerSurfaceNeutral(vec3 worldNormal) {
@@ -67,6 +75,7 @@ LayerSurface layerSurfaceNeutral(vec3 worldNormal) {
     s.normal = worldNormal;
     s.roughness = 1.0;
     s.ao = 1.0;
+    s.dominant = 0.0;
     return s;
 }
 
@@ -136,9 +145,11 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
 
     // The two world-position derivatives every tap's gradients are built from,
     // taken ONCE in fully uniform control flow. Everything below is affine in
-    // worldPos, so no further dFdx is needed anywhere.
-    vec3 dpx = dFdx(worldPos);
-    vec3 dpy = dFdy(worldPos);
+    // worldPos, so no further dFdx is needed anywhere. Frozen grain replaces
+    // them with a footprint far past any tile, driving every textureGrad below
+    // to its top mip.
+    vec3 dpx = layerGrainFrozen > 0 ? vec3(1.0e6, 0.0, 0.0) : dFdx(worldPos);
+    vec3 dpy = layerGrainFrozen > 0 ? vec3(0.0, 0.0, 1.0e6) : dFdy(worldPos);
 
     // Pass one: the albedo taps, which also carry the HEIGHT the blend needs.
     // The blend cannot be decided before this, so the surface maps wait for pass
@@ -180,10 +191,15 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
 
     float total = 0.0;
     vec4 b = vec4(0.0);
+    float bestB = -1.0;
     for (int i = 0; i < LAYERS_MAX; i++) {
         if (w[i] > 0.0)
             b[i] = max(w[i] + alb[i].a * layerBlendSharpness - cut, 0.0);
         total += b[i];
+        if (b[i] > bestB) {
+            bestB = b[i];
+            s.dominant = float(i);
+        }
     }
     if (total <= 0.0)
         return s;

@@ -23,6 +23,7 @@
 #include "sky.h"
 #include "water.h"
 #include "gi_volume.h"
+#include "layers_vt.h"
 #include "material_texture_array.h"
 #include "texture.h"
 #include "import.h" // resolve_height_maps (POM height convention)
@@ -163,6 +164,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->render_scale = 1.0f; // Full render resolution by default; opt in
                                  // with --render-scale for the TAAU upscale
     engine->msaa_samples = 4; // 4x MSAA by default (runtime-toggleable)
+    engine->layers_vt_enabled = true; // composite cache on; --no-layers-vt is the bisect lever
+    engine->layers_vt_res = 0;        // derived from the splat domain unless overridden
 
     engine->error_callback = NULL;
     engine->mouse_button_callback = NULL;
@@ -465,8 +468,11 @@ static int _setup_engine_glfw(Engine* engine) {
 
     engine->max_texture_image_units = get_gl_max_texture_image_units();
     engine->max_array_texture_layers = get_gl_max_array_texture_layers();
-    log_info("GL sampler budget: %d fragment texture image units, %d array layers",
-             engine->max_texture_image_units, engine->max_array_texture_layers);
+    engine->max_texture_size = get_gl_max_texture_size();
+    log_info("GL sampler budget: %d fragment texture image units, %d array layers, "
+             "max texture size %d",
+             engine->max_texture_image_units, engine->max_array_texture_layers,
+             engine->max_texture_size);
     // The renderer binds material + engine samplers up to IBL_SKYBOX_TEXTURE_UNIT
     // (see the static-assert chain in render.c); a GPU under that is out of spec.
     if (engine->max_texture_image_units <= IBL_SKYBOX_TEXTURE_UNIT)
@@ -1458,6 +1464,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     ShaderProgram* mask_copy_program = create_mask_copy_program();
     if (mask_copy_program) {
         add_shader_program_to_engine(engine, mask_copy_program);
+    }
+
+    ShaderProgram* layers_vt_bake_program = create_layers_vt_bake_program();
+    if (layers_vt_bake_program) {
+        add_shader_program_to_engine(engine, layers_vt_bake_program);
     }
 
     ShaderProgram* water_program = create_water_program();
@@ -2615,6 +2626,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // (Re)build the material texture array once its sources have loaded
         // (a no-op until then; masks fall back to their scalar factors).
         material_texture_array_ensure_built(current_scene, engine);
+
+        // The composite cache samples the array, so it is strictly after: a
+        // no-op while the array is dirty, and one frame behind it at worst.
+        material_layers_vt_ensure(current_scene, engine);
 
         // POM (§4.11): resolve height maps once the async texture loader drains.
         heights_ensure_resolved(current_scene, engine);

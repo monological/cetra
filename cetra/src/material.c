@@ -8,6 +8,7 @@
 
 #include "common.h"
 #include "ext/log.h"
+#include "layers_vt.h"
 #include "material.h"
 #include "program.h"
 
@@ -344,6 +345,7 @@ void free_material(Material* material) {
             if (material->layers[i].surface_tex)
                 texture_release(material->layers[i].surface_tex);
         }
+        free_material_layers_vt(material->layers_vt);
 
         // Shader program managed by engine. Do not free here.
         free(material);

@@ -311,6 +311,10 @@ typedef struct Material {
     // a narrower seam between projections and a harder transition across it.
     float layer_triplanar_sharpness;
 
+    // Composite cache for a WORLD_XZ splat (spec 11.66); NULL until the first
+    // bake, and never set for a UV1 splat.
+    struct MaterialLayersVt* layers_vt;
+
     ShaderProgram* shader_program;
 } Material;
 
