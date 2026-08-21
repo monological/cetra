@@ -8876,7 +8876,10 @@ def run_region_gate(workdir):
                          shift is supposed to move the stored bytes and that is
                          asserted in the same breath. Falsified by dropping the
                          group-identity reset in regions_rebuild, which
-                         double-shifts every prop that reloads afterwards.
+                         double-shifts every prop that reloads: 0 of 15 cells
+                         match. That mutation is also why the digest composes
+                         through the parent group -- against a node-local digest
+                         it read bit-identical and this arm stayed green.
       region-leak     every region ever loaded is either resident or was freed,
                          and the node total is the sum over the resident ones. A
                          residency that frees nothing renders perfectly and runs

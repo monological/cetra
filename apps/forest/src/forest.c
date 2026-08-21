@@ -1397,15 +1397,31 @@ static unsigned region_digest(const Region* r) {
 // unit is orders coarser than that error and orders finer than any misplacement a
 // bug would produce.
 //
-// Reads the node's LOCAL translation because the prototype groups it hangs under
-// are identity -- regions_rebuild resets them, which is the other half of the
-// shift this is here to test.
+// Composed THROUGH THE PARENT GROUP rather than read off the node's own local
+// transform, and that is the difference between this arm working and not.
+// regions_rebuild has two halves -- it resets the prototype groups to identity
+// and it re-scatters the nodes -- and a node local captures only the second.
+// Measured: with the identity reset deleted, which double-shifts every prop that
+// reloads, the node-local digest was bit-identical and the arm stayed green;
+// composed, it reads 0 of 15 cells matching.
+//
+// Not global_transform, which would be simpler: the region probe runs before
+// apply_transform_to_nodes, so a global is one frame stale and a region loaded
+// on the probe frame has none at all. The parent's local IS its world here --
+// prototype groups are root children.
 static unsigned region_digest_authored(const Region* r) {
     unsigned h = 2166136261u;
     for (size_t i = 0; i < r->node_count; ++i) {
         const SceneNode* n = r->nodes[i].node;
+        vec4 local = {n->original_transform[3][0], n->original_transform[3][1],
+                      n->original_transform[3][2], 1.0f};
+        vec4 world;
+        if (n->parent)
+            glm_mat4_mulv((vec4*)n->parent->original_transform, local, world);
+        else
+            glm_vec4_copy(local, world);
         for (int c = 0; c < 3; ++c) {
-            float v = floorf(n->original_transform[3][c] + g_scene->world_origin[c] + 0.5f);
+            float v = floorf(world[c] + g_scene->world_origin[c] + 0.5f);
             // Through memcpy rather than a cast to unsigned char*: the digest
             // above can pun a mat4 because it starts from an array, but punning a
             // scalar local is the aliasing case, and it also reads to cppcheck as
