@@ -279,17 +279,51 @@ static void measure_bone_bounds(Mesh* mesh) {
     }
 }
 
-// One of the two optional 3-float morph streams, or nothing when the mesh does
-// not carry it -- leaving the attribute unbound, which terrain_morph.glsl reads
-// as the off state.
-static void _upload_morph_stream(const Mesh* mesh, const float* data, GLuint* vbo, GLuint attr) {
+/*
+ * One optional per-vertex stream, or nothing when the mesh does not carry it --
+ * leaving the attribute unbound, which is the off state every consumer of an
+ * optional attribute is written against (terrain_morph.glsl says why for its
+ * two).
+ *
+ * `vbo` is generated on first use rather than in create_mesh. That was the morph
+ * streams' rule for a reason that generalises: almost no mesh has every stream,
+ * and a GL name per stream per mesh across a scene is not free.
+ *
+ * TWO functions and not one with a type flag, because integer attributes take
+ * glVertexAttribIPointer and a float that happens to hold an index is a
+ * different thing from an index. The alternative -- one function branching on a
+ * GLenum -- puts the branch at every call site's expense to save four lines.
+ *
+ * Everything above these was six near-identical lines per stream: bind, buffer,
+ * pointer, enable, differing only in the component count. That is the shape
+ * spec 11.63's uninitialised-field bug grew in, so the duplication is the defect
+ * and not merely the symptom.
+ */
+static void _upload_float_stream(const Mesh* mesh, const float* data, GLuint* vbo, GLuint attr,
+                                 GLint components) {
     if (!data)
         return;
     if (*vbo == 0)
         glGenBuffers(1, vbo);
+    const size_t stride = (size_t)components * sizeof(float);
     glBindBuffer(GL_ARRAY_BUFFER, *vbo);
-    glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 3 * sizeof(float), data, GL_STATIC_DRAW);
-    glVertexAttribPointer(attr, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * stride), data,
+                 GL_STATIC_DRAW);
+    glVertexAttribPointer(attr, components, GL_FLOAT, GL_FALSE, (GLsizei)stride, (void*)0);
+    glEnableVertexAttribArray(attr);
+}
+
+static void _upload_int_stream(const Mesh* mesh, const int* data, GLuint* vbo, GLuint attr,
+                               GLint components) {
+    if (!data)
+        return;
+    if (*vbo == 0)
+        glGenBuffers(1, vbo);
+    const size_t stride = (size_t)components * sizeof(int);
+    glBindBuffer(GL_ARRAY_BUFFER, *vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * stride), data,
+                 GL_STATIC_DRAW);
+    glVertexAttribIPointer(attr, components, GL_INT, (GLsizei)stride, (void*)0);
     glEnableVertexAttribArray(attr);
 }
 
@@ -322,81 +356,27 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
                      GL_STATIC_DRAW);
     }
 
-    // Normals
-    if (mesh->normals) {
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->nbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 3 * sizeof(float), mesh->normals,
-                     GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_NORMAL, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_NORMAL);
-    }
+    _upload_float_stream(mesh, mesh->normals, &mesh->nbo, GL_ATTR_NORMAL, 3);
+    // Tangents are vec4: xyz tangent, w bitangent handedness.
+    _upload_float_stream(mesh, mesh->tangents, &mesh->tangent_vbo, GL_ATTR_TANGENT, 4);
+    _upload_float_stream(mesh, mesh->tex_coords, &mesh->tbo, GL_ATTR_TEXCOORD, 2);
+    // UV1 carries lightmap/AO coordinates, and on a wind material the branch
+    // phase and flex weight instead (spec 11.51).
+    _upload_float_stream(mesh, mesh->tex_coords2, &mesh->tbo2, GL_ATTR_TEXCOORD2, 2);
+    _upload_float_stream(mesh, mesh->colors, &mesh->color_vbo, GL_ATTR_COLOR, 4);
 
-    // Tangents (vec4: xyz tangent, w bitangent handedness)
-    if (mesh->tangents) {
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->tangent_vbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 4 * sizeof(float), mesh->tangents,
-                     GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_TANGENT, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_TANGENT);
-    }
+    _upload_float_stream(mesh, mesh->morph, &mesh->morph_vbo, GL_ATTR_MORPH, 3);
+    _upload_float_stream(mesh, mesh->morph_normals, &mesh->morph_normal_vbo,
+                         GL_ATTR_MORPH_NORMAL, 3);
 
-    // Texture coordinates (UV0)
-    if (mesh->tex_coords) {
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->tbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 2 * sizeof(float), mesh->tex_coords,
-                     GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_TEXCOORD, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_TEXCOORD);
-    }
-
-    // Texture coordinates (UV1) for lightmaps/AO
-    if (mesh->tex_coords2) {
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->tbo2);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 2 * sizeof(float), mesh->tex_coords2,
-                     GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_TEXCOORD2, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float),
-                              (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_TEXCOORD2);
-    }
-
-    // Vertex colors (RGBA)
-    if (mesh->colors) {
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->color_vbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 4 * sizeof(float), mesh->colors,
-                     GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_COLOR, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_COLOR);
-    }
-
-    // CDLOD morph targets. The buffer NAMES are generated here rather than in
-    // create_mesh, because almost no mesh has these and two GL names apiece
-    // across a scene's whole mesh set is not free.
-    _upload_morph_stream(mesh, mesh->morph, &mesh->morph_vbo, GL_ATTR_MORPH);
-    _upload_morph_stream(mesh, mesh->morph_normals, &mesh->morph_normal_vbo,
-                         GL_ATTR_MORPH_NORMAL);
-
-    // Bone IDs (ivec4 per vertex)
-    if (mesh->is_skinned && mesh->bone_ids) {
-        if (mesh->bone_id_vbo == 0)
-            glGenBuffers(1, &mesh->bone_id_vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->bone_id_vbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * BONES_PER_VERTEX * sizeof(int),
-                     mesh->bone_ids, GL_STATIC_DRAW);
-        glVertexAttribIPointer(GL_ATTR_BONE_IDS, BONES_PER_VERTEX, GL_INT,
-                               BONES_PER_VERTEX * sizeof(int), (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_BONE_IDS);
-    }
-
-    // Bone Weights (vec4 per vertex)
-    if (mesh->is_skinned && mesh->bone_weights) {
-        if (mesh->bone_weight_vbo == 0)
-            glGenBuffers(1, &mesh->bone_weight_vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->bone_weight_vbo);
-        glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * BONES_PER_VERTEX * sizeof(float),
-                     mesh->bone_weights, GL_STATIC_DRAW);
-        glVertexAttribPointer(GL_ATTR_BONE_WEIGHTS, BONES_PER_VERTEX, GL_FLOAT, GL_FALSE,
-                              BONES_PER_VERTEX * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(GL_ATTR_BONE_WEIGHTS);
+    // The skinning pair is gated on is_skinned as well as on the array, because a
+    // mesh can carry weights it does not use and binding them would put a
+    // skinned program's attributes on an unskinned draw.
+    if (mesh->is_skinned) {
+        _upload_int_stream(mesh, mesh->bone_ids, &mesh->bone_id_vbo, GL_ATTR_BONE_IDS,
+                           BONES_PER_VERTEX);
+        _upload_float_stream(mesh, mesh->bone_weights, &mesh->bone_weight_vbo,
+                             GL_ATTR_BONE_WEIGHTS, BONES_PER_VERTEX);
     }
 
     check_gl_error("mesh buffer upload");
