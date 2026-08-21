@@ -1,0 +1,78 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "layer_vt_fixture.gltf"
+  }
+ ],
+ "materials": {
+  "layered_vt_surface": {
+   "splat": "layer_vt_fixture_splat.png",
+   "splatDomain": [
+    -2.0,
+    -2.0,
+    4.0,
+    4.0
+   ],
+   "layerBlend": 0.5,
+   "layers": [
+    {
+     "albedo": "layer_fixture_grey.png",
+     "surface": "layer_fixture_surface.png",
+     "uvScale": 2.0
+    },
+    {
+     "albedo": "layer_fixture_checker.png",
+     "surface": "layer_fixture_relief.png",
+     "uvScale": 2.0
+    },
+    {
+     "albedo": "layer_fixture_dark.png",
+     "surface": "layer_fixture_surface.png",
+     "uvScale": 2.0
+    },
+    {
+     "albedo": "layer_fixture_light.png",
+     "surface": "layer_fixture_surface.png",
+     "uvScale": 2.0
+    }
+   ]
+  }
+ },
+ "lights": [
+  {
+   "name": "VtSun",
+   "type": "directional",
+   "direction": [
+    -0.2,
+    -0.6,
+    -0.77
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   4.0,
+   7.0
+  ],
+  "target": [
+   0.0,
+   0.7,
+   -0.5
+  ],
+  "fov": 45
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false
+ }
+}
