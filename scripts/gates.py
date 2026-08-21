@@ -36,7 +36,43 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RENDER = os.path.join(ROOT, "out", "bin", "render")
+
+# Where the app binaries come from. `out/bin` is build.sh's default (Debug, no
+# -O at all); `out/release/bin` is `./build.sh --release`.
+#
+# Worth knowing before choosing, because the two apps answer very differently
+# (spec 11.65, measured):
+#   render  0.41 s -> 0.36 s, a 12% saving. Its startup is a GL context and ~37
+#           driver-side shader compiles, which an optimiser cannot touch.
+#   forest  6.58 s -> 1.36 s, a 4.8x saving. Its startup is CPU work -O2 does
+#           reach: procedural 1K texture bakes, 20 cluster-DAG builds, erosion.
+# At ~284 render and ~55 forest launches that is ~17 s against ~287 s, so
+# essentially the whole prize is forest's.
+#
+# Auto-selected by FRESHNESS, which is the one rule that cannot test a stale
+# binary: release is used only when it is at least as new as the debug tree it
+# would replace. Build debug after release and the mtime ordering flips back on
+# its own, so the dangerous case -- passing on a binary nobody just built --
+# cannot arise without also making debug older, which is the same hazard the
+# plain default has. An explicit --bin-dir or CETRA_BIN_DIR overrides it, and
+# the resolved directory is printed on every run so a result is never ambiguous
+# about what it tested.
+def _default_bin_dir():
+    debug = os.path.join(ROOT, "out", "bin")
+    release = os.path.join(ROOT, "out", "release", "bin")
+    try:
+        # forest is the app the choice is FOR -- 4.8x against render's 1.1x -- so
+        # it is the one whose freshness decides.
+        if os.path.getmtime(os.path.join(release, "forest")) >= os.path.getmtime(
+                os.path.join(debug, "forest")):
+            return release
+    except OSError:
+        pass
+    return debug
+
+
+BIN_DIR = os.environ.get("CETRA_BIN_DIR") or _default_bin_dir()
+RENDER = os.path.join(BIN_DIR, "render")
 SCALE = 1000.0
 
 
@@ -155,6 +191,38 @@ def scaled_copy(src, dst, factor):
 
 
 def render(scene, out, extra, frames=30):
+    """One headless frame capture at the suite's shared size.
+
+    THIRTY FRAMES IS INHERITED, NOT DERIVED, and since it is the most repeated
+    number in this file that is worth saying where it lives. Nothing in the
+    engine produces 30. What the engine actually forces (spec 11.65):
+
+      - Without --taa every shared temporal accumulator -- TAA, GTAO, SSGI, SSR,
+        SSS, the composited fog layer, contact shadows -- is not merely off, its
+        history is force-invalidated every frame. A gate run passes no --taa.
+      - A pinned exposure (--no-auto-exposure -E, or an authored post.exposure)
+        skips the metering block entirely, so it imposes no frame requirement.
+      - Animation, wind, particles and the water FFT are pure functions of the
+        frame INDEX headless, so frame N is pose N -- a floor and a ceiling at
+        once for any arm that reads motion, and irrelevant to one that does not.
+      - The one unconditional floor is the async texture loader at five uploads
+        per frame, plus one more frame for the material texture array. Most
+        fixtures here load zero or one texture; the worst is layer_fixture at
+        seven. So the real floor for a static, pinned, fog-free capture is about
+        two frames.
+
+    It is NOT lowered, and that is a measurement rather than caution: a frame at
+    this size costs ~0.0013 s, so thirty frames cost 0.04 s more than one and
+    cutting every call site to the floor would save about five seconds of a
+    ten-minute suite. Against that, `frames` is load-bearing for any arm reading
+    a pose, and lowering the shared default would move those silently -- the
+    arm would still pass, reading a different moment. Five seconds is not worth
+    a class of failure this suite has already shipped twice.
+
+    Counts that ARE derived state their reason where they are set: 60 for the
+    froxel and cloud accumulators, 150 for auto-exposure and foam history,
+    240 and 400 for trace cadence and walk geometry.
+    """
     cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out]
     r = subprocess.run(cmd + extra, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
@@ -1795,8 +1863,7 @@ def _ies_expected(v_deg, h_deg, span):
 
 def _ies_probe(workdir, scene, extra=None):
     """Run --ies-probe and split its rows by kind. Returns (profiles, samples, mirror, text)."""
-    rows, text = _probe_render(workdir, scene, "--ies-probe", "ies-probe", extra=extra,
-                               frames=2, out_name="ies.ppm")
+    rows, text = _probe_render(scene, "--ies-probe", "ies-probe", extra=extra, frames=2)
     return ([r for r in rows if r.get("kind") == "profile"],
             [r for r in rows if r.get("kind") == "sample"],
             [r for r in rows if r.get("kind") == "mirror"], text)
@@ -4249,7 +4316,7 @@ def _submit_sum_detail(tables, label):
                 f"{'identity holds in each' if ok else f'violations {bad}'}")
 
 
-FOREST = os.path.join(ROOT, "out", "bin", "forest")
+FOREST = os.path.join(BIN_DIR, "forest")
 _FOREST_CHAINS = re.compile(r"Forest: (\d+) LOD chains built, (\d+) refused")
 _FOREST_MESHES = re.compile(r"Forest: (\d+) distinct meshes")
 # What the terrain contributed. Since spec 11.63 that is not a constant: the
@@ -4287,7 +4354,7 @@ FOREST_CAM_AWAY = ["--cam-eye", "0,300,0", "--cam-target", "600,900,600"]
 _FOREST_RUN_CACHE = {}
 
 
-def _forest_run(workdir, tag, extra, cam=None):
+def _forest_run(tag, extra, cam=None):
     """One profiled forest run, or None if it did not produce a readable report.
 
     Built in one place for the same reason _gpu_cmd is: several arms here claim
@@ -4310,14 +4377,18 @@ def _forest_run(workdir, tag, extra, cam=None):
     key = (tuple(extra), tuple(cam) if cam else None)
     if key in _FOREST_RUN_CACHE:
         return _FOREST_RUN_CACHE[key]
-    out = os.path.join(workdir, f"forest_{tag}.ppm")
+
     # --no-fog because the app defaults it on: it is a froxel volume with its own
     # accumulator and it costs real time per run, while contributing nothing to
     # the submission counts every arm here reads.
-    cmd = ([FOREST, "-x", "-f", "20", "-W", "800", "-H", "450", "--profiler", "--no-fog",
-            "-S", out] + (cam or FOREST_CAM) + extra)
+    # No -S: every arm here reads the profiler's tables and the startup log, and
+    # none looks at a pixel -- so a screenshot is a full readback and a file write
+    # for nothing. _terrain_run reached this conclusion first; the pattern is the
+    # same one.
+    cmd = ([FOREST, "-x", "-f", "20", "-W", "800", "-H", "450", "--profiler", "--no-fog"]
+           + (cam or FOREST_CAM) + extra)
     r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0 or not os.path.exists(out):
+    if r.returncode != 0:
         print(f"  forest       ERROR {tag} exited {r.returncode}: "
               f"{(r.stdout + r.stderr).strip()[-300:]}")
         return None
@@ -8093,8 +8164,8 @@ def run_prepass_gate(workdir):
         return failures
 
     # --- prepass-shading: it removes shading, and the row appears -----------
-    base = _forest_run(workdir, "pp_base", ["--taa", "--headless-jitter", "--no-sort-opaque"])
-    pre = _forest_run(workdir, "pp_on",
+    base = _forest_run("pp_base", ["--taa", "--headless-jitter", "--no-sort-opaque"])
+    pre = _forest_run("pp_on",
                       ["--taa", "--headless-jitter", "--no-sort-opaque", "--depth-prepass"])
     if base is None or pre is None:
         failures.append("prepass-shading")
@@ -8229,10 +8300,10 @@ def run_cluster_gate(workdir):
     # FOREST_CAM_WIDE, because the parity arm is about DISTANCE: standing on the
     # island there is no far field for either builder to coarsen, and the two agree
     # trivially on a scene where neither had anything to do.
-    dag = _forest_run(workdir, "cluster_dag", [], cam=FOREST_CAM_WIDE)
-    chain = _forest_run(workdir, "cluster_chain", ["--no-clusters"], cam=FOREST_CAM_WIDE)
-    nolod = _forest_run(workdir, "cluster_nolod", ["--no-lod"], cam=FOREST_CAM_WIDE)
-    uninst = _forest_run(workdir, "cluster_uninst", ["--no-instancing"], cam=FOREST_CAM_WIDE)
+    dag = _forest_run("cluster_dag", [], cam=FOREST_CAM_WIDE)
+    chain = _forest_run("cluster_chain", ["--no-clusters"], cam=FOREST_CAM_WIDE)
+    nolod = _forest_run("cluster_nolod", ["--no-lod"], cam=FOREST_CAM_WIDE)
+    uninst = _forest_run("cluster_uninst", ["--no-instancing"], cam=FOREST_CAM_WIDE)
     if not all((dag, chain, nolod, uninst)):
         print("  cluster-batch ERROR while rendering forest")
         return failures + ["cluster-batch", "cluster-parity"]
@@ -8380,7 +8451,7 @@ def _quadtree_probe(extra, cam=None):
     }
 
 
-def _grid_tiles(workdir, tag, extra):
+def _grid_tiles(extra):
     """How many tiles the FIXED grid builds, or None.
 
     One frame at a postage stamp: the number is printed at startup and nothing
@@ -8396,9 +8467,9 @@ def _grid_tiles(workdir, tag, extra):
     feature rather than a cleanup. Measured in release it is a fraction of a
     second; the number that made it look worth fixing came from a debug build.
     """
-    out = os.path.join(workdir, f"grid_{tag}.ppm")
+    # No -S -- this docstring already says nothing here looks at a pixel.
     cmd = ([FOREST, "-x", "-f", "1", "-W", "160", "-H", "120", "--no-fog", "--seed", "1337",
-            "--no-quadtree", "-S", out] + extra)
+            "--no-quadtree"] + extra)
     r = subprocess.run(cmd, capture_output=True, text=True)
     m = _FOREST_TERRAIN.search(r.stdout + r.stderr)
     if r.returncode != 0 or not m:
@@ -8488,8 +8559,8 @@ def run_quadtree_gate(workdir):
     # One frame at a postage stamp, not a profiled render: what is read is the
     # tile COUNT, and a 4 km grid builds 1,024 tiles before it can draw one -- a
     # 20-frame 800x450 run to learn an integer the app prints at startup.
-    grid_near = _grid_tiles(workdir, "qt_grid_near", [])
-    grid_far = _grid_tiles(workdir, "qt_grid_far", ["--terrain-extent", "2000"])
+    grid_near = _grid_tiles([])
+    grid_far = _grid_tiles(["--terrain-extent", "2000"])
     if not grid_near or not grid_far:
         print("  quadtree-scale ERROR while rendering the fixed grid")
         failures.append("quadtree-scale")
@@ -8653,11 +8724,11 @@ REGION_CHURN = ["--region-span", "40", "--region-radius", "60"]
 REGION_WALK = ["--walk", "40", "--trace-player"]
 
 
-def _region_run(workdir, tag, extra, frames="400"):
+def _region_run(extra, frames="400"):
     """One forest run with the region probe, parsed into (summary, {cell: row})."""
-    out = os.path.join(workdir, f"region_{tag}.ppm")
+    # No -S: every region arm reads probe rows and trace lines, never a pixel.
     cmd = ([FOREST, "-x", "-f", frames, "-W", "320", "-H", "200", "--no-fog", "--seed", "1337",
-            "--region-probe", "-S", out] + extra)
+            "--region-probe"] + extra)
     r = subprocess.run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     m = _REGION_SUMMARY.search(text)
@@ -8929,8 +9000,8 @@ def run_region_gate(workdir):
     failures = []
 
     # --- scatter: the same cells, loaded two different ways -----------------
-    few, few_cells, _ = _region_run(workdir, "few", ["--region-radius", "200"], frames="5")
-    many, many_cells, _ = _region_run(workdir, "many", [], frames="5")
+    few, few_cells, _ = _region_run(["--region-radius", "200"], frames="5")
+    many, many_cells, _ = _region_run([], frames="5")
     if not few or not many:
         print("  region-scatter ERROR the region probe produced no rows")
         return ["region-scatter", "region-return", "region-shift", "region-leak",
@@ -8947,10 +9018,10 @@ def run_region_gate(workdir):
         failures.append("region-scatter")
 
     # --- the round trip ------------------------------------------------------
-    walk, walk_cells, walk_text = _region_run(workdir, "walk", REGION_CHURN + REGION_WALK)
+    walk, walk_cells, walk_text = _region_run(REGION_CHURN + REGION_WALK)
     # Thirty frames for the run that never moves: its resident set is settled on
     # the first descent and 370 more frames of standing still say nothing.
-    still, still_cells, _ = _region_run(workdir, "still", REGION_CHURN, frames="30")
+    still, still_cells, _ = _region_run(REGION_CHURN, frames="30")
     if not walk or not still:
         print("  region-return ERROR while walking")
         return failures + ["region-return", "region-shift", "region-leak", "region-collider"]
@@ -8991,10 +9062,8 @@ def run_region_gate(workdir):
     # The vacuity bar below is what caught exactly that.
     region_offset = ["--world-offset", str(int(ORIGIN_AUTO))]
     shifted, shifted_cells, _ = _region_run(
-        workdir, "shift", REGION_CHURN + region_offset + ["--origin-shift-at", "12"],
-        frames="30")
-    plain, plain_cells, _ = _region_run(workdir, "noshift", REGION_CHURN + region_offset,
-                                        frames="30")
+        REGION_CHURN + region_offset + ["--origin-shift-at", "12"], frames="30")
+    plain, plain_cells, _ = _region_run(REGION_CHURN + region_offset, frames="30")
     if not shifted or not plain:
         print("  region-shift ERROR while shifting the origin")
         return failures + ["region-shift", "region-leak", "region-collider"]
@@ -9071,7 +9140,7 @@ def run_forest_gate(workdir):
         return []
 
     failures = []
-    base = _forest_run(workdir, "base", [])
+    base = _forest_run("base", [])
     # Nothing below can mean anything if the base run did not report, so this is
     # the one arm that returns rather than accumulating.
     if base is None:
@@ -9110,7 +9179,7 @@ def run_forest_gate(workdir):
         failures.append("forest-batch-ship")
 
     # --- forest-batch-off: one draw per instance, the baseline for the ratio -
-    off = _forest_run(workdir, "noinst", ["--no-instancing"])
+    off = _forest_run("noinst", ["--no-instancing"])
     if off is None:
         failures.append("forest-batch-off")
         failures.append("forest-batch")
@@ -9141,7 +9210,7 @@ def run_forest_gate(workdir):
     # written because excluding two confounders left NO arm measuring batching
     # as the engine runs it, and a change that collapsed it to one draw per
     # instance would have passed everything here.
-    nolod = _forest_run(workdir, "nolod", ["--no-lod", "--no-sort-opaque"])
+    nolod = _forest_run("nolod", ["--no-lod", "--no-sort-opaque"])
     if nolod is None:
         failures.append("forest-batch")
     else:
@@ -9166,8 +9235,8 @@ def run_forest_gate(workdir):
     # and 44% from off the shore. Five per cent is not LOD failing, it is a camera
     # with nothing distant in front of it, and an arm about DISTANCE needs a
     # framing that has some.
-    lod_on = _forest_run(workdir, "lod_on", [], cam=FOREST_CAM_WIDE)
-    lod_off = _forest_run(workdir, "lod_off", ["--no-lod"], cam=FOREST_CAM_WIDE)
+    lod_on = _forest_run("lod_on", [], cam=FOREST_CAM_WIDE)
+    lod_off = _forest_run("lod_off", ["--no-lod"], cam=FOREST_CAM_WIDE)
     if not lod_on or not lod_off:
         failures.append("forest-lod")
     else:
@@ -9192,8 +9261,8 @@ def run_forest_gate(workdir):
     # 1819 instead of 1287 vs 2368, which is the arm measuring the bucket count
     # rather than the Morton ordering. Sorting moves neither instances nor
     # triangles, so the base run stays usable as the sorted side elsewhere.
-    sorted_run = _forest_run(workdir, "morton", ["--no-sort-opaque"])
-    unsorted_run = _forest_run(workdir, "nosort", ["--no-sort-opaque", "--no-spatial-sort"])
+    sorted_run = _forest_run("morton", ["--no-sort-opaque"])
+    unsorted_run = _forest_run("nosort", ["--no-sort-opaque", "--no-spatial-sort"])
     if sorted_run is None or unsorted_run is None:
         failures.append("forest-order")
     else:
@@ -9246,7 +9315,7 @@ def run_forest_gate(workdir):
             failures.append("forest-rest")
 
     # --- forest-cull: the frustum still removes most of the world -----------
-    away = _forest_run(workdir, "away", [], cam=FOREST_CAM_AWAY)
+    away = _forest_run("away", [], cam=FOREST_CAM_AWAY)
     if away is None:
         failures.append("forest-cull")
         failures.append("overdraw-empty")
@@ -10868,7 +10937,7 @@ def _emissive_worst(base, other):
     return ratios, name, ratios[name]
 
 
-def _probe_render(workdir, scene, flag, prefix, extra=None, frames=30, out_name="probe.ppm"):
+def _probe_render(scene, flag, prefix, extra=None, frames=30):
     """Run a --*-probe flag headless and return ([{key: str}], combined output).
 
     Probe lines are `<prefix> [tag] k=v k=v ...`, and every probe in the tree
@@ -10878,9 +10947,9 @@ def _probe_render(workdir, scene, flag, prefix, extra=None, frames=30, out_name=
     Values stay STRINGS. Callers cast what they need: the emissive probe carries
     `center=1,2,3`, which a blanket float() would drop on the floor.
     """
-    out = os.path.join(workdir, out_name)
-    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300",
-           "-S", out, flag]
+    # No -S, and no workdir: every caller reads probe ROWS off stdout, so the
+    # frames these used to write were a readback and a file write nobody opened.
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", flag]
     r = subprocess.run(cmd + (extra or []), capture_output=True, text=True)
     text = r.stdout + r.stderr
     rows = []
@@ -10903,15 +10972,15 @@ def _probe_render(workdir, scene, flag, prefix, extra=None, frames=30, out_name=
     return rows, text
 
 
-def _emissive_probe(workdir, scene, extra=None, frames=8):
+def _emissive_probe(scene, extra=None, frames=8):
     """Run --emissive-light-probe and parse its lines into dicts.
 
     Reads the INSTRUMENT rather than the image on purpose: a panel half a metre
     out or sqrt(2) too wide still lights a room, so a frame cannot tell a correct
     fit from a plausible one. Every geometric arm here goes through this.
     """
-    return _probe_render(workdir, scene, "--emissive-light-probe", "emissive-light-probe",
-                         extra=extra, frames=frames, out_name="emissive_probe.ppm")
+    return _probe_render(scene, "--emissive-light-probe", "emissive-light-probe",
+                         extra=extra, frames=frames)
 
 
 def _emissive_vec(rec, key):
@@ -11039,7 +11108,7 @@ def run_emissive_gate(workdir):
     if not os.path.exists(cornell):
         print(f"  emissive-fit   SKIP  ({CORNELL_FIXTURE} not present)")
     else:
-        rows, _ = _emissive_probe(workdir, cornell)
+        rows, _ = _emissive_probe(cornell)
         rec = _emissive_named(rows, "panel", "cornell_light")
         if not rec:
             print("  emissive-fit   FAIL  no panel derived from cornell_light")
@@ -11063,7 +11132,7 @@ def run_emissive_gate(workdir):
     if not os.path.exists(fixture):
         print(f"  emissive-strip SKIP  ({EMISSIVE_FIXTURE} not present)")
     else:
-        rows, _ = _emissive_probe(workdir, fixture)
+        rows, _ = _emissive_probe(fixture)
 
         rec = _emissive_named(rows, "panel", "emissive_strip")
         if not rec:
@@ -11160,8 +11229,8 @@ def run_emissive_gate(workdir):
         with open(moved, "w") as f:
             json.dump(doc, f)
 
-        short_rows, _ = _emissive_probe(workdir, moved, ["--emissive-lights"], frames=4)
-        long_rows, _ = _emissive_probe(workdir, moved, ["--emissive-lights"], frames=40)
+        short_rows, _ = _emissive_probe(moved, ["--emissive-lights"], frames=4)
+        long_rows, _ = _emissive_probe(moved, ["--emissive-lights"], frames=40)
         s_rec = _emissive_named(short_rows, "placed", "emissive_quad")
         l_rec = _emissive_named(long_rows, "placed", "emissive_quad")
         if not s_rec or not l_rec:
@@ -11184,7 +11253,7 @@ def run_emissive_gate(workdir):
     if not os.path.exists(water):
         print(f"  emissive-unlit SKIP  ({EMISSIVE_WATER_FIXTURE} not present)")
     else:
-        rows, _ = _emissive_probe(workdir, water, ["--no-water"])
+        rows, _ = _emissive_probe(water, ["--no-water"])
         panels = sorted(r["node"] for r in rows if r.get("kind") == "panel")
         ok = panels == ["water_bed", "water_ramp"]
         print(f"  emissive-unlit {'PASS' if ok else 'FAIL'}  panels={panels} "
@@ -11198,7 +11267,7 @@ def run_emissive_gate(workdir):
                   lambda d: d.setdefault("materials", {})
                              .setdefault("cornell_light", {})
                              .update({"emissiveLight": "off"}))
-        rows, _ = _emissive_probe(workdir, optout, ["--emissive-lights"])
+        rows, _ = _emissive_probe(optout, ["--emissive-lights"])
         header = next((r for r in rows if r.get("kind") == "header"), None)
         count = int(header["count"]) if header and "count" in header else -1
         # A count of 0 is also what a scene that failed to load prints, and what
@@ -11285,7 +11354,7 @@ def run_emissive_gate(workdir):
     # not exist when the scene file was written -- which is the whole ordering
     # claim -- and the renderer says so itself. The failure mode is loud and
     # distinct: cscene_apply prints "matches no light" instead.
-    _, text = _emissive_probe(workdir, derived, ["--emissive-lights"])
+    _, text = _emissive_probe(derived, ["--emissive-lights"])
     applied = "light 'cornell_light' cast_shadows on" in text
     unmatched = "matches no light" in text
     ok = applied and not unmatched
@@ -11581,7 +11650,7 @@ EXPOSURE_TAIL_MIN_DROP = 0.15
 EXPOSURE_TAIL_FLOOR = -20.0
 
 
-def _exposure_probe(workdir, scene, extra=None, frames=EXPOSURE_FRAMES, tag="exp"):
+def _exposure_probe(scene, extra=None, frames=EXPOSURE_FRAMES):
     """Run --exposure-probe and parse its lines. Returns (rows, combined output).
 
     Reads the INSTRUMENT rather than the image, for the reason the probe exists:
@@ -11591,8 +11660,8 @@ def _exposure_probe(workdir, scene, extra=None, frames=EXPOSURE_FRAMES, tag="exp
     Every field is a float here, unlike the emissive probe's, so the cast is this
     wrapper's whole job.
     """
-    rows, text = _probe_render(workdir, scene, "--exposure-probe", "exposure-probe",
-                               extra=extra, frames=frames, out_name=f"exposure_{tag}.ppm")
+    rows, text = _probe_render(scene, "--exposure-probe", "exposure-probe",
+                               extra=extra, frames=frames)
     return [{k: float(v) for k, v in r.items()} for r in rows], text
 
 
@@ -11669,11 +11738,11 @@ def run_exposure_gate(workdir):
     # Forced below the key by metering the DARKEST fifth, which the floor this
     # replaced made impossible -- it clamped every texel up to the key, so a
     # sub-key mean could not exist and the cap was never reached.
-    dark, _ = _exposure_probe(workdir, live, ["--meter-low", "0.05", "--meter-high", "0.20"],
-                              frames=120, tag="dark")
+    dark, _ = _exposure_probe(live, ["--meter-low", "0.05", "--meter-high", "0.20"],
+                              frames=120)
     bright = os.path.join(workdir, "exposure_bright.cscn")
     _exposure_live(scale_src, bright, scale=EXPOSURE_SCALE)
-    bright_rows, _ = _exposure_probe(workdir, bright, frames=EXPOSURE_LINEAR_FRAMES, tag="bright")
+    bright_rows, _ = _exposure_probe(bright, frames=EXPOSURE_LINEAR_FRAMES)
     if not dark or not bright_rows:
         print("  exposure-darkens ERROR no probe output")
         failures.append("exposure-darkens")
@@ -11697,7 +11766,7 @@ def run_exposure_gate(workdir):
             failures.append("exposure-darkens")
 
     # --- exposure-converge --------------------------------------------------
-    rows, _ = _exposure_probe(workdir, live, frames=EXPOSURE_FRAMES, tag="conv")
+    rows, _ = _exposure_probe(live, frames=EXPOSURE_FRAMES)
     if len(rows) < 20:
         print("  exposure-converge ERROR too few probe lines")
         failures.append("exposure-converge")
@@ -11723,8 +11792,8 @@ def run_exposure_gate(workdir):
             failures.append("exposure-converge")
 
     # --- exposure-stable ----------------------------------------------------
-    a, _ = _exposure_probe(workdir, live, frames=EXPOSURE_STABLE_FRAMES, tag="stable_a")
-    b, _ = _exposure_probe(workdir, live, frames=EXPOSURE_STABLE_FRAMES, tag="stable_b")
+    a, _ = _exposure_probe(live, frames=EXPOSURE_STABLE_FRAMES)
+    b, _ = _exposure_probe(live, frames=EXPOSURE_STABLE_FRAMES)
     if not a or len(a) != len(b):
         print(f"  exposure-stable FAIL  {len(a)} lines vs {len(b)}")
         failures.append("exposure-stable")
@@ -11745,7 +11814,7 @@ def run_exposure_gate(workdir):
     # --- exposure-linear ----------------------------------------------------
     one = os.path.join(workdir, "exposure_lin_1x.cscn")
     _exposure_live(scale_src, one, scale=1.0)
-    lo, _ = _exposure_probe(workdir, one, frames=EXPOSURE_LINEAR_FRAMES, tag="lin1")
+    lo, _ = _exposure_probe(one, frames=EXPOSURE_LINEAR_FRAMES)
     if not lo or not bright_rows:
         print("  exposure-linear ERROR no probe output")
         failures.append("exposure-linear")
@@ -11760,10 +11829,10 @@ def run_exposure_gate(workdir):
             failures.append("exposure-linear")
 
     # --- exposure-tail ------------------------------------------------------
-    keep, _ = _exposure_probe(workdir, live, ["--meter-low", "0.70", "--meter-high", "1.0"],
-                              frames=EXPOSURE_FRAMES, tag="tail_keep")
-    cut, _ = _exposure_probe(workdir, live, ["--meter-low", "0.70", "--meter-high", "0.95"],
-                             frames=EXPOSURE_FRAMES, tag="tail_cut")
+    keep, _ = _exposure_probe(live, ["--meter-low", "0.70", "--meter-high", "1.0"],
+                              frames=EXPOSURE_FRAMES)
+    cut, _ = _exposure_probe(live, ["--meter-low", "0.70", "--meter-high", "0.95"],
+                             frames=EXPOSURE_FRAMES)
     if not keep or not cut:
         print("  exposure-tail  ERROR no probe output")
         failures.append("exposure-tail")
@@ -11790,11 +11859,11 @@ def run_exposure_gate(workdir):
     # definition. This arm used 8.0 while the shader divided by the radius alone
     # and coverage saturated at 0.7071 -- so it passed without ever pinning what
     # the unit meant, and any value above 0.71 would have done.
-    wide, wide_text = _exposure_probe(workdir, live,
+    wide, wide_text = _exposure_probe(live,
                                       ["--meter-mode", "spot", "--meter-radius", "1.0"],
-                                      frames=EXPOSURE_FRAMES, tag="mask_wide")
-    spot, _ = _exposure_probe(workdir, live, ["--meter-mode", "spot", "--meter-radius", "0.4"],
-                              frames=EXPOSURE_FRAMES, tag="mask_spot")
+                                      frames=EXPOSURE_FRAMES)
+    spot, _ = _exposure_probe(live, ["--meter-mode", "spot", "--meter-radius", "0.4"],
+                              frames=EXPOSURE_FRAMES)
     if not (uni and wide and spot):
         # The probe helper already collected the renderer's output; printing its
         # tail is the difference between "something went wrong" and knowing what.
@@ -11965,9 +12034,8 @@ def run_cull_gate(workdir):
     # bound got safer.
     #
     # max_abs, not max_l2: the margin inflates the AABB per AXIS.
-    rows, _ = _probe_render(workdir, os.path.join(ROOT, "assets", f"{WIND}.cscn"),
-                            "--wind-bound-probe", "wind-bound-probe", frames=2,
-                            out_name="wind_bound_probe.ppm")
+    rows, _ = _probe_render(os.path.join(ROOT, "assets", f"{WIND}.cscn"),
+                            "--wind-bound-probe", "wind-bound-probe", frames=2)
     head = next((r for r in rows if r.get("kind") == "header"), None)
     samples = [r for r in rows if r.get("kind") in ("mesh", "sweep")]
     if not head or head.get("available") != "1" or not samples:
@@ -12437,7 +12505,16 @@ def main():
     ap.add_argument("--only", metavar="SEL",
                     help="run only groups whose selector contains SEL (comma-separated)")
     ap.add_argument("--list", action="store_true", help="list group selectors and exit")
+    ap.add_argument("--bin-dir", metavar="DIR",
+                    help="where to find the app binaries (default out/bin; "
+                         "out/release/bin runs forest ~5x faster)")
     args = ap.parse_args()
+
+    if args.bin_dir:
+        global BIN_DIR, RENDER, FOREST
+        BIN_DIR = os.path.abspath(args.bin_dir)
+        RENDER = os.path.join(BIN_DIR, "render")
+        FOREST = os.path.join(BIN_DIR, "forest")
 
     if args.list:
         for selector, banner, _ in GATE_GROUPS:
@@ -12446,6 +12523,15 @@ def main():
 
     if not os.path.exists(RENDER):
         sys.exit(f"{RENDER} not found -- run ./build.sh first")
+    # Said out loud on every run: which binaries these numbers describe is part
+    # of the result, not a detail of the harness.
+    print(f"binaries: {BIN_DIR}")
+    # And the lever, where it will actually be read, because a flag nobody
+    # remembers is a flag nobody uses. Only offered when a release tree exists:
+    # suggesting it otherwise is suggesting a build, which is the user's call.
+    if BIN_DIR.endswith(os.path.join("out", "bin")):
+        print("          (forest runs ~5x faster from a release build -- "
+              "./build.sh --release and it is picked up automatically)")
 
     groups = GATE_GROUPS
     if args.only:
