@@ -7,6 +7,7 @@
 #include "terrain_quadtree.h"
 #include "../ext/uthash.h"
 #include "../ext/log.h"
+#include "../util.h"
 
 /*
  * How far a level reaches, in patch widths, and it is a proof rather than a
@@ -179,13 +180,13 @@ static void select_patch(TerrainQuadtree* qt, int level, int ix, int iz) {
     TerrainPatch* patch = patch_get(qt, level, ix, iz);
     if (!patch)
         return;
-    if (qt->selected_count == qt->selected_cap) {
-        size_t cap = qt->selected_cap ? qt->selected_cap * 2 : 64;
-        TerrainPatch** grown = realloc(qt->selected, cap * sizeof(TerrainPatch*));
-        if (!grown)
-            return;
-        qt->selected = grown;
-        qt->selected_cap = cap;
+    if (!grow_array((void**)&qt->selected, &qt->selected_cap, qt->selected_count + 1,
+                    sizeof(TerrainPatch*), 64)) {
+        // Dropping a patch here is a hole in the ground, so it is said out loud
+        // rather than returned into silence.
+        log_error("terrain quadtree: could not hold %zu selected patches",
+                  qt->selected_count + 1);
+        return;
     }
     patch->seen = qt->tick;
     qt->selected[qt->selected_count++] = patch;

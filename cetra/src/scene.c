@@ -742,22 +742,13 @@ int add_child_node(SceneNode* node, SceneNode* child) {
     if (child->parent && child->parent != node)
         remove_child_node(child->parent, child);
 
-    // >= and not ==: import.c fills the array outright and sets cap = count, so
-    // the doubling arrives at an array that is already exactly full.
-    if (node->children_count >= node->children_cap) {
-        size_t cap = node->children_cap * 2;
-        if (cap < node->children_count + 1)
-            cap = node->children_count + 1;
-        if (cap < 4)
-            cap = 4;
-        SceneNode** new_children = realloc(node->children, cap * sizeof(SceneNode*));
-        if (!new_children) {
-            log_error("Failed to reallocate memory for child node");
-            return -1;
-        }
-        node->children = new_children;
-        node->children_cap = cap;
-    }
+    // Doubling rather than growing by one, because a quadtree re-parents its whole
+    // selection when the camera crosses a band. import.c fills the array outright
+    // and sets cap = count, so this really does arrive at an array that is
+    // already exactly full.
+    if (!grow_array((void**)&node->children, &node->children_cap, node->children_count + 1,
+                    sizeof(SceneNode*), 4))
+        return -1;
 
     node->children[node->children_count] = child;
     child->parent = node;

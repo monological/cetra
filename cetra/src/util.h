@@ -54,6 +54,17 @@ char* safe_strdup(const char* s);
  */
 void* safe_realloc(void* ptr, size_t size);
 
+// Ensure `*items` has room for `needed` elements of `elem_size`, doubling `*cap`
+// until it does. False leaves both untouched, so a caller that checks it has lost
+// nothing; the allocation failure is logged by safe_realloc.
+//
+// One helper for what was four hand-rolled doubling loops with three different
+// seed capacities and two overflow policies, none of which agreed and none of
+// which reported. The SEED stays a parameter because it is the one part that is
+// genuinely per-caller -- a scene node's children start at 4 and a terrain
+// quadtree's selection at 64, and neither wants the other's.
+bool grow_array(void** items, size_t* cap, size_t needed, size_t elem_size, size_t seed);
+
 /*
  * System
  */

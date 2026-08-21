@@ -437,16 +437,9 @@ static void probe_collect(const Placement* items, int count) {
     // regions that were freed.
     if (!g_args.scatter_probe)
         return;
-    if (g_probe_count + (size_t)count > g_probe_cap) {
-        size_t cap = g_probe_cap ? g_probe_cap * 2 : 1024;
-        while (cap < g_probe_count + (size_t)count)
-            cap *= 2;
-        Placement* grown = realloc(g_probe_items, cap * sizeof(Placement));
-        if (!grown)
-            return;
-        g_probe_items = grown;
-        g_probe_cap = cap;
-    }
+    if (!grow_array((void**)&g_probe_items, &g_probe_cap, g_probe_count + (size_t)count,
+                    sizeof(Placement), 1024))
+        return;
     memcpy(&g_probe_items[g_probe_count], items, (size_t)count * sizeof(Placement));
     g_probe_count += (size_t)count;
 }
@@ -1185,14 +1178,8 @@ static int region_share(int total) {
 // stays in the scene after its region unloads, so it is a prop standing in a
 // region that is no longer there, and no later pass can tell it from a live one.
 static bool region_track(Region* r, SceneNode* node) {
-    if (r->node_count == r->node_cap) {
-        size_t cap = r->node_cap ? r->node_cap * 2 : 64;
-        SceneNode** grown = realloc(r->nodes, cap * sizeof(SceneNode*));
-        if (!grown)
-            return false;
-        r->nodes = grown;
-        r->node_cap = cap;
-    }
+    if (!grow_array((void**)&r->nodes, &r->node_cap, r->node_count + 1, sizeof(SceneNode*), 64))
+        return false;
     r->nodes[r->node_count++] = node;
     return true;
 }

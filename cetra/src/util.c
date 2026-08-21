@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <math.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -172,6 +173,30 @@ void* safe_realloc(void* ptr, size_t size) {
         return NULL;
     }
     return new_ptr;
+}
+
+bool grow_array(void** items, size_t* cap, size_t needed, size_t elem_size, size_t seed) {
+    if (!items || !cap || elem_size == 0)
+        return false;
+    if (needed <= *cap)
+        return true;
+    size_t next = *cap ? *cap : (seed ? seed : 4);
+    while (next < needed) {
+        // Doubling can only overflow after the allocation it implies has already
+        // failed, but the check is here rather than argued about at four call
+        // sites.
+        if (next > SIZE_MAX / 2)
+            return false;
+        next *= 2;
+    }
+    if (next > SIZE_MAX / elem_size)
+        return false;
+    void* grown = safe_realloc(*items, next * elem_size);
+    if (!grown)
+        return false;
+    *items = grown;
+    *cap = next;
+    return true;
 }
 
 char* read_entire_file(const char* path, long* out_len) {
