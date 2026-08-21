@@ -218,6 +218,14 @@ typedef struct {
     // every index the pass maintains is still at its initial value and the
     // TRANSITION, which is what leaves those indices stale, is unreachable.
     int shadows_off_at;
+    // Diagnostic (--layer-blend-at): set every layered material's
+    // layer_blend_sharpness on this frame, -1 for never. The GUI's material
+    // editor reaches the same field, and nothing else headless does -- a fresh
+    // process bakes the composite cache from the final authored value at
+    // startup, so the by-value invalidation key is unreachable without a
+    // mid-run TRANSITION (the --shadows-off-at reasoning exactly).
+    int layer_blend_at_frame;
+    float layer_blend_at_value;
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;
