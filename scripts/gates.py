@@ -4252,6 +4252,12 @@ def _submit_sum_detail(tables, label):
 FOREST = os.path.join(ROOT, "out", "bin", "forest")
 _FOREST_CHAINS = re.compile(r"Forest: (\d+) LOD chains built, (\d+) refused")
 _FOREST_MESHES = re.compile(r"Forest: (\d+) distinct meshes")
+# What the terrain contributed. Since spec 11.63 that is not a constant: the
+# quadtree selects against the camera, so two runs at different framings draw
+# different numbers of patches, and any arm comparing mesh counts across framings
+# has to subtract this to be left with the props it meant to count.
+_FOREST_TERRAIN = re.compile(
+    r"Forest terrain: (?:quadtree \d+ levels, (\d+) patches selected|fixed grid, (\d+) tiles)")
 # Position, velocity, ground state and ground normal. The last two are what let
 # forest-rest tell "standing still" from "fell through the collider".
 _FOREST_TRACE = re.compile(
@@ -4306,6 +4312,8 @@ def _forest_run(workdir, tag, extra, cam=None):
         return None
     tables["chains"] = {"built": int(m.group(1)), "refused": int(m.group(2))}
     tables["meshes"] = int(mm.group(1))
+    mt = _FOREST_TERRAIN.search(text)
+    tables["terrain_meshes"] = int(mt.group(1) or mt.group(2)) if mt else 0
     tables["shading"] = shading
     tables["opaque"] = tables["submit"]["opaque"]
     return tables
@@ -8202,6 +8210,179 @@ def run_d4_gate(workdir):
     return failures
 
 
+# The quadtree probe's three line shapes.
+_QT_SUMMARY = re.compile(
+    r"terrain-quadtree-probe levels=(\d+) segments=(\d+) split_factor=([\d.]+) "
+    r"selected=(\d+) resident=(\d+) built=(\d+) triangles=(\d+)")
+_QT_SEAM = re.compile(
+    r"terrain-quadtree-probe seams=(\d+) unbalanced=(\d+) fine_min=([\d.]+) "
+    r"coarse_max=([\d.]+) gap=([\d.eE+-]+) interior_gap=([\d.eE+-]+)")
+
+# Both gaps are float rounding on ~95-unit heights, where an ulp is 7.6e-6. The
+# bar is two orders above that and four below the mutations it has to catch:
+# flipping the coarse quad's diagonal reads 2.92 world units, and dropping the
+# split factor to 2.0 opens a seam at coarse_max 0.173.
+D4_QUADTREE_GAP_MAX = 1.0e-3
+
+# Patches, for a SIXTEENFOLD increase in ground area. The claim is that a
+# quadtree's cost is logarithmic in world size where a fixed grid's is quadratic,
+# so the bar is nowhere near tight -- 16x area really did cost 1.94x, and the
+# thing this catches is the growth going quadratic, which would be 16x.
+D4_QUADTREE_GROWTH_MAX = 4.0
+
+# How much the depth prepass may move on the quadtree, as a multiple of how much
+# it moves on the fixed grid. The residual is pre-existing and belongs to masked
+# foliage taking its own program; the morph is supposed to add nothing to it.
+# Starving one program of uMorphEye reads 9x.
+D4_PREPASS_TOLERANCE = 2.5
+
+
+def _quadtree_probe(extra):
+    """The terrain quadtree probe, parsed, or None.
+
+    Three frames and a small window: the probe reads the SELECTION, which is a
+    function of the camera and not of how long the app has been running, and the
+    seam measurement walks every selected patch's boundary on the CPU.
+    """
+    cmd = ([FOREST, "-x", "-f", "3", "-W", "400", "-H", "240", "--no-fog", "--seed", "1337",
+            "--terrain-quadtree-probe"] + FOREST_CAM + extra)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    summary = _QT_SUMMARY.search(text)
+    seam = _QT_SEAM.search(text)
+    if r.returncode != 0 or not summary or not seam:
+        return None
+    return {
+        "levels": int(summary.group(1)),
+        "segments": int(summary.group(2)),
+        "split_factor": float(summary.group(3)),
+        "selected": int(summary.group(4)),
+        "triangles": int(summary.group(7)),
+        "seams": int(seam.group(1)),
+        "unbalanced": int(seam.group(2)),
+        "fine_min": float(seam.group(3)),
+        "coarse_max": float(seam.group(4)),
+        "gap": float(seam.group(5)),
+        "interior_gap": float(seam.group(6)),
+    }
+
+
+def run_d4_terrain_gate(workdir):
+    """The terrain quadtree: does the CDLOD selection hold together (spec 11.63).
+
+      d4-patch-seam    adjacent patches never differ by more than one level, and
+                       at every seam the fine side is fully morphed while the
+                       coarse side has not started -- so both are evaluating the
+                       same coarse surface there and no crack is possible. Read
+                       off the probe, at two world sizes.
+      d4-morph-parent  a fully morphed patch really is the surface its parent
+                       DRAWS, measured against the parent's own triangles. This
+                       is the pop, and the seam arm cannot see it: every boundary
+                       vertex is even-indexed and therefore its own morph target,
+                       so the interior can be wrong with every seam clean.
+      d4-patch-count   the selection grows logarithmically with the world and the
+                       fixed grid grows quadratically. The whole reason the
+                       quadtree exists, and the only arm that varies the domain.
+      d4-morph-depth   the morph reaches the DEPTH PREPASS. It rasterizes the
+                       same triangles and the shading pass tests against its
+                       depth with LEQUAL, so a program that displaces differently
+                       does not shade wrong, it deletes the surface.
+
+    Every number here is invisible in a frame, which is why the arms exist. A
+    crack opens for the few frames the camera spends crossing a band, on ground
+    that is by construction distant; a pop is one frame; and a starved prepass
+    removes terrain only where the coarse surface happens to sit in front.
+    """
+    if not os.path.exists(FOREST):
+        print("  d4-patch-seam SKIP  (forest not built)")
+        return []
+    failures = []
+
+    near = _quadtree_probe([])
+    far = _quadtree_probe(["--terrain-extent", "2000"])
+    if not near or not far:
+        print("  d4-patch-seam ERROR the quadtree probe produced no rows")
+        return ["d4-patch-seam", "d4-morph-parent", "d4-patch-count"]
+
+    # --- seam ---------------------------------------------------------------
+    # fine_min == 1 exactly and coarse_max == 0 exactly, not approximately: both
+    # are clamped, so the correct answer is the clamp's own endpoint and anything
+    # between them is a seam that is genuinely open.
+    ok = all(p["unbalanced"] == 0 and p["fine_min"] == 1.0 and p["coarse_max"] == 0.0
+             and p["gap"] <= D4_QUADTREE_GAP_MAX and p["seams"] > 0 for p in (near, far))
+    print(f"  d4-patch-seam {'PASS' if ok else 'FAIL'}  {near['seams']} seams at 1 km and "
+          f"{far['seams']} at 4 km, {near['unbalanced'] + far['unbalanced']} more than one level "
+          f"apart (want 0); fine side {near['fine_min']:.4f}/{far['fine_min']:.4f} (want 1), "
+          f"coarse side {near['coarse_max']:.4f}/{far['coarse_max']:.4f} (want 0), worst gap "
+          f"{max(near['gap'], far['gap']):.2e} units (want <= {D4_QUADTREE_GAP_MAX:.0e})")
+    if not ok:
+        failures.append("d4-patch-seam")
+
+    # --- interior -----------------------------------------------------------
+    worst = max(near["interior_gap"], far["interior_gap"])
+    ok = worst <= D4_QUADTREE_GAP_MAX
+    print(f"  d4-morph-parent {'PASS' if ok else 'FAIL'}  a fully morphed patch sits "
+          f"{worst:.2e} world units off the surface its parent draws (want <= "
+          f"{D4_QUADTREE_GAP_MAX:.0e}; the wrong coarse-quad diagonal reads 2.92)")
+    if not ok:
+        failures.append("d4-morph-parent")
+
+    # --- world size ---------------------------------------------------------
+    # The fixed-grid counts come from the app rather than from the ratio of the
+    # extents, so an app that quietly stopped growing its tile grid is caught
+    # here instead of flattering the quadtree.
+    grid_near = _forest_run(workdir, "qt_grid_near", ["--no-quadtree"])
+    grid_far = _forest_run(workdir, "qt_grid_far",
+                           ["--no-quadtree", "--terrain-extent", "2000"])
+    if not grid_near or not grid_far:
+        print("  d4-patch-count ERROR while rendering the fixed grid")
+        failures.append("d4-patch-count")
+    else:
+        qt_growth = far["selected"] / float(max(near["selected"], 1))
+        grid_growth = (grid_far["terrain_meshes"] / float(max(grid_near["terrain_meshes"], 1)))
+        ok = qt_growth <= D4_QUADTREE_GROWTH_MAX and grid_growth > qt_growth * 2.0
+        print(f"  d4-patch-count {'PASS' if ok else 'FAIL'}  16x the ground area takes the "
+              f"quadtree from {near['selected']} patches to {far['selected']} ({qt_growth:.2f}x, "
+              f"want <= {D4_QUADTREE_GROWTH_MAX:.0f}x) while the fixed grid goes "
+              f"{grid_near['terrain_meshes']} -> {grid_far['terrain_meshes']} "
+              f"({grid_growth:.1f}x, want more than twice the quadtree's)")
+        if not ok:
+            failures.append("d4-patch-count")
+
+    # --- the prepass --------------------------------------------------------
+    # --no-sky, because the Hillaire atmosphere is what makes forest not
+    # pixel-deterministic; the arm reads a difference between two frames and
+    # needs the difference to be the prepass.
+    shots = {}
+    for tag, extra in (("qt", []), ("qt_pp", ["--depth-prepass"]),
+                       ("grid", ["--no-quadtree"]),
+                       ("grid_pp", ["--no-quadtree", "--depth-prepass"])):
+        out = os.path.join(workdir, f"d4t_{tag}.ppm")
+        cmd = ([FOREST, "-x", "-f", "20", "-W", "800", "-H", "450", "--no-fog", "--no-sky",
+                "--seed", "1337", "-S", out] + FOREST_CAM + extra)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        shots[tag] = out if r.returncode == 0 and os.path.exists(out) else None
+    if not all(shots.values()):
+        print("  d4-morph-depth ERROR while rendering the prepass comparison")
+        return failures + ["d4-morph-depth"]
+
+    qt_move, _ = compare(shots["qt"], shots["qt_pp"])
+    grid_move, _ = compare(shots["grid"], shots["grid_pp"])
+    # The precondition, without which the arm passes on a frame where nothing
+    # morphs: some patch has to have reached factor 1 for the prepass to have
+    # anything to disagree about.
+    morphing = near["fine_min"] == 1.0 and near["seams"] > 0
+    ok = morphing and qt_move <= grid_move * D4_PREPASS_TOLERANCE
+    print(f"  d4-morph-depth {'PASS' if ok else 'FAIL'}  --depth-prepass moves {qt_move} px on "
+          f"the quadtree against {grid_move} on the fixed grid, whose terrain does not morph at "
+          f"all (want <= {D4_PREPASS_TOLERANCE:.1f}x it; starving one program of uMorphEye reads "
+          f"9x), with {near['seams']} seams morphing")
+    if not ok:
+        failures.append("d4-morph-depth")
+
+    return failures
+
+
 def run_forest_gate(workdir):
     """The forest app: does scattered content actually batch, and does LOD fire.
 
@@ -8412,13 +8593,22 @@ def run_forest_gate(workdir):
 
         a = away["opaque"]
         # Exact, not an inequality: aimed into the sky every mesh is outside the
-        # frustum, so seen == culled and draws == 0. `seen` matching the base run
-        # is what stops a scene that failed to load from satisfying the rest.
-        ok = (a["meshes seen"] == opaque["meshes seen"] and a["meshes culled"] == a["meshes seen"]
+        # frustum, so seen == culled and draws == 0.
+        #
+        # The second half stops a scene that failed to load from satisfying the
+        # first, and it counts PROPS -- seen minus the terrain's own meshes.
+        # Comparing raw `seen` across the two framings stopped working when the
+        # terrain became a quadtree, because the aimed-away camera is somewhere
+        # else and selects a different patch set. The scatter is what is supposed
+        # to be identical between them, and now that is what is compared.
+        props_away = a["meshes seen"] - away["terrain_meshes"]
+        props_base = opaque["meshes seen"] - base["terrain_meshes"]
+        ok = (props_away == props_base and a["meshes culled"] == a["meshes seen"]
               and a["draws"] == 0)
         print(f"  forest-cull  {'PASS' if ok else 'FAIL'}  aimed away: {a['meshes culled']} of "
-              f"{a['meshes seen']} culled and {a['draws']} draws (want all of "
-              f"{opaque['meshes seen']} culled, 0 draws)")
+              f"{a['meshes seen']} culled and {a['draws']} draws (want all culled, 0 draws), "
+              f"carrying {props_away} prop meshes against the base framing's {props_base} "
+              f"(want equal: the scatter does not move when the camera does)")
         if not ok:
             failures.append("forest-cull")
 
@@ -11544,6 +11734,7 @@ GATE_GROUPS = [
     ("prepass", "depth prepass (identical picture, less shading, spec 11.30 / E6):",
      run_prepass_gate),
     ("d4", "cluster-DAG level of detail (spec 11.63 / D4):", run_d4_gate),
+    ("d4-terrain", "the terrain quadtree (spec 11.63 / D4):", run_d4_terrain_gate),
     ("forest", "forest (scattered content: batching, ordering, LOD, spec 11.29):",
      run_forest_gate),
     ("import", "import:", _run_import_gates),

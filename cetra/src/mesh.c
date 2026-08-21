@@ -45,6 +45,8 @@ Mesh* create_mesh() {
     mesh->tex_coords = NULL;
     mesh->tex_coords2 = NULL;
     mesh->colors = NULL;
+    mesh->morph = NULL;
+    mesh->morph_normals = NULL;
     mesh->indices = NULL;
 
     mesh->vertex_count = 0;
@@ -135,6 +137,10 @@ void free_mesh(Mesh* mesh) {
     glDeleteBuffers(1, &mesh->ebo);
     glDeleteVertexArrays(1, &mesh->vao);
     glDeleteBuffers(1, &mesh->tangent_vbo);
+    if (mesh->morph_vbo)
+        glDeleteBuffers(1, &mesh->morph_vbo);
+    if (mesh->morph_normal_vbo)
+        glDeleteBuffers(1, &mesh->morph_normal_vbo);
 
     // Free the allocated memory
     if (mesh->vertices)
@@ -149,6 +155,10 @@ void free_mesh(Mesh* mesh) {
         free(mesh->tex_coords2);
     if (mesh->colors)
         free(mesh->colors);
+    if (mesh->morph)
+        free(mesh->morph);
+    if (mesh->morph_normals)
+        free(mesh->morph_normals);
     if (mesh->indices)
         free(mesh->indices);
 
@@ -263,6 +273,20 @@ static void measure_bone_bounds(Mesh* mesh) {
     }
 }
 
+// One of the two optional 3-float morph streams, or nothing when the mesh does
+// not carry it. Absent is the OFF state and not a degenerate one: an unbound
+// attribute reads (0,0,0) in the shader, which is a zero morph factor.
+static void _upload_morph_stream(const Mesh* mesh, const float* data, GLuint* vbo, GLuint attr) {
+    if (!data)
+        return;
+    if (*vbo == 0)
+        glGenBuffers(1, vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, *vbo);
+    glBufferData(GL_ARRAY_BUFFER, mesh->vertex_count * 3 * sizeof(float), data, GL_STATIC_DRAW);
+    glVertexAttribPointer(attr, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(attr);
+}
+
 void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     if (!mesh)
         return;
@@ -337,6 +361,13 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
         glVertexAttribPointer(GL_ATTR_COLOR, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(GL_ATTR_COLOR);
     }
+
+    // CDLOD morph targets. The buffer NAMES are generated here rather than in
+    // create_mesh, because almost no mesh has these and two GL names apiece
+    // across a scene's whole mesh set is not free.
+    _upload_morph_stream(mesh, mesh->morph, &mesh->morph_vbo, GL_ATTR_MORPH);
+    _upload_morph_stream(mesh, mesh->morph_normals, &mesh->morph_normal_vbo,
+                         GL_ATTR_MORPH_NORMAL);
 
     // Bone IDs (ivec4 per vertex)
     if (mesh->is_skinned && mesh->bone_ids) {

@@ -1162,7 +1162,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         UniformManager* au = ss->tsm_absorb_program->uniforms;
         uniform_set_mat4(au, "lightSpaceMatrix", matrix);
         uniform_set_int(au, "albedoTex", 0);
-        wind_upload_to_program(scene->wind, (const float*)scene->world_origin, au);
+        engine_upload_displacement_uniforms(engine, scene, au);
         uniform_set_float(au, "time", (float)engine->render_time);
         _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine);
@@ -1472,12 +1472,12 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     glUseProgram(ss->depth_program->id);
 
-    // Wind globals for the whole pass (per-mesh response/mask ride along in the
-    // node walk). render_time is the frame's single render clock, which the
-    // shading pass reads too -- that is what keeps a swaying caster and its
-    // shadow in lockstep rather than merely close.
-    wind_upload_to_program(scene->wind, (const float*)scene->world_origin,
-                           ss->depth_program->uniforms);
+    // The displacement globals for the whole pass (per-mesh wind response and
+    // mask ride along in the node walk, the morph targets in the vertex arrays).
+    // render_time is the frame's single render clock, which the shading pass
+    // reads too -- that is what keeps a swaying caster and its shadow in lockstep
+    // rather than merely close.
+    engine_upload_displacement_uniforms(engine, scene, ss->depth_program->uniforms);
     uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->render_time);
 
     // Resolved HERE, after the caster classification that tells it whether any

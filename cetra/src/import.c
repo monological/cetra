@@ -1623,6 +1623,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
 
     // Recursively process children nodes
     node->children_count = ai_node->mNumChildren;
+    node->children_cap = node->children_count;
     node->children = malloc(sizeof(SceneNode*) * node->children_count);
     for (unsigned int i = 0; i < node->children_count; i++) {
         node->children[i] =

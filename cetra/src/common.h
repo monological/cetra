@@ -24,7 +24,17 @@
 // center/params/color there (particle_renderer.c, particle_vert.glsl), as bare
 // literals rather than defines. It is a separate VAO from any mesh, so there is
 // no runtime conflict -- but reusing 9-11 for mesh geometry would collide with
-// that convention. 12-15 are unclaimed; GL 4.1 guarantees at least 16.
+// that convention. 14-15 are unclaimed; GL 4.1 guarantees at least 16.
+
+// CDLOD morph targets for a terrain quadtree patch (spec 11.63, terrain_morph.glsl).
+//
+// Both are OPTIONAL, and the shader reads an absent one as (0,0,0), which is the
+// off state rather than a degenerate one: GL_ATTR_MORPH.z is a reciprocal span,
+// so zero makes the factor zero and the whole displacement an exact identity.
+// Every mesh outside a terrain quadtree therefore costs a coherent branch and
+// nothing else -- no uniform, no material flag, nothing to switch off.
+#define GL_ATTR_MORPH        12 // vec3 - x parent Y, y window start, z 1/(end - start)
+#define GL_ATTR_MORPH_NORMAL 13 // vec3 - the parent surface's normal
 
 // PBR material fragment sampler units (render.c _update_program_material_uniforms).
 // The engine-side units (shadow map array, IBL) follow in shadow.h / ibl.h; all

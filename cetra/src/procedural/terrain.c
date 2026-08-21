@@ -615,8 +615,18 @@ static bool build_grid(const TerrainParams* p, float x0, float z0, float span, i
         return false;
 
     float step = span / (float)segments;
-    // UV0 in world units, so detail tiles at a constant density whatever the tile
-    // size is and runs continuously across a tile seam.
+    // UV0 at a constant density in world units, so detail tiles the same whatever
+    // the patch size is and runs continuously across a seam.
+    //
+    // Off the DOMAIN coordinate rather than the world one, which is spec 11.62's
+    // rule 2: a lookup keyed to position is an IDENTITY, so it has to be the
+    // authored position or the pattern slides when the world moves under it.
+    // Nothing could notice while a tile was built once and then carried by its
+    // node's transform; a quadtree patch is rebuilt at the new origin after a
+    // shift, and a world-derived UV re-derives somewhere else. Latent here --
+    // forest's terrain is layered and reads its detail through the splat, which
+    // was already authored-space -- so the surface this protects is a terrain
+    // that is NOT layered.
     const float uv_per_unit = 0.05f;
 
     for (int j = 0; j < side; ++j) {
@@ -638,7 +648,9 @@ static bool build_grid(const TerrainParams* p, float x0, float z0, float span, i
             }
 
             vec3 pos = {x, y, z};
-            mb_vertex(&mb, pos, n, t, x * uv_per_unit, z * uv_per_unit, 0.0f, 0.0f, rgba);
+            float ux, uz;
+            terrain_to_domain(p, x, z, &ux, &uz);
+            mb_vertex(&mb, pos, n, t, ux * uv_per_unit, uz * uv_per_unit, 0.0f, 0.0f, rgba);
         }
     }
 
@@ -667,6 +679,82 @@ bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh) {
     float x0 = terrain_world_x(p, -p->extent + tile_span * (float)tx);
     float z0 = terrain_world_z(p, -p->extent + tile_span * (float)tz);
     return build_grid(p, x0, z0, tile_span, p->tile_segments, true, mesh);
+}
+
+// The parent surface at every vertex, as the two morph attribute streams.
+//
+// The parent lattice is this patch's EVEN-indexed subset (see terrain.h), so an
+// even vertex morphs to itself and an odd one to the point of the parent's own
+// triangulation directly above or below it. Which parent point that is depends
+// on the winding build_grid uses: its quads split (a, c, b) and (b, c, d), so the
+// shared edge runs from (i+1, j) to (i, j+1) and a doubly-odd vertex sits exactly
+// on the coarse quad's anti-diagonal rather than on its other one.
+//
+// Every case is a midpoint of two parent vertices, and every one of them has the
+// same X and Z as the vertex itself -- so the whole displacement is in Y, which is
+// why the attribute is one float and not three.
+static void fill_morph_targets(Mesh* mesh, int segments, float morph_start, float morph_end) {
+    int side = segments + 1;
+    size_t n = mesh->vertex_count;
+    float* morph = malloc(n * 3 * sizeof(float));
+    float* normals = malloc(n * 3 * sizeof(float));
+    if (!morph || !normals) {
+        free(morph);
+        free(normals);
+        return;
+    }
+
+    float inv_span = morph_end > morph_start ? 1.0f / (morph_end - morph_start) : 0.0f;
+    float worst = 0.0f;
+
+    for (int j = 0; j < side; ++j) {
+        for (int i = 0; i < side; ++i) {
+            int v = j * side + i;
+            // The two parent vertices this one lies between, as an offset from
+            // it. Zero on the even/even case, which makes that vertex its own
+            // target by the same arithmetic rather than by a special case.
+            int di = 0, dj = 0;
+            if (i & 1) {
+                di = 1;
+                dj = (j & 1) ? -1 : 0;
+            } else if (j & 1) {
+                dj = 1;
+            }
+            int step = dj * side + di;
+            int a = v + step;
+            int b = v - step;
+
+            float y = 0.5f * (mesh->vertices[a * 3 + 1] + mesh->vertices[b * 3 + 1]);
+            morph[v * 3 + 0] = y;
+            morph[v * 3 + 1] = morph_start;
+            morph[v * 3 + 2] = inv_span;
+
+            vec3 pn;
+            glm_vec3_add(&mesh->normals[a * 3], &mesh->normals[b * 3], pn);
+            glm_vec3_normalize(pn);
+            glm_vec3_copy(pn, &normals[v * 3]);
+
+            float d = fabsf(y - mesh->vertices[v * 3 + 1]);
+            if (d > worst)
+                worst = d;
+        }
+    }
+
+    mesh->morph = morph;
+    mesh->morph_normals = normals;
+    // Exactly reached at factor 1, so the culler's box is tight rather than
+    // merely safe -- the morph is a lerp between two stored values.
+    mesh->morph_max_offset = worst;
+}
+
+bool terrain_build_patch(const TerrainParams* p, float x0, float z0, float span, int segments,
+                         float morph_start, float morph_end, Mesh* mesh) {
+    if (!p || !mesh || segments < 2 || (segments & 1))
+        return false;
+    if (!build_grid(p, x0, z0, span, segments, true, mesh))
+        return false;
+    fill_morph_targets(mesh, segments, morph_start, morph_end);
+    return true;
 }
 
 bool terrain_build_collider(const TerrainParams* p, int segments, Mesh* mesh) {

@@ -106,9 +106,23 @@ typedef struct Mesh {
     // bitangent only ever contributed that sign, and only mirrored-UV imports
     // set it to anything but +1.
     float* tangents;
-    float* tex_coords;     // Array of texture coordinates (UV0)
-    float* tex_coords2;    // Array of texture coordinates (UV1) for lightmaps/AO
-    float* colors;         // Array of vertex colors (RGBA)
+    float* tex_coords;  // Array of texture coordinates (UV0)
+    float* tex_coords2; // Array of texture coordinates (UV1) for lightmaps/AO
+    float* colors;      // Array of vertex colors (RGBA)
+
+    // CDLOD morph targets, 3 floats per vertex each, NULL on almost every mesh
+    // (spec 11.63). `morph` is (parent Y, window start, 1/(end - start)) and
+    // `morph_normals` the parent surface's normal; terrain_morph.glsl reads both.
+    //
+    // The window is per PATCH and stored per vertex anyway, which is eight bytes
+    // of redundancy against the alternative -- a baked level index, a uniform
+    // array of windows, and a dynamic index into it in five programs. What the
+    // redundancy buys is that a mesh without these arrays is an exact identity
+    // with nothing switched off, since a disabled attribute reads (0,0,0) and a
+    // zero reciprocal span is a zero factor.
+    float* morph;
+    float* morph_normals;
+
     unsigned int* indices; // Array of indices
 
     size_t vertex_count; // Number of vertices
@@ -124,6 +138,8 @@ typedef struct Mesh {
     GLuint tbo2;        // Texture Buffer Object (for UV1)
     GLuint color_vbo;   // Vertex Color Buffer Object
     GLuint tangent_vbo; // Tangent Buffer Object (vec4: xyz tangent, w handedness)
+    GLuint morph_vbo;   // CDLOD morph target; generated only when `morph` exists
+    GLuint morph_normal_vbo;
 
     AABB aabb;
 
@@ -136,6 +152,16 @@ typedef struct Mesh {
     float wind_leaf_max; // max |uv1.y * uv0.y|, the joint max rather than the
                          // product of the two, which is tighter and still an
                          // upper bound on the term that uses them together
+
+    // The furthest the CDLOD morph can move a vertex, in object space: the
+    // largest |parent Y - Y| this mesh carries. 0 with no morph arrays.
+    //
+    // EXACT rather than conservative, unlike the wind bound -- the morph is a
+    // lerp between two stored values, so its extreme is a measurement of the data
+    // and not an envelope over an expression. Read by draw_list.c's _item_bounds,
+    // for the same reason wind's is: a mesh whose displacement is unbounded
+    // cannot be frustum-culled without dropping geometry that is on screen.
+    float morph_max_offset;
 
     // Skinning data (NULL if not skinned)
     int* bone_ids;             // BONES_PER_VERTEX ints per vertex (ivec4)

@@ -85,13 +85,14 @@ void main() {
     // Posed and wind-displaced, through the chunk the prepass also uses so the
     // two cannot drift. The previous-frame position stays here: it feeds motion
     // vectors, which no depth stage writes.
-    // The SAME origin for both, because the phase is a property of the object
-    // rather than of the frame -- taking it from a moved node next frame would
-    // report a velocity the raster never drew.
-    vec3 windOrigin = model[3].xyz;
+    // The SAME model matrix for both, because the wind phase is a property of the
+    // object rather than of the frame -- taking it from a moved node next frame
+    // would report a velocity the raster never drew. The clock and the camera are
+    // what differ, and they are the arguments.
     localPos = cetra_local_position(aPos, boneTransform, skinned, aTexCoords, aTexCoords2, time,
-                                    windOrigin);
-    prevLocalPos.xyz += windOffset(aPos, aTexCoords, aTexCoords2, time - uDeltaTime, windOrigin);
+                                    model, uMorphEye);
+    prevLocalPos.xyz += cetra_local_displacement(aPos, aTexCoords, aTexCoords2,
+                                                 time - uDeltaTime, model, uMorphEyePrev);
 
     CetraObjectPos obj = cetra_object_position(model, view, projection, localPos);
     vec4 worldPos = obj.world;
@@ -106,7 +107,7 @@ void main() {
 
     vec4 clipPos = obj.clip;
 
-    Normal = normalize(uNormalMatrix * localNormal);
+    Normal = normalize(uNormalMatrix * cetraMorphNormal(localNormal, aPos, model, uMorphEye));
     TexCoords = aTexCoords;
     TexCoords2 = aTexCoords2;
     VertexColor = aColor;

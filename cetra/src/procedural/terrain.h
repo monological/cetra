@@ -244,6 +244,24 @@ void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out);
 // fix if one appears is that flag rather than anything here.
 bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh);
 
+// One quadtree patch (spec 11.63): the same grid a tile is, over an arbitrary
+// square, plus the CDLOD morph targets that let it become its parent's surface.
+//
+// `segments` must be EVEN, and that is a contract rather than a check that could
+// be relaxed. The parent quadtree node covers four times the area at the same
+// segment count, so its lattice restricted to this patch is this patch's
+// even-indexed subset -- which is only true when the odd/even parity survives the
+// half-patch offset an odd child index introduces. At an odd count the two
+// lattices interleave and there is no parent vertex to morph to.
+//
+// The morph window is a distance band on the camera: the patch is its own
+// surface at `morph_start` and exactly its parent's at `morph_end`. It is
+// written into every vertex rather than uploaded, and `morph_end <= morph_start`
+// is the off state, which is what a mesh with no morph attributes already reads
+// as.
+bool terrain_build_patch(const TerrainParams* p, float x0, float z0, float span, int segments,
+                         float morph_start, float morph_end, Mesh* mesh);
+
 // One mesh spanning the whole terrain at `segments` quads per side, for physics.
 //
 // Separate from the visual tiles because collision wants one body rather than

@@ -28,6 +28,7 @@
 #include "import.h" // resolve_height_maps (POM height convention)
 #include "render.h"
 #include "springbone.h"
+#include "wind.h"
 #include "profiler.h"
 
 #include "ext/log.h"
@@ -2239,6 +2240,21 @@ static float engine_origin_lattice(float threshold) {
     return isfinite(lattice) && lattice > 0.0f ? lattice : 0.0f;
 }
 
+void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scene,
+                                         UniformManager* u) {
+    wind_upload_to_program(scene ? scene->wind : NULL,
+                           scene ? (const float*)scene->world_origin : NULL, u);
+
+    // The morph's two camera positions. With no camera they are both the origin,
+    // which is a legal answer rather than a fallback: every mesh that carries no
+    // morph attribute is an exact identity whatever these say, and one that does
+    // is not being drawn by anything without a camera.
+    const float* eye = engine && engine->camera ? engine->camera->position : GLM_VEC3_ZERO;
+    const float* prev = engine ? engine->prev_camera_position : GLM_VEC3_ZERO;
+    uniform_set_vec3(u, "uMorphEye", eye);
+    uniform_set_vec3(u, "uMorphEyePrev", prev);
+}
+
 void engine_recentre_on_camera(const Engine* engine, float lattice) {
     if (!engine || !engine->camera)
         return;
@@ -2304,6 +2320,12 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
         glm_vec3_sub(engine->camera->position, delta, engine->camera->position);
         glm_vec3_sub(engine->camera->look_at, delta, engine->camera->look_at);
     }
+
+    // Rule 1 applies to the camera's own past as much as to the world's: the
+    // morph reads the difference between this eye and the previous one, so
+    // shifting one and not the other reports the whole shift as a camera move
+    // and re-morphs the terrain in a single frame.
+    glm_vec3_sub(engine->prev_camera_position, delta, engine->prev_camera_position);
 
     glm_translate(engine->prev_view_proj, delta);
     if (engine->postfx)

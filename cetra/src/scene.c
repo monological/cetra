@@ -661,6 +661,7 @@ SceneNode* create_node() {
     node->parent = NULL;
     node->children = NULL;
     node->children_count = 0;
+    node->children_cap = 0;
     glm_mat4_identity(node->original_transform);
     glm_mat4_identity(node->global_transform);
     glm_mat4_identity(node->prev_global_transform);
@@ -717,18 +718,48 @@ int add_child_node(SceneNode* node, SceneNode* child) {
     if (!node || !child)
         return -1;
 
-    SceneNode** new_children =
-        realloc(node->children, (node->children_count + 1) * sizeof(SceneNode*));
-    if (!new_children) {
-        log_error("Failed to reallocate memory for child node");
-        return -1;
+    // >= and not ==, because import.c fills the array outright from a known
+    // child count; the doubling has to cope with arriving at a full array it did
+    // not size.
+    if (node->children_count >= node->children_cap) {
+        size_t cap = node->children_cap * 2;
+        if (cap < node->children_count + 1)
+            cap = node->children_count + 1;
+        if (cap < 4)
+            cap = 4;
+        SceneNode** new_children = realloc(node->children, cap * sizeof(SceneNode*));
+        if (!new_children) {
+            log_error("Failed to reallocate memory for child node");
+            return -1;
+        }
+        node->children = new_children;
+        node->children_cap = cap;
     }
 
-    node->children = new_children;
     node->children[node->children_count] = child;
     child->parent = node;
     node->children_count++;
     return 0;
+}
+
+int remove_child_node(SceneNode* node, SceneNode* child) {
+    if (!node || !child)
+        return -1;
+    for (size_t i = 0; i < node->children_count; i++) {
+        if (node->children[i] != child)
+            continue;
+        // Shift rather than swap with the last: sibling order is what the draw
+        // list walks, and a scene that authored its nodes in an order gets to
+        // keep it. The capacity is untouched, so a set that churns every frame
+        // reuses one allocation.
+        memmove(&node->children[i], &node->children[i + 1],
+                (node->children_count - i - 1) * sizeof(SceneNode*));
+        node->children_count--;
+        child->parent = NULL;
+        scene_graph_touched();
+        return 0;
+    }
+    return -1;
 }
 
 int add_mesh_to_node(SceneNode* node, Mesh* mesh) {

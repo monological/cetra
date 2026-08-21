@@ -56,6 +56,7 @@
 #include "cetra/procedural/heightmap.h"
 #include "cetra/procedural/rock.h"
 #include "cetra/procedural/terrain.h"
+#include "cetra/procedural/terrain_quadtree.h"
 #include "cetra/procedural/terrain_tex.h"
 #include "cetra/procedural/tree_gen.h"
 #include "cetra/procedural/vegetation_tex.h"
@@ -91,6 +92,15 @@ typedef struct ForestArgs {
     // NOT an off switch for LOD -- both fill the same lod_* ranges, so this
     // isolates which BUILDER produced them.
     int no_clusters;
+    // Bisect lever (spec 11.63): the fixed tiles x tiles grid instead of the
+    // CDLOD quadtree. Not an identity -- a quadtree draws a different surface at
+    // a different density, which is the point of it -- so this exists to compare
+    // against rather than to restore.
+    int no_quadtree;
+    int quadtree_probe;
+    // Domain half-width in world units; 0 keeps the app default. The only way to
+    // ask what a bigger world costs, and what the quadtree is for.
+    float terrain_extent;
     int no_instancing;
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int depth_prepass;    // position-only depth before shading; off by default
@@ -149,6 +159,11 @@ typedef struct ForestArgs {
 static ForestArgs g_args;
 
 static TerrainParams g_terrain;
+// The CDLOD quadtree and the node it hangs its selection under. NULL under
+// --no-quadtree, where the fixed tile grid fills that node once at startup
+// instead.
+static TerrainQuadtree* g_terrain_qt;
+static SceneNode* g_terrain_group;
 // The eroded field, when --erode is on. File-static because g_terrain borrows it
 // for the process's lifetime -- the terrain is built once and never rebuilt.
 static TerrainField g_field;
@@ -735,22 +750,49 @@ static void load_heightfield(void) {
            g_field.res, (double)lo, (double)hi);
 }
 
+// Patch edge the quadtree aims its finest level at, in world units.
+//
+// The LEVEL COUNT is derived from it rather than fixed, so growing the domain
+// adds a level instead of coarsening the ground underfoot -- which is the whole
+// property a quadtree is here for and the one a tiles x tiles grid cannot have.
+// At TERRAIN_PATCH_SEGMENTS quads that makes the finest cell about two units,
+// a little tighter than the 2.6 the fixed grid used.
+#define TERRAIN_PATCH_SPAN     32.0f
+#define TERRAIN_PATCH_SEGMENTS 16
+
+static int forest_quadtree_levels(float extent) {
+    int levels = 1;
+    while (levels < 16 && (2.0f * extent) / (float)(1 << (levels - 1)) > TERRAIN_PATCH_SPAN)
+        levels++;
+    return levels;
+}
+
 static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
     SceneNode* group = make_group("terrain");
-    for (int tz = 0; tz < g_terrain.tiles; ++tz) {
-        for (int tx = 0; tx < g_terrain.tiles; ++tx) {
-            Mesh* mesh = create_mesh();
-            if (!terrain_build_tile(&g_terrain, tx, tz, mesh)) {
-                free_mesh(mesh);
-                continue;
-            }
-            finalize_mesh(mesh, g_mat_terrain, false);
+    if (g_args.no_quadtree) {
+        for (int tz = 0; tz < g_terrain.tiles; ++tz) {
+            for (int tx = 0; tx < g_terrain.tiles; ++tx) {
+                Mesh* mesh = create_mesh();
+                if (!terrain_build_tile(&g_terrain, tx, tz, mesh)) {
+                    free_mesh(mesh);
+                    continue;
+                }
+                finalize_mesh(mesh, g_mat_terrain, false);
 
-            SceneNode* node = create_node();
-            add_mesh_to_node(node, mesh);
-            add_child_node(group, node);
-            g_node_count++;
+                SceneNode* node = create_node();
+                add_mesh_to_node(node, mesh);
+                add_child_node(group, node);
+                g_node_count++;
+            }
         }
+    } else {
+        // Nothing is built here. The first descent -- which needs a camera, and
+        // so cannot happen before the first frame -- builds what it selects.
+        g_terrain_group = group;
+        g_terrain_qt = create_terrain_quadtree(&g_terrain, forest_quadtree_levels(g_terrain.extent),
+                                               TERRAIN_PATCH_SEGMENTS, g_mat_terrain);
+        if (!g_terrain_qt)
+            fprintf(stderr, "forest: terrain quadtree refused\n");
     }
 
     // Collision. One body over the whole terrain rather than one per tile: the
@@ -1012,6 +1054,18 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
     game_on_origin_shift_default(delta, ctx);
     g_terrain.center[0] -= delta[0];
     g_terrain.center[1] -= delta[2];
+    // A patch bakes world coordinates into its vertices, so moving the terrain
+    // under the cache makes every one of them describe ground that is no longer
+    // there. There is no correction to apply, so they are rebuilt -- and rebuilt
+    // HERE rather than at the next descent, because this runs before the shadow
+    // pass and the GI captures.
+    if (g_terrain_qt) {
+        Game* game = ctx;
+        Camera* camera = game && game->engine ? game->engine->camera : NULL;
+        vec3 zero = {0.0f, 0.0f, 0.0f};
+        terrain_quadtree_rebuild(g_terrain_qt, g_terrain_group,
+                                 camera ? camera->position : zero);
+    }
 }
 
 static void on_init(Game* game) {
@@ -1038,6 +1092,18 @@ static void on_init(Game* game) {
     g_terrain.height = 95.0f;
     g_terrain.base_freq = 0.0026f;
     g_terrain.octaves = 6;
+    if (g_args.terrain_extent > 0.0f) {
+        // The noise is left alone: what changes is how much of it there is, which
+        // is the only reading that isolates what a larger world costs from what a
+        // different landscape costs.
+        g_terrain.extent = g_args.terrain_extent;
+        // The fixed grid has no answer to a bigger domain but more tiles, so it
+        // gets them -- otherwise --no-quadtree would be comparing a quadtree that
+        // held its cell size against a grid that quietly stopped.
+        g_terrain.tiles = (int)((2.0f * g_terrain.extent) / 125.0f + 0.5f);
+        if (g_terrain.tiles < 1)
+            g_terrain.tiles = 1;
+    }
     g_rng = g_args.seed * 2654435761u + 1u;
     noise_perm_init(&g_clump, g_args.seed ^ 0x5bf03635u);
 
@@ -1394,6 +1460,17 @@ static void on_render(Game* game, double alpha) {
         update_engine_camera_perspective(engine);
     }
 
+    // The descent, before the transform walk that gives a newly attached patch
+    // its global transform and before the draw list is asked what to draw.
+    // Against the camera the frame will actually use, which is why it is here and
+    // not in the fixed-step update: at a fixed step the selection would lag the
+    // view by up to a frame, and the morph is a function of exactly this eye.
+    if (g_terrain_qt && camera) {
+        terrain_quadtree_update(g_terrain_qt, g_terrain_group, camera->position);
+        if (g_args.quadtree_probe && engine->total_frames + 1 == (size_t)g_args.frames)
+            terrain_quadtree_probe(g_terrain_qt);
+    }
+
     Transform t = {.position = {0, 0, 0}, .rotation = {0, 0, 0}, .scale = {1, 1, 1}};
     reset_and_apply_transform(&engine->model_matrix, &t);
     apply_transform_to_nodes(g_scene->root_node, engine->model_matrix);
@@ -1406,6 +1483,27 @@ static void on_shutdown(Game* game) {
     // because the whole app exists to be read off these tables.
     if (game && game->engine)
         profiler_report(game->engine->profiler);
+    // What the terrain cost, which is the one thing about this scene that is not
+    // a fixed number any more: the quadtree's selection is a function of where
+    // the camera ended up. Printed rather than left to the probe because anything
+    // comparing two runs has to be able to separate terrain from props, and the
+    // submission table sums them.
+    if (g_terrain_qt) {
+        TerrainQuadtreeStats qs;
+        terrain_quadtree_stats(g_terrain_qt, &qs);
+        printf("Forest terrain: quadtree %d levels, %d patches selected, %d resident, "
+               "%zu triangles\n",
+               qs.levels, qs.selected, qs.resident, qs.triangles);
+    } else {
+        printf("Forest terrain: fixed grid, %d tiles\n", g_terrain.tiles * g_terrain.tiles);
+    }
+
+    // Before the scene, whose root still points at the group these hang under:
+    // a patch node freed here has to be detached from that group first, and the
+    // quadtree is the only thing that knows which of them are attached.
+    free_terrain_quadtree(g_terrain_qt, g_terrain_group);
+    g_terrain_qt = NULL;
+    g_terrain_group = NULL;
     // g_terrain borrows this, so it outlives every consumer by construction and
     // is released only once nothing can ask for a height again.
     g_terrain.field = NULL;
@@ -1423,6 +1521,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --profiler          Per-pass timing + submission counters\n");
     fprintf(stderr, "      --no-lod            Draw every mesh at LOD level 0\n");
     fprintf(stderr, "      --no-clusters       Build LOD chains instead of cluster DAGs\n");
+    fprintf(stderr, "      --no-quadtree       Fixed terrain tile grid, not the CDLOD quadtree\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
     fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
     fprintf(stderr, "      --depth-prepass     Depth-only pass before shading\n");
@@ -1451,6 +1550,8 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --cluster-probe          Print each clustered prototype's DAG\n");
+    fprintf(stderr, "      --terrain-quadtree-probe Print the patch selection and morph windows\n");
+    fprintf(stderr, "      --terrain-extent <f>     Domain half-width; the world grows with it\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --screenshot-every N  Also save numbered frames every N frames\n");
     fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
@@ -1485,6 +1586,12 @@ int main(int argc, char** argv) {
             g_args.profiler = 1;
         } else if (!strcmp(a, "--no-clusters")) {
             g_args.no_clusters = 1;
+        } else if (!strcmp(a, "--no-quadtree")) {
+            g_args.no_quadtree = 1;
+        } else if (!strcmp(a, "--terrain-quadtree-probe")) {
+            g_args.quadtree_probe = 1;
+        } else if (!strcmp(a, "--terrain-extent") && i + 1 < argc) {
+            g_args.terrain_extent = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--no-lod")) {
             g_args.no_lod = 1;
         } else if (!strcmp(a, "--no-instancing")) {

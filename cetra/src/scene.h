@@ -36,6 +36,10 @@ typedef struct SceneNode {
     struct SceneNode** children;
 
     size_t children_count;
+    // Allocated slots in `children`. Doubling rather than one realloc per add,
+    // because a quadtree re-parents its whole selection when the camera crosses a
+    // band and a linear grow makes that quadratic.
+    size_t children_cap;
     // transpose(inverse(global_transform)) upper 3x3 -- what normals need under
     // non-uniform scale. Computed where global_transform is, because the draw
     // path wants it once per node and would otherwise invert a mat4 per mesh
@@ -66,6 +70,17 @@ void free_node(SceneNode* node);
 
 // build graph
 int add_child_node(SceneNode* node, SceneNode* child);
+
+// Detach `child` without freeing it, leaving the caller owning it. Returns -1 if
+// `child` is not a child of `node`.
+//
+// The counterpart free_node has never had: free_node releases a subtree and
+// leaves the PARENT's pointer to it dangling, which is safe only because every
+// caller until now freed whole trees from the root. Anything that outlives its
+// parent's interest in it -- a cached terrain patch, an unloaded region -- needs
+// this instead, and needs it to be the only way out of the array so the order of
+// the remaining children stays what the caller built.
+int remove_child_node(SceneNode* node, SceneNode* child);
 
 // meshes
 int add_mesh_to_node(SceneNode* node, Mesh* mesh);

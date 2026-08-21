@@ -80,17 +80,19 @@ void main() {
     mat4 mPrevModel = cetra_instance_prev_model(uPrevModel);
     mat3 mNormal = cetra_instance_normal_matrix(uNormalMatrix);
 
-    // Wind displaces the object-space position; the previous-frame position uses
-    // t - dt so the motion vector stays honest (no TAA/motion-blur smear).
+    // Wind and the terrain morph displace the object-space position; the
+    // previous-frame position runs the same chunk one frame back -- t - dt for
+    // the wind clock, last frame's camera for the morph -- so the motion vector
+    // stays honest (no TAA/motion-blur smear).
     // No skeleton in this stage: identity bone, and false so the posed branch
     // folds away.
-    // The SAME origin for both, because the phase is a property of the object
-    // rather than of the frame -- taking it from a moved node next frame would
-    // report a velocity the raster never drew.
-    vec3 windOrigin = mModel[3].xyz;
-    vec4 local =
-        cetra_local_position(aPos, mat4(1.0), false, aTexCoords, aTexCoords2, time, windOrigin);
-    vec3 posPrev = aPos + windOffset(aPos, aTexCoords, aTexCoords2, time - uDeltaTime, windOrigin);
+    // The SAME model matrix for both, because the wind phase is a property of the
+    // object rather than of the frame -- taking it from a moved node next frame
+    // would report a velocity the raster never drew.
+    vec4 local = cetra_local_position(aPos, mat4(1.0), false, aTexCoords, aTexCoords2, time,
+                                      mModel, uMorphEye);
+    vec3 posPrev = aPos + cetra_local_displacement(aPos, aTexCoords, aTexCoords2,
+                                                   time - uDeltaTime, mModel, uMorphEyePrev);
 
     CetraObjectPos obj = cetra_object_position(mModel, view, projection, local);
     vec4 worldPos = obj.world;
@@ -104,7 +106,7 @@ void main() {
 
     vec4 clipPos = obj.clip;
 
-    Normal = normalize(mNormal * aNormal);
+    Normal = normalize(mNormal * cetraMorphNormal(aNormal, aPos, mModel, uMorphEye));
     TexCoords = aTexCoords;
     TexCoords2 = aTexCoords2;
     VertexColor = aColor;

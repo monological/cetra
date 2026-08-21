@@ -32,6 +32,6 @@ void main()
 {
     mat4 mModel = cetra_instance_model(model);
     vec4 localPos = cetra_local_position(aPos, skinMatrixOrIdentity(aBoneIds, aBoneWeights),
-                                         skinned, aTexCoords, aTexCoords2, time, mModel[3].xyz);
+                                         skinned, aTexCoords, aTexCoords2, time, mModel, uMorphEye);
     gl_Position = cetra_object_position(mModel, view, projection, localPos).clip;
 }

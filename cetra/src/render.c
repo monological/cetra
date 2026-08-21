@@ -386,7 +386,6 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
             uniform_set_float(u, "time", (float)engine->render_time);
-            // Global directional wind (NULL -> uWindStrength 0 -> shader early-out).
             // The shader evaluates the previous-frame position at
             // time - uDeltaTime, so this must be the advance of the SAME clock
             // `time` came from -- render_delta, not the wall-clock delta_time.
@@ -394,8 +393,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // and stops entirely when paused, so a wall-clock delta would report
             // wind motion on geometry that never moved.
             uniform_set_float(u, "uDeltaTime", (float)engine->render_delta);
-            wind_upload_to_program(scene ? scene->wind : NULL,
-                                   scene ? (const float*)scene->world_origin : NULL, u);
+            engine_upload_displacement_uniforms(engine, scene, u);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
@@ -835,7 +833,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     uniform_set_mat4(u, "view", (const float*)view);
     uniform_set_mat4(u, "projection", (const float*)projection);
     uniform_set_float(u, "time", (float)engine->render_time);
-    wind_upload_to_program(scene->wind, (const float*)scene->world_origin, u);
+    engine_upload_displacement_uniforms(engine, scene, u);
 
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
@@ -1600,8 +1598,11 @@ void render_current_scene(Engine* engine) {
     glUseProgram(0);
 
     // Remember this frame's un-jittered view-projection for next frame's motion
-    // vectors. Done here (not in the engine loop) so every render path keeps it.
+    // vectors, and the eye the CDLOD morph was evaluated against for the same
+    // reason. Done here (not in the engine loop) so every render path keeps it.
     glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
+    if (engine->camera)
+        glm_vec3_copy(engine->camera->position, engine->prev_camera_position);
 }
 
 // Supersample factor for the blit capture path. 2x because that capture has no

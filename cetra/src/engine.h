@@ -272,6 +272,11 @@ typedef struct Engine {
                           // with the un-jittered matrix flips marginal hits every jitter phase,
                           // and TAA bakes the flicker into stationary crosshatch.
     mat4 prev_view_proj;  // Previous frame's view_proj, for motion vectors
+    // Where the camera was last frame, in storage space. The CDLOD morph is a
+    // function of the camera, so a static surface really does move when the
+    // camera does; this is what lets the previous-frame position report it.
+    // Stashed beside prev_view_proj, from the same camera it was built from.
+    vec3 prev_camera_position;
 
     bool show_gui;
     bool show_wireframe;
@@ -463,6 +468,25 @@ ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* pro
 // GUI
 void set_engine_show_gui(Engine* engine, bool show_gui);
 void set_engine_show_fps(Engine* engine, bool show_fps);
+
+/*
+ * Every uniform object_position.glsl's displacers read, in one call.
+ *
+ * The chunk lands in FIVE programs -- pbr, pbr_skinned, the depth prepass, the
+ * shadow depth pass and the shadow absorb pass -- and all five must displace a
+ * vertex to the same place. A shadow that leaves its caster is the mild failure;
+ * the prepass's one-sided LEQUAL is the sharp one, where a surface that moved
+ * differently in the two passes DISAPPEARS rather than shading wrong.
+ *
+ * One function rather than a call per displacer at each site, because the
+ * failure mode is arithmetic: it is not "an effect is missing" but "two passes
+ * disagree", which no per-effect gate can see. Spec 11.62 shipped a wind uniform
+ * that reached one program of the five and the full suite was green.
+ *
+ * `scene` may be NULL -- wind then uploads its own off state.
+ */
+void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scene,
+                                         UniformManager* u);
 
 // Present the frame: resolve the MSAA framebuffer through the post stack
 // (bloom + tone map, or a raw copy for non-PBR frame_mode) into the default
