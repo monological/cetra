@@ -8540,7 +8540,7 @@ def run_quadtree_gate(workdir):
         shots[tag] = out if r.returncode == 0 and os.path.exists(out) else None
     if not all(shots.values()):
         print("  quadtree-depth ERROR while rendering the prepass comparison")
-        return failures + ["quadtree-depth"]
+        return failures + ["quadtree-depth", "quadtree-render"]
 
     qt_move, _ = compare(shots["qt"], shots["qt_pp"])
     grid_move, _ = compare(shots["grid"], shots["grid_pp"])
@@ -8612,8 +8612,9 @@ _REGION_SUMMARY = re.compile(
     r"region-probe side=(\d+) span=([\d.]+) resident=(\d+) of (\d+) loaded=(\d+) freed=(\d+) "
     r"nodes=(\d+)")
 _REGION_CELL = re.compile(
-    r"region-probe cell rx=(\d+) rz=(\d+) trees=(\d+) rocks=(\d+) nodes=(\d+) collider=(\d+) "
-    r"digest=([0-9a-f]+)")
+    r"region-probe cell rx=(?P<rx>\d+) rz=(?P<rz>\d+) trees=(?P<trees>\d+) "
+    r"rocks=(?P<rocks>\d+) nodes=(?P<nodes>\d+) collider=(?P<collider>\d+) "
+    r"digest=(?P<digest>[0-9a-f]+) authored=(?P<authored>[0-9a-f]+)")
 
 # A region small enough, and a load radius short enough, that a walk of a few
 # hundred frames crosses several boundaries. The shipping radius is larger than a
@@ -8644,9 +8645,9 @@ def _region_run(workdir, tag, extra, frames="400"):
                "nodes": int(m.group(7))}
     cells = {}
     for c in _REGION_CELL.finditer(text):
-        cells[(int(c.group(1)), int(c.group(2)))] = {
-            "trees": int(c.group(3)), "rocks": int(c.group(4)), "nodes": int(c.group(5)),
-            "collider": int(c.group(6)), "digest": c.group(7)}
+        cells[(int(c["rx"]), int(c["rz"]))] = {
+            "trees": int(c["trees"]), "rocks": int(c["rocks"]), "nodes": int(c["nodes"]),
+            "collider": int(c["collider"]), "digest": c["digest"], "authored": c["authored"]}
     return summary, cells, text
 
 
@@ -8868,6 +8869,14 @@ def run_region_gate(workdir):
                          that never moved. Same mutation as above, and it has to be
                          separate: a scatter can be stable across NEIGHBOURS and
                          still not survive a free and a reload.
+      region-shift    and it survives an ORIGIN SHIFT, which frees every resident
+                         region, resets the prototype groups to identity and
+                         scatters again. Read on the AUTHORED digest -- storage
+                         plus the world origin, snapped to a unit -- because a
+                         shift is supposed to move the stored bytes and that is
+                         asserted in the same breath. Falsified by dropping the
+                         group-identity reset in regions_rebuild, which
+                         double-shifts every prop that reloads afterwards.
       region-leak     every region ever loaded is either resident or was freed,
                          and the node total is the sum over the resident ones. A
                          residency that frees nothing renders perfectly and runs
@@ -8898,7 +8907,8 @@ def run_region_gate(workdir):
     many, many_cells, _ = _region_run(workdir, "many", [], frames="5")
     if not few or not many:
         print("  region-scatter ERROR the region probe produced no rows")
-        return ["region-scatter", "region-return", "region-leak", "region-collider"]
+        return ["region-scatter", "region-return", "region-shift", "region-leak",
+                "region-collider"]
 
     shared = sorted(set(few_cells) & set(many_cells))
     same = [k for k in shared if few_cells[k]["digest"] == many_cells[k]["digest"]]
@@ -8917,7 +8927,7 @@ def run_region_gate(workdir):
     still, still_cells, _ = _region_run(workdir, "still", REGION_CHURN, frames="30")
     if not walk or not still:
         print("  region-return ERROR while walking")
-        return failures + ["region-return", "region-leak", "region-collider"]
+        return failures + ["region-return", "region-shift", "region-leak", "region-collider"]
 
     shared = sorted(set(walk_cells) & set(still_cells))
     same = [k for k in shared if walk_cells[k]["digest"] == still_cells[k]["digest"]]
@@ -8929,6 +8939,50 @@ def run_region_gate(workdir):
           f"(want all, on at least 4)")
     if not ok:
         failures.append("region-return")
+
+    # --- the round trip across an ORIGIN SHIFT --------------------------------
+    # regions_rebuild frees every resident region, resets the prototype groups to
+    # identity and scatters again, and forest.c asserts outright that what comes
+    # back is what was there. That is a claim about the app's hardest frame and
+    # nothing exercised it -- the arms above never move the origin.
+    #
+    # Read on the AUTHORED digest, not the raw one. A shift offsets every stored
+    # position by the delta, so the raw bytes are supposed to differ; what has to
+    # survive is where the prop stands in the authored world. The raw digest is
+    # asserted to MOVE in the same breath, because a shift that quietly did
+    # nothing would satisfy the authored bar perfectly.
+    #
+    # Comparable at all only because water is refused under --origin-shift-at and
+    # the shore rule keys on the ISLAND rather than on a Water object existing --
+    # so the shifted run drops the sea and still rejects the same drowned ground.
+    #
+    # BOTH runs take --world-offset, and that is what makes the comparison mean
+    # anything. The offset is MATERIALISED into every coordinate, so it defines
+    # the authored world; giving it to only one run would compare two different
+    # worlds. It is also what lets the shift fire at all -- the snap is to a
+    # 256-unit lattice about the camera, and forest spawns at the domain centre,
+    # so a shift with the world at the origin rounds to zero and does nothing.
+    # The vacuity bar below is what caught exactly that.
+    region_offset = ["--world-offset", str(int(ORIGIN_AUTO))]
+    shifted, shifted_cells, _ = _region_run(
+        workdir, "shift", REGION_CHURN + region_offset + ["--origin-shift-at", "12"],
+        frames="30")
+    plain, plain_cells, _ = _region_run(workdir, "noshift", REGION_CHURN + region_offset,
+                                        frames="30")
+    if not shifted or not plain:
+        print("  region-shift ERROR while shifting the origin")
+        return failures + ["region-shift", "region-leak", "region-collider"]
+
+    shared = sorted(set(shifted_cells) & set(plain_cells))
+    same = [k for k in shared if shifted_cells[k]["authored"] == plain_cells[k]["authored"]]
+    moved = [k for k in shared if shifted_cells[k]["digest"] != plain_cells[k]["digest"]]
+    ok = len(shared) >= 4 and len(same) == len(shared) and len(moved) == len(shared)
+    print(f"  region-shift {'PASS' if ok else 'FAIL'}  across an origin shift {len(same)} of "
+          f"{len(shared)} shared cells stand at the same AUTHORED positions (want all, on at "
+          f"least 4), while {len(moved)} of {len(shared)} moved in storage (want all, or the "
+          f"shift did nothing and the first bar is vacuous)")
+    if not ok:
+        failures.append("region-shift")
 
     # --- leak ----------------------------------------------------------------
     # `balanced` is the weakest of the three and is kept only as a consistency

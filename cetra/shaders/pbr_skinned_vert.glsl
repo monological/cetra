@@ -85,9 +85,11 @@ void main() {
     // Posed and wind-displaced, through the chunk the prepass also uses so the
     // two cannot drift. The previous-frame position stays here: it feeds motion
     // vectors, which no depth stage writes.
-    // The SAME model matrix for both, because the wind phase is a property of the
-    // object rather than of the frame -- taking it from a moved node next frame
-    // would report a velocity the raster never drew. The clock and the camera are
+    // The SAME model matrix for both, and it means two different things to the
+    // two displacers. To wind it is an IDENTITY -- the phase is a property of the
+    // object, so taking it from a moved node next frame would report a velocity
+    // the raster never drew. To the morph it is a TRANSFORM, putting the vertex
+    // in world space to measure against the eye. The clock and the camera are
     // what differ, and they are the arguments.
     localPos = cetra_local_position(aPos, boneTransform, skinned, aTexCoords, aTexCoords2, time,
                                     model, uMorphEye);

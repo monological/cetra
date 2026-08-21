@@ -762,7 +762,9 @@ static float forest_bed_height(void* ctx, float x, float z) {
 // NODE-CENTRED -- texel 0 on -extent, res-1 on +extent -- so it has res-1 cells,
 // and a mip pyramid halves only while that is even (spec 11.63). At 512 the
 // field gets no levels at all and every coarse quadtree patch point-samples the
-// full-resolution surface; at 513 it gets nine.
+// full-resolution surface; at 513 it gets eight -- 513, 257, 129, 65, 33, 17, 9
+// and 5, where terrain_field_build_pyramid stops because a 4-tap kernel over
+// fewer than five nodes is measuring its own clamp.
 #define EROSION_DEFAULT_RES 513
 
 // Seed a field from the fbm, erode it, and install it. Everything downstream --
@@ -1378,6 +1380,47 @@ static unsigned region_digest(const Region* r) {
     return h;
 }
 
+// The same hash over AUTHORED positions: storage plus the scene's world origin,
+// snapped to a whole unit.
+//
+// A second digest rather than a change to the one above, because the two answer
+// different questions and one cannot do both. The raw digest compares two runs at
+// the SAME origin and wants the exact bytes -- a sub-unit placement error has to
+// fail it. This one compares runs at DIFFERENT origins, where the raw bytes
+// cannot match and correctly do not: a shifted run stores every position offset
+// by the delta. What a shift owes is that a prop still stands at the same point
+// of the world the scene authored, which is what this reads.
+//
+// SNAPPED for the reason windObjectPhase snaps the position it hashes: the
+// reconstruction is a subtraction carrying an ulp at world magnitudes, so two
+// runs that placed a prop at the same point can disagree in the low bits. A whole
+// unit is orders coarser than that error and orders finer than any misplacement a
+// bug would produce.
+//
+// Reads the node's LOCAL translation because the prototype groups it hangs under
+// are identity -- regions_rebuild resets them, which is the other half of the
+// shift this is here to test.
+static unsigned region_digest_authored(const Region* r) {
+    unsigned h = 2166136261u;
+    for (size_t i = 0; i < r->node_count; ++i) {
+        const SceneNode* n = r->nodes[i].node;
+        for (int c = 0; c < 3; ++c) {
+            float v = floorf(n->original_transform[3][c] + g_scene->world_origin[c] + 0.5f);
+            // Through memcpy rather than a cast to unsigned char*: the digest
+            // above can pun a mat4 because it starts from an array, but punning a
+            // scalar local is the aliasing case, and it also reads to cppcheck as
+            // a value assigned and never used.
+            unsigned char b[sizeof(float)];
+            memcpy(b, &v, sizeof(b));
+            for (size_t k = 0; k < sizeof(b); ++k) {
+                h ^= b[k];
+                h *= 16777619u;
+            }
+        }
+    }
+    return h;
+}
+
 static void region_probe(void) {
     int resident = 0;
     for (int i = 0; i < g_region_side * g_region_side; ++i)
@@ -1390,10 +1433,14 @@ static void region_probe(void) {
             const Region* r = region_at(rx, rz);
             if (!r->resident)
                 continue;
+            // `authored` last, so a reader parsing this line positionally keeps
+            // working. The two are equal only by coincidence at the origin --
+            // they hash different things even there, since one takes raw mat4
+            // bytes and the other three snapped floats.
             printf("region-probe cell rx=%d rz=%d trees=%d rocks=%d nodes=%zu collider=%d "
-                   "digest=%08x\n",
+                   "digest=%08x authored=%08x\n",
                    rx, rz, r->trees, r->rocks, r->node_count, r->collider ? 1 : 0,
-                   region_digest(r));
+                   region_digest(r), region_digest_authored(r));
         }
     }
 }
