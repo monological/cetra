@@ -162,6 +162,15 @@ RECIPES = [
     {"name": "layer_fixture", "scene": "assets/layer_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
 
+    # The composite cache, LIT (spec 11.66). The vt gate arms read the albedo
+    # view, so without this nothing covers the CACHED path being shaded: the
+    # macro normal recomposed onto the geometric normal, the detail normal
+    # whiteout on top of it, and per-layer roughness/AO arriving as deviations
+    # from the baked means. Also the loudest nondeterminism trap for the bake --
+    # cmd_rebake renders twice and refuses on any difference.
+    {"name": "layer_vt_fixture", "scene": "assets/layer_vt_fixture.cscn", "size": (800, 600),
+     "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
+
     # --- global illumination and punctual shadows -----------------------------
     {"name": "cornell_box", "scene": "assets/cornell_box.gltf", "size": (1600, 1200),
      "flags": ["--gi-volume", "-f", "30", "--no-auto-exposure", "-E", "1.0",
