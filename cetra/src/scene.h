@@ -73,20 +73,20 @@ typedef struct SceneNode {
 
 // malloc
 SceneNode* create_node();
+// Releases the node and its whole subtree, unlinking it from its parent first --
+// so any node may be freed, not only a root.
 void free_node(SceneNode* node);
 
-// build graph
+// build graph. Detaches `child` from any previous parent first, so a node is
+// never in two children arrays -- which would be a double free, each array
+// freeing what it holds.
 int add_child_node(SceneNode* node, SceneNode* child);
 
 // Detach `child` without freeing it, leaving the caller owning it. Returns -1 if
 // `child` is not a child of `node`.
 //
-// The counterpart free_node has never had: free_node releases a subtree and
-// leaves the PARENT's pointer to it dangling, which is safe only because every
-// caller until now freed whole trees from the root. Anything that outlives its
-// parent's interest in it -- a cached terrain patch, an unloaded region -- needs
-// this instead, and needs it to be the only way out of the array so the order of
-// the remaining children stays what the caller built.
+// The only way out of the array, so the order of the remaining children stays
+// what the caller built: sibling order is what the draw list walks.
 int remove_child_node(SceneNode* node, SceneNode* child);
 
 // meshes

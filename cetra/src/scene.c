@@ -683,13 +683,16 @@ SceneNode* create_node() {
     return node;
 }
 
-void free_node(SceneNode* node) {
+// The subtree, WITHOUT unlinking. Split out only so the recursion does not go
+// through the unlink: a child is about to have its whole array freed, so
+// detaching it from a parent that is one frame from gone costs a memmove per
+// node and can be quadratic on a wide group.
+static void free_subtree(SceneNode* node) {
     if (!node)
         return;
-    scene_graph_touched();
 
     for (size_t i = 0; i < node->children_count; i++) {
-        free_node(node->children[i]);
+        free_subtree(node->children[i]);
     }
 
     free(node->children);
@@ -714,14 +717,33 @@ void free_node(SceneNode* node) {
     free(node);
 }
 
+void free_node(SceneNode* node) {
+    if (!node)
+        return;
+    scene_graph_touched();
+    // UNLINKED first, so a caller may free any node and not only a root. It was
+    // the caller's job until a quadtree started detaching and re-attaching
+    // patches every frame -- at which point "free_node does not unlink" is a
+    // dangling pointer in the parent's array rather than a documented contract,
+    // and the one place that can honour it is this one.
+    if (node->parent)
+        remove_child_node(node->parent, node);
+    free_subtree(node);
+}
+
 int add_child_node(SceneNode* node, SceneNode* child) {
     scene_graph_touched();
     if (!node || !child)
         return -1;
 
-    // >= and not ==, because import.c fills the array outright from a known
-    // child count; the doubling has to cope with arriving at a full array it did
-    // not size.
+    // Detached from wherever it was, so a node cannot be in two children arrays
+    // at once -- which is a double free, since each array frees what it holds.
+    // Re-parenting used to be a load-time-only operation; it is now per frame.
+    if (child->parent && child->parent != node)
+        remove_child_node(child->parent, child);
+
+    // >= and not ==: import.c fills the array outright and sets cap = count, so
+    // the doubling arrives at an array that is already exactly full.
     if (node->children_count >= node->children_cap) {
         size_t cap = node->children_cap * 2;
         if (cap < node->children_count + 1)
@@ -983,13 +1005,6 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         // Remember last frame's transform for motion vectors, then recompute.
         glm_mat4_copy(node->global_transform, node->prev_global_transform);
         glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
-        // A node reached for the first time has no previous frame, and the
-        // identity it was created with is not one -- it would report the object
-        // as having arrived from the world origin. Standing still is the truth.
-        if (!node->prev_valid) {
-            glm_mat4_copy(node->global_transform, node->prev_global_transform);
-            node->prev_valid = true;
-        }
 
         // Only for nodes that actually moved. The copy above makes
         // prev_global_transform the previous frame's value, so this comparison
@@ -997,10 +1012,24 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         // Worth the compare because bones are SceneNodes: a rigged model is
         // mostly nodes whose transform is recomputed and mostly unchanged, and
         // an unconditional inverse there costs more than the draw path it saves.
+        //
+        // On a node's FIRST visit the comparison is against the identity
+        // create_node left, so a static node gets its one normal matrix here.
+        // That is why the prev_valid seed below has to come after this and not
+        // before it: seeding first makes every first visit compare equal, and a
+        // node that never moves again never gets a normal matrix at all.
         if (memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) != 0) {
             mat4 inv_global;
             glm_mat4_inv(node->global_transform, inv_global);
             glm_mat4_pick3t(inv_global, node->normal_matrix);
+        }
+
+        // A node reached for the first time has no previous frame, and the
+        // identity it was created with is not one -- it would report the object
+        // as having arrived from the world origin. Standing still is the truth.
+        if (!node->prev_valid) {
+            glm_mat4_copy(node->global_transform, node->prev_global_transform);
+            node->prev_valid = true;
         }
 
         // Update light position and direction if present
