@@ -257,10 +257,6 @@ typedef struct Mesh {
     //
     // Reporting only -- nothing in the draw path branches on it, which is the
     // point: a cut is a concatenated index range like any other, so selection,
-    // batching and the sort key never learn that a DAG exists.
-    int cluster_count;  // clusters across every DAG level
-    int cluster_groups; // DAG groups
-    int cluster_levels; // DAG depth, NOT the band count
 
 } Mesh;
 

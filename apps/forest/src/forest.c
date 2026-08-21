@@ -285,13 +285,12 @@ static float rnd_range(float lo, float hi) {
 static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
     mesh->material = material;
     int levels = 0;
-    if (cluster && !g_args.no_clusters && mesh_build_cluster_lod(mesh)) {
+    MeshClusterStats st;
+    if (cluster && !g_args.no_clusters && mesh_build_cluster_lod(mesh, &st)) {
         levels = mesh->lod_levels;
         g_clustered_meshes++;
-        g_clusters_built += mesh->cluster_count;
+        g_clusters_built += st.clusters;
         if (g_args.cluster_probe) {
-            MeshClusterStats st;
-            mesh_cluster_stats(mesh, &st);
             // foreign_indices is the SEAL: a coarse band referencing a vertex
             // band 0 never used did not come from the original buffer. max_index
             // rides along as context and asserts nothing on its own -- the

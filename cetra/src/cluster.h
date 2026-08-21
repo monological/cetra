@@ -42,17 +42,8 @@ extern "C" {
  * "level" is a band.
  */
 
-// Build the cluster DAG for `mesh` and install its band cuts as the mesh's LOD
-// levels, replacing any chain lod.c built. Returns false and leaves the mesh
-// untouched when the DAG cannot be built (too few triangles, allocation failure),
-// so a caller may attempt this on anything and fall back to the chain.
-//
-// Call BEFORE upload_mesh_buffers_to_gpu, like mesh_build_lod_chain: it rewrites
-// mesh->indices.
-bool mesh_build_cluster_lod(Mesh* mesh);
-
-// What the build produced, for the probes and gate arms. Zeroed for a mesh that
-// has no DAG, so a caller needs no guard.
+// What the build produced. Only meaningful when mesh_build_cluster_lod returned
+// true, which is the same condition under which there is a DAG to describe.
 typedef struct MeshClusterStats {
     int clusters;  // total across every level
     int groups;    // DAG groups
@@ -67,7 +58,19 @@ typedef struct MeshClusterStats {
     int foreign_indices;
 } MeshClusterStats;
 
-void mesh_cluster_stats(const Mesh* mesh, MeshClusterStats* out);
+// Build the cluster DAG for `mesh` and install its band cuts as the mesh's LOD
+// levels, replacing any chain lod.c built. Returns false and leaves the mesh
+// untouched when the DAG cannot be built (too few triangles, allocation failure),
+// so a caller may attempt this on anything and fall back to the chain.
+//
+// Call BEFORE upload_mesh_buffers_to_gpu, like mesh_build_lod_chain: it rewrites
+// mesh->indices.
+//
+// `out` is optional and is filled ONLY on success -- what the build produced,
+// for the probes and gate arms. It is an out-param rather than three fields on
+// Mesh because nothing in the engine reads these to draw with: they described
+// the build, on a struct shared by every mesh in every app, at 12 bytes each.
+bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out);
 
 #ifdef __cplusplus
 }

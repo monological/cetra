@@ -128,7 +128,9 @@ float mesh_radius(Mesh* mesh) {
 
 } // namespace
 
-extern "C" bool mesh_build_cluster_lod(Mesh* mesh) {
+static void cluster_seal_stats(const Mesh* mesh, MeshClusterStats* out);
+
+extern "C" bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out) {
     // The same six refusals the chain makes, at this builder's own floor. Shared
     // rather than restated: they were a verbatim second copy in a second
     // language, including the O(index_count) validity scan, and only one of the
@@ -235,22 +237,20 @@ extern "C" bool mesh_build_cluster_lod(Mesh* mesh) {
     free(mesh->indices);
     mesh->indices = buffer;
 
-    mesh->cluster_count = (int)sink.clusters.size();
-    mesh->cluster_groups = (int)sink.groups.size();
-    mesh->cluster_levels = depth + 1;
+    if (out) {
+        memset(out, 0, sizeof(*out));
+        out->clusters = (int)sink.clusters.size();
+        out->groups = (int)sink.groups.size();
+        out->levels = depth + 1;
+        cluster_seal_stats(mesh, out);
+    }
     return true;
 }
 
-extern "C" void mesh_cluster_stats(const Mesh* mesh, MeshClusterStats* out) {
-    if (!out)
-        return;
-    memset(out, 0, sizeof(*out));
-    if (!mesh || mesh->cluster_count <= 0)
-        return;
-    out->clusters = mesh->cluster_count;
-    out->groups = mesh->cluster_groups;
-    out->levels = mesh->cluster_levels;
-
+// The two numbers that describe the SEAL rather than the build, read off the
+// finished index buffer. Separate from the counts above only because those come
+// from the builder's own working state and these come from its output.
+static void cluster_seal_stats(const Mesh* mesh, MeshClusterStats* out) {
     unsigned int high = 0;
     size_t total = mesh_index_total(mesh);
     for (size_t i = 0; i < total; ++i) {
