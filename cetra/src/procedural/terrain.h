@@ -33,6 +33,16 @@ typedef enum TerrainMask {
     TERRAIN_MASK_WEAR,    // material removed -- exposed bedrock
 } TerrainMask;
 
+// One resolution of a field: the four planes at a level and the node count they
+// share. Level 0 aliases the field's own arrays and owns nothing.
+typedef struct TerrainFieldLevel {
+    int res;
+    float* height;
+    float* flow;
+    float* deposit;
+    float* wear;
+} TerrainFieldLevel;
+
 // A stored heightfield, spanning the same square about `center` the analytic
 // terrain does, sampled at NODES: texel 0 sits exactly on -extent and texel res-1
 // exactly on +extent, so a field's corners are the terrain's corners. This is the
@@ -49,6 +59,20 @@ typedef struct TerrainField {
     float* flow;   // the three masks, each nominally [0,1]
     float* deposit;
     float* wear;
+
+    // Coarser copies of all four planes (spec 11.63), level 0 aliasing the
+    // arrays above. Empty until terrain_field_build_pyramid runs, and empty
+    // afterwards on a field whose resolution does not halve.
+    //
+    // FILTERED, under a separable [1 2 1] tent, and the alternative is worth
+    // recording because it is the obvious one: every other node, so a coarse node
+    // IS a fine node. That version delivers nothing whenever a patch cell is a
+    // whole multiple of a field cell, which is the normal case -- reading level 0
+    // at every other node returns exactly the floats level 1 stores, so the whole
+    // pyramid is an identity. What a coarse mesh needs is the detail REMOVED, not
+    // addressed more cheaply.
+    int level_count;
+    TerrainFieldLevel* levels;
 
     // The height range this field actually spans, maintained by whoever fills it.
     //
@@ -84,6 +108,15 @@ static inline float terrain_field_node(float extent, int res, int i) {
 // Allocate (zeroed) / release all four planes. False leaves the struct zeroed.
 bool terrain_field_alloc(TerrainField* field, int res);
 void terrain_field_free(TerrainField* field);
+
+// Build the coarse levels, returning how many the field ends up with (1 = level
+// 0 alone). Owed by whoever last WROTE the field: the levels are copies, so a
+// sim or a load that runs afterwards leaves them describing the old surface.
+//
+// A node-centred grid halves only while res - 1 is even, so a 512-node field
+// gets no levels at all and a 513-node one gets nine. That is the reason the
+// erosion default is 513 rather than the power of two it looks like it should be.
+int terrain_field_build_pyramid(TerrainField* field);
 
 // Recompute min_y/max_y from the heights currently stored. Every path that fills
 // or edits a field owes this call, since the tint reads the result.
@@ -184,6 +217,36 @@ bool terrain_field_seed(TerrainField* field, const TerrainParams* params);
 // function's contract is the weaker of the two and callers may not depend on which
 // branch they took.
 float terrain_height_at(const TerrainParams* p, float x, float z);
+
+// The same surface with everything below `level`'s own cell removed, for
+// geometry that will be sampled too coarsely to carry it (spec 11.63).
+//
+// LEVEL 0 IS terrain_height_at, bit for bit. Above it the two sources drop detail
+// the same way and for the same reason -- the field reads a filtered mip, the fbm
+// drops the octaves whose wavelength is under the cell. A coarse mesh that
+// instead point-samples the full surface does not draw a smoother version of it,
+// it draws an arbitrary one, and the silhouette changes for no reason every time
+// a patch switches level.
+//
+// The fbm's dropped octaves are removed from the SUM and left in the
+// normalisation, so a level is the fine surface minus what it cannot resolve
+// rather than the remainder scaled back up to full amplitude.
+float terrain_height_at_level(const TerrainParams* p, float x, float z, int level);
+void terrain_normal_at_level(const TerrainParams* p, float x, float z, int level, vec3 out);
+
+// How many levels this terrain offers, at least 1.
+int terrain_level_count(const TerrainParams* p);
+
+// The coarsest level whose own cell is no larger than `cell`, clamped into
+// range. This is how a consumer says how finely it intends to sample rather than
+// picking a level index, and it is what keeps a patch and its parent on adjacent
+// levels without either of them knowing about the other.
+int terrain_level_for_cell(const TerrainParams* p, float cell);
+
+// The cell a level describes, in world units: the field's node spacing at that
+// level, or -- with no field -- the Nyquist limit of the fbm's finest surviving
+// octave, doubling per level.
+float terrain_level_cell(const TerrainParams* p, int level);
 
 // An erosion byproduct at a world XZ, in [0,1]. Zero everywhere with no field
 // installed, so a caller blending by these degrades to the un-eroded look rather

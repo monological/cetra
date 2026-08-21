@@ -661,7 +661,12 @@ static float forest_bed_height(void* ctx, float x, float z) {
 // all, and the same bake there is 2.3 s and 14.8 s -- five times slower, because
 // none of the sim's small helpers inline. Any timing taken from `out/bin` rather
 // than `out/release/bin` is measuring that.
-#define EROSION_DEFAULT_RES 512
+// 513 and not the power of two it looks like it should be. The grid is
+// NODE-CENTRED -- texel 0 on -extent, res-1 on +extent -- so it has res-1 cells,
+// and a mip pyramid halves only while that is even (spec 11.63). At 512 the
+// field gets no levels at all and every coarse quadtree patch point-samples the
+// full-resolution surface; at 513 it gets nine.
+#define EROSION_DEFAULT_RES 513
 
 // Seed a field from the fbm, erode it, and install it. Everything downstream --
 // tiles, collider, scatter, water bed, camera -- then reads the eroded surface
@@ -1121,6 +1126,14 @@ static void on_init(Game* game) {
         load_heightfield();
     else if (g_args.erode)
         bake_erosion();
+    // Here rather than inside each of those, so a third way of getting a field
+    // cannot arrive without one. The levels are copies of what is in the field
+    // at this moment, so this has to be the last thing that touches it.
+    if (g_terrain.field == &g_field) {
+        int levels = terrain_field_build_pyramid(&g_field);
+        printf("Terrain field: %d level(s), finest cell %.3f units\n", levels,
+               (double)terrain_field_cell(g_terrain.extent, g_field.res));
+    }
     if (g_args.height_probe)
         terrain_height_probe(&g_terrain);
 

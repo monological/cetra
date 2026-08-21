@@ -573,11 +573,33 @@ void terrain_quadtree_probe(TerrainQuadtree* qt) {
         float span = level_span(qt, level);
         float start, end;
         level_morph_window(qt, level, &start, &end);
+        float cell = span / (float)qt->segments;
+        // How much detail this level's patches actually gave up, as the largest
+        // gap between a vertex and the FULL surface at the same XZ. The source
+        // level alone says only which level was asked for; this says whether
+        // asking changed anything, and it reads 0 on a terrain with no pyramid
+        // and no octaves to drop -- which is the honest answer there.
+        float dropped = 0.0f;
+        const TerrainPatch *patch, *tmp;
+        HASH_ITER(hh, qt->cache, patch, tmp) {
+            if (patch->seen != qt->tick || patch->level != level)
+                continue;
+            const Mesh* mesh = patch->mesh;
+            for (size_t v = 0; v < mesh->vertex_count; ++v) {
+                const float* pos = &mesh->vertices[v * 3];
+                float d = fabsf(pos[1] - terrain_height_at(qt->params, pos[0], pos[2]));
+                if (d > dropped)
+                    dropped = d;
+            }
+        }
         printf("terrain-quadtree-probe level=%d span=%.4f cell=%.4f split_at=%.4f "
-               "morph_start=%.4f morph_end=%.4f selected=%d\n",
-               level, (double)span, (double)(span / (float)qt->segments),
-               (double)(TERRAIN_SPLIT_FACTOR * span), (double)start, (double)end,
-               st.level_count[level]);
+               "morph_start=%.4f morph_end=%.4f selected=%d source_level=%d source_cell=%.4f "
+               "dropped=%.6f\n",
+               level, (double)span, (double)cell, (double)(TERRAIN_SPLIT_FACTOR * span),
+               (double)start, (double)end, st.level_count[level],
+               terrain_level_for_cell(qt->params, cell),
+               (double)terrain_level_cell(qt->params, terrain_level_for_cell(qt->params, cell)),
+               (double)dropped);
     }
     SeamStat seam;
     seam_measure(qt, &seam);

@@ -73,6 +73,113 @@ bool terrain_field_alloc(TerrainField* field, int res) {
     return true;
 }
 
+// A plane's node, with the border CLAMPED -- a terrain's edge is an edge, not a
+// period. Shared by the sampler and the pyramid so the two cannot disagree
+// about what lies outside.
+static float plane_texel(const float* plane, int res, int i, int j) {
+    i = i < 0 ? 0 : (i >= res ? res - 1 : i);
+    j = j < 0 ? 0 : (j >= res ? res - 1 : j);
+    return plane[(size_t)j * (size_t)res + (size_t)i];
+}
+
+// Level 0 borrows the field's own arrays; every level above it owns four.
+static void field_free_levels(TerrainField* field) {
+    for (int k = 1; k < field->level_count; ++k) {
+        free(field->levels[k].height);
+        free(field->levels[k].flow);
+        free(field->levels[k].deposit);
+        free(field->levels[k].wear);
+    }
+    free(field->levels);
+    field->levels = NULL;
+    field->level_count = 0;
+}
+
+/*
+ * Half-resolution `src`, on the even nodes, under a separable [1 2 1] tent.
+ *
+ * The tent and not a plain subsample, and the plan said the opposite. Its
+ * argument was that a coarse node must be BIT-EQUAL to the fine node under it,
+ * because the CDLOD morph target was going to be built by averaging a patch's own
+ * even vertices -- which is only the parent's surface if the two read the same
+ * numbers. That constraint is gone: the target is sampled at the PARENT'S level
+ * now, so it is the parent's surface by construction whatever the levels contain.
+ *
+ * And a subsample delivers nothing once the lattices align, which they do
+ * whenever a patch cell is a whole multiple of a field cell: a coarse mesh
+ * reading level 0 at every other node gets exactly the values level 1 stores, so
+ * the pyramid is an exact no-op. What a coarse mesh needs is the detail REMOVED,
+ * not addressed more cheaply -- a point sample every eight cells is not a
+ * smoother surface, it is an arbitrary one, and it changes for no reason as the
+ * camera moves.
+ *
+ * Node-centred, so the tent is clamped at the border rather than wrapped: a
+ * terrain's edge is an edge, not a period.
+ */
+static bool filter_plane(const float* src, int src_res, float** out, int res) {
+    float* dst = malloc((size_t)res * (size_t)res * sizeof(float));
+    if (!dst)
+        return false;
+    for (int j = 0; j < res; ++j) {
+        for (int i = 0; i < res; ++i) {
+            float sum = 0.0f;
+            for (int dj = -1; dj <= 1; ++dj) {
+                for (int di = -1; di <= 1; ++di) {
+                    float w = (di == 0 ? 0.5f : 0.25f) * (dj == 0 ? 0.5f : 0.25f);
+                    sum += w * plane_texel(src, src_res, i * 2 + di, j * 2 + dj);
+                }
+            }
+            dst[(size_t)j * (size_t)res + (size_t)i] = sum;
+        }
+    }
+    *out = dst;
+    return true;
+}
+
+int terrain_field_build_pyramid(TerrainField* field) {
+    if (!field || !field->height || field->res < 2)
+        return 0;
+    field_free_levels(field);
+
+    // How many halvings the node count admits, stopping while a level still has
+    // enough nodes for the 4-tap kernel to mean anything.
+    int count = 1;
+    for (int res = field->res; ((res - 1) & 1) == 0 && (res - 1) / 2 + 1 >= 5; ++count)
+        res = (res - 1) / 2 + 1;
+
+    field->levels = calloc((size_t)count, sizeof(TerrainFieldLevel));
+    if (!field->levels)
+        return 0;
+    field->level_count = 1;
+    field->levels[0].res = field->res;
+    field->levels[0].height = field->height;
+    field->levels[0].flow = field->flow;
+    field->levels[0].deposit = field->deposit;
+    field->levels[0].wear = field->wear;
+
+    for (int k = 1; k < count; ++k) {
+        const TerrainFieldLevel* prev = &field->levels[k - 1];
+        TerrainFieldLevel* cur = &field->levels[k];
+        cur->res = (prev->res - 1) / 2 + 1;
+        if (!filter_plane(prev->height, prev->res, &cur->height, cur->res) ||
+            !filter_plane(prev->flow, prev->res, &cur->flow, cur->res) ||
+            !filter_plane(prev->deposit, prev->res, &cur->deposit, cur->res) ||
+            !filter_plane(prev->wear, prev->res, &cur->wear, cur->res)) {
+            // Keep what did build. A short pyramid samples coarser geometry at a
+            // finer level than it wanted, which aliases; an absent one would make
+            // every caller branch.
+            free(cur->height);
+            free(cur->flow);
+            free(cur->deposit);
+            free(cur->wear);
+            memset(cur, 0, sizeof(*cur));
+            break;
+        }
+        field->level_count = k + 1;
+    }
+    return field->level_count;
+}
+
 void terrain_field_measure(TerrainField* field) {
     if (!field || !field->height || field->res < 1) {
         if (field) {
@@ -127,6 +234,7 @@ bool terrain_field_seed(TerrainField* field, const TerrainParams* params) {
 void terrain_field_free(TerrainField* field) {
     if (!field)
         return;
+    field_free_levels(field);
     free(field->height);
     free(field->flow);
     free(field->deposit);
@@ -180,27 +288,22 @@ static float catmull_rom(float a, float b, float c, float d, float t) {
                    (3.0f * b - 3.0f * c + d - a) * t3);
 }
 
-static float plane_texel(const TerrainField* f, const float* plane, int i, int j) {
-    i = i < 0 ? 0 : (i >= f->res ? f->res - 1 : i);
-    j = j < 0 ? 0 : (j >= f->res ? f->res - 1 : j);
-    return plane[(size_t)j * (size_t)f->res + (size_t)i];
-}
-
 // Shared by the height and all three masks so a mapping cannot drift between
 // them: a mask read at a different place from the height it describes would put
 // the silt somewhere other than where the sim deposited it.
-static float sample_plane(const TerrainParams* p, const float* plane, float x, float z) {
-    const TerrainField* f = p->field;
+static float sample_plane(const TerrainParams* p, const float* plane, int res, float x, float z) {
     // res >= 2 and a non-NULL height plane are terrain_field_alloc's invariants,
     // so they are not re-asked here. `plane` can still be NULL -- it is the
     // fall-through for a TerrainMask outside the enum -- and `extent` is
     // caller-owned and never validated on the way in.
-    float cell = terrain_field_cell(p->extent, f->res);
+    float cell = terrain_field_cell(p->extent, res);
     if (!plane || !(cell > 0.0f))
         return 0.0f;
 
-    // Texels sit on NODES: 0 lands on -extent and res-1 on +extent.
-    float last = (float)(f->res - 1);
+    // Texels sit on NODES: 0 lands on -extent and res-1 on +extent. A coarse
+    // level's node 0 is the fine level's node 0 and its last is the fine last,
+    // so every level spans exactly the same square.
+    float last = (float)(res - 1);
     float dx, dz;
     terrain_to_domain(p, x, z, &dx, &dz);
     float gx = dx / cell;
@@ -219,8 +322,9 @@ static float sample_plane(const TerrainParams* p, const float* plane, float x, f
     float rows[4];
     for (int r = 0; r < 4; ++r) {
         int jr = j - 1 + r;
-        rows[r] = catmull_rom(plane_texel(f, plane, i - 1, jr), plane_texel(f, plane, i, jr),
-                              plane_texel(f, plane, i + 1, jr), plane_texel(f, plane, i + 2, jr), tx);
+        rows[r] = catmull_rom(plane_texel(plane, res, i - 1, jr), plane_texel(plane, res, i, jr),
+                              plane_texel(plane, res, i + 1, jr), plane_texel(plane, res, i + 2, jr),
+                              tx);
     }
     return catmull_rom(rows[0], rows[1], rows[2], rows[3], tz);
 }
@@ -244,7 +348,7 @@ float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z
     // of a sharp step, so a mask that is 0 across a whole neighbourhood still
     // reads slightly negative next to a peak. The header promises [0,1] and four
     // consumers would each have to re-establish it otherwise.
-    float v = sample_plane(p, plane, x, z);
+    float v = sample_plane(p, plane, p->field->res, x, z);
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
@@ -325,14 +429,93 @@ bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb)
     return true;
 }
 
-float terrain_height_at(const TerrainParams* p, float x, float z) {
+// The field level whose planes to read, and the resolution that goes with it.
+// Level 0 with no pyramid built, which is every field from before 11.63.
+static const TerrainFieldLevel* field_level(const TerrainField* f, int level) {
+    static TerrainFieldLevel base;
+    if (f->level_count > 0 && f->levels) {
+        int k = level < 0 ? 0 : (level >= f->level_count ? f->level_count - 1 : level);
+        return &f->levels[k];
+    }
+    base.res = f->res;
+    base.height = f->height;
+    base.flow = f->flow;
+    base.deposit = f->deposit;
+    base.wear = f->wear;
+    return &base;
+}
+
+// The fbm's finest surviving octave at a level, as an octave COUNT.
+//
+// Nyquist on the octave's own wavelength: an octave of frequency f has features
+// about 1/f across, and a lattice of `cell` cannot carry anything under 2*cell.
+// Level 0 asks for cell 0 and keeps everything, which is what makes it identical
+// to the function that has no level at all.
+static int analytic_octaves(const TerrainParams* p, float cell) {
+    if (cell <= 0.0f)
+        return p->octaves;
+    float freq = p->base_freq;
+    int kept = 0;
+    for (int i = 0; i < p->octaves; ++i) {
+        if (freq > 0.0f && 1.0f / freq < 2.0f * cell)
+            break;
+        kept++;
+        freq *= p->lacunarity;
+    }
+    // At least one, so a level coarser than the terrain's largest feature is
+    // still a surface rather than a flat plane at zero.
+    return kept > 0 ? kept : 1;
+}
+
+float terrain_level_cell(const TerrainParams* p, int level) {
+    if (!p)
+        return 0.0f;
+    if (level < 0)
+        level = 0;
+    if (p->field && p->field->height) {
+        const TerrainFieldLevel* L = field_level(p->field, level);
+        return terrain_field_cell(p->extent, L->res);
+    }
+    if (p->octaves <= 0 || !(p->base_freq > 0.0f))
+        return 0.0f;
+    // Half the finest octave's wavelength: the smallest thing the fbm has to
+    // resolve, which is what level 0 means when there is no grid to ask.
+    float finest = p->base_freq;
+    for (int i = 1; i < p->octaves; ++i)
+        finest *= p->lacunarity;
+    return (0.5f / finest) * (float)(1 << level);
+}
+
+int terrain_level_count(const TerrainParams* p) {
+    if (!p)
+        return 1;
+    if (p->field && p->field->height)
+        return p->field->level_count > 0 ? p->field->level_count : 1;
+    return p->octaves > 0 ? p->octaves : 1;
+}
+
+int terrain_level_for_cell(const TerrainParams* p, float cell) {
+    int count = terrain_level_count(p);
+    int best = 0;
+    for (int k = 1; k < count; ++k) {
+        float lc = terrain_level_cell(p, k);
+        if (!(lc > 0.0f) || lc > cell)
+            break;
+        best = k;
+    }
+    return best;
+}
+
+float terrain_height_at_level(const TerrainParams* p, float x, float z, int level) {
     if (!p)
         return 0.0f;
     // Tested before the octave count, deliberately: a field with octaves 0 is a
     // legitimate configuration -- the fbm is simply inert -- and folding the two
     // guards together would return a flat 0 for it.
-    if (p->field && p->field->height)
-        return sample_plane(p, p->field->height, x, z);
+    if (p->field && p->field->height) {
+        const TerrainFieldLevel* L = field_level(p->field, level);
+        return sample_plane(p, L->height, L->res, x, z);
+    }
     if (p->octaves <= 0)
         return 0.0f;
     const NoisePerm* t = perm_for(p->seed);
@@ -343,18 +526,30 @@ float terrain_height_at(const TerrainParams* p, float x, float z) {
     float ox, oz;
     terrain_to_domain(p, x, z, &ox, &oz);
 
+    int kept = level > 0 ? analytic_octaves(p, terrain_level_cell(p, level)) : p->octaves;
     float sum = 0.0f, amp = 1.0f, norm = 0.0f, freq = p->base_freq;
     for (int i = 0; i < p->octaves; ++i) {
         // A different constant Y plane per octave, the trick grass.c uses, so
         // octaves do not share ridge lines and stack into visible creases.
-        float n = noise_perlin3_tiled(t, ox * freq, (float)i * 7.31f, oz * freq,
-                                      TERRAIN_NOISE_PERIOD);
-        sum += amp * n;
+        //
+        // The dropped octaves still count toward `norm`. A level is the surface
+        // MINUS what it cannot resolve; renormalising to the kept octaves would
+        // scale the survivors back up to full amplitude and make each level a
+        // different terrain rather than a smoother view of one.
+        if (i < kept) {
+            float n = noise_perlin3_tiled(t, ox * freq, (float)i * 7.31f, oz * freq,
+                                          TERRAIN_NOISE_PERIOD);
+            sum += amp * n;
+        }
         norm += amp;
         amp *= p->gain;
         freq *= p->lacunarity;
     }
     return norm > 0.0f ? (sum / norm) * p->height : 0.0f;
+}
+
+float terrain_height_at(const TerrainParams* p, float x, float z) {
+    return terrain_height_at_level(p, x, z, 0);
 }
 
 // The step a normal is measured over: half a quad of the visual mesh, so the
@@ -368,16 +563,31 @@ static float normal_step(const TerrainParams* p) {
     return (2.0f * p->extent) / (float)across * 0.5f;
 }
 
-void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out) {
+void terrain_normal_at_level(const TerrainParams* p, float x, float z, int level, vec3 out) {
     if (!p) {
         glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, out);
         return;
     }
+    // Level 0 keeps normal_step exactly, so nothing built before levels existed
+    // moves. Above it the step widens to the level's own half-cell where that is
+    // larger: differencing a coarse surface over a fine step measures the
+    // interpolant's slope rather than the surface's.
     float h = normal_step(p);
-    float dx = terrain_height_at(p, x + h, z) - terrain_height_at(p, x - h, z);
-    float dz = terrain_height_at(p, x, z + h) - terrain_height_at(p, x, z - h);
+    if (level > 0) {
+        float half = terrain_level_cell(p, level) * 0.5f;
+        if (half > h)
+            h = half;
+    }
+    float dx = terrain_height_at_level(p, x + h, z, level) -
+               terrain_height_at_level(p, x - h, z, level);
+    float dz = terrain_height_at_level(p, x, z + h, level) -
+               terrain_height_at_level(p, x, z - h, level);
     vec3 n = {-dx, 2.0f * h, -dz};
     glm_vec3_normalize_to(n, out);
+}
+
+void terrain_normal_at(const TerrainParams* p, float x, float z, vec3 out) {
+    terrain_normal_at_level(p, x, z, 0, out);
 }
 
 // The macro-variation half of the tint, for a layered material (spec 11.60).
@@ -604,7 +814,7 @@ void terrain_height_probe(const TerrainParams* p) {
 // XZ lattice sampled off the same height function; they differ only in extent,
 // resolution, and whether anything will ever shade them.
 static bool build_grid(const TerrainParams* p, float x0, float z0, float span, int segments,
-                       bool shaded, Mesh* mesh) {
+                       bool shaded, int level, Mesh* mesh) {
     if (segments <= 0)
         return false;
     int side = segments + 1;
@@ -633,13 +843,13 @@ static bool build_grid(const TerrainParams* p, float x0, float z0, float span, i
         for (int i = 0; i < side; ++i) {
             float x = x0 + step * (float)i;
             float z = z0 + step * (float)j;
-            float y = terrain_height_at(p, x, z);
+            float y = terrain_height_at_level(p, x, z, level);
 
             vec3 n = {0.0f, 1.0f, 0.0f};
             vec3 t = {1.0f, 0.0f, 0.0f};
             float rgba[4] = {1.0f, 1.0f, 1.0f, 1.0f};
             if (shaded) {
-                terrain_normal_at(p, x, z, n);
+                terrain_normal_at_level(p, x, z, level, n);
                 // Gram-Schmidt +X against the normal. Terrain normals point
                 // broadly up, so the two can never be parallel here.
                 glm_vec3_muladds(n, -glm_vec3_dot(n, t), t);
@@ -678,30 +888,61 @@ bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh) {
     float tile_span = (2.0f * p->extent) / (float)p->tiles;
     float x0 = terrain_world_x(p, -p->extent + tile_span * (float)tx);
     float z0 = terrain_world_z(p, -p->extent + tile_span * (float)tz);
-    return build_grid(p, x0, z0, tile_span, p->tile_segments, true, mesh);
+    return build_grid(p, x0, z0, tile_span, p->tile_segments, true, 0, mesh);
 }
 
-// The parent surface at every vertex, as the two morph attribute streams.
-//
-// The parent lattice is this patch's EVEN-indexed subset (see terrain.h), so an
-// even vertex morphs to itself and an odd one to the point of the parent's own
-// triangulation directly above or below it. Which parent point that is depends
-// on the winding build_grid uses: its quads split (a, c, b) and (b, c, d), so the
-// shared edge runs from (i+1, j) to (i, j+1) and a doubly-odd vertex sits exactly
-// on the coarse quad's anti-diagonal rather than on its other one.
-//
-// Every case is a midpoint of two parent vertices, and every one of them has the
-// same X and Z as the vertex itself -- so the whole displacement is in Y, which is
-// why the attribute is one float and not three.
-static void fill_morph_targets(Mesh* mesh, int segments, float morph_start, float morph_end) {
+/*
+ * The parent surface at every vertex, as the two morph attribute streams.
+ *
+ * The parent lattice restricted to this patch is its EVEN-indexed subset (see
+ * terrain.h), so an even vertex morphs to itself and an odd one to the point of
+ * the parent's own triangulation directly above or below it. Which parent point
+ * that is depends on the winding build_grid uses: its quads split (a, c, b) and
+ * (b, c, d), so the shared edge runs from (i+1, j) to (i, j+1) and a doubly-odd
+ * vertex sits on the coarse quad's anti-diagonal rather than on its other one.
+ *
+ * Every case is a midpoint of two parent NODES, and every one has the same X and
+ * Z as the vertex itself -- so the whole displacement is in Y, which is why the
+ * attribute is one float and not three.
+ *
+ * The nodes are SAMPLED AT THE PARENT'S LEVEL rather than read off this patch's
+ * own even vertices. The two are the same number only while both patches read
+ * the same level, which they do not once a pyramid exists: the parent drops what
+ * its coarser cell cannot carry, and a target averaged from this patch's
+ * vertices would be a surface the parent never draws. The linear interpolation
+ * between them is not an approximation of the parent -- it IS what the parent
+ * rasterizes between two of its vertices.
+ */
+static void fill_morph_targets(const TerrainParams* p, Mesh* mesh, float x0, float z0, float span,
+                               int segments, int parent_level, float morph_start,
+                               float morph_end) {
     int side = segments + 1;
+    int cside = segments / 2 + 1;
     size_t n = mesh->vertex_count;
     float* morph = malloc(n * 3 * sizeof(float));
     float* normals = malloc(n * 3 * sizeof(float));
-    if (!morph || !normals) {
+    float* ph = malloc((size_t)cside * (size_t)cside * sizeof(float));
+    float* pn = malloc((size_t)cside * (size_t)cside * 3 * sizeof(float));
+    if (!morph || !normals || !ph || !pn) {
         free(morph);
         free(normals);
+        free(ph);
+        free(pn);
         return;
+    }
+
+    // The parent's own nodes over this square, which are this patch's even ones.
+    float step = span / (float)segments;
+    for (int cj = 0; cj < cside; ++cj) {
+        for (int ci = 0; ci < cside; ++ci) {
+            float x = x0 + step * (float)(ci * 2);
+            float z = z0 + step * (float)(cj * 2);
+            size_t c = (size_t)cj * (size_t)cside + (size_t)ci;
+            ph[c] = terrain_height_at_level(p, x, z, parent_level);
+            vec3 nrm = {0.0f, 1.0f, 0.0f}; // out-param; seeded for static analysis
+            terrain_normal_at_level(p, x, z, parent_level, nrm);
+            glm_vec3_copy(nrm, &pn[c * 3]);
+        }
     }
 
     float inv_span = morph_end > morph_start ? 1.0f / (morph_end - morph_start) : 0.0f;
@@ -710,7 +951,7 @@ static void fill_morph_targets(Mesh* mesh, int segments, float morph_start, floa
     for (int j = 0; j < side; ++j) {
         for (int i = 0; i < side; ++i) {
             int v = j * side + i;
-            // The two parent vertices this one lies between, as an offset from
+            // The two parent nodes this vertex lies between, as an offset from
             // it. Zero on the even/even case, which makes that vertex its own
             // target by the same arithmetic rather than by a special case.
             int di = 0, dj = 0;
@@ -720,19 +961,18 @@ static void fill_morph_targets(Mesh* mesh, int segments, float morph_start, floa
             } else if (j & 1) {
                 dj = 1;
             }
-            int step = dj * side + di;
-            int a = v + step;
-            int b = v - step;
+            size_t a = (size_t)((j + dj) / 2) * (size_t)cside + (size_t)((i + di) / 2);
+            size_t b = (size_t)((j - dj) / 2) * (size_t)cside + (size_t)((i - di) / 2);
 
-            float y = 0.5f * (mesh->vertices[a * 3 + 1] + mesh->vertices[b * 3 + 1]);
+            float y = 0.5f * (ph[a] + ph[b]);
             morph[v * 3 + 0] = y;
             morph[v * 3 + 1] = morph_start;
             morph[v * 3 + 2] = inv_span;
 
-            vec3 pn;
-            glm_vec3_add(&mesh->normals[a * 3], &mesh->normals[b * 3], pn);
-            glm_vec3_normalize(pn);
-            glm_vec3_copy(pn, &normals[v * 3]);
+            vec3 nrm;
+            glm_vec3_add(&pn[a * 3], &pn[b * 3], nrm);
+            glm_vec3_normalize(nrm);
+            glm_vec3_copy(nrm, &normals[v * 3]);
 
             float d = fabsf(y - mesh->vertices[v * 3 + 1]);
             if (d > worst)
@@ -740,6 +980,8 @@ static void fill_morph_targets(Mesh* mesh, int segments, float morph_start, floa
         }
     }
 
+    free(ph);
+    free(pn);
     mesh->morph = morph;
     mesh->morph_normals = normals;
     // Exactly reached at factor 1, so the culler's box is tight rather than
@@ -751,9 +993,16 @@ bool terrain_build_patch(const TerrainParams* p, float x0, float z0, float span,
                          float morph_start, float morph_end, Mesh* mesh) {
     if (!p || !mesh || segments < 2 || (segments & 1))
         return false;
-    if (!build_grid(p, x0, z0, span, segments, true, mesh))
+    // Both levels come from the CELL rather than from a depth index, which is
+    // what keeps a patch and its parent one level apart without either knowing
+    // the other exists: the parent patch is built at twice this span with the
+    // same segment count, so it asks for exactly the cell asked for here.
+    float cell = span / (float)segments;
+    int level = terrain_level_for_cell(p, cell);
+    int parent_level = terrain_level_for_cell(p, cell * 2.0f);
+    if (!build_grid(p, x0, z0, span, segments, true, level, mesh))
         return false;
-    fill_morph_targets(mesh, segments, morph_start, morph_end);
+    fill_morph_targets(p, mesh, x0, z0, span, segments, parent_level, morph_start, morph_end);
     return true;
 }
 
@@ -761,5 +1010,5 @@ bool terrain_build_collider(const TerrainParams* p, int segments, Mesh* mesh) {
     if (!p || !mesh)
         return false;
     return build_grid(p, terrain_world_x(p, -p->extent), terrain_world_z(p, -p->extent),
-                      2.0f * p->extent, segments, false, mesh);
+                      2.0f * p->extent, segments, false, 0, mesh);
 }

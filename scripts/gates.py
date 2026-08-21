@@ -8217,6 +8217,11 @@ _QT_SUMMARY = re.compile(
 _QT_SEAM = re.compile(
     r"terrain-quadtree-probe seams=(\d+) unbalanced=(\d+) fine_min=([\d.]+) "
     r"coarse_max=([\d.]+) gap=([\d.eE+-]+) interior_gap=([\d.eE+-]+)")
+_QT_LEVEL = re.compile(
+    r"terrain-quadtree-probe level=(\d+) span=[\d.]+ cell=([\d.]+) split_at=[\d.]+ "
+    r"morph_start=[-\d.]+ morph_end=[-\d.]+ selected=(\d+) source_level=(\d+) "
+    r"source_cell=([\d.]+) dropped=([\d.eE+-]+)")
+_QT_FIELD_LEVELS = re.compile(r"Terrain field: (\d+) level\(s\)")
 
 # Both gaps are float rounding on ~95-unit heights, where an ulp is 7.6e-6. The
 # bar is two orders above that and four below the mutations it has to catch:
@@ -8236,8 +8241,22 @@ D4_QUADTREE_GROWTH_MAX = 4.0
 # Starving one program of uMorphEye reads 9x.
 D4_PREPASS_TOLERANCE = 2.5
 
+# World units of relief a coarse level must actually give up. Well above float
+# noise and well under what either source drops in practice -- 4.9 for the fbm,
+# 6.2 for a filtered field -- so the thing it catches is the drop being ZERO,
+# which is what a level selector that always answers 0 gives, and what a
+# SUBSAMPLED pyramid gives on a lattice the patches align with.
+D4_MIP_DROP_MIN = 0.5
 
-def _quadtree_probe(extra):
+
+# Far enough back that the descent stops at the root: one patch, at the coarsest
+# level there is, which is the only framing where the band-limit has anything to
+# do. Every other arm here reads FOREST_CAM, where the whole selection is fine
+# enough to want the full surface.
+FOREST_CAM_HIGH = ["--cam-eye", "0,3000,3000", "--cam-target", "0,0,0"]
+
+
+def _quadtree_probe(extra, cam=None):
     """The terrain quadtree probe, parsed, or None.
 
     Three frames and a small window: the probe reads the SELECTION, which is a
@@ -8245,14 +8264,20 @@ def _quadtree_probe(extra):
     seam measurement walks every selected patch's boundary on the CPU.
     """
     cmd = ([FOREST, "-x", "-f", "3", "-W", "400", "-H", "240", "--no-fog", "--seed", "1337",
-            "--terrain-quadtree-probe"] + FOREST_CAM + extra)
+            "--terrain-quadtree-probe"] + (cam or FOREST_CAM) + extra)
     r = subprocess.run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     summary = _QT_SUMMARY.search(text)
     seam = _QT_SEAM.search(text)
     if r.returncode != 0 or not summary or not seam:
         return None
+    fl = _QT_FIELD_LEVELS.search(text)
+    levels = [{"level": int(m.group(1)), "cell": float(m.group(2)), "selected": int(m.group(3)),
+               "source_level": int(m.group(4)), "source_cell": float(m.group(5)),
+               "dropped": float(m.group(6))} for m in _QT_LEVEL.finditer(text)]
     return {
+        "field_levels": int(fl.group(1)) if fl else 0,
+        "by_level": levels,
         "levels": int(summary.group(1)),
         "segments": int(summary.group(2)),
         "split_factor": float(summary.group(3)),
@@ -8283,6 +8308,12 @@ def run_d4_terrain_gate(workdir):
       d4-patch-count   the selection grows logarithmically with the world and the
                        fixed grid grows quadratically. The whole reason the
                        quadtree exists, and the only arm that varies the domain.
+      d4-mip           a coarse patch reads a coarse SOURCE, and reading it
+                       actually removes detail. Both sources: the fbm drops
+                       octaves, a stored field reads a filtered level. The second
+                       half is the arm -- picking a coarser level is free to be a
+                       no-op, and with a subsampled pyramid on an aligned lattice
+                       it is exactly that.
       d4-morph-depth   the morph reaches the DEPTH PREPASS. It rasterizes the
                        same triangles and the shading pass tests against its
                        depth with LEQUAL, so a program that displaces differently
@@ -8348,6 +8379,40 @@ def run_d4_terrain_gate(workdir):
               f"({grid_growth:.1f}x, want more than twice the quadtree's)")
         if not ok:
             failures.append("d4-patch-count")
+
+    # --- the band limit -----------------------------------------------------
+    # Read from a camera far enough back that the descent stops at the root, so
+    # the one selected patch is at the coarsest level there is. At FOREST_CAM the
+    # whole selection is fine enough to want the full surface, and every
+    # `dropped` there is legitimately 0.
+    analytic = _quadtree_probe([], cam=FOREST_CAM_HIGH)
+    stored = _quadtree_probe(["--erode", "--erode-iterations", "20"], cam=FOREST_CAM_HIGH)
+    if not analytic or not stored:
+        print("  d4-mip       ERROR the band-limit probe produced no rows")
+        failures.append("d4-mip")
+    else:
+        def coarsest(p):
+            rows = [r for r in p["by_level"] if r["selected"] > 0]
+            return max(rows, key=lambda r: r["level"]) if rows else None
+
+        a_row, s_row = coarsest(analytic), coarsest(stored)
+        # Monotone in the level, since a coarser patch may never ask for a finer
+        # source: that ordering is what keeps a patch and its parent one source
+        # level apart, which is what the morph target depends on.
+        ordered = all(p["by_level"][k]["source_level"] >= p["by_level"][k - 1]["source_level"]
+                      for p in (analytic, stored) for k in range(1, len(p["by_level"])))
+        ok = (a_row and s_row and ordered and stored["field_levels"] > 1
+              and a_row["source_level"] > 0 and a_row["dropped"] > D4_MIP_DROP_MIN
+              and s_row["source_level"] > 0 and s_row["dropped"] > D4_MIP_DROP_MIN)
+        print(f"  d4-mip       {'PASS' if ok else 'FAIL'}  the coarsest selected patch reads "
+              f"source level {a_row['source_level'] if a_row else '?'} of the fbm and drops "
+              f"{a_row['dropped'] if a_row else 0:.2f} world units, and level "
+              f"{s_row['source_level'] if s_row else '?'} of a "
+              f"{stored['field_levels']}-level stored field dropping "
+              f"{s_row['dropped'] if s_row else 0:.2f} (want > {D4_MIP_DROP_MIN} each, a field "
+              f"pyramid deeper than 1, and source levels non-decreasing: {ordered})")
+        if not ok:
+            failures.append("d4-mip")
 
     # --- the prepass --------------------------------------------------------
     # --no-sky, because the Hillaire atmosphere is what makes forest not
