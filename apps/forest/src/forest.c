@@ -1118,17 +1118,14 @@ static bool g_regions_pinned;
 // world it is churning, and nothing would ever be freed.
 #define REGION_UNLOAD_SCALE 1.2f
 
-// One instance node and the prototype group it hangs under, so unloading can
-// detach it from the right parent.
-typedef struct RegionNode {
-    SceneNode* group;
-    SceneNode* node;
-} RegionNode;
-
 typedef struct Region {
     int rx, rz;
     bool resident;
-    RegionNode* nodes;
+    // The instance nodes this region put into the global prototype groups. Just
+    // the nodes: the group each one hangs under was stored beside it until
+    // free_node started unlinking from SceneNode.parent itself, at which point
+    // the pair was a second source of truth for parentage across ~7,000 nodes.
+    SceneNode** nodes;
     size_t node_count, node_cap;
     Entity* collider;
     int trees, rocks;
@@ -1188,18 +1185,16 @@ static int region_share(int total) {
 // it back out of the group itself. An untracked node is not merely leaked -- it
 // stays in the scene after its region unloads, so it is a prop standing in a
 // region that is no longer there, and no later pass can tell it from a live one.
-static bool region_track(Region* r, SceneNode* group, SceneNode* node) {
+static bool region_track(Region* r, SceneNode* node) {
     if (r->node_count == r->node_cap) {
         size_t cap = r->node_cap ? r->node_cap * 2 : 64;
-        RegionNode* grown = realloc(r->nodes, cap * sizeof(RegionNode));
+        SceneNode** grown = realloc(r->nodes, cap * sizeof(SceneNode*));
         if (!grown)
             return false;
         r->nodes = grown;
         r->node_cap = cap;
     }
-    r->nodes[r->node_count].group = group;
-    r->nodes[r->node_count].node = node;
-    r->node_count++;
+    r->nodes[r->node_count++] = node;
     return true;
 }
 
@@ -1222,7 +1217,7 @@ static void region_emit(Region* r, const Placement* items, int count, Mesh* cons
             add_mesh_to_node(node, mesh_ref(protos[i]));
             set_node_trs(node, items[k].pos, items[k].yaw, items[k].scale);
             add_child_node(groups[i], node);
-            if (!region_track(r, groups[i], node)) {
+            if (!region_track(r, node)) {
                 remove_child_node(groups[i], node);
                 free_node(node);
                 fprintf(stderr, "forest: region %d,%d out of memory at %zu nodes\n", r->rx,
@@ -1301,10 +1296,9 @@ static void region_free(Region* r) {
     if (!r->resident)
         return;
     for (size_t i = 0; i < r->node_count; ++i) {
-        // Detached before it is freed. free_node releases a subtree without
-        // unlinking it, which would leave its group holding a dangling pointer.
-        remove_child_node(r->nodes[i].group, r->nodes[i].node);
-        free_node(r->nodes[i].node);
+        // free_node unlinks from the node's own parent, so the group it hangs
+        // under does not have to be remembered to take it back out.
+        free_node(r->nodes[i]);
         g_node_count--;
     }
     free(r->nodes);
@@ -1385,7 +1379,7 @@ static unsigned region_digest(const Region* r) {
     const size_t bytes = sizeof(mat4);
     unsigned h = 2166136261u;
     for (size_t i = 0; i < r->node_count; ++i) {
-        const SceneNode* n = r->nodes[i].node;
+        const SceneNode* n = r->nodes[i];
         const unsigned char* b = (const unsigned char*)n->original_transform;
         for (size_t k = 0; k < bytes; ++k) {
             h ^= b[k];
@@ -1427,7 +1421,7 @@ static unsigned region_digest(const Region* r) {
 static unsigned region_digest_authored(const Region* r) {
     unsigned h = 2166136261u;
     for (size_t i = 0; i < r->node_count; ++i) {
-        const SceneNode* n = r->nodes[i].node;
+        const SceneNode* n = r->nodes[i];
         vec4 local = {n->original_transform[3][0], n->original_transform[3][1],
                       n->original_transform[3][2], 1.0f};
         vec4 world;
