@@ -106,17 +106,27 @@ def _assert_fixture_still_tests_something():
     """Every claim the vt arms rest on, checked here so a bad edit fails loudly."""
     # The ramp must sit exactly between the Y and Z projections, or the
     # "cached and per-texel legitimately differ here" claim weakens to taste.
-    ramp_n = np.array([0.0, 1.0, 1.0]) / math.sqrt(2.0)
-    assert abs(ramp_n[1] - ramp_n[2]) < 1e-9, (
+    # Derived from the GEOMETRY, not restated beside it: the first version of
+    # this assert compared a local literal against itself and could not fire.
+    e1 = np.array(ramp_pos[1]) - np.array(ramp_pos[0])
+    e2 = np.array(ramp_pos[3]) - np.array(ramp_pos[0])
+    face_n = np.cross(e1, e2)
+    face_n = face_n / np.linalg.norm(face_n)
+    assert abs(face_n[1] - face_n[2]) < 1e-9, (
         "the ramp is no longer 45 degrees; the identity arm's difference floor "
         "rests on both projections being equally live there")
+    assert np.allclose(face_n, np.array(ramp_nrm[0])), (
+        "the ramp's authored normal disagrees with its own faces")
+
+    # The derived atlas must OUT-RESOLVE the splat, which is where the identity
+    # arm's residual edges come from -- the checker never lives in the atlas at
+    # any resolution (the bake freezes grain at per-layer means), so the splat's
+    # resampling is the only density the exactness claim depends on.
+    assert VT_DERIVED_RES_MIN >= 2 * TEX, (
+        f"the derived atlas ({VT_DERIVED_RES_MIN}) no longer out-resolves the "
+        f"{TEX}-texel splat; the identity arm's byte-exact column reads go soft")
 
     cell = base.CHECKER_CELL_WORLD
-    derived_texel = DOMAIN / VT_DERIVED_RES_MIN
-    assert cell >= 4.0 * derived_texel, (
-        f"a checker cell ({cell}) is under 4 texels of the derived atlas "
-        f"({derived_texel}); the identity arm's exactness claim needs the cache "
-        "to RESOLVE the checker at the derived resolution")
 
     coarse_texel = DOMAIN / VT_MACRO_RES
     assert coarse_texel >= 2.0 * cell, (
@@ -175,22 +185,10 @@ _chunks = [
 buffer_bytes = b"".join(c for c, _ in _chunks)
 
 
-def _views(chunks):
-    views, offset = [], 0
-    for data, target in chunks:
-        views.append({"buffer": 0, "byteOffset": offset, "byteLength": len(data),
-                      "target": target})
-        offset += len(data)
-    return views
-
-
-def _bounds(pts):
-    return ([min(p[i] for p in pts) for i in range(3)],
-            [max(p[i] for p in pts) for i in range(3)])
-
-
-floor_mn, floor_mx = _bounds(floor_pos)
-ramp_mn, ramp_mx = _bounds(ramp_pos)
+# The parent's glTF plumbing, not a copy of it -- an offset or bounds fix
+# there must reach this file without a second edit.
+floor_mn, floor_mx = base._bounds(floor_pos)
+ramp_mn, ramp_mx = base._bounds(ramp_pos)
 
 GLTF = {
     "asset": {"version": "2.0", "generator": "gen_layer_vt_fixture.py"},
@@ -222,7 +220,7 @@ GLTF = {
         {"bufferView": 4, "componentType": 5126, "count": 4, "type": "VEC2"},
         {"bufferView": 5, "componentType": 5123, "count": 6, "type": "SCALAR"},
     ],
-    "bufferViews": _views(_chunks),
+    "bufferViews": base._views(_chunks),
     "buffers": [{"uri": "data:application/octet-stream;base64," +
                         base64.b64encode(buffer_bytes).decode("ascii"),
                  "byteLength": len(buffer_bytes)}],

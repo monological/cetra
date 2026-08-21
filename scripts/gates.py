@@ -10238,19 +10238,29 @@ def run_fixture_gen_gate(workdir):
         tools_link = os.path.join(run_root, "tools")
         if not os.path.exists(tools_link):
             os.symlink(os.path.join(ROOT, "tools"), tools_link)
-        for path in [gen] + inputs:
+        # ALL the generators, not just the one under test: gen_layer_vt_fixture
+        # imports gen_layer_fixture for its shared constants, and a mirror
+        # without the sibling raised ModuleNotFoundError -- which the classifier
+        # below filed as a machine dependency, so the vt fixture had ZERO drift
+        # coverage while the pass line read one generator short. Unrun siblings
+        # cannot read as outputs: the mtime stamps only count writes, and -B
+        # keeps their import from minting a __pycache__ the scan would count.
+        for path in gens + inputs:
             shutil.copy2(path, run_dir)
         stamps = {f: os.stat(os.path.join(run_dir, f)).st_mtime_ns
                   for f in os.listdir(run_dir)}
 
-        proc = subprocess.run([sys.executable, os.path.join(run_dir, name)],
+        proc = subprocess.run([sys.executable, "-B", os.path.join(run_dir, name)],
                               capture_output=True, text=True, cwd=run_dir)
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout).strip().splitlines()
             last = tail[-1][:90] if tail else "no output"
             # A generator needing numpy or PIL is a property of this machine, not of the
-            # fixture, so it is reported apart from a real drift rather than as one.
-            (missing_dep if "ModuleNotFoundError" in (proc.stderr or "")
+            # fixture, so it is reported apart from a real drift rather than as one. A
+            # missing SIBLING is a property of the fixture and must fail loudly.
+            is_dep = ("ModuleNotFoundError" in (proc.stderr or "")
+                      and "No module named 'gen_" not in (proc.stderr or ""))
+            (missing_dep if is_dep
              else drifted).append(f"{name}: exited {proc.returncode} ({last})")
             continue
 
@@ -12059,7 +12069,7 @@ def run_cull_gate(workdir):
     return failures
 
 
-# --- Layered surfaces (spec 11.60 / D9) --------------------------------------
+# --- Layered surfaces and their composite cache (specs 11.60, 11.66) ---------
 #
 # Every arm here reads `--render-mode 6`, the albedo view, and that is the whole
 # reason the fixture is legible. In that view the shader returns
@@ -12079,47 +12089,38 @@ _LAYER_GEN = None
 _LAYER_VT_GEN = None
 
 
-def _layer_gen():
-    """The fixture generator, imported for its constants. Writes nothing on import.
+def _import_fixture_gen(filename):
+    """A fixture generator, imported for its constants. Writes nothing on import.
 
     Returns None if its dependencies are absent. The rest of gates.py is
-    stdlib-only and this is its single import of anything else -- the generator
-    pulls in numpy and Pillow -- so an environment without them would otherwise
-    abort a seven-minute run partway through with a ModuleNotFoundError, after
-    the GPU time is already spent. The arm SKIPs instead, like it does for a
-    missing fixture or an unbuilt binary.
+    stdlib-only and these are its only imports of anything else -- the
+    generators pull in numpy and Pillow -- so an environment without them would
+    otherwise abort a seven-minute run partway through with a
+    ModuleNotFoundError, after the GPU time is already spent. The caller SKIPs
+    instead, like it does for a missing fixture or an unbuilt binary.
     """
+    path = os.path.join(ROOT, "assets", filename)
+    try:
+        spec = importlib.util.spec_from_file_location(filename[:-3], path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except ImportError as exc:
+        print(f"  layers            SKIP  ({filename[:-3]} needs {exc.name})")
+        return None
+    return mod
+
+
+def _layer_gen():
     global _LAYER_GEN
     if _LAYER_GEN is None:
-        path = os.path.join(ROOT, "assets", "gen_layer_fixture.py")
-        try:
-            spec = importlib.util.spec_from_file_location("gen_layer_fixture", path)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-        except ImportError as exc:
-            print(f"  layers            SKIP  (gen_layer_fixture needs {exc.name})")
-            return None
-        _LAYER_GEN = mod
+        _LAYER_GEN = _import_fixture_gen("gen_layer_fixture.py")
     return _LAYER_GEN
 
 
 def _layer_vt_gen():
-    """gen_layer_vt_fixture, imported for its constants; writes nothing on import.
-
-    Same skip contract as _layer_gen -- it imports gen_layer_fixture, so it
-    carries the same numpy/Pillow dependency.
-    """
     global _LAYER_VT_GEN
     if _LAYER_VT_GEN is None:
-        path = os.path.join(ROOT, "assets", "gen_layer_vt_fixture.py")
-        try:
-            spec = importlib.util.spec_from_file_location("gen_layer_vt_fixture", path)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-        except ImportError as exc:
-            print(f"  layers-vt-identity SKIP  (gen_layer_vt_fixture needs {exc.name})")
-            return None
-        _LAYER_VT_GEN = mod
+        _LAYER_VT_GEN = _import_fixture_gen("gen_layer_vt_fixture.py")
     return _LAYER_VT_GEN
 
 
@@ -12129,10 +12130,13 @@ def _vt_point(u, v):
     The floor and the 45-degree ramp meet at z = 0, so one mapping serves both:
     y is -z on the ramp and 0 on the floor. v runs from the ramp's crest (0) to
     the floor's near edge (1), matching the splat rows the generator paints.
+    Geometry from the VT generator, which OWNS it -- today it inherits the
+    parent's HALF, but that is one editable line over there, and a scan built
+    from the parent's number would silently mis-sample the day they diverge.
     """
-    g = _layer_gen()
-    x = -g.HALF + u * 2.0 * g.HALF
-    z = -g.HALF + v * 2.0 * g.HALF
+    g2 = _layer_vt_gen()
+    x = -g2.HALF + u * 2.0 * g2.HALF
+    z = -g2.HALF + v * 2.0 * g2.HALF
     return (x, max(0.0, -z), z)
 
 
@@ -12252,8 +12256,8 @@ def run_layers_gate(workdir):
       layers-vt-invalidate a mid-run layerBlend change re-bakes the cache: the
                          crossover moves to the linear 0.5, which a stale atlas
                          cannot show
-      layers-vt-budget   the bake's own MB log equals the gate's closed form and
-                         sits under a gate-side ceiling
+      layers-vt-budget   the bake's own MB log equals the gate's closed form at
+                         the gate's own derived resolution
 
     WHAT THE FIRST FOUR ARMS CANNOT SEE: layer_fixture's splat is UV1-space, and
     the composite cache serves world-XZ splats only, so those arms cover the
@@ -12261,15 +12265,6 @@ def run_layers_gate(workdir):
     needs the coverage. The cache's coverage is the vt arms, on their own
     world-XZ fixture.
     """
-    print("  arms:")
-    print("      layers-select        each splat column resolves the layer it selects")
-    print("      layers-srgb          a mid-grey layer round-trips through the decode")
-    print("      layers-height        the height blend interlocks where linear smears")
-    print("      layers-triplanar     the wall is textured by its own axis, at the right size")
-    print("      layers-vt-*          the composite cache: identity, detail, macro,")
-    print("                           invalidation, budget (spec 11.66)")
-    print("      layers-scatter       the scatter stops planting trees in the stream beds")
-
     failures = []
     src = os.path.join(ROOT, "assets", "layer_fixture.cscn")
     if not os.path.exists(src):
@@ -12469,13 +12464,14 @@ def run_layers_gate(workdir):
     # nothing reads 0 there and fails, where the identity half alone would pass
     # it. Floor measured first: this fixture is 0 px across two runs of one
     # build, so these are hard numbers, not tolerances.
-    vt_cols = {0: g.GREY_CODE, 2: g.DARK_CODE, 3: g.LIGHT_CODE}
-    worst_pt = 0.0
-    for col, expect in sorted(vt_cols.items()):
-        u = (col + 0.5) / 4.0
-        a = _layer_sample(cf, _vt_point(u, 0.875))
-        b = _layer_sample(pf, _vt_point(u, 0.875))
-        worst_pt = max(worst_pt, abs(a - expect), abs(a - b))
+    def vt_columns_off(frame):
+        # Worst deviation from the painted byte over the flat selection columns
+        # (`codes`, the select arm's own table -- the vt fixture paints the same
+        # column band).
+        return max(abs(_layer_sample(frame, _vt_point((col + 0.5) / 4.0, 0.875)) - expect)
+                   for col, expect in codes.items())
+
+    worst_pt = max(vt_columns_off(cf), vt_columns_off(pf))
     ae_id, _ = compare(cpath, ppath)
     ae_coarse, _ = compare(opath, ppath)
     VT_ID_CEILING = 6000     # measured 2330 of 480000: edges + the crossover patch
@@ -12498,10 +12494,10 @@ def run_layers_gate(workdir):
     NV = 96
     fv0, fv1 = 0.76, 0.99
     floor_pts = [_vt_point(0.375, fv0 + (fv1 - fv0) * i / (NV - 1)) for i in range(NV)]
-    floor_span = (fv1 - fv0) * 2.0 * g.HALF
+    floor_span = (fv1 - fv0) * 2.0 * g2.HALF
     ramp_us = [0.02 + 0.96 * i / (NV - 1) for i in range(NV)]
     ramp_pts = [_vt_point(uu, 0.25) for uu in ramp_us]
-    ramp_span = 0.96 * 2.0 * g.HALF
+    ramp_span = 0.96 * 2.0 * g2.HALF
 
     fcross = _layer_transitions(_layer_scan(cf, floor_pts), g.STRIPE_DARK, g.STRIPE_LIGHT)
     rcross = _layer_transitions(_layer_scan(cf, ramp_pts), g.STRIPE_DARK, g.STRIPE_LIGHT)
@@ -12523,11 +12519,8 @@ def run_layers_gate(workdir):
     # checker still crosses at full density (the grain arrives via the detail
     # term). A plain baked atlas -- the roadmap's original stage 1 -- holds the
     # first and fails the second.
-    texel = 2.0 * g.HALF / g2.VT_MACRO_RES
-    coarse_worst = 0.0
-    for col, expect in sorted(vt_cols.items()):
-        u = (col + 0.5) / 4.0
-        coarse_worst = max(coarse_worst, abs(_layer_sample(of, _vt_point(u, 0.875)) - expect))
+    texel = 2.0 * g2.HALF / g2.VT_MACRO_RES
+    coarse_worst = vt_columns_off(of)
     coarse_rcross = _layer_transitions(_layer_scan(of, ramp_pts), g.STRIPE_DARK, g.STRIPE_LIGHT)
     ok = coarse_worst <= 1.0 and abs(coarse_rcross - r_expect) <= 2.5
     print(f"  layers-vt-macro    {'PASS' if ok else 'FAIL'}  at {texel:.2f} units/texel "
@@ -12542,16 +12535,21 @@ def run_layers_gate(workdir):
     # by-value key is unreachable without a mid-run transition; --layer-blend-at
     # is that transition. The crossover through the RE-BAKED cache must land on
     # the linear 0.5 where the startup bake put it at the height-blend position
-    # -- a stale atlas keeps reading the latter.
+    # -- a stale atlas keeps reading the latter. Known blind spot: this proves
+    # the FRAME went fresh, not that the re-baked cache is what rendered it --
+    # an implementation whose "invalidation" is falling back to per-texel
+    # forever reads 0.5 here too, and only the startup coarse leg above pins
+    # the cached path as live.
+    #
+    # 16 frames: the startup bake's 8, the transition at 10, one more ensure to
+    # re-bake, and margin. The scan reuses the height arm's `us` and its
+    # `expect_mid` closed form -- same band, same heights, one statement.
     trans = vt_shot("blendtrans", ["--layer-blend-at", "10:0.0"], frames=16)
-    band_us = [0.02 + i * (0.96 / 139) for i in range(140)]
 
     def vt_band_ramp(frame):
-        vals = _layer_scan(frame, [_vt_point(uu, 0.625) for uu in band_us])
-        return _layer_ramp(vals, band_us, g.DARK_CODE, g.LIGHT_CODE)
+        vals = _layer_scan(frame, [_vt_point(uu, 0.625) for uu in us])
+        return _layer_ramp(vals, us, g.DARK_CODE, g.LIGHT_CODE)
 
-    vt_expect_mid = (1.0 + (g.DARK_HEIGHT - g.LIGHT_HEIGHT) / 255.0
-                     * g.LAYER_BLEND_SHARPNESS) / 2.0
     if trans is None:
         print("  layers-vt-invalidate ERROR while rendering the transition leg")
         failures.append("layers-vt-invalidate")
@@ -12562,39 +12560,42 @@ def run_layers_gate(workdir):
             print("  layers-vt-invalidate FAIL  the transition band is not measurable")
             failures.append("layers-vt-invalidate")
         else:
-            ok = abs(rh2[1] - vt_expect_mid) <= 0.03 and abs(rl2[1] - 0.5) <= 0.03
+            ok = abs(rh2[1] - expect_mid) <= 0.03 and abs(rl2[1] - 0.5) <= 0.03
             print(f"  layers-vt-invalidate {'PASS' if ok else 'FAIL'}  crossover "
-                  f"{rh2[1]:.3f} at bake (want {vt_expect_mid:.3f} +/- 0.03), then "
+                  f"{rh2[1]:.3f} at bake (want {expect_mid:.3f} +/- 0.03), then "
                   f"{rl2[1]:.3f} after a frame-10 layerBlend 0 (want 0.500; a stale "
-                  f"cache keeps reading {vt_expect_mid:.3f})")
+                  f"cache keeps reading {expect_mid:.3f})")
             if not ok:
                 failures.append("layers-vt-invalidate")
 
     # --- layers-vt-budget ----------------------------------------------------
-    # The bake's own MB line against the gate's OWN closed form and a gate-side
-    # ceiling -- the layers-scatter lesson: a bar read from the process under
-    # test moves with the thing it checks. The derived-resolution rule is
-    # restated here for the same reason.
+    # The bake's own MB line against the gate's OWN closed form -- the
+    # layers-scatter lesson: a bar read from the process under test moves with
+    # the thing it checks. The derived-resolution rule is restated here for the
+    # same reason, seeded from the vt generator's floor so the two gate-side
+    # restatements cannot drift apart silently. The closed-form equality is the
+    # whole bar: the loop caps the expected res, so any leak past it fails the
+    # equality before it could fail a ceiling.
     r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", "8", "-W", "200", "-H", "150"],
                        capture_output=True, text=True)
     m = re.search(r"Layers VT: material '[^']+' composite (\d+)x(\d+) pair, ([\d.]+) MB",
                   r.stdout + r.stderr)
     if not m:
-        print("  layers-vt-budget   ERROR  the run printed no bake line")
+        tail = (r.stderr or r.stdout).strip().splitlines()
+        last = tail[-1][:90] if tail else "no output"
+        print(f"  layers-vt-budget   ERROR  the run printed no bake line "
+              f"(exited {r.returncode}: {last})")
         failures.append("layers-vt-budget")
     else:
         res_x, res_y, mb = int(m.group(1)), int(m.group(2)), float(m.group(3))
-        domain = 2.0 * g.HALF
-        er = 256
+        domain = 2.0 * g2.HALF
+        er = g2.VT_DERIVED_RES_MIN
         while er < domain / 0.5 and er < 2048:
             er *= 2
         closed = round(2.0 * er * er * 4.0 * (4.0 / 3.0) / (1024.0 * 1024.0), 1)
-        VT_BUDGET_MB_CEILING = 60.0  # 2048^2 pair mipped is 42.7; anything above leaked
-        ok = (res_x == er and res_y == er and abs(mb - closed) <= 0.05
-              and mb <= VT_BUDGET_MB_CEILING)
+        ok = res_x == er and res_y == er and abs(mb - closed) <= 0.05
         print(f"  layers-vt-budget   {'PASS' if ok else 'FAIL'}  {res_x}x{res_y} at {mb} MB "
-              f"(want {er} squared at {closed} MB by the gate's own 2*N^2*4*(4/3), under "
-              f"{VT_BUDGET_MB_CEILING})")
+              f"(want {er} squared at {closed} MB by the gate's own 2*N^2*4*(4/3))")
         if not ok:
             failures.append("layers-vt-budget")
 
@@ -12701,7 +12702,7 @@ GATE_GROUPS = [
     ("origin", "a world away from the origin, and one that moves under it (spec 11.62 / D11):",
      run_origin_gate),
     ("terrain", "Heightfield terrain and erosion (spec 11.59 / D6-D8):", run_terrain_gate),
-    ("layers", "layered surfaces (splat, height blend, triplanar; spec 11.60 / D9):",
+    ("layers", "layered surfaces and their composite cache (specs 11.60, 11.66):",
      run_layers_gate),
     ("translucent", "translucent shadows (analytic layer stack, spec 11.26 / C1):",
      run_translucent_shadow_gate),

@@ -79,6 +79,15 @@ LayerSurface layerSurfaceNeutral(vec3 worldNormal) {
     return s;
 }
 
+// The surface map's two-channel tangent normal, z reconstructed. ONE decode of
+// the storage format: it is a contract with the array packing and the bake,
+// and it used to be hand-written at seven sites in this file.
+vec3 layerTangentNormal(vec2 rg) {
+    vec3 t = vec3(rg * 2.0 - 1.0, 0.0);
+    t.z = sqrt(max(1.0 - dot(t.xy, t.xy), 0.0));
+    return t;
+}
+
 // Where the splat is read, in its own space. See Material.splat_space: neither
 // reading generalises, so the material states which one it means.
 //
@@ -233,12 +242,9 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
                            sx, sy, sz);
 
         // Reconstruct each projection's tangent normal from two channels.
-        vec3 tnx = vec3(sx.rg * 2.0 - 1.0, 0.0);
-        vec3 tny = vec3(sy.rg * 2.0 - 1.0, 0.0);
-        vec3 tnz = vec3(sz.rg * 2.0 - 1.0, 0.0);
-        tnx.z = sqrt(max(1.0 - dot(tnx.xy, tnx.xy), 0.0));
-        tny.z = sqrt(max(1.0 - dot(tny.xy, tny.xy), 0.0));
-        tnz.z = sqrt(max(1.0 - dot(tnz.xy, tnz.xy), 0.0));
+        vec3 tnx = layerTangentNormal(sx.rg);
+        vec3 tny = layerTangentNormal(sy.rg);
+        vec3 tnz = layerTangentNormal(sz.rg);
 
         normal += k * triplanarBlendNormal(tnx, tny, tnz, worldNormal, tw, sgn);
         rough += k * (tw.x * sx.b + tw.y * sy.b + tw.z * sz.b);
@@ -278,9 +284,11 @@ LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sample
     if (n <= 0)
         return s;
 
-    // The same authored rectangle the splat read uses; CLAMP_TO_EDGE on the
-    // cache makes the half-texel inset that read needs unnecessary here.
-    vec2 uv = (authoredPos(worldPos).xz - splatDomain.xy) / max(splatDomain.zw, vec2(1e-4));
+    // THE splat mapping, not a restatement of it -- the cache is armed only
+    // for world-XZ materials, so the helper's world arm is the one taken.
+    // CLAMP_TO_EDGE on the cache makes the half-texel inset the splat read
+    // itself needs unnecessary here.
+    vec2 uv = layerSplatUV(worldPos, vec2(0.0));
     // Implicit LOD on purpose, against this file's own rule: the caller's gate
     // is a uniform, so this is uniform control flow, and implicit gradients are
     // what keep the cache's anisotropic filtering intact.
@@ -296,8 +304,7 @@ LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sample
 
     // The macro's normal, composed onto the geometric normal exactly as a
     // Y-projection tangent normal is -- which is what the bake stored it as.
-    vec3 mtn = vec3(macroS.rg * 2.0 - 1.0, 0.0);
-    mtn.z = sqrt(max(1.0 - dot(mtn.xy, mtn.xy), 0.0));
+    vec3 mtn = layerTangentNormal(macroS.rg);
     vec3 tw = triplanarWeights(worldNormal, layerTriplanarSharpness);
     vec3 sgn = triplanarAxisSign(worldNormal);
     vec3 normal = triplanarBlendNormal(mtn, mtn, mtn, worldNormal, vec3(0.0, 1.0, 0.0), sgn);
@@ -324,12 +331,9 @@ LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sample
     if (ks >= 0) {
         vec4 sx, sy, sz;
         triplanarTapsArray(arr, float(ks), p, tw, sgn, dpx * s2, dpy * s2, sx, sy, sz);
-        vec3 tnx = vec3(sx.rg * 2.0 - 1.0, 0.0);
-        vec3 tny = vec3(sy.rg * 2.0 - 1.0, 0.0);
-        vec3 tnz = vec3(sz.rg * 2.0 - 1.0, 0.0);
-        tnx.z = sqrt(max(1.0 - dot(tnx.xy, tnx.xy), 0.0));
-        tny.z = sqrt(max(1.0 - dot(tny.xy, tny.xy), 0.0));
-        tnz.z = sqrt(max(1.0 - dot(tnz.xy, tnz.xy), 0.0));
+        vec3 tnx = layerTangentNormal(sx.rg);
+        vec3 tny = layerTangentNormal(sy.rg);
+        vec3 tnz = layerTangentNormal(sz.rg);
         // Detail composes onto the macro-composed normal, not the geometric
         // one, so the two perturbations stack instead of competing.
         normal = triplanarBlendNormal(tnx, tny, tnz, normal, tw, sgn);
@@ -342,7 +346,10 @@ LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sample
     }
 
     s.albedo = albedo;
-    s.normal = normalize(normal);
+    // Already unit length: on both paths `normal` is triplanarBlendNormal's
+    // return, which normalizes -- unlike the per-texel blend above, which sums
+    // weighted normals and must renormalize.
+    s.normal = normal;
     s.roughness = rough;
     s.ao = occ;
     s.dominant = float(k);

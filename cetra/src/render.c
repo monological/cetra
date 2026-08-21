@@ -240,33 +240,41 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // upload different values for the same material.
     material_upload_layer_uniforms(material, u);
 
-    if (material->albedo_tex) {
-        glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);
-        glBindTexture(GL_TEXTURE_2D, material->albedo_tex->id);
-    }
-
-    if (material->normal_tex) {
-        glActiveTexture(GL_TEXTURE0 + TEXUNIT_NORMAL);
-        glBindTexture(GL_TEXTURE_2D, material->normal_tex->id);
-    }
-
-    // Composite cache (spec 11.66): rides units 0/1, which the layered path
-    // never reads as albedo/normal. Bound AFTER those two binds, so a layered
-    // material that also authors either map cannot clobber the cache. The gate
-    // is uploaded unconditionally, like layerCount above, or a material with no
-    // cache inherits the last cached material's arm.
-    if (material->layers_vt && material->layers_vt->baked) {
+    // Units 0/1's tenant is a function of the SAME material bit the shader
+    // selects on: for a layered material the authored albedo/normal are dead
+    // in every consumer (the layered arms win, and the shadow pass binds its
+    // own copy), so the composite cache takes the units when baked and nothing
+    // needs them otherwise. An if/else rather than bind-then-override, so the
+    // exclusivity is structural instead of an ordering a later edit can break.
+    // The gate is uploaded on every path, like layerCount above, or a material
+    // with no cache inherits the last cached material's arm.
+    if (material->layer_count > 0 && material->layers_vt && material->layers_vt->baked) {
         const MaterialLayersVt* vt = material->layers_vt;
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);
         glBindTexture(GL_TEXTURE_2D, vt->albedo_tex);
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_NORMAL);
         glBindTexture(GL_TEXTURE_2D, vt->surface_tex);
         uniform_set_int(u, "layersVtActive", 1);
-        uniform_set_vec3_array(u, "layerMeanAlbedo", (const float*)vt->mean_albedo,
-                               MATERIAL_MAX_LAYERS);
+        // Indexed element names so the means ride the CACHED setter: the whole
+        // block re-fires per material switch, and the sort interleaves the
+        // terrain material with props, so an uncached array upload here would
+        // repeat exactly the way the 11.60 comment above warns about.
+        static const char* const MEAN_NAMES[MATERIAL_MAX_LAYERS] = {
+            "layerMeanAlbedo[0]", "layerMeanAlbedo[1]", "layerMeanAlbedo[2]",
+            "layerMeanAlbedo[3]"};
+        for (int i = 0; i < MATERIAL_MAX_LAYERS; i++)
+            uniform_set_vec3(u, MEAN_NAMES[i], vt->mean_albedo[i]);
         uniform_set_vec4(u, "layerMeanRough", vt->mean_rough);
         uniform_set_vec4(u, "layerMeanAo", vt->mean_ao);
     } else {
+        if (material->albedo_tex) {
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);
+            glBindTexture(GL_TEXTURE_2D, material->albedo_tex->id);
+        }
+        if (material->normal_tex) {
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_NORMAL);
+            glBindTexture(GL_TEXTURE_2D, material->normal_tex->id);
+        }
         uniform_set_int(u, "layersVtActive", 0);
     }
 

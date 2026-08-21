@@ -39,13 +39,12 @@ typedef struct MaterialLayersVtKey {
     float blend_sharpness;
     float triplanar_sharpness;
     float domain[4];
+    int arr_width, arr_height; // the array's canonical size the bake read through
 } MaterialLayersVtKey;
 
 typedef struct MaterialLayersVt {
     GLuint albedo_tex;  // rgb = blended albedo in STORED codes, a = dominant/3
     GLuint surface_tex; // rg = tangent normal xy, b = roughness, a = AO
-    GLuint quad_vao, quad_vbo;
-    int res;
 
     // Per-layer means of the SAME resampled data the taps read -- the material
     // texture array's top mip -- which is what makes the runtime detail ratio
@@ -64,8 +63,11 @@ typedef struct MaterialLayersVt {
 } MaterialLayersVt;
 
 // (Re)bake the cache for every world-XZ-splat layered material whose key no
-// longer matches. Called each frame after material_texture_array_ensure_built,
-// because the bake samples the array; a no-op while the array is dirty.
+// longer matches, and DISARM the cache of any material that stops qualifying
+// -- this function is the one owner of the armed state, so the bind site's
+// `layers_vt && baked` is exactly the qualification predicate. Called each
+// frame after material_texture_array_ensure_built, because the bake samples
+// the array; a no-op while the array is dirty.
 void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine);
 
 void free_material_layers_vt(MaterialLayersVt* vt);

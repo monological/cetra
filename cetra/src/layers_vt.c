@@ -62,14 +62,21 @@ static int vt_res_for(const Material* m, const Engine* engine) {
             res *= 2;
     }
     if (engine->max_texture_size > 0 && res > engine->max_texture_size) {
-        log_warn("layers_vt: %d exceeds GL_MAX_TEXTURE_SIZE (%d); clamped", res,
-                 engine->max_texture_size);
+        // Once: this runs per frame from the ensure's key build, and a clamped
+        // override is a healthy steady state, not a condition to re-report.
+        static bool warned;
+        if (!warned) {
+            log_warn("layers_vt: %d exceeds GL_MAX_TEXTURE_SIZE (%d); clamped", res,
+                     engine->max_texture_size);
+            warned = true;
+        }
         res = engine->max_texture_size;
     }
     return res;
 }
 
-static void vt_make_key(const Material* m, int res, MaterialLayersVtKey* key) {
+static void vt_make_key(const Material* m, int res, const MaterialTextureArray* arr,
+                        MaterialLayersVtKey* key) {
     // memset first so struct padding compares equal under memcmp.
     memset(key, 0, sizeof(*key));
     key->res = res;
@@ -89,6 +96,12 @@ static void vt_make_key(const Material* m, int res, MaterialLayersVtKey* key) {
     key->domain[1] = m->splat_origin[1];
     key->domain[2] = m->splat_size[0];
     key->domain[3] = m->splat_size[1];
+    // The array's canonical size, because the bake read THROUGH the array: a
+    // rebuild that changes it while ids and indices survive resamples every
+    // tap and every top-mip mean -- the same hole ids-beside-indices closes
+    // one level down.
+    key->arr_width = arr->width;
+    key->arr_height = arr->height;
 }
 
 static GLuint vt_alloc_target(int res) {
@@ -161,6 +174,10 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
         return false;
     }
 
+    // Unit 0 first: glBindTexture binds on whatever unit the shadow pass or
+    // the async uploads left active, and the trailing cleanup resets only
+    // unit 0 -- the water.c data-texture lesson.
+    glActiveTexture(GL_TEXTURE0);
     // Fresh targets before any source is bound, so the allocation cannot
     // clobber a unit a source sits on (the bake_lut_2d lesson).
     gl_delete_texture(&vt->albedo_tex);
@@ -180,9 +197,6 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
-
-    if (vt->quad_vao == 0)
-        create_fullscreen_quad_vao(&vt->quad_vao, &vt->quad_vbo);
 
     GLuint fbo = 0;
     glGenFramebuffers(1, &fbo);
@@ -204,7 +218,9 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
         uniform_set_int(prog->uniforms, "materialArray", 0);
         uniform_set_int(prog->uniforms, "layerGrainFrozen", 1);
         material_texture_array_bind(arr, 0);
-        draw_fullscreen_quad(vt->quad_vao);
+        // The array's own quad: non-zero on every path here, since the ensure
+        // gates on a successfully built array and the build creates it.
+        draw_fullscreen_quad(arr->quad_vao);
 
         glBindTexture(GL_TEXTURE_2D, vt->albedo_tex);
         glGenerateMipmap(GL_TEXTURE_2D);
@@ -228,7 +244,6 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
     if (ok) {
-        vt->res = res;
         // The 4/3 is the mip chain; two targets, so the pair is 8 bytes a texel.
         double bytes = 2.0 * (double)res * (double)res * 4.0 * (4.0 / 3.0);
         log_info("Layers VT: material '%s' composite %dx%d pair, %.1f MB",
@@ -238,7 +253,7 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
 }
 
 void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
-    if (!scene || !engine || !engine->layers_vt_enabled)
+    if (!scene || !engine)
         return;
     // The bake samples the material texture array, so it waits for the array
     // to be current -- one frame behind it at worst, never ahead of it.
@@ -247,11 +262,23 @@ void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
         return;
     for (size_t i = 0; i < scene->material_count; i++) {
         Material* m = scene->materials[i];
-        if (!m || m->layer_count <= 0 || m->splat_space != SPLAT_SPACE_WORLD_XZ)
+        if (!m)
             continue;
+        // This function is the ONE owner of the armed state: a material that
+        // stops qualifying is DISARMED, not merely skipped, so the bind site's
+        // `layers_vt && baked` is exactly this predicate, one frame behind at
+        // worst. Skipping instead leaves a stale cache bound to units 0/1 for
+        // a material whose layered gate no longer skips the albedo read.
+        bool want = engine->layers_vt_enabled && m->layer_count > 0 &&
+                    m->splat_space == SPLAT_SPACE_WORLD_XZ;
+        if (!want) {
+            if (m->layers_vt)
+                m->layers_vt->baked = false;
+            continue;
+        }
         int res = vt_res_for(m, engine);
         MaterialLayersVtKey key;
-        vt_make_key(m, res, &key);
+        vt_make_key(m, res, scene->material_textures, &key);
         if (m->layers_vt && m->layers_vt->baked &&
             memcmp(&key, &m->layers_vt->key, sizeof(key)) == 0)
             continue;
@@ -278,9 +305,5 @@ void free_material_layers_vt(MaterialLayersVt* vt) {
         return;
     gl_delete_texture(&vt->albedo_tex);
     gl_delete_texture(&vt->surface_tex);
-    if (vt->quad_vao)
-        glDeleteVertexArrays(1, &vt->quad_vao);
-    if (vt->quad_vbo)
-        glDeleteBuffers(1, &vt->quad_vbo);
     free(vt);
 }
