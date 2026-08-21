@@ -96,33 +96,29 @@ static void level_morph_window(const TerrainQuadtree* qt, int level, float* star
     *start = *end - TERRAIN_MORPH_FRACTION * TERRAIN_SPLIT_FACTOR * span;
 }
 
+// Updates an unselected patch survives before its mesh is released. The cache
+// exists so a camera oscillating across a split boundary does not rebuild the
+// same patch every frame, and three seconds at 60 covers that with room to
+// spare; past it the patch is behind you and its 30 kB is not worth holding.
+//
+// Without an eviction the cache is every patch the camera has ever selected,
+// which on a walk across a 4 km island is the whole tree at every level. This is
+// a WINDOW rather than a capacity cap because the working set is what the camera
+// has touched RECENTLY, not how many patches happen to fit -- a cap has to
+// choose a victim, and every ordering it could choose is a worse answer than the
+// one the tick already records.
+#define TERRAIN_PATCH_GRACE 180u
+
 static uint64_t patch_key(int level, int ix, int iz) {
     return ((uint64_t)level << 48) | ((uint64_t)(unsigned)ix << 24) | (uint64_t)(unsigned)iz;
 }
 
-// Squared distance from `eye` to the patch's world box. Squared because the
-// comparison is against a squared threshold; nothing here needs the root.
+// Squared distance from `eye` to the patch's world box, which is its footprint
+// over the domain's whole vertical range.
 static float box_dist_sq(const TerrainQuadtree* qt, float x0, float z0, float span,
                          const vec3 eye) {
-    float dx = x0 - eye[0];
-    if (dx < 0.0f) {
-        dx = eye[0] - (x0 + span);
-        if (dx < 0.0f)
-            dx = 0.0f;
-    }
-    float dz = z0 - eye[2];
-    if (dz < 0.0f) {
-        dz = eye[2] - (z0 + span);
-        if (dz < 0.0f)
-            dz = 0.0f;
-    }
-    float dy = qt->y_lo - eye[1];
-    if (dy < 0.0f) {
-        dy = eye[1] - qt->y_hi;
-        if (dy < 0.0f)
-            dy = 0.0f;
-    }
-    return dx * dx + dy * dy + dz * dz;
+    AABB box = {{x0, qt->y_lo, z0}, {x0 + span, qt->y_hi, z0 + span}};
+    return aabb_dist_sq(&box, eye);
 }
 
 // The world corner of the patch at (level, ix, iz).
@@ -227,7 +223,11 @@ TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, int levels
     qt->segments = segments;
 
     // An installed field states its own range; the analytic fbm's amplitude is
-    // symmetric about zero. Either way this only has to CONTAIN the terrain.
+    // symmetric about zero. Either way this only has to CONTAIN the terrain --
+    // and a box that does NOT is the one direction that costs correctness, since
+    // an eye below the box is further from it than from the ground and the patch
+    // fails to split. Hence the island floor: it reaches island_depth down,
+    // which is unrelated to height and on the island is four times it.
     if (params->field && params->field->max_y > params->field->min_y) {
         qt->y_lo = params->field->min_y;
         qt->y_hi = params->field->max_y;
@@ -235,33 +235,34 @@ TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, int levels
         qt->y_lo = -params->height;
         qt->y_hi = params->height;
     }
+    if (params->island_start > 0.0f && params->island_start < 1.0f &&
+        -params->island_depth < qt->y_lo)
+        qt->y_lo = -params->island_depth;
     return qt;
 }
 
 static void patch_free(TerrainPatch* patch) {
-    // The node owns the mesh, so freeing it releases both. Detaching first is
-    // the caller's job -- a freed node whose parent still points at it is the
-    // exact hazard remove_child_node exists for.
+    // The node owns the mesh, so freeing it releases both, and free_node unlinks
+    // it from the root on the way out -- so a patch can be dropped whether or not
+    // the selection currently holds it.
     free_node(patch->node);
     free(patch);
 }
 
-// Detach and release every cached patch, leaving the tree empty.
-static void drop_all(TerrainQuadtree* qt, SceneNode* root) {
+// Release every cached patch, leaving the tree empty.
+static void drop_all(TerrainQuadtree* qt) {
     TerrainPatch *patch, *tmp;
     HASH_ITER(hh, qt->cache, patch, tmp) {
-        if (patch->attached && root)
-            remove_child_node(root, patch->node);
         HASH_DEL(qt->cache, patch);
         patch_free(patch);
     }
     qt->selected_count = 0;
 }
 
-void free_terrain_quadtree(TerrainQuadtree* qt, SceneNode* root) {
+void free_terrain_quadtree(TerrainQuadtree* qt) {
     if (!qt)
         return;
-    drop_all(qt, root);
+    drop_all(qt);
     free(qt->selected);
     free(qt);
 }
@@ -269,7 +270,7 @@ void free_terrain_quadtree(TerrainQuadtree* qt, SceneNode* root) {
 void terrain_quadtree_rebuild(TerrainQuadtree* qt, SceneNode* root, const vec3 eye) {
     if (!qt)
         return;
-    drop_all(qt, root);
+    drop_all(qt);
     qt->built = 0;
     // The shift that brought us here has already translated every root child by
     // -delta, this node among them, which is exactly right for a subtree whose
@@ -297,14 +298,20 @@ int terrain_quadtree_update(TerrainQuadtree* qt, SceneNode* root, const vec3 eye
     glm_vec3_copy((float*)eye, qt->last_eye);
     descend(qt, qt->levels - 1, 0, 0, eye);
 
-    // Detach what the descent did not reach. Walking the CACHE rather than the
-    // root's children is what lets a patch carry its own attachment state and
-    // saves the node needing a back-reference to it.
+    // Detach what the descent did not reach, and evict what has been detached
+    // long enough. Walking the CACHE rather than the root's children is what lets
+    // a patch carry its own attachment state and saves the node needing a
+    // back-reference to it -- and it is why eviction costs nothing extra: this
+    // pass already visits every patch and already knows both facts it needs.
     TerrainPatch *patch, *tmp;
     HASH_ITER(hh, qt->cache, patch, tmp) {
         if (patch->attached && patch->seen != qt->tick) {
             remove_child_node(root, patch->node);
             patch->attached = false;
+        }
+        if (!patch->attached && qt->tick - patch->seen > TERRAIN_PATCH_GRACE) {
+            HASH_DEL(qt->cache, patch);
+            patch_free(patch);
         }
     }
     for (size_t i = 0; i < qt->selected_count; ++i) {
@@ -331,6 +338,9 @@ void terrain_quadtree_stats(const TerrainQuadtree* qt, TerrainQuadtreeStats* out
     for (size_t i = 0; i < qt->selected_count; ++i) {
         const TerrainPatch* patch = qt->selected[i];
         out->triangles += patch->mesh->index_count / 3u;
+        // Cannot be false -- create_terrain_quadtree caps levels at 16, which is
+        // what sizes level_count -- and kept as the bound's second statement, so
+        // raising that cap fails here loudly rather than writing past the array.
         if (patch->level >= 0 && patch->level < 16)
             out->level_count[patch->level]++;
     }
@@ -371,6 +381,18 @@ static const TerrainPatch* patch_selected(const TerrainQuadtree* qt, int level, 
     return patch && patch->seen == qt->tick ? patch : NULL;
 }
 
+// A SECOND IMPLEMENTATION of cetraMorphFactor, in C, and it can only ever agree
+// with the shader by being kept in step by hand. Everything the probe says about
+// seams and morph targets is therefore a statement about this arithmetic and not
+// about the surface that gets drawn: a morph that never reached a single geometry
+// program -- include missing, attributes unbound, uniform never uploaded -- leaves
+// every probe row correct.
+//
+// What closes that is --no-morph and the frame it moves, which is the same answer
+// --wind-bound-probe reached by driving the real shader through transform
+// feedback. Transform feedback is not available to this one: the morph is a
+// property of a SELECTION, and capturing it would mean a TF pass over every
+// selected patch every frame rather than over one fixture mesh.
 static float vertex_morph_factor(const TerrainQuadtree* qt, const TerrainPatch* patch, int v) {
     const float* pos = &patch->mesh->vertices[(size_t)v * 3];
     const float* m = &patch->mesh->morph[(size_t)v * 3];
@@ -416,6 +438,17 @@ static bool coarse_edge_y(const TerrainPatch* coarse, int segments, int axis, fl
     return true;
 }
 
+// The index of the t-th vertex along the boundary in direction (dx, dz): the
+// far row when the direction is positive, the near one when negative, and t
+// itself along the free axis. Written once because both arms of seam_measure walk
+// the same edge and a disagreement between them would compare a fine vertex
+// against a coarse edge it does not lie on.
+static int seam_vertex(int dx, int dz, int segments, int t) {
+    int i = dx > 0 ? segments : (dx < 0 ? 0 : t);
+    int j = dz > 0 ? segments : (dz < 0 ? 0 : t);
+    return j * (segments + 1) + i;
+}
+
 static void seam_measure(const TerrainQuadtree* qt, SeamStat* st) {
     memset(st, 0, sizeof(*st));
     st->fine_min = 1.0f;
@@ -451,9 +484,8 @@ static void seam_measure(const TerrainQuadtree* qt, SeamStat* st) {
                 }
                 st->seams++;
                 for (int t = 0; t < side; ++t) {
-                    int i = DX[d] > 0 ? segments : (DX[d] < 0 ? 0 : t);
-                    int j = DZ[d] > 0 ? segments : (DZ[d] < 0 ? 0 : t);
-                    float k = vertex_morph_factor(qt, fine, j * side + i);
+                    float k = vertex_morph_factor(qt, fine,
+                                                  seam_vertex(DX[d], DZ[d], segments, t));
                     if (k > st->coarse_max)
                         st->coarse_max = k;
                 }
@@ -466,9 +498,7 @@ static void seam_measure(const TerrainQuadtree* qt, SeamStat* st) {
             // used rather than one recomputed from the level's span.
             int axis = DX[d] != 0 ? 0 : 2;
             for (int t = 0; t < side; ++t) {
-                int i = DX[d] > 0 ? segments : (DX[d] < 0 ? 0 : t);
-                int j = DZ[d] > 0 ? segments : (DZ[d] < 0 ? 0 : t);
-                int v = j * side + i;
+                int v = seam_vertex(DX[d], DZ[d], segments, t);
                 const float* pos = &fine->mesh->vertices[(size_t)v * 3];
                 float k = vertex_morph_factor(qt, fine, v);
                 if (k < st->fine_min)

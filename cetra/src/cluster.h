@@ -23,11 +23,14 @@ extern "C" {
  * it does not, in one mesh.
  *
  * CRACKS ARE IMPOSSIBLE HERE, and not because a seam is stitched. Every cluster at
- * every level indexes the ORIGINAL vertex buffer -- simplification only drops
- * vertices, it never moves them -- so two clusters that share an edge share the
- * literal same vertices whatever levels they came from. That is why
- * `simplify_permissive` must stay off: it is the one setting that would
- * destructively rewrite positions and turn this guarantee into an approximation.
+ * every level indexes the ORIGINAL vertex buffer -- meshoptimizer's collapse model
+ * only ever drops vertices, it never introduces one -- so two clusters that share
+ * an edge share the literal same vertices whatever levels they came from.
+ *
+ * That property does NOT come from `simplify_permissive`, which an earlier version
+ * of this comment claimed. Permissive is "allow collapses across attribute
+ * discontinuities" -- a UV/normal seam permission. It is off because a prop with UV
+ * seams would have them collapsed, which is a quality decision, not the seal.
  *
  * The cut is quantised by DISTANCE BAND, which is what keeps instancing alive.
  * A per-instance cut would mean two trees at different distances could never share
@@ -51,11 +54,17 @@ bool mesh_build_cluster_lod(Mesh* mesh);
 // What the build produced, for the probes and gate arms. Zeroed for a mesh that
 // has no DAG, so a caller needs no guard.
 typedef struct MeshClusterStats {
-    int clusters;    // total across every level
-    int groups;      // DAG groups
-    int levels;      // DAG depth (max group depth + 1), NOT the band count
-    int max_index;   // largest vertex index any cluster references
-    bool permissive; // whether destructive simplification ran -- must be false
+    int clusters;  // total across every level
+    int groups;    // DAG groups
+    int levels;    // DAG depth (max group depth + 1), NOT the band count
+    int max_index; // largest vertex index any cluster references
+    // Indices in a COARSE band that band 0 never used. This is the seal as a
+    // number, and it is the only one of these a broken build can move: an index
+    // merely being in range says nothing, since the builder refuses an
+    // out-of-range input up front and meshoptimizer promises the output
+    // references the input buffer. A simplifier that REMAPPED to a compacted
+    // buffer would keep every index in range and land here instead.
+    int foreign_indices;
 } MeshClusterStats;
 
 void mesh_cluster_stats(const Mesh* mesh, MeshClusterStats* out);

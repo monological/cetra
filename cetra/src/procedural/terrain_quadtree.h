@@ -34,13 +34,13 @@ typedef struct TerrainQuadtree TerrainQuadtree;
 //
 // `params` and `material` are BORROWED and must outlive the quadtree. params in
 // particular is read on every patch build, so an app that shifts its terrain's
-// centre has to invalidate -- see terrain_quadtree_invalidate.
+// centre has to rebuild -- see terrain_quadtree_rebuild.
 TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, int levels, int segments,
                                          Material* material);
 
-// `root` is the node the selection was attached to, so its children can be
-// detached before they are freed. NULL if nothing was ever attached.
-void free_terrain_quadtree(TerrainQuadtree* qt, SceneNode* root);
+// The patches take themselves out of whatever they were attached to, so this
+// needs no root and cannot be given the wrong one.
+void free_terrain_quadtree(TerrainQuadtree* qt);
 
 // Descend against `eye` -- a position in the same space patch vertices are
 // stored in -- and make `root`'s children exactly the selected patches. Patches
@@ -75,7 +75,7 @@ typedef struct TerrainQuadtreeStats {
     int segments;
     int selected;        // patches in the current selection
     int resident;        // patches held in the cache
-    size_t built;        // patches built since creation
+    size_t built;        // patches built since creation or the last rebuild
     size_t triangles;    // triangles in the current selection
     float split_factor;  // how many patch widths from the camera a level survives
     int level_count[16]; // selection, by level

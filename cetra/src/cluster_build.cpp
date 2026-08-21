@@ -35,14 +35,19 @@ extern "C" {
 // it is dimensionless for the reason LOD_SWITCH is: folding in FOV or resolution
 // would make a zoom re-cut every mesh in the scene at once.
 //
-// Derived rather than dialled. clusterlod's own projection formula is
-// `error / distance * (proj * 0.5)`, and proj = cot(fovy/2) is about 1.73 at 60
-// degrees, so a screen fraction f corresponds to error/distance ~ 1.15 * f. Half
-// a pixel of a 1080-line frame is f = 4.6e-4, hence this. Measured against a
-// forest terrain tile, whose DAG groups carry errors 0.09 through 1.50 in mesh
-// units: it puts band 1 in the middle of that range and bands 2-3 past the end,
-// which is the intended shape -- graded where the geometry is still large on
-// screen, coarsest where it is not.
+// Derived, then TIGHTENED, and the gap between the two is the interesting part.
+// clusterlod's own projection formula is `error / distance * (proj * 0.5)`, and
+// proj = cot(fovy/2) is about 1.73 at 60 degrees, so a screen fraction f is
+// error/distance ~ 1.15 * f; half a pixel of a 1080-line frame is f = 4.6e-4,
+// which derives 5.3e-4. This is about a fifth of a pixel instead.
+//
+// Because a per-pixel budget is the wrong bar for a BANDED cut. A band is chosen
+// once for every instance in it, so the error has to be acceptable at the size
+// the band BEGINS, not at the size where it stopped being visible. At 5.3e-4 a
+// bark prototype goes 16,344 indices at band 0 to 118 at band 1 -- a 138x drop in
+// one step, taken at projected size 0.045, where a tree still fills a good part
+// of the frame. At this value the same prototype grades 16,344 / 976 / 241 / 59,
+// which is what having four bands is for.
 #define CLUSTER_ERROR_LIMIT 2.0e-4f
 
 // The band ladder, which is LOD_SWITCH read from the other side: band b covers
@@ -50,10 +55,17 @@ extern "C" {
 // must serve -- is the size at which it begins. Band 0 begins at infinity, which
 // is what makes it the untouched finest cut.
 //
-// Kept here rather than shared with draw_list.c deliberately: that file selects a
-// band from a projected size and this one builds what a band contains, and the two
-// meet through the number, not through a symbol. A shared constant would suggest
-// they can be changed independently, which is exactly what they cannot be.
+// DUPLICATED from draw_list.c's LOD_SWITCH, and that is a defect this comment
+// used to defend with an inverted argument -- it claimed a shared constant would
+// suggest the two could be changed independently, when a shared symbol is exactly
+// what makes independent change impossible. The two must agree: that file picks a
+// band from a projected size and this one builds what the band contains, so a
+// change to one and not the other draws a cut at a size it was not built for.
+//
+// Not yet shared because the house mechanism for it is a defines-only include
+// compiled by both languages (shore_constants.glsl, wind_bounds.glsl) and both
+// ends here are C++/C, where a plain header is the answer instead. Left as debt
+// with the coupling named, rather than as a decision.
 static const float CLUSTER_BAND_BEGIN[] = {FLT_MAX, 0.045f, 0.022f, 0.011f};
 
 static_assert(sizeof(CLUSTER_BAND_BEGIN) / sizeof(CLUSTER_BAND_BEGIN[0]) == CETRA_LOD_MAX,
@@ -96,9 +108,16 @@ struct BuildSink {
     }
 };
 
-// The mesh's own radius, from the same import AABB draw_list.c measures a
-// projected size against -- so the error limit and the band selection are in one
-// scale rather than two that happen to agree.
+// The mesh's radius in its OWN space, which is deliberately not the world radius
+// draw_list.c measures a projected size against -- an instanced prototype is
+// drawn at many scales and there is one cut for all of them.
+//
+// The two still meet, because the instance scale cancels. A group's error is in
+// local units, so on screen it is error * scale / distance, while the projected
+// size the band was chosen from is local_radius * scale / distance; divide and
+// the scale is gone, leaving screen_error = error * projected / local_radius.
+// That is the relation the limit below inverts, and it is why the local radius is
+// the right one rather than an approximation to the world one.
 float mesh_radius(Mesh* mesh) {
     vec3 extent;
     glm_vec3_sub(mesh->aabb.max, mesh->aabb.min, extent);
@@ -129,9 +148,12 @@ extern "C" bool mesh_build_cluster_lod(Mesh* mesh) {
     }
 
     clodConfig config = clodDefaultConfig(CLUSTER_TRIANGLES);
-    // OFF, and this is the guarantee rather than a tuning choice: permissive
-    // simplification rewrites vertex POSITIONS, and every level indexing one
-    // unmoved vertex buffer is what makes a crack between levels impossible.
+    // OFF, and what that buys is narrower than this comment used to claim.
+    // meshopt_SimplifyPermissive is "allow collapses across attribute
+    // discontinuities" -- a UV/normal SEAM permission, not a position rewrite.
+    // So it is off because a prop with UV seams would have them collapsed, not
+    // because it would move vertices: meshoptimizer never introduces a vertex,
+    // and the every-level-indexes-the-original-buffer property holds either way.
     config.simplify_permissive = false;
     config.simplify_fallback_permissive = false;
 
@@ -239,7 +261,7 @@ extern "C" void mesh_cluster_stats(const Mesh* mesh, MeshClusterStats* out) {
     out->clusters = mesh->cluster_count;
     out->groups = mesh->cluster_groups;
     out->levels = mesh->cluster_levels;
-    out->permissive = false;
+
     unsigned int high = 0;
     size_t total = mesh_index_total(mesh);
     for (size_t i = 0; i < total; ++i) {
@@ -247,4 +269,21 @@ extern "C" void mesh_cluster_stats(const Mesh* mesh, MeshClusterStats* out) {
             high = mesh->indices[i];
     }
     out->max_index = (int)high;
+
+    // Band 0 is every original triangle, so its index set IS the mesh's used
+    // vertices. Anything a coarser band references that is not in it did not come
+    // from the original buffer, whatever its numeric range says.
+    if (mesh->lod_levels < 2 || !mesh->vertices)
+        return;
+    std::vector<unsigned char> seen(mesh->vertex_count, 0);
+    for (size_t i = mesh->lod_offset[0] / sizeof(unsigned int),
+                e = i + mesh->lod_count[0];
+         i < e; ++i)
+        seen[mesh->indices[i]] = 1;
+    for (int band = 1; band < mesh->lod_levels; ++band) {
+        size_t first = mesh->lod_offset[band] / sizeof(unsigned int);
+        for (size_t i = first, e = first + mesh->lod_count[band]; i < e; ++i)
+            if (!seen[mesh->indices[i]])
+                out->foreign_indices++;
+    }
 }

@@ -9,8 +9,12 @@
  *   - prototypes grouped into contiguous sibling blocks, because the batcher
  *     joins only ADJACENT items and one foreign mesh between two instances ends
  *     the run
- *   - terrain split into tiles, because a tile is the unit of both culling and
- *     LOD selection and a kilometre-wide mesh is neither
+ *   - terrain split into PATCHES by a CDLOD quadtree, because a patch is the unit
+ *     of both culling and LOD selection and a kilometre-wide mesh is neither.
+ *     Before 11.63 that was a fixed tiles x tiles grid, which --no-quadtree still
+ *     reaches -- the reason it stopped being one is that a fixed grid's count
+ *     tracks the ground's AREA, so the same density over four kilometres is 1,024
+ *     tiles where the quadtree draws 706
  *   - wind on the trees, which spec 11.53 made possible: a wind material used
  *     to be exempt from frustum culling entirely, and 2,000 uncullable trees
  *     defeat the point of the app
@@ -120,6 +124,11 @@ typedef struct ForestArgs {
     // a different density, which is the point of it -- so this exists to compare
     // against rather than to restore.
     int no_quadtree;
+    // Bisect lever (spec 11.63): the CDLOD morph off in all five geometry
+    // programs. The quadtree still selects and still draws the same patches --
+    // only the blend toward the parent surface is gone, which is what makes this
+    // the one lever that reaches the morph from a rendered frame.
+    int no_morph;
     int quadtree_probe;
     // Domain half-width in world units; 0 keeps the app default. The only way to
     // ask what a bigger world costs, and what the quadtree is for.
@@ -130,7 +139,7 @@ typedef struct ForestArgs {
     int region_probe;
     float region_radius; // 0 keeps REGION_LOAD_RADIUS
     float region_span;   // 0 keeps REGION_SPAN_DEFAULT
-    float walk;          // scripted forward speed for --player; 0 = keyboard only
+    float walk;          // scripted character speed; 0 = keyboard only
     // The island is what this app IS since spec 11.63: ground that falls to a
     // shoreline and open sea past it. --no-island is the flat-domain terrain
     // every arm written before it measures, and it takes the sea with it.
@@ -250,23 +259,28 @@ static float rnd_range(float lo, float hi) {
 
 // --- mesh finalisation -----------------------------------------------------
 
-// The one place a generated mesh becomes drawable. The chain REWRITES
-// mesh->indices, so it has to precede the upload -- doing it after sends level 0
-// and leaves every later level's offset pointing past the end of the buffer.
 /*
- * `cluster` picks the LOD builder, and the split is measured rather than assumed
+ * The one place a generated mesh becomes drawable. Either LOD builder REWRITES
+ * mesh->indices, so the build has to precede the upload -- doing it after sends
+ * level 0 and leaves every later level's offset pointing past the end of the
+ * buffer.
+ *
+ * `cluster` picks which builder, and the split is measured rather than assumed
  * (spec 11.63).
  *
  * A cluster DAG locks each group's boundary at every level, which is what makes a
  * crack between levels impossible -- and on a REGULAR GRID that constraint costs
  * more than it buys, because whole-mesh simplification has no seams to respect
- * and reaches a better surface at the same triangle count. Terrain tiles are
- * exactly that shape, and at matched picture cost the chain beat the DAG on them.
- * Props are not: a trunk or a rock is irregular, instanced thousands of times, and
- * is where 99% of this scene's triangles live.
+ * and reaches a better surface at the same triangle count. Terrain is exactly
+ * that shape, and at matched picture cost the chain beat the DAG on it. Props are
+ * not: a trunk or a rock is irregular, instanced thousands of times, and is where
+ * 99% of this scene's triangles live.
  *
- * So tiles keep the chain and props take the DAG. Both fill the same lod_* ranges,
- * so nothing downstream -- selection, batching, the sort key -- learns which ran.
+ * So props take the DAG and nothing else does. Note the ground reaches neither on
+ * the shipping path: a quadtree patch is built at its own level and carries no
+ * chain at all, so the terrain half of that comparison is live only under
+ * --no-quadtree. Both builders fill the same lod_* ranges, so nothing downstream
+ * -- selection, batching, the sort key -- learns which ran.
  */
 static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
     mesh->material = material;
@@ -278,13 +292,14 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
         if (g_args.cluster_probe) {
             MeshClusterStats st;
             mesh_cluster_stats(mesh, &st);
-            // max_index against vertex_count is the SEAL: every level indexes the
-            // one unmoved vertex buffer, so two clusters sharing an edge share
-            // its literal vertices whatever levels they came from.
+            // foreign_indices is the SEAL: a coarse band referencing a vertex
+            // band 0 never used did not come from the original buffer. max_index
+            // rides along as context and asserts nothing on its own -- the
+            // builder refuses an out-of-range input before it ever gets here.
             printf("cluster-probe mesh=%zu clusters=%d groups=%d dag_levels=%d bands=%d "
-                   "max_index=%d vertex_count=%zu permissive=%d",
+                   "max_index=%d vertex_count=%zu foreign=%d",
                    g_distinct_meshes, st.clusters, st.groups, st.levels, mesh->lod_levels,
-                   st.max_index, mesh->vertex_count, st.permissive ? 1 : 0);
+                   st.max_index, mesh->vertex_count, st.foreign_indices);
             for (int b = 0; b < mesh->lod_levels; ++b)
                 printf(" band%d=%zu", b, mesh->lod_count[b] / 3);
             printf("\n");
@@ -366,9 +381,9 @@ static unsigned morton_key(const TerrainParams* p, float x, float z) {
 // KEY (zeroed at fill time) rather than here, which produces the same comparator
 // outputs over the same array and keeps the hidden global out of a comparator.
 //
-// Prototype grouping does not depend on this: emit_placements filters by
-// prototype, so each one is contiguous whatever order the array is in. Sorting
-// on it anyway keeps the two agreeing about block order.
+// Prototype grouping does not depend on this: region_emit filters by prototype,
+// so each one is contiguous whatever order the array is in. Sorting on it anyway
+// keeps the two agreeing about block order.
 static int placement_cmp(const void* a, const void* b) {
     const Placement* pa = (const Placement*)a;
     const Placement* pb = (const Placement*)b;
@@ -410,23 +425,19 @@ static float clump_density(float x, float z, float freq) {
 // computed from it.
 #define TREE_MAX_FLOW ((TERRAIN_CHANNEL_FLOW_LO + TERRAIN_CHANNEL_FLOW_HI) * 0.5f)
 
-/*
- * Where the scatter put things, against the drainage it was placing into.
- *
- * The instrument exists because the defect it guards is invisible in a frame: a
- * tree standing in a stream bed looks exactly like a tree, and the only thing
- * wrong with it is a number nothing prints. It reports the terrain's OWN flow
- * range beside the trees', which is what stops the arm being vacuous -- with no
- * erosion bake every mask reads zero, the placement rule is trivially satisfied,
- * and an arm checking only the trees would pass against a build that had never
- * implemented any of this.
- */
 // Accumulate a region's trees for the scatter probe, which reads the whole
 // distribution: a region is a sixteenth of it and says nothing on its own.
 static Placement* g_probe_items;
 static size_t g_probe_count, g_probe_cap;
 
 static void probe_collect(const Placement* items, int count) {
+    // The --scatter-probe guard lives INSIDE, not at the call sites. It was three
+    // call-site ifs, which is three places to forget it and one silent wrong
+    // answer when someone does -- these accumulate across every region load, so a
+    // fourth caller without the guard makes the probe's distribution include
+    // regions that were freed.
+    if (!g_args.scatter_probe)
+        return;
     if (g_probe_count + (size_t)count > g_probe_cap) {
         size_t cap = g_probe_cap ? g_probe_cap * 2 : 1024;
         while (cap < g_probe_count + (size_t)count)
@@ -445,15 +456,29 @@ static void probe_collect(const Placement* items, int count) {
 // waterline". Rocks and not just trees, and that is the point: a tree is turned
 // away from the shoal by the slope test long before the waterline matters, where
 // a rock tolerates 57 degrees and the rim is 45, so the rock is the one the rule
-// is actually for. Only maintained under --scatter-probe.
+// is actually for. Only maintained under --scatter-probe, which probe_low
+// enforces itself rather than trusting its callers to.
 static float g_lowest_prop_y = FLT_MAX;
 
 static void probe_low(const Placement* items, int count) {
+    if (!g_args.scatter_probe)
+        return;
     for (int i = 0; i < count; ++i)
         if (items[i].pos[1] < g_lowest_prop_y)
             g_lowest_prop_y = items[i].pos[1];
 }
 
+/*
+ * Where the scatter put things, against the drainage it was placing into.
+ *
+ * The instrument exists because the defect it guards is invisible in a frame: a
+ * tree standing in a stream bed looks exactly like a tree, and the only thing
+ * wrong with it is a number nothing prints. It reports the terrain's OWN flow
+ * range beside the trees', which is what stops the arm being vacuous -- with no
+ * erosion bake every mask reads zero, the placement rule is trivially satisfied,
+ * and an arm checking only the trees would pass against a build that had never
+ * implemented any of this.
+ */
 static void scatter_probe(const Placement* items, int count) {
     float tree_max = 0.0f, tree_sum = 0.0f;
     for (int i = 0; i < count; i++) {
@@ -512,8 +537,12 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
                           float x0, float z0, float span, vec3 out_pos) {
     float x = rnd_range(x0, x0 + span);
     float z = rnd_range(z0, z0 + span);
-    // The domain's own margin still applies, and clipping rather than rejecting:
-    // a rejection here would thin the edge regions rather than trim them.
+    // The domain's own margin still applies. A region's share is drawn against
+    // its whole square and the part outside is REJECTED, so a region straddling
+    // the margin concentrates its count inward rather than losing it, and one
+    // entirely outside places nothing at all -- the attempt budget in the caller
+    // is what stops that spinning. Both are what the margin is for: nothing
+    // stands where terrain_normal_at is about to run off the field.
     float margin = g_terrain.extent * 0.96f;
     float lo_x = terrain_world_x(&g_terrain, -margin), hi_x = terrain_world_x(&g_terrain, margin);
     float lo_z = terrain_world_z(&g_terrain, -margin), hi_z = terrain_world_z(&g_terrain, margin);
@@ -544,7 +573,14 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
     // is really for -- a tree is turned away from the shoal by the slope test
     // long before the waterline matters, where a rock tolerates 57 degrees and
     // the rim is 45.
-    if (g_args.water && y < g_args.water_level + PROP_SHORE_MARGIN)
+    //
+    // Keyed on the ISLAND, not on whether a Water object exists. Those come apart:
+    // the shaping is unconditional under --no-island, while water is refused when
+    // the world is off the origin -- so --world-offset used to give the full drop
+    // to the sea floor with no rejection at all, and props ran down the drowned
+    // rim to y -175.
+    if (g_terrain.island_start > 0.0f && g_terrain.island_start < 1.0f &&
+        y < g_args.water_level + PROP_SHORE_MARGIN)
         return false;
     out_pos[0] = x;
     out_pos[1] = y;
@@ -711,13 +747,17 @@ static float forest_bed_height(void* ctx, float x, float z) {
 
 // 1.96 units between cells at the default sizing, against the visual mesh's 2.60,
 // so the field resolves everything the tiles can draw with a little to spare.
-// Raising it is a straight quadratic on the bake: 452 ms at this size on eight
-// threads, 1839 on one.
+// Raising it is a straight quadratic on the bake: 452 ms on eight threads, 1839
+// on one. Those were taken at 512 rather than at this 513, so read them as the
+// size and not as this constant -- one extra row and column is 0.4% of the cells
+// and well inside the run-to-run spread, but the numbers are not measurements of
+// what the app now bakes.
 //
 // RELEASE figures. build.sh defaults to the debug preset, which passes no -O at
 // all, and the same bake there is 2.3 s and 14.8 s -- five times slower, because
 // none of the sim's small helpers inline. Any timing taken from `out/bin` rather
 // than `out/release/bin` is measuring that.
+//
 // 513 and not the power of two it looks like it should be. The grid is
 // NODE-CENTRED -- texel 0 on -extent, res-1 on +extent -- so it has res-1 cells,
 // and a mip pyramid halves only while that is even (spec 11.63). At 512 the
@@ -829,7 +869,18 @@ static int forest_quadtree_levels(float extent) {
     return levels;
 }
 
-static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
+// Whether this run ever moves the world off the storage origin, by any of the
+// three routes into it. One place, because the answer gates water in two and the
+// island's own sea-level default in a third, and the routes are easy to enumerate
+// incompletely -- --origin-shift-at was missing from both water tests for a spec
+// cycle, so a scheduled shift created a surface and then moved the world out from
+// under its origin-anchored bed.
+static bool world_leaves_origin(void) {
+    return g_args.world_offset != 0.0f || g_args.origin_shift_distance > 0.0f ||
+           g_args.origin_shift_at > 0;
+}
+
+static void build_terrain(void) {
     SceneNode* group = make_group("terrain");
     if (g_args.no_quadtree) {
         for (int tz = 0; tz < g_terrain.tiles; ++tz) {
@@ -857,24 +908,12 @@ static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
             fprintf(stderr, "forest: terrain quadtree refused\n");
     }
 
-    // Collision. One body over the whole terrain rather than one per tile: the
-    // tiles exist for culling and LOD, neither of which physics cares about.
-    Mesh* collider = create_mesh();
-    if (terrain_build_collider(&g_terrain, COLLIDER_SEGMENTS, collider)) {
-        Entity* e = create_entity(em, "terrain");
-        entity_set_position(e, (vec3){0.0f, 0.0f, 0.0f});
-        PhysicsShapeDesc desc = {.type = SHAPE_MESH, .density = 0.0f};
-        desc.mesh.vertices = collider->vertices;
-        desc.mesh.vertex_count = collider->vertex_count;
-        desc.mesh.indices = collider->indices;
-        desc.mesh.index_count = collider->index_count;
-        if (!entity_add_rigid_body(e, physics, &desc, MOTION_STATIC, OBJ_LAYER_STATIC))
-            fprintf(stderr, "forest: terrain collider rejected\n");
-        printf("Terrain collider: %zu triangles\n", collider->index_count / 3u);
-    }
-    // Never uploaded and never drawn -- Jolt copied the triangles into its own
-    // BVH, so this is CPU geometry whose only job is done.
-    free_mesh(collider);
+    // Collision belongs to the regions -- see region_load. There is deliberately
+    // no whole-domain body here: one would be an exact duplicate of the region
+    // colliders (same lattice, same height function, same cell), so the physics
+    // world would carry every ground triangle twice and a character would stand
+    // on the global one. That made region-collider assert nothing, since deleting
+    // every per-region collider left the arm green.
 }
 
 // The prototypes, built once and shared by every instance in every region. Held
@@ -1113,9 +1152,14 @@ static unsigned region_seed(int rx, int rz) {
     return h ? h : 1u; // the xorshift generator has no state at zero
 }
 
-// How many of a global count belong to one region, at constant DENSITY. A bigger
-// world gets proportionally more props rather than the same number spread
-// thinner, which is what makes residency worth having.
+// One region's area share of a WORLD total. TREE_COUNT and ROCK_COUNT are counts
+// for the whole domain however large it is, so growing the world spreads the same
+// props thinner rather than adding more -- the sum over every region is `total`
+// whatever the region size, which is what keeps the scatter arms comparable
+// across a world-size change.
+//
+// Never zero: a region with no props at all is indistinguishable from one that
+// failed to load, and the floor costs one prop per region.
 static int region_share(int total) {
     float domain = 2.0f * g_terrain.extent;
     float share = (float)total * (g_region_span * g_region_span) / (domain * domain);
@@ -1123,18 +1167,23 @@ static int region_share(int total) {
     return n > 0 ? n : 1;
 }
 
-static void region_track(Region* r, SceneNode* group, SceneNode* node) {
+// False if the node could not be remembered, in which case the caller must take
+// it back out of the group itself. An untracked node is not merely leaked -- it
+// stays in the scene after its region unloads, so it is a prop standing in a
+// region that is no longer there, and no later pass can tell it from a live one.
+static bool region_track(Region* r, SceneNode* group, SceneNode* node) {
     if (r->node_count == r->node_cap) {
         size_t cap = r->node_cap ? r->node_cap * 2 : 64;
         RegionNode* grown = realloc(r->nodes, cap * sizeof(RegionNode));
         if (!grown)
-            return;
+            return false;
         r->nodes = grown;
         r->node_cap = cap;
     }
     r->nodes[r->node_count].group = group;
     r->nodes[r->node_count].node = node;
     r->node_count++;
+    return true;
 }
 
 // Emit one prototype's share of `items` into its global group, remembering what
@@ -1156,7 +1205,13 @@ static void region_emit(Region* r, const Placement* items, int count, Mesh* cons
             add_mesh_to_node(node, mesh_ref(protos[i]));
             set_node_trs(node, items[k].pos, items[k].yaw, items[k].scale);
             add_child_node(groups[i], node);
-            region_track(r, groups[i], node);
+            if (!region_track(r, groups[i], node)) {
+                remove_child_node(groups[i], node);
+                free_node(node);
+                fprintf(stderr, "forest: region %d,%d out of memory at %zu nodes\n", r->rx,
+                        r->rz, r->node_count);
+                return;
+            }
             g_node_count++;
         }
     }
@@ -1183,16 +1238,18 @@ static void region_load(Region* r) {
         // length one.
         region_emit(r, items, r->trees, g_bark, TREE_PROTOTYPES, g_group_bark, "bark");
         region_emit(r, items, r->trees, g_leaf, TREE_PROTOTYPES, g_group_leaf, "leaf");
-        if (g_args.scatter_probe) {
-            probe_collect(items, r->trees);
-            probe_low(items, r->trees);
-        }
+        probe_collect(items, r->trees);
+        probe_low(items, r->trees);
 
         r->rocks = scatter_rocks(items, rock_n, x0, z0, g_region_span);
         region_emit(r, items, r->rocks, g_rocks, ROCK_PROTOTYPES, g_group_rock, "rock");
-        if (g_args.scatter_probe)
-            probe_low(items, r->rocks);
+        probe_low(items, r->rocks);
         free(items);
+    } else {
+        // Resident anyway, deliberately: a region that retries every frame under
+        // memory pressure thrashes instead of degrading. It gets its collider and
+        // no props, which is a walkable hole rather than a fall through the world.
+        fprintf(stderr, "forest: region %d,%d could not allocate its scatter\n", r->rx, r->rz);
     }
 
     // One static body per region. The mesh is CPU geometry whose only job is
@@ -1245,9 +1302,31 @@ static void region_free(Region* r) {
     g_regions_freed++;
 }
 
-// Residency against `eye`, with the load and free radii separated so a camera on
-// a boundary does not rebuild a region every frame.
-static void regions_update(const vec3 eye) {
+// Squared distance from `p` to a region's square. To the SQUARE and not to its
+// centre, so an anchor just inside a region is zero from it whatever its span is.
+// Squared horizontal distance from `p` to the region's cell. Y is deliberately
+// unbounded -- residency is a question about the ground plane, and a region is a
+// column, so a camera high above one is still standing on it.
+static float region_dist_sq(const Region* r, const vec3 p) {
+    float x0, z0;
+    region_origin(r, &x0, &z0);
+    AABB cell = {{x0, p[1], z0}, {x0 + g_region_span, p[1], z0 + g_region_span}};
+    return aabb_dist_sq(&cell, p);
+}
+
+/*
+ * Residency against TWO anchors, whichever is nearer, with the load and free
+ * radii separated so an anchor sitting on a boundary does not rebuild a region
+ * every frame.
+ *
+ * Two, because the camera and the player are not in the same cell and each owns
+ * a different half of the answer. The camera decides what has to be DRAWN. The
+ * player decides what has to have COLLISION -- and since collision is per region
+ * now, a cell with no body under it is a cell the character falls through. The
+ * third-person eye trails by CAM_DISTANCE, so at a small radius those are
+ * genuinely different squares.
+ */
+static void regions_update(const vec3 eye, const vec3 focus) {
     if (!g_regions)
         return;
     if (g_regions_pinned) {
@@ -1261,23 +1340,9 @@ static void regions_update(const vec3 eye) {
     for (int rz = 0; rz < g_region_side; ++rz) {
         for (int rx = 0; rx < g_region_side; ++rx) {
             Region* r = region_at(rx, rz);
-            float x0, z0;
-            region_origin(r, &x0, &z0);
-            // Distance to the region's SQUARE, not to its centre: a camera just
-            // inside a region is zero from it whatever its span is.
-            float dx = x0 - eye[0];
-            if (dx < 0.0f) {
-                dx = eye[0] - (x0 + g_region_span);
-                if (dx < 0.0f)
-                    dx = 0.0f;
-            }
-            float dz = z0 - eye[2];
-            if (dz < 0.0f) {
-                dz = eye[2] - (z0 + g_region_span);
-                if (dz < 0.0f)
-                    dz = 0.0f;
-            }
-            float d2 = dx * dx + dz * dz;
+            float de = region_dist_sq(r, eye);
+            float df = region_dist_sq(r, focus);
+            float d2 = de < df ? de : df;
             if (d2 <= load2)
                 region_load(r);
             else if (d2 > free2)
@@ -1336,7 +1401,6 @@ static void region_probe(void) {
 static void regions_create_sized(PhysicsWorld* physics, EntityManager* em, float span) {
     g_physics = physics;
     g_entities = em;
-    g_region_span = span;
     g_region_side = (int)((2.0f * g_terrain.extent) / span + 0.5f);
     if (g_region_side < 1)
         g_region_side = 1;
@@ -1375,9 +1439,13 @@ static void regions_create_single(PhysicsWorld* physics, EntityManager* em) {
 // back to identity and everything resident is placed again.
 //
 // It costs a full scatter, on a frame that is already rebuilding the terrain and
-// reconciling physics. The scatter is a pure function of the cell, so what comes
-// back is what was there.
-static void regions_rebuild(const vec3 eye) {
+// reconciling physics, and what comes back is what was there. That last is a
+// property of the shift rather than of luck: the seed is the cell index, and
+// every field the accept test reads -- height, slope, the erosion masks, the
+// clump noise -- is addressed through terrain_to_domain, which subtracts the
+// centre the shift just moved. So the region's ground is the same ground and its
+// stream is the same stream.
+static void regions_rebuild(const vec3 eye, const vec3 focus) {
     if (!g_regions)
         return;
     for (int i = 0; i < g_region_side * g_region_side; ++i)
@@ -1391,7 +1459,7 @@ static void regions_rebuild(const vec3 eye) {
     for (int i = 0; i < ROCK_PROTOTYPES; ++i)
         if (g_group_rock[i])
             glm_mat4_identity(g_group_rock[i]->original_transform);
-    regions_update(eye);
+    regions_update(eye, focus);
 }
 
 static void regions_free_all(void) {
@@ -1513,8 +1581,11 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
         terrain_quadtree_rebuild(g_terrain_qt, g_terrain_group, eye);
     // Same hazard, same repair: an instance placed after the shift comes out of a
     // centre that has already moved, under a group the shift has already
-    // translated.
-    regions_rebuild(eye);
+    // translated. The player has been shifted too, so its cell is still the one
+    // that needs a collider under it.
+    vec3 focus;
+    glm_vec3_copy(g_player ? g_player->position : eye, focus);
+    regions_rebuild(eye, focus);
 }
 
 static void on_init(Game* game) {
@@ -1567,7 +1638,7 @@ static void on_init(Game* game) {
         // Not asked for where water is refused anyway (see the create_water call
         // below): the island still SHAPES there, and a warning about a flag the
         // app set for itself is noise.
-        if (g_args.world_offset == 0.0f && g_args.origin_shift_distance <= 0.0f)
+        if (!world_leaves_origin())
             g_args.water = 1;
         if (g_args.water_level == 0.0f)
             g_args.water_level = ISLAND_SEA_LEVEL;
@@ -1653,7 +1724,7 @@ static void on_init(Game* game) {
     EntityManager* em = create_entity_manager(game);
     game_set_entity_manager(game, em);
 
-    build_terrain(physics, em);
+    build_terrain();
     build_tree_prototypes();
     build_rock_prototypes();
     if (g_args.no_regions) {
@@ -1666,10 +1737,14 @@ static void on_init(Game* game) {
     }
     // The first residency pass, here rather than at the first frame: the water
     // bed, the player spawn and the initial camera all want a world that exists.
-    vec3 home = {g_terrain.center[0], 0.0f, g_terrain.center[1]};
+    // The spawn is the domain centre, so it is the focus anchor whether or not a
+    // camera was pinned -- the player must land on ground that has a collider.
+    vec3 spawn = {g_terrain.center[0], 0.0f, g_terrain.center[1]};
+    vec3 home;
+    glm_vec3_copy(spawn, home);
     if (g_args.cam_set)
         glm_vec3_copy(g_args.cam_eye, home);
-    regions_update(home);
+    regions_update(home, spawn);
     if (g_args.scatter_probe && g_probe_items)
         scatter_probe(g_probe_items, (int)g_probe_count);
     printf("Trees and rocks: %d prototypes, %d region(s) of %d resident\n",
@@ -1689,16 +1764,14 @@ static void on_init(Game* game) {
     // terrain_height_at is a pure function of (params, x, z), so it satisfies
     // WaterHeightFn directly and the surface can shoal against real terrain with
     // no heightmap stored anywhere and no data copied.
-    if (g_args.water) {
-        // Water's bed domain is a half-size about the STORAGE origin with no
-        // centre of its own, so a world placed elsewhere shoals against terrain
-        // that is not under it. Refused rather than approximated: the two flags
-        // together produce a plausible frame that is wrong everywhere.
-        if (g_args.world_offset != 0.0f || g_args.origin_shift_distance > 0.0f)
-            fprintf(stderr, "forest: --water needs the world at the origin; "
-                            "--world-offset / --origin-shift-distance skip it\n");
-    }
-    if (g_args.water && g_args.world_offset == 0.0f && g_args.origin_shift_distance <= 0.0f) {
+    // Water's bed domain is a half-size about the STORAGE origin with no centre of
+    // its own, so a world placed elsewhere shoals against terrain that is not
+    // under it. Refused rather than approximated: the two together produce a
+    // plausible frame that is wrong everywhere.
+    if (g_args.water && world_leaves_origin())
+        fprintf(stderr, "forest: --water needs the world at the origin; --world-offset / "
+                        "--origin-shift-distance / --origin-shift-at skip it\n");
+    if (g_args.water && !world_leaves_origin()) {
         Water* water = create_water();
         if (water) {
             water->level = g_args.water_level;
@@ -1782,6 +1855,8 @@ static void on_init(Game* game) {
         engine->lod_enabled = false;
     if (g_args.no_instancing)
         engine->instancing_enabled = false;
+    if (g_args.no_morph)
+        engine->morph_enabled = false;
     if (g_args.no_sort_opaque)
         engine->opaque_sort_enabled = false;
     if (g_args.depth_prepass)
@@ -1848,9 +1923,11 @@ static void on_update(Game* game, double dt) {
 
     // Scripted walk (--walk), which is the only way a headless run can cross a
     // region boundary: residency follows the camera and the camera follows the
-    // player, and no key is ever pressed. Turns about-face at the halfway frame,
-    // so a run is a ROUND TRIP -- what leaves has to come back, which is what
-    // makes the determinism and the leak readable off one capture.
+    // player, and no key is ever pressed. Turns about-face at the halfway frame
+    // WHEN THERE IS ONE -- --walk without --frames has no midpoint to turn at and
+    // walks forward until the window closes, which is the interactive use. With a
+    // frame count the run is a ROUND TRIP: what leaves has to come back, which is
+    // what makes the determinism and the leak readable off one capture.
     if (g_args.walk > 0.0f && game->engine) {
         input_dir[2] = -1.0f;
         input_dir[0] = 0.0f;
@@ -1983,7 +2060,9 @@ static void on_render(Game* game, double alpha) {
         // Residency first: the quadtree hangs its patches under a node of its
         // own and does not care, but a region that loads here has to be in the
         // graph before the transform walk below reaches it.
-        regions_update(camera->position);
+        vec3 focus;
+        glm_vec3_copy(g_player ? g_player->position : camera->position, focus);
+        regions_update(camera->position, focus);
         if (g_terrain_qt) {
             terrain_quadtree_update(g_terrain_qt, g_terrain_group, camera->position);
             if (g_args.quadtree_probe && engine->total_frames + 1 == (size_t)g_args.frames)
@@ -2023,7 +2102,7 @@ static void on_shutdown(Game* game) {
     // Before the scene, whose root still points at the group these hang under:
     // a patch node freed here has to be detached from that group first, and the
     // quadtree is the only thing that knows which of them are attached.
-    free_terrain_quadtree(g_terrain_qt, g_terrain_group);
+    free_terrain_quadtree(g_terrain_qt);
     g_terrain_qt = NULL;
     g_terrain_group = NULL;
     // Before the scene: a region holds instance nodes parented under groups the
@@ -2073,7 +2152,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --water             Flood the terrain (spec 11.32)\n");
     fprintf(stderr, "      --water-level <f>   Still-water world Y (implies --water)\n");
     fprintf(stderr, "      --erode             Bake a heightfield and erode it\n");
-    fprintf(stderr, "      --erode-res <n>     Field resolution (default 512)\n");
+    fprintf(stderr, "      --erode-res <n>     Field resolution (default 513)\n");
     fprintf(stderr, "      --erode-iterations <n>  Sim steps (default 220)\n");
     fprintf(stderr, "      --erode-workers <n> Pin the thread count (0 = machine)\n");
     fprintf(stderr, "      --terrain-erosion-probe  Print the bake's own numbers\n");
@@ -2083,12 +2162,13 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --cluster-probe          Print each clustered prototype's DAG\n");
+    fprintf(stderr, "      --no-morph               CDLOD morph off, in all five geometry programs\n");
     fprintf(stderr, "      --terrain-quadtree-probe Print the patch selection and morph windows\n");
     fprintf(stderr, "      --terrain-extent <f>     Domain half-width; the world grows with it\n");
     fprintf(stderr, "      --no-regions             One resident region over the whole domain\n");
     fprintf(stderr, "      --region-radius <f>      Load radius; --region-span <f> the cell side\n");
     fprintf(stderr, "      --region-probe           Print residency and each region's scatter\n");
-    fprintf(stderr, "      --walk <speed>           Drive --player forward, about-face at half\n");
+    fprintf(stderr, "      --walk <speed>           Walk the character forward, about-face at half\n");
     fprintf(stderr, "      --no-island              Flat domain and no sea, as before 11.63\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --screenshot-every N  Also save numbered frames every N frames\n");
@@ -2126,6 +2206,8 @@ int main(int argc, char** argv) {
             g_args.no_clusters = 1;
         } else if (!strcmp(a, "--no-quadtree")) {
             g_args.no_quadtree = 1;
+        } else if (!strcmp(a, "--no-morph")) {
+            g_args.no_morph = 1;
         } else if (!strcmp(a, "--terrain-quadtree-probe")) {
             g_args.quadtree_probe = 1;
         } else if (!strcmp(a, "--terrain-extent") && i + 1 < argc) {
