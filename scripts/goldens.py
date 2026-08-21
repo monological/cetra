@@ -43,7 +43,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gates import compare  # noqa: E402  (the (AE, PAE) shell-out, already written)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RENDER = os.path.join(ROOT, "out", "bin", "render")
+
+# Same override gates.py takes, and the same env var, so one export covers both.
+#
+# But note the goldens are COMMITTED PNGs and a build type is part of what baked
+# them: -O2 changes CPU float results (AGENTS.md records the erosion digest
+# differing between -O0 and -O2). Checking release-built frames against
+# debug-baked goldens is a comparison across two builds, which this repo's own
+# rule says does not hold. Change the build type here only together with
+# --rebake, and only deliberately.
+BIN_DIR = os.environ.get("CETRA_BIN_DIR") or os.path.join(ROOT, "out", "bin")
+RENDER = os.path.join(BIN_DIR, "render")
 ASSETS = os.path.join(ROOT, "assets")
 
 # Every recipe carries the frame size it was baked at. `size` is the size of the
@@ -67,8 +77,21 @@ RECIPES = [
      "flags": ["--clouds", "--sun-elevation", "5", "-f", "30", "-W", "800", "-H", "500",
                "--no-auto-exposure", "-E", "1.0"]},
     # --no-aerial is what keeps this a FOG golden rather than an atmosphere one.
+    #
+    # SIXTY frames, where the rest of this table uses 30, and it is the froxel
+    # volume's own accumulator that asks for it: an alpha=0.1 EWMA still retains
+    # 4.2% of its cold start at frame 30 and 0.18% -- sub-LSB -- at 60. Baked at
+    # 30 this golden was pinning a transient, which is why fixing the frame-0
+    # history sentinel in postfx.c moved it by 25,716 px while every 60-frame fog
+    # ARM was unmoved. At 60 it pins the converged fog instead, and is insensitive
+    # to that whole class of cold-start change.
+    #
+    # The two cloud goldens above share the accumulator but NOT the problem:
+    # sky_clouds.c always carried the >= 0 guard postfx.c lacked, so their frame
+    # 30 is a stable, reproducible point rather than a wrong one. They are left
+    # alone because nothing forced them and a golden's job is reproducibility.
     {"name": "froxel_fog", "scene": "assets/contact_fixture.gltf", "size": (1280, 800),
-     "flags": ["--fog", "--no-aerial", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+     "flags": ["--fog", "--no-aerial", "-f", "60", "--no-auto-exposure", "-E", "1.0",
                "-W", "640", "-H", "400"]},
     # The water surface (spec 11.32). The surface and every one of its properties come
     # from the fixture's own `water` block since 11.33 phase 5, so this asks for none of
@@ -324,7 +347,15 @@ def main():
     ap.add_argument("--only", metavar="NAME", help="check just this one")
     ap.add_argument("--list", action="store_true", help="print the recipe table")
     ap.add_argument("--keep", action="store_true", help="keep the rendered frames")
+    ap.add_argument("--bin-dir", metavar="DIR",
+                    help="where to find the render binary (default out/bin). "
+                         "Changing this without --rebake compares across builds")
     args = ap.parse_args()
+
+    if args.bin_dir:
+        global BIN_DIR, RENDER
+        BIN_DIR = os.path.abspath(args.bin_dir)
+        RENDER = os.path.join(BIN_DIR, "render")
 
     if args.list:
         for r in RECIPES:

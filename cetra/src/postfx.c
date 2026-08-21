@@ -2572,7 +2572,15 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     // on TAA left the default configuration showing raw stair-stepped shadows.
     // Determinism survives because the jitter is a function of the frame index:
     // frame N is the same on every run.
-    const int temporal = (fx->froxel_prev_frame == fx->frame_index - 1) ? 1 : 0;
+    // The >= 0 is what makes the sentinel a sentinel. froxel_prev_frame starts
+    // at -1 to mean "no previous volume", and its own comment says 0 was avoided
+    // because it would match frame 0 -- but the test is against frame_index - 1,
+    // so at frame 0 the sentinel matched exactly the frame it was chosen to
+    // exclude. The volume then blended against its zero-cleared history and the
+    // first frame's fog came out at a tenth of its converged value, ramping up
+    // over the next few dozen. sky_clouds.c has carried this guard all along.
+    const int temporal =
+        (fx->froxel_prev_frame >= 0 && fx->froxel_prev_frame == fx->frame_index - 1) ? 1 : 0;
 
     mat4 inv_view;
     glm_mat4_inv(view, inv_view);
