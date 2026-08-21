@@ -169,6 +169,12 @@ typedef struct Engine {
     // contributed nothing, so this is expected to be 0 px and its job is to say
     // so when it is not.
     bool frustum_cull_enabled;
+    // false = every vertex draws its own surface, never its parent's -- the
+    // CDLOD morph off, in all five geometry programs at once. A bisect lever
+    // whose whole purpose is to be VISIBLE: it is the only thing that makes the
+    // morph reachable from a rendered frame, which the probe's own arithmetic
+    // cannot be.
+    bool morph_enabled;
     // true = the opaque lane is drawn coarsely front-to-back, grouped by
     // material and mesh, instead of in graph order. Opaque geometry is
     // order-independent, so this may not move a pixel; it moves what early-Z can
@@ -277,6 +283,13 @@ typedef struct Engine {
     // camera does; this is what lets the previous-frame position report it.
     // Stashed beside prev_view_proj, from the same camera it was built from.
     vec3 prev_camera_position;
+    // Whether the above has ever been written. Without it frame 0 reports the
+    // camera as having travelled from the world ORIGIN, so every morphing vertex
+    // gets a velocity the length of the camera's position -- the same defect
+    // SceneNode.prev_valid exists for, on the other half of the same subtraction,
+    // and it would be strange for the branch to answer it one way for nodes and
+    // another way here.
+    bool prev_camera_valid;
 
     bool show_gui;
     bool show_wireframe;

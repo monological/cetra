@@ -1163,7 +1163,6 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         uniform_set_mat4(au, "lightSpaceMatrix", matrix);
         uniform_set_int(au, "albedoTex", 0);
         engine_upload_displacement_uniforms(engine, scene, au);
-        uniform_set_float(au, "time", (float)engine->render_time);
         _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine);
         glDisable(GL_BLEND);
@@ -1478,7 +1477,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // reads too -- that is what keeps a swaying caster and its shadow in lockstep
     // rather than merely close.
     engine_upload_displacement_uniforms(engine, scene, ss->depth_program->uniforms);
-    uniform_set_float(ss->depth_program->uniforms, "time", (float)engine->render_time);
 
     // Resolved HERE, after the caster classification that tells it whether any
     // directional light casts, and before the first draw that depends on it.

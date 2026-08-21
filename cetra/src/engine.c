@@ -240,6 +240,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // --no-instancing is the escape hatch.
     engine->instancing_enabled = true;
     engine->frustum_cull_enabled = true;
+    engine->morph_enabled = true;
     engine->oit_moments_enabled = true;
     engine->emissive_lights_enabled = false; // see engine.h: emissive is mostly not a lamp
     engine->lod_enabled = true;
@@ -2242,6 +2243,21 @@ static float engine_origin_lattice(float threshold) {
 
 void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scene,
                                          UniformManager* u) {
+    // The CLOCK is a displacement input too, and it carries the same five-program
+    // hazard the rest of this function exists for: a program that misses it
+    // evaluates the wind at time 0 and puts its vertices somewhere else. It was
+    // set by hand at four call sites while this function's header already claimed
+    // to be the one place.
+    //
+    // uDeltaTime is the advance of the SAME clock, because the shader evaluates
+    // the previous-frame position at time - uDeltaTime. Not the wall-clock delta:
+    // under a game the sim advances in whole fixed steps and stops when paused, so
+    // a wall-clock delta reports wind motion on geometry that never moved. The
+    // depth-only programs declare neither; uniform_set_* caches the negative
+    // lookup, so naming them there costs one hash miss each.
+    uniform_set_float(u, "time", engine ? (float)engine->render_time : 0.0f);
+    uniform_set_float(u, "uDeltaTime", engine ? (float)engine->render_delta : 0.0f);
+
     wind_upload_to_program(scene ? scene->wind : NULL,
                            scene ? (const float*)scene->world_origin : NULL, u);
 
@@ -2250,9 +2266,17 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
     // morph attribute is an exact identity whatever these say, and one that does
     // is not being drawn by anything without a camera.
     const float* eye = engine && engine->camera ? engine->camera->position : GLM_VEC3_ZERO;
-    const float* prev = engine ? engine->prev_camera_position : GLM_VEC3_ZERO;
+    // Falls back to THIS frame's eye rather than to the origin, which is what
+    // "no previous frame" actually means: a camera that has not moved yet.
+    const float* prev =
+        engine && engine->prev_camera_valid ? (const float*)engine->prev_camera_position : eye;
     uniform_set_vec3(u, "uMorphEye", eye);
     uniform_set_vec3(u, "uMorphEyePrev", prev);
+    // The diagnostic off switch, and it rides this call rather than the quadtree
+    // because it has to reach all five programs to be an off switch at all --
+    // suppressing the morph in the shading pass alone is the exact prepass
+    // disagreement this function exists to prevent, wearing a flag's name.
+    uniform_set_float(u, "uMorphOff", engine && !engine->morph_enabled ? 1.0f : 0.0f);
 }
 
 void engine_recentre_on_camera(const Engine* engine, float lattice) {

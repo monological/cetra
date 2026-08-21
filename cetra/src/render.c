@@ -385,14 +385,6 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             uniform_set_mat4(u, "projection", (const float*)projection);
             uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
-            uniform_set_float(u, "time", (float)engine->render_time);
-            // The shader evaluates the previous-frame position at
-            // time - uDeltaTime, so this must be the advance of the SAME clock
-            // `time` came from -- render_delta, not the wall-clock delta_time.
-            // Under a game those differ: the sim advances in whole fixed steps
-            // and stops entirely when paused, so a wall-clock delta would report
-            // wind motion on geometry that never moved.
-            uniform_set_float(u, "uDeltaTime", (float)engine->render_delta);
             engine_upload_displacement_uniforms(engine, scene, u);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
@@ -832,7 +824,6 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     submit_use_program(&state, program->id);
     uniform_set_mat4(u, "view", (const float*)view);
     uniform_set_mat4(u, "projection", (const float*)projection);
-    uniform_set_float(u, "time", (float)engine->render_time);
     engine_upload_displacement_uniforms(engine, scene, u);
 
     for (size_t i = 0; i < list->count; ++i) {
@@ -1601,8 +1592,10 @@ void render_current_scene(Engine* engine) {
     // vectors, and the eye the CDLOD morph was evaluated against for the same
     // reason. Done here (not in the engine loop) so every render path keeps it.
     glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
-    if (engine->camera)
+    if (engine->camera) {
         glm_vec3_copy(engine->camera->position, engine->prev_camera_position);
+        engine->prev_camera_valid = true;
+    }
 }
 
 // Supersample factor for the blit capture path. 2x because that capture has no
@@ -1707,8 +1700,15 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     glm_mat4_copy(engine->prev_view_proj, saved_prev_view_proj);
 
     Camera* camera = engine->camera;
-    vec3 saved_cam_pos;
+    vec3 saved_cam_pos, saved_prev_cam_pos;
     glm_vec3_copy(camera->position, saved_cam_pos);
+    // The morph's previous eye, restored for the same reason prev_view_proj is:
+    // render_current_scene republishes it at the end of every face, so without
+    // this the frame after a capture measures its terrain motion vectors from
+    // wherever the last cube face was. Its validity flag goes with it, or a
+    // capture taken before the first frame seeds it from a probe.
+    glm_vec3_copy(engine->prev_camera_position, saved_prev_cam_pos);
+    bool saved_prev_cam_valid = engine->prev_camera_valid;
     float saved_near = camera->near_clip;
     float saved_far = camera->far_clip;
 
@@ -1833,6 +1833,8 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     glm_mat4_copy(saved_projection, engine->projection_matrix);
     glm_mat4_copy(saved_view_proj, engine->view_proj);
     glm_mat4_copy(saved_prev_view_proj, engine->prev_view_proj);
+    glm_vec3_copy(saved_prev_cam_pos, engine->prev_camera_position);
+    engine->prev_camera_valid = saved_prev_cam_valid;
     glm_vec3_copy(saved_cam_pos, camera->position);
     camera->near_clip = saved_near;
     camera->far_clip = saved_far;
