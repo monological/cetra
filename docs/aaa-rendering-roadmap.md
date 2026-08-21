@@ -1578,8 +1578,10 @@ than a golden**, because both water goldens are Gerstner and never reach the see
 2 carries no swell and read identical to every printed digit across the change, which is what pins
 the wind sea as untouched where a green golden would have pinned nothing.
 
-**So the tessellation stage is still entirely unspent** — POM silhouettes and D4 terrain remain its
-candidate first consumers, and neither inherits a pipeline from here.
+**So the tessellation stage is still entirely unspent**, and it has now been declined twice rather
+than merely not reached: D3 shipped a projected grid instead and D4 shipped a CDLOD quadtree whose
+morph is ordinary vertex work (11.63). POM silhouettes is the candidate first consumer left, and it
+inherits no pipeline from here.
 
 **Open items this entry still owns.** Recorded here rather than only in the closed specs, because a
 closed spec is not where anyone looks for work that is still outstanding. Numbers are stable —
@@ -1744,7 +1746,27 @@ itself, its bed-provider seam (`WaterHeightFn`, which `apps/forest`'s terrain sa
 the CPU wave query buoyancy would consume, and — since 11.45 — the shore chain, a CPU per-column
 solver published to the shading stage through a std140 block rather than a texture.
 
-### D4. Terrain — Effort XL
+### D4. Terrain — Effort XL — **CDLOD half SHIPPED (spec 11.63); STREAMING still unbuilt**
+
+**Spec 11.63 answered the question this entry says it had not chosen between**, and chose Strugar
+over Hoppe: a CDLOD quadtree (`procedural/terrain_quadtree.c/h`) replaced `apps/forest`'s fixed
+`tiles x tiles` grid, with per-vertex morphing to the parent surface. Sixteenfold ground area takes
+the quadtree from 364 patches to 706 where the fixed grid goes 64 to 1,024 — the logarithmic-vs-
+quadratic claim, measured. `TerrainField` gained an in-memory mip pyramid, and residency moved to
+region cells that own their props and their Jolt collider. `apps/forest` is an ISLAND now, and
+`--terrain-extent` grows it past a kilometre.
+
+**Three consequences for what is left here.** The T-junction stitch this entry inherits is
+SUPERSEDED for the quadtree and still owned for anything else: CDLOD closes a seam by morphing the
+fine side onto the parent surface it already shares vertices with, so there is no junction to
+stitch. The clipmap at `8d04658` remains the reference for rings, which nothing now plans to build.
+And the pyramid is IN MEMORY, so D4's actual scope — rings or quadtree nodes as windows into a
+*streamed* pyramid — is untouched: 11.63 made the terrain big, not paged.
+
+**What that leaves unbuilt is exactly what the contradiction below predicted.** Streaming becomes a
+problem when terrain becomes DATA, erosion (D7) made it data, and 11.63 made the domain large enough
+to care. The figure to schedule against is still 67 MB at 4096² fp32 and 268 MB at 8192².
+
 No terrain STREAMING system exists. `cetra/src/procedural/terrain.c/h` does -- an fbm-over-Perlin
 heightfield with `terrain_height_at` and tiled mesh generation, landed for `apps/forest` -- and this
 entry cited it by path 25 lines below while opening with "no terrain system exists". What is unbuilt
@@ -1765,12 +1787,14 @@ downstream of D6-D10 rather than their prerequisite, and it acquires a number wh
 the assumption. Note the stitch survives the change — it needs a surface evaluable at arbitrary
 points, and a filtered grid sample is one.*
 
-**`apps/forest` (11.29) is not this item and must not be read as it.** It is a *consumer* of E5:
-fixed tiles, per-tile LOD chains, everything resident, capped at 1 km² by exactly the streaming story
-this item owns. It is the "mega-mesh with extra steps" the paragraph above warns about, chosen
-knowingly because at that scale the warning does not bite. What it does contribute is a fixture — the
-first content in the tree where instancing, LOD and culling all matter at once, and the scene that
-found Wall 4.
+**`apps/forest` (11.29) is not this item and must not be read as it** — though 11.63 moved it a long
+way closer. It WAS a consumer of E5: fixed tiles, per-tile LOD chains, everything resident, capped at
+1 km² by exactly the streaming story this item owns, and the "mega-mesh with extra steps" the
+paragraph above warns about. It is now a quadtree with resident regions and a shoreline, so the
+tile-count and the everything-resident halves of that description are both retired; what survives is
+the cap, because residency is in memory and nothing pages. What it contributes besides is a fixture —
+the first content in the tree where instancing, LOD and culling all matter at once, and the scene
+that found Wall 4.
 
 **This item inherits a working geometry clipmap, and git is where it is kept.** D3 built one for water
 and 11.35 removed it — the snap arithmetic and the T-junction stitch are at commit `8d04658`, which is
@@ -2006,8 +2030,9 @@ the wrong order. What earns this item is one of three things happening first: la
 roads/decals needing to composite into the ground, or a terrain too large for one atlas — and the
 last of those is D4, which is why these two are neighbours.
 
-Stage it: a **baked composite atlas** first (no page table, no feedback, no eviction — 4096² covers
-`apps/forest`'s 1 km² and is a real shippable increment), then true RVT. GL 4.1 has **no sparse
+Stage it: a **baked composite atlas** first (no page table, no feedback, no eviction — 4096² covered
+`apps/forest`'s 1 km², which 11.63's `--terrain-extent` can now exceed, so the increment is real but
+its headroom is a flag away from gone), then true RVT. GL 4.1 has **no sparse
 textures** (`ARB_sparse_texture` is 4.3), so the physical cache is an ordinary atlas and the feedback
 buffer is an extra low-resolution MRT plus a readback.
 **Depends on:** D9 (hard).
@@ -2024,7 +2049,12 @@ anything that reads a world position as an IDENTITY. Forest's wind phase hash re
 frame from twelve units out, flat with distance, where the precision curve underneath is 0.10% at 12
 and 45% at 262,140. So the feature is two rules, and the second is the larger: everything linear
 takes the delta, and everything that hashes or tiles is handed the authored position back through
-`include/world_origin.glsl`. World partition cells remain D4.
+`include/world_origin.glsl`. World partition CELLS arrived with 11.63 -- forest's regions own their
+props and their collider and load and free against two anchors -- but in memory only, so what remains
+D4's is paging them off disk. 11.63 also proved the second rule holds under residency: a region that
+is freed and reloaded across an origin shift comes back at the same AUTHORED positions, which
+`region-shift` reads through a snapped authored digest because the raw storage bytes are supposed to
+differ by the delta.
 
 **It also fixes a defect that is already live and has nothing to do with world size.** The outermost
 shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) at a fixed ortho size, while
@@ -2487,7 +2517,7 @@ not scheduled.
 | 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. **Six more specs have landed on the surface since and none of them were rows here** (11.43 the fixture's sun, 11.44 world scale, 11.45 the swash film, 11.46 → row 35b, 11.47 whitecaps, 11.48 two wave trains); D3 carries them. |
 | 35b | **D5 By-example texturing** | S/M | **DONE (11.46), and it was never booked.** Would have been assumed blocked — a transformed copy of a texture plus an inverse table, in the most saturated program in the tree — and cost **zero** units: the shader never reads the original so the transform is baked over it, and the table is 768 bytes of uniform space. The ledger's fifth escape. Contrast held to 0.15% (0.02876 → 0.02881), which is the measurement that matters, because a broken blend flattens variance rather than shifting colour. **Two of the three defects it fixed were not rendering bugs at all** — a noise field sampled on an unbounded lattice, so forty tile boundaries were discontinuities in the data; and a circular tangent frame under planar UVs, creasing along every triangle edge. Both were reported as water bugs for most of a session. |
 | 35c | **Unbooked, shipped anyway** | — | **11.50 and 11.51 appear nowhere else in this document.** 11.50 made `foliage_shadows` a material row, so alpha-masked foliage arriving through a FILE can shadow — it had worked only for meshes built in C. 11.51 is the ivy arcade: the first asset authoring UV1 wind data, and a new `wind-uv` gate group. Both are content-driven work with no roadmap row, which is the same pattern D5 records — the table is a backlog, and the work keeps arriving from outside it. |
-| 36 | D4 Terrain **streaming** | XL | Only after E5; a clipmap without instancing/LOD is a mega-mesh with extra steps. `apps/forest` is a *consumer* of E5, not this — fixed tiles with per-tile chains, fine at 1 km² and explicitly not the answer above it. **Inherits D3's clipmap at `8d04658`** — the rings-over-a-mip-pyramid half water never used is the half terrain needs — and its T-junction stitch, which is a better fix for the crack risk E5 left open than locking borders. **Re-scoped: this row was the only booked terrain item and it is the LAST of them, not the first.** Its own entry demanded streamed height DATA while depending on the surface being ANALYTIC for that stitch, and today there is nothing to stream at all — the height is a pure function with no stored grid. What turns terrain into data is erosion (39/40), not scale, so this now sits downstream of 39-43 and gets a figure when they land: 4096² fp32 is 67 MB, 8192² is 268 MB. |
+| 36 | D4 Terrain **streaming** | XL | **The LOD half shipped as 11.63 and this row is now the remainder.** A CDLOD quadtree replaced forest's fixed grid — Strugar over Hoppe, which is the choice D4 said it had not made — so "a clipmap without instancing/LOD is a mega-mesh with extra steps" is settled and the T-junction stitch is superseded where the morph applies. What is still unbuilt is PAGING: the mip pyramid 11.63 added is in memory, residency is in memory, and nothing reads from disk. **Re-scoped once already and the re-scoping held.** Its own entry demanded streamed height DATA while depending on the surface being ANALYTIC for the stitch; erosion (39/40) turned terrain into data and 11.63 made the domain large enough to care, which is the order that entry predicted. Figure to schedule against: 4096² fp32 is 67 MB, 8192² is 268 MB. |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 | 38 | E10 Integer-bit hashes | S | **Booked by 11.54, which deliberately did not do it.** Every stochastic site in the tree keys off `fract(sin(x) · 43758.5453)`, which is precision-sensitive and driver-variable — `sin` at a large argument is implementation-defined in its last bits and `fract` of the product amplifies that across the whole range. A PCG or Wang integer hash would be exactly reproducible; GLSL 330 has `uint` and bitwise ops, so nothing blocks it. Not folded into 11.54 because it is a **behaviour** change wherever a hash is live, where that spec's hash phase was a 0 px assertion — and because `ssr_frag.glsl:187` has already measured what re-forming a hash costs on a ray-marching consumer: **31,800 px**. Price it against that, not against tidiness. |
 | 39 | **D6 Heightfield backend** | S | **DONE (11.59).** The unlock, and it exists only to serve 40. `terrain_height_at` gains a SOURCE — analytic fbm or a filtered sample of a stored grid — while staying a pure function of `(state, x, z)`, so all **eight** consumers keep working unchanged and a NULL field is today's path byte-identical. Three contracts, not details: the filter is **C1** (bilinear's piecewise-constant derivative would facet normals at cell boundaries and reach the scatter's slope gate), out of domain **clamps to edge** (`forest.c:939` queries at a camera eye that can leave the extent), and thread-safety is **not** improved — the analytic path memoizes into file statics and stays unsafe. |
@@ -2825,13 +2855,22 @@ said ~30, which understates the cost by about 3.5x. The fix is still one functio
   T-junction. None has been observed at any framing tried, which is large tiles and near-straight
   borders rather than a guarantee. The obvious fix is `meshopt_SimplifyLockBorder` on the terrain path
   specifically — deliberately not applied globally, since it would constrain every other chain
-  through the same call. **There is a better one, and D4 now records it**: the T-junction stitch D3's
-  water clipmap used (commit `8d04658`) lets both sides simplify and makes the finer one agree, which
-  needs a height function evaluable at arbitrary points — which terrain has and a general mesh does
-  not. Locking a border keeps its full density forever; the stitch does not.
+  through the same call. **11.63 closed this twice over and by neither of the answers booked here.**
+  Terrain no longer takes a chain at all: a quadtree patch is built at its own level and CDLOD
+  morphs the fine side of a seam onto the parent surface, so there is no junction. And props take a
+  cluster DAG whose seal is structural — every cluster at every level indexes the ORIGINAL vertex
+  buffer, because simplification only ever drops vertices, so two clusters sharing an edge share the
+  literal same vertices whatever levels they came from. The stitch at `8d04658` is still the answer
+  for a case that has neither, and there is not currently one.
 - **The GL 4.1 ceiling itself is the Tier 5 question.** Nothing in Tier 4 needs compute. Lumen-class
-  GI, virtual shadow maps, GPU-driven culling, Nanite-style cluster DAGs (which additionally want
-  SSBOs, `glMultiDrawElementsIndirect` and 64-bit atomics) and hardware ray tracing all do, and
+  GI, virtual shadow maps, GPU-driven culling and hardware ray tracing all do, and
+  **Nanite-style cluster DAGs are the entry on this list that turned out to be TWO things** — 11.63
+  shipped the CPU half on GL 4.1 with no compute, no SSBO and no atomic, because the DAG build and a
+  cut quantised by DISTANCE BAND are both CPU work and the result lands in the same EBO an LOD chain
+  already used. What genuinely needs 4.3+ is GPU-driven SELECTION and the visibility buffer, which
+  is a different item and aimed at micropolygons this renderer does not have. Read the rest of this
+  list with that in mind: the ceiling blocks less than the label suggests, which is the same lesson
+  the sampler ledger's five escapes teach.
   `docs/rendering-roadmap.md` §5 already prices the three honest answers (offline CPU path tracer /
   hybrid Metal RT via IOSurface / a full Metal or Vulkan backend). That document owns the question;
   this one should not re-open it.
@@ -2853,9 +2892,9 @@ said ~30, which understates the cost by about 3.5x. The fix is still one functio
 | Render-res/post-res split — **delivered** as four sizes (`width/height` render, `post_*`, `out_*`, `half_*` = render/2), plus the canvas locals every post-seam pass composites onto | B4 | B5, B7, tonemap |
 | Transmittance-vs-depth storage in the shadow path | C1 — **delivered** (11.26), as deep opacity maps rather than the moments the sketch assumed | any translucent caster: hair, glass, foliage tips, smoke |
 | Freed `pbr_frag` sampler units | D0 (proposed, and it frees ONE) | **the consumer list this row carried is withdrawn** — D2's surface half shipped without it (11.41), and detail/wetness maps were never blocked (they are mask-array layers). What is left is D1 *if* a flat 2D atlas is refused, and sampling the froxel volume from the transparent pass, which is not booked |
-| Tessellation pipeline (program creation, patch draw, distance LOD) | **still unowned** — D3 shipped without it | D4 terrain, POM silhouettes |
+| Tessellation pipeline (program creation, patch draw, distance LOD) | **still unowned** — D3 shipped without it, and D4 shipped without it too (11.63's CDLOD morph is vertex work) | POM silhouettes |
 | Bed-height seam (`WaterHeightFn`) + the CPU Gerstner query | D3 — **delivered** (11.32, 11.33) | Jolt buoyancy, gameplay water tests, any surface that shoals |
-| Geometry clipmap: coarsest-cell snap + T-junction stitch | D3 — built (11.33), **removed** (11.35), kept at `8d04658` | D4 terrain, where the streamed-mip-pyramid half water never used is the point |
+| Geometry clipmap: coarsest-cell snap + T-junction stitch | D3 — built (11.33), **removed** (11.35), kept at `8d04658` | **nothing now.** D4 chose CDLOD over rings in 11.63, and a morph closes a seam where the stitch would have. Kept as reference for a paged ring structure, which is the only consumer left |
 | Screen-space footprint → detail handover (mip level or dropped octave, energy into roughness) | D3 — **delivered** (11.35) | any procedural surface a projected or adaptive mesh under-samples at distance |
 | World-scale contract for shader-side physical lengths (`waterUnitsPerMetre` off `Sky.world_units_per_km`, the authority the atmosphere already used) | D3 — **delivered** (11.44) | anything whose constants are metres: terrain, POM depth, contact-shadow reach, decal projection |
 | A CPU solver published to the shading stage through a std140 block rather than a texture | D3 — **delivered** (11.45, `ShoreFilmBlock`) | any per-column or per-object field a shader needs that a UBO can hold — the ledger's second escape, generalised |
