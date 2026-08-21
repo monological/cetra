@@ -30,4 +30,28 @@
 //     genuinely uncollapsible.
 int mesh_build_lod_chain(Mesh* mesh);
 
+// Whether `mesh` can have ANY level-of-detail built over it, chain or cluster
+// DAG, at a builder's own triangle floor.
+//
+// Shared because the two builders refuse the same six things for the same
+// reasons and one of them is not a style choice: every index must name a real
+// vertex before a simplifier dereferences it. The import fills indices per FACE
+// and aiProcess_Triangulate leaves line and point primitives alone, so a 2-index
+// face leaves the third slot of its triple at whatever malloc returned. That
+// garbage used to reach only the GPU, which clamps; a simplifier reads
+// vertex_positions + idx * stride and does not.
+//
+// `min_triangles` is the caller's, because the floors differ in kind: a chain
+// level costs more to select than it saves below its floor, while a cluster DAG
+// below its floor has nothing to GROUP and degenerates to a chain with extra
+// steps.
+//
+// NOTE neither builder can cheaply refuse an already-uploaded mesh, which would
+// be worth doing -- building after the upload rewrites mesh->indices without
+// touching the EBO, so every level past 0 points past what the GPU holds and
+// draws wrong in silence. create_mesh generates the VAO and EBO names up front,
+// so neither handle distinguishes "created" from "uploaded"; catching it needs a
+// flag on Mesh that nothing else wants yet.
+bool mesh_lod_eligible(const Mesh* mesh, size_t min_triangles);
+
 #endif // _LOD_H_

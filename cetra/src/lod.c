@@ -31,6 +31,23 @@
 // triangles. This is what ends the chain on boundary-dominated geometry.
 #define LOD_MIN_SHRINK 0.85f
 
+bool mesh_lod_eligible(const Mesh* mesh, size_t min_triangles) {
+    if (!mesh || !mesh->indices || !mesh->vertices)
+        return false;
+    if (mesh->draw_mode != MESH_TRIANGLES || mesh->index_count % 3 != 0)
+        return false;
+    // See the header for why skinned meshes are refused rather than approximated.
+    if (mesh->is_skinned)
+        return false;
+    if (mesh->index_count / 3 < min_triangles)
+        return false;
+    for (size_t i = 0; i < mesh->index_count; ++i) {
+        if (mesh->indices[i] >= mesh->vertex_count)
+            return false;
+    }
+    return true;
+}
+
 int mesh_build_lod_chain(Mesh* mesh) {
     if (!mesh)
         return 1;
@@ -40,32 +57,8 @@ int mesh_build_lod_chain(Mesh* mesh) {
     mesh->lod_count[0] = mesh->index_count;
     mesh->lod_error[0] = 0.0f;
 
-    if (!mesh->indices || !mesh->vertices)
+    if (!mesh_lod_eligible(mesh, LOD_MIN_TRIANGLES))
         return 1;
-    // NOTE: there is no cheap way to refuse an already-uploaded mesh here, which
-    // would be worth doing -- a chain built after the upload rewrites
-    // mesh->indices without touching the EBO, so every level past 0 points past
-    // what the GPU holds and draws wrong in silence. create_mesh generates the
-    // VAO and EBO names up front, so neither handle distinguishes "created" from
-    // "uploaded"; catching it needs a flag on Mesh that nothing else wants yet.
-    if (mesh->draw_mode != MESH_TRIANGLES || mesh->index_count % 3 != 0)
-        return 1;
-    // See the header for why skinned meshes are refused rather than approximated.
-    if (mesh->is_skinned)
-        return 1;
-    if (mesh->index_count / 3 < LOD_MIN_TRIANGLES)
-        return 1;
-
-    // Every index has to name a real vertex before the simplifier dereferences
-    // it. The import fills indices per FACE over face.mNumIndices, and
-    // aiProcess_Triangulate leaves line and point primitives alone, so a
-    // 2-index face leaves the third slot of its triple at whatever malloc
-    // returned. That garbage used to reach only the GPU, which clamps; the
-    // simplifier reads vertex_positions + idx * stride and does not.
-    for (size_t i = 0; i < mesh->index_count; ++i) {
-        if (mesh->indices[i] >= mesh->vertex_count)
-            return 1;
-    }
 
     // Worst case every level is the size of the one above, which the shrink
     // test stops long before -- but the buffer has to exist before the test can

@@ -18,6 +18,7 @@
 
 extern "C" {
 #include "cluster.h"
+#include "lod.h"
 #include "ext/log.h"
 }
 
@@ -128,24 +129,12 @@ float mesh_radius(Mesh* mesh) {
 } // namespace
 
 extern "C" bool mesh_build_cluster_lod(Mesh* mesh) {
-    if (!mesh || !mesh->indices || !mesh->vertices)
+    // The same six refusals the chain makes, at this builder's own floor. Shared
+    // rather than restated: they were a verbatim second copy in a second
+    // language, including the O(index_count) validity scan, and only one of the
+    // two carried the explanation.
+    if (!mesh_lod_eligible(mesh, CLUSTER_MIN_TRIANGLES))
         return false;
-    if (mesh->draw_mode != MESH_TRIANGLES || mesh->index_count % 3 != 0)
-        return false;
-    // Skinned meshes are refused for the reason lod.c refuses them: weights do
-    // not transfer to surviving vertices, so a simplified level animates wrong.
-    // The DAG inherits that unchanged -- clustering does not make it false.
-    if (mesh->is_skinned)
-        return false;
-    if (mesh->index_count / 3 < CLUSTER_MIN_TRIANGLES)
-        return false;
-    // Every index must name a real vertex before the clusteriser dereferences
-    // it, for the reason lod.c states: an untriangulated face leaves the third
-    // slot of its triple at whatever malloc returned, and only the GPU clamps.
-    for (size_t i = 0; i < mesh->index_count; ++i) {
-        if (mesh->indices[i] >= mesh->vertex_count)
-            return false;
-    }
 
     clodConfig config = clodDefaultConfig(CLUSTER_TRIANGLES);
     // OFF, and what that buys is narrower than this comment used to claim.
