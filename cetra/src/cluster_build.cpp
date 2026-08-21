@@ -100,13 +100,6 @@ struct BuildSink {
         // simplifying THIS group, which is what rule 2 below tests.
         return id;
     }
-
-    // The raw C callback rather than clodBuild's convenience template, which takes
-    // its functor BY VALUE -- it would fill a copy and leave this one empty, and
-    // report a healthy cluster count while doing it.
-    static int thunk(void* ctx, clodGroup group, const clodCluster* items, size_t count) {
-        return static_cast<BuildSink*>(ctx)->take(group, items, count);
-    }
 };
 
 // The mesh's radius in its OWN space, which is deliberately not the world radius
@@ -156,7 +149,15 @@ extern "C" bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out) {
     input.vertex_positions_stride = 3 * sizeof(float);
 
     BuildSink sink;
-    size_t produced = clodBuild(config, input, &sink, &BuildSink::thunk);
+    // clodBuild's convenience template takes its functor BY VALUE, which is worth
+    // knowing and is NOT a reason to avoid it: the copy captures `sink` by
+    // reference, so take() writes through to this one. Filling a copy and
+    // reporting a healthy cluster count over an empty sink is what a by-value
+    // CAPTURE would do, and this is not one.
+    size_t produced = clodBuild(config, input,
+                                [&sink](const clodGroup& group, const clodCluster* items, size_t count) {
+                                    return sink.take(group, items, count);
+                                });
     if (produced == 0 || sink.clusters.empty() || sink.groups.empty())
         return false;
 

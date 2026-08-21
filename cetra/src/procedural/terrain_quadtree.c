@@ -53,6 +53,11 @@ typedef struct TerrainPatch {
 struct TerrainQuadtree {
     const TerrainParams* params; // borrowed
     Material* material;          // borrowed
+    // The node the selection hangs under, borrowed. Held rather than passed to
+    // every call: it is one node for the tree's whole life, and a parameter is a
+    // chance to hand in a different one, which detaches patches from a node that
+    // is not holding them.
+    SceneNode* root;
     int levels;
     int segments;
 
@@ -209,9 +214,9 @@ static void descend(TerrainQuadtree* qt, int level, int ix, int iz, const vec3 e
     select_patch(qt, level, ix, iz);
 }
 
-TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, int levels, int segments,
-                                         Material* material) {
-    if (!params || levels < 1 || levels > 16 || segments < 2 || (segments & 1)) {
+TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, SceneNode* root, int levels,
+                                         int segments, Material* material) {
+    if (!params || !root || levels < 1 || levels > 16 || segments < 2 || (segments & 1)) {
         log_error("terrain quadtree: levels 1-16 and an even segment count >= 2");
         return NULL;
     }
@@ -219,6 +224,7 @@ TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, int levels
     if (!qt)
         return NULL;
     qt->params = params;
+    qt->root = root;
     qt->material = material;
     qt->levels = levels;
     qt->segments = segments;
@@ -268,7 +274,7 @@ void free_terrain_quadtree(TerrainQuadtree* qt) {
     free(qt);
 }
 
-void terrain_quadtree_rebuild(TerrainQuadtree* qt, SceneNode* root, const vec3 eye) {
+void terrain_quadtree_rebuild(TerrainQuadtree* qt, const vec3 eye) {
     if (!qt)
         return;
     drop_all(qt);
@@ -280,18 +286,17 @@ void terrain_quadtree_rebuild(TerrainQuadtree* qt, SceneNode* root, const vec3 e
     // than at the app, because "patches are in storage space under an untouched
     // node" is this tree's own invariant and the shift is the one thing that
     // breaks it.
-    if (root)
-        glm_mat4_identity(root->original_transform);
+    glm_mat4_identity(qt->root->original_transform);
     // Re-selected HERE rather than left to the next descent, and that is the
     // whole reason this is one call. An origin shift lands before the shadow
     // pass and the GI captures, which are the first things in a frame to read
     // world positions -- so a tree left empty until the app's render callback
     // builds its shadow map out of a world with no ground in it.
-    terrain_quadtree_update(qt, root, eye);
+    terrain_quadtree_update(qt, eye);
 }
 
-int terrain_quadtree_update(TerrainQuadtree* qt, SceneNode* root, const vec3 eye) {
-    if (!qt || !root)
+int terrain_quadtree_update(TerrainQuadtree* qt, const vec3 eye) {
+    if (!qt)
         return 0;
 
     qt->tick++;
@@ -307,7 +312,7 @@ int terrain_quadtree_update(TerrainQuadtree* qt, SceneNode* root, const vec3 eye
     TerrainPatch *patch, *tmp;
     HASH_ITER(hh, qt->cache, patch, tmp) {
         if (patch->attached && patch->seen != qt->tick) {
-            remove_child_node(root, patch->node);
+            remove_child_node(qt->root, patch->node);
             patch->attached = false;
         }
         if (!patch->attached && qt->tick - patch->seen > TERRAIN_PATCH_GRACE) {
@@ -318,7 +323,7 @@ int terrain_quadtree_update(TerrainQuadtree* qt, SceneNode* root, const vec3 eye
     for (size_t i = 0; i < qt->selected_count; ++i) {
         if (qt->selected[i]->attached)
             continue;
-        add_child_node(root, qt->selected[i]->node);
+        add_child_node(qt->root, qt->selected[i]->node);
         qt->selected[i]->attached = true;
     }
     return (int)qt->selected_count;
@@ -399,7 +404,7 @@ static float vertex_morph_factor(const TerrainQuadtree* qt, const TerrainPatch* 
     const float* m = &patch->mesh->morph[(size_t)v * 3];
     float d = glm_vec3_distance((float*)pos, (float*)qt->last_eye);
     float k = (d - m[1]) * m[2];
-    return k < 0.0f ? 0.0f : (k > 1.0f ? 1.0f : k);
+    return glm_clamp_zo(k);
 }
 
 // Where the coarse patch's own triangulation puts the surface at `coord` along
@@ -453,8 +458,6 @@ static int seam_vertex(int dx, int dz, int segments, int t) {
 static void seam_measure(const TerrainQuadtree* qt, SeamStat* st) {
     memset(st, 0, sizeof(*st));
     st->fine_min = 1.0f;
-    st->coarse_max = 0.0f;
-    st->gap = 0.0f;
 
     static const int DX[4] = {1, -1, 0, 0};
     static const int DZ[4] = {0, 0, 1, -1};
@@ -463,9 +466,9 @@ static void seam_measure(const TerrainQuadtree* qt, SeamStat* st) {
 
     for (size_t s = 0; s < qt->selected_count; ++s) {
         const TerrainPatch* fine = qt->selected[s];
+        int level_side = 1 << (qt->levels - 1 - fine->level);
         for (int d = 0; d < 4; ++d) {
             int nx = fine->ix + DX[d], nz = fine->iz + DZ[d];
-            int level_side = 1 << (qt->levels - 1 - fine->level);
             if (nx < 0 || nz < 0 || nx >= level_side || nz >= level_side)
                 continue; // the domain's own edge, not a seam
             if (patch_selected(qt, fine->level, nx, nz))

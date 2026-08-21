@@ -73,10 +73,16 @@ vec3 cetraMorphOffset(vec3 rest, mat4 model, vec3 eye) {
 //
 // Without this the surface slides under its own shading as it morphs, and two
 // patches meeting at a seam agree on where the ground is while disagreeing about
-// which way it faces -- a crease that moves with the camera. Recomputing the
-// factor rather than taking it as a parameter is deliberate: two callers passing
-// it separately is two chances to pass a different one, which is the drift this
-// whole chunk exists to prevent.
+// which way it faces -- a crease that moves with the camera.
+//
+// Recomputing the factor rather than taking it as a parameter, which is the
+// OPPOSITE of what object_position.glsl does one file away with the bone matrix,
+// and the two are not in conflict: a bone matrix is expensive (four blends) and
+// its callers already hold it, while this factor is a distance and a clamp and
+// its callers are two independent expressions. Passing it would be two chances
+// to pass a different one for no saving worth the risk. The rule is cost, not
+// doctrine -- share what is expensive to recompute, recompute what is cheap to
+// get wrong.
 //
 // mix of two normals cannot cancel here: both are terrain normals and both point
 // broadly up, so the sum is never near zero.

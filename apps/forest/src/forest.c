@@ -911,7 +911,8 @@ static void build_terrain(void) {
         // Nothing is built here. The first descent -- which needs a camera, and
         // so cannot happen before the first frame -- builds what it selects.
         g_terrain_group = group;
-        g_terrain_qt = create_terrain_quadtree(&g_terrain, forest_quadtree_levels(g_terrain.extent),
+        g_terrain_qt = create_terrain_quadtree(&g_terrain, group,
+                                               forest_quadtree_levels(g_terrain.extent),
                                                TERRAIN_PATCH_SEGMENTS, g_mat_terrain);
         if (!g_terrain_qt)
             fprintf(stderr, "forest: terrain quadtree refused\n");
@@ -934,8 +935,6 @@ static Mesh* g_leaf[TREE_PROTOTYPES];
 static Mesh* g_rocks[ROCK_PROTOTYPES];
 
 static void build_tree_prototypes(void) {
-    Mesh** bark = g_bark;
-    Mesh** leaf = g_leaf;
 
     for (int i = 0; i < TREE_PROTOTYPES; ++i) {
         TreeParams tp;
@@ -967,20 +966,20 @@ static void build_tree_prototypes(void) {
         memset(&skel, 0, sizeof(skel));
         tree_skeleton_build(&skel, &tp);
 
-        bark[i] = create_mesh();
-        if (!tree_mesh_bark(&skel, &tp, bark[i])) {
-            free_mesh(bark[i]);
-            bark[i] = NULL;
+        g_bark[i] = create_mesh();
+        if (!tree_mesh_bark(&skel, &tp, g_bark[i])) {
+            free_mesh(g_bark[i]);
+            g_bark[i] = NULL;
         } else {
-            finalize_mesh(bark[i], g_mat_bark, true);
+            finalize_mesh(g_bark[i], g_mat_bark, true);
         }
 
-        leaf[i] = create_mesh();
-        if (!tree_mesh_leaves(&skel, &tp, leaf[i])) {
-            free_mesh(leaf[i]);
-            leaf[i] = NULL;
+        g_leaf[i] = create_mesh();
+        if (!tree_mesh_leaves(&skel, &tp, g_leaf[i])) {
+            free_mesh(g_leaf[i]);
+            g_leaf[i] = NULL;
         } else {
-            finalize_mesh(leaf[i], g_mat_leaf, true);
+            finalize_mesh(g_leaf[i], g_mat_leaf, true);
         }
         tree_skeleton_free(&skel);
     }
@@ -1010,20 +1009,19 @@ static int scatter_trees(Placement* items, int count, float x0, float z0, float 
 }
 
 static void build_rock_prototypes(void) {
-    Mesh** rocks = g_rocks;
     for (int i = 0; i < ROCK_PROTOTYPES; ++i) {
         RockParams rp = rock_default_params();
         rp.seed = 7u + (unsigned)i * 13u;
         rp.subdivisions = 3;
         rp.roughness = 0.26f + 0.06f * (float)(i % 3);
         rp.noise_freq = 1.4f + 0.3f * (float)(i % 4);
-        rocks[i] = create_mesh();
-        if (!rock_build_mesh(&rp, rocks[i])) {
-            free_mesh(rocks[i]);
-            rocks[i] = NULL;
+        g_rocks[i] = create_mesh();
+        if (!rock_build_mesh(&rp, g_rocks[i])) {
+            free_mesh(g_rocks[i]);
+            g_rocks[i] = NULL;
             continue;
         }
-        finalize_mesh(rocks[i], g_mat_rock, true);
+        finalize_mesh(g_rocks[i], g_mat_rock, true);
     }
 
 }
@@ -1636,7 +1634,7 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
     if (camera)
         glm_vec3_copy(camera->position, eye);
     if (g_terrain_qt)
-        terrain_quadtree_rebuild(g_terrain_qt, g_terrain_group, eye);
+        terrain_quadtree_rebuild(g_terrain_qt, eye);
     // Same hazard, same repair: an instance placed after the shift comes out of a
     // centre that has already moved, under a group the shift has already
     // translated. The player has been shifted too, so its cell is still the one
@@ -2122,7 +2120,7 @@ static void on_render(Game* game, double alpha) {
         glm_vec3_copy(g_player ? g_player->position : camera->position, focus);
         regions_update(camera->position, focus);
         if (g_terrain_qt) {
-            terrain_quadtree_update(g_terrain_qt, g_terrain_group, camera->position);
+            terrain_quadtree_update(g_terrain_qt, camera->position);
             if (g_args.quadtree_probe && engine->total_frames + 1 == (size_t)g_args.frames)
                 terrain_quadtree_probe(g_terrain_qt);
         }

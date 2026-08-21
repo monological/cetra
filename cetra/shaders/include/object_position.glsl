@@ -68,10 +68,16 @@
 // the same inputs. engine_upload_displacement_uniforms is the one call that does
 // it, and its own declaration says what happens when a program is missed.
 //
-// Split in two only because a caller that already holds a POSED position -- the
-// previous-frame skinned one, which no depth stage computes -- needs the
-// displacement to add to it rather than a position to replace it with. Both
+// Split in two because a caller that already holds a POSED position -- the
+// previous-frame skinned one, which no depth stage computes -- wants the
+// displacement to ADD to it rather than a position to replace it with. Both
 // halves are here so neither can list a different set of displacers.
+//
+// Convenience rather than necessity, and the distinction matters to anyone
+// trying to collapse them: pbr_skinned_vert declares its previous bone matrix
+// inside the `if (skinned)` branch, so the split reads as forced by skinning
+// when it is really forced by one local's scope. Hoisting that declaration makes
+// the two entry points interchangeable.
 vec3 cetra_local_displacement(vec3 rest, vec2 uv0, vec2 uv1, float t, mat4 model, vec3 eye) {
     return windOffset(rest, uv0, uv1, t, model[3].xyz) + cetraMorphOffset(rest, model, eye);
 }

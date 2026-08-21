@@ -32,24 +32,28 @@ typedef struct TerrainQuadtree TerrainQuadtree;
 // node at level levels-1 covering the whole domain. `segments` is quads along a
 // patch edge and must be even (terrain.h says why).
 //
-// `params` and `material` are BORROWED and must outlive the quadtree. params in
-// particular is read on every patch build, so an app that shifts its terrain's
-// centre has to rebuild -- see terrain_quadtree_rebuild.
-TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, int levels, int segments,
-                                         Material* material);
+// `params`, `root` and `material` are BORROWED and must outlive the quadtree.
+// params in particular is read on every patch build, so an app that shifts its
+// terrain's centre has to rebuild -- see terrain_quadtree_rebuild.
+//
+// `root` is the node the selection hangs under. Taken once here rather than at
+// every call, because it is one node for the tree's whole life and a parameter
+// is a chance to hand in a different one.
+TerrainQuadtree* create_terrain_quadtree(const TerrainParams* params, SceneNode* root, int levels,
+                                         int segments, Material* material);
 
 // The patches take themselves out of whatever they were attached to, so this
 // needs no root and cannot be given the wrong one.
 void free_terrain_quadtree(TerrainQuadtree* qt);
 
 // Descend against `eye` -- a position in the same space patch vertices are
-// stored in -- and make `root`'s children exactly the selected patches. Patches
+// stored in -- and make the root's children exactly the selected patches. Patches
 // that leave the selection are detached and kept; nothing is rebuilt to bring one
 // back. Returns how many are selected.
 //
 // Deliberately NOT frustum-aware. The shadow pass draws from the same graph and
 // needs the patches behind the camera, and the draw list already culls per item.
-int terrain_quadtree_update(TerrainQuadtree* qt, SceneNode* root, const vec3 eye);
+int terrain_quadtree_update(TerrainQuadtree* qt, const vec3 eye);
 
 // There is no "pin every patch to the finest level" knob, and --no-lod does not
 // reach here. --no-lod is a per-mesh statement -- draw this mesh at level 0 --
@@ -68,7 +72,7 @@ int terrain_quadtree_update(TerrainQuadtree* qt, SceneNode* root, const vec3 eye
 // would leave the low bits that the old origin's magnitude rounded away -- which
 // is the precision the shift exists to recover. It costs one rebuild of the whole
 // selection, on a frame that is already reconciling physics.
-void terrain_quadtree_rebuild(TerrainQuadtree* qt, SceneNode* root, const vec3 eye);
+void terrain_quadtree_rebuild(TerrainQuadtree* qt, const vec3 eye);
 
 typedef struct TerrainQuadtreeStats {
     int levels;

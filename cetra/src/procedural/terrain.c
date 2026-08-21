@@ -556,6 +556,11 @@ float terrain_height_at_level(const TerrainParams* p, float x, float z, int leve
     // guards together would return a flat 0 for it.
     if (p->field && p->field->height) {
         TerrainFieldLevel L = field_level(p->field, level);
+        // Returns BEFORE the island lerp at the bottom, deliberately: a field has
+        // the shaping already baked into its stored heights, because
+        // terrain_field_seed applies it at bake time. Shaping again here would
+        // apply the falloff twice, and a heightmap loaded from a file is left
+        // alone entirely -- a file is a statement about what the terrain is.
         return sample_plane(p, L.height, L.res, x, z);
     }
     // Offset into positive coordinates before scaling: the lattice is indexed
