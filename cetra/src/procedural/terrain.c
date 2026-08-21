@@ -86,12 +86,8 @@ static float plane_texel(const float* plane, int res, int i, int j) {
 
 // Level 0 borrows the field's own arrays; every level above it owns four.
 static void field_free_levels(TerrainField* field) {
-    for (int k = 1; k < field->level_count; ++k) {
+    for (int k = 1; k < field->level_count; ++k)
         free(field->levels[k].height);
-        free(field->levels[k].flow);
-        free(field->levels[k].deposit);
-        free(field->levels[k].wear);
-    }
     free(field->levels);
     field->levels = NULL;
     field->level_count = 0;
@@ -155,26 +151,17 @@ int terrain_field_build_pyramid(TerrainField* field) {
     field->level_count = 1;
     field->levels[0].res = field->res;
     field->levels[0].height = field->height;
-    field->levels[0].flow = field->flow;
-    field->levels[0].deposit = field->deposit;
-    field->levels[0].wear = field->wear;
 
     for (int k = 1; k < count; ++k) {
         const TerrainFieldLevel* prev = &field->levels[k - 1];
         TerrainFieldLevel* cur = &field->levels[k];
         cur->res = (prev->res - 1) / 2 + 1;
-        if (!filter_plane(prev->height, prev->res, &cur->height, cur->res) ||
-            !filter_plane(prev->flow, prev->res, &cur->flow, cur->res) ||
-            !filter_plane(prev->deposit, prev->res, &cur->deposit, cur->res) ||
-            !filter_plane(prev->wear, prev->res, &cur->wear, cur->res)) {
+        if (!filter_plane(prev->height, prev->res, &cur->height, cur->res)) {
             // Keep what did build. A short pyramid samples coarser geometry at a
             // finer level than it wanted, which aliases -- but it aliases rather
             // than failing, because field_level clamps and every caller therefore
             // asks for a level it may not get.
             free(cur->height);
-            free(cur->flow);
-            free(cur->deposit);
-            free(cur->wear);
             memset(cur, 0, sizeof(*cur));
             break;
         }
@@ -444,7 +431,7 @@ static TerrainFieldLevel field_level(const TerrainField* f, int level) {
         int k = level < 0 ? 0 : (level >= f->level_count ? f->level_count - 1 : level);
         return f->levels[k];
     }
-    TerrainFieldLevel base = {f->res, f->height, f->flow, f->deposit, f->wear};
+    TerrainFieldLevel base = {f->res, f->height};
     return base;
 }
 

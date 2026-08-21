@@ -33,14 +33,22 @@ typedef enum TerrainMask {
     TERRAIN_MASK_WEAR,    // material removed -- exposed bedrock
 } TerrainMask;
 
-// One resolution of a field: the four planes at a level and the node count they
-// share. Level 0 aliases the field's own arrays and owns nothing.
+// One resolution of a field: the HEIGHT at a level, and the node count it is
+// stored at. Level 0 aliases the field's own array and owns nothing.
+//
+// Height only, and the masks deliberately not. A coarse patch samples a coarse
+// height because that is what removing detail from a SURFACE means; the masks
+// have no such consumer. terrain_mask_at reads level 0 always, and the one
+// candidate for reading them coarser -- the vertex tint on a quadtree patch --
+// is unreachable, because the only app with a quadtree is layered and
+// terrain_tint returns through terrain_macro before the masks are touched. That
+// was built and measured at 0 px in both render modes before being dropped.
+//
+// So filtering them was three quarters of the pyramid's memory and build time
+// for arrays nothing read.
 typedef struct TerrainFieldLevel {
     int res;
     float* height;
-    float* flow;
-    float* deposit;
-    float* wear;
 } TerrainFieldLevel;
 
 // A stored heightfield, spanning the same square about `center` the analytic
