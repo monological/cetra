@@ -12076,6 +12076,7 @@ def run_cull_gate(workdir):
 # function of the interpolator being measured.
 
 _LAYER_GEN = None
+_LAYER_VT_GEN = None
 
 
 def _layer_gen():
@@ -12100,6 +12101,39 @@ def _layer_gen():
             return None
         _LAYER_GEN = mod
     return _LAYER_GEN
+
+
+def _layer_vt_gen():
+    """gen_layer_vt_fixture, imported for its constants; writes nothing on import.
+
+    Same skip contract as _layer_gen -- it imports gen_layer_fixture, so it
+    carries the same numpy/Pillow dependency.
+    """
+    global _LAYER_VT_GEN
+    if _LAYER_VT_GEN is None:
+        path = os.path.join(ROOT, "assets", "gen_layer_vt_fixture.py")
+        try:
+            spec = importlib.util.spec_from_file_location("gen_layer_vt_fixture", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except ImportError as exc:
+            print(f"  layers-vt-identity SKIP  (gen_layer_vt_fixture needs {exc.name})")
+            return None
+        _LAYER_VT_GEN = mod
+    return _LAYER_VT_GEN
+
+
+def _vt_point(u, v):
+    """World point on the VT fixture at splat coordinate (u, v).
+
+    The floor and the 45-degree ramp meet at z = 0, so one mapping serves both:
+    y is -z on the ramp and 0 on the floor. v runs from the ramp's crest (0) to
+    the floor's near edge (1), matching the splat rows the generator paints.
+    """
+    g = _layer_gen()
+    x = -g.HALF + u * 2.0 * g.HALF
+    z = -g.HALF + v * 2.0 * g.HALF
+    return (x, max(0.0, -z), z)
 
 
 def _layer_floor(u, v):
@@ -12194,13 +12228,47 @@ def _layer_ramp(vals, positions, lo, hi):
 
 
 def run_layers_gate(workdir):
-    """Layered surfaces: selection, the sRGB round trip, the height blend, triplanar."""
+    """Layered surfaces: the per-texel blend, and the composite cache over it.
+
+    The arms, in the order they run. Keep this list and the code in step: a
+    docstring naming a different set than the function runs is what a reviewer
+    reads to decide what is covered. (The scatter arm lives in a helper and is
+    therefore invisible to gate-arm-docs; it runs last, after everything below.)
+
+      layers-select      each splat column resolves the layer it selects
+      layers-srgb        a mid-grey layer round-trips through the decode
+      layers-height      the height blend interlocks where linear smears
+      layers-triplanar   the wall is textured by its own axis, at the right size
+      layers-vt-identity the cached path reproduces the per-texel blend where the
+                         atlas resolves the macro, and a forced-coarse atlas
+                         moves the frame -- which is what proves the flag arms a
+                         real path at all
+      layers-vt-detail   checker crossings at full grain density through the
+                         cache, on the floor and on the 45-degree ramp
+      layers-vt-macro    at an atlas texel WIDER than a checker period the
+                         selection still reads exact painted bytes while the
+                         grain still crosses -- the one arm a plain baked atlas
+                         (the roadmap's original stage 1) fails
+      layers-vt-invalidate a mid-run layerBlend change re-bakes the cache: the
+                         crossover moves to the linear 0.5, which a stale atlas
+                         cannot show
+      layers-vt-budget   the bake's own MB log equals the gate's closed form and
+                         sits under a gate-side ceiling
+
+    WHAT THE FIRST FOUR ARMS CANNOT SEE: layer_fixture's splat is UV1-space, and
+    the composite cache serves world-XZ splats only, so those arms cover the
+    per-texel path alone -- which stays live (walls, props, UV1 splats) and
+    needs the coverage. The cache's coverage is the vt arms, on their own
+    world-XZ fixture.
+    """
     print("  arms:")
-    print("      layers-select     each splat column resolves the layer it selects")
-    print("      layers-srgb       a mid-grey layer round-trips through the decode")
-    print("      layers-height     the height blend interlocks where linear smears")
-    print("      layers-triplanar  the wall is textured by its own axis, at the right size")
-    print("      layers-scatter    the scatter stops planting trees in the stream beds")
+    print("      layers-select        each splat column resolves the layer it selects")
+    print("      layers-srgb          a mid-grey layer round-trips through the decode")
+    print("      layers-height        the height blend interlocks where linear smears")
+    print("      layers-triplanar     the wall is textured by its own axis, at the right size")
+    print("      layers-vt-*          the composite cache: identity, detail, macro,")
+    print("                           invalidation, budget (spec 11.66)")
+    print("      layers-scatter       the scatter stops planting trees in the stream beds")
 
     failures = []
     src = os.path.join(ROOT, "assets", "layer_fixture.cscn")
@@ -12358,6 +12426,177 @@ def run_layers_gate(workdir):
           f"{floor_range:.0f} (want >= 100)")
     if not ok:
         failures.append("layers-triplanar")
+
+    # --- the composite cache (spec 11.66) ------------------------------------
+    # Its own fixture, because this one's splat is UV1-space and the cache
+    # serves world-XZ splats only -- no arm on layer_fixture can see the cache
+    # in either direction. Inline rather than in a helper: gate-arm-docs reads
+    # this function's own source, and a helper's arms would read as documented
+    # but never run.
+    vt_src = os.path.join(ROOT, "assets", "layer_vt_fixture.cscn")
+    g2 = _layer_vt_gen()
+    if not os.path.exists(vt_src) or g2 is None:
+        if g2 is not None:
+            print("  layers-vt-identity SKIP  (missing layer_vt_fixture.cscn)")
+        failures += _layers_scatter_arm()
+        return failures
+
+    def vt_shot(name, extra=None, frames=8):
+        # 8, derived: two frames of texture uploads, one for the material
+        # array, one for the bake that samples it, and margin.
+        out = os.path.join(workdir, f"layers_vt_{name}.ppm")
+        err = render(vt_src, out, ALBEDO + (extra or []), frames=frames)
+        if err:
+            return None
+        w2, h2, pix2 = _read_ppm(out)
+        return (w2, h2, pix2, _projector(_cscn_camera("layer_vt_fixture.cscn"), w2, h2)), out
+
+    cached = vt_shot("cached")
+    plain = vt_shot("plain", ["--no-layers-vt"])
+    coarse = vt_shot("coarse", ["--layers-vt-res", str(g2.VT_MACRO_RES)])
+    if not (cached and plain and coarse):
+        print("  layers-vt-identity ERROR while rendering the cache legs")
+        failures.append("layers-vt-identity")
+        failures += _layers_scatter_arm()
+        return failures
+    (cf, cpath), (pf, ppath), (of, opath) = cached, plain, coarse
+
+    # --- layers-vt-identity --------------------------------------------------
+    # Three claims in one A/B/C: the cached path reads the exact painted byte on
+    # every flat column AND matches the per-texel frame away from splat-resample
+    # edges and the blend crossover; and the forced-coarse atlas moves the frame
+    # against per-texel, which is the anti-vacuity -- a build whose flag arms
+    # nothing reads 0 there and fails, where the identity half alone would pass
+    # it. Floor measured first: this fixture is 0 px across two runs of one
+    # build, so these are hard numbers, not tolerances.
+    vt_cols = {0: g.GREY_CODE, 2: g.DARK_CODE, 3: g.LIGHT_CODE}
+    worst_pt = 0.0
+    for col, expect in sorted(vt_cols.items()):
+        u = (col + 0.5) / 4.0
+        a = _layer_sample(cf, _vt_point(u, 0.875))
+        b = _layer_sample(pf, _vt_point(u, 0.875))
+        worst_pt = max(worst_pt, abs(a - expect), abs(a - b))
+    ae_id, _ = compare(cpath, ppath)
+    ae_coarse, _ = compare(opath, ppath)
+    VT_ID_CEILING = 6000     # measured 2330 of 480000: edges + the crossover patch
+    VT_COARSE_FLOOR = 10000  # measured 32161; 0 = the flag switched nothing
+    ok = worst_pt <= 1.0 and ae_id <= VT_ID_CEILING and ae_coarse >= VT_COARSE_FLOOR
+    print(f"  layers-vt-identity {'PASS' if ok else 'FAIL'}  flat columns off by "
+          f"{worst_pt:.1f} (want <= 1), cached vs per-texel {ae_id} px (want <= "
+          f"{VT_ID_CEILING}: splat-resample edges and the blend crossover only), coarse vs "
+          f"per-texel {ae_coarse} px (want >= {VT_COARSE_FLOOR}; 0 = the flag arms nothing)")
+    if not ok:
+        failures.append("layers-vt-identity")
+
+    # --- layers-vt-detail ----------------------------------------------------
+    # Checker crossings through the CACHED path, on the floor's checker column
+    # (a v-scan inside column 1) and across the ramp (a u-scan) -- the ramp is
+    # the two-projection surface, which is what the per-texel path's triplanar
+    # arm covers and a Y-only cache would lose. Counted the layers-triplanar
+    # way: crossings, two-sided, against the cell size the generator derives.
+    cell = g.CHECKER_CELL_WORLD
+    NV = 96
+    fv0, fv1 = 0.76, 0.99
+    floor_pts = [_vt_point(0.375, fv0 + (fv1 - fv0) * i / (NV - 1)) for i in range(NV)]
+    floor_span = (fv1 - fv0) * 2.0 * g.HALF
+    ramp_us = [0.02 + 0.96 * i / (NV - 1) for i in range(NV)]
+    ramp_pts = [_vt_point(uu, 0.25) for uu in ramp_us]
+    ramp_span = 0.96 * 2.0 * g.HALF
+
+    fcross = _layer_transitions(_layer_scan(cf, floor_pts), g.STRIPE_DARK, g.STRIPE_LIGHT)
+    rcross = _layer_transitions(_layer_scan(cf, ramp_pts), g.STRIPE_DARK, g.STRIPE_LIGHT)
+    f_expect = floor_span / cell - 1.0
+    r_expect = ramp_span / cell - 1.0
+    ok = abs(fcross - f_expect) <= 1.5 and abs(rcross - r_expect) <= 2.5
+    print(f"  layers-vt-detail   {'PASS' if ok else 'FAIL'}  floor {fcross} crossings over "
+          f"{floor_span:.2f} units (want {f_expect:.1f} +/- 1.5), ramp {rcross} over "
+          f"{ramp_span:.2f} (want {r_expect:.1f} +/- 2.5; a dropped dominant index reads "
+          f"layer 0's flat grey and crosses nowhere)")
+    if not ok:
+        failures.append("layers-vt-detail")
+
+    # --- layers-vt-macro -----------------------------------------------------
+    # The design's central claim, at a resolution where it is legible: the
+    # forced atlas texel is WIDER than a checker period (generator-asserted), so
+    # nothing grain-shaped can live in the cache -- yet the selection columns
+    # still read their exact painted bytes (the macro survives) and the ramp
+    # checker still crosses at full density (the grain arrives via the detail
+    # term). A plain baked atlas -- the roadmap's original stage 1 -- holds the
+    # first and fails the second.
+    texel = 2.0 * g.HALF / g2.VT_MACRO_RES
+    coarse_worst = 0.0
+    for col, expect in sorted(vt_cols.items()):
+        u = (col + 0.5) / 4.0
+        coarse_worst = max(coarse_worst, abs(_layer_sample(of, _vt_point(u, 0.875)) - expect))
+    coarse_rcross = _layer_transitions(_layer_scan(of, ramp_pts), g.STRIPE_DARK, g.STRIPE_LIGHT)
+    ok = coarse_worst <= 1.0 and abs(coarse_rcross - r_expect) <= 2.5
+    print(f"  layers-vt-macro    {'PASS' if ok else 'FAIL'}  at {texel:.2f} units/texel "
+          f"(a checker cell is {cell:.2f}) the columns read off by {coarse_worst:.1f} "
+          f"(want <= 1) and the ramp still crosses {coarse_rcross} times (want "
+          f"{r_expect:.1f} +/- 2.5)")
+    if not ok:
+        failures.append("layers-vt-macro")
+
+    # --- layers-vt-invalidate ------------------------------------------------
+    # A fresh process always bakes from the final authored values, so the
+    # by-value key is unreachable without a mid-run transition; --layer-blend-at
+    # is that transition. The crossover through the RE-BAKED cache must land on
+    # the linear 0.5 where the startup bake put it at the height-blend position
+    # -- a stale atlas keeps reading the latter.
+    trans = vt_shot("blendtrans", ["--layer-blend-at", "10:0.0"], frames=16)
+    band_us = [0.02 + i * (0.96 / 139) for i in range(140)]
+
+    def vt_band_ramp(frame):
+        vals = _layer_scan(frame, [_vt_point(uu, 0.625) for uu in band_us])
+        return _layer_ramp(vals, band_us, g.DARK_CODE, g.LIGHT_CODE)
+
+    vt_expect_mid = (1.0 + (g.DARK_HEIGHT - g.LIGHT_HEIGHT) / 255.0
+                     * g.LAYER_BLEND_SHARPNESS) / 2.0
+    if trans is None:
+        print("  layers-vt-invalidate ERROR while rendering the transition leg")
+        failures.append("layers-vt-invalidate")
+    else:
+        rh2 = vt_band_ramp(cf)
+        rl2 = vt_band_ramp(trans[0])
+        if rh2 is None or rl2 is None:
+            print("  layers-vt-invalidate FAIL  the transition band is not measurable")
+            failures.append("layers-vt-invalidate")
+        else:
+            ok = abs(rh2[1] - vt_expect_mid) <= 0.03 and abs(rl2[1] - 0.5) <= 0.03
+            print(f"  layers-vt-invalidate {'PASS' if ok else 'FAIL'}  crossover "
+                  f"{rh2[1]:.3f} at bake (want {vt_expect_mid:.3f} +/- 0.03), then "
+                  f"{rl2[1]:.3f} after a frame-10 layerBlend 0 (want 0.500; a stale "
+                  f"cache keeps reading {vt_expect_mid:.3f})")
+            if not ok:
+                failures.append("layers-vt-invalidate")
+
+    # --- layers-vt-budget ----------------------------------------------------
+    # The bake's own MB line against the gate's OWN closed form and a gate-side
+    # ceiling -- the layers-scatter lesson: a bar read from the process under
+    # test moves with the thing it checks. The derived-resolution rule is
+    # restated here for the same reason.
+    r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", "8", "-W", "200", "-H", "150"],
+                       capture_output=True, text=True)
+    m = re.search(r"Layers VT: material '[^']+' composite (\d+)x(\d+) pair, ([\d.]+) MB",
+                  r.stdout + r.stderr)
+    if not m:
+        print("  layers-vt-budget   ERROR  the run printed no bake line")
+        failures.append("layers-vt-budget")
+    else:
+        res_x, res_y, mb = int(m.group(1)), int(m.group(2)), float(m.group(3))
+        domain = 2.0 * g.HALF
+        er = 256
+        while er < domain / 0.5 and er < 2048:
+            er *= 2
+        closed = round(2.0 * er * er * 4.0 * (4.0 / 3.0) / (1024.0 * 1024.0), 1)
+        VT_BUDGET_MB_CEILING = 60.0  # 2048^2 pair mipped is 42.7; anything above leaked
+        ok = (res_x == er and res_y == er and abs(mb - closed) <= 0.05
+              and mb <= VT_BUDGET_MB_CEILING)
+        print(f"  layers-vt-budget   {'PASS' if ok else 'FAIL'}  {res_x}x{res_y} at {mb} MB "
+              f"(want {er} squared at {closed} MB by the gate's own 2*N^2*4*(4/3), under "
+              f"{VT_BUDGET_MB_CEILING})")
+        if not ok:
+            failures.append("layers-vt-budget")
 
     failures += _layers_scatter_arm()
     return failures
