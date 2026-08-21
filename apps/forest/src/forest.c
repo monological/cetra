@@ -543,19 +543,34 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
     // entirely outside places nothing at all -- the attempt budget in the caller
     // is what stops that spinning. Both are what the margin is for: nothing
     // stands where terrain_normal_at is about to run off the field.
+    //
+    // Computed here rather than hoisted to the caller, deliberately. It is five
+    // float ops against the four fbm evaluations below it, so hoisting buys
+    // nothing measurable -- and every way of doing it is worse: a precomputed box
+    // is a ninth parameter on a signature already carrying two, and a file static
+    // is a value that goes stale the moment an origin shift moves the centre,
+    // which regions_rebuild then re-scatters against.
     float margin = g_terrain.extent * 0.96f;
     float lo_x = terrain_world_x(&g_terrain, -margin), hi_x = terrain_world_x(&g_terrain, margin);
     float lo_z = terrain_world_z(&g_terrain, -margin), hi_z = terrain_world_z(&g_terrain, margin);
     if (x < lo_x || x > hi_x || z < lo_z || z > hi_z)
         return false;
+    // Drainage before slope, because it is the cheaper of the two and rejects
+    // the same candidates in either order: both are pure and neither draws from
+    // rnd(), so the accepted set and the random stream are untouched by the
+    // ordering. terrain_mask_at is one sample where terrain_normal_at is four
+    // central-differenced height evaluations.
+    //
+    // Reads 0 with no erosion bake, so this degrades to exactly the pre-11.60
+    // placement rather than to a special case -- the same property that lets
+    // terrain_tint blend by the masks unconditionally. Which also means the
+    // saving is real only under --erode; without a field this returns in two
+    // instructions and never rejects.
+    if (max_flow < 1.0f && terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z) > max_flow)
+        return false;
     vec3 n = {0.0f, 1.0f, 0.0f};
     terrain_normal_at(&g_terrain, x, z, n);
     if (n[1] < max_slope)
-        return false;
-    // Reads 0 with no erosion bake, so this degrades to exactly the pre-11.60
-    // placement rather than to a special case -- the same property that lets
-    // terrain_tint blend by the masks unconditionally.
-    if (max_flow < 1.0f && terrain_mask_at(&g_terrain, TERRAIN_MASK_FLOW, x, z) > max_flow)
         return false;
     if (clump_freq > 0.0f) {
         float d = clump_density(x, z, clump_freq);
