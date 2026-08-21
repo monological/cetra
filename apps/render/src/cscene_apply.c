@@ -662,6 +662,15 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             // that are still -1.
             if (layer_count > 0)
                 m->layer_count = layer_count;
+            // The key's presence IS the space: world addressing without a
+            // rectangle has no mapping, so the two cannot be authored apart.
+            if (mo->has_splat_domain) {
+                m->splat_space = SPLAT_SPACE_WORLD_XZ;
+                m->splat_origin[0] = mo->splat_domain[0];
+                m->splat_origin[1] = mo->splat_domain[1];
+                m->splat_size[0] = mo->splat_domain[2];
+                m->splat_size[1] = mo->splat_domain[3];
+            }
             tagged++;
         }
         printf("Scene file: %d override(s) on material '%s' (%d material(s))\n", usable,

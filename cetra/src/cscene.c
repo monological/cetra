@@ -773,6 +773,16 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         out->layer_count = 0;
         parse_material_layers(out, m);
 
+        // Compound like sss: four numbers describing one rectangle. Skipped by
+        // the generic walk below, which would otherwise warn on the 4-array as
+        // "neither a number nor a 3-array" -- so a malformed one is warned here
+        // or it would be dropped silently.
+        out->has_splat_domain = get_floats(m, "splatDomain", out->splat_domain, 4);
+        if (!out->has_splat_domain && cJSON_GetObjectItemCaseSensitive(m, "splatDomain"))
+            log_warn("cscene: material '%s' key 'splatDomain' is not a 4-array of numbers; "
+                     "ignored",
+                     out->material);
+
         // Everything else is recorded by NAME and SHAPE only. Whether a key
         // exists is the application's business (cscene_apply.c owns the table),
         // so a parameter added there needs no change here -- and an unknown key
@@ -783,7 +793,8 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         cJSON_ArrayForEach(p, m) {
             if (!p->string || p->string[0] == '_') // _comment and friends
                 continue;
-            if (strcmp(p->string, "sss") == 0 || strcmp(p->string, "layers") == 0)
+            if (strcmp(p->string, "sss") == 0 || strcmp(p->string, "layers") == 0 ||
+                strcmp(p->string, "splatDomain") == 0)
                 continue;
             // A string value is a texture path. Recorded apart from the numeric
             // params only because a float array cannot hold one; the key still

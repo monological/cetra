@@ -178,6 +178,13 @@ typedef struct CSceneMaterialOverride {
     // of that, so it cannot ride the key/value table at all.
     CSceneMaterialLayer layers[CSCENE_MAX_MATERIAL_LAYERS];
     int layer_count; // 0 = an ordinary material
+    // Splat coordinate space (spec 11.66). Present = the splat map is addressed
+    // in world XZ over this rectangle; absent = UV1, the default. One compound
+    // key rather than a space enum beside a rectangle, because the two are
+    // meaningless apart: world addressing without a domain has no mapping, and
+    // UV1 addressing has no use for one.
+    bool has_splat_domain;
+    float splat_domain[4]; // origin x, origin z, size x, size z, world units
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a
