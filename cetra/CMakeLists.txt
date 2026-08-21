@@ -62,6 +62,7 @@ add_custom_target(cetra_shaders DEPENDS ${SHADER_HEADER})
 # Collect source files
 file(GLOB CETRA_SOURCES
     src/*.c
+    src/*.cpp
     src/ext/cwalk.c
     src/ext/cJSON.c
     src/ext/log.c

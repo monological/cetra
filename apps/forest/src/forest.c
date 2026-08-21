@@ -31,6 +31,7 @@
 #include "cetra/ibl.h"
 #include "cetra/light.h"
 #include "cetra/lod.h"
+#include "cetra/cluster.h"
 #include "cetra/material.h"
 #include "cetra/mesh.h"
 #include "cetra/noise.h"
@@ -86,6 +87,10 @@ typedef struct ForestArgs {
     int screenshot_every; // also save numbered frames every N (0 = only the final one)
     int profiler;
     int no_lod;
+    // Bisect lever (spec 11.63): build lod.c chains instead of cluster DAGs.
+    // NOT an off switch for LOD -- both fill the same lod_* ranges, so this
+    // isolates which BUILDER produced them.
+    int no_clusters;
     int no_instancing;
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int depth_prepass;    // position-only depth before shading; off by default
@@ -119,6 +124,10 @@ typedef struct ForestArgs {
     float heightmap_max;     // world Y the file's 65535 maps to
     int height_probe;        // print sampled heights, normals and masks
     int scatter_probe;       // print where the scatter put things, against the drainage
+    // Print each clustered prototype's DAG (spec 11.63). The instrument exists
+    // because the guarantee is STRUCTURAL: "no cluster index leaves the original
+    // vertex buffer" is what makes a crack impossible, and no frame can show it.
+    int cluster_probe;
     // Place the whole world this far from the origin on X and Z (spec 11.62).
     // The instrument fp32's relative precision is measured with: at 0 this is
     // the frame the app has always rendered.
@@ -166,6 +175,8 @@ static size_t g_prototype_tris;
 static size_t g_node_count;
 static size_t g_chains_built;
 static size_t g_chains_refused;
+static size_t g_clustered_meshes;
+static size_t g_clusters_built;
 
 // --- deterministic scatter -------------------------------------------------
 
@@ -193,9 +204,45 @@ static float rnd_range(float lo, float hi) {
 // The one place a generated mesh becomes drawable. The chain REWRITES
 // mesh->indices, so it has to precede the upload -- doing it after sends level 0
 // and leaves every later level's offset pointing past the end of the buffer.
-static void finalize_mesh(Mesh* mesh, Material* material) {
+/*
+ * `cluster` picks the LOD builder, and the split is measured rather than assumed
+ * (spec 11.63).
+ *
+ * A cluster DAG locks each group's boundary at every level, which is what makes a
+ * crack between levels impossible -- and on a REGULAR GRID that constraint costs
+ * more than it buys, because whole-mesh simplification has no seams to respect
+ * and reaches a better surface at the same triangle count. Terrain tiles are
+ * exactly that shape, and at matched picture cost the chain beat the DAG on them.
+ * Props are not: a trunk or a rock is irregular, instanced thousands of times, and
+ * is where 99% of this scene's triangles live.
+ *
+ * So tiles keep the chain and props take the DAG. Both fill the same lod_* ranges,
+ * so nothing downstream -- selection, batching, the sort key -- learns which ran.
+ */
+static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
     mesh->material = material;
-    int levels = mesh_build_lod_chain(mesh);
+    int levels = 0;
+    if (cluster && !g_args.no_clusters && mesh_build_cluster_lod(mesh)) {
+        levels = mesh->lod_levels;
+        g_clustered_meshes++;
+        g_clusters_built += mesh->cluster_count;
+        if (g_args.cluster_probe) {
+            MeshClusterStats st;
+            mesh_cluster_stats(mesh, &st);
+            // max_index against vertex_count is the SEAL: every level indexes the
+            // one unmoved vertex buffer, so two clusters sharing an edge share
+            // its literal vertices whatever levels they came from.
+            printf("cluster-probe mesh=%zu clusters=%d groups=%d dag_levels=%d bands=%d "
+                   "max_index=%d vertex_count=%zu permissive=%d",
+                   g_distinct_meshes, st.clusters, st.groups, st.levels, mesh->lod_levels,
+                   st.max_index, mesh->vertex_count, st.permissive ? 1 : 0);
+            for (int b = 0; b < mesh->lod_levels; ++b)
+                printf(" band%d=%zu", b, mesh->lod_count[b] / 3);
+            printf("\n");
+        }
+    } else {
+        levels = mesh_build_lod_chain(mesh);
+    }
     if (levels > 1)
         g_chains_built++;
     else
@@ -697,7 +744,7 @@ static void build_terrain(PhysicsWorld* physics, EntityManager* em) {
                 free_mesh(mesh);
                 continue;
             }
-            finalize_mesh(mesh, g_mat_terrain);
+            finalize_mesh(mesh, g_mat_terrain, false);
 
             SceneNode* node = create_node();
             add_mesh_to_node(node, mesh);
@@ -765,7 +812,7 @@ static void build_trees(void) {
             free_mesh(bark[i]);
             bark[i] = NULL;
         } else {
-            finalize_mesh(bark[i], g_mat_bark);
+            finalize_mesh(bark[i], g_mat_bark, true);
         }
 
         leaf[i] = create_mesh();
@@ -773,7 +820,7 @@ static void build_trees(void) {
             free_mesh(leaf[i]);
             leaf[i] = NULL;
         } else {
-            finalize_mesh(leaf[i], g_mat_leaf);
+            finalize_mesh(leaf[i], g_mat_leaf, true);
         }
         tree_skeleton_free(&skel);
     }
@@ -831,7 +878,7 @@ static void build_rocks(void) {
             rocks[i] = NULL;
             continue;
         }
-        finalize_mesh(rocks[i], g_mat_rock);
+        finalize_mesh(rocks[i], g_mat_rock, true);
     }
 
     static Placement items[ROCK_COUNT];
@@ -1204,6 +1251,7 @@ static void on_init(Game* game) {
     printf("Forest: %zu distinct meshes, %zu prototype triangles, %zu nodes\n", g_distinct_meshes,
            g_prototype_tris, g_node_count);
     printf("Forest: %zu LOD chains built, %zu refused\n", g_chains_built, g_chains_refused);
+    printf("Forest: %zu clustered meshes, %zu clusters\n", g_clustered_meshes, g_clusters_built);
 }
 
 // The lattice the diagnostic shift snaps to. Matches what the engine derives
@@ -1374,6 +1422,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "  -W, -H <n>              Window size\n");
     fprintf(stderr, "      --profiler          Per-pass timing + submission counters\n");
     fprintf(stderr, "      --no-lod            Draw every mesh at LOD level 0\n");
+    fprintf(stderr, "      --no-clusters       Build LOD chains instead of cluster DAGs\n");
     fprintf(stderr, "      --no-instancing     One draw per mesh\n");
     fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
     fprintf(stderr, "      --depth-prepass     Depth-only pass before shading\n");
@@ -1401,6 +1450,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --heightmap-range <lo> <hi>  World Y the file's range maps to\n");
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
+    fprintf(stderr, "      --cluster-probe          Print each clustered prototype's DAG\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --screenshot-every N  Also save numbered frames every N frames\n");
     fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
@@ -1433,6 +1483,8 @@ int main(int argc, char** argv) {
             g_args.screenshot_every = atoi(argv[++i]);
         } else if (!strcmp(a, "--profiler")) {
             g_args.profiler = 1;
+        } else if (!strcmp(a, "--no-clusters")) {
+            g_args.no_clusters = 1;
         } else if (!strcmp(a, "--no-lod")) {
             g_args.no_lod = 1;
         } else if (!strcmp(a, "--no-instancing")) {
@@ -1484,6 +1536,8 @@ int main(int argc, char** argv) {
         } else if (!strcmp(a, "--heightmap-range") && i + 2 < argc) {
             g_args.heightmap_min = strtof(argv[++i], NULL);
             g_args.heightmap_max = strtof(argv[++i], NULL);
+        } else if (!strcmp(a, "--cluster-probe")) {
+            g_args.cluster_probe = 1;
         } else if (!strcmp(a, "--scatter-probe")) {
             g_args.scatter_probe = 1;
         } else if (!strcmp(a, "--terrain-height-probe")) {

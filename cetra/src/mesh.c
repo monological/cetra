@@ -56,6 +56,9 @@ Mesh* create_mesh() {
     memset(mesh->lod_count, 0, sizeof(mesh->lod_count));
     memset(mesh->lod_error, 0, sizeof(mesh->lod_error));
     mesh->lod_levels = 1;
+    mesh->cluster_count = 0;
+    mesh->cluster_groups = 0;
+    mesh->cluster_levels = 0;
 
     // One share, held by whoever asked for the mesh. That makes the single-node
     // case identical to the ownership this had before refcounting, including

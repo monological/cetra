@@ -13,6 +13,10 @@ repos:
   - repo: https://github.com/pocc/pre-commit-hooks
     rev: v1.3.5
     hooks:
+      # cstyleCast is a C++-only check, and this is a C codebase: a C-style cast
+      # is the only cast C has. It stayed quiet while every staged file was .c,
+      # and started firing on unchanged headers the moment cluster_build.cpp
+      # joined the run and cppcheck began parsing them as C++.
       - id: cppcheck
-        args: [--std=c11, --suppress=missingIncludeSystem, --suppress=missingInclude, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkLevelNormal, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, --suppress=constParameterCallback, "--suppress=*:*ext/*"]
+        args: [--std=c11, --suppress=missingIncludeSystem, --suppress=missingInclude, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkLevelNormal, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, --suppress=constParameterCallback, --suppress=passedByValueCallback, --suppress=cstyleCast, "--suppress=*:*ext/*"]
         exclude: '^(cetra/src/ext/|cetra/src/ltc_lut\.h$)'

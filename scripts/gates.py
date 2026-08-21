@@ -8076,6 +8076,132 @@ def run_prepass_gate(workdir):
     return failures
 
 
+_D4_PROBE = re.compile(
+    r"cluster-probe mesh=(\d+) clusters=(\d+) groups=(\d+) dag_levels=(\d+) bands=(\d+) "
+    r"max_index=(\d+) vertex_count=(\d+) permissive=(\d+)((?: band\d+=\d+)+)")
+
+# A clustered prototype must reach at least this reduction from its finest band to
+# its coarsest, or the DAG did not produce a usable cut. Well under bark's measured
+# 277x and well over what a leaf card manages, which is the point: the arm has to
+# pass on the geometry that CAN simplify without demanding it of the geometry that
+# cannot.
+D4_BAND_REDUCTION_MIN = 8.0
+
+# How far the DAG's drawn triangles may sit from the chain's at one framing. The
+# two are at PARITY on this corpus (measured -2.7% near, -0.1% mid, -1.4% far), and
+# this arm pins that rather than claiming a win the measurement does not support.
+D4_PARITY_TOLERANCE = 0.06
+
+# Both builders must still beat drawing every triangle. The chain measures 15.2%
+# here and the DAG 13.0%; the bar sits below both so it reads "LOD happened", not
+# "this build's tuning".
+D4_LOD_SAVING_MIN = 0.10
+
+
+def run_d4_gate(workdir):
+    """Cluster-DAG level of detail, and what it does and does not buy.
+
+      d4-cluster-seal    every cluster at every level indexes the ORIGINAL vertex
+                         buffer, and destructive simplification never ran. That is
+                         what makes a crack between levels impossible, and it is
+                         structural -- no frame can show it, so it is read off the
+                         probe rather than rendered.
+      d4-cluster-bands   the cut actually coarsens with distance: band triangle
+                         counts never rise, and the geometry that CAN simplify
+                         reaches a large reduction. Leaf cards are expected not to
+                         and are not held to it.
+      d4-cluster-batch   instancing survives. A per-instance cut would have ended
+                         batching; the band quantisation exists so it does not, and
+                         this is the arm that says so -- identical draw and instance
+                         counts against the chain, and 0 px against --no-instancing.
+      d4-cluster-parity  the DAG draws about as many triangles as the chain, and
+                         both beat --no-lod. Parity is the honest claim on this
+                         corpus: boundary locking costs roughly what error-driven
+                         selection gains, and the DAG's win is the seal above.
+
+    The DAG is applied to PROPS ONLY, and the exclusion is measured rather than
+    assumed: on a regular grid -- which is what a terrain tile is -- locking every
+    group boundary costs more than it buys, and the chain reached a better surface
+    at the same triangle count. Terrain gets the quadtree instead.
+    """
+    if not os.path.exists(FOREST):
+        print("  d4-cluster-seal SKIP  (forest not built)")
+        return []
+    failures = []
+
+    probe = subprocess.run(
+        [FOREST, "-x", "-f", "1", "-W", "200", "-H", "150", "--no-fog", "--seed", "1337",
+         "--cluster-probe"], capture_output=True, text=True)
+    rows = [m for m in _D4_PROBE.finditer(probe.stdout + probe.stderr)]
+    if not rows:
+        print("  d4-cluster-seal ERROR the cluster probe produced no rows")
+        return ["d4-cluster-seal"]
+
+    # --- seal ---------------------------------------------------------------
+    escaped = [r for r in rows if int(r.group(6)) >= int(r.group(7))]
+    permissive = [r for r in rows if int(r.group(8)) != 0]
+    ok = not escaped and not permissive
+    print(f"  d4-cluster-seal {'PASS' if ok else 'FAIL'}  {len(rows)} clustered prototypes, "
+          f"{len(escaped)} with an index outside the original vertex buffer (want 0) and "
+          f"{len(permissive)} built with destructive simplification (want 0)")
+    if not ok:
+        failures.append("d4-cluster-seal")
+
+    # --- bands --------------------------------------------------------------
+    worst_rise, best_reduction = 0, 0.0
+    for r in rows:
+        bands = [int(v.split("=")[1]) for v in r.group(9).split()]
+        for i in range(1, len(bands)):
+            worst_rise = max(worst_rise, bands[i] - bands[i - 1])
+        if bands[-1] > 0:
+            best_reduction = max(best_reduction, bands[0] / float(bands[-1]))
+    ok = worst_rise <= 0 and best_reduction >= D4_BAND_REDUCTION_MIN
+    print(f"  d4-cluster-bands {'PASS' if ok else 'FAIL'}  worst band-to-band rise "
+          f"{worst_rise} triangles (want <= 0), best prototype reduction {best_reduction:.0f}x "
+          f"(want >= {D4_BAND_REDUCTION_MIN:.0f}x; a leaf card manages ~2x and is not the one "
+          f"this reads)")
+    if not ok:
+        failures.append("d4-cluster-bands")
+
+    # --- batching and parity ------------------------------------------------
+    dag = _forest_run(workdir, "d4_dag", [])
+    chain = _forest_run(workdir, "d4_chain", ["--no-clusters"])
+    nolod = _forest_run(workdir, "d4_nolod", ["--no-lod"])
+    uninst = _forest_run(workdir, "d4_uninst", ["--no-instancing"])
+    if not all((dag, chain, nolod, uninst)):
+        print("  d4-cluster-batch ERROR while rendering forest")
+        return failures + ["d4-cluster-batch", "d4-cluster-parity"]
+
+    same_draws = dag["opaque"]["draws"] == chain["opaque"]["draws"]
+    same_inst = dag["opaque"]["instances"] == chain["opaque"]["instances"]
+    unbatched = uninst["opaque"]["draws"] == uninst["opaque"]["instances"]
+    ok = same_draws and same_inst and unbatched
+    print(f"  d4-cluster-batch {'PASS' if ok else 'FAIL'}  DAG draws {dag['opaque']['draws']} vs "
+          f"chain {chain['opaque']['draws']} and instances {dag['opaque']['instances']} vs "
+          f"{chain['opaque']['instances']} (want equal: a per-instance cut would split every "
+          f"run); --no-instancing gives {uninst['opaque']['draws']} draws for "
+          f"{uninst['opaque']['instances']} instances (want equal)")
+    if not ok:
+        failures.append("d4-cluster-batch")
+
+    d_tris = dag["opaque"]["triangles"]
+    c_tris = chain["opaque"]["triangles"]
+    n_tris = nolod["opaque"]["triangles"]
+    drift = abs(d_tris - c_tris) / float(max(c_tris, 1))
+    d_save = 1.0 - d_tris / float(max(n_tris, 1))
+    c_save = 1.0 - c_tris / float(max(n_tris, 1))
+    ok = (drift <= D4_PARITY_TOLERANCE and d_save >= D4_LOD_SAVING_MIN
+          and c_save >= D4_LOD_SAVING_MIN)
+    print(f"  d4-cluster-parity {'PASS' if ok else 'FAIL'}  DAG {d_tris} triangles vs chain "
+          f"{c_tris}, drift {100.0 * drift:.1f}% (want <= {100.0 * D4_PARITY_TOLERANCE:.0f}%); "
+          f"against --no-lod's {n_tris} that is {100.0 * d_save:.1f}% and {100.0 * c_save:.1f}% "
+          f"saved (want >= {100.0 * D4_LOD_SAVING_MIN:.0f}% each)")
+    if not ok:
+        failures.append("d4-cluster-parity")
+
+    return failures
+
+
 def run_forest_gate(workdir):
     """The forest app: does scattered content actually batch, and does LOD fire.
 
@@ -11417,6 +11543,7 @@ GATE_GROUPS = [
      run_overdraw_gate),
     ("prepass", "depth prepass (identical picture, less shading, spec 11.30 / E6):",
      run_prepass_gate),
+    ("d4", "cluster-DAG level of detail (spec 11.63 / D4):", run_d4_gate),
     ("forest", "forest (scattered content: batching, ordering, LOD, spec 11.29):",
      run_forest_gate),
     ("import", "import:", _run_import_gates),
