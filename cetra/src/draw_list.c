@@ -302,9 +302,11 @@ static bool _item_bounds(const DrawItem* item, const CullView* view, AABB* out) 
                                    mesh->material->wind_mode, mesh->wind_flex_max,
                                    mesh->wind_leaf_max);
     // The CDLOD morph is the second displacer in object_position.glsl and needs
-    // the same treatment. Its bound is EXACT rather than an envelope -- the morph
-    // is a lerp between two stored positions, so the largest |parent Y - Y| the
-    // mesh carries is reached and never exceeded. Summed with wind's rather than
+    // the same treatment. Its bound is a measurement rather than an envelope --
+    // the morph is a lerp between two stored positions, so the largest
+    // |parent Y - Y| the mesh carries is reached and never exceeded -- but it
+    // bounds Y alone, and aabb_expand grows all three axes, so the box is exact
+    // vertically and conservative horizontally. Summed with wind's rather than
     // maxed: nothing stops a mesh carrying both, and the two add.
     margin += mesh->morph_max_offset;
     if (margin > 0.0f)

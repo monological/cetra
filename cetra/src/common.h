@@ -28,11 +28,10 @@
 
 // CDLOD morph targets for a terrain quadtree patch (spec 11.63, terrain_morph.glsl).
 //
-// Both are OPTIONAL, and the shader reads an absent one as (0,0,0), which is the
-// off state rather than a degenerate one: GL_ATTR_MORPH.z is a reciprocal span,
-// so zero makes the factor zero and the whole displacement an exact identity.
-// Every mesh outside a terrain quadtree therefore costs a coherent branch and
-// nothing else -- no uniform, no material flag, nothing to switch off.
+// Both are OPTIONAL, and an absent one is the OFF state rather than a degenerate
+// one -- terrain_morph.glsl states why, at the read that depends on it. Every
+// mesh outside a terrain quadtree therefore costs a coherent branch and nothing
+// else: no uniform, no material flag, nothing to switch off.
 #define GL_ATTR_MORPH        12 // vec3 - x parent Y, y window start, z 1/(end - start)
 #define GL_ATTR_MORPH_NORMAL 13 // vec3 - the parent surface's normal
 

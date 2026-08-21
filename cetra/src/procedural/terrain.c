@@ -168,8 +168,9 @@ int terrain_field_build_pyramid(TerrainField* field) {
             !filter_plane(prev->deposit, prev->res, &cur->deposit, cur->res) ||
             !filter_plane(prev->wear, prev->res, &cur->wear, cur->res)) {
             // Keep what did build. A short pyramid samples coarser geometry at a
-            // finer level than it wanted, which aliases; an absent one would make
-            // every caller branch.
+            // finer level than it wanted, which aliases -- but it aliases rather
+            // than failing, because field_level clamps and every caller therefore
+            // asks for a level it may not get.
             free(cur->height);
             free(cur->flow);
             free(cur->deposit);
@@ -433,18 +434,18 @@ bool terrain_bake_splat(const TerrainParams* p, int res, unsigned char* out_rgb)
 
 // The field level whose planes to read, and the resolution that goes with it.
 // Level 0 with no pyramid built, which is every field from before 11.63.
-static const TerrainFieldLevel* field_level(const TerrainField* f, int level) {
-    static TerrainFieldLevel base;
+//
+// BY VALUE, and it is five words wide. Returning a pointer meant the no-pyramid
+// case had to point AT something, which was a function-local static -- a second
+// caller holding the result across a call would have aliased it, and it took the
+// field path's one honest thread-safety property away for nothing.
+static TerrainFieldLevel field_level(const TerrainField* f, int level) {
     if (f->level_count > 0 && f->levels) {
         int k = level < 0 ? 0 : (level >= f->level_count ? f->level_count - 1 : level);
-        return &f->levels[k];
+        return f->levels[k];
     }
-    base.res = f->res;
-    base.height = f->height;
-    base.flow = f->flow;
-    base.deposit = f->deposit;
-    base.wear = f->wear;
-    return &base;
+    TerrainFieldLevel base = {f->res, f->height, f->flow, f->deposit, f->wear};
+    return base;
 }
 
 // The fbm's finest surviving octave at a level, as an octave COUNT.
@@ -469,24 +470,26 @@ static int analytic_octaves(const TerrainParams* p, float cell) {
     return kept > 0 ? kept : 1;
 }
 
-// How far this point has fallen toward the sea, in [0,1]: 0 inland of
-// island_start, 1 at the domain's edge midpoints and beyond.
-//
-// Smoothstep and not a linear ramp, because the join at island_start is a place
-// the eye finds instantly -- a crease running in a circle round the whole island
-// is more obviously artificial than any amount of noise.
-//
-// Takes DOMAIN coordinates, which is what the caller already has.
 /*
  * What the ground becomes once the falloff has fully run: the sea floor, keeping
  * a share of the terrain's own relief rather than going exactly flat.
  *
  * Partly because a sea floor is not a plane. Mostly because a large run of
- * EXACTLY COPLANAR triangles is a collider no BVH can index -- Jolt's tree
- * builder falls back to a random split and TRACES, and its default trace handler
- * is an assert, so the process dies while building a mesh shape. JoltC exposes no
- * hook to replace that handler, which is why this is fixed at the geometry rather
- * than at the report.
+ * EXACTLY COPLANAR triangles is a collider no BVH can index: Jolt's tree builder
+ * cannot find a split, falls back to a random one and TRACES, and the default
+ * TraceFunction is DummyTrace, which is JPH_ASSERT(false) -- so the process takes
+ * a breakpoint while building a mesh shape.
+ *
+ * Two corrections to what this comment claimed, both of which narrow it. The
+ * trace is JPH_IF_DEBUG-wrapped (AABBTreeBuilder.cpp:205), so the death is
+ * DEBUG-BUILD ONLY -- a release build indexes the same degenerate soup silently
+ * and badly. And JPH::Trace and JPH::AssertFailed are assignable JPH_EXPORT
+ * extern pointers, so a handler CAN be installed; what JoltC lacks is a C entry
+ * point for doing it, and a C++ TU is now precedented in this build.
+ *
+ * So this is not the only place the crash could be fixed -- it is the place the
+ * underlying problem is, which is that a flat sea floor is bad collision geometry
+ * whether or not anything reports it.
  *
  * A quarter, so the floor is unmistakably not a plane while the rim still reads
  * as deep water against a sea level a fraction of `island_depth` down.
@@ -497,6 +500,19 @@ static float island_floor(const TerrainParams* p, float h) {
     return -p->island_depth + h * ISLAND_FLOOR_RELIEF;
 }
 
+// How far this point has fallen toward the sea, in [0,1]: 0 inland of
+// island_start, 1 at the domain's edge midpoints and beyond.
+//
+// Smoothstep and not a linear ramp, because the join at island_start is a place
+// the eye finds instantly -- a crease running in a circle round the whole island
+// is more obviously artificial than any amount of noise.
+//
+// The radius is EUCLIDEAN against a square domain, so it passes 1 at the edge
+// midpoints and reaches sqrt(2) at the corners: the island is a disc inscribed in
+// the domain and the corners are open sea. A per-axis (Chebyshev) radius would
+// give a square island and satisfy every other property this has.
+//
+// Takes DOMAIN coordinates, which is what the caller already has.
 static float island_falloff(const TerrainParams* p, float ox, float oz) {
     if (!(p->island_start > 0.0f) || !(p->island_start < 1.0f) || !(p->extent > 0.0f))
         return 0.0f;
@@ -512,8 +528,8 @@ float terrain_level_cell(const TerrainParams* p, int level) {
     if (level < 0)
         level = 0;
     if (p->field && p->field->height) {
-        const TerrainFieldLevel* L = field_level(p->field, level);
-        return terrain_field_cell(p->extent, L->res);
+        TerrainFieldLevel L = field_level(p->field, level);
+        return terrain_field_cell(p->extent, L.res);
     }
     if (p->octaves <= 0 || !(p->base_freq > 0.0f))
         return 0.0f;
@@ -552,40 +568,44 @@ float terrain_height_at_level(const TerrainParams* p, float x, float z, int leve
     // legitimate configuration -- the fbm is simply inert -- and folding the two
     // guards together would return a flat 0 for it.
     if (p->field && p->field->height) {
-        const TerrainFieldLevel* L = field_level(p->field, level);
-        return sample_plane(p, L->height, L->res, x, z);
+        TerrainFieldLevel L = field_level(p->field, level);
+        return sample_plane(p, L.height, L.res, x, z);
     }
-    if (p->octaves <= 0)
-        return 0.0f;
-    const NoisePerm* t = perm_for(p->seed);
-
     // Offset into positive coordinates before scaling: the lattice is indexed
     // from zero, and feeding it negatives would fold the terrain about its own
     // origin rather than continuing it.
     float ox, oz;
     terrain_to_domain(p, x, z, &ox, &oz);
 
-    int kept = level > 0 ? analytic_octaves(p, terrain_level_cell(p, level)) : p->octaves;
-    float shore = island_falloff(p, ox, oz);
-    float sum = 0.0f, amp = 1.0f, norm = 0.0f, freq = p->base_freq;
-    for (int i = 0; i < p->octaves; ++i) {
-        // A different constant Y plane per octave, the trick grass.c uses, so
-        // octaves do not share ridge lines and stack into visible creases.
-        //
-        // The dropped octaves still count toward `norm`. A level is the surface
-        // MINUS what it cannot resolve; renormalising to the kept octaves would
-        // scale the survivors back up to full amplitude and make each level a
-        // different terrain rather than a smoother view of one.
-        if (i < kept) {
-            float n = noise_perlin3_tiled(t, ox * freq, (float)i * 7.31f, oz * freq,
-                                          TERRAIN_NOISE_PERIOD);
-            sum += amp * n;
+    // No octaves is a flat surface, and it falls THROUGH to the shore lerp below
+    // rather than returning early. An island's silhouette is a property of the
+    // domain, not of the noise: shaped only on the noisy path, `octaves: 0`
+    // silently turns an island back into an infinite plane at sea level.
+    float h = 0.0f;
+    if (p->octaves > 0) {
+        const NoisePerm* t = perm_for(p->seed);
+        int kept = level > 0 ? analytic_octaves(p, terrain_level_cell(p, level)) : p->octaves;
+        float sum = 0.0f, amp = 1.0f, norm = 0.0f, freq = p->base_freq;
+        for (int i = 0; i < p->octaves; ++i) {
+            // A different constant Y plane per octave, the trick grass.c uses, so
+            // octaves do not share ridge lines and stack into visible creases.
+            //
+            // The dropped octaves still count toward `norm`. A level is the surface
+            // MINUS what it cannot resolve; renormalising to the kept octaves would
+            // scale the survivors back up to full amplitude and make each level a
+            // different terrain rather than a smoother view of one.
+            if (i < kept) {
+                float n = noise_perlin3_tiled(t, ox * freq, (float)i * 7.31f, oz * freq,
+                                              TERRAIN_NOISE_PERIOD);
+                sum += amp * n;
+            }
+            norm += amp;
+            amp *= p->gain;
+            freq *= p->lacunarity;
         }
-        norm += amp;
-        amp *= p->gain;
-        freq *= p->lacunarity;
+        h = norm > 0.0f ? (sum / norm) * p->height : 0.0f;
     }
-    float h = norm > 0.0f ? (sum / norm) * p->height : 0.0f;
+    float shore = island_falloff(p, ox, oz);
     // Lerped toward the sea floor rather than multiplied down to zero: a shore
     // has to keep going once it is under water, or the sea meets a flat plate at
     // exactly its own level and there is no beach, only a waterline.
@@ -596,10 +616,18 @@ float terrain_height_at(const TerrainParams* p, float x, float z) {
     return terrain_height_at_level(p, x, z, 0);
 }
 
-// The step a normal is measured over: half a quad of the visual mesh, so the
-// shading normal describes the surface the eye actually sees. A fixed epsilon
-// would either sit under float precision on a large terrain or smooth away the
-// detail the triangles carry.
+// The step a normal is measured over: half a cell of the `tiles x tile_segments`
+// lattice. A fixed epsilon would either sit under float precision on a large
+// terrain or smooth away the detail the triangles carry, so it is derived from
+// the domain -- but from that lattice specifically, which is a stated sampling
+// RESOLUTION and no longer the meshing.
+//
+// It was "half a quad of the visual mesh" until the quadtree, where a patch's
+// quad depends on its level and there is no single visual quad to be half of.
+// The number is unchanged and deliberately so: it is what every normal in this
+// app has been measured over, the scatter's slope gate is tuned against it, and
+// tying it to a per-patch cell would make the same ground pass or fail that gate
+// depending on how far away the camera was standing when it was asked.
 static float normal_step(const TerrainParams* p) {
     int across = p->tiles * p->tile_segments;
     if (across <= 0)
@@ -815,7 +843,12 @@ void terrain_height_probe(const TerrainParams* p) {
     // from the drop. The drop is the falloff times a span that includes the noise
     // AND the floor's share of it, so recovering t outside this file means
     // restating island_floor's arithmetic somewhere that cannot see it.
-    if (p->island_start > 0.0f && p->island_start < 1.0f) {
+    // Analytic only, because the reference is `*p` with the shaping switched off
+    // and a FIELD has the shaping already baked into its stored heights --
+    // terrain_field_seed applies it at bake time. Clearing island_start there
+    // changes nothing the sampler reads, so every row would print drop=0.000000
+    // for a genuinely shaped island and the sweep would assert that it is flat.
+    if (!p->field && p->island_start > 0.0f && p->island_start < 1.0f) {
         TerrainParams flat = *p;
         flat.island_start = 0.0f;
         printf("terrain-height-probe island start=%.4f depth=%.4f\n", (double)p->island_start,
@@ -991,7 +1024,11 @@ bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh) {
  * between them is not an approximation of the parent -- it IS what the parent
  * rasterizes between two of its vertices.
  */
-static void fill_morph_targets(const TerrainParams* p, Mesh* mesh, float x0, float z0, float span,
+// False on allocation failure, and the caller must propagate it: a patch with no
+// morph arrays reads (0,0,0) in the shader, so its factor is pinned at 0 and it
+// never becomes its parent's surface. That is a fine patch abutting a coarse one
+// with a permanently open seam -- a crack, reported as a successful build.
+static bool fill_morph_targets(const TerrainParams* p, Mesh* mesh, float x0, float z0, float span,
                                int segments, int parent_level, float morph_start,
                                float morph_end) {
     int side = segments + 1;
@@ -1006,7 +1043,7 @@ static void fill_morph_targets(const TerrainParams* p, Mesh* mesh, float x0, flo
         free(normals);
         free(ph);
         free(pn);
-        return;
+        return false;
     }
 
     // The parent's own nodes over this square, which are this patch's even ones.
@@ -1060,11 +1097,17 @@ static void fill_morph_targets(const TerrainParams* p, Mesh* mesh, float x0, flo
 
     free(ph);
     free(pn);
+    // Released first: terrain_build_patch is public and a caller rebuilding into
+    // a Mesh it already used would otherwise leak both arrays every time.
+    free(mesh->morph);
+    free(mesh->morph_normals);
     mesh->morph = morph;
     mesh->morph_normals = normals;
-    // Exactly reached at factor 1, so the culler's box is tight rather than
-    // merely safe -- the morph is a lerp between two stored values.
+    // Exactly reached at factor 1 in Y, which is the axis the morph moves in.
+    // draw_list.c expands all three, so the box is exact there and conservative
+    // in X and Z.
     mesh->morph_max_offset = worst;
+    return true;
 }
 
 bool terrain_build_patch(const TerrainParams* p, float x0, float z0, float span, int segments,
@@ -1080,8 +1123,8 @@ bool terrain_build_patch(const TerrainParams* p, float x0, float z0, float span,
     int parent_level = terrain_level_for_cell(p, cell * 2.0f);
     if (!build_grid(p, x0, z0, span, segments, true, level, mesh))
         return false;
-    fill_morph_targets(p, mesh, x0, z0, span, segments, parent_level, morph_start, morph_end);
-    return true;
+    return fill_morph_targets(p, mesh, x0, z0, span, segments, parent_level, morph_start,
+                              morph_end);
 }
 
 bool terrain_build_collider(const TerrainParams* p, int segments, Mesh* mesh) {

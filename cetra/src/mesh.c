@@ -27,7 +27,13 @@
 static unsigned g_next_mesh_id = 1;
 
 Mesh* create_mesh() {
-    Mesh* mesh = malloc(sizeof(Mesh));
+    // Zeroed, not malloc'd, for the reason create_engine states: every field
+    // below is still set explicitly, but a struct this wide cannot rely on each
+    // new one being remembered here. Spec 11.63 added five fields and remembered
+    // two, which left a garbage cull margin on every mesh in the engine
+    // (draw_list.c reads morph_max_offset unconditionally) and a glDeleteBuffers
+    // on an arbitrary GL name in free_mesh.
+    Mesh* mesh = calloc(1, sizeof(Mesh));
     if (!mesh) {
         log_error("Failed to allocate memory for Mesh");
         return NULL;
@@ -274,8 +280,8 @@ static void measure_bone_bounds(Mesh* mesh) {
 }
 
 // One of the two optional 3-float morph streams, or nothing when the mesh does
-// not carry it. Absent is the OFF state and not a degenerate one: an unbound
-// attribute reads (0,0,0) in the shader, which is a zero morph factor.
+// not carry it -- leaving the attribute unbound, which terrain_morph.glsl reads
+// as the off state.
 static void _upload_morph_stream(const Mesh* mesh, const float* data, GLuint* vbo, GLuint attr) {
     if (!data)
         return;

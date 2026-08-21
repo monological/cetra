@@ -1,11 +1,18 @@
 // CDLOD vertex morphing, for the terrain quadtree (spec 11.63).
 //
-// A quadtree patch and its parent cover the same ground at half the density,
-// and the parent's lattice restricted to this patch is EXACTLY this patch's
-// even-indexed subset -- same world XZ, same height function, so the shared
-// vertices are the same vertices. The odd ones sit on the parent's own
-// triangulation of them. So the target differs from the vertex in Y ALONE, and
+// A quadtree patch and its parent cover the same ground at half the density, and
+// the parent's lattice restricted to this patch is this patch's even-indexed
+// subset AT THE SAME WORLD XZ. The odd vertices sit on the parent's own
+// triangulation of those. So the target differs from the vertex in Y alone, and
 // the whole displacement is one float per vertex.
+//
+// XZ only, NOT the height: the parent's surface is evaluated at the parent's
+// LEVEL, which is a coarser view of the field, so even the shared vertices move.
+// The plan called for a subsampled pyramid, where they would not have -- that
+// was dropped because a subsample drops exactly 0.000000 units on an aligned
+// lattice, i.e. it is not a pyramid at all. Sampling the target at the parent's
+// level is what dissolved the exactness constraint and let the levels be
+// filtered.
 //
 // Morphing to it as the camera retreats is what removes both the pop and the
 // crack. The pop, because a patch has already become its parent by the time the
@@ -34,11 +41,19 @@ uniform vec3 uMorphEye;
 // the camera does, and reporting zero velocity for it smears under TAA.
 uniform vec3 uMorphEyePrev;
 
+// 1 suppresses the morph, 0 is the normal path -- that way round, and not a
+// scale defaulting to 1, because an unset uniform reads 0. A sixth program that
+// included this chunk and missed the upload would morph correctly; the same
+// program under a scale would displace nothing, and under the prepass's one-sided
+// LEQUAL that DELETES the surface. The off state is the diagnostic, so the
+// dangerous direction is the one that has to be asked for explicitly.
+uniform float uMorphOff;
+
 // The factor for a vertex, from ITS OWN distance to the camera rather than the
 // patch's. Per vertex because the seam is where this has to be right, and the
 // two sides of a seam agree on nothing except the shared vertex itself.
 float cetraMorphFactor(vec3 world, vec3 eye) {
-    return clamp((distance(world, eye) - aMorph.y) * aMorph.z, 0.0, 1.0);
+    return (1.0 - uMorphOff) * clamp((distance(world, eye) - aMorph.y) * aMorph.z, 0.0, 1.0);
 }
 
 // Object-space displacement toward the parent surface.

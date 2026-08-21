@@ -61,16 +61,13 @@ typedef struct TerrainField {
     float* wear;
 
     // Coarser copies of all four planes (spec 11.63), level 0 aliasing the
-    // arrays above. Empty until terrain_field_build_pyramid runs, and empty
-    // afterwards on a field whose resolution does not halve.
+    // arrays above. Empty until terrain_field_build_pyramid runs; afterwards a
+    // field whose resolution does not halve carries exactly one level, which is
+    // not the same thing -- field_level distinguishes them.
     //
-    // FILTERED, under a separable [1 2 1] tent, and the alternative is worth
-    // recording because it is the obvious one: every other node, so a coarse node
-    // IS a fine node. That version delivers nothing whenever a patch cell is a
-    // whole multiple of a field cell, which is the normal case -- reading level 0
-    // at every other node returns exactly the floats level 1 stores, so the whole
-    // pyramid is an identity. What a coarse mesh needs is the detail REMOVED, not
-    // addressed more cheaply.
+    // FILTERED, under a separable [1 2 1] tent rather than subsampled --
+    // filter_plane records why, including what the subsample was measured to
+    // deliver.
     int level_count;
     TerrainFieldLevel* levels;
 
@@ -114,7 +111,7 @@ void terrain_field_free(TerrainField* field);
 // sim or a load that runs afterwards leaves them describing the old surface.
 //
 // A node-centred grid halves only while res - 1 is even, so a 512-node field
-// gets no levels at all and a 513-node one gets nine. That is the reason the
+// gets no levels at all and a 513-node one gets eight. That is the reason the
 // erosion default is 513 rather than the power of two it looks like it should be.
 int terrain_field_build_pyramid(TerrainField* field);
 

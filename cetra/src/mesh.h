@@ -81,6 +81,22 @@ static inline void aabb_expand(AABB* box, float margin) {
     glm_vec3_adds(box->max, margin, box->max);
 }
 
+// Squared distance from `p` to the box, 0 inside it. Squared because every
+// caller compares against a squared threshold and none of them wants the root.
+//
+// Here rather than at either caller because there were two, written differently
+// -- a sign-branch walk in the quadtree's descent and a clamp-and-subtract in
+// forest's residency -- and they answer the same question about the same shape.
+// Two spellings of one predicate is where a fix lands on one of them.
+static inline float aabb_dist_sq(const AABB* box, const vec3 p) {
+    float d = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+        float v = glm_clamp(p[i], box->min[i], box->max[i]) - p[i];
+        d += v * v;
+    }
+    return d;
+}
+
 typedef enum {
     MESH_POINTS = GL_POINTS,
     MESH_LINES = GL_LINES,
@@ -118,8 +134,7 @@ typedef struct Mesh {
     // of redundancy against the alternative -- a baked level index, a uniform
     // array of windows, and a dynamic index into it in five programs. What the
     // redundancy buys is that a mesh without these arrays is an exact identity
-    // with nothing switched off, since a disabled attribute reads (0,0,0) and a
-    // zero reciprocal span is a zero factor.
+    // with nothing switched off.
     float* morph;
     float* morph_normals;
 
@@ -156,11 +171,17 @@ typedef struct Mesh {
     // The furthest the CDLOD morph can move a vertex, in object space: the
     // largest |parent Y - Y| this mesh carries. 0 with no morph arrays.
     //
-    // EXACT rather than conservative, unlike the wind bound -- the morph is a
-    // lerp between two stored values, so its extreme is a measurement of the data
-    // and not an envelope over an expression. Read by draw_list.c's _item_bounds,
-    // for the same reason wind's is: a mesh whose displacement is unbounded
-    // cannot be frustum-culled without dropping geometry that is on screen.
+    // A measurement rather than an envelope, unlike the wind bound -- the morph
+    // is a lerp between two stored values, so this extreme is really reached. It
+    // is exact in Y, which is the only axis the morph moves in; the culler
+    // expands all three, so the box it builds is exact there and conservative in
+    // X and Z. Read by draw_list.c's _item_bounds, for the same reason wind's is:
+    // a mesh whose displacement is unbounded cannot be frustum-culled without
+    // dropping geometry that is on screen.
+    //
+    // And NOTHING CHECKS IT. Wind has --wind-bound-probe, which drives the real
+    // shader through transform feedback because a CPU port of the bound reads
+    // straight through a term added to the GLSL. This has no equivalent.
     float morph_max_offset;
 
     // Skinning data (NULL if not skinned)

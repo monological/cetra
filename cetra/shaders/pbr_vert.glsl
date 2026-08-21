@@ -86,9 +86,13 @@ void main() {
     // stays honest (no TAA/motion-blur smear).
     // No skeleton in this stage: identity bone, and false so the posed branch
     // folds away.
-    // The SAME model matrix for both, because the wind phase is a property of the
-    // object rather than of the frame -- taking it from a moved node next frame
-    // would report a velocity the raster never drew.
+    // The SAME model matrix for both, and it means two different things to the two
+    // displacers. To wind it is an IDENTITY -- the phase is a property of the
+    // object, so taking it from a moved node next frame would report a velocity
+    // the raster never drew. To the morph it is a TRANSFORM, used to put the
+    // vertex in world space against the eye; a terrain patch does not move, so the
+    // two agree here, and a morphing mesh that DID move would want its own
+    // previous model matrix, which nothing carries.
     vec4 local = cetra_local_position(aPos, mat4(1.0), false, aTexCoords, aTexCoords2, time,
                                       mModel, uMorphEye);
     vec3 posPrev = aPos + cetra_local_displacement(aPos, aTexCoords, aTexCoords2,

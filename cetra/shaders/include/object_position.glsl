@@ -66,10 +66,7 @@
 // the sharper of the two: this chunk lands in FIVE programs (pbr, pbr_skinned,
 // depth prepass, shadow depth, shadow absorb) and every one of them must be fed
 // the same inputs. engine_upload_displacement_uniforms is the one call that does
-// it -- a program that misses a uniform displaces its vertices somewhere else,
-// and under the prepass's one-sided LEQUAL that DELETES the surface rather than
-// shading it wrong. Spec 11.62 shipped exactly that, reaching one program of
-// five, and the full gate suite was green.
+// it, and its own declaration says what happens when a program is missed.
 //
 // Split in two only because a caller that already holds a POSED position -- the
 // previous-frame skinned one, which no depth stage computes -- needs the
