@@ -7989,10 +7989,19 @@ STREAM_L0_TILES = 5 # ceil(257 / 64), so 25 tiles cover level 0
 # there is nothing to miss.
 STREAM_SMALL = ["--terrain-stream-resident-res", "32", "--terrain-stream-window", "2",
                 "--terrain-stream-budget", "1", "--region-radius", "60", "--region-span", "40"]
-# The walk's two-sided bound. Both measured from two runs before being written
-# down; the ceiling is what the dead-band's deletion blows through.
-STREAM_WALK_LOAD_MAX = 900
-STREAM_WALK_WINDOW_KB = 6144
+# The walk's two-sided bound, both measured from two runs before being written
+# down: 475 tiles read and 4461 kB of window, identical across runs and with an
+# identical residency digest -- the walk is deterministic by construction, so
+# these are exact numbers rather than samples and the ceiling can sit close.
+#
+# Deleting the dead-band measures 598. That is a 1.26x separation where 11.67's
+# equivalent got 10x, and the reason is worth knowing before trusting this arm
+# too far: a scripted walk is the MILD case for a dead-band. It crosses tile
+# boundaries monotonically at constant speed, so re-centring every frame lands
+# on much the same tile-aligned positions. What a dead-band is really for is a
+# camera breathing across one boundary, which no headless arm produces.
+STREAM_WALK_LOAD_MAX = 520
+STREAM_WALK_WINDOW_KB = 5120
 
 # How far the character's height above the terrain may step between two trace
 # rows while it walks.
@@ -8189,16 +8198,24 @@ def run_terrain_stream_gate(workdir):
             failures.append("terrain-stream-fallback")
 
     # --- terrain-stream-refuse -----------------------------------------------
-    # The terrain-refuse discipline on the new format. A truncated file is the
-    # cheapest damage to produce and the one the length check exists for: every
-    # offset in it is still legal, so a reader that trusts the header reads a
-    # level of terrain that is somebody else's.
+    # The terrain-refuse discipline on the new format. Forced small so the
+    # refusal is exercised in the configuration the feature actually runs in,
+    # where most of the file is never read at open.
+    #
+    # What holds this arm is NOT the manifest length check, and the mutation
+    # round is how that was learned: deleting the check leaves it green in every
+    # configuration tried. The coarse levels sit at the END of the layout and
+    # are read whole whatever the residency, so a truncated tail always fails a
+    # READ first. The check is defence in depth against a file whose header and
+    # length disagree without the tail being touched; what this arm actually
+    # pins is the refusal path itself -- that a failed read refuses the whole
+    # field instead of installing a half-loaded one.
     trunc = os.path.join(workdir, "stream_bad.cts")
     with open(cts, "rb") as fsrc, open(trunc, "wb") as fdst:
         blob = fsrc.read()
         fdst.write(blob[:len(blob) - 4096])
     bad_run = _stream_run(workdir, "stream_bad",
-                          ["--terrain-stream", trunc, "--terrain-height-probe"])
+                          ["--terrain-stream", trunc, "--terrain-height-probe"] + STREAM_SMALL)
     if bad_run is None or not bad_run["header"]:
         print("  terrain-stream-refuse FAIL  the run produced no probe header")
         failures.append("terrain-stream-refuse")
