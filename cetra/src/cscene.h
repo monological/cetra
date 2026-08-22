@@ -157,6 +157,24 @@ typedef struct CSceneMaterialLayer {
     bool has_uv_scale;
 } CSceneMaterialLayer;
 
+// Most roads a material can author, and the longest course each may take. Must
+// equal MATERIAL_MAX_ROADS / MATERIAL_MAX_ROAD_POINTS in roads.h; the parser
+// warns and drops the excess rather than clamping, so a disagreement is loud.
+#define CSCENE_MAX_ROADS       4
+#define CSCENE_MAX_ROAD_POINTS 16
+
+// One authored road (spec 11.68): a world-XZ course, how wide it runs, how far
+// its shoulder feathers, and which of the material's OWN layers it is made of.
+// The layer index is what makes it a road rather than a decal -- it displaces
+// the ground's own materials, so it interlocks with them by height.
+typedef struct CSceneRoad {
+    float points[CSCENE_MAX_ROAD_POINTS][2]; // authored world XZ
+    int point_count;
+    float width;   // full width, world units
+    float feather; // shoulder beyond the half-width; absent = 0, a hard edge
+    int layer;
+} CSceneRoad;
+
 // Per-material overrides, keyed on the AUTHORED material name. Absent keys keep
 // whatever the model imported, so this is an override sheet rather than a
 // material definition. Formats that cannot express a property at all (glTF has
@@ -185,6 +203,11 @@ typedef struct CSceneMaterialOverride {
     // UV1 addressing has no use for one.
     bool has_splat_domain;
     float splat_domain[4]; // origin x, origin z, size x, size z, world units
+    // Roads over the layer set (spec 11.68). Compound and an array for the same
+    // reasons layers are, and the course is an array inside that -- the only
+    // key in the format whose value is an array of arrays.
+    CSceneRoad roads[CSCENE_MAX_ROADS];
+    int road_count; // 0 = no roads
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a

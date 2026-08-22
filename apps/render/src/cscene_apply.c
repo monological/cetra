@@ -688,6 +688,46 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
                 m->splat_size[0] = mo->splat_domain[2];
                 m->splat_size[1] = mo->splat_domain[3];
             }
+            // Roads AFTER the layer count, because the warnings below are about
+            // the layer set a road names.
+            for (int r = 0; r < mo->road_count && r < MATERIAL_MAX_ROADS; r++) {
+                const CSceneRoad* src_road = &mo->roads[r];
+                MaterialRoad* dst = &m->roads[r];
+                memset(dst, 0, sizeof(*dst));
+                dst->point_count = src_road->point_count < MATERIAL_MAX_ROAD_POINTS
+                                       ? src_road->point_count
+                                       : MATERIAL_MAX_ROAD_POINTS;
+                for (int p = 0; p < dst->point_count; p++) {
+                    dst->points[p][0] = src_road->points[p][0];
+                    dst->points[p][1] = src_road->points[p][1];
+                }
+                dst->width = src_road->width;
+                dst->feather = src_road->feather;
+                dst->layer = src_road->layer;
+                if (src_road->layer >= m->layer_count)
+                    fprintf(stderr,
+                            "Warning: material '%s' road %d names layer %d of %d; it is "
+                            "clamped to the last layer\n",
+                            mo->material, r, src_road->layer, m->layer_count);
+            }
+            if (mo->road_count > 0) {
+                m->road_count = mo->road_count < MATERIAL_MAX_ROADS ? mo->road_count
+                                                                    : MATERIAL_MAX_ROADS;
+                // Roads override the SPLAT WEIGHTS, so a material with no layer
+                // set has nothing for them to override, and one addressed
+                // through UV1 has no world frame to place them in. Both are
+                // inert rather than wrong, and both are worth saying out loud.
+                if (m->layer_count == 0)
+                    fprintf(stderr,
+                            "Warning: material '%s' has roads but no layers; they are "
+                            "ignored\n",
+                            mo->material);
+                else if (m->splat_space != SPLAT_SPACE_WORLD_XZ)
+                    fprintf(stderr,
+                            "Warning: material '%s' has roads but a UV1 splat; roads are "
+                            "world-space and are ignored\n",
+                            mo->material);
+            }
             tagged++;
         }
         printf("Scene file: %d override(s) on material '%s' (%d material(s))\n", usable,

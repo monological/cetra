@@ -748,6 +748,103 @@ static void parse_material_layers(CSceneMaterialOverride* out, const cJSON* m) {
     }
 }
 
+/*
+ * Roads over a layered material (spec 11.68).
+ *
+ * `points`, `width` and `layer` are REQUIRED and `feather` is not: a road with
+ * no course, no width, or no surface to be made of is not a road, where one
+ * with no shoulder is a hard-edged road -- visibly wrong rather than quietly
+ * so, which is the fog volume's argument for the same split.
+ *
+ * The course is the only array-of-arrays in the format, so it is walked by hand
+ * rather than through get_floats. A malformed vertex refuses the WHOLE road: a
+ * road missing a point in the middle is a different road, not a shorter one,
+ * and it would run somewhere nobody authored.
+ */
+static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
+    static const char* const known[] = {"points", "width", "feather", "layer"};
+    const cJSON* roads = cJSON_GetObjectItemCaseSensitive(m, "roads");
+    if (!roads)
+        return;
+    if (!cJSON_IsArray(roads)) {
+        log_warn("cscene: material '%s' key 'roads' is not an array; ignored", out->material);
+        return;
+    }
+    const cJSON* r = NULL;
+    cJSON_ArrayForEach(r, roads) {
+        if (out->road_count >= CSCENE_MAX_ROADS) {
+            log_warn("cscene: material '%s' has more than %d roads; extras ignored",
+                     out->material, CSCENE_MAX_ROADS);
+            break;
+        }
+        if (!cJSON_IsObject(r)) {
+            log_warn("cscene: material '%s' has a road that is not an object; skipped",
+                     out->material);
+            continue;
+        }
+        const cJSON* road = r;
+        warn_unknown_keys(road, known, sizeof(known) / sizeof(known[0]), "material road");
+
+        CSceneRoad* out_road = &out->roads[out->road_count];
+        memset(out_road, 0, sizeof(*out_road));
+
+        const cJSON* points = cJSON_GetObjectItemCaseSensitive(road, "points");
+        if (!cJSON_IsArray(points)) {
+            log_warn("cscene: material '%s' road %d has no points array; skipped", out->material,
+                     out->road_count);
+            continue;
+        }
+        bool malformed = false;
+        const cJSON* pt = NULL;
+        cJSON_ArrayForEach(pt, points) {
+            if (out_road->point_count >= CSCENE_MAX_ROAD_POINTS) {
+                log_warn("cscene: material '%s' road %d has more than %d points; skipped",
+                         out->material, out->road_count, CSCENE_MAX_ROAD_POINTS);
+                malformed = true;
+                break;
+            }
+            const cJSON* px = cJSON_GetArrayItem(pt, 0);
+            const cJSON* pz = cJSON_GetArrayItem(pt, 1);
+            if (!cJSON_IsArray(pt) || cJSON_GetArraySize(pt) != 2 || !cJSON_IsNumber(px) ||
+                !cJSON_IsNumber(pz)) {
+                log_warn("cscene: material '%s' road %d has a point that is not a 2-array of "
+                         "numbers; skipped",
+                         out->material, out->road_count);
+                malformed = true;
+                break;
+            }
+            out_road->points[out_road->point_count][0] = (float)px->valuedouble;
+            out_road->points[out_road->point_count][1] = (float)pz->valuedouble;
+            out_road->point_count++;
+        }
+        if (malformed)
+            continue;
+        if (out_road->point_count < 2) {
+            log_warn("cscene: material '%s' road %d needs at least two points; skipped",
+                     out->material, out->road_count);
+            continue;
+        }
+        if (!get_float(road, "width", &out_road->width) || out_road->width <= 0.0f) {
+            log_warn("cscene: material '%s' road %d needs a positive width; skipped",
+                     out->material, out->road_count);
+            continue;
+        }
+        // The memset above supplies the feather default; only the required
+        // layer is spelled, and it is read as a float because the format has no
+        // integer reader -- a fractional index is an authoring error the app's
+        // apply reports by name.
+        get_float(road, "feather", &out_road->feather);
+        float layer = -1.0f;
+        if (!get_float(road, "layer", &layer) || layer < 0.0f) {
+            log_warn("cscene: material '%s' road %d needs a layer index; skipped", out->material,
+                     out->road_count);
+            continue;
+        }
+        out_road->layer = (int)layer;
+        out->road_count++;
+    }
+}
+
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* mats = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (!cJSON_IsObject(mats))
@@ -772,6 +869,8 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
 
         out->layer_count = 0;
         parse_material_layers(out, m);
+        out->road_count = 0;
+        parse_material_roads(out, m);
 
         // Compound like sss: four numbers describing one rectangle. Skipped by
         // the generic walk below, which would otherwise warn on the 4-array as
@@ -794,7 +893,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
             if (!p->string || p->string[0] == '_') // _comment and friends
                 continue;
             if (strcmp(p->string, "sss") == 0 || strcmp(p->string, "layers") == 0 ||
-                strcmp(p->string, "splatDomain") == 0)
+                strcmp(p->string, "splatDomain") == 0 || strcmp(p->string, "roads") == 0)
                 continue;
             // A string value is a texture path. Recorded apart from the numeric
             // params only because a float array cannot hold one; the key still
@@ -848,8 +947,8 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
             out->param_count++;
         }
 
-        if (!out->has_sss && out->layer_count == 0 && out->param_count == 0 &&
-            out->texture_count == 0) {
+        if (!out->has_sss && out->layer_count == 0 && out->road_count == 0 &&
+            out->param_count == 0 && out->texture_count == 0) {
             log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }

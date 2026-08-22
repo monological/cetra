@@ -231,6 +231,12 @@ typedef struct {
     // mid-run TRANSITION (the --shadows-off-at reasoning exactly).
     int layer_blend_at_frame;
     float layer_blend_at_value;
+    // Diagnostic (--road-width-at): set every road's width on this frame, -1 for
+    // never. Same argument as the key above, and it exercises both halves of the
+    // road path in one stroke -- the segment block re-uploads and the composite
+    // cache's key goes stale.
+    int road_width_at_frame;
+    float road_width_at_value;
     // Diagnostic (--cam-at): teleport the camera on this frame, -1 for never.
     // The worst case for page residency -- every page misses at once -- which
     // no walk can produce, since walking crosses one boundary at a time.

@@ -92,6 +92,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --layer-blend-at <frame:value>  Diagnostic: set every layered material's\n"
             "                         blend sharpness mid-run (composite-cache invalidation)\n"
+            "      --road-width-at <frame:value>  Diagnostic: set every road's width mid-run\n"
+            "                         (re-uploads the segment block and re-bakes the cache)\n"
             "      --shadows-off-at <frame>  Diagnostic: clear the shadow system's master\n"
             "                         switch mid-run, exercising the runtime transition that\n"
             "                         --no-shadows (which clears it before frame 0) cannot\n");
@@ -398,6 +400,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->plg_intensity = 5.0f;
     args->shadows_off_at = -1;          // -1 = never; the transition is the diagnostic
     args->layer_blend_at_frame = -1;    // -1 = never; same idiom
+    args->road_width_at_frame = -1;     // -1 = never; same idiom
     args->cam_at_frame = -1;            // -1 = never; same idiom
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->msm_blur = -1.0f;             // -1 = keep the engine default
@@ -670,6 +673,17 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                        &args->layer_blend_at_value) != 2 ||
                 args->layer_blend_at_frame < 0) {
                 fprintf(stderr, "Error: --layer-blend-at wants frame:value\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--road-width-at") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%d:%f", &args->road_width_at_frame,
+                       &args->road_width_at_value) != 2 ||
+                args->road_width_at_frame < 0) {
+                fprintf(stderr, "Error: --road-width-at wants frame:value\n");
                 return -1;
             }
         } else if (strcmp(argv[i], "--no-pcss") == 0) {
@@ -1889,6 +1903,23 @@ static void render_frame_update(Engine* engine, float dt) {
             }
             fprintf(stderr, "frame %d: layer blend sharpness -> %.3f\n",
                     scale_schedule->layer_blend_at_frame, scale_schedule->layer_blend_at_value);
+        }
+    }
+    // Same transition, for roads: it re-uploads the segment block AND makes the
+    // composite cache's key stale, which is the pair of mechanisms no fresh
+    // process can exercise.
+    if (scale_schedule->road_width_at_frame == (int)engine->total_frames) {
+        Scene* scene = get_current_scene(engine);
+        if (scene) {
+            for (size_t i = 0; i < scene->material_count; i++) {
+                Material* m = scene->materials[i];
+                if (!m)
+                    continue;
+                for (int r = 0; r < m->road_count && r < MATERIAL_MAX_ROADS; r++)
+                    m->roads[r].width = scale_schedule->road_width_at_value;
+            }
+            fprintf(stderr, "frame %d: road width -> %.3f\n",
+                    scale_schedule->road_width_at_frame, scale_schedule->road_width_at_value);
         }
     }
     for (int i = 0; i < scale_schedule->scale_at_count; i++) {
