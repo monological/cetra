@@ -771,7 +771,12 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
         return;
     }
     const cJSON* r = NULL;
+    // The AUTHORED index, which is what a reader can find in the file --
+    // road_count is the SLOT being filled and does not advance on a refusal,
+    // so using it names every rejected road 'road 0'.
+    int idx = -1;
     cJSON_ArrayForEach(r, roads) {
+        idx++;
         if (out->road_count >= CSCENE_MAX_ROADS) {
             log_warn("cscene: material '%s' has more than %d roads; extras ignored",
                      out->material, CSCENE_MAX_ROADS);
@@ -791,7 +796,7 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
         const cJSON* points = cJSON_GetObjectItemCaseSensitive(road, "points");
         if (!cJSON_IsArray(points)) {
             log_warn("cscene: material '%s' road %d has no points array; skipped", out->material,
-                     out->road_count);
+                     idx);
             continue;
         }
         bool malformed = false;
@@ -809,7 +814,7 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
                 !cJSON_IsNumber(pz)) {
                 log_warn("cscene: material '%s' road %d has a point that is not a 2-array of "
                          "numbers; skipped",
-                         out->material, out->road_count);
+                         out->material, idx);
                 malformed = true;
                 break;
             }
@@ -821,12 +826,12 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
             continue;
         if (out_road->point_count < 2) {
             log_warn("cscene: material '%s' road %d needs at least two points; skipped",
-                     out->material, out->road_count);
+                     out->material, idx);
             continue;
         }
         if (!get_float(road, "width", &out_road->width) || out_road->width <= 0.0f) {
             log_warn("cscene: material '%s' road %d needs a positive width; skipped",
-                     out->material, out->road_count);
+                     out->material, idx);
             continue;
         }
         // The memset above supplies the feather default; only the required
@@ -837,7 +842,7 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
         float layer = -1.0f;
         if (!get_float(road, "layer", &layer) || layer < 0.0f) {
             log_warn("cscene: material '%s' road %d needs a layer index; skipped", out->material,
-                     out->road_count);
+                     idx);
             continue;
         }
         out_road->layer = (int)layer;
