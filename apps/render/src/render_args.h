@@ -186,6 +186,7 @@ typedef struct {
     int no_layers_vt_pages;     // Fallback atlas alone -- stage 1 exactly
     int no_layers_vt_feedback;  // Residency on prediction alone (no vote pass)
     int layers_vt_page_slots;   // Physical page slots in use; 0 = all
+    int layers_vt_page_budget;  // Page bakes per frame; 0 = default
     int layers_vt_probe;        // Print page residency every N frames; 0 = off
     int show_lights;            // Draw light gizmos (position + cull radius)
     int cluster_heatmap;        // Tint by cluster light count

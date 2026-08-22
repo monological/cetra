@@ -220,7 +220,7 @@ typedef struct Material {
     Texture* metalness_tex;         // Metalness Map
     Texture* ambient_occlusion_tex; // Ambient Occlusion Map
     Texture* emissive_tex;          // Emissive Map
-    Texture* height_tex;            // Height Map (Displacement Map)
+    Texture* height_tex;            // Height Map (Displacement Map); refused when layer_count > 0
 
     // Additional Advanced PBR Textures
     Texture* opacity_tex;      // Opacity Map
@@ -241,7 +241,8 @@ typedef struct Material {
     Texture* anisotropy_tex;
     Texture* sheen_tex;            // Sheen Map (for fabrics)
     Texture* reflectance_tex;      // Reflectance Map
-    Texture* clearcoat_normal_tex; // Clearcoat normal map (orange-peel / weave)
+    Texture* clearcoat_normal_tex; // Clearcoat normal map (orange-peel / weave); refused when
+                                   // layer_count > 0
 
     // Per-mask layer indices into the scene's material mask sampler2DArray
     // (-1 = no texture -> the shader falls back to the scalar factor). The
@@ -266,6 +267,10 @@ typedef struct Material {
      * exactly where terrain is most interesting -- 5.8x on an 80-degree face.
      */
     MaterialLayer layers[MATERIAL_MAX_LAYERS];
+    // > 0 makes this a LAYERED material, which REFUSES height_tex and
+    // clearcoat_normal_tex: their sampler units carry the composite cache's
+    // page pair on layered surfaces (spec 11.67), the same structural
+    // exclusivity as units 0/1.
     int layer_count;
 
     // Per-texel layer weights: .r/.g/.b select layers 1..3 and layer 0 takes the

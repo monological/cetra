@@ -108,25 +108,36 @@ static void vt_make_key(const Material* m, int res, const MaterialTextureArray* 
     key->arr_height = arr->height;
 }
 
-static GLuint vt_alloc_target(int res) {
+// One RGBA8 cache target in the shared shape: mip 0 allocated here,
+// glGenerateMipmap fills the chain after each draw (glTexStorage2D is GL 4.2,
+// unavailable). Linear internal format: the albedo targets hold STORED codes
+// the shader decodes after the detail ratio, exactly as the material texture
+// array does. CLAMP, not REPEAT: neither the composite nor the atlas tiles,
+// and clamping is what makes the half-texel inset the splat read needs
+// unnecessary here.
+//
+// mip_cap < 0 keeps the full chain WITH anisotropy -- the fallback shades a
+// kilometre of ground at grazing incidence, the engine's worst moire case, and
+// the material texture array sets no aniso of its own. The page atlas caps at
+// VT_PAGE_MIP_CAP with no aniso: page mip VT_PAGE_MIP_CAP is the same macro at
+// the same effective density as fallback mip 0, so the handoff band blends
+// near-identical signals, and the 4-texel gutters bound trilinear reach at
+// that level (mip-free was reviewed and rejected -- unmipped minification
+// shimmers on exactly the content pages carry; grazing minification belongs
+// to the fallback, since the paged zone is the magnified near field).
+static GLuint vt_alloc_target(int res, int mip_cap) {
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    // Mip 0 only; glGenerateMipmap fills the chain after the draw
-    // (glTexStorage2D is GL 4.2, unavailable here). Linear internal format:
-    // the albedo target holds STORED codes the shader decodes after the
-    // detail ratio, exactly as the material texture array does.
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, res, res, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // CLAMP, not REPEAT: the composite is not tiled, and clamping is what
-    // makes the half-texel inset the splat read needs unnecessary here.
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    // The material texture array sets no anisotropy; this must. A kilometre of
-    // ground at grazing incidence is the engine's worst moire case, and the
-    // composite is the only texture on it once the cache is live.
-    texture_set_max_anisotropy();
+    if (mip_cap < 0)
+        texture_set_max_anisotropy();
+    else
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip_cap);
     return tex;
 }
 
@@ -186,12 +197,11 @@ static void vt_page_config(MaterialLayersVt* vt, const Material* m, int res) {
     }
     vt->page_texel = (size / (float)res) / (float)VT_PAGE_DENSITY_RATIO;
     vt->page_span = (float)VT_PAGE_USABLE * vt->page_texel;
-    int grid = (int)ceilf(size / vt->page_span);
-    if (grid < 1)
-        grid = 1;
-    // Reachable only through the diagnostic res override, which skips the
+    // ceil of a positive ratio is >= 1, so only the upper clamp exists. It is
+    // reachable only through the diagnostic res override, which skips the
     // derived rule's clamps on purpose; the table must not follow it past
     // capacity.
+    int grid = (int)ceilf(size / vt->page_span);
     if (grid > VT_PAGE_GRID_MAX)
         grid = VT_PAGE_GRID_MAX;
     vt->page_grid = grid;
@@ -205,25 +215,99 @@ static void vt_pages_reset(MaterialLayersVt* vt) {
     vt->pages_dirty = true;
 }
 
-static GLuint vt_alloc_page_atlas(void) {
-    GLuint tex = 0;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, VT_ATLAS_TEXELS, VT_ATLAS_TEXELS, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    // Mips CAPPED, not absent: page mip VT_PAGE_MIP_CAP is the same macro at
-    // the same effective density as fallback mip 0, so the handoff band blends
-    // near-identical signals -- and the 4-texel gutters bound trilinear reach
-    // at that level. Mip-free was reviewed and rejected (unmipped minification
-    // shimmers on exactly the content pages carry). No anisotropy: the paged
-    // zone is the magnified near field; grazing minification belongs to the
-    // fallback, which keeps its full chain and its aniso.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, VT_PAGE_MIP_CAP);
-    return tex;
+/*
+ * The GL state bracket every off-screen pass in this file needs: FBO, viewport
+ * and the three fixed-function switches saved, normalized (blend and cull off
+ * -- blending must be off for a bake, since the surface target's alpha is AO
+ * and an AO feeding the blend equation as source alpha makes the bake differ
+ * run to run, the BRDF LUT lesson in ibl.c -- depth per the pass), and
+ * restored to their SAVED values, so the depth handling cannot grow the
+ * inverted-restore asymmetry a third hand copy did.
+ */
+typedef struct VtGlState {
+    GLint fbo;
+    GLint viewport[4];
+    GLboolean blend, cull, depth;
+} VtGlState;
+
+static void vt_gl_state_save(VtGlState* st, bool want_depth) {
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &st->fbo);
+    glGetIntegerv(GL_VIEWPORT, st->viewport);
+    st->blend = glIsEnabled(GL_BLEND);
+    st->cull = glIsEnabled(GL_CULL_FACE);
+    st->depth = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    if (want_depth)
+        glEnable(GL_DEPTH_TEST);
+    else
+        glDisable(GL_DEPTH_TEST);
+}
+
+static void vt_gl_state_restore(const VtGlState* st) {
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)st->fbo);
+    glViewport(st->viewport[0], st->viewport[1], st->viewport[2], st->viewport[3]);
+    if (st->blend)
+        glEnable(GL_BLEND);
+    else
+        glDisable(GL_BLEND);
+    if (st->cull)
+        glEnable(GL_CULL_FACE);
+    else
+        glDisable(GL_CULL_FACE);
+    if (st->depth)
+        glEnable(GL_DEPTH_TEST);
+    else
+        glDisable(GL_DEPTH_TEST);
+}
+
+/*
+ * The shared half of both bakes: state bracket, an FBO over the two RGBA8
+ * targets, the bake program with the layer uniforms and the material array on
+ * unit 0. On an incomplete framebuffer returns false with the error logged;
+ * either way the caller owns exactly one vt_bake_close, which tears the FBO
+ * down, restores the bracket and leaves unit 0 clean.
+ */
+typedef struct VtBakeCtx {
+    VtGlState gl;
+    GLuint fbo;
+} VtBakeCtx;
+
+static bool vt_bake_open(VtBakeCtx* ctx, const Material* m, const MaterialTextureArray* arr,
+                         ShaderProgram* prog, GLuint albedo_tex, GLuint surface_tex) {
+    vt_gl_state_save(&ctx->gl, false);
+    ctx->fbo = 0;
+    glGenFramebuffers(1, &ctx->fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, ctx->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, albedo_tex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, surface_tex, 0);
+    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, bufs);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("layers_vt: bake framebuffer incomplete");
+        return false;
+    }
+    glUseProgram(prog->id);
+    material_upload_layer_uniforms(m, prog->uniforms);
+    uniform_set_int(prog->uniforms, "materialArray", 0);
+    uniform_set_int(prog->uniforms, "layerGrainFrozen", 1);
+    material_texture_array_bind(arr, 0);
+    return true;
+}
+
+static void vt_bake_close(VtBakeCtx* ctx) {
+    glDeleteFramebuffers(1, &ctx->fbo);
+    vt_gl_state_restore(&ctx->gl);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+}
+
+static void vt_gen_mips(GLuint albedo_tex, GLuint surface_tex) {
+    glBindTexture(GL_TEXTURE_2D, albedo_tex);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, surface_tex);
+    glGenerateMipmap(GL_TEXTURE_2D);
 }
 
 // The world rect one page TILE covers, gutter included -- the rect the bake
@@ -256,37 +340,13 @@ static bool vt_bake_pages(Material* m, struct Scene* scene, struct Engine* engin
 
     glActiveTexture(GL_TEXTURE0);
     if (vt->page_albedo_tex == 0) {
-        vt->page_albedo_tex = vt_alloc_page_atlas();
-        vt->page_surface_tex = vt_alloc_page_atlas();
+        vt->page_albedo_tex = vt_alloc_target(VT_ATLAS_TEXELS, VT_PAGE_MIP_CAP);
+        vt->page_surface_tex = vt_alloc_target(VT_ATLAS_TEXELS, VT_PAGE_MIP_CAP);
     }
 
-    GLint prev_fbo = 0, prev_viewport[4];
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
-    GLboolean blend_was = glIsEnabled(GL_BLEND);
-    GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
-    GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_DEPTH_TEST);
-
-    GLuint fbo = 0;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           vt->page_albedo_tex, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
-                           vt->page_surface_tex, 0);
-    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-    glDrawBuffers(2, bufs);
-
-    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    VtBakeCtx ctx;
+    bool ok = vt_bake_open(&ctx, m, arr, prog, vt->page_albedo_tex, vt->page_surface_tex);
     if (ok) {
-        glUseProgram(prog->id);
-        material_upload_layer_uniforms(m, prog->uniforms);
-        uniform_set_int(prog->uniforms, "materialArray", 0);
-        uniform_set_int(prog->uniforms, "layerGrainFrozen", 1);
-        material_texture_array_bind(arr, 0);
         for (int i = 0; i < count; i++) {
             int ox = (slots[i] % VT_ATLAS_PAGES_PER_ROW) * VT_PAGE_TEXELS;
             int oy = (slots[i] / VT_ATLAS_PAGES_PER_ROW) * VT_PAGE_TEXELS;
@@ -296,26 +356,9 @@ static bool vt_bake_pages(Material* m, struct Scene* scene, struct Engine* engin
             uniform_set_vec4(prog->uniforms, "vtBakeRect", rect);
             draw_fullscreen_quad(arr->quad_vao);
         }
-        glBindTexture(GL_TEXTURE_2D, vt->page_albedo_tex);
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, vt->page_surface_tex);
-        glGenerateMipmap(GL_TEXTURE_2D);
-    } else {
-        log_error("layers_vt: page bake framebuffer incomplete");
+        vt_gen_mips(vt->page_albedo_tex, vt->page_surface_tex);
     }
-
-    glDeleteFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
-    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-    if (blend_was)
-        glEnable(GL_BLEND);
-    if (cull_was)
-        glEnable(GL_CULL_FACE);
-    if (depth_was)
-        glEnable(GL_DEPTH_TEST);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    vt_bake_close(&ctx);
     return ok;
 }
 
@@ -421,10 +464,7 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
             continue;
         cands[nc].d2 = vt_page_dist2(vt, m, scene, v, cam);
         cands[nc].vpage = v;
-        cands[nc].seen = engine->vt_feedback && engine->vt_feedback->have &&
-                                 engine->vt_feedback->requested[v]
-                             ? 1
-                             : 0;
+        cands[nc].seen = engine->vt_feedback && engine->vt_feedback->requested[v] ? 1 : 0;
         nc++;
     }
     qsort(cands, (size_t)nc, sizeof(VtPageCand), vt_cand_cmp);
@@ -485,7 +525,11 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
             vt->pages_loaded += (unsigned long long)nb;
         } else {
             // Roll the table back: it must never point at a slot the bake did
-            // not fill. The fallback covers those pixels next frame.
+            // not fill. The fallback covers those pixels next frame. The
+            // victims evicted above stay forgotten -- their atlas content is
+            // intact (the failed bake drew nothing) but re-registering them on
+            // a path that just failed buys little, so pages_evicted overstates
+            // by up to the batch here and they reload as ordinary wants.
             for (int i = 0; i < nb; i++) {
                 vt->page_table[bake_v[i]] = -1;
                 vt->slot_page[bake_s[i]] = -1;
@@ -505,7 +549,7 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
             if (vt->slot_page[s2] >= 0)
                 resident++;
         int requested = 0;
-        if (engine->vt_feedback && engine->vt_feedback->have)
+        if (engine->vt_feedback)
             for (int v2 = 0; v2 < VT_PAGE_TABLE_MAX; v2++)
                 requested += engine->vt_feedback->requested[v2];
         printf("layers-vt-probe frame=%zu grid=%d slots=%d resident=%d wanted=%d "
@@ -529,6 +573,10 @@ static void vt_pages_upload(const MaterialLayersVt* vt, struct Engine* engine) {
     block.info[3] = VT_PAGE_GUTTER;
     block.params[0] = (float)VT_ATLAS_TEXELS;
     block.params[1] = vt->page_span;
+    // The handoff band's endpoints in the shader are this ratio and its half;
+    // uploading it is what keeps the band pinned to the density design rather
+    // than to a literal that would not follow a ratio change.
+    block.params[2] = (float)VT_PAGE_DENSITY_RATIO;
     for (int i = 0; i < VT_PAGE_TABLE_MAX; i++)
         block.entries[i >> 2][i & 3] = vt->page_table[i];
     ubo_upload(engine->vt_pages_ubo, &block, sizeof(block));
@@ -551,54 +599,21 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
     // clobber a unit a source sits on (the bake_lut_2d lesson).
     gl_delete_texture(&vt->albedo_tex);
     gl_delete_texture(&vt->surface_tex);
-    vt->albedo_tex = vt_alloc_target(res);
-    vt->surface_tex = vt_alloc_target(res);
+    vt->albedo_tex = vt_alloc_target(res, -1);
+    vt->surface_tex = vt_alloc_target(res, -1);
 
-    GLint prev_fbo = 0, prev_viewport[4];
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
-    GLboolean blend_was = glIsEnabled(GL_BLEND);
-    GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
-    GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
-    // Blending must be off for the draw: the surface target's alpha is AO, and
-    // an AO feeding the blend equation as source alpha makes the bake differ
-    // run to run (the BRDF LUT lesson, ibl.c).
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_DEPTH_TEST);
-
-    GLuint fbo = 0;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, vt->albedo_tex,
-                           0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, vt->surface_tex,
-                           0);
-    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-    glDrawBuffers(2, bufs);
-
-    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-    if (!ok) {
-        log_error("layers_vt: bake framebuffer incomplete at %dx%d", res, res);
-    } else {
+    VtBakeCtx ctx;
+    bool ok = vt_bake_open(&ctx, m, arr, prog, vt->albedo_tex, vt->surface_tex);
+    if (ok) {
         glViewport(0, 0, res, res);
-        glUseProgram(prog->id);
-        material_upload_layer_uniforms(m, prog->uniforms);
-        uniform_set_int(prog->uniforms, "materialArray", 0);
-        uniform_set_int(prog->uniforms, "layerGrainFrozen", 1);
         const float full_rect[4] = {m->splat_origin[0], m->splat_origin[1], m->splat_size[0],
                                     m->splat_size[1]};
         uniform_set_vec4(prog->uniforms, "vtBakeRect", full_rect);
-        material_texture_array_bind(arr, 0);
         // The array's own quad: non-zero on every path here, since the ensure
         // gates on a successfully built array and the build creates it.
         draw_fullscreen_quad(arr->quad_vao);
 
-        glBindTexture(GL_TEXTURE_2D, vt->albedo_tex);
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, vt->surface_tex);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
+        vt_gen_mips(vt->albedo_tex, vt->surface_tex);
         vt_read_means(vt, m, arr);
 
         // A fallback re-bake invalidates every page: their content was a
@@ -607,19 +622,7 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
         vt_page_config(vt, m, res);
         vt_pages_reset(vt);
     }
-
-    glDeleteFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
-    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-    if (blend_was)
-        glEnable(GL_BLEND);
-    if (cull_was)
-        glEnable(GL_CULL_FACE);
-    if (depth_was)
-        glEnable(GL_DEPTH_TEST);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    vt_bake_close(&ctx);
 
     if (ok) {
         // The 4/3 is the mip chain; two targets, so the pair is 8 bytes a texel.
@@ -706,15 +709,24 @@ void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
  * by now), then render this frame's votes and queue their readback into the
  * slot just freed.
  */
+static void vt_feedback_release(LayersVtFeedback* fb) {
+    gl_delete_texture(&fb->color_tex);
+    if (fb->depth_rb) {
+        glDeleteRenderbuffers(1, &fb->depth_rb);
+        fb->depth_rb = 0;
+    }
+    gl_delete_fbo(&fb->fbo);
+    for (int i = 0; i < VT_FEEDBACK_RING; i++) {
+        if (fb->pbo[i]) {
+            glDeleteBuffers(1, &fb->pbo[i]);
+            fb->pbo[i] = 0;
+        }
+    }
+}
+
 static void vt_feedback_alloc(LayersVtFeedback* fb, int w, int h) {
     glActiveTexture(GL_TEXTURE0);
-    gl_delete_texture(&fb->color_tex);
-    if (fb->depth_rb)
-        glDeleteRenderbuffers(1, &fb->depth_rb);
-    gl_delete_fbo(&fb->fbo);
-    for (int i = 0; i < VT_FEEDBACK_RING; i++)
-        if (fb->pbo[i])
-            glDeleteBuffers(1, &fb->pbo[i]);
+    vt_feedback_release(fb);
 
     glGenTextures(1, &fb->color_tex);
     glBindTexture(GL_TEXTURE_2D, fb->color_tex);
@@ -739,7 +751,6 @@ static void vt_feedback_alloc(LayersVtFeedback* fb, int w, int h) {
     fb->w = w;
     fb->h = h;
     fb->frames = 0;
-    fb->have = false;
     memset(fb->requested, 0, sizeof(fb->requested));
 }
 
@@ -762,13 +773,16 @@ static void vt_feedback_parse(LayersVtFeedback* fb, GLuint pbo, int grid) {
             fb->requested[(int)p[1] * grid + (int)p[0]] = 1;
         }
         glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-        fb->have = true;
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 }
 
 void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
-    if (!engine || !scene || !engine->layers_vt_feedback_enabled)
+    // Gated on pages too: feedback exists solely to feed page residency, and
+    // vt_pages_update -- its only consumer -- early-outs when pages are off,
+    // so running the pass there would be dead draws and a dead readback ring.
+    if (!engine || !scene || !engine->layers_vt_feedback_enabled ||
+        !engine->layers_vt_pages_enabled)
         return;
     // The scene's one paged material; without it there is nothing to vote for.
     const Material* paged = NULL;
@@ -808,15 +822,8 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     if (fb->frames >= VT_FEEDBACK_RING)
         vt_feedback_parse(fb, fb->pbo[slot], paged->layers_vt->page_grid);
 
-    GLint prev_fbo = 0, prev_viewport[4];
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
-    GLboolean blend_was = glIsEnabled(GL_BLEND);
-    GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
-    GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_DEPTH_TEST);
+    VtGlState gl;
+    vt_gl_state_save(&gl, true);
 
     glBindFramebuffer(GL_FRAMEBUFFER, fb->fbo);
     glViewport(0, 0, fb->w, fb->h);
@@ -833,12 +840,20 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     // that matters for ground pages. Other geometry as occluders is deliberate
     // v1 scope-out -- omitting a tree canopy makes the vote conservative, never
     // wrong -- and skinned meshes are skipped outright (no paged material is
-    // skinned, and the minimal vertex stage has no bones).
+    // skinned, and the minimal vertex stage has no bones). Frustum-culled with
+    // the raw mesh box, which is exact for what this pass DRAWS: its vertex
+    // stage applies no displacement, so the undisplaced bound is the rendered
+    // bound even where the main pass would need the expanded one.
+    Frustum fr;
+    frustum_extract_from_vp(engine->view_proj, &fr);
     const DrawList* list = &scene->draw_list;
     for (size_t i = 0; i < list->count; i++) {
         const DrawItem* item = &list->items[i];
         Mesh* mesh = item->mesh;
         if (!mesh || mesh->is_skinned || !mesh->material || mesh->material != paged)
+            continue;
+        if (!frustum_test_aabb_transformed(&fr, mesh->aabb.min, mesh->aabb.max,
+                                           item->node->global_transform))
             continue;
         uniform_set_mat4(prog->uniforms, "model",
                          (const float*)item->node->global_transform);
@@ -851,33 +866,23 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     glBindVertexArray(0);
 
     // Queue this frame's readback into the slot just consumed; the map that
-    // retires it happens VT_FEEDBACK_RING frames from now.
+    // retires it happens VT_FEEDBACK_RING frames from now. PACK_ALIGNMENT is
+    // restored with the rest of the bracket's discipline -- RGBA rows are
+    // always 4-aligned so 1 is harmless today, but it is global state.
     glBindBuffer(GL_PIXEL_PACK_BUFFER, fb->pbo[slot]);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, fb->w, fb->h, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     fb->frames++;
 
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
-    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-    if (blend_was)
-        glEnable(GL_BLEND);
-    if (cull_was)
-        glEnable(GL_CULL_FACE);
-    if (!depth_was)
-        glDisable(GL_DEPTH_TEST);
+    vt_gl_state_restore(&gl);
 }
 
 void free_layers_vt_feedback(LayersVtFeedback* fb) {
     if (!fb)
         return;
-    gl_delete_texture(&fb->color_tex);
-    if (fb->depth_rb)
-        glDeleteRenderbuffers(1, &fb->depth_rb);
-    gl_delete_fbo(&fb->fbo);
-    for (int i = 0; i < VT_FEEDBACK_RING; i++)
-        if (fb->pbo[i])
-            glDeleteBuffers(1, &fb->pbo[i]);
+    vt_feedback_release(fb);
     free(fb);
 }
 

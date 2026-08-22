@@ -1176,6 +1176,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->layers_vt_page_slots = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--layers-vt-page-budget") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->layers_vt_page_budget = atoi(argv[i]);
         } else if (strcmp(argv[i], "--layers-vt-probe") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1557,6 +1563,36 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
 static MouseDragController* drag_controller = NULL;
 
 /*
+ * Adopt an explicit camera pose (--cam-eye at startup, --cam-at mid-run): eye,
+ * look-at, and the orbit bookkeeping -- distance and theta/phi re-seeded from
+ * the pose so a mouse drag continues from this exact view instead of
+ * recomputing the camera from stale spherical coordinates one frame in.
+ * Auto-orbit is killed for the same reason (it rewrites the camera from
+ * theta/phi every frame, clobbering the pose), keeping the controller's own
+ * stored limits, and the mode goes FREE (mirrored by the GUI radio): a pinned
+ * pose is a free camera, and switching the radio to Orbit picks up the seeded
+ * angles.
+ */
+static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
+    Camera* camera = engine->camera;
+    set_camera_position(camera, eye);
+    set_camera_look_at(camera, target);
+    vec3 offset;
+    glm_vec3_sub(eye, target, offset);
+    camera->distance = glm_vec3_norm(offset);
+    if (camera->distance > 1e-6f) {
+        camera->theta = asinf(glm_clamp(offset[1] / camera->distance, -1.0f, 1.0f));
+        camera->phi = atan2f(offset[2], offset[0]);
+    }
+    if (drag_controller)
+        set_mouse_drag_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
+                                  drag_controller->auto_orbit_min_dist,
+                                  drag_controller->auto_orbit_max_dist);
+    set_engine_camera_mode(engine, CAMERA_MODE_FREE);
+    update_engine_camera_lookat(engine);
+}
+
+/*
  * Animation playback state
  */
 static AnimationState* anim_state = NULL;
@@ -1837,16 +1873,7 @@ static void render_frame_update(Engine* engine, float dt) {
                     scale_schedule->cam_at[2]};
         vec3 target = {scale_schedule->cam_at[3], scale_schedule->cam_at[4],
                        scale_schedule->cam_at[5]};
-        set_camera_position(engine->camera, eye);
-        set_camera_look_at(engine->camera, target);
-        // The --cam-eye bookkeeping, or the orbit controller recomputes the
-        // position from stale spherical coordinates on the next drag: distance
-        // and angles re-seeded from the new pose. Headless survives without
-        // this only by accident (auto-orbit is off), so it is done regardless.
-        vec3 delta;
-        glm_vec3_sub(eye, target, delta);
-        engine->camera->distance = glm_vec3_norm(delta);
-        update_engine_camera_lookat(engine);
+        apply_explicit_pose(engine, eye, target);
         fprintf(stderr, "frame %d: camera teleported\n", scale_schedule->cam_at_frame);
     }
     // The composite cache's by-value invalidation is unreachable from a fresh
@@ -2459,6 +2486,9 @@ int main(int argc, char** argv) {
     }
     if (args.layers_vt_page_slots > 0) {
         engine->layers_vt_page_slots = args.layers_vt_page_slots;
+    }
+    if (args.layers_vt_page_budget > 0) {
+        engine->layers_vt_page_budget = args.layers_vt_page_budget;
     }
     if (args.layers_vt_probe > 0) {
         engine->layers_vt_probe_interval = args.layers_vt_probe;
@@ -3273,27 +3303,8 @@ int main(int argc, char** argv) {
         vec3 up = {0.0f, 1.0f, 0.0f};
         if (args.cam_up_set)
             glm_vec3_copy(args.cam_up, up);
-        set_camera_position(camera, args.cam_eye);
-        set_camera_look_at(camera, args.cam_target);
         set_camera_up_vector(camera, up);
-        camera->distance = glm_vec3_distance(args.cam_eye, args.cam_target);
-        // An explicit pose must survive interactive mode too: kill the
-        // auto-orbit animation (it recomputes the camera from theta/phi
-        // every frame, clobbering the pose one frame in) and seed the orbit
-        // angles from eye-target so a mouse drag continues from this exact
-        // view instead of snapping back to the default framing. Start in
-        // FREE mode (mirrored by the GUI radio) -- a pinned pose is a free
-        // camera; switching the radio to Orbit picks up the seeded angles.
-        set_mouse_drag_auto_orbit(drag_controller, false, CAM_ANGULAR_SPEED,
-                                  fminf(camera_distance * 0.5f, orbit_max), orbit_max);
-        set_engine_camera_mode(engine, CAMERA_MODE_FREE);
-        if (camera->distance > 1e-6f) {
-            vec3 offset;
-            glm_vec3_sub(args.cam_eye, args.cam_target, offset);
-            camera->theta = asinf(glm_clamp(offset[1] / camera->distance, -1.0f, 1.0f));
-            camera->phi = atan2f(offset[2], offset[0]);
-        }
-        update_engine_camera_lookat(engine);
+        apply_explicit_pose(engine, args.cam_eye, args.cam_target);
     } else if (args.cam_eye_set || args.cam_target_set) {
         fprintf(stderr,
                 "Warning: --cam-eye and --cam-target must both be given; ignoring camera pose.\n");

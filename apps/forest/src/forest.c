@@ -150,6 +150,7 @@ typedef struct ForestArgs {
     int no_layers_vt_pages;    // fallback atlas alone -- stage 1 exactly
     int no_layers_vt_feedback; // residency on prediction alone (no vote pass)
     int layers_vt_page_slots;  // physical page slots in use; 0 = all
+    int layers_vt_page_budget; // page bakes per frame; 0 = default
     int layers_vt_probe;       // print page residency every N frames; 0 = off
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int depth_prepass;    // position-only depth before shading; off by default
@@ -1929,6 +1930,8 @@ static void on_init(Game* game) {
         engine->layers_vt_feedback_enabled = false;
     if (g_args.layers_vt_page_slots > 0)
         engine->layers_vt_page_slots = g_args.layers_vt_page_slots;
+    if (g_args.layers_vt_page_budget > 0)
+        engine->layers_vt_page_budget = g_args.layers_vt_page_budget;
     if (g_args.layers_vt_probe > 0)
         engine->layers_vt_probe_interval = g_args.layers_vt_probe;
     if (g_args.no_sort_opaque)
@@ -2319,6 +2322,8 @@ int main(int argc, char** argv) {
             g_args.no_layers_vt_feedback = 1;
         } else if (!strcmp(a, "--layers-vt-page-slots") && i + 1 < argc) {
             g_args.layers_vt_page_slots = atoi(argv[++i]);
+        } else if (!strcmp(a, "--layers-vt-page-budget") && i + 1 < argc) {
+            g_args.layers_vt_page_budget = atoi(argv[++i]);
         } else if (!strcmp(a, "--layers-vt-probe") && i + 1 < argc) {
             g_args.layers_vt_probe = atoi(argv[++i]);
         } else if (!strcmp(a, "--no-sort-opaque")) {

@@ -201,6 +201,8 @@ GLTF = {
     # what makes depth the only thing rejecting the hidden floor.
     "scenes": [{"nodes": [1, 0]}],
     "nodes": [{"name": "vt_floor", "mesh": 0}, {"name": "vt_ramp", "mesh": 1}],
+    # (asserted below the literal: a reorder here is a silent un-falsifying of
+    # the occlusion arm's depth mutation, not a style choice)
     "meshes": [
         {"name": "vt_floor",
          "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 4},
@@ -231,6 +233,12 @@ GLTF = {
                         base64.b64encode(buffer_bytes).decode("ascii"),
                  "byteLength": len(buffer_bytes)}],
 }
+
+# The occluder (ramp, node 1) must precede the occluded floor (node 0), or the
+# feedback-occlusion arm's depth mutation passes by painter's order.
+_scene_order = GLTF["scenes"][0]["nodes"]
+assert _scene_order.index(1) < _scene_order.index(0), (
+    "the ramp must draw before the floor; see the scenes comment")
 
 CSCN = {
     "version": 1,

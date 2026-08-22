@@ -314,30 +314,30 @@ LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface,
      * stays FALLBACK-owned -- a page/fallback index disagreement inside the
      * band would flicker the detail term through the blend.
      */
-    if (vtPageInfo.x > 0) {
-        vec2 pf = uv * splatDomain.zw / vtPageParams.y;
-        ivec2 pi = ivec2(floor(pf));
-        if (pi.x >= 0 && pi.y >= 0 && pi.x < vtPageInfo.x && pi.y < vtPageInfo.x) {
-            int slot = vtPageEntry(pi.y * vtPageInfo.x + pi.x);
-            if (slot >= 0) {
-                float usable = float(vtPageInfo.z - 2 * vtPageInfo.w);
-                float pageTexel = vtPageParams.y / usable;
-                vec2 fp = vec2(length(dpx.xz), length(dpy.xz)) / pageTexel;
-                float pageW = 1.0 - smoothstep(2.0, 4.0, max(fp.x, fp.y));
-                if (pageW > 0.0) {
-                    vec2 slotOrigin =
-                        vec2(ivec2(slot % vtPageInfo.y, slot / vtPageInfo.y) * vtPageInfo.z);
-                    vec2 texel = slotOrigin + float(vtPageInfo.w) + fract(pf) * usable;
-                    vec2 auv = texel / vtPageParams.x;
-                    vec2 gx = dpx.xz / (pageTexel * vtPageParams.x);
-                    vec2 gy = dpy.xz / (pageTexel * vtPageParams.x);
-                    vec4 pageA = textureGrad(vtPageAlbedo, auv, gx, gy);
-                    vec4 pageS = textureGrad(vtPageSurface, auv, gx, gy);
-                    // rgb only: macroA.a is the dominant index, fallback-owned.
-                    macroA.rgb = mix(macroA.rgb, pageA.rgb, pageW);
-                    macroS = mix(macroS, pageS, pageW);
-                }
-            }
+    {
+        vec2 pf;
+        int slot = vtPageSlot(uv, splatDomain.zw, pf);
+        float usable = float(vtPageInfo.z - 2 * vtPageInfo.w);
+        float pageTexel = vtPageParams.y / max(usable, 1.0);
+        vec2 fp = vec2(length(dpx.xz), length(dpy.xz)) / pageTexel;
+        // The band's endpoints ARE the density ratio and its half, uploaded
+        // rather than restated: pages beat the fallback exactly while the
+        // fallback is magnified, i.e. under one fallback texel = ratio page
+        // texels, and at the far end page mip 2 meets fallback mip 0.
+        float ratio = vtPageParams.z;
+        float pageW = 1.0 - smoothstep(0.5 * ratio, ratio, max(fp.x, fp.y));
+        if (slot >= 0 && pageW > 0.0) {
+            vec2 slotOrigin = vec2(ivec2(slot % vtPageInfo.y, slot / vtPageInfo.y)
+                                   * vtPageInfo.z);
+            vec2 texel = slotOrigin + float(vtPageInfo.w) + fract(pf) * usable;
+            vec2 auv = texel / vtPageParams.x;
+            vec2 gx = dpx.xz / (pageTexel * vtPageParams.x);
+            vec2 gy = dpy.xz / (pageTexel * vtPageParams.x);
+            vec4 pageA = textureGrad(vtPageAlbedo, auv, gx, gy);
+            vec4 pageS = textureGrad(vtPageSurface, auv, gx, gy);
+            // rgb only: macroA.a is the dominant index, fallback-owned.
+            macroA.rgb = mix(macroA.rgb, pageA.rgb, pageW);
+            macroS = mix(macroS, pageS, pageW);
         }
     }
 

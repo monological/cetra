@@ -12124,6 +12124,23 @@ def _layer_vt_gen():
     return _LAYER_VT_GEN
 
 
+# One statement of the probe line's shape, shared by every consumer: the
+# fixture runner and the forest walk arm read the same print, and two regexes
+# would let a probe format change strand one of them silently.
+_VT_PROBE = re.compile(
+    r"layers-vt-probe frame=(\d+) grid=(\d+) slots=(\d+) resident=(\d+) wanted=(\d+) "
+    r"requested=(\d+) loaded=(\d+) evicted=(\d+) digest=([0-9a-f]{8})")
+
+
+def _vt_probe_rows(text):
+    """Every --layers-vt-probe line in `text`, oldest first, as dicts."""
+    return [{"frame": int(m.group(1)), "grid": int(m.group(2)), "slots": int(m.group(3)),
+             "resident": int(m.group(4)), "wanted": int(m.group(5)),
+             "requested": int(m.group(6)), "loaded": int(m.group(7)),
+             "evicted": int(m.group(8)), "digest": m.group(9)}
+            for m in _VT_PROBE.finditer(text)]
+
+
 def _vt_point(u, v):
     """World point on the VT fixture at splat coordinate (u, v).
 
@@ -12635,23 +12652,16 @@ def run_layers_gate(workdir):
         return failures
 
     def vt_probe_run(extra, frames):
-        # The group's own 400x300, not a smaller size: the occlusion arm's
-        # numbers were measured here, and the depth-off leak it exists to catch
-        # did not reproduce at 200x150.
-        r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", str(frames), "-W", "400", "-H",
-                            "300", "--render-mode", "6", "--no-auto-exposure", "-E", "1.0",
-                            "--layers-vt-probe", "4"] + extra,
+        # The group's own 400x300 and ALBEDO framing, not a smaller size: the
+        # occlusion arm's numbers were measured here, and the depth-off leak it
+        # exists to catch did not reproduce at 200x150. Probe interval 4 against
+        # 24 frames: six rows, and the last sits past the teleport frame plus
+        # the 4-deep feedback ring plus several budget-2 bake frames, so every
+        # arm reads a settled tail rather than a transient.
+        r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", str(frames), "-W", "400",
+                            "-H", "300"] + ALBEDO + ["--layers-vt-probe", "4"] + extra,
                            capture_output=True, text=True)
-        rows = []
-        for mm in re.finditer(r"layers-vt-probe frame=(\d+) grid=(\d+) slots=(\d+) "
-                              r"resident=(\d+) wanted=(\d+) requested=(\d+) loaded=(\d+) "
-                              r"evicted=(\d+) digest=([0-9a-f]{8})", r.stdout + r.stderr):
-            rows.append({"frame": int(mm.group(1)), "grid": int(mm.group(2)),
-                         "slots": int(mm.group(3)), "resident": int(mm.group(4)),
-                         "wanted": int(mm.group(5)), "requested": int(mm.group(6)),
-                         "loaded": int(mm.group(7)), "evicted": int(mm.group(8)),
-                         "digest": mm.group(9)})
-        return rows
+        return _vt_probe_rows(r.stdout + r.stderr)
 
     # --- layers-vt-pages-identity --------------------------------------------
     # Pages on vs off at the derived resolution: the pages resample the same
@@ -12661,15 +12671,24 @@ def run_layers_gate(workdir):
     # residency happened at all.
     ae_pages, _ = compare(cpath, nopages[1])
     probe = vt_probe_run([], 16)
-    resident_final = probe[-1]["resident"] if probe else 0
-    VT_PAGES_ID_CEILING = 2000 # measured 696 of 480000: splat-edge resample only
-    ok = ae_pages <= VT_PAGES_ID_CEILING and resident_final > 0
-    print(f"  layers-vt-pages-identity {'PASS' if ok else 'FAIL'}  pages on vs off "
-          f"{ae_pages} px (want <= {VT_PAGES_ID_CEILING}: the pages hold the same macro), "
-          f"{resident_final} pages resident at the end (want > 0, or the identity is the "
-          f"feature never arming)")
-    if not ok:
+    # Measured 696 of 480000: splat-edge resample only. Which page set sits
+    # resident at the capture frame shifts with the vote decode (the tie-riding
+    # encoding the review replaced read 490 here), so small moves inside the
+    # ceiling track residency order, not blend arithmetic.
+    VT_PAGES_ID_CEILING = 2000
+    if not probe:
+        print("  layers-vt-pages-identity FAIL  the probe printed no rows "
+              "(a crash or a silenced probe, not a residency reading)")
         failures.append("layers-vt-pages-identity")
+    else:
+        resident_final = probe[-1]["resident"]
+        ok = ae_pages <= VT_PAGES_ID_CEILING and resident_final > 0
+        print(f"  layers-vt-pages-identity {'PASS' if ok else 'FAIL'}  pages on vs off "
+              f"{ae_pages} px (want <= {VT_PAGES_ID_CEILING}: the pages hold the same macro), "
+              f"{resident_final} pages resident at the end (want > 0, or the identity is the "
+              f"feature never arming)")
+        if not ok:
+            failures.append("layers-vt-pages-identity")
 
     # --- layers-vt-pages-effect ----------------------------------------------
     # At a fallback the derived rule would refuse, pages carry the macro the
@@ -12699,6 +12718,10 @@ def run_layers_gate(workdir):
     # arm's forcing -- after the teleport the still-visible old pages vote,
     # stay top-ranked, and correctly nothing moves. Feedback's own behaviour
     # has its two arms below.
+    # The teleport pose drops the camera low over the fixture's left half,
+    # looking along it -- chosen so its nearest-first want only partially
+    # overlaps the default framing's, which at 4 slots is what forces both
+    # evictions and reloads rather than a want that happens to be resident.
     churn_flags = ["--layers-vt-page-slots", "4", "--no-layers-vt-feedback", "--cam-at",
                    "10:-1.5,2.0,3.0,-1.5,0.0,-1.0"]
     rows_a = vt_probe_run(churn_flags, 24)
@@ -12708,6 +12731,8 @@ def run_layers_gate(workdir):
         failures.append("layers-vt-pages-churn")
     else:
         cap_ok = all(r["resident"] <= r["slots"] for r in rows_a)
+        # loaded > slots is what proves a slot was REFILLED: at cap 4, a fifth
+        # load has nowhere to land without an eviction first.
         churned = rows_a[-1]["evicted"] >= 1 and rows_a[-1]["loaded"] > rows_a[-1]["slots"]
         stable = rows_a[-1]["loaded"] == rows_a[-2]["loaded"]
         deterministic = rows_a == rows_b
@@ -12725,22 +12750,16 @@ def run_layers_gate(workdir):
     # bound (34, from ceil(4 * 2048 / usable) -- a number the gate states, never
     # reads back), residency must follow a real walk under the capacity clamp,
     # and the walk must churn pages the way it churns regions.
-    forest_bin = os.path.join(BIN_DIR, "forest")
-    if not os.path.exists(forest_bin):
+    if not os.path.exists(FOREST):
         print("  layers-vt-pages-walk SKIP  (forest not built)")
     else:
-        r = subprocess.run([forest_bin, "-x", "-f", "400", "-W", "320", "-H", "200",
-                            "--no-fog", "--seed", "1337", "--region-span", "40",
-                            "--region-radius", "60", "--walk", "40", "--layers-vt-probe",
-                            "50"],
-                           capture_output=True, text=True, cwd=ROOT)
-        rows = []
-        for mm in re.finditer(r"layers-vt-probe frame=(\d+) grid=(\d+) slots=(\d+) "
-                              r"resident=(\d+) wanted=(\d+) requested=(\d+) loaded=(\d+) "
-                              r"evicted=(\d+) digest=([0-9a-f]{8})", r.stdout + r.stderr):
-            rows.append({"grid": int(mm.group(2)), "slots": int(mm.group(3)),
-                         "resident": int(mm.group(4)), "requested": int(mm.group(6)),
-                         "loaded": int(mm.group(7)), "evicted": int(mm.group(8))})
+        # The regions' own churn walk, through the regions' own runner: same
+        # constants, same launch, so this arm cannot drift from the walk the
+        # region arms measure -- the probe line just rides along, and the
+        # region probe's own output is ignored here by prefix.
+        _, _, walk_text = _region_run(REGION_CHURN + REGION_WALK +
+                                      ["--layers-vt-probe", "50"])
+        rows = _vt_probe_rows(walk_text)
         if len(rows) < 4:
             print("  layers-vt-pages-walk FAIL  the probe printed too few rows")
             failures.append("layers-vt-pages-walk")
@@ -12749,8 +12768,10 @@ def run_layers_gate(workdir):
             cap_ok = all(r2["resident"] <= r2["slots"] for r2 in rows)
             churned = rows[-1]["evicted"] > 0 and rows[-1]["loaded"] > rows[-1]["slots"]
             # The anti-thrash bound, TWO-SIDED because a walk both churns and
-            # settles: healthy measured 71 loads over the round trip; evicting
-            # wanted pages (the hysteresis-and-want guard deleted) measured 701.
+            # settles: healthy measures 79 loads over the round trip (71 on the
+            # pre-review vote encoding -- the seen boost follows the decode);
+            # evicting wanted pages (the hysteresis-and-want guard deleted)
+            # measured 701, a 10x contrast the decode shift cannot blur.
             no_thrash = rows[-1]["loaded"] <= 200
             ok = grid_ok and cap_ok and churned and no_thrash
             print(f"  layers-vt-pages-walk {'PASS' if ok else 'FAIL'}  grid 34 at every "
@@ -12783,9 +12804,11 @@ def run_layers_gate(workdir):
     # --- layers-vt-feedback-occlusion ----------------------------------------
     # The arm that discriminates feedback from prediction: a low camera behind
     # the 45-degree ramp sees the ramp and NOT the floor beyond its crest, so
-    # the floor's pages must cast no votes while the frustum wants all 25. The
-    # band is two-sided: below it the pass lost the ramp too, above it the
-    # depth test stopped rejecting the hidden floor.
+    # the floor's pages must cast no votes while the frustum wants all 25 --
+    # the fixture's WHOLE virtual grid, ceil(4 * 256 / 248) = 5 per axis at its
+    # derived-minimum 256 fallback, squared. The band is two-sided: below it
+    # the pass lost the ramp too, above it the depth test stopped rejecting
+    # the hidden floor.
     occ_rows = vt_probe_run(["--cam-eye", "0,0.4,-3.5", "--cam-target", "0,0.5,3"], 24)
     if len(occ_rows) < 3:
         print("  layers-vt-feedback-occlusion FAIL  the probe printed too few rows")
@@ -12794,7 +12817,7 @@ def run_layers_gate(workdir):
         req = occ_rows[-1]["requested"]
         ok = 8 <= req <= 14 and occ_rows[-1]["wanted"] == 25
         print(f"  layers-vt-feedback-occlusion {'PASS' if ok else 'FAIL'}  behind the ramp "
-              f"the vote pass requested {req} pages (want 8..14, measured 12: the ramp's "
+              f"the vote pass requested {req} pages (want 8..14, measured 13: the ramp's "
               f"own) while prediction wanted {occ_rows[-1]['wanted']} (want 25 -- the "
               f"occluded floor is frustum-visible, and only the depth-tested vote knows "
               f"it is hidden)")

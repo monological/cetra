@@ -38,6 +38,9 @@
 #define VT_PAGE_TABLE_MAX   (VT_PAGE_GRID_MAX * VT_PAGE_GRID_MAX)
 #define VT_PAGE_TABLE_VEC4S ((VT_PAGE_TABLE_MAX + 3) / 4)
 
+// The feedback pass encodes a vote's page coordinates one per unorm8 channel.
+_Static_assert(VT_PAGE_GRID_MAX <= 255, "page coordinates must fit a vote byte");
+
 /*
  * C mirror of VtPageBlock (vt_pages.glsl). Entries are the virtual page grid
  * row-major, each an atlas slot index or -1, packed four to an ivec4 -- the
@@ -47,7 +50,7 @@
 typedef struct GpuVtPageBlock {
     // pagesPerAxis, atlasPagesPerRow, pageTexels, gutterTexels
     int32_t info[4];
-    // atlasTexels, pageWorldSpan, splat-domain-relative page origin scale x2
+    // atlasTexels, pageWorldSpan, densityRatio, unused (std140 pad)
     float params[4];
     int32_t entries[VT_PAGE_TABLE_VEC4S][4];
 } GpuVtPageBlock;

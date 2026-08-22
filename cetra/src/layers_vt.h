@@ -103,7 +103,6 @@ typedef struct LayersVtFeedback {
     GLuint pbo[VT_FEEDBACK_RING];
     unsigned long long frames;                  // submits so far; ring is live past RING
     unsigned char requested[VT_PAGE_TABLE_MAX]; // frame N-RING's votes, parsed
-    bool have;                                  // requested[] holds a real frame
 } LayersVtFeedback;
 
 // Render the vote pass for the scene's paged material and cycle the readback

@@ -15,7 +15,9 @@
  * residency sort spends the extra votes by distance.
  *
  * Encoding: r = vx, g = vz (a page grid is at most 34), b = 1 marks a vote; a
- * cleared texel is no vote.
+ * cleared texel is no vote. i/255 is exact under the unorm8 round -- the
+ * (i+0.5)/255 form lands on the round-to-nearest tie the GL spec leaves
+ * implementation-defined, which would shift votes one page on some drivers.
  */
 
 #include "world_origin.glsl"
@@ -29,12 +31,10 @@ layout(location = 0) out vec4 FragColor;
 
 void main() {
     FragColor = vec4(0.0);
-    if (vtPageInfo.x <= 0)
-        return;
     vec2 uv = (authoredPos(WorldPos).xz - splatDomain.xy) / max(splatDomain.zw, vec2(1e-4));
-    vec2 pf = uv * splatDomain.zw / vtPageParams.y;
-    ivec2 pi = ivec2(floor(pf));
-    if (pi.x < 0 || pi.y < 0 || pi.x >= vtPageInfo.x || pi.y >= vtPageInfo.x)
+    vec2 pf;
+    ivec2 pi;
+    if (!vtPageCoord(uv, splatDomain.zw, pf, pi))
         return;
-    FragColor = vec4((float(pi.x) + 0.5) / 255.0, (float(pi.y) + 0.5) / 255.0, 1.0, 1.0);
+    FragColor = vec4(vec2(pi) / 255.0, 1.0, 1.0);
 }
