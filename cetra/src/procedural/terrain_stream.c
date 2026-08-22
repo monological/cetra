@@ -485,10 +485,21 @@ TerrainStream* terrain_stream_open(const char* path, float extent, float l0_cove
         L->offset = offset[k];
         L->whole = lres[k] <= s->resident_res;
         int wt = k == 0 ? l0_tiles : s->window_tiles;
-        L->win_nodes = L->whole ? lres[k] : wt * tile;
+        // n * tile + 1 nodes, NOT n * tile, and it is the same reason a level is
+        // 2^k + 1: the grid is node-centred, so a run of whole tiles covers one
+        // node fewer than it looks. Sized the other way, no tile-aligned window
+        // can ever reach the level's last node -- the far edge of the terrain
+        // becomes permanently unreachable, every rect touching it silently
+        // fails to become resident, and what gets built there comes from the
+        // fall. It reaches Jolt as a collider flat enough that the tree builder
+        // cannot split it.
+        //
+        // It also makes the origin bound land on a tile: res - win_nodes is
+        // 2^k - n * tile, which the tile divides.
+        L->win_nodes = L->whole ? lres[k] : wt * tile + 1;
         if (L->win_nodes > lres[k])
             L->win_nodes = lres[k];
-        L->win_tiles = tiles_for(L->win_nodes, tile);
+        L->win_tiles = (L->win_nodes - 1) / tile + 1;
         L->win_x0 = L->win_z0 = 0;
     }
 
@@ -663,26 +674,43 @@ static void window_shift(TerrainStreamLevel* L, int planes, int nx0, int nz0, in
     int hi_z = (oz0 + W < nz0 + W ? oz0 + W : nz0 + W);
 
     if (hi_x > lo_x && hi_z > lo_z) {
+        // delta is dst MINUS src, so the source of a row is dst - delta. Written
+        // the other way it slides the terrain the wrong direction, and the tiles
+        // it lands on stay marked resident -- so nothing falls, nothing warns,
+        // and the surface is simply somewhere else.
         long delta = (long)(oz0 - nz0) * (long)W + (long)(ox0 - nx0);
         int width = hi_x - lo_x;
         for (int pl = 0; pl < planes; ++pl) {
             float* m = L->mem[pl];
-            if (delta <= 0) {
+            // Rows in the order that cannot clobber a source before it is read:
+            // ascending when the data moves down in memory, descending when up.
+            if (delta < 0) {
                 for (int j = lo_z; j < hi_z; ++j) {
                     size_t dst = (size_t)(j - nz0) * (size_t)W + (size_t)(lo_x - nx0);
-                    memmove(m + dst, m + (size_t)((long)dst + delta), (size_t)width * sizeof(float));
+                    memmove(m + dst, m + (size_t)((long)dst - delta), (size_t)width * sizeof(float));
                 }
             } else {
                 for (int j = hi_z - 1; j >= lo_z; --j) {
                     size_t dst = (size_t)(j - nz0) * (size_t)W + (size_t)(lo_x - nx0);
-                    memmove(m + dst, m + (size_t)((long)dst + delta), (size_t)width * sizeof(float));
+                    memmove(m + dst, m + (size_t)((long)dst - delta), (size_t)width * sizeof(float));
                 }
             }
         }
     }
 
-    // The tile bitmap follows the same shift, so a window that moved by one
-    // column keeps the residency of everything it kept the data for.
+    /*
+     * The tile bitmap follows the same shift, so a window that moved one column
+     * keeps the residency of everything it kept the data for -- with one
+     * exception that is easy to miss and expensive to have.
+     *
+     * A window is n * tile + 1 nodes, so its LAST tile on each axis holds a
+     * single node column. Shift by a tile and that stub becomes an interior
+     * tile needing all 64, of which 63 were never read. Carrying its bit marks
+     * a tile resident over stale memory: nothing falls, nothing warns, and the
+     * ground there is whatever the window held two positions ago. So residency
+     * carries only from a source tile that was COMPLETE, which costs one tile
+     * row and column of re-reading per move.
+     */
     int T = L->win_tiles;
     unsigned char* keep = calloc((size_t)T * (size_t)T, 1);
     if (keep) {
@@ -690,7 +718,8 @@ static void window_shift(TerrainStreamLevel* L, int planes, int nx0, int nz0, in
         for (int tz = 0; tz < T; ++tz) {
             for (int tx = 0; tx < T; ++tx) {
                 int stx = tx + dtx, stz = tz + dtz;
-                if (stx >= 0 && stz >= 0 && stx < T && stz < T)
+                bool complete = (stx + 1) * tile <= L->win_nodes && (stz + 1) * tile <= L->win_nodes;
+                if (stx >= 0 && stz >= 0 && stx < T && stz < T && complete)
                     keep[tz * T + tx] = L->resident[stz * T + stx];
             }
         }
@@ -811,6 +840,21 @@ bool terrain_stream_ensure_rect(TerrainStream* s, const TerrainParams* p, float 
         nx = (nx / tile) * tile;
         nz = (nz / tile) * tile;
         window_shift(L, planes_at(level), nx, nz, tile);
+    }
+
+    // Checked AFTER the move, because a silent failure here is the expensive
+    // one: read_tile drops tiles outside the window without complaining, so an
+    // ensure that did not cover its rect would return success and leave the
+    // caller building a collider out of the fall. Loud, once, and false.
+    if (i0 < L->win_x0 || i1 > L->win_x0 + L->win_nodes || j0 < L->win_z0 ||
+        j1 > L->win_z0 + L->win_nodes) {
+        if (!s->warned_capacity) {
+            s->warned_capacity = true;
+            log_warn("terrain_stream: level %d could not place a window over nodes "
+                     "[%d,%d]x[%d,%d]; it reads coarse",
+                     level, i0, i1, j0, j1);
+        }
+        return false;
     }
 
     size_t tn = (size_t)tile * (size_t)tile;

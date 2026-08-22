@@ -7966,6 +7966,336 @@ def run_terrain_gate(workdir):
     return failures
 
 
+# ---------------------------------------------------------------------------
+# terrain streaming (spec 11.69)
+# ---------------------------------------------------------------------------
+
+# The source field these arms stream is WRITTEN HERE, and the committed fixture
+# is why: terrain_fixture.r16 is 256 nodes, 255 is odd, so a node-centred grid
+# halves zero times and it carries no coarse level at all -- the save refuses it
+# by name, and a stream of it would have nothing to fall to. 257 halves seven
+# times, and painting it from the SAME closed form keeps one statement of what
+# this terrain is rather than adding a second asset to drift from the first.
+STREAM_RES = 257
+# Stated here rather than read back off the probe, the "grid 34" discipline: a
+# gate that takes the design's own numbers from the thing under test cannot fail
+# when the design changes underneath it.
+STREAM_TILE = 64    # TERRAIN_STREAM_TILE_NODES
+STREAM_LEVELS = 7   # 257, 129, 65, 33, 17, 9, 5
+STREAM_L0_TILES = 5 # ceil(257 / 64), so 25 tiles cover level 0
+# Forced-small residency, the --layers-vt-page-slots 4 idiom. resident-res 32
+# leaves levels 0..3 streaming; the region radius is what sizes level 0's own
+# window, so it has to come down too or the finest level covers the domain and
+# there is nothing to miss.
+STREAM_SMALL = ["--terrain-stream-resident-res", "32", "--terrain-stream-window", "2",
+                "--terrain-stream-budget", "1", "--region-radius", "60", "--region-span", "40"]
+# The walk's two-sided bound. Both measured from two runs before being written
+# down; the ceiling is what the dead-band's deletion blows through.
+STREAM_WALK_LOAD_MAX = 900
+STREAM_WALK_WINDOW_KB = 6144
+
+# How far the character's height above the terrain may step between two trace
+# rows while it walks.
+#
+# NOT origin-physics' 0.05, and the difference is the measurement: that arm
+# holds a RESTING capsule across a shift, where this one walks a triangle mesh
+# and crosses region seams. Measured 0.1200 on the streamed walk and 0.1200 on
+# the same walk with the field fully resident -- the same number, which is the
+# real content here and what the bar is floored just above. A collider built
+# from the fall does not read smoother, it reads adrift: the printed terrain
+# column still comes from level 0 while the ground under the capsule does not,
+# and the first version of this feature measured 70.03 that way.
+STREAM_CLEARANCE_MAX = 0.20
+
+_STREAM_HEADER = re.compile(
+    r"terrain-stream-header path=(\S+) res=(\d+) levels=(\d+) tile=(\d+) "
+    r"min=(-?[\d.eE+-]+) max=(-?[\d.eE+-]+) ms=([\d.]+)")
+_STREAM_PROBE = re.compile(
+    r"terrain-stream-probe frame=(\d+) levels=(\d+) l0=(-?\d+),(-?\d+) window_kb=(\d+) "
+    r"loaded=(\d+) ensured=(\d+) misses=(\d+) digest=([0-9a-f]{8})")
+_STREAM_LEVEL = re.compile(
+    r"terrain-stream-probe level idx=(\d+) res=(\d+) window=(\d+) tiles=(\d+) "
+    r"resident=(\d+) whole=(\d)")
+_STREAM_FALLBACK = re.compile(
+    r"terrain-stream-probe fallback x=(-?[\d.]+) z=(-?[\d.]+) h=(-?[\d.eE+-]+) "
+    r"expect=(-?[\d.eE+-]+) level=(\d+) resident=(\d)")
+_STREAM_SAVED = re.compile(
+    r"terrain-stream-probe saved path=(\S+) res=(\d+) levels=(\d+) tile=(\d+) "
+    r"min=(-?[\d.eE+-]+) max=(-?[\d.eE+-]+)")
+
+
+def _stream_source(workdir):
+    """The 257-node twin of the committed fixture, painted from _terrain_truth."""
+    path = os.path.join(workdir, "stream_src.r16")
+    if not os.path.exists(path):
+        lo, hi = float(TERRAIN_RANGE[0]), float(TERRAIN_RANGE[1])
+        with open(path, "wb") as f:
+            for j in range(STREAM_RES):
+                row = bytearray()
+                for i in range(STREAM_RES):
+                    h01 = (_terrain_truth(i / (STREAM_RES - 1), j / (STREAM_RES - 1), lo, hi)
+                           - lo) / (hi - lo)
+                    row += struct.pack("<H", int(round(max(0.0, min(1.0, h01)) * 65535.0)))
+                f.write(row)
+    return path
+
+
+def _stream_run(workdir, tag, extra):
+    """One forest run carrying both probes, since the stream rows ride the launch."""
+    r = _terrain_run(workdir, tag, extra)
+    if r is None:
+        return None
+    text = r["text"]
+    r["sheader"] = _STREAM_HEADER.search(text)
+    r["ssaved"] = _STREAM_SAVED.search(text)
+    r["probe"] = [{"frame": int(m.group(1)), "levels": int(m.group(2)),
+                   "l0": (int(m.group(3)), int(m.group(4))), "window_kb": int(m.group(5)),
+                   "loaded": int(m.group(6)), "ensured": int(m.group(7)),
+                   "misses": int(m.group(8)), "digest": m.group(9)}
+                  for m in _STREAM_PROBE.finditer(text)]
+    r["slevels"] = [tuple(int(g) for g in m.groups()) for m in _STREAM_LEVEL.finditer(text)]
+    r["fallback"] = [{"x": float(m.group(1)), "z": float(m.group(2)), "h": float(m.group(3)),
+                      "expect": float(m.group(4)), "level": int(m.group(5)),
+                      "resident": int(m.group(6))}
+                     for m in _STREAM_FALLBACK.finditer(text)]
+    return r
+
+
+def run_terrain_stream_gate(workdir):
+    """Terrain streaming: a tiled field on disk, windows over it (spec 11.69 / D4):
+
+      terrain-stream-identity   a streamed field answers what the resident one did
+      terrain-stream-correct    under eviction pressure it still reads what was painted
+      terrain-stream-fallback   a miss reads the coarse level exactly, never a zero
+      terrain-stream-refuse     a damaged file is refused whole, not half-loaded
+      terrain-stream-walk       windows follow a walk and the reads stay bounded
+      terrain-stream-collider   the character stays grounded while tiles churn under it
+
+    Read as printed numbers, for the reason the terrain group states and one
+    more: residency is invisible in a frame BY DESIGN. The fall returns a
+    smoother surface, not a broken one, so a field that never became resident
+    renders as plausible terrain -- which is what makes the anti-vacuity clause
+    load-bearing on every arm here rather than a formality.
+
+    The source field is painted at gate time (_stream_source) instead of
+    committed. The committed 256-node fixture cannot stand in: 255 is odd, so it
+    halves zero times, carries no coarse level, and the save refuses it.
+    """
+    failures = []
+    src = _stream_source(workdir)
+    cts = os.path.join(workdir, "stream.cts")
+
+    # --- terrain-stream-identity ---------------------------------------------
+    # One launch writes the tiled file and prints the resident field's own
+    # answers; the next reads that file back. Comparing the two is the whole
+    # arm, and it is a comparison of EVERY probe row rather than a sampled one
+    # -- samples on the lattice, mids between nodes and clamps outside the
+    # domain each fail differently under a paging bug.
+    whole = _stream_run(workdir, "stream_whole",
+                        ["--heightmap", src, "--heightmap-range", TERRAIN_RANGE[0],
+                         TERRAIN_RANGE[1], "--terrain-height-probe",
+                         "--terrain-stream-save", cts])
+    streamed = _stream_run(workdir, "stream_read",
+                           ["--terrain-stream", cts, "--terrain-height-probe",
+                            "--terrain-stream-probe", "1"])
+    if whole is None or streamed is None or not whole["ssaved"]:
+        print("  terrain-stream-identity FAIL  a run did not produce its rows")
+        failures.append("terrain-stream-identity")
+    else:
+        same = (whole["samples"] == streamed["samples"] and whole["clamps"] == streamed["clamps"]
+                and whole["mids"] == streamed["mids"])
+        # The anti-vacuity, and it is not a formality: a build whose stream
+        # never opened falls back to the analytic terrain, which would differ
+        # loudly -- but one that opened and never READ anything would answer
+        # from the coarse tail and still look like terrain.
+        armed = streamed["sheader"] is not None
+        loaded = streamed["probe"][-1]["loaded"] if streamed["probe"] else 0
+        levels = int(streamed["sheader"].group(3)) if armed else 0
+        ok = same and armed and loaded > 0 and levels == STREAM_LEVELS
+        print(f"  terrain-stream-identity {'PASS' if ok else 'FAIL'}  "
+              f"{len(streamed['samples'])} samples, {len(streamed['mids'])} midpoints and "
+              f"{len(streamed['clamps'])} clamp pairs identical to the resident field: {same}; "
+              f"the file opened with {levels} levels (want {STREAM_LEVELS}) and read "
+              f"{loaded} tiles (want > 0, or the identity is a stream that never armed)")
+        if not ok:
+            failures.append("terrain-stream-identity")
+
+    # --- terrain-stream-correct ----------------------------------------------
+    # The same painted ground truth the committed fixture is read against, now
+    # under a residency too small to hold the domain: the probe walks 25 points
+    # across the whole field at a one-tile budget, so tiles are read, dropped
+    # and read again underneath it. A wrong tile INDEX is what this catches, and
+    # it is the failure mode paging has that nothing else does -- the generator
+    # asserts a transpose moves over 500 codes against a 3-code bar.
+    small = _stream_run(workdir, "stream_small",
+                        ["--terrain-stream", cts, "--terrain-height-probe",
+                         "--terrain-stream-probe", "1"] + STREAM_SMALL)
+    small2 = _stream_run(workdir, "stream_small2",
+                         ["--terrain-stream", cts, "--terrain-height-probe",
+                          "--terrain-stream-probe", "1"] + STREAM_SMALL)
+    if small is None or small2 is None or not small["samples"]:
+        print("  terrain-stream-correct FAIL  a run did not produce its rows")
+        print("  terrain-stream-fallback FAIL  (same run)")
+        failures += ["terrain-stream-correct", "terrain-stream-fallback"]
+    else:
+        lo, hi = float(TERRAIN_RANGE[0]), float(TERRAIN_RANGE[1])
+        extent = float(small["header"].group(3))
+        step = (hi - lo) / 65535.0
+        worst, worst_at = 0.0, None
+        for x, z, h, _fbm, _ny, _f, _d, _w in small["samples"]:
+            u = (x + extent) / (2.0 * extent)
+            v = (z + extent) / (2.0 * extent)
+            d = abs(h - _terrain_truth(u, v, lo, hi))
+            if d > worst:
+                worst, worst_at = d, (x, z)
+        bar = 3.0 * step
+        # Determinism folded in here rather than given an arm of its own: two
+        # runs of one build must agree on every row a reader can see, which is
+        # the stream rows AND the heights they produced.
+        deterministic = (small["samples"] == small2["samples"]
+                         and small["mids"] == small2["mids"]
+                         and [p["digest"] for p in small["probe"]]
+                         == [p["digest"] for p in small2["probe"]])
+        # More tiles read than level 0 HAS is the refill proof: 25 cover it, so
+        # a 26th read is one that had to come back after being dropped.
+        read = small["probe"][-1]["loaded"] if small["probe"] else 0
+        ok = worst <= bar and deterministic and read > STREAM_L0_TILES * STREAM_L0_TILES
+        print(f"  terrain-stream-correct {'PASS' if ok else 'FAIL'}  "
+              f"{len(small['samples'])} samples under a 1-tile budget, worst "
+              f"{worst / step:.2f} codes at {worst_at} (want <= {bar / step:.0f}: a tile index "
+              f"off by one moves hundreds); two runs identical: {deterministic}; "
+              f"{read} tiles read against {STREAM_L0_TILES * STREAM_L0_TILES} in level 0 "
+              f"(want more, or nothing was ever re-read)")
+        if not ok:
+            failures.append("terrain-stream-correct")
+
+        # --- terrain-stream-fallback -----------------------------------------
+        # Rides the same launch. The fallback rows are the only ones that do NOT
+        # ensure, so they are the only place the miss policy is observable: `h`
+        # asks for level 0 and falls, `expect` asks for the level it settled on
+        # and does not. Equal only if the fall returns that level's own value.
+        rows = small["fallback"]
+        missed = [r for r in rows if r["resident"] == 0]
+        bad = [r for r in rows if r["h"] != r["expect"]]
+        spread = (max(r["expect"] for r in rows) - min(r["expect"] for r in rows)) if rows else 0.0
+        misses = small["probe"][-1]["misses"] if small["probe"] else 0
+        ok = bool(rows) and not bad and bool(missed) and misses > 0 and spread > 0.0
+        print(f"  terrain-stream-fallback {'PASS' if ok else 'FAIL'}  {len(rows)} probe points, "
+              f"{len(bad)} disagree with the level they fell to (want 0, exactly: a zero fill, "
+              f"a clamp to the window or the wrong plane all separate them); {len(missed)} sat "
+              f"outside level 0's window and the run logged {misses} falls (want > 0 each, or "
+              f"nothing missed); coarse spread {spread:.2f} (want > 0, or the fallback is flat)")
+        if not ok:
+            failures.append("terrain-stream-fallback")
+
+    # --- terrain-stream-refuse -----------------------------------------------
+    # The terrain-refuse discipline on the new format. A truncated file is the
+    # cheapest damage to produce and the one the length check exists for: every
+    # offset in it is still legal, so a reader that trusts the header reads a
+    # level of terrain that is somebody else's.
+    trunc = os.path.join(workdir, "stream_bad.cts")
+    with open(cts, "rb") as fsrc, open(trunc, "wb") as fdst:
+        blob = fsrc.read()
+        fdst.write(blob[:len(blob) - 4096])
+    bad_run = _stream_run(workdir, "stream_bad",
+                          ["--terrain-stream", trunc, "--terrain-height-probe"])
+    if bad_run is None or not bad_run["header"]:
+        print("  terrain-stream-refuse FAIL  the run produced no probe header")
+        failures.append("terrain-stream-refuse")
+    else:
+        named = "terrain_stream" in bad_run["text"] and trunc in bad_run["text"]
+        fell_back = bad_run["header"].group(1) == "analytic"
+        ok = named and fell_back
+        print(f"  terrain-stream-refuse {'PASS' if ok else 'FAIL'}  truncated file "
+              f"{'named' if named else 'NOT named'} in a warning and the source fell back to "
+              f"{bad_run['header'].group(1)} (want analytic; a half-loaded field is worse than "
+              f"none, because it renders)")
+        if not ok:
+            failures.append("terrain-stream-refuse")
+
+    # --- terrain-stream-walk / terrain-stream-collider -----------------------
+    # One walk, two arms, in the region group's own idiom: residency follows the
+    # camera, the camera follows the player, and --trace-player rides along so
+    # "the windows moved" and "the ground stayed under the character" are read
+    # off the same 400 frames rather than two runs that merely shared flags.
+    #
+    # A 513 field rather than the 257 above, because this needs level 0 bigger
+    # than a window that can plausibly hold it while still baking in under a
+    # second: --erode-iterations -1 seeds and installs, running no sim.
+    walk_cts = os.path.join(workdir, "walk.cts")
+    seeded = _stream_run(workdir, "stream_walk_bake",
+                         ["--erode", "--erode-res", "513", "--erode-iterations", "-1",
+                          "--terrain-stream-save", walk_cts])
+    if seeded is None or not seeded["ssaved"]:
+        print("  terrain-stream-walk FAIL  the 513 field did not save")
+        print("  terrain-stream-collider FAIL  (same run)")
+        failures += ["terrain-stream-walk", "terrain-stream-collider"]
+        return failures
+
+    _, _, walk_text = _region_run(REGION_CHURN + REGION_WALK +
+                                  ["--terrain-stream", walk_cts,
+                                   "--terrain-stream-resident-res", "64",
+                                   "--terrain-stream-window", "4",
+                                   "--terrain-stream-probe", "50"])
+    rows = [{"frame": int(m.group(1)), "l0": (int(m.group(3)), int(m.group(4))),
+             "window_kb": int(m.group(5)), "loaded": int(m.group(6)), "digest": m.group(9)}
+            for m in _STREAM_PROBE.finditer(walk_text)]
+    if len(rows) < 4:
+        print(f"  terrain-stream-walk FAIL  the probe printed {len(rows)} rows, want at least 4")
+        failures.append("terrain-stream-walk")
+    else:
+        moved = len({r["l0"] for r in rows}) > 1
+        grew = rows[-1]["loaded"] > rows[0]["loaded"]
+        # The thrash ceiling, the 71/701/200 template. A walk both churns and
+        # settles, so the bound is two-sided: growth proves the windows follow,
+        # the ceiling proves they are not re-reading ground they already hold.
+        no_thrash = rows[-1]["loaded"] <= STREAM_WALK_LOAD_MAX
+        capped = all(r["window_kb"] <= STREAM_WALK_WINDOW_KB for r in rows)
+        ok = moved and grew and no_thrash and capped
+        print(f"  terrain-stream-walk {'PASS' if ok else 'FAIL'}  level 0's window took "
+              f"{len({r['l0'] for r in rows})} distinct positions over the round trip (want > 1: "
+              f"it follows the walk); reads went {rows[0]['loaded']} -> {rows[-1]['loaded']} "
+              f"(want growth, and <= {STREAM_WALK_LOAD_MAX} -- the dead-band deleted re-reads a "
+              f"column a frame); windows held <= {STREAM_WALK_WINDOW_KB} kB at every print: "
+              f"{capped}")
+        if not ok:
+            failures.append("terrain-stream-walk")
+
+    # --- terrain-stream-collider ---------------------------------------------
+    # The hazard this whole design is arranged around. A collider is built from
+    # heights and handed to Jolt, which keeps its own copy: if the mesh under
+    # the player were ever built from the fall, the floor would step by the
+    # difference between two pyramid levels and the capsule would sink or hover.
+    # Read as the clearance origin-physics already reads, against its bound.
+    trace = [{"t": float(m.group(1)), "x": float(m.group(2)), "y": float(m.group(3)),
+              "grounded": m.group(5), "terrain": float(m.group(6))}
+             for m in _ORIGIN_TRACE.finditer(walk_text)]
+    settled = trace[1:]
+    if len(settled) < 3:
+        print(f"  terrain-stream-collider FAIL  {len(settled)} settled trace rows, want 3+")
+        failures.append("terrain-stream-collider")
+    else:
+        clearances = [r["y"] - r["terrain"] for r in settled]
+        drift = max(abs(b - a) for a, b in zip(clearances, clearances[1:]))
+        grounded = all(r["grounded"] == "1" for r in settled)
+        # Anti-vacuity, and it is the whole point of riding this launch: the
+        # character has to have stayed grounded WHILE tiles were being read
+        # under it, not on a run where residency never moved.
+        churned = bool(rows) and rows[-1]["loaded"] > rows[0]["loaded"]
+        ok = grounded and drift <= STREAM_CLEARANCE_MAX and churned
+        print(f"  terrain-stream-collider {'PASS' if ok else 'FAIL'}  {len(settled)} settled "
+              f"rows, grounded at every one: {grounded}; worst clearance step {drift:.3f} "
+              f"(want <= {STREAM_CLEARANCE_MAX}, the same 0.120 a fully resident walk measures: "
+              f"a collider built from the fall steps by the gap between two levels); "
+              f"the same run read "
+              f"{rows[-1]['loaded'] - rows[0]['loaded']} tiles while it walked (want > 0, or "
+              f"nothing was streaming)")
+        if not ok:
+            failures.append("terrain-stream-collider")
+
+    return failures
+
+
 def run_overdraw_gate(workdir):
     """Depth complexity, against a scene whose answer is known (spec 11.31).
 
@@ -13208,6 +13538,7 @@ GATE_GROUPS = [
     ("origin", "a world away from the origin, and one that moves under it (spec 11.62 / D11):",
      run_origin_gate),
     ("terrain", "Heightfield terrain and erosion (spec 11.59 / D6-D8):", run_terrain_gate),
+    ("terrain-stream", "terrain streaming (spec 11.69 / D4):", run_terrain_stream_gate),
     ("layers", "layered surfaces and their composite cache (specs 11.60, 11.66):",
      run_layers_gate),
     ("translucent", "translucent shadows (analytic layer stack, spec 11.26 / C1):",
