@@ -193,7 +193,13 @@ ramp_mn, ramp_mx = base._bounds(ramp_pos)
 GLTF = {
     "asset": {"version": "2.0", "generator": "gen_layer_vt_fixture.py"},
     "scene": 0,
-    "scenes": [{"nodes": [0, 1]}],
+    # RAMP FIRST, and the order is load-bearing for the feedback-occlusion arm:
+    # the vote pass disables culling and its occlusion claim rests on the depth
+    # test, but a hidden surface drawn BEFORE its occluder is also hidden by
+    # painter's order -- so with the occluder last, deleting the depth test
+    # changes nothing and the arm cannot see the deletion. Occluder first is
+    # what makes depth the only thing rejecting the hidden floor.
+    "scenes": [{"nodes": [1, 0]}],
     "nodes": [{"name": "vt_floor", "mesh": 0}, {"name": "vt_ramp", "mesh": 1}],
     "meshes": [
         {"name": "vt_floor",

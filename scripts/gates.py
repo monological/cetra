@@ -12635,8 +12635,11 @@ def run_layers_gate(workdir):
         return failures
 
     def vt_probe_run(extra, frames):
-        r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", str(frames), "-W", "200", "-H",
-                            "150", "--render-mode", "6", "--no-auto-exposure", "-E", "1.0",
+        # The group's own 400x300, not a smaller size: the occlusion arm's
+        # numbers were measured here, and the depth-off leak it exists to catch
+        # did not reproduce at 200x150.
+        r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", str(frames), "-W", "400", "-H",
+                            "300", "--render-mode", "6", "--no-auto-exposure", "-E", "1.0",
                             "--layers-vt-probe", "4"] + extra,
                            capture_output=True, text=True)
         rows = []
@@ -12745,12 +12748,17 @@ def run_layers_gate(workdir):
             grid_ok = all(r2["grid"] == 34 for r2 in rows)
             cap_ok = all(r2["resident"] <= r2["slots"] for r2 in rows)
             churned = rows[-1]["evicted"] > 0 and rows[-1]["loaded"] > rows[-1]["slots"]
-            ok = grid_ok and cap_ok and churned
+            # The anti-thrash bound, TWO-SIDED because a walk both churns and
+            # settles: healthy measured 71 loads over the round trip; evicting
+            # wanted pages (the hysteresis-and-want guard deleted) measured 701.
+            no_thrash = rows[-1]["loaded"] <= 200
+            ok = grid_ok and cap_ok and churned and no_thrash
             print(f"  layers-vt-pages-walk {'PASS' if ok else 'FAIL'}  grid 34 at every "
                   f"print: {grid_ok} (the relative-density bound); resident <= slots: "
                   f"{cap_ok}; the walk loaded {rows[-1]['loaded']} and evicted "
                   f"{rows[-1]['evicted']} against {rows[-1]['slots']} slots (want real "
-                  f"churn, as the walk churns regions)")
+                  f"churn, as the walk churns regions, and loads <= 200 -- the "
+                  f"want-guard deleted measures 701, a 10x thrash)")
             if not ok:
                 failures.append("layers-vt-pages-walk")
 
