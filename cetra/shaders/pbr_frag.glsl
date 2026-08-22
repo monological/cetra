@@ -362,6 +362,14 @@ uniform float probeIntensity;
 uniform float probeMaxLOD;
 uniform float probeBoxFade;
 
+// Two or more probes (spec 11.70) take a different route entirely: the scalar
+// uniforms above go quiet, the prefilter unit keeps holding the global
+// environment, and the blend reads an octahedral atlas riding giAtlasTex.
+// probeCount decides which, and it is dynamically uniform, so a scene with one
+// probe or none pays a branch and nothing else.
+#define PROBE_MASK_FROM_CLUSTERS
+#include "probe_specular.glsl"
+
 const float PI = 3.14159265359;
 
 
@@ -2030,6 +2038,18 @@ void main() {
             vec3 dir = normalize(mix(R, corrected, inside));
             prefilteredColor = textureLod(prefilteredMap, dir, roughnessMap * probeMaxLOD).rgb
                                * probeIntensity;
+        } else if (probeInfo.x >= 2) {
+            // A SET of probes, blended by how far inside each proxy box this
+            // fragment sits. probeSetSpecular returns the probes' share and the
+            // weight it covers; whatever weight is left over falls to the
+            // environment through the exact expression the no-probe branch
+            // below uses -- so a fragment outside every box is that branch,
+            // arrived at by arithmetic rather than by a second code path.
+            vec4 probes = probeSetSpecular(giAtlasTex, probeMask(gl_FragCoord.xy, -ViewPos.z),
+                                           WorldPos, R, roughnessMap);
+            prefilteredColor =
+                probes.rgb + (1.0 - probes.a) *
+                                 textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
         } else {
             prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
         }

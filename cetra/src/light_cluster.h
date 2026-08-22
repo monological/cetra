@@ -6,6 +6,9 @@
 #include <stdint.h>
 
 #include "ubo.h"
+// PROBE_SET_MAX, which sizes the probe descriptor array below. probe_set.h owns
+// the cap; this file only lays it out for std140, the shore_chain relationship.
+#include "probe_set.h"
 
 struct Engine;
 struct Scene;
@@ -77,8 +80,44 @@ typedef struct GpuClusterIndexBlock {
     uint16_t indices[LC_MAX_CLUSTER_INDICES];
 } GpuClusterIndexBlock;
 
+/*
+ * C mirror of ProbeBlock (include/probe_specular.glsl), spec 11.70. Here rather
+ * than in probe_set.h because half of it is the froxel masks, which this file's
+ * grid sizes and this file's build pass fills.
+ *
+ * ONE block for the descriptors AND the masks, where the lights spend three.
+ * Not thrift: pbr_frag's fragment stage declares eight uniform blocks against
+ * GL 4.1's guaranteed twelve, so a second block would spend a tenth declaration
+ * to save re-sending 3.6 KB -- under a third of what ONE light block sends
+ * every frame.
+ *
+ * Uploaded whole, per build, on the grid's cadence rather than the IES table's:
+ * the masks are VIEW-space and a probe capture face re-enters the build with
+ * its own view, so a once-a-frame upload would leave every capture face reading
+ * another view's masks. Writing it whole also leaves no undefined tail, which
+ * is the trap the IES table was placed after the lights to avoid.
+ */
+typedef struct GpuProbeDesc {
+    float pos_intensity[4]; // xyz capture position (world), w intensity
+    float box_min_fade[4];  // xyz parallax box min,         w box_fade
+    float box_max_rows[4];  // xyz parallax box max,         w last atlas row index
+    float atlas_rect[4];    // x u0, y v0 (texels), z row-0 tile size, w gutter
+} GpuProbeDesc;
+
+typedef struct GpuProbeBlock {
+    int32_t info[4];       // x count, y mask bits set (diagnostic), zw unused
+    float atlas_params[4]; // 1/atlas_w, 1/atlas_h, atlas_w, atlas_h
+    GpuProbeDesc descs[PROBE_SET_MAX];
+    // One 8-bit mask per froxel, four to a word. A uint per froxel would be
+    // four times the bytes for the same bits, and std140 would then give each
+    // one a vec4 stride and make it sixteen.
+    uint32_t cluster_masks[LC_CLUSTER_COUNT / 4];
+} GpuProbeBlock;
+
 _Static_assert(sizeof(GpuLightsBlock) == UBO_LIGHTS_BLOCK_SIZE,
                "GpuLightsBlock must match the std140 LightsBlock layout");
+_Static_assert(sizeof(GpuProbeBlock) == UBO_PROBES_BLOCK_SIZE,
+               "GpuProbeBlock must match the std140 ProbeBlock layout");
 _Static_assert(sizeof(GpuClusterBlock) == UBO_CLUSTERS_BLOCK_SIZE,
                "GpuClusterBlock must match the std140 ClusterBlock layout");
 _Static_assert(sizeof(GpuClusterIndexBlock) == UBO_CLUSTER_INDICES_BLOCK_SIZE,
@@ -104,8 +143,14 @@ typedef struct LightClusterContext {
     // the SCENE's library when that changes, never by the per-frame build.
     struct Ubo* ies_ubo;
     uint64_t ies_uploaded_revision; // library+set last packed; 0 = nothing uploaded yet
+    // ProbeBlock (UBO_BINDING_PROBES). Here for the ies_ubo reason -- the masks
+    // are this module's grid -- but built per invocation like the light blocks,
+    // because they are view-space where an IES table is not.
+    struct Ubo* probes_ubo;
+    bool probes_armed; // last build wrote a live block; drives the disarming zero write
 
     GpuLightsBlock lights;
+    GpuProbeBlock probes;
     GpuClusterBlock grid;
     GpuClusterIndexBlock index_pool;
     LightClusterRange ranges[LC_MAX_CLUSTER_LIGHTS];

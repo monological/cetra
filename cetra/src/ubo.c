@@ -89,6 +89,10 @@ bool ubo_wire_blocks(GLuint program_id) {
     // lit surface and the composite bake both, through layers.glsl -- which is
     // what keeps the two reading one set of segments.
     ubo_wire_program_block(program_id, "RoadsBlock", UBO_BINDING_ROADS, UBO_ROADS_BLOCK_SIZE);
+    // Clustered specular probes (spec 11.70). Declared by anything including
+    // probe_specular.glsl -- the lit surface and SSR -- so the two blend the
+    // same probes through one implementation.
+    ubo_wire_program_block(program_id, "ProbeBlock", UBO_BINDING_PROBES, UBO_PROBES_BLOCK_SIZE);
     return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
                                   UBO_INSTANCES_BLOCK_SIZE);
 }

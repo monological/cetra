@@ -16,6 +16,10 @@
 // byte per froxel.
 #define PROBE_SET_MAX 8
 
+// The GPU mirror of a set, GpuProbeBlock, lives in light_cluster.h beside the
+// other std140 mirrors: half of it is the froxel masks, which that file's grid
+// sizes and its build pass fills.
+
 struct Engine;
 struct Scene;
 struct PostFX;

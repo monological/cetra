@@ -7,6 +7,7 @@
 
 #include "ext/log.h"
 #include "intersect.h"
+#include "probe_atlas.h"
 #include "light.h"
 #include "scene.h"
 #include "shadow.h"
@@ -33,7 +34,9 @@ LightClusterContext* create_light_cluster_context(void) {
     // Created here beside the other light blocks, but NOT uploaded here: it is
     // static per scene, so the per-frame path never touches it (ubo.h).
     ctx->ies_ubo = create_ubo(UBO_IES_BLOCK_SIZE, UBO_BINDING_IES);
-    if (!ctx->lights_ubo || !ctx->clusters_ubo || !ctx->cluster_indices_ubo || !ctx->ies_ubo) {
+    ctx->probes_ubo = create_ubo(UBO_PROBES_BLOCK_SIZE, UBO_BINDING_PROBES);
+    if (!ctx->lights_ubo || !ctx->clusters_ubo || !ctx->cluster_indices_ubo || !ctx->ies_ubo ||
+        !ctx->probes_ubo) {
         log_error("Failed to create clustered light UBOs");
         free_light_cluster_context(ctx);
         return NULL;
@@ -48,6 +51,7 @@ void free_light_cluster_context(LightClusterContext* ctx) {
     free_ubo(ctx->clusters_ubo);
     free_ubo(ctx->cluster_indices_ubo);
     free_ubo(ctx->ies_ubo);
+    free_ubo(ctx->probes_ubo);
     free(ctx);
 }
 
@@ -366,6 +370,111 @@ static void _fill_index_pool(LightClusterContext* ctx) {
         ctx->grid.clusters[ci] = (ctx->offsets[ci] << 12) | (uint32_t)ctx->counts[ci];
 }
 
+/*
+ * Which probes reach which froxel (spec 11.70).
+ *
+ * A MASK rather than the lights' offset|count word plus an index pool: at a cap
+ * of eight, one byte per froxel holds the whole answer, so there is no prefix
+ * sum, no shared pool and no truncation state to represent. It also needs no
+ * touched bitset -- that exists because the light path walks its cells twice,
+ * and this one writes its answer on the first pass.
+ *
+ * Each probe's parallax box is bounded by its own sphere and handed to the
+ * light path's own tests unchanged. The bound over-covers a box badly at the
+ * corners, and that is harmless here in a way it would not be for a light: the
+ * fragment recomputes the exact box weight anyway, and outside the box that
+ * weight is zero. What the mask decides is only which probes a fragment
+ * BOTHERS to weigh.
+ */
+static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* scene, mat4 view,
+                                 mat4 projection, float near_clip, const ClusterFrame* cf) {
+    const ReflectionProbeSet* set = scene->probe_set;
+    memset(&ctx->probes, 0, sizeof(ctx->probes));
+
+    if (!probe_set_multi(set)) {
+        // A zero block is the disarmed state and the shader reads count 0 from
+        // it. Written once on the way down rather than every frame: the upload
+        // is what costs, not the memset.
+        if (ctx->probes_armed) {
+            ubo_upload(ctx->probes_ubo, &ctx->probes, sizeof(ctx->probes));
+            ctx->probes_armed = false;
+        }
+        return;
+    }
+
+    ctx->probes.info[0] = set->count;
+    int aw = 0, ah = 0;
+    probe_atlas_size(set->atlas, &aw, &ah);
+    ctx->probes.atlas_params[0] = aw > 0 ? 1.0f / (float)aw : 0.0f;
+    ctx->probes.atlas_params[1] = ah > 0 ? 1.0f / (float)ah : 0.0f;
+    ctx->probes.atlas_params[2] = (float)aw;
+    ctx->probes.atlas_params[3] = (float)ah;
+
+    int bits = 0;
+    for (int i = 0; i < set->count; ++i) {
+        const ReflectionProbe* probe = set->probes[i];
+        GpuProbeDesc* desc = &ctx->probes.descs[i];
+
+        glm_vec3_copy((float*)probe->position, desc->pos_intensity);
+        desc->pos_intensity[3] = probe->intensity;
+        glm_vec3_copy((float*)probe->box_min, desc->box_min_fade);
+        desc->box_min_fade[3] = probe->box_fade;
+        glm_vec3_copy((float*)probe->box_max, desc->box_max_rows);
+        desc->box_max_rows[3] = (float)(PROBE_ATLAS_ROWS - 1);
+        probe_atlas_fill_rect(set->atlas, i, desc->atlas_rect);
+
+        // World box -> view-space bounding sphere, the shape the grid tests.
+        vec3 center, half;
+        glm_vec3_add((float*)probe->box_min, (float*)probe->box_max, center);
+        glm_vec3_scale(center, 0.5f, center);
+        glm_vec3_sub((float*)probe->box_max, center, half);
+        const float radius = glm_vec3_norm(half);
+
+        vec4 world = {center[0], center[1], center[2], 1.0f};
+        vec4 view_center4;
+        glm_mat4_mulv(view, world, view_center4);
+        const vec3 view_center = {view_center4[0], view_center4[1], view_center4[2]};
+
+        LightClusterRange range;
+        _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);
+        const float zc = -view_center[2];
+        range.z0 = _slice_for_z(fmaxf(zc - radius, 1e-4f), cf);
+        range.z1 = _slice_for_z(fmaxf(zc + radius, 1e-4f), cf);
+
+        const float sphere[4] = {view_center[0], view_center[1], view_center[2], radius};
+        const float radius_sq = radius * radius;
+        for (int z = range.z0; z <= range.z1; ++z) {
+            for (int y = range.y0; y <= range.y1; ++y) {
+                for (int x = range.x0; x <= range.x1; ++x) {
+                    if (!_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
+                        continue;
+                    const int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
+                    ctx->probes.cluster_masks[ci >> 2] |= 1u << (((ci & 3) * 8) + i);
+                    bits++;
+                }
+            }
+        }
+    }
+
+    ctx->probes.info[1] = bits;
+    ubo_upload(ctx->probes_ubo, &ctx->probes, sizeof(ctx->probes));
+    ctx->probes_armed = true;
+
+    // Reported back so the diagnostic can print them and a gate can compare two
+    // runs in one number. FNV-1a over the masks alone: the descriptors are a
+    // function of the authored scene, where the masks are a function of the
+    // camera path, which is the thing determinism is in question about.
+    ReflectionProbeSet* live = scene->probe_set;
+    uint32_t h = 2166136261u;
+    const uint8_t* bytes = (const uint8_t*)ctx->probes.cluster_masks;
+    for (size_t b = 0; b < sizeof(ctx->probes.cluster_masks); ++b) {
+        h ^= bytes[b];
+        h *= 16777619u;
+    }
+    live->mask_digest = h;
+    live->mask_bits = bits;
+}
+
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
                                     float far_clip) {
@@ -415,6 +524,12 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     _mark_touched_clusters(ctx, &cf);
     uint32_t total_indices = _assign_index_offsets(ctx);
     _fill_index_pool(ctx);
+
+    // Strictly after the light pass and touching none of its three arrays: the
+    // light grid has no gate of its own anywhere in the suite, so the only
+    // safe place for a second consumer of this frame's ClusterFrame is past
+    // the point where the first one is finished with it.
+    _mark_probe_clusters(ctx, scene, view, projection, near_clip, &cf);
 
     // Upload only the live prefix of the variable-length blocks (the light
     // array and index pool are both tail fields, and the shader never reads

@@ -171,6 +171,28 @@ _Static_assert(UBO_ROADS_BLOCK_SIZE <= 16384,
 _Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,
                "RoadsBlock's C mirror must match its std140 size");
 
+/*
+ * Clustered specular probes (spec 11.70). info + atlas params + four descriptor
+ * rows per probe + one 8-bit froxel mask per cluster, packed four to a word.
+ *
+ * Sized here rather than beside the mirror because that mirror is in
+ * light_cluster.h, which includes this file -- so the number has to be
+ * available before the struct is. The assert against sizeof lives there, where
+ * the struct is.
+ *
+ * The reader is pbr_frag, whose fragment stage this takes to NINE uniform
+ * blocks of GL 4.1's guaranteed twelve. Whoever wants the tenth should know
+ * that is the budget being spent.
+ */
+// info(16) + atlas params(16) + 8 probes x 4 rows(512) + 3072 froxel masks
+// packed 4 per word(3072). A literal for the reason the cluster sizes above are
+// literals: light_cluster.h owns the grid dimensions and includes THIS file, so
+// the count is not reachable here. The assert against sizeof is over there,
+// where the struct is, and is what catches either number drifting.
+#define UBO_PROBES_BLOCK_SIZE 3616
+_Static_assert(UBO_PROBES_BLOCK_SIZE <= 16384,
+               "the probes block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
+
 typedef struct Ubo {
     GLuint id;
     GLsizeiptr size; // fixed allocation size, set at create

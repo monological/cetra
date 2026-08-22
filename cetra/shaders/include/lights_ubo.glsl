@@ -178,15 +178,22 @@ uint lightIndexAt(uint i) {
     return (i & 1u) == 0u ? (w & 0xFFFFu) : (w >> 16u);
 }
 
-// The cluster light list for an already-resolved screen tile: .x = index-pool
-// offset, .y = light count. The exponential-Z slicing and the offset|count word
-// layout live HERE and nowhere else -- both entry points below go through this,
-// so the slicing formula has exactly one edit site. Only the tile lookup, which
-// is where the two consumers genuinely differ, sits outside.
-uvec2 clusterLightListTile(int tileX, int tileY, float viewZ) {
+// The froxel a screen tile and a view depth land in. The exponential-Z slicing
+// lives HERE and nowhere else, which is what lets a second consumer of the grid
+// (the specular probe masks, spec 11.70) address the same cells without a
+// second copy of the formula to keep in step.
+uint clusterIndex(int tileX, int tileY, float viewZ) {
     int slice =
         clamp(int(log2(max(viewZ, 1e-4)) * clusterParams.x + clusterParams.y), 0, CLUSTER_Z - 1);
-    uint word = clusterWord(uint(tileX + CLUSTER_X * (tileY + CLUSTER_Y * slice)));
+    return uint(tileX + CLUSTER_X * (tileY + CLUSTER_Y * slice));
+}
+
+// The cluster light list for an already-resolved screen tile: .x = index-pool
+// offset, .y = light count. The offset|count word layout lives here -- both
+// entry points below go through this, so it has exactly one edit site. Only the
+// tile lookup, which is where the two consumers genuinely differ, sits outside.
+uvec2 clusterLightListTile(int tileX, int tileY, float viewZ) {
+    uint word = clusterWord(clusterIndex(tileX, tileY, viewZ));
     return uvec2(word >> 12u, word & 0xFFFu);
 }
 
