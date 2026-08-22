@@ -187,8 +187,8 @@ RECIPES = [
     # IBL to be created, and a sun below the horizon supplies one without
     # lighting the rooms.
     {"name": "cornell_rooms", "scene": "assets/cornell_rooms.gltf", "size": (1600, 1200),
-     "flags": ["--sky", "--sun-elevation", "-10", "-f", "30", "--no-auto-exposure",
-               "-E", "1.0", "-W", "800", "-H", "600"]},
+     "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800",
+               "-H", "600"]},
 
     # The cascade fixture, here for a reason the other cascade coverage does not
     # give: run_dir_shadow_gate and run_translucent_offpath_gate both read it

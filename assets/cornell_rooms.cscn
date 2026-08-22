@@ -3,28 +3,38 @@
   "models": [
     { "path": "cornell_rooms.gltf" }
   ],
+  "_comment_environment": "A probe cannot be CREATED without a precomputed IBL, so this block is not decoration: without it the file opens with its probes[] refused and the fixture silently measures nothing. The sun sits below the horizon because what is wanted is the IBL, not its light.",
+  "environment": {
+    "mode": "sky",
+    "sun": { "elevation": -10.0, "azimuth": 0.0 }
+  },
   "materials": {
     "rooms_floor": { "roughness": 0.08, "metallic": 0.0 }
   },
+  "_comment_lights": "SPOTS, not the area panels the emissive quads suggest, and for cornell_leak's stated reason: a fixture whose premise is that one room's light does not reach the other has to start from direct lighting that is beyond question, and an LTC panel still lights surfaces facing away from it.",
   "lights": [
     {
-      "name": "RoomsPanelA",
-      "type": "area",
-      "position": [-1.0, 1.97, 0.0],
+      "name": "RoomsLampA",
+      "type": "spot",
+      "position": [-1.0, 1.9, 0.0],
       "direction": [0.0, -1.0, 0.0],
-      "size": [0.7, 0.7],
+      "cone": [45.0, 65.0],
       "color": [1.0, 0.95, 0.88],
-      "intensity": 24.0,
+      "intensity": 220.0,
+      "intensity_unit": "lumens",
+      "range": 10.0,
       "cast_shadows": true
     },
     {
-      "name": "RoomsPanelB",
-      "type": "area",
-      "position": [1.0, 1.97, 0.0],
+      "name": "RoomsLampB",
+      "type": "spot",
+      "position": [1.0, 1.9, 0.0],
       "direction": [0.0, -1.0, 0.0],
-      "size": [0.7, 0.7],
+      "cone": [45.0, 65.0],
       "color": [0.88, 0.95, 1.0],
-      "intensity": 3.0,
+      "intensity": 28.0,
+      "intensity_unit": "lumens",
+      "range": 10.0,
       "cast_shadows": true
     }
   ],

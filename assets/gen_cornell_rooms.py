@@ -329,6 +329,15 @@ DOOR_Z = 0.30
 # seam arm measures exactly this band.
 PROBE_OVERLAP = 0.30
 
+# This partition's OWN thickness, not the leak room's.
+#
+# PARTITION_HALF is 0.03 up there because that fixture needs probes to straddle
+# the wall -- it is testing whether trilinear weights leak through one. Nothing
+# here wants that, and 6 cm is far below one shadow texel at these cone widths,
+# so a wall that thin casts a stair-stepped shadow that breaks into blocks along
+# its base. This is a wall between two rooms; it is allowed to be a wall.
+ROOMS_PARTITION_HALF = 0.12
+
 
 def build_rooms_room():
     """Two rooms joined by a doorway, over ONE floor mesh.
@@ -371,7 +380,7 @@ def build_rooms_room():
     # coincident with a receiver junction is a shadow-map staircase no filter
     # width removes.
     r.begin("rooms_partition")
-    p = PARTITION_HALF
+    p = ROOMS_PARTITION_HALF
     lo_y, hi_y, back = -EMBED, TOP + EMBED, LO - EMBED
     r.quad((-p, lo_y, back), (-p, lo_y, DOOR_Z), (-p, hi_y, DOOR_Z), (-p, hi_y, back))  # -X
     r.quad((p, lo_y, DOOR_Z), (p, lo_y, back), (p, hi_y, back), (p, hi_y, DOOR_Z))      # +X
@@ -408,6 +417,10 @@ assert PROBE_OVERLAP < ROOMS_X, "the overlap cannot span a whole room"
 # place the two probes both contribute and the seam arm measures a wall.
 assert DOOR_Z < HI, "the doorway must reach the open front"
 assert HI - DOOR_Z > PROBE_OVERLAP, "the opening must be deeper than the blend band is wide"
+# The wall has to be thick enough to resolve in a shadow map at this scale, and
+# still thinner than the opening it stands beside.
+assert ROOMS_PARTITION_HALF > PARTITION_HALF, "a wall between rooms is not a leak-test slab"
+assert ROOMS_PARTITION_HALF < HI - DOOR_Z, "the wall cannot be thicker than the doorway is deep"
 
 emit("cornell_box.gltf", *build_box_room())
 emit("cornell_leak.gltf", *build_leak_room())
