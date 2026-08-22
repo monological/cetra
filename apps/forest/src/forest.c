@@ -144,6 +144,9 @@ typedef struct ForestArgs {
     // shoreline and open sea past it. --no-island is the flat-domain terrain
     // every arm written before it measures, and it takes the sea with it.
     int no_island;
+    // The gravel trail across the island (spec 11.68), which is also what keeps
+    // props off its course. --no-trail is the ground before it.
+    int no_trail;
     int no_instancing;
     int no_layers_vt;     // per-texel layered blend instead of the composite cache
     int layers_vt_res;    // composite-cache resolution override; 0 = derived
@@ -431,6 +434,89 @@ static float clump_density(float x, float z, float freq) {
 // computed from it.
 #define TREE_MAX_FLOW ((TERRAIN_CHANNEL_FLOW_LO + TERRAIN_CHANNEL_FLOW_HI) * 0.5f)
 
+/*
+ * The trail (spec 11.68): a gravel path from the island's centre out to a shore,
+ * as one road on the terrain material.
+ *
+ * Held in TERRAIN-LOCAL XZ. The material gets local + centre once, at bake, and
+ * that authored frame is what the shader reads through authoredPos -- the same
+ * frame splat_origin is built from, which forest deliberately never chases on an
+ * origin shift. The scatter tests in local, so both sides move together and a
+ * region rebuilt after a shift rejects the same ground.
+ */
+#define TRAIL_POINTS      12
+#define TRAIL_WIDTH       3.0f
+#define TRAIL_FEATHER     1.5f
+#define TRAIL_LAYER       3 // gravel, the layer set's own worn surface
+// How far past its own shoulder the trail keeps props off. A tree whose trunk
+// clears the gravel but whose canopy hangs over it is still a tree in the path.
+#define TRAIL_PROP_MARGIN 1.0f
+
+static float g_trail_local[TRAIL_POINTS][2];
+static int g_trail_points;
+static unsigned long long g_trail_rejected;
+
+// Its OWN stream, never rnd(): the scatter's draws are stream-aligned with every
+// frame this app has ever rendered, and taking even one number from the shared
+// generator here would re-place all five thousand props.
+static unsigned trail_rand(unsigned* s) {
+    *s = *s * 1664525u + 1013904223u;
+    return *s >> 8;
+}
+
+static void build_trail(void) {
+    g_trail_points = 0;
+    g_trail_rejected = 0;
+    if (g_args.no_trail)
+        return;
+    unsigned s = g_args.seed * 2246822519u + 3266489917u;
+    float bearing = (float)(trail_rand(&s) % 6283) * 0.001f;
+    float phase = (float)(trail_rand(&s) % 6283) * 0.001f;
+    float dirx = sinf(bearing), dirz = cosf(bearing);
+    float perpx = dirz, perpz = -dirx;
+    float reach = 0.9f * g_terrain.extent;
+
+    float prev_h = terrain_height_at(&g_terrain, terrain_world_x(&g_terrain, 0.0f),
+                                     terrain_world_z(&g_terrain, 0.0f));
+    for (int i = 0; i < TRAIL_POINTS; i++) {
+        float t = (float)i / (float)(TRAIL_POINTS - 1);
+        float r = t * reach;
+        float wig = 0.04f * g_terrain.extent * sinf((float)i * 1.7f + phase);
+        float bx = dirx * r + perpx * wig;
+        float bz = dirz * r + perpz * wig;
+        // Three candidates, and keep the flattest step. Not pathfinding: a path
+        // that searches would wander somewhere the scatter cannot predict, and
+        // what this needs is only to stop the trail climbing a cliff face.
+        float best_x = bx, best_z = bz, best_d = -1.0f, best_h = prev_h;
+        for (int k = -1; k <= 1 && i > 0; k++) {
+            float nudge = 0.02f * g_terrain.extent * (float)k;
+            float cx = bx + perpx * nudge, cz = bz + perpz * nudge;
+            float h = terrain_height_at(&g_terrain, terrain_world_x(&g_terrain, cx),
+                                        terrain_world_z(&g_terrain, cz));
+            float d = fabsf(h - prev_h);
+            if (best_d < 0.0f || d < best_d) {
+                best_d = d;
+                best_x = cx;
+                best_z = cz;
+                best_h = h;
+            }
+        }
+        if (i == 0)
+            best_h = prev_h;
+        // Stop at the shoal rather than running into the sea: past here the
+        // ground the trail would cross is under water.
+        if (i > 0 && g_terrain.island_start > 0.0f && g_terrain.island_start < 1.0f &&
+            best_h < g_args.water_level + 2.0f * PROP_SHORE_MARGIN)
+            break;
+        g_trail_local[g_trail_points][0] = best_x;
+        g_trail_local[g_trail_points][1] = best_z;
+        g_trail_points++;
+        prev_h = best_h;
+    }
+    if (g_trail_points < 2)
+        g_trail_points = 0;
+}
+
 // Accumulate a region's trees for the scatter probe, which reads the whole
 // distribution: a region is a sixteenth of it and says nothing on its own.
 static Placement* g_probe_items;
@@ -517,6 +603,26 @@ static void scatter_probe(const Placement* items, int count) {
            count, (double)tree_max, count ? (double)(tree_sum / (float)count) : 0.0,
            (double)(land_sum / (float)(G * G)), (double)land_over / (double)(G * G),
            (double)TREE_MAX_FLOW);
+
+    // The trail's own row, APPENDED rather than folded into the line above: the
+    // existing parsers are anchored on that line's token order.
+    //
+    // `on` is counted at the STRICT half-width, where the reject ran at
+    // half-width plus feather plus margin. The asymmetry is what makes this a
+    // real test of the CPU distance against the shader's: they are the same
+    // formula written twice, and only a drift of more than the whole shoulder
+    // could seat a tree on gravel the frame actually draws.
+    int on = 0;
+    for (size_t i = 0; i < g_probe_count; i++) {
+        if (g_trail_points >= 2 &&
+            roads_polyline_distance_xz(g_trail_local, g_trail_points,
+                                       g_probe_items[i].pos[0] - g_terrain.center[0],
+                                       g_probe_items[i].pos[2] - g_terrain.center[1]) <
+                TRAIL_WIDTH * 0.5f)
+            on++;
+    }
+    printf("scatter-probe road points=%d trees_on=%d rejected=%llu width=%.2f\n",
+           g_trail_points, on, g_trail_rejected, (double)TRAIL_WIDTH);
 }
 
 // Rejection sampling against slope, against drainage, and against that density.
@@ -571,6 +677,17 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
     terrain_normal_at(&g_terrain, x, z, n);
     if (n[1] < max_slope)
         return false;
+    // Nothing stands on the trail (spec 11.68). Here with the other two pure
+    // tests and BEFORE the clump draw below, which is what keeps the random
+    // stream where it was: this rejects candidates, it does not consume them.
+    // In the trail's own local frame, since that is the frame it is held in.
+    if (g_trail_points >= 2 &&
+        roads_polyline_distance_xz(g_trail_local, g_trail_points, x - g_terrain.center[0],
+                                   z - g_terrain.center[1]) <
+            TRAIL_WIDTH * 0.5f + TRAIL_FEATHER + TRAIL_PROP_MARGIN) {
+        g_trail_rejected++;
+        return false;
+    }
     if (clump_freq > 0.0f) {
         float d = clump_density(x, z, clump_freq);
         if (rnd() > powf(d, clump_power))
@@ -692,6 +809,26 @@ static void bake_terrain_layers(Scene* scene) {
     g_mat_terrain->splat_origin[0] = terrain_world_x(&g_terrain, -g_terrain.extent);
     g_mat_terrain->splat_origin[1] = terrain_world_z(&g_terrain, -g_terrain.extent);
     g_mat_terrain->splat_size[0] = g_mat_terrain->splat_size[1] = 2.0f * g_terrain.extent;
+
+    // The trail, in the authored frame the splat rectangle above is in: the
+    // shader reads a road through authoredPos, so local + centre once here is
+    // what keeps the two agreeing after an origin shift.
+    build_trail();
+    if (g_trail_points >= 2) {
+        MaterialRoad* road = &g_mat_terrain->roads[0];
+        memset(road, 0, sizeof(*road));
+        for (int i = 0; i < g_trail_points; i++) {
+            road->points[i][0] = g_trail_local[i][0] + g_terrain.center[0];
+            road->points[i][1] = g_trail_local[i][1] + g_terrain.center[1];
+        }
+        road->point_count = g_trail_points;
+        road->width = TRAIL_WIDTH;
+        road->feather = TRAIL_FEATHER;
+        road->layer = TRAIL_LAYER;
+        g_mat_terrain->road_count = 1;
+        printf("Trail: %d points, %.1f wide in layer %d\n", g_trail_points, (double)TRAIL_WIDTH,
+               TRAIL_LAYER);
+    }
 
     // Last, because it is what arms the shader.
     g_mat_terrain->layer_count = count;
@@ -2254,6 +2391,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --region-probe           Print residency and each region's scatter\n");
     fprintf(stderr, "      --walk <speed>           Walk the character forward, about-face at half\n");
     fprintf(stderr, "      --no-island              Flat domain and no sea, as before 11.63\n");
+    fprintf(stderr, "      --no-trail               No gravel path, and no props kept off it\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --screenshot-every N  Also save numbered frames every N frames\n");
     fprintf(stderr, "      --world-offset N    Place the whole world N units from the origin\n");
@@ -2308,6 +2446,8 @@ int main(int argc, char** argv) {
             g_args.walk = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--no-island")) {
             g_args.no_island = 1;
+        } else if (!strcmp(a, "--no-trail")) {
+            g_args.no_trail = 1;
         } else if (!strcmp(a, "--no-lod")) {
             g_args.no_lod = 1;
         } else if (!strcmp(a, "--no-instancing")) {

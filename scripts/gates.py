@@ -12262,8 +12262,9 @@ def run_layers_gate(workdir):
 
     The arms, in the order they run. Keep this list and the code in step: a
     docstring naming a different set than the function runs is what a reviewer
-    reads to decide what is covered. (The scatter arm lives in a helper and is
-    therefore invisible to gate-arm-docs; it runs last, after everything below.)
+    reads to decide what is covered. (The scatter arms live in a helper and are
+    therefore invisible to gate-arm-docs; they run last, after everything below:
+    layers-scatter, then layers-road-scatter off the same forest run.)
 
       layers-select      each splat column resolves the layer it selects
       layers-srgb        a mid-grey layer round-trips through the decode
@@ -13039,6 +13040,17 @@ _SCATTER_PROBE = re.compile(
     r"scatter-probe trees=(\d+) tree_flow_max=([\d.]+) tree_flow_mean=([\d.]+) "
     r"land_flow_mean=([\d.]+) land_frac_over=([\d.]+) limit=([\d.]+)")
 
+# The trail's own row (spec 11.68), read from the SAME forest run as the row
+# above -- a second launch would cost the suite a whole forest startup to learn
+# something the first one already printed.
+_SCATTER_ROAD = re.compile(
+    r"scatter-probe road points=(\d+) trees_on=(\d+) rejected=(\d+) width=([\d.]+)")
+
+# The trail's authored width, stated gate-side for the LAYERS_SCATTER_LIMIT
+# reason: a bar read out of the process under test cannot fail when the process
+# changes it.
+LAYERS_TRAIL_WIDTH = 3.0
+
 
 def _layers_scatter_arm():
     """The scatter places into ground the splat has not painted as a stream bed.
@@ -13085,7 +13097,32 @@ def _layers_scatter_arm():
           f"says {limit:.4f}); {land_over * 100:.1f}% of the scatter's domain is above it "
           f"(want >= 2%, or the rule rejected nothing and this proves nothing), tree mean "
           f"{tree_mean:.4f} vs land {land_mean:.4f}")
-    return [] if ok else ["layers-scatter"]
+    failures = [] if ok else ["layers-scatter"]
+
+    # --- layers-road-scatter (spec 11.68) ------------------------------------
+    # Nothing stands on the trail, off the SAME run. `rejected` is the
+    # anti-vacuity and it is the load-bearing half: "no tree is on the road" is
+    # satisfied perfectly by a build with no road at all, or one whose trail ran
+    # where nothing would have grown anyway.
+    mr = _SCATTER_ROAD.search(r.stdout + r.stderr)
+    if not mr:
+        print("  layers-road-scatter ERROR  the run printed no trail row")
+        return failures + ["layers-road-scatter"]
+    points, on_road = int(mr.group(1)), int(mr.group(2))
+    rejected, width = int(mr.group(3)), float(mr.group(4))
+    # The reject ran at half-width plus feather plus margin and this counts at
+    # the bare half-width, so a CPU distance that had drifted from the shader's
+    # by less than the whole shoulder still reads zero here -- which is why the
+    # rejected count, not this one, is what says the rule ran.
+    road_ok = (points >= 2 and on_road == 0 and rejected >= 1
+               and abs(width - LAYERS_TRAIL_WIDTH) < 1e-4)
+    print(f"  layers-road-scatter {'PASS' if road_ok else 'FAIL'}  a {points}-point trail "
+          f"{width:.2f} wide (the gate says {LAYERS_TRAIL_WIDTH:.2f}) carries {on_road} "
+          f"trees (want 0) and turned {rejected} candidates away (want >= 1, or the trail "
+          f"ran where nothing would have grown and the zero above proves nothing)")
+    if not road_ok:
+        failures.append("layers-road-scatter")
+    return failures
 
 
 GATE_GROUPS = [
