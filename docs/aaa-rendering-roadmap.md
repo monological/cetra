@@ -171,7 +171,11 @@ Binding for all features (three new links in the `_Static_assert` chain, `render
 - **unit 7** → `ltcTex` (LTC 2-layer array: M-inverse + magnitude/Fresnel — packed in 10.7.1)
 - **unit 9** → `charliePrefilteredMap` (Charlie sheen env cubemap — took the unit the LTC pack freed in 10.7.1)
 - **unit 14** → `giAtlasTex` (DDGI octahedral atlas, sampler2D — legal since sampler units are
-  per-program and pbr_frag never sampled the skybox cube)
+  per-program and pbr_frag never sampled the skybox cube). Since 11.70 that ONE declaration
+  serves two features: the clustered specular probes' octahedral columns are a tenant of the
+  same physical texture, side by side with the GI region, whose coordinates are untouched
+  because `giAtlasSize` was already a uniform. An atlas is a POOL, and the second consumer
+  cost a region rather than a declaration -- the material array's lesson, in a second place.
 - Contact shadows + bent-normal spec-occ consume **zero** pbr_frag units (postfx-only).
 - Clustered forward consumes **zero** units (UBOs, not data textures).
 - Pre-integrated skin consumes **zero** units (spec 11.13). The fit did disappoint — the analytic
@@ -1152,22 +1156,40 @@ IESNA LM-63 for the file format.
 by construction — and the deferral above shows how easily "avoided by construction" turns into
 "priced against it anyway" one paragraph later.
 
-### C4. Clustered specular probes — Effort L
-`scene->probe` is singular (`scene.h:127`) — **one** parallax-corrected reflection probe for an entire
-scene. SSR covers what is on screen; everything it misses falls back to that one probe plus the IBL
-cube, so a character walking from a lit hall into a side room keeps the hall's reflections. A4 gave
-diffuse GI a spatial structure and specular never got one.
+### C4. Clustered specular probes — Effort L — **DONE (spec 11.70)**
+Shipped. Read `specs/11.70-a-mirror-in-every-room.md` rather than the sketch below, which was
+written before the code and is wrong in two places kept here for the record: the sampler claim
+("reusing A4's") is true of the DECLARATION and not of the texture -- A4's atlas is mip-less with
+8x8 tiles where specular needs roughness-varying prefiltered radiance, so the two became tenants of
+one physical texture, side by side, with GI's coordinates untouched; and the citation `scene.h:127`
+was stale before it was written (the field is `scene->probe_set` now, and was at :201).
 
-The two pieces this needs are both already built and both already own the foundation: **A1's cluster
-grid** for probe→cluster assignment (the same CPU pass that culls lights culls probe AABBs) and
-**A4's octahedral atlas + `include/octahedral.glsl`** for storage, so N probes cost one sampler, not
-N. The unresolved design question is the capture budget: A4's answer — converge, then idle at
-literally zero — is available here too and is probably right, but a probe re-capture is a full
-6-face scene render at a useful resolution, not A4's 16².
+`scene->probe` was singular -- **one** parallax-corrected reflection probe for an entire scene, so a
+character walking from a lit hall into a side room kept the hall's reflections. It is now a
+`ReflectionProbeSet` of up to eight, selected and blended PER FRAGMENT: a per-froxel 8-bit mask on
+A1's grid says which probes reach a cell, each probe's proxy box gives a weight, and whatever weight
+is left over falls to the global environment through the same expression the no-probe path uses.
+Storage is an octahedral atlas of roughness ROWS (mips would filter across the tile gutters) riding
+`giAtlasTex` on unit 14, so N probes cost zero new sampler declarations; a new `ProbeBlock` on
+binding 9 carries the descriptors AND the masks in 3616 bytes.
+
+**Per-DRAW selection was the alternative and is refused on measurable grounds**, which is why the
+fixture is two rooms over ONE floor mesh: that mesh is a single draw, so a per-draw design lights
+half of it with the wrong room's reflections while every per-room measurement still passes.
+The capture budget resolved the way A4's did -- a load-time sweep, attached only once every probe
+succeeds, `captures_total` making converge-then-idle checkable. Relight is deferred behind
+`probe_set_mark_dirty`.
+
+**The defect worth carrying out of it:** the box fade must run OUTWARD from the proxy faces. Inward
+is the shape that reads as obvious, and it gives every floor in every scene a weight of exactly zero
+-- a floor lies ON the bottom face of the box that box-projects it -- so the one surface the feature
+exists for falls back to the environment. It shipped that way for a day with a plausible-looking
+frame, because a floor reflecting nothing and a floor reflecting a dim room are the same picture.
 **Refs.** Lagarde & Zanuttini, *Local Image-Based Lighting with Parallax-Corrected Cubemaps*
-(SIGGRAPH 2012 talk) — shipped as the single-probe path; McGuire et al., *Real-Time Global
-Illumination using Precomputed Light Field Probes* (I3D 2017) for the atlas/visibility structure.
-**Depends on:** A1 (shipped), A4 (shipped). **Wall 1:** unaffected (one atlas sampler, reusing A4's).
+(SIGGRAPH 2012 talk) — the parallax correction, now applied per probe; McGuire et al., *Real-Time
+Global Illumination using Precomputed Light Field Probes* (I3D 2017) for the atlas structure.
+**Depends on:** A1 (shipped), A4 (shipped). **Wall 1:** unaffected, and confirmed so — zero new
+sampler declarations in `pbr_frag`.
 
 ### C5. Screen-space shadows for local lights — Effort S — **DONE (spec 11.56)**
 A3 marched contact shadows along **one** light — the key. The march now walks the cluster list a
@@ -2609,7 +2631,7 @@ not scheduled.
 | 26 | C5 Screen-space shadows for local lights | S | **DONE (11.56).** Postfx-only as booked, and the cluster list arrived with no C-side binding at all — `create_post_program` already links through `ubo_wire_blocks`. But **the row's reason was false and had been for six specs**: it blamed a punctual map's "texel footprint" for losing the contact, where that map is ~1 mm/texel at 1 m for a point light (2048² at 2–6 layers) and ~2 mm at its 1024² floor, and the hairline that did exist was a far-side depth STORAGE defect fixed in 10.3/10.4 with `cornell_box` as its gate. The real gap is that **~120 of 128 clusterable lights can never have a map** (8 punctual layers, 6 per point light), which flips the cull from "the N nearest" to "skip the ones that already have a map" — one line that is the performance cap and, once the fold's denominator counts them, the anti-double-shadow guarantee too. The gate widened as well: a room lit only by practicals never ran the pass. Cost tracks COVERAGE, not count — 2.43 ms per fully-covering light at 3200×2000 internal, but sixteen SPREAD lights cost +0.77 ms against the +38 ms sixteen coincident ones would. No per-pixel cap, deliberately. **Area panels are still not served** — the 41% wall leak below is NOT what this fixed; a panel counts in the fold's denominator but is never marched, because the only direction available is its centre and marching that would be a different approximation from the LTC integral the shading used. **Its own review then found three defects an eight-agent pass caught and the spec had not**: the fold's denominator omitting every skipped light (one blocked practical took 23% off a pixel that should have lost 1%), `shadow_layer` read raw when it goes stale the moment the shadow system is toggled off, and a per-pixel cluster walk nothing gated. Plus a fixture assert that could not fail. |
 | 27 | E3 Histogram exposure | M | **DONE (11.52).** A 128-bin gather histogram plus a percentile-clipped reduce, two raster passes replacing the mip chain; metering modes, EV bounds, split adapt rates, and the controls. **Both reasons this row gave were wrong**: the bright-pixel failure was already defended by a geometric mean AND an explicit clamp, and the determinism claim was already collected by `EXPOSURE_ADAPT_SNAP`, after which the adaptation holds no history and two runs are bit-identical over 200 frames. Capability parity was the whole reason and it sufficed. The instrument found what the row had not: the meter was **not linear in radiance**, 8.36 stops against 9.97 at x1000, because the absolute floor at the key inflated a dim scene's mean 3.05x. Percentiles fix it, **-1.61 stops to +0.021**. Removing the ceiling too produced a measured **runaway** to 1.15e7 nits via fp16 underflow -- though review then showed the GAIN was already bounded by the 20-stop floor, so the metered bound recorded a saner number and changed no pixel. And the SCALE_GATES shape cannot test a live meter -- scaling emitters by K while dividing the camera by K double-compensates. **The review then changed the implementation twice more**: the bin pass turned out to be OCCUPANCY-bound rather than fetch-bound (64 fragments is ~0.4% of the GPU; splitting the source across 8 output rows took the scope 0.744 -> 0.392 ms), and the bin ceiling could not be a constant at all, since the measure pass clamps in working space and divides by pre-exposure so its largest emittable value moves with the exposure. No golden moves (all 24 pin exposure), which is why this was the least-tested subsystem shipping on by default; six new arms now cover it. |
 | 28 | E2 3D LUT grading | S | **DONE (11.58).** Colourist workflow, as booked, and the working-space warning was the right thing to warn about -- the contract is that a `.cube` is applied AFTER `displayEncode`, because that is the space one is authored in. **But the row's own number was wrong for the format it names**: 32³ is not a size `.cube` produces (33³ is Resolve's default), so the size comes from the file and the fixtures carry three of them. Log/pre-tonemap LUTs were declined -- not as too hard, since `agxTonemap` already log-encodes and linearizes back so one would be a fourth branch of `toneSelect`, but because no off-the-shelf table can be authored against a log window we invent, and it would replace the tonemap rather than compose with it. **Tetrahedral is the default, and the first figure published for it was wrong by 28x**: 0.076 of an 8-bit code was measured on a table whose every output channel is a ridge function of TWO inputs, so trilinear degenerates to bilinear on it and the three-way cross term tetrahedral drops is identically zero. Re-measured on a table with a real three-way term it reads **2.7 codes** — subtle but over this repo's own visibility floor. What buys it is the neutral axis (trilinear tints greys 5 codes through a table that touches them not at all) and an exact identity (0 px, against trilinear's 12,088 at PAE 1/255 -- the texture unit's fixed-point filter weights). **The 32F rejection was also measured on a construction that could not show the effect** — an identity table at 17³, whose every lattice value is k/16 and exactly representable in fp16. Re-measured where fp16 rounding is live it costs 0.004 of a code; 16F stands, on evidence rather than on a coincidence. Trilinear stays reachable because tetrahedral alone is unfalsifiable. **Its gate's first draft claimed coverage it did not have** -- the identity arm said it caught the half-texel inset and was green with the inset deleted, since `lutCoord` is trilinear-only and tetrahedral fetches by integer index. |
-| 29 | C4 Clustered specular probes | L | Diffuse GI got a spatial structure in A4; specular still has exactly one probe. Reuses A1's grid and A4's atlas. |
+| 29 | C4 Clustered specular probes | L | **DONE (11.70)** N probes blended per fragment through A1's grid, stored as octahedral roughness rows tenanting A4's atlas texture. Zero new sampler declarations. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
 | 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it — **shipped without it in 11.41, so that is now demonstrated rather than predicted** — and D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
@@ -2664,7 +2686,7 @@ construction. **25 (C3, IES) followed both** (11.57), and **28 (E2, 3D LUT gradi
 33 (D1), 36 (D4) and 37 (E7), all L or XL, plus 38 (E10, integer-bit hashes), which is S
 and is the only one of those that arrives with a measured price already attached --
 11.54 booked it against `ssr_frag`'s 31,800 px, so it can be judged on a number rather
-than on tidiness. **36 (D4) has since gone too** (11.69), leaving 29, 32, 33 and 37.
+than on tidiness. **36 (D4) has since gone too** (11.69), and **29 (C4) with it** (11.70), leaving 32, 33 and 37.
 
 **And then the column refilled, because the table was missing an entire subject.** Rows 39-44 (D6-D11)
 were added by 11.59 after a comparison against what UE, Unity, Frostbite and Decima actually ship:
@@ -2681,10 +2703,13 @@ on it: the flow / deposit / wear masks existed, round-tripped through the height
 consumed by a per-VERTEX tint at 2.6 units. **42 is now built too** (11.60), and the masks have a
 consumer that resolves per texel.
 
-What is left is 29 (C4), 32 (D0), 33 (D1) and 37 (E7) -- all L and
-none with a measurement demanding it -- plus 38 (E10), still S and still carrying `ssr_frag`'s 31,800
+What is left is 32 (D0), 33 (D1) and 37 (E7) -- both remaining L items with no
+measurement demanding them -- plus 38 (E10), still S and still carrying `ssr_frag`'s 31,800
 px. (This sentence read 29, 32, 37, 44 and "the re-scoped 36" until the sweep after 11.69: it
-dropped 33, which was never built, and carried 44 and 36 after 11.62 and 11.69 shipped them.) **43 (D10) is the only one 11.60 moved the case for, and it moved it DOWN** -- past ~8 layers or
+dropped 33, which was never built, and carried 44 and 36 after 11.62 and 11.69 shipped them.
+29 went with 11.70.) **The one of those the roadmap argues against itself is 32 (D0)**, which
+has had no scheduled consumer since 11.57, and 11.70 is the fourth feature in a row to need
+no unit at all: N reflection probes arrived as tenants of a declaration that already existed. **43 (D10) is the only one 11.60 moved the case for, and it moved it DOWN** -- past ~8 layers or
 roads/decals, with four layers at three declarations and 4-25 taps. 11.66 then shipped its stage 1
 anyway and the measurement went the other way: the 25-tap end of that range is most of an eroded
 terrain, and the cache takes it to 5-9 independent of layer count. Nothing is waiting on stage 2's
