@@ -376,6 +376,7 @@ void free_engine(Engine* engine) {
     free_ubo(engine->view_ubo);
     free_ubo(engine->instance_ubo);
     free_ubo(engine->vt_pages_ubo);
+    free_ubo(engine->roads_ubo);
     free_layers_vt_feedback(engine->vt_feedback);
 
     glDeleteFramebuffers(1, &engine->framebuffer);
@@ -870,6 +871,9 @@ int init_engine(Engine* engine) {
     // Zero-filled at create, so a shader reading the page table before the
     // first residency upload sees a 0x0 grid rather than garbage.
     engine->vt_pages_ubo = create_ubo(UBO_VT_PAGES_BLOCK_SIZE, UBO_BINDING_VT_PAGES);
+    // Same zero-filled contract: a shader reading roads before the first upload
+    // sees a road count of 0, which is the off state.
+    engine->roads_ubo = create_ubo(UBO_ROADS_BLOCK_SIZE, UBO_BINDING_ROADS);
     if (!engine->light_cluster) {
         log_error("Failed to create light cluster context");
         return -1;
@@ -2641,6 +2645,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // (Re)build the material texture array once its sources have loaded
         // (a no-op until then; masks fall back to their scalar factors).
         material_texture_array_ensure_built(current_scene, engine);
+
+        // Roads BEFORE the composite cache, and the order is load-bearing: the
+        // bake samples the road block, so an edited road must reach the GPU
+        // before the key change it causes triggers the re-bake that reads it.
+        material_roads_ensure(current_scene, engine);
 
         // The composite cache samples the array, so it is strictly after: a
         // no-op while the array is dirty, and one frame behind it at worst.

@@ -49,6 +49,10 @@ void material_upload_layer_uniforms(const Material* material, struct UniformMana
         uniform_set_vec4(u, "splatDomain", domain);
         uniform_set_float(u, "layerBlendSharpness", material->layer_blend_sharpness);
         uniform_set_float(u, "layerTriplanarSharpness", material->layer_triplanar_sharpness);
+        // Uploaded for every layered material, not only the road bearer: this
+        // is what resets it on the others, since a program keeps the last value
+        // any draw left in it.
+        uniform_set_int(u, "roadsActive", material->roads_armed ? 1 : 0);
     }
 }
 
@@ -106,6 +110,22 @@ static void vt_make_key(const Material* m, int res, const MaterialTextureArray* 
     // one level down.
     key->arr_width = arr->width;
     key->arr_height = arr->height;
+    // Only when ARMED: a material whose roads were disarmed had none drawn into
+    // its bake, and the key must be what the bake read rather than what the
+    // material happens to carry.
+    if (m->roads_armed) {
+        key->road_count = m->road_count;
+        for (int r = 0; r < MATERIAL_MAX_ROADS; r++) {
+            key->road_point_counts[r] = m->roads[r].point_count;
+            key->road_width[r] = m->roads[r].width;
+            key->road_feather[r] = m->roads[r].feather;
+            key->road_layer[r] = m->roads[r].layer;
+            for (int i = 0; i < MATERIAL_MAX_ROAD_POINTS; i++) {
+                key->road_points[r][i][0] = m->roads[r].points[i][0];
+                key->road_points[r][i][1] = m->roads[r].points[i][1];
+            }
+        }
+    }
 }
 
 // One RGBA8 cache target in the shared shape: mip 0 allocated here,

@@ -41,6 +41,16 @@ typedef struct MaterialLayersVtKey {
     float triplanar_sharpness;
     float domain[4];
     int arr_width, arr_height; // the array's canonical size the bake read through
+    // The roads the bake drew (spec 11.68), raw rather than hashed: this struct's
+    // contract is everything the bake read BY VALUE, and a digest would be a
+    // second serialization whose forgotten field is silent where a forgotten
+    // copy here is the same bug in either design.
+    float road_points[MATERIAL_MAX_ROADS][MATERIAL_MAX_ROAD_POINTS][2];
+    int road_point_counts[MATERIAL_MAX_ROADS];
+    float road_width[MATERIAL_MAX_ROADS];
+    float road_feather[MATERIAL_MAX_ROADS];
+    int road_layer[MATERIAL_MAX_ROADS];
+    int road_count;
 } MaterialLayersVtKey;
 
 typedef struct MaterialLayersVt {

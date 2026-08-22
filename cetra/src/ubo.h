@@ -12,6 +12,8 @@
 #include "ies.h"
 // And again: layers_vt_pages.h owns the page-table dimensions.
 #include "layers_vt_pages.h"
+// And again: roads.h owns the road and segment caps.
+#include "roads.h"
 
 // Uniform-buffer plumbing for std140 blocks (first used by clustered forward
 // lighting, spec 9.1). GLSL 330 cannot write layout(binding=N) -- that
@@ -31,6 +33,7 @@
 #define UBO_BINDING_SHORE_FILM      5
 #define UBO_BINDING_IES             6
 #define UBO_BINDING_VT_PAGES        7
+#define UBO_BINDING_ROADS           8
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
@@ -148,6 +151,29 @@ _Static_assert(UBO_VT_PAGES_BLOCK_SIZE <= 16384,
                "the page-table block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 _Static_assert(sizeof(GpuVtPageBlock) == UBO_VT_PAGES_BLOCK_SIZE,
                "VtPageBlock's C mirror must match its std140 size");
+
+/*
+ * Roads (spec 11.68), and the third feature in a row that a full sampler ledger
+ * did not block. A road reaching the shader is a handful of SEGMENTS -- the
+ * shading path evaluates their distance analytically -- so what a lit surface
+ * needs here is geometry in uniform space, not an image, exactly as the IES
+ * block needed a distribution rather than a texture.
+ *
+ * Its own block for the IesBlock reason: uploaded on change only, where the
+ * light blocks orphan and rewrite every frame.
+ */
+// info(1) + two descriptor rows per road + the shared segment pool
+#define UBO_ROADS_VEC4S      (1 + MATERIAL_MAX_ROADS * 2 + ROAD_SEGS_MAX)
+#define UBO_ROADS_BLOCK_SIZE (UBO_ROADS_VEC4S * 16)
+// The pool must hold every road at the ceiling, or a road authored to the point
+// cap would silently lose its tail segments -- the shore film's lesson again,
+// stated as the derivation rather than as a number to keep in step by hand.
+_Static_assert(ROAD_SEGS_MAX == MATERIAL_MAX_ROADS * (MATERIAL_MAX_ROAD_POINTS - 1),
+               "the road segment pool must hold every road at the point cap");
+_Static_assert(UBO_ROADS_BLOCK_SIZE <= 16384,
+               "the roads block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
+_Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,
+               "RoadsBlock's C mirror must match its std140 size");
 
 typedef struct Ubo {
     GLuint id;

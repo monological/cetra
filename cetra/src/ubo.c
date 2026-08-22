@@ -85,6 +85,10 @@ bool ubo_wire_blocks(GLuint program_id) {
     // including vt_pages.glsl; stripped where nothing pages.
     ubo_wire_program_block(program_id, "VtPageBlock", UBO_BINDING_VT_PAGES,
                            UBO_VT_PAGES_BLOCK_SIZE);
+    // Roads (spec 11.68). Declared by anything including roads_ubo.glsl -- the
+    // lit surface and the composite bake both, through layers.glsl -- which is
+    // what keeps the two reading one set of segments.
+    ubo_wire_program_block(program_id, "RoadsBlock", UBO_BINDING_ROADS, UBO_ROADS_BLOCK_SIZE);
     return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
                                   UBO_INSTANCES_BLOCK_SIZE);
 }

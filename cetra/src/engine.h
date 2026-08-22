@@ -173,6 +173,11 @@ typedef struct Engine {
     // v1 pages one material per scene, which is what lets the buffer sit on its
     // binding for the context's lifetime per ubo.h's contract.
     struct Ubo* vt_pages_ubo;
+    // Road segments (spec 11.68), single for the same reason: v1 carries one
+    // road-bearing material per scene. The shadow copy is what makes the upload
+    // by-value -- roads have three writers and no dirty flag.
+    struct Ubo* roads_ubo;
+    GpuRoadsBlock roads_shadow;
     bool instancing_enabled; // false = every run submits one draw per mesh
     bool lod_enabled;        // false = every draw takes LOD level 0
     float lod_bias;          // > 1 holds detail longer, < 1 drops it sooner

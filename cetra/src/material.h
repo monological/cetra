@@ -9,6 +9,8 @@
 #include "program.h"
 // For STOCHASTIC_LUT_SIZE, the width of the inverse table a material carries.
 #include "procedural/stochastic_tex.h"
+// For MaterialRoad and the road caps, which a layered material carries inline.
+#include "roads.h"
 
 // How a material's alpha is rendered (glTF alphaMode semantics).
 //
@@ -315,6 +317,17 @@ typedef struct Material {
     // How sharply the triplanar projection favours the dominant axis. Higher is
     // a narrower seam between projections and a harder transition across it.
     float layer_triplanar_sharpness;
+
+    // Roads over the layer set (spec 11.68): polylines that override the splat
+    // weights toward one of the layers above. Inline rather than allocated --
+    // the whole-struct default copy zero-fills them, and road_count 0 is the
+    // off state every consumer already reads.
+    MaterialRoad roads[MATERIAL_MAX_ROADS];
+    int road_count;
+    // Whether this material is the scene's road bearer. Owned by
+    // material_roads_ensure, which is what a second road-bearing material is
+    // disarmed by; the shader gates its override on it.
+    bool roads_armed;
 
     // Composite cache for a WORLD_XZ splat (spec 11.66); NULL until the first
     // bake, and never set for a UV1 splat.
