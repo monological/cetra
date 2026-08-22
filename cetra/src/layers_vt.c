@@ -115,16 +115,7 @@ static void vt_make_key(const Material* m, int res, const MaterialTextureArray* 
     // material happens to carry.
     if (m->roads_armed) {
         key->road_count = m->road_count;
-        for (int r = 0; r < MATERIAL_MAX_ROADS; r++) {
-            key->road_point_counts[r] = m->roads[r].point_count;
-            key->road_width[r] = m->roads[r].width;
-            key->road_feather[r] = m->roads[r].feather;
-            key->road_layer[r] = m->roads[r].layer;
-            for (int i = 0; i < MATERIAL_MAX_ROAD_POINTS; i++) {
-                key->road_points[r][i][0] = m->roads[r].points[i][0];
-                key->road_points[r][i][1] = m->roads[r].points[i][1];
-            }
-        }
+        memcpy(key->roads, m->roads, sizeof(key->roads));
     }
 }
 

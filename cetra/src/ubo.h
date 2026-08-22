@@ -165,11 +165,6 @@ _Static_assert(sizeof(GpuVtPageBlock) == UBO_VT_PAGES_BLOCK_SIZE,
 // info(1) + two descriptor rows per road + the shared segment pool
 #define UBO_ROADS_VEC4S      (1 + MATERIAL_MAX_ROADS * 2 + ROAD_SEGS_MAX)
 #define UBO_ROADS_BLOCK_SIZE (UBO_ROADS_VEC4S * 16)
-// The pool must hold every road at the ceiling, or a road authored to the point
-// cap would silently lose its tail segments -- the shore film's lesson again,
-// stated as the derivation rather than as a number to keep in step by hand.
-_Static_assert(ROAD_SEGS_MAX == MATERIAL_MAX_ROADS * (MATERIAL_MAX_ROAD_POINTS - 1),
-               "the road segment pool must hold every road at the point cap");
 _Static_assert(UBO_ROADS_BLOCK_SIZE <= 16384,
                "the roads block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 _Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,

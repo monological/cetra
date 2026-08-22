@@ -41,15 +41,14 @@ typedef struct MaterialLayersVtKey {
     float triplanar_sharpness;
     float domain[4];
     int arr_width, arr_height; // the array's canonical size the bake read through
-    // The roads the bake drew (spec 11.68), raw rather than hashed: this struct's
-    // contract is everything the bake read BY VALUE, and a digest would be a
-    // second serialization whose forgotten field is silent where a forgotten
-    // copy here is the same bug in either design.
-    float road_points[MATERIAL_MAX_ROADS][MATERIAL_MAX_ROAD_POINTS][2];
-    int road_point_counts[MATERIAL_MAX_ROADS];
-    float road_width[MATERIAL_MAX_ROADS];
-    float road_feather[MATERIAL_MAX_ROADS];
-    int road_layer[MATERIAL_MAX_ROADS];
+    // The roads the bake drew (spec 11.68), as the struct itself rather than
+    // flattened into parallel arrays. The layer fields above flatten because
+    // they SUBSTITUTE -- a Texture* becomes a GL id -- where a road field is
+    // already a plain value. Copying the struct whole is what makes this
+    // struct's contract, everything the bake read BY VALUE, mechanically true:
+    // a field added to MaterialRoad joins the key by construction instead of
+    // waiting for someone to remember a sixth copy line.
+    MaterialRoad roads[MATERIAL_MAX_ROADS];
     int road_count;
 } MaterialLayersVtKey;
 

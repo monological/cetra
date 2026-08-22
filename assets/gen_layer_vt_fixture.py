@@ -100,9 +100,23 @@ ROAD_LAYER = 2
 # feature would read as absent. Forcing the fallback to 64 moves the same
 # comparison into world units the frame can show: its texel is 0.0625 and its
 # pages' 0.0156, and a shoulder between the two is content exactly one of them
-# holds. Same argument, and same arrangement, as layers-vt-pages-effect.
+# holds. The same ARGUMENT as layers-vt-pages-effect, in a different arrangement:
+# that arm forces VT_MACRO_RES and reads whole-frame AE, where this one forces
+# its own resolution (at 8 the road itself is under a texel) and reads bytes.
 VT_ROAD_COARSE_RES = 64
 ROAD_PAGES_FEATHER = 0.02
+
+# The page-to-fallback density ratio (layers_vt_pages.h's VT_PAGE_DENSITY_RATIO),
+# restated here because the assert below is built from it -- a C-side change to 2
+# or 8 must not leave that assert green while it guards the wrong band.
+VT_PAGE_DENSITY_RATIO = 4
+
+# The world z's the road arms READ, named beside the geometry they derive from
+# rather than re-derived at each arm. The same offset was written out three
+# times before this, which is the drift the gate refuses everywhere else.
+ROAD_Z_ON = ROAD_Z + ROAD_WIDTH / 2.0 * 0.5              # full mask, on the road
+ROAD_Z_OFF = ROAD_Z + ROAD_WIDTH / 2.0 + ROAD_FEATHER + 0.04  # past the shoulder
+ROAD_Z_PAGES_IN = ROAD_Z + ROAD_WIDTH / 2.0 - 0.02       # just inside the road's edge
 
 
 def _splat():
@@ -186,7 +200,7 @@ def _assert_fixture_still_tests_something():
     # finer than a fallback texel and coarser than a page texel, so it is
     # content exactly one of the two can hold.
     coarse_fallback_texel = DOMAIN / VT_ROAD_COARSE_RES
-    coarse_page_texel = coarse_fallback_texel / 4.0 # VT_PAGE_DENSITY_RATIO
+    coarse_page_texel = coarse_fallback_texel / VT_PAGE_DENSITY_RATIO
     assert coarse_page_texel < ROAD_PAGES_FEATHER < coarse_fallback_texel, (
         f"the pages arm's feather ({ROAD_PAGES_FEATHER}) must sit between a "
         f"page texel ({coarse_page_texel}) and a fallback texel "
@@ -198,6 +212,24 @@ def _assert_fixture_still_tests_something():
         f"the road ({ROAD_WIDTH}) is under four coarse texels "
         f"({coarse_fallback_texel}); the arm would be reading a road the "
         "fallback cannot represent at all, not an edge it cannot resolve")
+
+    # Each named read must be clear of every edge it is not measuring, or an arm
+    # samples the wrong side of one and reads a plausible number from the wrong
+    # surface. Stated per-read rather than once, because they fail differently.
+    assert ROAD_Z_ON < ROAD_Z + ROAD_WIDTH / 2.0, (
+        "the on-road read is outside the full-mask band")
+    assert ROAD_Z_OFF > ROAD_Z + ROAD_WIDTH / 2.0 + ROAD_FEATHER, (
+        "the off-road read is inside the shoulder, so it reads a blend")
+    assert ROAD_Z_OFF < HALF - 0.04, (
+        f"the off-road read at {ROAD_Z_OFF} has no plate under it (floor ends "
+        f"at {HALF})")
+    assert ROAD_Z_PAGES_IN > ROAD_Z - ROAD_WIDTH / 2.0, (
+        "the pages read is off the far side of the road")
+    # It must also sit inside the road by LESS than a coarse texel, or the
+    # fallback resolves it and the arm's whole discrimination disappears.
+    assert 0.0 < ROAD_Z + ROAD_WIDTH / 2.0 - ROAD_Z_PAGES_IN < coarse_fallback_texel, (
+        "the pages read must sit within one coarse fallback texel of the road's "
+        "edge, or the fallback holds it too and pages have nothing to restore")
 
     splat = _splat()
     quarter = TEX // 4

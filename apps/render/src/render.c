@@ -1623,9 +1623,11 @@ static int frames_rendered = 0;
 static int check_stretch = 0;
 
 /*
- * Render-scale schedule (--render-scale-at), read by the per-frame update hook
+ * The mid-run schedules, read by the per-frame update hook. Named for the whole
+ * set rather than for --render-scale-at: it carries five of them now, and a
+ * name that says one is a name the next reader has to disprove.
  */
-static const RenderArgs* scale_schedule = NULL;
+static const RenderArgs* frame_schedule = NULL;
 
 /*
  * Recenter offset (computed at load): translates the model so its bounding-box
@@ -1853,12 +1855,20 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 }
 
 // engine_run's per-frame update hook, running before any scene GL work. Carries
-// the two mid-run diagnostics: --render-scale-at requests any scale due this
-// frame (the engine defers the rebuild to the next frame top, so a switch named
-// for frame N takes effect on N+1), and --shadows-off-at clears the shadow
-// system's master switch.
+// every mid-run diagnostic, in the order they run:
 //
-// Both match by equality, not ">=", so an entry fires on exactly the frame named
+//   --shadows-off-at    clears the shadow system's master switch
+//   --cam-at            teleports the camera to an explicit pose
+//   --layer-blend-at    sets every layered material's blend sharpness
+//   --road-width-at     sets every road's width
+//   --render-scale-at   requests any scale due this frame (the engine defers
+//                       the rebuild to the next frame top, so a switch named
+//                       for frame N takes effect on N+1)
+//
+// Keep this list and the body in step -- it stood at two for three specs while
+// the body ran five, which is a comment describing 40% of what it sits on.
+//
+// All match by equality, not ">=", so an entry fires on exactly the frame named
 // and once -- which is what lets a switched run be compared against a straight
 // one at a fixed frame (the equivalence gate, specs/11.8).
 static void render_frame_update(Engine* engine, float dt) {
@@ -1869,12 +1879,12 @@ static void render_frame_update(Engine* engine, float dt) {
     // after the pass has run is what leaves those indices pointing at layers
     // nothing draws, which is the state the GUI checkbox produces and the state
     // anything reading Light.shadow_layer has to survive.
-    if (scale_schedule->shadows_off_at == (int)engine->total_frames) {
+    if (frame_schedule->shadows_off_at == (int)engine->total_frames) {
         Scene* scene = get_current_scene(engine);
         if (scene && scene->shadow_system) {
             scene->shadow_system->enabled = false;
             fprintf(stderr, "frame %d: shadow system disabled\n",
-                    scale_schedule->shadows_off_at);
+                    frame_schedule->shadows_off_at);
         }
     }
     // A camera TELEPORT (spec 11.67): the worst case for page residency, which
@@ -1882,33 +1892,33 @@ static void render_frame_update(Engine* engine, float dt) {
     // read the fallback while the budget refills. Fires before the frame's
     // camera-matrix update and before the residency ensure, and refreshes the
     // view matrices itself so the moved pose is what residency sees.
-    if (scale_schedule->cam_at_frame == (int)engine->total_frames && engine->camera) {
-        vec3 eye = {scale_schedule->cam_at[0], scale_schedule->cam_at[1],
-                    scale_schedule->cam_at[2]};
-        vec3 target = {scale_schedule->cam_at[3], scale_schedule->cam_at[4],
-                       scale_schedule->cam_at[5]};
+    if (frame_schedule->cam_at_frame == (int)engine->total_frames && engine->camera) {
+        vec3 eye = {frame_schedule->cam_at[0], frame_schedule->cam_at[1],
+                    frame_schedule->cam_at[2]};
+        vec3 target = {frame_schedule->cam_at[3], frame_schedule->cam_at[4],
+                       frame_schedule->cam_at[5]};
         apply_explicit_pose(engine, eye, target);
-        fprintf(stderr, "frame %d: camera teleported\n", scale_schedule->cam_at_frame);
+        fprintf(stderr, "frame %d: camera teleported\n", frame_schedule->cam_at_frame);
     }
     // The composite cache's by-value invalidation is unreachable from a fresh
     // process -- the first bake always reads the final authored values -- so
     // this transition is the only headless way to make the key go stale.
-    if (scale_schedule->layer_blend_at_frame == (int)engine->total_frames) {
+    if (frame_schedule->layer_blend_at_frame == (int)engine->total_frames) {
         Scene* scene = get_current_scene(engine);
         if (scene) {
             for (size_t i = 0; i < scene->material_count; i++) {
                 Material* m = scene->materials[i];
                 if (m && m->layer_count > 0)
-                    m->layer_blend_sharpness = scale_schedule->layer_blend_at_value;
+                    m->layer_blend_sharpness = frame_schedule->layer_blend_at_value;
             }
             fprintf(stderr, "frame %d: layer blend sharpness -> %.3f\n",
-                    scale_schedule->layer_blend_at_frame, scale_schedule->layer_blend_at_value);
+                    frame_schedule->layer_blend_at_frame, frame_schedule->layer_blend_at_value);
         }
     }
     // Same transition, for roads: it re-uploads the segment block AND makes the
     // composite cache's key stale, which is the pair of mechanisms no fresh
     // process can exercise.
-    if (scale_schedule->road_width_at_frame == (int)engine->total_frames) {
+    if (frame_schedule->road_width_at_frame == (int)engine->total_frames) {
         Scene* scene = get_current_scene(engine);
         if (scene) {
             for (size_t i = 0; i < scene->material_count; i++) {
@@ -1916,23 +1926,23 @@ static void render_frame_update(Engine* engine, float dt) {
                 if (!m)
                     continue;
                 for (int r = 0; r < m->road_count && r < MATERIAL_MAX_ROADS; r++)
-                    m->roads[r].width = scale_schedule->road_width_at_value;
+                    m->roads[r].width = frame_schedule->road_width_at_value;
             }
             fprintf(stderr, "frame %d: road width -> %.3f\n",
-                    scale_schedule->road_width_at_frame, scale_schedule->road_width_at_value);
+                    frame_schedule->road_width_at_frame, frame_schedule->road_width_at_value);
         }
     }
-    for (int i = 0; i < scale_schedule->scale_at_count; i++) {
-        if (scale_schedule->scale_at_frame[i] != (int)engine->total_frames)
+    for (int i = 0; i < frame_schedule->scale_at_count; i++) {
+        if (frame_schedule->scale_at_frame[i] != (int)engine->total_frames)
             continue;
-        set_engine_render_scale(engine, scale_schedule->scale_at_value[i]);
+        set_engine_render_scale(engine, frame_schedule->scale_at_value[i]);
         // stderr, not stdout: this line is the record of how far a stress run
         // got, and stdout is block-buffered when redirected, so a crash would
         // take it with it. It also keeps the switch ordered against the
         // engine's own log lines rather than split across two streams.
         // Reports what the setter settled on, not what was asked -- it clamps,
         // and refuses outright in headless without jitter.
-        fprintf(stderr, "frame %d: render scale -> %.2f\n", scale_schedule->scale_at_frame[i],
+        fprintf(stderr, "frame %d: render scale -> %.2f\n", frame_schedule->scale_at_frame[i],
                 engine->render_scale);
     }
 }
@@ -3569,7 +3579,7 @@ int main(int argc, char** argv) {
     if (args.msaa > 0)
         set_engine_msaa_samples(engine, args.msaa);
 
-    scale_schedule = &args;
+    frame_schedule = &args;
     engine_run(engine, render_frame_update, render_scene_callback);
 
     // After the last frame and before free_engine, so the GL context is still

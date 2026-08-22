@@ -14,7 +14,10 @@
 float roads_polyline_distance_xz(const float (*points)[2], int count, float x, float z) {
     if (!points || count < 2)
         return 1.0e9f;
-    float best = 1.0e9f;
+    // Squared through the loop and rooted once, the shape its GLSL twin uses:
+    // min commutes with sqrt, and this runs per prop CANDIDATE across every
+    // region load.
+    float best2 = 1.0e18f;
     for (int i = 0; i + 1 < count; i++) {
         float ax = points[i][0], az = points[i][1];
         float bx = points[i + 1][0], bz = points[i + 1][1];
@@ -26,11 +29,11 @@ float roads_polyline_distance_xz(const float (*points)[2], int count, float x, f
         t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
         float dx = x - (ax + ex * t);
         float dz = z - (az + ez * t);
-        float d = sqrtf(dx * dx + dz * dz);
-        if (d < best)
-            best = d;
+        float d2 = dx * dx + dz * dz;
+        if (d2 < best2)
+            best2 = d2;
     }
-    return best;
+    return sqrtf(best2);
 }
 
 // Pack the owner's roads into the std140 mirror. Segments go into one shared
@@ -131,9 +134,16 @@ void material_roads_ensure(struct Scene* scene, struct Engine* engine) {
     // set it, and the writers are a scene file, a CLI schedule and an app
     // building a trail. Packing a kilobyte and comparing it is cheaper than
     // being wrong about who remembered.
+    //
+    // The shadow records what the GPU HAS, so it is written only after the
+    // upload that makes it true. Committing it first and then skipping the
+    // upload would claim bytes the buffer never received, and because the
+    // comparison is by value nothing would ever retry -- roads would be
+    // silently dead for the rest of the process.
+    if (!engine->roads_ubo)
+        return;
     if (memcmp(&block, &engine->roads_shadow, sizeof(block)) == 0)
         return;
+    ubo_upload(engine->roads_ubo, &block, sizeof(block));
     engine->roads_shadow = block;
-    if (engine->roads_ubo)
-        ubo_upload(engine->roads_ubo, &block, sizeof(block));
 }

@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -777,9 +778,9 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
     int idx = -1;
     cJSON_ArrayForEach(r, roads) {
         idx++;
-        if (out->road_count >= CSCENE_MAX_ROADS) {
+        if (out->road_count >= MATERIAL_MAX_ROADS) {
             log_warn("cscene: material '%s' has more than %d roads; extras ignored",
-                     out->material, CSCENE_MAX_ROADS);
+                     out->material, MATERIAL_MAX_ROADS);
             break;
         }
         if (!cJSON_IsObject(r)) {
@@ -790,7 +791,7 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
         const cJSON* road = r;
         warn_unknown_keys(road, known, sizeof(known) / sizeof(known[0]), "material road");
 
-        CSceneRoad* out_road = &out->roads[out->road_count];
+        MaterialRoad* out_road = &out->roads[out->road_count];
         memset(out_road, 0, sizeof(*out_road));
 
         const cJSON* points = cJSON_GetObjectItemCaseSensitive(road, "points");
@@ -802,9 +803,9 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
         bool malformed = false;
         const cJSON* pt = NULL;
         cJSON_ArrayForEach(pt, points) {
-            if (out_road->point_count >= CSCENE_MAX_ROAD_POINTS) {
+            if (out_road->point_count >= MATERIAL_MAX_ROAD_POINTS) {
                 log_warn("cscene: material '%s' road %d has more than %d points; skipped",
-                         out->material, out->road_count, CSCENE_MAX_ROAD_POINTS);
+                         out->material, idx, MATERIAL_MAX_ROAD_POINTS);
                 malformed = true;
                 break;
             }
@@ -834,15 +835,24 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
                      out->material, idx);
             continue;
         }
-        // The memset above supplies the feather default; only the required
-        // layer is spelled, and it is read as a float because the format has no
-        // integer reader -- a fractional index is an authoring error the app's
-        // apply reports by name.
-        get_float(road, "feather", &out_road->feather);
+        // The memset above supplies the feather default. A negative one is
+        // refused rather than clamped, for the reason a non-positive width is:
+        // both describe a road nobody can have meant, and silently repairing
+        // one while refusing the other is an asymmetry with no argument behind
+        // it.
+        if (get_float(road, "feather", &out_road->feather) && out_road->feather < 0.0f) {
+            log_warn("cscene: material '%s' road %d has a negative feather; skipped",
+                     out->material, idx);
+            continue;
+        }
+        // Read as a float because the format has no integer reader, and a
+        // fractional index is refused here -- the apply-side warning only sees
+        // the truncated value, so "layer": 2.7 would otherwise become 2 in
+        // silence.
         float layer = -1.0f;
-        if (!get_float(road, "layer", &layer) || layer < 0.0f) {
-            log_warn("cscene: material '%s' road %d needs a layer index; skipped", out->material,
-                     idx);
+        if (!get_float(road, "layer", &layer) || layer < 0.0f || layer != floorf(layer)) {
+            log_warn("cscene: material '%s' road %d needs a whole layer index; skipped",
+                     out->material, idx);
             continue;
         }
         out_road->layer = (int)layer;

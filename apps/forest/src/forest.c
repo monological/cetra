@@ -448,6 +448,10 @@ static float clump_density(float x, float z, float freq) {
 #define TRAIL_WIDTH       3.0f
 #define TRAIL_FEATHER     1.5f
 #define TRAIL_LAYER       3 // gravel, the layer set's own worn surface
+// The trail is handed to the material as ONE road, so it has to fit one road's
+// point array -- nothing else connects the two, and overrunning it writes into
+// point_count, width, feather and layer in turn.
+_Static_assert(TRAIL_POINTS <= MATERIAL_MAX_ROAD_POINTS, "the trail must fit one road");
 // How far past its own shoulder the trail keeps props off. A tree whose trunk
 // clears the gravel but whose canopy hangs over it is still a tree in the path.
 #define TRAIL_PROP_MARGIN 1.0f
@@ -486,23 +490,26 @@ static void build_trail(void) {
         float bz = dirz * r + perpz * wig;
         // Three candidates, and keep the flattest step. Not pathfinding: a path
         // that searches would wander somewhere the scatter cannot predict, and
-        // what this needs is only to stop the trail climbing a cliff face.
-        float best_x = bx, best_z = bz, best_d = -1.0f, best_h = prev_h;
-        for (int k = -1; k <= 1 && i > 0; k++) {
-            float nudge = 0.02f * g_terrain.extent * (float)k;
-            float cx = bx + perpx * nudge, cz = bz + perpz * nudge;
-            float h = terrain_height_at(&g_terrain, terrain_world_x(&g_terrain, cx),
-                                        terrain_world_z(&g_terrain, cz));
-            float d = fabsf(h - prev_h);
-            if (best_d < 0.0f || d < best_d) {
-                best_d = d;
-                best_x = cx;
-                best_z = cz;
-                best_h = h;
+        // what this needs is only to stop the trail climbing a cliff face. The
+        // first point has no previous step to be flat against, so it takes the
+        // bearing unnudged rather than entering the loop at all.
+        float best_x = bx, best_z = bz, best_h = prev_h;
+        if (i > 0) {
+            float best_d = 1.0e9f;
+            for (int k = -1; k <= 1; k++) {
+                float nudge = 0.02f * g_terrain.extent * (float)k;
+                float cx = bx + perpx * nudge, cz = bz + perpz * nudge;
+                float h = terrain_height_at(&g_terrain, terrain_world_x(&g_terrain, cx),
+                                            terrain_world_z(&g_terrain, cz));
+                float d = fabsf(h - prev_h);
+                if (d < best_d) {
+                    best_d = d;
+                    best_x = cx;
+                    best_z = cz;
+                    best_h = h;
+                }
             }
         }
-        if (i == 0)
-            best_h = prev_h;
         // Stop at the shoal rather than running into the sea: past here the
         // ground the trail would cross is under water.
         if (i > 0 && g_terrain.island_start > 0.0f && g_terrain.island_start < 1.0f &&
@@ -677,10 +684,19 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
     terrain_normal_at(&g_terrain, x, z, n);
     if (n[1] < max_slope)
         return false;
-    // Nothing stands on the trail (spec 11.68). Here with the other two pure
-    // tests and BEFORE the clump draw below, which is what keeps the random
-    // stream where it was: this rejects candidates, it does not consume them.
-    // In the trail's own local frame, since that is the frame it is held in.
+    // Nothing stands on the trail (spec 11.68), in the trail's own local frame
+    // since that is the frame it is held in.
+    //
+    // LAST among the pure tests, which is the ordering rule stated above
+    // applied rather than contradicted: the right order is ascending
+    // cost-over-rejection-probability, and this corridor is ~0.2% of the domain
+    // where the slope test rejects a large fraction of an island rim. Cheap per
+    // call and almost never firing is what belongs at the end.
+    //
+    // Note this does NOT leave the random stream untouched -- x and z are drawn
+    // at entry, so a rejection here still costs those two draws and the scatter
+    // reports 1935 trees where it reported 1936. What makes the scatter
+    // comparable run to run is trail_rand, not this position.
     if (g_trail_points >= 2 &&
         roads_polyline_distance_xz(g_trail_local, g_trail_points, x - g_terrain.center[0],
                                    z - g_terrain.center[1]) <
@@ -818,8 +834,8 @@ static void bake_terrain_layers(Scene* scene) {
         MaterialRoad* road = &g_mat_terrain->roads[0];
         memset(road, 0, sizeof(*road));
         for (int i = 0; i < g_trail_points; i++) {
-            road->points[i][0] = g_trail_local[i][0] + g_terrain.center[0];
-            road->points[i][1] = g_trail_local[i][1] + g_terrain.center[1];
+            road->points[i][0] = terrain_world_x(&g_terrain, g_trail_local[i][0]);
+            road->points[i][1] = terrain_world_z(&g_terrain, g_trail_local[i][1]);
         }
         road->point_count = g_trail_points;
         road->width = TRAIL_WIDTH;

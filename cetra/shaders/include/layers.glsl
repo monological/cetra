@@ -175,15 +175,21 @@ vec4 roadReshapedWeights(vec4 w, vec2 apos, int n) {
         vec4 d0 = roadDesc[r * 2];
         int first = int(d0.x);
         int segs = int(d0.y);
-        float dist = 1.0e9;
+        // SQUARED through the loop, rooted once: min commutes with sqrt over
+        // non-negatives, and only the minimum ever reaches the mask below. At
+        // the ceiling that is 4 square roots a fragment rather than 60, and the
+        // bake is where they land -- 2048 squared texels of them per re-bake.
+        float d2 = 1.0e18;
         for (int s = 0; s < ROAD_SEGS_PER_ROAD; s++) {
             if (s >= segs)
                 break;
             vec4 seg = roadSegs[first + s];
             vec2 ab = seg.zw - seg.xy;
             float t = clamp(dot(apos - seg.xy, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
-            dist = min(dist, length(apos - (seg.xy + ab * t)));
+            vec2 v = apos - (seg.xy + ab * t);
+            d2 = min(d2, dot(v, v));
         }
+        float dist = sqrt(d2);
         // Feather 0 is a hard edge, which smoothstep gives for free: the two
         // edges coincide and it steps.
         float m = 1.0 - smoothstep(d0.z, d0.z + d0.w, dist);

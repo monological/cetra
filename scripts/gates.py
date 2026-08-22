@@ -2879,22 +2879,27 @@ def _origin_forest(workdir, tag, offset, extra, frames="40", mode="6", size=("80
     tens of thousands of pixels run to run, and the albedo view is the only mode
     with a 0 px floor. Every arm below measures its own floor anyway.
 
-    --no-trail because the trail (spec 11.68) is an ANALYTIC world-space edge,
-    and these arms compare two runs that shifted by different amounts -- so each
-    reconstructs authoredPos with its own rounding, and an analytic edge resolves
-    that difference where a texture lookup quantizes it away. Measured 106 px of
-    1.44M (0.007%) between the auto and manual legs, and 61 px between two MANUAL
-    shifts at different frames, which is what says it is the shift AMOUNT rather
-    than the trigger. That is far inside 11.62's own curve for ordinary geometry
-    (0.73% of frame at a THIRD of this offset) and it is not what these arms are
-    for: they test the shift mechanism, and the exact-zero bar below is only
-    meaningful against a scene with nothing analytic in it. The trail has its own
-    arm in the layers group.
+    The trail (spec 11.68) is left ON here, and only `origin-auto` passes
+    --no-trail. That arm compares two runs that shifted by DIFFERENT amounts and
+    demands they agree at exactly 0 px; a road makes that unreachable, because
+    the dominant-layer index rides the atlas alpha and is read with an unfiltered
+    texelFetch, so a road's hard discontinuity in that field flips one texel
+    under an ulp of reconstruction difference and switches the whole detail tap.
+    Measured 106 px of 1.44M (0.007%), and 61 px between two MANUAL shifts at
+    different frames -- which is what says it is the shift AMOUNT, not the
+    trigger, and not the auto path.
+
+    Every other arm here keeps the trail deliberately. Their bars are 2% of
+    frame, a 20% floor, and a ratio -- none of which 0.007% can reach -- and
+    `origin-shift` is the ONE place in the suite that renders a road under an
+    origin shift at all. A road that failed to follow authoredPos would land in
+    the wrong place, which is a full-size difference rather than a sub-pixel one,
+    and that arm is what would catch it.
     """
     path = os.path.join(workdir, f"origin_{tag}.ppm")
     cmd = [FOREST, "-x", "-f", frames, "-W", size[0], "-H", size[1], "--no-fog",
            "--render-mode", mode, "--seed", "1337", "--world-offset", repr(offset),
-           "--no-trail", "--cam-eye", f"{offset},40,{offset + 120}",
+           "--cam-eye", f"{offset},40,{offset + 120}",
            "--cam-target", f"{offset},10,{offset}", "-S", path] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(path):
@@ -3160,9 +3165,15 @@ def run_origin_gate(workdir):
     # hand-driven shift rather than against a remembered number: both take the
     # world to the same origin, so if the automatic trigger is the same mechanism
     # the two frames are the SAME frame.
-    manual, _ = _origin_forest(workdir, "auto_manual", ORIGIN_AUTO, ["--origin-shift-at", "20"])
+    # --no-trail on BOTH legs, and only here: this is the suite's only exact-zero
+    # comparison between two runs that shifted by different amounts, which is the
+    # one bar a road can break. See _origin_forest's docstring for the mechanism
+    # and for why every other origin arm keeps the trail.
+    manual, _ = _origin_forest(workdir, "auto_manual", ORIGIN_AUTO,
+                               ["--origin-shift-at", "20", "--no-trail"])
     auto, autolog = _origin_forest(workdir, "auto_auto", ORIGIN_AUTO,
-                                   ["--origin-shift-distance", repr(ORIGIN_AUTO_THRESHOLD)])
+                                   ["--origin-shift-distance", repr(ORIGIN_AUTO_THRESHOLD),
+                                    "--no-trail"])
     if not (manual and auto):
         print("  origin-auto   ERROR while rendering the automatic shift")
         return failures + ["origin-auto"]
@@ -12692,7 +12703,7 @@ def run_layers_gate(workdir):
         failures += _layers_scatter_arm()
         return failures
 
-    def vt_probe_run(extra, frames, overrides=None):
+    def vt_probe_run(extra, frames, overrides=None, name="probe"):
         # The group's own 400x300 and ALBEDO framing, not a smaller size: the
         # occlusion arm's numbers were measured here, and the depth-off leak it
         # exists to catch did not reproduce at 200x150. Probe interval 4 against
@@ -12701,7 +12712,9 @@ def run_layers_gate(workdir):
         # arm reads a settled tail rather than a transient.
         scene = vt_src
         if overrides:
-            scene = os.path.join(workdir, "layers_vt_probe_variant.cscn")
+            # Keyed like vt_shot's, so a second probe variant cannot overwrite
+            # the first and --keep leaves both to look at.
+            scene = os.path.join(workdir, f"layers_vt_{name}.cscn")
             cscn_copy(vt_src, scene, overrides)
         r = subprocess.run([RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400",
                             "-H", "300"] + ALBEDO + ["--layers-vt-probe", "4"] + extra,
@@ -12872,26 +12885,26 @@ def run_layers_gate(workdir):
     # --- roads (spec 11.68) --------------------------------------------------
     # Every road arm renders a runtime VARIANT: the committed fixture carries no
     # roads, so its golden and the sixteen arms above cannot move.
-    def _vt_road(width=None, feather=None, z=None, layer=None):
-        w = g2.ROAD_WIDTH if width is None else width
+    # feather is the only field any arm varies; **material carries anything else
+    # the same mutation wants to set, which is what keeps a two-key variant one
+    # call rather than a lambda sequencing two side effects.
+    def _vt_road(feather=None, **material):
         f = g2.ROAD_FEATHER if feather is None else feather
-        zz = g2.ROAD_Z if z is None else z
-        ll = g2.ROAD_LAYER if layer is None else layer
 
         def mutate(d):
-            d["materials"]["layered_vt_surface"]["roads"] = [
-                {"points": [[-g2.HALF, zz], [g2.HALF, zz]],
-                 "width": w, "feather": f, "layer": ll}]
+            mat = d["materials"]["layered_vt_surface"]
+            mat["roads"] = [{"points": [[-g2.HALF, g2.ROAD_Z], [g2.HALF, g2.ROAD_Z]],
+                             "width": g2.ROAD_WIDTH, "feather": f, "layer": g2.ROAD_LAYER}]
+            mat.update(material)
         return mutate
 
-    # v of a world z on the floor, the inverse of _vt_point's mapping.
-    def _road_v(z):
-        return (z + g2.HALF) / g2.DOMAIN
+    # The byte at a world z on the floor, which is the only space these arms
+    # reason in: _vt_point maps splat coords to world, so this inverts the half
+    # of it the caller would otherwise have to invert at every read.
+    def road_byte(shot_data, z, u=0.125):
+        return _layer_sample(shot_data[0], _vt_point(u, (z + g2.HALF) / g2.DOMAIN))
 
     ROAD_HALF = g2.ROAD_WIDTH / 2.0
-    # Inside the full-mask band (|dz| < half width) and past the shoulder.
-    V_ON = _road_v(g2.ROAD_Z + ROAD_HALF * 0.5)
-    V_OFF = _road_v(g2.ROAD_Z + ROAD_HALF + g2.ROAD_FEATHER + 0.04)
 
     # --- layers-road-select --------------------------------------------------
     # The road is MADE of layer 2, so it reads that layer's painted byte -- over
@@ -12905,16 +12918,13 @@ def run_layers_gate(workdir):
         print("  layers-road-select ERROR while rendering the road legs")
         failures.append("layers-road-select")
     else:
-        def road_read(shot_data, u, v):
-            return _layer_sample(shot_data[0], _vt_point(u, v))
-
-        on = [road_read(road_cached, u, V_ON) for u in (0.125, 0.875)]
-        off = [road_read(road_cached, u, V_OFF) for u in (0.125, 0.875)]
-        par = [road_read(road_plain, u, V_ON) for u in (0.125, 0.875)]
+        on = [road_byte(road_cached, g2.ROAD_Z_ON, u) for u in (0.125, 0.875)]
+        off = [road_byte(road_cached, g2.ROAD_Z_OFF, u) for u in (0.125, 0.875)]
+        par = [road_byte(road_plain, g2.ROAD_Z_ON, u) for u in (0.125, 0.875)]
         base_codes = (g.GREY_CODE, g.LIGHT_CODE)
-        on_ok = all(c is not None and abs(c - g.DARK_CODE) <= 1 for c in on)
-        off_ok = all(c is not None and abs(c - b) <= 1 for c, b in zip(off, base_codes))
-        par_ok = all(a is not None and b is not None and a == b for a, b in zip(on, par))
+        on_ok = all(abs(c - g.DARK_CODE) <= 1 for c in on)
+        off_ok = all(abs(c - b) <= 1 for c, b in zip(off, base_codes))
+        par_ok = all(a == b for a, b in zip(on, par))
         ok = on_ok and off_ok and par_ok
         print(f"  layers-road-select {'PASS' if ok else 'FAIL'}  on the road "
               f"{on} (want {g.DARK_CODE} +/- 1 over BOTH bases -- a tint would "
@@ -12931,21 +12941,22 @@ def run_layers_gate(workdir):
     # mask's own half with the feather's full width, whatever the heights are.
     # Read as the RATIO of the two legs' widths, which is what survives the
     # feather being a tuning value.
-    road_lin = vt_shot("road_linear", overrides=(lambda d: (
-        _vt_road()(d), d["materials"]["layered_vt_surface"].update({"layerBlend": 0.0}))))
+    road_lin = vt_shot("road_linear", overrides=_vt_road(layerBlend=0.0))
     if not (road_cached and road_lin):
         print("  layers-road-edge ERROR while rendering the shoulder legs")
         failures.append("layers-road-edge")
     else:
         # Scan out of the road across the shoulder into bare ground.
-        z0, z1 = g2.ROAD_Z + ROAD_HALF * 0.5, g2.ROAD_Z + ROAD_HALF + g2.ROAD_FEATHER + 0.04
+        z0, z1 = g2.ROAD_Z_ON, g2.ROAD_Z_OFF
+        # 48 over ~0.29 world units: finer than the ~0.015 units a screen pixel
+        # spans at this framing, so the scan resolves the render rather than
+        # under-sampling it.
         steps = 48
         zs = [z0 + (z1 - z0) * i / (steps - 1.0) for i in range(steps)]
         legs = {}
         for tag, shot_data in (("height", road_cached), ("linear", road_lin)):
-            vals = [_layer_sample(shot_data[0], _vt_point(0.125, _road_v(z))) for z in zs]
-            legs[tag] = None if any(v is None for v in vals) else _layer_ramp(
-                vals, zs, g.DARK_CODE, g.GREY_CODE)
+            vals = [road_byte(shot_data, z) for z in zs]
+            legs[tag] = _layer_ramp(vals, zs, g.DARK_CODE, g.GREY_CODE)
         if not legs["height"] or not legs["linear"]:
             print("  layers-road-edge FAIL  a shoulder scan was not monotone")
             failures.append("layers-road-edge")
@@ -12986,26 +12997,31 @@ def run_layers_gate(workdir):
     fine_nopages = vt_shot("road_fine_nopages", COARSE + ["--no-layers-vt-pages"],
                            overrides=fine)
     fine_truth = vt_shot("road_fine_truth", ["--no-layers-vt"], overrides=fine)
-    fine_probe = vt_probe_run(COARSE, 16, overrides=fine)
+    fine_probe = vt_probe_run(COARSE, 16, overrides=fine, name="road_fine_probe")
     if not (fine_pages and fine_nopages and fine_truth and fine_probe):
         print("  layers-road-pages ERROR while rendering the fine-shoulder legs")
         failures.append("layers-road-pages")
     else:
-        # Just INSIDE the road's edge, by less than a coarse texel: the fallback
-        # has to average across the edge here, where pages hold it.
-        z_in = g2.ROAD_Z + ROAD_HALF - 0.02
-        p = _layer_sample(fine_pages[0], _vt_point(0.125, _road_v(z_in)))
-        n = _layer_sample(fine_nopages[0], _vt_point(0.125, _road_v(z_in)))
-        t = _layer_sample(fine_truth[0], _vt_point(0.125, _road_v(z_in)))
+        # A short RUN just inside the road's edge, not one pixel: the fallback
+        # has to average across the edge through this whole band, and reading
+        # five points instead of one stops the arm being a single-pixel bet on
+        # where a mip boundary lands.
+        band = [g2.ROAD_Z_PAGES_IN - 0.008 * k for k in range(5)]
+        pv = [road_byte(fine_pages, z) for z in band]
+        nv = [road_byte(fine_nopages, z) for z in band]
+        tv = [road_byte(fine_truth, z) for z in band]
+        p, n, t = pv[0], nv[0], tv[0]
+        page_err = max(abs(a - b) for a, b in zip(pv, tv))
+        fallback_err = max(abs(a - b) for a, b in zip(nv, tv))
         resident = fine_probe[-1]["resident"]
-        ok = (p is not None and n is not None and t is not None
-              and abs(p - t) <= 1 and abs(n - t) >= ROAD_PAGES_SMEAR_MIN and resident > 0)
-        print(f"  layers-road-pages {'PASS' if ok else 'FAIL'}  {0.02} inside the road's "
-              f"edge, against a {coarse_texel:.4f} fallback texel and its "
-              f"{coarse_texel / 4.0:.4f} pages: the per-texel truth reads {t}, pages read "
-              f"{p} (want within 1 -- they hold the edge) and the fallback alone reads "
-              f"{n} (want at least {ROAD_PAGES_SMEAR_MIN} off the truth: it averaged "
-              f"across an edge it cannot represent), with {resident} pages resident")
+        ok = (page_err <= 1 and fallback_err >= ROAD_PAGES_SMEAR_MIN and resident > 0)
+        print(f"  layers-road-pages {'PASS' if ok else 'FAIL'}  over five reads inside "
+              f"the road's edge, against a {coarse_texel:.4f} fallback texel and its "
+              f"{coarse_texel / g2.VT_PAGE_DENSITY_RATIO:.4f} pages: the per-texel truth "
+              f"reads {t}, pages read {p} and stay within {page_err} of it (want <= 1 -- "
+              f"they hold the edge) where the fallback alone reads {n} and drifts "
+              f"{fallback_err} (want >= {ROAD_PAGES_SMEAR_MIN}: it averaged across an edge "
+              f"it cannot represent), with {resident} pages resident")
         if not ok:
             failures.append("layers-road-pages")
 
@@ -13017,17 +13033,16 @@ def run_layers_gate(workdir):
     # shoulder (distance 0.64 > halfWidth 0.2 + feather 0.4) and inside the
     # widened one (0.64 < the new halfWidth 0.8), so it is full road after and
     # untouched ground before, with no blend band at either end.
-    wide = g2.ROAD_Z + ROAD_HALF + g2.ROAD_FEATHER + 0.04
+    wide = g2.ROAD_Z_OFF
     road_widened = vt_shot("road_widened", ["--road-width-at", "10:1.6"],
                            frames=16, overrides=_vt_road())
     if not (road_cached and road_widened):
         print("  layers-road-invalidate ERROR while rendering the widened leg")
         failures.append("layers-road-invalidate")
     else:
-        before = _layer_sample(road_cached[0], _vt_point(0.125, _road_v(wide)))
-        after = _layer_sample(road_widened[0], _vt_point(0.125, _road_v(wide)))
-        ok = (before is not None and after is not None
-              and abs(before - g.GREY_CODE) <= 2 and abs(after - g.DARK_CODE) <= 2)
+        before = road_byte(road_cached, wide)
+        after = road_byte(road_widened, wide)
+        ok = abs(before - g.GREY_CODE) <= 2 and abs(after - g.DARK_CODE) <= 2
         print(f"  layers-road-invalidate {'PASS' if ok else 'FAIL'}  a point at "
               f"z={wide:.3f} reads {before} at the authored width (want "
               f"{g.GREY_CODE} +/- 2: bare ground) and {after} after a frame-10 "
@@ -13056,10 +13071,17 @@ _SCATTER_PROBE = re.compile(
 _SCATTER_ROAD = re.compile(
     r"scatter-probe road points=(\d+) trees_on=(\d+) rejected=(\d+) width=([\d.]+)")
 
-# The trail's authored width, stated gate-side for the LAYERS_SCATTER_LIMIT
-# reason: a bar read out of the process under test cannot fail when the process
-# changes it.
+# The trail's authored width, stated gate-side as a DRIFT ALARM: it catches the
+# trail shrinking to nothing or the probe reporting a width the app is not using.
+# (Not the LAYERS_SCATTER_LIMIT argument, which is a different one -- there,
+# raising the app's limit would raise the bar it was checked against, so the arm
+# could never fail that way. Widening the trail weakens nothing here, because
+# trees_on is counted at the app's own width.)
 LAYERS_TRAIL_WIDTH = 3.0
+# Floored near the measurement rather than at 1 and 2. Healthy reads 165
+# rejections over a 10-point course (truncated from 12 at the shoal).
+LAYERS_TRAIL_MIN_REJECTED = 60
+LAYERS_TRAIL_MIN_POINTS = 6
 
 
 def _layers_scatter_arm():
@@ -13071,7 +13093,11 @@ def _layers_scatter_arm():
     implemented any of it. So the terrain's OWN drainage range is asserted too,
     and that is what makes this a test rather than a tautology.
     """
-    forest = os.path.join(ROOT, "out", "bin", "forest")
+    # FOREST, not a hardcoded out/bin: --bin-dir rebinds it, and running every
+    # other forest arm against release while this one silently measured the
+    # debug binary is exactly the "which binaries a number describes" mistake
+    # the suite prints its resolved directory to avoid.
+    forest = FOREST
     if not os.path.exists(forest):
         print("  layers-scatter    SKIP  (forest not built)")
         return []
@@ -13124,12 +13150,19 @@ def _layers_scatter_arm():
     # the bare half-width, so a CPU distance that had drifted from the shader's
     # by less than the whole shoulder still reads zero here -- which is why the
     # rejected count, not this one, is what says the rule ran.
-    road_ok = (points >= 2 and on_road == 0 and rejected >= 1
+    #
+    # And both bars are FLOORED NEAR THE MEASUREMENT, which is the lesson the
+    # arm above wrote down: "rejected >= 1" is satisfied by a trail crossing one
+    # candidate's worth of ground, and "points >= 2" by a trail truncated to a
+    # stub. Measured 165 of 2101 candidates (7.9%) over a 10-point course.
+    road_ok = (points >= LAYERS_TRAIL_MIN_POINTS and on_road == 0
+               and rejected >= LAYERS_TRAIL_MIN_REJECTED
                and abs(width - LAYERS_TRAIL_WIDTH) < 1e-4)
     print(f"  layers-road-scatter {'PASS' if road_ok else 'FAIL'}  a {points}-point trail "
-          f"{width:.2f} wide (the gate says {LAYERS_TRAIL_WIDTH:.2f}) carries {on_road} "
-          f"trees (want 0) and turned {rejected} candidates away (want >= 1, or the trail "
-          f"ran where nothing would have grown and the zero above proves nothing)")
+          f"{width:.2f} wide (the gate says {LAYERS_TRAIL_WIDTH:.2f}, want >= "
+          f"{LAYERS_TRAIL_MIN_POINTS} points) carries {on_road} trees (want 0) and turned "
+          f"{rejected} candidates away (want >= {LAYERS_TRAIL_MIN_REJECTED}, measured 165: a "
+          f"floor of 1 is satisfied by a trail that crossed one candidate and proves nothing)")
     if not road_ok:
         failures.append("layers-road-scatter")
     return failures
