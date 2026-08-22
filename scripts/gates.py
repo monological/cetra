@@ -10559,24 +10559,25 @@ PROBE_PATCH = 4  # half-width in pixels of the box each sample averages
 # photographed the LIT room instead. Both legs run the identical multi path over
 # the identical atlas, so this is a reading of selection alone.
 # The single probe has to reach the frame at all, or every other thing
-# probe-set-single checks is satisfied by a build that binds no probe.
+# probe-set-single checks is satisfied by a build that binds no probe. Measured
+# 366,129 px -- and note these are FRAMEBUFFER pixels, so on a 1x display the
+# same frame reads ~91,500. The bar clears both.
 PROBE_SINGLE_EFFECT_MIN = 20000
+# What moving both boxes out of frame takes away, which is what stops
+# probe-set-fallback's identity holding for the wrong reason. Measured 345,230.
+PROBE_FALLBACK_REMOVED_MIN = 20000
 
-PROBE_ROOMS_RATIO_MIN = 1.20  # measured 3.62
+# How much brighter the dark room's floor gets when the probe serving it
+# photographed the LIT room instead. Both legs run the identical multi path over
+# the identical atlas, so this is a reading of selection alone.
+# Measured 1.82 on the rooms arm and 1.62 under --gi-volume, which the tenancy
+# arm reads against this same bar.
+PROBE_ROOMS_RATIO_MIN = 1.20
 # The lit room is the in-frame control: only probe B moved, so room A has to
 # read the same in both legs. A bar rather than exact equality because the two
 # legs are separate processes; it has measured 0.0000 every time.
 PROBE_ROOMS_CONTROL_MAX = 0.01
 
-# The seam is read as whether the handover STANDS OUT against the floor's own
-# curvature, in each leg on its own terms.
-#
-# An absolute bound cannot work here, and neither can "the band is no sharper
-# than the rest of the floor": the band CONTAINS the doorway, so its curvature
-# is legitimately high in every leg -- the jamb, the partition's shadow and the
-# lit-to-dim falloff all live there and none of them is a probe. What isolates
-# the blend is the same band measured with the boxes abutting, where the two
-# probes hand over discontinuously and everything else is identical.
 _PROBE_SET_ROW = re.compile(
     r"probe-set frame=(\d+) count=(\d+) mode=(\w+) atlas=(\d+)x(\d+) "
     r"captures=(\d+) mask_bits=(\d+) digest=([0-9a-f]+)")
@@ -10754,8 +10755,10 @@ def run_probe_set_gate(workdir):
 
     # -- fallback: outside every box is the no-probe frame ---------------------
     pix_off, _, _, out_off = _probe_run(workdir, "boxes_off", _probe_boxes_offstage)
-    pix_none, _, _, out_none = _probe_run(workdir, "no_probes",
-                                          lambda d: d.pop("probes", None))
+    # The probe-free frame is pix_bare, already rendered for probe-set-single's
+    # anti-vacuity: same fixture, same mutation, same flags. Rendering it twice
+    # is two processes for one image.
+    pix_none, out_none = pix_bare, out_bare
     if pix_off is None or pix_none is None:
         print(f"  probe-set-fallback ERROR  {(out_off if pix_off is None else out_none)[-300:]}")
         failures.append("probe-set-fallback")
@@ -10767,11 +10770,11 @@ def run_probe_set_gate(workdir):
         # probe in them and holds for the wrong reason.
         removed = 0 if pix_ok is None else sum(1 for i in range(0, len(pix_off), 3)
                                                if pix_off[i:i + 3] != pix_ok[i:i + 3])
-        ok = diff == 0 and removed >= PROBE_SINGLE_EFFECT_MIN
+        ok = diff == 0 and removed >= PROBE_FALLBACK_REMOVED_MIN
         print(f"  probe-set-fallback {'PASS' if ok else 'FAIL'}  boxes moved out of frame "
               f"vs no probes at all: {diff} px differ, want 0 (the W=0 remainder is the "
               f"no-probe expression); moving them took {removed} px away, want "
-              f">={PROBE_SINGLE_EFFECT_MIN}")
+              f">={PROBE_FALLBACK_REMOVED_MIN}")
         if not ok:
             failures.append("probe-set-fallback")
 
@@ -10791,10 +10794,14 @@ def run_probe_set_gate(workdir):
         # that has one must agree, and must agree across processes.
         digs = {r["digest"] for r in rows_c if r["mask_bits"] > 0}
         digs2 = {r["digest"] for r in rows_c2 if r["mask_bits"] > 0}
-        ok = caps == {2} and len(digs) == 1 and digs == digs2
+        # The probe count the run reported, not a literal: the claim is "captures
+        # stop AT the probe count", and a fixture that grows a third probe should
+        # keep testing that rather than failing for having grown.
+        want = rows_c[0]["count"]
+        ok = caps == {want} and len(digs) == 1 and digs == digs2
         print(f"  probe-set-converge {'PASS' if ok else 'FAIL'}  captures {sorted(caps)} "
-              f"want exactly [2] across {len(rows_c)} frames; mask digest {sorted(digs)} "
-              f"stable and equal across two processes ({sorted(digs2)})")
+              f"want exactly [{want}] (the probe count) across {len(rows_c)} frames; mask "
+              f"digest {sorted(digs)} stable and equal across two processes ({sorted(digs2)})")
         if not ok:
             failures.append("probe-set-converge")
 
@@ -10809,10 +10816,8 @@ def run_probe_set_gate(workdir):
     pix_gi, _, _, out_gi = _probe_run(workdir, "gi_probes", None, ["--gi-volume"])
     pix_gi_wr, _, _, out_gi_wr = _probe_run(workdir, "gi_wrong", _probe_b_into_room_a,
                                             ["--gi-volume"])
-    pix_gi_np, _, _, out_gi_np = _probe_run(workdir, "gi_only",
-                                            lambda d: d.pop("probes", None), ["--gi-volume"])
-    if pix_gi is None or pix_gi_np is None or pix_gi_wr is None or pix_ok is None:
-        print(f"  probe-set-tenancy ERROR  {(out_gi if pix_gi is None else out_gi_np)[-300:]}")
+    if pix_gi is None or pix_gi_wr is None or pix_ok is None:
+        print(f"  probe-set-tenancy ERROR  {(out_gi if pix_gi is None else out_gi_wr)[-300:]}")
         failures.append("probe-set-tenancy")
     else:
         gi_effect = sum(1 for i in range(0, len(pix_gi), 3)

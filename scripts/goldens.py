@@ -183,9 +183,11 @@ RECIPES = [
     # committed frame with more than one reflection probe in it, and the only
     # one that renders the atlas blend at all -- the gate arms beside it read
     # patches and ratios, which is what a golden cannot do and vice versa.
-    # --sky is load-bearing rather than decoration: a probe needs a precomputed
-    # IBL to be created, and a sun below the horizon supplies one without
-    # lighting the rooms.
+    # The fixture's own `environment` block is load-bearing rather than
+    # decoration: a probe cannot be created without a precomputed IBL, and a sun
+    # below the horizon supplies one without lighting the rooms. It is authored
+    # there rather than passed here so that opening the file by hand renders
+    # what the arms render.
     {"name": "cornell_rooms", "scene": "assets/cornell_rooms.gltf", "size": (1600, 1200),
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800",
                "-H", "600"]},

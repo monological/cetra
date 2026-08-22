@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate the Cornell test assets: cornell_box.gltf and cornell_leak.gltf for
-indirect diffuse (spec 9.7), cornell_point.gltf for punctual shadows (spec 9.8).
+indirect diffuse (spec 9.7), cornell_point.gltf for punctual shadows (spec 9.8),
+cornell_rooms.gltf for clustered specular probes (spec 11.70).
 
-One room, three variants, one generator -- and each ships as a `.gltf` with a
+One room, four variants, one generator -- and each ships as a `.gltf` with a
 sibling `.cscn` of the same stem, which is what lets every one of them run as
 `render -m assets/<name>.gltf` with no second path to remember. Between them
 they cover a different light type each: area panel, spot, point.
@@ -47,8 +48,7 @@ be visible, rather than hiding in the wall/floor corners.
 
 Lighting for the Cornell box is an area panel authored in its sibling .cscn (glTF
 punctual lights carry no rectangle), matching the emissive quad here so the visible
-source and the analytic light agree. Emissive comes from the glTF because .cscn materials express
-only sss and windResponse. Direct light from that panel lights the floor and the
+source and the analytic light agree. Emissive comes from the glTF because a .cscn cannot author it. Direct light from that panel lights the floor and the
 box tops; what only GI can supply is the colour bleed, the fill in the corners, and
 the light under and behind the boxes.
 
@@ -324,9 +324,11 @@ ROOMS_X = 2.0
 DOOR_Z = 0.30
 
 # The two rooms' probe boxes OVERLAP by this much either side of the partition,
-# which is what makes the doorway a blend rather than a step. Stated here beside
-# the geometry because the sibling .cscn's boxes are derived from it, and the
-# seam arm measures exactly this band.
+# which is what makes the doorway a blend rather than a step.
+#
+# The .cscn hand-authors those boxes, so this constant is CHECKED against the
+# file rather than merely stated beside it -- an assert relating a literal to
+# itself, which is what this was, cannot fail and constrains nothing.
 PROBE_OVERLAP = 0.30
 
 # This partition's OWN thickness, not the leak room's.
@@ -389,9 +391,9 @@ def build_rooms_room():
     r.quad((-p, lo_y, DOOR_Z), (p, lo_y, DOOR_Z), (p, hi_y, DOOR_Z), (-p, hi_y, DOOR_Z))
     r.end()
 
-    # Two panels of very different strength: the left room is the lit hall, the
-    # right is the side room. The .cscn scales them, so what is authored here is
-    # only where they are.
+    # The two ceiling fixtures, as geometry. They are emissive so the rooms have
+    # a visible source, but they are NOT what lights the scene -- the .cscn
+    # authors a spot per room, for the reason its own comment gives.
     r.begin("rooms_light_a")
     r.quad((-1.35, TOP - 0.02, -0.35), (-0.65, TOP - 0.02, -0.35), (-0.65, TOP - 0.02, 0.35),
            (-1.35, TOP - 0.02, 0.35))
@@ -407,22 +409,43 @@ def build_rooms_room():
                "rooms_light_a": WHITE, "rooms_light_b": WHITE}
 
 
-# The doorway has to leave a blend band the gate can actually sample, and the
-# probe boxes have to reach across the partition to produce one. Both are stated
-# above and asserted here, so a change to either fails loudly rather than
-# quietly making the seam arm measure a hard edge that is supposed to be soft.
-assert PROBE_OVERLAP > 0.0, "probe boxes must overlap or the doorway is a step, not a blend"
-assert PROBE_OVERLAP < ROOMS_X, "the overlap cannot span a whole room"
 # The overlap band has to sit in the OPENING, or the partition hides the only
-# place the two probes both contribute and the seam arm measures a wall.
+# place the two probes both contribute.
 assert DOOR_Z < HI, "the doorway must reach the open front"
 assert HI - DOOR_Z > PROBE_OVERLAP, "the opening must be deeper than the blend band is wide"
 # The wall has to be thick enough to resolve in a shadow map at this scale, and
-# still thinner than the opening it stands beside.
+# still thinner than the opening it stands beside. FULL thickness against the
+# opening's depth -- ROOMS_PARTITION_HALF is a half-extent.
 assert ROOMS_PARTITION_HALF > PARTITION_HALF, "a wall between rooms is not a leak-test slab"
-assert ROOMS_PARTITION_HALF < HI - DOOR_Z, "the wall cannot be thicker than the doorway is deep"
+assert 2 * ROOMS_PARTITION_HALF < HI - DOOR_Z, \
+    "the wall cannot be thicker than the doorway is deep"
+
+
+def check_rooms_cscn():
+    """The hand-authored .cscn agrees with the geometry emitted here.
+
+    The probe boxes are the one thing about this fixture that lives in the scene
+    file rather than in the mesh, and they are what makes the doorway a blend
+    rather than a step -- so they are the one thing worth reading back. Asserting
+    PROBE_OVERLAP against itself, which is what this was, cannot fail.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cornell_rooms.cscn")
+    if not os.path.exists(path):
+        return  # the .gltf is emitted first on a fresh checkout
+    with open(path) as f:
+        probes = json.load(f)["probes"]
+    assert len(probes) == 2, "cornell_rooms.cscn should author exactly two probes"
+    assert abs(probes[0]["boxMax"][0] - PROBE_OVERLAP) < 1e-6, \
+        "probe A's box must reach PROBE_OVERLAP past the partition"
+    assert abs(probes[1]["boxMin"][0] + PROBE_OVERLAP) < 1e-6, \
+        "probe B's box must reach PROBE_OVERLAP past the partition"
+    # Each probe must stand in its own room, or the fixture cannot tell the two
+    # designs apart no matter what the gate measures.
+    assert probes[0]["position"][0] < 0.0 < probes[1]["position"][0], \
+        "the two probes must sit in different rooms"
 
 emit("cornell_box.gltf", *build_box_room())
 emit("cornell_leak.gltf", *build_leak_room())
 emit("cornell_point.gltf", *build_point_room())
 emit("cornell_rooms.gltf", *build_rooms_room())
+check_rooms_cscn()
