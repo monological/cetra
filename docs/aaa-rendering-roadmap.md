@@ -1774,7 +1774,44 @@ itself, its bed-provider seam (`WaterHeightFn`, which `apps/forest`'s terrain sa
 the CPU wave query buoyancy would consume, and — since 11.45 — the shore chain, a CPU per-column
 solver published to the shading stage through a std140 block rather than a texture.
 
-### D4. Terrain — Effort XL — **CDLOD half SHIPPED (spec 11.63); STREAMING still unbuilt**
+### D4. Terrain — Effort XL — **SHIPPED, both halves: CDLOD (11.63) and STREAMING (11.69)**
+
+**Spec 11.69 closed it.** A stored field's pyramid goes to disk as an fp32 tiled file
+(`.cts`, `procedural/terrain_stream.c/h`) and only a rectangle of each level stays in memory,
+anchored on the camera and the player. The coarse tail stays whole, which is what makes a miss
+ANSWERABLE: a query whose clamped footprint escapes a window retries one level coarser, each
+step covering twice the world, and what it returns is exactly what that level would have
+returned unstreamed.
+
+**WINDOWS, not a page table, and the reasoning is the opposite of D10's.** The access pattern
+here is dense and anchored where virtual texturing's is sparse and feedback-driven: every heavy
+consumer walks a contiguous square, and `sample_plane` runs ~30k times per patch build. A window
+costs one containment test per sample; a table costs a lookup per corner of a 4x4 footprint that
+straddles up to four tiles. The second thing windows buy is that residency becomes a pure
+function of the anchor path, so 11.67's eviction ordering, want-guard and hysteresis all
+evaporate rather than being re-implemented. **So the two residency systems in this engine are
+deliberately different shapes**, and the thing that decides which is the access pattern, not the
+scale.
+
+**The rule the consumers are organised by** is worth carrying past terrain: anything that builds
+a PERSISTENT artifact -- a Jolt BVH, a scatter placement, a cached patch mesh -- reads exact data
+through a synchronous ensure, because a coarse answer there is not a softer picture but a wrong
+one that outlives the residency which produced it. Anything transient takes the fall. That closes
+the stale-cache problem structurally rather than with an invalidation channel, and it is why fill
+is synchronous budgeted I/O with no async completions at all: there is no arrival order for the
+content to depend on.
+
+**Fixed the figure this entry has quoted since it was written.** 67 MB at 4096² and 268 MB at
+8192² are the HEIGHT PLANE alone; with the three erosion masks a resident field is 291 MB and
+1.16 GB, and 4096 builds no coarse levels at all -- the node-centred grid halves only while
+res-1 is even, so a streamable field is 4097² or 8193².
+
+What remains terrain's is not D4's: the splat is still one texture over the whole domain
+(capped at 2048 under streaming, a bound rather than a fix) and its pyramid is D10's, and
+per-tile erosion stays refused for the reason 11.63 gave -- the domain is a closed basin by
+construction. Erode offline at top resolution; stream the result.
+
+*The entry as it stood before 11.69 follows.*
 
 **Spec 11.63 answered the question this entry says it had not chosen between**, and chose Strugar
 over Hoppe: a CDLOD quadtree (`procedural/terrain_quadtree.c/h`) replaced `apps/forest`'s fixed
@@ -2582,7 +2619,7 @@ not scheduled.
 | 35 | ~~D3 Tessellated water~~ | — | **SHIPPED (11.32, 11.33, 11.35) and it spent no tessellation.** The mesh went through two screen-space schemes instead: clipmap rings (11.33), then a **projected grid** (11.35) after the rings turned out to weld reach to near-field detail — the snap that makes them tile is the same thing that kept the surface 5° short of the horizon while a comment claimed otherwise. The stage this item was scheduled to open is still closed. Reaching the horizon then moved the problem from the MESH to filtering: distant cells cover more than a wave period, so each wave model drops what sits under its footprint and hands the slope energy to roughness — a BRDF answer to a geometry question. See D3. **Six more specs have landed on the surface since and none of them were rows here** (11.43 the fixture's sun, 11.44 world scale, 11.45 the swash film, 11.46 → row 35b, 11.47 whitecaps, 11.48 two wave trains); D3 carries them. |
 | 35b | **D5 By-example texturing** | S/M | **DONE (11.46), and it was never booked.** Would have been assumed blocked — a transformed copy of a texture plus an inverse table, in the most saturated program in the tree — and cost **zero** units: the shader never reads the original so the transform is baked over it, and the table is 768 bytes of uniform space. The ledger's fifth escape. Contrast held to 0.15% (0.02876 → 0.02881), which is the measurement that matters, because a broken blend flattens variance rather than shifting colour. **Two of the three defects it fixed were not rendering bugs at all** — a noise field sampled on an unbounded lattice, so forty tile boundaries were discontinuities in the data; and a circular tangent frame under planar UVs, creasing along every triangle edge. Both were reported as water bugs for most of a session. |
 | 35c | **Unbooked, shipped anyway** | — | **11.50 and 11.51 appear nowhere else in this document.** 11.50 made `foliage_shadows` a material row, so alpha-masked foliage arriving through a FILE can shadow — it had worked only for meshes built in C. 11.51 is the ivy arcade: the first asset authoring UV1 wind data, and a new `wind-uv` gate group. Both are content-driven work with no roadmap row, which is the same pattern D5 records — the table is a backlog, and the work keeps arriving from outside it. |
-| 36 | D4 Terrain **streaming** | XL | **The LOD half shipped as 11.63 and this row is now the remainder.** A CDLOD quadtree replaced forest's fixed grid — Strugar over Hoppe, which is the choice D4 said it had not made — so "a clipmap without instancing/LOD is a mega-mesh with extra steps" is settled and the T-junction stitch is superseded where the morph applies. What is still unbuilt is PAGING: the mip pyramid 11.63 added is in memory, residency is in memory, and nothing reads from disk. **Re-scoped once already and the re-scoping held.** Its own entry demanded streamed height DATA while depending on the surface being ANALYTIC for the stitch; erosion (39/40) turned terrain into data and 11.63 made the domain large enough to care, which is the order that entry predicted. Figure to schedule against: 4096² fp32 is 67 MB, 8192² is 268 MB. |
+| 36 | D4 Terrain **streaming** | XL | **SHIPPED — 11.63 took the LOD half, 11.69 the paging half, and the row is closed.** A CDLOD quadtree replaced forest's fixed grid (Strugar over Hoppe, the choice D4 said it had not made), then an fp32 tiled `.cts` file put the pyramid on disk with a rectangular WINDOW resident per level. Windows rather than 11.67's page table, decided by access pattern and not by scale: terrain reads contiguous squares ~30k times per patch build, so a containment test beats an indirection per footprint corner — and residency becomes a pure function of the anchor path, which deletes the eviction ordering and hysteresis rather than re-implementing them. The organising rule is the transferable part: **anything building a PERSISTENT artifact ensures exact data synchronously, anything transient takes the coarse fall**, which closes cache staleness structurally instead of with an invalidation channel. **Re-scoped once and the re-scoping held**: the entry demanded streamed height DATA while depending on an ANALYTIC surface for its stitch; erosion (39/40) made terrain data and 11.63 made the domain big enough to care, exactly the order predicted. **Its own scheduling figure was wrong the whole time** — 67 MB / 268 MB is the height plane alone, a real field with its three masks is 291 MB / 1.16 GB, and 4096² builds no coarse levels at all (node-centred grids halve only while res−1 is even, so it is 4097² or 8193²). |
 | 37 | E7 Occlusion culling | L | Booked so the gap is visible, **not because a measurement demands it**, and 11.31 lowers the price further rather than raising it: forest's opaque lane already runs at complexity 1.08 from ordering alone, so there is little redundant shading left to remove, and the one thing that reached 0.72 — the prepass — lost on the clock anyway because the extra submission cost more than the fragments it saved. An occlusion pass is a bigger version of that same trade. `assets/overdraw_layers.gltf` is the instrument to price it with. |
 | 38 | E10 Integer-bit hashes | S | **Booked by 11.54, which deliberately did not do it.** Every stochastic site in the tree keys off `fract(sin(x) · 43758.5453)`, which is precision-sensitive and driver-variable — `sin` at a large argument is implementation-defined in its last bits and `fract` of the product amplifies that across the whole range. A PCG or Wang integer hash would be exactly reproducible; GLSL 330 has `uint` and bitwise ops, so nothing blocks it. Not folded into 11.54 because it is a **behaviour** change wherever a hash is live, where that spec's hash phase was a 0 px assertion — and because `ssr_frag.glsl:187` has already measured what re-forming a hash costs on a ray-marching consumer: **31,800 px**. Price it against that, not against tidiness. |
 | 39 | **D6 Heightfield backend** | S | **DONE (11.59).** The unlock, and it exists only to serve 40. `terrain_height_at` gains a SOURCE — analytic fbm or a filtered sample of a stored grid — while staying a pure function of `(state, x, z)`, so all **eight** consumers keep working unchanged and a NULL field is today's path byte-identical. Three contracts, not details: the filter is **C1** (bilinear's piecewise-constant derivative would facet normals at cell boundaries and reach the scatter's slope gate), out of domain **clamps to edge** (`forest.c:939` queries at a camera eye that can leave the extent), and thread-safety is **not** improved — the analytic path memoizes into file statics and stays unsafe. |
@@ -2625,6 +2662,7 @@ it was written, since 11.49 shipped a *producer* of local lights that are inelig
 construction. **25 (C3, IES) followed both** (11.57), and **28 (E2, 3D LUT grading) is now built too**
 (11.58). That emptied the small-and-unblocked column: what was left is 29 (C4), 32 (D0),
 33 (D1), 36 (D4) and 37 (E7), all L or XL, plus 38 (E10, integer-bit hashes), which is S
+— **and 36 (D4) has since gone too** (11.69), which leaves 29, 32, 33 and 37 of that set
 and is the only one of those that arrives with a measured price already attached --
 11.54 booked it against `ssr_frag`'s 31,800 px, so it can be judged on a number rather
 than on tidiness.
