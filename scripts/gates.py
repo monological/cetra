@@ -2878,11 +2878,23 @@ def _origin_forest(workdir, tag, offset, extra, frames="40", mode="6", size=("80
     --render-mode 6 for the reason AGENTS.md gives: forest's Hillaire sky moves
     tens of thousands of pixels run to run, and the albedo view is the only mode
     with a 0 px floor. Every arm below measures its own floor anyway.
+
+    --no-trail because the trail (spec 11.68) is an ANALYTIC world-space edge,
+    and these arms compare two runs that shifted by different amounts -- so each
+    reconstructs authoredPos with its own rounding, and an analytic edge resolves
+    that difference where a texture lookup quantizes it away. Measured 106 px of
+    1.44M (0.007%) between the auto and manual legs, and 61 px between two MANUAL
+    shifts at different frames, which is what says it is the shift AMOUNT rather
+    than the trigger. That is far inside 11.62's own curve for ordinary geometry
+    (0.73% of frame at a THIRD of this offset) and it is not what these arms are
+    for: they test the shift mechanism, and the exact-zero bar below is only
+    meaningful against a scene with nothing analytic in it. The trail has its own
+    arm in the layers group.
     """
     path = os.path.join(workdir, f"origin_{tag}.ppm")
     cmd = [FOREST, "-x", "-f", frames, "-W", size[0], "-H", size[1], "--no-fog",
            "--render-mode", mode, "--seed", "1337", "--world-offset", repr(offset),
-           "--cam-eye", f"{offset},40,{offset + 120}",
+           "--no-trail", "--cam-eye", f"{offset},40,{offset + 120}",
            "--cam-target", f"{offset},10,{offset}", "-S", path] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(path):
