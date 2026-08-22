@@ -7,6 +7,10 @@
 
 #include "../mesh_builder.h"
 #include "../noise.h"
+// The samplers own the streamed residency's READ half -- the containment test
+// and the fall -- so that one bicubic, one clamp and one coordinate mapping
+// serve both residencies. terrain_stream.c owns everything that MOVES a window.
+#include "terrain_stream.h"
 
 // The tiling lattice period noise_perlin3_tiled works over. Coordinates are
 // offset to start at zero and the default frequencies keep the finest octave
@@ -75,13 +79,29 @@ bool terrain_field_alloc(TerrainField* field, int res) {
     return true;
 }
 
+// A node of a plane that may be only PARTLY held: `base` addresses node
+// (ox, oz) of a `stride`-wide window, while `res` is still the whole level's
+// node count (spec 11.69).
+//
+// The clamp runs BEFORE the origin is subtracted, and the order is the
+// contract: clamping is a statement about the LEVEL -- a query off the west
+// edge reads node 0 of the terrain -- where the window is a statement about
+// what happens to be in memory. The other way round clamps to the window, and a
+// partly-resident field then reports its own residency as terrain.
+//
+// The caller owes containment: node (i, j) after clamping must lie in the
+// window. Every path here either holds the whole level or has just tested it.
+static float view_texel(const float* base, int res, int stride, int ox, int oz, int i, int j) {
+    i = i < 0 ? 0 : (i >= res ? res - 1 : i);
+    j = j < 0 ? 0 : (j >= res ? res - 1 : j);
+    return base[(size_t)(j - oz) * (size_t)stride + (size_t)(i - ox)];
+}
+
 // A plane's node, with the border CLAMPED -- a terrain's edge is an edge, not a
 // period. Shared by the sampler and the pyramid so the two cannot disagree
 // about what lies outside.
 static float plane_texel(const float* plane, int res, int i, int j) {
-    i = i < 0 ? 0 : (i >= res ? res - 1 : i);
-    j = j < 0 ? 0 : (j >= res ? res - 1 : j);
-    return plane[(size_t)j * (size_t)res + (size_t)i];
+    return view_texel(plane, res, res, 0, 0, i, j);
 }
 
 // Level 0 borrows the field's own arrays; every level above it owns four.
@@ -281,14 +301,21 @@ static float catmull_rom(float a, float b, float c, float d, float t) {
 // Shared by the height and all three masks so a mapping cannot drift between
 // them: a mask read at a different place from the height it describes would put
 // the silt somewhere other than where the sim deposited it.
-static float sample_plane(const TerrainParams* p, const float* plane, int res, float x, float z) {
-    // res >= 2 and a non-NULL height plane are terrain_field_alloc's invariants,
-    // so they are not re-asked here. `plane` can still be NULL -- it is the
-    // fall-through for a TerrainMask outside the enum -- and `extent` is
-    // caller-owned and never validated on the way in.
+//
+// Windowed for the same reason (spec 11.69): a streamed level is sampled by the
+// identical arithmetic over a rectangle of itself, so there is one bicubic here
+// and not one per residency. At stride == res and origin zero the address
+// reduces to j * res + i and the floats are bit for bit what they always were.
+//
+// Where a sample LANDS is factored out below it: the streamed resolver has to
+// decide whether it holds the nodes this is about to read, and deriving the
+// footprint a second time is how the two would come to disagree about which
+// nodes those are.
+static bool plane_grid_coords(const TerrainParams* p, int res, float x, float z, float* out_gx,
+                              float* out_gz) {
     float cell = terrain_field_cell(p->extent, res);
-    if (!plane || !(cell > 0.0f))
-        return 0.0f;
+    if (!(cell > 0.0f))
+        return false;
 
     // Texels sit on NODES: 0 lands on -extent and res-1 on +extent. A coarse
     // level's node 0 is the fine level's node 0 and its last is the fine last,
@@ -301,8 +328,20 @@ static float sample_plane(const TerrainParams* p, const float* plane, int res, f
     // Clamp the COORDINATE rather than only the taps. Clamping taps alone still
     // interpolates between them with an out-of-range t, which extrapolates the
     // cubic past the edge -- the failure this policy exists to avoid.
-    gx = gx < 0.0f ? 0.0f : (gx > last ? last : gx);
-    gz = gz < 0.0f ? 0.0f : (gz > last ? last : gz);
+    *out_gx = gx < 0.0f ? 0.0f : (gx > last ? last : gx);
+    *out_gz = gz < 0.0f ? 0.0f : (gz > last ? last : gz);
+    return true;
+}
+
+static float sample_plane_view(const TerrainParams* p, const float* base, int res, int stride,
+                               int ox, int oz, float x, float z) {
+    // res >= 2 and a non-NULL height plane are terrain_field_alloc's invariants,
+    // so they are not re-asked here. `plane` can still be NULL -- it is the
+    // fall-through for a TerrainMask outside the enum -- and `extent` is
+    // caller-owned and never validated on the way in.
+    float gx, gz;
+    if (!base || !plane_grid_coords(p, res, x, z, &gx, &gz))
+        return 0.0f;
 
     int i = (int)floorf(gx);
     int j = (int)floorf(gz);
@@ -312,16 +351,120 @@ static float sample_plane(const TerrainParams* p, const float* plane, int res, f
     float rows[4];
     for (int r = 0; r < 4; ++r) {
         int jr = j - 1 + r;
-        rows[r] = catmull_rom(plane_texel(plane, res, i - 1, jr), plane_texel(plane, res, i, jr),
-                              plane_texel(plane, res, i + 1, jr), plane_texel(plane, res, i + 2, jr),
-                              tx);
+        rows[r] = catmull_rom(view_texel(base, res, stride, ox, oz, i - 1, jr),
+                              view_texel(base, res, stride, ox, oz, i, jr),
+                              view_texel(base, res, stride, ox, oz, i + 1, jr),
+                              view_texel(base, res, stride, ox, oz, i + 2, jr), tx);
     }
     return catmull_rom(rows[0], rows[1], rows[2], rows[3], tz);
+}
+
+static float sample_plane(const TerrainParams* p, const float* plane, int res, float x, float z) {
+    return sample_plane_view(p, plane, res, res, 0, 0, x, z);
+}
+
+/*
+ * Does this level's window hold every node the sample is about to read?
+ *
+ * The footprint is the bicubic's own -- [i-1, i+2] on each axis -- clamped to
+ * the level first, exactly as view_texel clamps, so a query off the edge asks
+ * about the edge column rather than about nodes that do not exist. That order
+ * is what lets an out-of-domain query and its edge twin reach the same
+ * decision, which is the whole of terrain-clamp's exact equality surviving
+ * partial residency.
+ */
+static bool stream_contains(const TerrainParams* p, int tile, const TerrainStreamLevel* L, float x,
+                            float z) {
+    if (L->whole)
+        return true;
+    float gx, gz;
+    if (!plane_grid_coords(p, L->res, x, z, &gx, &gz))
+        return false;
+    int i = (int)floorf(gx), j = (int)floorf(gz);
+    int i0 = i - 1, i1 = i + 2, j0 = j - 1, j1 = j + 2;
+    if (i0 < 0)
+        i0 = 0;
+    if (j0 < 0)
+        j0 = 0;
+    if (i1 > L->res - 1)
+        i1 = L->res - 1;
+    if (j1 > L->res - 1)
+        j1 = L->res - 1;
+    if (i0 < L->win_x0 || i1 >= L->win_x0 + L->win_nodes)
+        return false;
+    if (j0 < L->win_z0 || j1 >= L->win_z0 + L->win_nodes)
+        return false;
+    int tx0 = (i0 - L->win_x0) / tile, tx1 = (i1 - L->win_x0) / tile;
+    int tz0 = (j0 - L->win_z0) / tile, tz1 = (j1 - L->win_z0) / tile;
+    for (int tz = tz0; tz <= tz1; ++tz)
+        for (int tx = tx0; tx <= tx1; ++tx)
+            if (!L->resident[tz * L->win_tiles + tx])
+                return false;
+    return true;
+}
+
+// The counters are instrumentation, not state anything reads back, so they are
+// bumped through a const pointer: the stream itself is not a const OBJECT, it is
+// merely reached through TerrainParams' const view of the field.
+static void stream_note_miss(const TerrainStream* s) {
+    ((TerrainStream*)s)->misses++;
+}
+
+/*
+ * The spatial fall (spec 11.69).
+ *
+ * field_level clamps a level index that does not exist down to one that does,
+ * and this is the same policy in space: the finest level whose window actually
+ * holds the footprint, starting from the one asked for. Each step coarser
+ * covers twice the world, so the search terminates -- at the coarsest whole
+ * level in the worst case, which open() refuses to run without.
+ *
+ * What it returns is exactly what terrain_height_at_level would have returned
+ * for the level it settled on, so an unstreamed run reproduces the answer
+ * without knowing a window was involved.
+ */
+static float stream_height(const TerrainParams* p, const TerrainStream* s, int level, float x,
+                           float z) {
+    if (level < 0)
+        level = 0;
+    if (level >= s->level_count)
+        level = s->level_count - 1;
+    for (int k = level; k < s->level_count; ++k) {
+        const TerrainStreamLevel* L = &s->lv[k];
+        if (!stream_contains(p, s->tile_nodes, L, x, z))
+            continue;
+        // Once per READ rather than once per level stepped over: what a reader
+        // wants to know is how often the fine answer was unavailable.
+        if (k != level)
+            stream_note_miss(s);
+        ((TerrainStream*)s)->last_level = k;
+        return sample_plane_view(p, L->mem[0], L->res, L->win_nodes, L->win_x0, L->win_z0, x, z);
+    }
+    return 0.0f;
+}
+
+// The masks have no pyramid to fall through, so the fall is one step: level 0's
+// window, or the coarse plane the file carries for exactly this.
+static float stream_mask(const TerrainParams* p, const TerrainStream* s, int which, float x,
+                         float z) {
+    const TerrainStreamLevel* L = &s->lv[0];
+    if (stream_contains(p, s->tile_nodes, L, x, z))
+        return sample_plane_view(p, L->mem[1 + which], L->res, L->win_nodes, L->win_x0, L->win_z0,
+                                 x, z);
+    stream_note_miss(s);
+    if (!s->coarse_mask[which] || s->mask_res < 2)
+        return 0.0f;
+    return sample_plane_view(p, s->coarse_mask[which], s->mask_res, s->mask_res, 0, 0, x, z);
 }
 
 float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z) {
     if (!p || !p->field)
         return 0.0f;
+    if (p->field->stream) {
+        int which = mask == TERRAIN_MASK_FLOW ? 0 : (mask == TERRAIN_MASK_DEPOSIT ? 1 : 2);
+        float sv = stream_mask(p, p->field->stream, which, x, z);
+        return sv < 0.0f ? 0.0f : (sv > 1.0f ? 1.0f : sv);
+    }
     const float* plane = NULL;
     switch (mask) {
     case TERRAIN_MASK_FLOW:
@@ -555,6 +698,8 @@ float terrain_height_at_level(const TerrainParams* p, float x, float z, int leve
     // legitimate configuration -- the fbm is simply inert -- and folding the two
     // guards together would return a flat 0 for it.
     if (p->field && p->field->height) {
+        if (p->field->stream)
+            return stream_height(p, p->field->stream, level, x, z);
         TerrainFieldLevel L = field_level(p->field, level);
         // Returns BEFORE the island lerp at the bottom, deliberately: a field has
         // the shaping already baked into its stored heights, because
@@ -805,6 +950,15 @@ void terrain_height_probe(const TerrainParams* p) {
                 z = terrain_world_z(p, terrain_field_node(extent, f->res,
                                                           (int)floorf(dz / snap + 0.5f)));
             }
+            // These rows measure the stored DATA, so they ensure: a probe that
+            // read whatever happened to be resident would be reporting on the
+            // miss policy while claiming to report on the field. The miss
+            // policy has rows of its own, in terrain_stream_probe, and those
+            // deliberately do not ensure.
+            if (f && f->stream) {
+                float snap = terrain_field_cell(extent, f->res);
+                terrain_stream_ensure_rect(f->stream, p, x - snap, z - snap, 2.0f * snap, 0);
+            }
             vec3 n = {0.0f, 1.0f, 0.0f};
             terrain_normal_at(p, x, z, n);
             // The fbm at the SAME point, alongside whatever the active source
@@ -883,6 +1037,12 @@ void terrain_height_probe(const TerrainParams* p) {
         float x = terrain_world_x(p, lx), z = terrain_world_z(p, lz);
         float cx = terrain_world_x(p, lx < -extent ? -extent : (lx > extent ? extent : lx));
         float cz = terrain_world_z(p, lz < -extent ? -extent : (lz > extent ? extent : lz));
+        // Ensured at the EDGE point, which is where both queries end up: the
+        // outside one clamps onto it, so making it resident is what lets the
+        // pair be compared for exact equality rather than for how far apart two
+        // residency states left them.
+        if (f && f->stream)
+            terrain_stream_ensure_rect(f->stream, p, cx - step, cz - step, 2.0f * step, 0);
         printf("terrain-height-probe clamp x=%.4f z=%.4f h=%.6f edge_x=%.4f edge_z=%.4f "
                "edge_h=%.6f\n",
                (double)x, (double)z, (double)terrain_height_at(p, x, z), (double)cx,
@@ -907,6 +1067,8 @@ void terrain_height_probe(const TerrainParams* p) {
         float nz = floorf((v * 2.0f * extent) / cell);
         float x = terrain_world_x(p, -extent + (nx + 0.5f) * cell);
         float z = terrain_world_z(p, -extent + nz * cell);
+        if (f && f->stream)
+            terrain_stream_ensure_rect(f->stream, p, x - cell, z - cell, 2.0f * cell, 0);
         printf("terrain-height-probe mid x=%.6f z=%.6f h=%.6f\n", (double)x, (double)z,
                (double)terrain_height_at(p, x, z));
     }
@@ -920,6 +1082,14 @@ static bool build_grid(const TerrainParams* p, float x0, float z0, float span, i
                        bool shaded, int level, Mesh* mesh) {
     if (segments <= 0)
         return false;
+    // Ensure before sampling, and this is the one place the rule has to hold:
+    // every mesh in the tree comes through here, and a mesh is a PERSISTENT
+    // artifact -- the quadtree caches its patches, Jolt copies a collider into
+    // a BVH it keeps. A coarse answer here does not soften a picture, it bakes
+    // a surface that outlives the residency which produced it. Transient
+    // readers take the fall instead; see terrain_stream_ensure_rect.
+    if (p->field && p->field->stream)
+        terrain_stream_ensure_rect(p->field->stream, p, x0, z0, span, level);
     int side = segments + 1;
 
     MeshBuilder mb;
@@ -1023,6 +1193,11 @@ bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh) {
 static bool fill_morph_targets(const TerrainParams* p, Mesh* mesh, float x0, float z0, float span,
                                int segments, int parent_level, float morph_start,
                                float morph_end) {
+    // The PARENT's level, which build_grid's ensure did not cover: a morph
+    // target read coarse is a vertex blending toward a surface its parent patch
+    // will not draw, which is the open seam the whole morph exists to close.
+    if (p->field && p->field->stream)
+        terrain_stream_ensure_rect(p->field->stream, p, x0, z0, span, parent_level);
     int side = segments + 1;
     int cside = segments / 2 + 1;
     size_t n = mesh->vertex_count;

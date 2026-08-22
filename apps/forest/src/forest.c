@@ -61,6 +61,7 @@
 #include "cetra/procedural/rock.h"
 #include "cetra/procedural/terrain.h"
 #include "cetra/procedural/terrain_quadtree.h"
+#include "cetra/procedural/terrain_stream.h"
 #include "cetra/procedural/terrain_tex.h"
 #include "cetra/procedural/tree_gen.h"
 #include "cetra/procedural/vegetation_tex.h"
@@ -185,6 +186,18 @@ typedef struct ForestArgs {
     const char* heightmap;   // load a field from here instead of baking
     float heightmap_min;     // world Y the file's 0 maps to
     float heightmap_max;     // world Y the file's 65535 maps to
+    // Stream a tiled field rather than holding one (spec 11.69). Opt-in by
+    // naming a file, so the OFF leg is the whole-file load every terrain arm
+    // already covers rather than a negative flag with nothing behind it.
+    const char* terrain_stream;
+    const char* terrain_stream_save; // write the installed field as a tiled file
+    int terrain_stream_budget;       // tiles read per update; 0 = the default
+    int terrain_stream_window;       // window edge in tiles; 0 = the default
+    // Diagnostic: lower the node count at or under which a level stays whole,
+    // so a fixture-scale field streams at all. Without it the whole of a 513
+    // field is resident and there is nothing to measure.
+    int terrain_stream_resident_res;
+    int terrain_stream_probe; // print residency every N frames; 0 = off
     int height_probe;        // print sampled heights, normals and masks
     int scatter_probe;       // print where the scatter put things, against the drainage
     // Print each clustered prototype's DAG (spec 11.63). The instrument exists
@@ -220,6 +233,9 @@ static SceneNode* g_terrain_group;
 // The eroded field, when --erode is on. File-static because g_terrain borrows it
 // for the process's lifetime -- the terrain is built once and never rebuilt.
 static TerrainField g_field;
+// The streamed field, when --terrain-stream names one (spec 11.69). It owns a
+// TerrainField of its own, so exactly one of these two is ever installed.
+static TerrainStream* g_stream;
 static Scene* g_scene;
 static SceneNode* g_root;
 static Entity* g_player;
@@ -762,6 +778,13 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
 // to slope alone, which is the un-eroded look and is the point.
 #define TERRAIN_SPLAT_FALLBACK_RES 512
 
+// Ceiling on that when the field is STREAMED (spec 11.69). The splat is one
+// texture over the whole domain, so following a streamed field's resolution
+// would upload 201 MB at 8193 square to describe ground the eye never resolves
+// -- and would read the whole file to bake it, which is the cost streaming
+// exists to avoid. A bound rather than a fix: the splat's own pyramid is D10's.
+#define TERRAIN_SPLAT_STREAM_MAX_RES 2048
+
 // The four grounds, in splat order: layer 0 takes the remainder, then r, g, b.
 // terrain_bake_splat decides which mask feeds which channel; this decides what
 // each channel LOOKS like, which is the half an app gets to choose.
@@ -806,6 +829,12 @@ static void bake_terrain_layers(Scene* scene) {
     }
 
     int res = g_terrain.field ? g_terrain.field->res : TERRAIN_SPLAT_FALLBACK_RES;
+    // One texture over the whole domain, so a streamed field's resolution is
+    // the wrong thing to follow it with: 8193 square would be a 201 MB upload
+    // of a map whose finest content the ground never resolves. Capped, and the
+    // real answer is the splat pyramid D10 owns -- this is a bound, not a fix.
+    if (g_terrain.field && g_terrain.field->stream && res > TERRAIN_SPLAT_STREAM_MAX_RES)
+        res = TERRAIN_SPLAT_STREAM_MAX_RES;
     unsigned char* splat = malloc((size_t)res * (size_t)res * 3u);
     if (splat && terrain_bake_splat(&g_terrain, res, splat)) {
         set_material_splat_tex(g_mat_terrain,
@@ -1019,6 +1048,40 @@ static void load_heightfield(void) {
     g_terrain.field = &g_field;
     printf("Terrain loaded: %s, %dx%d, range %.3f..%.3f\n", g_args.heightmap, g_field.res,
            g_field.res, (double)lo, (double)hi);
+}
+
+// Install a streamed field (spec 11.69). `l0_coverage` comes from the caller
+// because it is a REGION number and the region constants are declared further
+// down: the radius level 0 must serve without falling is the one region loads
+// use, not the camera's, since a region load builds a collider and a scatter --
+// both of which want exact heights -- out to its own load distance whatever the
+// eye is looking at.
+static void load_stream(float l0_coverage) {
+    double t0 = glfwGetTime();
+    g_stream = terrain_stream_open(g_args.terrain_stream, g_terrain.extent, l0_coverage,
+                                   g_args.terrain_stream_resident_res,
+                                   g_args.terrain_stream_window, g_args.terrain_stream_budget);
+    double ms = (glfwGetTime() - t0) * 1000.0;
+    if (!g_stream) {
+        fprintf(stderr, "forest: terrain stream %s refused; keeping the analytic terrain\n",
+                g_args.terrain_stream);
+        return;
+    }
+    g_terrain.field = &g_stream->field;
+    printf("terrain-stream-header path=%s res=%d levels=%d tile=%d min=%.9g max=%.9g ms=%.0f\n",
+           g_args.terrain_stream, g_stream->field.res, g_stream->level_count, g_stream->tile_nodes,
+           (double)g_stream->field.min_y, (double)g_stream->field.max_y, ms);
+}
+
+static void save_stream(void) {
+    if (!terrain_stream_save(&g_field, g_args.terrain_stream_save)) {
+        fprintf(stderr, "forest: could not write the terrain stream %s\n",
+                g_args.terrain_stream_save);
+        return;
+    }
+    printf("terrain-stream-probe saved path=%s res=%d levels=%d tile=%d min=%.9g max=%.9g\n",
+           g_args.terrain_stream_save, g_field.res, g_field.level_count,
+           TERRAIN_STREAM_TILE_NODES, (double)g_field.min_y, (double)g_field.max_y);
 }
 
 // Patch edge the quadtree aims its finest level at, in world units.
@@ -1379,6 +1442,17 @@ static void region_load(Region* r) {
     float x0, z0;
     region_origin(r, &x0, &z0);
 
+    // Everything below builds something PERSISTENT out of heights -- prop
+    // placements and a Jolt BVH -- so the ground it stands on is made exact
+    // first. The collider's own build ensures again through build_grid; this
+    // call is for the SCATTER, whose flow gate reads a mask that has no pyramid
+    // to fall through and whose absence reads as "no water has run here".
+    //
+    // It also keeps the region digest a function of the world rather than of
+    // I/O history, which is what region-return and region-scatter compare.
+    if (g_stream)
+        terrain_stream_ensure_rect(g_stream, &g_terrain, x0, z0, g_region_span, 0);
+
     // From its own coordinates, so this is the same scatter every time the
     // region is entered rather than a function of how many regions came before.
     g_rng = region_seed(r->rx, r->rz);
@@ -1482,6 +1556,17 @@ static float region_dist_sq(const Region* r, const vec3 p) {
  * genuinely different squares.
  */
 static void regions_update(const vec3 eye, const vec3 focus) {
+    // The stream advances HERE, and this one site is why: residency already
+    // takes exactly the two anchors a window wants, and every path that moves
+    // regions -- the first pass, the origin-shift rebuild, the per-frame update
+    // -- comes through this function. Hanging it off the frame loop instead
+    // would leave the rebuild reading windows aimed at where the camera used to
+    // be, which is the frame a shift exists to avoid.
+    //
+    // Before the loads below, so a region that becomes resident this call finds
+    // its ground already read rather than ensuring it a second time.
+    if (g_stream)
+        terrain_stream_update(g_stream, &g_terrain, eye, focus);
     if (!g_regions)
         return;
     if (g_regions_pinned) {
@@ -1869,21 +1954,39 @@ static void on_init(Game* game) {
     // Said out loud, because every --erode-* flag also SETS --erode, so a command
     // line asking to bake and save alongside a --heightmap would otherwise get no
     // bake, no file and no explanation.
-    if (g_args.heightmap && g_args.erode)
+    // A STREAMED field wins over both, for the same reason a loaded one wins
+    // over a bake and one step further along: the file already holds the
+    // pyramid, so building either of the others would be producing a surface
+    // nothing is going to read.
+    if (g_args.terrain_stream && (g_args.heightmap || g_args.erode))
+        fprintf(stderr, "forest: --terrain-stream wins over --heightmap and --erode; neither "
+                        "is loaded and any save of them is skipped\n");
+    else if (g_args.heightmap && g_args.erode)
         fprintf(stderr, "forest: --heightmap wins over --erode; the bake and any --erode-save "
                         "are skipped\n");
-    if (g_args.heightmap)
+    if (g_args.terrain_stream) {
+        float radius = g_args.region_radius > 0.0f ? g_args.region_radius : REGION_LOAD_RADIUS;
+        float span = g_args.region_span > 0.0f ? g_args.region_span : REGION_SPAN_DEFAULT;
+        load_stream(radius + 2.0f * span);
+    } else if (g_args.heightmap)
         load_heightfield();
     else if (g_args.erode)
         bake_erosion();
     // Here rather than inside each of those, so a third way of getting a field
     // cannot arrive without one. The levels are copies of what is in the field
     // at this moment, so this has to be the last thing that touches it.
+    //
+    // A streamed field is exempt and not merely skipped: its levels came out of
+    // the file already, and rebuilding them would need the whole surface in
+    // memory, which is the thing streaming exists not to do.
     if (g_terrain.field == &g_field) {
         int levels = terrain_field_build_pyramid(&g_field);
         printf("Terrain field: %d level(s), finest cell %.3f units\n", levels,
                (double)terrain_field_cell(g_terrain.extent, g_field.res));
     }
+    // After the pyramid, because the levels are what a stream file stores.
+    if (g_args.terrain_stream_save && g_terrain.field == &g_field)
+        save_stream();
     if (g_args.height_probe)
         terrain_height_probe(&g_terrain);
 
@@ -2300,6 +2403,11 @@ static void on_render(Game* game, double alpha) {
         }
         if (g_args.region_probe && engine->total_frames + 1 == (size_t)g_args.frames)
             region_probe();
+        if (g_stream && g_args.terrain_stream_probe > 0) {
+            bool final = engine->total_frames + 1 == (size_t)g_args.frames;
+            if (final || engine->total_frames % (size_t)g_args.terrain_stream_probe == 0)
+                terrain_stream_probe(g_stream, &g_terrain, engine->total_frames, final);
+        }
     }
 
     Transform t = {.position = {0, 0, 0}, .rotation = {0, 0, 0}, .scale = {1, 1, 1}};
@@ -2350,6 +2458,8 @@ static void on_shutdown(Game* game) {
     // is released only once nothing can ask for a height again.
     g_terrain.field = NULL;
     terrain_field_free(&g_field);
+    terrain_stream_free(g_stream);
+    g_stream = NULL;
 }
 
 // --- entry point -----------------------------------------------------------
@@ -2396,6 +2506,12 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --erode-save <p>    Write the baked field as .r16\n");
     fprintf(stderr, "      --heightmap <p>     Load a field (.r16 / 16-bit PNG) instead\n");
     fprintf(stderr, "      --heightmap-range <lo> <hi>  World Y the file's range maps to\n");
+    fprintf(stderr, "      --terrain-stream <p>     Stream a tiled field instead of holding one\n");
+    fprintf(stderr, "      --terrain-stream-save <p>  Write the installed field as a tiled file\n");
+    fprintf(stderr, "      --terrain-stream-budget <n>  Tiles read per update\n");
+    fprintf(stderr, "      --terrain-stream-window <n>  Window edge in tiles\n");
+    fprintf(stderr, "      --terrain-stream-resident-res <n>  Whole-level node threshold\n");
+    fprintf(stderr, "      --terrain-stream-probe <n>   Print residency every N frames\n");
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --cluster-probe          Print each clustered prototype's DAG\n");
@@ -2529,6 +2645,18 @@ int main(int argc, char** argv) {
         } else if (!strcmp(a, "--heightmap-range") && i + 2 < argc) {
             g_args.heightmap_min = strtof(argv[++i], NULL);
             g_args.heightmap_max = strtof(argv[++i], NULL);
+        } else if (!strcmp(a, "--terrain-stream") && i + 1 < argc) {
+            g_args.terrain_stream = argv[++i];
+        } else if (!strcmp(a, "--terrain-stream-save") && i + 1 < argc) {
+            g_args.terrain_stream_save = argv[++i];
+        } else if (!strcmp(a, "--terrain-stream-budget") && i + 1 < argc) {
+            g_args.terrain_stream_budget = atoi(argv[++i]);
+        } else if (!strcmp(a, "--terrain-stream-window") && i + 1 < argc) {
+            g_args.terrain_stream_window = atoi(argv[++i]);
+        } else if (!strcmp(a, "--terrain-stream-resident-res") && i + 1 < argc) {
+            g_args.terrain_stream_resident_res = atoi(argv[++i]);
+        } else if (!strcmp(a, "--terrain-stream-probe") && i + 1 < argc) {
+            g_args.terrain_stream_probe = atoi(argv[++i]);
         } else if (!strcmp(a, "--cluster-probe")) {
             g_args.cluster_probe = 1;
         } else if (!strcmp(a, "--scatter-probe")) {

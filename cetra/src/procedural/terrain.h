@@ -68,6 +68,18 @@ typedef struct TerrainField {
     float* deposit;
     float* wear;
 
+    // Set only on a STREAMED field (spec 11.69), and it suspends the invariant
+    // stated just above: the planes then address a resident WINDOW rather than
+    // the whole level, so indexing them by res is wrong everywhere it is not
+    // caught. Nothing outside terrain.c's samplers and terrain_stream.c may
+    // touch a plane on such a field -- the paths that would (a save, a measure,
+    // a sim) refuse one by name instead, and the range comes from the file's
+    // own manifest.
+    //
+    // NULL on every field there has ever been, which is what keeps the
+    // unstreamed path a single untested branch rather than a mode.
+    struct TerrainStream* stream;
+
     // Coarser copies of all four planes (spec 11.63), level 0 aliasing the
     // arrays above. Empty until terrain_field_build_pyramid runs; afterwards a
     // field whose resolution does not halve carries exactly one level, which is
