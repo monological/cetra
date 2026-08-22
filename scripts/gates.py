@@ -12258,6 +12258,17 @@ def run_layers_gate(workdir):
                          cannot show
       layers-vt-budget   the bake's own MB log equals the gate's closed form at
                          the gate's own derived resolution
+      layers-vt-pages-identity pages on vs off at the derived resolution is
+                         splat-edge resample only, AND the probe proves pages
+                         went resident -- the pixel half alone passes a build
+                         whose pages never arm
+      layers-vt-pages-effect at a forced-coarse fallback, pages restore most of
+                         what the coarseness lost against the full reference
+      layers-vt-pages-churn four slots against a 25-page grid plus a --cam-at
+                         teleport: capacity holds, the teleport evicts and
+                         reloads, the tail is stable, two runs are identical
+      layers-vt-pages-walk forest's 400-frame region walk churns pages under
+                         the capacity clamp, on the design's own 34-page grid
 
     WHAT THE FIRST FOUR ARMS CANNOT SEE: layer_fixture's splat is UV1-space, and
     the composite cache serves world-XZ splats only, so those arms cover the
@@ -12448,7 +12459,12 @@ def run_layers_gate(workdir):
 
     cached = vt_shot("cached")
     plain = vt_shot("plain", ["--no-layers-vt"])
-    coarse = vt_shot("coarse", ["--layers-vt-res", str(g2.VT_MACRO_RES)])
+    # Pages OFF on this leg deliberately: it measures the stage-1 FALLBACK's
+    # coarseness (the anti-vacuity that the res flag arms a real path), and
+    # pages restoring sharpness would eat most of its floor. The vt-pages arms
+    # below measure the pages against their own shots.
+    coarse = vt_shot("coarse",
+                     ["--layers-vt-res", str(g2.VT_MACRO_RES), "--no-layers-vt-pages"])
     if not (cached and plain and coarse):
         print("  layers-vt-identity ERROR while rendering the cache legs")
         failures.append("layers-vt-identity")
@@ -12598,6 +12614,134 @@ def run_layers_gate(workdir):
               f"(want {er} squared at {closed} MB by the gate's own 2*N^2*4*(4/3))")
         if not ok:
             failures.append("layers-vt-budget")
+
+    # --- the paged near field (spec 11.67) -----------------------------------
+    # Pages hold the SAME macro at 4x the fallback's density, so at the
+    # fixture's derived resolution they resolve almost nothing (the identity)
+    # and at a forced-coarse fallback they restore what it lost (the effect).
+    # Residency is read through --layers-vt-probe, whose whole history is a
+    # pure function of the flags -- measured bit-identical across runs.
+    nopages = vt_shot("nopages", ["--no-layers-vt-pages"])
+    coarse_pages = vt_shot("coarsepages", ["--layers-vt-res", str(g2.VT_MACRO_RES)])
+    if not (nopages and coarse_pages):
+        print("  layers-vt-pages-identity ERROR while rendering the page legs")
+        failures.append("layers-vt-pages-identity")
+        failures += _layers_scatter_arm()
+        return failures
+
+    def vt_probe_run(extra, frames):
+        r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", str(frames), "-W", "200", "-H",
+                            "150", "--render-mode", "6", "--no-auto-exposure", "-E", "1.0",
+                            "--layers-vt-probe", "4"] + extra,
+                           capture_output=True, text=True)
+        rows = []
+        for mm in re.finditer(r"layers-vt-probe frame=(\d+) grid=(\d+) slots=(\d+) "
+                              r"resident=(\d+) wanted=(\d+) loaded=(\d+) evicted=(\d+) "
+                              r"digest=([0-9a-f]{8})", r.stdout + r.stderr):
+            rows.append({"frame": int(mm.group(1)), "grid": int(mm.group(2)),
+                         "slots": int(mm.group(3)), "resident": int(mm.group(4)),
+                         "wanted": int(mm.group(5)), "loaded": int(mm.group(6)),
+                         "evicted": int(mm.group(7)), "digest": mm.group(8)})
+        return rows
+
+    # --- layers-vt-pages-identity --------------------------------------------
+    # Pages on vs off at the derived resolution: the pages resample the same
+    # macro, so the difference is confined to sub-code resample of splat edges.
+    # The anti-vacuity is the probe, not the pixels -- a build whose pages never
+    # arm reads 0 px here and PASSES the ceiling, so the arm also demands
+    # residency happened at all.
+    ae_pages, _ = compare(cpath, nopages[1])
+    probe = vt_probe_run([], 16)
+    resident_final = probe[-1]["resident"] if probe else 0
+    VT_PAGES_ID_CEILING = 2000 # measured 696 of 480000: splat-edge resample only
+    ok = ae_pages <= VT_PAGES_ID_CEILING and resident_final > 0
+    print(f"  layers-vt-pages-identity {'PASS' if ok else 'FAIL'}  pages on vs off "
+          f"{ae_pages} px (want <= {VT_PAGES_ID_CEILING}: the pages hold the same macro), "
+          f"{resident_final} pages resident at the end (want > 0, or the identity is the "
+          f"feature never arming)")
+    if not ok:
+        failures.append("layers-vt-pages-identity")
+
+    # --- layers-vt-pages-effect ----------------------------------------------
+    # At a fallback the derived rule would refuse, pages carry the macro the
+    # fallback cannot: coarse+pages must move far from coarse-only AND land
+    # much nearer the full-density reference. Density stated in the fixture's
+    # own units: the coarse fallback is 0.5 units/texel, its pages 0.125.
+    ae_restore, _ = compare(coarse_pages[1], opath)
+    ae_left, _ = compare(coarse_pages[1], nopages[1])
+    ae_coarse_ref, _ = compare(opath, nopages[1])
+    ok = (ae_restore >= 15000 and ae_coarse_ref > 0
+          and ae_left <= int(0.6 * ae_coarse_ref))
+    print(f"  layers-vt-pages-effect {'PASS' if ok else 'FAIL'}  coarse+pages moves "
+          f"{ae_restore} px off coarse-only (want >= 15000; measured 32289) and sits "
+          f"{ae_left} px from the full reference against coarse-only's {ae_coarse_ref} "
+          f"(want <= 0.6 of it: pages recover most of what coarseness lost)")
+    if not ok:
+        failures.append("layers-vt-pages-effect")
+
+    # --- layers-vt-pages-churn -----------------------------------------------
+    # Slots forced far under the 25-page virtual grid, plus a --cam-at teleport
+    # -- the worst case no walk can produce, every page missing at once. The
+    # capacity clamp must hold at every print, the teleport must evict and
+    # reload, the tail must be STABLE (loaded stops growing: the anti-thrash),
+    # and the whole history must be deterministic across two runs.
+    churn_flags = ["--layers-vt-page-slots", "4", "--cam-at",
+                   "10:-1.5,2.0,3.0,-1.5,0.0,-1.0"]
+    rows_a = vt_probe_run(churn_flags, 24)
+    rows_b = vt_probe_run(churn_flags, 24)
+    if len(rows_a) < 4:
+        print("  layers-vt-pages-churn FAIL  the probe printed too few rows")
+        failures.append("layers-vt-pages-churn")
+    else:
+        cap_ok = all(r["resident"] <= r["slots"] for r in rows_a)
+        churned = rows_a[-1]["evicted"] >= 1 and rows_a[-1]["loaded"] > rows_a[-1]["slots"]
+        stable = rows_a[-1]["loaded"] == rows_a[-2]["loaded"]
+        deterministic = rows_a == rows_b
+        ok = cap_ok and churned and stable and deterministic
+        print(f"  layers-vt-pages-churn {'PASS' if ok else 'FAIL'}  resident <= slots at "
+              f"every print: {cap_ok}; teleport evicted {rows_a[-1]['evicted']} and drove "
+              f"loads to {rows_a[-1]['loaded']} against {rows_a[-1]['slots']} slots (want "
+              f"churn); tail stable: {stable} (loads still growing = thrash); two runs "
+              f"identical: {deterministic}")
+        if not ok:
+            failures.append("layers-vt-pages-churn")
+
+    # --- layers-vt-pages-walk ------------------------------------------------
+    # The integration read, on forest: the derived grid must be the design's own
+    # bound (34, from ceil(4 * 2048 / usable) -- a number the gate states, never
+    # reads back), residency must follow a real walk under the capacity clamp,
+    # and the walk must churn pages the way it churns regions.
+    forest_bin = os.path.join(BIN_DIR, "forest")
+    if not os.path.exists(forest_bin):
+        print("  layers-vt-pages-walk SKIP  (forest not built)")
+    else:
+        r = subprocess.run([forest_bin, "-x", "-f", "400", "-W", "320", "-H", "200",
+                            "--no-fog", "--seed", "1337", "--region-span", "40",
+                            "--region-radius", "60", "--walk", "40", "--layers-vt-probe",
+                            "50"],
+                           capture_output=True, text=True, cwd=ROOT)
+        rows = []
+        for mm in re.finditer(r"layers-vt-probe frame=(\d+) grid=(\d+) slots=(\d+) "
+                              r"resident=(\d+) wanted=(\d+) loaded=(\d+) evicted=(\d+) "
+                              r"digest=([0-9a-f]{8})", r.stdout + r.stderr):
+            rows.append({"grid": int(mm.group(2)), "slots": int(mm.group(3)),
+                         "resident": int(mm.group(4)), "loaded": int(mm.group(6)),
+                         "evicted": int(mm.group(7))})
+        if len(rows) < 4:
+            print("  layers-vt-pages-walk FAIL  the probe printed too few rows")
+            failures.append("layers-vt-pages-walk")
+        else:
+            grid_ok = all(r2["grid"] == 34 for r2 in rows)
+            cap_ok = all(r2["resident"] <= r2["slots"] for r2 in rows)
+            churned = rows[-1]["evicted"] > 0 and rows[-1]["loaded"] > rows[-1]["slots"]
+            ok = grid_ok and cap_ok and churned
+            print(f"  layers-vt-pages-walk {'PASS' if ok else 'FAIL'}  grid 34 at every "
+                  f"print: {grid_ok} (the relative-density bound); resident <= slots: "
+                  f"{cap_ok}; the walk loaded {rows[-1]['loaded']} and evicted "
+                  f"{rows[-1]['evicted']} against {rows[-1]['slots']} slots (want real "
+                  f"churn, as the walk churns regions)")
+            if not ok:
+                failures.append("layers-vt-pages-walk")
 
     failures += _layers_scatter_arm()
     return failures
