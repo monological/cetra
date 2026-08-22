@@ -90,11 +90,19 @@ ROAD_WIDTH = 0.4
 ROAD_FEATHER = 0.4
 ROAD_LAYER = 2
 
-# The feather the PAGES arm authors instead, and the whole reason that arm can
-# see anything: at the derived 256 the fallback texel is DOMAIN/256 = 0.015625
-# world units, and a shoulder narrower than that is content the fallback cannot
-# resolve while its pages, at four times the density, can.
-ROAD_PAGES_FEATHER = 0.008
+# The pages arm's own fallback resolution and shoulder, and why it forces the
+# fallback coarse rather than reading the derived one.
+#
+# Pages hold the same macro at four times the fallback's density, so what they
+# can resolve and it cannot is a band FOUR TIMES narrower than a fallback texel
+# -- and at the derived 256 that band (under 0.0156 world units) is finer than
+# this fixture's camera resolves at all, so every leg would agree and a working
+# feature would read as absent. Forcing the fallback to 64 moves the same
+# comparison into world units the frame can show: its texel is 0.0625 and its
+# pages' 0.0156, and a shoulder between the two is content exactly one of them
+# holds. Same argument, and same arrangement, as layers-vt-pages-effect.
+VT_ROAD_COARSE_RES = 64
+ROAD_PAGES_FEATHER = 0.02
 
 
 def _splat():
@@ -174,14 +182,22 @@ def _assert_fixture_still_tests_something():
         "the road's shoulder crosses onto the ramp, where the two paths "
         "legitimately differ and a byte-exact read is not available")
 
-    # The pages arm's whole claim: its feather is finer than a fallback texel
-    # and coarser than a page texel, so it is content only the pages resolve.
-    fallback_texel = DOMAIN / VT_DERIVED_RES_MIN
-    page_texel = fallback_texel / 4.0  # VT_PAGE_DENSITY_RATIO
-    assert page_texel < ROAD_PAGES_FEATHER < fallback_texel, (
+    # The pages arm's whole claim: at its forced-coarse fallback the shoulder is
+    # finer than a fallback texel and coarser than a page texel, so it is
+    # content exactly one of the two can hold.
+    coarse_fallback_texel = DOMAIN / VT_ROAD_COARSE_RES
+    coarse_page_texel = coarse_fallback_texel / 4.0 # VT_PAGE_DENSITY_RATIO
+    assert coarse_page_texel < ROAD_PAGES_FEATHER < coarse_fallback_texel, (
         f"the pages arm's feather ({ROAD_PAGES_FEATHER}) must sit between a "
-        f"page texel ({page_texel}) and a fallback texel ({fallback_texel}), or "
-        "it is either invisible to both or resolved by both")
+        f"page texel ({coarse_page_texel}) and a fallback texel "
+        f"({coarse_fallback_texel}) at its forced resolution, or it is either "
+        "invisible to both or resolved by both")
+    # And the road must be several coarse texels WIDE, or its two shoulders land
+    # in one texel and the fallback loses the road itself rather than its edge.
+    assert ROAD_WIDTH >= 4.0 * coarse_fallback_texel, (
+        f"the road ({ROAD_WIDTH}) is under four coarse texels "
+        f"({coarse_fallback_texel}); the arm would be reading a road the "
+        "fallback cannot represent at all, not an edge it cannot resolve")
 
     splat = _splat()
     quarter = TEX // 4

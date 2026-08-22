@@ -12124,14 +12124,12 @@ def _layer_vt_gen():
     return _LAYER_VT_GEN
 
 
-# The floor the road-pages arm holds pages to (spec 11.68). Stated gate-side
-# rather than read back, and it is the first NON-ZERO page effect in the suite:
-# every earlier page arm measures a 0 px identity, because until roads there was
-# no content finer than the splat the fallback already over-resolves. Measured
-# 22,398 px, identical across two runs of one build; the floor is a third of it,
-# low enough to survive a driver reshuffling the shoulder's antialiasing and
-# high enough that a build whose pages carry no road cannot reach it.
-ROAD_PAGES_MOVE_MIN = 7000
+# How far off the truth the coarse fallback alone must read on the road's edge
+# (spec 11.68) -- the anti-vacuity for the clause above it, since "pages match
+# the truth" is also satisfied where the fallback matches it too and pages are
+# doing nothing. Measured 18 codes of smear; the bar is 10, and a build whose
+# roads never reach the atlas reads 0 here because every leg is bare ground.
+ROAD_PAGES_SMEAR_MIN = 10
 
 # One statement of the probe line's shape, shared by every consumer: the
 # fixture runner and the forest walk arm read the same print, and two regexes
@@ -12958,44 +12956,44 @@ def run_layers_gate(workdir):
                 failures.append("layers-road-edge")
 
     # --- layers-road-pages ---------------------------------------------------
-    # The first page content in the suite that is not a 0 px identity, and the
-    # arm authors its OWN FRAMING because the fixture's cannot see what it
-    # measures (the water-glitter idiom). Pages are the MAGNIFIED near field by
-    # construction -- the handoff hands them weight only where a fallback texel
-    # covers more than a pixel -- and at the fixture's own camera the derived
-    # 256 atlas already out-resolves the screen, so every leg here would agree
-    # and the arm would read a feature that was working as designed as absent.
+    # The first page content in the suite that is not a 0 px identity, read as
+    # BYTES on the road rather than as a frame difference. A whole-frame count
+    # cannot say this: the legs differ by a code or two across every flat
+    # surface in view (a macro resampled twice), which swamps a road edge in
+    # tens of thousands of pixels that have nothing to do with roads.
     #
-    # Close up, with a shoulder finer than a fallback texel (the generator
-    # asserts that), the fallback has to quantize what the pages resolve.
-    fallback_texel = g2.DOMAIN / g2.VT_DERIVED_RES_MIN
-    ROAD_CLOSE = ["--cam-eye", "0,0.30,2.05", "--cam-target", f"0,0,{g2.ROAD_Z}"]
+    # Forced coarse for the reason the generator states: what pages resolve and
+    # the fallback cannot is a band four times narrower than a fallback texel,
+    # and at the derived 256 that is finer than this fixture's camera resolves
+    # at all -- so the comparison is moved to a resolution the frame can show,
+    # exactly as layers-vt-pages-effect does.
+    coarse_texel = g2.DOMAIN / g2.VT_ROAD_COARSE_RES
+    COARSE = ["--layers-vt-res", str(g2.VT_ROAD_COARSE_RES)]
     fine = _vt_road(feather=g2.ROAD_PAGES_FEATHER)
-    fine_pages = vt_shot("road_fine_pages", ROAD_CLOSE, overrides=fine)
-    fine_nopages = vt_shot("road_fine_nopages", ROAD_CLOSE + ["--no-layers-vt-pages"],
+    fine_pages = vt_shot("road_fine_pages", COARSE, overrides=fine)
+    fine_nopages = vt_shot("road_fine_nopages", COARSE + ["--no-layers-vt-pages"],
                            overrides=fine)
-    fine_truth = vt_shot("road_fine_truth", ROAD_CLOSE + ["--no-layers-vt"], overrides=fine)
-    fine_probe = vt_probe_run(ROAD_CLOSE, 16, overrides=fine)
+    fine_truth = vt_shot("road_fine_truth", ["--no-layers-vt"], overrides=fine)
+    fine_probe = vt_probe_run(COARSE, 16, overrides=fine)
     if not (fine_pages and fine_nopages and fine_truth and fine_probe):
         print("  layers-road-pages ERROR while rendering the fine-shoulder legs")
         failures.append("layers-road-pages")
     else:
-        ae_move, _ = compare(fine_pages[1], fine_nopages[1])
-        ae_pages_truth, _ = compare(fine_pages[1], fine_truth[1])
-        ae_fallback_truth, _ = compare(fine_nopages[1], fine_truth[1])
-        # The RATIO, not the difference: it is what separates a shoulder the
-        # fallback cannot hold (measured 0.594) from one it can (a coarse
-        # feather measures 0.823 at this same framing).
-        near = ae_pages_truth / ae_fallback_truth if ae_fallback_truth else 9.9
+        # Just INSIDE the road's edge, by less than a coarse texel: the fallback
+        # has to average across the edge here, where pages hold it.
+        z_in = g2.ROAD_Z + ROAD_HALF - 0.02
+        p = _layer_sample(fine_pages[0], _vt_point(0.125, _road_v(z_in)))
+        n = _layer_sample(fine_nopages[0], _vt_point(0.125, _road_v(z_in)))
+        t = _layer_sample(fine_truth[0], _vt_point(0.125, _road_v(z_in)))
         resident = fine_probe[-1]["resident"]
-        ok = ae_move >= ROAD_PAGES_MOVE_MIN and near <= 0.70 and resident > 0
-        print(f"  layers-road-pages {'PASS' if ok else 'FAIL'}  close up on a shoulder of "
-              f"{g2.ROAD_PAGES_FEATHER} against a {fallback_texel:.6f} fallback texel: "
-              f"pages on vs off {ae_move} px (want >= {ROAD_PAGES_MOVE_MIN}; 0 = the "
-              f"pages carry nothing the fallback did not), and pages sit "
-              f"{ae_pages_truth} px from the per-texel truth against the fallback's "
-              f"{ae_fallback_truth} -- {near:.3f} of it (want <= 0.70; a shoulder the "
-              f"fallback CAN resolve reads 0.823), with {resident} pages resident")
+        ok = (p is not None and n is not None and t is not None
+              and abs(p - t) <= 1 and abs(n - t) >= ROAD_PAGES_SMEAR_MIN and resident > 0)
+        print(f"  layers-road-pages {'PASS' if ok else 'FAIL'}  {0.02} inside the road's "
+              f"edge, against a {coarse_texel:.4f} fallback texel and its "
+              f"{coarse_texel / 4.0:.4f} pages: the per-texel truth reads {t}, pages read "
+              f"{p} (want within 1 -- they hold the edge) and the fallback alone reads "
+              f"{n} (want at least {ROAD_PAGES_SMEAR_MIN} off the truth: it averaged "
+              f"across an edge it cannot represent), with {resident} pages resident")
         if not ok:
             failures.append("layers-road-pages")
 
