@@ -1171,7 +1171,7 @@ A1's grid says which probes reach a cell, each probe's proxy box gives a weight,
 is left over falls to the global environment through the same expression the no-probe path uses.
 Storage is an octahedral atlas of roughness ROWS (mips would filter across the tile gutters) riding
 `giAtlasTex` on unit 14, so N probes cost zero new sampler declarations; a new `ProbeBlock` on
-binding 9 carries the descriptors AND the masks in 3616 bytes.
+binding 9 carries the descriptors AND the masks in 3760 bytes.
 
 **Per-DRAW selection was the alternative and is refused on measurable grounds**, which is why the
 fixture is two rooms over ONE floor mesh: that mesh is a single draw, so a per-draw design lights
