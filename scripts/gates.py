@@ -8120,11 +8120,13 @@ def run_terrain_stream_gate(workdir):
         armed = streamed["sheader"] is not None
         loaded = streamed["probe"][-1]["loaded"] if streamed["probe"] else 0
         levels = int(streamed["sheader"].group(3)) if armed else 0
-        ok = same and armed and loaded > 0 and levels == STREAM_LEVELS
+        tile = int(streamed["sheader"].group(4)) if armed else 0
+        ok = same and armed and loaded > 0 and levels == STREAM_LEVELS and tile == STREAM_TILE
         print(f"  terrain-stream-identity {'PASS' if ok else 'FAIL'}  "
               f"{len(streamed['samples'])} samples, {len(streamed['mids'])} midpoints and "
               f"{len(streamed['clamps'])} clamp pairs identical to the resident field: {same}; "
-              f"the file opened with {levels} levels (want {STREAM_LEVELS}) and read "
+              f"the file opened with {levels} levels at tile {tile} (want {STREAM_LEVELS} and "
+              f"{STREAM_TILE}, both stated here rather than read back) and read "
               f"{loaded} tiles (want > 0, or the identity is a stream that never armed)")
         if not ok:
             failures.append("terrain-stream-identity")
@@ -8168,13 +8170,23 @@ def run_terrain_stream_gate(workdir):
         # More tiles read than level 0 HAS is the refill proof: 25 cover it, so
         # a 26th read is one that had to come back after being dropped.
         read = small["probe"][-1]["loaded"] if small["probe"] else 0
-        ok = worst <= bar and deterministic and read > STREAM_L0_TILES * STREAM_L0_TILES
+        # The residency this arm claims to be measuring, asserted rather than
+        # assumed: a forced-small run must produce a MIXED pyramid. All-whole is
+        # the identity configuration, where every number above is true and none
+        # of it is about streaming.
+        mixed = (any(r[5] == 1 for r in small["slevels"])
+                 and any(r[5] == 0 for r in small["slevels"]))
+        ok = (worst <= bar and deterministic and mixed
+              and read > STREAM_L0_TILES * STREAM_L0_TILES)
         print(f"  terrain-stream-correct {'PASS' if ok else 'FAIL'}  "
               f"{len(small['samples'])} samples under a 1-tile budget, worst "
               f"{worst / step:.2f} codes at {worst_at} (want <= {bar / step:.0f}: a tile index "
               f"off by one moves hundreds); two runs identical: {deterministic}; "
-              f"{read} tiles read against {STREAM_L0_TILES * STREAM_L0_TILES} in level 0 "
-              f"(want more, or nothing was ever re-read)")
+              f"{sum(1 for r in small['slevels'] if r[5] == 0)} of "
+              f"{len(small['slevels'])} levels streaming (want a mix, or this is the identity "
+              f"config wearing the arm's name); {read} tiles read against "
+              f"{STREAM_L0_TILES * STREAM_L0_TILES} in level 0 (want more, or nothing was "
+              f"ever re-read)")
         if not ok:
             failures.append("terrain-stream-correct")
 
