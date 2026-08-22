@@ -18,10 +18,16 @@
 // mips because generating mips would filter across the tile gutters that make
 // an octahedral tile bilinear-safe at all.
 
-// Row 0's interior edge. The near-mirror case decides it, as it decided
-// PROBE_PREFILTER_SIZE: an octahedral tile carries roughly (2/sqrt(6)) of a
-// cube face's angular density per edge texel, so this is softer than the cube
-// it resamples and --probe-set-res is the dial when that shows.
+// Row 0's interior edge, and it must be a POWER OF TWO -- create_probe_atlas
+// rounds down to one and says so. The row sizes are computed on both sides of
+// the seam, as an integer shift here and as a divide by exp2 in the shader
+// (which has no integer row0 to shift), and those agree for a power of two and
+// nowhere else.
+//
+// The near-mirror case decides the default, as it decided PROBE_PREFILTER_SIZE:
+// an octahedral tile carries roughly (2/sqrt(6)) of a cube face's angular
+// density per edge texel, so this is softer than the cube it resamples and
+// --probe-set-res is the dial when that shows.
 #define PROBE_ATLAS_ROW0_DEFAULT 512
 #define PROBE_ATLAS_ROW0_MIN     64
 #define PROBE_ATLAS_ROW0_MAX     2048

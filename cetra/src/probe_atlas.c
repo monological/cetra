@@ -54,6 +54,19 @@ ProbeAtlas* create_probe_atlas(struct Engine* engine, struct Scene* scene, int c
         row0 = PROBE_ATLAS_ROW0_MIN;
     if (row0 > PROBE_ATLAS_ROW0_MAX)
         row0 = PROBE_ATLAS_ROW0_MAX;
+    // Down to a power of two, and this is a correctness requirement rather than
+    // neatness. The row sizes are computed twice -- here as an integer shift and
+    // in the shader as a divide by exp2 -- because the shader has no integer
+    // row0 to shift. Those two agree for every power of two and disagree the
+    // moment row0 is anything else (513 >> 1 is 256, 513/2 is 256.5), and the
+    // disagreement is a half-texel drift in every row origin below the first:
+    // the atlas would be written at one set of offsets and read at another.
+    int pot = PROBE_ATLAS_ROW0_MIN;
+    while (pot * 2 <= row0)
+        pot *= 2;
+    if (pot != row0)
+        log_warn("Probe atlas row size %d is not a power of two; using %d", row0, pot);
+    row0 = pot;
 
     ProbeAtlas* atlas = calloc(1, sizeof(ProbeAtlas));
     if (!atlas) {
