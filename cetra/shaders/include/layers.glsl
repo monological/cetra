@@ -7,6 +7,8 @@
 #include "world_origin.glsl"
 // The composite cache's page table (spec 11.67) -- a UBO, not a sampler.
 #include "vt_pages.glsl"
+// Road segments (spec 11.68) -- a UBO for the same reason.
+#include "roads_ubo.glsl"
 
 /*
  * Layered surfaces, spec 11.60.
@@ -55,6 +57,9 @@ uniform int splatSpace;            // 0 = UV1, 1 = world XZ (MaterialSplatSpace)
 uniform vec4 splatDomain;          // world XZ origin.xy, size.zw
 uniform float layerBlendSharpness; // 0 = a plain weighted average
 uniform float layerTriplanarSharpness;
+// Whether this material is the scene's road bearer (spec 11.68). Uploaded for
+// every layered material, so it is also what clears the override on the others.
+uniform int roadsActive;
 // Bake-only (spec 11.66): every layer tap reads its own top mip -- its mean --
 // so the composite the cache stores carries no tile grain at ANY atlas
 // resolution. Without this the runtime detail ratio would re-apply grain the
@@ -137,6 +142,61 @@ vec4 layerWeights(sampler2DArray arr, vec2 splatUV, int n) {
     return sum > 1.0 ? w * (1.0 / sum) : w;
 }
 
+/*
+ * Roads (spec 11.68): a procedural override of the splat weights, applied
+ * BEFORE the height blend.
+ *
+ * Before, not after, and that is the whole design. A road blended in afterwards
+ * is a stripe painted over the ground; reshaped here it is MADE of one of the
+ * material's own layers, so the shoulder height-interlocks with what it runs
+ * over exactly as a painted layer boundary does, the dominant index follows it,
+ * and the composite bake inherits roads because it calls this same function
+ * unchanged. Gravel that interlocks with the grass it displaces is the whole
+ * argument for the height blend, and a road is the case that wants it most.
+ *
+ * Positions are AUTHORED: a road is an identity, not a location, and it may not
+ * slide when the engine re-centres.
+ *
+ * The loops are constant-bounded with early breaks, which is the file's rule
+ * above satisfied rather than dodged -- they index UBO arrays, never the local
+ * arrays that rule is about (iesProfile walks a uniform block the same way).
+ * The lane write is a constant-lane compare rather than w[L], because THAT
+ * would be the dynamic local index the rule forbids.
+ *
+ * The CPU twin of the segment distance is roads_polyline_distance_xz (roads.c);
+ * the two cannot share a token, and the road gate arms are what tie them.
+ */
+vec4 roadReshapedWeights(vec4 w, vec2 apos, int n) {
+    if (roadsActive <= 0 || roadsInfo.x <= 0)
+        return w;
+    for (int r = 0; r < ROADS_MAX; r++) {
+        if (r >= roadsInfo.x)
+            break;
+        vec4 d0 = roadDesc[r * 2];
+        int first = int(d0.x);
+        int segs = int(d0.y);
+        float dist = 1.0e9;
+        for (int s = 0; s < ROAD_SEGS_PER_ROAD; s++) {
+            if (s >= segs)
+                break;
+            vec4 seg = roadSegs[first + s];
+            vec2 ab = seg.zw - seg.xy;
+            float t = clamp(dot(apos - seg.xy, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
+            dist = min(dist, length(apos - (seg.xy + ab * t)));
+        }
+        // Feather 0 is a hard edge, which smoothstep gives for free: the two
+        // edges coincide and it steps.
+        float m = 1.0 - smoothstep(d0.z, d0.z + d0.w, dist);
+        if (m <= 0.0)
+            continue;
+        int lane = clamp(int(roadDesc[r * 2 + 1].x), 0, n - 1);
+        // Convexity survives: a mix of two vectors that each sum to one sums to
+        // one, which is what the whole blend below rests on.
+        w = w * (1.0 - m) + vec4(equal(ivec4(0, 1, 2, 3), ivec4(lane))) * m;
+    }
+    return w;
+}
+
 LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldNormal,
                                   vec2 uv1) {
     LayerSurface s = layerSurfaceNeutral(worldNormal);
@@ -144,14 +204,16 @@ LayerSurface sampleLayeredSurface(sampler2DArray arr, vec3 worldPos, vec3 worldN
     if (n <= 0)
         return s;
 
-    vec4 w = layerWeights(arr, layerSplatUV(worldPos, uv1), n);
-    vec3 tw = triplanarWeights(worldNormal, layerTriplanarSharpness);
     // The tiling lattice is locked to the world, so it reads the AUTHORED
     // position: a ground whose gravel slides a third of a tile because the
     // engine re-centred is a ground that is not locked to anything. Taken once
     // here rather than per layer -- the derivatives below are of the same value
-    // and a constant offset does not change them.
+    // and a constant offset does not change them, and the roads read it too.
     vec3 tilePos = authoredPos(worldPos);
+
+    vec4 w = layerWeights(arr, layerSplatUV(worldPos, uv1), n);
+    w = roadReshapedWeights(w, tilePos.xz, n);
+    vec3 tw = triplanarWeights(worldNormal, layerTriplanarSharpness);
     vec3 sgn = triplanarAxisSign(worldNormal);
 
     // The two world-position derivatives every tap's gradients are built from,
