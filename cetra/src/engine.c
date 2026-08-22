@@ -166,6 +166,10 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->msaa_samples = 4; // 4x MSAA by default (runtime-toggleable)
     engine->layers_vt_enabled = true; // composite cache on; --no-layers-vt is the bisect lever
     engine->layers_vt_res = 0;        // derived from the splat domain unless overridden
+    engine->layers_vt_pages_enabled = true; // pages on; --no-layers-vt-pages is stage 1 exactly
+    engine->layers_vt_page_slots = 0;       // 0 = the full physical atlas
+    engine->layers_vt_page_budget = 0;      // 0 = the default bakes-per-frame
+    engine->layers_vt_probe_interval = 0;   // diagnostic; off unless a probe asks
 
     engine->error_callback = NULL;
     engine->mouse_button_callback = NULL;
@@ -370,6 +374,7 @@ void free_engine(Engine* engine) {
     free_light_cluster_context(engine->light_cluster);
     free_ubo(engine->view_ubo);
     free_ubo(engine->instance_ubo);
+    free_ubo(engine->vt_pages_ubo);
 
     glDeleteFramebuffers(1, &engine->framebuffer);
     _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
@@ -860,6 +865,9 @@ int init_engine(Engine* engine) {
     engine->light_cluster = create_light_cluster_context();
     engine->view_ubo = create_ubo(UBO_VIEW_BLOCK_SIZE, UBO_BINDING_VIEW);
     engine->instance_ubo = create_ubo(UBO_INSTANCES_BLOCK_SIZE, UBO_BINDING_INSTANCES);
+    // Zero-filled at create, so a shader reading the page table before the
+    // first residency upload sees a 0x0 grid rather than garbage.
+    engine->vt_pages_ubo = create_ubo(UBO_VT_PAGES_BLOCK_SIZE, UBO_BINDING_VT_PAGES);
     if (!engine->light_cluster) {
         log_error("Failed to create light cluster context");
         return -1;

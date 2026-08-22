@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <GL/glew.h>
 
+#include "layers_vt_pages.h"
 #include "material.h"
 
 struct Scene;
@@ -45,6 +46,24 @@ typedef struct MaterialLayersVtKey {
 typedef struct MaterialLayersVt {
     GLuint albedo_tex;  // rgb = blended albedo in STORED codes, a = dominant/3
     GLuint surface_tex; // rg = tangent normal xy, b = roughness, a = AO
+
+    /*
+     * The paged near-field atlas (spec 11.67): fixed 256-texel tiles of the
+     * same two-target packing at VT_PAGE_DENSITY_RATIO x the fallback's
+     * density, guttered, mips capped at VT_PAGE_MIP_CAP so page mip 2 meets
+     * fallback mip 0 and the handoff band blends near-identical signals.
+     * Residency is a page table (virtual index -> atlas slot), uploaded to the
+     * engine's VtPageBlock UBO when it changes.
+     */
+    GLuint page_albedo_tex, page_surface_tex; // VT_ATLAS_TEXELS^2 pair; 0 = pages off
+    int page_grid;                            // virtual pages per axis for the current bake config
+    float page_span;                          // world units one page's USABLE texels cover
+    float page_texel;                         // world units per page texel (fallback texel / ratio)
+    int16_t page_table[VT_PAGE_TABLE_MAX];    // virtual index -> atlas slot, -1 = absent
+    int16_t slot_page[VT_PAGE_SLOTS];         // atlas slot -> virtual index, -1 = free
+    bool pages_dirty;                         // table changed since the last UBO upload
+    unsigned long long pages_loaded;          // lifetime page bakes, for the probe
+    unsigned long long pages_evicted;         // lifetime evictions, for the probe
 
     // Per-layer means of the SAME resampled data the taps read -- the material
     // texture array's top mip -- which is what makes the runtime detail ratio

@@ -81,6 +81,10 @@ bool ubo_wire_blocks(GLuint program_id) {
     // and stripped as unreferenced where nothing calls iesProfile, which this
     // already treats as a no-op.
     ubo_wire_program_block(program_id, "IesBlock", UBO_BINDING_IES, UBO_IES_BLOCK_SIZE);
+    // The composite cache's page table (spec 11.67). Declared by anything
+    // including vt_pages.glsl; stripped where nothing pages.
+    ubo_wire_program_block(program_id, "VtPageBlock", UBO_BINDING_VT_PAGES,
+                           UBO_VT_PAGES_BLOCK_SIZE);
     return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
                                   UBO_INSTANCES_BLOCK_SIZE);
 }

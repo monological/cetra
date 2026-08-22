@@ -59,6 +59,10 @@ typedef struct Engine {
     GLint max_texture_size;         // GL_MAX_TEXTURE_SIZE (composite-cache bound)
     bool layers_vt_enabled;         // false = every layered material takes the per-texel blend
     int layers_vt_res;              // composite-cache resolution override; 0 = derived
+    bool layers_vt_pages_enabled;   // false = the fallback atlas alone (stage 1 exactly)
+    int layers_vt_page_slots;       // physical page slots in use; 0 = all of them
+    int layers_vt_page_budget;      // page bakes per frame; 0 = the default
+    int layers_vt_probe_interval;   // print page residency every N frames; 0 = off
     int ss_scale;                   // Supersampling factor: scene + post render at ss_scale x
                                     // display resolution, box-downsampled at tone map.
                                     // 1 = off, 2 = 2x SSAA. Changing it at runtime rebuilds
@@ -163,6 +167,10 @@ typedef struct Engine {
     // the same reason as view_ubo: the scene passes and the depth pass both
     // fill it, and it must outlive either.
     struct Ubo* instance_ubo;
+    // The composite cache's page table (spec 11.67). Engine-owned and single --
+    // v1 pages one material per scene, which is what lets the buffer sit on its
+    // binding for the context's lifetime per ubo.h's contract.
+    struct Ubo* vt_pages_ubo;
     bool instancing_enabled; // false = every run submits one draw per mesh
     bool lod_enabled;        // false = every draw takes LOD level 0
     float lod_bias;          // > 1 holds detail longer, < 1 drops it sooner

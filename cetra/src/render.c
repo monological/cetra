@@ -255,6 +255,16 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_NORMAL);
         glBindTexture(GL_TEXTURE_2D, vt->surface_tex);
         uniform_set_int(u, "layersVtActive", 1);
+        // The page pair (spec 11.67) on units 3/4, which the refusal below
+        // keeps free of the material's own maps. A cache with no pages yet
+        // binds nothing here; the shader's page path is gated on the table's
+        // own pagesPerAxis, which the zero-filled UBO reads as 0.
+        if (vt->page_albedo_tex) {
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_CLEARCOAT_NORMAL);
+            glBindTexture(GL_TEXTURE_2D, vt->page_albedo_tex);
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_HEIGHT);
+            glBindTexture(GL_TEXTURE_2D, vt->page_surface_tex);
+        }
         // Indexed element names so the means ride the CACHED setter: the whole
         // block re-fires per material switch, and the sort interleaves the
         // terrain material with props, so an uncached array upload here would

@@ -235,6 +235,13 @@ uniform float uShoreWetness;
  */
 #define vtAlbedoTex albedoTex   // unit 0, unread when layerCount > 0
 #define vtSurfaceTex normalTex  // unit 1, unread when layerCount > 0
+// The page pair (spec 11.67) rides units 3/4 by the same argument, made true
+// by REFUSAL rather than proof: a layered material refuses its clearcoat-normal
+// and height maps -- enforced where the binds and the Exists gates derive -- so
+// both declarations are unread when layerCount > 0. The height half is a bug
+// fix in its own right (the POM march had no layered test and could discard).
+#define vtPageAlbedoTex clearcoatNormalTex // unit 3, refused on layered materials
+#define vtPageSurfaceTex heightTex         // unit 4, same refusal
 #include "layers.glsl"
 
 // Open porosity of sand that the swash fills, from Lagarde's 25-50% band for natural
@@ -1014,7 +1021,8 @@ void main() {
     // inside either arm stays well-defined.
     LayerSurface layerSurf;
     if (layersVtActive > 0)
-        layerSurf = sampleCachedSurface(vtAlbedoTex, vtSurfaceTex, materialArray, WorldPos,
+        layerSurf = sampleCachedSurface(vtAlbedoTex, vtSurfaceTex, vtPageAlbedoTex,
+                                        vtPageSurfaceTex, materialArray, WorldPos,
                                         normalize(Normal));
     else
         layerSurf = sampleLayeredSurface(materialArray, WorldPos, normalize(Normal), splatUV1);

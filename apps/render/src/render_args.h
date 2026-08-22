@@ -183,6 +183,9 @@ typedef struct {
     int oit_moments;            // Absorbance-moment weight in the accumulate; same tri-state
     int no_layers_vt;           // Per-texel blend on every layered material (cache off)
     int layers_vt_res;          // Composite-cache resolution override; 0 = derived
+    int no_layers_vt_pages;     // Fallback atlas alone -- stage 1 exactly
+    int layers_vt_page_slots;   // Physical page slots in use; 0 = all
+    int layers_vt_probe;        // Print page residency every N frames; 0 = off
     int show_lights;            // Draw light gizmos (position + cull radius)
     int cluster_heatmap;        // Tint by cluster light count
     int area_light;             // --area-light given: spawn one LTC panel
@@ -226,6 +229,11 @@ typedef struct {
     // mid-run TRANSITION (the --shadows-off-at reasoning exactly).
     int layer_blend_at_frame;
     float layer_blend_at_value;
+    // Diagnostic (--cam-at): teleport the camera on this frame, -1 for never.
+    // The worst case for page residency -- every page misses at once -- which
+    // no walk can produce, since walking crosses one boundary at a time.
+    int cam_at_frame;
+    float cam_at[6]; // eye xyz, target xyz
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;

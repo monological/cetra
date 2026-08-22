@@ -5,6 +5,8 @@
 // authoredPos: the tiling lattice and the splat rectangle are both locked to the
 // WORLD, so both read a position as an identity rather than as a location.
 #include "world_origin.glsl"
+// The composite cache's page table (spec 11.67) -- a UBO, not a sampler.
+#include "vt_pages.glsl"
 
 /*
  * Layered surfaces, spec 11.60.
@@ -277,8 +279,9 @@ uniform vec3 layerMeanAlbedo[LAYERS_MAX]; // per-layer top-mip means, STORED cod
 uniform vec4 layerMeanRough;              // component i = layer i's mean roughness
 uniform vec4 layerMeanAo;
 
-LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sampler2DArray arr,
-                                 vec3 worldPos, vec3 worldNormal) {
+LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface,
+                                 sampler2D vtPageAlbedo, sampler2D vtPageSurface,
+                                 sampler2DArray arr, vec3 worldPos, vec3 worldNormal) {
     LayerSurface s = layerSurfaceNeutral(worldNormal);
     int n = min(layerCount, LAYERS_MAX);
     if (n <= 0)
@@ -289,11 +292,54 @@ LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sample
     // CLAMP_TO_EDGE on the cache makes the half-texel inset the splat read
     // itself needs unnecessary here.
     vec2 uv = layerSplatUV(worldPos, vec2(0.0));
+    // Hoisted here, in fully uniform flow, because three consumers need them:
+    // the page footprint and gradients below, and the detail taps at the end.
+    vec3 dpx = dFdx(worldPos);
+    vec3 dpy = dFdy(worldPos);
     // Implicit LOD on purpose, against this file's own rule: the caller's gate
     // is a uniform, so this is uniform control flow, and implicit gradients are
     // what keep the cache's anisotropic filtering intact.
     vec4 macroA = texture(vtAlbedo, uv);
     vec4 macroS = texture(vtSurface, uv);
+
+    /*
+     * The paged near field (spec 11.67). A resident page holds the SAME macro
+     * at VT_PAGE_DENSITY_RATIO x the density, so it takes over exactly where
+     * the fallback is magnified -- a footprint under 4 page texels -- and hands
+     * back over smoothstep(2, 4), where page mip 2 and fallback mip 0 are the
+     * same signal at the same effective density: the band is invisible by
+     * construction, not by tuning. textureGrad, never implicit LOD: atlas UV
+     * is discontinuous at page borders, and the gutter inset keeps bilinear and
+     * the capped trilinear inside the tile. The dominant-layer index below
+     * stays FALLBACK-owned -- a page/fallback index disagreement inside the
+     * band would flicker the detail term through the blend.
+     */
+    if (vtPageInfo.x > 0) {
+        vec2 pf = uv * splatDomain.zw / vtPageParams.y;
+        ivec2 pi = ivec2(floor(pf));
+        if (pi.x >= 0 && pi.y >= 0 && pi.x < vtPageInfo.x && pi.y < vtPageInfo.x) {
+            int slot = vtPageEntry(pi.y * vtPageInfo.x + pi.x);
+            if (slot >= 0) {
+                float usable = float(vtPageInfo.z - 2 * vtPageInfo.w);
+                float pageTexel = vtPageParams.y / usable;
+                vec2 fp = vec2(length(dpx.xz), length(dpy.xz)) / pageTexel;
+                float pageW = 1.0 - smoothstep(2.0, 4.0, max(fp.x, fp.y));
+                if (pageW > 0.0) {
+                    vec2 slotOrigin =
+                        vec2(ivec2(slot % vtPageInfo.y, slot / vtPageInfo.y) * vtPageInfo.z);
+                    vec2 texel = slotOrigin + float(vtPageInfo.w) + fract(pf) * usable;
+                    vec2 auv = texel / vtPageParams.x;
+                    vec2 gx = dpx.xz / (pageTexel * vtPageParams.x);
+                    vec2 gy = dpy.xz / (pageTexel * vtPageParams.x);
+                    vec4 pageA = textureGrad(vtPageAlbedo, auv, gx, gy);
+                    vec4 pageS = textureGrad(vtPageSurface, auv, gx, gy);
+                    // rgb only: macroA.a is the dominant index, fallback-owned.
+                    macroA.rgb = mix(macroA.rgb, pageA.rgb, pageW);
+                    macroS = mix(macroS, pageS, pageW);
+                }
+            }
+        }
+    }
 
     // The dominant layer index rides the alpha and is read UNFILTERED: bilinear
     // between two indices passes through every index between them, and a mip
@@ -314,10 +360,8 @@ LayerSurface sampleCachedSurface(sampler2D vtAlbedo, sampler2D vtSurface, sample
     float occ = macroS.a;
 
     // The detail term. k is fragment-varying, so from here on the file's
-    // textureGrad rule is load-bearing again; the gradients are hoisted here in
-    // flow that is still uniform.
-    vec3 dpx = dFdx(worldPos);
-    vec3 dpy = dFdy(worldPos);
+    // textureGrad rule is load-bearing again; the gradients were hoisted at
+    // the top, in flow that was still uniform.
     float s2 = 1.0 / max(layerUvScale[k], 1e-4);
     vec3 p = authoredPos(worldPos) * s2;
 

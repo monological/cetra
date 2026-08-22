@@ -243,6 +243,14 @@ static void print_usage(const char* prog) {
             "      --no-layers-vt     Per-texel layered blend instead of the composite cache\n");
     fprintf(stderr,
             "      --layers-vt-res N  Composite-cache resolution override (diagnostic)\n");
+    fprintf(stderr,
+            "      --no-layers-vt-pages     Fallback atlas alone (no paged near field)\n");
+    fprintf(stderr,
+            "      --layers-vt-page-slots N Physical page slots in use (diagnostic)\n");
+    fprintf(stderr,
+            "      --layers-vt-probe N      Print page residency every N frames\n");
+    fprintf(stderr,
+            "      --cam-at <frame:ex,ey,ez,tx,ty,tz>  Diagnostic: teleport the camera\n");
     fprintf(stderr, "      --no-oit-moments   Weighted-blended OIT: the depth curve, not the "
                     "measured moments\n");
     fprintf(stderr, "      --oit / --oit-moments  Restate the defaults (both are already on)\n");
@@ -388,6 +396,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->plg_intensity = 5.0f;
     args->shadows_off_at = -1;          // -1 = never; the transition is the diagnostic
     args->layer_blend_at_frame = -1;    // -1 = never; same idiom
+    args->cam_at_frame = -1;            // -1 = never; same idiom
     args->shadow_softness = -1.0f;      // -1 = keep the engine default
     args->msm_blur = -1.0f;             // -1 = keep the engine default
     args->msm_bleed = -1.0f;            // -1 = keep the engine default
@@ -1155,6 +1164,32 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->layers_vt_res = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--no-layers-vt-pages") == 0) {
+            args->no_layers_vt_pages = 1;
+        } else if (strcmp(argv[i], "--layers-vt-page-slots") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->layers_vt_page_slots = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--layers-vt-probe") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->layers_vt_probe = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--cam-at") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%d:%f,%f,%f,%f,%f,%f", &args->cam_at_frame, &args->cam_at[0],
+                       &args->cam_at[1], &args->cam_at[2], &args->cam_at[3], &args->cam_at[4],
+                       &args->cam_at[5]) != 7 ||
+                args->cam_at_frame < 0) {
+                fprintf(stderr, "Error: --cam-at wants frame:ex,ey,ez,tx,ty,tz\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--area-light") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1788,6 +1823,28 @@ static void render_frame_update(Engine* engine, float dt) {
                     scale_schedule->shadows_off_at);
         }
     }
+    // A camera TELEPORT (spec 11.67): the worst case for page residency, which
+    // no walk can produce -- every page misses at once and the frame after must
+    // read the fallback while the budget refills. Fires before the frame's
+    // camera-matrix update and before the residency ensure, and refreshes the
+    // view matrices itself so the moved pose is what residency sees.
+    if (scale_schedule->cam_at_frame == (int)engine->total_frames && engine->camera) {
+        vec3 eye = {scale_schedule->cam_at[0], scale_schedule->cam_at[1],
+                    scale_schedule->cam_at[2]};
+        vec3 target = {scale_schedule->cam_at[3], scale_schedule->cam_at[4],
+                       scale_schedule->cam_at[5]};
+        set_camera_position(engine->camera, eye);
+        set_camera_look_at(engine->camera, target);
+        // The --cam-eye bookkeeping, or the orbit controller recomputes the
+        // position from stale spherical coordinates on the next drag: distance
+        // and angles re-seeded from the new pose. Headless survives without
+        // this only by accident (auto-orbit is off), so it is done regardless.
+        vec3 delta;
+        glm_vec3_sub(eye, target, delta);
+        engine->camera->distance = glm_vec3_norm(delta);
+        update_engine_camera_lookat(engine);
+        fprintf(stderr, "frame %d: camera teleported\n", scale_schedule->cam_at_frame);
+    }
     // The composite cache's by-value invalidation is unreachable from a fresh
     // process -- the first bake always reads the final authored values -- so
     // this transition is the only headless way to make the key go stale.
@@ -2389,6 +2446,15 @@ int main(int argc, char** argv) {
     }
     if (args.layers_vt_res > 0) {
         engine->layers_vt_res = args.layers_vt_res;
+    }
+    if (args.no_layers_vt_pages) {
+        engine->layers_vt_pages_enabled = false;
+    }
+    if (args.layers_vt_page_slots > 0) {
+        engine->layers_vt_page_slots = args.layers_vt_page_slots;
+    }
+    if (args.layers_vt_probe > 0) {
+        engine->layers_vt_probe_interval = args.layers_vt_probe;
     }
     engine->show_lights = args.show_lights != 0;
     engine->cluster_debug = args.cluster_heatmap != 0;

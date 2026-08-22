@@ -29,6 +29,13 @@
 
 uniform sampler2DArray materialArray;
 
+// The world rect the current viewport covers: origin.xy, size.zw. The full
+// fallback bake uploads splatDomain here; a PAGE bake uploads its own tile's
+// rect (gutter included), and the viewport confines the draw -- so
+// dFdx(worldPos) is one texel of whichever target is being written, which is
+// what keeps the splat tap footprint-filtered in both cases.
+uniform vec4 vtBakeRect;
+
 in vec2 TexCoords;
 
 // rgb = blended albedo in STORED codes, a = dominant layer index over 3 --
@@ -38,8 +45,8 @@ layout(location = 0) out vec4 OutAlbedo;
 layout(location = 1) out vec4 OutSurface;
 
 void main() {
-    vec3 worldPos = vec3(splatDomain.x + TexCoords.x * splatDomain.z, 0.0,
-                         splatDomain.y + TexCoords.y * splatDomain.w);
+    vec3 worldPos = vec3(vtBakeRect.x + TexCoords.x * vtBakeRect.z, 0.0,
+                         vtBakeRect.y + TexCoords.y * vtBakeRect.w);
     LayerSurface s =
         sampleLayeredSurface(materialArray, worldPos, vec3(0.0, 1.0, 0.0), vec2(0.0));
 

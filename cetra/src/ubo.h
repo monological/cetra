@@ -10,6 +10,8 @@
 #include "shore_chain.h"
 // Same relationship: ies.h owns the profile ceiling, this file only lays it out.
 #include "ies.h"
+// And again: layers_vt_pages.h owns the page-table dimensions.
+#include "layers_vt_pages.h"
 
 // Uniform-buffer plumbing for std140 blocks (first used by clustered forward
 // lighting, spec 9.1). GLSL 330 cannot write layout(binding=N) -- that
@@ -28,6 +30,7 @@
 #define UBO_BINDING_INSTANCES       4
 #define UBO_BINDING_SHORE_FILM      5
 #define UBO_BINDING_IES             6
+#define UBO_BINDING_VT_PAGES        7
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
@@ -126,6 +129,25 @@ _Static_assert(UBO_IES_BLOCK_SIZE <= 16384,
 // with every check above still green.
 _Static_assert(sizeof(GpuIesBlock) == UBO_IES_BLOCK_SIZE,
                "IesBlock's C mirror must match its std140 size");
+
+/*
+ * The composite cache's page table (spec 11.67), and why RVT costs no sampler
+ * for its indirection either: a page table is a TABLE, and the IES block above
+ * already established that a table small enough for uniform space costs zero
+ * units. The physical pages themselves ride freed sampler units; only the
+ * virtual-to-physical mapping lives here.
+ *
+ * Its own block for the IesBlock reason exactly -- the light blocks orphan and
+ * rewrite per frame, where this uploads only when residency changes.
+ */
+// info(1) + params(1) + the packed entry grid
+#define UBO_VT_PAGES_VEC4S      (2 + VT_PAGE_TABLE_VEC4S)
+#define UBO_VT_PAGES_BLOCK_SIZE (UBO_VT_PAGES_VEC4S * 16)
+_Static_assert(VT_PAGE_TABLE_MAX % 4 == 0, "the page table must be a whole number of ivec4 rows");
+_Static_assert(UBO_VT_PAGES_BLOCK_SIZE <= 16384,
+               "the page-table block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
+_Static_assert(sizeof(GpuVtPageBlock) == UBO_VT_PAGES_BLOCK_SIZE,
+               "VtPageBlock's C mirror must match its std140 size");
 
 typedef struct Ubo {
     GLuint id;

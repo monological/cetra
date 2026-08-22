@@ -5,9 +5,11 @@
 #include "layers_vt.h"
 #include "scene.h"
 #include "engine.h"
+#include "intersect.h"
 #include "material_texture_array.h"
 #include "texture.h"
 #include "program.h"
+#include "ubo.h"
 #include "uniform.h"
 #include "util.h"
 #include "ext/log.h"
@@ -165,6 +167,356 @@ static void vt_read_means(MaterialLayersVt* vt, const Material* m,
     free(px);
 }
 
+/*
+ * The paged near-field atlas (spec 11.67).
+ *
+ * Page texel density is the fallback's times VT_PAGE_DENSITY_RATIO -- a ratio,
+ * never an absolute span, which is what bounds the virtual grid at
+ * VT_PAGE_GRID_MAX for every domain size: the fallback resolution clamps at
+ * 2048, so a larger domain gets coarser pages exactly as it gets a coarser
+ * fallback, and the table never overflows.
+ */
+static void vt_page_config(MaterialLayersVt* vt, const Material* m, int res) {
+    float size = fmaxf(m->splat_size[0], m->splat_size[1]);
+    if (size <= 0.0f || res <= 0) {
+        vt->page_grid = 0;
+        return;
+    }
+    vt->page_texel = (size / (float)res) / (float)VT_PAGE_DENSITY_RATIO;
+    vt->page_span = (float)VT_PAGE_USABLE * vt->page_texel;
+    int grid = (int)ceilf(size / vt->page_span);
+    if (grid < 1)
+        grid = 1;
+    // Reachable only through the diagnostic res override, which skips the
+    // derived rule's clamps on purpose; the table must not follow it past
+    // capacity.
+    if (grid > VT_PAGE_GRID_MAX)
+        grid = VT_PAGE_GRID_MAX;
+    vt->page_grid = grid;
+}
+
+static void vt_pages_reset(MaterialLayersVt* vt) {
+    for (int i = 0; i < VT_PAGE_TABLE_MAX; i++)
+        vt->page_table[i] = -1;
+    for (int i = 0; i < VT_PAGE_SLOTS; i++)
+        vt->slot_page[i] = -1;
+    vt->pages_dirty = true;
+}
+
+static GLuint vt_alloc_page_atlas(void) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, VT_ATLAS_TEXELS, VT_ATLAS_TEXELS, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Mips CAPPED, not absent: page mip VT_PAGE_MIP_CAP is the same macro at
+    // the same effective density as fallback mip 0, so the handoff band blends
+    // near-identical signals -- and the 4-texel gutters bound trilinear reach
+    // at that level. Mip-free was reviewed and rejected (unmipped minification
+    // shimmers on exactly the content pages carry). No anisotropy: the paged
+    // zone is the magnified near field; grazing minification belongs to the
+    // fallback, which keeps its full chain and its aniso.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, VT_PAGE_MIP_CAP);
+    return tex;
+}
+
+// The world rect one page TILE covers, gutter included -- the rect the bake
+// draws and the inset the shader's read undoes.
+static void vt_page_rect(const MaterialLayersVt* vt, const Material* m, int vpage,
+                         float rect[4]) {
+    int vx = vpage % vt->page_grid;
+    int vz = vpage / vt->page_grid;
+    rect[0] = m->splat_origin[0] + (float)vx * vt->page_span
+              - (float)VT_PAGE_GUTTER * vt->page_texel;
+    rect[1] = m->splat_origin[1] + (float)vz * vt->page_span
+              - (float)VT_PAGE_GUTTER * vt->page_texel;
+    rect[2] = (float)VT_PAGE_TEXELS * vt->page_texel;
+    rect[3] = rect[2];
+}
+
+/*
+ * Bake a batch of pages into their atlas slots: one GL-state bracket, one
+ * viewport draw per page (the GI-volume idiom -- the gutter ring is WRITTEN by
+ * the pass covering the bordered tile), one capped glGenerateMipmap for the
+ * whole atlas after. Alignment makes the mip box filter bleed-free.
+ */
+static bool vt_bake_pages(Material* m, struct Scene* scene, struct Engine* engine,
+                          const int* vpages, const int* slots, int count) {
+    MaterialLayersVt* vt = m->layers_vt;
+    MaterialTextureArray* arr = scene->material_textures;
+    ShaderProgram* prog = get_engine_shader_program_by_name(engine, "layers_vt_bake");
+    if (!prog || count <= 0)
+        return false;
+
+    glActiveTexture(GL_TEXTURE0);
+    if (vt->page_albedo_tex == 0) {
+        vt->page_albedo_tex = vt_alloc_page_atlas();
+        vt->page_surface_tex = vt_alloc_page_atlas();
+    }
+
+    GLint prev_fbo = 0, prev_viewport[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    GLboolean blend_was = glIsEnabled(GL_BLEND);
+    GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
+    GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           vt->page_albedo_tex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                           vt->page_surface_tex, 0);
+    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, bufs);
+
+    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (ok) {
+        glUseProgram(prog->id);
+        material_upload_layer_uniforms(m, prog->uniforms);
+        uniform_set_int(prog->uniforms, "materialArray", 0);
+        uniform_set_int(prog->uniforms, "layerGrainFrozen", 1);
+        material_texture_array_bind(arr, 0);
+        for (int i = 0; i < count; i++) {
+            int ox = (slots[i] % VT_ATLAS_PAGES_PER_ROW) * VT_PAGE_TEXELS;
+            int oy = (slots[i] / VT_ATLAS_PAGES_PER_ROW) * VT_PAGE_TEXELS;
+            float rect[4];
+            vt_page_rect(vt, m, vpages[i], rect);
+            glViewport(ox, oy, VT_PAGE_TEXELS, VT_PAGE_TEXELS);
+            uniform_set_vec4(prog->uniforms, "vtBakeRect", rect);
+            draw_fullscreen_quad(arr->quad_vao);
+        }
+        glBindTexture(GL_TEXTURE_2D, vt->page_albedo_tex);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, vt->page_surface_tex);
+        glGenerateMipmap(GL_TEXTURE_2D);
+    } else {
+        log_error("layers_vt: page bake framebuffer incomplete");
+    }
+
+    glDeleteFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    if (blend_was)
+        glEnable(GL_BLEND);
+    if (cull_was)
+        glEnable(GL_CULL_FACE);
+    if (depth_was)
+        glEnable(GL_DEPTH_TEST);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    return ok;
+}
+
+static void vt_pages_upload(const MaterialLayersVt* vt, struct Engine* engine);
+
+// Conservative vertical extent for a page's frustum box. The material knows
+// its XZ rectangle and nothing about the terrain's heights, so the box is tall
+// on purpose: the cost of the slack is a page the frustum would have rejected
+// vertically staying a candidate, which the capacity clamp absorbs.
+#define VT_PAGE_Y_SPAN 2048.0f
+
+// Ceiling on bakes per frame, sizing the batch arrays; the budget flag clamps
+// to it rather than growing them.
+#define VT_PAGE_BAKE_MAX 8
+
+// Eviction hysteresis, squared: a resident page yields its slot only to an
+// incoming page meaningfully nearer, or the truncation edge of the wanted set
+// re-decides its last slots every frame the camera breathes (the regions
+// idiom's 1.2, applied where the capacity clamp bites).
+#define VT_PAGE_EVICT_HYST_SQ 1.44f
+
+static float vt_page_dist2(const MaterialLayersVt* vt, const Material* m,
+                           const struct Scene* scene, int vpage, const float* cam) {
+    float rect[4];
+    vt_page_rect(vt, m, vpage, rect);
+    float cx = rect[0] - scene->world_origin[0] + 0.5f * rect[2];
+    float cz = rect[1] - scene->world_origin[2] + 0.5f * rect[3];
+    float dx = cam[0] - cx;
+    float dz = cam[2] - cz;
+    return dx * dx + dz * dz;
+}
+
+static uint32_t vt_pages_digest(const MaterialLayersVt* vt) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < VT_PAGE_TABLE_MAX; i++) {
+        h ^= (uint32_t)(uint16_t)vt->page_table[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+typedef struct VtPageCand {
+    float d2;
+    int vpage;
+} VtPageCand;
+
+static int vt_cand_cmp(const void* a, const void* b) {
+    const VtPageCand* ca = a;
+    const VtPageCand* cb = b;
+    if (ca->d2 != cb->d2)
+        return ca->d2 < cb->d2 ? -1 : 1;
+    return ca->vpage - cb->vpage; // total order: determinism over ties
+}
+
+/*
+ * Residency (spec 11.67): the wanted set is CPU frustum PREDICTION -- pages
+ * whose rect intersects the camera frustum, nearest first -- later unioned
+ * with GPU feedback. Runs on frame N-1's pose, deliberately: the camera
+ * finalizes in the app's render hook, after this. One frame of lag, absorbed
+ * by the eviction hysteresis and by the fallback, which renders a missing page
+ * softer, never wrong.
+ *
+ * Page rects are AUTHORED space and the frustum is STORAGE; the conversion
+ * (authored - world_origin) happens here and only here, and ensure runs after
+ * engine_apply_origin_shift, so a shift frame sees the post-shift camera
+ * against fixed authored rects.
+ */
+static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* engine) {
+    MaterialLayersVt* vt = m->layers_vt;
+    if (!engine->layers_vt_pages_enabled || vt->page_grid <= 0 || !engine->camera)
+        return;
+    int slots = VT_PAGE_SLOTS;
+    if (engine->layers_vt_page_slots > 0 && engine->layers_vt_page_slots < VT_PAGE_SLOTS)
+        slots = engine->layers_vt_page_slots;
+    int budget = engine->layers_vt_page_budget > 0 ? engine->layers_vt_page_budget : 2;
+    if (budget > VT_PAGE_BAKE_MAX)
+        budget = VT_PAGE_BAKE_MAX;
+
+    Frustum fr;
+    frustum_extract_from_vp(engine->view_proj, &fr);
+    const float cam[3] = {engine->camera->position[0], engine->camera->position[1],
+                          engine->camera->position[2]};
+
+    VtPageCand cands[VT_PAGE_TABLE_MAX] = {{0.0f, 0}};
+    int nc = 0;
+    int total = vt->page_grid * vt->page_grid;
+    mat4 ident = GLM_MAT4_IDENTITY_INIT;
+    for (int v = 0; v < total; v++) {
+        float rect[4];
+        vt_page_rect(vt, m, v, rect);
+        float ox = rect[0] - scene->world_origin[0];
+        float oz = rect[1] - scene->world_origin[2];
+        vec3 mn = {ox, -VT_PAGE_Y_SPAN, oz};
+        vec3 mx = {ox + rect[2], VT_PAGE_Y_SPAN, oz + rect[3]};
+        if (!frustum_test_aabb_transformed(&fr, mn, mx, ident))
+            continue;
+        cands[nc].d2 = vt_page_dist2(vt, m, scene, v, cam);
+        cands[nc].vpage = v;
+        nc++;
+    }
+    qsort(cands, (size_t)nc, sizeof(VtPageCand), vt_cand_cmp);
+
+    // The CAPACITY CLAMP is the governor, not a screen-density bound: the
+    // frustum admits far more pages than the atlas holds, so the first
+    // `slots` by (distance, id) are the want.
+    int want_n = nc < slots ? nc : slots;
+    bool in_want[VT_PAGE_TABLE_MAX] = {false};
+    for (int i = 0; i < want_n; i++)
+        in_want[cands[i].vpage] = true;
+
+    int bake_v[VT_PAGE_BAKE_MAX], bake_s[VT_PAGE_BAKE_MAX];
+    int nb = 0;
+    for (int i = 0; i < want_n && nb < budget; i++) {
+        int v = cands[i].vpage;
+        if (vt->page_table[v] >= 0)
+            continue; // already resident
+        int slot = -1;
+        for (int s2 = 0; s2 < slots; s2++) {
+            if (vt->slot_page[s2] < 0) {
+                slot = s2;
+                break;
+            }
+        }
+        if (slot < 0) {
+            // Evict the farthest resident page outside the want, and only for
+            // an incoming page nearer by the hysteresis margin.
+            float worst = cands[i].d2 * VT_PAGE_EVICT_HYST_SQ;
+            int worst_slot = -1;
+            for (int s2 = 0; s2 < slots; s2++) {
+                int rv = vt->slot_page[s2];
+                if (rv < 0 || in_want[rv])
+                    continue;
+                float d2 = vt_page_dist2(vt, m, scene, rv, cam);
+                if (d2 > worst) {
+                    worst = d2;
+                    worst_slot = s2;
+                }
+            }
+            if (worst_slot < 0)
+                break; // nothing yields this frame; nearer wants retry later
+            vt->page_table[vt->slot_page[worst_slot]] = -1;
+            vt->slot_page[worst_slot] = -1;
+            vt->pages_evicted++;
+            slot = worst_slot; // pages_dirty follows with the assignment below
+        }
+        vt->slot_page[slot] = (int16_t)v;
+        vt->page_table[v] = (int16_t)slot;
+        vt->pages_dirty = true;
+        bake_v[nb] = v;
+        bake_s[nb] = slot;
+        nb++;
+    }
+
+    if (nb > 0) {
+        if (vt_bake_pages(m, scene, engine, bake_v, bake_s, nb)) {
+            vt->pages_loaded += (unsigned long long)nb;
+        } else {
+            // Roll the table back: it must never point at a slot the bake did
+            // not fill. The fallback covers those pixels next frame.
+            for (int i = 0; i < nb; i++) {
+                vt->page_table[bake_v[i]] = -1;
+                vt->slot_page[bake_s[i]] = -1;
+            }
+        }
+    }
+
+    if (vt->pages_dirty) {
+        vt_pages_upload(vt, engine);
+        vt->pages_dirty = false;
+    }
+
+    if (engine->layers_vt_probe_interval > 0 &&
+        engine->total_frames % (size_t)engine->layers_vt_probe_interval == 0) {
+        int resident = 0;
+        for (int s2 = 0; s2 < VT_PAGE_SLOTS; s2++)
+            if (vt->slot_page[s2] >= 0)
+                resident++;
+        printf("layers-vt-probe frame=%zu grid=%d slots=%d resident=%d wanted=%d "
+               "loaded=%llu evicted=%llu digest=%08x\n",
+               engine->total_frames, vt->page_grid, slots, resident, want_n, vt->pages_loaded,
+               vt->pages_evicted, vt_pages_digest(vt));
+    }
+}
+
+// Pack and upload the page table. Called at the end of ensure when residency
+// changed; residency has one writer, so a plain dirty flag suffices where the
+// multi-writer IES table needed a revision.
+static void vt_pages_upload(const MaterialLayersVt* vt, struct Engine* engine) {
+    if (!engine->vt_pages_ubo)
+        return;
+    GpuVtPageBlock block;
+    memset(&block, 0, sizeof(block));
+    block.info[0] = vt->page_grid;
+    block.info[1] = VT_ATLAS_PAGES_PER_ROW;
+    block.info[2] = VT_PAGE_TEXELS;
+    block.info[3] = VT_PAGE_GUTTER;
+    block.params[0] = (float)VT_ATLAS_TEXELS;
+    block.params[1] = vt->page_span;
+    for (int i = 0; i < VT_PAGE_TABLE_MAX; i++)
+        block.entries[i >> 2][i & 3] = vt->page_table[i];
+    ubo_upload(engine->vt_pages_ubo, &block, sizeof(block));
+}
+
 static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int res) {
     MaterialLayersVt* vt = m->layers_vt;
     MaterialTextureArray* arr = scene->material_textures;
@@ -217,6 +569,9 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
         material_upload_layer_uniforms(m, prog->uniforms);
         uniform_set_int(prog->uniforms, "materialArray", 0);
         uniform_set_int(prog->uniforms, "layerGrainFrozen", 1);
+        const float full_rect[4] = {m->splat_origin[0], m->splat_origin[1], m->splat_size[0],
+                                    m->splat_size[1]};
+        uniform_set_vec4(prog->uniforms, "vtBakeRect", full_rect);
         material_texture_array_bind(arr, 0);
         // The array's own quad: non-zero on every path here, since the ensure
         // gates on a successfully built array and the build creates it.
@@ -228,6 +583,12 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
         glGenerateMipmap(GL_TEXTURE_2D);
 
         vt_read_means(vt, m, arr);
+
+        // A fallback re-bake invalidates every page: their content was a
+        // function of the same key. Config re-derives with the new res, and
+        // the reset marks the table for its next UBO upload.
+        vt_page_config(vt, m, res);
+        vt_pages_reset(vt);
     }
 
     glDeleteFramebuffers(1, &fbo);
@@ -260,6 +621,11 @@ void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
     if (scene->material_textures_dirty || !scene->material_textures ||
         scene->material_textures->layer_count == 0)
         return;
+    // v1 pages ONE material per scene: the engine owns a single VtPageBlock,
+    // and a buffer per binding point is ubo.h's lifetime contract. The first
+    // qualifying material is the page owner; any further one keeps its
+    // fallback atlas and is warned about, once.
+    bool page_owner_seen = false;
     for (size_t i = 0; i < scene->material_count; i++) {
         Material* m = scene->materials[i];
         if (!m)
@@ -279,24 +645,40 @@ void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
         int res = vt_res_for(m, engine);
         MaterialLayersVtKey key;
         vt_make_key(m, res, scene->material_textures, &key);
-        if (m->layers_vt && m->layers_vt->baked &&
-            memcmp(&key, &m->layers_vt->key, sizeof(key)) == 0)
-            continue;
-        if (!m->layers_vt) {
-            m->layers_vt = calloc(1, sizeof(MaterialLayersVt));
+        bool current = m->layers_vt && m->layers_vt->baked &&
+                       memcmp(&key, &m->layers_vt->key, sizeof(key)) == 0;
+        if (!current) {
             if (!m->layers_vt) {
-                log_error("layers_vt: allocation failed for material '%s'",
-                          m->name ? m->name : "(unnamed)");
-                continue;
+                m->layers_vt = calloc(1, sizeof(MaterialLayersVt));
+                if (!m->layers_vt) {
+                    log_error("layers_vt: allocation failed for material '%s'",
+                              m->name ? m->name : "(unnamed)");
+                    continue;
+                }
+            }
+            if (vt_bake(m, scene, engine, res)) {
+                m->layers_vt->key = key;
+                m->layers_vt->baked = true;
+            }
+            // A failed bake keeps baked false and retries next frame; the
+            // shading path falls back to the per-texel blend meanwhile, which
+            // is a correct frame rather than a black one.
+        }
+        if (m->layers_vt && m->layers_vt->baked) {
+            if (!page_owner_seen) {
+                page_owner_seen = true;
+                vt_pages_update(m, scene, engine);
+            } else if (m->layers_vt->page_grid > 0) {
+                static bool warned_second_owner;
+                if (!warned_second_owner) {
+                    log_warn("layers_vt: material '%s' also qualifies for pages; v1 pages "
+                             "one material per scene, this one keeps its fallback atlas",
+                             m->name ? m->name : "(unnamed)");
+                    warned_second_owner = true;
+                }
+                m->layers_vt->page_grid = 0;
             }
         }
-        if (vt_bake(m, scene, engine, res)) {
-            m->layers_vt->key = key;
-            m->layers_vt->baked = true;
-        }
-        // A failed bake keeps baked false and retries next frame; the shading
-        // path falls back to the per-texel blend meanwhile, which is a correct
-        // frame rather than a black one.
     }
 }
 
@@ -305,5 +687,7 @@ void free_material_layers_vt(MaterialLayersVt* vt) {
         return;
     gl_delete_texture(&vt->albedo_tex);
     gl_delete_texture(&vt->surface_tex);
+    gl_delete_texture(&vt->page_albedo_tex);
+    gl_delete_texture(&vt->page_surface_tex);
     free(vt);
 }
