@@ -2019,7 +2019,7 @@ pbr-shaped uniform set to any material program.
 against one image unit is undefined for the WHOLE program, not merely for the untaken branch.
 **Depends on:** D6, D7 (for the weights).
 
-### D10. Virtual-texture compositing — Effort XL — **stage 1 DONE (spec 11.66)**
+### D10. Virtual-texture compositing — Effort XL — **stages 1 and 2 DONE (specs 11.66, 11.67)**
 What UE actually does: composite the layers once into a cached virtual texture, then sample one
 albedo and one normal at runtime, with meshes able to blend into the same cache. Page table, physical
 cache atlas, and a feedback pass telling the CPU which pages were wanted.
@@ -2040,13 +2040,24 @@ interior ground, and the per-texel path stays live for UV1 splats and anything v
 sampler declarations: the pair rides `albedoTex`/`normalTex`, provably unread when `layerCount > 0`
 — the strongest of `pbr_frag`'s alias arguments, since it rests on the material rather than a pass.
 
-**Stage 2 is paging plus feedback, and it is earned by the MACRO gaining dense content**: roads and
-decals composited into the cache, or an erosion field far denser than 513² — layer count alone no
-longer qualifies, since the cached cost does not depend on it. GL 4.1 has **no sparse textures**
-(`ARB_sparse_texture` is 4.3), so pages stay an ordinary atlas and the feedback buffer is an extra
-low-resolution MRT plus a readback — a capability the engine already exercises every frame in the
-exposure meter.
-**Depends on:** D9 (hard). Stage 2 also on D4-streaming for the "too large for one atlas" case.
+**Stage 2 SHIPPED too (spec 11.67): pages, residency, and the feedback that fills them.** A
+64-slot guttered page atlas (256² tiles at 4x the fallback's density — a RATIO, which is what
+bounds the virtual grid at 34² for every domain size), a page table in a **UBO** on binding 7
+(the IES lesson again: an indirection is a TABLE, and tables in uniform space cost zero
+samplers), the page pair riding units 3/4 freed by an IES-style refusal (a layered material
+refuses its clearcoat-normal and height maps — the height half independently a bug fix, POM ran
+a dead march that could discard), and a **depth-tested GPU vote pass read back through a PBO
+ring at fixed latency** (always the slot from 4 frames ago, never "whichever fence signalled" —
+which is what keeps residency a pure function of frame history and every gate arm
+deterministic; measured: the whole stage costs 0.23 ms GPU at a half-ground framing and the
+fixed-latency map never stalls). Residency = frustum prediction sorted (seen, distance, id):
+feedback's occlusion-awareness is one comparator, proven by the arm where a hidden floor casts
+no votes while the frustum wants all of it. On today's content pages are a measured **0 px
+identity** — the macro's finest content is the 513² splat the fallback already over-resolves —
+so what remains for D10 is CONTENT: roads and decals composited into pages at bake time (they
+draw into the atlas FBO and never touch `pbr_frag`'s ledger), and the general-mesh era that
+turns feedback from a refinement into the only correct source.
+**Depends on:** D9 (hard, shipped). The content era also wants D4-streaming for its source data.
 
 ### D11. Large-world origin rebasing — Effort M/L — **DONE (spec 11.62)**
 Independent of the terrain chain and needed by anything that wants a world bigger than a few
@@ -2535,7 +2546,7 @@ not scheduled.
 | 40 | **D7 Erosion bake** | M | **DONE (11.59).** The largest visual gap against a shipped AAA terrain, and the reason 39 exists. **Erosion is a simulation over a grid, not a function of position** — the height at a point depends on the whole upstream watershed, so there is no `f(x,z)` to write and terrain must become DATA. That is why UE/Unity/Frostbite/Decima all consume a baked heightfield. **The silhouette is the smaller half**: the sim knows where water flowed, so its flow/deposit/wear masks put gravel in stream beds and bare rock on ridges — where `terrain_tint` today guesses from slope+altitude+noise, which is exactly why it reads as procedural. CPU, Eulerian, double-buffered, threaded like the cloud bake, whose zero-sync disjoint-slab shape gives **bytes identical at any thread count**. Droplet/Lagrangian erosion is refused on that same test. **Two corrections from building it.** Mei's own semi-Lagrangian transport LEAKS -- 3.06% of the sediment budget, since a bilinear gather conserves mass only for a divergence-free field -- so the load rides the fluxes instead and closure is 5e-09. And rain over evaporation IS the equilibrium depth: the first defaults flooded the whole terrain and the mask came out uniform. 452 ms at 512² x 220 on eight threads, release. |
 | 41 | **D8 Heightmap import/export** | S | **DONE (11.59).** Unifies the two producers by making them meet at one format: **the bake writes what the importer reads**, so dev-time bakes, ship-time loads, and a Gaea export drops into the same slot. `.r16` (headerless 16-bit, the literal UE/World Machine/Gaea interchange) plus 16-bit PNG on the read side via **`stbi_load_16`, vendored and called nowhere in this repo**. Deliberately not routed through `texture.c`, whose `texture_gl_formats` hard-wires *unsized* internal formats and has no path that can request 16-bit at all. **The masks are the half that is easy to drop and 11.59 dropped them first**: the save wrote height only, so a shipping load got eroded geometry shaded by the guess erosion exists to replace -- 40's opening failure, reached through 41's own round trip, with every arm green. A round-trip arm comparing only the geometry is not one. |
 | 42 | **D9 Terrain material layers** | M | **DONE (11.60).** By 11.45's rule (`ocean.glsl:63-78`) N layers are ONE shape — and the row was still one step short: it wanted "a program with room", when the declaration was already there. `materialArray` is bound on every draw and `material_texture_layer_for` knows nothing about masks, so layers became further tenants of it for **zero new declarations, zero new units and zero new programs**. The `pbr_skinned` precedent it cited is a second VERTEX shader over the same fragment shader; the only real second surface program, `water_frag`, has no clustered lights, punctual shadows, LTC or GI, which is right for an ocean and ruinous for terrain. **The test is whether the LIGHTING MODEL differs, not the texture count.** Shipped world-aligned (triplanar) with a height-weighted blend and a splat whose coordinate SPACE the material states — because world XZ cannot address a vertical surface and a mesh-local reading makes the weights swim on a moving prop. It also shipped inert in `apps/forest` and was caught in review: terrain writes UV1 as a literal zero, so the ground sampled one splat texel, through a green suite. |
-| 43 | ~~D10 Virtual-texture compositing~~ | — | **Stage 1 SHIPPED (11.66): the composite atlas plus a runtime detail term.** The staging here was right about the shape and missing the half that makes it not a regression — a composite cache is a MACRO cache at any affordable density (matching today's 3.9 mm ground over 1 km is 524 GiB), so the grain comes back as one triplanar tap of the dominant layer's own maps, selected by an index the bake writes into the atlas alpha. `3 + 2A` taps against the real per-texel cost of 9/17/25 (the "eight taps" this row deferred on was the flat best case), **independent of layer count**, byte-exact on flat content, 0 px on forest's interior ground, 42.7 MB for the 1 km pair. Zero new sampler declarations (rides `albedoTex`/`normalTex`, unread when layered). Stage 2 — paging + the feedback readback — is earned by the macro gaining dense content: roads/decals into the cache, or erosion far past 513²; layer count no longer qualifies. |
+| 43 | ~~D10 Virtual-texture compositing~~ | — | **Stages 1 AND 2 SHIPPED (11.66, 11.67).** Stage 1: the composite atlas plus a runtime detail term — `3 + 2A` taps against the per-texel 9/17/25, independent of layer count, byte-exact on flat content, zero new sampler declarations. Stage 2: a 64-slot guttered page atlas at 4x the fallback's density (a ratio, bounding the virtual grid at 34² forever), the page table in a UBO on binding 7, the page pair on units 3/4 freed by refusal, frustum-predicted residency sorted (seen, distance, id), and a depth-tested GPU vote pass read back through a fixed-latency PBO ring — deterministic by construction, +0.23 ms GPU, 0 px on today's content by design. What remains is CONTENT: roads/decals composited into pages (they draw into the atlas FBO, never the ledger) and the general-mesh era where feedback becomes the only correct source. |
 | 44 | **D11 Large-world origin rebasing** | M/L | Independent of 39-43 and needed by anything wanting a world past a few kilometres: fp32 world coordinates cannot hold still, which is why UE4 capped at ~20 km and UE5 shipped fp64 Large World Coordinates. **It also fixes a defect that is already live and has nothing to do with world size** — the outermost shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) while the inner ones follow the camera, so terrain placed away from the origin loses its far shadows with no diagnostic. `terrain.h` already warns about this and works around it by centring the terrain. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
