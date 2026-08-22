@@ -10512,6 +10512,143 @@ def _run_import_gates(workdir):
     return run_range_gate() + run_cone_gate() + run_fbx_unit_gate()
 
 
+# Clustered specular probes (spec 11.70).
+#
+# The fixture is two rooms over ONE floor mesh, joined by a doorway at the front,
+# with a bright panel in the left room and a dim one in the right. Every arm
+# below reads that shared floor, because it is the geometry the whole design was
+# decided by: per-DRAW probe selection, the cheaper answer this spec refused,
+# hands one mesh a single probe and lights half of it with the wrong room's
+# reflections -- while every per-room measurement still passes.
+#
+# Probes need a precomputed IBL to exist at all, so every arm passes
+# --sky --sun-elevation -10: the sky path is 0 px run-to-run and keeps the repo
+# HDR-free, and a sun below the horizon does not light the rooms it is only
+# present to enable. Exposure is pinned for the reason every other arm pins it.
+PROBE_FIXTURE = "cornell_rooms.cscn"
+PROBE_SKY = ["--sky", "--sun-elevation", "-10", "--no-auto-exposure", "-E", "1.0"]
+
+# Floor samples, in WORLD space, projected through the fixture's own camera.
+#
+# z = 0.55 is in FRONT of the partition, which ends at z = 0.30 (DOOR_Z in the
+# generator): the doorway is at the front precisely so this band is visible from
+# a viewpoint that sees both rooms. The dark and lit reads are mirrored about
+# x = 0, so the pair differs in which room it is in and in nothing else.
+PROBE_FLOOR_Z = 0.55
+PROBE_DARK_X = 1.30
+PROBE_LIT_X = -1.30
+PROBE_PATCH = 4  # half-width in pixels of the box each sample averages
+
+# The seam sweep crosses the doorway along the same floor band. It spans the
+# whole overlap (the two boxes share x in [-0.3, 0.3]) plus a margin either side,
+# so a hard switch anywhere in the blend lands inside the sweep.
+PROBE_SEAM_X0, PROBE_SEAM_X1, PROBE_SEAM_N = -0.85, 0.85, 35
+
+# How much brighter the dark room's floor gets when the probe serving it
+# photographed the LIT room instead. Both legs run the identical multi path over
+# the identical atlas, so this is a reading of selection alone.
+PROBE_ROOMS_RATIO_MIN = 1.20  # measured 3.62
+# The lit room is the in-frame control: only probe B moved, so room A has to
+# read the same in both legs. A bar rather than exact equality because the two
+# legs are separate processes; it has measured 0.0000 every time.
+PROBE_ROOMS_CONTROL_MAX = 0.01
+
+# The seam is read as whether the handover STANDS OUT against the floor's own
+# curvature, in each leg on its own terms.
+#
+# An absolute bound cannot work here, and neither can "the band is no sharper
+# than the rest of the floor": the band CONTAINS the doorway, so its curvature
+# is legitimately high in every leg -- the jamb, the partition's shadow and the
+# lit-to-dim falloff all live there and none of them is a probe. What isolates
+# the blend is the same band measured with the boxes abutting, where the two
+# probes hand over discontinuously and everything else is identical.
+PROBE_SEAM_BAND = 0.35       # |x| within which the two boxes hand over
+PROBE_SEAM_SMOOTH_MIN = 1.35 # measured 1.68; a build that stops blending reads 1.00
+# ...and the sweep has to traverse something, or a frame with no reflections in
+# it at all satisfies any smoothness bound perfectly.
+PROBE_SEAM_SPAN_MIN = 0.05
+
+_PROBE_SET_ROW = re.compile(
+    r"probe-set frame=(\d+) count=(\d+) mode=(\w+) atlas=(\d+)x(\d+) "
+    r"captures=(\d+) mask_bits=(\d+) digest=([0-9a-f]+)")
+
+
+def _probe_set_rows(text):
+    """The diagnostic's per-frame lines, as dicts in emission order."""
+    return [{"frame": int(m[0]), "count": int(m[1]), "mode": m[2],
+             "atlas": (int(m[3]), int(m[4])), "captures": int(m[5]),
+             "mask_bits": int(m[6]), "digest": m[7]}
+            for m in _PROBE_SET_ROW.findall(text)]
+
+
+def _probe_run(workdir, tag, mutate=None, extra=None, frames=30, fixture=None):
+    """Render the two-room fixture, optionally through a mutation.
+
+    Returns (pixels, w, h, output) or (None, None, None, error).
+    """
+    src = os.path.join(ROOT, "assets", fixture or PROBE_FIXTURE)
+    if not os.path.exists(src):
+        return None, None, None, "missing fixture"
+    scene = src
+    if mutate is not None:
+        scene = os.path.join(workdir, f"probe_{tag}.cscn")
+        cscn_copy(src, scene, mutate)
+    out = os.path.join(workdir, f"probe_{tag}.ppm")
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300",
+           "-S", out] + PROBE_SKY + (extra or [])
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None, None, None, r.stdout + r.stderr
+    w, h, pix = _read_ppm(out)
+    return pix, w, h, r.stdout + r.stderr
+
+
+def _probe_floor_luma(pix, w, h, project, x, z=PROBE_FLOOR_Z):
+    """Mean linear luma of a patch centred on a world floor point."""
+    px, py = project((x, 0.0, z))
+    vals = [_linear_luma(pix, w, h, px + dx, py + dy)
+            for dy in range(-PROBE_PATCH, PROBE_PATCH + 1)
+            for dx in range(-PROBE_PATCH, PROBE_PATCH + 1)]
+    return sum(vals) / len(vals)
+
+
+def _probe_b_into_room_a(d):
+    """The wrong-room leg: probe B keeps its box and photographs room A.
+
+    Deliberately NOT "delete probe B", which would compare the multi path
+    against the single-probe path and measure the storage change along with the
+    selection. Moving only the capture point leaves everything else identical,
+    so what the arm reads is which room a probe photographed and nothing else.
+    """
+    d["probes"][1]["position"] = list(d["probes"][0]["position"])
+
+
+def _probe_boxes_abut(d):
+    """The hard-switch leg: the two boxes meet at the partition and never overlap.
+
+    With no shared region and no fade there is nowhere for the two probes to
+    blend, so the handover is a step. Everything else -- captures, atlas, floor,
+    lighting -- is the shipping fixture's, which is what makes the pair a
+    reading of the blend alone.
+    """
+    d["probes"][0]["boxMax"] = [0.0, 2.0, 1.0]
+    d["probes"][1]["boxMin"] = [0.0, 0.0, -1.0]
+    for p in d["probes"]:
+        p["boxFade"] = 0.001
+
+
+def _probe_boxes_offstage(d):
+    """Both probes keep their captures and move their INFLUENCE out of frame.
+
+    Every fragment then sits outside every box, so the blend's weight is zero
+    everywhere and the whole frame must fall to the global environment -- which
+    is the same expression the no-probe branch evaluates.
+    """
+    for p in d["probes"]:
+        p["boxMin"] = [100.0, 100.0, 100.0]
+        p["boxMax"] = [101.0, 101.0, 101.0]
+
+
 # A line-initial two-space name, which is the shape an arm's printed line and a
 # docstring's arm list BOTH use -- one pattern, because the check is that they agree.
 # inspect.getdoc, not __doc__: Python 3.13 strips a docstring's common indentation at
@@ -10523,6 +10660,208 @@ _ARM_DOCUMENTED = re.compile(r"^  " + _ARM_NAME + r"(?=\s)", re.M)
 # carries the same name, and several are emitted from a guard ABOVE the arm they belong
 # to -- reading those as the arm's position reports a false order mismatch.
 _ARM_PRINTED = re.compile(r'print\(f?"  ' + _ARM_NAME + r'[^"]*PASS')
+
+
+def run_probe_set_gate(workdir):
+    """N reflection probes, selected and blended per fragment (spec 11.70).
+
+      probe-set-single   one probe keeps the pre-11.70 path: mode=single, no froxel
+                         masks built, and two runs byte-identical
+      probe-set-rooms    the dark room's floor reflects ITS room. The wrong-room leg
+                         moves probe B's capture into room A and nothing else, so the
+                         ratio isolates selection; the lit room is the in-frame control
+      probe-set-seam     no step where the two probes hand over across the doorway,
+                         and the sweep has to traverse something to say so
+      probe-set-fallback every fragment outside every box IS the no-probe frame
+      probe-set-converge captures stop at the probe count and the mask digest repeats
+      probe-set-tenancy  the probe atlas and the GI volume share one texture: both
+                         effects survive being switched on together
+      probe-set-schema   a probe missing its box is refused by name, not defaulted
+
+    NO ARM HERE IS SAFE ALONE, and the pairing is deliberate. probe-set-rooms alone
+    passes on a build that blends nothing, because the dark room is dim anyway --
+    its control read is what forces the lit room to be untouched. probe-set-seam
+    alone passes on a build with no probes at all, because a frame with no
+    reflections has no step in it -- its span floor is what forces the band to
+    carry a transition. And probe-set-fallback alone passes on a build where the
+    probes never contribute, which is exactly the defect the 11.70 branch shipped
+    for a day: the fade ran inward from the proxy faces, so a floor lying ON the
+    bottom face weighed zero, and the frame looked right because a floor
+    reflecting nothing and a floor reflecting a dim room are the same picture.
+
+    There is deliberately NO SSR arm, and the reason is worth stating rather than
+    leaving as an omission: SSR shades only what the shadow catcher marked, the
+    catcher is installed only on scenes that author no lights of their own, and
+    this fixture authors two. The multi-probe SSR path is therefore implemented
+    and ungated here. The suite has no SSR gate of any kind to add it to.
+    """
+    if not os.path.exists(os.path.join(ROOT, "assets", PROBE_FIXTURE)):
+        print(f"  probe-set-single SKIP  {PROBE_FIXTURE} not found")
+        return []
+    failures = []
+    cam = _cscn_camera(PROBE_FIXTURE)
+
+    # -- single: the pre-11.70 path, unmoved -----------------------------------
+    def one_probe(d):
+        d["probes"] = [d["probes"][0]]
+
+    pix_a, w, h, out_a = _probe_run(workdir, "single_a", one_probe,
+                                    ["--probe-set-probe", "10"])
+    pix_b, _, _, out_b = _probe_run(workdir, "single_b", one_probe,
+                                    ["--probe-set-probe", "10"])
+    if pix_a is None or pix_b is None:
+        print(f"  probe-set-single ERROR  {(out_a if pix_a is None else out_b)[-300:]}")
+        failures.append("probe-set-single")
+    else:
+        rows = _probe_set_rows(out_a)
+        modes = {r["mode"] for r in rows}
+        masks = {r["mask_bits"] for r in rows}
+        counts = {r["count"] for r in rows}
+        identical = pix_a == pix_b
+        ok = bool(rows) and modes == {"single"} and masks == {0} and counts == {1} and identical
+        print(f"  probe-set-single {'PASS' if ok else 'FAIL'}  mode={sorted(modes)} "
+              f"count={sorted(counts)} mask_bits={sorted(masks)} want single/1/0; "
+              f"two runs identical={identical}")
+        if not ok:
+            failures.append("probe-set-single")
+
+    # -- rooms: which room a probe photographed decides the floor --------------
+    pix_ok, w, h, out_ok = _probe_run(workdir, "rooms_ok")
+    pix_wr, _, _, out_wr = _probe_run(workdir, "rooms_wrong", _probe_b_into_room_a)
+    project = _projector(cam, w, h) if pix_ok is not None else None
+    if pix_ok is None or pix_wr is None:
+        print(f"  probe-set-rooms ERROR  {(out_ok if pix_ok is None else out_wr)[-300:]}")
+        failures.append("probe-set-rooms")
+        dark_ok = dark_wr = lit_ok = lit_wr = float("nan")
+    else:
+        dark_ok = _probe_floor_luma(pix_ok, w, h, project, PROBE_DARK_X)
+        dark_wr = _probe_floor_luma(pix_wr, w, h, project, PROBE_DARK_X)
+        lit_ok = _probe_floor_luma(pix_ok, w, h, project, PROBE_LIT_X)
+        lit_wr = _probe_floor_luma(pix_wr, w, h, project, PROBE_LIT_X)
+        ratio = dark_wr / dark_ok if dark_ok > 0 else float("inf")
+        drift = abs(lit_wr - lit_ok) / max(lit_ok, 1e-6)
+        ok = ratio >= PROBE_ROOMS_RATIO_MIN and drift <= PROBE_ROOMS_CONTROL_MAX
+        print(f"  probe-set-rooms {'PASS' if ok else 'FAIL'}  dark floor {dark_ok:.4f} -> "
+              f"{dark_wr:.4f} when probe B photographs the lit room, ratio {ratio:.4f} "
+              f"want >={PROBE_ROOMS_RATIO_MIN}; lit-room control {lit_ok:.4f} vs "
+              f"{lit_wr:.4f} drift {drift:.4f} want <={PROBE_ROOMS_CONTROL_MAX}")
+        if not ok:
+            failures.append("probe-set-rooms")
+
+    # -- seam: the handover across the doorway is continuous -------------------
+    pix_hard, _, _, out_hard = _probe_run(workdir, "seam_hard", _probe_boxes_abut)
+    if pix_ok is None or pix_hard is None:
+        print(f"  probe-set-seam ERROR  {(out_ok if pix_ok is None else out_hard)[-300:]}")
+        failures.append("probe-set-seam")
+    else:
+        xs = [PROBE_SEAM_X0 + (PROBE_SEAM_X1 - PROBE_SEAM_X0) * i / (PROBE_SEAM_N - 1)
+              for i in range(PROBE_SEAM_N)]
+
+        # The SECOND difference, not the first: the floor's own gradient is
+        # steep, and a first difference reads that rather than the handover. A
+        # second difference cancels any linear ramp exactly and leaves the
+        # curvature, which is where a discontinuity lives.
+        def band_curvature(pix):
+            vals = [_probe_floor_luma(pix, w, h, project, x) for x in xs]
+            return vals, max(abs(vals[i + 1] - 2.0 * vals[i] + vals[i - 1])
+                             for i in range(1, len(vals) - 1)
+                             if abs(xs[i]) <= PROBE_SEAM_BAND)
+
+        soft_vals, soft_curv = band_curvature(pix_ok)
+        _, hard_curv = band_curvature(pix_hard)
+        span = max(soft_vals) - min(soft_vals)
+        smooth = hard_curv / soft_curv if soft_curv > 0 else float("inf")
+        ok = smooth >= PROBE_SEAM_SMOOTH_MIN and span >= PROBE_SEAM_SPAN_MIN
+        print(f"  probe-set-seam {'PASS' if ok else 'FAIL'}  peak curvature in the handover "
+              f"band {soft_curv:.4f} blended vs {hard_curv:.4f} with the boxes abutting, "
+              f"{smooth:.2f}x smoother, want >={PROBE_SEAM_SMOOTH_MIN}; sweep span "
+              f"{span:.4f} want >={PROBE_SEAM_SPAN_MIN}")
+        if not ok:
+            failures.append("probe-set-seam")
+
+    # -- fallback: outside every box is the no-probe frame ---------------------
+    pix_off, _, _, out_off = _probe_run(workdir, "boxes_off", _probe_boxes_offstage)
+    pix_none, _, _, out_none = _probe_run(workdir, "no_probes",
+                                          lambda d: d.pop("probes", None))
+    if pix_off is None or pix_none is None:
+        print(f"  probe-set-fallback ERROR  {(out_off if pix_off is None else out_none)[-300:]}")
+        failures.append("probe-set-fallback")
+    else:
+        diff = sum(1 for i in range(0, len(pix_off), 3)
+                   if pix_off[i:i + 3] != pix_none[i:i + 3])
+        ok = diff == 0
+        print(f"  probe-set-fallback {'PASS' if ok else 'FAIL'}  boxes moved out of frame "
+              f"vs no probes at all: {diff} px differ, want 0 (the W=0 remainder is the "
+              f"no-probe expression)")
+        if not ok:
+            failures.append("probe-set-fallback")
+
+    # -- converge: the sweep runs once and then costs nothing ------------------
+    pix_c, _, _, out_c = _probe_run(workdir, "converge", None,
+                                    ["--probe-set-probe", "10"], frames=60)
+    _, _, _, out_c2 = _probe_run(workdir, "converge2", None,
+                                 ["--probe-set-probe", "10"], frames=60)
+    rows_c = _probe_set_rows(out_c)
+    rows_c2 = _probe_set_rows(out_c2)
+    if pix_c is None or not rows_c:
+        print(f"  probe-set-converge ERROR  {out_c[-300:]}")
+        failures.append("probe-set-converge")
+    else:
+        caps = {r["captures"] for r in rows_c}
+        # The digest is 0 on the frame before the first grid build; every frame
+        # that has one must agree, and must agree across processes.
+        digs = {r["digest"] for r in rows_c if r["mask_bits"] > 0}
+        digs2 = {r["digest"] for r in rows_c2 if r["mask_bits"] > 0}
+        ok = caps == {2} and len(digs) == 1 and digs == digs2
+        print(f"  probe-set-converge {'PASS' if ok else 'FAIL'}  captures {sorted(caps)} "
+              f"want exactly [2] across {len(rows_c)} frames; mask digest {sorted(digs)} "
+              f"stable and equal across two processes ({sorted(digs2)})")
+        if not ok:
+            failures.append("probe-set-converge")
+
+    # -- tenancy: one texture, two features ------------------------------------
+    pix_gi, _, _, out_gi = _probe_run(workdir, "gi_probes", None, ["--gi-volume"])
+    pix_gi_np, _, _, out_gi_np = _probe_run(workdir, "gi_only",
+                                            lambda d: d.pop("probes", None), ["--gi-volume"])
+    if pix_gi is None or pix_gi_np is None or pix_ok is None or pix_none is None:
+        print(f"  probe-set-tenancy ERROR  {(out_gi if pix_gi is None else out_gi_np)[-300:]}")
+        failures.append("probe-set-tenancy")
+    else:
+        # GI still does something with probes present, and probes still do
+        # something with GI present. If the two atlases collided, one of the two
+        # differences would collapse.
+        gi_effect = sum(1 for i in range(0, len(pix_gi), 3)
+                        if pix_gi[i:i + 3] != pix_ok[i:i + 3])
+        probe_effect = sum(1 for i in range(0, len(pix_gi), 3)
+                           if pix_gi[i:i + 3] != pix_gi_np[i:i + 3])
+        ok = gi_effect > 0 and probe_effect > 0
+        print(f"  probe-set-tenancy {'PASS' if ok else 'FAIL'}  sharing unit 14: GI moves "
+              f"{gi_effect} px with probes live, probes move {probe_effect} px with GI "
+              f"live; both want >0")
+        if not ok:
+            failures.append("probe-set-tenancy")
+
+    # -- schema: a probe without a box is refused, not defaulted ---------------
+    def drop_box(d):
+        d["probes"][1].pop("boxMax", None)
+
+    _, _, _, out_s = _probe_run(workdir, "schema", drop_box, ["--probe-set-probe", "60"])
+
+    def bad_key(d):
+        d["probes"][0]["boxmax"] = [1.0, 1.0, 1.0]
+
+    _, _, _, out_k = _probe_run(workdir, "schema_key", bad_key)
+    refused = "needs position, boxMin and boxMax" in out_s
+    warned = "is not a recognised probe parameter" in out_k
+    rows_s = _probe_set_rows(out_s)
+    fell_to_one = bool(rows_s) and {r["count"] for r in rows_s} == {1}
+    ok = refused and warned and fell_to_one
+    print(f"  probe-set-schema {'PASS' if ok else 'FAIL'}  missing boxMax refused by "
+          f"name={refused}, set falls to count 1={fell_to_one}, unknown key warned={warned}")
+    if not ok:
+        failures.append("probe-set-schema")
+
+    return failures
 
 
 def run_gate_docs_gate(workdir):
@@ -13552,6 +13891,8 @@ GATE_GROUPS = [
      run_beach_gate),
     ("emissive", "emissive geometry as area lights (fit, intent, light; spec 11.49):",
      run_emissive_gate),
+    ("probe-set", "clustered specular probes (selection, blend, tenancy; spec 11.70):",
+     run_probe_set_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
     ("skin-offpath", "pre-integrated skin (off-path byte identity):", run_skin_offpath_gate),
     ("skin-curvature", "pre-integrated skin (curvature ordering):", run_skin_curvature_gate),

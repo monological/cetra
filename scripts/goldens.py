@@ -179,6 +179,16 @@ RECIPES = [
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]},
     {"name": "cornell_point", "scene": "assets/cornell_point.gltf", "size": (1600, 1200),
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]},
+    # Two rooms over one polished floor, a probe in each (spec 11.70). The only
+    # committed frame with more than one reflection probe in it, and the only
+    # one that renders the atlas blend at all -- the gate arms beside it read
+    # patches and ratios, which is what a golden cannot do and vice versa.
+    # --sky is load-bearing rather than decoration: a probe needs a precomputed
+    # IBL to be created, and a sun below the horizon supplies one without
+    # lighting the rooms.
+    {"name": "cornell_rooms", "scene": "assets/cornell_rooms.gltf", "size": (1600, 1200),
+     "flags": ["--sky", "--sun-elevation", "-10", "-f", "30", "--no-auto-exposure",
+               "-E", "1.0", "-W", "800", "-H", "600"]},
 
     # The cascade fixture, here for a reason the other cascade coverage does not
     # give: run_dir_shadow_gate and run_translucent_offpath_gate both read it
