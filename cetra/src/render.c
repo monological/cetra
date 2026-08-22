@@ -283,10 +283,20 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         glBindTexture(GL_TEXTURE_2D, material->emissive_tex->id);
     }
 
+    // A LAYERED material refuses its height and clearcoat-normal maps (spec
+    // 11.67): units 3/4 are the composite cache's PAGE pair, and the refusal is
+    // what makes that exclusivity structural rather than an ordering -- the
+    // same argument units 0/1 carry. Enforced here, at the one site that both
+    // binds and derives the Exists gates, whatever path authored the maps. The
+    // height half is independently a bug fix: the POM march has no layerCount
+    // test in-shader, so a layered material with a height map ran a dead march
+    // whose silhouette test could DISCARD fragments.
+    bool refuse_maps_34 = material->layer_count > 0;
+
     // POM height map (§4.11): the parallax march samples it before every
     // material lookup. Guarded in-shader by parallaxEnabled/heightTexExists/
     // parallaxScale, so binding it is inert until a material opts in.
-    if (material->height_tex) {
+    if (material->height_tex && !refuse_maps_34) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_HEIGHT);
         glBindTexture(GL_TEXTURE_2D, material->height_tex->id);
     }
@@ -302,7 +312,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // sheen environment in 10.7.1. Binding it would cost a glActiveTexture +
     // glBindTexture per material switch feeding a unit nothing reads.
 
-    if (material->clearcoat_normal_tex) {
+    if (material->clearcoat_normal_tex && !refuse_maps_34) {
         glActiveTexture(GL_TEXTURE0 + TEXUNIT_CLEARCOAT_NORMAL);
         glBindTexture(GL_TEXTURE_2D, material->clearcoat_normal_tex->id);
     }
@@ -310,9 +320,14 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "albedoTexExists", material->albedo_tex ? 1 : 0);
     uniform_set_int(u, "normalTexExists", material->normal_tex ? 1 : 0);
     uniform_set_int(u, "emissiveTexExists", material->emissive_tex ? 1 : 0);
-    uniform_set_int(u, "heightTexExists", material->height_tex ? 1 : 0);
+    // The Exists gates follow the refusal, not the pointers: leaving them at 1
+    // with nothing (or a page) bound on units 3/4 would read foreign data as a
+    // height or a coat normal.
+    uniform_set_int(u, "heightTexExists",
+                    material->height_tex && !refuse_maps_34 ? 1 : 0);
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
-    uniform_set_int(u, "clearcoatNormalExists", material->clearcoat_normal_tex ? 1 : 0);
+    uniform_set_int(u, "clearcoatNormalExists",
+                    material->clearcoat_normal_tex && !refuse_maps_34 ? 1 : 0);
 
     // Reset active texture unit
     glActiveTexture(GL_TEXTURE0);

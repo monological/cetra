@@ -660,8 +660,25 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             // Assigned last, since it is what arms the shader: a count raised
             // before its layers are attached is a frame sampling layer indices
             // that are still -1.
-            if (layer_count > 0)
+            if (layer_count > 0) {
                 m->layer_count = layer_count;
+                // A layered material refuses its height and clearcoat-normal
+                // maps (spec 11.67): their units carry the composite cache's
+                // page pair. No .cscn key can author either, so the collision
+                // is a scene file layering an IMPORTED material that carries
+                // them -- refused by name here, enforced at the bind site.
+                if (m->height_tex)
+                    fprintf(stderr,
+                            "Warning: material '%s' is layered; its height map is "
+                            "refused (units 3/4 carry the composite cache's pages)\n",
+                            mo->material);
+                if (m->clearcoat_normal_tex)
+                    fprintf(stderr,
+                            "Warning: material '%s' is layered; its clearcoat-normal "
+                            "map is refused (units 3/4 carry the composite cache's "
+                            "pages)\n",
+                            mo->material);
+            }
             // The key's presence IS the space: world addressing without a
             // rectangle has no mapping, so the two cannot be authored apart.
             if (mo->has_splat_domain) {
