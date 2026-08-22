@@ -567,15 +567,13 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             uniform_set_vec3(u, "ambientRadiance",
                              scene ? scene->ambient_radiance : (vec3){0.0f, 0.0f, 0.0f});
 
-            // Local reflection probe (parallax-corrected specular), rebinding
-            // the IBL prefilter unit to the probe capture. The probe joins
-            // the scene only after its capture, so the capture pass itself
-            // never consumes it.
-            if (scene && reflection_probe_active(scene->probe)) {
-                bind_reflection_probe(scene->probe, program);
-            } else {
-                uniform_set_int(u, "probeEnabled", 0);
-            }
+            // Local reflection probes (parallax-corrected specular). At one
+            // probe this rebinds the IBL prefilter unit to its capture, exactly
+            // as it always did; above one the atlas and the froxel masks answer
+            // instead and the prefilter unit keeps the global environment the
+            // blend falls back to. A set joins the scene only after every probe
+            // has captured, so the capture pass itself never consumes one.
+            probe_set_bind(scene ? scene->probe_set : NULL, program);
 
             // Indirect diffuse from the probe grid, replacing the flat
             // irradiance map. Self-gates to giEnabled = 0 while the volume is
@@ -1358,12 +1356,16 @@ void render_current_scene(Engine* engine) {
     // the skybox shader emits linear HDR that would display uncorrected.
     // With the probe debug view on, the probe content replaces the skybox
     // (environment-only probes have no capture; show their prefilter source).
+    // Only the primary probe: past one there is no raw capture left to show --
+    // the sweep frees them once the atlas holds the radiance -- and the view
+    // that answers a multi-probe question is --probe-set-debug's atlas.
+    ReflectionProbe* debug_probe = probe_set_primary(scene->probe_set);
     if (scene->ibl && scene->ibl->precomputed && render_mode == RENDER_MODE_PBR) {
         profiler_scope_begin(engine->profiler, "skybox");
-        if (scene->probe && scene->probe->debug_background) {
+        if (debug_probe && debug_probe->debug_background) {
             render_skybox_cubemap(scene->ibl,
-                                  scene->probe->cubemap ? scene->probe->cubemap
-                                                        : scene->ibl->environment_cubemap,
+                                  debug_probe->cubemap ? debug_probe->cubemap
+                                                       : scene->ibl->environment_cubemap,
                                   *view, draw_projection);
         } else if (scene->sky && scene->sky->enabled) {
             // Procedural sky owns the background (sky-view LUT + sun disc)

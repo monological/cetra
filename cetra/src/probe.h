@@ -72,6 +72,13 @@ void free_reflection_probe(ReflectionProbe* probe);
 int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, struct Scene* scene,
                              float near_clip, float far_clip, bool environment_only);
 
+// Drop the raw scene capture, keeping the prefiltered chain. For a probe whose
+// radiance has been resampled into the atlas the capture is spent: it is ~50 MB
+// at PROBE_CUBEMAP_SIZE against the ~4 MB column that replaced it, and holding
+// one per probe would cost more than every probe's storage put together. The
+// single-probe path keeps it -- --probe-debug renders it.
+void probe_release_capture_scratch(ReflectionProbe* probe);
+
 // Bind the prefiltered probe + uniforms for a PBR draw. The fragment stage
 // is at the driver's sampler limit, so the probe rebinds
 // IBL_PREFILTER_TEXTURE_UNIT (call after bind_ibl_textures) and the shader

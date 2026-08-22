@@ -155,14 +155,6 @@ void bind_reflection_probe(const ReflectionProbe* probe, ShaderProgram* program)
     glActiveTexture(GL_TEXTURE0);
 }
 
-// Flatten the probe (or its absence) into postfx's per-frame uniform block.
-// Deliberately NO environment tier on probe-less scenes: publishing the IBL
-// prefilter as the miss fallback was built and rejected -- SSR only shades
-// the shadow catcher, and an invisible catcher that mirrors the sky over a
-// darker background prints as a glowing pool the size of its quad. The
-// environment answer is only right when a probe's parallax box re-grounds
-// it; a probe-less miss stays empty and the march's own fades hide the
-// reach limits.
 void reflection_probe_shift_origin(ReflectionProbe* probe, const vec3 delta) {
     if (!probe)
         return;
@@ -171,6 +163,21 @@ void reflection_probe_shift_origin(ReflectionProbe* probe, const vec3 delta) {
     glm_vec3_sub(probe->box_max, (float*)delta, probe->box_max);
 }
 
+void probe_release_capture_scratch(ReflectionProbe* probe) {
+    if (!probe || !probe->cubemap)
+        return;
+    glDeleteTextures(1, &probe->cubemap);
+    probe->cubemap = 0;
+}
+
+// Flatten the probe (or its absence) into postfx's per-frame uniform block.
+// Deliberately NO environment tier on probe-less scenes: publishing the IBL
+// prefilter as the miss fallback was built and rejected -- SSR only shades
+// the shadow catcher, and an invisible catcher that mirrors the sky over a
+// darker background prints as a glowing pool the size of its quad. The
+// environment answer is only right when a probe's parallax box re-grounds
+// it; a probe-less miss stays empty and the march's own fades hide the
+// reach limits.
 void reflection_probe_publish_to_postfx(const ReflectionProbe* probe, PostFX* fx) {
     if (!fx)
         return;

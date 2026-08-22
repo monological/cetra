@@ -599,6 +599,56 @@ static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
+ * probes[] -- local reflection probes (spec 11.70).
+ *
+ * position, boxMin and boxMax are all REQUIRED, for the reason center and extent are
+ * above: a probe missing any of them is not a probe, and the default would be a capture
+ * at the origin box-projected against a degenerate box, which renders as a plausible
+ * wrong reflection rather than as an error.
+ *
+ * Closed key list, unlike fogVolumes: this block arrived after warn_unknown_keys existed
+ * and a typo'd `boxmin` is exactly the silent failure the required-key check cannot catch.
+ */
+static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
+    static const char* known[] = {"position", "boxMin",   "boxMax",
+                                  "intensity", "boxFade", "envOnly"};
+
+    const cJSON* probes = cJSON_GetObjectItemCaseSensitive(root, "probes");
+    if (!cJSON_IsArray(probes))
+        return;
+    const cJSON* p = NULL;
+    cJSON_ArrayForEach(p, probes) {
+        if (d->probe_count >= CSCENE_MAX_PROBES) {
+            log_warn("cscene: more than %d reflection probes; extras ignored",
+                     CSCENE_MAX_PROBES);
+            break;
+        }
+        if (!cJSON_IsObject(p)) {
+            log_warn("cscene: reflection probe that is not an object; skipped");
+            continue;
+        }
+        warn_unknown_keys(p, known, sizeof(known) / sizeof(known[0]), "probe");
+
+        CSceneProbe* out = &d->probes[d->probe_count];
+        memset(out, 0, sizeof(*out));
+        if (!get_floats(p, "position", out->position, 3) ||
+            !get_floats(p, "boxMin", out->box_min, 3) ||
+            !get_floats(p, "boxMax", out->box_max, 3)) {
+            log_warn("cscene: reflection probe needs position, boxMin and boxMax; skipped");
+            continue;
+        }
+        // create_reflection_probe's own defaults, restated because the memset
+        // above cleared them and a probe at intensity 0 is an invisible probe.
+        out->intensity = 1.0f;
+        out->box_fade = 0.2f;
+        get_float(p, "intensity", &out->intensity);
+        get_float(p, "boxFade", &out->box_fade);
+        get_bool(p, "envOnly", &out->env_only);
+        d->probe_count++;
+    }
+}
+
+/*
  * One nested wave train, `water.windSea` or `water.swell` (spec 11.48).
  *
  * Nested rather than flat-prefixed (`swellWindSpeed`, `swellSpreadGain`, ...) because a flat
@@ -1022,6 +1072,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_dust(d, root);
     parse_water(d, root);
     parse_fog_volumes(d, root);
+    parse_probes(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
     cJSON_Delete(root);

@@ -14,7 +14,7 @@
 #include "camera.h"
 #include "shadow.h"
 #include "ibl.h"
-#include "probe.h"
+#include "probe_set.h"
 #include "animation.h"
 #include "draw_list.h"
 
@@ -198,11 +198,11 @@ typedef struct Scene {
 
     // Image-Based Lighting
     IBLResources* ibl;
-    ReflectionProbe* probe;     // local reflection probe (optional)
-    struct SkyAtmosphere* sky;  // procedural sky feeding ibl (optional)
-    struct Wind* wind;          // dominant directional wind (optional; owned)
-    struct GIVolume* gi_volume; // indirect-diffuse probe grid (optional; owned)
-    struct Water* water;        // ocean/lake surface (optional; owned)
+    ReflectionProbeSet* probe_set; // local reflection probes (optional; owned)
+    struct SkyAtmosphere* sky;     // procedural sky feeding ibl (optional)
+    struct Wind* wind;             // dominant directional wind (optional; owned)
+    struct GIVolume* gi_volume;    // indirect-diffuse probe grid (optional; owned)
+    struct Water* water;           // ocean/lake surface (optional; owned)
 
     // Boxes of denser air, folded into the froxel volume (spec 11.39). Count 0 = none.
     FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES];

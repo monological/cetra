@@ -62,7 +62,7 @@ Scene* create_scene() {
 
     // Initialize IBL (NULL by default, user must load HDR)
     scene->ibl = NULL;
-    scene->probe = NULL;
+    scene->probe_set = NULL;
     scene->sky = NULL;
     scene->wind = NULL;
     scene->gi_volume = NULL;
@@ -173,10 +173,10 @@ void free_scene(Scene* scene) {
         scene->ibl = NULL;
     }
 
-    // Free reflection probe
-    if (scene->probe) {
-        free_reflection_probe(scene->probe);
-        scene->probe = NULL;
+    // Free reflection probes
+    if (scene->probe_set) {
+        free_reflection_probe_set(scene->probe_set);
+        scene->probe_set = NULL;
     }
 
     // Free procedural sky
@@ -518,7 +518,7 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
         glm_vec3_sub(scene->fog_volumes[i].center, (float*)delta, scene->fog_volumes[i].center);
 
     shadow_system_shift_origin(scene->shadow_system, delta);
-    reflection_probe_shift_origin(scene->probe, delta);
+    probe_set_shift_origin(scene->probe_set, delta);
     gi_volume_shift_origin(scene->gi_volume, delta);
     for (size_t i = 0; i < scene->particle_system_count; ++i)
         particle_system_shift_origin(scene->particle_systems[i], delta);

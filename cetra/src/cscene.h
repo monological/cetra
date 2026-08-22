@@ -17,6 +17,7 @@
 
 #define CSCENE_MAX_LIGHTS          16
 #define CSCENE_MAX_FOG_VOLUMES     8
+#define CSCENE_MAX_PROBES          8
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
 #define CSCENE_MAX_MATERIALS       8
 #define CSCENE_MAX_NAME            128
@@ -317,6 +318,28 @@ typedef struct CSceneFogVolume {
     float tint[3];
 } CSceneFogVolume;
 
+/*
+ * probes[] -- local reflection probes (spec 11.70), a top-level block for the same reason
+ * fogVolumes is one: a probe is a thing placed in the world.
+ *
+ * position, boxMin and boxMax are all REQUIRED. A probe is a capture point plus the box
+ * that box-projects it, and defaulting either would put a probe at the origin reflecting a
+ * room it is not in -- which renders plausibly and is wrong everywhere. The array replaces
+ * `environment.probe_scene` when both are present: that flag asks for ONE auto-placed
+ * probe, and a file that authored its own has already answered the question the flag asks.
+ *
+ * Mirrors ReflectionProbe in probe.h. The cap is this parser's own; a static assert where
+ * the two meet keeps it from exceeding PROBE_SET_MAX.
+ */
+typedef struct CSceneProbe {
+    float position[3];
+    float box_min[3];
+    float box_max[3];
+    float intensity;
+    float box_fade;
+    bool env_only; // prefilter the global environment instead of capturing the scene
+} CSceneProbe;
+
 // Mirrors MeteringMode in cetra/src/exposure.h. Kept as its own enum for the
 // reason CSceneTonemap is: this header carries no engine headers, and the values
 // must agree numerically -- which is unwritten anywhere if both sides use bare
@@ -458,6 +481,9 @@ typedef struct CetraSceneDesc {
 
     CSceneFogVolume fog_volumes[CSCENE_MAX_FOG_VOLUMES];
     int fog_volume_count;
+
+    CSceneProbe probes[CSCENE_MAX_PROBES];
+    int probe_count;
 
     CSceneMaterialOverride materials[CSCENE_MAX_MATERIALS];
     int material_count;

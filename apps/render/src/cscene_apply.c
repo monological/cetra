@@ -487,6 +487,87 @@ void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn) {
 }
 
 /*
+ * The scene file's reflection probes (spec 11.70). No CLI counterpart for the same reason
+ * fog volumes have none: a probe needs a capture point AND a parallax box, which is more
+ * than a flag can carry -- `--probe` asks for one auto-placed probe and cannot say where
+ * the rooms are.
+ *
+ * Captures the whole set here, at load, before the render loop: the set publishes only
+ * once every probe has succeeded, so no probe is ever photographed into another's capture
+ * and a headless frame sees a converged set. Returns false when the scene authored none,
+ * which is what leaves the auto-placement path below untouched.
+ */
+_Static_assert(CSCENE_MAX_PROBES <= PROBE_SET_MAX,
+               "the parser cannot author more probes than a set can hold");
+
+bool apply_cscene_probes(Engine* engine, Scene* scene, const CetraSceneDesc* cscn, int row0) {
+    if (!engine || !scene || !cscn || cscn->probe_count <= 0)
+        return false;
+
+    if (!scene->ibl || !scene->ibl->precomputed) {
+        fprintf(stderr,
+                "Warning: scene file authors %d reflection probe(s) but there is no HDR "
+                "environment (-e/--sky); skipping capture\n",
+                cscn->probe_count);
+        return false;
+    }
+
+    ReflectionProbeSet* set = create_reflection_probe_set();
+    if (!set)
+        return false;
+
+    float near_clips[CSCENE_MAX_PROBES];
+    float far_clips[CSCENE_MAX_PROBES];
+    bool env_only[CSCENE_MAX_PROBES];
+
+    for (int i = 0; i < cscn->probe_count; i++) {
+        const CSceneProbe* p = &cscn->probes[i];
+        ReflectionProbe* probe = create_reflection_probe();
+        if (!probe)
+            break;
+
+        glm_vec3_copy((float*)p->position, probe->position);
+        glm_vec3_copy((float*)p->box_min, probe->box_min);
+        glm_vec3_copy((float*)p->box_max, probe->box_max);
+        probe->intensity = p->intensity;
+        probe->box_fade = p->box_fade;
+
+        // The capture frustum comes from the probe's OWN box rather than from
+        // the scene: an authored probe describes a room, and a far plane fitted
+        // to the whole scene would push its depth precision into the walls it
+        // is actually looking at.
+        vec3 span;
+        glm_vec3_sub(probe->box_max, probe->box_min, span);
+        const float radius = 0.5f * glm_vec3_norm(span);
+        const int n = set->count;
+        near_clips[n] = fmaxf(0.005f * radius, 0.01f);
+        far_clips[n] = 10.0f * fmaxf(radius, 1.0f);
+        env_only[n] = p->env_only;
+
+        if (!probe_set_add(set, probe)) {
+            free_reflection_probe(probe);
+            break;
+        }
+        printf("Scene file: probe %d at (%.2f %.2f %.2f) box (%.2f %.2f %.2f)..(%.2f %.2f "
+               "%.2f) intensity %.2f fade %.2f%s\n",
+               n, (double)probe->position[0], (double)probe->position[1],
+               (double)probe->position[2], (double)probe->box_min[0], (double)probe->box_min[1],
+               (double)probe->box_min[2], (double)probe->box_max[0], (double)probe->box_max[1],
+               (double)probe->box_max[2], (double)probe->intensity, (double)probe->box_fade,
+               p->env_only ? " (environment only)" : "");
+    }
+
+    if (set->count <= 0 ||
+        !probe_set_capture_all(set, engine, scene, near_clips, far_clips, env_only, row0)) {
+        free_reflection_probe_set(set);
+        return false;
+    }
+
+    scene->probe_set = set;
+    return true;
+}
+
+/*
  * The material vocabulary lives in material.c (MATERIAL_PARAMS), shared with
  * the GUI editor so the two cannot disagree about what a name means or which
  * properties are safe to set. The parser records keys generically and never

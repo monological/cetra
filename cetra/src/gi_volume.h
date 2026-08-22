@@ -71,6 +71,7 @@ typedef struct GIVolume {
     GLuint atlas;
     int atlas_w, atlas_h;
     int irradiance_rows; // atlas rows consumed by the irradiance block
+    bool owns_atlas;     // false when the specular probe atlas allocated it
 
     // Per-probe capture scratch, reused for every probe.
     GLuint capture_color; // cubemap, GI_CAPTURE_FACE^2, RGB16F
@@ -100,6 +101,23 @@ typedef struct GIVolume {
 
 GIVolume* create_gi_volume(int nx, int ny, int nz);
 void free_gi_volume(GIVolume* gi);
+
+// The atlas this volume WOULD allocate, without allocating it. Asked by the
+// specular probe atlas (spec 11.70), which has to reserve these columns before
+// the volume's own lazy allocation runs -- there is one sampler unit for both
+// and only one texture can be bound to it.
+void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h);
+
+// Take a texture the specular probe atlas allocated, with this volume's region
+// at columns [0, w) of it. The volume keeps every tile coordinate it already
+// computes: those are texel offsets, and giAtlasSize is a uniform, so a wider
+// texture moves nothing it addresses.
+//
+// Must be called before the first gi_volume_update, which allocates otherwise
+// and then early-returns forever -- leaving two textures fighting over one
+// sampler unit. The probe sweep runs at load, before the loop's first frame,
+// so the ordering holds by construction; this warns rather than trusting it.
+void gi_volume_adopt_atlas(GIVolume* gi, GLuint texture, int atlas_w, int atlas_h);
 
 // Fit the grid to a scene AABB and arm a full convergence sweep.
 void gi_volume_fit(GIVolume* gi, const vec3 aabb_min, const vec3 aabb_max);

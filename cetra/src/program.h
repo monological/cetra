@@ -175,6 +175,7 @@ ShaderProgram* create_froxel_composite_program();
 // exponential representation (spec 11.12); one pass per layer per axis.
 ShaderProgram* create_fog_esm_program();
 ShaderProgram* create_gi_project_program();
+ShaderProgram* create_probe_project_program();
 ShaderProgram* create_lum_measure_program();
 ShaderProgram* create_lum_histogram_program();
 ShaderProgram* create_lum_reduce_program();

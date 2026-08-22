@@ -48,6 +48,12 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn);
 
+// Build and capture the scene file's reflection probes (spec 11.70). True when
+// it took the scene's probes, which is what tells the caller to skip the single
+// auto-placed probe --probe would otherwise install. Must run after the model
+// recenter, like every other capture.
+bool apply_cscene_probes(Engine* engine, Scene* scene, const CetraSceneDesc* cscn, int row0);
+
 // Build the scene's ambient dust particle system (if the .cscn declares a dust
 // block), sized to the scene bounds. Replaces the old hardcoded filename gate.
 void apply_cscene_dust(struct Engine* engine, Scene* scene, const CetraSceneDesc* cscn, vec3 center,

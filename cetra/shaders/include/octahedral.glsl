@@ -37,3 +37,25 @@ vec3 octDecode(vec2 uv) {
 vec3 octDirFromTexel(vec2 texel, float res) {
     return octDecode((texel + 0.5) / res * 2.0 - 1.0);
 }
+
+// Gutter texel -> the interior texel it mirrors, in BORDERED tile coordinates
+// (0 and res+1 are the gutter ring). The octahedral square wraps in a way no
+// sampler understands: crossing an edge re-enters the SAME tile mirrored along
+// that edge, and corners wrap to the diagonally opposite corner. Interior
+// texels pass through untouched.
+//
+// The one-texel ring is a contract, not a default: this steps exactly one
+// column or row in, so a wider gutter would leave its outer ring unwritten and
+// the tiles would filter into each other at grazing roughness.
+vec2 octWrapToInterior(vec2 local, float res) {
+    float outer = res + 1.0;
+    bool cx = (local.x == 0.0 || local.x == outer);
+    bool cy = (local.y == 0.0 || local.y == outer);
+    if (cx && cy)
+        return vec2(local.x == 0.0 ? res : 1.0, local.y == 0.0 ? res : 1.0);
+    if (cx) // vertical edge: mirror in y, step one column in from the far side
+        return vec2(local.x == 0.0 ? 1.0 : res, outer - local.y);
+    if (cy) // horizontal edge: mirror in x, step one row in from the far side
+        return vec2(outer - local.x, local.y == 0.0 ? 1.0 : res);
+    return local;
+}

@@ -58,25 +58,11 @@ float rayDistance(vec3 dir, float depth01) {
     return min(viewZ / (max(axis, 1e-4) * farZ), 1.0);
 }
 
-// Border texel -> the interior texel it mirrors. The octahedral square wraps in
-// a way no sampler understands: crossing an edge re-enters the SAME tile,
-// mirrored along that edge; corners wrap to the diagonally opposite corner.
-// Interior texels pass through untouched.
-vec2 wrapToInterior(vec2 local, float outer) {
-    bool cx = (local.x == 0.0 || local.x == outer);
-    bool cy = (local.y == 0.0 || local.y == outer);
-    if (cx && cy)
-        return vec2(local.x == 0.0 ? tileRes : 1.0, local.y == 0.0 ? tileRes : 1.0);
-    if (cx) // vertical edge: mirror in y, step one column in from the far side
-        return vec2(local.x == 0.0 ? 1.0 : tileRes, outer - local.y);
-    if (cy) // horizontal edge: mirror in x, step one row in from the far side
-        return vec2(outer - local.x, local.y == 0.0 ? 1.0 : tileRes);
-    return local;
-}
-
 void main() {
     // Position within the bordered tile: 0 and tileRes+1 are the gutter ring.
-    vec2 local = wrapToInterior(floor(gl_FragCoord.xy - tileOrigin), tileRes + 1.0);
+    // The wrap itself is octahedral.glsl's, shared with the specular probe
+    // projection: it is a property of the mapping, not of what a tile holds.
+    vec2 local = octWrapToInterior(floor(gl_FragCoord.xy - tileOrigin), tileRes);
     // ...then to the interior's own 0-based coordinates, which is what the
     // octahedral mapping and every consumer's UV are expressed in.
     vec3 N = octDirFromTexel(local - 1.0, tileRes);

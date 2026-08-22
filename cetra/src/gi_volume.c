@@ -64,7 +64,7 @@ GIVolume* create_gi_volume(int nx, int ny, int nz) {
 void free_gi_volume(GIVolume* gi) {
     if (!gi)
         return;
-    if (gi->atlas)
+    if (gi->atlas && gi->owns_atlas)
         glDeleteTextures(1, &gi->atlas);
     if (gi->capture_color)
         glDeleteTextures(1, &gi->capture_color);
@@ -135,26 +135,59 @@ static GLuint gi_make_cubemap(int size, GLenum internal_format, GLenum format, G
     return tex;
 }
 
+void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h) {
+    if (!gi) {
+        if (out_w)
+            *out_w = 0;
+        if (out_h)
+            *out_h = 0;
+        return;
+    }
+    const int rows = gi->counts[1] * gi->counts[2];
+    if (out_w)
+        *out_w = gi->counts[0] * (IRR_PITCH > VIS_PITCH ? IRR_PITCH : VIS_PITCH);
+    if (out_h)
+        *out_h = rows * IRR_PITCH + rows * VIS_PITCH;
+}
+
+void gi_volume_adopt_atlas(GIVolume* gi, GLuint texture, int atlas_w, int atlas_h) {
+    if (!gi || !texture)
+        return;
+    if (gi->atlas) {
+        log_warn("GI volume already allocated its atlas; the specular probes cannot share it");
+        return;
+    }
+    gi->atlas = texture;
+    gi->atlas_w = atlas_w;
+    gi->atlas_h = atlas_h;
+    gi->owns_atlas = false;
+}
+
 static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
-    if (gi->atlas)
-        return true;
     if (gi->failed)
         return false;
+    // A shared atlas arrives already allocated and already cleared; only the
+    // rest of the scratch is still missing.
+    const bool adopted = gi->atlas != 0;
 
     const int rows = gi->counts[1] * gi->counts[2];
     gi->irradiance_rows = rows * IRR_PITCH;
-    gi->atlas_w = gi->counts[0] * (IRR_PITCH > VIS_PITCH ? IRR_PITCH : VIS_PITCH);
-    gi->atlas_h = gi->irradiance_rows + rows * VIS_PITCH;
 
-    glGenTextures(1, &gi->atlas);
-    glBindTexture(GL_TEXTURE_2D, gi->atlas);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, gi->atlas_w, gi->atlas_h, 0, GL_RGBA, GL_FLOAT,
-                 NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    if (!adopted) {
+        gi->owns_atlas = true;
+        gi->atlas_w = gi->counts[0] * (IRR_PITCH > VIS_PITCH ? IRR_PITCH : VIS_PITCH);
+        gi->atlas_h = gi->irradiance_rows + rows * VIS_PITCH;
+
+        glGenTextures(1, &gi->atlas);
+        glBindTexture(GL_TEXTURE_2D, gi->atlas);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, gi->atlas_w, gi->atlas_h, 0, GL_RGBA, GL_FLOAT,
+                     NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 
     gi->capture_color = gi_make_cubemap(GI_CAPTURE_FACE, GL_RGB16F, GL_RGB, GL_FLOAT);
     gi->capture_depth =
@@ -182,13 +215,17 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
     }
 
     // The atlas starts undefined; a probe that is never reached would otherwise
-    // blend against garbage forever.
-    glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
-    glViewport(0, 0, gi->atlas_w, gi->atlas_h);
-    glDisable(GL_BLEND);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // blend against garbage forever. A shared atlas was cleared whole by the
+    // owner before anything was drawn into it, so clearing here would erase the
+    // specular columns instead.
+    if (!adopted) {
+        glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
+        glViewport(0, 0, gi->atlas_w, gi->atlas_h);
+        glDisable(GL_BLEND);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
 
     log_info("GI volume: %dx%dx%d probes, %dx%d atlas", gi->counts[0], gi->counts[1],
              gi->counts[2], gi->atlas_w, gi->atlas_h);

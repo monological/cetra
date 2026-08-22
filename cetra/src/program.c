@@ -1071,6 +1071,12 @@ ShaderProgram* create_gi_project_program() {
     return create_post_program("gi_project", gi_project_frag_shader_str);
 }
 
+// Specular probe projection (spec 11.70). Same sub-rectangle-by-viewport shape
+// as the GI tile above, one row of roughness at a time.
+ShaderProgram* create_probe_project_program() {
+    return create_post_program("probe_project", probe_project_frag_shader_str);
+}
+
 ShaderProgram* create_motion_blur_program() {
     return create_post_program("motion_blur", motion_blur_frag_shader_str);
 }

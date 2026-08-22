@@ -307,6 +307,14 @@ typedef struct PostFX {
     float probe_max_lod;
     float probe_intensity;
 
+    // Two or more probes (spec 11.70): the fields above go quiet and SSR blends
+    // the same octahedral atlas the surface shader does, through the same
+    // include and the same UBO descriptors. Mutually exclusive with
+    // probe_enabled, which is what keeps the one-probe path bit-identical.
+    bool probe_multi;
+    GLuint probe_atlas;
+    int probe_count;
+
     // Volumetric fog (spec 9.5): a camera-frustum froxel volume gathers
     // single-scattered light from the shadow casters, the clustered local
     // lights, and an ambient term through an exponential height-fog density,

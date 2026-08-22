@@ -155,6 +155,10 @@ static void print_usage(const char* prog) {
             "      --probe-scene      Capture the scene meshes into the probe (interiors)\n");
     fprintf(stderr,
             "      --probe-debug      Show the raw capture as the background (implies --probe)\n");
+    fprintf(stderr, "      --probe-set-res N  Probe atlas row-0 tile size (default 512; a scene "
+                    "file's probes[] only)\n");
+    fprintf(stderr, "      --probe-set-probe N  Print the probe-set diagnostic every N frames\n");
+    fprintf(stderr, "      --probe-set-debug  Draw the probe atlas over the frame\n");
     fprintf(stderr, "      --gi-volume        DDGI irradiance probe volume (indirect diffuse "
                     "bounce)\n");
     fprintf(stderr,
@@ -818,6 +822,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--probe-debug") == 0) {
             args->probe = 1;
             args->probe_debug = 1;
+        } else if (strcmp(argv[i], "--probe-set-res") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->probe_set_res = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--probe-set-probe") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->probe_set_probe = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--probe-set-debug") == 0) {
+            args->probe_set_debug = 1;
         } else if (strcmp(argv[i], "--gi-volume") == 0) {
             args->gi_volume = 1;
         } else if (strcmp(argv[i], "--gi-probes") == 0) {
@@ -1944,6 +1962,12 @@ static void render_frame_update(Engine* engine, float dt) {
         // and refuses outright in headless without jitter.
         fprintf(stderr, "frame %d: render scale -> %.2f\n", frame_schedule->scale_at_frame[i],
                 engine->render_scale);
+    }
+    if (frame_schedule->probe_set_probe > 0 &&
+        (int)engine->total_frames % frame_schedule->probe_set_probe == 0) {
+        Scene* scene = get_current_scene(engine);
+        if (scene)
+            probe_set_probe_print(scene->probe_set, (int)engine->total_frames, false);
     }
 }
 
@@ -3376,7 +3400,43 @@ int main(int argc, char** argv) {
     // generated.
     apply_model_recenter(engine, scene->root_node);
 
-    if (args.probe && scene->ibl && scene->ibl->precomputed) {
+    // The GI probe volume. Only allocated here -- the capture sweep runs inside
+    // the render loop, where the scene has its final transforms and the async
+    // texture loader has drained.
+    //
+    // BEFORE the reflection probes, and the order is load-bearing: the two
+    // atlases share sampler unit 14, so the specular atlas has to reserve this
+    // volume's columns at allocation and can only do that if the volume exists
+    // to be measured. Reversed, each allocates its own texture and the second
+    // one bound wins the unit.
+    if (args.gi_volume) {
+        int nx = args.gi_probes[0] > 0 ? args.gi_probes[0] : 8;
+        int ny = args.gi_probes[1] > 0 ? args.gi_probes[1] : 4;
+        int nz = args.gi_probes[2] > 0 ? args.gi_probes[2] : 8;
+        GIVolume* gi = create_gi_volume(nx, ny, nz);
+        if (gi) {
+            if (args.gi_rate >= 0)
+                gi->rate = args.gi_rate;
+            gi->debug_atlas = args.gi_debug != 0;
+            // Bounds AFTER the recenter above: the pre-recenter ones no longer
+            // say where the scene is.
+            vec3 gi_min, gi_max;
+            compute_scene_bounds(scene, gi_min, gi_max);
+            gi_volume_fit(gi, gi_min, gi_max);
+            scene->gi_volume = gi;
+        }
+    }
+
+    // A scene file that authored its own probes wins over the flag, and says so:
+    // --probe (or environment.probe_scene, which is the same request) asks for
+    // ONE auto-placed probe, and a file carrying a probes[] array has already
+    // answered where its rooms are.
+    const bool authored_probes = apply_cscene_probes(engine, scene, cscn, args.probe_set_res);
+    if (authored_probes && args.probe) {
+        fprintf(stderr, "Warning: the scene file authors reflection probes; --probe ignored\n");
+    }
+
+    if (!authored_probes && args.probe && scene->ibl && scene->ibl->precomputed) {
         // A dome stage grounds the environment itself (no scene render); the
         // scene meshes join the capture only for interiors, where they ARE
         // the environment
@@ -3450,7 +3510,15 @@ int main(int argc, char** argv) {
             // never see one
             if (reflection_probe_capture(probe, engine, scene, probe_near, probe_far,
                                          probe_env_only) == 0) {
-                scene->probe = probe;
+                ReflectionProbeSet* set = create_reflection_probe_set();
+                if (set && probe_set_add(set, probe)) {
+                    set->captures_total = 1;
+                    set->ready = true;
+                    scene->probe_set = set;
+                } else {
+                    free_reflection_probe_set(set);
+                    free_reflection_probe(probe);
+                }
             } else {
                 free_reflection_probe(probe);
             }
@@ -3459,26 +3527,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Warning: --probe requires an HDR environment (-e); skipping capture\n");
     }
 
-    // The GI probe volume. Only allocated here -- the capture sweep runs inside
-    // the render loop, where the scene has its final transforms and the async
-    // texture loader has drained.
-    if (args.gi_volume) {
-        int nx = args.gi_probes[0] > 0 ? args.gi_probes[0] : 8;
-        int ny = args.gi_probes[1] > 0 ? args.gi_probes[1] : 4;
-        int nz = args.gi_probes[2] > 0 ? args.gi_probes[2] : 8;
-        GIVolume* gi = create_gi_volume(nx, ny, nz);
-        if (gi) {
-            if (args.gi_rate >= 0)
-                gi->rate = args.gi_rate;
-            gi->debug_atlas = args.gi_debug != 0;
-            // Bounds AFTER the recenter above, which the probe block may have
-            // applied: the pre-recenter bounds no longer say where the scene is.
-            vec3 gi_min, gi_max;
-            compute_scene_bounds(scene, gi_min, gi_max);
-            gi_volume_fit(gi, gi_min, gi_max);
-            scene->gi_volume = gi;
-        }
-    }
+
+    if (scene->probe_set)
+        scene->probe_set->debug_atlas = args.probe_set_debug != 0;
 
     /*
      * The water surface: the scene file supplies it, the flags override it.
@@ -3594,6 +3645,12 @@ int main(int argc, char** argv) {
     // --water-probe -- there is nothing to measure until a frame has run one.
     if (args.water_fft_probe)
         water_fft_probe(scene->water, engine);
+
+    // The per-probe block, after the loop for the same reason: the froxel masks
+    // are built by the frames, so the digest and the bit count only mean
+    // anything once some have run.
+    if (args.probe_set_probe > 0)
+        probe_set_probe_print(scene->probe_set, (int)engine->total_frames, true);
 
     // Needs no GL and no frame -- the wind field, the per-mesh maxima and the
     // mask bounds are all resident from load. Here anyway, beside the others,

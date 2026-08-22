@@ -23,6 +23,7 @@
 #include "sky.h"
 #include "water.h"
 #include "gi_volume.h"
+#include "probe_atlas.h"
 #include "layers_vt.h"
 #include "material_texture_array.h"
 #include "texture.h"
@@ -1518,6 +1519,13 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         add_shader_program_to_engine(engine, gi_project_program);
     }
 
+    // Specular probe projection (spec 11.70), here for the same reason: the
+    // atlas it writes is read by the scene pass.
+    ShaderProgram* probe_project_program = create_probe_project_program();
+    if (probe_project_program) {
+        add_shader_program_to_engine(engine, probe_project_program);
+    }
+
     return 0;
 }
 
@@ -1788,10 +1796,10 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
         engine->postfx->dof_focus_distance =
             glm_vec3_distance(engine->camera->position, engine->camera->look_at);
     }
-    // Hand the current scene's reflection probe and shadow casters to postfx
+    // Hand the current scene's reflection probes and shadow casters to postfx
     // (SSR miss fallback / fog march) without postfx learning about Scene
     const Scene* fx_scene = get_current_scene(engine);
-    reflection_probe_publish_to_postfx(fx_scene ? fx_scene->probe : NULL, engine->postfx);
+    probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
     // LUTs it is rebuilt here every frame, immediately before it is published.
@@ -1829,6 +1837,10 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     }
     if (fx_scene && fx_scene->gi_volume && fx_scene->gi_volume->debug_atlas) {
         gi_volume_debug_blit(fx_scene->gi_volume, engine, engine->fb_width, engine->fb_height);
+    }
+    if (fx_scene && fx_scene->probe_set && fx_scene->probe_set->debug_atlas) {
+        probe_atlas_debug_blit(fx_scene->probe_set->atlas, engine, engine->fb_width,
+                               engine->fb_height);
     }
 
     // GUI last, after tone mapping. gui_render_frame self-gates on

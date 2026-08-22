@@ -91,6 +91,9 @@ typedef struct {
     float probe_pos[3];    // Probe capture position override
     int probe_scene;       // Capture the scene meshes too (interiors)
     int probe_debug;       // Show the raw capture as the background
+    int probe_set_res;     // Probe atlas row-0 tile size (0 = default)
+    int probe_set_probe;   // Print the probe-set diagnostic every N frames (0 = off)
+    int probe_set_debug;   // Draw the probe atlas over the frame
     int gi_volume;         // Enable the DDGI irradiance probe volume
     int gi_probes[3];      // Probe grid counts (0,0,0 = default)
     int water;             // Enable the water surface (spec 11.32)

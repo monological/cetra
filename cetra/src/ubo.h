@@ -34,6 +34,7 @@
 #define UBO_BINDING_IES             6
 #define UBO_BINDING_VT_PAGES        7
 #define UBO_BINDING_ROADS           8
+#define UBO_BINDING_PROBES          9
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's

@@ -271,11 +271,15 @@ static void _sky_release_rebake(Engine* engine, Scene* scene, SkyAtmosphere* sky
     // purged (enabled implies noise_baked on every reachable path).
     if (sky->clouds.noise_baked)
         sky_bake_ex(sky, scene->ibl, engine, sky->clouds.enabled);
-    if (scene->probe) {
-        if (scene->probe->cubemap == 0)
-            reflection_probe_capture(scene->probe, engine, scene, 0.1f, 100.0f, true);
+    // Per probe, and the refusal is per probe too: an environment-only probe
+    // re-prefilters for the price of a cube walk, a scene-captured one would
+    // cost six scene renders and is left as shot.
+    const ReflectionProbeSet* probes = scene->probe_set;
+    for (int i = 0; probes && i < probes->count; ++i) {
+        if (probes->probes[i]->cubemap == 0 && !probe_set_multi(probes))
+            reflection_probe_capture(probes->probes[i], engine, scene, 0.1f, 100.0f, true);
         else
-            log_info("Sky: scene-captured probe not refreshed on release");
+            log_info("Sky: scene-captured probe %d not refreshed on release", i);
     }
     gi_volume_mark_dirty(scene->gi_volume);
 }
@@ -594,12 +598,28 @@ static void _engine_gui_panel(Engine* engine) {
 
         // Attached probes always carry a capture: the toggle switches
         // consumption, it does not recapture
-        if (scene->probe) {
-            _begin_effect_group("Reflection Probe", &scene->probe->enabled);
-            igSliderFloat("Probe Intensity", &scene->probe->intensity, 0.0f, 4.0f, "%.2f", 0);
-            igSliderFloat("Box Fade", &scene->probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
-            igCheckbox("Show Capture", &scene->probe->debug_background);
+        ReflectionProbeSet* probe_set = scene->probe_set;
+        if (probe_set && probe_set->count == 1) {
+            ReflectionProbe* probe = probe_set->probes[0];
+            _begin_effect_group("Reflection Probe", &probe->enabled);
+            igSliderFloat("Probe Intensity", &probe->intensity, 0.0f, 4.0f, "%.2f", 0);
+            igSliderFloat("Box Fade", &probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
+            igCheckbox("Show Capture", &probe->debug_background);
             _end_effect_group();
+        } else if (probe_set && probe_set->count > 1) {
+            // The descriptors upload with the froxel masks every frame, so an
+            // edit here is live on the next one with no invalidation path.
+            if (igCollapsingHeader_BoolPtr("Reflection Probes", NULL, 0)) {
+                for (int i = 0; i < probe_set->count; ++i) {
+                    ReflectionProbe* probe = probe_set->probes[i];
+                    igPushID_Int(i);
+                    igText("Probe %d  (%.1f, %.1f, %.1f)", i, probe->position[0],
+                           probe->position[1], probe->position[2]);
+                    igSliderFloat("Intensity", &probe->intensity, 0.0f, 4.0f, "%.2f", 0);
+                    igSliderFloat("Box Fade", &probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
+                    igPopID();
+                }
+            }
         }
 
         // Attached water always carries its own bed and cascades; the toggle
