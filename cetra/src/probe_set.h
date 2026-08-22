@@ -16,6 +16,11 @@
 // byte per froxel.
 #define PROBE_SET_MAX 8
 
+// Roughness rows per probe column. Here rather than in probe_atlas.h because
+// light_cluster.h sizes the GPU block's row table by it and cannot include that
+// header; probe_atlas.h asserts the two agree.
+#define PROBE_ATLAS_ROWS_MAX 8
+
 // The GPU mirror of a set, GpuProbeBlock, lives in light_cluster.h beside the
 // other std140 mirrors: half of it is the froxel masks, which that file's grid
 // sizes and its build pass fills.
@@ -80,6 +85,17 @@ bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struc
 // calls it yet, and a scene-captured probe is deliberately left stale by the
 // sun slider exactly as the single probe always was.
 void probe_set_mark_dirty(ReflectionProbeSet* set);
+
+// Pack what a probe IS -- position, box, intensity, where its column sits --
+// into the GPU block. The froxel masks in the same block are the light grid's
+// to fill; this is the half that belongs to the set.
+struct GpuProbeBlock;
+void probe_set_fill_descriptors(const ReflectionProbeSet* set, struct GpuProbeBlock* out);
+
+// Take back the digest and bit count of the masks the grid just built, so the
+// diagnostic can print them. Here rather than written from light_cluster.c,
+// which would have to launder a const Scene* to reach these fields.
+void probe_set_report_masks(ReflectionProbeSet* set, const void* masks, size_t bytes, int bits);
 
 // World-origin shift (spec 11.62): each probe's parallax origin and proxy box
 // are world absolutes and move with the world. The atlas holds radiance in

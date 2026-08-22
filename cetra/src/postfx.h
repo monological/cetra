@@ -313,7 +313,6 @@ typedef struct PostFX {
     // probe_enabled, which is what keeps the one-probe path bit-identical.
     bool probe_multi;
     GLuint probe_atlas;
-    int probe_count;
 
     // Volumetric fog (spec 9.5): a camera-frustum froxel volume gathers
     // single-scattered light from the shadow casters, the clustered local

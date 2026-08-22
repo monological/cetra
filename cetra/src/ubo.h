@@ -184,12 +184,13 @@ _Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,
  * blocks of GL 4.1's guaranteed twelve. Whoever wants the tenth should know
  * that is the budget being spent.
  */
-// info(16) + atlas params(16) + 8 probes x 4 rows(512) + 3072 froxel masks
-// packed 4 per word(3072). A literal for the reason the cluster sizes above are
-// literals: light_cluster.h owns the grid dimensions and includes THIS file, so
-// the count is not reachable here. The assert against sizeof is over there,
-// where the struct is, and is what catches either number drifting.
-#define UBO_PROBES_BLOCK_SIZE 3616
+// info(16) + atlas params(16) + atlas column(16) + 8 row entries(128)
+// + 8 probes x 4 rows(512) + 3072 froxel masks packed 4 per word(3072).
+// A literal for the reason the cluster sizes above are literals:
+// light_cluster.h owns the grid dimensions and includes THIS file, so the count
+// is not reachable here. The assert against sizeof is over there, where the
+// struct is, and is what catches either number drifting.
+#define UBO_PROBES_BLOCK_SIZE 3760
 _Static_assert(UBO_PROBES_BLOCK_SIZE <= 16384,
                "the probes block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 

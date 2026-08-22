@@ -54,19 +54,10 @@ ProbeAtlas* create_probe_atlas(struct Engine* engine, struct Scene* scene, int c
         row0 = PROBE_ATLAS_ROW0_MIN;
     if (row0 > PROBE_ATLAS_ROW0_MAX)
         row0 = PROBE_ATLAS_ROW0_MAX;
-    // Down to a power of two, and this is a correctness requirement rather than
-    // neatness. The row sizes are computed twice -- here as an integer shift and
-    // in the shader as a divide by exp2 -- because the shader has no integer
-    // row0 to shift. Those two agree for every power of two and disagree the
-    // moment row0 is anything else (513 >> 1 is 256, 513/2 is 256.5), and the
-    // disagreement is a half-texel drift in every row origin below the first:
-    // the atlas would be written at one set of offsets and read at another.
-    int pot = PROBE_ATLAS_ROW0_MIN;
-    while (pot * 2 <= row0)
-        pot *= 2;
-    if (pot != row0)
-        log_warn("Probe atlas row size %d is not a power of two; using %d", row0, pot);
-    row0 = pot;
+    // Any size in range. This used to round down to a power of two, because the
+    // shader recomputed the row sizes with a divide by exp2 where this file
+    // shifts, and the two agree only on powers of two. The shader reads a
+    // published table now, so there is nothing left to agree with.
 
     ProbeAtlas* atlas = calloc(1, sizeof(ProbeAtlas));
     if (!atlas) {
@@ -213,7 +204,7 @@ bool probe_atlas_project(ProbeAtlas* atlas, const ReflectionProbe* probe, int in
     return true;
 }
 
-void probe_atlas_bind(const ProbeAtlas* atlas, ShaderProgram* program, int count) {
+void probe_atlas_bind(const ProbeAtlas* atlas, ShaderProgram* program) {
     if (!atlas || !program || !program->uniforms)
         return;
 
@@ -223,8 +214,6 @@ void probe_atlas_bind(const ProbeAtlas* atlas, ShaderProgram* program, int count
     glActiveTexture(GL_TEXTURE0 + GI_ATLAS_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_2D, atlas->texture);
     glActiveTexture(GL_TEXTURE0);
-
-    uniform_set_int(u, "probeCount", count);
 }
 
 void probe_atlas_publish_to_postfx(const ProbeAtlas* atlas, const ReflectionProbeSet* set,
@@ -234,22 +223,38 @@ void probe_atlas_publish_to_postfx(const ProbeAtlas* atlas, const ReflectionProb
 
     fx->probe_multi = atlas != NULL;
     fx->probe_atlas = atlas ? atlas->texture : 0;
-    fx->probe_count = set ? set->count : 0;
     // SSR reads the same block the surface program does, so it needs no copy of
     // the descriptors -- only the texture and the count that arms the loop.
     fx->probe_enabled = false;
     fx->probe_cubemap = 0;
 }
 
-void probe_atlas_fill_rect(const ProbeAtlas* atlas, int index, float out[4]) {
-    if (!atlas || !out)
+float probe_atlas_column_x(const ProbeAtlas* atlas, int index) {
+    if (!atlas || index < 0 || index >= atlas->capacity)
+        return 0.0f;
+    return (float)(atlas->spec_x + index * atlas_column_w(atlas->row0));
+}
+
+void probe_atlas_fill_column(const ProbeAtlas* atlas, float out_column[4],
+                             float out_rows[][4]) {
+    if (!atlas || !out_column || !out_rows)
         return;
-    int ox, oy;
-    atlas_tile_origin(atlas, index, 0, &ox, &oy);
-    out[0] = (float)ox;
-    out[1] = (float)oy;
-    out[2] = (float)atlas->row0;
-    out[3] = (float)PROBE_ATLAS_GUTTER;
+
+    out_column[0] = 0.0f;
+    out_column[1] = 0.0f;
+    out_column[2] = (float)PROBE_ATLAS_GUTTER;
+    out_column[3] = (float)(PROBE_ATLAS_ROWS - 1);
+
+    // The row table the shader reads instead of re-deriving the halving rule.
+    // Every probe's column has this same geometry, so it is published once.
+    int y = 0;
+    for (int r = 0; r < PROBE_ATLAS_ROWS; ++r) {
+        out_rows[r][0] = (float)y;
+        out_rows[r][1] = (float)atlas_row_res(atlas->row0, r);
+        out_rows[r][2] = 0.0f;
+        out_rows[r][3] = 0.0f;
+        y += atlas_row_pitch(atlas->row0, r);
+    }
 }
 
 void probe_atlas_size(const ProbeAtlas* atlas, int* out_w, int* out_h) {

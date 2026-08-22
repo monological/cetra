@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 #include "probe.h"
+#include "probe_set.h" // PROBE_ATLAS_ROWS_MAX, which the GPU row table is sized by
 
 // Where N probes' prefiltered radiance lives (spec 11.70). Everything the rest
 // of the engine would otherwise have to know about specular probe storage is
@@ -18,11 +19,9 @@
 // mips because generating mips would filter across the tile gutters that make
 // an octahedral tile bilinear-safe at all.
 
-// Row 0's interior edge, and it must be a POWER OF TWO -- create_probe_atlas
-// rounds down to one and says so. The row sizes are computed on both sides of
-// the seam, as an integer shift here and as a divide by exp2 in the shader
-// (which has no integer row0 to shift), and those agree for a power of two and
-// nowhere else.
+// Row 0's interior edge. Any value in range: the row geometry is published to
+// the shader as a table, so nothing recomputes it on the far side of the seam
+// and no power-of-two constraint follows.
 //
 // The near-mirror case decides the default, as it decided PROBE_PREFILTER_SIZE:
 // an octahedral tile carries roughly (2/sqrt(6)) of a cube face's angular
@@ -36,6 +35,11 @@
 // r/(rows-1) -- ibl_prefilter_cubemap's own convention, which is what lets the
 // shader's roughness lookup be two taps and a mix with no remapping.
 #define PROBE_ATLAS_ROWS PROBE_PREFILTER_MIP_LEVELS
+// light_cluster.h sizes the GPU row table by PROBE_ATLAS_ROWS_MAX and cannot
+// include this header (it would cycle), so the two are stated apart and pinned
+// together here.
+_Static_assert(PROBE_ATLAS_ROWS == PROBE_ATLAS_ROWS_MAX,
+               "the GPU row table must have one entry per prefiltered roughness level");
 
 // Rows stop halving here: past it a tile is mostly gutter, and the roughness
 // levels that read it are the ones a lobe has already smeared flat.
@@ -78,14 +82,21 @@ void free_probe_atlas(ProbeAtlas* atlas);
 bool probe_atlas_project(ProbeAtlas* atlas, const ReflectionProbe* probe, int index);
 
 // Bind the atlas on the GI atlas unit and publish the layout uniforms.
-void probe_atlas_bind(const ProbeAtlas* atlas, ShaderProgram* program, int count);
+void probe_atlas_bind(const ProbeAtlas* atlas, ShaderProgram* program);
 
 void probe_atlas_publish_to_postfx(const ProbeAtlas* atlas, const struct ReflectionProbeSet* set,
                                    struct PostFX* fx);
 
-// The four floats a probe's UBO descriptor carries about where its column is:
-// texel origin, row-0 size, gutter.
-void probe_atlas_fill_rect(const ProbeAtlas* atlas, int index, float out[4]);
+// A probe column's left edge, in texels. The only per-probe fact about the
+// layout -- everything else about a column is shared, which is what
+// probe_atlas_fill_column publishes.
+float probe_atlas_column_x(const ProbeAtlas* atlas, int index);
+
+// The atlas-wide half of the layout: the gutter and last row index, plus each
+// row's y origin and interior edge. Published to the GPU so the shader reads a
+// table instead of re-deriving the halving rule -- which is what lets the row
+// size be any value rather than a power of two.
+void probe_atlas_fill_column(const ProbeAtlas* atlas, float out_column[4], float out_rows[][4]);
 
 void probe_atlas_size(const ProbeAtlas* atlas, int* out_w, int* out_h);
 void probe_atlas_rect(const ProbeAtlas* atlas, int index, int* out_x, int* out_y, int* out_rows);

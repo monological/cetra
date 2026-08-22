@@ -164,6 +164,15 @@ void gi_volume_adopt_atlas(GIVolume* gi, GLuint texture, int atlas_w, int atlas_
 }
 
 static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
+    // Allocate-once, and this must NOT be `gi->atlas != 0`. That field used to
+    // serve as the memo, and since 11.70 it is also set from outside by
+    // gi_volume_adopt_atlas -- so one sentinel would be answering two questions
+    // ("is my atlas here" and "are my targets built") and this function became
+    // re-runnable. It is called on every frame with a dirty probe, so a
+    // re-convergence sweep re-created two cubemaps, an FBO and a VAO per frame
+    // and orphaned the previous ones.
+    if (gi->targets_ready)
+        return true;
     if (gi->failed)
         return false;
     // A shared atlas arrives already allocated and already cleared; only the
@@ -175,8 +184,10 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
 
     if (!adopted) {
         gi->owns_atlas = true;
-        gi->atlas_w = gi->counts[0] * (IRR_PITCH > VIS_PITCH ? IRR_PITCH : VIS_PITCH);
-        gi->atlas_h = gi->irradiance_rows + rows * VIS_PITCH;
+        // The size this volume WOULD take, from the one function that states
+        // it -- the specular atlas reserves its columns from the same answer,
+        // and a second copy here would mis-place them the moment either moved.
+        gi_volume_atlas_extent(gi, &gi->atlas_w, &gi->atlas_h);
 
         glGenTextures(1, &gi->atlas);
         glBindTexture(GL_TEXTURE_2D, gi->atlas);
@@ -227,6 +238,7 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
+    gi->targets_ready = true;
     log_info("GI volume: %dx%dx%d probes, %dx%d atlas", gi->counts[0], gi->counts[1],
              gi->counts[2], gi->atlas_w, gi->atlas_h);
     return true;

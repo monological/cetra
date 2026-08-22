@@ -3,6 +3,7 @@
 
 #include "probe_set.h"
 #include "probe_atlas.h"
+#include "light_cluster.h" // GpuProbeBlock, the block this fills half of
 #include "engine.h"
 #include "postfx.h"
 #include "ext/log.h"
@@ -78,6 +79,47 @@ bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struc
     return true;
 }
 
+void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* out) {
+    if (!set || !out)
+        return;
+
+    out->info[0] = set->count;
+
+    int aw = 0, ah = 0;
+    probe_atlas_size(set->atlas, &aw, &ah);
+    out->atlas_params[0] = aw > 0 ? 1.0f / (float)aw : 0.0f;
+    out->atlas_params[1] = ah > 0 ? 1.0f / (float)ah : 0.0f;
+    out->atlas_params[2] = (float)aw;
+    out->atlas_params[3] = (float)ah;
+
+    probe_atlas_fill_column(set->atlas, out->atlas_column, out->rows);
+
+    for (int i = 0; i < set->count; ++i) {
+        const ReflectionProbe* probe = set->probes[i];
+        GpuProbeDesc* desc = &out->descs[i];
+
+        glm_vec3_copy((float*)probe->position, desc->pos_intensity);
+        desc->pos_intensity[3] = probe->intensity;
+        glm_vec3_copy((float*)probe->box_min, desc->box_min_fade);
+        desc->box_min_fade[3] = probe->box_fade;
+        glm_vec3_copy((float*)probe->box_max, desc->box_max_pad);
+        desc->column[0] = probe_atlas_column_x(set->atlas, i);
+    }
+}
+
+void probe_set_report_masks(ReflectionProbeSet* set, const void* masks, size_t bytes, int bits) {
+    if (!set || !masks)
+        return;
+    uint32_t h = 2166136261u;
+    const uint8_t* p = (const uint8_t*)masks;
+    for (size_t b = 0; b < bytes; ++b) {
+        h ^= p[b];
+        h *= 16777619u;
+    }
+    set->mask_digest = h;
+    set->mask_bits = bits;
+}
+
 void probe_set_shift_origin(ReflectionProbeSet* set, const vec3 delta) {
     if (!set)
         return;
@@ -95,11 +137,9 @@ void probe_set_bind(const ReflectionProbeSet* set, ShaderProgram* program) {
         // holding that environment: probeEnabled stays 0 and the single-probe
         // branch is never taken.
         uniform_set_int(program->uniforms, "probeEnabled", 0);
-        probe_atlas_bind(set->atlas, program, set->count);
+        probe_atlas_bind(set->atlas, program);
         return;
     }
-
-    uniform_set_int(program->uniforms, "probeCount", set ? set->count : 0);
 
     const ReflectionProbe* primary = probe_set_primary(set);
     if (reflection_probe_active(primary))

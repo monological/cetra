@@ -197,11 +197,20 @@ uvec2 clusterLightListTile(int tileX, int tileY, float viewZ) {
     return uvec2(word >> 12u, word & 0xFFFu);
 }
 
-// A fragment's cluster light list, from its pixel coordinate in the scene pass's
+// The froxel a fragment lands in, from its pixel coordinate in the scene pass's
 // framebuffer -- clusterParams.zw carries CLUSTER_X/fbWidth, CLUSTER_Y/fbHeight.
+// The tile clamp lives HERE, beside the slicing, so a second consumer of the
+// grid addresses the same cells without a copy of either half (spec 11.70's
+// specular probe masks are the second).
+uint clusterIndexAt(vec2 fragCoord, float viewZ) {
+    return clusterIndex(min(int(fragCoord.x * clusterParams.z), CLUSTER_X - 1),
+                        min(int(fragCoord.y * clusterParams.w), CLUSTER_Y - 1), viewZ);
+}
+
+// A fragment's cluster light list.
 uvec2 clusterLightList(vec2 fragCoord, float viewZ) {
-    return clusterLightListTile(min(int(fragCoord.x * clusterParams.z), CLUSTER_X - 1),
-                                min(int(fragCoord.y * clusterParams.w), CLUSTER_Y - 1), viewZ);
+    uint word = clusterWord(clusterIndexAt(fragCoord, viewZ));
+    return uvec2(word >> 12u, word & 0xFFFu);
 }
 
 // The same list at a NORMALIZED screen position, for consumers that do not

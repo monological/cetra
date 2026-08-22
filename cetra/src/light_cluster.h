@@ -100,13 +100,21 @@ typedef struct GpuClusterIndexBlock {
 typedef struct GpuProbeDesc {
     float pos_intensity[4]; // xyz capture position (world), w intensity
     float box_min_fade[4];  // xyz parallax box min,         w box_fade
-    float box_max_rows[4];  // xyz parallax box max,         w last atlas row index
-    float atlas_rect[4];    // x u0, y v0 (texels), z row-0 tile size, w gutter
+    float box_max_pad[4];   // xyz parallax box max,         w unused
+    float column[4];        // x column left edge (texels),  yzw unused
 } GpuProbeDesc;
 
 typedef struct GpuProbeBlock {
-    int32_t info[4];       // x count, y mask bits set (diagnostic), zw unused
+    int32_t info[4];       // x count, yzw unused
     float atlas_params[4]; // 1/atlas_w, 1/atlas_h, atlas_w, atlas_h
+    // Atlas-wide rather than per probe: xy unused, z gutter, w last row index.
+    float atlas_column[4];
+    // Row r's y origin (texels, gutter included) and interior edge. Published
+    // by the CPU because every probe's column has the SAME row geometry and it
+    // never changes after the atlas is built -- which is what keeps the halving
+    // rule out of the shader, and with it the requirement that the row size be
+    // a power of two.
+    float rows[PROBE_ATLAS_ROWS_MAX][4];
     GpuProbeDesc descs[PROBE_SET_MAX];
     // One 8-bit mask per froxel, four to a word. A uint per froxel would be
     // four times the bytes for the same bits, and std140 would then give each

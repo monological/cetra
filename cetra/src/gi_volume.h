@@ -72,6 +72,10 @@ typedef struct GIVolume {
     int atlas_w, atlas_h;
     int irradiance_rows; // atlas rows consumed by the irradiance block
     bool owns_atlas;     // false when the specular probe atlas allocated it
+    // The scratch below is built; gi_ensure_targets returns early on it. Its
+    // own flag rather than a test on `atlas`, which since 11.70 may have been
+    // set from outside before any of this existed.
+    bool targets_ready;
 
     // Per-probe capture scratch, reused for every probe.
     GLuint capture_color; // cubemap, GI_CAPTURE_FACE^2, RGB16F

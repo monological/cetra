@@ -402,26 +402,14 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
         return;
     }
 
-    ctx->probes.info[0] = set->count;
-    int aw = 0, ah = 0;
-    probe_atlas_size(set->atlas, &aw, &ah);
-    ctx->probes.atlas_params[0] = aw > 0 ? 1.0f / (float)aw : 0.0f;
-    ctx->probes.atlas_params[1] = ah > 0 ? 1.0f / (float)ah : 0.0f;
-    ctx->probes.atlas_params[2] = (float)aw;
-    ctx->probes.atlas_params[3] = (float)ah;
+    // What a probe IS -- its position, its box, where its column sits -- is the
+    // probe set's to state, not this module's. This function owns the froxel
+    // masks below and nothing else about them.
+    probe_set_fill_descriptors(set, &ctx->probes);
 
     int bits = 0;
     for (int i = 0; i < set->count; ++i) {
         const ReflectionProbe* probe = set->probes[i];
-        GpuProbeDesc* desc = &ctx->probes.descs[i];
-
-        glm_vec3_copy((float*)probe->position, desc->pos_intensity);
-        desc->pos_intensity[3] = probe->intensity;
-        glm_vec3_copy((float*)probe->box_min, desc->box_min_fade);
-        desc->box_min_fade[3] = probe->box_fade;
-        glm_vec3_copy((float*)probe->box_max, desc->box_max_rows);
-        desc->box_max_rows[3] = (float)(PROBE_ATLAS_ROWS - 1);
-        probe_atlas_fill_rect(set->atlas, i, desc->atlas_rect);
 
         // World box -> view-space bounding sphere, the shape the grid tests.
         vec3 center, half;
@@ -456,23 +444,18 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
         }
     }
 
-    ctx->probes.info[1] = bits;
     ubo_upload(ctx->probes_ubo, &ctx->probes, sizeof(ctx->probes));
     ctx->probes_armed = true;
 
-    // Reported back so the diagnostic can print them and a gate can compare two
-    // runs in one number. FNV-1a over the masks alone: the descriptors are a
-    // function of the authored scene, where the masks are a function of the
-    // camera path, which is the thing determinism is in question about.
-    ReflectionProbeSet* live = scene->probe_set;
-    uint32_t h = 2166136261u;
-    const uint8_t* bytes = (const uint8_t*)ctx->probes.cluster_masks;
-    for (size_t b = 0; b < sizeof(ctx->probes.cluster_masks); ++b) {
-        h ^= bytes[b];
-        h *= 16777619u;
-    }
-    live->mask_digest = h;
-    live->mask_bits = bits;
+    // Handed back rather than written into the set from here: this module reads
+    // the probes and owns the grid, and the one place it reached sideways to
+    // mutate another subsystem's fields was also the one place a `const Scene*`
+    // had to be laundered to do it. The digest is over the MASKS alone -- the
+    // descriptors are a function of the authored scene, where the masks are a
+    // function of the camera path, which is what determinism is in question
+    // about.
+    probe_set_report_masks(scene->probe_set, ctx->probes.cluster_masks,
+                           sizeof(ctx->probes.cluster_masks), bits);
 }
 
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
