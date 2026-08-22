@@ -52,8 +52,6 @@ _Static_assert(PROBE_ATLAS_ROWS == PROBE_ATLAS_ROWS_MAX,
 
 struct Engine;
 struct Scene;
-struct PostFX;
-struct ReflectionProbeSet;
 
 typedef struct ProbeAtlas {
     GLuint texture;
@@ -84,8 +82,9 @@ bool probe_atlas_project(ProbeAtlas* atlas, const ReflectionProbe* probe, int in
 // Bind the atlas on the GI atlas unit and publish the layout uniforms.
 void probe_atlas_bind(const ProbeAtlas* atlas, ShaderProgram* program);
 
-void probe_atlas_publish_to_postfx(const ProbeAtlas* atlas, const struct ReflectionProbeSet* set,
-                                   struct PostFX* fx);
+// The GL name, for the one consumer that binds it outside a draw (SSR's
+// per-frame publish). The only thing about the atlas postfx needs.
+GLuint probe_atlas_texture(const ProbeAtlas* atlas);
 
 // A probe column's left edge, in texels. The only per-probe fact about the
 // layout -- everything else about a column is shared, which is what

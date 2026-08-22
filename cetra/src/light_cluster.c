@@ -418,10 +418,8 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
         glm_vec3_sub((float*)probe->box_max, center, half);
         const float radius = glm_vec3_norm(half);
 
-        vec4 world = {center[0], center[1], center[2], 1.0f};
-        vec4 view_center4;
-        glm_mat4_mulv(view, world, view_center4);
-        const vec3 view_center = {view_center4[0], view_center4[1], view_center4[2]};
+        vec3 view_center;
+        glm_mat4_mulv3(view, center, 1.0f, view_center);
 
         LightClusterRange range;
         _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);

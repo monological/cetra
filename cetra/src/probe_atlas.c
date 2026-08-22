@@ -2,7 +2,6 @@
 #include <string.h>
 
 #include "probe_atlas.h"
-#include "probe_set.h"
 #include "engine.h"
 #include "gi_volume.h"
 #include "postfx.h"
@@ -216,17 +215,8 @@ void probe_atlas_bind(const ProbeAtlas* atlas, ShaderProgram* program) {
     glActiveTexture(GL_TEXTURE0);
 }
 
-void probe_atlas_publish_to_postfx(const ProbeAtlas* atlas, const ReflectionProbeSet* set,
-                                   PostFX* fx) {
-    if (!fx)
-        return;
-
-    fx->probe_multi = atlas != NULL;
-    fx->probe_atlas = atlas ? atlas->texture : 0;
-    // SSR reads the same block the surface program does, so it needs no copy of
-    // the descriptors -- only the texture and the count that arms the loop.
-    fx->probe_enabled = false;
-    fx->probe_cubemap = 0;
+GLuint probe_atlas_texture(const ProbeAtlas* atlas) {
+    return atlas ? atlas->texture : 0;
 }
 
 float probe_atlas_column_x(const ProbeAtlas* atlas, int index) {

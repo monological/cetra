@@ -274,12 +274,22 @@ static void _sky_release_rebake(Engine* engine, Scene* scene, SkyAtmosphere* sky
     // Per probe, and the refusal is per probe too: an environment-only probe
     // re-prefilters for the price of a cube walk, a scene-captured one would
     // cost six scene renders and is left as shot.
+    //
+    // A SET is refused wholesale and separately, because the question is not
+    // per probe there: its members have had their capture cubes released into
+    // the atlas, so none of them could re-prefilter even if it wanted to, and
+    // re-running the sweep is what relight will be.
     const ReflectionProbeSet* probes = scene->probe_set;
-    for (int i = 0; probes && i < probes->count; ++i) {
-        if (probes->probes[i]->cubemap == 0 && !probe_set_multi(probes))
-            reflection_probe_capture(probes->probes[i], engine, scene, 0.1f, 100.0f, true);
-        else
-            log_info("Sky: scene-captured probe %d not refreshed on release", i);
+    if (probe_set_multi(probes)) {
+        log_info("Sky: %d-probe set not refreshed on release (relight is deferred)",
+                 probes->count);
+    } else {
+        for (int i = 0; probes && i < probes->count; ++i) {
+            if (probes->probes[i]->cubemap == 0)
+                reflection_probe_capture(probes->probes[i], engine, scene, 0.1f, 100.0f, true);
+            else
+                log_info("Sky: scene-captured probe %d not refreshed on release", i);
+        }
     }
     gi_volume_mark_dirty(scene->gi_volume);
 }

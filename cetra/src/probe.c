@@ -7,6 +7,7 @@
 #include "render.h"
 #include "shadow.h"
 #include "postfx.h"
+#include "util.h" // gl_delete_texture
 #include "ext/log.h"
 
 ReflectionProbe* create_reflection_probe(void) {
@@ -164,10 +165,9 @@ void reflection_probe_shift_origin(ReflectionProbe* probe, const vec3 delta) {
 }
 
 void probe_release_capture_scratch(ReflectionProbe* probe) {
-    if (!probe || !probe->cubemap)
+    if (!probe)
         return;
-    glDeleteTextures(1, &probe->cubemap);
-    probe->cubemap = 0;
+    gl_delete_texture(&probe->cubemap);
 }
 
 // Flatten the probe (or its absence) into postfx's per-frame uniform block.

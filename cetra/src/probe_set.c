@@ -153,11 +153,18 @@ void probe_set_publish_to_postfx(const ReflectionProbeSet* set, PostFX* fx) {
         return;
 
     if (probe_set_multi(set)) {
-        probe_atlas_publish_to_postfx(set->atlas, set, fx);
+        // SSR reads the descriptors out of the same block the surface program
+        // does, so all it needs published is the texture and the flag arming
+        // the branch.
+        fx->probe_multi = true;
+        fx->probe_atlas = probe_atlas_texture(set->atlas);
+        fx->probe_enabled = false;
+        fx->probe_cubemap = 0;
         return;
     }
 
     fx->probe_multi = false;
+    fx->probe_atlas = 0;
     reflection_probe_publish_to_postfx(probe_set_primary(set), fx);
 }
 
