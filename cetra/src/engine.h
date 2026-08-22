@@ -54,25 +54,27 @@ typedef struct Engine {
     int win_height;
     int fb_width;
     int fb_height;
-    GLint max_texture_image_units;  // GL_MAX_TEXTURE_IMAGE_UNITS (queried at init)
-    GLint max_array_texture_layers; // GL_MAX_ARRAY_TEXTURE_LAYERS (mask array budget)
-    GLint max_texture_size;         // GL_MAX_TEXTURE_SIZE (composite-cache bound)
-    bool layers_vt_enabled;         // false = every layered material takes the per-texel blend
-    int layers_vt_res;              // composite-cache resolution override; 0 = derived
-    bool layers_vt_pages_enabled;   // false = the fallback atlas alone (stage 1 exactly)
-    int layers_vt_page_slots;       // physical page slots in use; 0 = all of them
-    int layers_vt_page_budget;      // page bakes per frame; 0 = the default
-    int layers_vt_probe_interval;   // print page residency every N frames; 0 = off
-    int ss_scale;                   // Supersampling factor: scene + post render at ss_scale x
-                                    // display resolution, box-downsampled at tone map.
-                                    // 1 = off, 2 = 2x SSAA. Changing it at runtime rebuilds
-                                    // the render targets at the next frame top.
-    float render_scale;             // Render-resolution scale in [0.5, 1]: the scene + the
-                                    // pre-TAA post chain rasterize at this fraction of the
-                                    // post size. 1 = off. Changing it at runtime rebuilds
-                                    // the render targets at the next frame top.
-    bool render_suspended;          // A render-target rebuild failed; frames are skipped
-                                    // until a size that allocates successfully is set
+    GLint max_texture_image_units;   // GL_MAX_TEXTURE_IMAGE_UNITS (queried at init)
+    GLint max_array_texture_layers;  // GL_MAX_ARRAY_TEXTURE_LAYERS (mask array budget)
+    GLint max_texture_size;          // GL_MAX_TEXTURE_SIZE (composite-cache bound)
+    bool layers_vt_enabled;          // false = every layered material takes the per-texel blend
+    int layers_vt_res;               // composite-cache resolution override; 0 = derived
+    bool layers_vt_pages_enabled;    // false = the fallback atlas alone (stage 1 exactly)
+    bool layers_vt_feedback_enabled; // false = residency runs on prediction alone
+    int layers_vt_page_slots;        // physical page slots in use; 0 = all of them
+    int layers_vt_page_budget;       // page bakes per frame; 0 = the default
+    int layers_vt_probe_interval;    // print page residency every N frames; 0 = off
+    struct LayersVtFeedback* vt_feedback; // the vote pass's targets + readback ring
+    int ss_scale;                         // Supersampling factor: scene + post render at ss_scale x
+                                          // display resolution, box-downsampled at tone map.
+                                          // 1 = off, 2 = 2x SSAA. Changing it at runtime rebuilds
+                                          // the render targets at the next frame top.
+    float render_scale;                   // Render-resolution scale in [0.5, 1]: the scene + the
+                                          // pre-TAA post chain rasterize at this fraction of the
+                                          // post size. 1 = off. Changing it at runtime rebuilds
+                                          // the render targets at the next frame top.
+    bool render_suspended;                // A render-target rebuild failed; frames are skipped
+                                          // until a size that allocates successfully is set
     // The size the render targets were last built AT, or last attempted at.
     // The frame-top sync compares against these, so it both detects a change
     // and declines to retry a size that already failed.

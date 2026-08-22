@@ -12269,6 +12269,11 @@ def run_layers_gate(workdir):
                          reloads, the tail is stable, two runs are identical
       layers-vt-pages-walk forest's 400-frame region walk churns pages under
                          the capacity clamp, on the design's own 34-page grid
+      layers-vt-feedback-sky aimed at the sky the vote pass requests zero pages
+                         while prediction still wants some
+      layers-vt-feedback-occlusion behind the ramp only the ramp's pages vote;
+                         the frustum-visible hidden floor casts none -- the arm
+                         that discriminates feedback from prediction
 
     WHAT THE FIRST FOUR ARMS CANNOT SEE: layer_fixture's splat is UV1-space, and
     the composite cache serves world-XZ splats only, so those arms cover the
@@ -12636,12 +12641,13 @@ def run_layers_gate(workdir):
                            capture_output=True, text=True)
         rows = []
         for mm in re.finditer(r"layers-vt-probe frame=(\d+) grid=(\d+) slots=(\d+) "
-                              r"resident=(\d+) wanted=(\d+) loaded=(\d+) evicted=(\d+) "
-                              r"digest=([0-9a-f]{8})", r.stdout + r.stderr):
+                              r"resident=(\d+) wanted=(\d+) requested=(\d+) loaded=(\d+) "
+                              r"evicted=(\d+) digest=([0-9a-f]{8})", r.stdout + r.stderr):
             rows.append({"frame": int(mm.group(1)), "grid": int(mm.group(2)),
                          "slots": int(mm.group(3)), "resident": int(mm.group(4)),
-                         "wanted": int(mm.group(5)), "loaded": int(mm.group(6)),
-                         "evicted": int(mm.group(7)), "digest": mm.group(8)})
+                         "wanted": int(mm.group(5)), "requested": int(mm.group(6)),
+                         "loaded": int(mm.group(7)), "evicted": int(mm.group(8)),
+                         "digest": mm.group(9)})
         return rows
 
     # --- layers-vt-pages-identity --------------------------------------------
@@ -12685,7 +12691,12 @@ def run_layers_gate(workdir):
     # capacity clamp must hold at every print, the teleport must evict and
     # reload, the tail must be STABLE (loaded stops growing: the anti-thrash),
     # and the whole history must be deterministic across two runs.
-    churn_flags = ["--layers-vt-page-slots", "4", "--cam-at",
+    # Feedback OFF here, deliberately: this arm tests the eviction machinery in
+    # isolation, and the seen-first boost makes residency smarter than the
+    # arm's forcing -- after the teleport the still-visible old pages vote,
+    # stay top-ranked, and correctly nothing moves. Feedback's own behaviour
+    # has its two arms below.
+    churn_flags = ["--layers-vt-page-slots", "4", "--no-layers-vt-feedback", "--cam-at",
                    "10:-1.5,2.0,3.0,-1.5,0.0,-1.0"]
     rows_a = vt_probe_run(churn_flags, 24)
     rows_b = vt_probe_run(churn_flags, 24)
@@ -12722,11 +12733,11 @@ def run_layers_gate(workdir):
                            capture_output=True, text=True, cwd=ROOT)
         rows = []
         for mm in re.finditer(r"layers-vt-probe frame=(\d+) grid=(\d+) slots=(\d+) "
-                              r"resident=(\d+) wanted=(\d+) loaded=(\d+) evicted=(\d+) "
-                              r"digest=([0-9a-f]{8})", r.stdout + r.stderr):
+                              r"resident=(\d+) wanted=(\d+) requested=(\d+) loaded=(\d+) "
+                              r"evicted=(\d+) digest=([0-9a-f]{8})", r.stdout + r.stderr):
             rows.append({"grid": int(mm.group(2)), "slots": int(mm.group(3)),
-                         "resident": int(mm.group(4)), "loaded": int(mm.group(6)),
-                         "evicted": int(mm.group(7))})
+                         "resident": int(mm.group(4)), "requested": int(mm.group(6)),
+                         "loaded": int(mm.group(7)), "evicted": int(mm.group(8))})
         if len(rows) < 4:
             print("  layers-vt-pages-walk FAIL  the probe printed too few rows")
             failures.append("layers-vt-pages-walk")
@@ -12742,6 +12753,45 @@ def run_layers_gate(workdir):
                   f"churn, as the walk churns regions)")
             if not ok:
                 failures.append("layers-vt-pages-walk")
+
+    # --- layers-vt-feedback-sky ----------------------------------------------
+    # A camera aimed at the sky rasterizes no paged surface, so feedback must
+    # request ZERO pages -- while prediction's tall conservative frustum boxes
+    # still WANT pages, which is the anti-vacuity: zero against a zero want
+    # would also describe a pass that never ran.
+    sky_rows = vt_probe_run(["--cam-eye", "0,5,8", "--cam-target", "0,60,8"], 24)
+    if len(sky_rows) < 3:
+        print("  layers-vt-feedback-sky FAIL  the probe printed too few rows")
+        failures.append("layers-vt-feedback-sky")
+    else:
+        ok = sky_rows[-1]["requested"] == 0 and sky_rows[-1]["wanted"] > 0
+        print(f"  layers-vt-feedback-sky {'PASS' if ok else 'FAIL'}  aimed at the sky the "
+              f"vote pass requested {sky_rows[-1]['requested']} pages (want exactly 0) while "
+              f"prediction wanted {sky_rows[-1]['wanted']} (want > 0, or the pass never ran "
+              f"and zero proves nothing)")
+        if not ok:
+            failures.append("layers-vt-feedback-sky")
+
+    # --- layers-vt-feedback-occlusion ----------------------------------------
+    # The arm that discriminates feedback from prediction: a low camera behind
+    # the 45-degree ramp sees the ramp and NOT the floor beyond its crest, so
+    # the floor's pages must cast no votes while the frustum wants all 25. The
+    # band is two-sided: below it the pass lost the ramp too, above it the
+    # depth test stopped rejecting the hidden floor.
+    occ_rows = vt_probe_run(["--cam-eye", "0,0.4,-3.5", "--cam-target", "0,0.5,3"], 24)
+    if len(occ_rows) < 3:
+        print("  layers-vt-feedback-occlusion FAIL  the probe printed too few rows")
+        failures.append("layers-vt-feedback-occlusion")
+    else:
+        req = occ_rows[-1]["requested"]
+        ok = 8 <= req <= 14 and occ_rows[-1]["wanted"] == 25
+        print(f"  layers-vt-feedback-occlusion {'PASS' if ok else 'FAIL'}  behind the ramp "
+              f"the vote pass requested {req} pages (want 8..14, measured 12: the ramp's "
+              f"own) while prediction wanted {occ_rows[-1]['wanted']} (want 25 -- the "
+              f"occluded floor is frustum-visible, and only the depth-tested vote knows "
+              f"it is hidden)")
+        if not ok:
+            failures.append("layers-vt-feedback-occlusion")
 
     failures += _layers_scatter_arm()
     return failures

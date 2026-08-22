@@ -755,6 +755,19 @@ ShaderProgram* create_layers_vt_bake_program() {
     return program;
 }
 
+ShaderProgram* create_layers_vt_feedback_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("layers_vt_feedback",
+                                              layers_vt_feedback_vert_shader_str,
+                                              layers_vt_feedback_frag_shader_str, NULL)) == NULL) {
+        log_error("Failed to initialize layers VT feedback shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_msm_resolve_program() {
     ShaderProgram* program = NULL;
 

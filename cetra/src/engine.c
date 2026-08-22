@@ -167,6 +167,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->layers_vt_enabled = true; // composite cache on; --no-layers-vt is the bisect lever
     engine->layers_vt_res = 0;        // derived from the splat domain unless overridden
     engine->layers_vt_pages_enabled = true; // pages on; --no-layers-vt-pages is stage 1 exactly
+    engine->layers_vt_feedback_enabled = true; // the vote pass; off = prediction alone
     engine->layers_vt_page_slots = 0;       // 0 = the full physical atlas
     engine->layers_vt_page_budget = 0;      // 0 = the default bakes-per-frame
     engine->layers_vt_probe_interval = 0;   // diagnostic; off unless a probe asks
@@ -375,6 +376,7 @@ void free_engine(Engine* engine) {
     free_ubo(engine->view_ubo);
     free_ubo(engine->instance_ubo);
     free_ubo(engine->vt_pages_ubo);
+    free_layers_vt_feedback(engine->vt_feedback);
 
     glDeleteFramebuffers(1, &engine->framebuffer);
     _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
@@ -1477,6 +1479,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     ShaderProgram* layers_vt_bake_program = create_layers_vt_bake_program();
     if (layers_vt_bake_program) {
         add_shader_program_to_engine(engine, layers_vt_bake_program);
+    }
+
+    ShaderProgram* layers_vt_feedback_program = create_layers_vt_feedback_program();
+    if (layers_vt_feedback_program) {
+        add_shader_program_to_engine(engine, layers_vt_feedback_program);
     }
 
     ShaderProgram* water_program = create_water_program();
@@ -2645,6 +2652,12 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         if (render != NULL && current_scene != NULL) {
             render(engine, current_scene);
         }
+
+        // The feedback vote pass (spec 11.67), after the scene so the draw
+        // list is this frame's; its readback retires at fixed latency into the
+        // NEXT frames' residency, which is what keeps the loop deterministic.
+        if (current_scene)
+            layers_vt_feedback_pass(engine, current_scene);
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         engine->current_render_mode = saved_render_mode;

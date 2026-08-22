@@ -81,6 +81,38 @@ typedef struct MaterialLayersVt {
     bool baked;
 } MaterialLayersVt;
 
+/*
+ * The GPU feedback loop (spec 11.67): a small depth-tested pass where every
+ * rasterized texel of a paged surface votes for its virtual page, read back
+ * through a PBO ring consumed at FIXED latency -- always the slot from
+ * VT_FEEDBACK_RING frames ago, never "whichever fence signalled", which is
+ * what keeps residency a pure function of frame history (10.2's
+ * nondeterminism belonged to the ready-order consume; a fixed-slot map costs
+ * wall time at worst, never content). Prediction covers the frames before the
+ * ring fills and every teleport; feedback adds what prediction cannot see --
+ * occlusion today, non-enumerable VT consumers (decals, meshes) later.
+ */
+#define VT_FEEDBACK_RING 4
+// Render size over this, clamped to a floor: page votes need page-sized
+// blobs, not pixels.
+#define VT_FEEDBACK_DIVISOR 8
+
+typedef struct LayersVtFeedback {
+    GLuint fbo, color_tex, depth_rb;
+    int w, h;
+    GLuint pbo[VT_FEEDBACK_RING];
+    unsigned long long frames;                  // submits so far; ring is live past RING
+    unsigned char requested[VT_PAGE_TABLE_MAX]; // frame N-RING's votes, parsed
+    bool have;                                  // requested[] holds a real frame
+} LayersVtFeedback;
+
+// Render the vote pass for the scene's paged material and cycle the readback
+// ring. Called once per frame after the scene render (it re-walks the draw
+// list); a no-op without an armed paged material or with feedback disabled.
+void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene);
+
+void free_layers_vt_feedback(LayersVtFeedback* fb);
+
 // (Re)bake the cache for every world-XZ-splat layered material whose key no
 // longer matches, and DISARM the cache of any material that stops qualifying
 // -- this function is the one owner of the armed state, so the bind site's

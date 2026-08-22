@@ -5,7 +5,9 @@
 #include "layers_vt.h"
 #include "scene.h"
 #include "engine.h"
+#include "draw_list.h"
 #include "intersect.h"
+#include "mesh.h"
 #include "material_texture_array.h"
 #include "texture.h"
 #include "program.h"
@@ -358,14 +360,21 @@ static uint32_t vt_pages_digest(const MaterialLayersVt* vt) {
 typedef struct VtPageCand {
     float d2;
     int vpage;
+    int seen; // 1 = the feedback pass rasterized this page (frame N-RING)
 } VtPageCand;
 
 static int vt_cand_cmp(const void* a, const void* b) {
     const VtPageCand* ca = a;
     const VtPageCand* cb = b;
+    // Feedback first: a page actually SEEN outranks one the frustum merely
+    // admits -- which is occlusion-awareness, since a page behind a hill
+    // rasterizes nothing and casts no vote. Then distance, then id, so the
+    // order is total and two runs sort identically.
+    if (ca->seen != cb->seen)
+        return cb->seen - ca->seen;
     if (ca->d2 != cb->d2)
         return ca->d2 < cb->d2 ? -1 : 1;
-    return ca->vpage - cb->vpage; // total order: determinism over ties
+    return ca->vpage - cb->vpage;
 }
 
 /*
@@ -412,6 +421,10 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
             continue;
         cands[nc].d2 = vt_page_dist2(vt, m, scene, v, cam);
         cands[nc].vpage = v;
+        cands[nc].seen = engine->vt_feedback && engine->vt_feedback->have &&
+                                 engine->vt_feedback->requested[v]
+                             ? 1
+                             : 0;
         nc++;
     }
     qsort(cands, (size_t)nc, sizeof(VtPageCand), vt_cand_cmp);
@@ -491,10 +504,14 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
         for (int s2 = 0; s2 < VT_PAGE_SLOTS; s2++)
             if (vt->slot_page[s2] >= 0)
                 resident++;
+        int requested = 0;
+        if (engine->vt_feedback && engine->vt_feedback->have)
+            for (int v2 = 0; v2 < VT_PAGE_TABLE_MAX; v2++)
+                requested += engine->vt_feedback->requested[v2];
         printf("layers-vt-probe frame=%zu grid=%d slots=%d resident=%d wanted=%d "
-               "loaded=%llu evicted=%llu digest=%08x\n",
-               engine->total_frames, vt->page_grid, slots, resident, want_n, vt->pages_loaded,
-               vt->pages_evicted, vt_pages_digest(vt));
+               "requested=%d loaded=%llu evicted=%llu digest=%08x\n",
+               engine->total_frames, vt->page_grid, slots, resident, want_n, requested,
+               vt->pages_loaded, vt->pages_evicted, vt_pages_digest(vt));
     }
 }
 
@@ -680,6 +697,188 @@ void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
             }
         }
     }
+}
+
+/*
+ * The GPU feedback loop (spec 11.67). See layers_vt.h for the fixed-latency
+ * contract; here is the mechanics: parse the OLDEST ring slot first (its
+ * glReadPixels was issued VT_FEEDBACK_RING frames ago, so the map is a formality
+ * by now), then render this frame's votes and queue their readback into the
+ * slot just freed.
+ */
+static void vt_feedback_alloc(LayersVtFeedback* fb, int w, int h) {
+    glActiveTexture(GL_TEXTURE0);
+    gl_delete_texture(&fb->color_tex);
+    if (fb->depth_rb)
+        glDeleteRenderbuffers(1, &fb->depth_rb);
+    gl_delete_fbo(&fb->fbo);
+    for (int i = 0; i < VT_FEEDBACK_RING; i++)
+        if (fb->pbo[i])
+            glDeleteBuffers(1, &fb->pbo[i]);
+
+    glGenTextures(1, &fb->color_tex);
+    glBindTexture(GL_TEXTURE_2D, fb->color_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenRenderbuffers(1, &fb->depth_rb);
+    glBindRenderbuffer(GL_RENDERBUFFER, fb->depth_rb);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    glGenFramebuffers(1, &fb->fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fb->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->color_tex,
+                           0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+                              fb->depth_rb);
+    for (int i = 0; i < VT_FEEDBACK_RING; i++) {
+        glGenBuffers(1, &fb->pbo[i]);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, fb->pbo[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)w * h * 4, NULL, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    fb->w = w;
+    fb->h = h;
+    fb->frames = 0;
+    fb->have = false;
+    memset(fb->requested, 0, sizeof(fb->requested));
+}
+
+static void vt_feedback_parse(LayersVtFeedback* fb, GLuint pbo, int grid) {
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    const unsigned char* px =
+        glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, (GLsizeiptr)fb->w * fb->h * 4, GL_MAP_READ_BIT);
+    memset(fb->requested, 0, sizeof(fb->requested));
+    if (px) {
+        int count = fb->w * fb->h;
+        for (int i = 0; i < count; i++) {
+            const unsigned char* p = px + (size_t)i * 4;
+            if (p[2] == 0)
+                continue; // no vote
+            // Decoded against the CURRENT grid: a vote from before a config
+            // change lands out of range and is dropped, which is the safe
+            // reading of stale feedback.
+            if ((int)p[0] >= grid || (int)p[1] >= grid)
+                continue;
+            fb->requested[(int)p[1] * grid + (int)p[0]] = 1;
+        }
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        fb->have = true;
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+}
+
+void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
+    if (!engine || !scene || !engine->layers_vt_feedback_enabled)
+        return;
+    // The scene's one paged material; without it there is nothing to vote for.
+    const Material* paged = NULL;
+    for (size_t i = 0; i < scene->material_count; i++) {
+        const Material* m = scene->materials[i];
+        if (m && m->layers_vt && m->layers_vt->baked && m->layers_vt->page_grid > 0) {
+            paged = m;
+            break;
+        }
+    }
+    if (!paged)
+        return;
+    ShaderProgram* prog = get_engine_shader_program_by_name(engine, "layers_vt_feedback");
+    if (!prog)
+        return;
+
+    if (!engine->vt_feedback) {
+        engine->vt_feedback = calloc(1, sizeof(LayersVtFeedback));
+        if (!engine->vt_feedback)
+            return;
+    }
+    LayersVtFeedback* fb = engine->vt_feedback;
+    int rw = 0, rh = 0;
+    engine_render_size(engine, &rw, &rh);
+    int w = rw / VT_FEEDBACK_DIVISOR;
+    int h = rh / VT_FEEDBACK_DIVISOR;
+    if (w < 16)
+        w = 16;
+    if (h < 16)
+        h = 16;
+    if (fb->fbo == 0 || fb->w != w || fb->h != h)
+        vt_feedback_alloc(fb, w, h);
+
+    // Fixed-latency consume BEFORE this frame's submit: the slot about to be
+    // reused holds the readback issued VT_FEEDBACK_RING frames ago.
+    int slot = (int)(fb->frames % VT_FEEDBACK_RING);
+    if (fb->frames >= VT_FEEDBACK_RING)
+        vt_feedback_parse(fb, fb->pbo[slot], paged->layers_vt->page_grid);
+
+    GLint prev_fbo = 0, prev_viewport[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    GLboolean blend_was = glIsEnabled(GL_BLEND);
+    GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
+    GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fb->fbo);
+    glViewport(0, 0, fb->w, fb->h);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(prog->id);
+    uniform_set_mat4(prog->uniforms, "viewProj", (const float*)engine->view_proj);
+    const float domain[4] = {paged->splat_origin[0], paged->splat_origin[1],
+                             paged->splat_size[0], paged->splat_size[1]};
+    uniform_set_vec4(prog->uniforms, "splatDomain", domain);
+
+    // Only the paged surfaces vote, depth-tested against EACH OTHER: terrain
+    // self-occlusion (a hillside hiding the valley behind it) is the occlusion
+    // that matters for ground pages. Other geometry as occluders is deliberate
+    // v1 scope-out -- omitting a tree canopy makes the vote conservative, never
+    // wrong -- and skinned meshes are skipped outright (no paged material is
+    // skinned, and the minimal vertex stage has no bones).
+    const DrawList* list = &scene->draw_list;
+    for (size_t i = 0; i < list->count; i++) {
+        const DrawItem* item = &list->items[i];
+        Mesh* mesh = item->mesh;
+        if (!mesh || mesh->is_skinned || !mesh->material || mesh->material != paged)
+            continue;
+        uniform_set_mat4(prog->uniforms, "model",
+                         (const float*)item->node->global_transform);
+        GLsizei count = 0;
+        const void* offset = NULL;
+        mesh_lod_range(mesh, 0, &count, &offset);
+        glBindVertexArray(mesh->vao);
+        glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, offset);
+    }
+    glBindVertexArray(0);
+
+    // Queue this frame's readback into the slot just consumed; the map that
+    // retires it happens VT_FEEDBACK_RING frames from now.
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, fb->pbo[slot]);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, fb->w, fb->h, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    fb->frames++;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    if (blend_was)
+        glEnable(GL_BLEND);
+    if (cull_was)
+        glEnable(GL_CULL_FACE);
+    if (!depth_was)
+        glDisable(GL_DEPTH_TEST);
+}
+
+void free_layers_vt_feedback(LayersVtFeedback* fb) {
+    if (!fb)
+        return;
+    gl_delete_texture(&fb->color_tex);
+    if (fb->depth_rb)
+        glDeleteRenderbuffers(1, &fb->depth_rb);
+    gl_delete_fbo(&fb->fbo);
+    for (int i = 0; i < VT_FEEDBACK_RING; i++)
+        if (fb->pbo[i])
+            glDeleteBuffers(1, &fb->pbo[i]);
+    free(fb);
 }
 
 void free_material_layers_vt(MaterialLayersVt* vt) {

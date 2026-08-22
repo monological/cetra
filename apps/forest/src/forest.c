@@ -147,9 +147,10 @@ typedef struct ForestArgs {
     int no_instancing;
     int no_layers_vt;     // per-texel layered blend instead of the composite cache
     int layers_vt_res;    // composite-cache resolution override; 0 = derived
-    int no_layers_vt_pages;   // fallback atlas alone -- stage 1 exactly
-    int layers_vt_page_slots; // physical page slots in use; 0 = all
-    int layers_vt_probe;      // print page residency every N frames; 0 = off
+    int no_layers_vt_pages;    // fallback atlas alone -- stage 1 exactly
+    int no_layers_vt_feedback; // residency on prediction alone (no vote pass)
+    int layers_vt_page_slots;  // physical page slots in use; 0 = all
+    int layers_vt_probe;       // print page residency every N frames; 0 = off
     int no_sort_opaque;   // opaque front-to-back ordering is on by default
     int depth_prepass;    // position-only depth before shading; off by default
     int force_taa;        // TAA headless too; diagnostic, costs determinism
@@ -1924,6 +1925,8 @@ static void on_init(Game* game) {
         engine->layers_vt_res = g_args.layers_vt_res;
     if (g_args.no_layers_vt_pages)
         engine->layers_vt_pages_enabled = false;
+    if (g_args.no_layers_vt_feedback)
+        engine->layers_vt_feedback_enabled = false;
     if (g_args.layers_vt_page_slots > 0)
         engine->layers_vt_page_slots = g_args.layers_vt_page_slots;
     if (g_args.layers_vt_probe > 0)
@@ -2210,6 +2213,7 @@ static void print_usage(const char* argv0) {
             "      --no-layers-vt      Per-texel layered blend instead of the composite cache\n");
     fprintf(stderr, "      --layers-vt-res N   Composite-cache resolution override (diagnostic)\n");
     fprintf(stderr, "      --no-layers-vt-pages      Fallback atlas alone (no paged near field)\n");
+    fprintf(stderr, "      --no-layers-vt-feedback   Page residency on prediction alone\n");
     fprintf(stderr, "      --layers-vt-page-slots N  Physical page slots in use (diagnostic)\n");
     fprintf(stderr, "      --layers-vt-probe N       Print page residency every N frames\n");
     fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
@@ -2311,6 +2315,8 @@ int main(int argc, char** argv) {
             g_args.layers_vt_res = atoi(argv[++i]);
         } else if (!strcmp(a, "--no-layers-vt-pages")) {
             g_args.no_layers_vt_pages = 1;
+        } else if (!strcmp(a, "--no-layers-vt-feedback")) {
+            g_args.no_layers_vt_feedback = 1;
         } else if (!strcmp(a, "--layers-vt-page-slots") && i + 1 < argc) {
             g_args.layers_vt_page_slots = atoi(argv[++i]);
         } else if (!strcmp(a, "--layers-vt-probe") && i + 1 < argc) {

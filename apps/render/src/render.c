@@ -246,6 +246,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --no-layers-vt-pages     Fallback atlas alone (no paged near field)\n");
     fprintf(stderr,
+            "      --no-layers-vt-feedback  Page residency on prediction alone\n");
+    fprintf(stderr,
             "      --layers-vt-page-slots N Physical page slots in use (diagnostic)\n");
     fprintf(stderr,
             "      --layers-vt-probe N      Print page residency every N frames\n");
@@ -1166,6 +1168,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->layers_vt_res = atoi(argv[i]);
         } else if (strcmp(argv[i], "--no-layers-vt-pages") == 0) {
             args->no_layers_vt_pages = 1;
+        } else if (strcmp(argv[i], "--no-layers-vt-feedback") == 0) {
+            args->no_layers_vt_feedback = 1;
         } else if (strcmp(argv[i], "--layers-vt-page-slots") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2449,6 +2453,9 @@ int main(int argc, char** argv) {
     }
     if (args.no_layers_vt_pages) {
         engine->layers_vt_pages_enabled = false;
+    }
+    if (args.no_layers_vt_feedback) {
+        engine->layers_vt_feedback_enabled = false;
     }
     if (args.layers_vt_page_slots > 0) {
         engine->layers_vt_page_slots = args.layers_vt_page_slots;
