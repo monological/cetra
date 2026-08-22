@@ -12124,6 +12124,15 @@ def _layer_vt_gen():
     return _LAYER_VT_GEN
 
 
+# The floor the road-pages arm holds pages to (spec 11.68). Stated gate-side
+# rather than read back, and it is the first NON-ZERO page effect in the suite:
+# every earlier page arm measures a 0 px identity, because until roads there was
+# no content finer than the splat the fallback already over-resolves. Measured
+# 22,398 px, identical across two runs of one build; the floor is a third of it,
+# low enough to survive a driver reshuffling the shoulder's antialiasing and
+# high enough that a build whose pages carry no road cannot reach it.
+ROAD_PAGES_MOVE_MIN = 7000
+
 # One statement of the probe line's shape, shared by every consumer: the
 # fixture runner and the forest walk arm read the same print, and two regexes
 # would let a probe format change strand one of them silently.
@@ -12291,6 +12300,19 @@ def run_layers_gate(workdir):
       layers-vt-feedback-occlusion behind the ramp only the ramp's pages vote;
                          the frustum-visible hidden floor casts none -- the arm
                          that discriminates feedback from prediction
+      layers-road-select a road reads its own layer's painted byte through the
+                         cache, over two different base layers, and leaves the
+                         ground past its shoulder untouched; the per-texel path
+                         reads the same bytes
+      layers-road-edge   the shoulder crossover sits where the HEIGHTS put it and
+                         collapses to a narrow band, against a linear twin that
+                         crosses at the mask's own half -- the arm that proves
+                         the override happens BEFORE the height blend
+      layers-road-pages  with a shoulder finer than a fallback texel, pages on vs
+                         off differ and pages land nearer the per-texel truth:
+                         the first content that is not a 0 px page identity
+      layers-road-invalidate a mid-run --road-width-at re-bakes the cache, so a
+                         point outside the bake-time shoulder becomes road
 
     WHAT THE FIRST FOUR ARMS CANNOT SEE: layer_fixture's splat is UV1-space, and
     the composite cache serves world-XZ splats only, so those arms cover the
@@ -12469,11 +12491,19 @@ def run_layers_gate(workdir):
         failures += _layers_scatter_arm()
         return failures
 
-    def vt_shot(name, extra=None, frames=8):
+    def vt_shot(name, extra=None, frames=8, overrides=None):
         # 8, derived: two frames of texture uploads, one for the material
         # array, one for the bake that samples it, and margin.
         out = os.path.join(workdir, f"layers_vt_{name}.ppm")
-        err = render(vt_src, out, ALBEDO + (extra or []), frames=frames)
+        # The committed fixture is ROAD-FREE and stays that way: its golden and
+        # every arm above render it unmutated, so a road arm builds its variant
+        # here -- the sibling shot() idiom. The camera still comes from the
+        # committed file, because no mutation touches it.
+        scene = vt_src
+        if overrides:
+            scene = os.path.join(workdir, f"layers_vt_{name}.cscn")
+            cscn_copy(vt_src, scene, overrides)
+        err = render(scene, out, ALBEDO + (extra or []), frames=frames)
         if err:
             return None
         w2, h2, pix2 = _read_ppm(out)
@@ -12651,14 +12681,18 @@ def run_layers_gate(workdir):
         failures += _layers_scatter_arm()
         return failures
 
-    def vt_probe_run(extra, frames):
+    def vt_probe_run(extra, frames, overrides=None):
         # The group's own 400x300 and ALBEDO framing, not a smaller size: the
         # occlusion arm's numbers were measured here, and the depth-off leak it
         # exists to catch did not reproduce at 200x150. Probe interval 4 against
         # 24 frames: six rows, and the last sits past the teleport frame plus
         # the 4-deep feedback ring plus several budget-2 bake frames, so every
         # arm reads a settled tail rather than a transient.
-        r = subprocess.run([RENDER, "-m", vt_src, "-x", "-f", str(frames), "-W", "400",
+        scene = vt_src
+        if overrides:
+            scene = os.path.join(workdir, "layers_vt_probe_variant.cscn")
+            cscn_copy(vt_src, scene, overrides)
+        r = subprocess.run([RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400",
                             "-H", "300"] + ALBEDO + ["--layers-vt-probe", "4"] + extra,
                            capture_output=True, text=True)
         return _vt_probe_rows(r.stdout + r.stderr)
@@ -12823,6 +12857,173 @@ def run_layers_gate(workdir):
               f"it is hidden)")
         if not ok:
             failures.append("layers-vt-feedback-occlusion")
+
+    # --- roads (spec 11.68) --------------------------------------------------
+    # Every road arm renders a runtime VARIANT: the committed fixture carries no
+    # roads, so its golden and the sixteen arms above cannot move.
+    def _vt_road(width=None, feather=None, z=None, layer=None):
+        w = g2.ROAD_WIDTH if width is None else width
+        f = g2.ROAD_FEATHER if feather is None else feather
+        zz = g2.ROAD_Z if z is None else z
+        ll = g2.ROAD_LAYER if layer is None else layer
+
+        def mutate(d):
+            d["materials"]["layered_vt_surface"]["roads"] = [
+                {"points": [[-g2.HALF, zz], [g2.HALF, zz]],
+                 "width": w, "feather": f, "layer": ll}]
+        return mutate
+
+    # v of a world z on the floor, the inverse of _vt_point's mapping.
+    def _road_v(z):
+        return (z + g2.HALF) / g2.DOMAIN
+
+    ROAD_HALF = g2.ROAD_WIDTH / 2.0
+    # Inside the full-mask band (|dz| < half width) and past the shoulder.
+    V_ON = _road_v(g2.ROAD_Z + ROAD_HALF * 0.5)
+    V_OFF = _road_v(g2.ROAD_Z + ROAD_HALF + g2.ROAD_FEATHER + 0.04)
+
+    # --- layers-road-select --------------------------------------------------
+    # The road is MADE of layer 2, so it reads that layer's painted byte -- over
+    # column 0's grey and column 3's light alike, which is what says the override
+    # replaced the splat's choice rather than tinting it. Past the shoulder the
+    # ground reads its own byte untouched, and the per-texel leg reads the same
+    # bytes as the cache: roads reach both paths through one function.
+    road_cached = vt_shot("road", overrides=_vt_road())
+    road_plain = vt_shot("road_plain", ["--no-layers-vt"], overrides=_vt_road())
+    if not (road_cached and road_plain):
+        print("  layers-road-select ERROR while rendering the road legs")
+        failures.append("layers-road-select")
+    else:
+        def road_read(shot_data, u, v):
+            return _layer_sample(shot_data[0], _vt_point(u, v))
+
+        on = [road_read(road_cached, u, V_ON) for u in (0.125, 0.875)]
+        off = [road_read(road_cached, u, V_OFF) for u in (0.125, 0.875)]
+        par = [road_read(road_plain, u, V_ON) for u in (0.125, 0.875)]
+        base_codes = (g.GREY_CODE, g.LIGHT_CODE)
+        on_ok = all(c is not None and abs(c - g.DARK_CODE) <= 1 for c in on)
+        off_ok = all(c is not None and abs(c - b) <= 1 for c, b in zip(off, base_codes))
+        par_ok = all(a is not None and b is not None and a == b for a, b in zip(on, par))
+        ok = on_ok and off_ok and par_ok
+        print(f"  layers-road-select {'PASS' if ok else 'FAIL'}  on the road "
+              f"{on} (want {g.DARK_CODE} +/- 1 over BOTH bases -- a tint would "
+              f"read two different values), past the shoulder {off} (want "
+              f"{list(base_codes)}), per-texel leg {par} (want the cached bytes exactly)")
+        if not ok:
+            failures.append("layers-road-select")
+
+    # --- layers-road-edge ----------------------------------------------------
+    # The arm that proves the override lands BEFORE the height blend. Layer 2 is
+    # the tallest in the set, so a road reshaped into the weights overstays its
+    # mask where the heights say it should and the transition collapses into
+    # LAYER_BLEND_RANGE; a road mixed in AFTER the blend would cross at the
+    # mask's own half with the feather's full width, whatever the heights are.
+    # Read as the RATIO of the two legs' widths, which is what survives the
+    # feather being a tuning value.
+    road_lin = vt_shot("road_linear", overrides=(lambda d: (
+        _vt_road()(d), d["materials"]["layered_vt_surface"].update({"layerBlend": 0.0}))))
+    if not (road_cached and road_lin):
+        print("  layers-road-edge ERROR while rendering the shoulder legs")
+        failures.append("layers-road-edge")
+    else:
+        # Scan out of the road across the shoulder into bare ground.
+        z0, z1 = g2.ROAD_Z + ROAD_HALF * 0.5, g2.ROAD_Z + ROAD_HALF + g2.ROAD_FEATHER + 0.04
+        steps = 48
+        zs = [z0 + (z1 - z0) * i / (steps - 1.0) for i in range(steps)]
+        legs = {}
+        for tag, shot_data in (("height", road_cached), ("linear", road_lin)):
+            vals = [_layer_sample(shot_data[0], _vt_point(0.125, _road_v(z))) for z in zs]
+            legs[tag] = None if any(v is None for v in vals) else _layer_ramp(
+                vals, zs, g.DARK_CODE, g.GREY_CODE)
+        if not legs["height"] or not legs["linear"]:
+            print("  layers-road-edge FAIL  a shoulder scan was not monotone")
+            failures.append("layers-road-edge")
+        else:
+            wh, ch = legs["height"]
+            wl, cl = legs["linear"]
+            ratio = wh / wl if wl > 0 else 99.0
+            # The linear leg crosses where the mask does, at distance
+            # halfWidth + 0.5 * feather from the centreline.
+            lin_want = g2.ROAD_Z + ROAD_HALF + 0.5 * g2.ROAD_FEATHER
+            ok = ratio <= 0.35 and abs(cl - lin_want) <= 0.06 and ch > cl
+            print(f"  layers-road-edge {'PASS' if ok else 'FAIL'}  the height leg's "
+                  f"shoulder is {wh:.4f} wide against the linear twin's {wl:.4f} "
+                  f"(ratio {ratio:.3f}, want <= 0.35: the blend hands the transition to "
+                  f"LAYER_BLEND_RANGE, where a road mixed in after it would read 1.0); "
+                  f"the linear leg crosses at z={cl:.4f} (want {lin_want:.4f} +/- 0.06, "
+                  f"the mask's own half) and the proud road holds on further, to "
+                  f"z={ch:.4f}")
+            if not ok:
+                failures.append("layers-road-edge")
+
+    # --- layers-road-pages ---------------------------------------------------
+    # The first page content in the suite that is not a 0 px identity, and the
+    # arm authors its OWN FRAMING because the fixture's cannot see what it
+    # measures (the water-glitter idiom). Pages are the MAGNIFIED near field by
+    # construction -- the handoff hands them weight only where a fallback texel
+    # covers more than a pixel -- and at the fixture's own camera the derived
+    # 256 atlas already out-resolves the screen, so every leg here would agree
+    # and the arm would read a feature that was working as designed as absent.
+    #
+    # Close up, with a shoulder finer than a fallback texel (the generator
+    # asserts that), the fallback has to quantize what the pages resolve.
+    fallback_texel = g2.DOMAIN / g2.VT_DERIVED_RES_MIN
+    ROAD_CLOSE = ["--cam-eye", "0,0.30,2.05", "--cam-target", f"0,0,{g2.ROAD_Z}"]
+    fine = _vt_road(feather=g2.ROAD_PAGES_FEATHER)
+    fine_pages = vt_shot("road_fine_pages", ROAD_CLOSE, overrides=fine)
+    fine_nopages = vt_shot("road_fine_nopages", ROAD_CLOSE + ["--no-layers-vt-pages"],
+                           overrides=fine)
+    fine_truth = vt_shot("road_fine_truth", ROAD_CLOSE + ["--no-layers-vt"], overrides=fine)
+    fine_probe = vt_probe_run(ROAD_CLOSE, 16, overrides=fine)
+    if not (fine_pages and fine_nopages and fine_truth and fine_probe):
+        print("  layers-road-pages ERROR while rendering the fine-shoulder legs")
+        failures.append("layers-road-pages")
+    else:
+        ae_move, _ = compare(fine_pages[1], fine_nopages[1])
+        ae_pages_truth, _ = compare(fine_pages[1], fine_truth[1])
+        ae_fallback_truth, _ = compare(fine_nopages[1], fine_truth[1])
+        # The RATIO, not the difference: it is what separates a shoulder the
+        # fallback cannot hold (measured 0.594) from one it can (a coarse
+        # feather measures 0.823 at this same framing).
+        near = ae_pages_truth / ae_fallback_truth if ae_fallback_truth else 9.9
+        resident = fine_probe[-1]["resident"]
+        ok = ae_move >= ROAD_PAGES_MOVE_MIN and near <= 0.70 and resident > 0
+        print(f"  layers-road-pages {'PASS' if ok else 'FAIL'}  close up on a shoulder of "
+              f"{g2.ROAD_PAGES_FEATHER} against a {fallback_texel:.6f} fallback texel: "
+              f"pages on vs off {ae_move} px (want >= {ROAD_PAGES_MOVE_MIN}; 0 = the "
+              f"pages carry nothing the fallback did not), and pages sit "
+              f"{ae_pages_truth} px from the per-texel truth against the fallback's "
+              f"{ae_fallback_truth} -- {near:.3f} of it (want <= 0.70; a shoulder the "
+              f"fallback CAN resolve reads 0.823), with {resident} pages resident")
+        if not ok:
+            failures.append("layers-road-pages")
+
+    # --- layers-road-invalidate ----------------------------------------------
+    # Roads join the cache's by-value key, and a fresh process cannot show it:
+    # it bakes once, from the final authored width. Only a mid-run transition
+    # leaves a baked atlas describing a road that is no longer there.
+    # The SAME point the select arm proved is bare ground: past the authored
+    # shoulder (distance 0.64 > halfWidth 0.2 + feather 0.4) and inside the
+    # widened one (0.64 < the new halfWidth 0.8), so it is full road after and
+    # untouched ground before, with no blend band at either end.
+    wide = g2.ROAD_Z + ROAD_HALF + g2.ROAD_FEATHER + 0.04
+    road_widened = vt_shot("road_widened", ["--road-width-at", "10:1.6"],
+                           frames=16, overrides=_vt_road())
+    if not (road_cached and road_widened):
+        print("  layers-road-invalidate ERROR while rendering the widened leg")
+        failures.append("layers-road-invalidate")
+    else:
+        before = _layer_sample(road_cached[0], _vt_point(0.125, _road_v(wide)))
+        after = _layer_sample(road_widened[0], _vt_point(0.125, _road_v(wide)))
+        ok = (before is not None and after is not None
+              and abs(before - g.GREY_CODE) <= 2 and abs(after - g.DARK_CODE) <= 2)
+        print(f"  layers-road-invalidate {'PASS' if ok else 'FAIL'}  a point at "
+              f"z={wide:.3f} reads {before} at the authored width (want "
+              f"{g.GREY_CODE} +/- 2: bare ground) and {after} after a frame-10 "
+              f"widening to 1.6 (want {g.DARK_CODE} +/- 2; a cache that ignored "
+              f"roads in its key keeps reading the ground)")
+        if not ok:
+            failures.append("layers-road-invalidate")
 
     failures += _layers_scatter_arm()
     return failures

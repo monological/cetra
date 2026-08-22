@@ -75,6 +75,27 @@ SPLAT_NAME = "layer_vt_fixture_splat.png"
 # being true rather than letting the arm go soft.
 VT_DERIVED_RES_MIN = 256
 
+# The road the 11.68 arms author on top of this fixture (spec 11.68). NOT in the
+# committed scene: the road arms build a runtime variant, so the golden and the
+# sixteen arms that came before it render a road-free file and cannot move.
+#
+# A straight run across the floor at constant z, wide enough to hold a full-mask
+# band around its centreline and clear enough of the domain edge that its
+# shoulder lands on floor rather than falling off it. Layer 2 is the DARK code
+# (48) and the tallest height in the set, so the road is proud of what it runs
+# over -- which is what gives the height blend's shoulder a sign to have, and
+# what the edge arm reads.
+ROAD_Z = 1.3
+ROAD_WIDTH = 0.4
+ROAD_FEATHER = 0.4
+ROAD_LAYER = 2
+
+# The feather the PAGES arm authors instead, and the whole reason that arm can
+# see anything: at the derived 256 the fallback texel is DOMAIN/256 = 0.015625
+# world units, and a shoulder narrower than that is content the fallback cannot
+# resolve while its pages, at four times the density, can.
+ROAD_PAGES_FEATHER = 0.008
+
 
 def _splat():
     """rgb = weights for layers 1..3; layer 0 is whatever is left over."""
@@ -138,6 +159,29 @@ def _assert_fixture_still_tests_something():
     assert column_w % coarse_texel == 0, (
         "splat columns no longer align to the forced-coarse texel grid; the "
         "macro arm's centre read would straddle a bilinear seam")
+
+    # The road band and its shoulder must land on the FLOOR, which ends at
+    # z = HALF. A road whose feather runs off the plate has no ground to feather
+    # into and the edge arm would scan into the background.
+    road_far = ROAD_Z + ROAD_WIDTH / 2.0 + ROAD_FEATHER
+    assert road_far <= HALF - 0.05, (
+        f"the road's shoulder reaches z={road_far} against a floor ending at "
+        f"{HALF}; the edge arm would scan off the plate")
+    # ...and the road must sit on the FLOOR half (v >= 0.5), not the ramp: the
+    # arms read it as a flat surface where the cached and per-texel paths agree
+    # byte for byte.
+    assert ROAD_Z - ROAD_WIDTH / 2.0 - ROAD_FEATHER > 0.0, (
+        "the road's shoulder crosses onto the ramp, where the two paths "
+        "legitimately differ and a byte-exact read is not available")
+
+    # The pages arm's whole claim: its feather is finer than a fallback texel
+    # and coarser than a page texel, so it is content only the pages resolve.
+    fallback_texel = DOMAIN / VT_DERIVED_RES_MIN
+    page_texel = fallback_texel / 4.0  # VT_PAGE_DENSITY_RATIO
+    assert page_texel < ROAD_PAGES_FEATHER < fallback_texel, (
+        f"the pages arm's feather ({ROAD_PAGES_FEATHER}) must sit between a "
+        f"page texel ({page_texel}) and a fallback texel ({fallback_texel}), or "
+        "it is either invisible to both or resolved by both")
 
     splat = _splat()
     quarter = TEX // 4
