@@ -260,7 +260,7 @@ def emit(filename, room, mat_by_group):
                 "roughnessFactor": 1.0,
             },
         }
-        if name == "cornell_light":
+        if name.endswith("_light") or "_light_" in name:
             m["emissiveFactor"] = [1.0, 0.95, 0.88]
         materials.append(m)
 
@@ -308,6 +308,108 @@ def emit(filename, room, mat_by_group):
           len(room.groups), "draws )")
 
 
+# cornell_rooms: the two-room span for clustered specular probes (spec 11.70).
+#
+# Twice as wide as the rooms above and cut in half by a partition with a DOORWAY,
+# so a probe per room has somewhere to disagree and a band where they overlap.
+ROOMS_X = 2.0
+# Where the partition stops: it runs from the back wall to here, and the rest of
+# the depth is the doorway.
+#
+# The opening is at the FRONT, on the camera's side, and that is a measurement
+# requirement rather than a style choice. Put the doorway in the middle of the
+# depth and the near half of the partition stands directly in front of it, so
+# the floor band where the two probes overlap -- the only place a seam can be
+# seen at all -- is occluded from every viewpoint that sees both rooms.
+DOOR_Z = 0.30
+
+# The two rooms' probe boxes OVERLAP by this much either side of the partition,
+# which is what makes the doorway a blend rather than a step. Stated here beside
+# the geometry because the sibling .cscn's boxes are derived from it, and the
+# seam arm measures exactly this band.
+PROBE_OVERLAP = 0.30
+
+
+def build_rooms_room():
+    """Two rooms joined by a doorway, over ONE floor mesh.
+
+    The shared floor is the whole reason this fixture exists. Per-DRAW probe
+    selection -- the cheaper design this spec refused -- would hand that one mesh
+    a single probe and light half of it with the wrong room's reflections, and it
+    would do so while every per-room measurement still passed. Split the floor in
+    two and the fixture stops being able to tell the two designs apart.
+
+    Polished (roughness 0.08 in the .cscn) for the emissive-spec reason: a rough
+    floor has no reflection to measure, and a metal one collapses the denominator
+    of every ratio toward black.
+    """
+    r = Room()
+
+    # The floor alone, spanning BOTH rooms, as its own group so the .cscn can
+    # polish it without polishing the ceiling.
+    r.begin("rooms_floor")
+    r.quad((-ROOMS_X, 0.0, HI), (ROOMS_X, 0.0, HI), (ROOMS_X, 0.0, LO), (-ROOMS_X, 0.0, LO))
+    r.end()
+
+    r.begin("rooms_shell")
+    r.quad((-ROOMS_X, TOP, LO), (ROOMS_X, TOP, LO), (ROOMS_X, TOP, HI), (-ROOMS_X, TOP, HI))
+    r.quad((-ROOMS_X, 0.0, LO), (ROOMS_X, 0.0, LO), (ROOMS_X, TOP, LO), (-ROOMS_X, TOP, LO))
+    r.end()
+
+    # One saturated wall per room, facing in. These are what a floor patch
+    # reflects, and their colours are what says WHICH room's probe answered.
+    r.begin("rooms_left_red")
+    r.quad((-ROOMS_X, 0.0, HI), (-ROOMS_X, 0.0, LO), (-ROOMS_X, TOP, LO), (-ROOMS_X, TOP, HI))
+    r.end()
+
+    r.begin("rooms_right_green")
+    r.quad((ROOMS_X, 0.0, LO), (ROOMS_X, 0.0, HI), (ROOMS_X, TOP, HI), (ROOMS_X, TOP, LO))
+    r.end()
+
+    # The partition, in two slabs with the doorway between them. Embedded into
+    # the surfaces it meets for build_leak_room's reason: a silhouette edge
+    # coincident with a receiver junction is a shadow-map staircase no filter
+    # width removes.
+    r.begin("rooms_partition")
+    p = PARTITION_HALF
+    lo_y, hi_y, back = -EMBED, TOP + EMBED, LO - EMBED
+    r.quad((-p, lo_y, back), (-p, lo_y, DOOR_Z), (-p, hi_y, DOOR_Z), (-p, hi_y, back))  # -X
+    r.quad((p, lo_y, DOOR_Z), (p, lo_y, back), (p, hi_y, back), (p, hi_y, DOOR_Z))      # +X
+    # The jamb: the doorway is a hole through a wall with thickness, not a gap
+    # between two floating planes.
+    r.quad((-p, lo_y, DOOR_Z), (p, lo_y, DOOR_Z), (p, hi_y, DOOR_Z), (-p, hi_y, DOOR_Z))
+    r.end()
+
+    # Two panels of very different strength: the left room is the lit hall, the
+    # right is the side room. The .cscn scales them, so what is authored here is
+    # only where they are.
+    r.begin("rooms_light_a")
+    r.quad((-1.35, TOP - 0.02, -0.35), (-0.65, TOP - 0.02, -0.35), (-0.65, TOP - 0.02, 0.35),
+           (-1.35, TOP - 0.02, 0.35))
+    r.end()
+
+    r.begin("rooms_light_b")
+    r.quad((0.65, TOP - 0.02, -0.35), (1.35, TOP - 0.02, -0.35), (1.35, TOP - 0.02, 0.35),
+           (0.65, TOP - 0.02, 0.35))
+    r.end()
+
+    return r, {"rooms_floor": WHITE, "rooms_shell": WHITE, "rooms_left_red": RED,
+               "rooms_right_green": GREEN, "rooms_partition": WHITE,
+               "rooms_light_a": WHITE, "rooms_light_b": WHITE}
+
+
+# The doorway has to leave a blend band the gate can actually sample, and the
+# probe boxes have to reach across the partition to produce one. Both are stated
+# above and asserted here, so a change to either fails loudly rather than
+# quietly making the seam arm measure a hard edge that is supposed to be soft.
+assert PROBE_OVERLAP > 0.0, "probe boxes must overlap or the doorway is a step, not a blend"
+assert PROBE_OVERLAP < ROOMS_X, "the overlap cannot span a whole room"
+# The overlap band has to sit in the OPENING, or the partition hides the only
+# place the two probes both contribute and the seam arm measures a wall.
+assert DOOR_Z < HI, "the doorway must reach the open front"
+assert HI - DOOR_Z > PROBE_OVERLAP, "the opening must be deeper than the blend band is wide"
+
 emit("cornell_box.gltf", *build_box_room())
 emit("cornell_leak.gltf", *build_leak_room())
 emit("cornell_point.gltf", *build_point_room())
+emit("cornell_rooms.gltf", *build_rooms_room())

@@ -895,6 +895,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->ssr_program->uniforms, "hdrTex", 2);
     uniform_set_int(fx->ssr_program->uniforms, "probeTex", 3);
     uniform_set_int(fx->ssr_program->uniforms, "hizTex", 4);
+    // The probe atlas (spec 11.70), on its own unit rather than aliasing
+    // probeTex: those are two sampler TYPES, and pointing both at one image unit
+    // is an INVALID_OPERATION at draw. This pass has the units to spare -- it is
+    // pbr_frag that does not.
+    uniform_set_int(fx->ssr_program->uniforms, "probeAtlasTex", 5);
     glUseProgram(fx->ssr_hiz_program->id);
     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
     glUseProgram(fx->froxel_inject_program->id);
@@ -2878,6 +2883,19 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
         uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMax", fx->probe_box_max);
         uniform_set_float(fx->ssr_program->uniforms, "probeMaxLOD", fx->probe_max_lod);
         uniform_set_float(fx->ssr_program->uniforms, "probeIntensity", fx->probe_intensity);
+    }
+    // A SET of probes (spec 11.70): the descriptors already reach this program
+    // through ProbeBlock, which is bound for the context's lifetime, so all the
+    // pass needs is the atlas and the flag that arms the branch.
+    uniform_set_int(fx->ssr_program->uniforms, "probeMulti", fx->probe_multi ? 1 : 0);
+    if (fx->probe_multi) {
+        mat4 inv_view;
+        glm_mat4_inv(view, inv_view);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, fx->probe_atlas);
+        glActiveTexture(GL_TEXTURE0);
+        uniform_set_int(fx->ssr_program->uniforms, "probeAtlasTex", 5);
+        uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
     }
     draw_fullscreen_quad(fx->quad_vao);
 

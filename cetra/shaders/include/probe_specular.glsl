@@ -51,10 +51,16 @@ uint probeMask(vec2 fragCoord, float viewZ) {
 
 #define PROBE_MASK_ALL 0xFFu
 
-// How much of this fragment belongs to probe i: 1 well inside its box, falling
-// to 0 at the faces over the probe's own fade. The same normalized-box distance
-// the single-probe path feathers its parallax correction with -- so a lone
-// probe in a set weighs itself exactly the way the old path faded itself.
+// How much of this fragment belongs to probe i: 1 anywhere inside its proxy
+// box, falling to 0 over the probe's own fade measured OUTWARD from the faces.
+//
+// Outward, and that is a correctness requirement rather than a preference. A
+// floor lies exactly ON the bottom face of the box that box-projects it -- the
+// single-probe SSR path says so in as many words -- so an inward fade gives
+// every floor in every scene a weight of exactly zero and hands the one surface
+// this feature exists for back to the global environment. The blend therefore
+// happens in the region where boxes OVERLAP or where their fades reach past
+// each other, which is what an authored doorway is.
 float probeBoxWeight(int i, vec3 P) {
     vec3 boxMin = probeDesc[4 * i + 1].xyz;
     vec3 boxMax = probeDesc[4 * i + 2].xyz;
@@ -63,7 +69,7 @@ float probeBoxWeight(int i, vec3 P) {
     vec3 dd = abs(P - center) / halfExt;
     float outer = max(dd.x, max(dd.y, dd.z));
     float fade = max(probeDesc[4 * i + 1].w, 1e-3);
-    return clamp((1.0 - outer) / fade, 0.0, 1.0);
+    return clamp((1.0 + fade - outer) / fade, 0.0, 1.0);
 }
 
 // One probe's radiance along R at this roughness.

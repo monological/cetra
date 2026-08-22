@@ -44,10 +44,18 @@ uniform vec3 probeBoxMin; // parallax proxy AABB (world)
 uniform vec3 probeBoxMax;
 uniform float probeMaxLOD;
 uniform float probeIntensity;
+// Two or more probes (spec 11.70): probeEnabled goes to 0 and the same blend
+// the surface runs answers here instead, off its own copy of the atlas. No
+// froxel mask -- this pass would have to pull four light blocks in to save at
+// most seven box tests, and the box weights reject the same probes the mask
+// would have.
+uniform sampler2D probeAtlasTex;
+uniform int probeMulti;
 
 // hdrTex is already pre-exposed, so a reflection inherits the conversion and
 // WS_REFLECT_MAX below is read in the same space it was written in.
 #include "view.glsl"
+#include "probe_specular.glsl"
 
 // Acceptance slab behind a surface: floor thicknessMin (absolute view units,
 // covering depth quantization and the start bias) plus the ray's own view-z
@@ -90,22 +98,34 @@ vec3 viewPosFromDepth(vec2 uv, float depth)
 // write today's values bit-identically.
 vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
 {
-    if (probeEnabled == 0)
+    if (probeEnabled == 0 && probeMulti == 0)
         return vec4(0.0);
     vec3 worldPos = (invView * vec4(fragPosV, 1.0)).xyz;
     vec3 worldR = normalize(mat3(invView) * RV);
-    vec3 invR = 1.0 / worldR;
-    vec3 tMax3 = max((probeBoxMax - worldPos) * invR, (probeBoxMin - worldPos) * invR);
-    float t = min(min(tMax3.x, tMax3.y), tMax3.z);
-    // The floor lies ON the box's bottom face, so no inside-the-box fade;
-    // a ray starting outside the box keeps the uncorrected direction
-    vec3 dir = (t > 0.0) ? normalize((worldPos + worldR * t) - probePos) : worldR;
-    // The probe bakes absolute radiance (render.c renders captures at unity), so
-    // unlike the hdrTex hit path this one converts. Without it the fallback
-    // would sit at scene scale while the hit it substitutes for sits at working
-    // scale, and a ray crossing the screen edge would step in brightness.
-    vec3 col =
-        textureLod(probeTex, dir, floorRoughness * probeMaxLOD).rgb * probeIntensity * preExposure;
+    vec3 col;
+    if (probeMulti != 0) {
+        // The set's blend, through the same include the surface uses. The
+        // remainder that the surface hands to the global environment is dropped
+        // here instead: this pass has no environment tier at all, by the
+        // decision recorded in probe.c -- an invisible catcher mirroring the sky
+        // prints as a glowing pool the size of its quad.
+        vec4 probes =
+            probeSetSpecular(probeAtlasTex, PROBE_MASK_ALL, worldPos, worldR, floorRoughness);
+        col = probes.rgb * preExposure;
+    } else {
+        vec3 invR = 1.0 / worldR;
+        vec3 tMax3 = max((probeBoxMax - worldPos) * invR, (probeBoxMin - worldPos) * invR);
+        float t = min(min(tMax3.x, tMax3.y), tMax3.z);
+        // The floor lies ON the box's bottom face, so no inside-the-box fade;
+        // a ray starting outside the box keeps the uncorrected direction
+        vec3 dir = (t > 0.0) ? normalize((worldPos + worldR * t) - probePos) : worldR;
+        // The probe bakes absolute radiance (render.c renders captures at unity), so
+        // unlike the hdrTex hit path this one converts. Without it the fallback
+        // would sit at scene scale while the hit it substitutes for sits at working
+        // scale, and a ray crossing the screen edge would step in brightness.
+        col = textureLod(probeTex, dir, floorRoughness * probeMaxLOD).rgb * probeIntensity *
+              preExposure;
+    }
     float NdotV = max(dot(n, -viewDir), 0.0);
     float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
     float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
