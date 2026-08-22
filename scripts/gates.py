@@ -10547,6 +10547,10 @@ PROBE_SEAM_X0, PROBE_SEAM_X1, PROBE_SEAM_N = -0.85, 0.85, 35
 # How much brighter the dark room's floor gets when the probe serving it
 # photographed the LIT room instead. Both legs run the identical multi path over
 # the identical atlas, so this is a reading of selection alone.
+# The single probe has to reach the frame at all, or every other thing
+# probe-set-single checks is satisfied by a build that binds no probe.
+PROBE_SINGLE_EFFECT_MIN = 20000
+
 PROBE_ROOMS_RATIO_MIN = 1.20  # measured 3.62
 # The lit room is the in-frame control: only probe B moved, so room A has to
 # read the same in both legs. A bar rather than exact equality because the two
@@ -10709,7 +10713,12 @@ def run_probe_set_gate(workdir):
                                     ["--probe-set-probe", "10"])
     pix_b, _, _, out_b = _probe_run(workdir, "single_b", one_probe,
                                     ["--probe-set-probe", "10"])
-    if pix_a is None or pix_b is None:
+    # The anti-vacuity, and it is not optional: every assertion above is about
+    # the diagnostic and about two runs agreeing, and a build that binds no
+    # probe at all satisfies all of them perfectly.
+    pix_bare, _, _, out_bare = _probe_run(workdir, "single_none",
+                                          lambda d: d.pop("probes", None))
+    if pix_a is None or pix_b is None or pix_bare is None:
         print(f"  probe-set-single ERROR  {(out_a if pix_a is None else out_b)[-300:]}")
         failures.append("probe-set-single")
     else:
@@ -10718,10 +10727,14 @@ def run_probe_set_gate(workdir):
         masks = {r["mask_bits"] for r in rows}
         counts = {r["count"] for r in rows}
         identical = pix_a == pix_b
-        ok = bool(rows) and modes == {"single"} and masks == {0} and counts == {1} and identical
+        lit = sum(1 for i in range(0, len(pix_a), 3)
+                  if pix_a[i:i + 3] != pix_bare[i:i + 3])
+        ok = (bool(rows) and modes == {"single"} and masks == {0} and counts == {1}
+              and identical and lit >= PROBE_SINGLE_EFFECT_MIN)
         print(f"  probe-set-single {'PASS' if ok else 'FAIL'}  mode={sorted(modes)} "
               f"count={sorted(counts)} mask_bits={sorted(masks)} want single/1/0; "
-              f"two runs identical={identical}")
+              f"two runs identical={identical}; the one probe moves {lit} px against no "
+              f"probe, want >={PROBE_SINGLE_EFFECT_MIN}")
         if not ok:
             failures.append("probe-set-single")
 
