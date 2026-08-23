@@ -243,8 +243,6 @@ def _wall_shadow_of(pt):
 # this geometry: clear of six existing read points, clear of what the oblique
 # plate hides, inside the poster's own full-coverage region, and unambiguously
 # in ONE poster quadrant so the falsified reading is a code rather than a blend.
-POSTER_INDEX = 0
-SCORCH_INDEX = 1
 # The slot the arm appends into. LATER index = later paint, which is the arm's
 # whole premise -- decalAccumulate walks ascending and composites over.
 OVERLAP_INDEX = 2
@@ -470,10 +468,16 @@ def _assert_fixture_still_tests_something():
     # THE OVERLAP. It is appended by an arm rather than authored here, so every
     # one of these is a claim this file has to make on the arm's behalf.
 
-    # It must be the LATER mark. Ascending index is paint order, so an overlap
-    # appended before the poster would be painted OVER and the arm would assert
-    # the exact opposite of what it says.
-    assert OVERLAP_INDEX > POSTER_INDEX, "the overlap is not appended after the poster"
+    # It must be the LATER mark, and the poster's own slot is DERIVED from the
+    # scene rather than restated -- a reordering of the decals block would
+    # otherwise leave two literals agreeing with each other and with nothing
+    # else. Ascending index is paint order, so an overlap appended before the
+    # poster would be painted OVER and the arm would assert the exact opposite of
+    # what it says.
+    poster_index = next(i for i, dec in enumerate(CSCN["decals"])
+                        if dec["image"] == "decal_poster.png")
+    assert OVERLAP_INDEX > poster_index, (
+        f"the overlap's slot {OVERLAP_INDEX} is not past the poster's {poster_index}")
     assert OVERLAP_INDEX == len(CSCN["decals"]), (
         f"the overlap's slot {OVERLAP_INDEX} is not the end of the committed decal "
         f"list ({len(CSCN['decals'])}); the arm appends, so the two must agree")
