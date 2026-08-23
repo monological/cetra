@@ -75,6 +75,31 @@ static int material_texture_layer_for(GLuint* ids, Texture** texs, int* count, T
     return (*count)++;
 }
 
+/*
+ * Put every decal back to "not built" after the indices have been assigned but
+ * before the array they name exists.
+ *
+ * A build that fails past the assignment leaves nothing a decal can legally read.
+ * The max-layers path keeps the OLD array bound while the indices may point past
+ * it, so a mark takes its neighbour's image. The mask_copy path is worse: the old
+ * array is already deleted and its replacement holds undefined texels with no mip
+ * chain, where every textureGrad returns (0,0,0,1) -- alpha 1.0 for a decal, i.e.
+ * a fully opaque black mark over every box in the scene. And ensure_built only
+ * clears the dirty flag on success, so that frame repeats.
+ *
+ * -1 is the state that already means this, and _decal_is_live (decal.c) refuses
+ * it, so the mark is simply absent until a build succeeds.
+ *
+ * The MATERIAL indices are deliberately not swept the same way: a material layer
+ * index has no such reading, and giving it one is a separate question.
+ */
+static void _clear_decal_layers(struct Scene* scene) {
+    for (int d = 0; d < scene->decal_count; d++) {
+        scene->decals[d].albedo_layer = -1;
+        scene->decals[d].surface_layer = -1;
+    }
+}
+
 int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene, struct Engine* engine) {
     if (!arr || !scene || !engine)
         return -1;
@@ -146,6 +171,7 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
                   count, engine->max_array_texture_layers);
         free(ids);
         free(texs);
+        _clear_decal_layers(scene);
         return -1;
     }
 
@@ -213,6 +239,7 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
         log_error("material_texture_array_build: mask_copy program missing");
         free(ids);
         free(texs);
+        _clear_decal_layers(scene);
         return -1;
     }
 
