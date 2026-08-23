@@ -124,10 +124,6 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
         }
     }
 
-    // Where the materials' own textures end, so the canonical-size warning below
-    // can tell whether a decal is what raised it.
-    const int material_layer_count = count;
-
     // The decal images, after the materials and by the same dedup. Assigned even
     // for a disabled decal: `enabled` is a per-frame question the descriptor pack
     // asks, where a layer index is a property of the built array, and dropping it
@@ -172,40 +168,29 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
     //    256 and whose surface layers are 1024 still pays 1024 for the masks. The
     //    number is reported rather than assumed, because the coupling is
     //    invisible from either material on its own.
+    //    WHICH source set it is worth naming, because the cost lands everywhere
+    //    except there: every other layer is promoted to hold the one large
+    //    image, and that is invisible from either end. Tracked as the argmax of
+    //    the scan that has to run anyway -- the question is the same whether the
+    //    culprit is a decal, a leaf atlas or a layer albedo, so it is asked once
+    //    rather than once per tenant class.
     int width = 1, height = 1;
+    Texture* widest = NULL;
+    Texture* tallest = NULL;
     for (int i = 0; i < count; i++) {
-        if (texs[i]->width > width)
+        if (texs[i]->width > width) {
             width = texs[i]->width;
-        if (texs[i]->height > height)
+            widest = texs[i];
+        }
+        if (texs[i]->height > height) {
             height = texs[i]->height;
+            tallest = texs[i];
+        }
     }
     if (width > MATERIAL_TEXTURE_ARRAY_CAP)
         width = MATERIAL_TEXTURE_ARRAY_CAP;
     if (height > MATERIAL_TEXTURE_ARRAY_CAP)
         height = MATERIAL_TEXTURE_ARRAY_CAP;
-
-    // A decal that RAISED the canonical size is worth naming, because the cost
-    // does not land on it: every other layer in the scene is promoted to hold one
-    // large poster, and that is invisible from either the decal or the material
-    // it inflated. Warned rather than refused -- the price is VRAM and it is
-    // reported right below, where a refusal would reject the ordinary case of one
-    // detailed mark in a scene of small masks.
-    int mat_w = 1, mat_h = 1;
-    for (int i = 0; i < material_layer_count; i++) {
-        if (texs[i]->width > mat_w)
-            mat_w = texs[i]->width;
-        if (texs[i]->height > mat_h)
-            mat_h = texs[i]->height;
-    }
-    if (material_layer_count > 0 && (width > mat_w || height > mat_h)) {
-        for (int i = material_layer_count; i < count; i++) {
-            if (texs[i]->width > mat_w || texs[i]->height > mat_h)
-                log_warn("material_texture_array: decal image '%s' (%dx%d) raises every layer "
-                         "from %dx%d to %dx%d",
-                         texs[i]->filepath ? texs[i]->filepath : "(unnamed)", texs[i]->width,
-                         texs[i]->height, mat_w, mat_h, width, height);
-        }
-    }
 
     // 3. Allocate the array (mip 0; glGenerateMipmap fills the chain after the
     //    layers are drawn -- glTexStorage3D is GL 4.2, unavailable here).
@@ -277,9 +262,14 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
     arr->layer_count = count;
     // The 4/3 is the mip chain, which glGenerateMipmap has just filled.
     double bytes = (double)count * (double)width * (double)height * 4.0 * (4.0 / 3.0);
-    log_info("Material texture array: %d layers at %dx%d, %.1f MB%s", count, width, height,
-             bytes / (1024.0 * 1024.0),
-             count > material_layer_count ? " (including decals)" : "");
+    // Naming what SET each dimension, so the promotion cost has somewhere to be
+    // read from. One source at 2048 beside forty at 256 is the whole bill, and
+    // neither the big one nor the small ones can see that from where they sit.
+    const char* w_src = widest && widest->filepath ? widest->filepath : "?";
+    const char* h_src = tallest && tallest->filepath ? tallest->filepath : "?";
+    log_info("Material texture array: %d layers at %dx%d, %.1f MB (width from '%s', "
+             "height from '%s')",
+             count, width, height, bytes / (1024.0 * 1024.0), w_src, h_src);
 
     free(ids);
     free(texs);
