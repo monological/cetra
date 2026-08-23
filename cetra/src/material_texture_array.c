@@ -82,7 +82,10 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
     // 1. Dedup the scene's unique source textures and assign each material's
     //    layer indices in one pass. The unique count is bounded by
     //    TEXTURES_PER_MATERIAL per material, so one up-front allocation suffices.
-    size_t bound = scene->material_count * TEXTURES_PER_MATERIAL;
+    // Decals are tenants of this array too (spec 11.73): what it holds is the
+    // scene's unique per-texel material IMAGES, and a mark projected onto a
+    // surface is one of those. Two apiece, an albedo and an optional surface.
+    size_t bound = scene->material_count * TEXTURES_PER_MATERIAL + (size_t)DECAL_MAX * 2;
     GLuint* ids = malloc(bound * sizeof(GLuint));
     Texture** texs = malloc(bound * sizeof(Texture*));
     if (bound && (!ids || !texs)) {
@@ -119,6 +122,20 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
             mat->layers[i].surface_layer =
                 material_texture_layer_for(ids, texs, &count, mat->layers[i].surface_tex);
         }
+    }
+
+    // Where the materials' own textures end, so the canonical-size warning below
+    // can tell whether a decal is what raised it.
+    const int material_layer_count = count;
+
+    // The decal images, after the materials and by the same dedup. Assigned even
+    // for a disabled decal: `enabled` is a per-frame question the descriptor pack
+    // asks, where a layer index is a property of the built array, and dropping it
+    // here would make switching a decal back on need a rebuild.
+    for (int d = 0; d < scene->decal_count; d++) {
+        Decal* dec = &scene->decals[d];
+        dec->albedo_layer = material_texture_layer_for(ids, texs, &count, dec->albedo_tex);
+        dec->surface_layer = material_texture_layer_for(ids, texs, &count, dec->surface_tex);
     }
 
     if (count == 0) {
@@ -166,6 +183,29 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
         width = MATERIAL_TEXTURE_ARRAY_CAP;
     if (height > MATERIAL_TEXTURE_ARRAY_CAP)
         height = MATERIAL_TEXTURE_ARRAY_CAP;
+
+    // A decal that RAISED the canonical size is worth naming, because the cost
+    // does not land on it: every other layer in the scene is promoted to hold one
+    // large poster, and that is invisible from either the decal or the material
+    // it inflated. Warned rather than refused -- the price is VRAM and it is
+    // reported right below, where a refusal would reject the ordinary case of one
+    // detailed mark in a scene of small masks.
+    int mat_w = 1, mat_h = 1;
+    for (int i = 0; i < material_layer_count; i++) {
+        if (texs[i]->width > mat_w)
+            mat_w = texs[i]->width;
+        if (texs[i]->height > mat_h)
+            mat_h = texs[i]->height;
+    }
+    if (material_layer_count > 0 && (width > mat_w || height > mat_h)) {
+        for (int i = material_layer_count; i < count; i++) {
+            if (texs[i]->width > mat_w || texs[i]->height > mat_h)
+                log_warn("material_texture_array: decal image '%s' (%dx%d) raises every layer "
+                         "from %dx%d to %dx%d",
+                         texs[i]->filepath ? texs[i]->filepath : "(unnamed)", texs[i]->width,
+                         texs[i]->height, mat_w, mat_h, width, height);
+        }
+    }
 
     // 3. Allocate the array (mip 0; glGenerateMipmap fills the chain after the
     //    layers are drawn -- glTexStorage3D is GL 4.2, unavailable here).
@@ -237,8 +277,9 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
     arr->layer_count = count;
     // The 4/3 is the mip chain, which glGenerateMipmap has just filled.
     double bytes = (double)count * (double)width * (double)height * 4.0 * (4.0 / 3.0);
-    log_info("Material texture array: %d layers at %dx%d, %.1f MB", count, width, height,
-             bytes / (1024.0 * 1024.0));
+    log_info("Material texture array: %d layers at %dx%d, %.1f MB%s", count, width, height,
+             bytes / (1024.0 * 1024.0),
+             count > material_layer_count ? " (including decals)" : "");
 
     free(ids);
     free(texs);
