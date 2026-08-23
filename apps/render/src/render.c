@@ -29,6 +29,7 @@
 #include "cetra/water.h"
 #include "cetra/ies.h"
 #include "cetra/wind.h"
+#include "cetra/config_snapshot.h"
 // For SHORE_CHAIN_HISTORY and SHORE_TAP_PERIODS, which --shore-probe reports the film's
 // history window against.
 #include "cetra/shore_chain.h"
@@ -331,6 +332,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
     fprintf(stderr, "  -S, --screenshot <path> Save final frame as PPM on exit\n");
     fprintf(stderr, "      --screenshot-every <N> Also save numbered frames every N frames\n");
+    fprintf(stderr, "      --config-dump <path> Write the whole tuned config as JSON on exit\n");
     fprintf(stderr, "  -h, --help             Show this help message\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s -m character.fbx -t textures/\n", prog);
@@ -1545,6 +1547,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid screenshot interval '%s'\n", argv[i]);
                 return -1;
             }
+        } else if (strcmp(argv[i], "--config-dump") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->config_dump_path = argv[i];
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2308,6 +2316,12 @@ int main(int argc, char** argv) {
     // sitting next to a bare model) and merge its look into args, leaving
     // CLI-given values untouched. See cscene_setup above main.
     CetraSceneDesc* cscn = NULL;
+    // The .cscn as the user named it, before cscene_setup replaces model_path
+    // with the model INSIDE it. A snapshot has to record this one: reloading the
+    // .glb alone would get the geometry without the file that describes it. NULL
+    // for a bare model, whose sibling .cscn is found again the same way.
+    const char* cscn_path =
+        (args.model_path && cscene_path_is_scene(args.model_path)) ? args.model_path : NULL;
     // -E's SIGN can only be judged once the scene file has been merged, because
     // what it means depends on whether a post.camera arrived -- a linear
     // multiplier, which must be positive, or an EV bias, where negative is
@@ -3630,8 +3644,32 @@ int main(int argc, char** argv) {
     if (args.msaa > 0)
         set_engine_msaa_samples(engine, args.msaa);
 
+    /*
+     * What was loaded, for anything that writes a snapshot (spec 11.71). The GUI
+     * button and --config-dump both produce one and neither can see `args`, so
+     * the paths are left here rather than threaded through either.
+     *
+     * args.model_path is already the resolved model even when a .cscn was named,
+     * so the .cscn is passed separately -- a snapshot that recorded the .glb
+     * would reload the geometry without the file that describes it.
+     */
+    config_snapshot_set_source(&(ConfigSnapshotSource){
+        .model = cscn_path ? cscn_path : args.model_path,
+        .hdr = args.hdr_path,
+        .lut = args.lut_path,
+        .textures = args.texture_dir,
+        .sky = args.sky != 0,
+    });
+
     frame_schedule = &args;
     engine_run(engine, render_frame_update, render_scene_callback);
+
+    // Before free_engine, like the probes below: it reads live engine state.
+    // After the loop rather than before it, because the point of a snapshot is
+    // the configuration as the last frame rendered it -- a mid-run schedule or a
+    // GUI drag has to be in it.
+    if (args.config_dump_path)
+        config_snapshot_save(engine, scene, args.config_dump_path);
 
     // After the last frame and before free_engine, so the GL context is still
     // alive. Headless has no HUD to read, and this is the only way the numbers

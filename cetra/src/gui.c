@@ -8,6 +8,7 @@
 
 #include "gui.h"
 
+#include "config_snapshot.h"
 #include "engine.h"
 #include "profiler.h"
 #include "ext/log.h"
@@ -1059,6 +1060,13 @@ static void _engine_gui_panel(Engine* engine) {
                    camera->up_vector[1], camera->up_vector[2]);
             fflush(stdout);
         }
+        // The whole tuned state, where Print Camera above is the pose alone
+        // (spec 11.71). Fixed filename in the working directory rather than a
+        // path field: there is no text input in this panel, and the point of the
+        // button is that it takes one click while the frame is on screen.
+        igSameLine(0, -1);
+        if (igButton("Dump Config", (ImVec2){0, 0}))
+            config_snapshot_save(engine, scene, "cetra_config.json");
     }
 
     // Per-pass GPU time, CPU time and submission counts (specs 11.27, 11.28).

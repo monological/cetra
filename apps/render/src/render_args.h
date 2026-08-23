@@ -26,8 +26,13 @@ typedef struct {
     const char* ies_profile_path;
     const char* screenshot_path; // Save final frame here (PPM)
     int screenshot_every;        // Also save numbered frames every N frames
-    float fov_deg;               // Camera FOV in degrees (0 = default 50)
-    float exposure;              // Tonemap exposure override; see has_exposure
+    // Write the whole tuned configuration here as JSON before exit (spec 11.71),
+    // which is the GUI's Dump Config button without a window. Beside the
+    // screenshot because it answers the other half of "what produced this
+    // frame": the pixels, and the settings that made them.
+    const char* config_dump_path;
+    float fov_deg;  // Camera FOV in degrees (0 = default 50)
+    float exposure; // Tonemap exposure override; see has_exposure
     // Presence flag rather than testing `exposure > 0`, which six sites did.
     // Under a physical camera the value is an EV BIAS, where negative is a legal
     // and useful setting -- stopping down -- so sign cannot double as presence.
