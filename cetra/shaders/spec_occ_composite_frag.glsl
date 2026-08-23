@@ -15,11 +15,13 @@ out vec4 FragColor;
 uniform sampler2D specTex;    // Resolved ambient specular (working space)
 uniform sampler2D aoTex;      // AO chain: .r visibility, .gba encoded bent normal
 uniform sampler2D normalsTex; // View normal .xyz + catcher marker .a
-uniform sampler2D auxTex;     // .w = effective roughness
+uniform sampler2D auxTex;     // .z = linear view-Z, .w = effective roughness
 uniform vec2 invFocal;        // 1/projection focal terms (view-ray reconstruction)
+uniform vec2 aoRes;           // aoTex's own size: it is HALF this pass's res
 uniform int aoActive;         // 0 = no AO this frame: fold spec back untouched
 uniform float aoStrength;
 
+#include "ao_upsample.glsl"
 #include "spec_occ.glsl"
 
 void main()
@@ -30,7 +32,11 @@ void main()
         FragColor = vec4(spec, 1.0);
         return;
     }
-    float ao = texture(aoTex, TexCoords).r;
-    float so = specOccSplitAt(TexCoords, invFocal);
-    FragColor = vec4(spec * mix(1.0, so, aoStrength), mix(1.0, ao, aoStrength));
+    // This pass runs at render res, where aux is 1:1 -- so the pixel's own
+    // depth is a plain fetch, and the AO buffer beneath it is the only thing
+    // that needs reconstructing. One fetch, both consumers of it.
+    vec4 aoSample = aoFetchBilateral(aoTex, auxTex, TexCoords, aoRes,
+                                     texture(auxTex, TexCoords).z);
+    float so = specOccSplitAt(TexCoords, invFocal, aoSample);
+    FragColor = vec4(spec * mix(1.0, so, aoStrength), mix(1.0, aoSample.r, aoStrength));
 }

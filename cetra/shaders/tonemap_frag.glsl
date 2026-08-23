@@ -32,6 +32,7 @@ uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
 // give view-Z + roughness, normalsTex the view normal, for a Lagarde term.
 uniform sampler2D auxTex;       // Aux G-buffer: linear view-Z (.z) + roughness (.w)
 uniform vec2 invFocal;          // 1/projection focal terms, for view-pos reconstruction
+uniform vec2 aoRes;             // aoTex's own size, which is HALF the render res
 uniform int specOccMode;        // 0 off, 1 legacy smoothness blend, 2 bent-normal cone
 uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
 uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), full internal res
@@ -309,11 +310,24 @@ vec3 toneSelect(vec3 c)
 // true and mode 3 falls through to the legacy blend below.
 //
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
+#include "ao_upsample.glsl"
 #include "spec_occ.glsl"
+
+// The AO buffer at this pixel, reconstructed rather than merely filtered.
+//
+// This pass runs at OUT res while aux is at render res, so the aux fetch is
+// itself a magnification -- but aux is NEAREST, so it returns one whole texel's
+// depth rather than a blend of two surfaces, which is the property the weights
+// need. Wrapped because three call sites want it: the applied term and the two
+// debug views, which show what the frame received for exactly that reason.
+vec4 aoSampleAt()
+{
+    return aoFetchBilateral(aoTex, auxTex, TexCoords, aoRes, texture(auxTex, TexCoords).z);
+}
 
 float aoVisibility()
 {
-    vec4 aoSample = texture(aoTex, TexCoords); // .r visibility, .gba encoded bent normal
+    vec4 aoSample = aoSampleAt(); // .r visibility, .gba encoded bent normal
     float ao = aoSample.r;
     if (specOccMode == 0)
         return ao;
@@ -430,7 +444,10 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
 void main()
 {
     if (debugView == 1) {
-        FragColor = vec4(vec3(texture(aoTex, TexCoords).r), 1.0);
+        // The reconstructed value, not the stored one: a debug view answers
+        // "what did this pixel get", and the half-res buffer is not what any
+        // pixel gets. Reading it raw here would show a frame nothing renders.
+        FragColor = vec4(vec3(aoSampleAt().r), 1.0);
         return;
     }
     if (debugView == 2) {
@@ -463,7 +480,7 @@ void main()
         // reflection relief vs the raw AO of debug view 1. Split mode shows
         // the term the composite applied to the specular share, through the
         // same shared function so this view cannot drift from it.
-        FragColor = vec4(vec3(specOccMode == 3 ? specOccSplitAt(TexCoords, invFocal)
+        FragColor = vec4(vec3(specOccMode == 3 ? specOccSplitAt(TexCoords, invFocal, aoSampleAt())
                                                : aoVisibility()),
                          1.0);
         return;
@@ -478,7 +495,7 @@ void main()
         // surfaces read as their own normal; a crevice tilts away from the
         // occluder. Sky/hair (zero G-buffer normal) stay black.
         vec3 nrm = texture(normalsTex, TexCoords).xyz;
-        vec3 bent = normalize(texture(aoTex, TexCoords).gba * 2.0 - 1.0);
+        vec3 bent = normalize(aoSampleAt().gba * 2.0 - 1.0);
         FragColor = vec4(dot(nrm, nrm) > 0.001 ? bent * 0.5 + 0.5 : vec3(0.0), 1.0);
         return;
     }

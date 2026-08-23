@@ -61,10 +61,17 @@ float specOcclusionCone(float ao, float roughness, vec3 bentN, vec3 R)
 // The split-mode term for one pixel: guard, view ray, bent decode, cone --
 // the whole evaluation, so the composite pass and the tonemap's debug view
 // call one function and cannot drift. The includer must declare
-// sampler2D aoTex / normalsTex / auxTex (the depth.glsl contract style).
-float specOccSplitAt(vec2 uv, vec2 invFocal)
+// sampler2D normalsTex / auxTex (the depth.glsl contract style).
+//
+// `aoSample` arrives from the caller rather than being sampled here, and that
+// is what keeps the count at ONE reconstruction per pixel: the AO buffer is
+// half res and reading it now costs a four-tap depth-weighted fetch
+// (ao_upsample.glsl), which the caller already performed for the visibility
+// term. Sampling it a second time here would double the cost to reach the same
+// value -- or, worse, a different one, if the two fetches ever stopped
+// agreeing on how the magnification is done.
+float specOccSplitAt(vec2 uv, vec2 invFocal, vec4 aoSample)
 {
-    vec4 aoSample = texture(aoTex, uv);
     vec4 nrm = texture(normalsTex, uv);
     // Sky/hair (zero normal) and the shadow-catcher floor: no trustworthy
     // reflection direction, so the plain AO answer serves. The catcher test

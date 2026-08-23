@@ -1306,6 +1306,12 @@ static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, bool
     glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
     const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
     uniform_set_vec2(sc, "invFocal", inv_focal);
+    // Per draw rather than seeded, the rule the texelSize uniforms follow: this
+    // pass and the tonemap read the same buffer at different resolutions, so a
+    // seeded value would be right for one of them and a silent fallback for the
+    // other.
+    const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
+    uniform_set_vec2(sc, "aoRes", ao_res);
     // The cone term needs the same inputs the tonemap's spec-occ did: AO,
     // normals, and the aux roughness. Missing any of them, fold the specular
     // back unoccluded rather than read an unbound unit.
@@ -3567,7 +3573,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, fx->bloom_texture); // magnified -> level 0
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, ao_result_tex); // accumulated AO when TAA on, else blurred
+        glBindTexture(GL_TEXTURE_2D, ao_result_tex); // always the BLURRED buffer, at half res
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
         glActiveTexture(GL_TEXTURE4);
@@ -3607,6 +3613,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "specOccHasMetallic", albedo_written ? 1 : 0);
         const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
         uniform_set_vec2(tm, "invFocal", inv_focal);
+        // See the composite's copy: uploaded per draw because the two consumers
+        // magnify this buffer by different factors.
+        const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
+        uniform_set_vec2(tm, "aoRes", ao_res);
         // Contact shadows multiply the direct-light term beside AO. The exact
         // form 1 - strength*(1 - cs) is identity at cs == 1, so a lit frame is
         // byte-identical to the feature off.
