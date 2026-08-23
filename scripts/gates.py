@@ -10907,6 +10907,76 @@ def _config_run(workdir, name, extra, model=CONFIG_FIXTURE, frames=2):
     return ppm, dump, r.stdout + r.stderr
 
 
+# Values a restore is allowed NOT to reproduce, each with the reason. Two are a
+# setter doing its job, which is itself worth pinning -- a perturbation that came
+# back unchanged would mean the table had gone round the setter. The third is a
+# field nothing can carry.
+#
+# The list is the whole point of config-perturb: it inverts the default from
+# "uncovered unless an arm names it" to "covered unless this names it".
+CONFIG_PERTURB_EXCEPTIONS = {
+    "engine.msaa_samples": "set_engine_msaa_samples validates; 5 is not a sample count",
+    "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
+    "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
+}
+
+
+def _config_perturb(node, top=True):
+    """Move every scalar in a snapshot to a different value, in place.
+
+    Type-aware: ints stay ints (a float into an int row truncates and reads as a
+    dropped value), and a float already inside [0,1] is moved WITHIN that band so
+    a percentage or a blend weight is not pushed out of range and legitimately
+    refused. Strings are left alone -- an enum's next label would need the
+    vocabulary, and the enums are already covered by config-roundtrip.
+    """
+    n = 0
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if top and k in ("version", "source"):
+                continue
+            if k in ("name", "index"):
+                continue
+            if isinstance(v, bool):
+                node[k] = not v
+                n += 1
+            elif isinstance(v, int):
+                node[k] = v + 1
+                n += 1
+            elif isinstance(v, float):
+                node[k] = round(v * 0.5 + 0.25, 6) if 0.0 <= v <= 1.0 else round(v * 1.37 + 0.11, 6)
+                n += 1
+            elif not isinstance(v, str):
+                n += _config_perturb(v, False)
+    elif isinstance(node, list):
+        for v in node:
+            n += _config_perturb(v, False)
+    return n
+
+
+def _config_diff_scalars(asked, got, path="", top=True, out=None):
+    """Dotted paths where `got` does not carry the value `asked` holds."""
+    if out is None:
+        out = []
+    if isinstance(asked, dict):
+        for k, v in asked.items():
+            if top and k in ("version", "source"):
+                continue
+            if k in ("name", "index") or not isinstance(got, dict) or k not in got:
+                continue
+            _config_diff_scalars(v, got[k], f"{path}.{k}" if path else k, False, out)
+    elif isinstance(asked, list) and isinstance(got, list):
+        for a, g in zip(asked, got):
+            _config_diff_scalars(a, g, path, False, out)
+    elif isinstance(asked, bool):
+        if asked != got:
+            out.append(path)
+    elif isinstance(asked, (int, float)) and isinstance(got, (int, float)):
+        if abs(asked - got) > max(1e-4, abs(asked) * 1e-4):
+            out.append(path)
+    return out
+
+
 def _config_missing(*paths):
     """True if any capture is absent -- a run that refused rather than rendered.
 
@@ -10968,6 +11038,9 @@ def run_config_gate(workdir):
                         named in one of two lists here with what it drives or why it
                         cannot be carried. Static: reads both sources, renders nothing
       config-roundtrip  restore a snapshot and dump again: byte-identical to the first
+      config-perturb    move EVERY carried value, restore, and check each one came
+                        back. The only arm that can see a row whose apply silently
+                        does nothing, which config-roundtrip structurally cannot
       config-pixels     a run under a non-default look, against its own snapshot
                         restored with no other flag. Floor measured first
       config-standalone the same restore with NO -m and no -W/-H: the source block
@@ -11104,6 +11177,38 @@ def run_config_gate(workdir):
              f"the flag-only frame" if same_as_alone >= 0 else "a leg produced no frame"))
     if not ok:
         failures.append("config-override")
+
+    # -- perturb: does every carried value actually SURVIVE a restore? ----------
+    # config-roundtrip cannot answer this. Both of its legs render the same
+    # fixture from the same defaults, so a value the apply DROPS is identical in
+    # both dumps and the byte comparison passes -- only a CORRUPTING apply is
+    # caught. That left ~210 rows plus both element arrays uncovered for the
+    # commonest defect there is: a row whose apply silently does nothing.
+    # Measured when this arm was written: 4 rows were dead, at 0 px, silently.
+    perturbed_json = os.path.join(workdir, "config_perturb_in.json")
+    with open(orig_json) as f:
+        d = json.load(f)
+    moved = _config_perturb(d)
+    with open(perturbed_json, "w") as f:
+        json.dump(d, f, indent=1)
+    _, back, _ = _config_run(workdir, "perturb", ["--config", perturbed_json], model=None)
+    lost = []
+    if os.path.exists(back):
+        with open(back) as f:
+            lost = _config_diff_scalars(d, json.load(f))
+    unexpected = sorted(set(lost) - set(CONFIG_PERTURB_EXCEPTIONS))
+    # An exception that starts surviving is also a finding: the note is then a
+    # lie, and the list is the only thing standing between this arm and vacuity.
+    stale = sorted(set(CONFIG_PERTURB_EXCEPTIONS) - set(lost))
+    ok = os.path.exists(back) and moved > 300 and not unexpected and not stale
+    detail = f"{moved} values moved, {len(lost)} not reproduced"
+    if unexpected:
+        detail += f"; DROPPED: {', '.join(unexpected)}"
+    if stale:
+        detail += f"; exception no longer needed: {', '.join(stale)}"
+    print(f"  config-perturb  {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("config-perturb")
 
     # -- sun: the deferred re-bake, which is a value AND everything downstream ---
     # Storing the two angles is not restoring the sun: the transmittance and
