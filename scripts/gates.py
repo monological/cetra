@@ -10946,6 +10946,9 @@ def run_config_gate(workdir):
                         carries the model and the framing
       config-override   the snapshot beats the .cscn AND the command line, which is
                         what makes it a reproduction rather than another opinion
+      config-order      it lands AFTER the scene-radius derivation, read as values
+                        rather than pixels because that block moves none on a small
+                        fixture with AO and SSR off
       config-schema     an unknown key, a wrong-shaped value, a light this scene does
                         not have and a whole absent subsystem are each named
 
@@ -10960,6 +10963,11 @@ def run_config_gate(workdir):
     that is not. A control added to gui.c with no table row is invisible to every other
     arm in the suite -- the snapshot still round-trips, still reproduces its own frame,
     and silently omits the thing somebody just added.
+
+    config-order exists BECAUSE the falsification round found the hole: moving the
+    apply above the scene-radius block destroys a restored fog range and silently
+    raises anything under a derived floor, and every other arm here passed on that
+    build. Anything read only as pixels is blind to a field the frame does not use.
     """
     failures = []
 
@@ -11053,6 +11061,34 @@ def run_config_gate(workdir):
           f"{same_as_alone} px, and {moved_off_flags} px off the flag-only frame")
     if not ok:
         failures.append("config-override")
+
+    # -- order: the apply must land AFTER the scene-radius derivation ------------
+    # Read as VALUES, not pixels, and that is the point: the five fields this block
+    # touches are a fog range and three screen-space reaches, none of which moves a
+    # pixel on a small fixture with AO and SSR switched off. The falsification round
+    # moved the apply above this block and all six other arms passed.
+    #
+    # Both mechanisms, because they fail differently: fog.far is an unconditional
+    # ASSIGNMENT, so an early apply loses it outright; ao.radius is an fmaxf FLOOR,
+    # so an early apply only loses values below the floor.
+    order_json = os.path.join(workdir, "config_order.json")
+    d = json.load(open(orig_json))
+    derived_far = d["postfx"]["fog"]["far"]
+    d["postfx"]["fog"]["far"] = 1234.5
+    d["postfx"]["ao"]["radius"] = 0.001  # under scene_radius * 0.01 on this fixture
+    json.dump(d, open(order_json, "w"), indent=1)
+    _, back_json, _ = _config_run(workdir, "order", ["--config", order_json], model=None)
+    back = json.load(open(back_json)) if os.path.exists(back_json) else {}
+    kept_far = abs(back.get("postfx", {}).get("fog", {}).get("far", 0.0) - 1234.5) < 0.01
+    kept_radius = abs(back.get("postfx", {}).get("ao", {}).get("radius", 0.0) - 0.001) < 1e-6
+    # Anti-vacuity: the authored values must actually differ from what the block
+    # derives, or "they survived" is true of a build that never applied them.
+    distinct = abs(derived_far - 1234.5) > 1.0
+    ok = kept_far and kept_radius and distinct
+    print(f"  config-order    {'PASS' if ok else 'FAIL'}  authored fog.far survived={kept_far}, "
+          f"ao.radius under the floor survived={kept_radius} (derived far {derived_far:.2f})")
+    if not ok:
+        failures.append("config-order")
 
     # -- schema: four different wrongnesses, each named --------------------------
     bad_json = os.path.join(workdir, "config_bad.json")
