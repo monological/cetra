@@ -401,11 +401,28 @@ static bool postfx_alloc_targets(PostFX* fx) {
     // (view-space normal .xyz + SSR marker .a); RGBA16F to match the MSAA source
     if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->normal_fbo, &fx->normal_texture))
         return false;
-    // RGBA8, not R8: .r is the AO the whole chain has always read, .gba carry
-    // the bent normal encoded to [0,1]. 8 bits of a unit direction is ~0.5
-    // degrees after normalize, far finer than a 2-slice estimator resolves.
+    // RGBA rather than R: .r is the AO the whole chain has always read, .gba
+    // carry the bent normal encoded to [0,1].
+    //
+    // 16F rather than 8, and the load-bearing reason is the buffer BELOW this
+    // one. The temporal accumulation ping-pong is RGBA16F because a 0.97
+    // feedback blend needs more than 256 levels to converge without banding --
+    // and then the blur wrote its result back through an 8-bit target every
+    // frame, which spends that precision on the way out. The two allocations
+    // now agree about what the chain is worth keeping.
+    //
+    // What it does NOT do, measured rather than assumed: remove the contour
+    // banding on a shallow AO gradient. That was this change's original
+    // headline -- 0.92-1.00 is ~20 codes at 8 bits, so storage looked like the
+    // obvious parent -- and widening the format leaves the band structure
+    // untouched (identical flat-run lengths along the gradient, identical
+    // span). The bands come from the estimator, not from how its answer is
+    // stored. Kept anyway for the reason above, which stands on its own.
+    //
+    // What it costs on a lit frame: ~2% of pixels move, 99.5% of those by one
+    // or two codes, which is dequantisation and nothing more.
     for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->half_width, fx->half_height, GL_RGBA8, &fx->ssao_fbo[i],
+        if (!create_color_fbo(fx->half_width, fx->half_height, GL_RGBA16F, &fx->ssao_fbo[i],
                               &fx->ssao_texture[i]))
             return false;
     }
