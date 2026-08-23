@@ -8341,6 +8341,13 @@ def run_overdraw_gate(workdir):
     allocated multisample and this driver rounded it up to 2, so every reading
     on the TAA path was exactly double -- a single full-frame quad read 2.00.
     (11.34 has since made a 1-sample request genuinely single-sample.)
+
+    THE FIRST TWO ARMS HERE ARE INTEGERS AND THE THIRD IS A CLOCK, and only the
+    third has ever been red. Five specs (11.36, 11.38, 11.39, 11.40, 11.73) have
+    recorded `prepass-crossover` failing and each worked around it by re-running,
+    which is the right move on a flake and the wrong description of this one --
+    see the separation rule at the bottom of this function for what was actually
+    measured. A reader meeting it red should start there, not at pbr_frag.
     """
     layers_scene = os.path.join(ROOT, "assets", OVERDRAW_LAYERS)
     if not os.path.exists(layers_scene):
@@ -8421,6 +8428,36 @@ def run_overdraw_gate(workdir):
         print("  prepass-crossover FAIL  no usable opaque row to compare")
         return failures + ["prepass-crossover"]
     b, o, cost, noise = timing
+    #
+    # THE SEPARATION RULE IS WHAT FAILS, AND IT FAILS ON AN UNCHANGED RENDERER.
+    # Measured over five samples on two commits, quiet machine, nothing else
+    # running (the last two are the commit before 11.74 and are the control):
+    #
+    #   base ms  prepass  cost  floor  3xfloor  bar it missed
+    #    5.288    5.597    +6%    2%      6%    separation, by a hair
+    #    4.979    5.741   +15%    7%     21%    separation
+    #    5.279    5.491    +4%    3%      9%    both (that run was NOT quiet)
+    #    5.513    5.666    +3%    0%      0%    the +5% minimum
+    #    4.931    5.392    +9%    6%     18%    separation
+    #
+    # Five for five red, and the CLAIM held every time: the prepass cost time on
+    # every sample, +3% to +15%, which is the whole thing this arm exists to say.
+    # What is broken is the test. `noise` is ONE sample of run-to-run variation
+    # and `cost` is one sample of the same process shifted by the effect, so
+    # `cost >= 3 * noise` asks whether one draw beats three times another draw of
+    # comparable scale. With sigma around 3-4% on this row the bar is itself a
+    # random variable ranging 0% to 21%, and a genuine +15% reading fails against
+    # a floor that happened to sample 7%.
+    #
+    # Left AS IS rather than quietly retuned, because both halves are load
+    # bearing and the fix is a judgement about which: a mean or max over N floor
+    # samples costs suite time, dropping the separation rule reinstates the
+    # unfloored timing claim the rule was added to prevent, and raising
+    # CROSSOVER_SEPARATION's input to a real estimator is the honest version and
+    # is more than a constant. Anything here also has to keep the arm able to
+    # FAIL -- an arm that cannot go red on a prepass that stopped costing is
+    # worse than this one.
+    #
     # The premise, asserted rather than left in a comment: this fixture has
     # nothing to reject. If it ever gained overlap the arm would quietly be
     # measuring a different scene.
