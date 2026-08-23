@@ -870,6 +870,7 @@ static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
     case CFG_WATER_SWELL:
         return scene && scene->water ? &scene->water->sea.swell : NULL;
     case CFG_PROBE_ELEM:
+    case CFG_DECAL_ELEM:
     case CFG_LIGHT_ELEM:
     case CFG_MATERIAL_ELEM:
         // Element owners have no singleton to resolve; the array walk supplies

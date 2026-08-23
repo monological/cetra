@@ -13433,7 +13433,7 @@ _LAYER_GEN = None
 _LAYER_VT_GEN = None
 
 
-def _import_fixture_gen(filename):
+def _import_fixture_gen(filename, group="layers"):
     """A fixture generator, imported for its constants. Writes nothing on import.
 
     Returns None if its dependencies are absent. The rest of gates.py is
@@ -13442,6 +13442,10 @@ def _import_fixture_gen(filename):
     otherwise abort a seven-minute run partway through with a
     ModuleNotFoundError, after the GPU time is already spent. The caller SKIPs
     instead, like it does for a missing fixture or an unbuilt binary.
+
+    `group` names the gate in that SKIP line. It was the literal "layers" until
+    a second group wanted this, which would have had the decals gate reporting
+    itself as the layers one.
     """
     path = os.path.join(ROOT, "assets", filename)
     try:
@@ -13449,7 +13453,7 @@ def _import_fixture_gen(filename):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
     except ImportError as exc:
-        print(f"  layers            SKIP  ({filename[:-3]} needs {exc.name})")
+        print(f"  {group:<17} SKIP  ({filename[:-3]} needs {exc.name})")
         return None
     return mod
 
@@ -14491,29 +14495,42 @@ def _layers_scatter_arm():
 
 # --- clustered decals (spec 11.73) ------------------------------------------
 DECAL_FIXTURE = "decal_fixture.cscn"
-# Read straight out of the generator, which is the one statement of what the
-# fixture is: transcribing the codes here would leave two copies that agree only
-# until somebody repaints an image, and the failure is silent -- an arm asserting
-# a stale code fails loudly, but one asserting a stale POSITION reads plausible
-# bytes off the wrong part of the frame and passes.
-DECAL_POSTER_CODE = (216, 64, 32)
-DECAL_SCORCH_CODE = (40, 40, 44)
-# The substrate factors the .gltf authors, as the albedo view returns them:
-# linearToSRGB in this engine is pow(1/2.2), not the piecewise sRGB curve.
-DECAL_WALL_SUBSTRATE = (230, 228, 220)
-DECAL_OBLIQUE_SUBSTRATE = (123, 177, 224)
-# World points, from the generator's own constants.
-# The generator's own POSTER_READ and OBLIQUE_READ, which it asserts are clear
-# of each other: the oblique plate stands in front of the wall, so a poster read
-# it occluded would return the plate's colour -- indistinguishable from a decal
-# that never landed.
-DECAL_POSTER_READ = (-0.65, 1.6, -2.75)
-DECAL_OBLIQUE_READ = (-1.82, 1.6, -2.5)
-DECAL_WALL_CLEAR = (1.6, 1.6, -3.0)   # wall, well outside the poster's box
-DECAL_SCORCH_CENTRE = (1.3, 0.0, -0.6)
-DECAL_FLOOR_CLEAR = (-1.8, 0.0, 1.2)  # floor, outside the scorch's box
-# How far a byte may sit from its painted value. One code of dither (spec 11.24)
-# plus one of rounding; anything the decal path gets WRONG is tens of codes.
+_DECAL_GEN = None
+
+
+def _decal_gen():
+    """The decal fixture's generator, IMPORTED rather than transcribed.
+
+    This block used to carry a comment saying exactly that while listing nine
+    hand-copied literals underneath it -- including two derived by hand from the
+    .gltf's baseColorFactors, two steps from their source. The mechanism the
+    comment described already existed and is used by the layers gate; it just
+    was not called.
+    """
+    global _DECAL_GEN
+    if _DECAL_GEN is None:
+        _DECAL_GEN = _import_fixture_gen("gen_decal_fixture.py", "decals")
+    return _DECAL_GEN
+
+
+def _decal_substrate(gen, material):
+    """The albedo view's byte for an authored baseColorFactor.
+
+    linearToSRGB in this engine is pow(1/2.2), not the piecewise sRGB curve --
+    reading a substrate through the piecewise one is a two-code error on the
+    floor, which is inside this gate's tolerance and would hide a real one.
+    """
+    for m in gen.GLTF["materials"]:
+        if m["name"] == material:
+            f = m["pbrMetallicRoughness"]["baseColorFactor"]
+            return tuple(int(round((c ** (1.0 / 2.2)) * 255.0)) for c in f[:3])
+    raise KeyError(material)
+
+
+# How far a byte may sit from its painted value. Two codes of rounding through
+# the linear/encode round trip, plus one of slack; anything the decal path gets
+# WRONG is tens of codes. NOT dither -- --render-mode 6 takes the passthrough
+# blit, which skips the tonemap where the dither lives.
 DECAL_CODE_EPS = 3
 # The froxel grid, from light_cluster.h. A decal is a small box, so the two in
 # this fixture claim a tiny fraction of it -- measured 130 of 3072. The bound is
@@ -14549,10 +14566,18 @@ def _decal_run(workdir, tag, mutate=None, extra=None, frames=4):
 def _decal_byte(pix, w, h, project, world):
     """The raw RGB triple at a world point. RAW, not linearised: the albedo view
     hands back the exact code the generator painted, so the assertion is against
-    a byte and introducing a decode would only add error to it."""
+    a byte and introducing a decode would only add error to it.
+
+    RAISES for a point that projects off-screen rather than clamping, which is
+    _layer_sample's contract and for its reason: a clamp returns a number, and a
+    number is what an arm reads, so a fixture whose framing drifted would go on
+    passing against whatever pixel sat at the edge. This gate has already been
+    bitten once by a read point that moved onto the wrong surface.
+    """
     px, py = project(world)
-    x = max(0, min(w - 1, int(round(px))))
-    y = max(0, min(h - 1, int(round(py))))
+    x, y = int(round(px)), int(round(py))
+    if not (0 <= x < w and 0 <= y < h):
+        raise AssertionError(f"world {world} projects to ({x},{y}), outside the {w}x{h} frame")
     o = (y * w + x) * 3
     return (pix[o], pix[o + 1], pix[o + 2])
 
@@ -14565,10 +14590,13 @@ def _decal_probe_rows(output):
     """The --decal-probe lines, split into the per-frame and per-decal halves."""
     frames, decals = [], []
     for line in output.splitlines():
+        # `if "=" in kv`, the guard the file's four other k=v readers carry: a
+        # bare token added to either line would otherwise raise mid-suite
+        # instead of leaving a field unread.
         if line.startswith("decal-probe decal "):
-            decals.append(dict(kv.split("=", 1) for kv in line.split()[2:]))
+            decals.append(dict(kv.split("=", 1) for kv in line.split()[2:] if "=" in kv))
         elif line.startswith("decal-probe frame="):
-            frames.append(dict(kv.split("=", 1) for kv in line.split()[1:]))
+            frames.append(dict(kv.split("=", 1) for kv in line.split()[1:] if "=" in kv))
     return frames, decals
 
 
@@ -14580,6 +14608,9 @@ def run_decal_gate(workdir):
                         stops the first passing on a build that projects nothing
       decals-albedo     the poster's interior reads its painted code through the
                         albedo view, with clear wall as the in-frame control
+      decals-orient     each of the poster's four quadrants lands in the world
+                        corner it was painted for -- the arm that says the mark
+                        is a PICTURE and not just a coloured patch
       decals-angle-fade the oblique plate inside the poster's box reads its own
                         substrate: a projector must refuse a surface it grazes
       decals-surface    the scorch's surface map moves roughness where its albedo
@@ -14607,6 +14638,13 @@ def run_decal_gate(workdir):
     arms green. Anything that reads only a == 1 is blind to how a mark meets the
     surface under it, which is most of what a decal is.
 
+    decals-orient exists for the same class of reason and cost more: every image
+    in this fixture used to be invariant under mirror, flip, transpose AND
+    180-degree rotation, so a projector laying every picture on backwards and
+    upside down -- which is what shipped -- painted a frame no arm could tell
+    from a correct one. A single-colour patch cannot test a projector. The
+    quadrants are what make the fixture able to fail.
+
     ONE DELIBERATE ABSENCE: no arm covers the half-texel UV inset that guards
     against the material array's GL_REPEAT wrap. One was written and removed on
     measurement -- deleting the inset moves 0 px on this fixture, because its
@@ -14625,8 +14663,14 @@ def run_decal_gate(workdir):
     if not os.path.exists(os.path.join(ROOT, "assets", DECAL_FIXTURE)):
         print(f"  decals-identity SKIP  {DECAL_FIXTURE} not found")
         return []
+    gen = _decal_gen()
+    if gen is None:
+        return []
     failures = []
     cam = _cscn_camera(DECAL_FIXTURE)
+    wall_substrate = _decal_substrate(gen, "decal_wall_mat")
+    oblique_substrate = _decal_substrate(gen, "decal_oblique_mat")
+    floor_substrate = _decal_substrate(gen, "decal_floor_mat")
 
     # -- identity: the feature costs a decal-free scene nothing ---------------
     def strip(d):
@@ -14656,26 +14700,56 @@ def run_decal_gate(workdir):
 
     project = _projector(cam, w or 400, h or 300)
 
-    # -- albedo: the painted code, and clear wall as the control --------------
+    # -- albedo: the painted codes, and clear substrate as the control --------
     if pix_on is not None:
-        got = _decal_byte(pix_on, w, h, project, DECAL_POSTER_READ)
-        ctrl = _decal_byte(pix_on, w, h, project, DECAL_WALL_CLEAR)
-        ok = _decal_near(got, DECAL_POSTER_CODE) and _decal_near(ctrl, DECAL_WALL_SUBSTRATE)
+        poster = _decal_byte(pix_on, w, h, project, gen.POSTER_READ)
+        wall = _decal_byte(pix_on, w, h, project, gen.WALL_CLEAR)
+        # The scorch too: it is the decal whose frame comes from the canonical
+        # perpendicular fallback and the only one carrying a surface map, so it
+        # is the one most likely to be wrong -- and its colour went unasserted
+        # while both this file and AGENTS.md quoted it as a reading.
+        scorch = _decal_byte(pix_on, w, h, project, gen.SCORCH_READ)
+        floor = _decal_byte(pix_on, w, h, project, gen.FLOOR_CLEAR)
+        ok = (_decal_near(poster, gen.POSTER_TR) and _decal_near(wall, wall_substrate) and
+              _decal_near(scorch, gen.SCORCH_CODE) and _decal_near(floor, floor_substrate))
         if not ok:
             failures.append("decals-albedo")
-        print(f"  decals-albedo {'PASS' if ok else 'FAIL'}  poster reads {got} "
-              f"(want {DECAL_POSTER_CODE}), clear wall {ctrl} "
-              f"(want {DECAL_WALL_SUBSTRATE}), both +/-{DECAL_CODE_EPS}")
+        print(f"  decals-albedo {'PASS' if ok else 'FAIL'}  poster reads {poster} "
+              f"(want {gen.POSTER_TR}), scorch {scorch} (want {gen.SCORCH_CODE}); "
+              f"controls: wall {wall} (want {wall_substrate}), floor {floor} "
+              f"(want {floor_substrate}), all +/-{DECAL_CODE_EPS}")
+
+    # -- orient: the picture arrives the way round it was painted -------------
+    if pix_on is not None:
+        # Which PNG quadrant each world corner must return. A projector that
+        # mirrors, flips, rotates or transposes gets a DIFFERENT wrong answer
+        # for each, because the generator asserts the four codes are separated
+        # in every channel.
+        want = {"upper_left": gen.POSTER_TL, "upper_right": gen.POSTER_TR,
+                "lower_left": gen.POSTER_BL, "lower_right": gen.POSTER_BR}
+        got = {k: _decal_byte(pix_on, w, h, project, v) for k, v in gen.QUAD_READS.items()}
+        wrong = [k for k in want if not _decal_near(got[k], want[k])]
+        # Anti-vacuity: the four reads must be four DIFFERENT bytes, or they are
+        # all landing on one quadrant and agreeing with it by accident.
+        distinct = len({tuple(v) for v in got.values()}) == 4
+        ok = not wrong and distinct
+        if not ok:
+            failures.append("decals-orient")
+        print(f"  decals-orient {'PASS' if ok else 'FAIL'}  four quadrants land in their "
+              f"own corners ({len(want) - len(wrong)}/4 correct, {len(set(map(tuple, got.values())))} "
+              f"distinct of 4)" +
+              (f"; wrong: {', '.join(f'{k}={got[k]} want {want[k]}' for k in wrong)}"
+               if wrong else ""))
 
     # -- angle fade: the oblique plate refuses the mark -----------------------
     if pix_on is not None:
-        ob = _decal_byte(pix_on, w, h, project, DECAL_OBLIQUE_READ)
-        ok = _decal_near(ob, DECAL_OBLIQUE_SUBSTRATE)
+        ob = _decal_byte(pix_on, w, h, project, gen.OBLIQUE_READ)
+        ok = _decal_near(ob, oblique_substrate)
         if not ok:
             failures.append("decals-angle-fade")
         print(f"  decals-angle-fade {'PASS' if ok else 'FAIL'}  the oblique plate "
               f"inside the poster's box reads {ob} (want its own substrate "
-              f"{DECAL_OBLIQUE_SUBSTRATE} +/-{DECAL_CODE_EPS}, i.e. no mark)")
+              f"{oblique_substrate} +/-{DECAL_CODE_EPS}, i.e. no mark)")
 
     # -- surface: the scorch's map moves the lit frame ------------------------
     def flatten(d):
@@ -14708,19 +14782,19 @@ def run_decal_gate(workdir):
         failures.append("decals-opacity")
         print(f"  decals-opacity FAIL  render error\n{out_half}")
     else:
-        got = _decal_byte(pix_half, w, h, project, DECAL_POSTER_READ)
+        got = _decal_byte(pix_half, w, h, project, gen.POSTER_READ)
         # The albedo view encodes with pow(1/2.2), and the blend happens in
         # LINEAR -- so the expected byte is the encode of the half-and-half of
         # the two decoded values, not the average of the two bytes.
         want = tuple(
             int(round((((c / 255.0) ** 2.2 + (s_ / 255.0) ** 2.2) * 0.5) ** (1 / 2.2) * 255.0))
-            for c, s_ in zip(DECAL_POSTER_CODE, DECAL_WALL_SUBSTRATE))
+            for c, s_ in zip(gen.POSTER_TR, wall_substrate))
         ok = _decal_near(got, want, eps=4)
         if not ok:
             failures.append("decals-opacity")
         print(f"  decals-opacity {'PASS' if ok else 'FAIL'}  a half-opaque poster reads "
-              f"{got} (want {want} +/-4, the linear midpoint of {DECAL_POSTER_CODE} and "
-              f"{DECAL_WALL_SUBSTRATE}); multiplying by coverage twice reads darker")
+              f"{got} (want {want} +/-4, the linear midpoint of {gen.POSTER_TR} and "
+              f"{wall_substrate}); multiplying by coverage twice reads darker")
 
     # -- mask: determinism, and a decal off screen claims nothing -------------
     _, _, _, out_p1 = _decal_run(workdir, "probe1", None, ["--decal-probe", "1"])

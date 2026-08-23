@@ -28,11 +28,14 @@ void decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out
         vec3 axis = {0.0f, 0.0f, 0.0f};
         vec3 up = {0.0f, 0.0f, 0.0f};
         orientation_frame(d->direction, d->up, axis, up);
-        // Right-handed with local +Z along the projection axis, so the image's
-        // u runs along `right` and v along `up` -- the frame light_emission_frame
-        // hands a panel, used for the same reason.
+        // cross(axis, up), NOT cross(up, axis), and the order is the difference
+        // between a poster and its mirror image. A projector faces along `axis`
+        // and is looked at from the far side of it, so the viewer's right hand
+        // is axis x up; the other order points `right` at the viewer's LEFT and
+        // lays every image on backwards. Nothing catches that without an
+        // asymmetric mark, which is why the fixture has four quadrants.
         vec3 right;
-        glm_vec3_cross(up, axis, right);
+        glm_vec3_cross(axis, up, right);
         glm_vec3_normalize(right);
 
         // The rows are the frame TRANSPOSED (an orthonormal basis inverts by

@@ -1111,11 +1111,17 @@ void main() {
         decalSurf = decalAccumulate(materialArray,
                                     decalMaskAt(clusterIndexAt(gl_FragCoord.xy, -ViewPos.z)),
                                     WorldPos, Normal, dFdx(WorldPos), dFdy(WorldPos));
+        // Guarded on coverage the way the surface half below is, and for a
+        // reason beyond symmetry: sRGBToLinear is three pow() calls, and most
+        // fragments in a decal-armed scene are outside every box -- a mix by
+        // zero is cheap, the decode feeding it is not.
+        //
         // Decoded once after the blend, not per decal: the material array is
         // linear RGBA8 and a decal's albedo is stored in it as authored sRGB
         // codes, which is the layered path's arrangement exactly.
-        albedoMap = mix(albedoMap, sRGBToLinear(decalResolvedAlbedo(decalSurf)),
-                        decalSurf.alpha);
+        if (decalSurf.alpha > 0.0)
+            albedoMap = mix(albedoMap, sRGBToLinear(decalResolvedAlbedo(decalSurf)),
+                            decalSurf.alpha);
     }
 
     /*

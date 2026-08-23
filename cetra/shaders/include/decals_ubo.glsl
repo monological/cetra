@@ -166,12 +166,18 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
         vec3 edge = (vec3(1.0) - abs(local)) / feather;
         float edgeWeight = clamp(min(edge.x, min(edge.y, edge.z)), 0.0, 1.0);
 
-        vec2 uv = clamp(local.xy * 0.5 + 0.5, inset, 1.0 - inset);
+        // v is NEGATED and u is not, because the two axes disagree about which
+        // way is forward: row1 is the decal's up in the WORLD, where v runs DOWN
+        // an image from row 0. Without it the picture arrives upside down --
+        // which, together with a mirrored `right`, is a clean 180-degree
+        // rotation that a symmetric test image cannot see.
+        const vec2 uvAxis = vec2(0.5, -0.5);
+        vec2 uv = clamp(local.xy * uvAxis + 0.5, inset, 1.0 - inset);
         // The projected coordinate's gradients, by chain rule through the same
         // rows that produced it -- exact, because the projection is affine, and
-        // the 0.5 is the local -> uv remap above.
-        vec2 duvdx = vec2(dot(r0.xyz, ddxWorld), dot(r1.xyz, ddxWorld)) * 0.5;
-        vec2 duvdy = vec2(dot(r0.xyz, ddyWorld), dot(r1.xyz, ddyWorld)) * 0.5;
+        // carrying uvAxis so the v gradient keeps the sign its coordinate has.
+        vec2 duvdx = vec2(dot(r0.xyz, ddxWorld), dot(r1.xyz, ddxWorld)) * uvAxis;
+        vec2 duvdy = vec2(dot(r0.xyz, ddyWorld), dot(r1.xyz, ddyWorld)) * uvAxis;
 
         vec4 tex = textureGrad(atlas, vec3(uv, p0.x), duvdx, duvdy);
         float a = tex.a * p0.z * angleWeight * edgeWeight;

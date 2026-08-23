@@ -60,8 +60,18 @@ TEX = 64  # every painted image is TEX x TEX
 # --- the marks --------------------------------------------------------------
 # Codes chosen away from both endpoints and from each other, so a misread is a
 # large number rather than a plausible one.
-POSTER_CODE = (216, 64, 32)   # the poster's interior
-POSTER_BORDER = (32, 240, 96) # its one-texel ring; must never appear opposite
+# The poster's four quadrants, named by where they sit IN THE PNG (row 0 is the
+# top). All four differ in every channel, so a mirror, a flip, a transpose and a
+# 180-degree rotation each produce a different wrong answer rather than a
+# plausible one -- the terrain fixture's "a transpose must move >500 codes" rule,
+# applied to the thing a decal actually is.
+POSTER_TL = (216, 64, 32)
+POSTER_TR = (48, 200, 96)
+POSTER_BL = (96, 112, 200)
+POSTER_BR = (160, 32, 176)
+# The ring, distinct from all four in every channel for the same reason: where
+# it appears is an answer, so it must not be confusable with a quadrant.
+POSTER_BORDER = (248, 248, 248)
 SCORCH_CODE = (40, 40, 44)
 
 # The scorch's surface map, packed as layers.glsl reads it.
@@ -101,7 +111,11 @@ OBLIQUE_DX = -0.62
 # part of what the fixture IS: an arm sampling a point some other plate occludes
 # reads plausible bytes off the wrong surface, which is the failure this file's
 # asserts exist to make impossible.
-POSTER_READ = (POSTER_POS[0] + 0.55, POSTER_POS[1], POSTER_POS[2])
+# Inside the poster's UPPER-RIGHT quadrant, so it returns POSTER_TR rather than
+# whatever a seam rounds to -- it sat on the horizontal seam until the poster
+# gained quadrants, which is exactly the read a one-colour image cannot notice.
+POSTER_READ = (POSTER_POS[0] + 0.55 * POSTER_HALF[0],
+               POSTER_POS[1] + 0.5 * POSTER_HALF[1], POSTER_POS[2])
 OBLIQUE_READ = (POSTER_POS[0] + OBLIQUE_DX, POSTER_POS[1], POSTER_POS[2] + 0.25)
 # Just inside the poster's RIGHT edge, where the image's own margin has faded
 # out. The far side from it carries the border ring, so this is where a missing
@@ -111,13 +125,53 @@ OBLIQUE_READ = (POSTER_POS[0] + OBLIQUE_DX, POSTER_POS[1], POSTER_POS[2] + 0.25)
 # comfortably inside the opaque region the margin leaves (asserted below).
 EDGE_READ = (POSTER_POS[0] + 0.70 * POSTER_HALF[0], POSTER_POS[1], POSTER_POS[2])
 
+# The four world points an orientation arm reads, at 0.5 of the half-extent so
+# each sits well inside its own quadrant and away from the seams. Named for the
+# VIEWER's frame -- the camera looks down -Z at the wall, so +x is the viewer's
+# right and +y is up. Which PNG quadrant each ought to return is the whole
+# question: the projector decides it, and until this fixture had four colours
+# nothing in the suite could ask.
+# The scorch's own centre, on the floor plane, and the two CONTROL points --
+# substrate a decal must not have touched. Every arm reads a control in the same
+# frame as its signal, so a build that painted the whole wall fails rather than
+# reading plausibly.
+SCORCH_READ = (SCORCH_POS[0], 0.0, SCORCH_POS[2])
+WALL_CLEAR = (1.6, 1.6, WALL_Z)
+FLOOR_CLEAR = (-1.8, 0.0, 1.2)
+
+QUAD_READS = {
+    "upper_right": (POSTER_POS[0] + 0.5 * POSTER_HALF[0],
+                    POSTER_POS[1] + 0.5 * POSTER_HALF[1], POSTER_POS[2]),
+    "upper_left": (POSTER_POS[0] - 0.5 * POSTER_HALF[0],
+                   POSTER_POS[1] + 0.5 * POSTER_HALF[1], POSTER_POS[2]),
+    "lower_right": (POSTER_POS[0] + 0.5 * POSTER_HALF[0],
+                    POSTER_POS[1] - 0.5 * POSTER_HALF[1], POSTER_POS[2]),
+    "lower_left": (POSTER_POS[0] - 0.5 * POSTER_HALF[0],
+                   POSTER_POS[1] - 0.5 * POSTER_HALF[1], POSTER_POS[2]),
+}
+
 
 def _poster():
-    """Bands with a bright one-texel border and a transparent margin."""
+    """Four distinct QUADRANTS, a bright one-texel border, a transparent margin.
+
+    The quadrants are the whole point and they were missing until the review:
+    every earlier version of this image was invariant under horizontal mirror,
+    vertical flip, transpose AND 180-degree rotation, so a projector that landed
+    the picture backwards, upside down, or both painted a frame no arm could
+    tell from a correct one. A decal whose pitch is "a poster, a logo" has to be
+    able to fail that way in the fixture before it can be asserted not to.
+
+    Named by where they sit IN THE PNG -- row 0 is the image's top -- so an arm
+    can say which world corner each ought to reach.
+    """
     img = np.zeros((TEX, TEX, 4), dtype=np.uint8)
     m = int(TEX * MARGIN)
-    img[m:TEX - m, m:TEX - m, :3] = POSTER_CODE
     img[m:TEX - m, m:TEX - m, 3] = 255
+    mid = TEX // 2
+    img[m:mid, m:mid, :3] = POSTER_TL
+    img[m:mid, mid:TEX - m, :3] = POSTER_TR
+    img[mid:TEX - m, m:mid, :3] = POSTER_BL
+    img[mid:TEX - m, mid:TEX - m, :3] = POSTER_BR
     # The ring, exactly one texel inside the opaque region on every side.
     img[m, m:TEX - m, :3] = POSTER_BORDER
     img[TEX - m - 1, m:TEX - m, :3] = POSTER_BORDER
@@ -178,8 +232,63 @@ def _assert_fixture_still_tests_something():
     # in the interior and the wrap arm would read it on both sides legitimately.
     m = int(TEX * MARGIN)
     assert tuple(poster[m, TEX // 2, :3]) == POSTER_BORDER, "the border ring moved"
-    assert tuple(poster[TEX // 2, TEX // 2, :3]) == POSTER_CODE, (
-        "the poster's interior is not its own code")
+
+    # The four quadrants must be four DIFFERENT colours, and differ in a way no
+    # symmetry can undo -- this is the assert that makes the orientation arm
+    # possible. An image invariant under mirror, flip, transpose or rotation
+    # cannot fail an orientation test, which is what every earlier version of
+    # this poster was.
+    q = {"TL": POSTER_TL, "TR": POSTER_TR, "BL": POSTER_BL, "BR": POSTER_BR}
+    marks = dict(q, RING=POSTER_BORDER)
+    assert len(set(marks.values())) == 5, "the poster's marks are not five distinct colours"
+    for a in marks:
+        for b in marks:
+            if a < b:
+                assert all(abs(x - y) > 16 for x, y in zip(marks[a], marks[b])), (
+                    f"{a} and {b} are within 16 codes in some channel; a "
+                    f"misprojection would read as noise rather than as an answer")
+    lo, hi = m + 1, TEX - m - 2  # inside the border ring
+    mid = TEX // 2
+    for name, (r, c) in (("TL", (lo, lo)), ("TR", (lo, hi)),
+                         ("BL", (hi, lo)), ("BR", (hi, hi))):
+        assert tuple(poster[r, c, :3]) == q[name], f"the {name} quadrant is not where it says"
+    assert mid - m >= 4, "the quadrants are too small to sample away from their seams"
+
+    # Every control point must be OUTSIDE the box of every decal, or it is not a
+    # control -- it is a second read of the same mark. Checked against both
+    # boxes rather than the obvious one, since a control's whole job is to be
+    # untouched by anything.
+    for pt, name in ((WALL_CLEAR, "wall"), (FLOOR_CLEAR, "floor")):
+        for pos, half, dname in ((POSTER_POS, POSTER_HALF, "poster"),
+                                 (SCORCH_POS, SCORCH_HALF, "scorch")):
+            inside = all(abs(pt[k] - pos[k]) < half[k] for k in range(3))
+            assert not inside, f"the {name} control sits inside the {dname}'s box"
+
+    # ...and the scorch read must be INSIDE the scorch's box, on the floor.
+    assert all(abs(SCORCH_READ[k] - SCORCH_POS[k]) < SCORCH_HALF[k] for k in range(3)), (
+        "the scorch read point is outside the scorch's own box")
+
+    # POSTER_READ must sit in ONE quadrant, clear of both seams, or it returns
+    # whatever the seam rounds to and the arm reading it against a single
+    # quadrant code is asserting a coin flip.
+    for k, axis, edge in ((0, "x", POSTER_HALF[0]), (1, "y", POSTER_HALF[1])):
+        off = POSTER_READ[k] - POSTER_POS[k]
+        assert abs(off) > 0.15 * edge, (
+            f"POSTER_READ is {abs(off):.3f} from the poster's {axis} seam; it must "
+            f"be unambiguously inside one quadrant")
+    assert POSTER_READ[0] > POSTER_POS[0] and POSTER_READ[1] > POSTER_POS[1], (
+        "POSTER_READ is not in the upper-right quadrant its arm reads POSTER_TR for")
+
+    # Every quadrant read must be inside the poster's box in x and y, and must
+    # sit in the quadrant its name claims -- the arm's whole premise.
+    for name, pt in QUAD_READS.items():
+        for k, axis in ((0, "x"), (1, "y")):
+            assert abs(pt[k] - POSTER_POS[k]) < POSTER_HALF[k], (
+                f"the {name} quadrant read is outside the poster's box in {axis}")
+        want_right = "right" in name
+        want_upper = "upper" in name
+        assert (pt[0] > POSTER_POS[0]) == want_right, f"{name} is not on the {'right' if want_right else 'left'}"
+        assert (pt[1] > POSTER_POS[1]) == want_upper, f"{name} is not in the {'upper' if want_upper else 'lower'} half"
 
     # The oblique plate stands in FRONT of the wall, so it must not cover the
     # point the poster arm reads -- a sample the plate occludes returns the
