@@ -55,7 +55,27 @@ float specOcclusionCone(float ao, float roughness, vec3 bentN, vec3 R)
     // fully unoccluded surface -- open ground, a distant landscape --
     // comes back darkened.
     float open = coneOverlap(0.0, cosAs, bDotR);
-    return open > 1e-4 ? clamp(visible / open, 0.0, 1.0) : 1.0;
+    // FADE the reference out, do not switch it off at an epsilon.
+    //
+    // `open` is how much of the reflection lobe clears the horizon at all, so
+    // the ratio below is only meaningful while there IS a lobe to speak of.
+    // Guarding that with `open > 1e-4 ? ratio : 1.0` looks like a divide-by-zero
+    // guard and behaves like a cliff: `visible` reaches exactly 0 well before
+    // `open` does -- the two cones stop overlapping while the lobe is still
+    // partly above the horizon -- so across the band where that is true the
+    // branch reads 0.0, and the moment `open` slips under the epsilon it reads
+    // 1.0. Fully occluded and fully open, adjacent, decided by which side of
+    // 1e-4 a number landed on. On a floor around an occluder those two bands
+    // are concentric, which is the ring this replaces: measured 1.000 over
+    // y 1292-1310 against 0.000 over y 1316-1352 on one column of cornell_rooms.
+    //
+    // The width is not tuned to taste: TRUST_OPEN is where the lobe has enough
+    // of itself above the horizon for the fraction to mean something, and below
+    // it the term relaxes to "do not occlude" the way it always did -- just
+    // continuously, so no pair of neighbouring pixels can straddle the decision.
+    const float TRUST_OPEN = 0.15;
+    float ratio = clamp(visible / max(open, 1e-4), 0.0, 1.0);
+    return mix(1.0, ratio, smoothstep(0.0, TRUST_OPEN, open));
 }
 
 // The split-mode term for one pixel: guard, view ray, bent decode, cone --
