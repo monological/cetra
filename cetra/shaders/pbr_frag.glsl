@@ -243,6 +243,9 @@ uniform float uShoreWetness;
 #define vtPageAlbedoTex clearcoatNormalTex // unit 3, refused on layered materials
 #define vtPageSurfaceTex heightTex         // unit 4, same refusal
 #include "layers.glsl"
+// Clustered decals (spec 11.73). After layers.glsl, which owns the packed
+// surface-map decode a decal's optional relief map shares.
+#include "decals_ubo.glsl"
 
 // Open porosity of sand that the swash fills, from Lagarde's 25-50% band for natural
 // materials. What the diffuse albedo loses when the pores are full.
@@ -1074,6 +1077,40 @@ void main() {
         discard;
     }
 
+    // Screen-space derivatives of the world position. Taken HERE because the
+    // decal loop below needs them for its textureGrad taps and the punctual
+    // shadow lookup needs them much further down, inside the clustered light
+    // loop where control flow is not uniform. One definition serves both.
+    vec3 ddxWorld = dFdx(WorldPos);
+    vec3 ddyWorld = dFdy(WorldPos);
+
+    /*
+     * DECALS (spec 11.73), and they are spliced in two halves.
+     *
+     * This is the first: the accumulation, and the albedo it produces. It sits
+     * ABOVE the albedo-only debug view below rather than beside the wet sand,
+     * which is where the rest of it lands, because that view is what a gate
+     * reads painted bytes through -- a decal invisible there would be a decal no
+     * arm could assert an exact code against, and this file already records what
+     * that costs: a broken layered decode shipped green because the arms read
+     * this view and this view had its own copy of the resolution.
+     *
+     * Guarded on a dynamically uniform count, so a scene with no decals takes
+     * one branch and no fetches. The moment and depth-only passes are excluded
+     * because neither reads a surface value: a mark changes no coverage and no
+     * depth, so running it there would be pure cost.
+     */
+    DecalSurface decalSurf = decalSurfaceNone();
+    if (decalInfo.x > 0 && passMode != 2 && passMode != 3) {
+        decalSurf = decalAccumulate(materialArray,
+                                    decalMaskAt(clusterIndexAt(gl_FragCoord.xy, -ViewPos.z)),
+                                    WorldPos, Normal, ddxWorld, ddyWorld);
+        // Decoded once after the blend, not per decal: the material array is
+        // linear RGBA8 and a decal's albedo is stored in it as authored sRGB
+        // codes, which is the layered path's arrangement exactly.
+        albedoMap = mix(albedoMap, sRGBToLinear(decalSurf.albedo), decalSurf.alpha);
+    }
+
     /*
      * ALBEDO ONLY -- and it sits HERE, apart from the other debug views, because
      * it has to read the same albedoMap the shading path is about to use: the POM
@@ -1323,12 +1360,27 @@ void main() {
         }
     }
 
-    // Screen-space derivatives of the world position, taken HERE because the
-    // punctual shadow lookup that needs them runs inside the clustered light
-    // loop, and derivatives are undefined in non-uniform control flow. They
-    // reconstruct the receiver's own plane per light (punctual_shadow.glsl).
-    vec3 ddxWorld = dFdx(WorldPos);
-    vec3 ddyWorld = dFdy(WorldPos);
+    /*
+     * DECALS, the second half: the surface a mark makes, rather than its colour.
+     *
+     * Here rather than beside the albedo half because N and roughnessMap do not
+     * exist up there -- the layered blend, the normal map, the microsurface and
+     * the specular-AA widening all land between. It is the wet sand's seam, and
+     * the wet sand is the precedent for modifying these three in place.
+     *
+     * AFTER the wetness, deliberately: a poster covers the water rather than
+     * being soaked by it. A decal on a beach is one drawn over the wet sand, not
+     * one the tide has been over.
+     *
+     * Nothing here is reached unless a decal carried a surface map, so the
+     * common case -- a poster with an albedo alone -- pays a compare.
+     */
+    if (decalSurf.surfaceAlpha > 0.0) {
+        N = normalize(mix(N, decalSurf.normal, decalSurf.surfaceAlpha));
+        roughnessMap = clamp(mix(roughnessMap, decalSurf.roughness, decalSurf.surfaceAlpha),
+                             0.04, 1.0);
+        aoMap = mix(aoMap, aoMap * decalSurf.occlusion, decalSurf.surfaceAlpha);
+    }
 
     // Calculate view direction (WorldPos -- world space, as the maths needs)
     vec3 V = normalize(camPos - WorldPos);

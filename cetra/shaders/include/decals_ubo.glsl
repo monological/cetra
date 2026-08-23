@@ -1,0 +1,170 @@
+// Clustered decals (spec 11.73): marks projected onto whatever surface lies
+// inside their box, selected by a per-froxel mask and composited onto the
+// surface values before any lighting runs.
+//
+// The atlas is a PARAMETER for the reason probe_specular.glsl's is: a decal
+// image is a tenant of the material texture array, which pbr_frag declares as
+// materialArray, and passing it keeps this file free of a seventeenth sampler
+// in a program that has sixteen.
+//
+// What a decal is made of lives here and in decal.c. The rest of the engine
+// knows only that decals exist.
+
+layout(std140) uniform DecalBlock {
+    ivec4 decalInfo; // x count (0 = disarmed), yzw unused
+    // [5i + 0..2] world->local rows, each scaled by 1/half_extent with the
+    //             translation in .w -- so local xyz is in [-1,1] inside the box
+    // [5i + 3]    x albedo layer, y surface layer (-1 = none), z opacity,
+    //             w cos(angle fade)
+    // [5i + 4]    x edge feather (local units), y normal strength, zw unused
+    vec4 decalDesc[16 * 5];
+    // One 16-bit mask per froxel, two to a word. std140 gives a scalar array a
+    // vec4 stride, so a uint[3072] would be four times this block.
+    uvec4 decalClusterMasks[384];
+};
+
+// Must match DECAL_MAX (decal.h). Held by the driver's own std140 size check
+// against UBO_DECALS_BLOCK_SIZE, which decalDesc's declaration rides.
+const int DECAL_MAX = 16;
+
+// Which decals reach this froxel. The decode is lightIndexAt's halfword unpack
+// rather than probeMaskAt's byte one, because the mask is twice as wide.
+uint decalMaskAt(uint ci) {
+    return (decalClusterMasks[ci >> 3u][(ci >> 1u) & 3u] >> ((ci & 1u) * 16u)) & 0xFFFFu;
+}
+
+// What a fragment accumulated from every decal that reached it.
+//
+// Albedo is carried in STORED sRGB codes, not linear: the caller decodes once
+// after the blend, which is the layered-surface arrangement (layers.glsl) and
+// exists because the material array is linear RGBA8 and holds the codes as
+// authored. Roughness and occlusion are absolute values, with surfaceAlpha
+// saying how much of them to take.
+//
+// The normal is WORLD-space, already rotated out of the decal's own tangent
+// frame -- so where a decal is opaque its relief REPLACES the surface's rather
+// than stacking on it, which is what a poster does to the wall's plaster. That
+// is why it is not the whiteout compose layers.glsl uses for macro over detail:
+// there the two perturbations describe one surface, here the mark is a second
+// surface lying on top of the first.
+struct DecalSurface {
+    vec3 albedo;
+    float alpha;
+    vec3 normal;
+    float roughness;
+    float occlusion;
+    float surfaceAlpha; // coverage from decals that carried a surface map
+};
+
+// The identity: no coverage, and a normal the caller's mix leaves alone because
+// surfaceAlpha is zero.
+DecalSurface decalSurfaceNone() {
+    return DecalSurface(vec3(0.0), 0.0, vec3(0.0, 0.0, 1.0), 0.0, 0.0, 0.0);
+}
+
+/*
+ * Accumulate every decal covering this fragment, front of the list to the back
+ * of it -- authored order is paint order, so a later decal draws over an
+ * earlier one.
+ *
+ * The loop is bounded by a CONSTANT and broken on a dynamically uniform count,
+ * the probeSetSpecular shape: a scene with no decals takes one branch, and no
+ * fragment can be made to iterate more than the authored cap however the boxes
+ * overlap. There is deliberately no per-pixel cap under that -- a silent
+ * truncation would make a mark vanish where two others happened to cover it --
+ * so the cap IS the bound, and it is the one the author chose.
+ *
+ * Every cheap reject runs before any fetch: the mask bit, the box test, the
+ * facing test, then the edge. `ng` is the GEOMETRIC normal rather than the
+ * mapped one, because what the facing test asks is which way the SURFACE lies,
+ * and a normal map answering that question would let relief punch holes in a
+ * poster.
+ *
+ * Taps are textureGrad with gradients carried in from the caller: the projected
+ * coordinate is discontinuous at a box edge and the loop is divergent, where an
+ * implicit-LOD fetch is undefined in GLSL 3.30.
+ */
+DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec3 ng,
+                             vec3 ddxWorld, vec3 ddyWorld) {
+    DecalSurface acc = decalSurfaceNone();
+    if (decalInfo.x <= 0 || mask == 0u)
+        return acc;
+
+    // Half a texel of the array's own size, so a tap at the very edge of an
+    // image cannot bilinear against the opposite edge: the array wraps with
+    // GL_REPEAT, and every layer shares one canonical size.
+    vec2 inset = 0.5 / vec2(textureSize(atlas, 0).xy);
+
+    for (int i = 0; i < DECAL_MAX; ++i) {
+        if (i >= decalInfo.x)
+            break;
+        if ((mask & (1u << uint(i))) == 0u)
+            continue;
+
+        vec4 r0 = decalDesc[i * 5 + 0];
+        vec4 r1 = decalDesc[i * 5 + 1];
+        vec4 r2 = decalDesc[i * 5 + 2];
+        vec4 p0 = decalDesc[i * 5 + 3];
+        vec4 p1 = decalDesc[i * 5 + 4];
+
+        vec4 wp = vec4(worldPos, 1.0);
+        vec3 local = vec3(dot(r0, wp), dot(r1, wp), dot(r2, wp));
+        if (any(greaterThan(abs(local), vec3(1.0))))
+            continue;
+
+        // Local +Z is the way the projector faces, so a surface takes the mark
+        // where its normal opposes that. Outside the authored angle it takes
+        // none -- which is what stops a projector smearing its image down every
+        // wall it happens to graze.
+        vec3 axis = normalize(vec3(r2.x, r2.y, r2.z));
+        float facing = dot(normalize(ng), -axis);
+        if (facing <= p0.w)
+            continue;
+        // Ramp over the last of the authored angle rather than switching, or a
+        // curved surface takes a hard-edged bite out of the mark.
+        float angleWeight = smoothstep(p0.w, mix(p0.w, 1.0, 0.25), facing);
+
+        // The edge, feathered inward from all three faces in the box's own
+        // units. Depth counts: a mark should fade out as the surface it lands
+        // on leaves the volume, not stop dead at the back plane.
+        float feather = max(p1.x, 1e-4);
+        vec3 edge = (vec3(1.0) - abs(local)) / feather;
+        float edgeWeight = clamp(min(edge.x, min(edge.y, edge.z)), 0.0, 1.0);
+
+        vec2 uv = clamp(local.xy * 0.5 + 0.5, inset, 1.0 - inset);
+        // The projected coordinate's gradients, by chain rule through the same
+        // rows that produced it -- exact, because the projection is affine, and
+        // the 0.5 is the local -> uv remap above.
+        vec2 duvdx = vec2(dot(r0.xyz, ddxWorld), dot(r1.xyz, ddxWorld)) * 0.5;
+        vec2 duvdy = vec2(dot(r0.xyz, ddyWorld), dot(r1.xyz, ddyWorld)) * 0.5;
+
+        vec4 tex = textureGrad(atlas, vec3(uv, p0.x), duvdx, duvdy);
+        float a = tex.a * p0.z * angleWeight * edgeWeight;
+        if (a <= 0.0)
+            continue;
+
+        // Over, in stored codes. The caller decodes the result once.
+        acc.albedo = mix(acc.albedo, tex.rgb, a);
+        acc.alpha = acc.alpha + a * (1.0 - acc.alpha);
+
+        if (p0.y >= 0.0) {
+            vec4 surf = textureGrad(atlas, vec3(uv, p0.y), duvdx, duvdy);
+            vec3 tn = layerTangentNormal(surf.rg);
+            // Strength scales the perturbation, not the normal: flattening xy
+            // and renormalising is what "less relief" means.
+            tn = normalize(vec3(tn.xy * p1.y, max(tn.z, 1e-4)));
+            // Out of the decal's own tangent frame -- u along row0, v along
+            // row1, n along the facing direction -- into world space, where the
+            // caller mixes it against the surface normal by surfaceAlpha.
+            vec3 t = normalize(vec3(r0.x, r0.y, r0.z));
+            vec3 b = normalize(vec3(r1.x, r1.y, r1.z));
+            vec3 worldNormal = normalize(t * tn.x + b * tn.y + (-axis) * tn.z);
+            acc.normal = normalize(mix(acc.normal, worldNormal, a));
+            acc.roughness = mix(acc.roughness, surf.b, a);
+            acc.occlusion = mix(acc.occlusion, surf.a, a);
+            acc.surfaceAlpha = acc.surfaceAlpha + a * (1.0 - acc.surfaceAlpha);
+        }
+    }
+
+    return acc;
+}
