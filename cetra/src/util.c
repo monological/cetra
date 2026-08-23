@@ -120,6 +120,18 @@ void print_indentation(int depth) {
     }
 }
 
+uint32_t fnv1a_bytes(const void* data, size_t bytes) {
+    uint32_t h = 2166136261u;
+    const uint8_t* p = (const uint8_t*)data;
+    if (!p)
+        return h;
+    for (size_t b = 0; b < bytes; ++b) {
+        h ^= p[b];
+        h *= 16777619u;
+    }
+    return h;
+}
+
 char* safe_strdup(const char* s) {
     if (s == NULL) {
         return NULL; // Return NULL if the input string is NULL

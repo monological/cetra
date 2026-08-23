@@ -11,6 +11,7 @@
 #include "light.h"
 #include "scene.h"
 #include "shadow.h"
+#include "util.h"
 
 // View-dependent constants shared by the assignment and fill phases.
 typedef struct ClusterFrame {
@@ -474,51 +475,44 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
  * Marking those would spend mask bits -- and with them per-fragment box tests --
  * on marks that cannot be seen.
  *
- * The order the bits are assigned in is decal_is_live's over the scene's array,
- * which is also the descriptor pack's. That is the whole reason it is a shared
- * predicate: bit i and descriptor i must name the same decal.
+ * This walks the SLOTS the descriptor pack produced, not the scene's array, so
+ * bit i and descriptor i name the same decal by construction. It used to re-walk
+ * the scene under a shared predicate to rediscover that numbering -- see
+ * decal.h for what had to agree across the two files for that to hold, and for
+ * the one-line edit that would have broken it silently.
  */
 static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* scene,
                                  const Frustum* frustum, mat4 view, mat4 projection,
                                  float near_clip, const ClusterFrame* cf) {
     memset(&ctx->decals, 0, sizeof(ctx->decals));
-    decal_fill_descriptors(scene, &ctx->decals);
+    float bounds[DECAL_MAX][4];
+    const int live = decal_fill_descriptors(scene, &ctx->decals, bounds);
 
-    if (ctx->decals.info[0] <= 0) {
+    if (live <= 0) {
         // The disarmed state, written once on the way down: a zero block reads
         // count 0 and the shader's loop is never entered. The upload is what
-        // costs, not the memset.
+        // costs, not the memset. The digest and bit count go with it, or a probe
+        // taken after the last decal went dark reports the previous build's.
         if (ctx->decals_armed) {
             ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
             ctx->decals_armed = false;
         }
+        ctx->decal_mask_bits = 0;
         return;
     }
 
     int bits = 0;
-    int slot = 0;
-    for (int i = 0; i < scene->decal_count && slot < DECAL_MAX; ++i) {
-        const Decal* decal = &scene->decals[i];
-        if (!decal_is_live(decal))
-            continue;
-        const int index = slot++;
-
-        // The oriented box's own bounding sphere, which is the shape the grid
-        // tests. Rotation-invariant -- a box and its rotation have the same
-        // half-diagonal -- so the frame never enters this, and the over-cover at
-        // the corners is harmless for the probes' reason: the fragment
-        // recomputes the exact box, and outside it the decal contributes zero.
-        vec3 half;
-        glm_vec3_copy((float*)decal->half_extent, half);
-        const float radius = glm_vec3_norm(half);
+    for (int index = 0; index < live; ++index) {
+        const float* centre = bounds[index];
+        const float radius = bounds[index][3];
         if (radius <= 0.0f)
             continue;
 
-        if (frustum && !frustum_test_sphere(frustum, (float*)decal->position, radius))
+        if (frustum && !frustum_test_sphere(frustum, (float*)centre, radius))
             continue;
 
         vec3 view_center;
-        glm_mat4_mulv3(view, (float*)decal->position, 1.0f, view_center);
+        glm_mat4_mulv3(view, (float*)centre, 1.0f, view_center);
         const float zc = -view_center[2];
         if (zc + radius < cf->near_clip || zc - radius > cf->far_clip)
             continue;
@@ -545,8 +539,6 @@ static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* s
 
     ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
     ctx->decals_armed = true;
-    ctx->decal_mask_digest = decal_mask_digest(ctx->decals.cluster_masks,
-                                               sizeof(ctx->decals.cluster_masks));
     ctx->decal_mask_bits = bits;
 }
 
@@ -627,7 +619,9 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
 }
 
 uint32_t light_cluster_decal_mask_digest(const LightClusterContext* ctx) {
-    return ctx ? ctx->decal_mask_digest : 0u;
+    // Hashed here rather than at build time: the masks are still sitting in the
+    // context, and both callers run at most once a frame behind a flag.
+    return ctx ? fnv1a_bytes(ctx->decals.cluster_masks, sizeof(ctx->decals.cluster_masks)) : 0u;
 }
 
 int light_cluster_decal_mask_bits(const LightClusterContext* ctx) {

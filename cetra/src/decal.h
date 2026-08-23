@@ -39,34 +39,29 @@ struct Scene;
 struct Decal;
 struct GpuDecalBlock;
 
-// Whether this decal reaches the shader at all: enabled, and with an image that
-// has been assigned an array layer.
-//
-// ONE statement of the rule, because two walks consume it -- the descriptor
-// pack here and the froxel mask loop in light_cluster.c -- and they index the
-// same slot. A predicate that differed between them would not fail loudly; it
-// would give mask bit i and descriptor i to different decals, and every mark in
-// the scene would be projected by its neighbour's box.
-bool decal_is_live(const struct Decal* decal);
-
-// Pack every enabled decal that has an image into `out`, writing the count into
-// its info row. Descriptors only: the mask array is the cluster build's and is
-// left alone.
-//
-// The world->local rows are built here rather than in the shader for the reason
-// every other descriptor is: a frame that resolves differently on the two sides
-// aims the same authored numbers two ways, and both halves still render.
-void decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out);
-
-// FNV-1a over the froxel masks, handed back the way the probe set takes its
-// own. Reported rather than written from the cluster build for the same reason:
-// that module reads decals and owns the grid, and reaching sideways to mutate a
-// subsystem's fields is what forced a const Scene* to be laundered once already.
-//
-// The digest is over the MASKS alone -- descriptors are a function of the
-// authored scene, where the masks are a function of the camera path, which is
-// what a determinism question is about.
-uint32_t decal_mask_digest(const void* masks, size_t bytes);
+/*
+ * Pack every live decal into `out` -- enabled, with an image the material array
+ * has given a layer -- writing the count into its info row and returning it.
+ *
+ * `bounds` receives, PER PACKED SLOT, the world-space bounding sphere the froxel
+ * grid tests: xyz centre, w radius. That is the whole reason it is an out
+ * parameter rather than something the caller derives.
+ *
+ * Descriptor i and mask bit i must name the same decal, and the mask loop used
+ * to re-walk the scene under a shared predicate to rediscover the numbering this
+ * function had just produced. Three things then had to agree across two files --
+ * the predicate, the cap, and where the counter increments relative to the
+ * culling rejects -- and only the first was written down. Moving the slot's
+ * counter three lines, which is the obvious "do not burn a slot you will not
+ * use" edit, shifted every bit above it and projected every mark in the scene
+ * through its neighbour's box, silently. Handing the enumeration out makes that
+ * unrepresentable rather than documented.
+ *
+ * The world->local rows are built here rather than in the shader for the reason
+ * every other descriptor is: a frame that resolves differently on the two sides
+ * aims the same authored numbers two ways, and both halves still render.
+ */
+int decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out, float bounds[][4]);
 
 /*
  * One line per frame plus one per decal at the end, the --water-fft-probe idiom.

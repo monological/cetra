@@ -2,6 +2,7 @@
 #define _UTIL_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 
@@ -49,6 +50,19 @@ GLenum gl_transfer_format(GLenum internal_format);
  */
 void print_indentation(int depth);
 char* safe_strdup(const char* s);
+
+// FNV-1a over a byte range.
+//
+// Here because two diagnostics hash the SAME kind of thing -- a froxel mask
+// array, byte-wise, to answer "did two runs of this build agree" -- and had
+// written the same six-line loop twice. Every --*-probe determinism claim in the
+// tree rests on one of these, so they had better be one function.
+//
+// The word-wise copies in layers_vt.c, terrain_stream.c and forest.c are NOT
+// this: they fold typed values into a running digest, and their outputs are
+// gate-asserted, so they stay where they are until something has a reason to
+// touch them.
+uint32_t fnv1a_bytes(const void* data, size_t bytes);
 
 /*
  * Memory

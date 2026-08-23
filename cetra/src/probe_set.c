@@ -6,6 +6,7 @@
 #include "light_cluster.h" // GpuProbeBlock, the block this fills half of
 #include "engine.h"
 #include "postfx.h"
+#include "util.h"
 #include "ext/log.h"
 
 ReflectionProbeSet* create_reflection_probe_set(void) {
@@ -110,13 +111,7 @@ void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* ou
 void probe_set_report_masks(ReflectionProbeSet* set, const void* masks, size_t bytes, int bits) {
     if (!set || !masks)
         return;
-    uint32_t h = 2166136261u;
-    const uint8_t* p = (const uint8_t*)masks;
-    for (size_t b = 0; b < bytes; ++b) {
-        h ^= p[b];
-        h *= 16777619u;
-    }
-    set->mask_digest = h;
+    set->mask_digest = fnv1a_bytes(masks, bytes);
     set->mask_bits = bits;
 }
 

@@ -197,11 +197,15 @@ typedef struct LightClusterContext {
     // masks are view-space, so it is built per invocation and not per frame.
     struct Ubo* decals_ubo;
     bool decals_armed;
-    // What the last build's masks were, for --decal-probe. Kept here rather than
-    // reported back to a decal subsystem the way the probes' digest is, because
-    // there is no such object: a Decal is a plain struct on the Scene with no
-    // module owning a set of them.
-    uint32_t decal_mask_digest;
+    // How many (decal, froxel) pairs the last build marked, for --decal-probe.
+    // Kept here rather than reported back to a decal subsystem the way the
+    // probes' bit count is, because there is no such object: a Decal is a plain
+    // struct on the Scene with no module owning a set of them.
+    //
+    // There is no digest field beside it. The masks survive the build in
+    // `decals` below, so the accessor hashes them WHEN ASKED -- 6 KB of
+    // byte-wise FNV-1a every build, seven times over on a probe-capture frame,
+    // is a lot of work for a flag nobody passed.
     int decal_mask_bits;
 
     GpuLightsBlock lights;

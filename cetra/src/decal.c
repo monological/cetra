@@ -8,21 +8,25 @@
 #include "light_cluster.h"
 #include "scene.h"
 
-bool decal_is_live(const struct Decal* decal) {
-    // A decal with no image is not a mark, and one whose image has not reached
-    // the array yet has no layer to name -- both would project a fully
-    // transparent nothing at the cost of a box test per fragment.
+// A decal with no image is not a mark, and one whose image has not reached the
+// array yet has no layer to name -- both would project a fully transparent
+// nothing at the cost of a box test per fragment.
+//
+// Static: the one walk that decides membership is below, and it hands its answer
+// out. Nothing else re-derives it.
+static bool _decal_is_live(const Decal* decal) {
     return decal && decal->enabled && decal->albedo_layer >= 0;
 }
 
-void decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out) {
-    if (!scene || !out)
-        return;
+int decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out,
+                           float bounds[][4]) {
+    if (!scene || !out || !bounds)
+        return 0;
 
     int n = 0;
     for (int i = 0; i < scene->decal_count && n < DECAL_MAX; ++i) {
         const Decal* d = &scene->decals[i];
-        if (!decal_is_live(d))
+        if (!_decal_is_live(d))
             continue;
 
         vec3 axis = {0.0f, 0.0f, 0.0f};
@@ -75,22 +79,18 @@ void decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out
         desc->params1[1] = d->normal_strength;
         desc->params1[2] = 0.0f;
         desc->params1[3] = 0.0f;
+
+        // The oriented box's own bounding sphere, for the grid. Its radius is
+        // the half-diagonal, which a rotation does not change -- so the frame
+        // above never enters it, and the over-cover at the corners is harmless
+        // for the probes' reason: the fragment recomputes the exact box.
+        glm_vec3_copy((float*)d->position, bounds[n]);
+        bounds[n][3] = glm_vec3_norm((float*)d->half_extent);
         n++;
     }
 
     out->info[0] = n;
-}
-
-uint32_t decal_mask_digest(const void* masks, size_t bytes) {
-    uint32_t h = 2166136261u;
-    const uint8_t* p = (const uint8_t*)masks;
-    if (!p)
-        return h;
-    for (size_t b = 0; b < bytes; ++b) {
-        h ^= p[b];
-        h *= 16777619u;
-    }
-    return h;
+    return n;
 }
 
 void decal_probe_print(const struct Scene* scene, int frame, bool final, uint32_t mask_digest,
@@ -100,7 +100,7 @@ void decal_probe_print(const struct Scene* scene, int frame, bool final, uint32_
 
     int live = 0;
     for (int i = 0; i < scene->decal_count; ++i)
-        if (decal_is_live(&scene->decals[i]))
+        if (_decal_is_live(&scene->decals[i]))
             live++;
 
     printf("decal-probe frame=%d authored=%d live=%d mask_bits=%d digest=%08x\n", frame,

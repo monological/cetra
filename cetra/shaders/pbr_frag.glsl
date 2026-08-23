@@ -1127,8 +1127,7 @@ void main() {
         // linear RGBA8 and a decal's albedo is stored in it as authored sRGB
         // codes, which is the layered path's arrangement exactly.
         if (decalSurf.alpha > 0.0)
-            albedoMap = mix(albedoMap, sRGBToLinear(decalResolvedAlbedo(decalSurf)),
-                            decalSurf.alpha);
+            albedoMap = mix(albedoMap, sRGBToLinear(decalSurf.albedo), decalSurf.alpha);
     }
 
     /*
@@ -1396,10 +1395,10 @@ void main() {
      * common case -- a poster with an albedo alone -- pays a compare.
      */
     if (decalSurf.surfaceAlpha > 0.0) {
-        N = normalize(mix(N, normalize(decalSurf.normal), decalSurf.surfaceAlpha));
-        roughnessMap = clamp(mix(roughnessMap, decalResolvedRoughness(decalSurf),
-                                 decalSurf.surfaceAlpha), 0.04, 1.0);
-        aoMap = mix(aoMap, aoMap * decalResolvedOcclusion(decalSurf), decalSurf.surfaceAlpha);
+        N = normalize(mix(N, decalSurf.normal, decalSurf.surfaceAlpha));
+        roughnessMap = clamp(mix(roughnessMap, decalSurf.roughness, decalSurf.surfaceAlpha),
+                             0.04, 1.0);
+        aoMap *= mix(1.0, decalSurf.occlusion, decalSurf.surfaceAlpha);
     }
 
     // Screen-space derivatives of the world position, taken HERE because the

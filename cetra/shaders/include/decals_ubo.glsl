@@ -33,17 +33,20 @@ uint decalMaskAt(uint ci) {
     return (decalClusterMasks[ci >> 3u][(ci >> 1u) & 3u] >> ((ci & 1u) * 16u)) & 0xFFFFu;
 }
 
-// What a fragment accumulated from every decal that reached it.
+// What a fragment accumulated from every decal that reached it, RESOLVED --
+// every value is what it means, and the two alphas say how much of it to take.
 //
-// Every channel is PREMULTIPLIED by its own coverage, so a caller divides that
-// coverage back out before using it -- the decalResolved* accessors below do
-// exactly that, and using a field directly instead applies the coverage twice.
+// The accumulation inside is premultiplied and the divide happens once before
+// this is returned, which is probeSetSpecular's arrangement (`sum / total`) and
+// LayerSurface's. Handing back premultiplied data instead needs a warning
+// comment telling every consumer to divide, and the branch shipped exactly the
+// bug that warning describes: a decal at opacity 0.5 was wrong everywhere it
+// drew, with six arms green. A type whose obvious use is wrong is the defect.
 //
 // Albedo is carried in STORED sRGB codes, not linear: the caller decodes once
 // after the blend, which is the layered-surface arrangement (layers.glsl) and
 // exists because the material array is linear RGBA8 and holds the codes as
-// authored. Roughness and occlusion are absolute values, with surfaceAlpha
-// saying how much of them to take.
+// authored.
 //
 // The normal is WORLD-space, already rotated out of the decal's own tangent
 // frame -- so where a decal is opaque its relief REPLACES the surface's rather
@@ -60,30 +63,15 @@ struct DecalSurface {
     float surfaceAlpha; // coverage from decals that carried a surface map
 };
 
-// The identity: no coverage anywhere, so every un-premultiply below returns its
-// zero and every caller-side mix is a no-op.
+// The accumulator's seed, and the identity a fragment with no decal gets back:
+// zero coverage, so every caller-side mix is a no-op.
 //
-// The normal is ZERO rather than +Z, which it has to be now that the
-// accumulation is premultiplied: a +Z seed is a phantom contribution that a
-// partly-covering decal would blend against. The caller only normalizes it
-// under surfaceAlpha > 0, by which point some decal has written it.
+// Zero rather than any neutral value, INCLUDING the normal, because the sum
+// below runs premultiplied -- a +Z seed would be a phantom contribution that a
+// partly-covering decal blends against. What a zero-coverage channel should
+// READ as is decided in the resolve at the end, not here.
 DecalSurface decalSurfaceNone() {
     return DecalSurface(vec3(0.0), 0.0, vec3(0.0), 0.0, 0.0, 0.0);
-}
-
-// The accumulated albedo as a plain sRGB code, coverage divided back out.
-// Zero coverage has no colour to report, and the caller's mix ignores it.
-vec3 decalResolvedAlbedo(DecalSurface s) {
-    return s.alpha > 0.0 ? s.albedo / s.alpha : vec3(0.0);
-}
-
-// Likewise for the surface map's two scalars.
-float decalResolvedRoughness(DecalSurface s) {
-    return s.surfaceAlpha > 0.0 ? s.roughness / s.surfaceAlpha : 0.0;
-}
-
-float decalResolvedOcclusion(DecalSurface s) {
-    return s.surfaceAlpha > 0.0 ? s.occlusion / s.surfaceAlpha : 1.0;
 }
 
 /*
@@ -189,12 +177,12 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
         // expression, and reading the mix form as "not premultiplied" is what
         // hid the defect for a round.
         //
-        // What matters is that the RESULT is premultiplied, so a consumer has to
-        // divide the coverage back out (decalResolvedAlbedo). Blending this
-        // value directly by `alpha` applies the coverage twice, which darkens a
-        // mark toward its own feathered edge instead of fading it to the surface
-        // under it -- and is invisible at a == 1, which is every opaque interior
-        // and so every reading that looks right.
+        // The coverage is divided back out in the resolve at the end, so this
+        // form never leaves the function. Blending a premultiplied value by its
+        // own alpha applies the coverage twice, which darkens a mark toward its
+        // feathered edge instead of fading it to the surface under it -- and is
+        // invisible at a == 1, which is every opaque interior and so every
+        // reading that looks right. That shipped.
         acc.albedo = tex.rgb * a + acc.albedo * (1.0 - a);
         acc.alpha = a + acc.alpha * (1.0 - a);
 
@@ -220,5 +208,30 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
         }
     }
 
+    /*
+     * RESOLVE, here and once, so nothing outside this file can hold a
+     * premultiplied value and use it by mistake. probeSetSpecular's shape.
+     *
+     * The zero-coverage answers differ by what each channel IS: occlusion
+     * multiplies, so its neutral is 1; roughness replaces, so it has no neutral
+     * this side of the substrate and the caller's mix weight of 0 is what
+     * actually protects it.
+     */
+    if (acc.alpha > 0.0)
+        acc.albedo /= acc.alpha;
+    if (acc.surfaceAlpha > 0.0) {
+        acc.roughness /= acc.surfaceAlpha;
+        acc.occlusion /= acc.surfaceAlpha;
+        // Normalised here rather than by the caller, and GUARDED: two marks
+        // whose relief resolves to opposed world normals cancel exactly, and
+        // normalize(0) is a NaN straight into the normals target -- the failure
+        // triplanar.glsl's floored cutoff exists to prevent.
+        // Falls back to the surface's own normal, which makes the caller's mix
+        // a no-op rather than a wrong answer.
+        float len2 = dot(acc.normal, acc.normal);
+        acc.normal = len2 > 1e-12 ? acc.normal * inversesqrt(len2) : normalize(ng);
+    } else {
+        acc.occlusion = 1.0;
+    }
     return acc;
 }
