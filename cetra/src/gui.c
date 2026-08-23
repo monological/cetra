@@ -594,6 +594,28 @@ static void _engine_gui_panel(Engine* engine) {
             }
         }
 
+        // Decals (spec 11.73). Everything here is live on the next frame with no
+        // invalidation path, for the reason the probe block above says: the
+        // descriptors are packed and uploaded with the froxel masks every build.
+        // The image is not editable, because a decal's image is a layer of the
+        // material texture array and swapping one is a rebuild of that array.
+        if (scene->decal_count > 0 && igCollapsingHeader_BoolPtr("Decals", NULL, 0)) {
+            for (int i = 0; i < scene->decal_count; ++i) {
+                Decal* decal = &scene->decals[i];
+                igPushID_Int(i);
+                igText("Decal %d", i);
+                igCheckbox("Enabled", &decal->enabled);
+                igDragFloat3("Position", decal->position, 0.05f, -1000.0f, 1000.0f, "%.2f", 0);
+                igDragFloat3("Half Extent", decal->half_extent, 0.02f, 0.01f, 100.0f, "%.2f", 0);
+                igDragFloat3("Direction", decal->direction, 0.01f, -1.0f, 1.0f, "%.2f", 0);
+                igSliderFloat("Opacity", &decal->opacity, 0.0f, 1.0f, "%.2f", 0);
+                igSliderFloat("Angle Fade", &decal->angle_fade, 0.0f, 89.0f, "%.0f deg", 0);
+                igSliderFloat("Feather", &decal->feather, 0.0f, 1.0f, "%.2f", 0);
+                igSliderFloat("Normal Strength", &decal->normal_strength, 0.0f, 2.0f, "%.2f", 0);
+                igPopID();
+            }
+        }
+
         // Attached water always carries its own bed and cascades; the toggle
         // switches whether the surface draws.
         if (scene->water) {

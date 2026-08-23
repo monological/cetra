@@ -68,4 +68,20 @@ void decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out
 // what a determinism question is about.
 uint32_t decal_mask_digest(const void* masks, size_t bytes);
 
+/*
+ * One line per frame plus one per decal at the end, the --water-fft-probe idiom.
+ *
+ * The instrument exists because a decal's correctness is not a question a frame
+ * answers: a mark projected through a box half a metre out, or folded by the
+ * wrong axis, or taking its image from a neighbour's layer, still lands on a
+ * wall and still looks like a poster. What is checkable from outside the process
+ * is the froxel mask -- how many cells each decal claimed, and whether two runs
+ * claimed the same ones -- and the layers the array actually assigned.
+ *
+ * The digest and bit count come from the cluster build, which is where the masks
+ * are; a Decal has no module owning a set of them to report back to.
+ */
+void decal_probe_print(const struct Scene* scene, int frame, bool final, uint32_t mask_digest,
+                       int mask_bits);
+
 #endif // _DECAL_H_

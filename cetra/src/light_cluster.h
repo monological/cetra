@@ -238,4 +238,10 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
                                     float far_clip);
 
+// What the last build's decal masks came to, for --decal-probe. Accessors rather
+// than a reach into the struct, because the digest is the one thing about this
+// module an app has any business reading.
+uint32_t light_cluster_decal_mask_digest(const LightClusterContext* ctx);
+int light_cluster_decal_mask_bits(const LightClusterContext* ctx);
+
 #endif // _LIGHT_CLUSTER_H_

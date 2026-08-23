@@ -17,6 +17,7 @@
 #include "cetra/util.h"
 #include "cetra/engine.h"
 #include "cetra/profiler.h"
+#include "cetra/light_cluster.h"
 #include "cetra/import.h"
 #include "cetra/render.h"
 #include "cetra/transform.h"
@@ -217,6 +218,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-aerial        Disable aerial perspective (on by default)\n");
     fprintf(stderr, "      --no-fog-volumes   Drop a scene file's fogVolumes[]\n");
     fprintf(stderr, "      --no-decals        Drop a scene file's decals[]\n");
+    fprintf(stderr, "      --decal-probe N    Print the decal diagnostic every N frames\n");
     fprintf(stderr, "      --no-cloud-shadows Keep the cloud deck, drop its shadow\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
@@ -835,6 +837,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->probe_set_res = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--decal-probe") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->decal_probe = atoi(argv[i]);
         } else if (strcmp(argv[i], "--probe-set-probe") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1991,6 +1999,14 @@ static void render_frame_update(Engine* engine, float dt) {
         Scene* scene = get_current_scene(engine);
         if (scene)
             probe_set_probe_print(scene->probe_set, (int)engine->total_frames, false);
+    }
+    if (frame_schedule->decal_probe > 0 &&
+        (int)engine->total_frames % frame_schedule->decal_probe == 0) {
+        Scene* scene = get_current_scene(engine);
+        if (scene)
+            decal_probe_print(scene, (int)engine->total_frames, false,
+                              light_cluster_decal_mask_digest(engine->light_cluster),
+                              light_cluster_decal_mask_bits(engine->light_cluster));
     }
 }
 
@@ -3769,6 +3785,10 @@ int main(int argc, char** argv) {
     // anything once some have run.
     if (args.probe_set_probe > 0)
         probe_set_probe_print(scene->probe_set, (int)engine->total_frames, true);
+    if (args.decal_probe > 0)
+        decal_probe_print(scene, (int)engine->total_frames, true,
+                          light_cluster_decal_mask_digest(engine->light_cluster),
+                          light_cluster_decal_mask_bits(engine->light_cluster));
 
     // Needs no GL and no frame -- the wind field, the per-mesh maxima and the
     // mask bounds are all resident from load. Here anyway, beside the others,

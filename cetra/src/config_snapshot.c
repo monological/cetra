@@ -51,6 +51,7 @@ typedef enum ConfigOwner {
     // each base in turn. Kept in the same table anyway: a probe's fields drift
     // from a probe's fields exactly as easily as anything else's.
     CFG_PROBE_ELEM,
+    CFG_DECAL_ELEM,
     CFG_LIGHT_ELEM,
     // No static rows: a material's are synthesised from MATERIAL_PARAMS, which
     // is already the vocabulary. The owner exists so those rows can say what
@@ -140,6 +141,7 @@ typedef struct ConfigField {
 #define CFG_STRUCT_CFG_WATER_WINDSEA WaterWaveTrain
 #define CFG_STRUCT_CFG_WATER_SWELL WaterWaveTrain
 #define CFG_STRUCT_CFG_PROBE_ELEM ReflectionProbe
+#define CFG_STRUCT_CFG_DECAL_ELEM Decal
 #define CFG_STRUCT_CFG_LIGHT_ELEM Light
 
 #define CFG_ROW(owner_, type_, section_, key_, member_)                                            \
@@ -679,6 +681,26 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_PROBE_ELEM, CFG_BOOL, "probes", "debug_background", debug_background),
 
     /*
+     * Decals (spec 11.73). Unlike a probe, PLACEMENT is carried: a probe's
+     * position and box are its CAPTURE, so moving one without re-photographing
+     * describes a mirror that is not where it says it is -- where a decal has
+     * nothing baked, and a restored position is simply next frame's descriptor.
+     *
+     * The image is not here for the opposite reason: it IS baked, into a layer
+     * of the material texture array, and a snapshot cannot bind one. That half
+     * belongs to the .cscn the snapshot names.
+     */
+    CFG_ROW(CFG_DECAL_ELEM, CFG_BOOL, "decals", "enabled", enabled),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_VEC3, "decals", "position", position),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_VEC3, "decals", "half_extent", half_extent),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_VEC3, "decals", "direction", direction),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_VEC3, "decals", "up", up),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_FLOAT, "decals", "opacity", opacity),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_FLOAT, "decals", "angle_fade", angle_fade),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_FLOAT, "decals", "feather", feather),
+    CFG_ROW(CFG_DECAL_ELEM, CFG_FLOAT, "decals", "normal_strength", normal_strength),
+
+    /*
      * The STORED canonical intensity beside the authored unit, NOT the value the
      * GUI displays.
      *
@@ -726,6 +748,13 @@ static void* _probe_at(Scene* scene, int i, const char** name) {
     return (set && i >= 0 && i < set->count) ? set->probes[i] : NULL;
 }
 
+static void* _decal_at(Scene* scene, int i, const char** name) {
+    // No name: a decal has none to carry, so order is identity -- the probes'
+    // arrangement, and for the probes' reason.
+    *name = NULL;
+    return (scene && i >= 0 && i < scene->decal_count) ? &scene->decals[i] : NULL;
+}
+
 static void* _light_at(Scene* scene, int i, const char** name) {
     *name = NULL;
     if (!scene || i < 0 || (size_t)i >= scene->light_count)
@@ -748,6 +777,7 @@ static void* _material_at(Scene* scene, int i, const char** name) {
 
 static const ConfigArray CFG_ARRAYS[] = {
     {"probes", "probe", CFG_PROBE_ELEM, false, _probe_at},
+    {"decals", "decal", CFG_DECAL_ELEM, false, _decal_at},
     {"lights", "light", CFG_LIGHT_ELEM, true, _light_at},
     {"materials", "material", CFG_MATERIAL_ELEM, true, _material_at},
 };

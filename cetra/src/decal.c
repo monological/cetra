@@ -1,5 +1,6 @@
 #include <cglm/cglm.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "decal.h"
@@ -76,4 +77,40 @@ uint32_t decal_mask_digest(const void* masks, size_t bytes) {
         h *= 16777619u;
     }
     return h;
+}
+
+void decal_probe_print(const struct Scene* scene, int frame, bool final, uint32_t mask_digest,
+                       int mask_bits) {
+    if (!scene)
+        return;
+
+    int live = 0;
+    for (int i = 0; i < scene->decal_count; ++i)
+        if (decal_is_live(&scene->decals[i]))
+            live++;
+
+    printf("decal-probe frame=%d authored=%d live=%d mask_bits=%d digest=%08x\n", frame,
+           scene->decal_count, live, mask_bits, mask_digest);
+
+    if (!final)
+        return;
+
+    for (int i = 0; i < scene->decal_count; ++i) {
+        const Decal* d = &scene->decals[i];
+        // Says WHY a decal is not live rather than omitting it: an authored
+        // decal missing from this list and an authored decal that never loaded
+        // its image look the same from outside, and the second is the failure.
+        const char* state = !d->enabled          ? "disabled"
+                            : d->albedo_layer < 0 ? "no-layer"
+                                                  : "live";
+        printf("decal-probe decal idx=%d state=%s pos=%.3f,%.3f,%.3f half=%.3f,%.3f,%.3f "
+               "dir=%.3f,%.3f,%.3f albedo_layer=%d surface_layer=%d opacity=%.3f "
+               "angle_fade=%.1f feather=%.3f\n",
+               i, state, (double)d->position[0], (double)d->position[1], (double)d->position[2],
+               (double)d->half_extent[0], (double)d->half_extent[1], (double)d->half_extent[2],
+               (double)d->direction[0], (double)d->direction[1], (double)d->direction[2],
+               d->albedo_layer, d->surface_layer, (double)d->opacity, (double)d->angle_fade,
+               (double)d->feather);
+    }
+    fflush(stdout);
 }

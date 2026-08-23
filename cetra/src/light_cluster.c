@@ -625,3 +625,11 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
         ctx->logged_first_build = true;
     }
 }
+
+uint32_t light_cluster_decal_mask_digest(const LightClusterContext* ctx) {
+    return ctx ? ctx->decal_mask_digest : 0u;
+}
+
+int light_cluster_decal_mask_bits(const LightClusterContext* ctx) {
+    return ctx ? ctx->decal_mask_bits : 0;
+}
