@@ -51,7 +51,11 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src);
 // Serialise the live engine + scene. Returns a malloc'd string the caller frees,
 // or NULL. Sections whose owner is absent (no water, no sky, no probes) are
 // omitted rather than written empty.
-char* config_snapshot_write(struct Engine* engine, struct Scene* scene);
+//
+// `out_fields` receives how many values were actually WRITTEN, which is not the
+// table's size on any scene missing a subsystem -- reporting the latter would
+// say the same number whether or not the water block came out.
+char* config_snapshot_write(struct Engine* engine, struct Scene* scene, int* out_fields);
 
 // config_snapshot_write to a file. Reports the path it wrote on success and the
 // reason on failure; both to stdout, so a headless run records what it produced.
