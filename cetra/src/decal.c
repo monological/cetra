@@ -58,8 +58,19 @@ void decal_fill_descriptors(const struct Scene* scene, struct GpuDecalBlock* out
 
         desc->params0[0] = (float)d->albedo_layer;
         desc->params0[1] = (float)d->surface_layer;
-        desc->params0[2] = d->opacity;
-        desc->params0[3] = cosf(glm_rad(d->angle_fade));
+        // CLAMPED, and it is not defensive tidiness: the shader's coverage ends
+        // up as this value, and the consumer is a mix() -- so an authored 2.0
+        // does not make a decal twice as opaque, it EXTRAPOLATES past the mark
+        // into 2*decal - substrate, which is negative in any channel where the
+        // mark is darker than half the surface. Negative albedo then reaches the
+        // diffuse term, the SSGI attachment, bloom and the meter. The GUI slider
+        // stops at 1; a scene file and a restored snapshot do not.
+        desc->params0[2] = glm_clamp(d->opacity, 0.0f, 1.0f);
+        // The angle as its COSINE, which is what a dot product is compared
+        // against -- the spot-cutoff convention. Floored a hair under 1 because
+        // smoothstep is undefined where its edges meet, which is exactly what
+        // an authored 0 degrees produces.
+        desc->params0[3] = fminf(cosf(glm_rad(d->angle_fade)), 1.0f - 1e-4f);
         desc->params1[0] = d->feather;
         desc->params1[1] = d->normal_strength;
         desc->params1[2] = 0.0f;

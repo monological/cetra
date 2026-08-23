@@ -1108,9 +1108,16 @@ void main() {
         // operands are uniforms -- and after the alpha discard above for the
         // reason the specular-AA block below already is: this file takes
         // derivatives past that point in three places.
+        // The GEOMETRIC normal AS THIS FRAGMENT IS SHADED, which on a
+        // double-sided material is not the raw varying -- the file flips it at
+        // the two other places it asks the same question (the N flip below and
+        // clearcoatNormal's Ngeo). Passing the unflipped one refuses the mark on
+        // every visible back face, and on the mirror case hands the surface half
+        // a normal opposing N so their midpoint is zero and normalize() is NaN.
+        vec3 decalNg = gl_FrontFacing ? Normal : -Normal;
         decalSurf = decalAccumulate(materialArray,
                                     decalMaskAt(clusterIndexAt(gl_FragCoord.xy, -ViewPos.z)),
-                                    WorldPos, Normal, dFdx(WorldPos), dFdy(WorldPos));
+                                    WorldPos, decalNg, dFdx(WorldPos), dFdy(WorldPos));
         // Guarded on coverage the way the surface half below is, and for a
         // reason beyond symmetry: sRGBToLinear is three pow() calls, and most
         // fragments in a decal-armed scene are outside every box -- a mix by

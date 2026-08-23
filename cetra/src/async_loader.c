@@ -48,8 +48,11 @@ struct InFlightLoad {
 // by both decode sources so file and embedded textures cannot drift.
 static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pixels, int width,
                                     int height, int channels, bool is_srgb) {
-    // Colour only -- see texture.c. A linear RGBA texture's alpha is data, and
-    // dilating it overwrites the three channels beside it.
+    // Inferred from is_srgb, which is the DEFAULT the file loader's `_ex` form
+    // overrides rather than a law -- a linear RGBA texture's alpha is usually
+    // data, and dilating it overwrites the three channels beside it, but a decal
+    // image is colour with a real opacity loaded linear. Nothing streams one
+    // yet; when something does, this wants the override too.
     if (channels == 4 && is_srgb) {
         texture_dilate_transparent_rgb(pixels, width, height);
     }

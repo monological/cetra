@@ -492,6 +492,25 @@ Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath,
 
     Texture* cached_texture = get_texture_from_pool(pool, subpath);
     if (cached_texture) {
+        /*
+         * The pool keys on PATH, so a second consumer wanting the same file in a
+         * different colour space gets the first one's decision silently. That
+         * was harmless while `is_srgb` tracked what a slot was FOR; a decal
+         * broke it, being colour data that loads LINEAR because it lives in the
+         * material array.
+         *
+         * Warned by name rather than re-keyed: two entries would double the
+         * VRAM for one image, and the honest answer is that a scene wanting one
+         * file as both a lit albedo and a decal wants two files. Silence here
+         * renders one of the two consumers a full sRGB decode wrong -- markedly
+         * too dark or too bright -- with nothing to read.
+         */
+        const bool cached_srgb = cached_texture->internal_format == GL_SRGB ||
+                                 cached_texture->internal_format == GL_SRGB_ALPHA;
+        if (cached_srgb != is_srgb)
+            log_warn("texture '%s' is already loaded as %s and is now wanted as %s; "
+                     "the pool keys on path, so the first load wins",
+                     subpath, cached_srgb ? "sRGB" : "linear", is_srgb ? "sRGB" : "linear");
         free(normalized_path);
         free(subpath);
         return cached_texture;
@@ -583,8 +602,14 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     }
 
     // RGBA COLOUR sources need their transparent texels' color repaired; work on
-    // a mutable copy since the caller owns the pixel data. See the note above on
-    // why a linear RGBA texture is left alone.
+    // a mutable copy since the caller owns the pixel data.
+    //
+    // Still INFERRED from is_srgb here, where the file loader above takes the
+    // decision as a parameter. That is a real gap rather than a considered
+    // split: an app building a decal image procedurally -- which is how
+    // apps/tree and apps/forest make all of theirs -- gets no dilate and no way
+    // to ask for one. It wants the same `_ex` treatment the moment something
+    // needs it.
     unsigned char* dilated = NULL;
     if (channels == 4 && is_srgb) {
         size_t size = (size_t)width * (size_t)height * 4;
