@@ -97,6 +97,11 @@ void free_scene(Scene* scene) {
         return; // Nothing to free
     }
 
+    // Releases the reference add_decal_to_scene took. The pool below holds its
+    // own, so either order is safe -- materials release AFTER it for exactly
+    // that reason.
+    scene_clear_decals(scene);
+
     // Free texture pool
     if (scene->tex_pool) {
         free_texture_pool(scene->tex_pool);
@@ -546,8 +551,23 @@ int add_decal_to_scene(Scene* scene, const Decal* decal) {
         log_warn("scene: more than %d decals; extra ignored", DECAL_MAX);
         return -1;
     }
-    scene->decals[scene->decal_count++] = *decal;
+    Decal* slot = &scene->decals[scene->decal_count++];
+    *slot = *decal;
+    texture_retain(slot->albedo_tex);
+    texture_retain(slot->surface_tex);
     return 0;
+}
+
+void scene_clear_decals(Scene* scene) {
+    if (!scene)
+        return;
+    for (int i = 0; i < scene->decal_count; i++) {
+        texture_release(scene->decals[i].albedo_tex);
+        texture_release(scene->decals[i].surface_tex);
+        scene->decals[i].albedo_tex = NULL;
+        scene->decals[i].surface_tex = NULL;
+    }
+    scene->decal_count = 0;
 }
 
 void scene_environment_changed(Scene* scene, struct Engine* engine) {

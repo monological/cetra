@@ -380,8 +380,19 @@ void scene_environment_changed(Scene* scene, struct Engine* engine);
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);
 
 // decals. Same contract; the caller owns resolving the textures and orienting
-// the frame, so this only bounds-checks and copies.
+// the frame, so this bounds-checks, copies, and RETAINS the two images.
+//
+// Retaining here rather than at the caller is what makes the pair unforgettable:
+// the reference is taken exactly where the Decal enters the Scene, and released
+// exactly where it leaves, so a refused decal cannot orphan one and a second
+// producer cannot arrive without the release. Every other consumer of a pooled
+// texture retains it (material.c's sixteen setters); a decal holding a raw
+// pointer was the one deviation, and a deviation nothing states is
+// indistinguishable from an oversight.
 int add_decal_to_scene(Scene* scene, const Decal* decal);
+// Release every decal's images and empty the array. The counterpart above, and
+// the only correct way to drop decals -- zeroing decal_count leaks the retains.
+void scene_clear_decals(Scene* scene);
 // Copy this frame's volumes onto PostFX. Mirrors water_publish_to_postfx: the medium
 // hands PostFX flat POD and PostFX never learns that a Scene exists.
 void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx);

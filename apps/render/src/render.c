@@ -3687,8 +3687,11 @@ int main(int argc, char** argv) {
     // producer and not just the scene file -- the same shape as --no-water above.
     if (args.no_fog_volumes)
         scene->fog_volume_count = 0;
+    // Decals are ALSO skipped at the apply, which is where the decode and the upload
+    // are; this is what still holds the flag against a producer that is not the scene
+    // file. Through the clear rather than the count, which would leak the retains.
     if (args.no_decals)
-        scene->decal_count = 0;
+        scene_clear_decals(scene);
 
     /*
      * --water-probe: the CPU wave query, printed. It is the only way anything outside
