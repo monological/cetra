@@ -498,7 +498,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid width '%s'\n", argv[i]);
                 return -1;
             }
-            args->size_set = 1;
+            args->width_set = 1;
         } else if (strcmp(argv[i], "-H") == 0 || strcmp(argv[i], "--height") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -509,7 +509,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid height '%s'\n", argv[i]);
                 return -1;
             }
-            args->size_set = 1;
+            args->height_set = 1;
         } else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--headless") == 0) {
             args->headless = 1;
         } else if (strcmp(argv[i], "--headless-jitter") == 0) {
@@ -2334,10 +2334,12 @@ int main(int argc, char** argv) {
             args.texture_dir = src->textures;
         // Framing is part of the look here, not part of the run: a snapshot
         // taken at one window size does not describe the same frame at another.
-        if (!args.size_set && src->width > 0 && src->height > 0) {
+        // Per dimension, so `-W 800` alone takes the width and still gets the
+        // snapshot's height rather than the default one.
+        if (!args.width_set && src->width > 0)
             args.width = src->width;
+        if (!args.height_set && src->height > 0)
             args.height = src->height;
-        }
         if (!args.model_path) {
             fprintf(stderr, "Error: %s names no model and none was given\n", args.config_path);
             return -1;

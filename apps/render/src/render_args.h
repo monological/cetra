@@ -289,10 +289,15 @@ typedef struct {
     float motion_blur_scale; // --motion-blur-scale shutter (-1 = engine default)
     int width;
     int height;
-    // Presence flag: both default to a real size rather than a sentinel, so
-    // "the user chose this framing" cannot be read off the values themselves --
-    // which a restored --config needs to know before it supplies its own.
-    int size_set;
+    // Presence flags: both default to a real size rather than a sentinel, so
+    // "the user chose this" cannot be read off the values themselves -- which a
+    // restored --config needs to know before it supplies its own. One per
+    // dimension, like cam_eye_set/cam_target_set/cam_up_set and for the same
+    // reason: a single flag for both makes `-W 800 --config s.json` take the
+    // width and drop the snapshot's height, giving an aspect ratio neither the
+    // user nor the file asked for.
+    int width_set;
+    int height_set;
     int headless;
     int headless_jitter; // Apply TAA jitter in headless (lets temporal effects converge)
     int max_frames;      // Exit after this many frames (0 = run forever)

@@ -22,6 +22,7 @@
 #include "scene.h"
 #include "shadow.h"
 #include "sky.h"
+#include "util.h"
 #include "water.h"
 
 /*
@@ -51,10 +52,17 @@ typedef enum ConfigOwner {
     // from a probe's fields exactly as easily as anything else's.
     CFG_PROBE_ELEM,
     CFG_LIGHT_ELEM,
+    // No static rows: a material's are synthesised from MATERIAL_PARAMS, which
+    // is already the vocabulary. The owner exists so those rows can say what
+    // they are.
+    CFG_MATERIAL_ELEM,
 } ConfigOwner;
 
-// The first element owner. Rows at or above it are written by the array walk.
+// The first element owner. Rows at or above it are written by the array walk,
+// and skipped by the singleton walk -- including its "this scene has no '%s'"
+// warning, which is why testing `_owner_base() == NULL` alone will not do.
 #define CFG_FIRST_ELEM_OWNER CFG_PROBE_ELEM
+_Static_assert(CFG_FIRST_ELEM_OWNER > CFG_WATER_SWELL, "element owners must sort last");
 
 typedef enum ConfigType {
     CFG_BOOL = 0,
@@ -158,11 +166,22 @@ static const void* _field_ptr_const(const void* base, const ConfigField* f) {
     return (const void*)((const unsigned char*)base + f->offset);
 }
 
+// Defined with the reader, and declared here so the apply hooks below can do
+// their store through it rather than each spelling the vector rule again.
+static void _store_value(const ConfigField* f, void* base, const double* v, int n);
+
 /*
- * The rows that are not a store. Every one of them is a value whose EFFECT needs
- * something to run -- a target rebuild, a re-bake, a flag somewhere else -- and
- * assigning the field alone would leave a snapshot that reads back correctly and
- * renders wrong.
+ * The rows that are not a store, and the rule for when a new one belongs here:
+ * THE FIELD HAS AN ENTRY POINT THAT VALIDATES OR ALLOCATES, AND THE TABLE MUST
+ * NOT GO ROUND IT.
+ *
+ * Stating it as "needs a target rebuild" would be wrong for two of the five
+ * below and would mislead the next person adding a row. `render_scale` and
+ * `ss_scale` do NOT need one -- `_engine_sync_render_targets` runs at every
+ * frame top and rebuilds whenever the derived size disagrees, so a plain store
+ * would be picked up anyway. What their setters buy is the CLAMP: a hand-edited
+ * 0.2 would otherwise sail into a field no other entry point can reach, and the
+ * frame-top sync would happily build it.
  */
 static void _apply_render_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                                 const double* v, int n) {
@@ -209,31 +228,37 @@ static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigFie
 // and the sun is about to move if the snapshot carried one.
 static void _apply_fog_ambient(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                                const double* v, int n) {
-    float* dst = (float*)_field_ptr(base, f);
-    for (int i = 0; i < n && i < 3; i++)
-        dst[i] = (float)v[i];
+    _store_value(f, base, v, n);
     if (ctx->scene && ctx->scene->sky)
         ctx->scene->sky->publish_fog_ambient = false;
 }
 
-// Two angles are ONE sun move. Storing here and re-baking after the walk keeps
-// it to a single bake rather than one per angle, and keeps the bake from running
-// against a half-restored sun.
+/*
+ * Two angles are ONE sun move, deferred so the re-bake runs once and never
+ * against a half-restored sun.
+ *
+ * Flagged on a CHANGE, not on the row being present. Every snapshot of a scene
+ * with a sky carries both angles, so flagging on presence re-bakes the
+ * transmittance, multiscatter and sky-view LUTs, the environment cube and the
+ * GGX prefilter on every restore -- including the common one, where the file is
+ * restored onto the scene it was taken from and the sun has not moved at all.
+ * That is 0.11 s a restore, and it drags sky_apply_sun_to_light along with it,
+ * which overwrites the sun light's intensity the `lights` array just restored.
+ */
 static void _apply_sun_angle(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
                              int n) {
-    (void)n;
-    *(float*)_field_ptr(base, f) = (float)v[0];
+    if ((float)v[0] == *(const float*)_field_ptr_const(base, f))
+        return;
+    _store_value(f, base, v, n);
     ctx->sun_moved = true;
 }
 
-// Eye, target and up are one POSE, and the orbit bookkeeping derived from it is
-// stale until all three have landed -- hence the deferral rather than a sync per
-// component.
+// Eye, target and up are one POSE: the view matrix built from any one of them is
+// wrong until the other two have landed, hence the deferral rather than a
+// rebuild per component.
 static void _apply_camera_vec(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                               const double* v, int n) {
-    float* dst = (float*)_field_ptr(base, f);
-    for (int i = 0; i < n && i < 3; i++)
-        dst[i] = (float)v[i];
+    _store_value(f, base, v, n);
     ctx->camera_moved = true;
 }
 
@@ -567,8 +592,34 @@ static const ConfigField CFG_FIELDS[] = {
 
 #define CFG_FIELD_COUNT ((int)(sizeof(CFG_FIELDS) / sizeof(CFG_FIELDS[0])))
 
-// See the header: the GUI produces snapshots and cannot reach the app's
-// arguments, so the app leaves them here.
+/*
+ * The element arrays: the JSON key, the owner whose rows describe an entry, and
+ * whether entries have a NAME to match on.
+ *
+ * One list, because these three facts were stated in three places -- the writer,
+ * the reader and the unknown-key sweep's skip list -- and a fourth array meant
+ * editing all three, where forgetting the skip list warns about an array the
+ * loader handled correctly.
+ *
+ * Probes are `false` because they have no name: their order IS their identity,
+ * probes[0] being the one the .cscn authored first.
+ */
+static const struct {
+    const char* key;
+    ConfigOwner owner;
+    bool by_name;
+} CFG_ARRAYS[] = {
+    {"probes", CFG_PROBE_ELEM, false},
+    {"lights", CFG_LIGHT_ELEM, true},
+    {"materials", CFG_MATERIAL_ELEM, true},
+};
+
+#define CFG_ARRAY_COUNT (sizeof(CFG_ARRAYS) / sizeof(CFG_ARRAYS[0]))
+
+/*
+ * What THIS session loaded, for the writer. See the header: the GUI produces
+ * snapshots and cannot reach the app's arguments, so the app leaves them here.
+ */
 static ConfigSnapshotSource _source;
 static char _source_model[512];
 static char _source_hdr[512];
@@ -576,19 +627,35 @@ static char _source_lut[512];
 static char _source_textures[512];
 static bool _source_set;
 
+/*
+ * What the last READ found, which is a different fact and now has different
+ * storage. These shared one cell until a review pointed out what that meant: a
+ * function named `read` wrote the process's record of what the live session
+ * loaded, so a `--config-dump` beside a `--config` named the restored file's
+ * source instead of its own -- repaired only by the two calls happening 1,380
+ * lines apart in main(), in an order neither call site mentions.
+ */
+static ConfigSnapshotSource _read_back;
+static char _read_model[512];
+static char _read_hdr[512];
+static char _read_lut[512];
+static char _read_textures[512];
+
+// The app hands back pointers it got from a previous read, which are these very
+// buffers -- so source and destination can be the same object, and snprintf with
+// overlapping arguments is undefined.
 static void _copy_source_path(char* dst, size_t cap, const char* src) {
     if (!src || !src[0]) {
         dst[0] = '\0';
         return;
     }
-    snprintf(dst, cap, "%s", src);
+    if (dst != src)
+        snprintf(dst, cap, "%s", src);
 }
 
 void config_snapshot_set_source(const ConfigSnapshotSource* src) {
-    if (!src) {
-        _source_set = false;
+    if (!src)
         return;
-    }
     _copy_source_path(_source_model, sizeof(_source_model), src->model);
     _copy_source_path(_source_hdr, sizeof(_source_hdr), src->hdr);
     _copy_source_path(_source_lut, sizeof(_source_lut), src->lut);
@@ -598,8 +665,8 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src) {
     _source.lut = _source_lut;
     _source.textures = _source_textures;
     _source.sky = src->sky;
-    _source.width = src->width;
-    _source.height = src->height;
+    // No width/height: the writer takes those from the live engine, which is the
+    // only place that knows what the window ended up as.
     _source_set = true;
 }
 
@@ -635,6 +702,7 @@ static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
         return scene && scene->water ? &scene->water->sea.swell : NULL;
     case CFG_PROBE_ELEM:
     case CFG_LIGHT_ELEM:
+    case CFG_MATERIAL_ELEM:
         // Element owners have no singleton to resolve; the array walk supplies
         // each base. Answering NULL here is what keeps them out of the scalar
         // pass rather than needing a second test at every call.
@@ -644,14 +712,20 @@ static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
 }
 
 /*
- * Get-or-create the object a dotted section path names. Sections are created in
- * first-use order, so the file's layout is the table's order and a diff between
- * two snapshots stays line-for-line comparable -- which config-roundtrip reads.
+ * The object a dotted section path names, created on the way if `create`.
+ *
+ * One walker for both directions: the writer creates as it goes, so sections
+ * appear in the table's order and two snapshots diff line for line; the reader
+ * must never create, because a missing section means the file did not carry it.
+ * That is the whole difference, and splitting it in two would put the name
+ * buffer's truncation rule in two places -- where the create side and the find
+ * side must agree exactly or a long path is written under one name and looked up
+ * under another.
  */
-static cJSON* _section_object(cJSON* root, const char* path) {
+static cJSON* _section(cJSON* root, const char* path, bool create) {
     cJSON* node = root;
     const char* p = path;
-    while (*p) {
+    while (*p && node) {
         const char* dot = strchr(p, '.');
         size_t len = dot ? (size_t)(dot - p) : strlen(p);
         char name[64];
@@ -661,11 +735,8 @@ static cJSON* _section_object(cJSON* root, const char* path) {
         name[len] = '\0';
 
         cJSON* child = cJSON_GetObjectItemCaseSensitive(node, name);
-        if (!child) {
+        if (!child && create)
             child = cJSON_AddObjectToObject(node, name);
-            if (!child)
-                return NULL;
-        }
         node = child;
         p = dot ? dot + 1 : p + len;
     }
@@ -693,17 +764,19 @@ static bool _write_field(cJSON* obj, const ConfigField* f, const void* base) {
         return cJSON_AddNumberToObject(obj, f->key, *(const int*)p) != NULL;
     case CFG_FLOAT:
         return cJSON_AddNumberToObject(obj, f->key, *(const float*)p) != NULL;
-    case CFG_VEC2: {
-        const float* v = (const float*)p;
-        double xy[2] = {v[0], v[1]};
-        cJSON* arr = cJSON_CreateDoubleArray(xy, 2);
-        return arr && cJSON_AddItemToObject(obj, f->key, arr);
-    }
+    case CFG_VEC2:
     case CFG_VEC3: {
         const float* v = (const float*)p;
-        double xyz[3] = {v[0], v[1], v[2]};
-        cJSON* arr = cJSON_CreateDoubleArray(xyz, 3);
-        return arr && cJSON_AddItemToObject(obj, f->key, arr);
+        const int n = f->type == CFG_VEC2 ? 2 : 3;
+        double xyz[3] = {v[0], v[1], n > 2 ? v[2] : 0.0};
+        cJSON* arr = cJSON_CreateDoubleArray(xyz, n);
+        if (!arr)
+            return false;
+        if (!cJSON_AddItemToObject(obj, f->key, arr)) {
+            cJSON_Delete(arr);
+            return false;
+        }
+        return true;
     }
     case CFG_ENUM: {
         int value = *(const int*)p;
@@ -757,8 +830,10 @@ static void _write_source(cJSON* root, Engine* engine) {
 static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, const char* id_name,
                            int id_index, int* count) {
     cJSON* obj = cJSON_CreateObject();
-    if (!obj || !cJSON_AddItemToArray(array, obj))
+    if (!obj || !cJSON_AddItemToArray(array, obj)) {
+        cJSON_Delete(obj);
         return false;
+    }
     if (id_name)
         cJSON_AddStringToObject(obj, "name", id_name);
     cJSON_AddNumberToObject(obj, "index", id_index);
@@ -775,14 +850,37 @@ static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, co
 }
 
 /*
- * A material's tunables, through MATERIAL_PARAMS rather than through rows here.
+ * One MATERIAL_PARAMS entry, as a row this file's codec understands.
  *
- * That table already IS the vocabulary -- the scene parser resolves authored
- * keys through it and the GUI builds its controls from it -- so a second list
- * would be a third statement of what a material has, and the one that silently
- * stopped matching. Texture rows are skipped: rebinding an image is authoring,
- * which is the .cscn's half of the boundary this whole file sits on.
+ * MATERIAL_PARAMS already IS the material vocabulary -- the scene parser
+ * resolves authored keys through it and the GUI builds its controls from it --
+ * so the key, the offset and the enum labels all still come from there, and a
+ * property added there is carried here for free. What the adapter buys is the
+ * CODEC: shape checking, enum labels by name, and "refused by name rather than
+ * coerced" all come from the same two functions every other row uses, instead of
+ * a second encoder and a second decoder with quietly different rules.
+ *
+ * Returns false for TEXTURE rows: rebinding an image is authoring, which is the
+ * .cscn's half of the boundary this whole file sits on.
  */
+static bool _material_row(const MaterialParam* p, ConfigField* out) {
+    if (!p || p->type == MATERIAL_PARAM_TEXTURE)
+        return false;
+    ConfigType type = CFG_FLOAT;
+    if (p->type == MATERIAL_PARAM_COLOR)
+        type = CFG_VEC3;
+    else if (p->type == MATERIAL_PARAM_INT)
+        type = p->enum_labels ? CFG_ENUM : CFG_INT;
+    *out = (ConfigField){.owner = CFG_MATERIAL_ELEM,
+                         .type = (unsigned char)type,
+                         .section = "materials",
+                         .key = p->key,
+                         .offset = p->offset,
+                         .labels = p->enum_labels,
+                         .label_count = p->enum_count,
+                         .apply = NULL};
+    return true;
+}
 static bool _write_materials(cJSON* root, Scene* scene, int* count) {
     if (!scene || scene->material_count == 0)
         return true;
@@ -795,41 +893,21 @@ static bool _write_materials(cJSON* root, Scene* scene, int* count) {
         if (!material)
             continue;
         cJSON* obj = cJSON_CreateObject();
-        if (!obj || !cJSON_AddItemToArray(array, obj))
+        if (!obj || !cJSON_AddItemToArray(array, obj)) {
+            cJSON_Delete(obj);
             return false;
+        }
         // Name and index both, for the reason _write_element states.
         if (material->name)
             cJSON_AddStringToObject(obj, "name", material->name);
         cJSON_AddNumberToObject(obj, "index", (double)m);
 
         for (size_t p = 0; p < MATERIAL_PARAM_COUNT; p++) {
-            const MaterialParam* param = &MATERIAL_PARAMS[p];
-            if (param->type == MATERIAL_PARAM_TEXTURE)
+            ConfigField row;
+            if (!_material_row(&MATERIAL_PARAMS[p], &row))
                 continue;
-            float v[3] = {0.0f, 0.0f, 0.0f};
-            material_param_get(material, param, v);
-            switch (param->type) {
-            case MATERIAL_PARAM_FLOAT:
-                cJSON_AddNumberToObject(obj, param->key, v[0]);
-                break;
-            case MATERIAL_PARAM_COLOR: {
-                double rgb[3] = {v[0], v[1], v[2]};
-                cJSON* arr = cJSON_CreateDoubleArray(rgb, 3);
-                if (!arr || !cJSON_AddItemToObject(obj, param->key, arr))
-                    return false;
-                break;
-            }
-            case MATERIAL_PARAM_INT: {
-                const int value = (int)v[0];
-                if (param->enum_labels && value >= 0 && value < param->enum_count)
-                    cJSON_AddStringToObject(obj, param->key, param->enum_labels[value]);
-                else
-                    cJSON_AddNumberToObject(obj, param->key, value);
-                break;
-            }
-            case MATERIAL_PARAM_TEXTURE:
-                continue;
-            }
+            if (!_write_field(obj, &row, material))
+                return false;
             (*count)++;
         }
     }
@@ -856,7 +934,7 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
         // block whose every value is uninitialised memory.
         if (!base)
             continue;
-        if (!_write_field(_section_object(root, f->section), f, base)) {
+        if (!_write_field(_section(root, f->section, true), f, base)) {
             cJSON_Delete(root);
             return NULL;
         }
@@ -865,7 +943,7 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
 
     bool ok = true;
     const ReflectionProbeSet* probes = scene ? scene->probe_set : NULL;
-    if (ok && probes && probes->count > 0) {
+    if (probes && probes->count > 0) {
         cJSON* array = cJSON_AddArrayToObject(root, "probes");
         ok = array != NULL;
         for (int i = 0; ok && i < probes->count; i++) {
@@ -931,50 +1009,6 @@ bool config_snapshot_save(Engine* engine, Scene* scene, const char* path) {
 
 // ---------------------------------------------------------------------------
 // Reading one back.
-
-static char* _read_whole_file(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f)
-        return NULL;
-    if (fseek(f, 0, SEEK_END) != 0) {
-        fclose(f);
-        return NULL;
-    }
-    const long size = ftell(f);
-    if (size < 0 || fseek(f, 0, SEEK_SET) != 0) {
-        fclose(f);
-        return NULL;
-    }
-    char* text = (char*)malloc((size_t)size + 1);
-    if (!text) {
-        fclose(f);
-        return NULL;
-    }
-    const size_t got = fread(text, 1, (size_t)size, f);
-    fclose(f);
-    text[got] = '\0';
-    return text;
-}
-
-// Find-only twin of _section_object. A restore must never CREATE a section: a
-// missing one means the snapshot did not carry it, which is the same answer as
-// this scene not having it.
-static const cJSON* _find_section(const cJSON* root, const char* path) {
-    const cJSON* node = root;
-    const char* p = path;
-    while (*p && node) {
-        const char* dot = strchr(p, '.');
-        size_t len = dot ? (size_t)(dot - p) : strlen(p);
-        char name[64];
-        if (len >= sizeof(name))
-            len = sizeof(name) - 1;
-        memcpy(name, p, len);
-        name[len] = '\0';
-        node = cJSON_GetObjectItemCaseSensitive(node, name);
-        p = dot ? dot + 1 : p + len;
-    }
-    return node;
-}
 
 static int _enum_value(const ConfigField* f, const char* label) {
     for (int i = 0; i < f->label_count; i++) {
@@ -1188,35 +1222,26 @@ static int _apply_materials(ConfigApplyCtx* ctx, const cJSON* root) {
 
         for (size_t p = 0; p < MATERIAL_PARAM_COUNT; p++) {
             const MaterialParam* param = &MATERIAL_PARAMS[p];
-            if (param->type == MATERIAL_PARAM_TEXTURE)
+            ConfigField row;
+            if (!_material_row(param, &row))
                 continue;
             const cJSON* item = cJSON_GetObjectItemCaseSensitive(entry, param->key);
             if (!item)
                 continue;
-            float v[3] = {0.0f, 0.0f, 0.0f};
-            if (cJSON_IsNumber(item)) {
-                v[0] = (float)item->valuedouble;
-            } else if (cJSON_IsString(item) && param->enum_labels) {
-                int value = -1;
-                for (int e = 0; e < param->enum_count; e++) {
-                    if (param->enum_labels[e] && strcmp(param->enum_labels[e], item->valuestring) == 0)
-                        value = e;
-                }
-                if (value < 0) {
-                    fprintf(stderr, "Warning: config snapshot: material '%s' %s='%s' unknown\n",
-                            name->valuestring, param->key, item->valuestring);
-                    continue;
-                }
-                v[0] = (float)value;
-            } else if (cJSON_IsArray(item) && cJSON_GetArraySize(item) == 3) {
-                for (int c = 0; c < 3; c++) {
-                    const cJSON* e = cJSON_GetArrayItem(item, c);
-                    v[c] = cJSON_IsNumber(e) ? (float)e->valuedouble : 0.0f;
-                }
-            } else {
+            double v[3] = {0.0, 0.0, 0.0};
+            const int n = _decode_value(&row, item, v);
+            if (n == 0) {
+                fprintf(stderr, "Warning: config snapshot: materials.%s is not a %s; ignored\n",
+                        param->key,
+                        row.type == CFG_ENUM ? "known value" : "value of the right shape");
                 continue;
             }
-            material_param_set(material, param, v);
+            // Stored through the material's own setter rather than through
+            // _store_value: it is the same offset write today, and keeping the
+            // canonical accessor is what carries a future change there into this
+            // path instead of silently around it.
+            const float fv[3] = {(float)v[0], (float)v[1], (float)v[2]};
+            material_param_set(material, param, fv);
             written++;
         }
     }
@@ -1271,7 +1296,25 @@ static void _warn_unknown_keys(const cJSON* obj, const char* path) {
     }
 }
 
-// Element objects carry both id keys beside the rows, so neither is a stray.
+// Does this owner have a row under this key? Materials answer from
+// MATERIAL_PARAMS, which is where their rows come from.
+static bool _element_has_key(ConfigOwner owner, const char* key) {
+    if (owner == CFG_MATERIAL_ELEM) {
+        ConfigField row;
+        return _material_row(material_param_find(key), &row);
+    }
+    for (int i = 0; i < CFG_FIELD_COUNT; i++) {
+        if ((ConfigOwner)CFG_FIELDS[i].owner == owner && strcmp(CFG_FIELDS[i].key, key) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Element objects carry both id keys beside the rows, so neither is a stray. One
+// function for all three arrays: the skip list is the load-bearing part, and it
+// was written twice -- so a third id key meant remembering both, and forgetting
+// one warns on every element of one array, which is the noise that trains a
+// reader to stop looking at these.
 static void _warn_unknown_element_keys(const cJSON* array, ConfigOwner owner,
                                        const char* array_key) {
     const cJSON* entry = NULL;
@@ -1281,12 +1324,7 @@ static void _warn_unknown_element_keys(const cJSON* array, ConfigOwner owner,
             if (!item->string || item->string[0] == '_' || strcmp(item->string, "name") == 0 ||
                 strcmp(item->string, "index") == 0)
                 continue;
-            bool known = false;
-            for (int i = 0; i < CFG_FIELD_COUNT && !known; i++) {
-                known = (ConfigOwner)CFG_FIELDS[i].owner == owner &&
-                        strcmp(CFG_FIELDS[i].key, item->string) == 0;
-            }
-            if (!known)
+            if (!_element_has_key(owner, item->string))
                 fprintf(stderr, "Warning: config snapshot: '%s.%s' is not a known setting; "
                                 "ignored\n",
                         array_key, item->string);
@@ -1294,28 +1332,11 @@ static void _warn_unknown_element_keys(const cJSON* array, ConfigOwner owner,
     }
 }
 
-static void _warn_unknown_material_keys(const cJSON* array) {
-    const cJSON* entry = NULL;
-    cJSON_ArrayForEach(entry, array) {
-        const cJSON* item = NULL;
-        cJSON_ArrayForEach(item, entry) {
-            if (!item->string || item->string[0] == '_' || strcmp(item->string, "name") == 0 ||
-                strcmp(item->string, "index") == 0)
-                continue;
-            const MaterialParam* param = material_param_find(item->string);
-            if (!param || param->type == MATERIAL_PARAM_TEXTURE)
-                fprintf(stderr,
-                        "Warning: config snapshot: 'materials.%s' is not a known setting; "
-                        "ignored\n",
-                        item->string);
-        }
-    }
-}
-
-// Top-level names the table does not own: the file's own version, the source
-// block's separate vocabulary, and the three arrays, each checked its own way.
+// Top-level names the table does not own: the file's own version, and the source
+// block's separate vocabulary. The arrays are not listed here -- CFG_ARRAYS is
+// what says they exist, so adding a fourth cannot leave this list behind.
 static void _warn_unknown_root(const cJSON* root) {
-    static const char* const SKIP[] = {"version", "source", "probes", "lights", "materials"};
+    static const char* const SKIP[] = {"version", "source"};
     const cJSON* item = NULL;
     cJSON_ArrayForEach(item, root) {
         if (!item->string || item->string[0] == '_')
@@ -1323,6 +1344,8 @@ static void _warn_unknown_root(const cJSON* root) {
         bool skip = false;
         for (size_t i = 0; i < sizeof(SKIP) / sizeof(SKIP[0]) && !skip; i++)
             skip = strcmp(item->string, SKIP[i]) == 0;
+        for (size_t i = 0; i < CFG_ARRAY_COUNT && !skip; i++)
+            skip = strcmp(item->string, CFG_ARRAYS[i].key) == 0;
         if (skip)
             continue;
         if (cJSON_IsObject(item) && _table_has_section(item->string))
@@ -1332,21 +1355,17 @@ static void _warn_unknown_root(const cJSON* root) {
                     item->string);
     }
 
-    const cJSON* probes = cJSON_GetObjectItemCaseSensitive(root, "probes");
-    if (cJSON_IsArray(probes))
-        _warn_unknown_element_keys(probes, CFG_PROBE_ELEM, "probes");
-    const cJSON* lights = cJSON_GetObjectItemCaseSensitive(root, "lights");
-    if (cJSON_IsArray(lights))
-        _warn_unknown_element_keys(lights, CFG_LIGHT_ELEM, "lights");
-    const cJSON* materials = cJSON_GetObjectItemCaseSensitive(root, "materials");
-    if (cJSON_IsArray(materials))
-        _warn_unknown_material_keys(materials);
+    for (size_t i = 0; i < CFG_ARRAY_COUNT; i++) {
+        const cJSON* array = cJSON_GetObjectItemCaseSensitive(root, CFG_ARRAYS[i].key);
+        if (cJSON_IsArray(array))
+            _warn_unknown_element_keys(array, CFG_ARRAYS[i].owner, CFG_ARRAYS[i].key);
+    }
 }
 
 int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
     if (!engine || !path || !path[0])
         return -1;
-    char* text = _read_whole_file(path);
+    char* text = read_entire_file(path, NULL);
     if (!text) {
         fprintf(stderr, "Error: config snapshot: cannot read '%s'\n", path);
         return -1;
@@ -1374,7 +1393,7 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
         const ConfigField* f = &CFG_FIELDS[i];
         if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER)
             continue;
-        const cJSON* obj = _find_section(root, f->section);
+        const cJSON* obj = _section((cJSON*)root, f->section, false);
         if (!obj || !cJSON_IsObject(obj))
             continue;
         void* base = _owner_base((ConfigOwner)f->owner, engine, scene);
@@ -1414,12 +1433,26 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
     return written;
 }
 
+// The two shapes the source block is made of. cscene.c has the same pair as
+// file statics of its own; they are not shared because a `static` in one .c is
+// not reachable from another, which is a seam worth widening the day a third
+// cJSON reader appears rather than on the second.
+static const char* _string_or(const cJSON* obj, const char* key) {
+    const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsString(item) ? item->valuestring : NULL;
+}
+
+static int _int_or(const cJSON* obj, const char* key, int fallback) {
+    const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsNumber(item) ? (int)item->valuedouble : fallback;
+}
+
 bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** out) {
     if (out)
         *out = NULL;
     if (!path || !path[0])
         return false;
-    char* text = _read_whole_file(path);
+    char* text = read_entire_file(path, NULL);
     if (!text) {
         fprintf(stderr, "Error: config snapshot: cannot read '%s'\n", path);
         return false;
@@ -1438,26 +1471,22 @@ bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** 
         return false;
     }
 
-    ConfigSnapshotSource s = {0};
-    const cJSON* model = cJSON_GetObjectItemCaseSensitive(src, "model");
-    const cJSON* hdr = cJSON_GetObjectItemCaseSensitive(src, "hdr");
-    const cJSON* lut = cJSON_GetObjectItemCaseSensitive(src, "lut");
-    const cJSON* textures = cJSON_GetObjectItemCaseSensitive(src, "textures");
-    const cJSON* sky = cJSON_GetObjectItemCaseSensitive(src, "sky");
-    s.model = cJSON_IsString(model) ? model->valuestring : NULL;
-    s.hdr = cJSON_IsString(hdr) ? hdr->valuestring : NULL;
-    s.lut = cJSON_IsString(lut) ? lut->valuestring : NULL;
-    s.textures = cJSON_IsString(textures) ? textures->valuestring : NULL;
-    s.sky = cJSON_IsTrue(sky);
-    const cJSON* width = cJSON_GetObjectItemCaseSensitive(src, "width");
-    const cJSON* height = cJSON_GetObjectItemCaseSensitive(src, "height");
-    s.width = cJSON_IsNumber(width) ? (int)width->valuedouble : 0;
-    s.height = cJSON_IsNumber(height) ? (int)height->valuedouble : 0;
+    // Into the READ buffers, so the answer survives the parse tree without
+    // touching what the writer will emit.
+    _copy_source_path(_read_model, sizeof(_read_model), _string_or(src, "model"));
+    _copy_source_path(_read_hdr, sizeof(_read_hdr), _string_or(src, "hdr"));
+    _copy_source_path(_read_lut, sizeof(_read_lut), _string_or(src, "lut"));
+    _copy_source_path(_read_textures, sizeof(_read_textures), _string_or(src, "textures"));
+    _read_back.model = _read_model;
+    _read_back.hdr = _read_hdr;
+    _read_back.lut = _read_lut;
+    _read_back.textures = _read_textures;
+    _read_back.sky = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "sky"));
+    _read_back.width = _int_or(src, "width", 0);
+    _read_back.height = _int_or(src, "height", 0);
 
-    // Copies into this module's buffers, so the answer survives the parse tree.
-    config_snapshot_set_source(&s);
     cJSON_Delete(root);
     if (out)
-        *out = &_source;
+        *out = &_read_back;
     return true;
 }

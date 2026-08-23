@@ -10917,6 +10917,21 @@ def _config_missing(*paths):
     return any(not os.path.exists(p) for p in paths)
 
 
+def _config_px(a, b):
+    """compare()'s pixel count, or -1 when either leg refused to render."""
+    return -1 if _config_missing(a, b) else compare(a, b)[0]
+
+
+def _config_variant(src, dst, mutate):
+    """A snapshot with one thing changed. The twin cannot differ in anything else."""
+    with open(src) as f:
+        d = json.load(f)
+    mutate(d)
+    with open(dst, "w") as f:
+        json.dump(d, f, indent=1)
+    return dst
+
+
 def _config_gui_members():
     """Every struct member a gui.c control writes, by its trailing name."""
     src = open(os.path.join(ROOT, "cetra", "src", "gui.c")).read()
@@ -11036,13 +11051,16 @@ def run_config_gate(workdir):
 
     # config-standalone IS the restore above -- no -m, no -W/-H -- so the pixel arm
     # and this one read the same run and cannot disagree about what it was.
-    ctrl_ppm, _, _ = _config_run(workdir, "control", pinned)
-    rendered = not _config_missing(orig_ppm, rest_ppm, ctrl_ppm)
-    px = compare(orig_ppm, rest_ppm)[0] if rendered else -1
-    ctrl_px = compare(orig_ppm, ctrl_ppm)[0] if rendered else -1
-    ok = rendered and px <= floor_px and ctrl_px > 1000
+    # The control leg -- the same fixture with no snapshot -- is what floor_a
+    # already is, byte for byte: same fixture, same size, same pinned exposure.
+    # Reusing it rather than rendering a third identical frame saves a process
+    # launch, and on this fixture a launch is ~0.7 s release because it captures
+    # two probes at load.
+    px = _config_px(orig_ppm, rest_ppm)
+    ctrl_px = _config_px(orig_ppm, floor_a)
+    ok = px >= 0 and ctrl_px >= 0 and px <= floor_px and ctrl_px > 1000
     print(f"  config-pixels   {'PASS' if ok else 'FAIL'}  "
-          + (f"restored {px} px (floor {floor_px}), no-config control {ctrl_px} px" if rendered
+          + (f"restored {px} px (floor {floor_px}), no-config control {ctrl_px} px" if px >= 0
              else "the restored run produced no frame"))
     if not ok:
         failures.append("config-pixels")
@@ -11051,13 +11069,11 @@ def run_config_gate(workdir):
     # the positive half. The negative half is the point: blank the model out of the
     # source block and the run must REFUSE, or "it found the model" is unfalsifiable
     # -- a build that ignored the block entirely would look identical here.
-    blank_json = os.path.join(workdir, "config_nomodel.json")
-    d = json.load(open(orig_json))
-    d["source"].pop("model", None)
-    json.dump(d, open(blank_json, "w"), indent=1)
+    blank_json = _config_variant(orig_json, os.path.join(workdir, "config_nomodel.json"),
+                                 lambda d: d["source"].pop("model", None))
     _, _, blank_out = _config_run(workdir, "nomodel", ["--config", blank_json], model=None)
     refused = "names no model and none was given" in blank_out
-    ok = rendered and px <= floor_px and refused
+    ok = px >= 0 and px <= floor_px and refused
     print(f"  config-standalone {'PASS' if ok else 'FAIL'}  rendered from the snapshot alone="
           f"{os.path.exists(rest_ppm)}, refused with its model blanked={refused}")
     if not ok:
@@ -11068,21 +11084,21 @@ def run_config_gate(workdir):
     # line. If it wins, the frame is the one the snapshot alone produces; if the flags
     # win, it is the flag-only frame. Asserting BOTH is what makes this precise --
     # "something moved" would also pass on a build that restored garbage.
-    over_json = os.path.join(workdir, "config_override.json")
-    d = json.load(open(orig_json))
-    d["postfx"]["ssr"]["enabled"] = True
-    d["postfx"]["tonemap"] = "neutral"
-    json.dump(d, open(over_json, "w"), indent=1)
+    def _override(d):
+        d["postfx"]["ssr"]["enabled"] = True
+        d["postfx"]["tonemap"] = "neutral"
+
+    over_json = _config_variant(orig_json, os.path.join(workdir, "config_override.json"),
+                                _override)
     with_flags, _, _ = _config_run(workdir, "override_flags", pinned + CONFIG_LOOK +
                                    ["--config", over_json])
     alone, _, _ = _config_run(workdir, "override_alone", ["--config", over_json], model=None)
-    both = not _config_missing(with_flags, alone, orig_ppm)
-    same_as_alone = compare(with_flags, alone)[0] if both else -1
-    moved_off_flags = compare(orig_ppm, with_flags)[0] if both else -1
-    ok = both and same_as_alone <= floor_px and moved_off_flags > 1000
+    same_as_alone = _config_px(with_flags, alone)
+    moved_off_flags = _config_px(orig_ppm, with_flags)
+    ok = same_as_alone >= 0 and same_as_alone <= floor_px and moved_off_flags > 1000
     print(f"  config-override {'PASS' if ok else 'FAIL'}  "
           + (f"with flags == snapshot alone: {same_as_alone} px, and {moved_off_flags} px off "
-             f"the flag-only frame" if both else "a leg produced no frame"))
+             f"the flag-only frame" if same_as_alone >= 0 else "a leg produced no frame"))
     if not ok:
         failures.append("config-override")
 
@@ -11106,22 +11122,22 @@ def run_config_gate(workdir):
     if _config_missing(sun_orig_json):
         print(f"  config-sun      SKIP  {sun_scene} not found")
     else:
-        sun_json = os.path.join(workdir, "config_sun_in.json")
-        d = json.load(open(sun_orig_json))
-        d["sky"]["sun_elevation"] = 55.0
-        d["sky"]["sun_azimuth"] = 120.0
-        json.dump(d, open(sun_json, "w"), indent=1)
+        def _move_sun(d):
+            d["sky"]["sun_elevation"] = 55.0
+            d["sky"]["sun_azimuth"] = 120.0
+
+        sun_json = _config_variant(sun_orig_json, os.path.join(workdir, "config_sun_in.json"),
+                                   _move_sun)
         sun_cfg, _, _ = _config_run(workdir, "sun_cfg", ["--config", sun_json], model=None)
         sun_flag, _, _ = _config_run(workdir, "sun_flag", sun_base +
                                      ["--sun-elevation", "55", "--sun-azimuth", "120"],
                                      model=sun_scene)
-        both = not _config_missing(sun_cfg, sun_flag, sun_orig)
-        agree = compare(sun_cfg, sun_flag)[0] if both else -1
-        moved = compare(sun_cfg, sun_orig)[0] if both else -1
-        ok = both and agree == 0 and moved > 1000
+        agree = _config_px(sun_cfg, sun_flag)
+        moved = _config_px(sun_cfg, sun_orig)
+        ok = agree == 0 and moved > 1000
         print(f"  config-sun      {'PASS' if ok else 'FAIL'}  "
               + (f"snapshot sun == --sun-elevation: {agree} px, and {moved} px off the "
-                 f"original sun" if both else "a leg produced no frame"))
+                 f"original sun" if agree >= 0 else "a leg produced no frame"))
         if not ok:
             failures.append("config-sun")
 
@@ -11131,23 +11147,22 @@ def run_config_gate(workdir):
     # nothing. The realistic case is the only one that tests it: you moved the
     # camera, then dumped. Read against --cam-eye/--cam-target at the same place,
     # which is the answer the snapshot has to reproduce.
-    cam_json = os.path.join(workdir, "config_camera_in.json")
-    d = json.load(open(orig_json))
-    eye = [d["camera"]["eye"][0] + 1.3, d["camera"]["eye"][1] + 0.6, d["camera"]["eye"][2] - 1.1]
-    target = d["camera"]["target"]
-    d["camera"]["eye"] = eye
-    json.dump(d, open(cam_json, "w"), indent=1)
+    with open(orig_json) as f:
+        base_cam = json.load(f)["camera"]
+    eye = [base_cam["eye"][0] + 1.3, base_cam["eye"][1] + 0.6, base_cam["eye"][2] - 1.1]
+    target = base_cam["target"]
+    cam_json = _config_variant(orig_json, os.path.join(workdir, "config_camera_in.json"),
+                               lambda d: d["camera"].update(eye=eye))
     cam_cfg, _, _ = _config_run(workdir, "camera_cfg", ["--config", cam_json], model=None)
     cam_flag, _, _ = _config_run(workdir, "camera_flag", pinned + CONFIG_LOOK + [
         "--cam-eye", ",".join(f"{v:.6f}" for v in eye),
         "--cam-target", ",".join(f"{v:.6f}" for v in target)])
-    both = not _config_missing(cam_cfg, cam_flag, orig_ppm)
-    agree = compare(cam_cfg, cam_flag)[0] if both else -1
-    moved = compare(cam_cfg, orig_ppm)[0] if both else -1
-    ok = both and agree <= floor_px and moved > 1000
+    agree = _config_px(cam_cfg, cam_flag)
+    moved = _config_px(cam_cfg, orig_ppm)
+    ok = agree >= 0 and agree <= floor_px and moved > 1000
     print(f"  config-camera   {'PASS' if ok else 'FAIL'}  "
           + (f"snapshot pose == --cam-eye: {agree} px, and {moved} px off the original pose"
-             if both else "a leg produced no frame"))
+             if agree >= 0 else "a leg produced no frame"))
     if not ok:
         failures.append("config-camera")
 
@@ -11164,14 +11179,20 @@ def run_config_gate(workdir):
     # dump path from the arm name, so an input called config_order.json would be
     # the file the restore writes back over -- and the arm would be reading its own
     # input and could never fail. It shipped that way for one falsification round.
-    order_json = os.path.join(workdir, "config_order_in.json")
-    d = json.load(open(orig_json))
-    derived_far = d["postfx"]["fog"]["far"]
-    d["postfx"]["fog"]["far"] = 1234.5
-    d["postfx"]["ao"]["radius"] = 0.001  # under scene_radius * 0.01 on this fixture
-    json.dump(d, open(order_json, "w"), indent=1)
+    with open(orig_json) as f:
+        derived_far = json.load(f)["postfx"]["fog"]["far"]
+
+    def _out_of_band(d):
+        d["postfx"]["fog"]["far"] = 1234.5
+        d["postfx"]["ao"]["radius"] = 0.001  # under scene_radius * 0.01 on this fixture
+
+    order_json = _config_variant(orig_json, os.path.join(workdir, "config_order_in.json"),
+                                 _out_of_band)
     _, back_json, _ = _config_run(workdir, "order", ["--config", order_json], model=None)
-    back = json.load(open(back_json)) if os.path.exists(back_json) else {}
+    back = {}
+    if os.path.exists(back_json):
+        with open(back_json) as f:
+            back = json.load(f)
     kept_far = abs(back.get("postfx", {}).get("fog", {}).get("far", 0.0) - 1234.5) < 0.01
     kept_radius = abs(back.get("postfx", {}).get("ao", {}).get("radius", 0.0) - 0.001) < 1e-6
     # Anti-vacuity: the authored values must actually differ from what the block
@@ -11184,14 +11205,15 @@ def run_config_gate(workdir):
         failures.append("config-order")
 
     # -- schema: four different wrongnesses, each named --------------------------
-    bad_json = os.path.join(workdir, "config_bad.json")
-    d = json.load(open(orig_json))
-    d["postfx"]["nonsense_key"] = 3
-    d["postfx"]["ssr"]["strength"] = "not a number"
-    d["postfx"]["tonemap"] = "chartreuse"
-    d["water"] = {"level": 2.0}
-    d["lights"].append({"name": "ghost_light", "intensity": 1.0})
-    json.dump(d, open(bad_json, "w"), indent=1)
+    def _five_wrongnesses(d):
+        d["postfx"]["nonsense_key"] = 3
+        d["postfx"]["ssr"]["strength"] = "not a number"
+        d["postfx"]["tonemap"] = "chartreuse"
+        d["water"] = {"level": 2.0}
+        d["lights"].append({"name": "ghost_light", "intensity": 1.0})
+
+    bad_json = _config_variant(orig_json, os.path.join(workdir, "config_bad.json"),
+                               _five_wrongnesses)
     _, _, bad_out = _config_run(workdir, "bad", ["--config", bad_json], model=None)
     named = {
         "unknown key": "'postfx.nonsense_key' is not a known setting" in bad_out,
