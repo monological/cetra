@@ -14497,7 +14497,6 @@ DECAL_FIXTURE = "decal_fixture.cscn"
 # a stale code fails loudly, but one asserting a stale POSITION reads plausible
 # bytes off the wrong part of the frame and passes.
 DECAL_POSTER_CODE = (216, 64, 32)
-DECAL_POSTER_BORDER = (32, 240, 96)
 DECAL_SCORCH_CODE = (40, 40, 44)
 # The substrate factors the .gltf authors, as the albedo view returns them:
 # linearToSRGB in this engine is pow(1/2.2), not the piecewise sRGB curve.
@@ -14510,7 +14509,6 @@ DECAL_OBLIQUE_SUBSTRATE = (123, 177, 224)
 # that never landed.
 DECAL_POSTER_READ = (-0.65, 1.6, -2.75)
 DECAL_OBLIQUE_READ = (-1.82, 1.6, -2.5)
-DECAL_EDGE_READ = (-0.5, 1.6, -2.75)
 DECAL_WALL_CLEAR = (1.6, 1.6, -3.0)   # wall, well outside the poster's box
 DECAL_SCORCH_CENTRE = (1.3, 0.0, -0.6)
 DECAL_FLOOR_CLEAR = (-1.8, 0.0, 1.2)  # floor, outside the scorch's box
@@ -14580,8 +14578,6 @@ def run_decal_gate(workdir):
                         substrate: a projector must refuse a surface it grazes
       decals-surface    the scorch's surface map moves roughness where its albedo
                         alone would not, against a normal-strength-0 twin
-      decals-edge       the far side of the poster does not carry the near side's
-                        border -- the half-texel inset against GL_REPEAT
       decals-mask       two runs agree on the froxel digest, and a decal behind
                         the camera claims no froxel and moves no pixel
       decals-schema     a decal missing position, size, direction or image is
@@ -14594,6 +14590,16 @@ def run_decal_gate(workdir):
     decals-albedo is what makes it a claim about refusal rather than absence. And
     decals-identity's first half passes on any build where the feature is inert,
     which is why its second half asserts the decals moved the frame at all.
+
+    ONE DELIBERATE ABSENCE: no arm covers the half-texel UV inset that guards
+    against the material array's GL_REPEAT wrap. One was written and removed on
+    measurement -- deleting the inset moves 0 px on this fixture, because its
+    images carry a transparent margin and a wrapped blend between two
+    transparent texels is still transparent. Making it observable needs an image
+    opaque to its own border, where the affected band is half a texel: at the
+    canonical 64-texel array size over a two-unit box that is 0.016 world units,
+    which is sub-pixel at this framing. The inset stays because it is correct and
+    free; an arm that cannot fail would be worse than the gap it papers over.
 
     Every read is a BYTE through --render-mode 6, the layer fixture's rule: the
     albedo view returns linearToSRGB(factor * sRGBToLinear(blend)), so a correct
@@ -14676,22 +14682,6 @@ def run_decal_gate(workdir):
         print(f"  decals-surface {'PASS' if ok else 'FAIL'}  dropping the scorch's "
               f"surface map moves {moved} px of the lit frame (want > 200; a build "
               f"that stamps albedo alone reads 0)")
-
-    # -- edge: the inset against the array's GL_REPEAT wrap -------------------
-    if pix_on is not None:
-        # Toward the poster's right edge, inside its opaque region. The image's
-        # FAR side carries the border ring, so without the half-texel inset the
-        # tap here reaches across the wrap and the ring's green appears where it
-        # cannot belong. Asserted as the painted interior code rather than as
-        # "not green": a byte that is neither is a different failure and should
-        # say so.
-        edge = _decal_byte(pix_on, w, h, project, DECAL_EDGE_READ)
-        ok = _decal_near(edge, DECAL_POSTER_CODE)
-        if not ok:
-            failures.append("decals-edge")
-        print(f"  decals-edge {'PASS' if ok else 'FAIL'}  a byte toward the poster's "
-              f"far edge reads {edge} (want its interior {DECAL_POSTER_CODE}); the "
-              f"border {DECAL_POSTER_BORDER} must not wrap onto it")
 
     # -- mask: determinism, and a decal off screen claims nothing -------------
     _, _, _, out_p1 = _decal_run(workdir, "probe1", None, ["--decal-probe", "1"])

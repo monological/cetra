@@ -93,6 +93,13 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
     // Half a texel of the array's own size, so a tap at the very edge of an
     // image cannot bilinear against the opposite edge: the array wraps with
     // GL_REPEAT, and every layer shares one canonical size.
+    //
+    // DEFENSIVE, and measured as such: removing it moves 0 px on decal_fixture,
+    // whose images carry a transparent margin -- a wrapped blend between two
+    // transparent texels is still transparent. What it protects is an image
+    // opaque to its own border, where the band is half a texel wide and the
+    // colour comes from the far side of the mark. No arm covers it; see the
+    // decals gate's docstring for why one was written and then removed.
     vec2 inset = 0.5 / vec2(textureSize(atlas, 0).xy);
 
     for (int i = 0; i < DECAL_MAX; ++i) {
@@ -118,6 +125,10 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
         // wall it happens to graze.
         vec3 axis = normalize(vec3(r2.x, r2.y, r2.z));
         float facing = dot(normalize(ng), -axis);
+        // The smoothstep below is what REJECTS -- it returns 0 for any facing
+        // at or under the cutoff -- so this compare saves the fetches rather
+        // than deciding anything. Worth knowing before mutating it to prove the
+        // fade works: deleting this line changes no pixel.
         if (facing <= p0.w)
             continue;
         // Ramp over the last of the authored angle rather than switching, or a
