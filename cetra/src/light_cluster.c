@@ -35,8 +35,9 @@ LightClusterContext* create_light_cluster_context(void) {
     // static per scene, so the per-frame path never touches it (ubo.h).
     ctx->ies_ubo = create_ubo(UBO_IES_BLOCK_SIZE, UBO_BINDING_IES);
     ctx->probes_ubo = create_ubo(UBO_PROBES_BLOCK_SIZE, UBO_BINDING_PROBES);
+    ctx->decals_ubo = create_ubo(UBO_DECALS_BLOCK_SIZE, UBO_BINDING_DECALS);
     if (!ctx->lights_ubo || !ctx->clusters_ubo || !ctx->cluster_indices_ubo || !ctx->ies_ubo ||
-        !ctx->probes_ubo) {
+        !ctx->probes_ubo || !ctx->decals_ubo) {
         log_error("Failed to create clustered light UBOs");
         free_light_cluster_context(ctx);
         return NULL;
@@ -52,6 +53,7 @@ void free_light_cluster_context(LightClusterContext* ctx) {
     free_ubo(ctx->cluster_indices_ubo);
     free_ubo(ctx->ies_ubo);
     free_ubo(ctx->probes_ubo);
+    free_ubo(ctx->decals_ubo);
     free(ctx);
 }
 
@@ -456,6 +458,98 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
                            sizeof(ctx->probes.cluster_masks), bits);
 }
 
+/*
+ * Which decals reach which froxel (spec 11.73).
+ *
+ * The probe pass's shape, one bit per (decal, froxel) written on a single walk,
+ * with the same argument for a MASK over the lights' offset|count word: at a cap
+ * of sixteen the answer fits two bytes a froxel, so there is no prefix sum, no
+ * shared pool and no truncation state -- and no touched bitset, since nothing
+ * walks the cells twice.
+ *
+ * What it takes from the LIGHT path and the probes do not is the two rejects: a
+ * world-frustum test and a view-depth range test. A probe set is small and
+ * mostly on screen, so over-covering costs a handful of froxels; decals are
+ * scenery, and a room's worth of them sit behind the camera in any given frame.
+ * Marking those would spend mask bits -- and with them per-fragment box tests --
+ * on marks that cannot be seen.
+ *
+ * The order the bits are assigned in is decal_is_live's over the scene's array,
+ * which is also the descriptor pack's. That is the whole reason it is a shared
+ * predicate: bit i and descriptor i must name the same decal.
+ */
+static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* scene,
+                                 const Frustum* frustum, mat4 view, mat4 projection,
+                                 float near_clip, const ClusterFrame* cf) {
+    memset(&ctx->decals, 0, sizeof(ctx->decals));
+    decal_fill_descriptors(scene, &ctx->decals);
+
+    if (ctx->decals.info[0] <= 0) {
+        // The disarmed state, written once on the way down: a zero block reads
+        // count 0 and the shader's loop is never entered. The upload is what
+        // costs, not the memset.
+        if (ctx->decals_armed) {
+            ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
+            ctx->decals_armed = false;
+        }
+        return;
+    }
+
+    int bits = 0;
+    int slot = 0;
+    for (int i = 0; i < scene->decal_count && slot < DECAL_MAX; ++i) {
+        const Decal* decal = &scene->decals[i];
+        if (!decal_is_live(decal))
+            continue;
+        const int index = slot++;
+
+        // The oriented box's own bounding sphere, which is the shape the grid
+        // tests. Rotation-invariant -- a box and its rotation have the same
+        // half-diagonal -- so the frame never enters this, and the over-cover at
+        // the corners is harmless for the probes' reason: the fragment
+        // recomputes the exact box, and outside it the decal contributes zero.
+        vec3 half;
+        glm_vec3_copy((float*)decal->half_extent, half);
+        const float radius = glm_vec3_norm(half);
+        if (radius <= 0.0f)
+            continue;
+
+        if (frustum && !frustum_test_sphere(frustum, (float*)decal->position, radius))
+            continue;
+
+        vec3 view_center;
+        glm_mat4_mulv3(view, (float*)decal->position, 1.0f, view_center);
+        const float zc = -view_center[2];
+        if (zc + radius < cf->near_clip || zc - radius > cf->far_clip)
+            continue;
+
+        LightClusterRange range;
+        _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);
+        range.z0 = _slice_for_z(fmaxf(zc - radius, cf->near_clip), cf);
+        range.z1 = _slice_for_z(fminf(zc + radius, cf->far_clip), cf);
+
+        const float sphere[4] = {view_center[0], view_center[1], view_center[2], radius};
+        const float radius_sq = radius * radius;
+        for (int z = range.z0; z <= range.z1; ++z) {
+            for (int y = range.y0; y <= range.y1; ++y) {
+                for (int x = range.x0; x <= range.x1; ++x) {
+                    if (!_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
+                        continue;
+                    const int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
+                    ctx->decals.cluster_masks[ci >> 1] |= 1u << (((ci & 1) * 16) + index);
+                    bits++;
+                }
+            }
+        }
+    }
+
+    ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
+    ctx->decals_armed = true;
+    ctx->decal_mask_digest = decal_mask_digest(ctx->decals.cluster_masks,
+                                               sizeof(ctx->decals.cluster_masks));
+    ctx->decal_mask_bits = bits;
+}
+
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
                                     float far_clip) {
@@ -511,6 +605,7 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     // safe place for a second consumer of this frame's ClusterFrame is past
     // the point where the first one is finished with it.
     _mark_probe_clusters(ctx, scene, view, projection, near_clip, &cf);
+    _mark_decal_clusters(ctx, scene, &frustum, view, projection, near_clip, &cf);
 
     // Upload only the live prefix of the variable-length blocks (the light
     // array and index pool are both tail fields, and the shader never reads

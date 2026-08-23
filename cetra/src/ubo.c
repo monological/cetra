@@ -93,6 +93,9 @@ bool ubo_wire_blocks(GLuint program_id) {
     // probe_specular.glsl -- the lit surface and SSR -- so the two blend the
     // same probes through one implementation.
     ubo_wire_program_block(program_id, "ProbeBlock", UBO_BINDING_PROBES, UBO_PROBES_BLOCK_SIZE);
+    // Clustered decals (spec 11.73). Declared by anything including
+    // decals_ubo.glsl, which today is the lit surface alone.
+    ubo_wire_program_block(program_id, "DecalBlock", UBO_BINDING_DECALS, UBO_DECALS_BLOCK_SIZE);
     return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
                                   UBO_INSTANCES_BLOCK_SIZE);
 }

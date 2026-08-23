@@ -193,9 +193,20 @@ typedef struct LightClusterContext {
     // because they are view-space where an IES table is not.
     struct Ubo* probes_ubo;
     bool probes_armed; // last build wrote a live block; drives the disarming zero write
+    // DecalBlock (UBO_BINDING_DECALS), on the probe block's terms exactly: the
+    // masks are view-space, so it is built per invocation and not per frame.
+    struct Ubo* decals_ubo;
+    bool decals_armed;
+    // What the last build's masks were, for --decal-probe. Kept here rather than
+    // reported back to a decal subsystem the way the probes' digest is, because
+    // there is no such object: a Decal is a plain struct on the Scene with no
+    // module owning a set of them.
+    uint32_t decal_mask_digest;
+    int decal_mask_bits;
 
     GpuLightsBlock lights;
     GpuProbeBlock probes;
+    GpuDecalBlock decals;
     GpuClusterBlock grid;
     GpuClusterIndexBlock index_pool;
     LightClusterRange ranges[LC_MAX_CLUSTER_LIGHTS];
