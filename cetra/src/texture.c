@@ -450,11 +450,12 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture) {
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb) {
     // The historical correlation, kept as the default: a colour texture is the
     // one with an opacity in alpha.
-    return load_texture_path_into_pool_ex(pool, filepath, is_srgb, is_srgb);
+    return load_texture_path_into_pool_ex(pool, filepath, is_srgb,
+                                          is_srgb ? TEXTURE_ALPHA_OPACITY : TEXTURE_ALPHA_DATA);
 }
 
 Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
-                                        bool dilate_transparent) {
+                                        TextureAlpha alpha) {
     if (!pool || !filepath) {
         log_error("Invalid pool or filepath");
         return NULL;
@@ -531,7 +532,7 @@ Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath,
     // else: spec 11.60 stores a layer's HEIGHT there and its ambient occlusion in
     // the surface map's, and dilating those overwrites the albedo, the packed
     // normal and the roughness of every texel whose relief dips below 3.1%.
-    if (nrChannels == 4 && dilate_transparent) {
+    if (nrChannels == 4 && alpha == TEXTURE_ALPHA_OPACITY) {
         texture_dilate_transparent_rgb(data, width, height);
     }
 

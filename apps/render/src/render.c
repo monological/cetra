@@ -3628,7 +3628,14 @@ int main(int argc, char** argv) {
      */
     apply_cscene_water(scene, cscn);
     apply_cscene_fog_volumes(scene, cscn);
-    apply_cscene_decals(scene, cscn);
+    // Guarded rather than applied-then-cleared, unlike its neighbours: the apply
+    // decodes, dilates and uploads every decal image, so the off path was paying
+    // for pictures it then dropped -- and marking the material array dirty for
+    // them, which on a scene with no per-texel masks forces a rebuild that would
+    // not otherwise happen. The count is still zeroed below, which is what makes
+    // the flag beat a producer that is not a scene file.
+    if (!args.no_decals)
+        apply_cscene_decals(scene, cscn);
     if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;

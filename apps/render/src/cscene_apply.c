@@ -505,18 +505,18 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
 
         // LINEAR, because the image becomes a layer of the material texture array and
         // that array is linear -- pbr_frag decodes after the blend, the layered-albedo
-        // arrangement. Dilated explicitly: alpha here IS an opacity, which is the case
-        // the plain loader's is_srgb inference gets wrong.
-        Texture* albedo = load_texture_path_into_pool_ex(scene->tex_pool, d->image, false, true);
+        // arrangement. The alpha is an OPACITY, which is what the plain loader's
+        // is_srgb inference gets wrong about a linear-loaded picture.
+        Texture* albedo = load_texture_path_into_pool_ex(scene->tex_pool, d->image, false,
+                                                         TEXTURE_ALPHA_OPACITY);
         if (!albedo) {
             fprintf(stderr, "Warning: decal %d: cannot load image '%s'; skipped\n", i, d->image);
             continue;
         }
         Texture* surface = NULL;
         if (d->surface[0] != '\0') {
-            // Not dilated: this one packs a normal, a roughness and an occlusion, so its
-            // alpha is data and the repair would overwrite three channels of it.
-            surface = load_texture_path_into_pool_ex(scene->tex_pool, d->surface, false, false);
+            surface = load_texture_path_into_pool_ex(scene->tex_pool, d->surface, false,
+                                                     TEXTURE_ALPHA_DATA);
             if (!surface)
                 fprintf(stderr, "Warning: decal %d: cannot load surface '%s'; ignored\n", i,
                         d->surface);

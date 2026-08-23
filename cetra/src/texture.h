@@ -136,8 +136,19 @@ void texture_dilate_transparent_rgb(unsigned char* data, int width, int height);
 
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb);
 
-// As above, but SAYS whether the transparent-texel dilate should run instead of
-// inferring it from is_srgb.
+// What an RGBA source's ALPHA means, which decides whether its transparent
+// texels' rgb wants repairing before it is filtered or mipped.
+//
+// A named pair rather than a bool, because the call site is what has to be
+// legible: `(false, true)` and `(false, false)` next to each other say nothing
+// about which is which, and both needed a comment above them to explain the
+// second argument.
+typedef enum TextureAlpha {
+    TEXTURE_ALPHA_OPACITY, // coverage: dilate, so a cutout edge does not bleed
+    TEXTURE_ALPHA_DATA,    // a height, an occlusion, a mask: never touch the rgb
+} TextureAlpha;
+
+// As above, but SAYS what the alpha means instead of inferring it from is_srgb.
 //
 // The inference is right for everything loaded through the plain form: `is_srgb`
 // means "this is colour beside an opacity", and the linear textures reaching it
@@ -146,7 +157,7 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bo
 // opacity alpha, loaded LINEAR because it lives in the material array -- so it
 // asks directly rather than lying about its colour space to get the repair.
 Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
-                                        bool dilate_transparent);
+                                        TextureAlpha alpha);
 
 // The pool does NOT keep `pixels`. glTexImage2D takes GL's own copy and Texture
 // stores no pixel pointer, so the caller's buffer is dead the moment this

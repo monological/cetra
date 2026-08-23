@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cglm/cglm.h>
+
 /*
  * What a decal IS, packed for the shader (spec 11.73).
  *
@@ -35,8 +37,45 @@
  */
 #define DECAL_MAX 16
 
+/*
+ * A mark projected onto whatever surface is inside its box.
+ *
+ * ORIENTED, unlike the fog volume it otherwise resembles, and that deferral's
+ * reasoning does not carry over: a fog box is a MEDIUM, which an axis-aligned
+ * pair of corners describes completely, and it declined a matrix per volume
+ * because nothing had asked. A decal is a PICTURE, so which way round it sits is
+ * half of what is authored -- there is no unoriented version of a poster -- and
+ * the per-fragment transform is the cost this feature exists to pay.
+ *
+ * What it is NOT is a material: 11.68's roads reshape a layered ground's own
+ * splat weights, so a road is MADE of a layer the surface already carries. This
+ * projects an image onto surfaces that have no such layer set at all, which is
+ * why walls and props are its half of the job.
+ *
+ * Owned by the Scene as a flat array, like a fog volume and unlike a
+ * transformable citizen -- but declared HERE, with its cap and the functions
+ * that read it, which is where probe_set.h and roads.h each keep theirs.
+ */
+typedef struct Decal {
+    vec3 position;
+    vec3 half_extent; // local x,y span the image covers; z the projection depth
+    vec3 direction;   // the way the projector faces; local +Z
+    vec3 up;          // roll reference, Gram-Schmidt'd against direction
+    float opacity;    // scales the image's own alpha; clamped to [0,1] at pack
+    float angle_fade; // degrees off-axis past which a surface takes no mark
+    float feather;    // local units the edge ramps over, inward from the box faces
+    float normal_strength;
+    bool enabled;
+    struct Texture* albedo_tex;  // borrowed from the scene's texture pool
+    struct Texture* surface_tex; // optional: packed normal.xy + roughness + AO
+    // Layer indices in the material texture array, assigned at its build and
+    // -1 until then (or where no map was authored). Re-read every frame by the
+    // descriptor pack, so a rebuild that renumbers layers heals on the next one.
+    int albedo_layer;
+    int surface_layer;
+} Decal;
+
 struct Scene;
-struct Decal;
 struct GpuDecalBlock;
 
 /*
