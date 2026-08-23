@@ -101,6 +101,13 @@ POSTER_HALF = (1.0, 1.0, 0.6)
 SCORCH_POS = (1.3, 0.25, -0.6)
 SCORCH_HALF = (0.9, 0.5, 0.9)
 
+# The framing, named because two read points are DERIVED from it -- a mirror
+# reflection cannot be stated as a screen position, only computed from where the
+# eye is.
+CAM_EYE = (0.0, 2.2, 5.5)
+CAM_TARGET = (0.0, 1.5, -1.0)
+CAM_FOV = 45
+
 ANGLE_FADE = 60.0  # degrees; a surface tilted further takes no mark
 # The edge ramp, in the box's own units, and it is 0.35 rather than something
 # subtle FOR A REASON THE ASSERTS BELOW ENFORCE: the ramp covers |local| in
@@ -173,6 +180,22 @@ FEATHER_COVERAGE = min(1.0,
                        (1.0 - _WALL_LOCAL_Z) / FEATHER)
 WALL_CLEAR = (1.6, 1.6, WALL_Z)
 FLOOR_CLEAR = (-1.8, 0.0, 1.2)
+
+def _mirror_read():
+    """The floor point where a mirror shows the poster's centre.
+
+    Derived rather than eyeballed: reflect the poster through the floor plane,
+    aim the camera at the reflection, and take where that ray crosses y = 0.
+    An arm asserting a decal reached a probe CAPTURE has to read a pixel that
+    only the capture can explain, and 'somewhere on the floor' is not that.
+    """
+    ex, ey, ez = CAM_EYE
+    px, py, pz = POSTER_POS[0], POSTER_POS[1], WALL_Z
+    t = ey / (ey + py)  # crossing y = 0 on the way to the mirrored poster
+    return (ex + t * (px - ex), 0.0, ez + t * (pz - ez))
+
+
+MIRROR_READ = _mirror_read()
 
 QUAD_READS = {
     "upper_right": (POSTER_POS[0] + 0.5 * POSTER_HALF[0],
@@ -301,6 +324,13 @@ def _assert_fixture_still_tests_something():
                                  (SCORCH_POS, SCORCH_HALF, "scorch")):
             inside = all(abs(pt[k] - pos[k]) < half[k] for k in range(3))
             assert not inside, f"the {name} control sits inside the {dname}'s box"
+
+    # The mirror read must be ON the floor and clear of the scorch, or the arm
+    # reading it is looking at a mark rather than at a reflection of one.
+    assert abs(MIRROR_READ[0]) < HALF and WALL_Z < MIRROR_READ[2] < HALF, (
+        f"the mirror read {MIRROR_READ} is off the floor")
+    assert not all(abs(MIRROR_READ[k] - SCORCH_POS[k]) < SCORCH_HALF[k] for k in range(3)), (
+        "the mirror read sits inside the scorch's box")
 
     # ...and the scorch read must be INSIDE the scorch's box, on the floor.
     assert all(abs(SCORCH_READ[k] - SCORCH_POS[k]) < SCORCH_HALF[k] for k in range(3)), (
@@ -536,7 +566,7 @@ CSCN = {
                 "intensity": 3.0, "cast_shadows": False}],
     # Both plates and the oblique in one frame, square on to the wall so the
     # poster is not foreshortened.
-    "camera": {"eye": [0.0, 2.2, 5.5], "target": [0.0, 1.5, -1.0], "fov": 45},
+    "camera": {"eye": list(CAM_EYE), "target": list(CAM_TARGET), "fov": CAM_FOV},
     "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
 }
 

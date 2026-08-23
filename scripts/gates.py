@@ -14630,6 +14630,9 @@ def run_decal_gate(workdir):
                         behind the camera claims no froxel and moves no pixel
       decals-schema     a decal missing position, size, direction or image is
                         refused by name, and a degenerate size is refused too
+      decals-capture    a decal reaches a reflection PROBE's capture, read as the
+                        poster's reflection in a mirror floor -- the property the
+                        materialArray tenancy bought over a unit-6 alias
       decals-config     the snapshot's nine decal rows survive a dump and a
                         restore, and a perturbed one CHANGES THE FRAME -- the
                         config group's own fixture authors no decal, so without
@@ -14932,6 +14935,46 @@ def run_decal_gate(workdir):
           f"{len(named) - len(misses)}/{len(named)}"
           f"{' (missing ' + ','.join(misses) + ')' if misses else ''}, "
           f"and the unmutated fixture loads with no refusal and {len(clean)} decals")
+
+    # -- capture: decals reach a reflection probe, which is the design claim ---
+    #
+    # The whole texture story rests on this. A unit-6 alias -- the plan the
+    # roadmap booked -- is bound only for `SUBMIT_PASS_SHADE && !alpha_pass &&
+    # !capturing`, so it would have had decals absent from probe captures; the
+    # materialArray tenancy has no such exclusion. Nothing asserted the
+    # difference, and the arm was specced and never written.
+    def with_probe(d, drop_decals=False):
+        # A mirror floor and a probe that can see the wall. The probe is what
+        # carries the poster into the reflection; the floor is what shows it.
+        d["probes"] = [{"position": [0.0, 1.2, 0.0],
+                        "boxMin": [-3.0, -0.1, -3.1],
+                        "boxMax": [3.0, 4.0, 3.1],
+                        "boxFade": 0.05}]
+        d["materials"] = {"decal_floor_mat": {"roughness": 0.02, "metallic": 1.0}}
+        if drop_decals:
+            d.pop("decals", None)
+
+    pix_cap, _, _, out_cap = _decal_run(workdir, "cap", with_probe, PROBE_SKY, frames=8)
+    pix_capless, _, _, out_capless = _decal_run(
+        workdir, "capless", lambda d: with_probe(d, True), PROBE_SKY, frames=8)
+    if pix_cap is None or pix_capless is None:
+        failures.append("decals-capture")
+        print(f"  decals-capture FAIL  render error\n{(out_cap or out_capless)[:400]}")
+    else:
+        # The reflection, and a floor control the wall cannot reach into.
+        refl = _decal_byte(pix_cap, w, h, project, gen.MIRROR_READ)
+        refl_bare = _decal_byte(pix_capless, w, h, project, gen.MIRROR_READ)
+        moved = sum(abs(int(a) - int(b)) for a, b in zip(refl, refl_bare))
+        # Anti-vacuity: a probe has to have been captured at all, or the two
+        # frames are two mirrors of the same empty wall and agree for a reason
+        # that has nothing to do with decals.
+        captured = "probe" in (out_cap or "").lower()
+        ok = moved > 12 and captured
+        if not ok:
+            failures.append("decals-capture")
+        print(f"  decals-capture {'PASS' if ok else 'FAIL'}  the poster's reflection in a "
+              f"mirror floor reads {refl} with the decal and {refl_bare} without "
+              f"(sum |delta| {moved}, want > 12); a probe was captured: {captured}")
 
     # -- config: the snapshot rows, which the config group's fixture cannot see -
     #

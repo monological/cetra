@@ -3514,6 +3514,23 @@ int main(int argc, char** argv) {
         }
     }
 
+    /*
+     * DECALS BEFORE THE PROBES, and the order is load-bearing: a probe captures
+     * its cube here, once, at load. A decal applied after that is absent from
+     * every capture -- so a poster is missing from its own reflection, forever,
+     * with the frame otherwise correct.
+     *
+     * That is exactly the property the material-array tenancy was chosen FOR
+     * over a unit-6 alias (which is unbound during captures and could not have
+     * had it at all), so shipping it broken would have made the design argument
+     * false in the one place it is checkable.
+     *
+     * Guarded rather than applied-then-cleared: the apply decodes, dilates and
+     * uploads every image, and dirties the material array for them.
+     */
+    if (!args.no_decals)
+        apply_cscene_decals(scene, cscn);
+
     // A scene file that authored its own probes wins over the flag, and says so:
     // --probe (or environment.probe_scene, which is the same request) asks for
     // ONE auto-placed probe, and a file carrying a probes[] array has already
@@ -3628,14 +3645,7 @@ int main(int argc, char** argv) {
      */
     apply_cscene_water(scene, cscn);
     apply_cscene_fog_volumes(scene, cscn);
-    // Guarded rather than applied-then-cleared, unlike its neighbours: the apply
-    // decodes, dilates and uploads every decal image, so the off path was paying
-    // for pictures it then dropped -- and marking the material array dirty for
-    // them, which on a scene with no per-texel masks forces a rebuild that would
-    // not otherwise happen. The count is still zeroed below, which is what makes
-    // the flag beat a producer that is not a scene file.
-    if (!args.no_decals)
-        apply_cscene_decals(scene, cscn);
+    // (decals were applied above, before the probe capture -- see the note there)
     if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;
