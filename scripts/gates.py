@@ -14613,8 +14613,12 @@ def run_decal_gate(workdir):
                         is a PICTURE and not just a coloured patch
       decals-angle-fade the oblique plate inside the poster's box reads its own
                         substrate: a projector must refuse a surface it grazes
-      decals-surface    the scorch's surface map moves roughness where its albedo
-                        alone would not, against a normal-strength-0 twin
+      decals-surface    the scorch's roughness reads its PAINTED code through
+                        renderMode 8, against a no-surface-map twin and a floor
+                        control that must not move
+      decals-normal     flattening the relief ALONE -- the map still bound --
+                        moves the lit frame, which is the only arm that reaches
+                        the decal's tangent frame
       decals-opacity    a half-opaque poster reads the MIDPOINT between its own code
                         and the wall's, not something darker -- the premultiplied
                         accumulation, which the opaque arms above cannot see
@@ -14755,26 +14759,60 @@ def run_decal_gate(workdir):
               f"{oblique_substrate} +/-{DECAL_CODE_EPS}, i.e. no mark)")
 
     # -- surface: the scorch's map moves the lit frame ------------------------
-    def flatten(d):
+    # renderMode 8 is vec4(metallicMap, roughnessMap, 0, 1), and its return sits
+    # AFTER the wet-sand seam where the surface half lands -- so the G channel is
+    # the decal's roughness as the BRDF will see it, read as a byte rather than
+    # inferred from a pixel count.
+    def drop_surface(d):
         for dec in d.get("decals", []):
-            dec["normalStrength"] = 0.0
             dec.pop("surface", None)
 
-    lit_full, lw, lh, out_lit = _decal_run(workdir, "lit", None, None)
-    lit_flat, _, _, out_flat = _decal_run(workdir, "flat", flatten, None)
-    if lit_full is None or lit_flat is None:
+    def flat_normal(d):
+        # The surface map STAYS; only its relief is switched off. That is what
+        # separates the normal half from the roughness half -- popping the map,
+        # which is what this arm used to do, drops both and cannot tell them
+        # apart while claiming in its own message to be testing the normal.
+        for dec in d.get("decals", []):
+            dec["normalStrength"] = 0.0
+
+    pix_r, _, _, out_r = _decal_run(workdir, "rough", None, ["--render-mode", "8"])
+    pix_rn, _, _, out_rn = _decal_run(workdir, "roughnone", drop_surface,
+                                      ["--render-mode", "8"])
+    if pix_r is None or pix_rn is None:
         failures.append("decals-surface")
-        print(f"  decals-surface FAIL  render error\n{out_lit or out_flat}")
+        print(f"  decals-surface FAIL  render error\n{out_r or out_rn}")
+    else:
+        got = _decal_byte(pix_r, w, h, project, gen.SCORCH_READ)[1]
+        bare = _decal_byte(pix_rn, w, h, project, gen.SCORCH_READ)[1]
+        ctrl = _decal_byte(pix_r, w, h, project, gen.FLOOR_CLEAR)[1]
+        ctrl_bare = _decal_byte(pix_rn, w, h, project, gen.FLOOR_CLEAR)[1]
+        # renderMode 8 writes roughness raw, no encode -- so the painted code IS
+        # the expected byte, give or take the 0.04 floor and rounding.
+        want = gen.SCORCH_ROUGH
+        ok = (abs(got - want) <= 4 and abs(got - bare) > 40 and ctrl == ctrl_bare)
+        if not ok:
+            failures.append("decals-surface")
+        print(f"  decals-surface {'PASS' if ok else 'FAIL'}  the scorch's roughness reads "
+              f"{got} (want its painted {want} +/-4) against {bare} with no surface map "
+              f"(want > 40 apart), and the floor control is {ctrl} either way "
+              f"(unmoved: {ctrl == ctrl_bare})")
+
+    # -- surface-normal: the relief, isolated from the roughness --------------
+    lit_full, _, _, out_lit = _decal_run(workdir, "lit", None, None)
+    lit_flat, _, _, out_flat = _decal_run(workdir, "flat", flat_normal, None)
+    if lit_full is None or lit_flat is None:
+        failures.append("decals-normal")
+        print(f"  decals-normal FAIL  render error\n{out_lit or out_flat}")
     else:
         full = os.path.join(workdir, "decal_lit.ppm")
         flat = os.path.join(workdir, "decal_flat.ppm")
         moved, _ = compare(full, flat)
         ok = moved > 200
         if not ok:
-            failures.append("decals-surface")
-        print(f"  decals-surface {'PASS' if ok else 'FAIL'}  dropping the scorch's "
-              f"surface map moves {moved} px of the lit frame (want > 200; a build "
-              f"that stamps albedo alone reads 0)")
+            failures.append("decals-normal")
+        print(f"  decals-normal {'PASS' if ok else 'FAIL'}  flattening the scorch's relief "
+              f"alone -- its surface map still bound -- moves {moved} px of the lit frame "
+              f"(want > 200; a build that never composes the decal normal reads 0)")
 
     # -- opacity: the premultiply, which every opaque read is blind to --------
     def half(d):

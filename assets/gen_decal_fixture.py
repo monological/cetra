@@ -79,6 +79,11 @@ SCORCH_CODE = (40, 40, 44)
 # The scorch's surface map, packed as layers.glsl reads it.
 SCORCH_ROUGH = 250  # against the substrate's own, which is far lower
 SCORCH_AO = 120
+# normal.x, encoded. 208 is +0.63 in tangent space -- a 39-degree tilt along the
+# decal's own u axis, which is steep enough that the lit frame moves a long way
+# if the shader picks the wrong basis vector, negates one, or drops the
+# composition entirely.
+SCORCH_NORMAL_X = 208
 
 # Fraction of each image that is fully transparent margin.
 MARGIN = 0.125
@@ -214,10 +219,23 @@ def _scorch_albedo():
 
 
 def _scorch_surface():
-    """Packed normal.xy + roughness + AO, the layer surface format."""
+    """Packed normal.xy + roughness + AO, the layer surface format.
+
+    The normal has REAL RELIEF, and it did not until the review: both channels
+    were a flat 128, which encodes 0.0039 rather than 0 and tilts the world
+    normal by about a third of a degree -- on a surface the map also drives to
+    roughness 0.98, and toward a direction that IS the floor's own normal. So
+    the entire tangent-frame construction in the shader was unobservable:
+    swapping the two basis vectors was a literal no-op, and deleting the normal
+    composition left the roughness delta alone and every arm green.
+
+    A single-axis TILT rather than a pattern, and the axis is the decal's own u:
+    that is what makes a swapped or negated basis vector move the lit frame, and
+    it is asserted below to be a real tilt rather than a rounding of zero.
+    """
     img = np.zeros((TEX, TEX, 4), dtype=np.uint8)
-    img[:, :, 0] = 128  # normal.x = 0
-    img[:, :, 1] = 128  # normal.y = 0 -- flat, so the arm reads roughness alone
+    img[:, :, 0] = SCORCH_NORMAL_X
+    img[:, :, 1] = 128  # v is flat, so a basis error shows as a tilt, not a wash
     img[:, :, 2] = SCORCH_ROUGH
     img[:, :, 3] = SCORCH_AO
     return img
@@ -364,6 +382,14 @@ def _assert_fixture_still_tests_something():
     # The scorch must actually differ from the substrate in the channel the
     # surface arm reads, or that arm passes on a build that ignores the map.
     assert SCORCH_ROUGH > 200, "the scorch's roughness is not far from a plain floor's"
+
+    # ...and its normal must be a REAL tilt. 128 encodes 0.0039, not 0, so a map
+    # that looks flat is a third of a degree off the surface it lies on -- which
+    # is indistinguishable from no normal composition at all.
+    tilt = abs(SCORCH_NORMAL_X / 255.0 * 2.0 - 1.0)
+    assert tilt > 0.3, (
+        f"the scorch's normal.x is {tilt:.3f} in tangent space; a build that "
+        f"dropped the tangent frame entirely would look the same")
 
 
 # The oblique plate's centre and its rotation. Tilted about X, so its normal
