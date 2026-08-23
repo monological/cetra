@@ -300,12 +300,14 @@ content-dependent hole, which is not the same thing as exclusivity.
 | consumer | pass it reads in | fits the idle slot? |
 |---|---|---|
 | cloud shadow map | opaque | **yes** — a 2D R16F onto a `sampler2D` |
-| decal atlas | opaque | **only as a flat 2D atlas** with computed tile UVs. As a `sampler2DArray` it needs an idle array, and all four (2, 7, 10, 15) are read during opaque shading. `gi_volume.glsl`'s `giTileUV` is the in-tree pattern for doing it flat |
+| decal atlas | opaque | ~~**only as a flat 2D atlas** with computed tile UVs~~ — **moot: D1 shipped (11.73) taking neither the slot nor a flat atlas.** The row asked which consumer fits an idle unit, and the answer was that a decal image is one of the scene's per-texel material images, so it is a TENANT of unit 2's array — a layer index, no declaration, and no exclusivity argument to audit. The slot was never free anyway: 11.41 holds unit 6 for the whole opaque pass, so this table and the cloud-shadow row above it were two candidates for one thing |
 | light cookies | opaque **and** late | same type problem, and they want transparent receivers too |
 | froxel volume from the transparent pass | late | **no.** A `sampler3D`, in the one pass where refraction is live. Blocked twice over |
 
-So the honest remaining customer for a freed unit is the froxel-in-transparent item, and D1 only if a
-flat atlas is refused. Note also a SECOND conditionally-free routing on unit 6: the refraction read is
+So the honest remaining customer for a freed unit is the froxel-in-transparent item — **and since
+11.73 it is the ONLY one.** D1 was the other name on this list and it shipped without a unit at all,
+which leaves this whole section describing a budget with one booked spender. Note also a SECOND
+conditionally-free routing on unit 6: the refraction read is
 guarded by `transmission > 0`, so a non-transmissive late-pass draw does not touch it. That is real
 capacity and should be treated as a last resort — `pbr_frag.glsl:239-243` already calls the present
 arrangement "forced rather than clever", and a third routing on one unit is where it stops being
@@ -1244,15 +1246,18 @@ links through `ubo_wire_blocks`, so the cluster list arrives with no C-side bind
 
 ## Track D — Surfaces & environment
 
-*Corrected twice, and neither dependent survived. Both D1 and D2's ground-shadow half read in the
-OPAQUE pass, where unit 6 sits idle and takes a `#define` alias — so neither needs a freed unit. D2's
-is a plain 2D map and fits outright; D1 fits if its atlas is flat rather than a `sampler2DArray`.
-What Wall 1 actually bites is narrower than this preamble claims: a consumer read in a pass where
-every unit is already live. See the ledger's occupancy sweep.*
+*Corrected three times, and neither dependent survived — nor did the correction. D2's ground-shadow
+half reads in the OPAQUE pass, where unit 6 took a `#define` alias, and shipped in 11.41. D1 was said
+to fit the same way "if its atlas is flat rather than a `sampler2DArray`", and that was wrong twice
+over: 11.41 had already taken the slot for the whole pass, and 11.73 shipped decals as a TENANT of
+unit 2's array, which needs neither an idle unit nor a flat layout. **Both dependents are built and
+neither spent D0.** What Wall 1 actually bites is narrower than this preamble ever claimed: a
+consumer read in a pass where every unit is already live. See the ledger's occupancy sweep.*
 
-Where Wall 1 actually bites. D1 and D2's ground-shadow half both need a texture inside `pbr_frag`,
-so **D0 is a hard prerequisite for them** and should not be started until one of them is scheduled
-(the roadmap's own just-in-time rule: foundations land with their first consumer).
+~~Where Wall 1 actually bites. D1 and D2's ground-shadow half both need a texture inside `pbr_frag`,
+so **D0 is a hard prerequisite for them**~~ — withdrawn on both counts above. What survives is the
+just-in-time rule itself: a foundation lands with its first consumer, and D0's only remaining
+candidate consumer is the froxel volume in the transparent pass, which is not scheduled.
 
 ### D0. Free two `pbr_frag` sampler units — Effort M — explored, and the count is ONE
 Not a feature; the unblocking item. The concrete candidate: **unit 11 (IBL irradiance) folds into the
@@ -1264,7 +1269,9 @@ where the two consumers are provably mutually exclusive.
 **The 0-diff gate here is unusually strong and should be demanded**: folding irradiance into an atlas
 tile is a pure storage change, so the raiden baseline must be 0 px, and if it is not, the
 octahedral resampling is lossy in a way that matters and the item should stop.
-**Depends on:** A4 (shipped). **Owns foundations:** the freed units D1/D2 spend.
+**Depends on:** A4 (shipped). ~~**Owns foundations:** the freed units D1/D2 spend.~~ — **neither
+spends one.** D2's surface half shipped on unit 6's alias (11.41), D1 as a tenant of unit 2's array
+(11.73). This item owns a foundation nothing booked has asked for.
 **Demanded by measurement since 11.39**, not just by the dependency graph: D2 shipped its froxel
 half and measured the ground at RMSE 0.0013 against the air's 0.0353, so the dappled light on
 terrain that D2 was written to deliver is entirely on the far side of this item. It is now the only
@@ -1280,6 +1287,12 @@ written from the dependency graph the entry itself proposed, and the graph was w
 worth doing, for D1 and for the froxel-in-transparent item, which are the two consumers that really
 cannot dodge it.*
 
+***And "two" is now one.*** *D1 dodged it too, by a route this section did not consider at all —
+becoming a tenant of an array that was already declared, rather than looking for a unit to alias.
+The froxel volume in the transparent pass is the last consumer that genuinely cannot, and it is not
+booked. Every prediction this entry made about who would spend it has now been falsified by the
+thing shipping without it.*
+
 **Explored against the code after 11.40, nothing built. Five corrections to the entry above.**
 
 **1. It frees ONE unit, not two — 16/16 becomes 15/16.** Only the first mechanism holds. The second
@@ -1289,13 +1302,15 @@ specific consumer squeeze in under a constraint that is invisible at link time a
 image rather than an error. Wall 1 therefore does not fall here; it becomes a one-slot budget, and
 per the ledger's occupancy sweep that slot has **one** honest customer left — sampling the froxel
 volume from the transparent pass, which is a `sampler3D` read in the one pass where refraction is
-live. D1 joins it only if a flat 2D decal atlas is refused in favour of a `sampler2DArray`.
+live. ~~D1 joins it only if a flat 2D decal atlas is refused in favour of a `sampler2DArray`.~~ —
+D1 shipped (11.73) as an array TENANT and joined nothing.
 Everything else on the wall's list either was never blocked or can take unit 6's idle opaque slot.
 
 **Which means D0 currently has no SCHEDULED consumer at all.** That is not an argument against
-building it — headroom before D1 is worth something — but it does mean the item has to be judged on
-its own measurement rather than on what it unblocks, and the just-in-time rule this entry cites is
-now pointing the other way.
+building it — but it does mean the item has to be judged on its own measurement rather than on what
+it unblocks, and the just-in-time rule this entry cites is now pointing the other way. *(This
+sentence read "headroom before D1 is worth something" until 11.73 built D1 without it. There is no
+consumer left to hold headroom for except an unbooked one.)*
 
 **And 11.68 pushed that further, which is worth counting.** Roads are the FIFTH feature this
 roadmap booked against a freed unit that needed none — after C2's derived area lights (one float),
@@ -1305,6 +1320,12 @@ all: it is a handful of segments the shader evaluates. The pattern behind all fi
 enough to state as a rule — **ask what SHAPE the data is before asking for a unit, because a
 sampler is for pictures, and four of the five wanted a table, a scalar, a vertex or an equation.**
 D1's poster-and-scorch half is the first booked consumer that genuinely wants a picture.
+
+**And 11.73 made it the SIXTH, which is the more useful lesson.** Wanting a picture turned out not
+to be the same as wanting a DECLARATION: the array on unit 2 already holds pictures, so a decal
+image joined it as a layer. The rule above should therefore be read one step further — ask what
+shape the data is, and if the answer really is "a picture", ask whether something already declared
+holds pictures of that shape before asking for a unit.
 
 **2. The fold is about TYPE, not storage, and that changes its cheapest shape.** `pbr_frag.glsl:1766`
 already reads `giEnabled > 0 ? giSampleIrradiance(...) : texture(irradianceMap, N).rgb` — the two are
@@ -1365,10 +1386,12 @@ Three preconditions, all inert today and all biting the instant height becomes a
   layers from 8 MB to 134 MB for nothing.
 
 **Deliberately not recommended until a second consumer is scheduled.** One unit already covers D2's
-surface half, the only Track-D feature with a measurement behind it; D1 is Effort L and unscheduled,
-and the froxel-in-transparent item is not scheduled at all. Taking unit 4 now halves POM's resolution
+surface half, the only Track-D feature with a measurement behind it; ~~D1 is Effort L and
+unscheduled~~ **D1 has since shipped (11.73) and took no unit**, and the froxel-in-transparent item
+is not scheduled at all. Taking unit 4 now halves POM's resolution
 on the tree's only POM asset to buy a slot nothing spends — precisely what the just-in-time rule
-exists to prevent. Revisit with D1, and measure the 4096→2048 question on `pilot` then rather than
+exists to prevent. ~~Revisit with D1~~ — D1 came and went without asking. Revisit with whatever
+schedules the froxel read, and measure the 4096→2048 question on `pilot` then rather than
 assuming it.
 
 *Also learned, since the name misleads: the frame loop's "POM height resolve" is not a GPU pass. It is
@@ -1416,6 +1439,16 @@ cap and broken on a uniform count, so every golden is 0 px and a decal-free scen
 across builds — the data-dependence worth watching is per-pixel fetch count inside overlapping
 boxes, which the cap bounds and nothing else does.*
 
+***Spec 11.74 closed what the review round left, no new surface.*** *The multi-decal path had never
+been exercised at all — the fixture's two marks are disjoint in two axes, so the over-composite only
+ever met an empty accumulator, which is the one input under which paint order, a premultiplied sum
+and a plain overwrite are the same picture. `decals-overlap` appends a third mark at gate time and
+reads which one wins; reversing the composite fails it and no other arm. Also: the Scene now retains
+and releases its decal images rather than holding raw pool pointers, a failed material-array build
+puts every decal back to "not built" (measured 36,786 px of opaque black marks otherwise, since GL
+defines a sample of a mip-incomplete texture as (0,0,0,1)), and the three froxel z-clamp spellings
+became one.*
+
 
 The largest **environment-art** gap in the engine: there is no way to author localised surface detail
 onto geometry — no scorch marks, no leaks, no edge wear, no posters, no puddle edges. Forward
@@ -1439,16 +1472,24 @@ world-XZ splat.** Evaluated per fragment on the per-texel path, which is why the
 NETWORK wants the paged content era rather than a hundred polylines. So what D1 still owns is most
 of it: detail on walls and props, which have no world-XZ splat to override; marks whose appearance
 is a picture rather than a material the surface already carries — a poster, a scorch, a logo; and
-any density past a handful of marks. Price that remainder against the flat-atlas alias below rather
-than against the ledger.*
+any density past a handful of marks. ~~Price that remainder against the flat-atlas alias below rather
+than against the ledger.~~ **That remainder is what 11.73 built, and it was priced against neither:
+the atlas question never arose, because the picture went into an array that was already declared.***
 
-*Softened by the ledger sweep: this is blocked by a choice of texture LAYOUT, not by the ledger.
+*~~Softened by the ledger sweep: this is blocked by a choice of texture LAYOUT, not by the ledger.
 Decals are read in the opaque pass, where unit 6 is idle, so a **flat 2D atlas with computed tile
 UVs** takes the alias and needs no freed unit at all — `gi_volume.glsl`'s `giTileUV` is the in-tree
 pattern, and the GI atlas is itself a flat 2D atlas of tiles for the same reason (hundreds of tiles,
 one sampler). Only the `sampler2DArray` form is blocked, because every array declared in the shader
 (2, 7, 10, 15) is read during opaque shading. Price the flat atlas before assuming D0 is a
-prerequisite; the array's convenience is real but it is convenience, not necessity.*
+prerequisite; the array's convenience is real but it is convenience, not necessity.~~*
+
+***Struck whole, and worth leaving visible because both of its premises were false.*** *Unit 6 is
+not idle in the opaque pass — 11.41 binds the cloud-shadow map there for all of it. And "every array
+declared in the shader is read during opaque shading" is true and beside the point: the question was
+never whether an array is idle, it was whether one already holds this kind of picture. Unit 2's does.
+11.73 added a layer to it, and the `sampler2DArray` form this paragraph called blocked is what
+shipped.*
 **Refs.** Persson, *Practical Clustered Shading* (SIGGRAPH 2013 course); Wronski,
 *Screen-Space Decals* (GDC 2014).
 **Depends on:** A1 (shipped). ~~D0 (hard)~~ — withdrawn; see the shipped note above.
@@ -2657,7 +2698,7 @@ not scheduled.
 | 29 | C4 Clustered specular probes | L | **DONE (11.70)** N probes blended per fragment through A1's grid, stored as octahedral roughness rows tenanting A4's atlas texture. Zero new sampler declarations. |
 | 30 | E5 Instancing + LOD + sorting | L | **DONE, two limbs of three (11.28 / 11.29).** Wall 2 mostly removed: `abandoned_window_shadowed` shadow CPU −83%, frame −38%, 2,148 draws → 272. Sorting deferred as unfalsifiable against the corpus, which `apps/forest` has since falsified — moved to E6. Established that scatter *order* decides whether batching happens at all (2,368 → 1,287 draws for identical geometry), that LOD fights instancing on the `(mesh, lod)` key non-monotonically, and that "meshoptimizer locks mesh borders" — in three headers and spec 11.28 — was wrong from the start. |
 | 31 | **E6 Depth prepass + opaque ordering** | M | **DONE (11.30 + 11.31).** `apps/forest` opaque **306 → 169 ms (−45%)** from the ORDERING alone, depth complexity 1.93 → 1.08. Masked geometry now prepasses too (11.31, via a `depthOnly` mode in `pbr_frag`) and reaches a better 0.72 — and is still **slower** than the sort, because a full extra geometry pass costs more than the shading it saves. The two are substitutes, not complements: 11.30's "worth more together" was an artefact of the masked exclusion. Ordering ships on, the prepass off, with a gate arm asserting the prepass **costs** on a scene with no overdraw. 11.30's own figures were doubled by a budget that trusted `msaa_samples` over the driver, and its −64% interior does not reproduce. Between them these two specs withdrew seven claims — every one from an instrument that had never been checked against a scene with a known answer. |
-| 32 | D0 Free two sampler units | M | Foundation only — schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it — **shipped without it in 11.41, so that is now demonstrated rather than predicted** — and D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
+| 32 | D0 Free two sampler units | M | Foundation only — ~~schedule it **with** D1 or D2's surface half, never before, per the just-in-time rule~~ **both have shipped and neither wanted it**, so the just-in-time rule now points at the froxel-in-transparent item or at nothing. **Explored after 11.40 and it frees ONE unit, not two** (16/16 → 15/16): the irradiance fold holds, the unit-6 share is a conditional slot rather than a freed one, and the second real candidate (unit 4, POM height into the mask array) costs POM half its resolution on `pilot` to buy a slot nothing currently spends. See D0 for the five corrections. **And the ledger sweep left it with no SCHEDULED consumer at all**: D2's surface half never needed it — **shipped without it in 11.41, so that is now demonstrated rather than predicted** — and ~~D1 can dodge it with a flat 2D decal atlas rather than a `sampler2DArray`~~ **D1 dodged it too (11.73), by neither route this row imagined: a decal image is a TENANT of unit 2's array, so it cost a layer index and no declaration**. Both predicted spenders are now built and neither spent it. The one consumer that genuinely cannot dodge it is sampling the froxel volume from the transparent pass — a `sampler3D` in the one pass where refraction is live — and that is not booked. Judge the item on its own measurement, not on what it unblocks. |
 | 33 | D1 Clustered decals | L | **SHIPPED (spec 11.73).** ~~Hard-blocked on D0.~~ ~~Blocked by a texture-layout choice: unit 6 is idle in the opaque pass, so a flat 2D atlas takes the alias.~~ **Both wrong.** Unit 6 is NOT idle there — 11.41's cloud shadow holds it for the whole pass — and no alias was needed: a decal image is a tenant of `materialArray`, which costs a layer index and no declaration, and reaches the late pass and probe captures that an opaque-pass alias would have foreclosed. Cap 16, sized by the froxel mask; binding 10, the tenth uniform block of twelve. The ground slice 11.68 shipped stands: a mark MADE of a layer the surface carries is still a splat-weight override with no image at all. |
 | 34 | E8 Fix the wind cull | S | **DONE (11.53), and this row described half of it.** The condition is `is_skinned || wind_response > 0`, so **every skinned mesh** was exempt from the camera frustum and every cascade too — and the prescribed AABB expansion does not address a posed mesh at all, since a bind-pose bound is a bound on a different shape. Both bounds turned out to be closed-form: `windOffset` is sin/cos-bounded with nothing scaling by vertex position, and skin weights are convex so a posed vertex lies in the hull of its bones acting alone. `DRAW_UNBOUNDED` is deleted — it was decided in `classify`, which sees neither the wind field nor the pose — and the decision moved into a `CullView` beside the frustum, built per pass. Aimed away, `ivy_arcade` goes 49 of 73 culled to **73 of 73, 0 draws**, and raiden **18 of 18**. **The payoff needed a second half the row did not book**: wind is object-space, so making trees cullable does not stop 2,000 copies swaying in lockstep — `phaseVariation` fixes that with no InstanceBlock field, hashed from the object's world origin. `apps/forest` now has its wind, and it costs **5 meshes of cull out of 28,256**, against a counterfactual of at most 3,064 opaque culled where it measures 4,085. Also closed a latent defect nothing had reported: `_count_late_meshes` tested the raw bind AABB while the lane that draws those meshes exempted them, so a swaying or posed transmissive mesh could be drawn without the refraction resolve it samples. **The review then found the fixture testing one multiply** — authored at turbulence 0 and mode 0, so `wind_max_offset` collapsed to `strength × response` and none of the six shared coefficients, neither per-mesh maximum, nor any of the vegetation arithmetic reached the value under test, which is the branch `apps/forest` ships on. It also found the shared-constants file written as if the technique were novel: **`shore_constants.glsl` is the precedent**, and the `f` suffix its header calls load-bearing was missing, so the CPU bound evaluated in double against a float shader. |
 | 34b | **E9 One sample means one sample** | M | **DONE (11.34).** `apps/forest` opaque **150.9 → 121.6 ms (−19.4%)** against a 0.23% floor, with byte-identical submission integers — the same work, cheaper. One branch in the one allocator plus one at the depth renderbuffer flips the scene, OIT and moment FBOs in lockstep, since they share the depth attachment. The row's original prescription was wrong twice: there is no `sampler2DMS` anywhere in the corpus (11.17 rejected it), and postfx reaches the scene target only through blits, so the GLSL surface was zero files and postfx changed nothing. Priced before built with a new `--msaa <n>` lever, which also decomposed the first confounded A/B: A2C alone costs 202 ms of forest's opaque row (fragment-set explosion, headless-only), a sample ~93 ms on that inflated set. TAA-only edges verified by crops (raiden groom, forest canopy — indistinguishable), all 23 goldens 0 px, and MBOIT's moment-resolve bias (11.17) is now absent on the TAA path for free. |
@@ -2709,7 +2750,8 @@ construction. **25 (C3, IES) followed both** (11.57), and **28 (E2, 3D LUT gradi
 33 (D1), 36 (D4) and 37 (E7), all L or XL, plus 38 (E10, integer-bit hashes), which is S
 and is the only one of those that arrives with a measured price already attached --
 11.54 booked it against `ssr_frag`'s 31,800 px, so it can be judged on a number rather
-than on tidiness. **36 (D4) has since gone too** (11.69), and **29 (C4) with it** (11.70), leaving 32, 33 and 37.
+than on tidiness. **36 (D4) has since gone too** (11.69), **29 (C4) with it** (11.70) and **33 (D1) with 11.73**,
+leaving 32 and 37.
 
 **And then the column refilled, because the table was missing an entire subject.** Rows 39-44 (D6-D11)
 were added by 11.59 after a comparison against what UE, Unity, Frostbite and Decima actually ship:
@@ -2726,13 +2768,15 @@ on it: the flow / deposit / wear masks existed, round-tripped through the height
 consumed by a per-VERTEX tint at 2.6 units. **42 is now built too** (11.60), and the masks have a
 consumer that resolves per texel.
 
-What is left is 32 (D0), 33 (D1) and 37 (E7) -- both remaining L items with no
-measurement demanding them -- plus 38 (E10), still S and still carrying `ssr_frag`'s 31,800
-px. (This sentence read 29, 32, 37, 44 and "the re-scoped 36" until the sweep after 11.69: it
+What is left is 32 (D0) and 37 (E7) -- the last L item with no
+measurement demanding it, plus a foundation -- and 38 (E10), still S and still carrying `ssr_frag`'s
+31,800 px. (This sentence read 29, 32, 37, 44 and "the re-scoped 36" until the sweep after 11.69: it
 dropped 33, which was never built, and carried 44 and 36 after 11.62 and 11.69 shipped them.
-29 went with 11.70.) **The one of those the roadmap argues against itself is 32 (D0)**, which
-has had no scheduled consumer since 11.57, and 11.70 is the fourth feature in a row to need
-no unit at all: N reflection probes arrived as tenants of a declaration that already existed. **43 (D10) is the only one 11.60 moved the case for, and it moved it DOWN** -- past ~8 layers or
+29 went with 11.70, **and 33 with 11.73**.) **The one of those the roadmap argues against itself is
+32 (D0)**, which
+has had no scheduled consumer since 11.57, and 11.73 is the FIFTH feature in a row to need
+no unit at all: N reflection probes arrived as tenants of a declaration that already existed, and
+clustered decals -- the one row booked against D0 by name -- arrived the same way. **43 (D10) is the only one 11.60 moved the case for, and it moved it DOWN** -- past ~8 layers or
 roads/decals, with four layers at three declarations and 4-25 taps. 11.66 then shipped its stage 1
 anyway and the measurement went the other way: the 25-tap end of that range is most of an eroded
 terrain, and the cache takes it to 5-9 independent of layer count. Nothing is waiting on stage 2's
@@ -3044,7 +3088,7 @@ said ~30, which understates the cost by about 3.5x. The fix is still one functio
 | CPU 3D noise (`noise_worley3`, Perlin-Worley packing, threaded bake) | B2 | ground fog detail, media |
 | Render-res/post-res split — **delivered** as four sizes (`width/height` render, `post_*`, `out_*`, `half_*` = render/2), plus the canvas locals every post-seam pass composites onto | B4 | B5, B7, tonemap |
 | Transmittance-vs-depth storage in the shadow path | C1 — **delivered** (11.26), as deep opacity maps rather than the moments the sketch assumed | any translucent caster: hair, glass, foliage tips, smoke |
-| Freed `pbr_frag` sampler units | D0 (proposed, and it frees ONE) | **the consumer list this row carried is withdrawn** — D2's surface half shipped without it (11.41), and detail/wetness maps were never blocked (they are mask-array layers). What is left is D1 *if* a flat 2D atlas is refused, and sampling the froxel volume from the transparent pass, which is not booked |
+| Freed `pbr_frag` sampler units | D0 (proposed, and it frees ONE) | **the consumer list this row carried is withdrawn** — D2's surface half shipped without it (11.41), and detail/wetness maps were never blocked (they are mask-array layers). ~~What is left is D1 *if* a flat 2D atlas is refused, and~~ **D1 shipped in 11.73 without one** — a decal image is a tenant of unit 2's array. What is left is sampling the froxel volume from the transparent pass, and that is not booked |
 | Tessellation pipeline (program creation, patch draw, distance LOD) | **still unowned** — D3 shipped without it, and D4 shipped without it too (11.63's CDLOD morph is vertex work) | POM silhouettes |
 | Bed-height seam (`WaterHeightFn`) + the CPU Gerstner query | D3 — **delivered** (11.32, 11.33) | Jolt buoyancy, gameplay water tests, any surface that shoals |
 | Geometry clipmap: coarsest-cell snap + T-junction stitch | D3 — built (11.33), **removed** (11.35), kept at `8d04658` | **nothing now.** D4 chose CDLOD over rings in 11.63, and a morph closes a seam where the stitch would have. Kept as reference for a paged ring structure, which is the only consumer left |
