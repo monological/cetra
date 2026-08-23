@@ -27,7 +27,7 @@
  *
  * It is also what the mask width is sized from, so it is not free to be
  * generous: at 32 the froxel masks alone are 12288 bytes and would pin the
- * descriptor at six vec4 rows forever, and at 64 the block does not fit GL
+ * descriptor at seven vec4 rows forever, and at 64 the block does not fit GL
  * 4.1's guaranteed 16 KB at all. Every scene pays the compiled loop's width
  * whether or not it has a decal in it.
  *

@@ -609,6 +609,45 @@ static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
  * Closed key list, unlike fogVolumes: this block arrived after warn_unknown_keys existed
  * and a typo'd `boxmin` is exactly the silent failure the required-key check cannot catch.
  */
+static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
+    static const char* known[] = {"position", "boxMin",   "boxMax",
+                                  "intensity", "boxFade", "envOnly"};
+
+    const cJSON* probes = cJSON_GetObjectItemCaseSensitive(root, "probes");
+    if (!cJSON_IsArray(probes))
+        return;
+    const cJSON* p = NULL;
+    cJSON_ArrayForEach(p, probes) {
+        if (d->probe_count >= CSCENE_MAX_PROBES) {
+            log_warn("cscene: more than %d reflection probes; extras ignored",
+                     CSCENE_MAX_PROBES);
+            break;
+        }
+        if (!cJSON_IsObject(p)) {
+            log_warn("cscene: reflection probe that is not an object; skipped");
+            continue;
+        }
+        warn_unknown_keys(p, known, sizeof(known) / sizeof(known[0]), "probe");
+
+        CSceneProbe* out = &d->probes[d->probe_count];
+        memset(out, 0, sizeof(*out));
+        if (!get_floats(p, "position", out->position, 3) ||
+            !get_floats(p, "boxMin", out->box_min, 3) ||
+            !get_floats(p, "boxMax", out->box_max, 3)) {
+            log_warn("cscene: reflection probe needs position, boxMin and boxMax; skipped");
+            continue;
+        }
+        // create_reflection_probe's own defaults, restated because the memset
+        // above cleared them and a probe at intensity 0 is an invisible probe.
+        out->intensity = 1.0f;
+        out->box_fade = 0.2f;
+        get_float(p, "intensity", &out->intensity);
+        get_float(p, "boxFade", &out->box_fade);
+        get_bool(p, "envOnly", &out->env_only);
+        d->probe_count++;
+    }
+}
+
 /*
  * decals[] -- a mark projected onto whatever is inside its box (spec 11.73).
  *
@@ -660,7 +699,10 @@ static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
             continue;
         }
 
-        // create_decal's own defaults, restated because the memset cleared them and a
+        // The library defaults, and this is their ONLY statement -- there is no
+        // create_decal to inherit them from, so a Decal reaching the scene from
+        // anywhere but here gets zeros: an invisible mark with a hard edge.
+        // Restated after the memset because a
         // decal at opacity 0 is an invisible decal -- the probe-intensity lesson.
         out->opacity = 1.0f;
         out->angle_fade = 60.0f;
@@ -674,45 +716,6 @@ static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
         copy_string(out->surface, CSCENE_MAX_PATH,
                     cJSON_GetObjectItemCaseSensitive(p, "surface"));
         d->decal_count++;
-    }
-}
-
-static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
-    static const char* known[] = {"position", "boxMin",   "boxMax",
-                                  "intensity", "boxFade", "envOnly"};
-
-    const cJSON* probes = cJSON_GetObjectItemCaseSensitive(root, "probes");
-    if (!cJSON_IsArray(probes))
-        return;
-    const cJSON* p = NULL;
-    cJSON_ArrayForEach(p, probes) {
-        if (d->probe_count >= CSCENE_MAX_PROBES) {
-            log_warn("cscene: more than %d reflection probes; extras ignored",
-                     CSCENE_MAX_PROBES);
-            break;
-        }
-        if (!cJSON_IsObject(p)) {
-            log_warn("cscene: reflection probe that is not an object; skipped");
-            continue;
-        }
-        warn_unknown_keys(p, known, sizeof(known) / sizeof(known[0]), "probe");
-
-        CSceneProbe* out = &d->probes[d->probe_count];
-        memset(out, 0, sizeof(*out));
-        if (!get_floats(p, "position", out->position, 3) ||
-            !get_floats(p, "boxMin", out->box_min, 3) ||
-            !get_floats(p, "boxMax", out->box_max, 3)) {
-            log_warn("cscene: reflection probe needs position, boxMin and boxMax; skipped");
-            continue;
-        }
-        // create_reflection_probe's own defaults, restated because the memset
-        // above cleared them and a probe at intensity 0 is an invisible probe.
-        out->intensity = 1.0f;
-        out->box_fade = 0.2f;
-        get_float(p, "intensity", &out->intensity);
-        get_float(p, "boxFade", &out->box_fade);
-        get_bool(p, "envOnly", &out->env_only);
-        d->probe_count++;
     }
 }
 

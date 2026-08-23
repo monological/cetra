@@ -1097,7 +1097,7 @@ void main() {
      * that is a measurement rather than a preference. Hoisting that pair up to
      * this point to serve both -- which is the obvious way to write it, and how
      * this shipped first -- cost **11% of the opaque pass on a scene with no
-     * decals in it**, against 2.8% for the whole rest of the feature. Two vec3s
+     * decals in it**, against 3.1% for the whole rest of the feature. Two vec3s
      * live across the entire shader body is register pressure every fragment
      * pays whether or not it takes this branch. Recomputing them is two
      * instructions; keeping them alive is not.
