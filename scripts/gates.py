@@ -11380,29 +11380,57 @@ def run_config_gate(workdir):
     if not ok:
         failures.append("config-order")
 
-    # -- schema: four different wrongnesses, each named --------------------------
-    def _five_wrongnesses(d):
-        d["postfx"]["nonsense_key"] = 3
-        d["postfx"]["ssr"]["strength"] = "not a number"
-        d["postfx"]["tonemap"] = "chartreuse"
-        d["water"] = {"level": 2.0}
+    # -- schema: every way a file can be wrong, each named ------------------------
+    # One run covers all of them, so the only reason to carry fewer would be that
+    # the rest were untested -- which is what they were: the whole per-array key
+    # sweep, its MATERIAL_PARAMS branch, the vector-length check and the version
+    # warning had no coverage at all.
+    def _wrongnesses(d):
+        d["postfx"]["nonsense_key"] = 3                     # unknown key in a real section
+        d["postfx"]["ssr"]["strength"] = "not a number"     # scalar of the wrong shape
+        d["postfx"]["tonemap"] = "chartreuse"               # unknown enum label
+        d["postfx"]["grade"]["lift"] = [0.1, 0.2]           # vector of the wrong LENGTH
+        d["water"] = {"level": 2.0}                         # a subsystem this scene lacks
+        d["nonsense_section"] = {"x": 1}                    # unknown top-level section
         d["lights"].append({"name": "ghost_light", "intensity": 1.0})
+        d["probes"].append({"index": 99, "intensity": 1.0})
+        d["materials"].append({"name": "ghost_material", "roughness": 0.5})
+        d["probes"][0]["bogus_probe_key"] = 1
+        d["lights"][0]["bogus_light_key"] = 1
+        d["materials"][0]["bogus_mat_key"] = 1
+        d["version"] = 7
 
-    bad_json = _config_variant(orig_json, os.path.join(workdir, "config_bad.json"),
-                               _five_wrongnesses)
+    bad_json = _config_variant(orig_json, os.path.join(workdir, "config_bad.json"), _wrongnesses)
     _, _, bad_out = _config_run(workdir, "bad", ["--config", bad_json], model=None)
     named = {
         "unknown key": "'postfx.nonsense_key' is not a known setting" in bad_out,
         "wrong shape": "postfx.ssr.strength is not a value of the right shape" in bad_out,
         "unknown enum": "postfx.tonemap is not a known value" in bad_out,
+        "wrong vector length": "postfx.grade.lift is not a value of the right shape" in bad_out,
         "absent subsystem": "this scene has no 'water'" in bad_out,
+        "unknown section": "'nonsense_section' is not a known section" in bad_out,
         "absent light": "no light 'ghost_light'" in bad_out,
+        "absent probe": "no probe 99" in bad_out,
+        "absent material": "no material 'ghost_material'" in bad_out,
+        "unknown probe key": "'probes.bogus_probe_key' is not a known setting" in bad_out,
+        "unknown light key": "'lights.bogus_light_key' is not a known setting" in bad_out,
+        "unknown material key": "'materials.bogus_mat_key' is not a known setting" in bad_out,
+        "version": "version 7; expected 1" in bad_out,
     }
-    # And it must still have applied the rest rather than refusing the file.
-    survived = "config snapshot applied" in bad_out
-    ok = all(named.values()) and survived
+    # And it must still have applied the rest rather than refusing the file --
+    # asserted as a COUNT, so "applied" cannot pass while a refusal silently took
+    # other values with it. THREE values are refused here: the wrong-shaped
+    # scalar, the wrong-length vector, and the unknown enum label, which is a
+    # refused value as much as the other two. Everything else must still land.
+    REFUSED = 3
+    applied = re.search(r"config snapshot applied: \S+ \((\d+) fields\)", bad_out)
+    clean = re.search(r"config snapshot applied: \S+ \((\d+) fields\)", rest_out)
+    count_ok = bool(applied and clean) and int(applied.group(1)) == int(clean.group(1)) - REFUSED
+    ok = all(named.values()) and count_ok
     print(f"  config-schema   {'PASS' if ok else 'FAIL'}  "
-          f"{sum(named.values())}/5 named, rest still applied={survived}"
+          f"{sum(named.values())}/{len(named)} named, applied "
+          f"{applied.group(1) if applied else '?'} of {clean.group(1) if clean else '?'} "
+          f"(want {REFUSED} refused)"
           + ("" if all(named.values()) else
              f", silent: {', '.join(k for k, v in named.items() if not v)}"))
     if not ok:
