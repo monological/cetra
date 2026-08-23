@@ -743,19 +743,25 @@ static void _write_source(cJSON* root, Engine* engine) {
 }
 
 /*
- * Every row of one element owner, into one object. `key` names the element for
- * the reader to match on -- an index for probes, whose order IS their identity,
- * a name for lights and materials, whose order is the importer's.
+ * Every row of one element owner, into one object, under a key the reader can
+ * match it back by.
+ *
+ * NAME where there is one, `index` where there is not, and both are written
+ * rather than one or the other: `Light.name` and `Material.name` start NULL and
+ * only an importer or a scene file fills them, so every CLI-spawned light and
+ * every procedural material has none. A name is the stable key -- an index moves
+ * when the content does -- but an unnamed element has no other, and writing the
+ * index under the "name" key (which is what this did) produces an entry the
+ * reader silently drops.
  */
-static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, const char* id_key,
-                           const char* id_name, int id_index, int* count) {
+static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, const char* id_name,
+                           int id_index, int* count) {
     cJSON* obj = cJSON_CreateObject();
     if (!obj || !cJSON_AddItemToArray(array, obj))
         return false;
     if (id_name)
-        cJSON_AddStringToObject(obj, id_key, id_name);
-    else
-        cJSON_AddNumberToObject(obj, id_key, id_index);
+        cJSON_AddStringToObject(obj, "name", id_name);
+    cJSON_AddNumberToObject(obj, "index", id_index);
 
     for (int i = 0; i < CFG_FIELD_COUNT; i++) {
         const ConfigField* f = &CFG_FIELDS[i];
@@ -791,10 +797,10 @@ static bool _write_materials(cJSON* root, Scene* scene, int* count) {
         cJSON* obj = cJSON_CreateObject();
         if (!obj || !cJSON_AddItemToArray(array, obj))
             return false;
+        // Name and index both, for the reason _write_element states.
         if (material->name)
             cJSON_AddStringToObject(obj, "name", material->name);
-        else
-            cJSON_AddNumberToObject(obj, "index", (double)m);
+        cJSON_AddNumberToObject(obj, "index", (double)m);
 
         for (size_t p = 0; p < MATERIAL_PARAM_COUNT; p++) {
             const MaterialParam* param = &MATERIAL_PARAMS[p];
@@ -864,8 +870,7 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
         ok = array != NULL;
         for (int i = 0; ok && i < probes->count; i++) {
             if (probes->probes[i])
-                ok = _write_element(array, CFG_PROBE_ELEM, probes->probes[i], "index", NULL, i,
-                                    &written);
+                ok = _write_element(array, CFG_PROBE_ELEM, probes->probes[i], NULL, i, &written);
         }
     }
     if (ok && scene && scene->light_count > 0) {
@@ -874,8 +879,7 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
         for (size_t i = 0; ok && i < scene->light_count; i++) {
             const Light* light = scene->lights[i];
             if (light)
-                ok = _write_element(array, CFG_LIGHT_ELEM, light, "name", light->name, (int)i,
-                                    &written);
+                ok = _write_element(array, CFG_LIGHT_ELEM, light, light->name, (int)i, &written);
         }
     }
     if (ok)
@@ -1108,19 +1112,30 @@ static int _apply_elements(ConfigApplyCtx* ctx, const cJSON* root, const char* a
                 continue;
             }
         } else {
+            // Name first, index second. Not interchangeable: a name survives the
+            // light order changing and an index does not, so falling back is for
+            // the lights that HAVE no name -- every one the CLI spawned.
             const cJSON* name = cJSON_GetObjectItemCaseSensitive(entry, "name");
-            if (!cJSON_IsString(name) || !name->valuestring)
-                continue;
-            for (size_t i = 0; ctx->scene && i < ctx->scene->light_count; i++) {
+            const char* want = cJSON_IsString(name) ? name->valuestring : NULL;
+            for (size_t i = 0; want && ctx->scene && i < ctx->scene->light_count; i++) {
                 Light* light = ctx->scene->lights[i];
-                if (light && light->name && strcmp(light->name, name->valuestring) == 0) {
+                if (light && light->name && strcmp(light->name, want) == 0) {
                     base = light;
                     break;
                 }
             }
+            const cJSON* idx = cJSON_GetObjectItemCaseSensitive(entry, "index");
+            const int i = cJSON_IsNumber(idx) ? (int)idx->valuedouble : -1;
+            if (!base && !want && ctx->scene && i >= 0 && (size_t)i < ctx->scene->light_count)
+                base = ctx->scene->lights[i];
             if (!base) {
-                fprintf(stderr, "Warning: config snapshot: no light '%s' in this scene; ignored\n",
-                        name->valuestring);
+                if (want)
+                    fprintf(stderr,
+                            "Warning: config snapshot: no light '%s' in this scene; ignored\n",
+                            want);
+                else
+                    fprintf(stderr,
+                            "Warning: config snapshot: no light %d in this scene; ignored\n", i);
                 continue;
             }
         }
@@ -1143,20 +1158,31 @@ static int _apply_materials(ConfigApplyCtx* ctx, const cJSON* root) {
     int written = 0;
     const cJSON* entry = NULL;
     cJSON_ArrayForEach(entry, array) {
+        // Name first, index for the unnamed -- _apply_elements' reasoning.
         const cJSON* name = cJSON_GetObjectItemCaseSensitive(entry, "name");
-        if (!cJSON_IsString(name) || !name->valuestring)
-            continue;
+        const char* want = cJSON_IsString(name) ? name->valuestring : NULL;
         Material* material = NULL;
-        for (size_t i = 0; ctx->scene && i < ctx->scene->material_count; i++) {
+        for (size_t i = 0; want && ctx->scene && i < ctx->scene->material_count; i++) {
             Material* m = ctx->scene->materials[i];
-            if (m && m->name && strcmp(m->name, name->valuestring) == 0) {
+            if (m && m->name && strcmp(m->name, want) == 0) {
                 material = m;
                 break;
             }
         }
+        const cJSON* idx = cJSON_GetObjectItemCaseSensitive(entry, "index");
+        const int at = cJSON_IsNumber(idx) ? (int)idx->valuedouble : -1;
+        if (!material && !want && ctx->scene && at >= 0 &&
+            (size_t)at < ctx->scene->material_count)
+            material = ctx->scene->materials[at];
         if (!material) {
-            fprintf(stderr, "Warning: config snapshot: no material '%s' in this scene; ignored\n",
-                    name->valuestring);
+            if (want)
+                fprintf(stderr,
+                        "Warning: config snapshot: no material '%s' in this scene; ignored\n",
+                        want);
+            else
+                fprintf(stderr, "Warning: config snapshot: no material %d in this scene; "
+                                "ignored\n",
+                        at);
             continue;
         }
 
@@ -1245,14 +1271,15 @@ static void _warn_unknown_keys(const cJSON* obj, const char* path) {
     }
 }
 
-// Element objects carry their id key beside the rows, so it is not a stray.
-static void _warn_unknown_element_keys(const cJSON* array, ConfigOwner owner, const char* array_key,
-                                       const char* id_key) {
+// Element objects carry both id keys beside the rows, so neither is a stray.
+static void _warn_unknown_element_keys(const cJSON* array, ConfigOwner owner,
+                                       const char* array_key) {
     const cJSON* entry = NULL;
     cJSON_ArrayForEach(entry, array) {
         const cJSON* item = NULL;
         cJSON_ArrayForEach(item, entry) {
-            if (!item->string || item->string[0] == '_' || strcmp(item->string, id_key) == 0)
+            if (!item->string || item->string[0] == '_' || strcmp(item->string, "name") == 0 ||
+                strcmp(item->string, "index") == 0)
                 continue;
             bool known = false;
             for (int i = 0; i < CFG_FIELD_COUNT && !known; i++) {
@@ -1307,10 +1334,10 @@ static void _warn_unknown_root(const cJSON* root) {
 
     const cJSON* probes = cJSON_GetObjectItemCaseSensitive(root, "probes");
     if (cJSON_IsArray(probes))
-        _warn_unknown_element_keys(probes, CFG_PROBE_ELEM, "probes", "index");
+        _warn_unknown_element_keys(probes, CFG_PROBE_ELEM, "probes");
     const cJSON* lights = cJSON_GetObjectItemCaseSensitive(root, "lights");
     if (cJSON_IsArray(lights))
-        _warn_unknown_element_keys(lights, CFG_LIGHT_ELEM, "lights", "name");
+        _warn_unknown_element_keys(lights, CFG_LIGHT_ELEM, "lights");
     const cJSON* materials = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (cJSON_IsArray(materials))
         _warn_unknown_material_keys(materials);
