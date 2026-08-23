@@ -10856,6 +10856,234 @@ def run_probe_set_gate(workdir):
     return failures
 
 
+# The scene the config arms drive. Cornell rooms because it is the corpus's densest
+# fixture for this: two probes, three lights, seven materials and no water, so one
+# snapshot exercises both element arrays, the material pass through MATERIAL_PARAMS,
+# and the absent-subsystem path at once.
+CONFIG_FIXTURE = "cornell_rooms.cscn"
+
+# A look nothing defaults to, so a restore that silently did nothing cannot pass by
+# landing on the same frame. Every one of these is a different mechanism: two effect
+# switches, a tonemap enum, and three finishing-stack floats.
+CONFIG_LOOK = ["--no-ssr", "--no-ssao", "--tonemap", "agx", "--sharpen", "0.8",
+               "--vignette", "--grain", "0.05"]
+
+# GUI controls whose widget writes a LOCAL, not the field. Each entry names the field
+# it actually drives, which is the whole value of the list: a control added with a new
+# local fails config-coverage until somebody writes down what it sets.
+CONFIG_GUI_LOCALS = {
+    "fft": "wave_model",
+    "interp": "lut_interp",
+    "mode": "meter_mode",
+    "msaa": "msaa_samples",
+    "msm_size_idx": "msm_size",
+    "pending_scale": "render_scale",
+    "rm": "current_render_mode",
+    "so": "spec_occlusion_mode",
+    "taa": "taa_enabled",
+    "tm": "tonemap_mode",
+    "wireframe": "show_wireframe",
+}
+
+# Controls a snapshot deliberately cannot carry, with the reason. Not an escape hatch:
+# both reasons are about IDENTITY, which is what a snapshot needs and these lack.
+CONFIG_GUI_UNCARRIED = {
+    "stiffness": "spring-bone params live per SceneNode; a node has no stable key",
+    "damping": "spring-bone params live per SceneNode; a node has no stable key",
+    "gravity": "spring-bone params live per SceneNode; a node has no stable key",
+    "sss_profiles": "profile SLOTS are assigned in material-block order at load, and "
+                    "material->subsurface_profile indexes them",
+}
+
+
+def _config_run(workdir, name, extra, model=CONFIG_FIXTURE, frames=2):
+    """One capture plus its snapshot. Returns (ppm, json, stdout+stderr)."""
+    ppm = os.path.join(workdir, f"config_{name}.ppm")
+    dump = os.path.join(workdir, f"config_{name}.json")
+    cmd = [RENDER, "-x", "-f", str(frames), "-S", ppm, "--config-dump", dump]
+    if model:
+        cmd += ["-m", os.path.join(ROOT, "assets", model), "-W", "400", "-H", "300"]
+    r = subprocess.run(cmd + extra, capture_output=True, text=True)
+    return ppm, dump, r.stdout + r.stderr
+
+
+def _config_gui_members():
+    """Every struct member a gui.c control writes, by its trailing name."""
+    src = open(os.path.join(ROOT, "cetra", "src", "gui.c")).read()
+    widgets = (r'ig(?:Checkbox|SliderFloat|SliderInt|ColorEdit3|DragFloat3|Combo_Str_arr)'
+               r'\s*\(\s*(?:"[^"]*"|\w+)\s*,\s*&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)')
+    found = [m.group(1) for m in re.finditer(widgets, src)]
+    # The effect-group helper is a checkbox too, and it owns every master switch.
+    found += [m.group(1) for m in
+              re.finditer(r'_begin_effect_group\(\s*"[^"]*"\s*,\s*&([A-Za-z_][\w\->\.\[\]]*)', src)]
+    return {re.split(r'->|\.', re.sub(r'\[[^\]]*\]', '', e))[-1] for e in found}
+
+
+def _config_table_members():
+    """Every struct member the descriptor table addresses."""
+    src = open(os.path.join(ROOT, "cetra", "src", "config_snapshot.c")).read()
+    # The member's argument POSITION differs per macro, so the macro name selects it.
+    index = {"CFG_ROW": 5, "CFG_ROW_ENUM": 4, "CFG_ROW_FN": 5}
+    members = set()
+    for m in re.finditer(r'\b(CFG_ROW|CFG_ROW_ENUM|CFG_ROW_FN)\(([^()]*)\)', src, re.S):
+        args = [a.strip() for a in m.group(2).replace("\n", " ").split(",")]
+        i = index[m.group(1)]
+        if len(args) > i:
+            members.add(args[i].split(".")[-1])
+    return members
+
+
+def run_config_gate(workdir):
+    """The live session dumped to JSON and restored from it (spec 11.71).
+
+      config-coverage   every gui.c control is a row in the descriptor table, or is
+                        named in one of two lists here with what it drives or why it
+                        cannot be carried. Static: reads both sources, renders nothing
+      config-roundtrip  restore a snapshot and dump again: byte-identical to the first
+      config-pixels     a run under a non-default look, against its own snapshot
+                        restored with no other flag. Floor measured first
+      config-standalone the same restore with NO -m and no -W/-H: the source block
+                        carries the model and the framing
+      config-override   the snapshot beats the .cscn AND the command line, which is
+                        what makes it a reproduction rather than another opinion
+      config-schema     an unknown key, a wrong-shaped value, a light this scene does
+                        not have and a whole absent subsystem are each named
+
+    config-pixels is the arm that matters and it is NOT safe alone: "restored frame
+    equals original" is satisfied perfectly by a restore that does nothing, since both
+    legs would then render the fixture's own defaults. Its control leg -- the same
+    fixture with no snapshot -- is what forces the look to have arrived, and it is
+    checked against a floor rather than assumed.
+
+    config-coverage is the arm that keeps the feature true over time. Everything else
+    here tests the values that ARE carried; only this one can fail because of a value
+    that is not. A control added to gui.c with no table row is invisible to every other
+    arm in the suite -- the snapshot still round-trips, still reproduces its own frame,
+    and silently omits the thing somebody just added.
+    """
+    failures = []
+
+    # -- coverage: static, and the only arm that can see an OMISSION --------------
+    gui = _config_gui_members()
+    table = _config_table_members()
+    known = set(CONFIG_GUI_LOCALS) | set(CONFIG_GUI_UNCARRIED)
+    missing = sorted(gui - table - known)
+    # Anti-vacuity: an empty or tiny extraction would pass by finding nothing.
+    parsed_enough = len(gui) >= 150 and len(table) >= 200
+    # A local named here must still reach a real row, or the note is fiction.
+    locals_land = sorted(f for f in CONFIG_GUI_LOCALS.values() if f not in table)
+    ok = not missing and parsed_enough and not locals_land
+    detail = f"{len(gui)} controls, {len(table)} rows"
+    if missing:
+        detail += f", NOT CARRIED: {', '.join(missing)}"
+    if locals_land:
+        detail += f", local maps to nothing: {', '.join(locals_land)}"
+    print(f"  config-coverage {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("config-coverage")
+
+    if not os.path.exists(os.path.join(ROOT, "assets", CONFIG_FIXTURE)):
+        print(f"  config-roundtrip SKIP  {CONFIG_FIXTURE} not found")
+        return failures
+
+    # -- the floor, before anything is compared to anything ----------------------
+    pinned = ["--no-auto-exposure", "-E", "1.0"]
+    floor_a, _, _ = _config_run(workdir, "floor_a", pinned)
+    floor_b, _, _ = _config_run(workdir, "floor_b", pinned)
+    floor_px, _ = compare(floor_a, floor_b)
+
+    # -- the tuned original, and the two restores off it -------------------------
+    orig_ppm, orig_json, _ = _config_run(workdir, "orig", pinned + CONFIG_LOOK)
+    rest_ppm, rest_json, rest_out = _config_run(workdir, "restore", ["--config", orig_json],
+                                                model=None)
+
+    same_json = (os.path.exists(orig_json) and os.path.exists(rest_json)
+                 and open(orig_json).read() == open(rest_json).read())
+    applied = "config snapshot applied" in rest_out
+    ok = same_json and applied
+    print(f"  config-roundtrip {'PASS' if ok else 'FAIL'}  dump == redump after restore="
+          f"{same_json}, applied={applied}")
+    if not ok:
+        failures.append("config-roundtrip")
+
+    # config-standalone IS the restore above -- no -m, no -W/-H -- so the pixel arm
+    # and this one read the same run and cannot disagree about what it was.
+    ctrl_ppm, _, _ = _config_run(workdir, "control", pinned)
+    px, _ = compare(orig_ppm, rest_ppm)
+    ctrl_px, _ = compare(orig_ppm, ctrl_ppm)
+    ok = px <= floor_px and ctrl_px > 1000
+    print(f"  config-pixels   {'PASS' if ok else 'FAIL'}  restored {px} px (floor {floor_px}), "
+          f"no-config control {ctrl_px} px")
+    if not ok:
+        failures.append("config-pixels")
+
+    # The restore above already ran with no -m and no -W/-H, so its frame matching is
+    # the positive half. The negative half is the point: blank the model out of the
+    # source block and the run must REFUSE, or "it found the model" is unfalsifiable
+    # -- a build that ignored the block entirely would look identical here.
+    blank_json = os.path.join(workdir, "config_nomodel.json")
+    d = json.load(open(orig_json))
+    d["source"].pop("model", None)
+    json.dump(d, open(blank_json, "w"), indent=1)
+    _, _, blank_out = _config_run(workdir, "nomodel", ["--config", blank_json], model=None)
+    refused = "names no model and none was given" in blank_out
+    ok = os.path.exists(rest_ppm) and px <= floor_px and refused
+    print(f"  config-standalone {'PASS' if ok else 'FAIL'}  rendered from the snapshot alone="
+          f"{os.path.exists(rest_ppm)}, refused with its model blanked={refused}")
+    if not ok:
+        failures.append("config-standalone")
+
+    # -- override: the snapshot lands after the .cscn AND after the flags ---------
+    # A snapshot saying the opposite of the command line, applied WITH that command
+    # line. If it wins, the frame is the one the snapshot alone produces; if the flags
+    # win, it is the flag-only frame. Asserting BOTH is what makes this precise --
+    # "something moved" would also pass on a build that restored garbage.
+    over_json = os.path.join(workdir, "config_override.json")
+    d = json.load(open(orig_json))
+    d["postfx"]["ssr"]["enabled"] = True
+    d["postfx"]["tonemap"] = "neutral"
+    json.dump(d, open(over_json, "w"), indent=1)
+    with_flags, _, _ = _config_run(workdir, "override_flags", pinned + CONFIG_LOOK +
+                                   ["--config", over_json])
+    alone, _, _ = _config_run(workdir, "override_alone", ["--config", over_json], model=None)
+    same_as_alone, _ = compare(with_flags, alone)
+    moved_off_flags, _ = compare(orig_ppm, with_flags)
+    ok = same_as_alone <= floor_px and moved_off_flags > 1000
+    print(f"  config-override {'PASS' if ok else 'FAIL'}  with flags == snapshot alone: "
+          f"{same_as_alone} px, and {moved_off_flags} px off the flag-only frame")
+    if not ok:
+        failures.append("config-override")
+
+    # -- schema: four different wrongnesses, each named --------------------------
+    bad_json = os.path.join(workdir, "config_bad.json")
+    d = json.load(open(orig_json))
+    d["postfx"]["nonsense_key"] = 3
+    d["postfx"]["ssr"]["strength"] = "not a number"
+    d["postfx"]["tonemap"] = "chartreuse"
+    d["water"] = {"level": 2.0}
+    d["lights"].append({"name": "ghost_light", "intensity": 1.0})
+    json.dump(d, open(bad_json, "w"), indent=1)
+    _, _, bad_out = _config_run(workdir, "bad", ["--config", bad_json], model=None)
+    named = {
+        "unknown key": "'postfx.nonsense_key' is not a known setting" in bad_out,
+        "wrong shape": "postfx.ssr.strength is not a value of the right shape" in bad_out,
+        "unknown enum": "postfx.tonemap is not a known value" in bad_out,
+        "absent subsystem": "this scene has no 'water'" in bad_out,
+        "absent light": "no light 'ghost_light'" in bad_out,
+    }
+    # And it must still have applied the rest rather than refusing the file.
+    survived = "config snapshot applied" in bad_out
+    ok = all(named.values()) and survived
+    print(f"  config-schema   {'PASS' if ok else 'FAIL'}  "
+          f"{sum(named.values())}/5 named, rest still applied={survived}"
+          + ("" if all(named.values()) else
+             f", silent: {', '.join(k for k, v in named.items() if not v)}"))
+    if not ok:
+        failures.append("config-schema")
+
+    return failures
+
+
 def run_gate_docs_gate(workdir):
     """A group's documented arm list is the list it actually runs.
 
@@ -13885,6 +14113,8 @@ GATE_GROUPS = [
      run_emissive_gate),
     ("probe-set", "clustered specular probes (selection, blend, tenancy; spec 11.70):",
      run_probe_set_gate),
+    ("config", "the session dumped to JSON and restored from it (spec 11.71):",
+     run_config_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
     ("skin-offpath", "pre-integrated skin (off-path byte identity):", run_skin_offpath_gate),
     ("skin-curvature", "pre-integrated skin (curvature ordering):", run_skin_curvature_gate),
