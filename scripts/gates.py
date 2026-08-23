@@ -14584,6 +14584,9 @@ def run_decal_gate(workdir):
                         substrate: a projector must refuse a surface it grazes
       decals-surface    the scorch's surface map moves roughness where its albedo
                         alone would not, against a normal-strength-0 twin
+      decals-opacity    a half-opaque poster reads the MIDPOINT between its own code
+                        and the wall's, not something darker -- the premultiplied
+                        accumulation, which the opaque arms above cannot see
       decals-mask       two runs agree on the froxel digest, the live decals claim
                         a fraction of the grid rather than all of it, and a decal
                         behind the camera claims no froxel and moves no pixel
@@ -14597,6 +14600,12 @@ def run_decal_gate(workdir):
     decals-albedo is what makes it a claim about refusal rather than absence. And
     decals-identity's first half passes on any build where the feature is inert,
     which is why its second half asserts the decals moved the frame at all.
+
+    decals-opacity exists because every other colour arm reads an OPAQUE interior,
+    where the premultiplied accumulation and the naive one agree exactly -- which
+    is how a real double-multiply survived the first mutation round with all six
+    arms green. Anything that reads only a == 1 is blind to how a mark meets the
+    surface under it, which is most of what a decal is.
 
     ONE DELIBERATE ABSENCE: no arm covers the half-texel UV inset that guards
     against the material array's GL_REPEAT wrap. One was written and removed on
@@ -14689,6 +14698,29 @@ def run_decal_gate(workdir):
         print(f"  decals-surface {'PASS' if ok else 'FAIL'}  dropping the scorch's "
               f"surface map moves {moved} px of the lit frame (want > 200; a build "
               f"that stamps albedo alone reads 0)")
+
+    # -- opacity: the premultiply, which every opaque read is blind to --------
+    def half(d):
+        d["decals"][0]["opacity"] = 0.5
+
+    pix_half, _, _, out_half = _decal_run(workdir, "half", half, ["--render-mode", "6"])
+    if pix_half is None:
+        failures.append("decals-opacity")
+        print(f"  decals-opacity FAIL  render error\n{out_half}")
+    else:
+        got = _decal_byte(pix_half, w, h, project, DECAL_POSTER_READ)
+        # The albedo view encodes with pow(1/2.2), and the blend happens in
+        # LINEAR -- so the expected byte is the encode of the half-and-half of
+        # the two decoded values, not the average of the two bytes.
+        want = tuple(
+            int(round((((c / 255.0) ** 2.2 + (s_ / 255.0) ** 2.2) * 0.5) ** (1 / 2.2) * 255.0))
+            for c, s_ in zip(DECAL_POSTER_CODE, DECAL_WALL_SUBSTRATE))
+        ok = _decal_near(got, want, eps=4)
+        if not ok:
+            failures.append("decals-opacity")
+        print(f"  decals-opacity {'PASS' if ok else 'FAIL'}  a half-opaque poster reads "
+              f"{got} (want {want} +/-4, the linear midpoint of {DECAL_POSTER_CODE} and "
+              f"{DECAL_WALL_SUBSTRATE}); multiplying by coverage twice reads darker")
 
     # -- mask: determinism, and a decal off screen claims nothing -------------
     _, _, _, out_p1 = _decal_run(workdir, "probe1", None, ["--decal-probe", "1"])

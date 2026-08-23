@@ -35,6 +35,12 @@ uint decalMaskAt(uint ci) {
 
 // What a fragment accumulated from every decal that reached it.
 //
+// Every channel is PREMULTIPLIED by its own coverage, so a caller divides that
+// coverage back out before using it -- the decalResolved* accessors below do
+// exactly that. What it
+// buys is correctness at partial alpha, where the obvious non-premultiplied
+// accumulation multiplies by the coverage twice.
+//
 // Albedo is carried in STORED sRGB codes, not linear: the caller decodes once
 // after the blend, which is the layered-surface arrangement (layers.glsl) and
 // exists because the material array is linear RGBA8 and holds the codes as
@@ -56,10 +62,30 @@ struct DecalSurface {
     float surfaceAlpha; // coverage from decals that carried a surface map
 };
 
-// The identity: no coverage, and a normal the caller's mix leaves alone because
-// surfaceAlpha is zero.
+// The identity: no coverage anywhere, so every un-premultiply below returns its
+// zero and every caller-side mix is a no-op.
+//
+// The normal is ZERO rather than +Z, which it has to be now that the
+// accumulation is premultiplied: a +Z seed is a phantom contribution that a
+// partly-covering decal would blend against. The caller only normalizes it
+// under surfaceAlpha > 0, by which point some decal has written it.
 DecalSurface decalSurfaceNone() {
-    return DecalSurface(vec3(0.0), 0.0, vec3(0.0, 0.0, 1.0), 0.0, 0.0, 0.0);
+    return DecalSurface(vec3(0.0), 0.0, vec3(0.0), 0.0, 0.0, 0.0);
+}
+
+// The accumulated albedo as a plain sRGB code, coverage divided back out.
+// Zero coverage has no colour to report, and the caller's mix ignores it.
+vec3 decalResolvedAlbedo(DecalSurface s) {
+    return s.alpha > 0.0 ? s.albedo / s.alpha : vec3(0.0);
+}
+
+// Likewise for the surface map's two scalars.
+float decalResolvedRoughness(DecalSurface s) {
+    return s.surfaceAlpha > 0.0 ? s.roughness / s.surfaceAlpha : 0.0;
+}
+
+float decalResolvedOcclusion(DecalSurface s) {
+    return s.surfaceAlpha > 0.0 ? s.occlusion / s.surfaceAlpha : 1.0;
 }
 
 /*
@@ -154,9 +180,15 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
         if (a <= 0.0)
             continue;
 
-        // Over, in stored codes. The caller decodes the result once.
-        acc.albedo = mix(acc.albedo, tex.rgb, a);
-        acc.alpha = acc.alpha + a * (1.0 - acc.alpha);
+        // Over, PREMULTIPLIED, in stored codes -- the caller divides the
+        // coverage back out before decoding. Premultiplied because the
+        // alternative multiplies by `a` twice: a non-premultiplied mix leaves
+        // the first decal's colour at tex * a, and the caller then blends that
+        // by `a` again, so a mark darkens toward its own feathered edge instead
+        // of fading to the surface under it. The two agree only at a == 1,
+        // which is every opaque interior and so every reading that looks right.
+        acc.albedo = tex.rgb * a + acc.albedo * (1.0 - a);
+        acc.alpha = a + acc.alpha * (1.0 - a);
 
         if (p0.y >= 0.0) {
             vec4 surf = textureGrad(atlas, vec3(uv, p0.y), duvdx, duvdy);
@@ -170,10 +202,13 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
             vec3 t = normalize(vec3(r0.x, r0.y, r0.z));
             vec3 b = normalize(vec3(r1.x, r1.y, r1.z));
             vec3 worldNormal = normalize(t * tn.x + b * tn.y + (-axis) * tn.z);
-            acc.normal = normalize(mix(acc.normal, worldNormal, a));
-            acc.roughness = mix(acc.roughness, surf.b, a);
-            acc.occlusion = mix(acc.occlusion, surf.a, a);
-            acc.surfaceAlpha = acc.surfaceAlpha + a * (1.0 - acc.surfaceAlpha);
+            // Premultiplied too, and for the albedo's reason. The normal needs
+            // no un-premultiply because normalize removes the scale, but it is
+            // accumulated the same way so overlapping marks weigh correctly.
+            acc.normal = worldNormal * a + acc.normal * (1.0 - a);
+            acc.roughness = surf.b * a + acc.roughness * (1.0 - a);
+            acc.occlusion = surf.a * a + acc.occlusion * (1.0 - a);
+            acc.surfaceAlpha = a + acc.surfaceAlpha * (1.0 - a);
         }
     }
 

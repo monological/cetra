@@ -1108,7 +1108,8 @@ void main() {
         // Decoded once after the blend, not per decal: the material array is
         // linear RGBA8 and a decal's albedo is stored in it as authored sRGB
         // codes, which is the layered path's arrangement exactly.
-        albedoMap = mix(albedoMap, sRGBToLinear(decalSurf.albedo), decalSurf.alpha);
+        albedoMap = mix(albedoMap, sRGBToLinear(decalResolvedAlbedo(decalSurf)),
+                        decalSurf.alpha);
     }
 
     /*
@@ -1376,10 +1377,10 @@ void main() {
      * common case -- a poster with an albedo alone -- pays a compare.
      */
     if (decalSurf.surfaceAlpha > 0.0) {
-        N = normalize(mix(N, decalSurf.normal, decalSurf.surfaceAlpha));
-        roughnessMap = clamp(mix(roughnessMap, decalSurf.roughness, decalSurf.surfaceAlpha),
-                             0.04, 1.0);
-        aoMap = mix(aoMap, aoMap * decalSurf.occlusion, decalSurf.surfaceAlpha);
+        N = normalize(mix(N, normalize(decalSurf.normal), decalSurf.surfaceAlpha));
+        roughnessMap = clamp(mix(roughnessMap, decalResolvedRoughness(decalSurf),
+                                 decalSurf.surfaceAlpha), 0.04, 1.0);
+        aoMap = mix(aoMap, aoMap * decalResolvedOcclusion(decalSurf), decalSurf.surfaceAlpha);
     }
 
     // Calculate view direction (WorldPos -- world space, as the maths needs)
