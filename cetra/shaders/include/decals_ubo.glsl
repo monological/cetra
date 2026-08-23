@@ -48,6 +48,13 @@ uint decalMaskAt(uint ci) {
 // exists because the material array is linear RGBA8 and holds the codes as
 // authored.
 //
+// So a mark over ANOTHER MARK composites in code space, while the same mark over
+// its substrate composites in linear -- the two are different arithmetic, and
+// that is a choice rather than an oversight. Decoding per decal inside the loop
+// is what would make them agree, which buys back one pow() per tap for every
+// fragment of every decal-armed scene to move a blend nothing authors by eye.
+// The overlap is asserted as it stands, not as it would be.
+//
 // The normal is WORLD-space, already rotated out of the decal's own tangent
 // frame -- so where a decal is opaque its relief REPLACES the surface's rather
 // than stacking on it, which is what a poster does to the wall's plaster. That

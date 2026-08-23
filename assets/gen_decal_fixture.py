@@ -41,6 +41,13 @@ Both images carry a fully TRANSPARENT margin, which is what makes the edge
 feather measurable at all: an image opaque to its own border cannot show the
 difference between the feather ramping and the box clipping.
 
+A THIRD MARK IS DESCRIBED HERE AND NOT AUTHORED: the OVERLAP, a reuse of the
+scorch image laid over the poster, which the paint-order arm appends at gate
+time. The committed scene stays two decals because two arms assert that count
+and four mutations index the first -- but where the third goes, and what makes
+its read point legible, is geometry, and geometry belongs in the file that owns
+the geometry.
+
 Regenerate with: python3 assets/gen_decal_fixture.py
 """
 
@@ -207,6 +214,57 @@ QUAD_READS = {
     "lower_left": (POSTER_POS[0] - 0.5 * POSTER_HALF[0],
                    POSTER_POS[1] - 0.5 * POSTER_HALF[1], POSTER_POS[2]),
 }
+
+
+def _wall_shadow_of(pt):
+    """Where a point standing PROUD of the wall appears, as a point on the wall.
+
+    Which wall a near plate hides is not its own x and y: it is its corners
+    scaled along the eye ray, and the oblique plate stands a quarter unit out, so
+    the two differ by a tenth of a unit here. An arm reading a wall point the
+    plate covers gets the plate's colour, which is this fixture's first draft and
+    the reason the read points are asserted rather than chosen.
+    """
+    ex, ey, ez = CAM_EYE
+    s = (WALL_Z - ez) / (pt[2] - ez)
+    return (ex + s * (pt[0] - ex), ey + s * (pt[1] - ey), WALL_Z)
+
+
+# --- the overlap, which exists only in a runtime variant ---------------------
+# No two decals in the committed file overlap, so the accumulator has never run
+# with anything in it -- "authored order is paint order" is documented and
+# unasserted, and so is the whole multi-decal path. The paint-order arm APPENDS
+# a third mark at gate time rather than the fixture carrying it, because two arms
+# assert this scene's exact decal count and four mutations index decals[0].
+#
+# What belongs HERE is where it goes. A read point is part of what the fixture
+# is whether or not the committed scene carries the mark that makes it
+# interesting, and the constraints it has to satisfy are all statements about
+# this geometry: clear of six existing read points, clear of what the oblique
+# plate hides, inside the poster's own full-coverage region, and unambiguously
+# in ONE poster quadrant so the falsified reading is a code rather than a blend.
+POSTER_INDEX = 0
+SCORCH_INDEX = 1
+# The slot the arm appends into. LATER index = later paint, which is the arm's
+# whole premise -- decalAccumulate walks ascending and composites over.
+OVERLAP_INDEX = 2
+
+# Centre and half-extent in the poster's own local frame. Its x and y halves are
+# 1.0, so a local offset IS a world offset here and the two read alike.
+OVERLAP_LOCAL = (-0.20, -0.48)
+OVERLAP_HALF = (0.14, 0.16, POSTER_HALF[2])
+OVERLAP_POS = (POSTER_POS[0] + OVERLAP_LOCAL[0] * POSTER_HALF[0],
+               POSTER_POS[1] + OVERLAP_LOCAL[1] * POSTER_HALF[1],
+               POSTER_POS[2])
+OVERLAP_READ = _on_wall(*OVERLAP_LOCAL)
+# The control, and it is in the SAME poster quadrant as the read deliberately: a
+# build that painted the third mark over the whole poster reads one code at both
+# points, and a build that never painted it reads POSTER_BL at both. Only the
+# correct one reads two different codes.
+OVERLAP_CONTROL = QUAD_READS["lower_left"]
+# The mark it reuses -- no new asset, the roads generator's rule. Its flat code
+# is asserted below to separate from POSTER_BL in every channel.
+OVERLAP_IMAGE = "decal_scorch.png"
 
 
 def _poster():
@@ -408,6 +466,72 @@ def _assert_fixture_still_tests_something():
                      (FEATHER_READ, "feather")):
         assert abs(pt[0] - POSTER_POS[0]) < POSTER_HALF[0], (
             f"the {name} read point is outside the poster's box in x")
+
+    # THE OVERLAP. It is appended by an arm rather than authored here, so every
+    # one of these is a claim this file has to make on the arm's behalf.
+
+    # It must be the LATER mark. Ascending index is paint order, so an overlap
+    # appended before the poster would be painted OVER and the arm would assert
+    # the exact opposite of what it says.
+    assert OVERLAP_INDEX > POSTER_INDEX, "the overlap is not appended after the poster"
+    assert OVERLAP_INDEX == len(CSCN["decals"]), (
+        f"the overlap's slot {OVERLAP_INDEX} is not the end of the committed decal "
+        f"list ({len(CSCN['decals'])}); the arm appends, so the two must agree")
+
+    # Its read must sit where the POSTER is at FULL coverage, or the accumulator
+    # is empty under the third mark and this is a one-decal test wearing two.
+    # The poster's own ramp is the binding limit, not its transparent margin.
+    for k, axis in ((0, "x"), (1, "y")):
+        assert abs(OVERLAP_LOCAL[k]) < 1.0 - FEATHER, (
+            f"the overlap read is at poster-local {axis} {OVERLAP_LOCAL[k]}, inside "
+            f"the poster's own edge ramp -- the mark beneath it would be partial")
+
+    # ...in ONE poster quadrant, clear of both seams, so the falsified reading
+    # ("the poster instead") is a code rather than a blend of two.
+    for k, axis in ((0, "x"), (1, "y")):
+        assert abs(OVERLAP_LOCAL[k]) > 0.15, (
+            f"the overlap read is {abs(OVERLAP_LOCAL[k]):.2f} from the poster's "
+            f"{axis} seam; it must be unambiguously inside one quadrant")
+    assert OVERLAP_LOCAL[0] < 0 and OVERLAP_LOCAL[1] < 0, (
+        "the overlap read is not in the lower-left quadrant its control reads "
+        "POSTER_BL for")
+
+    # The two codes must separate in EVERY channel, or the arm cannot say which
+    # mark it read. Only POSTER_BL does, which is why the quadrant is not free.
+    assert all(abs(a - b) > 40 for a, b in zip(SCORCH_CODE, POSTER_BL)), (
+        f"the overlap's {SCORCH_CODE} and the quadrant under it {POSTER_BL} are "
+        f"within 40 codes in some channel")
+
+    # No existing read point may fall inside its box. An arm reading a code a
+    # third mark now paints is an arm about a different fixture.
+    for pt, name in ((POSTER_READ, "POSTER_READ"), (FEATHER_READ, "FEATHER_READ"),
+                     (OBLIQUE_READ, "OBLIQUE_READ"), (WALL_CLEAR, "WALL_CLEAR"),
+                     (OVERLAP_CONTROL, "OVERLAP_CONTROL"),
+                     *((p, f"QUAD_READS[{k}]") for k, p in QUAD_READS.items())):
+        inside = all(abs(pt[k] - OVERLAP_POS[k]) < OVERLAP_HALF[k] for k in range(3))
+        assert not inside, f"the overlap's box covers {name}"
+
+    # ...and the control needs REAL clearance rather than bare exclusion, since a
+    # read lands within a pixel or two of where it is asked for. Disjoint in one
+    # axis is what the box test needs; this asserts the widest gap is a gap.
+    clear = max(abs(OVERLAP_CONTROL[k] - OVERLAP_POS[k]) - OVERLAP_HALF[k] for k in (0, 1))
+    assert clear > 0.10, (
+        f"the overlap control clears its box by only {clear:.3f} units, which is "
+        f"a few pixels at this framing")
+
+    # It must clear what the oblique plate HIDES, which is not where the plate
+    # is -- the plate stands proud of the wall, so its wall footprint is its
+    # corners along the eye ray. Disjoint in one axis is enough, and y is the
+    # axis with room.
+    shadow = [_wall_shadow_of(p) for p in oblique_pos]
+    gaps = []
+    for k in (0, 1):
+        lo, hi = min(p[k] for p in shadow), max(p[k] for p in shadow)
+        gaps.append(max(lo - (OVERLAP_POS[k] + OVERLAP_HALF[k]),
+                        (OVERLAP_POS[k] - OVERLAP_HALF[k]) - hi))
+    assert max(gaps) > 0.12, (
+        f"the overlap's box clears the oblique plate's wall footprint by only "
+        f"{max(gaps):.3f} units; a read there would return the plate")
 
     # The scorch must actually differ from the substrate in the channel the
     # surface arm reads, or that arm passes on a build that ignores the map.

@@ -14625,6 +14625,9 @@ def run_decal_gate(workdir):
       decals-feather    a point inside the poster's edge ramp reads the substrate
                         mixed at the coverage the box geometry owes, so a mark
                         fades out of its volume instead of stopping dead
+      decals-overlap    a THIRD mark over the poster wins where it covers it, and
+                        the poster still reads its own code beside it -- the only
+                        arm where the accumulator is non-empty at all
       decals-mask       two runs agree on the froxel digest, the live decals claim
                         a fraction of the grid rather than all of it, and a decal
                         behind the camera claims no froxel and moves no pixel
@@ -14645,6 +14648,18 @@ def run_decal_gate(workdir):
     decals-albedo is what makes it a claim about refusal rather than absence. And
     decals-identity's first half passes on any build where the feature is inert,
     which is why its second half asserts the decals moved the frame at all.
+
+    decals-overlap is the only arm that runs the accumulation with anything in it.
+    The committed fixture's two decals are disjoint in two axes, so `over`
+    composited against a zero accumulator every time -- which is the one input
+    under which paint order, the premultiplied sum and a plain overwrite are all
+    the same picture. It APPENDS its third mark rather than the fixture carrying
+    one, because two arms here assert the scene's exact decal count and four
+    mutations index decals[0]: the roads rule, and load-bearing rather than
+    stylistic. What it does NOT assert is the colour space of that blend -- decal
+    over decal composites in stored codes where decal over substrate composites in
+    linear, which is stated as a choice in decals_ubo.glsl and asserted here as it
+    stands.
 
     decals-opacity exists because every other colour arm reads an OPAQUE interior,
     where the premultiplied accumulation and the naive one agree exactly -- which
@@ -14871,6 +14886,39 @@ def run_decal_gate(workdir):
               f"{got}, i.e. coverage {measured:.3f} over {len(got_c)} channels (want "
               f"{want_c:.3f} +/-0.06 from the box geometry; no ramp reads 1.000, no "
               f"decal reads 0.000)")
+
+    # -- overlap: a mark over a mark, and which one wins ----------------------
+    def overlap(d):
+        # APPENDED, which is what makes it the later paint: decalAccumulate walks
+        # ascending and composites over, so the generator asserts this slot is
+        # past the poster's rather than the arm assuming it.
+        d["decals"].append({
+            "position": list(gen.OVERLAP_POS),
+            "size": list(gen.OVERLAP_HALF),
+            "direction": [0.0, 0.0, -1.0],
+            "image": gen.OVERLAP_IMAGE,
+            "opacity": 1.0,
+            "angleFade": gen.ANGLE_FADE,
+            "feather": gen.FEATHER,
+        })
+
+    pix_ov, _, _, out_ov = _decal_run(workdir, "overlap", overlap, ["--render-mode", "6"])
+    if pix_ov is None:
+        failures.append("decals-overlap")
+        print(f"  decals-overlap FAIL  render error\n{out_ov}")
+    else:
+        over = _decal_byte(pix_ov, w, h, project, gen.OVERLAP_READ)
+        under = _decal_byte(pix_ov, w, h, project, gen.OVERLAP_CONTROL)
+        # The control is in the SAME poster quadrant, which is the anti-vacuity:
+        # a variant whose third mark covered the whole poster reads the overlap's
+        # code at both points and passes half of this on its own.
+        ok = _decal_near(over, gen.SCORCH_CODE) and _decal_near(under, gen.POSTER_BL)
+        if not ok:
+            failures.append("decals-overlap")
+        print(f"  decals-overlap {'PASS' if ok else 'FAIL'}  the later mark reads {over} "
+              f"(want {gen.SCORCH_CODE}) where it covers the poster, and the poster still "
+              f"reads {under} (want {gen.POSTER_BL}) beside it, +/-{DECAL_CODE_EPS}; "
+              f"reversing the composite reads {gen.POSTER_BL} at both")
 
     # -- mask: determinism, and a decal off screen claims nothing -------------
     _, _, _, out_p1 = _decal_run(workdir, "probe1", None, ["--decal-probe", "1"])
