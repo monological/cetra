@@ -10907,6 +10907,16 @@ def _config_run(workdir, name, extra, model=CONFIG_FIXTURE, frames=2):
     return ppm, dump, r.stdout + r.stderr
 
 
+def _config_missing(*paths):
+    """True if any capture is absent -- a run that refused rather than rendered.
+
+    Guarded because several arms here deliberately drive the refusal paths, and
+    handing a missing file to compare() aborts the whole GROUP on an exception:
+    the arm that failed is reported and every arm after it silently never runs.
+    """
+    return any(not os.path.exists(p) for p in paths)
+
+
 def _config_gui_members():
     """Every struct member a gui.c control writes, by its trailing name."""
     src = open(os.path.join(ROOT, "cetra", "src", "gui.c")).read()
@@ -10946,6 +10956,10 @@ def run_config_gate(workdir):
                         carries the model and the framing
       config-override   the snapshot beats the .cscn AND the command line, which is
                         what makes it a reproduction rather than another opinion
+      config-sun        a moved sun, which is the deferred re-bake and everything
+                        downstream of it, read against --sun-elevation
+      config-camera     a pose the scene file does not already hold, read against
+                        --cam-eye at the same place
       config-order      it lands AFTER the scene-radius derivation, read as values
                         rather than pixels because that block moves none on a small
                         fixture with AO and SSR off
@@ -10968,6 +10982,12 @@ def run_config_gate(workdir):
     apply above the scene-radius block destroys a restored fog range and silently
     raises anything under a derived floor, and every other arm here passed on that
     build. Anything read only as pixels is blind to a field the frame does not use.
+
+    ONE KNOWN GAP, said out loud. Nothing here can see the deferred
+    update_engine_camera_lookat, because the render app's own frame loop rebuilds
+    the view matrix through mouse_drag_update every frame -- deleting the call is
+    0 px on every arm. It is kept because the apply must not assume its caller has
+    a drag controller, and it is honestly untested rather than quietly covered.
     """
     failures = []
 
@@ -11017,11 +11037,13 @@ def run_config_gate(workdir):
     # config-standalone IS the restore above -- no -m, no -W/-H -- so the pixel arm
     # and this one read the same run and cannot disagree about what it was.
     ctrl_ppm, _, _ = _config_run(workdir, "control", pinned)
-    px, _ = compare(orig_ppm, rest_ppm)
-    ctrl_px, _ = compare(orig_ppm, ctrl_ppm)
-    ok = px <= floor_px and ctrl_px > 1000
-    print(f"  config-pixels   {'PASS' if ok else 'FAIL'}  restored {px} px (floor {floor_px}), "
-          f"no-config control {ctrl_px} px")
+    rendered = not _config_missing(orig_ppm, rest_ppm, ctrl_ppm)
+    px = compare(orig_ppm, rest_ppm)[0] if rendered else -1
+    ctrl_px = compare(orig_ppm, ctrl_ppm)[0] if rendered else -1
+    ok = rendered and px <= floor_px and ctrl_px > 1000
+    print(f"  config-pixels   {'PASS' if ok else 'FAIL'}  "
+          + (f"restored {px} px (floor {floor_px}), no-config control {ctrl_px} px" if rendered
+             else "the restored run produced no frame"))
     if not ok:
         failures.append("config-pixels")
 
@@ -11035,7 +11057,7 @@ def run_config_gate(workdir):
     json.dump(d, open(blank_json, "w"), indent=1)
     _, _, blank_out = _config_run(workdir, "nomodel", ["--config", blank_json], model=None)
     refused = "names no model and none was given" in blank_out
-    ok = os.path.exists(rest_ppm) and px <= floor_px and refused
+    ok = rendered and px <= floor_px and refused
     print(f"  config-standalone {'PASS' if ok else 'FAIL'}  rendered from the snapshot alone="
           f"{os.path.exists(rest_ppm)}, refused with its model blanked={refused}")
     if not ok:
@@ -11054,13 +11076,80 @@ def run_config_gate(workdir):
     with_flags, _, _ = _config_run(workdir, "override_flags", pinned + CONFIG_LOOK +
                                    ["--config", over_json])
     alone, _, _ = _config_run(workdir, "override_alone", ["--config", over_json], model=None)
-    same_as_alone, _ = compare(with_flags, alone)
-    moved_off_flags, _ = compare(orig_ppm, with_flags)
-    ok = same_as_alone <= floor_px and moved_off_flags > 1000
-    print(f"  config-override {'PASS' if ok else 'FAIL'}  with flags == snapshot alone: "
-          f"{same_as_alone} px, and {moved_off_flags} px off the flag-only frame")
+    both = not _config_missing(with_flags, alone, orig_ppm)
+    same_as_alone = compare(with_flags, alone)[0] if both else -1
+    moved_off_flags = compare(orig_ppm, with_flags)[0] if both else -1
+    ok = both and same_as_alone <= floor_px and moved_off_flags > 1000
+    print(f"  config-override {'PASS' if ok else 'FAIL'}  "
+          + (f"with flags == snapshot alone: {same_as_alone} px, and {moved_off_flags} px off "
+             f"the flag-only frame" if both else "a leg produced no frame"))
     if not ok:
         failures.append("config-override")
+
+    # -- sun: the deferred re-bake, which is a value AND everything downstream ---
+    # Storing the two angles is not restoring the sun: the transmittance and
+    # sky-view LUTs, the environment cube, the IBL and the coupled key light are
+    # all derived from it. Dropping the re-bake leaves a snapshot that reads back
+    # correctly and renders the OLD sun -- measured at the whole frame here.
+    # Read against --sun-elevation/--sun-azimuth, the answer it has to reproduce.
+    #
+    # NOT on cornell_rooms, and the reason is a real limit rather than a fixture
+    # preference: a probe SET cannot be re-captured (its capture cubes are released
+    # into the atlas), so 11.70 defers relight, and a restored sun there leaves two
+    # probes lit by the sun that was up when they were photographed. Measured: the
+    # snapshot leg lands 0.144 RMSE from the flag leg on that fixture, where the
+    # original is 0.159 -- it moves, but not TO the answer. layer_fixture carries no
+    # probe, so the claim there is exact and the arm can demand equality.
+    sun_scene = "layer_fixture.cscn"
+    sun_base = pinned + ["--sky"]
+    sun_orig, sun_orig_json, _ = _config_run(workdir, "sun_orig", sun_base, model=sun_scene)
+    if _config_missing(sun_orig_json):
+        print(f"  config-sun      SKIP  {sun_scene} not found")
+    else:
+        sun_json = os.path.join(workdir, "config_sun_in.json")
+        d = json.load(open(sun_orig_json))
+        d["sky"]["sun_elevation"] = 55.0
+        d["sky"]["sun_azimuth"] = 120.0
+        json.dump(d, open(sun_json, "w"), indent=1)
+        sun_cfg, _, _ = _config_run(workdir, "sun_cfg", ["--config", sun_json], model=None)
+        sun_flag, _, _ = _config_run(workdir, "sun_flag", sun_base +
+                                     ["--sun-elevation", "55", "--sun-azimuth", "120"],
+                                     model=sun_scene)
+        both = not _config_missing(sun_cfg, sun_flag, sun_orig)
+        agree = compare(sun_cfg, sun_flag)[0] if both else -1
+        moved = compare(sun_cfg, sun_orig)[0] if both else -1
+        ok = both and agree == 0 and moved > 1000
+        print(f"  config-sun      {'PASS' if ok else 'FAIL'}  "
+              + (f"snapshot sun == --sun-elevation: {agree} px, and {moved} px off the "
+                 f"original sun" if both else "a leg produced no frame"))
+        if not ok:
+            failures.append("config-sun")
+
+    # -- camera: a pose the scene file does NOT already hold ---------------------
+    # Every other arm restores the fixture's own camera, so the pose path is inert
+    # in all of them -- deleting the spherical re-seed and the lookat rebuild moved
+    # nothing. The realistic case is the only one that tests it: you moved the
+    # camera, then dumped. Read against --cam-eye/--cam-target at the same place,
+    # which is the answer the snapshot has to reproduce.
+    cam_json = os.path.join(workdir, "config_camera_in.json")
+    d = json.load(open(orig_json))
+    eye = [d["camera"]["eye"][0] + 1.3, d["camera"]["eye"][1] + 0.6, d["camera"]["eye"][2] - 1.1]
+    target = d["camera"]["target"]
+    d["camera"]["eye"] = eye
+    json.dump(d, open(cam_json, "w"), indent=1)
+    cam_cfg, _, _ = _config_run(workdir, "camera_cfg", ["--config", cam_json], model=None)
+    cam_flag, _, _ = _config_run(workdir, "camera_flag", pinned + CONFIG_LOOK + [
+        "--cam-eye", ",".join(f"{v:.6f}" for v in eye),
+        "--cam-target", ",".join(f"{v:.6f}" for v in target)])
+    both = not _config_missing(cam_cfg, cam_flag, orig_ppm)
+    agree = compare(cam_cfg, cam_flag)[0] if both else -1
+    moved = compare(cam_cfg, orig_ppm)[0] if both else -1
+    ok = both and agree <= floor_px and moved > 1000
+    print(f"  config-camera   {'PASS' if ok else 'FAIL'}  "
+          + (f"snapshot pose == --cam-eye: {agree} px, and {moved} px off the original pose"
+             if both else "a leg produced no frame"))
+    if not ok:
+        failures.append("config-camera")
 
     # -- order: the apply must land AFTER the scene-radius derivation ------------
     # Read as VALUES, not pixels, and that is the point: the five fields this block
@@ -11071,7 +11160,11 @@ def run_config_gate(workdir):
     # Both mechanisms, because they fail differently: fog.far is an unconditional
     # ASSIGNMENT, so an early apply loses it outright; ao.radius is an fmaxf FLOOR,
     # so an early apply only loses values below the floor.
-    order_json = os.path.join(workdir, "config_order.json")
+    # The INPUT is named apart from the dump on purpose: _config_run derives its
+    # dump path from the arm name, so an input called config_order.json would be
+    # the file the restore writes back over -- and the arm would be reading its own
+    # input and could never fail. It shipped that way for one falsification round.
+    order_json = os.path.join(workdir, "config_order_in.json")
     d = json.load(open(orig_json))
     derived_far = d["postfx"]["fog"]["far"]
     d["postfx"]["fog"]["far"] = 1234.5
