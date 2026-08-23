@@ -11002,11 +11002,54 @@ def _config_variant(src, dst, mutate):
     return dst
 
 
+# Every ImGui call in gui.c is either a VALUE widget whose target must be a table
+# row, or it is not. Both lists are explicit, and an ig* call on neither is a
+# failure -- which is the whole point: the value list used to be the only one, so
+# a control written with an unlisted widget type was silently not counted, and
+# the census still printed a plausible number. Five of eight shapes tested were
+# invisible that way, including igDragFloat and igInputFloat.
+CONFIG_VALUE_WIDGETS = ("Checkbox", "SliderFloat", "SliderInt", "SliderFloat2", "SliderFloat3",
+                        "SliderAngle", "ColorEdit3", "ColorEdit4", "DragFloat", "DragFloat2",
+                        "DragFloat3", "InputFloat", "InputInt", "Combo_Str_arr")
+# Calls that display, lay out, or act -- they carry no settable target.
+CONFIG_NONVALUE_WIDGETS = (
+    "Begin", "BeginChild", "BeginDisabled", "BeginTable", "BeginTooltip", "Button",
+    "CollapsingHeader_TreeNodeFlags", "CollapsingHeader_BoolPtr", "ColorConvertFloat4ToU32",
+    "End", "EndChild", "EndDisabled", "EndTable", "EndTooltip", "GetContentRegionAvail",
+    "GetCursorScreenPos", "GetIO", "GetStyle", "GetWindowDrawList", "Image", "Indent",
+    "IsItemActive", "IsItemDeactivatedAfterEdit", "IsItemHovered", "PopID", "PopItemWidth",
+    "PopStyleColor", "PopStyleVar", "ProgressBar", "PushID_Int", "PushID_Str", "PushItemWidth",
+    "PushStyleColor_Vec4", "PushStyleVar_Float", "PushStyleVar_Vec2", "RadioButton_Bool",
+    "Selectable_Bool", "Separator", "SeparatorText", "SetNextWindowPos", "SetNextWindowSize",
+    "SetTooltip", "SameLine", "Spacing", "TableNextColumn", "TableNextRow", "TableSetupColumn",
+    "Text", "TextColored", "TextDisabled", "TextUnformatted", "TextWrapped", "TreeNode_Str",
+    "TreePop", "Unindent", "ImDrawList_AddRectFilled", "ImDrawList_AddImage",
+    "BeginCombo", "EndCombo", "GetDrawData", "GetWindowPos", "GetWindowSize", "Render",
+    "SetItemDefaultFocus", "SetNextWindowBgAlpha", "StyleColorsDark",
+)
+
+# Controls whose target is chosen at RUNTIME from a table rather than named in
+# the source, so there is no member for the census to match. They are carried --
+# by the array the table drives -- and config-perturb is what proves it.
+CONFIG_GUI_TABLE_DRIVEN = {
+    "v": "the material editor's float/colour buffer: one control per MATERIAL_PARAMS row, "
+         "written back through material_param_set, so the materials array carries it",
+    "iv": "the same, for that editor's int and enum rows",
+}
+
+
+def _config_gui_widgets_unclassified():
+    """ig* calls in gui.c that neither list mentions. Any is a coverage hole."""
+    src = open(os.path.join(ROOT, "cetra", "src", "gui.c")).read()
+    called = {m.group(1) for m in re.finditer(r'\big([A-Z]\w*)\s*\(', src)}
+    return sorted(called - set(CONFIG_VALUE_WIDGETS) - set(CONFIG_NONVALUE_WIDGETS))
+
+
 def _config_gui_members():
     """Every struct member a gui.c control writes, by its trailing name."""
     src = open(os.path.join(ROOT, "cetra", "src", "gui.c")).read()
-    widgets = (r'ig(?:Checkbox|SliderFloat|SliderInt|ColorEdit3|DragFloat3|Combo_Str_arr)'
-               r'\s*\(\s*(?:"[^"]*"|\w+)\s*,\s*&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)')
+    widgets = (r'ig(?:' + "|".join(CONFIG_VALUE_WIDGETS) + r')'
+               r'\s*\(\s*(?:"[^"]*"|[\w\->\.]+)\s*,\s*&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)')
     found = [m.group(1) for m in re.finditer(widgets, src)]
     # The effect-group helper is a checkbox too, and it owns every master switch.
     found += [m.group(1) for m in
@@ -11038,15 +11081,15 @@ def run_config_gate(workdir):
                         named in one of two lists here with what it drives or why it
                         cannot be carried. Static: reads both sources, renders nothing
       config-roundtrip  restore a snapshot and dump again: byte-identical to the first
-      config-perturb    move EVERY carried value, restore, and check each one came
-                        back. The only arm that can see a row whose apply silently
-                        does nothing, which config-roundtrip structurally cannot
       config-pixels     a run under a non-default look, against its own snapshot
                         restored with no other flag. Floor measured first
       config-standalone the same restore with NO -m and no -W/-H: the source block
                         carries the model and the framing
       config-override   the snapshot beats the .cscn AND the command line, which is
                         what makes it a reproduction rather than another opinion
+      config-perturb    move EVERY carried value, restore, and check each one came
+                        back. The only arm that can see a row whose apply silently
+                        does nothing, which config-roundtrip structurally cannot
       config-sun        a moved sun, which is the deferred re-bake and everything
                         downstream of it, read against --sun-elevation
       config-camera     a pose the scene file does not already hold, read against
@@ -11074,29 +11117,54 @@ def run_config_gate(workdir):
     raises anything under a derived floor, and every other arm here passed on that
     build. Anything read only as pixels is blind to a field the frame does not use.
 
-    ONE KNOWN GAP, said out loud. Nothing here can see the deferred
-    update_engine_camera_lookat, because the render app's own frame loop rebuilds
-    the view matrix through mouse_drag_update every frame -- deleting the call is
-    0 px on every arm. It is kept because the apply must not assume its caller has
-    a drag controller, and it is honestly untested rather than quietly covered.
+    THREE KNOWN GAPS, said out loud rather than left to look like coverage.
+
+    Nothing here can see the deferred update_engine_camera_lookat, because the
+    render app's own frame loop rebuilds the view matrix through mouse_drag_update
+    every frame -- deleting the call is 0 px on every arm. It is kept because the
+    apply must not assume its caller has a drag controller.
+
+    Nothing here can see the auto-orbit kill after a restore either, for the same
+    shape of reason: render.c already passes `!args.headless` when it arms
+    auto-orbit, so it is off in every headless run and those lines are unreachable
+    from this group.
+
+    And config-coverage matches a gui.c target by its TRAILING member name, so a
+    control writing `sb->enabled` is satisfied by Water.enabled. The springs
+    checkbox is the live instance: it is reported carried and is not, while its
+    three siblings sit in CONFIG_GUI_UNCARRIED for exactly that reason. Fixing it
+    wants (struct, member) keying on both sides.
     """
     failures = []
 
     # -- coverage: static, and the only arm that can see an OMISSION --------------
     gui = _config_gui_members()
     table = _config_table_members()
-    known = set(CONFIG_GUI_LOCALS) | set(CONFIG_GUI_UNCARRIED)
+    known = set(CONFIG_GUI_LOCALS) | set(CONFIG_GUI_UNCARRIED) | set(CONFIG_GUI_TABLE_DRIVEN)
     missing = sorted(gui - table - known)
     # Anti-vacuity: an empty or tiny extraction would pass by finding nothing.
     parsed_enough = len(gui) >= 150 and len(table) >= 200
     # A local named here must still reach a real row, or the note is fiction.
     locals_land = sorted(f for f in CONFIG_GUI_LOCALS.values() if f not in table)
-    ok = not missing and parsed_enough and not locals_land
+    # An ig* call on neither widget list means the census silently skipped it.
+    unclassified = _config_gui_widgets_unclassified()
+    # Both exception lists must stay honest: an entry whose control is gone is
+    # stale, and one naming something the table DOES carry is simply false.
+    stale = sorted(known - gui)
+    redundant = sorted(set(CONFIG_GUI_UNCARRIED) & table)
+    ok = (not missing and parsed_enough and not locals_land and not unclassified and not stale
+          and not redundant)
     detail = f"{len(gui)} controls, {len(table)} rows"
     if missing:
         detail += f", NOT CARRIED: {', '.join(missing)}"
     if locals_land:
         detail += f", local maps to nothing: {', '.join(locals_land)}"
+    if unclassified:
+        detail += f", UNCLASSIFIED widget: {', '.join(unclassified)}"
+    if stale:
+        detail += f", exception for a control that is gone: {', '.join(stale)}"
+    if redundant:
+        detail += f", excused but carried: {', '.join(redundant)}"
     print(f"  config-coverage {'PASS' if ok else 'FAIL'}  {detail}")
     if not ok:
         failures.append("config-coverage")

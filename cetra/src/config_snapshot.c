@@ -171,6 +171,37 @@ static const char* const CFG_WAVE_MODELS[] = {"gerstner", "fft"};
 static const char* const CFG_LIGHT_UNITS[] = {"default", "candela", "lumens", "lux", "nits"};
 
 /*
+ * Every vocabulary must have exactly as many labels as its enum has values.
+ *
+ * This is the one that rots WITHOUT a compile error otherwise: a value inserted
+ * in the MIDDLE of an enum leaves the counts equal only if a label is added too,
+ * and if it is not, every label after the insertion names the wrong value --
+ * silently, in both directions at once, so a round trip stays green while every
+ * previously-saved file re-points. Adding at the END is caught by these; adding
+ * in the middle is caught by these only once the label count also moves, which
+ * is why the label array is the thing to edit first.
+ */
+_Static_assert(sizeof(CFG_RENDER_MODES) / sizeof(*CFG_RENDER_MODES) ==
+                   RENDER_MODE_EXTRAPOLATION + 1,
+               "CFG_RENDER_MODES must name every RenderMode");
+_Static_assert(sizeof(CFG_CAMERA_MODES) / sizeof(*CFG_CAMERA_MODES) == CAMERA_MODE_ORBIT + 1,
+               "CFG_CAMERA_MODES must name every CameraMode");
+_Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_AGX + 1,
+               "CFG_TONEMAPS must name every PostFXTonemapMode");
+_Static_assert(sizeof(CFG_DEBUG_VIEWS) / sizeof(*CFG_DEBUG_VIEWS) == POSTFX_DEBUG_BENT + 1,
+               "CFG_DEBUG_VIEWS must name every PostFXDebugView");
+_Static_assert(sizeof(CFG_SPEC_OCC) / sizeof(*CFG_SPEC_OCC) == POSTFX_SPEC_OCC_SPLIT + 1,
+               "CFG_SPEC_OCC must name every PostFXSpecOccMode");
+_Static_assert(sizeof(CFG_LUT_INTERP) / sizeof(*CFG_LUT_INTERP) == POSTFX_LUT_TETRAHEDRAL + 1,
+               "CFG_LUT_INTERP must name every PostFXLutInterp");
+_Static_assert(sizeof(CFG_METER_MODES) / sizeof(*CFG_METER_MODES) == METERING_SPOT + 1,
+               "CFG_METER_MODES must name every MeteringMode");
+_Static_assert(sizeof(CFG_WAVE_MODELS) / sizeof(*CFG_WAVE_MODELS) == WATER_WAVES_FFT + 1,
+               "CFG_WAVE_MODELS must name every WaterWaveModel");
+_Static_assert(sizeof(CFG_LIGHT_UNITS) / sizeof(*CFG_LIGHT_UNITS) == LIGHT_UNITS_NITS + 1,
+               "CFG_LIGHT_UNITS must name every LightUnits");
+
+/*
  * CFG_ENUM reads and writes through an int*, which is only the same object as
  * the enum member if the compiler sized it that way. It does here, and the
  * alternative -- a per-type read -- would put the type list in a second place.
@@ -293,8 +324,13 @@ static void _apply_camera_vec(ConfigApplyCtx* ctx, void* base, const ConfigField
 }
 
 /*
- * The table. Every row is one control; a control with no row is a control this
- * feature cannot carry, which is what `config-coverage` asserts against gui.c.
+ * The table.
+ *
+ * A control with no row is a setting this feature cannot carry, which is what
+ * `config-coverage` asserts against gui.c. The converse is NOT true and the
+ * comment here used to claim it was: about sixty rows have no control at all --
+ * a CLI flag, a scene-file key or a field only code reaches. Rows exist to
+ * describe the configuration, not to mirror the panel.
  */
 static const ConfigField CFG_FIELDS[] = {
     // --- engine
@@ -1389,7 +1425,9 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
 
     ConfigApplyCtx ctx = {.engine = engine, .scene = scene};
     int written = 0;
-    const char* absent = NULL;
+    // One bit per singleton owner, so an absent subsystem is named once.
+    unsigned absent_warned = 0;
+    _Static_assert(CFG_FIRST_ELEM_OWNER <= 32, "absent_warned needs a bit per singleton owner");
     for (int i = 0; i < CFG_FIELD_COUNT; i++) {
         const ConfigField* f = &CFG_FIELDS[i];
         if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER)
@@ -1400,11 +1438,14 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
         void* base = _owner_base((ConfigOwner)f->owner, engine, scene);
         if (!base) {
             // The file describes a subsystem this scene does not have -- a water
-            // block on dry land. Said once per section rather than per row: rows
-            // of one section are contiguous, so comparing against the last is
-            // enough to collapse them.
-            if (absent != f->section) {
-                absent = f->section;
+            // block on dry land. Once per OWNER rather than per row: an owner is
+            // an integer, where the section is a string this used to dedupe by
+            // POINTER, which C leaves free to give two identical literals
+            // different addresses and which additionally assumed rows of one
+            // section never interleave. Two unenforced invariants for a warning
+            // count.
+            if (!(absent_warned & (1u << f->owner))) {
+                absent_warned |= 1u << f->owner;
                 fprintf(stderr, "Warning: config snapshot: this scene has no '%s'; ignored\n",
                         f->section);
             }
