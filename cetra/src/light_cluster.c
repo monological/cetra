@@ -152,6 +152,27 @@ static void _tile_range_for_sphere(mat4 projection, const vec3 view_center, floa
     range->y1 = _clampi((int)floorf((ndc_max_y * 0.5f + 0.5f) * LC_CLUSTER_Y), 0, LC_CLUSTER_Y - 1);
 }
 
+/*
+ * The depth half of the same bound, filling z0/z1 as the above fills x/y -- one
+ * expression for what lights, probes and decals each spelled differently.
+ *
+ * The three spellings were EQUIVALENT and only readably so: _slice_for_z clamps
+ * its input to 1e-4 and saturates its output to the grid, so clamping the sphere
+ * to the frustum here, clamping it to 1e-4, or not clamping it at all all land on
+ * the same slice. That equivalence is worth writing down because it rests
+ * entirely on those two internal clamps -- remove either and one of the three
+ * former spellings becomes the only correct one, at an end of the range where
+ * nothing renders differently until something does.
+ *
+ * Clamped to the frustum rather than to 1e-4 because that is what the range MEANS:
+ * the slices this sphere can reach, which cannot be outside the ones that exist.
+ */
+static void _slice_range_for_sphere(float zc, float radius, const ClusterFrame* cf,
+                                    LightClusterRange* range) {
+    range->z0 = _slice_for_z(fmaxf(zc - radius, cf->near_clip), cf);
+    range->z1 = _slice_for_z(fminf(zc + radius, cf->far_clip), cf);
+}
+
 static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
     glm_vec3_copy((float*)light->direction, dst->dir_shadow);
     dst->dir_shadow[3] = (float)light->shadow_map_index;
@@ -268,8 +289,7 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
             float zc = -view_center[2];
             if (zc + radius < cf->near_clip || zc - radius > cf->far_clip)
                 continue; // outside the depth range (this packed slot is reused)
-            range->z0 = _slice_for_z(fmaxf(zc - radius, cf->near_clip), cf);
-            range->z1 = _slice_for_z(fminf(zc + radius, cf->far_clip), cf);
+            _slice_range_for_sphere(zc, radius, cf, range);
             _tile_range_for_sphere(projection, view_center, radius, cf->near_clip, range);
             glm_vec3_copy(view_center, sphere);
             sphere[3] = radius;
@@ -426,9 +446,7 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
 
         LightClusterRange range;
         _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);
-        const float zc = -view_center[2];
-        range.z0 = _slice_for_z(fmaxf(zc - radius, 1e-4f), cf);
-        range.z1 = _slice_for_z(fmaxf(zc + radius, 1e-4f), cf);
+        _slice_range_for_sphere(-view_center[2], radius, cf, &range);
 
         const float sphere[4] = {view_center[0], view_center[1], view_center[2], radius};
         const float radius_sq = radius * radius;
@@ -519,8 +537,7 @@ static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* s
 
         LightClusterRange range;
         _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);
-        range.z0 = _slice_for_z(fmaxf(zc - radius, cf->near_clip), cf);
-        range.z1 = _slice_for_z(fminf(zc + radius, cf->far_clip), cf);
+        _slice_range_for_sphere(zc, radius, cf, &range);
 
         const float sphere[4] = {view_center[0], view_center[1], view_center[2], radius};
         const float radius_sq = radius * radius;
