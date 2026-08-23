@@ -79,13 +79,17 @@ static int material_texture_layer_for(GLuint* ids, Texture** texs, int* count, T
  * Put every decal back to "not built" after the indices have been assigned but
  * before the array they name exists.
  *
- * A build that fails past the assignment leaves nothing a decal can legally read.
- * The max-layers path keeps the OLD array bound while the indices may point past
- * it, so a mark takes its neighbour's image. The mask_copy path is worse: the old
- * array is already deleted and its replacement holds undefined texels with no mip
- * chain, where every textureGrad returns (0,0,0,1) -- alpha 1.0 for a decal, i.e.
- * a fully opaque black mark over every box in the scene. And ensure_built only
- * clears the dirty flag on success, so that frame repeats.
+ * A build that fails past the assignment leaves a live index naming an array it
+ * was not computed for. On the max-layers path that is whatever survived -- the
+ * previous array, or the 1x1 dummy on a first build -- so a mark reads a
+ * neighbour's image, or an undefined texel, or nothing at all depending on what
+ * was there.
+ *
+ * The mask_copy path is worse, and worse DETERMINISTICALLY: the old array is
+ * already deleted and its replacement has no mip chain, which makes it
+ * incomplete, and GL defines a sample of an incomplete texture as (0,0,0,1) --
+ * alpha 1.0 for a decal, i.e. an opaque black mark over every box in the scene.
+ * ensure_built clears the dirty flag only on success, so that frame repeats.
  *
  * -1 is the state that already means this, and _decal_is_live (decal.c) refuses
  * it, so the mark is simply absent until a build succeeds.
