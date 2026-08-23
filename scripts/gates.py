@@ -2289,6 +2289,83 @@ def run_ies_gate(workdir):
     return failures
 
 
+AO_SCENE = os.path.join(ROOT, "assets", "cornell_rooms.cscn")
+# AO on vs off moves 32% of this frame at PAE 71/255. The bar is a fraction of
+# that with room to spare: what it exists to catch is the chain going SILENT --
+# an FBO the driver refuses, a gate that stopped arming, a format nothing can
+# render to -- not a shift in how dark the corners get.
+AO_ACTIVE_MIN_FRAC = 0.05
+
+
+def run_ao_gate(workdir):
+    """Ambient occlusion reaches the frame, and does it the same way twice.
+
+      ao-active        AO on and AO off are different pictures, by a wide
+                       margin -- the chain is armed, allocated and composited
+      ao-deterministic two runs of the AO-on frame are byte-identical
+
+    TWO ARMS, AND THE ABSENCES ARE THE INTERESTING PART. Spec 11.75 planned two
+    more and neither could be built honestly; both attempts are recorded here
+    because the next person will have the same two ideas.
+
+    **A silhouette arm was measured and abandoned.** 11.75's depth-aware
+    upsample stops AO bleeding across a depth edge, and the effect is real --
+    reverting it to plain bilinear moves 3,252 px here, peaking at 53/255. But
+    it is a ONE-TO-TWO PIXEL band along silhouettes by construction, which is
+    the entire reach of a 2x2 footprint, so there is no region a box mean can
+    read: averaging any rectangle containing it dilutes 53 codes to 0.0003.
+    Selecting the affected pixels instead would mean selecting them by whether
+    the mutation moved them, which is circular. The property is real, worth
+    having, and lives in the goldens rather than here.
+
+    **A banding arm was designed against a premise that turned out false.** The
+    AO target went RGBA8 -> RGBA16F in 11.75 on the theory that ~20 codes across
+    an 0.92-1.00 gradient was what the visible contour banding was made of.
+    Measured after: identical flat-run lengths and identical span. The bands are
+    the ESTIMATOR's (2 slices, gtao_frag.glsl), not the storage's, so an arm
+    asserting short runs would fail on a correct build. The format change stands
+    on its other reason -- see postfx.c -- and this arm is not written.
+
+    What is left is coverage of the thing that actually breaks silently: an AO
+    chain that stops running. Nothing else in the suite asserts that; before
+    this group the entire chain's only executable coverage was golden pixels.
+    """
+    if not os.path.exists(AO_SCENE):
+        print("  ao-active    SKIP  (cornell_rooms.cscn not present)")
+        return []
+    failures = []
+    flags = ["--sky", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]
+    on = os.path.join(workdir, "ao_on.ppm")
+    off = os.path.join(workdir, "ao_off.ppm")
+    on2 = os.path.join(workdir, "ao_on2.ppm")
+    err = (render(AO_SCENE, on, flags) or render(AO_SCENE, off, flags + ["--no-ssao"]) or
+           render(AO_SCENE, on2, flags))
+    if err:
+        print(f"  ao-active    FAIL  render error\n{err}")
+        print("  ao-deterministic FAIL  (same)")
+        return ["ao-active", "ao-deterministic"]
+
+    moved, _ = compare(on, off)
+    w, h, _ = _read_ppm(on)
+    frac = moved / float(w * h)
+    ok = frac >= AO_ACTIVE_MIN_FRAC
+    if not ok:
+        failures.append("ao-active")
+    print(f"  ao-active    {'PASS' if ok else 'FAIL'}  AO moves {frac * 100.0:.1f}% of the "
+          f"frame ({moved} px, want >= {AO_ACTIVE_MIN_FRAC * 100.0:.0f}%); a chain that "
+          f"silently stopped running reads 0.0%")
+
+    same, _ = compare(on, on2)
+    ok = same == 0
+    if not ok:
+        failures.append("ao-deterministic")
+    print(f"  ao-deterministic {'PASS' if ok else 'FAIL'}  two runs differ by {same} px "
+          f"(want 0: no --taa, so every temporal history is force-invalidated and GTAO "
+          f"is a pure function of the frame)")
+
+    return failures
+
+
 def run_contact_gate(workdir):
     """Contact shadows for local lights, which is the population with no other occlusion.
 
@@ -15234,6 +15311,7 @@ GATE_GROUPS = [
     ("catcher", "catcher over a real ground (contact fixture):", run_catcher_gate),
     ("contact", "contact shadows for the lights with no shadow map (spec 11.56):",
      run_contact_gate),
+    ("ao", "ambient occlusion reaches the frame (spec 11.75):", run_ao_gate),
     ("ies", "IES photometric profiles (table, symmetry, seeding, fold; spec 11.57):",
      run_ies_gate),
     ("catcher-transparency", "catcher vs transparency (panel through the plane):",
