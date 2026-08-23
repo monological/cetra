@@ -10918,6 +10918,11 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "engine.msaa_samples": "set_engine_msaa_samples validates; 5 is not a sample count",
     "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
     "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
+    # This fixture runs without --clouds, so flipping the switch asks for a layer
+    # whose noise bake -- a one-shot at startup -- never ran. Refused by name, and
+    # config-clouds is the arm that reads both halves of that.
+    "sky.clouds.enabled": "the session baked no cloud noise, so the row refuses rather than "
+                          "storing a flag every consumer ignores",
 }
 
 
@@ -11092,6 +11097,9 @@ def run_config_gate(workdir):
                         does nothing, which config-roundtrip structurally cannot
       config-sun        a moved sun, which is the deferred re-bake and everything
                         downstream of it, read against --sun-elevation
+      config-clouds     a cloudy session restores cloudy, and a file whose source
+                        cannot arm the noise bake is refused by name rather than
+                        storing a flag every consumer ignores
       config-camera     a pose the scene file does not already hold, read against
                         --cam-eye at the same place
       config-order      it lands AFTER the scene-radius derivation, read as values
@@ -11316,6 +11324,46 @@ def run_config_gate(workdir):
                  f"original sun" if agree >= 0 else "a leg produced no frame"))
         if not ok:
             failures.append("config-sun")
+
+    # -- clouds: the deck survives a restore, and says so when it cannot --------
+    # Both halves matter and neither is safe alone. The positive half alone
+    # passes on a build that always arms clouds; the negative half alone passes
+    # on one that never does.
+    #
+    # Coverage is pinned at 0.10 rather than left at the 0.45 default for the
+    # reason the cloud-shadow arms pin it: at the default the deck is a flat
+    # dimming with no pattern in it, so a frame comparison reads a scale factor
+    # rather than a sky.
+    cloud_base = pinned + ["--sky", "--clouds", "--cloud-coverage", "0.10"]
+    cloud_orig, cloud_json, _ = _config_run(workdir, "cloud_orig", cloud_base, model=sun_scene)
+    if _config_missing(cloud_json):
+        print(f"  config-clouds   SKIP  {sun_scene} not found")
+    else:
+        cloud_cfg, _, _ = _config_run(workdir, "cloud_cfg", ["--config", cloud_json], model=None)
+        # No --clouds on this leg: the snapshot's source block must ask for it.
+        clear, _, _ = _config_run(workdir, "cloud_clear", pinned + ["--sky"], model=sun_scene)
+        agree = _config_px(cloud_cfg, cloud_orig)
+        # Anti-vacuity: a cloudy sky must actually differ from a clear one, or
+        # "the restore matches" is true of a build with no clouds at all.
+        deck_visible = _config_px(cloud_orig, clear)
+
+        # The negative half: the pre-11.72 file shape, whose source block never
+        # carried `clouds`. The layer cannot be armed after startup, so the row
+        # must refuse BY NAME rather than store a flag every consumer ignores --
+        # which is what silently rendered a clear sky while the dump wrote
+        # `enabled: true` back out and config-roundtrip passed on it.
+        noarm = _config_variant(cloud_json, os.path.join(workdir, "config_cloud_noarm.json"),
+                                lambda d: d["source"].pop("clouds", None))
+        _, _, noarm_out = _config_run(workdir, "cloud_noarm", ["--config", noarm], model=None)
+        refused = "baked no cloud noise; sky.clouds.enabled ignored" in noarm_out
+
+        ok = agree == 0 and deck_visible > 1000 and refused
+        print(f"  config-clouds   {'PASS' if ok else 'FAIL'}  "
+              + (f"restored == cloudy original: {agree} px, deck worth {deck_visible} px, "
+                 f"unarmed restore refused by name={refused}"
+                 if agree >= 0 else "a leg produced no frame"))
+        if not ok:
+            failures.append("config-clouds")
 
     # -- camera: a pose the scene file does NOT already hold ---------------------
     # Every other arm restores the fixture's own camera, so the pose path is inert

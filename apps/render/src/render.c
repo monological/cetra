@@ -2328,6 +2328,11 @@ int main(int argc, char** argv) {
             args.hdr_path = src->hdr;
         if (!args.hdr_path && !args.sky && src->sky)
             args.sky = 1;
+        // The cloud noise is a one-shot bake gated on the layer being on, so the
+        // restore has to ask for it HERE -- the sky.clouds.enabled row lands long
+        // after the only chance to bake, and refuses itself when it finds none.
+        if (!args.clouds && src->clouds)
+            args.clouds = 1;
         if (!args.lut_path && src->lut[0])
             args.lut_path = src->lut;
         if (!args.texture_dir && src->textures[0])
@@ -3708,6 +3713,7 @@ int main(int argc, char** argv) {
         .lut = args.lut_path,
         .textures = args.texture_dir,
         .sky = args.sky != 0,
+        .clouds = args.clouds != 0,
     });
 
     /*

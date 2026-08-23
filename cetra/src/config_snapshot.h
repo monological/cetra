@@ -41,6 +41,11 @@ typedef struct ConfigSnapshotSource {
     const char* lut;      // --lut
     const char* textures; // -t
     bool sky;             // --sky: the environment is procedural, not a file
+    // --clouds. Here rather than as a table row because the noise bake is a
+    // one-shot at startup gated on the layer being on, so "restore the clouds"
+    // has to be answered before the engine exists; a row alone would store a
+    // flag every consumer then refuses.
+    bool clouds;
     // Window size. Filled by the writer from the live engine and ignored on the
     // way in; a reader takes them from the parsed block. 0 = not recorded.
     int width, height;

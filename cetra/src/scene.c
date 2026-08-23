@@ -13,6 +13,8 @@
 #include "sky.h"
 #include "wind.h"
 #include "gi_volume.h"
+#include "probe.h"
+#include "probe_set.h"
 #include "water.h"
 #include "postfx.h"
 #include "material_texture_array.h"
@@ -535,6 +537,45 @@ int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
     }
     scene->fog_volumes[scene->fog_volume_count++] = *volume;
     return 0;
+}
+
+void scene_environment_changed(Scene* scene, struct Engine* engine) {
+    if (!scene || !engine || !scene->sky)
+        return;
+    SkyAtmosphere* sky = scene->sky;
+
+    // Clouds existed this session -> the env may need the deck added or purged.
+    // The per-drag path never pays this march, which is why the chain is a
+    // release/apply step rather than something the sliders call per frame.
+    if (sky->clouds.noise_baked)
+        sky_bake_ex(sky, scene->ibl, engine, sky->clouds.enabled);
+
+    /*
+     * Per probe, and the refusal is per probe too: an environment-only probe
+     * re-prefilters for the price of a cube walk, a scene-captured one would
+     * cost six scene renders and is left as shot.
+     *
+     * A SET is refused wholesale and separately, because the question is not per
+     * probe there: its members have had their capture cubes released into the
+     * atlas, so none of them could re-prefilter even if it wanted to, and
+     * re-running the sweep is what relight will be.
+     */
+    const ReflectionProbeSet* probes = scene->probe_set;
+    if (probe_set_multi(probes)) {
+        log_info("Sky: %d-probe set not refreshed (relight is deferred)", probes->count);
+    } else {
+        for (int i = 0; probes && i < probes->count; ++i) {
+            if (probes->probes[i]->cubemap == 0)
+                reflection_probe_capture(probes->probes[i], engine, scene, 0.1f, 100.0f, true);
+            else
+                log_info("Sky: scene-captured probe %d not refreshed", i);
+        }
+    }
+
+    // Re-armed rather than swept here: a sweep is one scene render per probe
+    // face, and unlike the probe it does not stall -- it spreads over the
+    // following frames at `rate` with the old atlas sampleable throughout.
+    gi_volume_mark_dirty(scene->gi_volume);
 }
 
 void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx) {

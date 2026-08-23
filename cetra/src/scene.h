@@ -355,6 +355,20 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta);
 void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, void* ctx),
                                void* ctx);
 
+/*
+ * The one "the environment changed" chain: re-bake the env cube WITH the cloud
+ * deck when there is one, refresh probes that only mirror the sky, and re-arm
+ * the GI sweep.
+ *
+ * Here rather than in sky.c because the chain is a SCENE fact: sky_bake_ex takes
+ * an IBLResources and an Engine and deliberately does not know what a Scene is,
+ * while this touches ibl, probe_set and gi_volume. Callers are the GUI's sun and
+ * cloud controls on release, and a restored config snapshot. Everything that
+ * re-derives from the sun goes through here, or the three consumers drift --
+ * which is what happened while this was a file static in gui.c.
+ */
+void scene_environment_changed(Scene* scene, struct Engine* engine);
+
 // fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);
 // Copy this frame's volumes onto PostFX. Mirrors water_publish_to_postfx: the medium

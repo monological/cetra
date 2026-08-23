@@ -256,45 +256,6 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
     igEnd();
 }
 
-// The one "environment changed on release" chain, shared by the sun sliders
-// and the cloud controls so the downstream consumers cannot drift apart:
-// re-bake the env WITH clouds when the layer is on (the per-drag path never
-// pays that march), refresh a probe that only mirrors the sky, and re-arm
-// the GI volume. A scene-captured probe (--probe-scene) is left stale --
-// re-rendering the scene per release is too costly; its baked reflections
-// stay as shot. The GI sweep re-arms on RELEASE, not per drag frame,
-// because a sweep is one scene render per probe face -- the one cost the
-// converge-then-idle cadence exists to keep off the steady state; unlike
-// the probe it does not stall (spread over following frames at `rate`, old
-// atlas sampleable throughout).
-static void _sky_release_rebake(Engine* engine, Scene* scene, SkyAtmosphere* sky) {
-    // Clouds existed this session -> the env may need the deck added or
-    // purged (enabled implies noise_baked on every reachable path).
-    if (sky->clouds.noise_baked)
-        sky_bake_ex(sky, scene->ibl, engine, sky->clouds.enabled);
-    // Per probe, and the refusal is per probe too: an environment-only probe
-    // re-prefilters for the price of a cube walk, a scene-captured one would
-    // cost six scene renders and is left as shot.
-    //
-    // A SET is refused wholesale and separately, because the question is not
-    // per probe there: its members have had their capture cubes released into
-    // the atlas, so none of them could re-prefilter even if it wanted to, and
-    // re-running the sweep is what relight will be.
-    const ReflectionProbeSet* probes = scene->probe_set;
-    if (probe_set_multi(probes)) {
-        log_info("Sky: %d-probe set not refreshed on release (relight is deferred)",
-                 probes->count);
-    } else {
-        for (int i = 0; probes && i < probes->count; ++i) {
-            if (probes->probes[i]->cubemap == 0)
-                reflection_probe_capture(probes->probes[i], engine, scene, 0.1f, 100.0f, true);
-            else
-                log_info("Sky: scene-captured probe %d not refreshed on release", i);
-        }
-    }
-    gi_volume_mark_dirty(scene->gi_volume);
-}
-
 // The main settings panel, in Dear ImGui. Sections are collapsing headers;
 // effect on/off states are checkboxes and their parameters appear indented
 // beneath them. Bound directly to the same engine/scene/postfx fields.
@@ -569,7 +530,7 @@ static void _engine_gui_panel(Engine* engine) {
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
             if (sun_released)
-                _sky_release_rebake(engine, scene, sky);
+                scene_environment_changed(scene, engine);
 
             // Cloud layer (only offered once the noise fields exist). The
             // screen march follows every slider live; the env/IBL copy and
@@ -592,7 +553,7 @@ static void _engine_gui_panel(Engine* engine) {
                 _end_effect_group();
                 bool toggled = clouds_were_on != sky->clouds.enabled;
                 if (toggled || (cloud_edit && sky->clouds.enabled))
-                    _sky_release_rebake(engine, scene, sky);
+                    scene_environment_changed(scene, engine);
             }
         }
 

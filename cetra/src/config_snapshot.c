@@ -87,6 +87,10 @@ typedef struct ConfigApplyCtx {
     struct Scene* scene;
     bool sun_moved;
     bool camera_moved;
+    // Anything the env cube, the sky-mirroring probes and the GI volume are
+    // derived from -- the sun and the cloud layer both. One flag because they
+    // feed ONE chain (scene_environment_changed), which is the whole point.
+    bool env_changed;
 } ConfigApplyCtx;
 
 // Rows carrying one of these do NOT store; the function is responsible for the
@@ -312,6 +316,52 @@ static void _apply_sun_angle(ConfigApplyCtx* ctx, void* base, const ConfigField*
         return;
     _store_value(f, base, v, n);
     ctx->sun_moved = true;
+    ctx->env_changed = true;
+}
+
+/*
+ * A cloud field, which the env cube, the sky-mirroring probes and the GI volume
+ * are all derived from exactly as they are from the sun.
+ *
+ * These were plain stores, so restoring a cloud change re-derived nothing: the
+ * screen march followed while the env, the probe and the GI kept the old deck.
+ * Flagged on a CHANGE for _apply_sun_angle's reason -- the common restore is
+ * onto the scene the file came from, and a bake plus a probe re-capture is not
+ * a thing to pay for a value that did not move.
+ */
+static void _apply_cloud_field(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                               const double* v, int n) {
+    const float before = *(const float*)_field_ptr_const(base, f);
+    if ((float)v[0] == before)
+        return;
+    _store_value(f, base, v, n);
+    ctx->env_changed = true;
+}
+
+/*
+ * The cloud layer's master switch, which is the one cloud field that can be
+ * asked for something this session cannot give.
+ *
+ * sky_bake_cloud_noise early-outs on !enabled and runs once at startup, so a
+ * session started without clouds has no noise -- and storing `true` against it
+ * yields a flag every consumer refuses, a clear sky, and a dump that writes
+ * `true` straight back out. Refused BY NAME instead, in the IES idiom: the
+ * snapshot's `source` block carries `clouds` so the app can arm the bake before
+ * the engine exists, and this is what says so when it did not.
+ */
+static void _apply_cloud_enabled(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                                 const double* v, int n) {
+    const bool want = v[0] != 0.0;
+    const CloudLayer* clouds = (const CloudLayer*)base;
+    if (want && !clouds->noise_baked) {
+        fprintf(stderr, "Warning: config snapshot: this session baked no cloud noise; "
+                        "sky.clouds.enabled ignored\n");
+        return;
+    }
+    if (want == *(const bool*)_field_ptr_const(base, f))
+        return;
+    _store_value(f, base, v, n);
+    ctx->env_changed = true;
 }
 
 // Eye, target and up are one POSE: the view matrix built from any one of them is
@@ -551,10 +601,11 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "sun_disc", sun_disc_deg),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "world_units_per_km", world_units_per_km),
     CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "aerial", aerial_enabled),
-    CFG_ROW(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "density", density),
+    CFG_ROW_FN(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled, _apply_cloud_enabled),
+    CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage, _apply_cloud_field),
+    CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type, _apply_cloud_field),
+    CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "density", density, _apply_cloud_field),
+    // Wind re-bakes nothing: the env cube holds a still of the deck by design.
     CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "wind_speed_kmh", wind_speed_kmh),
     CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "wind_dir", wind_dir_deg),
 
@@ -752,6 +803,7 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src) {
     _source.lut = _source_lut;
     _source.textures = _source_textures;
     _source.sky = src->sky;
+    _source.clouds = src->clouds;
     // No width/height: the writer takes those from the live engine, which is the
     // only place that knows what the window ended up as.
     _source_set = true;
@@ -895,6 +947,7 @@ static void _write_source(cJSON* root, Engine* engine) {
         if (_source.textures[0])
             cJSON_AddStringToObject(src, "textures", _source.textures);
         cJSON_AddBoolToObject(src, "sky", _source.sky);
+        cJSON_AddBoolToObject(src, "clouds", _source.clouds);
     }
     if (engine) {
         cJSON_AddNumberToObject(src, "width", engine->win_width);
@@ -1465,6 +1518,17 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
      */
     if (ctx.sun_moved && scene && scene->sky)
         sky_update_sun(scene->sky, scene->ibl, engine);
+    /*
+     * ...then the chain everything else derived from the environment goes
+     * through, which is the same one gui.c's sliders call on release.
+     *
+     * sky_update_sun alone was what this used to do, and it is a strict SUBSET:
+     * it re-bakes the env with sky_bake, which is sky_bake_ex(..., false), so a
+     * restored sun did not merely skip the cloud deck -- it stripped the deck
+     * out of an env cube that had one, refreshed no probe and re-armed no GI.
+     */
+    if (ctx.env_changed && scene)
+        scene_environment_changed(scene, engine);
 
     for (size_t a = 0; a < CFG_ARRAY_COUNT; a++)
         written += _apply_array(&ctx, root, &CFG_ARRAYS[a]);
@@ -1538,6 +1602,7 @@ bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** 
     _read_back.lut = _read_lut;
     _read_back.textures = _read_textures;
     _read_back.sky = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "sky"));
+    _read_back.clouds = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "clouds"));
     _read_back.width = _int_or(src, "width", 0);
     _read_back.height = _int_or(src, "height", 0);
 
