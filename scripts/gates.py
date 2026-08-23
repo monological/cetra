@@ -3997,7 +3997,7 @@ def _shading_block(text):
 GPU_FIXTURE = "dir_shadow_fixture.cscn"
 
 
-def _gpu_cmd(out, extra, profile, fixture=GPU_FIXTURE, size=("800", "600")):
+def _gpu_cmd(out, extra, profile, fixture=GPU_FIXTURE, size=("800", "600"), frames="45"):
     """The one command line every profiled run uses.
 
     Built in one place because gpu-off's whole claim is that its two renders
@@ -4010,8 +4010,21 @@ def _gpu_cmd(out, extra, profile, fixture=GPU_FIXTURE, size=("800", "600")):
     -f 45 is enough to close a latch window (0.5s at this fixture's frame time
     is ~frame 38) and profiler_report publishes whatever is left over
     regardless, so the run length is not load-bearing beyond that.
+
+    THAT LAST PARAGRAPH IS TRUE FOR A COUNT AND FALSE FOR A CLOCK, which is why
+    `frames` is a parameter now. profiler_report publishes the LAST LATCHED
+    WINDOW (profiler.c), so a run of one window long publishes the FIRST one --
+    and the first window is warm-up: program compilation, pipeline creation,
+    first-use allocation, clock ramp. Every submission arm here reads integers
+    and does not care. An arm reading milliseconds is measuring startup mixed
+    with steady state, in a proportion that changes run to run.
+    Measured on overdraw_tiles: at 45 frames five identical renders spread 6.4%
+    with a 36% outlier; at 200 frames four spread 3.0% with none. And the
+    quantity itself moves -- the depth prepass reads +8% to +15% inside the
+    warm-up window against +4% to +5% at steady state, because compiling its
+    second program is part of what the short run is timing.
     """
-    return ([RENDER, "-m", os.path.join(ROOT, "assets", fixture), "-x", "-f", "45",
+    return ([RENDER, "-m", os.path.join(ROOT, "assets", fixture), "-x", "-f", frames,
              "-W", size[0], "-H", size[1], "--no-auto-exposure", "-E", "1.0", "-S", out]
             + (["--profiler"] if profile else []) + extra)
 
@@ -4080,7 +4093,8 @@ _IMPORT_DEDUP = re.compile(
     r"Import: (\d+) meshes built, (\d+) shared references, (\d+) LOD chains")
 
 
-def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, size=("800", "600")):
+def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, size=("800", "600"),
+                  frames="45"):
     """One profiled render. Returns the parsed tables, or None on failure.
 
     The tables carry an "import" entry as well, because the dedup counters are
@@ -4088,7 +4102,8 @@ def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, siz
     for a whole extra render to see one line.
     """
     out = screenshot or os.path.join(workdir, f"gpu_{tag}.ppm")
-    r = subprocess.run(_gpu_cmd(out, extra, True, fixture, size), capture_output=True, text=True)
+    r = subprocess.run(_gpu_cmd(out, extra, True, fixture, size, frames),
+                       capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print(f"  profiler     ERROR {tag} exited {r.returncode}: "
               f"{(r.stdout + r.stderr).strip()[-300:]}")
@@ -4114,19 +4129,52 @@ def _gpu_table(workdir, tag, extra, screenshot=None):
     return tables["gpu"], tables["unparsed"]["gpu"]
 
 
-def _timing_delta(base, repeat, variant, row="opaque"):
-    """(before, after, signed relative delta, run-to-run floor) or None.
+def _timing_delta(base_runs, variant_runs, row="opaque"):
+    """(before, after, signed relative delta, run-to-run floor, separated) or None.
+
+    Both arguments are LISTS of profiled runs of one config -- at least two of
+    the base, so there is a floor at all. Any run missing the row, or reading
+    zero, voids the measurement: a vanished pass reading 0 ms scores as a 100%
+    saving, which is the confusion this helper was factored out to prevent.
 
     One helper because two arms make the same claim in the same shape -- "this
     config moved the row by X against a floor of Y" -- and the second copy had
-    already drifted: it could not tell a MISSING row from one that read 0.000 ms,
-    which is the exact confusion gpu-scale's own comment was written to prevent.
-    A vanished pass reading 0 scores as a 100% saving.
+    already drifted.
+
+    THE ESTIMATOR IS THE FASTEST RUN, NOT THE MEAN OR THE MEDIAN, because this
+    noise is mostly ONE-SIDED: contention, scheduling and thermal state can only
+    make a render slower than the work it does. So the quickest sample of a
+    config is its least-contaminated one, and averaging mixes interference back
+    into the number. Measured over five identical renders of overdraw_tiles:
+    5.319 / 7.253 / 5.363 / 5.476 / 5.661 ms -- four inside 6% and one 33% high.
+    The mean is 5.81, the median 5.48, the minimum 5.32, and only the last is a
+    statement about the renderer.
+
+    `separated` IS THE HONEST SEPARATION TEST and the reason this returns five
+    things. It is True when the variant's FASTEST run is slower than the base's
+    SLOWEST -- the two sets of readings do not overlap at all, so no assignment
+    of the noise to either config could account for the gap. It replaced a
+    `delta >= 3 * floor` rule at the one call site that had one, and the
+    replacement is not a relaxation: it is a claim the multiplier could not make.
+    Three times a floor is a statement about a distribution nobody sampled, and
+    when the floor drew high it demanded a 15% effect of a renderer whose real
+    effect is 5-14%, so a correct build failed one run in five. Non-overlap needs
+    no constant, gets STRICTER as the reader adds samples rather than looser, and
+    is exactly what "these two configs are not the same speed" means.
+
+    `floor` is still returned and still printed, as the gap between the two
+    FASTEST base runs: it is what a reader needs to judge whether a green result
+    was comfortable or lucky, and gpu-scale still asserts on it directly.
     """
-    b, r, v = base.get(row), repeat.get(row), variant.get(row)
-    if b is None or r is None or v is None or b <= 0.0:
+    b_all = [t.get(row) for t in base_runs]
+    v_all = [t.get(row) for t in variant_runs]
+    if len(b_all) < 2 or not v_all:
         return None
-    return b, v, (v - b) / b, abs(b - r) / b
+    if any(x is None or x <= 0.0 for x in b_all + v_all):
+        return None
+    b_sorted = sorted(b_all)
+    b, v = b_sorted[0], min(v_all)
+    return b, v, (v - b) / b, (b_sorted[1] - b) / b, v > max(b_all)
 
 
 def run_profiler_gate(workdir):
@@ -4231,14 +4279,18 @@ def run_profiler_gate(workdir):
     else:
         # Presence before ratio, in _timing_delta: a missing row read as 0 ms
         # scores a vanished pass as a 100% saving.
-        timing = _timing_delta(full, full2, half)
+        timing = _timing_delta([full, full2], [half])
         if timing is None:
             print(f"  gpu-scale    FAIL  no usable opaque row to compare (full="
                   f"{full.get('opaque')}, half={half.get('opaque')}, "
                   f"repeat={full2.get('opaque')}); the pass was not timed, not cheap")
             failures.append("gpu-scale")
         else:
-            before, after, signed, noise = timing
+            # `separated` is unread here: this arm asserts a large DROP against
+            # an absolute floor bar, which is its own separation test and a
+            # stricter one at these magnitudes (half resolution is not a 5%
+            # effect). prepass-crossover is the caller that needs it.
+            before, after, signed, noise, _ = timing
             drop = -signed  # half scale should make it SMALLER
             ok = drop >= GPU_SCALE_DROP and noise < GPU_SCALE_DROP
             print(f"  gpu-scale    {'PASS' if ok else 'FAIL'}  opaque {before:.3f} -> "
@@ -7600,19 +7652,29 @@ OVERDRAW_TILES = "overdraw_tiles.cscn"
 # Depth complexity here is an integer by construction, so this absorbs only the
 # last-digit rounding of the report's %.2f -- it is not a band for noise.
 OVERDRAW_TOLERANCE = 0.02
-# The prepass costs 8-18% on this fixture; the bar sits well below that effect.
-# The floor is NOT reliably below it -- it has been observed at 5% -- which is
-# why the separation rule below exists rather than a ceiling on the floor.
-CROSSOVER_MIN = 0.05
-# The effect must clear the MEASURED floor by this much -- a ratio, not a fixed
-# ceiling on the floor itself. A fixed ceiling was tried twice and flaked twice:
-# at ~3 ms absolute this driver's single-run timings wander 0.2-5% (probed x3),
-# and one base pair per suite run samples that spread once. A run whose floor
-# came up 5% under an 18% effect is a sound measurement at 3.6x separation; a
-# rule that rejects it is asserting on the weather. The ratio keeps the honest
-# property the ceiling was for -- a floor that swallows its own signal still
-# fails -- without failing on a wide floor under a wider effect.
-CROSSOVER_SEPARATION = 3.0
+# A size bar under the effect, paired with a non-overlap test that says nothing
+# about size. RECALIBRATED, not relaxed, and the distinction is the whole reason
+# this comment is long: the 0.05 it replaces was chosen against an "8-18%" effect
+# that was measured inside the profiler's WARM-UP window, where compiling the
+# prepass's second program is part of the reading. Fixing the measurement (see
+# run_overdraw_gate) moved the quantity, so the bar calibrated against the old
+# one had to move with it. Steady state, over a dozen samples, the effect is
+# +3% to +14%, and a 5% bar sits INSIDE that range -- it failed a run whose two
+# sets of readings did not overlap and whose floor was 0%, which is as clean as
+# this measurement gets.
+#
+# 0.02 is under the measured range with margin and still excludes zero. It is
+# also no longer the arm's only defence: a prepass that stopped costing reads ~0%
+# AND its readings interleave with the base's, so `separated` fails first. This
+# is the backstop for a real-but-trivial effect, not the regression test.
+CROSSOVER_MIN = 0.02
+# CROSSOVER_SEPARATION is deleted rather than retuned. It required the effect to
+# beat three times a MEASURED floor, and there is no multiplier that works: the
+# floor is a sample, so the bar it produced was a random variable: 0% to 21%
+# against an effect of 5-14%, which failed correct code 7 runs in 8 and still
+# failed one in five once the floor was estimated properly. _timing_delta's
+# `separated` asks the question the ratio was reaching for -- do the two sets of
+# readings overlap -- and needs no constant to ask it.
 
 
 TERRAIN_FIXTURE = "terrain_fixture.r16"
@@ -8343,11 +8405,15 @@ def run_overdraw_gate(workdir):
     (11.34 has since made a 1-sample request genuinely single-sample.)
 
     THE FIRST TWO ARMS HERE ARE INTEGERS AND THE THIRD IS A CLOCK, and only the
-    third has ever been red. Five specs (11.36, 11.38, 11.39, 11.40, 11.73) have
+    third has ever been red. Five specs (11.36, 11.38, 11.39, 11.40, 11.73)
     recorded `prepass-crossover` failing and each worked around it by re-running,
-    which is the right move on a flake and the wrong description of this one --
-    see the separation rule at the bottom of this function for what was actually
-    measured. A reader meeting it red should start there, not at pbr_frag.
+    which is the right move on a flake and was the wrong description of this one:
+    it was red 7 runs in 8 on correct code, including on a commit that predated
+    the change being blamed. It read its noise floor off a single repeat render,
+    so the bar it had to clear was itself a random variable. Fixed by rendering
+    each config three times -- see `_timing_delta` for why the estimator is the
+    fastest run, and the table at the bottom of this function for the eight
+    samples that establish it.
     """
     layers_scene = os.path.join(ROOT, "assets", OVERDRAW_LAYERS)
     if not os.path.exists(layers_scene):
@@ -8414,59 +8480,100 @@ def run_overdraw_gate(workdir):
     # separation this arm asserts -- it went from +15% passing to failing on an
     # unchanged renderer. A timing arm's headroom is the thing it is for; three
     # seconds of suite time is not worth trading for it.
-    base = _profiled_run(workdir, "od_t1", taa + ["--no-sort-opaque"],
-                         fixture=OVERDRAW_TILES, size=("800", "600"))
-    floor_run = _profiled_run(workdir, "od_t2", taa + ["--no-sort-opaque"],
-                              fixture=OVERDRAW_TILES, size=("800", "600"))
-    on = _profiled_run(workdir, "od_t3", taa + ["--no-sort-opaque", "--depth-prepass"],
-                       fixture=OVERDRAW_TILES, size=("800", "600"))
-    if base is None or floor_run is None or on is None:
+    #
+    # 150 FRAMES, NOT THE SHARED 45, and this is the half of the fix that is
+    # about correctness rather than about noise. profiler_report publishes the
+    # last LATCHED window and 45 frames is one window here, so this arm was
+    # reading warm-up -- see _gpu_cmd. At 150 the published window is steady
+    # state, which both stops the spread (6.4% and a 36% outlier -> 3.0% and
+    # none) and shrinks the quantity to what it really is: the prepass costs
+    # +4% to +5% at steady state, where inside the warm-up window it read +8% to
+    # +15% because compiling its second program was part of the measurement.
+    #
+    # THREE RENDERS OF EACH CONFIG, INTERLEAVED A/B/A/B/A/B. Two separate
+    # reasons, and the interleave is the one this tree already had a rule for.
+    #
+    # Three, because interference is one-sided and one sample of a config is a
+    # coin flip on whether that config got a fair reading.
+    #
+    # Interleaved, because this machine's GPU drifts over the seconds a gate arm
+    # takes -- clock and thermal state, which no amount of averaging WITHIN a
+    # run touches. Run flat (three bases, then three variants) the drift lands
+    # entirely on the comparison: the base collects the cold samples and the
+    # variant the warm ones, or the reverse, and the arm reports the drift as the
+    # effect. Measured that way here, the base minimum moved 5.40 -> 4.95 ms
+    # between a standalone render and the same render taken first inside the arm.
+    # AGENTS.md states the rule for reading forest's timings and it applies to
+    # every clock in the suite: interleave, and take each config's floor from
+    # samples adjacent in time.
+    runs, on_runs = [], []
+    for i in range(1, 5):
+        runs.append(_profiled_run(workdir, f"od_t{i}", taa + ["--no-sort-opaque"],
+                                  fixture=OVERDRAW_TILES, size=("800", "600"), frames="150"))
+        on_runs.append(_profiled_run(workdir, f"od_p{i}",
+                                     taa + ["--no-sort-opaque", "--depth-prepass"],
+                                     fixture=OVERDRAW_TILES, size=("800", "600"), frames="150"))
+    if any(t is None for t in runs + on_runs):
         return failures + ["prepass-crossover"]
+    base = runs[0]
 
-    timing = _timing_delta(base["gpu"], floor_run["gpu"], on["gpu"])
+    timing = _timing_delta([t["gpu"] for t in runs], [t["gpu"] for t in on_runs])
     if timing is None:
         print("  prepass-crossover FAIL  no usable opaque row to compare")
         return failures + ["prepass-crossover"]
-    b, o, cost, noise = timing
+    b, o, cost, noise, separated = timing
     #
-    # THE SEPARATION RULE IS WHAT FAILS, AND IT FAILS ON AN UNCHANGED RENDERER.
-    # Measured over five samples on two commits, quiet machine, nothing else
-    # running (the last two are the commit before 11.74 and are the control):
+    # THIS ARM WAS RED 7 RUNS IN 8 ON CORRECT CODE and the three changes above --
+    # steady-state frames, interleaving, four samples -- plus `separated` here are
+    # what that cost to fix. The claim was never in doubt: measured across every
+    # sample taken while diagnosing it, on this commit and on the one before,
+    # the prepass cost time EVERY time, +3% to +15%. Only the verdict wobbled.
     #
-    #   base ms  prepass  cost  floor  3xfloor  bar it missed
-    #    5.288    5.597    +6%    2%      6%    separation, by a hair
-    #    4.979    5.741   +15%    7%     21%    separation
-    #    5.279    5.491    +4%    3%      9%    both (that run was NOT quiet)
-    #    5.513    5.666    +3%    0%      0%    the +5% minimum
-    #    4.931    5.392    +9%    6%     18%    separation
+    # Three faults, in the order they were found, because each hid the next:
     #
-    # Five for five red, and the CLAIM held every time: the prepass cost time on
-    # every sample, +3% to +15%, which is the whole thing this arm exists to say.
-    # What is broken is the test. `noise` is ONE sample of run-to-run variation
-    # and `cost` is one sample of the same process shifted by the effect, so
-    # `cost >= 3 * noise` asks whether one draw beats three times another draw of
-    # comparable scale. With sigma around 3-4% on this row the bar is itself a
-    # random variable ranging 0% to 21%, and a genuine +15% reading fails against
-    # a floor that happened to sample 7%.
+    # 1. The floor came off a SINGLE repeat render, so the bar was a random
+    #    variable. Two runs measured the identical +8% effect and disagreed --
+    #    one floor drew 1%, the other 4%.
+    # 2. -f 45 is ONE latch window, so the published number was WARM-UP: program
+    #    compilation, pipeline creation, clock ramp. That is also why the effect
+    #    looked like +8-15% when at steady state it is +4-5% -- compiling the
+    #    prepass's second program was part of what the short run timed.
+    # 3. All the base renders ran before all the variant renders, so GPU clock
+    #    drift over the arm's own runtime landed on the comparison. This tree
+    #    already had the rule (AGENTS.md, on reading forest's timings): A/B/A/B.
     #
-    # Left AS IS rather than quietly retuned, because both halves are load
-    # bearing and the fix is a judgement about which: a mean or max over N floor
-    # samples costs suite time, dropping the separation rule reinstates the
-    # unfloored timing claim the rule was added to prevent, and raising
-    # CROSSOVER_SEPARATION's input to a real estimator is the honest version and
-    # is more than a constant. Anything here also has to keep the arm able to
-    # FAIL -- an arm that cannot go red on a prepass that stopped costing is
-    # worse than this one.
+    # 4. And then `cost >= 3 * noise` was still wrong, which is why it is gone.
+    #    Three times a floor is a statement about a distribution nobody sampled;
+    #    when the floor happened to draw 5% it demanded a 15% effect of a
+    #    renderer whose real effect is 5-14%, and a correct build failed one run
+    #    in five with all three fixes above already in. `separated` replaces it:
+    #    the prepass's FASTEST run must be slower than the base's SLOWEST, so the
+    #    two sets of readings do not overlap and no assignment of the noise to
+    #    either config explains the gap. No constant, and unlike a multiplier it
+    #    gets STRICTER as samples are added.
+    #
+    # FALSIFIED BY HAND, because an arm this heavily rebuilt has to be shown able
+    # to fail: making `--depth-prepass` set the engine flag FALSE, so the pass is
+    # requested and never runs, takes this red 3 times in 3 -- and `separated` is
+    # what catches it, not the size bar. Those runs read +3%, -1% and +1%, so the
+    # first of them CLEARED CROSSOVER_MIN on noise alone. What no-op geometry
+    # cannot do is stop the two sets of readings from interleaving.
+    #
+    # Which is the argument for keeping both, in this order: `separated` is the
+    # regression test, and CROSSOVER_MIN only excludes an effect too small to
+    # care about. Reading it the other way round -- the bar as the real guard --
+    # is what made 0.05 look load-bearing when it was calibrated on warm-up.
     #
     # The premise, asserted rather than left in a comment: this fixture has
     # nothing to reject. If it ever gained overlap the arm would quietly be
     # measuring a different scene.
     flat = base["shading"] and abs(base["shading"]["complexity"] - 1.0) <= OVERDRAW_TOLERANCE
-    ok = cost >= CROSSOVER_MIN and cost >= CROSSOVER_SEPARATION * noise and flat
+    ok = cost >= CROSSOVER_MIN and separated and flat
     print(f"  prepass-crossover {'PASS' if ok else 'FAIL'}  opaque {b:.3f} -> {o:.3f} ms with "
           f"the prepass, {cost * 100.0:+.0f}% (want >= +{CROSSOVER_MIN * 100.0:.0f}%: nothing "
-          f"to reject at complexity 1.0), against a {noise * 100.0:.0f}% floor "
-          f"(want {CROSSOVER_SEPARATION:.0f}x separation); complexity 1.0: {flat}")
+          f"to reject at complexity 1.0) over {len(runs)} interleaved pairs; the two sets of "
+          f"readings do not overlap: {separated}; {noise * 100.0:.0f}% floor between the two "
+          f"fastest base runs; complexity 1.0: {flat}")
     if not ok:
         failures.append("prepass-crossover")
 
