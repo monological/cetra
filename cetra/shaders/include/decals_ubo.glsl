@@ -37,9 +37,7 @@ uint decalMaskAt(uint ci) {
 //
 // Every channel is PREMULTIPLIED by its own coverage, so a caller divides that
 // coverage back out before using it -- the decalResolved* accessors below do
-// exactly that. What it
-// buys is correctness at partial alpha, where the obvious non-premultiplied
-// accumulation multiplies by the coverage twice.
+// exactly that, and using a field directly instead applies the coverage twice.
 //
 // Albedo is carried in STORED sRGB codes, not linear: the caller decodes once
 // after the blend, which is the layered-surface arrangement (layers.glsl) and
@@ -180,13 +178,17 @@ DecalSurface decalAccumulate(sampler2DArray atlas, uint mask, vec3 worldPos, vec
         if (a <= 0.0)
             continue;
 
-        // Over, PREMULTIPLIED, in stored codes -- the caller divides the
-        // coverage back out before decoding. Premultiplied because the
-        // alternative multiplies by `a` twice: a non-premultiplied mix leaves
-        // the first decal's colour at tex * a, and the caller then blends that
-        // by `a` again, so a mark darkens toward its own feathered edge instead
-        // of fading to the surface under it. The two agree only at a == 1,
-        // which is every opaque interior and so every reading that looks right.
+        // Over, PREMULTIPLIED, in stored codes. Written as the explicit sum
+        // rather than mix() only to say so out loud -- the two are the same
+        // expression, and reading the mix form as "not premultiplied" is what
+        // hid the defect for a round.
+        //
+        // What matters is that the RESULT is premultiplied, so a consumer has to
+        // divide the coverage back out (decalResolvedAlbedo). Blending this
+        // value directly by `alpha` applies the coverage twice, which darkens a
+        // mark toward its own feathered edge instead of fading it to the surface
+        // under it -- and is invisible at a == 1, which is every opaque interior
+        // and so every reading that looks right.
         acc.albedo = tex.rgb * a + acc.albedo * (1.0 - a);
         acc.alpha = a + acc.alpha * (1.0 - a);
 
