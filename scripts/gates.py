@@ -14515,6 +14515,12 @@ DECAL_FLOOR_CLEAR = (-1.8, 0.0, 1.2)  # floor, outside the scorch's box
 # How far a byte may sit from its painted value. One code of dither (spec 11.24)
 # plus one of rounding; anything the decal path gets WRONG is tens of codes.
 DECAL_CODE_EPS = 3
+# The froxel grid, from light_cluster.h. A decal is a small box, so the two in
+# this fixture claim a tiny fraction of it -- measured 130 of 3072. The bound is
+# the whole grid rather than a tight fit around that number: what it exists to
+# catch is culling that stopped working altogether (marking every cell reads
+# 6144), not a shift of a few cells when the camera or the boxes move.
+DECAL_GRID_CELLS = 16 * 8 * 24
 
 
 def _decal_run(workdir, tag, mutate=None, extra=None, frames=4):
@@ -14578,8 +14584,9 @@ def run_decal_gate(workdir):
                         substrate: a projector must refuse a surface it grazes
       decals-surface    the scorch's surface map moves roughness where its albedo
                         alone would not, against a normal-strength-0 twin
-      decals-mask       two runs agree on the froxel digest, and a decal behind
-                        the camera claims no froxel and moves no pixel
+      decals-mask       two runs agree on the froxel digest, the live decals claim
+                        a fraction of the grid rather than all of it, and a decal
+                        behind the camera claims no froxel and moves no pixel
       decals-schema     a decal missing position, size, direction or image is
                         refused by name, and a degenerate size is refused too
 
@@ -14707,14 +14714,15 @@ def run_decal_gate(workdir):
         behind_ppm = os.path.join(workdir, "decal_behind.ppm")
         off = os.path.join(workdir, "decal_off.ppm")
         px_behind, _ = compare(off, behind_ppm)
-        ok = (digest_a == digest_b and bits_live > 0 and bits_behind == 0 and
-              px_behind == 0 and int(f1[-1]["live"]) == 2)
+        ok = (digest_a == digest_b and 0 < bits_live < DECAL_GRID_CELLS and
+              bits_behind == 0 and px_behind == 0 and int(f1[-1]["live"]) == 2)
         if not ok:
             failures.append("decals-mask")
         print(f"  decals-mask {'PASS' if ok else 'FAIL'}  digest {digest_a} == "
-              f"{digest_b} across two runs, {bits_live} froxel bits live (want > 0), "
-              f"and behind the camera {bits_behind} bits (want 0) rendering "
-              f"{px_behind} px from the decal-free frame (want 0)")
+              f"{digest_b} across two runs, {bits_live} froxel bits live "
+              f"(want 0 < n < {DECAL_GRID_CELLS}; marking every cell reads "
+              f"{2 * DECAL_GRID_CELLS}), and behind the camera {bits_behind} bits "
+              f"(want 0) rendering {px_behind} px from the decal-free frame (want 0)")
 
     # -- schema: the four required keys, refused BY NAME ----------------------
     def drop_position(d):
