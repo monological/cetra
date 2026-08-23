@@ -609,25 +609,60 @@ static const ConfigField CFG_FIELDS[] = {
 #define CFG_FIELD_COUNT ((int)(sizeof(CFG_FIELDS) / sizeof(CFG_FIELDS[0])))
 
 /*
- * The element arrays: the JSON key, the owner whose rows describe an entry, and
- * whether entries have a NAME to match on.
+ * The element arrays: the JSON key, the owner whose rows describe an entry,
+ * whether entries have a NAME to match on, and how to reach element i.
  *
- * One list, because these three facts were stated in three places -- the writer,
- * the reader and the unknown-key sweep's skip list -- and a fourth array meant
- * editing all three, where forgetting the skip list warns about an array the
- * loader handled correctly.
+ * ONE list, and it drives the writer, the reader, the unknown-key sweep and that
+ * sweep's skip list. It briefly drove only the last of those while a comment
+ * here claimed all of them -- which is the failure this whole file exists to
+ * prevent, and worse than not having the list at all: the next reader trusts the
+ * comment and edits one site.
  *
- * Probes are `false` because they have no name: their order IS their identity,
- * probes[0] being the one the .cscn authored first.
+ * Probes are `by_name` false because they have no name: their order IS their
+ * identity, probes[0] being the one the .cscn authored first. Lights and
+ * materials prefer their name and fall back to the index for the unnamed, which
+ * every CLI-spawned light and procedural material is.
  */
-static const struct {
-    const char* key;
+typedef struct ConfigArray {
+    const char* key;  // the JSON array's name
+    const char* noun; // one element of it, for warnings that read as English
     ConfigOwner owner;
     bool by_name;
-} CFG_ARRAYS[] = {
-    {"probes", CFG_PROBE_ELEM, false},
-    {"lights", CFG_LIGHT_ELEM, true},
-    {"materials", CFG_MATERIAL_ELEM, true},
+    // Element i of `scene`, or NULL past the end. *name is its identity, or NULL
+    // when it has none.
+    void* (*at)(Scene* scene, int i, const char** name);
+} ConfigArray;
+
+static void* _probe_at(Scene* scene, int i, const char** name) {
+    *name = NULL;
+    ReflectionProbeSet* set = scene ? scene->probe_set : NULL;
+    return (set && i >= 0 && i < set->count) ? set->probes[i] : NULL;
+}
+
+static void* _light_at(Scene* scene, int i, const char** name) {
+    *name = NULL;
+    if (!scene || i < 0 || (size_t)i >= scene->light_count)
+        return NULL;
+    Light* light = scene->lights[i];
+    if (light)
+        *name = light->name;
+    return light;
+}
+
+static void* _material_at(Scene* scene, int i, const char** name) {
+    *name = NULL;
+    if (!scene || i < 0 || (size_t)i >= scene->material_count)
+        return NULL;
+    Material* material = scene->materials[i];
+    if (material)
+        *name = material->name;
+    return material;
+}
+
+static const ConfigArray CFG_ARRAYS[] = {
+    {"probes", "probe", CFG_PROBE_ELEM, false, _probe_at},
+    {"lights", "light", CFG_LIGHT_ELEM, true, _light_at},
+    {"materials", "material", CFG_MATERIAL_ELEM, true, _material_at},
 };
 
 #define CFG_ARRAY_COUNT (sizeof(CFG_ARRAYS) / sizeof(CFG_ARRAYS[0]))
@@ -832,37 +867,23 @@ static void _write_source(cJSON* root, Engine* engine) {
 }
 
 /*
- * Every row of one element owner, into one object, under a key the reader can
- * match it back by.
+ * A material's tunable, stored through the material's own setter.
  *
- * NAME where there is one, `index` where there is not, and both are written
- * rather than one or the other: `Light.name` and `Material.name` start NULL and
- * only an importer or a scene file fills them, so every CLI-spawned light and
- * every procedural material has none. A name is the stable key -- an index moves
- * when the content does -- but an unnamed element has no other, and writing the
- * index under the "name" key (which is what this did) produces an entry the
- * reader silently drops.
+ * The offset write would be identical today -- material_param_set is that same
+ * store -- but going through it is what carries a future change there into this
+ * path instead of silently around it. The param is re-found by key rather than
+ * carried on the row, which is a 30-entry scan once per field at restore and
+ * saves putting a field on ConfigField for one owner's benefit.
  */
-static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, const char* id_name,
-                           int id_index, int* count) {
-    cJSON* obj = cJSON_CreateObject();
-    if (!obj || !cJSON_AddItemToArray(array, obj)) {
-        cJSON_Delete(obj);
-        return false;
-    }
-    if (id_name)
-        cJSON_AddStringToObject(obj, "name", id_name);
-    cJSON_AddNumberToObject(obj, "index", id_index);
-
-    for (int i = 0; i < CFG_FIELD_COUNT; i++) {
-        const ConfigField* f = &CFG_FIELDS[i];
-        if ((ConfigOwner)f->owner != owner)
-            continue;
-        if (!_write_field(obj, f, base))
-            return false;
-        (*count)++;
-    }
-    return true;
+static void _apply_material_param(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                                  const double* v, int n) {
+    (void)ctx;
+    (void)n;
+    const MaterialParam* p = material_param_find(f->key);
+    if (!p)
+        return;
+    const float fv[3] = {(float)v[0], (float)v[1], (float)v[2]};
+    material_param_set((Material*)base, p, fv);
 }
 
 /*
@@ -907,38 +928,64 @@ static bool _material_row(const MaterialParam* p, ConfigField* out) {
                          .offset = p->offset,
                          .labels = p->enum_labels,
                          .label_count = p->enum_count,
-                         .apply = NULL};
+                         .apply = _apply_material_param};
     return true;
 }
-static bool _write_materials(cJSON* root, Scene* scene, int* count) {
-    if (!scene || scene->material_count == 0)
-        return true;
-    cJSON* array = cJSON_AddArrayToObject(root, "materials");
-    if (!array)
+
+/*
+ * The rows describing one element of `owner`, one per call, `*cursor` opaque.
+ *
+ * This is what lets ONE writer and ONE reader serve all three arrays: materials
+ * come from MATERIAL_PARAMS and everything else from CFG_FIELDS, and neither
+ * walker has to know which.
+ */
+static bool _element_row(ConfigOwner owner, int* cursor, ConfigField* out) {
+    if (owner == CFG_MATERIAL_ELEM) {
+        while (*cursor < (int)MATERIAL_PARAM_COUNT) {
+            if (_material_row(&MATERIAL_PARAMS[(*cursor)++], out))
+                return true;
+        }
         return false;
+    }
+    while (*cursor < CFG_FIELD_COUNT) {
+        const ConfigField* f = &CFG_FIELDS[(*cursor)++];
+        if ((ConfigOwner)f->owner == owner) {
+            *out = *f;
+            return true;
+        }
+    }
+    return false;
+}
 
-    for (size_t m = 0; m < scene->material_count; m++) {
-        const Material* material = scene->materials[m];
-        if (!material)
-            continue;
-        cJSON* obj = cJSON_CreateObject();
-        if (!obj || !cJSON_AddItemToArray(array, obj)) {
-            cJSON_Delete(obj);
+/*
+ * Every row of one element owner, into one object, under a key the reader can
+ * match it back by.
+ *
+ * NAME where there is one, `index` where there is not, and both are written
+ * rather than one or the other: `Light.name` and `Material.name` start NULL and
+ * only an importer or a scene file fills them, so every CLI-spawned light and
+ * every procedural material has none. A name is the stable key -- an index moves
+ * when the content does -- but an unnamed element has no other, and writing the
+ * index under the "name" key (which is what this did) produces an entry the
+ * reader silently drops.
+ */
+static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, const char* id_name,
+                           int id_index, int* count) {
+    cJSON* obj = cJSON_CreateObject();
+    if (!obj || !cJSON_AddItemToArray(array, obj)) {
+        cJSON_Delete(obj);
+        return false;
+    }
+    if (id_name)
+        cJSON_AddStringToObject(obj, "name", id_name);
+    cJSON_AddNumberToObject(obj, "index", id_index);
+
+    int cursor = 0;
+    ConfigField row;
+    while (_element_row(owner, &cursor, &row)) {
+        if (!_write_field(obj, &row, base))
             return false;
-        }
-        // Name and index both, for the reason _write_element states.
-        if (material->name)
-            cJSON_AddStringToObject(obj, "name", material->name);
-        cJSON_AddNumberToObject(obj, "index", (double)m);
-
-        for (size_t p = 0; p < MATERIAL_PARAM_COUNT; p++) {
-            ConfigField row;
-            if (!_material_row(&MATERIAL_PARAMS[p], &row))
-                continue;
-            if (!_write_field(obj, &row, material))
-                return false;
-            (*count)++;
-        }
+        (*count)++;
     }
     return true;
 }
@@ -970,27 +1017,23 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
         written++;
     }
 
+    // One loop for all three arrays, off CFG_ARRAYS. An array is omitted rather
+    // than written empty, for the same reason an absent subsystem's section is.
     bool ok = true;
-    const ReflectionProbeSet* probes = scene ? scene->probe_set : NULL;
-    if (probes && probes->count > 0) {
-        cJSON* array = cJSON_AddArrayToObject(root, "probes");
+    for (size_t a = 0; ok && a < CFG_ARRAY_COUNT; a++) {
+        const ConfigArray* arr = &CFG_ARRAYS[a];
+        const char* name = NULL;
+        if (!arr->at(scene, 0, &name))
+            continue;
+        cJSON* array = cJSON_AddArrayToObject(root, arr->key);
         ok = array != NULL;
-        for (int i = 0; ok && i < probes->count; i++) {
-            if (probes->probes[i])
-                ok = _write_element(array, CFG_PROBE_ELEM, probes->probes[i], NULL, i, &written);
+        for (int i = 0; ok; i++) {
+            const void* base = arr->at(scene, i, &name);
+            if (!base)
+                break;
+            ok = _write_element(array, arr->owner, base, arr->by_name ? name : NULL, i, &written);
         }
     }
-    if (ok && scene && scene->light_count > 0) {
-        cJSON* array = cJSON_AddArrayToObject(root, "lights");
-        ok = array != NULL;
-        for (size_t i = 0; ok && i < scene->light_count; i++) {
-            const Light* light = scene->lights[i];
-            if (light)
-                ok = _write_element(array, CFG_LIGHT_ELEM, light, light->name, (int)i, &written);
-        }
-    }
-    if (ok)
-        ok = _write_materials(root, scene, &written);
 
     if (!ok) {
         cJSON_Delete(root);
@@ -1144,134 +1187,63 @@ static bool _apply_field(ConfigApplyCtx* ctx, const cJSON* obj, const ConfigFiel
 }
 
 /*
- * The element arrays. Probes match on their index because their order IS their
- * identity -- probes[0] is the probe the .cscn authored first. Lights and
- * materials match on NAME, because theirs is the importer's order and a mesh
- * added to a model would silently re-point every entry after it.
+ * The element arrays, all three through one walk off CFG_ARRAYS.
+ *
+ * Matching: by NAME where the array has one, falling back to `index` for the
+ * unnamed -- every CLI-spawned light and every procedural material. Probes have
+ * no name at all, so they match by index alone: their order IS their identity.
+ * A name is the stable key; an index moves when the content does.
+ *
+ * This took an `owner` parameter and then hardcoded scene->lights in its else
+ * branch, so passing CFG_MATERIAL_ELEM searched the light array -- while the
+ * comment above it invited exactly that call.
  */
-static int _apply_elements(ConfigApplyCtx* ctx, const cJSON* root, const char* array_key,
-                           ConfigOwner owner) {
-    const cJSON* array = cJSON_GetObjectItemCaseSensitive(root, array_key);
+static int _apply_array(ConfigApplyCtx* ctx, const cJSON* root, const ConfigArray* arr) {
+    const cJSON* array = cJSON_GetObjectItemCaseSensitive(root, arr->key);
     if (!array)
         return 0;
     if (!cJSON_IsArray(array)) {
-        fprintf(stderr, "Warning: config snapshot: '%s' is not an array; ignored\n", array_key);
+        fprintf(stderr, "Warning: config snapshot: '%s' is not an array; ignored\n", arr->key);
         return 0;
     }
 
     int written = 0;
     const cJSON* entry = NULL;
     cJSON_ArrayForEach(entry, array) {
+        const cJSON* name_item = cJSON_GetObjectItemCaseSensitive(entry, "name");
+        const char* want = (arr->by_name && cJSON_IsString(name_item)) ? name_item->valuestring
+                                                                      : NULL;
+        const cJSON* idx_item = cJSON_GetObjectItemCaseSensitive(entry, "index");
+        const int want_index = cJSON_IsNumber(idx_item) ? (int)idx_item->valuedouble : -1;
+
         void* base = NULL;
-        if (owner == CFG_PROBE_ELEM) {
-            const cJSON* idx = cJSON_GetObjectItemCaseSensitive(entry, "index");
-            const ReflectionProbeSet* set = ctx->scene ? ctx->scene->probe_set : NULL;
-            const int i = cJSON_IsNumber(idx) ? (int)idx->valuedouble : -1;
-            if (set && i >= 0 && i < set->count)
-                base = set->probes[i];
-            if (!base) {
-                fprintf(stderr, "Warning: config snapshot: no probe %d in this scene; ignored\n",
-                        i);
-                continue;
-            }
-        } else {
-            // Name first, index second. Not interchangeable: a name survives the
-            // light order changing and an index does not, so falling back is for
-            // the lights that HAVE no name -- every one the CLI spawned.
-            const cJSON* name = cJSON_GetObjectItemCaseSensitive(entry, "name");
-            const char* want = cJSON_IsString(name) ? name->valuestring : NULL;
-            for (size_t i = 0; want && ctx->scene && i < ctx->scene->light_count; i++) {
-                Light* light = ctx->scene->lights[i];
-                if (light && light->name && strcmp(light->name, want) == 0) {
-                    base = light;
+        const char* have = NULL;
+        if (want) {
+            for (int i = 0; !base; i++) {
+                void* el = arr->at(ctx->scene, i, &have);
+                if (!el)
                     break;
-                }
+                if (have && strcmp(have, want) == 0)
+                    base = el;
             }
-            const cJSON* idx = cJSON_GetObjectItemCaseSensitive(entry, "index");
-            const int i = cJSON_IsNumber(idx) ? (int)idx->valuedouble : -1;
-            if (!base && !want && ctx->scene && i >= 0 && (size_t)i < ctx->scene->light_count)
-                base = ctx->scene->lights[i];
-            if (!base) {
-                if (want)
-                    fprintf(stderr,
-                            "Warning: config snapshot: no light '%s' in this scene; ignored\n",
-                            want);
-                else
-                    fprintf(stderr,
-                            "Warning: config snapshot: no light %d in this scene; ignored\n", i);
-                continue;
-            }
+        } else if (want_index >= 0) {
+            base = arr->at(ctx->scene, want_index, &have);
         }
-
-        for (int i = 0; i < CFG_FIELD_COUNT; i++) {
-            const ConfigField* f = &CFG_FIELDS[i];
-            if ((ConfigOwner)f->owner == owner && _apply_field(ctx, entry, f, base))
-                written++;
-        }
-    }
-    return written;
-}
-
-// Materials, through MATERIAL_PARAMS for the reason _write_materials states.
-static int _apply_materials(ConfigApplyCtx* ctx, const cJSON* root) {
-    const cJSON* array = cJSON_GetObjectItemCaseSensitive(root, "materials");
-    if (!array || !cJSON_IsArray(array))
-        return 0;
-
-    int written = 0;
-    const cJSON* entry = NULL;
-    cJSON_ArrayForEach(entry, array) {
-        // Name first, index for the unnamed -- _apply_elements' reasoning.
-        const cJSON* name = cJSON_GetObjectItemCaseSensitive(entry, "name");
-        const char* want = cJSON_IsString(name) ? name->valuestring : NULL;
-        Material* material = NULL;
-        for (size_t i = 0; want && ctx->scene && i < ctx->scene->material_count; i++) {
-            Material* m = ctx->scene->materials[i];
-            if (m && m->name && strcmp(m->name, want) == 0) {
-                material = m;
-                break;
-            }
-        }
-        const cJSON* idx = cJSON_GetObjectItemCaseSensitive(entry, "index");
-        const int at = cJSON_IsNumber(idx) ? (int)idx->valuedouble : -1;
-        if (!material && !want && ctx->scene && at >= 0 &&
-            (size_t)at < ctx->scene->material_count)
-            material = ctx->scene->materials[at];
-        if (!material) {
+        if (!base) {
             if (want)
-                fprintf(stderr,
-                        "Warning: config snapshot: no material '%s' in this scene; ignored\n",
-                        want);
+                fprintf(stderr, "Warning: config snapshot: no %s '%s' in this scene; ignored\n",
+                        arr->noun, want);
             else
-                fprintf(stderr, "Warning: config snapshot: no material %d in this scene; "
-                                "ignored\n",
-                        at);
+                fprintf(stderr, "Warning: config snapshot: no %s %d in this scene; ignored\n",
+                        arr->noun, want_index);
             continue;
         }
 
-        for (size_t p = 0; p < MATERIAL_PARAM_COUNT; p++) {
-            const MaterialParam* param = &MATERIAL_PARAMS[p];
-            ConfigField row;
-            if (!_material_row(param, &row))
-                continue;
-            const cJSON* item = cJSON_GetObjectItemCaseSensitive(entry, param->key);
-            if (!item)
-                continue;
-            double v[3] = {0.0, 0.0, 0.0};
-            const int n = _decode_value(&row, item, v);
-            if (n == 0) {
-                fprintf(stderr, "Warning: config snapshot: materials.%s is not a %s; ignored\n",
-                        param->key,
-                        row.type == CFG_ENUM ? "known value" : "value of the right shape");
-                continue;
-            }
-            // Stored through the material's own setter rather than through
-            // _store_value: it is the same offset write today, and keeping the
-            // canonical accessor is what carries a future change there into this
-            // path instead of silently around it.
-            const float fv[3] = {(float)v[0], (float)v[1], (float)v[2]};
-            material_param_set(material, param, fv);
-            written++;
+        int cursor = 0;
+        ConfigField row;
+        while (_element_row(arr->owner, &cursor, &row)) {
+            if (_apply_field(ctx, entry, &row, base))
+                written++;
         }
     }
     return written;
@@ -1453,9 +1425,8 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
     if (ctx.sun_moved && scene && scene->sky)
         sky_update_sun(scene->sky, scene->ibl, engine);
 
-    written += _apply_elements(&ctx, root, "probes", CFG_PROBE_ELEM);
-    written += _apply_elements(&ctx, root, "lights", CFG_LIGHT_ELEM);
-    written += _apply_materials(&ctx, root);
+    for (size_t a = 0; a < CFG_ARRAY_COUNT; a++)
+        written += _apply_array(&ctx, root, &CFG_ARRAYS[a]);
     cJSON_Delete(root);
 
     /*
