@@ -108,19 +108,49 @@ typedef struct ConfigField {
     ConfigApplyFn apply; // NULL = a plain store
 } ConfigField;
 
-#define CFG_ROW(owner_, type_, section_, key_, struct_, member_)                                   \
-    {owner_, type_, section_, key_, offsetof(struct_, member_), NULL, 0, NULL}
-#define CFG_ROW_ENUM(owner_, section_, key_, struct_, member_, labels_)                            \
+/*
+ * The struct each owner addresses, stated ONCE per owner rather than once per row.
+ *
+ * A row used to name both and nothing tied them together, so
+ * CFG_ROW(CFG_SCENE, CFG_FLOAT, "postfx.ssr", "strength", ssr_strength)
+ * compiled clean and then applied PostFX's offset to a Scene*, writing a float
+ * past the end of the struct. That is the worst thing this file can do, arriving
+ * by the likeliest edit in a 300-row table -- a copy-paste with one field
+ * changed. Derived by token paste, the mismatch is a compile error instead.
+ *
+ * What survives is owner-vs-SECTION mismatch, which files a key under the wrong
+ * JSON object and is cosmetic. Corruption to misfiling is the trade.
+ */
+#define CFG_STRUCT_CFG_ENGINE Engine
+#define CFG_STRUCT_CFG_POSTFX PostFX
+#define CFG_STRUCT_CFG_EXPOSURE Exposure
+#define CFG_STRUCT_CFG_SCENE Scene
+#define CFG_STRUCT_CFG_CAMERA Camera
+#define CFG_STRUCT_CFG_SHADOW ShadowSystem
+#define CFG_STRUCT_CFG_SKY SkyAtmosphere
+#define CFG_STRUCT_CFG_CLOUDS CloudLayer
+#define CFG_STRUCT_CFG_IBL IBLResources
+#define CFG_STRUCT_CFG_GI GIVolume
+#define CFG_STRUCT_CFG_CLUSTER LightClusterContext
+#define CFG_STRUCT_CFG_WATER Water
+#define CFG_STRUCT_CFG_WATER_WINDSEA WaterWaveTrain
+#define CFG_STRUCT_CFG_WATER_SWELL WaterWaveTrain
+#define CFG_STRUCT_CFG_PROBE_ELEM ReflectionProbe
+#define CFG_STRUCT_CFG_LIGHT_ELEM Light
+
+#define CFG_ROW(owner_, type_, section_, key_, member_)                                            \
+    {owner_, type_, section_, key_, offsetof(CFG_STRUCT_##owner_, member_), NULL, 0, NULL}
+#define CFG_ROW_ENUM(owner_, section_, key_, member_, labels_)                                     \
     {owner_,                                                                                       \
      CFG_ENUM,                                                                                     \
      section_,                                                                                     \
      key_,                                                                                         \
-     offsetof(struct_, member_),                                                                   \
+     offsetof(CFG_STRUCT_##owner_, member_),                                                       \
      labels_,                                                                                      \
      (int)(sizeof(labels_) / sizeof((labels_)[0])),                                                \
      NULL}
-#define CFG_ROW_FN(owner_, type_, section_, key_, struct_, member_, fn_)                           \
-    {owner_, type_, section_, key_, offsetof(struct_, member_), NULL, 0, fn_}
+#define CFG_ROW_FN(owner_, type_, section_, key_, member_, fn_)                                    \
+    {owner_, type_, section_, key_, offsetof(CFG_STRUCT_##owner_, member_), NULL, 0, fn_}
 
 // Enum vocabularies. Index IS the enum value, so a gap would misname every value
 // after it -- the two that do not start at zero say so beside themselves.
@@ -268,173 +298,164 @@ static void _apply_camera_vec(ConfigApplyCtx* ctx, void* base, const ConfigField
  */
 static const ConfigField CFG_FIELDS[] = {
     // --- engine
-    CFG_ROW_ENUM(CFG_ENGINE, "engine", "render_mode", Engine, current_render_mode,
-                 CFG_RENDER_MODES),
-    CFG_ROW_ENUM(CFG_ENGINE, "engine", "camera_mode", Engine, camera_mode, CFG_CAMERA_MODES),
-    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", Engine, msaa_samples, _apply_msaa),
-    CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "render_scale", Engine, render_scale,
-               _apply_render_scale),
-    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "ss_scale", Engine, ss_scale, _apply_ss_scale),
+    CFG_ROW_ENUM(CFG_ENGINE, "engine", "render_mode", current_render_mode, CFG_RENDER_MODES),
+    CFG_ROW_ENUM(CFG_ENGINE, "engine", "camera_mode", camera_mode, CFG_CAMERA_MODES),
+    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", msaa_samples, _apply_msaa),
+    CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "render_scale", render_scale, _apply_render_scale),
+    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "ss_scale", ss_scale, _apply_ss_scale),
 
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "gui", Engine, show_gui),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "wireframe", Engine, show_wireframe),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "xyz", Engine, show_xyz),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "fps", Engine, show_fps),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "camera_hud", Engine, show_camera_hud),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "bones", Engine, show_bones),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "lights", Engine, show_lights),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "cluster_heatmap", Engine, cluster_debug),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "gui", show_gui),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "wireframe", show_wireframe),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "xyz", show_xyz),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "fps", show_fps),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "camera_hud", show_camera_hud),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "bones", show_bones),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "lights", show_lights),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "cluster_heatmap", cluster_debug),
 
-    CFG_ROW(CFG_ENGINE, CFG_FLOAT, "engine.material", "specular_aa", Engine,
-            specular_aa_strength),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "energy_comp", Engine, energy_comp_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "refraction", Engine, refraction_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "clearcoat", Engine, clearcoat_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "specular", Engine, specular_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "sheen", Engine, sheen_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "parallax", Engine, parallax_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "sss", Engine, sss_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "skin_preint", Engine, skin_preint_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "oit", Engine, oit_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "oit_moments", Engine, oit_moments_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "emissive_lights", Engine,
-            emissive_lights_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_FLOAT, "engine.material", "specular_aa", specular_aa_strength),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "energy_comp", energy_comp_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "refraction", refraction_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "clearcoat", clearcoat_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "specular", specular_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "sheen", sheen_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "parallax", parallax_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "sss", sss_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "skin_preint", skin_preint_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "oit", oit_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "oit_moments", oit_moments_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.material", "emissive_lights", emissive_lights_enabled),
 
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "instancing", Engine, instancing_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "lod", Engine, lod_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_FLOAT, "engine.draw", "lod_bias", Engine, lod_bias),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "frustum_cull", Engine, frustum_cull_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "morph", Engine, morph_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "opaque_sort", Engine, opaque_sort_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "depth_prepass", Engine, depth_prepass_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "instancing", instancing_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "lod", lod_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_FLOAT, "engine.draw", "lod_bias", lod_bias),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "frustum_cull", frustum_cull_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "morph", morph_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "opaque_sort", opaque_sort_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "depth_prepass", depth_prepass_enabled),
 
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.layers_vt", "enabled", Engine, layers_vt_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_INT, "engine.layers_vt", "res", Engine, layers_vt_res),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.layers_vt", "pages", Engine, layers_vt_pages_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.layers_vt", "feedback", Engine,
-            layers_vt_feedback_enabled),
-    CFG_ROW(CFG_ENGINE, CFG_INT, "engine.layers_vt", "page_slots", Engine, layers_vt_page_slots),
-    CFG_ROW(CFG_ENGINE, CFG_INT, "engine.layers_vt", "page_budget", Engine, layers_vt_page_budget),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.layers_vt", "enabled", layers_vt_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_INT, "engine.layers_vt", "res", layers_vt_res),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.layers_vt", "pages", layers_vt_pages_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.layers_vt", "feedback", layers_vt_feedback_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_INT, "engine.layers_vt", "page_slots", layers_vt_page_slots),
+    CFG_ROW(CFG_ENGINE, CFG_INT, "engine.layers_vt", "page_budget", layers_vt_page_budget),
 
     // --- postfx
-    CFG_ROW_ENUM(CFG_POSTFX, "postfx", "tonemap", PostFX, tonemap_mode, CFG_TONEMAPS),
-    CFG_ROW_ENUM(CFG_POSTFX, "postfx", "debug_view", PostFX, debug_view, CFG_DEBUG_VIEWS),
-    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx", "taa", PostFX, taa_enabled, _apply_taa),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx", "normals_gbuffer", PostFX, normals_enabled),
+    CFG_ROW_ENUM(CFG_POSTFX, "postfx", "tonemap", tonemap_mode, CFG_TONEMAPS),
+    CFG_ROW_ENUM(CFG_POSTFX, "postfx", "debug_view", debug_view, CFG_DEBUG_VIEWS),
+    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx", "taa", taa_enabled, _apply_taa),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx", "normals_gbuffer", normals_enabled),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.bloom", "enabled", PostFX, bloom_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "threshold", PostFX, bloom_threshold),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "knee", PostFX, bloom_knee),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "max_brightness", PostFX, bloom_max_brightness),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "strength", PostFX, bloom_strength),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.bloom", "enabled", bloom_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "threshold", bloom_threshold),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "knee", bloom_knee),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "max_brightness", bloom_max_brightness),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.bloom", "strength", bloom_strength),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.flare", "enabled", PostFX, flare_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "strength", PostFX, flare_strength),
-    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.flare", "ghosts", PostFX, flare_ghosts),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "ghost_spacing", PostFX, flare_ghost_spacing),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "halo_width", PostFX, flare_halo_width),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "chroma", PostFX, flare_chroma),
-    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.flare", "source_lod", PostFX, flare_source_lod),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.flare", "enabled", flare_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "strength", flare_strength),
+    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.flare", "ghosts", flare_ghosts),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "ghost_spacing", flare_ghost_spacing),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "halo_width", flare_halo_width),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "chroma", flare_chroma),
+    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.flare", "source_lod", flare_source_lod),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ao", "enabled", PostFX, ssao_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ao", "radius", PostFX, ssao_radius),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ao", "strength", PostFX, ssao_strength),
-    CFG_ROW_ENUM(CFG_POSTFX, "postfx.ao", "spec_occlusion", PostFX, spec_occlusion_mode,
-                 CFG_SPEC_OCC),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ao", "edge_filter", PostFX, ao_edge_filter_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ao", "enabled", ssao_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ao", "radius", ssao_radius),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ao", "strength", ssao_strength),
+    CFG_ROW_ENUM(CFG_POSTFX, "postfx.ao", "spec_occlusion", spec_occlusion_mode, CFG_SPEC_OCC),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ao", "edge_filter", ao_edge_filter_enabled),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.contact_shadows", "enabled", PostFX,
-            contact_shadows_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.contact_shadows", "strength", PostFX, cs_strength),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.contact_shadows", "distance", PostFX, cs_distance),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.contact_shadows", "enabled", contact_shadows_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.contact_shadows", "strength", cs_strength),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.contact_shadows", "distance", cs_distance),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssgi", "enabled", PostFX, ssgi_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssgi", "intensity", PostFX, ssgi_intensity),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssgi", "enabled", ssgi_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssgi", "intensity", ssgi_intensity),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "enabled", PostFX, ssr_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "strength", PostFX, ssr_strength),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "max_distance", PostFX, ssr_max_distance),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "thickness_min", PostFX, ssr_thickness_min),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "max_roughness", PostFX, ssr_max_roughness),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "floor_roughness", PostFX, ssr_floor_roughness),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "temporal", PostFX, ssr_temporal),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "denoise", PostFX, ssr_denoise),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "jitter", PostFX, ssr_jitter),
-    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "full_res", PostFX, ssr_full_res,
-               _apply_ssr_full_res),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "enabled", ssr_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "strength", ssr_strength),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "max_distance", ssr_max_distance),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "thickness_min", ssr_thickness_min),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "max_roughness", ssr_max_roughness),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "floor_roughness", ssr_floor_roughness),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "temporal", ssr_temporal),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "denoise", ssr_denoise),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "jitter", ssr_jitter),
+    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "full_res", ssr_full_res, _apply_ssr_full_res),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "enabled", PostFX, fog_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "density", PostFX, fog_density),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "height_falloff", PostFX, fog_height_falloff),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "floor_y", PostFX, fog_floor_y),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "near", PostFX, fog_near),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "far", PostFX, fog_far),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "depth_distribution", PostFX, fog_depth_dist),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "temporal_blend", PostFX, fog_temporal_blend),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "anisotropy", PostFX, fog_anisotropy),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "sun_boost", PostFX, fog_sun_boost),
-    CFG_ROW_FN(CFG_POSTFX, CFG_VEC3, "postfx.fog", "ambient", PostFX, fog_ambient,
-               _apply_fog_ambient),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "esm", PostFX, fog_esm_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "esm_sharpness", PostFX, fog_esm_k),
-    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_x", PostFX, froxel_grid_x),
-    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_y", PostFX, froxel_grid_y),
-    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_z", PostFX, froxel_grid_z),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "enabled", fog_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "density", fog_density),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "height_falloff", fog_height_falloff),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "floor_y", fog_floor_y),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "near", fog_near),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "far", fog_far),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "depth_distribution", fog_depth_dist),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "temporal_blend", fog_temporal_blend),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "anisotropy", fog_anisotropy),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "sun_boost", fog_sun_boost),
+    CFG_ROW_FN(CFG_POSTFX, CFG_VEC3, "postfx.fog", "ambient", fog_ambient, _apply_fog_ambient),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "esm", fog_esm_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "esm_sharpness", fog_esm_k),
+    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_x", froxel_grid_x),
+    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_y", froxel_grid_y),
+    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_z", froxel_grid_z),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.dof", "enabled", PostFX, dof_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.dof", "autofocus", PostFX, dof_autofocus),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "focus_distance", PostFX, dof_focus_distance),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "focus_range", PostFX, dof_focus_range),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "max_coc", PostFX, dof_max_coc),
-    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.dof", "blades", PostFX, dof_blades),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "rotation", PostFX, dof_rotation),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.dof", "enabled", dof_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.dof", "autofocus", dof_autofocus),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "focus_distance", dof_focus_distance),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "focus_range", dof_focus_range),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "max_coc", dof_max_coc),
+    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.dof", "blades", dof_blades),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dof", "rotation", dof_rotation),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.motion_blur", "enabled", PostFX, motion_blur_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.motion_blur", "scale", PostFX, motion_blur_scale),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.motion_blur", "enabled", motion_blur_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.motion_blur", "scale", motion_blur_scale),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.sharpen", "enabled", PostFX, sharpen_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.sharpen", "strength", PostFX, sharpen_strength),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.sharpen", "enabled", sharpen_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.sharpen", "strength", sharpen_strength),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.grade", "enabled", PostFX, grade_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.grade", "lift", PostFX, grade_lift),
-    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.grade", "gamma", PostFX, grade_gamma),
-    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.grade", "gain", PostFX, grade_gain),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.grade", "enabled", grade_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.grade", "lift", grade_lift),
+    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.grade", "gamma", grade_gamma),
+    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.grade", "gain", grade_gain),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.vignette", "enabled", PostFX, vignette_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.vignette", "strength", PostFX, vignette_strength),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.vignette", "radius", PostFX, vignette_radius),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.vignette", "enabled", vignette_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.vignette", "strength", vignette_strength),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.vignette", "radius", vignette_radius),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.chromatic_aberration", "enabled", PostFX, ca_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.chromatic_aberration", "strength", PostFX, ca_strength),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.chromatic_aberration", "enabled", ca_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.chromatic_aberration", "strength", ca_strength),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.grain", "enabled", PostFX, grain_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.grain", "strength", PostFX, grain_strength),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.grain", "enabled", grain_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.grain", "strength", grain_strength),
 
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.dither", "enabled", PostFX, dither_enabled),
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dither", "strength", PostFX, dither_strength),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.dither", "enabled", dither_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dither", "strength", dither_strength),
 
     // The .cube path rides `source`, not here: the table only carries values the
     // owner struct holds, and PostFX keeps the basename alone.
-    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.lut", "strength", PostFX, lut_strength),
-    CFG_ROW_ENUM(CFG_POSTFX, "postfx.lut", "interp", PostFX, lut_interp, CFG_LUT_INTERP),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.lut", "strength", lut_strength),
+    CFG_ROW_ENUM(CFG_POSTFX, "postfx.lut", "interp", lut_interp, CFG_LUT_INTERP),
 
     // --- exposure
-    CFG_ROW(CFG_EXPOSURE, CFG_BOOL, "exposure", "physical", Exposure, physical),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "aperture", Exposure, aperture),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "shutter_speed", Exposure, shutter_speed),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "iso", Exposure, iso),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "multiplier", Exposure, multiplier),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "bias_stops", Exposure, bias_stops),
-    CFG_ROW(CFG_EXPOSURE, CFG_BOOL, "exposure", "automatic", Exposure, automatic),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "key", Exposure, key),
-    CFG_ROW_ENUM(CFG_EXPOSURE, "exposure", "meter_mode", Exposure, meter_mode, CFG_METER_MODES),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_radius", Exposure, meter_radius),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_low", Exposure, meter_low),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_high", Exposure, meter_high),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_min_log2", Exposure, meter_min_log2),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_max_log2", Exposure, meter_max_log2),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapt_rate_up", Exposure, adapt_rate_up),
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapt_rate_down", Exposure, adapt_rate_down),
+    CFG_ROW(CFG_EXPOSURE, CFG_BOOL, "exposure", "physical", physical),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "aperture", aperture),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "shutter_speed", shutter_speed),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "iso", iso),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "multiplier", multiplier),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "bias_stops", bias_stops),
+    CFG_ROW(CFG_EXPOSURE, CFG_BOOL, "exposure", "automatic", automatic),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "key", key),
+    CFG_ROW_ENUM(CFG_EXPOSURE, "exposure", "meter_mode", meter_mode, CFG_METER_MODES),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_radius", meter_radius),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_low", meter_low),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_high", meter_high),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_min_log2", meter_min_log2),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "meter_max_log2", meter_max_log2),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapt_rate_up", adapt_rate_up),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapt_rate_down", adapt_rate_down),
     /*
      * The adaptation state, and it is CONFIGURATION here even though it is
      * history everywhere else. Auto-exposure multiplies every pixel, and a
@@ -443,130 +464,119 @@ static const ConfigField CFG_FIELDS[] = {
      * at 99.77% of pixels for exactly this reason. Carrying the two makes the
      * first restored frame continue rather than converge.
      */
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapted_luminance", Exposure, adapted_luminance),
-    CFG_ROW(CFG_EXPOSURE, CFG_BOOL, "exposure", "adapted_valid", Exposure, adapted_valid),
+    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapted_luminance", adapted_luminance),
+    CFG_ROW(CFG_EXPOSURE, CFG_BOOL, "exposure", "adapted_valid", adapted_valid),
 
     // --- scene
-    CFG_ROW(CFG_SCENE, CFG_VEC3, "scene", "ambient_radiance", Scene, ambient_radiance),
-    CFG_ROW(CFG_SCENE, CFG_BOOL, "scene", "render_skybox", Scene, render_skybox),
-    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene", "skybox_brightness", Scene, skybox_brightness),
-    CFG_ROW(CFG_SCENE, CFG_BOOL, "scene.ground_projection", "enabled", Scene,
-            skybox_ground_projection),
-    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene.ground_projection", "radius", Scene, skybox_gp_radius),
-    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene.ground_projection", "height", Scene, skybox_gp_height),
-    CFG_ROW(CFG_SCENE, CFG_BOOL, "scene.shadow_catcher", "enabled", Scene, shadow_catcher),
-    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene.shadow_catcher", "strength", Scene,
-            shadow_catcher_strength),
+    CFG_ROW(CFG_SCENE, CFG_VEC3, "scene", "ambient_radiance", ambient_radiance),
+    CFG_ROW(CFG_SCENE, CFG_BOOL, "scene", "render_skybox", render_skybox),
+    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene", "skybox_brightness", skybox_brightness),
+    CFG_ROW(CFG_SCENE, CFG_BOOL, "scene.ground_projection", "enabled", skybox_ground_projection),
+    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene.ground_projection", "radius", skybox_gp_radius),
+    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene.ground_projection", "height", skybox_gp_height),
+    CFG_ROW(CFG_SCENE, CFG_BOOL, "scene.shadow_catcher", "enabled", shadow_catcher),
+    CFG_ROW(CFG_SCENE, CFG_FLOAT, "scene.shadow_catcher", "strength", shadow_catcher_strength),
 
     // --- camera. Radians, not the degrees Print Camera emits: this file is read
     // back by the loader, and a unit conversion is a second place to disagree.
-    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "eye", Camera, position, _apply_camera_vec),
-    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "target", Camera, look_at, _apply_camera_vec),
-    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "up", Camera, up_vector, _apply_camera_vec),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "fov_radians", Camera, fov_radians),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "near_clip", Camera, near_clip),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "far_clip", Camera, far_clip),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "distance", Camera, distance),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "height", Camera, height),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "theta", Camera, theta),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "phi", Camera, phi),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "amplitude", Camera, amplitude),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "zoom_speed", Camera, zoom_speed),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "orbit_speed", Camera, orbit_speed),
+    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "eye", position, _apply_camera_vec),
+    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "target", look_at, _apply_camera_vec),
+    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "up", up_vector, _apply_camera_vec),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "fov_radians", fov_radians),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "near_clip", near_clip),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "far_clip", far_clip),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "distance", distance),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "height", height),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "theta", theta),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "phi", phi),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "amplitude", amplitude),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "zoom_speed", zoom_speed),
+    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "orbit_speed", orbit_speed),
 
     // --- shadows. The map SIZE is not here and cannot be: create_shadow_system
     // takes it once and no flag, key or slider reaches it either.
-    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "enabled", ShadowSystem, enabled),
-    CFG_ROW(CFG_SHADOW, CFG_INT, "shadow", "cascades", ShadowSystem, cascade_count),
-    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "cascade_tint", ShadowSystem, csm_debug),
-    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "translucent", ShadowSystem, tsm_enabled),
-    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow", "bias", ShadowSystem, shadow_bias),
-    CFG_ROW(CFG_SHADOW, CFG_VEC3, "shadow", "scene_center", ShadowSystem, scene_center),
-    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow.moments", "enabled", ShadowSystem, msm_enabled),
-    CFG_ROW(CFG_SHADOW, CFG_INT, "shadow.moments", "size", ShadowSystem, msm_size),
-    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow.moments", "blur", ShadowSystem, msm_blur),
-    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow.moments", "bleed", ShadowSystem, msm_bleed),
-    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow.pcss", "enabled", ShadowSystem, pcss_enabled),
-    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow.pcss", "softness", ShadowSystem, pcss_softness),
+    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "enabled", enabled),
+    CFG_ROW(CFG_SHADOW, CFG_INT, "shadow", "cascades", cascade_count),
+    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "cascade_tint", csm_debug),
+    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "translucent", tsm_enabled),
+    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow", "bias", shadow_bias),
+    CFG_ROW(CFG_SHADOW, CFG_VEC3, "shadow", "scene_center", scene_center),
+    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow.moments", "enabled", msm_enabled),
+    CFG_ROW(CFG_SHADOW, CFG_INT, "shadow.moments", "size", msm_size),
+    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow.moments", "blur", msm_blur),
+    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow.moments", "bleed", msm_bleed),
+    CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow.pcss", "enabled", pcss_enabled),
+    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow.pcss", "softness", pcss_softness),
 
     // --- sky. Moving the sun re-bakes the LUTs, the environment and the IBL, so
     // these rows have a setter on apply where the rest are stores.
-    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "sun_elevation", SkyAtmosphere, sun_elevation_deg,
-               _apply_sun_angle),
-    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "sun_azimuth", SkyAtmosphere, sun_azimuth_deg,
-               _apply_sun_angle),
-    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "sun_disc", SkyAtmosphere, sun_disc_deg),
-    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "world_units_per_km", SkyAtmosphere, world_units_per_km),
-    CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "aerial", SkyAtmosphere, aerial_enabled),
-    CFG_ROW(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", CloudLayer, enabled),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", CloudLayer, coverage),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", CloudLayer, cloud_type),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "density", CloudLayer, density),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "wind_speed_kmh", CloudLayer, wind_speed_kmh),
-    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "wind_dir", CloudLayer, wind_dir_deg),
+    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "sun_elevation", sun_elevation_deg, _apply_sun_angle),
+    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "sun_azimuth", sun_azimuth_deg, _apply_sun_angle),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "sun_disc", sun_disc_deg),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "world_units_per_km", world_units_per_km),
+    CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "aerial", aerial_enabled),
+    CFG_ROW(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled),
+    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage),
+    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type),
+    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "density", density),
+    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "wind_speed_kmh", wind_speed_kmh),
+    CFG_ROW(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "wind_dir", wind_dir_deg),
 
     // --- environment
-    CFG_ROW(CFG_IBL, CFG_FLOAT, "ibl", "intensity", IBLResources, intensity),
+    CFG_ROW(CFG_IBL, CFG_FLOAT, "ibl", "intensity", intensity),
 
     // --- GI volume. The grid dimensions are an allocation, so they are absent
     // for the reason the shadow map size is.
-    CFG_ROW(CFG_GI, CFG_BOOL, "gi", "enabled", GIVolume, enabled),
-    CFG_ROW(CFG_GI, CFG_INT, "gi", "rate", GIVolume, rate),
-    CFG_ROW(CFG_GI, CFG_BOOL, "gi", "debug_atlas", GIVolume, debug_atlas),
+    CFG_ROW(CFG_GI, CFG_BOOL, "gi", "enabled", enabled),
+    CFG_ROW(CFG_GI, CFG_INT, "gi", "rate", rate),
+    CFG_ROW(CFG_GI, CFG_BOOL, "gi", "debug_atlas", debug_atlas),
 
-    CFG_ROW(CFG_CLUSTER, CFG_BOOL, "lighting", "area_lights", LightClusterContext,
-            area_lights_enabled),
+    CFG_ROW(CFG_CLUSTER, CFG_BOOL, "lighting", "area_lights", area_lights_enabled),
 
     // --- water. Editing any sea-state row re-seeds three 128^2 grids on the
     // next frame, which is a cost the restore pays once and says nothing about.
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "enabled", Water, enabled),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "level", Water, level),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "extent", Water, extent),
-    CFG_ROW(CFG_WATER, CFG_VEC3, "water", "absorption", Water, absorption),
-    CFG_ROW(CFG_WATER, CFG_VEC3, "water", "scatter", Water, scatter),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "roughness", Water, roughness),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "ior", Water, ior),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "amplitude", Water, amplitude),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "wavelength", Water, wavelength),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "steepness", Water, steepness),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "spread", Water, spread),
-    CFG_ROW(CFG_WATER, CFG_VEC2, "water", "wind_dir", Water, wind_dir),
-    CFG_ROW_ENUM(CFG_WATER, "water", "waves", Water, wave_model, CFG_WAVE_MODELS),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "caustics", Water, caustics),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "glitter", Water, glitter),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "foam_history", Water, foam_history),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "foam_decay", Water, foam_decay),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "foam_drift", Water, foam_drift),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "shore_coverage", Water, shore_coverage),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "surf", Water, surf),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "far_lod", Water, far_lod),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "wetness", Water, wetness),
-    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "film", Water, film),
-    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "sea_depth", Water, sea.sea_depth),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "enabled", enabled),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "level", level),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "extent", extent),
+    CFG_ROW(CFG_WATER, CFG_VEC3, "water", "absorption", absorption),
+    CFG_ROW(CFG_WATER, CFG_VEC3, "water", "scatter", scatter),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "roughness", roughness),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "ior", ior),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "amplitude", amplitude),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "wavelength", wavelength),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "steepness", steepness),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "spread", spread),
+    CFG_ROW(CFG_WATER, CFG_VEC2, "water", "wind_dir", wind_dir),
+    CFG_ROW_ENUM(CFG_WATER, "water", "waves", wave_model, CFG_WAVE_MODELS),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "caustics", caustics),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "glitter", glitter),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "foam_history", foam_history),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "foam_decay", foam_decay),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "foam_drift", foam_drift),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "shore_coverage", shore_coverage),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "surf", surf),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "far_lod", far_lod),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "wetness", wetness),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "film", film),
+    CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "sea_depth", sea.sea_depth),
 
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "wind_speed", WaterWaveTrain,
-            wind_speed),
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "fetch", WaterWaveTrain, fetch),
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "direction", WaterWaveTrain, direction),
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "scale", WaterWaveTrain, scale),
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "peak_enhancement", WaterWaveTrain,
-            peak_enhancement),
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "focus", WaterWaveTrain, focus),
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "spread_gain", WaterWaveTrain,
-            spread_gain),
-    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "spread_blend", WaterWaveTrain,
-            spread_blend),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "wind_speed", wind_speed),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "fetch", fetch),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "direction", direction),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "scale", scale),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "peak_enhancement", peak_enhancement),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "focus", focus),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "spread_gain", spread_gain),
+    CFG_ROW(CFG_WATER_WINDSEA, CFG_FLOAT, "water.wind_sea", "spread_blend", spread_blend),
 
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "wind_speed", WaterWaveTrain, wind_speed),
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "fetch", WaterWaveTrain, fetch),
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "direction", WaterWaveTrain, direction),
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "scale", WaterWaveTrain, scale),
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "peak_enhancement", WaterWaveTrain,
-            peak_enhancement),
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "focus", WaterWaveTrain, focus),
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "spread_gain", WaterWaveTrain, spread_gain),
-    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "spread_blend", WaterWaveTrain,
-            spread_blend),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "wind_speed", wind_speed),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "fetch", fetch),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "direction", direction),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "scale", scale),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "peak_enhancement", peak_enhancement),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "focus", focus),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "spread_gain", spread_gain),
+    CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "spread_blend", spread_blend),
 
     /*
      * --- array elements. `section` is the ARRAY's name here, not a path: the
@@ -576,18 +586,24 @@ static const ConfigField CFG_FIELDS[] = {
      * its tuning -- moving either without re-photographing the room describes a
      * mirror that is not where it says it is.
      */
-    CFG_ROW(CFG_PROBE_ELEM, CFG_BOOL, "probes", "enabled", ReflectionProbe, enabled),
-    CFG_ROW(CFG_PROBE_ELEM, CFG_FLOAT, "probes", "intensity", ReflectionProbe, intensity),
-    CFG_ROW(CFG_PROBE_ELEM, CFG_FLOAT, "probes", "box_fade", ReflectionProbe, box_fade),
-    CFG_ROW(CFG_PROBE_ELEM, CFG_BOOL, "probes", "debug_background", ReflectionProbe,
-            debug_background),
+    CFG_ROW(CFG_PROBE_ELEM, CFG_BOOL, "probes", "enabled", enabled),
+    CFG_ROW(CFG_PROBE_ELEM, CFG_FLOAT, "probes", "intensity", intensity),
+    CFG_ROW(CFG_PROBE_ELEM, CFG_FLOAT, "probes", "box_fade", box_fade),
+    CFG_ROW(CFG_PROBE_ELEM, CFG_BOOL, "probes", "debug_background", debug_background),
 
-    // Intensity is the STORED canonical value beside the authored unit, not the
-    // GUI's display conversion: set_light_intensity_units is those two stores,
-    // so writing both back is the same light and one conversion fewer to drift.
-    CFG_ROW(CFG_LIGHT_ELEM, CFG_FLOAT, "lights", "intensity", Light, intensity),
-    CFG_ROW_ENUM(CFG_LIGHT_ELEM, "lights", "intensity_unit", Light, units, CFG_LIGHT_UNITS),
-    CFG_ROW(CFG_LIGHT_ELEM, CFG_FLOAT, "lights", "range", Light, range),
+    /*
+     * The STORED canonical intensity beside the authored unit, NOT the value the
+     * GUI displays.
+     *
+     * Deliberately not through set_light_intensity_units, and the reason is the
+     * opposite of what it looks like: that setter CONVERTS, dividing by
+     * LUMENS_PER_CANDELA when the unit is lumens. Handing it a value already in
+     * canonical form would divide a lumens-authored lamp by 683 on every
+     * restore. Writing both fields back is the same light, exactly.
+     */
+    CFG_ROW(CFG_LIGHT_ELEM, CFG_FLOAT, "lights", "intensity", intensity),
+    CFG_ROW_ENUM(CFG_LIGHT_ELEM, "lights", "intensity_unit", units, CFG_LIGHT_UNITS),
+    CFG_ROW(CFG_LIGHT_ELEM, CFG_FLOAT, "lights", "range", range),
 };
 
 #define CFG_FIELD_COUNT ((int)(sizeof(CFG_FIELDS) / sizeof(CFG_FIELDS[0])))
@@ -864,13 +880,26 @@ static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, co
  * .cscn's half of the boundary this whole file sits on.
  */
 static bool _material_row(const MaterialParam* p, ConfigField* out) {
-    if (!p || p->type == MATERIAL_PARAM_TEXTURE)
+    if (!p)
         return false;
-    ConfigType type = CFG_FLOAT;
-    if (p->type == MATERIAL_PARAM_COLOR)
+    // A switch with no default, like every other type dispatch in this file and
+    // in material.c: -Wall implies -Wswitch, so a new MaterialParamType breaks
+    // the build here. The if/else chain this replaced defaulted to CFG_FLOAT,
+    // which would have read four bytes off a one-byte bool.
+    ConfigType type;
+    switch (p->type) {
+    case MATERIAL_PARAM_FLOAT:
+        type = CFG_FLOAT;
+        break;
+    case MATERIAL_PARAM_COLOR:
         type = CFG_VEC3;
-    else if (p->type == MATERIAL_PARAM_INT)
+        break;
+    case MATERIAL_PARAM_INT:
         type = p->enum_labels ? CFG_ENUM : CFG_INT;
+        break;
+    case MATERIAL_PARAM_TEXTURE:
+        return false; // rebinding an image is authoring, not tuning
+    }
     *out = (ConfigField){.owner = CFG_MATERIAL_ELEM,
                          .type = (unsigned char)type,
                          .section = "materials",
@@ -1413,20 +1442,35 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
             written++;
     }
 
+    /*
+     * The sun BEFORE the arrays, which is not where it reads most naturally.
+     * sky_update_sun ends in sky_apply_sun_to_light, which rewrites the coupled
+     * sun light's intensity, colour, direction and cast_shadows from the sky's
+     * own base intensity -- so running it after the lights array silently threw
+     * away whatever that array had just restored for that light. Measured on a
+     * moved sun: asked 2.5, got 10.
+     */
+    if (ctx.sun_moved && scene && scene->sky)
+        sky_update_sun(scene->sky, scene->ibl, engine);
+
     written += _apply_elements(&ctx, root, "probes", CFG_PROBE_ELEM);
     written += _apply_elements(&ctx, root, "lights", CFG_LIGHT_ELEM);
     written += _apply_materials(&ctx, root);
     cJSON_Delete(root);
 
-    // The two deferrals, in the order their costs demand: the sun re-bake feeds
-    // the environment every later read uses, and the pose is last because the
-    // orbit bookkeeping is derived from it.
-    if (ctx.sun_moved && scene && scene->sky)
-        sky_update_sun(scene->sky, scene->ibl, engine);
-    if (ctx.camera_moved && engine->camera) {
-        camera_sync_spherical_from_position(engine->camera);
+    /*
+     * The pose last, once eye, target and up have all landed -- a view matrix
+     * built from any one of them alone is wrong.
+     *
+     * NOT paired with camera_sync_spherical_from_position, which derives
+     * distance/theta/phi FROM the pose and so overwrote the three camera.orbit
+     * rows this file had just restored. The snapshot carries them itself,
+     * written in the same breath as the pose and therefore already agreeing with
+     * it; re-deriving them discarded a hand-edited orbit block and made three
+     * rows unreachable from outside the process.
+     */
+    if (ctx.camera_moved && engine->camera)
         update_engine_camera_lookat(engine);
-    }
 
     printf("config snapshot applied: %s (%d fields)\n", path, written);
     fflush(stdout);

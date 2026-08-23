@@ -10947,8 +10947,11 @@ def _config_gui_members():
 def _config_table_members():
     """Every struct member the descriptor table addresses."""
     src = open(os.path.join(ROOT, "cetra", "src", "config_snapshot.c")).read()
-    # The member's argument POSITION differs per macro, so the macro name selects it.
-    index = {"CFG_ROW": 5, "CFG_ROW_ENUM": 4, "CFG_ROW_FN": 5}
+    # The member's argument POSITION differs per macro, so the macro name selects
+    # it. These must track the macro definitions; when they last drifted, the
+    # anti-vacuity floor below caught it rather than letting the census
+    # silently shrink to 19 rows and report 150 controls as uncarried.
+    index = {"CFG_ROW": 4, "CFG_ROW_ENUM": 3, "CFG_ROW_FN": 4}
     members = set()
     for m in re.finditer(r'\b(CFG_ROW|CFG_ROW_ENUM|CFG_ROW_FN)\(([^()]*)\)', src, re.S):
         args = [a.strip() for a in m.group(2).replace("\n", " ").split(",")]
