@@ -231,21 +231,25 @@ float light_cull_radius(const struct Light* light) {
     return sqrtf(i_eff / LIGHT_CULL_EPSILON);
 }
 
-void light_emission_frame(const struct Light* light, vec3 axis, vec3 up) {
-    glm_vec3_copy((float*)light->direction, axis);
+void orientation_frame(const float dir[3], const float ref[3], vec3 axis, vec3 up) {
+    glm_vec3_copy((float*)dir, axis);
     if (glm_vec3_norm(axis) < 1e-6f)
         glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, axis);
     glm_vec3_normalize(axis);
 
-    // Gram-Schmidt the authored `up` against the axis rather than trusting it.
+    // Gram-Schmidt the authored `ref` against the axis rather than trusting it.
     // Parallel (or degenerate) leaves no roll to recover -- it is genuinely
     // undefined there -- so take the canonical perpendicular and stay buildable.
     vec3 proj;
-    glm_vec3_proj((float*)light->up, axis, proj);
-    glm_vec3_sub((float*)light->up, proj, up);
+    glm_vec3_proj((float*)ref, axis, proj);
+    glm_vec3_sub((float*)ref, proj, up);
     if (glm_vec3_norm(up) < 1e-4f)
         glm_vec3_ortho(axis, up);
     glm_vec3_normalize(up);
+}
+
+void light_emission_frame(const struct Light* light, vec3 axis, vec3 up) {
+    orientation_frame(light->direction, light->up, axis, up);
 }
 
 /**

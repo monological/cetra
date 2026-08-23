@@ -216,6 +216,7 @@ static void print_usage(const char* prog) {
             "(default 1000, implies --sky)\n");
     fprintf(stderr, "      --no-aerial        Disable aerial perspective (on by default)\n");
     fprintf(stderr, "      --no-fog-volumes   Drop a scene file's fogVolumes[]\n");
+    fprintf(stderr, "      --no-decals        Drop a scene file's decals[]\n");
     fprintf(stderr, "      --no-cloud-shadows Keep the cloud deck, drop its shadow\n");
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
@@ -1003,6 +1004,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--clouds") == 0) {
             args->clouds = 1;
             args->sky = 1;
+        } else if (strcmp(argv[i], "--no-decals") == 0) {
+            args->no_decals = 1;
         } else if (strcmp(argv[i], "--no-fog-volumes") == 0) {
             args->no_fog_volumes = 1;
         } else if (strcmp(argv[i], "--no-cloud-shadows") == 0) {
@@ -3609,6 +3612,7 @@ int main(int argc, char** argv) {
      */
     apply_cscene_water(scene, cscn);
     apply_cscene_fog_volumes(scene, cscn);
+    apply_cscene_decals(scene, cscn);
     if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;
@@ -3650,6 +3654,8 @@ int main(int argc, char** argv) {
     // producer and not just the scene file -- the same shape as --no-water above.
     if (args.no_fog_volumes)
         scene->fog_volume_count = 0;
+    if (args.no_decals)
+        scene->decal_count = 0;
 
     /*
      * --water-probe: the CPU wave query, printed. It is the only way anything outside

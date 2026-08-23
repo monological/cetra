@@ -136,6 +136,18 @@ void texture_dilate_transparent_rgb(unsigned char* data, int width, int height);
 
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb);
 
+// As above, but SAYS whether the transparent-texel dilate should run instead of
+// inferring it from is_srgb.
+//
+// The inference is right for everything loaded through the plain form: `is_srgb`
+// means "this is colour beside an opacity", and the linear textures reaching it
+// carry a height or an occlusion in alpha, which dilating would overwrite. A
+// decal image is the case that breaks the correlation -- colour with a real
+// opacity alpha, loaded LINEAR because it lives in the material array -- so it
+// asks directly rather than lying about its colour space to get the repair.
+Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
+                                        bool dilate_transparent);
+
 // The pool does NOT keep `pixels`. glTexImage2D takes GL's own copy and Texture
 // stores no pixel pointer, so the caller's buffer is dead the moment this
 // returns and the caller frees it. Stated here because the only place that said

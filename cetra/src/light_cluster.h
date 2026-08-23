@@ -9,6 +9,8 @@
 // PROBE_SET_MAX, which sizes the probe descriptor array below. probe_set.h owns
 // the cap; this file only lays it out for std140, the shore_chain relationship.
 #include "probe_set.h"
+// And again: decal.h owns the decal cap the mask array below is sized from.
+#include "decal.h"
 
 struct Engine;
 struct Scene;
@@ -122,10 +124,45 @@ typedef struct GpuProbeBlock {
     uint32_t cluster_masks[LC_CLUSTER_COUNT / 4];
 } GpuProbeBlock;
 
+/*
+ * Clustered decals (spec 11.73). Same two halves as the probe block above and
+ * for the same reasons: world-space descriptors that are a function of the
+ * authored scene, and VIEW-space froxel masks that are a function of the camera
+ * and so must be rebuilt per invocation, capture faces included.
+ *
+ * The transform is stored as three ROWS of world->local rather than a mat4 with
+ * a separate extent: folding 1/half_extent into the rotation rows makes the
+ * shader's local coordinate land in [-1,1] with three dots and no divide, and
+ * costs a row less than the alternative. The fourth column is the translation,
+ * so there is no separate origin to keep in step with it.
+ */
+typedef struct GpuDecalDesc {
+    float row0[4]; // world->local rows, each scaled by 1/half_extent[i] with the
+    float row1[4]; // translation folded into .w -- so xyz local is in [-1,1]^3
+    float row2[4]; // inside the box, and outside it exactly where |local| > 1
+    // x albedo layer (-1 none), y surface layer (-1 none), z opacity,
+    // w cos(angle_fade) -- the cosine rather than the angle because that is what
+    // the shader compares a dot product against, the spot-cutoff lesson.
+    float params0[4];
+    float params1[4]; // x edge feather (local units), y normal strength, zw unused
+} GpuDecalDesc;
+
+typedef struct GpuDecalBlock {
+    int32_t info[4]; // x count, yzw unused
+    GpuDecalDesc descs[DECAL_MAX];
+    // One 16-bit mask per froxel, two to a word. Sixteen because the cap is
+    // sixteen; the packing is the light index pool's, not the probe mask's.
+    uint32_t cluster_masks[LC_CLUSTER_COUNT / 2];
+} GpuDecalBlock;
+
 _Static_assert(sizeof(GpuLightsBlock) == UBO_LIGHTS_BLOCK_SIZE,
                "GpuLightsBlock must match the std140 LightsBlock layout");
 _Static_assert(sizeof(GpuProbeBlock) == UBO_PROBES_BLOCK_SIZE,
                "GpuProbeBlock must match the std140 ProbeBlock layout");
+_Static_assert(sizeof(GpuDecalBlock) == UBO_DECALS_BLOCK_SIZE,
+               "GpuDecalBlock must match the std140 DecalBlock layout");
+// Two froxels to a word, so an odd froxel count would drop the last one.
+_Static_assert(LC_CLUSTER_COUNT % 2 == 0, "the decal mask packs two froxels per word");
 _Static_assert(sizeof(GpuClusterBlock) == UBO_CLUSTERS_BLOCK_SIZE,
                "GpuClusterBlock must match the std140 ClusterBlock layout");
 _Static_assert(sizeof(GpuClusterIndexBlock) == UBO_CLUSTER_INDICES_BLOCK_SIZE,

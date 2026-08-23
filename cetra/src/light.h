@@ -141,15 +141,21 @@ void set_light_range(Light* light, float range);
 // clustering.
 float light_cull_radius(const struct Light* light);
 
-// The luminaire's orthonormal emission frame: `axis` the unit direction it emits
-// along, `up` the roll reference orthogonal to it. Both are always buildable --
-// a degenerate authored direction falls back to -Y and a degenerate or parallel
-// `up` to the canonical perpendicular -- which every consumer assumes, from the
-// LTC corner construction to an asymmetric profile's azimuth zero.
+// An orthonormal frame from an authored direction and an authored roll
+// reference. Always buildable -- a degenerate `dir` falls back to -Y and a
+// degenerate or parallel `ref` to the canonical perpendicular -- which every
+// consumer assumes rather than testing for.
 //
-// One function because two consumers derive it and they must agree: a frame that
-// differs between them turns the same lamp a different way in each, and both
-// halves still render a plausible beam while doing it.
+// Takes vectors rather than a Light because the second consumer is not one: a
+// decal is oriented by exactly this pair (decal.h), and an authored frame that
+// resolves differently in the two would aim the same numbers two ways while
+// both halves still rendered something plausible.
+void orientation_frame(const float dir[3], const float ref[3], vec3 axis, vec3 up);
+
+// The luminaire's orthonormal emission frame: `axis` the unit direction it emits
+// along, `up` the roll reference orthogonal to it -- orientation_frame over the
+// light's own two fields. Consumers assume it is buildable, from the LTC corner
+// construction to an asymmetric profile's azimuth zero.
 void light_emission_frame(const struct Light* light, vec3 axis, vec3 up);
 
 void set_light_cutoff(Light* light, float cutOff, float outerCutOff);

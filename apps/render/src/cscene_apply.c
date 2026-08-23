@@ -487,6 +487,75 @@ void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn) {
 }
 
 /*
+ * The scene file's decals (spec 11.73). No CLI counterpart, the fog-volume rule: a decal
+ * needs a place, a size, a facing AND an image, which is far more than a flag can carry --
+ * `--no-decals` is the only switch, and it is the way off a file that asked for them.
+ *
+ * Printed for the reason a fog volume is: a mark projected onto geometry the camera never
+ * sees is indistinguishable from one that failed to parse.
+ */
+_Static_assert(CSCENE_MAX_DECALS <= DECAL_MAX,
+               "the parser cannot author more decals than a scene can hold");
+
+void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn)
+        return;
+    for (int i = 0; i < cscn->decal_count; i++) {
+        const CSceneDecal* d = &cscn->decals[i];
+
+        // LINEAR, because the image becomes a layer of the material texture array and
+        // that array is linear -- pbr_frag decodes after the blend, the layered-albedo
+        // arrangement. Dilated explicitly: alpha here IS an opacity, which is the case
+        // the plain loader's is_srgb inference gets wrong.
+        Texture* albedo = load_texture_path_into_pool_ex(scene->tex_pool, d->image, false, true);
+        if (!albedo) {
+            fprintf(stderr, "Warning: decal %d: cannot load image '%s'; skipped\n", i, d->image);
+            continue;
+        }
+        Texture* surface = NULL;
+        if (d->surface[0] != '\0') {
+            // Not dilated: this one packs a normal, a roughness and an occlusion, so its
+            // alpha is data and the repair would overwrite three channels of it.
+            surface = load_texture_path_into_pool_ex(scene->tex_pool, d->surface, false, false);
+            if (!surface)
+                fprintf(stderr, "Warning: decal %d: cannot load surface '%s'; ignored\n", i,
+                        d->surface);
+        }
+
+        Decal out = {.opacity = d->opacity,
+                     .angle_fade = d->angle_fade,
+                     .feather = d->feather,
+                     .normal_strength = d->normal_strength,
+                     .enabled = true,
+                     .albedo_tex = albedo,
+                     .surface_tex = surface,
+                     .albedo_layer = -1,
+                     .surface_layer = -1};
+        glm_vec3_copy((float*)d->position, out.position);
+        glm_vec3_copy((float*)d->size, out.half_extent);
+        glm_vec3_copy((float*)d->direction, out.direction);
+        // An unauthored roll is not zero, it is unstated: orientation_frame supplies the
+        // canonical perpendicular from a degenerate reference, so leaving it zero IS the
+        // way to ask for that, exactly as a light does.
+        if (d->has_up)
+            glm_vec3_copy((float*)d->up, out.up);
+
+        if (add_decal_to_scene(scene, &out) < 0)
+            break;
+        printf("Scene file: decal at (%.2f %.2f %.2f) half-extent (%.2f %.2f %.2f) "
+               "facing (%.2f %.2f %.2f) image '%s'%s\n",
+               (double)out.position[0], (double)out.position[1], (double)out.position[2],
+               (double)out.half_extent[0], (double)out.half_extent[1],
+               (double)out.half_extent[2], (double)out.direction[0], (double)out.direction[1],
+               (double)out.direction[2], d->image, surface ? " (+surface)" : "");
+    }
+
+    // A decal image is a layer of the array, so authoring one is a reason to rebuild it.
+    if (cscn->decal_count > 0)
+        scene->material_textures_dirty = true;
+}
+
+/*
  * The scene file's reflection probes (spec 11.70). No CLI counterpart for the same reason
  * fog volumes have none: a probe needs a capture point AND a parallax box, which is more
  * than a flag can carry -- `--probe` asks for one auto-placed probe and cannot say where

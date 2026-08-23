@@ -48,6 +48,11 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn);
 
+// Attach the scene file's decals (spec 11.73), loading each image into the
+// texture pool. Marks the material texture array dirty, since a decal image
+// becomes one of its layers.
+void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn);
+
 // Build and capture the scene file's reflection probes (spec 11.70). True when
 // it took the scene's probes, which is what tells the caller to skip the single
 // auto-placed probe --probe would otherwise install. Must run after the model

@@ -17,6 +17,7 @@
 #include "probe_set.h"
 #include "animation.h"
 #include "draw_list.h"
+#include "decal.h"
 
 // Forward-declared so scene.h and particle_system.h never include each other
 // (particle_system.h forward-declares SceneNode in turn) -- avoids a cycle.
@@ -137,6 +138,43 @@ typedef struct FogVolume {
 } FogVolume;
 
 /*
+ * A mark projected onto whatever surface is inside its box (spec 11.73).
+ *
+ * ORIENTED, unlike the fog volume above, and the deferral stated there does not
+ * carry over: that box is a medium, which an axis-aligned pair of corners
+ * describes completely, and it declined a matrix per volume because nothing had
+ * asked. A decal is a PICTURE, so which way round it sits is half of what is
+ * authored -- there is no unoriented version of a poster -- and the per-fragment
+ * transform is the cost this feature exists to pay.
+ *
+ * What it is NOT is a material: 11.68's roads reshape a layered ground's own
+ * splat weights, so a road is MADE of a layer the surface already carries. This
+ * projects an image onto surfaces that have no such layer set at all, which is
+ * why walls and props are its half of the job.
+ *
+ * The cap (DECAL_MAX, decal.h) is small and deliberate, the roads argument
+ * again -- see that header for what sizes it.
+ */
+typedef struct Decal {
+    vec3 position;
+    vec3 half_extent; // local x,y span the image covers; z the projection depth
+    vec3 direction;   // the way the projector faces; local +Z
+    vec3 up;          // roll reference, Gram-Schmidt'd against direction
+    float opacity;    // scales the image's own alpha
+    float angle_fade; // degrees off-axis past which a surface takes no mark
+    float feather;    // local units the edge ramps over, inward from the box faces
+    float normal_strength;
+    bool enabled;
+    Texture* albedo_tex;  // borrowed from the scene's texture pool
+    Texture* surface_tex; // optional: packed normal.xy + roughness + AO
+    // Layer indices in the material texture array, assigned at its build and
+    // -1 until then (or where no map was authored). Re-read every frame by the
+    // descriptor pack, so a rebuild that renumbers layers heals on the next one.
+    int albedo_layer;
+    int surface_layer;
+} Decal;
+
+/*
  * Scene
  */
 
@@ -207,6 +245,12 @@ typedef struct Scene {
     // Boxes of denser air, folded into the froxel volume (spec 11.39). Count 0 = none.
     FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES];
     int fog_volume_count;
+
+    // Marks projected onto the surfaces inside them (spec 11.73). Count 0 = none,
+    // which is the whole off state: nothing allocates and the shader's loop is
+    // never entered.
+    Decal decals[DECAL_MAX];
+    int decal_count;
 
     // The scene's unique per-texel material images -- masks and layer maps --
     // packed into one GL_TEXTURE_2D_ARRAY (built lazily once the source textures
@@ -371,6 +415,10 @@ void scene_environment_changed(Scene* scene, struct Engine* engine);
 
 // fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);
+
+// decals. Same contract; the caller owns resolving the textures and orienting
+// the frame, so this only bounds-checks and copies.
+int add_decal_to_scene(Scene* scene, const Decal* decal);
 // Copy this frame's volumes onto PostFX. Mirrors water_publish_to_postfx: the medium
 // hands PostFX flat POD and PostFX never learns that a Scene exists.
 void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx);

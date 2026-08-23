@@ -35,6 +35,7 @@
 #define UBO_BINDING_VT_PAGES        7
 #define UBO_BINDING_ROADS           8
 #define UBO_BINDING_PROBES          9
+#define UBO_BINDING_DECALS          10
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
@@ -180,9 +181,9 @@ _Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,
  * available before the struct is. The assert against sizeof lives there, where
  * the struct is.
  *
- * The reader is pbr_frag, whose fragment stage this takes to NINE uniform
- * blocks of GL 4.1's guaranteed twelve. Whoever wants the tenth should know
- * that is the budget being spent.
+ * The reader is pbr_frag, whose fragment stage this took to NINE uniform blocks
+ * of GL 4.1's guaranteed twelve -- and the decal block below is the tenth, so
+ * two are left. Whoever wants the eleventh should know that is what remains.
  */
 // info(16) + atlas params(16) + atlas column(16) + 8 row entries(128)
 // + 8 probes x 4 rows(512) + 3072 froxel masks packed 4 per word(3072).
@@ -193,6 +194,24 @@ _Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,
 #define UBO_PROBES_BLOCK_SIZE 3760
 _Static_assert(UBO_PROBES_BLOCK_SIZE <= 16384,
                "the probes block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
+
+/*
+ * Clustered decals (spec 11.73), and the TENTH block the note above priced.
+ * Spent knowingly: what a decal needs per fragment is an oriented transform and
+ * a froxel mask, which is geometry in uniform space -- the roads argument -- and
+ * the only alternative that avoids the block is a texture holding transforms,
+ * which spends a sampler this shader does not have.
+ *
+ * The mask is SIXTEEN bits per froxel where the probes' is eight, because the
+ * cap is 16 rather than 8. That width is what bounds the cap: 32 decals would
+ * be 12288 mask bytes and pin the descriptor at six rows forever, and 64 would
+ * not fit the block at all.
+ */
+// info(16) + 16 decals x 5 rows(1280) + 3072 froxel masks packed 2 per word(6144).
+// A literal for the same reason UBO_PROBES_BLOCK_SIZE is one.
+#define UBO_DECALS_BLOCK_SIZE 7440
+_Static_assert(UBO_DECALS_BLOCK_SIZE <= 16384,
+               "the decals block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 
 typedef struct Ubo {
     GLuint id;

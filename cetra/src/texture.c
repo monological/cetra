@@ -448,6 +448,13 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture) {
 }
 
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb) {
+    // The historical correlation, kept as the default: a colour texture is the
+    // one with an opacity in alpha.
+    return load_texture_path_into_pool_ex(pool, filepath, is_srgb, is_srgb);
+}
+
+Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
+                                        bool dilate_transparent) {
     if (!pool || !filepath) {
         log_error("Invalid pool or filepath");
         return NULL;
@@ -498,14 +505,14 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bo
         return NULL;
     }
 
-    // Only a COLOUR texture. The dilate repairs the rgb of transparent texels so
-    // a cutout's edge does not bleed the atlas background, which is a statement
-    // about colour beside an OPACITY -- and `is_srgb` is exactly "this is colour
-    // data" (import.c). A linear RGBA texture's alpha means something else:
-    // spec 11.60 stores a layer's HEIGHT there and its ambient occlusion in the
-    // surface map's, and dilating those overwrites the albedo, the packed normal
-    // and the roughness of every texel whose relief dips below 3.1%.
-    if (nrChannels == 4 && is_srgb) {
+    // Only where alpha is an OPACITY. The dilate repairs the rgb of transparent
+    // texels so a cutout's edge does not bleed the atlas background, and callers
+    // that do not say default this to `is_srgb`, which is exactly "this is colour
+    // data" (import.c). A linear RGBA texture's alpha usually means something
+    // else: spec 11.60 stores a layer's HEIGHT there and its ambient occlusion in
+    // the surface map's, and dilating those overwrites the albedo, the packed
+    // normal and the roughness of every texel whose relief dips below 3.1%.
+    if (nrChannels == 4 && dilate_transparent) {
         texture_dilate_transparent_rgb(data, width, height);
     }
 

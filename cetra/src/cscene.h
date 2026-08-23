@@ -18,6 +18,7 @@
 #define CSCENE_MAX_LIGHTS          16
 #define CSCENE_MAX_FOG_VOLUMES     8
 #define CSCENE_MAX_PROBES          8
+#define CSCENE_MAX_DECALS          16
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
 #define CSCENE_MAX_MATERIALS       8
 #define CSCENE_MAX_NAME            128
@@ -340,6 +341,37 @@ typedef struct CSceneProbe {
     bool env_only; // prefilter the global environment instead of capturing the scene
 } CSceneProbe;
 
+/*
+ * decals[] -- marks projected onto the surfaces inside them (spec 11.73). A top-level
+ * block for the reason the two above are: a decal is a thing placed in the world.
+ *
+ * position, size, direction and image are all REQUIRED, the probe rule again. A decal is
+ * a picture, a box to project it through and the way it faces; defaulting any of the four
+ * gives a mark somewhere nobody asked for, facing somewhere nobody asked, which renders as
+ * a plausible frame with the poster on the wrong wall. `up` is optional because a roll of
+ * zero is a real answer and orientation_frame supplies the canonical one -- the same split
+ * a light's `up` takes.
+ *
+ * A MIRROR rather than the runtime type, unlike MaterialRoad: this holds image PATHS where
+ * Decal holds Texture*, which is CSceneMaterialLayer's relationship to MaterialLayer and
+ * not a road's to itself.
+ */
+typedef struct CSceneDecal {
+    float position[3];
+    float size[3]; // HALF-extent, matching the engine struct
+    float direction[3];
+    float up[3];
+    bool has_up;
+    float opacity;
+    float angle_fade; // DEGREES here; the pack converts to the cosine the shader wants
+    float feather;
+    float normal_strength;
+    // Resolved through the texture pool against the app's -t directory, like every
+    // material texture -- not against the scene file's own directory.
+    char image[CSCENE_MAX_PATH];
+    char surface[CSCENE_MAX_PATH]; // optional; empty = none
+} CSceneDecal;
+
 // Mirrors MeteringMode in cetra/src/exposure.h. Kept as its own enum for the
 // reason CSceneTonemap is: this header carries no engine headers, and the values
 // must agree numerically -- which is unwritten anywhere if both sides use bare
@@ -484,6 +516,9 @@ typedef struct CetraSceneDesc {
 
     CSceneProbe probes[CSCENE_MAX_PROBES];
     int probe_count;
+
+    CSceneDecal decals[CSCENE_MAX_DECALS];
+    int decal_count;
 
     CSceneMaterialOverride materials[CSCENE_MAX_MATERIALS];
     int material_count;

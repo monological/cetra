@@ -539,6 +539,17 @@ int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
     return 0;
 }
 
+int add_decal_to_scene(Scene* scene, const Decal* decal) {
+    if (!scene || !decal)
+        return -1;
+    if (scene->decal_count >= DECAL_MAX) {
+        log_warn("scene: more than %d decals; extra ignored", DECAL_MAX);
+        return -1;
+    }
+    scene->decals[scene->decal_count++] = *decal;
+    return 0;
+}
+
 void scene_environment_changed(Scene* scene, struct Engine* engine) {
     if (!scene || !engine || !scene->sky)
         return;

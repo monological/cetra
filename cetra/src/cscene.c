@@ -609,6 +609,74 @@ static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
  * Closed key list, unlike fogVolumes: this block arrived after warn_unknown_keys existed
  * and a typo'd `boxmin` is exactly the silent failure the required-key check cannot catch.
  */
+/*
+ * decals[] -- a mark projected onto whatever is inside its box (spec 11.73).
+ *
+ * Four required keys, the probe rule: a decal is a picture, a box and a facing, and a
+ * default for any of them is a poster on a wall nobody chose. `image` is required for the
+ * same reason and refused by name -- a decal whose image failed to load is invisible, and
+ * silently dropping it looks exactly like the feature not working.
+ */
+static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
+    static const char* known[] = {"position", "size",    "direction",      "up",     "image",
+                                  "surface",  "opacity", "angleFade",      "feather",
+                                  "normalStrength"};
+
+    const cJSON* decals = cJSON_GetObjectItemCaseSensitive(root, "decals");
+    if (!cJSON_IsArray(decals))
+        return;
+    const cJSON* p = NULL;
+    cJSON_ArrayForEach(p, decals) {
+        if (d->decal_count >= CSCENE_MAX_DECALS) {
+            log_warn("cscene: more than %d decals; extras ignored", CSCENE_MAX_DECALS);
+            break;
+        }
+        if (!cJSON_IsObject(p)) {
+            log_warn("cscene: decal that is not an object; skipped");
+            continue;
+        }
+        warn_unknown_keys(p, known, sizeof(known) / sizeof(known[0]), "decal");
+
+        CSceneDecal* out = &d->decals[d->decal_count];
+        memset(out, 0, sizeof(*out));
+        if (!get_floats(p, "position", out->position, 3) ||
+            !get_floats(p, "size", out->size, 3) ||
+            !get_floats(p, "direction", out->direction, 3)) {
+            log_warn("cscene: decal needs position, size and direction; skipped");
+            continue;
+        }
+        copy_string(out->image, CSCENE_MAX_PATH, cJSON_GetObjectItemCaseSensitive(p, "image"));
+        if (out->image[0] == '\0') {
+            log_warn("cscene: decal needs an image; skipped");
+            continue;
+        }
+        // A zero half-extent is a box with no inside, which projects nothing at the price
+        // of a per-fragment test. Refused rather than clamped: the authored number is
+        // meaningless, where roads refuse a negative feather on the same argument.
+        if (out->size[0] <= 0.0f || out->size[1] <= 0.0f || out->size[2] <= 0.0f) {
+            log_warn("cscene: decal size must be positive in every axis "
+                     "(got %.3f, %.3f, %.3f); skipped",
+                     (double)out->size[0], (double)out->size[1], (double)out->size[2]);
+            continue;
+        }
+
+        // create_decal's own defaults, restated because the memset cleared them and a
+        // decal at opacity 0 is an invisible decal -- the probe-intensity lesson.
+        out->opacity = 1.0f;
+        out->angle_fade = 60.0f;
+        out->feather = 0.1f;
+        out->normal_strength = 1.0f;
+        out->has_up = get_floats(p, "up", out->up, 3);
+        get_float(p, "opacity", &out->opacity);
+        get_float(p, "angleFade", &out->angle_fade);
+        get_float(p, "feather", &out->feather);
+        get_float(p, "normalStrength", &out->normal_strength);
+        copy_string(out->surface, CSCENE_MAX_PATH,
+                    cJSON_GetObjectItemCaseSensitive(p, "surface"));
+        d->decal_count++;
+    }
+}
+
 static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
     static const char* known[] = {"position", "boxMin",   "boxMax",
                                   "intensity", "boxFade", "envOnly"};
@@ -1073,6 +1141,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_water(d, root);
     parse_fog_volumes(d, root);
     parse_probes(d, root);
+    parse_decals(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
     cJSON_Delete(root);
