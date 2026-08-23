@@ -14630,6 +14630,10 @@ def run_decal_gate(workdir):
                         behind the camera claims no froxel and moves no pixel
       decals-schema     a decal missing position, size, direction or image is
                         refused by name, and a degenerate size is refused too
+      decals-config     the snapshot's nine decal rows survive a dump and a
+                        restore, and a perturbed one CHANGES THE FRAME -- the
+                        config group's own fixture authors no decal, so without
+                        this the rows are dead to the whole suite
 
     NO ARM HERE IS SAFE ALONE, the probe-set rule. decals-albedo alone passes on
     a build with no facing test, no edge and no mask -- it only asks that a mark
@@ -14928,6 +14932,61 @@ def run_decal_gate(workdir):
           f"{len(named) - len(misses)}/{len(named)}"
           f"{' (missing ' + ','.join(misses) + ')' if misses else ''}, "
           f"and the unmutated fixture loads with no refusal and {len(clean)} decals")
+
+    # -- config: the snapshot rows, which the config group's fixture cannot see -
+    #
+    # CONFIG_FIXTURE is cornell_rooms and it authors no decal, so _decal_at
+    # returns NULL at every index and the whole "decals" section is empty in
+    # every arm over there -- config-perturb included, which is the one arm that
+    # can see a row whose apply silently does nothing. And config-coverage
+    # matches on the TRAILING member name, so `position`, `opacity`, `enabled`
+    # and the rest are all already satisfied by Light and Probe rows: the nine
+    # decal rows would pass that census if they were deleted outright.
+    # Dumped from a session already in the state the reference frames were taken
+    # in -- albedo view, exposure pinned. The snapshot OWNS THE LOOK and applies
+    # after the CLI, so a dump taken in another mode would restore that mode and
+    # overrule the flag, and the comparison would be against a different picture.
+    _, dump, _ = _config_run(workdir, "decals",
+                             ["-t", os.path.join(ROOT, "assets"), "--render-mode", "6",
+                              "--no-auto-exposure", "-E", "1.0"],
+                             model=DECAL_FIXTURE, frames=4)
+    carried, restored_px, keys = [], None, 0
+    if os.path.exists(dump):
+        with open(dump) as fh:
+            snap = json.load(fh)
+        rows = snap.get("decals") or []
+        keys = len(rows[0]) if rows else 0
+        carried = sorted(rows[0].keys()) if rows else []
+        # Perturb through the SNAPSHOT rather than the .cscn: that is the path
+        # under test, and opacity 0 is a change every pixel of the mark can see.
+        for r in rows:
+            r["opacity"] = 0.0
+        edited = os.path.join(workdir, "config_decals_edited.json")
+        with open(edited, "w") as fh:
+            json.dump(snap, fh)
+        shot = os.path.join(workdir, "config_decals_restored.ppm")
+        # No look flags here on purpose: the snapshot carries them, which is the
+        # claim -- "give somebody the JSON and they see your pixels".
+        subprocess.run([RENDER, "--config", edited, "-t", os.path.join(ROOT, "assets"),
+                        "-x", "-f", "4", "-W", "400", "-H", "300", "-S", shot],
+                       capture_output=True, text=True)
+        on = os.path.join(workdir, "decal_on.ppm")
+        off = os.path.join(workdir, "decal_off.ppm")
+        if os.path.exists(shot):
+            moved, _ = compare(on, shot)
+            same_as_off, _ = compare(off, shot)
+            restored_px = (moved, same_as_off)
+    # Nine rows, and the restore must land: opacity 0 takes the frame all the way
+    # back to the decal-free one, which no half-applied restore reaches.
+    ok = (keys >= 9 and restored_px is not None and restored_px[0] > 500 and
+          restored_px[1] == 0)
+    if not ok:
+        failures.append("decals-config")
+    print(f"  decals-config {'PASS' if ok else 'FAIL'}  the dump carries {keys} decal rows "
+          f"({', '.join(carried) if carried else 'none'}); restoring one with opacity 0 "
+          f"moves {restored_px[0] if restored_px else '?'} px from the marked frame (want "
+          f"> 500) and lands {restored_px[1] if restored_px else '?'} px from the "
+          f"decal-free one (want 0)")
 
     return failures
 
