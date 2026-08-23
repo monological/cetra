@@ -333,6 +333,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -S, --screenshot <path> Save final frame as PPM on exit\n");
     fprintf(stderr, "      --screenshot-every <N> Also save numbered frames every N frames\n");
     fprintf(stderr, "      --config-dump <path> Write the whole tuned config as JSON on exit\n");
+    fprintf(stderr, "      --config <path>    Restore one; carries its own model, so it can be\n");
+    fprintf(stderr, "                         the only argument. Wins over the .cscn and flags\n");
     fprintf(stderr, "  -h, --help             Show this help message\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s -m character.fbx -t textures/\n", prog);
@@ -496,6 +498,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid width '%s'\n", argv[i]);
                 return -1;
             }
+            args->size_set = 1;
         } else if (strcmp(argv[i], "-H") == 0 || strcmp(argv[i], "--height") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -506,6 +509,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: invalid height '%s'\n", argv[i]);
                 return -1;
             }
+            args->size_set = 1;
         } else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--headless") == 0) {
             args->headless = 1;
         } else if (strcmp(argv[i], "--headless-jitter") == 0) {
@@ -1553,6 +1557,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->config_dump_path = argv[i];
+        } else if (strcmp(argv[i], "--config") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->config_path = argv[i];
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1581,7 +1591,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         }
     }
 
-    if (!args->show_help && !args->model_path) {
+    // --config carries its own, which is what lets a snapshot be the only
+    // argument; main refuses again if the file turns out to name none.
+    if (!args->show_help && !args->model_path && !args->config_path) {
         fprintf(stderr, "Error: model path is required\n\n");
         return -1;
     }
@@ -2295,6 +2307,41 @@ int main(int argc, char** argv) {
     if (args.show_help) {
         print_usage(argv[0]);
         return 0;
+    }
+
+    /*
+     * A config snapshot's `source` block, which is the only half of it that can
+     * be read this early -- everything else describes objects that do not exist
+     * until the model has loaded (spec 11.71).
+     *
+     * It fills the same sentinels a .cscn does and loses to an explicit flag for
+     * the same reason: the file records what a session WAS, and naming -m or -e
+     * on the command line beside it is asking for a variation on it.
+     */
+    if (args.config_path) {
+        const ConfigSnapshotSource* src = NULL;
+        if (!config_snapshot_read_source(args.config_path, &src))
+            return -1;
+        if (!args.model_path)
+            args.model_path = src->model[0] ? src->model : NULL;
+        if (!args.hdr_path && !args.sky && src->hdr[0])
+            args.hdr_path = src->hdr;
+        if (!args.hdr_path && !args.sky && src->sky)
+            args.sky = 1;
+        if (!args.lut_path && src->lut[0])
+            args.lut_path = src->lut;
+        if (!args.texture_dir && src->textures[0])
+            args.texture_dir = src->textures;
+        // Framing is part of the look here, not part of the run: a snapshot
+        // taken at one window size does not describe the same frame at another.
+        if (!args.size_set && src->width > 0 && src->height > 0) {
+            args.width = src->width;
+            args.height = src->height;
+        }
+        if (!args.model_path) {
+            fprintf(stderr, "Error: %s names no model and none was given\n", args.config_path);
+            return -1;
+        }
     }
 
     // Two environment sources cannot coexist; silent precedence would hide
@@ -3660,6 +3707,25 @@ int main(int argc, char** argv) {
         .textures = args.texture_dir,
         .sky = args.sky != 0,
     });
+
+    /*
+     * And the rest of a restored snapshot, LAST -- after the scene file, after
+     * every flag, and after the scene-radius block that floors ssao_radius,
+     * ssr_max_distance and ssr_thickness_min against the model's own size. Land
+     * this before that and those three are raised back out from under it.
+     *
+     * The auto-orbit kill is the one thing the engine-side apply cannot do: the
+     * drag controller is the app's, and a restored pose it does not know about
+     * gets rewritten from theta/phi on the first frame.
+     */
+    if (args.config_path) {
+        if (config_snapshot_apply_file(engine, scene, args.config_path) < 0)
+            return -1;
+        if (drag_controller)
+            set_mouse_drag_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
+                                      drag_controller->auto_orbit_min_dist,
+                                      drag_controller->auto_orbit_max_dist);
+    }
 
     frame_schedule = &args;
     engine_run(engine, render_frame_update, render_scene_callback);

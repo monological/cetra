@@ -68,6 +68,25 @@ typedef enum ConfigType {
     CFG_ENUM,
 } ConfigType;
 
+struct ConfigField;
+
+// What a restore is allowed to touch beyond the field itself, and the two things
+// it must defer. Both deferrals exist because the work is triggered by a MOVE
+// rather than by a value: two sun angles are one sun move, and a camera pose is
+// only coherent once eye, target and up have all arrived.
+typedef struct ConfigApplyCtx {
+    struct Engine* engine;
+    struct Scene* scene;
+    bool sun_moved;
+    bool camera_moved;
+} ConfigApplyCtx;
+
+// Rows carrying one of these do NOT store; the function is responsible for the
+// write. `v` holds the decoded value -- one element for a scalar or an enum,
+// two or three for a vector.
+typedef void (*ConfigApplyFn)(ConfigApplyCtx* ctx, void* base, const struct ConfigField* f,
+                              const double* v, int n);
+
 typedef struct ConfigField {
     unsigned char owner;
     unsigned char type;
@@ -78,13 +97,22 @@ typedef struct ConfigField {
     size_t offset;
     const char* const* labels; // CFG_ENUM only
     int label_count;
+    ConfigApplyFn apply; // NULL = a plain store
 } ConfigField;
 
 #define CFG_ROW(owner_, type_, section_, key_, struct_, member_)                                   \
-    {owner_, type_, section_, key_, offsetof(struct_, member_), NULL, 0}
+    {owner_, type_, section_, key_, offsetof(struct_, member_), NULL, 0, NULL}
 #define CFG_ROW_ENUM(owner_, section_, key_, struct_, member_, labels_)                            \
-    {owner_,      CFG_ENUM, section_, key_, offsetof(struct_, member_), labels_,                   \
-     (int)(sizeof(labels_) / sizeof((labels_)[0]))}
+    {owner_,                                                                                       \
+     CFG_ENUM,                                                                                     \
+     section_,                                                                                     \
+     key_,                                                                                         \
+     offsetof(struct_, member_),                                                                   \
+     labels_,                                                                                      \
+     (int)(sizeof(labels_) / sizeof((labels_)[0])),                                                \
+     NULL}
+#define CFG_ROW_FN(owner_, type_, section_, key_, struct_, member_, fn_)                           \
+    {owner_, type_, section_, key_, offsetof(struct_, member_), NULL, 0, fn_}
 
 // Enum vocabularies. Index IS the enum value, so a gap would misname every value
 // after it -- the two that do not start at zero say so beside themselves.
@@ -118,6 +146,98 @@ _Static_assert(sizeof(PostFXLutInterp) == sizeof(int), "CFG_ENUM addresses enums
 _Static_assert(sizeof(MeteringMode) == sizeof(int), "CFG_ENUM addresses enums as int");
 
 /*
+ * The row's field inside an owner. Returned as void* rather than cast at each
+ * site: the offset arithmetic needs a byte pointer, and a char*-to-float* cast
+ * is the one a portability checker reads as reinterpreting unaligned bytes.
+ */
+static void* _field_ptr(void* base, const ConfigField* f) {
+    return (void*)((unsigned char*)base + f->offset);
+}
+
+static const void* _field_ptr_const(const void* base, const ConfigField* f) {
+    return (const void*)((const unsigned char*)base + f->offset);
+}
+
+/*
+ * The rows that are not a store. Every one of them is a value whose EFFECT needs
+ * something to run -- a target rebuild, a re-bake, a flag somewhere else -- and
+ * assigning the field alone would leave a snapshot that reads back correctly and
+ * renders wrong.
+ */
+static void _apply_render_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                                const double* v, int n) {
+    (void)base;
+    (void)f;
+    (void)n;
+    set_engine_render_scale(ctx->engine, (float)v[0]);
+}
+
+static void _apply_msaa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
+                        int n) {
+    (void)base;
+    (void)f;
+    (void)n;
+    set_engine_msaa_samples(ctx->engine, (int)v[0]);
+}
+
+static void _apply_ss_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
+                            int n) {
+    (void)base;
+    (void)f;
+    (void)n;
+    set_engine_ss_scale(ctx->engine, (int)v[0]);
+}
+
+static void _apply_taa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
+                       int n) {
+    (void)base;
+    (void)f;
+    (void)n;
+    set_engine_taa_enabled(ctx->engine, v[0] != 0.0);
+}
+
+static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                                const double* v, int n) {
+    (void)base;
+    (void)f;
+    (void)n;
+    postfx_set_ssr_full_res(ctx->engine->postfx, v[0] != 0.0);
+}
+
+// The store is the easy half. Clearing publish_fog_ambient is what makes it
+// stick: the sky stamps its zenith radiance over this every time the sun moves,
+// and the sun is about to move if the snapshot carried one.
+static void _apply_fog_ambient(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                               const double* v, int n) {
+    float* dst = (float*)_field_ptr(base, f);
+    for (int i = 0; i < n && i < 3; i++)
+        dst[i] = (float)v[i];
+    if (ctx->scene && ctx->scene->sky)
+        ctx->scene->sky->publish_fog_ambient = false;
+}
+
+// Two angles are ONE sun move. Storing here and re-baking after the walk keeps
+// it to a single bake rather than one per angle, and keeps the bake from running
+// against a half-restored sun.
+static void _apply_sun_angle(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
+                             int n) {
+    (void)n;
+    *(float*)_field_ptr(base, f) = (float)v[0];
+    ctx->sun_moved = true;
+}
+
+// Eye, target and up are one POSE, and the orbit bookkeeping derived from it is
+// stale until all three have landed -- hence the deferral rather than a sync per
+// component.
+static void _apply_camera_vec(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                              const double* v, int n) {
+    float* dst = (float*)_field_ptr(base, f);
+    for (int i = 0; i < n && i < 3; i++)
+        dst[i] = (float)v[i];
+    ctx->camera_moved = true;
+}
+
+/*
  * The table. Every row is one control; a control with no row is a control this
  * feature cannot carry, which is what `config-coverage` asserts against gui.c.
  */
@@ -126,9 +246,10 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW_ENUM(CFG_ENGINE, "engine", "render_mode", Engine, current_render_mode,
                  CFG_RENDER_MODES),
     CFG_ROW_ENUM(CFG_ENGINE, "engine", "camera_mode", Engine, camera_mode, CFG_CAMERA_MODES),
-    CFG_ROW(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", Engine, msaa_samples),
-    CFG_ROW(CFG_ENGINE, CFG_FLOAT, "engine", "render_scale", Engine, render_scale),
-    CFG_ROW(CFG_ENGINE, CFG_INT, "engine", "ss_scale", Engine, ss_scale),
+    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", Engine, msaa_samples, _apply_msaa),
+    CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "render_scale", Engine, render_scale,
+               _apply_render_scale),
+    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "ss_scale", Engine, ss_scale, _apply_ss_scale),
 
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "gui", Engine, show_gui),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "wireframe", Engine, show_wireframe),
@@ -173,7 +294,7 @@ static const ConfigField CFG_FIELDS[] = {
     // --- postfx
     CFG_ROW_ENUM(CFG_POSTFX, "postfx", "tonemap", PostFX, tonemap_mode, CFG_TONEMAPS),
     CFG_ROW_ENUM(CFG_POSTFX, "postfx", "debug_view", PostFX, debug_view, CFG_DEBUG_VIEWS),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx", "taa", PostFX, taa_enabled),
+    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx", "taa", PostFX, taa_enabled, _apply_taa),
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx", "normals_gbuffer", PostFX, normals_enabled),
 
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.bloom", "enabled", PostFX, bloom_enabled),
@@ -214,7 +335,8 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "temporal", PostFX, ssr_temporal),
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "denoise", PostFX, ssr_denoise),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "jitter", PostFX, ssr_jitter),
-    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "full_res", PostFX, ssr_full_res),
+    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "full_res", PostFX, ssr_full_res,
+               _apply_ssr_full_res),
 
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "enabled", PostFX, fog_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "density", PostFX, fog_density),
@@ -226,7 +348,8 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "temporal_blend", PostFX, fog_temporal_blend),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "anisotropy", PostFX, fog_anisotropy),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "sun_boost", PostFX, fog_sun_boost),
-    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.fog", "ambient", PostFX, fog_ambient),
+    CFG_ROW_FN(CFG_POSTFX, CFG_VEC3, "postfx.fog", "ambient", PostFX, fog_ambient,
+               _apply_fog_ambient),
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "esm", PostFX, fog_esm_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "esm_sharpness", PostFX, fog_esm_k),
     CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_x", PostFX, froxel_grid_x),
@@ -312,9 +435,9 @@ static const ConfigField CFG_FIELDS[] = {
 
     // --- camera. Radians, not the degrees Print Camera emits: this file is read
     // back by the loader, and a unit conversion is a second place to disagree.
-    CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "eye", Camera, position),
-    CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "target", Camera, look_at),
-    CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "up", Camera, up_vector),
+    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "eye", Camera, position, _apply_camera_vec),
+    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "target", Camera, look_at, _apply_camera_vec),
+    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "up", Camera, up_vector, _apply_camera_vec),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "fov_radians", Camera, fov_radians),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "near_clip", Camera, near_clip),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "far_clip", Camera, far_clip),
@@ -343,8 +466,10 @@ static const ConfigField CFG_FIELDS[] = {
 
     // --- sky. Moving the sun re-bakes the LUTs, the environment and the IBL, so
     // these rows have a setter on apply where the rest are stores.
-    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "sun_elevation", SkyAtmosphere, sun_elevation_deg),
-    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "sun_azimuth", SkyAtmosphere, sun_azimuth_deg),
+    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "sun_elevation", SkyAtmosphere, sun_elevation_deg,
+               _apply_sun_angle),
+    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "sun_azimuth", SkyAtmosphere, sun_azimuth_deg,
+               _apply_sun_angle),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "sun_disc", SkyAtmosphere, sun_disc_deg),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "world_units_per_km", SkyAtmosphere, world_units_per_km),
     CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "aerial", SkyAtmosphere, aerial_enabled),
@@ -473,6 +598,8 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src) {
     _source.lut = _source_lut;
     _source.textures = _source_textures;
     _source.sky = src->sky;
+    _source.width = src->width;
+    _source.height = src->height;
     _source_set = true;
 }
 
@@ -557,10 +684,7 @@ static const char* _enum_label(const ConfigField* f, int value) {
 static bool _write_field(cJSON* obj, const ConfigField* f, const void* base) {
     if (!obj)
         return false;
-    // Through void*, not straight off the byte pointer: the offset arithmetic
-    // needs a char*, but a char*-to-float* cast is the one a portability checker
-    // reads as a reinterpretation of unaligned bytes.
-    const void* p = (const void*)((const unsigned char*)base + f->offset);
+    const void* p = _field_ptr_const(base, f);
 
     switch ((ConfigType)f->type) {
     case CFG_BOOL:
@@ -798,5 +922,515 @@ bool config_snapshot_save(Engine* engine, Scene* scene, const char* path) {
     }
     printf("config snapshot written: %s (%d fields)\n", path, fields);
     fflush(stdout);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Reading one back.
+
+static char* _read_whole_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    const long size = ftell(f);
+    if (size < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    char* text = (char*)malloc((size_t)size + 1);
+    if (!text) {
+        fclose(f);
+        return NULL;
+    }
+    const size_t got = fread(text, 1, (size_t)size, f);
+    fclose(f);
+    text[got] = '\0';
+    return text;
+}
+
+// Find-only twin of _section_object. A restore must never CREATE a section: a
+// missing one means the snapshot did not carry it, which is the same answer as
+// this scene not having it.
+static const cJSON* _find_section(const cJSON* root, const char* path) {
+    const cJSON* node = root;
+    const char* p = path;
+    while (*p && node) {
+        const char* dot = strchr(p, '.');
+        size_t len = dot ? (size_t)(dot - p) : strlen(p);
+        char name[64];
+        if (len >= sizeof(name))
+            len = sizeof(name) - 1;
+        memcpy(name, p, len);
+        name[len] = '\0';
+        node = cJSON_GetObjectItemCaseSensitive(node, name);
+        p = dot ? dot + 1 : p + len;
+    }
+    return node;
+}
+
+static int _enum_value(const ConfigField* f, const char* label) {
+    for (int i = 0; i < f->label_count; i++) {
+        if (f->labels[i] && strcmp(f->labels[i], label) == 0)
+            return i;
+    }
+    return -1;
+}
+
+/*
+ * Decode one JSON item into up to three doubles, in the shape the row wants.
+ * Returns the count, or 0 when the item cannot be that shape -- which is refused
+ * BY NAME rather than coerced, because a silently-zeroed field renders as a
+ * setting somebody chose.
+ */
+static int _decode_value(const ConfigField* f, const cJSON* item, double* out) {
+    switch ((ConfigType)f->type) {
+    case CFG_BOOL:
+        if (!cJSON_IsBool(item))
+            return 0;
+        out[0] = cJSON_IsTrue(item) ? 1.0 : 0.0;
+        return 1;
+    case CFG_INT:
+    case CFG_FLOAT:
+        if (!cJSON_IsNumber(item))
+            return 0;
+        out[0] = item->valuedouble;
+        return 1;
+    case CFG_VEC2:
+    case CFG_VEC3: {
+        const int want = f->type == CFG_VEC2 ? 2 : 3;
+        if (!cJSON_IsArray(item) || cJSON_GetArraySize(item) != want)
+            return 0;
+        for (int i = 0; i < want; i++) {
+            const cJSON* e = cJSON_GetArrayItem(item, i);
+            if (!cJSON_IsNumber(e))
+                return 0;
+            out[i] = e->valuedouble;
+        }
+        return want;
+    }
+    case CFG_ENUM: {
+        // A number is accepted as well as a label, so a hand-edited file that
+        // wrote the raw value still loads; the writer only ever emits labels.
+        if (cJSON_IsNumber(item)) {
+            out[0] = item->valuedouble;
+            return 1;
+        }
+        if (!cJSON_IsString(item) || !item->valuestring)
+            return 0;
+        const int value = _enum_value(f, item->valuestring);
+        if (value < 0)
+            return 0;
+        out[0] = value;
+        return 1;
+    }
+    }
+    return 0;
+}
+
+// Store a decoded value into the row's field. The mirror of _write_field's
+// switch, and the reason both live in this file: they are one contract.
+static void _store_value(const ConfigField* f, void* base, const double* v, int n) {
+    void* p = _field_ptr(base, f);
+    switch ((ConfigType)f->type) {
+    case CFG_BOOL:
+        *(bool*)p = v[0] != 0.0;
+        break;
+    case CFG_INT:
+    case CFG_ENUM:
+        *(int*)p = (int)v[0];
+        break;
+    case CFG_FLOAT:
+        *(float*)p = (float)v[0];
+        break;
+    case CFG_VEC2:
+    case CFG_VEC3: {
+        float* dst = (float*)p;
+        for (int i = 0; i < n; i++)
+            dst[i] = (float)v[i];
+        break;
+    }
+    }
+}
+
+// One row against one already-located object. Absent is silence -- a snapshot
+// may legitimately predate a field -- but present-and-wrong is named.
+static bool _apply_field(ConfigApplyCtx* ctx, const cJSON* obj, const ConfigField* f, void* base) {
+    const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, f->key);
+    if (!item)
+        return false;
+    double v[3] = {0.0, 0.0, 0.0};
+    const int n = _decode_value(f, item, v);
+    if (n == 0) {
+        fprintf(stderr, "Warning: config snapshot: %s.%s is not a %s; ignored\n", f->section,
+                f->key, f->type == CFG_ENUM ? "known value" : "value of the right shape");
+        return false;
+    }
+    if (f->apply)
+        f->apply(ctx, base, f, v, n);
+    else
+        _store_value(f, base, v, n);
+    return true;
+}
+
+/*
+ * The element arrays. Probes match on their index because their order IS their
+ * identity -- probes[0] is the probe the .cscn authored first. Lights and
+ * materials match on NAME, because theirs is the importer's order and a mesh
+ * added to a model would silently re-point every entry after it.
+ */
+static int _apply_elements(ConfigApplyCtx* ctx, const cJSON* root, const char* array_key,
+                           ConfigOwner owner) {
+    const cJSON* array = cJSON_GetObjectItemCaseSensitive(root, array_key);
+    if (!array)
+        return 0;
+    if (!cJSON_IsArray(array)) {
+        fprintf(stderr, "Warning: config snapshot: '%s' is not an array; ignored\n", array_key);
+        return 0;
+    }
+
+    int written = 0;
+    const cJSON* entry = NULL;
+    cJSON_ArrayForEach(entry, array) {
+        void* base = NULL;
+        if (owner == CFG_PROBE_ELEM) {
+            const cJSON* idx = cJSON_GetObjectItemCaseSensitive(entry, "index");
+            const ReflectionProbeSet* set = ctx->scene ? ctx->scene->probe_set : NULL;
+            const int i = cJSON_IsNumber(idx) ? (int)idx->valuedouble : -1;
+            if (set && i >= 0 && i < set->count)
+                base = set->probes[i];
+            if (!base) {
+                fprintf(stderr, "Warning: config snapshot: no probe %d in this scene; ignored\n",
+                        i);
+                continue;
+            }
+        } else {
+            const cJSON* name = cJSON_GetObjectItemCaseSensitive(entry, "name");
+            if (!cJSON_IsString(name) || !name->valuestring)
+                continue;
+            for (size_t i = 0; ctx->scene && i < ctx->scene->light_count; i++) {
+                Light* light = ctx->scene->lights[i];
+                if (light && light->name && strcmp(light->name, name->valuestring) == 0) {
+                    base = light;
+                    break;
+                }
+            }
+            if (!base) {
+                fprintf(stderr, "Warning: config snapshot: no light '%s' in this scene; ignored\n",
+                        name->valuestring);
+                continue;
+            }
+        }
+
+        for (int i = 0; i < CFG_FIELD_COUNT; i++) {
+            const ConfigField* f = &CFG_FIELDS[i];
+            if ((ConfigOwner)f->owner == owner && _apply_field(ctx, entry, f, base))
+                written++;
+        }
+    }
+    return written;
+}
+
+// Materials, through MATERIAL_PARAMS for the reason _write_materials states.
+static int _apply_materials(ConfigApplyCtx* ctx, const cJSON* root) {
+    const cJSON* array = cJSON_GetObjectItemCaseSensitive(root, "materials");
+    if (!array || !cJSON_IsArray(array))
+        return 0;
+
+    int written = 0;
+    const cJSON* entry = NULL;
+    cJSON_ArrayForEach(entry, array) {
+        const cJSON* name = cJSON_GetObjectItemCaseSensitive(entry, "name");
+        if (!cJSON_IsString(name) || !name->valuestring)
+            continue;
+        Material* material = NULL;
+        for (size_t i = 0; ctx->scene && i < ctx->scene->material_count; i++) {
+            Material* m = ctx->scene->materials[i];
+            if (m && m->name && strcmp(m->name, name->valuestring) == 0) {
+                material = m;
+                break;
+            }
+        }
+        if (!material) {
+            fprintf(stderr, "Warning: config snapshot: no material '%s' in this scene; ignored\n",
+                    name->valuestring);
+            continue;
+        }
+
+        for (size_t p = 0; p < MATERIAL_PARAM_COUNT; p++) {
+            const MaterialParam* param = &MATERIAL_PARAMS[p];
+            if (param->type == MATERIAL_PARAM_TEXTURE)
+                continue;
+            const cJSON* item = cJSON_GetObjectItemCaseSensitive(entry, param->key);
+            if (!item)
+                continue;
+            float v[3] = {0.0f, 0.0f, 0.0f};
+            if (cJSON_IsNumber(item)) {
+                v[0] = (float)item->valuedouble;
+            } else if (cJSON_IsString(item) && param->enum_labels) {
+                int value = -1;
+                for (int e = 0; e < param->enum_count; e++) {
+                    if (param->enum_labels[e] && strcmp(param->enum_labels[e], item->valuestring) == 0)
+                        value = e;
+                }
+                if (value < 0) {
+                    fprintf(stderr, "Warning: config snapshot: material '%s' %s='%s' unknown\n",
+                            name->valuestring, param->key, item->valuestring);
+                    continue;
+                }
+                v[0] = (float)value;
+            } else if (cJSON_IsArray(item) && cJSON_GetArraySize(item) == 3) {
+                for (int c = 0; c < 3; c++) {
+                    const cJSON* e = cJSON_GetArrayItem(item, c);
+                    v[c] = cJSON_IsNumber(e) ? (float)e->valuedouble : 0.0f;
+                }
+            } else {
+                continue;
+            }
+            material_param_set(material, param, v);
+            written++;
+        }
+    }
+    return written;
+}
+
+/*
+ * Warn about anything in the file the table does not know.
+ *
+ * Derived from the table rather than from a hand-written key list per section
+ * (which is how cscene.c does it, because its parser has no table to derive
+ * from). Silence here is the failure that matters: these files get hand-edited,
+ * and a mistyped key that quietly does nothing looks exactly like a setting that
+ * does not work.
+ */
+static bool _table_has(const char* section, const char* key) {
+    for (int i = 0; i < CFG_FIELD_COUNT; i++) {
+        if (strcmp(CFG_FIELDS[i].section, section) == 0 && strcmp(CFG_FIELDS[i].key, key) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Is this path a section the table uses -- either one rows sit in directly, or
+// one they sit BELOW? Both count: "postfx" holds rows and contains "postfx.ssr",
+// while "engine.overlays" only holds rows, and testing for the second alone
+// warned about every real subsection in the file.
+static bool _table_has_section(const char* path) {
+    const size_t len = strlen(path);
+    for (int i = 0; i < CFG_FIELD_COUNT; i++) {
+        const char* s = CFG_FIELDS[i].section;
+        if (strncmp(s, path, len) == 0 && (s[len] == '\0' || s[len] == '.'))
+            return true;
+    }
+    return false;
+}
+
+static void _warn_unknown_keys(const cJSON* obj, const char* path) {
+    const cJSON* item = NULL;
+    cJSON_ArrayForEach(item, obj) {
+        if (!item->string || item->string[0] == '_') // _comment and friends
+            continue;
+        char child[128];
+        snprintf(child, sizeof(child), "%s%s%s", path, path[0] ? "." : "", item->string);
+        if (cJSON_IsObject(item) && _table_has_section(child)) {
+            _warn_unknown_keys(item, child);
+            continue;
+        }
+        if (!_table_has(path, item->string))
+            fprintf(stderr, "Warning: config snapshot: '%s' is not a known setting; ignored\n",
+                    child);
+    }
+}
+
+// Element objects carry their id key beside the rows, so it is not a stray.
+static void _warn_unknown_element_keys(const cJSON* array, ConfigOwner owner, const char* array_key,
+                                       const char* id_key) {
+    const cJSON* entry = NULL;
+    cJSON_ArrayForEach(entry, array) {
+        const cJSON* item = NULL;
+        cJSON_ArrayForEach(item, entry) {
+            if (!item->string || item->string[0] == '_' || strcmp(item->string, id_key) == 0)
+                continue;
+            bool known = false;
+            for (int i = 0; i < CFG_FIELD_COUNT && !known; i++) {
+                known = (ConfigOwner)CFG_FIELDS[i].owner == owner &&
+                        strcmp(CFG_FIELDS[i].key, item->string) == 0;
+            }
+            if (!known)
+                fprintf(stderr, "Warning: config snapshot: '%s.%s' is not a known setting; "
+                                "ignored\n",
+                        array_key, item->string);
+        }
+    }
+}
+
+static void _warn_unknown_material_keys(const cJSON* array) {
+    const cJSON* entry = NULL;
+    cJSON_ArrayForEach(entry, array) {
+        const cJSON* item = NULL;
+        cJSON_ArrayForEach(item, entry) {
+            if (!item->string || item->string[0] == '_' || strcmp(item->string, "name") == 0 ||
+                strcmp(item->string, "index") == 0)
+                continue;
+            const MaterialParam* param = material_param_find(item->string);
+            if (!param || param->type == MATERIAL_PARAM_TEXTURE)
+                fprintf(stderr,
+                        "Warning: config snapshot: 'materials.%s' is not a known setting; "
+                        "ignored\n",
+                        item->string);
+        }
+    }
+}
+
+// Top-level names the table does not own: the file's own version, the source
+// block's separate vocabulary, and the three arrays, each checked its own way.
+static void _warn_unknown_root(const cJSON* root) {
+    static const char* const SKIP[] = {"version", "source", "probes", "lights", "materials"};
+    const cJSON* item = NULL;
+    cJSON_ArrayForEach(item, root) {
+        if (!item->string || item->string[0] == '_')
+            continue;
+        bool skip = false;
+        for (size_t i = 0; i < sizeof(SKIP) / sizeof(SKIP[0]) && !skip; i++)
+            skip = strcmp(item->string, SKIP[i]) == 0;
+        if (skip)
+            continue;
+        if (cJSON_IsObject(item) && _table_has_section(item->string))
+            _warn_unknown_keys(item, item->string);
+        else
+            fprintf(stderr, "Warning: config snapshot: '%s' is not a known section; ignored\n",
+                    item->string);
+    }
+
+    const cJSON* probes = cJSON_GetObjectItemCaseSensitive(root, "probes");
+    if (cJSON_IsArray(probes))
+        _warn_unknown_element_keys(probes, CFG_PROBE_ELEM, "probes", "index");
+    const cJSON* lights = cJSON_GetObjectItemCaseSensitive(root, "lights");
+    if (cJSON_IsArray(lights))
+        _warn_unknown_element_keys(lights, CFG_LIGHT_ELEM, "lights", "name");
+    const cJSON* materials = cJSON_GetObjectItemCaseSensitive(root, "materials");
+    if (cJSON_IsArray(materials))
+        _warn_unknown_material_keys(materials);
+}
+
+int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
+    if (!engine || !path || !path[0])
+        return -1;
+    char* text = _read_whole_file(path);
+    if (!text) {
+        fprintf(stderr, "Error: config snapshot: cannot read '%s'\n", path);
+        return -1;
+    }
+    cJSON* root = cJSON_Parse(text);
+    free(text);
+    if (!root) {
+        fprintf(stderr, "Error: config snapshot: '%s' is not valid JSON\n", path);
+        return -1;
+    }
+    const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
+    if (cJSON_IsNumber(version) && (int)version->valuedouble != 1) {
+        fprintf(stderr, "Warning: config snapshot version %d; expected 1\n",
+                (int)version->valuedouble);
+    }
+
+    // Before applying, so a file with a typo says so even if the typo is in the
+    // only section this scene could have used.
+    _warn_unknown_root(root);
+
+    ConfigApplyCtx ctx = {.engine = engine, .scene = scene};
+    int written = 0;
+    const char* absent = NULL;
+    for (int i = 0; i < CFG_FIELD_COUNT; i++) {
+        const ConfigField* f = &CFG_FIELDS[i];
+        if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER)
+            continue;
+        const cJSON* obj = _find_section(root, f->section);
+        if (!obj || !cJSON_IsObject(obj))
+            continue;
+        void* base = _owner_base((ConfigOwner)f->owner, engine, scene);
+        if (!base) {
+            // The file describes a subsystem this scene does not have -- a water
+            // block on dry land. Said once per section rather than per row: rows
+            // of one section are contiguous, so comparing against the last is
+            // enough to collapse them.
+            if (absent != f->section) {
+                absent = f->section;
+                fprintf(stderr, "Warning: config snapshot: this scene has no '%s'; ignored\n",
+                        f->section);
+            }
+            continue;
+        }
+        if (_apply_field(&ctx, obj, f, base))
+            written++;
+    }
+
+    written += _apply_elements(&ctx, root, "probes", CFG_PROBE_ELEM);
+    written += _apply_elements(&ctx, root, "lights", CFG_LIGHT_ELEM);
+    written += _apply_materials(&ctx, root);
+    cJSON_Delete(root);
+
+    // The two deferrals, in the order their costs demand: the sun re-bake feeds
+    // the environment every later read uses, and the pose is last because the
+    // orbit bookkeeping is derived from it.
+    if (ctx.sun_moved && scene && scene->sky)
+        sky_update_sun(scene->sky, scene->ibl, engine);
+    if (ctx.camera_moved && engine->camera) {
+        camera_sync_spherical_from_position(engine->camera);
+        update_engine_camera_lookat(engine);
+    }
+
+    printf("config snapshot applied: %s (%d fields)\n", path, written);
+    fflush(stdout);
+    return written;
+}
+
+bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** out) {
+    if (out)
+        *out = NULL;
+    if (!path || !path[0])
+        return false;
+    char* text = _read_whole_file(path);
+    if (!text) {
+        fprintf(stderr, "Error: config snapshot: cannot read '%s'\n", path);
+        return false;
+    }
+    cJSON* root = cJSON_Parse(text);
+    free(text);
+    if (!root) {
+        fprintf(stderr, "Error: config snapshot: '%s' is not valid JSON\n", path);
+        return false;
+    }
+
+    const cJSON* src = cJSON_GetObjectItemCaseSensitive(root, "source");
+    if (!cJSON_IsObject(src)) {
+        fprintf(stderr, "Error: config snapshot: '%s' has no source block\n", path);
+        cJSON_Delete(root);
+        return false;
+    }
+
+    ConfigSnapshotSource s = {0};
+    const cJSON* model = cJSON_GetObjectItemCaseSensitive(src, "model");
+    const cJSON* hdr = cJSON_GetObjectItemCaseSensitive(src, "hdr");
+    const cJSON* lut = cJSON_GetObjectItemCaseSensitive(src, "lut");
+    const cJSON* textures = cJSON_GetObjectItemCaseSensitive(src, "textures");
+    const cJSON* sky = cJSON_GetObjectItemCaseSensitive(src, "sky");
+    s.model = cJSON_IsString(model) ? model->valuestring : NULL;
+    s.hdr = cJSON_IsString(hdr) ? hdr->valuestring : NULL;
+    s.lut = cJSON_IsString(lut) ? lut->valuestring : NULL;
+    s.textures = cJSON_IsString(textures) ? textures->valuestring : NULL;
+    s.sky = cJSON_IsTrue(sky);
+    const cJSON* width = cJSON_GetObjectItemCaseSensitive(src, "width");
+    const cJSON* height = cJSON_GetObjectItemCaseSensitive(src, "height");
+    s.width = cJSON_IsNumber(width) ? (int)width->valuedouble : 0;
+    s.height = cJSON_IsNumber(height) ? (int)height->valuedouble : 0;
+
+    // Copies into this module's buffers, so the answer survives the parse tree.
+    config_snapshot_set_source(&s);
+    cJSON_Delete(root);
+    if (out)
+        *out = &_source;
     return true;
 }

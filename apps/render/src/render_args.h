@@ -31,6 +31,10 @@ typedef struct {
     // screenshot because it answers the other half of "what produced this
     // frame": the pixels, and the settings that made them.
     const char* config_dump_path;
+    // Restore one. Its `source` block fills the same sentinels a .cscn does, so
+    // this can be the ONLY argument; everything else in it is applied after the
+    // model loads, where it wins over both the scene file and the flags.
+    const char* config_path;
     float fov_deg;  // Camera FOV in degrees (0 = default 50)
     float exposure; // Tonemap exposure override; see has_exposure
     // Presence flag rather than testing `exposure > 0`, which six sites did.
@@ -285,6 +289,10 @@ typedef struct {
     float motion_blur_scale; // --motion-blur-scale shutter (-1 = engine default)
     int width;
     int height;
+    // Presence flag: both default to a real size rather than a sentinel, so
+    // "the user chose this framing" cannot be read off the values themselves --
+    // which a restored --config needs to know before it supplies its own.
+    int size_set;
     int headless;
     int headless_jitter; // Apply TAA jitter in headless (lets temporal effects converge)
     int max_frames;      // Exit after this many frames (0 = run forever)

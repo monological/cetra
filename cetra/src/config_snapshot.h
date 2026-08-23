@@ -41,6 +41,9 @@ typedef struct ConfigSnapshotSource {
     const char* lut;      // --lut
     const char* textures; // -t
     bool sky;             // --sky: the environment is procedural, not a file
+    // Window size. Filled by the writer from the live engine and ignored on the
+    // way in; a reader takes them from the parsed block. 0 = not recorded.
+    int width, height;
 } ConfigSnapshotSource;
 
 // Record what was loaded. Call once, after arguments are resolved. Without it
@@ -60,5 +63,28 @@ char* config_snapshot_write(struct Engine* engine, struct Scene* scene, int* out
 // config_snapshot_write to a file. Reports the path it wrote on success and the
 // reason on failure; both to stdout, so a headless run records what it produced.
 bool config_snapshot_save(struct Engine* engine, struct Scene* scene, const char* path);
+
+/*
+ * Apply a snapshot to the live engine + scene. Returns the number of values
+ * written, or -1 if the file could not be read or parsed.
+ *
+ * Run AFTER the model has loaded and after any scene-radius derivation: several
+ * PostFX reaches are floored against the scene's own size at startup, so a
+ * restore that lands before that block has its values raised back out from under
+ * it. An unknown key warns and is skipped; a section whose subsystem this scene
+ * does not have warns and is skipped -- a snapshot from a watery scene is still
+ * a usable description of everything else in it.
+ */
+int config_snapshot_apply_file(struct Engine* engine, struct Scene* scene, const char* path);
+
+/*
+ * The `source` block alone, read without an engine.
+ *
+ * Separate because it is needed EARLIER than everything else: the model path has
+ * to reach argument resolution before the window exists, where the rest of the
+ * file describes objects that do not exist yet. `out` points into a buffer owned
+ * here, valid until the next call.
+ */
+bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** out);
 
 #endif // _CONFIG_SNAPSHOT_H_
