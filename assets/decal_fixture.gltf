@@ -1,0 +1,251 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "gen_decal_fixture.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "decal_floor",
+   "mesh": 0
+  },
+  {
+   "name": "decal_wall",
+   "mesh": 1
+  },
+  {
+   "name": "decal_oblique",
+   "mesh": 2
+  }
+ ],
+ "meshes": [
+  {
+   "name": "decal_floor",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 6
+     },
+     "indices": 7,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "decal_wall",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 2,
+      "NORMAL": 3,
+      "TEXCOORD_0": 6
+     },
+     "indices": 7,
+     "material": 1
+    }
+   ]
+  },
+  {
+   "name": "decal_oblique",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 4,
+      "NORMAL": 5,
+      "TEXCOORD_0": 6
+     },
+     "indices": 7,
+     "material": 2
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "decal_floor_mat",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.55,
+     0.55,
+     0.55,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.25
+   }
+  },
+  {
+   "name": "decal_wall_mat",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.8,
+     0.78,
+     0.72,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  },
+  {
+   "name": "decal_oblique_mat",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.2,
+     0.45,
+     0.75,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -3.0,
+    0.0,
+    -3.0
+   ],
+   "max": [
+    3.0,
+    0.0,
+    3.0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -3.0,
+    0.0,
+    -3.0
+   ],
+   "max": [
+    3.0,
+    4.0,
+    -3.0
+   ]
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -2.1199999999999997,
+    1.5376264927546723,
+    -2.793444280220142
+   ],
+   "max": [
+    -1.5199999999999998,
+    1.6623735072453278,
+    -2.206555719779858
+   ]
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 144,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 192,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 240,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 288,
+   "byteLength": 32,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 320,
+   "byteLength": 12,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "data:application/octet-stream;base64,AABAwAAAAAAAAEBAAABAQAAAAAAAAEBAAABAQAAAAAAAAEDAAABAwAAAAAAAAEDAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAABAwAAAAAAAAEDAAABAQAAAAAAAAEDAAABAQAAAgEAAAEDAAABAwAAAgEAAAEDAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/FK4HwPLQxD81OA3AXI/Cv/LQxD81OA3AXI/Cv6jI1D/LxzLAFK4HwKjI1D/LxzLAAAAAAOJnej/N5lQ+AAAAAOJnej/N5lQ+AAAAAOJnej/N5lQ+AAAAAOJnej/N5lQ+AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAEAAgAAAAIAAwA=",
+   "byteLength": 332
+  }
+ ]
+}

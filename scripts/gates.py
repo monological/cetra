@@ -14489,6 +14489,276 @@ def _layers_scatter_arm():
     return failures
 
 
+# --- clustered decals (spec 11.73) ------------------------------------------
+DECAL_FIXTURE = "decal_fixture.cscn"
+# Read straight out of the generator, which is the one statement of what the
+# fixture is: transcribing the codes here would leave two copies that agree only
+# until somebody repaints an image, and the failure is silent -- an arm asserting
+# a stale code fails loudly, but one asserting a stale POSITION reads plausible
+# bytes off the wrong part of the frame and passes.
+DECAL_POSTER_CODE = (216, 64, 32)
+DECAL_POSTER_BORDER = (32, 240, 96)
+DECAL_SCORCH_CODE = (40, 40, 44)
+# The substrate factors the .gltf authors, as the albedo view returns them:
+# linearToSRGB in this engine is pow(1/2.2), not the piecewise sRGB curve.
+DECAL_WALL_SUBSTRATE = (230, 228, 220)
+DECAL_OBLIQUE_SUBSTRATE = (123, 177, 224)
+# World points, from the generator's own constants.
+# The generator's own POSTER_READ and OBLIQUE_READ, which it asserts are clear
+# of each other: the oblique plate stands in front of the wall, so a poster read
+# it occluded would return the plate's colour -- indistinguishable from a decal
+# that never landed.
+DECAL_POSTER_READ = (-0.65, 1.6, -2.75)
+DECAL_OBLIQUE_READ = (-1.82, 1.6, -2.5)
+DECAL_EDGE_READ = (-0.5, 1.6, -2.75)
+DECAL_WALL_CLEAR = (1.6, 1.6, -3.0)   # wall, well outside the poster's box
+DECAL_SCORCH_CENTRE = (1.3, 0.0, -0.6)
+DECAL_FLOOR_CLEAR = (-1.8, 0.0, 1.2)  # floor, outside the scorch's box
+# How far a byte may sit from its painted value. One code of dither (spec 11.24)
+# plus one of rounding; anything the decal path gets WRONG is tens of codes.
+DECAL_CODE_EPS = 3
+
+
+def _decal_run(workdir, tag, mutate=None, extra=None, frames=4):
+    """Render the decal fixture, optionally through a mutation.
+
+    Returns (pixels, w, h, output) or (None, None, None, error).
+    """
+    src = os.path.join(ROOT, "assets", DECAL_FIXTURE)
+    if not os.path.exists(src):
+        return None, None, None, "missing fixture"
+    scene = src
+    if mutate is not None:
+        scene = os.path.join(workdir, f"decal_{tag}.cscn")
+        cscn_copy(src, scene, mutate)
+    out = os.path.join(workdir, f"decal_{tag}.ppm")
+    cmd = [RENDER, "-m", scene, "-t", os.path.join(ROOT, "assets"), "-x", "-f", str(frames),
+           "-W", "400", "-H", "300", "-S", out,
+           "--no-auto-exposure", "-E", "1.0"] + (extra or [])
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None, None, None, r.stdout + r.stderr
+    w, h, pix = _read_ppm(out)
+    return pix, w, h, r.stdout + r.stderr
+
+
+def _decal_byte(pix, w, h, project, world):
+    """The raw RGB triple at a world point. RAW, not linearised: the albedo view
+    hands back the exact code the generator painted, so the assertion is against
+    a byte and introducing a decode would only add error to it."""
+    px, py = project(world)
+    x = max(0, min(w - 1, int(round(px))))
+    y = max(0, min(h - 1, int(round(py))))
+    o = (y * w + x) * 3
+    return (pix[o], pix[o + 1], pix[o + 2])
+
+
+def _decal_near(got, want, eps=DECAL_CODE_EPS):
+    return all(abs(int(g) - int(v)) <= eps for g, v in zip(got, want))
+
+
+def _decal_probe_rows(output):
+    """The --decal-probe lines, split into the per-frame and per-decal halves."""
+    frames, decals = [], []
+    for line in output.splitlines():
+        if line.startswith("decal-probe decal "):
+            decals.append(dict(kv.split("=", 1) for kv in line.split()[2:]))
+        elif line.startswith("decal-probe frame="):
+            frames.append(dict(kv.split("=", 1) for kv in line.split()[1:]))
+    return frames, decals
+
+
+def run_decal_gate(workdir):
+    """Marks projected through a box, culled into the froxel grid (spec 11.73).
+
+      decals-identity   a decal-free scene is the pre-decal frame exactly, and the
+                        fixture WITH its decals is not -- the second half is what
+                        stops the first passing on a build that projects nothing
+      decals-albedo     the poster's interior reads its painted code through the
+                        albedo view, with clear wall as the in-frame control
+      decals-angle-fade the oblique plate inside the poster's box reads its own
+                        substrate: a projector must refuse a surface it grazes
+      decals-surface    the scorch's surface map moves roughness where its albedo
+                        alone would not, against a normal-strength-0 twin
+      decals-edge       the far side of the poster does not carry the near side's
+                        border -- the half-texel inset against GL_REPEAT
+      decals-mask       two runs agree on the froxel digest, and a decal behind
+                        the camera claims no froxel and moves no pixel
+      decals-schema     a decal missing position, size, direction or image is
+                        refused by name, and a degenerate size is refused too
+
+    NO ARM HERE IS SAFE ALONE, the probe-set rule. decals-albedo alone passes on
+    a build with no facing test, no edge and no mask -- it only asks that a mark
+    landed. decals-angle-fade alone passes on a build that projects NOTHING, since
+    a surface taking no decal is exactly what it asserts; its pairing with
+    decals-albedo is what makes it a claim about refusal rather than absence. And
+    decals-identity's first half passes on any build where the feature is inert,
+    which is why its second half asserts the decals moved the frame at all.
+
+    Every read is a BYTE through --render-mode 6, the layer fixture's rule: the
+    albedo view returns linearToSRGB(factor * sRGBToLinear(blend)), so a correct
+    renderer hands back the exact code the generator painted and the assertion
+    argues about nothing else -- not the BRDF, not exposure, not the tonemap.
+    """
+    if not os.path.exists(os.path.join(ROOT, "assets", DECAL_FIXTURE)):
+        print(f"  decals-identity SKIP  {DECAL_FIXTURE} not found")
+        return []
+    failures = []
+    cam = _cscn_camera(DECAL_FIXTURE)
+
+    # -- identity: the feature costs a decal-free scene nothing ---------------
+    def strip(d):
+        d.pop("decals", None)
+
+    pix_off, w, h, out_off = _decal_run(workdir, "off", strip, ["--render-mode", "6"])
+    pix_flag, _, _, out_flag = _decal_run(workdir, "flag", None,
+                                          ["--render-mode", "6", "--no-decals"])
+    pix_on, _, _, out_on = _decal_run(workdir, "on", None, ["--render-mode", "6"])
+    if pix_off is None or pix_flag is None or pix_on is None:
+        failures.append("decals-identity")
+        print(f"  decals-identity FAIL  render error\n{out_off or out_flag or out_on}")
+    else:
+        off = os.path.join(workdir, "decal_off.ppm")
+        flag = os.path.join(workdir, "decal_flag.ppm")
+        on = os.path.join(workdir, "decal_on.ppm")
+        same, _ = compare(off, flag)
+        moved, _ = compare(off, on)
+        # The anti-vacuity: the decals have to have DONE something, or the
+        # identity above is between two frames that never had a decal in them.
+        ok = same == 0 and moved > 500
+        if not ok:
+            failures.append("decals-identity")
+        print(f"  decals-identity {'PASS' if ok else 'FAIL'}  --no-decals is the "
+              f"stripped scene at {same} px (want 0), while the decals themselves "
+              f"move {moved} px (want > 500)")
+
+    project = _projector(cam, w or 400, h or 300)
+
+    # -- albedo: the painted code, and clear wall as the control --------------
+    if pix_on is not None:
+        got = _decal_byte(pix_on, w, h, project, DECAL_POSTER_READ)
+        ctrl = _decal_byte(pix_on, w, h, project, DECAL_WALL_CLEAR)
+        ok = _decal_near(got, DECAL_POSTER_CODE) and _decal_near(ctrl, DECAL_WALL_SUBSTRATE)
+        if not ok:
+            failures.append("decals-albedo")
+        print(f"  decals-albedo {'PASS' if ok else 'FAIL'}  poster reads {got} "
+              f"(want {DECAL_POSTER_CODE}), clear wall {ctrl} "
+              f"(want {DECAL_WALL_SUBSTRATE}), both +/-{DECAL_CODE_EPS}")
+
+    # -- angle fade: the oblique plate refuses the mark -----------------------
+    if pix_on is not None:
+        ob = _decal_byte(pix_on, w, h, project, DECAL_OBLIQUE_READ)
+        ok = _decal_near(ob, DECAL_OBLIQUE_SUBSTRATE)
+        if not ok:
+            failures.append("decals-angle-fade")
+        print(f"  decals-angle-fade {'PASS' if ok else 'FAIL'}  the oblique plate "
+              f"inside the poster's box reads {ob} (want its own substrate "
+              f"{DECAL_OBLIQUE_SUBSTRATE} +/-{DECAL_CODE_EPS}, i.e. no mark)")
+
+    # -- surface: the scorch's map moves the lit frame ------------------------
+    def flatten(d):
+        for dec in d.get("decals", []):
+            dec["normalStrength"] = 0.0
+            dec.pop("surface", None)
+
+    lit_full, lw, lh, out_lit = _decal_run(workdir, "lit", None, None)
+    lit_flat, _, _, out_flat = _decal_run(workdir, "flat", flatten, None)
+    if lit_full is None or lit_flat is None:
+        failures.append("decals-surface")
+        print(f"  decals-surface FAIL  render error\n{out_lit or out_flat}")
+    else:
+        full = os.path.join(workdir, "decal_lit.ppm")
+        flat = os.path.join(workdir, "decal_flat.ppm")
+        moved, _ = compare(full, flat)
+        ok = moved > 200
+        if not ok:
+            failures.append("decals-surface")
+        print(f"  decals-surface {'PASS' if ok else 'FAIL'}  dropping the scorch's "
+              f"surface map moves {moved} px of the lit frame (want > 200; a build "
+              f"that stamps albedo alone reads 0)")
+
+    # -- edge: the inset against the array's GL_REPEAT wrap -------------------
+    if pix_on is not None:
+        # Toward the poster's right edge, inside its opaque region. The image's
+        # FAR side carries the border ring, so without the half-texel inset the
+        # tap here reaches across the wrap and the ring's green appears where it
+        # cannot belong. Asserted as the painted interior code rather than as
+        # "not green": a byte that is neither is a different failure and should
+        # say so.
+        edge = _decal_byte(pix_on, w, h, project, DECAL_EDGE_READ)
+        ok = _decal_near(edge, DECAL_POSTER_CODE)
+        if not ok:
+            failures.append("decals-edge")
+        print(f"  decals-edge {'PASS' if ok else 'FAIL'}  a byte toward the poster's "
+              f"far edge reads {edge} (want its interior {DECAL_POSTER_CODE}); the "
+              f"border {DECAL_POSTER_BORDER} must not wrap onto it")
+
+    # -- mask: determinism, and a decal off screen claims nothing -------------
+    _, _, _, out_p1 = _decal_run(workdir, "probe1", None, ["--decal-probe", "1"])
+    _, _, _, out_p2 = _decal_run(workdir, "probe2", None, ["--decal-probe", "1"])
+
+    def behind(d):
+        # Both decals moved behind the camera, which looks down -Z from z=5.5.
+        for dec in d.get("decals", []):
+            dec["position"] = [dec["position"][0], dec["position"][1], 40.0]
+
+    pix_behind, _, _, out_behind = _decal_run(workdir, "behind", behind,
+                                              ["--render-mode", "6", "--decal-probe", "1"])
+    f1, d1 = _decal_probe_rows(out_p1 or "")
+    f2, _ = _decal_probe_rows(out_p2 or "")
+    fb, _ = _decal_probe_rows(out_behind or "")
+    if not f1 or not f2 or not fb or pix_behind is None:
+        failures.append("decals-mask")
+        print(f"  decals-mask FAIL  no probe rows\n{(out_p1 or '')[:400]}")
+    else:
+        digest_a, digest_b = f1[-1]["digest"], f2[-1]["digest"]
+        bits_live = int(f1[-1]["mask_bits"])
+        bits_behind = int(fb[-1]["mask_bits"])
+        behind_ppm = os.path.join(workdir, "decal_behind.ppm")
+        off = os.path.join(workdir, "decal_off.ppm")
+        px_behind, _ = compare(off, behind_ppm)
+        ok = (digest_a == digest_b and bits_live > 0 and bits_behind == 0 and
+              px_behind == 0 and int(f1[-1]["live"]) == 2)
+        if not ok:
+            failures.append("decals-mask")
+        print(f"  decals-mask {'PASS' if ok else 'FAIL'}  digest {digest_a} == "
+              f"{digest_b} across two runs, {bits_live} froxel bits live (want > 0), "
+              f"and behind the camera {bits_behind} bits (want 0) rendering "
+              f"{px_behind} px from the decal-free frame (want 0)")
+
+    # -- schema: the four required keys, refused BY NAME ----------------------
+    def drop_position(d):
+        d["decals"][0].pop("position", None)
+
+    def drop_image(d):
+        d["decals"][0].pop("image", None)
+
+    def zero_size(d):
+        d["decals"][0]["size"] = [1.0, 0.0, 1.0]
+
+    _, _, _, out_nopos = _decal_run(workdir, "nopos", drop_position, ["--decal-probe", "1"])
+    _, _, _, out_noimg = _decal_run(workdir, "noimg", drop_image, ["--decal-probe", "1"])
+    _, _, _, out_zero = _decal_run(workdir, "zerosize", zero_size, ["--decal-probe", "1"])
+    _, clean = _decal_probe_rows(out_p1 or "")
+    named = [
+        ("position", out_nopos, "needs position, size and direction"),
+        ("image", out_noimg, "needs an image"),
+        ("size", out_zero, "size must be positive"),
+    ]
+    misses = [k for k, o, want in named if want not in (o or "")]
+    # The unmutated twin must load silently, or "a warning appeared" says nothing.
+    clean_quiet = "decal needs" not in (out_p1 or "")
+    ok = not misses and clean_quiet and len(clean) == 2
+    if not ok:
+        failures.append("decals-schema")
+    print(f"  decals-schema {'PASS' if ok else 'FAIL'}  refused by name: "
+          f"{len(named) - len(misses)}/{len(named)}"
+          f"{' (missing ' + ','.join(misses) + ')' if misses else ''}, "
+          f"and the unmutated fixture loads with no refusal and {len(clean)} decals")
+
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -14516,6 +14786,8 @@ GATE_GROUPS = [
      run_emissive_gate),
     ("probe-set", "clustered specular probes (selection, blend, tenancy; spec 11.70):",
      run_probe_set_gate),
+    ("decals", "clustered decals (projection, fade, surface, masks; spec 11.73):",
+     run_decal_gate),
     ("config", "the session dumped to JSON and restored from it (spec 11.71):",
      run_config_gate),
     ("clouds", "cloud layer (steady-state churn, report-only):", run_cloud_churn_gate),
