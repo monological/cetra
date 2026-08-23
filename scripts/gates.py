@@ -14618,6 +14618,9 @@ def run_decal_gate(workdir):
       decals-opacity    a half-opaque poster reads the MIDPOINT between its own code
                         and the wall's, not something darker -- the premultiplied
                         accumulation, which the opaque arms above cannot see
+      decals-feather    a point inside the poster's edge ramp reads the substrate
+                        mixed at the coverage the box geometry owes, so a mark
+                        fades out of its volume instead of stopping dead
       decals-mask       two runs agree on the froxel digest, the live decals claim
                         a fraction of the grid rather than all of it, and a decal
                         behind the camera claims no froxel and moves no pixel
@@ -14795,6 +14798,34 @@ def run_decal_gate(workdir):
         print(f"  decals-opacity {'PASS' if ok else 'FAIL'}  a half-opaque poster reads "
               f"{got} (want {want} +/-4, the linear midpoint of {gen.POSTER_TR} and "
               f"{wall_substrate}); multiplying by coverage twice reads darker")
+
+    # -- feather: the edge ramp, which was inert until the fixture was fixed --
+    if pix_on is not None:
+        got = _decal_byte(pix_on, w, h, project, gen.FEATHER_READ)
+        # SOLVED for, not compared byte to byte. The read point lands within a
+        # pixel of where it is asked for, and a pixel here is 0.03 of coverage --
+        # so a byte tolerance loose enough to survive that is loose enough to
+        # miss a real error. Inverting the blend states what the arm means: the
+        # coverage the geometry owes is what came back.
+        got_c = []
+        for k, (m, s_) in enumerate(zip(gen.POSTER_BR, wall_substrate)):
+            mark_lin, wall_lin = (m / 255.0) ** 2.2, (s_ / 255.0) ** 2.2
+            if abs(wall_lin - mark_lin) < 0.1:
+                continue  # this channel cannot resolve a coverage
+            got_lin = (got[k] / 255.0) ** 2.2
+            got_c.append((wall_lin - got_lin) / (wall_lin - mark_lin))
+        measured = sum(got_c) / len(got_c) if got_c else 0.0
+        want_c = gen.FEATHER_COVERAGE
+        # +/- 0.06 is two pixels of the read's own position. A build with no
+        # ramp reads 1.0 and one with no decal reads 0.0, both far outside it --
+        # which is the anti-vacuity, and it is arithmetic rather than a bar.
+        ok = abs(measured - want_c) <= 0.06 and len(got_c) >= 2
+        if not ok:
+            failures.append("decals-feather")
+        print(f"  decals-feather {'PASS' if ok else 'FAIL'}  inside the edge ramp reads "
+              f"{got}, i.e. coverage {measured:.3f} over {len(got_c)} channels (want "
+              f"{want_c:.3f} +/-0.06 from the box geometry; no ramp reads 1.000, no "
+              f"decal reads 0.000)")
 
     # -- mask: determinism, and a decal off screen claims nothing -------------
     _, _, _, out_p1 = _decal_run(workdir, "probe1", None, ["--decal-probe", "1"])

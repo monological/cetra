@@ -32,7 +32,7 @@
    "image": "decal_poster.png",
    "opacity": 1.0,
    "angleFade": 60.0,
-   "feather": 0.12
+   "feather": 0.35
   },
   {
    "position": [
@@ -54,7 +54,7 @@
    "surface": "decal_scorch_surface.png",
    "opacity": 1.0,
    "angleFade": 60.0,
-   "feather": 0.12
+   "feather": 0.35
   }
  ],
  "lights": [

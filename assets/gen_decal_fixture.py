@@ -69,9 +69,11 @@ POSTER_TL = (216, 64, 32)
 POSTER_TR = (48, 200, 96)
 POSTER_BL = (96, 112, 200)
 POSTER_BR = (160, 32, 176)
-# The ring, distinct from all four in every channel for the same reason: where
-# it appears is an answer, so it must not be confusable with a quadrant.
-POSTER_BORDER = (248, 248, 248)
+# There is NO border ring. One existed for the decals-edge arm, which was
+# written, measured at 0 px and removed -- and the ring outlived it as pure
+# contamination: it sat about a texel from where the feather arm reads, and
+# bilinear pulled its white in, which reads as a coverage that disagrees between
+# channels. Scaffolding for a deleted arm is not free.
 SCORCH_CODE = (40, 40, 44)
 
 # The scorch's surface map, packed as layers.glsl reads it.
@@ -95,7 +97,15 @@ SCORCH_POS = (1.3, 0.25, -0.6)
 SCORCH_HALF = (0.9, 0.5, 0.9)
 
 ANGLE_FADE = 60.0  # degrees; a surface tilted further takes no mark
-FEATHER = 0.12
+# The edge ramp, in the box's own units, and it is 0.35 rather than something
+# subtle FOR A REASON THE ASSERTS BELOW ENFORCE: the ramp covers |local| in
+# [1 - FEATHER, 1], while the image's own alpha has already gone to zero past
+# 1 - 2*MARGIN. At 0.12 those two bands were DISJOINT -- the picture ended at
+# 0.75 and the ramp did not start until 0.88 -- so deleting the feather from the
+# shader entirely moved 0 px, measured. That is the same "the transparent margin
+# retires the alpha before the guard begins" mechanism that made the half-texel
+# inset unobservable, found a second time and fixed here rather than admitted.
+FEATHER = 0.35
 
 # The oblique plate's tilt away from the poster's facing direction. Past the
 # fade by a real margin rather than a hair, so the arm is not reading the ramp.
@@ -111,20 +121,25 @@ OBLIQUE_DX = -0.62
 # part of what the fixture IS: an arm sampling a point some other plate occludes
 # reads plausible bytes off the wrong surface, which is the failure this file's
 # asserts exist to make impossible.
+def _on_wall(lx, ly):
+    """A poster read point, at the box's local (lx, ly) but ON THE WALL PLANE.
+
+    The z matters and it is not the box's. A read at the projector's own centre
+    hangs a quarter of a unit in front of the surface, and projecting it to
+    screen lands NEAR the right pixel rather than on it -- fine at the middle of
+    a flat quadrant, wrong at an edge, where a fraction of a unit of parallax is
+    the difference between inside the ramp and past it. That cost one arm a
+    debugging round.
+    """
+    return (POSTER_POS[0] + lx * POSTER_HALF[0],
+            POSTER_POS[1] + ly * POSTER_HALF[1], WALL_Z)
+
+
 # Inside the poster's UPPER-RIGHT quadrant, so it returns POSTER_TR rather than
 # whatever a seam rounds to -- it sat on the horizontal seam until the poster
 # gained quadrants, which is exactly the read a one-colour image cannot notice.
-POSTER_READ = (POSTER_POS[0] + 0.55 * POSTER_HALF[0],
-               POSTER_POS[1] + 0.5 * POSTER_HALF[1], POSTER_POS[2])
+POSTER_READ = _on_wall(0.55, 0.5)
 OBLIQUE_READ = (POSTER_POS[0] + OBLIQUE_DX, POSTER_POS[1], POSTER_POS[2] + 0.25)
-# Just inside the poster's RIGHT edge, where the image's own margin has faded
-# out. The far side from it carries the border ring, so this is where a missing
-# half-texel inset shows up: the array wraps with GL_REPEAT and the tap reaches
-# across the image to a colour that cannot belong here.
-# 0.70 of the half-extent: past the poster's centre toward its right edge, and
-# comfortably inside the opaque region the margin leaves (asserted below).
-EDGE_READ = (POSTER_POS[0] + 0.70 * POSTER_HALF[0], POSTER_POS[1], POSTER_POS[2])
-
 # The four world points an orientation arm reads, at 0.5 of the half-extent so
 # each sits well inside its own quadrant and away from the seams. Named for the
 # VIEWER's frame -- the camera looks down -Z at the wall, so +x is the viewer's
@@ -136,6 +151,21 @@ EDGE_READ = (POSTER_POS[0] + 0.70 * POSTER_HALF[0], POSTER_POS[1], POSTER_POS[2]
 # frame as its signal, so a build that painted the whole wall fails rather than
 # reading plausibly.
 SCORCH_READ = (SCORCH_POS[0], 0.0, SCORCH_POS[2])
+
+# Inside the poster's edge RAMP and inside its opaque region at once, which is
+# the whole trick -- see FEATHER. Local (0.70, -0.30), so it sits in the
+# lower-right quadrant and its coverage is decided by x alone.
+FEATHER_LOCAL = (0.70, -0.30)
+FEATHER_READ = _on_wall(*FEATHER_LOCAL)
+# What the shader owes there: min over the three axes of (1 - |local|)/feather,
+# clamped. Stated here so the arm asserts the fixture's own arithmetic rather
+# than a number somebody read off a frame once. The z term is the wall's own
+# depth in the box, which is why the read has to BE on the wall.
+_WALL_LOCAL_Z = abs((WALL_Z - POSTER_POS[2]) / POSTER_HALF[2])
+FEATHER_COVERAGE = min(1.0,
+                       (1.0 - abs(FEATHER_LOCAL[0])) / FEATHER,
+                       (1.0 - abs(FEATHER_LOCAL[1])) / FEATHER,
+                       (1.0 - _WALL_LOCAL_Z) / FEATHER)
 WALL_CLEAR = (1.6, 1.6, WALL_Z)
 FLOOR_CLEAR = (-1.8, 0.0, 1.2)
 
@@ -172,11 +202,6 @@ def _poster():
     img[m:mid, mid:TEX - m, :3] = POSTER_TR
     img[mid:TEX - m, m:mid, :3] = POSTER_BL
     img[mid:TEX - m, mid:TEX - m, :3] = POSTER_BR
-    # The ring, exactly one texel inside the opaque region on every side.
-    img[m, m:TEX - m, :3] = POSTER_BORDER
-    img[TEX - m - 1, m:TEX - m, :3] = POSTER_BORDER
-    img[m:TEX - m, m, :3] = POSTER_BORDER
-    img[m:TEX - m, TEX - m - 1, :3] = POSTER_BORDER
     return img
 
 
@@ -222,32 +247,27 @@ def _assert_fixture_still_tests_something():
     # shader clamps by would be unreadable whether or not the inset exists.
     assert int(TEX * MARGIN) >= 2, "the transparent margin is too thin to feather into"
 
-    # The transparent margin has to be real, or the edge arm reads the box
-    # clipping the image rather than the image's own alpha.
+    # The transparent margin has to be real, or a read at the box's own edge
+    # meets the box clipping the image rather than the image's own alpha.
     poster = _poster()
     assert poster[0, 0, 3] == 0 and poster[TEX // 2, TEX // 2, 3] == 255, (
         "the poster is not transparent at its margin and opaque at its centre")
-
-    # The border must be on the border. Painted at the wrong index it would sit
-    # in the interior and the wrap arm would read it on both sides legitimately.
-    m = int(TEX * MARGIN)
-    assert tuple(poster[m, TEX // 2, :3]) == POSTER_BORDER, "the border ring moved"
 
     # The four quadrants must be four DIFFERENT colours, and differ in a way no
     # symmetry can undo -- this is the assert that makes the orientation arm
     # possible. An image invariant under mirror, flip, transpose or rotation
     # cannot fail an orientation test, which is what every earlier version of
     # this poster was.
+    m = int(TEX * MARGIN)
     q = {"TL": POSTER_TL, "TR": POSTER_TR, "BL": POSTER_BL, "BR": POSTER_BR}
-    marks = dict(q, RING=POSTER_BORDER)
-    assert len(set(marks.values())) == 5, "the poster's marks are not five distinct colours"
-    for a in marks:
-        for b in marks:
+    assert len(set(q.values())) == 4, "the poster's quadrants are not four distinct colours"
+    for a in q:
+        for b in q:
             if a < b:
-                assert all(abs(x - y) > 16 for x, y in zip(marks[a], marks[b])), (
+                assert all(abs(x - y) > 16 for x, y in zip(q[a], q[b])), (
                     f"{a} and {b} are within 16 codes in some channel; a "
                     f"misprojection would read as noise rather than as an answer")
-    lo, hi = m + 1, TEX - m - 2  # inside the border ring
+    lo, hi = m, TEX - m - 1
     mid = TEX // 2
     for name, (r, c) in (("TL", (lo, lo)), ("TR", (lo, hi)),
                          ("BL", (hi, lo)), ("BR", (hi, hi))):
@@ -267,6 +287,31 @@ def _assert_fixture_still_tests_something():
     # ...and the scorch read must be INSIDE the scorch's box, on the floor.
     assert all(abs(SCORCH_READ[k] - SCORCH_POS[k]) < SCORCH_HALF[k] for k in range(3)), (
         "the scorch read point is outside the scorch's own box")
+
+    # THE FEATHER MUST BE OBSERVABLE, which is two conditions and the fixture
+    # satisfied neither until it was measured at 0 px. The ramp has to begin
+    # inside the region where the image still has alpha...
+    opaque_local = 1.0 - 2.0 * MARGIN
+    assert 1.0 - FEATHER < opaque_local, (
+        f"the edge ramp starts at |local| {1.0 - FEATHER:.3f}, past where the "
+        f"image's own alpha ends at {opaque_local:.3f} -- deleting the feather "
+        f"would move 0 px, which is what it did")
+
+    # ...and the read point has to sit in the overlap, with a coverage that is
+    # neither 0 nor 1 by a real margin.
+    assert 1.0 - FEATHER < abs(FEATHER_LOCAL[0]) < opaque_local, (
+        f"the feather read at |local.x| {abs(FEATHER_LOCAL[0])} is outside the band "
+        f"({1.0 - FEATHER:.3f}, {opaque_local:.3f}) where the ramp is visible")
+    assert 0.15 < FEATHER_COVERAGE < 0.95, (
+        f"the feather read's coverage is {FEATHER_COVERAGE:.3f}; too near either "
+        f"end and the arm cannot tell a ramp from a step")
+    # x must be what DECIDES the coverage, or the arm is measuring another axis.
+    for k, name in ((1, "y"), (2, "z")):
+        other = abs(FEATHER_LOCAL[1]) if k == 1 else abs(
+            (WALL_Z - POSTER_POS[2]) / POSTER_HALF[2])
+        assert (1.0 - other) / FEATHER > FEATHER_COVERAGE + 0.1, (
+            f"the {name} axis is as close to its face as x is; the feather read's "
+            f"coverage would not be a function of x alone")
 
     # POSTER_READ must sit in ONE quadrant, clear of both seams, or it returns
     # whatever the seam rounds to and the arm reading it against a single
@@ -305,24 +350,16 @@ def _assert_fixture_still_tests_something():
     assert ob_lo <= OBLIQUE_READ[0] <= ob_hi, (
         "the angle arm's read point is not on the oblique plate")
 
-    # The edge read is on the far side from the plate, for the same reason.
-    assert not (ob_lo <= EDGE_READ[0] <= ob_hi), (
-        "the oblique plate covers the edge read point")
+    # The feather read is on the far side from the plate, for the same reason.
+    assert not (ob_lo <= FEATHER_READ[0] <= ob_hi), (
+        "the oblique plate covers the feather read point")
 
     # Every read point must be inside the poster's box in x, or an arm is
     # asking about a region the decal never claimed.
     for pt, name in ((POSTER_READ, "poster"), (OBLIQUE_READ, "oblique"),
-                     (EDGE_READ, "edge")):
+                     (FEATHER_READ, "feather")):
         assert abs(pt[0] - POSTER_POS[0]) < POSTER_HALF[0], (
             f"the {name} read point is outside the poster's box in x")
-
-    # The edge read must be inside the image's OPAQUE region -- past the
-    # transparent margin -- or it reads bare substrate whether the inset exists
-    # or not, and the arm passes on a build with no clamp at all.
-    edge_local = abs(EDGE_READ[0] - POSTER_POS[0]) / POSTER_HALF[0]
-    assert edge_local < 1.0 - 2.0 * MARGIN, (
-        f"the edge read sits at {edge_local:.3f} of the box, inside the "
-        f"image's {MARGIN} transparent margin -- it would read substrate")
 
     # The scorch must actually differ from the substrate in the channel the
     # surface arm reads, or that arm passes on a build that ignores the map.
