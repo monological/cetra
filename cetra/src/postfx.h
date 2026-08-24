@@ -746,6 +746,17 @@ typedef struct PostFXGBufferWrites {
     // own weight first. Adjacent to oit_fbo because it is meaningless when that
     // is 0.
     bool oit_moment_weighted;
+    // The moment atlas itself, 0 when the generation pass did not run. The
+    // atmosphere composite reads it for the one thing the aux attachment cannot
+    // hold: how much of a pixel is translucent, and at what depth. Beside the two
+    // above because it is meaningless without them.
+    GLuint oit_moment_atlas;
+    // The interval that atlas's depth warp is stated over. Passed through rather
+    // than re-derived from the projection: the app recomputes near_clip per frame
+    // from the camera-to-target distance, so a value reconstructed here would be
+    // a different one from the value the moments were written against.
+    float oit_near;
+    float oit_far;
 } PostFXGBufferWrites;
 
 // Pass frame_is_hdr = false for frames whose shaders already emitted

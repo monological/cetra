@@ -950,6 +950,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->froxel_composite_program->uniforms, "integratedVolume", 1);
     uniform_set_int(fx->froxel_composite_program->uniforms, "layerTex", 2);
     uniform_set_int(fx->froxel_composite_program->uniforms, "aerialVolume", 3);
+    uniform_set_int(fx->froxel_composite_program->uniforms, "momentTex", 4);
 
     glUseProgram(fx->dof_coc_program->id);
     uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
@@ -2731,7 +2732,8 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
 // RENDER res so the jitter-cancelling accumulator reads the aux depth 1:1
 // (spec 9.5.1); only the stabilized layer magnifies at the fold.
 static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_written,
-                                  bool taa_resolving, mat4 projection, mat4 view) {
+                                  bool taa_resolving, mat4 projection, mat4 view,
+                                  const PostFXGBufferWrites* writes) {
     // Both need the aux buffer: it is the only source of the linear depth the
     // composite indexes by.
     // Water and local volumes arm the pass through postfx_has_medium rather than by
@@ -2779,7 +2781,18 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     glBindTexture(GL_TEXTURE_3D, fx->froxel_integrated);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_3D, fx->aerial_volume);
+    // The translucent stack's own depth and coverage (spec 11.78). Armed only with
+    // a moment atlas: the weighted-blended accumulation carries no depth
+    // statistic, so --no-oit-moments keeps the single-depth composite exactly.
+    const bool moments_armed = writes != NULL && writes->oit_moment_atlas != 0 &&
+                               writes->oit_far > writes->oit_near && writes->oit_near > 0.0f;
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, moments_armed ? writes->oit_moment_atlas : 0);
     glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(cu, "momentArmed", moments_armed ? 1 : 0);
+    const float oit_near_far[2] = {moments_armed ? writes->oit_near : 1.0f,
+                                   moments_armed ? writes->oit_far : 2.0f};
+    uniform_set_vec2(cu, "oitNearFar", oit_near_far);
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogNear", postfx_fog_near(fx, projection));
     uniform_set_float(cu, "fogFar", fx->fog_far);
@@ -3598,7 +3611,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             profiler_scope_end(fx->profiler);
         }
 
-        postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view);
+        postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view,
+                              writes);
 
         // Separable SSS: blur the resolved skin-diffuse buffer and fold
         // blur - diffuse into the canvas, softening diffuse while specular

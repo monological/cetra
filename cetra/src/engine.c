@@ -1826,7 +1826,14 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
                                         .spec = engine->spec_this_frame,
                                         .oit_fbo =
                                             engine->oit_this_frame ? engine->oit_fbo : 0,
-                                        .oit_moment_weighted = engine->moments_this_frame};
+                                        .oit_moment_weighted = engine->moments_this_frame,
+                                        .oit_moment_atlas = engine->moments_this_frame
+                                                                ? engine->moment_atlas_texture
+                                                                : 0,
+                                        .oit_near = engine->camera ? engine->camera->near_clip
+                                                                   : 0.0f,
+                                        .oit_far = engine->camera ? engine->camera->far_clip
+                                                                  : 0.0f};
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR, &writes,
                engine->draw_projection, engine->view_matrix);
 
