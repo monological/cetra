@@ -739,6 +739,17 @@ sampler in `pbr_frag` for any unit**, free or not, because the driver counts dec
 moments ride the refraction sampler through a `#define`, which caps them at four floats and is why
 six or eight moments are a re-plan rather than a tweak.
 
+**OPEN, and found by accident in 11.78: the reconstruction loses a near-opaque layer badly.**
+Building that spec's fixture wanted an ALPHA_BLEND pane at alpha 1.0 — a byte-identical twin of an
+opaque pane, differing only in `alphaMode` — and it renders at about a FIFTH of its value: measured
+**38.9 against the 180.2 it owes, and exactly 180.20 under `--no-oit-moments`**. At alpha 0.5 the
+loss is 4.4%. The mechanism is `MBOIT_OVERESTIMATION` charging a lone layer a quarter of its own
+absorbance while `mboitAbsorbance` blows up as alpha approaches 1, so the weight collapses. This is
+the **default-on** path, and it means any near-opaque blend surface — a window pane, a painted panel,
+a decal card authored BLEND rather than MASK — renders far too dark. Nothing in the suite sees it:
+the OIT arms read a card stack at alpha 0.15, and `oit_sphere_moments` is the only golden on this
+path. Arguably a larger visible defect than the one 11.78 fixed, and it is nobody's row yet.
+
 ### B7. Lens flare / cinematic finishing — Effort S/M — DONE (spec 11.21)
 Quarter-res Chapman-style ghost chain, additive pre-tonemap composite, plus lateral chromatic
 aberration on the scene tap. Both default off.
@@ -3043,12 +3054,34 @@ describe it correctly, and neither did the first two attempts at testing it.
 Recorded because they are real, understood, and currently nobody's row — not because they are
 scheduled.
 
-- **Volumetrics, DoF and AO do not see transparent surfaces.** The transparent pass runs with
-  `glDepthMask(GL_FALSE)` (`render.c:975`), so the aux linear-Z target holds whatever opaque surface
-  is *behind* the glass. Fog, aerial perspective, DoF and GTAO therefore all treat a transparent pixel
-  as the wall behind it. Standard forward-renderer behaviour; the clean fix wants the froxel volume
-  sampled inside `pbr_frag`, which is Wall 1. A partial fix (per-draw analytic fog on transparent
-  meshes) is available and cheap but will not match the froxel result.
+- **Screen-space post does not see transparent surfaces. FOG AND AERIAL ARE FIXED (spec 11.78);
+  the rest stands.** The aux attachment holds ONE linear Z per pixel and the late pass never writes
+  it, so everything reading it treats a transparent pixel as the wall behind it. **The mechanism is
+  the draw-buffer list, not the depth mask** — this entry said `glDepthMask(GL_FALSE)` at a
+  `render.c:975` that has since moved to `:1523`, but `render.c:1342` drops `glDrawBuffers` to count 1
+  when the opaque scope closes and nothing re-arms it, so the write `pbr_frag.glsl:2418` still
+  performs is discarded by the buffer list. A late pass that started writing depth would still write
+  no aux. Water escapes it by writing aux like an opaque surface (`water_frag.glsl:1233`); a stack of
+  translucent layers cannot, because one slot cannot hold both its depth and the wall's.
+  **The consumer list was also a third of the truth.** Aerial is not a separate reader — its depth
+  read is the same line as fog's (`froxel_composite_frag.glsl:52`) — and **DoF is a different buffer
+  entirely**, reading the resolved hardware depth (`dof_coc_frag.glsl:10`), so fixing aux does
+  nothing for it. What actually reads aux, beyond fog and GTAO: **TAA/TAAU reprojection and motion
+  blur** (a glass pixel gets the *wall's* velocity), contact shadows, the SSGI/SSR/SSAO edge-stopping
+  weights, and the spec-occ composite.
+  **11.78 fixed fog and aerial**, and not by the route this entry proposed: sampling the froxel volume
+  in `pbr_frag` needs TWO `sampler3D` declarations (fog and aerial are separate volumes with separate
+  owners, nears and Z exponents), D0 frees ONE and is itself blocked on ownership, and both volumes
+  are built AFTER the scene pass so a fragment read would be a frame stale. It is done in the
+  composite instead, off the MBOIT moments — `b0` is the translucent stack's absorbance and `b1/b0`
+  its mean warped depth, so the pass folds its two media at that depth as well and mixes by coverage.
+  Zero new sampler units, all 27 goldens 0 px.
+  **What is left is the harder half and is largely inherent to forward rendering**: AO, TAA, motion
+  blur, contact shadows and DoF still read a single-layer depth. Transmissive surfaces are out too —
+  they never enter OIT — though that case is mostly right already, since light seen *through* glass
+  genuinely did travel from the wall and only the surface term is misfogged. **Particles are out and
+  are the weakest of those exclusions**: they draw in their own pass after OIT, generate no moments,
+  and a smoke card is exactly the near translucent surface this defect is most visible on.
 - ~~**No golden runner.**~~ **BUILT (spec 11.25)** — `python3 scripts/goldens.py` checks the whole
   corpus in one command (nineteen then, **24 now**), and every render command lives in one table
   instead of in whichever spec introduced it. **The corpus was never broken**, which is the part
