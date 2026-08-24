@@ -168,17 +168,23 @@ typedef struct PostFX {
     PingPong ssgi_history;  // Half-res temporal-GI accumulation (RGBA16F)
     PingPong ssgi_atrous;   // Half-res a-trous denoise ping-pong (RGBA16F)
     bool ssgi_ready;        // Lazy-alloc guard: GI target + the two pairs above
-    GLuint noise_texture;   // 4x4 random slice rotations, tiled
-    GLuint ssr_fbo;         // Reflection buffer (march target); full-res by
-    GLuint ssr_texture;     // default, half-res when ssr_full_res is off
-    PingPong ssr_history;   // Temporal-SSR accumulation (RGBA16F): averages the jittered march
-                            // across frames so the single-frame step banding washes out (TAA only)
-    PingPong ssr_atrous;    // SSR a-trous denoise ping-pong (RGBA16F): resolves the stochastic
-                            // march's per-pixel noise into a clean reflection in a single frame
-    GLuint hiz_fbo;         // Min-depth pyramid build target (re-attached per mip)
-    GLuint hiz_texture;     // R32F, SSR-res base + full mip chain; the SSR
-                            // traversal walks it so rays cannot step over thin
-                            // geometry regardless of march length
+    GLuint spec_occ_raw_texture; // Half-res RG16F reflection-lobe sums, MRT attachment 2 on the
+                                 // GTAO FBO (split spec-occ): .r visible, .g the lobe it is of
+    GLuint spec_occ_fbo;         // Blur target for the above
+    GLuint spec_occ_texture;
+    PingPong spec_occ_history; // Half-res temporal accumulation (RG16F)
+    bool spec_occ_ready;       // Lazy-alloc guard: the three above
+    GLuint noise_texture;      // 4x4 random slice rotations, tiled
+    GLuint ssr_fbo;            // Reflection buffer (march target); full-res by
+    GLuint ssr_texture;        // default, half-res when ssr_full_res is off
+    PingPong ssr_history;      // Temporal-SSR accumulation (RGBA16F): averages the jittered march
+                          // across frames so the single-frame step banding washes out (TAA only)
+    PingPong ssr_atrous; // SSR a-trous denoise ping-pong (RGBA16F): resolves the stochastic
+                         // march's per-pixel noise into a clean reflection in a single frame
+    GLuint hiz_fbo;      // Min-depth pyramid build target (re-attached per mip)
+    GLuint hiz_texture;  // R32F, SSR-res base + full mip chain; the SSR
+                         // traversal walks it so rays cannot step over thin
+                         // geometry regardless of march length
     int hiz_mips;
     GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
                     // (GTAO)

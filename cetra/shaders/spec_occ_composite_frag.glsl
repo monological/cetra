@@ -14,9 +14,9 @@ out vec4 FragColor;
 // stabilized as one image.
 uniform sampler2D specTex;    // Resolved ambient specular (working space)
 uniform sampler2D aoTex;      // AO chain: .r visibility, .gba encoded bent normal
+uniform sampler2D specOccTex; // Reflection-lobe sums: .r visible, .g the lobe it is of
 uniform sampler2D normalsTex; // View normal .xyz + catcher marker .a
 uniform sampler2D auxTex;     // .z = linear view-Z, .w = effective roughness
-uniform vec2 invFocal;        // 1/projection focal terms (view-ray reconstruction)
 uniform vec2 aoRes;           // aoTex's own size: it is HALF this pass's res
 uniform int aoActive;         // 0 = no AO this frame: fold spec back untouched
 uniform float aoStrength;
@@ -33,10 +33,15 @@ void main()
         return;
     }
     // This pass runs at render res, where aux is 1:1 -- so the pixel's own
-    // depth is a plain fetch, and the AO buffer beneath it is the only thing
-    // that needs reconstructing. One fetch, both consumers of it.
-    vec4 aoSample = aoFetchBilateral(aoTex, auxTex, TexCoords, aoRes,
-                                     texture(auxTex, TexCoords).z);
-    float so = specOccSplitAt(TexCoords, invFocal, aoSample);
+    // depth is a plain fetch, and the two half-res buffers beneath it are what
+    // need reconstructing. Both magnifications land on the SAME weights without
+    // being made to: the weight set is a pure function of (auxTex, uv, aoRes,
+    // zRef), which is identical in the two calls, so a shared-weight variant
+    // would buy correctness that is already free and cost a near-duplicate of
+    // the helper. What it does spend is the four aux taps, twice.
+    float zRef = texture(auxTex, TexCoords).z;
+    vec4 aoSample = aoFetchBilateral(aoTex, auxTex, TexCoords, aoRes, zRef);
+    vec2 specPair = aoFetchBilateral(specOccTex, auxTex, TexCoords, aoRes, zRef).rg;
+    float so = specOccSplitAt(TexCoords, aoSample, specPair);
     FragColor = vec4(spec * mix(1.0, so, aoStrength), mix(1.0, aoSample.r, aoStrength));
 }

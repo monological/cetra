@@ -78,31 +78,35 @@ float specOcclusionCone(float ao, float roughness, vec3 bentN, vec3 R)
     return mix(1.0, ratio, smoothstep(0.0, TRUST_OPEN, open));
 }
 
-// The split-mode term for one pixel: guard, view ray, bent decode, cone --
-// the whole evaluation, so the composite pass and the tonemap's debug view
-// call one function and cannot drift. The includer must declare
-// sampler2D normalsTex / auxTex (the depth.glsl contract style).
+// The split-mode term for one pixel, so the composite pass and the tonemap's
+// debug view call one function and cannot drift. The includer must declare
+// sampler2D normalsTex (the depth.glsl contract style).
 //
-// `aoSample` arrives from the caller rather than being sampled here, and that
-// is what keeps the count at ONE reconstruction per pixel: the AO buffer is
-// half res and reading it now costs a four-tap depth-weighted fetch
-// (ao_upsample.glsl), which the caller already performed for the visibility
-// term. Sampling it a second time here would double the cost to reach the same
-// value -- or, worse, a different one, if the two fetches ever stopped
-// agreeing on how the magnification is done.
-float specOccSplitAt(vec2 uv, vec2 invFocal, vec4 aoSample)
+// Both samples arrive from the caller rather than being fetched here, which is
+// what keeps the count at ONE reconstruction per pixel: these buffers are half
+// res and reading either costs a four-tap depth-weighted fetch
+// (ao_upsample.glsl), which the caller already performed. Fetching again here
+// would double the cost to reach the same value -- or, worse, a different one,
+// if the two ever stopped agreeing on how the magnification is done.
+//
+// There is no cone here any more. `specPair` is the reflection lobe's own
+// visibility, measured against the sector bitmask inside the AO sweep where
+// that mask exists (gtao_frag.glsl), and carried as the estimator's two sums so
+// the denoise chain averages quantities that are linear in visibility. All this
+// owes it is the divide and the guard. specOcclusionCone above is still live --
+// it is what `--spec-occ bent` runs -- so the two terms remain comparable.
+float specOccSplitAt(vec2 uv, vec4 aoSample, vec2 specPair)
 {
-    vec4 nrm = texture(normalsTex, uv);
     // Sky/hair (zero normal) and the shadow-catcher floor: no trustworthy
     // reflection direction, so the plain AO answer serves. The catcher test
     // is the marker's SIGN, matching what the catcher writes and the SSR
     // march reads -- its magnitude is the edge falloff, so any threshold
-    // would hand part of the plane's outer ring to the cone term.
+    // would hand part of the plane's outer ring to the specular term.
+    vec4 nrm = texture(normalsTex, uv);
     if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0)
         return aoSample.r;
-    vec2 ndc = uv * 2.0 - 1.0;
-    vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
-    vec3 N = normalize(nrm.xyz);
-    vec3 bentN = normalize(aoSample.gba * 2.0 - 1.0);
-    return specOcclusionCone(aoSample.r, texture(auxTex, uv).w, bentN, reflect(-V, N));
+    // No lobe above the horizon anywhere in the sweep -- including every pixel
+    // whose sums came from the early-outs' (0,0) neutral. Nothing to occlude,
+    // and the BRDF has already zeroed what sits below.
+    return specPair.y > 1e-5 ? clamp(specPair.x / specPair.y, 0.0, 1.0) : 1.0;
 }

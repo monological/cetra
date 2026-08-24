@@ -513,6 +513,10 @@ static void postfx_free_targets(PostFX* fx) {
     gl_delete_texture(&fx->ssgi_gi_texture);
     free_pingpong(&fx->ssgi_history);
     free_pingpong(&fx->ssgi_atrous);
+    gl_delete_texture(&fx->spec_occ_raw_texture);
+    gl_delete_fbo(&fx->spec_occ_fbo);
+    gl_delete_texture(&fx->spec_occ_texture);
+    free_pingpong(&fx->spec_occ_history);
     gl_delete_fbo(&fx->dof_coc_fbo);
     gl_delete_texture(&fx->dof_coc_texture);
     gl_delete_fbo(&fx->dof_gather_fbo);
@@ -572,6 +576,7 @@ static void postfx_free_targets(PostFX* fx) {
 static void postfx_invalidate_targets(PostFX* fx) {
     postfx_free_targets(fx);
     fx->ssgi_ready = false;
+    fx->spec_occ_ready = false;
     fx->dof_ready = false;
     fx->flare_ready = false;
     fx->fog_layer_ready = false;
@@ -898,6 +903,10 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // Appending is what keeps that unrepresentable if a 2D sampler is ever
     // restored to 7 -- it is insurance, not a fix.
     uniform_set_int(fx->tonemap_program->uniforms, "lutTex", 11);
+    // Debug view 7 only: the split term is applied in the composite pass, so
+    // this exists so that view can show what was applied rather than recompute
+    // a second opinion about it.
+    uniform_set_int(fx->tonemap_program->uniforms, "specOccTex", 12);
 
     glUseProgram(fx->lum_measure_program->id);
     uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
@@ -990,6 +999,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->spec_occ_composite_program->uniforms, "aoTex", 1);
     uniform_set_int(fx->spec_occ_composite_program->uniforms, "normalsTex", 2);
     uniform_set_int(fx->spec_occ_composite_program->uniforms, "auxTex", 3);
+    uniform_set_int(fx->spec_occ_composite_program->uniforms, "specOccTex", 4);
 
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
@@ -1115,6 +1125,52 @@ static bool postfx_ensure_ssgi_targets(PostFX* fx) {
         return false;
     }
     fx->ssgi_ready = true;
+    return true;
+}
+
+// Allocate the split spec-occ targets on first enable (the pattern above): the
+// half-res reflection-lobe sums as attachment 2 of the GTAO FBO, plus the blur
+// target and accumulation pair that denoise them. Two channels, because what
+// the sweep writes is an estimator's numerator and denominator rather than a
+// colour -- see gtao_frag.glsl's SpecOccOut.
+//
+// The sums ride the AO chain's own denoise programs unchanged: the blur weights
+// every channel it is handed identically, and the accumulator blends a vec4, so
+// neither needed to learn what this buffer means. What they cannot share is the
+// DRAW, since each writes one target -- hence a second blur pass and a second
+// accumulation rather than teaching a program that the contact-shadow denoise
+// also runs to carry a passenger.
+static bool postfx_ensure_spec_occ_targets(PostFX* fx) {
+    if (fx->spec_occ_ready)
+        return true;
+    glGenTextures(1, &fx->spec_occ_raw_texture);
+    glBindTexture(GL_TEXTURE_2D, fx->spec_occ_raw_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, fx->half_width, fx->half_height, 0, GL_RG, GL_FLOAT,
+                 NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D,
+                           fx->spec_occ_raw_texture, 0);
+    // Checked here, unlike the SSGI re-attach above: a re-attach can fail the
+    // completeness rules (mismatched size, an unsupported format) and an
+    // incomplete FBO discards every draw into it silently, which reads as the
+    // feature having no effect rather than as an error.
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("spec-occ attachment left the GTAO framebuffer incomplete (0x%x)", status);
+        return false;
+    }
+    if (!create_color_fbo(fx->half_width, fx->half_height, GL_RG16F, &fx->spec_occ_fbo,
+                          &fx->spec_occ_texture) ||
+        !create_pingpong(fx->half_width, fx->half_height, GL_RG16F, &fx->spec_occ_history)) {
+        log_error("Failed to allocate spec-occ targets");
+        return false;
+    }
+    fx->spec_occ_ready = true;
     return true;
 }
 
@@ -1307,8 +1363,8 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
 // Runs before TAA so the reunited frame is stabilized as one image, and
 // before the SSR march / fog / bloom so every later pass sees the corrected
 // color.
-static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, bool have_normals,
-                                          bool aux_written, mat4 projection) {
+static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, GLuint spec_occ_tex,
+                                          bool have_normals, bool aux_written) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->spec_occ_composite_program->id);
@@ -1321,17 +1377,17 @@ static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, bool
     glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
-    const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
-    uniform_set_vec2(sc, "invFocal", inv_focal);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, spec_occ_tex);
     // Per draw rather than seeded, the rule the texelSize uniforms follow: this
     // pass and the tonemap read the same buffer at different resolutions, so a
     // seeded value would be right for one of them and a silent fallback for the
     // other.
     const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
     uniform_set_vec2(sc, "aoRes", ao_res);
-    // The cone term needs the same inputs the tonemap's spec-occ did: AO,
-    // normals, and the aux roughness. Missing any of them, fold the specular
-    // back unoccluded rather than read an unbound unit.
+    // The term needs the AO chain to have run, the normals for its guard, and
+    // the aux depth for both magnifications. Missing any of them, fold the
+    // specular back unoccluded rather than read an unbound unit.
     uniform_set_int(sc, "aoActive",
                     fx->ssao_enabled && have_normals && aux_written ? 1 : 0);
     uniform_set_float(sc, "aoStrength", fx->ssao_strength);
@@ -3288,8 +3344,15 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // allocated on first enable.
         const bool ssgi_active = fx->ssgi_enabled && postfx_ensure_ssgi_targets(fx);
         const bool gtao_active = fx->ssao_enabled || ssgi_active;
+        // The reflection lobe is only worth measuring when the split composite
+        // is there to apply it AND the masks are actually being swept for AO.
+        // With AO off the composite already folds the specular back untouched
+        // through its own aoActive == 0 arm, so there is nothing for this to say.
+        const bool spec_occ_swept =
+            split_live && fx->ssao_enabled && postfx_ensure_spec_occ_targets(fx);
         bool ao_accum_ran = false;
         bool gi_accum_ran = false;
+        bool spec_occ_accum_ran = false;
         if (gtao_active) {
             profiler_scope_begin(fx->profiler, "gtao sweep");
             // Raw occlusion at half res. GTAO reads linear view-Z from the aux
@@ -3297,12 +3360,16 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // non-linear depth buffer staircased flat surfaces into AO banding.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[0]);
             glViewport(0, 0, fx->half_width, fx->half_height);
-            // SSGI rides the same sweep: when on, also draw the GI radiance into
-            // attachment 1 (ssgi_gi_texture); when off, only AO is written so the
-            // path is byte-identical to plain GTAO.
-            if (ssgi_active) {
-                const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-                glDrawBuffers(2, bufs);
+            // SSGI and split spec-occ both ride this sweep, and both are
+            // optional, so the draw-buffer list is built rather than chosen:
+            // GL_NONE holds an absent slot open so attachment 2 keeps its
+            // location whether or not SSGI is on. With neither on, only AO is
+            // written and the path is byte-identical to plain GTAO.
+            if (ssgi_active || spec_occ_swept) {
+                const GLenum bufs[3] = {GL_COLOR_ATTACHMENT0,
+                                        ssgi_active ? GL_COLOR_ATTACHMENT1 : GL_NONE,
+                                        spec_occ_swept ? GL_COLOR_ATTACHMENT2 : GL_NONE};
+                glDrawBuffers(3, bufs);
             } else {
                 glDrawBuffer(GL_COLOR_ATTACHMENT0);
             }
@@ -3328,6 +3395,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index % 4096);
             uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
             uniform_set_int(fx->gtao_program->uniforms, "gatherSpec", gather_spec ? 1 : 0);
+            uniform_set_int(fx->gtao_program->uniforms, "specOcclusion",
+                            spec_occ_swept ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
             profiler_scope_end(fx->profiler);
 
@@ -3376,15 +3445,46 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 draw_fullscreen_quad(fx->quad_vao);
                 ao_result_tex = fx->ssao_texture[1];
                 profiler_scope_end(fx->profiler);
+
+                // The reflection-lobe sums through the same two stages, in the
+                // same order and with the same weights, because they carry the
+                // same estimator's noise: one mask per slice, popcounted. The
+                // blur program is reused verbatim -- it weights all four
+                // channels alike and neither of these is a colour.
+                if (spec_occ_swept) {
+                    profiler_scope_begin(fx->profiler, "spec occ denoise");
+                    GLuint spec_src = fx->spec_occ_raw_texture;
+                    if (taa_resolving) {
+                        spec_src = run_temporal_accum(
+                            fx, fx->temporal_accum_program, &fx->spec_occ_history, fx->half_width,
+                            fx->half_height, fx->spec_occ_raw_texture, TEMPORAL_FEEDBACK_AO);
+                        spec_occ_accum_ran = true;
+                    }
+                    glBindFramebuffer(GL_FRAMEBUFFER, fx->spec_occ_fbo);
+                    glViewport(0, 0, fx->half_width, fx->half_height);
+                    glUseProgram(fx->ssao_blur_program->id);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, spec_src);
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
+                    uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
+                    uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware",
+                                    fx->ao_edge_filter_enabled ? 1 : 0);
+                    draw_fullscreen_quad(fx->quad_vao);
+                    profiler_scope_end(fx->profiler);
+                }
             }
         }
         if (!ao_accum_ran)
             fx->ao_history.valid = false;
+        if (!spec_occ_accum_ran)
+            fx->spec_occ_history.valid = false;
 
         if (split_live) {
             profiler_scope_begin(fx->profiler, "spec occ composite");
-            postfx_run_spec_occ_composite(fx, ao_result_tex, have_normals, aux_written,
-                                          projection);
+            postfx_run_spec_occ_composite(fx, ao_result_tex,
+                                          spec_occ_swept ? fx->spec_occ_texture : 0, have_normals,
+                                          aux_written);
             profiler_scope_end(fx->profiler);
         }
 
@@ -3611,6 +3711,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, cs_active ? cs_result_tex : 0); // contact-shadow visibility
         glActiveTexture(GL_TEXTURE11);
         glBindTexture(GL_TEXTURE_3D, fx->lut_texture); // 0 when no table is loaded
+        glActiveTexture(GL_TEXTURE12);
+        glBindTexture(GL_TEXTURE_2D, fx->spec_occ_ready ? fx->spec_occ_texture : 0);
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);

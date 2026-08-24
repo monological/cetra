@@ -2,6 +2,15 @@
 in vec2 TexCoords;
 layout(location = 0) out vec4 AoOut; // visibility (1 = unoccluded)
 layout(location = 1) out vec4 GiOut; // gathered one-bounce radiance (SSGI; only drawn when on)
+// Reflection-lobe visibility as the estimator's two SUMS, .r visible and .g
+// total, not their quotient (split spec-occ; only drawn when on). Sums because
+// everything downstream averages this -- the accumulation, the blur, the
+// bilateral upsample -- and the denominator varies per pixel, so a mean of
+// quotients is not the quotient of the means. Dividing last also gives the
+// early-outs a true neutral: (0,0) contributes nothing to a neighbour's sums
+// and leaves its ratio where it was, where any ratio would have to invent a
+// value and drag the neighbour toward it.
+layout(location = 2) out vec4 SpecOccOut;
 
 // Ground-Truth AO via the 2023 "Visibility Bitmask" (Therrien et al.). For each
 // pixel we reconstruct its view-space position and normal, then sweep a few
@@ -38,6 +47,7 @@ uniform int gatherGI;     // 1 = also gather one-bounce irradiance into GiOut (S
 // slight bounce overestimate in crevices, accepted against the loss).
 uniform sampler2D specTex; // Resolved split ambient specular
 uniform int gatherSpec;    // 1 = add specTex to the gather's source radiance
+uniform int specOcclusion; // 1 = also test the reflection lobe against the masks
 
 // hdrTex is already pre-exposed, so the gather inherits the conversion and
 // WS_BOUNCE_MAX below is read in the same space it was written in.
@@ -56,6 +66,7 @@ const float HEIGHT_BIAS = 0.04;       // Min sin(elevation) a sample needs to co
 // Xv = ndc.x * (-z) / focalX, Yv likewise; a jitter-constant XY offset cancels
 // in the relative sVec the occlusion math uses.
 #include "depth.glsl"
+#include "spec_lobe.glsl"
 
 // 32-bit population count (SWAR). GLSL 3.30 has uint + bit ops but not the
 // bitCount() builtin (added in 4.00), so we roll our own to stay on 330.
@@ -101,6 +112,37 @@ uint sectorBits(float lo, float hi)
     return (0xFFFFFFFFu >> (SECTOR_COUNT - count)) << startBit;
 }
 
+// Bits for every sector the reflection lobe REACHES -- TOUCH semantics, not
+// sectorBits' round, and the asymmetry is the point rather than an oversight.
+// An occluder is asked "do you cover this sector", so a grazing slab that
+// covers almost none of one should set nothing. A lobe is asked "do you reach
+// it", and a mirror lobe is narrower than a single sector: rounded, it would
+// round away to no bits at all, the total below would be zero, and the surface
+// would report itself unoccluded no matter what stood in front of it. So the
+// range is widened to whole sectors and is never empty once it meets the
+// hemisphere.
+//
+// The [0,1] clamp is the HORIZON REFERENCE, and it is why this needs no second
+// term. A reflection lobe always hangs partly below its own horizon and the
+// BRDF has already zeroed that half, so the cone form this replaces had to
+// measure itself against a second overlap against an open hemisphere; clamping
+// the sector range does the same thing exactly, for nothing. It was the
+// approximation in that reference, not the reference itself, that the
+// TRUST_OPEN fade was covering for.
+uint lobeSectors(float lo, float hi)
+{
+    // Entirely below the horizon: this slice sees no part of the lobe. Tested
+    // BEFORE the clamp, which would otherwise collapse both ends onto the same
+    // edge and hand back a spurious sector there.
+    if (hi <= 0.0 || lo >= 1.0)
+        return 0u;
+    lo = clamp(lo, 0.0, 1.0);
+    hi = clamp(hi, 0.0, 1.0);
+    uint startBit = min(uint(floor(lo * float(SECTOR_COUNT))), SECTOR_COUNT - 1u);
+    uint endBit = clamp(uint(ceil(hi * float(SECTOR_COUNT))), startBit + 1u, SECTOR_COUNT);
+    return (0xFFFFFFFFu >> (SECTOR_COUNT - (endBit - startBit))) << startBit;
+}
+
 void main()
 {
     float linZ = texture(linDepthTex, TexCoords).z;
@@ -117,6 +159,7 @@ void main()
         // and an unwritten channel there would be undefined.
         AoOut = vec4(1.0, 0.5, 0.5, 1.0);
         GiOut = vec4(0.0);
+        SpecOccOut = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
@@ -136,6 +179,7 @@ void main()
         // its baked material AO in the lighting pass.
         AoOut = vec4(1.0, 0.5, 0.5, 1.0);
         GiOut = vec4(0.0);
+        SpecOccOut = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
     // G-buffer normal when the MRT is on, else a depth-derivative normal (the
@@ -172,12 +216,23 @@ void main()
         // direction is its own normal.
         AoOut = vec4(1.0, N * 0.5 + 0.5);
         GiOut = vec4(0.0);
+        SpecOccOut = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
     float occlusion = 0.0;
     vec3 gi = vec3(0.0);   // one-bounce irradiance gathered from occluders (SSGI)
     vec3 bent = vec3(0.0); // sum of the still-visible directions (bent normal)
+    // The specular lobe this pixel reflects along, and how wide it is. Both are
+    // constant across slices, so they are taken once; the roughness is the aux
+    // buffer's own .w, the channel this shader has always had bound and never
+    // read. Half res, which is the one thing the term gives up by moving here.
+    vec3 R = reflect(-V, N);
+    float lobeHalf = specOcclusion == 1
+                         ? acos(clamp(specLobeCos(texture(linDepthTex, TexCoords).w), -1.0, 1.0))
+                         : 0.0;
+    float specVis = 0.0; // sector-weighted lobe still visible, summed over slices
+    float specTot = 0.0; // ... and the lobe it is a fraction of
     // Per-sector rotation step for the bent-normal recurrence below; constant
     // across slices.
     float dAng = PI / float(SECTOR_COUNT);
@@ -267,6 +322,27 @@ void main()
         }
         occlusion += float(popCount(bitfield)) / float(SECTOR_COUNT);
 
+        // Specular occlusion, against the same mask and while it still exists.
+        // The lobe is projected into this slice's plane and read on the very
+        // scale the occluders were marked on, so the two are the same
+        // measurement rather than two approximations meeting downstream.
+        //
+        // projRLen weights the slice the way projNLen already gates one: a
+        // reflection direction perpendicular to this plane projects to nothing,
+        // and a slice that cannot see the lobe should not get a vote on it.
+        if (specOcclusion == 1) {
+            vec3 projR = R - planeNormal * dot(R, planeNormal);
+            float projRLen = length(projR);
+            if (projRLen > 1e-5) {
+                float aR = sign(dot(projR, tangent)) *
+                           acos(clamp(dot(projR, V) / projRLen, -1.0, 1.0));
+                uint lobe = lobeSectors((aR - lobeHalf - hemiStart) / PI,
+                                        (aR + lobeHalf - hemiStart) / PI);
+                specVis += projRLen * float(popCount(lobe & ~bitfield));
+                specTot += projRLen * float(popCount(lobe));
+            }
+        }
+
         // Bent normal: the average of the directions still VISIBLE, i.e. the
         // sectors this slice left unset. Sector k spans the hemisphere angles
         // [hemiStart + k*dAng, +(k+1)*dAng], so its mid-direction is
@@ -301,4 +377,8 @@ void main()
 
     AoOut = vec4(1.0 - occlusion, bentN * 0.5 + 0.5); // visibility (1 = unoccluded) + bent normal
     GiOut = vec4(gi, 1.0);                            // gathered one-bounce radiance
+    // Normalised so both sums land in [0,1] and the ratio is unchanged: the
+    // most a slice can contribute is every sector at full weight.
+    const float SPEC_NORM = 1.0 / (float(SECTOR_COUNT) * float(SLICES));
+    SpecOccOut = vec4(specVis * SPEC_NORM, specTot * SPEC_NORM, 0.0, 1.0);
 }

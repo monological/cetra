@@ -36,6 +36,7 @@ uniform vec2 aoRes;             // aoTex's own size, which is HALF the render re
 uniform int specOccMode;        // 0 off, 1 legacy smoothness blend, 2 bent-normal cone
 uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
 uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), full internal res
+uniform sampler2D specOccTex;   // Reflection-lobe sums (.r visible, .g total), half render res
 uniform int csEnabled;          // Multiply the direct-light term by contact shadows
 uniform float csStrength;       // Contact-shadow darkening weight
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
@@ -325,6 +326,17 @@ vec4 aoSampleAt()
     return aoFetchBilateral(aoTex, auxTex, TexCoords, aoRes, texture(auxTex, TexCoords).z);
 }
 
+// The reflection lobe's two sums, magnified the same way. Only debug view 7
+// wants these -- split mode's applied term lands in the composite pass, well
+// before this one -- so this exists to let that view show what the composite
+// used rather than a second opinion about it.
+vec2 specOccSampleAt()
+{
+    return aoFetchBilateral(specOccTex, auxTex, TexCoords, aoRes,
+                            texture(auxTex, TexCoords).z)
+        .rg;
+}
+
 float aoVisibility()
 {
     vec4 aoSample = aoSampleAt(); // .r visibility, .gba encoded bent normal
@@ -480,8 +492,9 @@ void main()
         // reflection relief vs the raw AO of debug view 1. Split mode shows
         // the term the composite applied to the specular share, through the
         // same shared function so this view cannot drift from it.
-        FragColor = vec4(vec3(specOccMode == 3 ? specOccSplitAt(TexCoords, invFocal, aoSampleAt())
-                                               : aoVisibility()),
+        FragColor = vec4(vec3(specOccMode == 3
+                                  ? specOccSplitAt(TexCoords, aoSampleAt(), specOccSampleAt())
+                                  : aoVisibility()),
                          1.0);
         return;
     }
