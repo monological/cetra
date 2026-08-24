@@ -371,6 +371,20 @@ char* convert_windows_path_to_unix(const char* windows_path) {
     return unix_path;
 }
 
+const char* path_last_sep(const char* path) {
+    if (!path)
+        return NULL;
+    const char* slash = strrchr(path, '/');
+#if defined(_WIN32)
+    // Windows only: a backslash is a legal character in a POSIX filename, so
+    // treating it as a separator there would split paths that do not have one.
+    const char* back = strrchr(path, '\\');
+    if (back && (!slash || back > slash))
+        slash = back;
+#endif
+    return slash;
+}
+
 char* convert_and_normalize_path(const char* input_path) {
     if (input_path == NULL) {
         log_error("Error: Input path is NULL");

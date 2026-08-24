@@ -98,6 +98,14 @@ bool path_exists(const char* path);
 // used because cwalk is pinned to UNIX style and would not recognize a drive.
 bool path_is_absolute(const char* path);
 
+// Last path separator in `path`, or NULL when it names no directory. Both '/'
+// and, on Windows, '\\' -- because the engine's forward-slash convention is
+// enforced on TEXTURE paths (they go through convert_and_normalize_path) and
+// not on the scene and model paths that arrive from argv. A search for '/'
+// alone answers "no directory" for every Windows path, and the dirname sites
+// downstream read that as "." and resolve against the working directory.
+const char* path_last_sep(const char* path);
+
 // Read a whole file into a NUL-terminated malloc'd buffer (caller frees).
 // Returns NULL on open/short-read failure; *out_len (optional) gets the byte
 // count excluding the terminator.

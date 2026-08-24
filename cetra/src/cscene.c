@@ -1156,7 +1156,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     // Resolve stored paths against the scene file's directory (dirname idiom
     // as in import.c effective_texture_dir) so consumers get usable paths.
     char dir[CSCENE_MAX_PATH];
-    const char* slash = strrchr(path, '/');
+    const char* slash = path_last_sep(path);
     if (slash) {
         snprintf(dir, sizeof(dir), "%.*s", (int)(slash - path), path);
     } else {

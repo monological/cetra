@@ -54,7 +54,7 @@ static const char* effective_texture_dir(const char* path, const char* texture_d
                                          size_t bufsize) {
     if (texture_directory || !path)
         return texture_directory;
-    const char* slash = strrchr(path, '/');
+    const char* slash = path_last_sep(path);
     if (!slash || (size_t)(slash - path) >= bufsize)
         return NULL;
     snprintf(buf, bufsize, "%.*s", (int)(slash - path), path);
@@ -1668,7 +1668,7 @@ void resolve_height_maps(Scene* scene) {
         if (!src || !src[0])
             continue;
 
-        const char* slash = strrchr(src, '/');
+        const char* slash = path_last_sep(src);
         const char* name = slash ? slash + 1 : src;
         const char* dot = strrchr(name, '.');
         size_t stem_len = dot ? (size_t)(dot - name) : strlen(name);
