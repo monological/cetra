@@ -447,10 +447,19 @@ The listed successors want it because it is a cheap directional signal; 11.76 me
 collapsed mean direction loses to the full 32-bit sector mask for exactly that purpose, and the
 mask is right there in the same shader. So none of these three should assume the bent normal is
 what they want. **This is not an argument for deleting it either** — it removes the reason to
-keep it and leaves the question open. What settles it is a COST measurement, which nobody has
-taken: the production loop is 32 sectors x 2 slices per pixel (the shader's own comment calls it
-the one place it pays real ALU for this), and `.gba` is three of the AO target's four channels
-carried through the blur, the temporal accumulation and the bilateral upsample.
+keep it, and what settles that is cost.
+
+**MEASURED, and the answer is keep it for now: ~0.13 ms.** Deleting the production loop and
+dropping `AoOut` to R16F moves `gtao sweep` 1.793 → 1.733 ms and `ao denoise` 1.863 → 1.797 ms
+(minimum of 3, `cornell_rooms --no-bloom --no-ssr` at 1600x1000). That is ~3.5% of the AO chain
+and ~0.3% of the frame, against an 18.9 ms opaque pass — real, but not worth a diff across the
+write path, blur, accumulation, upsample and debug view. It scales with AO resolution, so
+re-take it before targeting 4K, and take it again if the AO chain is ever being optimised for
+other reasons: 3.5% of it feeds nothing.
+**The default profiler cannot see this and will mislead you.** It drifted 2.4x run-to-run and
+returned a flat 0.000 at 3200x2000 (the heavy-frame unavailable path). Dropping bloom and SSR is
+what makes the frame light enough for the queries to retire — spread falls to 1.9%, and two
+baseline groups an hour apart agreed to 0.4%.
 
 ### A7. Punctual shadow maps — shadows for all four light types — Effort M — **DONE (spec 9.8)**
 Directional lights had cascades; spot lights had exactly one map ("the flashlight", first spot in
