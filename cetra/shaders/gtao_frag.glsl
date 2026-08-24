@@ -67,17 +67,35 @@ uint popCount(uint v)
     return (v * 0x01010101u) >> 24u;
 }
 
-// Bits for every sector spanned by the normalised range [lo, hi] (each in
-// [0,1] across the hemisphere), for OR-ing into the running occlusion mask.
+// Bits for every sector the normalised range [lo, hi] (each in [0,1] across the
+// hemisphere) covers by at least HALF -- the paper's ROUND criterion, which is
+// the hit test the method is specified with and not a tuning choice.
+//
+// The rounded EDGES are how the paper realises "half covered" in O(1): a sector
+// is set when the slab reaches its midpoint. That is an approximation of true
+// per-sector coverage and is meant to be -- a narrow slab straddling one
+// midpoint still sets that sector -- but it is unbiased, where the form this
+// replaces was not.
+//
+// What it replaces: floor(lo*N) with ceil((hi-lo)*N), which set every sector the
+// slab TOUCHED. A sample grazing one per cent of a sector occluded it whole, so
+// every occluder carried about half a sector of phantom width, on every slab, in
+// every slice. That is a systematic darkening the denoise cannot remove because
+// it is not noise, and it is largest exactly where slabs are thinnest -- grazing
+// samples and distant geometry.
+//
+// A grazing slab can now legitimately round to zero sectors, which is the point
+// of the criterion rather than a case to defend against; the count == 0 early-out
+// below already says so.
 uint sectorBits(float lo, float hi)
 {
     lo = clamp(lo, 0.0, 1.0);
     hi = clamp(hi, 0.0, 1.0);
-    uint startBit = min(uint(lo * float(SECTOR_COUNT)), SECTOR_COUNT - 1u);
-    uint count = uint(ceil((hi - lo) * float(SECTOR_COUNT)));
-    if (count == 0u)
+    uint startBit = min(uint(round(lo * float(SECTOR_COUNT))), SECTOR_COUNT - 1u);
+    uint endBit = min(uint(round(hi * float(SECTOR_COUNT))), SECTOR_COUNT);
+    if (endBit <= startBit)
         return 0u;
-    count = min(count, SECTOR_COUNT);
+    uint count = min(endBit - startBit, SECTOR_COUNT);
     return (0xFFFFFFFFu >> (SECTOR_COUNT - count)) << startBit;
 }
 
