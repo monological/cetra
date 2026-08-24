@@ -71,7 +71,7 @@ import struct
 
 # --- framing, shared with the gate ------------------------------------------------------
 FOVY_DEG = 45.0
-ASPECT = 1.6  # the 800x500 the gate renders at
+ASPECT = 400.0 / 300.0  # gates.py's shared render size; the panes are laid out to fit it
 EYE_Y = 26.0
 EYE_Z = 28.0
 
@@ -82,9 +82,9 @@ PANE_DIST = EYE_Z - PANE_Z  # 8
 BACK_DIST = EYE_Z - BACK_Z  # 48
 
 # --- the panes --------------------------------------------------------------------------
-PANE_HALF_W = 0.9
+PANE_HALF_W = 0.62
 PANE_HALF_H = 1.6
-PANE_X = [-3.8, -1.3, 1.3, 3.8]  # opaque, half a=0.5, quarter a=0.25, dark a=0.5
+PANE_X = [-3.10, -1.05, 1.05, 3.10]  # opaque, half a=0.5, quarter a=0.25, dark a=0.5
 
 # Coverage of the two sweep panes. Both well inside the range where the moment
 # reconstruction is well conditioned -- see the alpha-1.0 note in the module docstring.

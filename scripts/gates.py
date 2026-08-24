@@ -5194,6 +5194,165 @@ def run_fog_volume_gate(workdir):
     return failures
 
 
+FOGDEPTH_FIXTURE = "fog_glass_fixture.cscn"
+# Pinned, not inherited. The render app derives fog density from the SCENE RADIUS, so a
+# geometry edit would silently re-tune the very medium these arms predict in; and a falloff
+# far larger than the scene makes the medium uniform, which is what makes optical depth
+# proportional to path length. Stated in assets/gen_fog_glass_fixture.py too, beside the
+# geometry the predictions come from.
+FOGDEPTH_FOG = ["--fog", "--fog-density", "0.020", "--fog-height", "1000"]
+# Sixty, for FOGVOL_FRAMES' reason: the froxel volume has its own temporal accumulator and
+# has not settled at thirty.
+FOGDEPTH_FRAMES = "60"
+# Crop boxes as (x0, y0, x1, y1) fractions. The panes sit at one depth and the gaps between
+# them are bare backdrop at the SAME rows, so the vignette and the tone curve cancel out of
+# every comparison. Gap names give the panes they lie between.
+FOGDEPTH_BOXES = {
+    "opaque": (0.10, 0.32, 0.20, 0.68),
+    "half": (0.33, 0.32, 0.43, 0.68),
+    "quarter": (0.57, 0.32, 0.67, 0.68),
+    "dark": (0.80, 0.32, 0.90, 0.68),
+    "edgeL": (0.02, 0.32, 0.06, 0.68),
+    "gapLH": (0.235, 0.32, 0.295, 0.68),
+    "gapC": (0.465, 0.32, 0.535, 0.68),
+    "gapQD": (0.705, 0.32, 0.765, 0.68),
+    "edgeR": (0.94, 0.32, 0.98, 0.68),
+}
+# Which gaps bound each pane. A pane's own backdrop reference is the mean of the two, and
+# it has to be LOCAL: the backdrop is a plane, so the path to it grows as 1/cos of the
+# horizontal angle and its fog ratio runs 0.621 at the frame edge against 0.667 dead
+# centre. A single shared reference would read that gradient as signal.
+FOGDEPTH_NEIGHBOURS = {
+    "opaque": ("edgeL", "gapLH"),
+    "half": ("gapLH", "gapC"),
+    "quarter": ("gapC", "gapQD"),
+    "dark": ("gapQD", "edgeR"),
+}
+# The two sweep panes carry alpha 0.5 and 0.25 and are mirrored about x=0, so the
+# difference of their fog ratios is (0.5 - 0.25) x the near-vs-far advantage with the
+# backdrop gradient cancelled. Measured 0.0676 against 0.0677 predicted; before the fix it
+# was 0.0008, because coverage reached the composite nowhere at all.
+FOGDEPTH_COVER_MIN = 0.040
+# An alpha-0.5 pane must be fogged clear of the backdrop behind it. Measured lifts of
+# 0.1594 (centre pane) and 0.1743 (outer pane) after, against 0.0039 and 0.0121 before.
+FOGDEPTH_LIFT_MIN = 0.080
+# ... and must stay under the fully-near answer the opaque pane reads. Without this the
+# floor above is passed by fogging EVERYTHING at the near depth, which is the same defect
+# mirrored. Measured 0.8195 against 0.9309.
+FOGDEPTH_NEAR_MARGIN = 0.030
+# Opaque pixels must not move when the moment path arms. Their colour comes from the opaque
+# pass and a composite whose arithmetic this feature does not touch, so the bar is exact
+# equality with a single 8-bit code of slack.
+FOGDEPTH_OPAQUE_EPS = 1.5 / 255.0
+
+
+def _fogdepth_ratios(workdir, name, extra):
+    """Fog-over-no-fog ratio per crop box, which is what makes the reads comparable.
+
+    The moment OIT reconstruction does not return a blend pane's composite exactly -- 4.4%
+    low at alpha 0.5 on this fixture -- and that loss is present in both renders, so a
+    ratio divides it out and leaves the fog. Reading absolute codes instead would fold the
+    reconstruction's error into every number below.
+    """
+    scene = os.path.join(ROOT, "assets", FOGDEPTH_FIXTURE)
+    pin = ["--no-auto-exposure", "-E", "1.0", "--no-dither"]
+    out = {}
+    for tag, flags in (("on", pin + FOGDEPTH_FOG + extra), ("off", pin + extra)):
+        path = os.path.join(workdir, f"fogdepth_{name}_{tag}.ppm")
+        err = render(scene, path, flags, frames=FOGDEPTH_FRAMES)
+        if err:
+            return None, err
+        w, h, pix = _read_ppm(path)
+        out[tag] = {k: _absorb_box_rgb(pix, w, h, b) for k, b in FOGDEPTH_BOXES.items()}
+
+    def luma(v):
+        return (v[0] + v[1] + v[2]) / 3.0
+
+    return {k: luma(out["on"][k]) / max(luma(out["off"][k]), 1e-6) for k in FOGDEPTH_BOXES}, None
+
+
+def run_fogdepth_gate(workdir):
+    """Fog at the translucent depth (spec 11.78): a pane fogged at its own distance.
+
+    The atmosphere composite reads ONE linear Z per pixel out of the aux attachment, and
+    the late pass never writes it, so a translucent surface used to be fogged at the depth
+    of whatever opaque thing stood behind it. The moments carry what aux cannot -- b0 is
+    the stack's absorbance and b1/b0 its mean warped depth -- and the composite now folds
+    its two media at that depth as well and mixes by coverage.
+
+    Every read is a fog-over-no-fog RATIO, so the moment reconstruction's own loss divides
+    out. Three arms, none implying the others:
+
+      fogdepth-coverage  the alpha-0.5 and alpha-0.25 panes differ. They are mirrored about
+                         x=0, so the backdrop's 1/cos path gradient cancels and what is
+                         left is coverage. Fails any build where cover does not reach the
+                         mix -- which is exactly the shipping state before this spec, where
+                         the two panes differed by 0.0008.
+      fogdepth-lift      both alpha-0.5 panes read clear of the backdrop beside them AND
+                         below the opaque pane's fully-near answer. The ceiling is not
+                         decoration: the floor alone is passed by fogging everything at the
+                         near depth, which is the same defect with its sign flipped.
+      fogdepth-opaque    the opaque pane and all five backdrop gaps do not move between
+                         --no-oit-moments and the shipping path. The identity arm: it fails
+                         a constant coverage, or any leak of the second depth onto pixels
+                         with no translucency in front of them, which no golden can see
+                         because none of them puts a blend surface in fog.
+
+    --no-dither because the reads are ratios of small luma differences where a +/-1 LSB is
+    large, and sixty frames because the froxel volume has its own accumulator.
+    """
+    scene = os.path.join(ROOT, "assets", FOGDEPTH_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  fogdepth-coverage SKIP  ({FOGDEPTH_FIXTURE} not present)")
+        return []
+
+    r, err = _fogdepth_ratios(workdir, "base", [])
+    if err:
+        print(f"  fogdepth-coverage ERROR render failed: {err.strip()[-200:]}")
+        return ["fogdepth-coverage"]
+
+    failures = []
+
+    def backdrop(pane):
+        a, b = FOGDEPTH_NEIGHBOURS[pane]
+        return 0.5 * (r[a] + r[b])
+
+    spread = r["half"] - r["quarter"]
+    ok = spread >= FOGDEPTH_COVER_MIN
+    print(f"  fogdepth-coverage {'PASS' if ok else 'FAIL'}  a=0.5 {r['half']:.4f} - "
+          f"a=0.25 {r['quarter']:.4f} = {spread:.4f} want >={FOGDEPTH_COVER_MIN}")
+    if not ok:
+        failures.append("fogdepth-coverage")
+
+    ok = True
+    detail = []
+    for pane in ("half", "dark"):
+        lift = r[pane] - backdrop(pane)
+        under = r["opaque"] - r[pane]
+        detail.append(f"{pane} lift={lift:.4f} under-near={under:.4f}")
+        if lift < FOGDEPTH_LIFT_MIN or under < FOGDEPTH_NEAR_MARGIN:
+            ok = False
+    print(f"  fogdepth-lift     {'PASS' if ok else 'FAIL'}  {', '.join(detail)} "
+          f"want lift>={FOGDEPTH_LIFT_MIN} and under-near>={FOGDEPTH_NEAR_MARGIN}")
+    if not ok:
+        failures.append("fogdepth-lift")
+
+    nomom, err = _fogdepth_ratios(workdir, "nomom", ["--no-oit-moments"])
+    if err:
+        print(f"  fogdepth-opaque   ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["fogdepth-opaque"]
+    untouched = ["opaque", "edgeL", "gapLH", "gapC", "gapQD", "edgeR"]
+    worst = max(abs(r[k] - nomom[k]) for k in untouched)
+    where = max(untouched, key=lambda k: abs(r[k] - nomom[k]))
+    ok = worst <= FOGDEPTH_OPAQUE_EPS
+    print(f"  fogdepth-opaque   {'PASS' if ok else 'FAIL'}  worst move {worst:.5f} at "
+          f"{where} want <={FOGDEPTH_OPAQUE_EPS:.5f}")
+    if not ok:
+        failures.append("fogdepth-opaque")
+
+    return failures
+
+
 def run_absorption_gate(workdir):
     """Volume absorption scales with path length, and only in the tinted channels.
 
@@ -15438,6 +15597,7 @@ GATE_GROUPS = [
      run_absorption_gate),
     ("fog-volume", "local fog volumes (density, tint, arming; spec 11.39):",
      run_fog_volume_gate),
+    ("fogdepth", "fog at the translucent depth (spec 11.78):", run_fogdepth_gate),
     ("cloud-shadow", "cloud shadows into the fog and onto the ground (specs 11.39, 11.41):",
      run_cloud_shadow_gate),
     ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.35):",
