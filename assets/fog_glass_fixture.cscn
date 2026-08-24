@@ -1,0 +1,67 @@
+{
+ "version": 1,
+ "_comment": [
+  "The translucent-fog-depth instrument (spec 11.78). Four panes at ONE near depth in",
+  "front of one emissive backdrop far behind them, with bare backdrop showing between",
+  "every pair.",
+  "",
+  "Backdrop and three of the four panes carry the SAME emissive, so an unfogged render",
+  "is a flat field and every difference an arm reads is the fog -- and a blend pane's",
+  "composite is then its own emissive at ANY alpha, which leaves coverage free to be",
+  "the variable the arms sweep.",
+  "",
+  "Read as RATIOS against a no-fog render of this same file. The moment OIT",
+  "reconstruction does not return a blend pane's composite exactly and a ratio divides",
+  "that out. No pane sits at alpha 1.0: the reconstruction charges a lone layer part of",
+  "its own absorbance and renders it at about a fifth of its value.",
+  "",
+  "The fourth pane carries a different emissive on purpose: with equal radiance a",
+  "coverage-weighted mix of the two fog answers and an exact per-contribution",
+  "decomposition agree exactly, so without it the cheaper one passes every arm.",
+  "",
+  "No fog is authored here. The gate pins --fog-density and a --fog-height far larger",
+  "than the scene, which makes the medium uniform and the expected transmittance at",
+  "either depth a closed form. The app derives density from the scene radius, so",
+  "inheriting it would let a geometry change re-tune the quantity under test."
+ ],
+ "models": [
+  {
+   "path": "fog_glass_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "FogGlassKey",
+   "type": "directional",
+   "direction": [
+    0.6,
+    -0.5,
+    -0.62
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 2.5,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   26.0,
+   28.0
+  ],
+  "target": [
+   0.0,
+   26.0,
+   0.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}
