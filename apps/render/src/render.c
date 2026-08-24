@@ -9,6 +9,7 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
+#include "cetra/compat.h" // strcasecmp
 #include "cetra/common.h"
 #include "cetra/mesh.h"
 #include "cetra/shader.h"

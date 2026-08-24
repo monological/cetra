@@ -97,8 +97,18 @@ target_link_libraries(cetra PRIVATE cetra_warnings)
 # Linux only. glibc needs it for the POSIX APIs used here; on macOS it pins
 # __DARWIN_C_LEVEL down and hides Darwin extensions (which is why util.c has to
 # re-enable _DARWIN_C_SOURCE), and on Windows it is meaningless.
+#
+# _DEFAULT_SOURCE rides with it because naming _POSIX_C_SOURCE explicitly is what
+# TURNS OFF glibc's default feature set, and M_PI lives in the part that goes with
+# it -- guarded by __USE_MISC || __USE_XOPEN, neither implied by POSIX alone. Four
+# files here use it (light.c, emissive_light.c, tree_gen.c, vegetation_tex.c); the
+# other ten reach for cglm's CGLM_PI, which is GLM_PIf and therefore a FLOAT, so
+# converting the four to match would change double arithmetic to single rather
+# than fix a portability bug. macOS never needed either: its math.h exposes M_PI
+# unconditionally, so this only ever failed on the platform nobody configures on.
 target_compile_definitions(cetra PRIVATE
-    $<$<PLATFORM_ID:Linux>:_POSIX_C_SOURCE=200809L>)
+    $<$<PLATFORM_ID:Linux>:_POSIX_C_SOURCE=200809L>
+    $<$<PLATFORM_ID:Linux>:_DEFAULT_SOURCE>)
 
 # Link JoltC physics library if enabled
 if(CETRA_BUILD_JOLTC)

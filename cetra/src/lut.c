@@ -1,9 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-// strncasecmp; ies.c's note applies -- POSIX, and the cetra target already
-// compiles with _POSIX_C_SOURCE.
-#include <strings.h>
+#include "compat.h" // strncasecmp
 
 #include "lut.h"
 #include "util.h"

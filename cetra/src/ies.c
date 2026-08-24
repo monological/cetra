@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h> // strncasecmp: POSIX, and _POSIX_C_SOURCE is set for this target
+#include "compat.h" // strncasecmp
 
 #include "ext/log.h"
 #include "util.h"

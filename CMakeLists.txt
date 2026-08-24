@@ -161,6 +161,14 @@ add_subdirectory(cetra/src/ext/glfw)
 
 # GLEW (Perlmint/glew-cmake fork ships pre-generated sources + CMake).
 # libglew_static carries GLEW_STATIC as a PUBLIC define.
+#
+# On APPLE only, cmake/apple shadows FindX11: glew asks for X11 REQUIRED on every
+# non-Windows host, which is fatal on a Mac that has no XQuartz and no Homebrew
+# libx11. See cmake/apple/FindX11.cmake -- the reason macOS reaches that branch
+# at all is a Darwin-25 version gate, and the reason it must not is Cocoa.
+if(APPLE)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apple")
+endif()
 set(glew-cmake_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(glew-cmake_BUILD_STATIC ON  CACHE BOOL "" FORCE)
 set(ONLY_LIBS ON CACHE BOOL "" FORCE)
@@ -258,13 +266,31 @@ if(MSVC)
     set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
     set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
     set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
-    # These default ON and emit AVX2/BMI, which a KVM guest's default CPU model
-    # does not expose -- a SIGILL at the first physics tick, not a build error.
-    # Re-enable once the guest is CPU-passthrough. SSE4.1/4.2 stay on (universal).
-    foreach(_jolt_isa USE_AVX2 USE_AVX512 USE_F16C USE_FMADD USE_LZCNT USE_TZCNT)
-        set(${_jolt_isa} OFF CACHE BOOL "" FORCE)
-    endforeach()
 endif()
+
+# Jolt's x86 ISA options default ON and put -mavx2/-mbmi/-mf16c/-mfma into the
+# GLOBAL compiler flags, so they reach every C file in the build and not just
+# Jolt's. Forced OFF before its add_subdirectory so the cached values win in its
+# scope. Genuinely inert on arm64, which has none of these; this block used to
+# sit inside the if(MSVC) above under a comment claiming it was inert on Linux
+# too, which was false -- the options default ON there and nothing turned them
+# off.
+#
+# Two consequences, and the second is the one that cost a day:
+#
+#   - The binary then requires an AVX2 CPU. A KVM guest's default CPU model does
+#     not expose it, so physics dies with SIGILL at the first tick.
+#   - __AVX__ makes cglm's mat4 CGLM_ALIGN(32) and its copies _mm256_store_ps,
+#     while Engine, Scene and every node come from calloc, which guarantees 16 on
+#     glibc. That is a SIGSEGV in glm_mat4_identity inside create_engine, before
+#     any GL call -- so it reads as a graphics failure and is not one.
+#
+# USE_AVX is in the list and must stay: dropping only AVX2 leaves -mavx, which
+# still defines __AVX__ and still crashes. SSE4.1/4.2 stay on, universal on
+# x86-64 since 2008 and only 16-byte aligned, which calloc already satisfies.
+foreach(_jolt_isa USE_AVX USE_AVX2 USE_AVX512 USE_F16C USE_FMADD USE_LZCNT USE_TZCNT)
+    set(${_jolt_isa} OFF CACHE BOOL "" FORCE)
+endforeach()
 
 # Build JoltC if enabled
 if(CETRA_BUILD_JOLTC)

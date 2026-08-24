@@ -60,6 +60,32 @@ CETRA_WIN_SSH="${CETRA_WIN_SSH:-cetra-win}"
 # uses it -- ASSIMP_BUILD_TESTS is OFF).
 SYNC_EXCLUDE_DIRS=(out .git my_models cetra/src/ext/assimp/test)
 
+# The sync drops .git (above), so the VM has no history to derive a version from
+# and its configure aborts by design -- CMakeLists names this exact case and its
+# escape hatch: a VERSION file, which it reads before asking git.
+#
+# Computed here and written THERE, as a separate copy after the transfer. Writing
+# it into the local tree instead would be a shared mutation that two concurrent
+# --target runs interleave on -- one removing the file the other is still packing
+# -- and a stale one left behind silently pins the version of every later LOCAL
+# build too, since VERSION outranks git describe by design.
+stamp_remote_version() {
+    local dest="$1" v tmp
+    v="$(git describe --tags --dirty --match 'v[0-9]*' 2>/dev/null \
+         || git rev-parse --short HEAD 2>/dev/null || true)"
+    if [[ -z "$v" ]]; then
+        echo "No git history here to derive a version from; the remote tree would have none either." >&2
+        exit 1
+    fi
+    # Via scp rather than an echo over ssh: byte-exact on both remotes, where a
+    # PowerShell redirect would decide an encoding and can prepend a BOM.
+    tmp="${TMPDIR:-/tmp}/cetra-version-$$"
+    printf '%s\n' "$v" > "$tmp"
+    scp -q "$tmp" "$dest/VERSION"
+    rm -f "$tmp"
+    echo "Stamped VERSION=$v on the remote tree."
+}
+
 # This invocation's build knobs as a flag string in the target's own spelling
 # ($1 release, $2 clean, $3 no-joltc) -- so the two remote arms don't each
 # re-derive the same three predicates.
@@ -82,6 +108,8 @@ if [[ -n "$TARGET" ]]; then
             echo "Syncing working tree -> $SSH:~/cetra ..."
             rsync -az --delete -e ssh "${EX[@]}" --exclude='.DS_Store' --exclude='._*' \
                 ./ "$SSH:cetra/"
+            # After the rsync, whose --delete would otherwise take it straight back off.
+            stamp_remote_version "$SSH:cetra"
             echo "Building on $SSH ($TARGET-$BUILD_TYPE)..."
             # Run through the VM's login shell ($SHELL -l) so its profile is
             # sourced: a non-interactive `ssh host cmd` otherwise gets a bare PATH
@@ -109,6 +137,8 @@ if [[ -n "$TARGET" ]]; then
             # for the build cache) or files removed upstream would linger, then
             # extract. tar restores the archived mtimes, so rebuilds stay incremental.
             ssh "$CETRA_WIN_SSH" "if (Test-Path '$DEST') { Get-ChildItem -Path '$DEST/*' -Force -Exclude out | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }; New-Item -ItemType Directory -Force '$DEST' | Out-Null; tar xzf $WIN_TGZ -C '$DEST'"
+            # After the extract, which clears the destination first.
+            stamp_remote_version "$CETRA_WIN_SSH:$DEST"
             echo "Building on $CETRA_WIN_SSH (windows-$BUILD_TYPE)..."
             exec ssh "$CETRA_WIN_SSH" "powershell -ExecutionPolicy Bypass -File $DEST/tools/build.ps1$(remote_flags -Release -Clean -NoJoltc)"
             ;;
