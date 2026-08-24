@@ -134,6 +134,12 @@ void main() {
         // No stack here: leave the surface answer exactly as it was computed, so
         // every pixel of every fog frame without translucency in front of it is
         // bit-identical to the frame before this feature existed.
+        // Deleting this changes nothing measurable on this driver -- b0 is 0 on a
+        // pixel with nothing translucent in front of it, cover is then 0, and
+        // mix() returns the surface answer whatever its other argument holds. It
+        // stays because b1/b0 is 0/0 there, which GLSL leaves undefined, and
+        // mix(a, NaN, 0.0) is NaN wherever the hardware propagates 0 * NaN. A
+        // guard against undefined behaviour, not against a wrong number.
         if (b0 > 1e-5) {
             float b1 = textureLod(momentTex, mUV, 0.0).r;
             // Invert mboitWarpDepth. It clamps its own output, so a mean of

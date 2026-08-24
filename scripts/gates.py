@@ -5292,11 +5292,27 @@ def run_fogdepth_gate(workdir):
                          below the opaque pane's fully-near answer. The ceiling is not
                          decoration: the floor alone is passed by fogging everything at the
                          near depth, which is the same defect with its sign flipped.
-      fogdepth-opaque    the opaque pane and all five backdrop gaps do not move between
-                         --no-oit-moments and the shipping path. The identity arm: it fails
-                         a constant coverage, or any leak of the second depth onto pixels
-                         with no translucency in front of them, which no golden can see
-                         because none of them puts a blend surface in fog.
+      fogdepth-offpath   --no-oit-moments reaches the PRE-FIX frame: the panes fall back
+                         onto the backdrop's fog (lift under the floor above) while the
+                         opaque pane and all five gaps do not move at all. Both halves are
+                         needed and neither substitutes. The first fails a build that arms
+                         the second depth regardless of the flag, so the bisect lever stops
+                         being one -- and the weighted-blended accumulation carries no
+                         depth statistic, so there is nothing for it to arm FROM. The
+                         second fails any leak onto pixels with no translucency in front of
+                         them, which no golden can see because none puts a blend surface in
+                         fog.
+
+    Stated honestly, because a coverage claim is the least-verified sentence in most specs:
+    the two arms above are what catch mutations, and fogdepth-offpath is a PROPERTY
+    STATEMENT rather than a discriminator. Four mutations were tried against it -- coverage
+    forced to 0 and to 1, the wrong texture bound on the moment unit, and the b0 guard
+    deleted -- and it caught none. The first three the arms above catch; the fourth is inert
+    on this driver (see the guard's own comment in froxel_composite_frag). Its fallback half
+    cannot be broken from the shader either, because with no moment atlas generated there is
+    no b0 to arm from whatever the shader does with it. What it is worth is the day someone
+    gives the weighted-blended path a depth statistic and wires it in here: this is what
+    notices.
 
     --no-dither because the reads are ratios of small luma differences where a +/-1 LSB is
     large, and sixty frames because the froxel volume has its own accumulator.
@@ -5339,16 +5355,19 @@ def run_fogdepth_gate(workdir):
 
     nomom, err = _fogdepth_ratios(workdir, "nomom", ["--no-oit-moments"])
     if err:
-        print(f"  fogdepth-opaque   ERROR render failed: {err.strip()[-200:]}")
-        return failures + ["fogdepth-opaque"]
+        print(f"  fogdepth-offpath  ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["fogdepth-offpath"]
     untouched = ["opaque", "edgeL", "gapLH", "gapC", "gapQD", "edgeR"]
     worst = max(abs(r[k] - nomom[k]) for k in untouched)
     where = max(untouched, key=lambda k: abs(r[k] - nomom[k]))
-    ok = worst <= FOGDEPTH_OPAQUE_EPS
-    print(f"  fogdepth-opaque   {'PASS' if ok else 'FAIL'}  worst move {worst:.5f} at "
-          f"{where} want <={FOGDEPTH_OPAQUE_EPS:.5f}")
+    fell_back = max(nomom[p] - 0.5 * (nomom[a] + nomom[b])
+                    for p, (a, b) in FOGDEPTH_NEIGHBOURS.items() if p != "opaque")
+    ok = worst <= FOGDEPTH_OPAQUE_EPS and fell_back < FOGDEPTH_LIFT_MIN
+    print(f"  fogdepth-offpath  {'PASS' if ok else 'FAIL'}  panes fall back to lift "
+          f"{fell_back:.4f} (want <{FOGDEPTH_LIFT_MIN}), opaque and gaps move "
+          f"{worst:.5f} at {where} (want <={FOGDEPTH_OPAQUE_EPS:.5f})")
     if not ok:
-        failures.append("fogdepth-opaque")
+        failures.append("fogdepth-offpath")
 
     return failures
 
