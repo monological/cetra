@@ -827,7 +827,15 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, "%.2f m",
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
-        static const char* const spec_occ_names[] = {"Off", "Legacy", "Bent normal", "Split"};
+        static const char* const spec_occ_names[] = {"Off", "Legacy", "Split"};
+        // The combo writes its INDEX straight back into the enum, so a label
+        // dropped here without the enum value (or the reverse) compiles clean
+        // and silently selects the wrong mode. config_snapshot.c guards its own
+        // vocabulary this way; this one had nothing until spec 11.77 removed a
+        // label from both and noticed only one side would have complained.
+        _Static_assert(sizeof(spec_occ_names) / sizeof(*spec_occ_names) ==
+                           POSTFX_SPEC_OCC_SPLIT + 1,
+                       "spec_occ_names must label every PostFXSpecOccMode");
         int so = (int)fx->spec_occlusion_mode;
         if (igCombo_Str_arr("Specular Occlusion", &so, spec_occ_names,
                             (int)(sizeof(spec_occ_names) / sizeof(spec_occ_names[0])), -1))

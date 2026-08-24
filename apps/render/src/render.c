@@ -129,7 +129,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --no-spec-occlusion Let GTAO darken specular (alias for --spec-occ off)\n");
     fprintf(stderr,
-            "      --spec-occ <m>     Specular occlusion: off, legacy, bent, split "
+            "      --spec-occ <m>     Specular occlusion: off, legacy, split "
             "(default: split)\n");
     fprintf(stderr, "      --spec-occ-debug   Show the AO visibility the scene multiplies by\n");
     fprintf(stderr, "      --bent-debug       Show the bent normal from the AO chain\n");
@@ -792,12 +792,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 args->spec_occ_mode = POSTFX_SPEC_OCC_OFF;
             } else if (strcmp(argv[i], "legacy") == 0) {
                 args->spec_occ_mode = POSTFX_SPEC_OCC_LEGACY;
-            } else if (strcmp(argv[i], "bent") == 0) {
-                args->spec_occ_mode = POSTFX_SPEC_OCC_BENT;
             } else if (strcmp(argv[i], "split") == 0) {
                 args->spec_occ_mode = POSTFX_SPEC_OCC_SPLIT;
             } else {
-                fprintf(stderr, "Error: --spec-occ expects off, legacy, bent, or split\n");
+                fprintf(stderr, "Error: --spec-occ expects off, legacy, or split\n");
                 return -1;
             }
         } else if (strcmp(argv[i], "--spec-occ-debug") == 0) {

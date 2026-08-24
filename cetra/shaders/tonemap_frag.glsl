@@ -33,7 +33,7 @@ uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
 uniform sampler2D auxTex;       // Aux G-buffer: linear view-Z (.z) + roughness (.w)
 uniform vec2 invFocal;          // 1/projection focal terms, for view-pos reconstruction
 uniform vec2 aoRes;             // aoTex's own size, which is HALF the render res
-uniform int specOccMode;        // 0 off, 1 legacy smoothness blend, 2 bent-normal cone
+uniform int specOccMode;        // 0 off, 1 legacy smoothness blend, 2 split (applied in the composite)
 uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
 uniform sampler2D csTex;        // Contact-shadow visibility (spec 9.3), full internal res
 uniform sampler2D specOccTex;   // Reflection-lobe sums (.r visible, .g total), half render res
@@ -297,18 +297,18 @@ vec3 toneSelect(vec3 c)
 // directionless -- a reflection aimed into a wall is unoccluded as readily as
 // one aimed at open sky.
 //
-// Mode 2 (bent) instead asks the directional question: how much of the
-// reflection lobe actually points somewhere visible? The AO chain carries a
-// bent normal (average unoccluded direction) whose cone half-angle follows
-// from the AO itself, and the reflection is a cone about R widening with
-// roughness. Their overlap is the visibility a mirror-ish lobe really has --
-// so a reflection aimed into an occluder stays dark while one aimed at open
-// sky is untouched, which the smoothness blend cannot distinguish.
+// Mode 2 (split) normally does not reach this function at all: the composite
+// pass applied the specular-occlusion term to the specular share and plain AO
+// to the rest, and aoEnabled arrives false. If the composite could not run,
+// aoEnabled stays true and mode 2 falls through to the legacy blend below --
+// an error path by construction, since every way of reaching it logs first.
 //
-// Mode 3 (split) normally does not reach this function: the composite pass
-// applied the cone term to the specular share and plain AO to the rest, and
-// aoEnabled arrives false. If the composite could not run, aoEnabled stays
-// true and mode 3 falls through to the legacy blend below.
+// A third mode sat here until spec 11.77: `bent`, which asked the directional
+// question by intersecting a cone about the AO chain's bent normal with a cone
+// about R. That question is now answered in the AO sweep against the sector
+// bitmask itself, before anything is collapsed to a single direction, so the
+// cone had no accuracy left to offer -- only the banding its own reconstruction
+// introduced.
 //
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
 #include "ao_upsample.glsl"
@@ -370,15 +370,6 @@ float aoVisibility()
     // without it every grazing pixel hands its whole -- mostly diffuse --
     // energy to the specular answer.
     float specWeight = mix(fresnel, 1.0, metallic) * (1.0 - aux.w);
-
-    if (specOccMode == 2) {
-        vec3 bentN = normalize(aoSample.gba * 2.0 - 1.0);
-        float so = specOcclusionCone(ao, aux.w, bentN, reflect(-V, N));
-        // Same weight as legacy, different destination: legacy hands the
-        // specular share a blanket 1.0 (unoccluded in every direction), this
-        // hands it the share of its own lobe that points somewhere visible.
-        return mix(ao, so, specWeight);
-    }
 
     return mix(ao, 1.0, specWeight);
 }
@@ -492,7 +483,11 @@ void main()
         // reflection relief vs the raw AO of debug view 1. Split mode shows
         // the term the composite applied to the specular share, through the
         // same shared function so this view cannot drift from it.
-        FragColor = vec4(vec3(specOccMode == 3
+        // 2 is POSTFX_SPEC_OCC_SPLIT. The uniform carries the C enum's value
+        // raw, so this literal and postfx.h are coupled by nothing but agreeing
+        // -- and getting it wrong is quiet, since the wrong arm still returns a
+        // plausible picture. ao-ring renders through this view for that reason.
+        FragColor = vec4(vec3(specOccMode == 2
                                   ? specOccSplitAt(TexCoords, aoSampleAt(), specOccSampleAt())
                                   : aoVisibility()),
                          1.0);

@@ -170,7 +170,7 @@ static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "ag
 // and the values are the shader's own debugView dispatch, so it cannot be closed.
 static const char* const CFG_DEBUG_VIEWS[] = {"none", "ao",      "normals", "ssr",     "albedo",
                                               "ssgi", "unused_6", "spec_occ", "contact", "bent"};
-static const char* const CFG_SPEC_OCC[] = {"off", "legacy", "bent", "split"};
+static const char* const CFG_SPEC_OCC[] = {"off", "legacy", "split"};
 static const char* const CFG_LUT_INTERP[] = {"trilinear", "tetrahedral"};
 static const char* const CFG_METER_MODES[] = {"uniform", "centre", "spot"};
 static const char* const CFG_WAVE_MODELS[] = {"gerstner", "fft"};

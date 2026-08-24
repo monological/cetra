@@ -94,15 +94,20 @@ typedef enum PostFXDebugView {
 } PostFXDebugView;
 
 // How the AO factor treats specular. Legacy blends AO toward unoccluded by
-// smoothness alone; bent intersects the AO chain's visibility cone with the
-// reflection lobe, so a reflection aimed into an occluder stays occluded.
-// Split routes ambient specular to its own scene attachment and occludes
-// exactly that share in post -- no per-pixel guess at the specular fraction.
+// smoothness alone, directionless, against a buffer where diffuse and specular
+// are already summed. Split routes ambient specular to its own scene attachment
+// and occludes exactly that share in post -- no per-pixel guess at the specular
+// fraction, and the term itself comes from the AO sweep's own sector bitmask.
+//
+// A third mode, BENT, sat between them until spec 11.77: a cone about the AO
+// chain's bent normal intersected with a cone about R. It went because the
+// directional question it asked is now answered against the bitmask, before
+// anything is collapsed to one direction -- so it had no accuracy left to
+// justify itself, only its own banding.
 typedef enum PostFXSpecOccMode {
     POSTFX_SPEC_OCC_OFF = 0,
     POSTFX_SPEC_OCC_LEGACY = 1,
-    POSTFX_SPEC_OCC_BENT = 2,
-    POSTFX_SPEC_OCC_SPLIT = 3,
+    POSTFX_SPEC_OCC_SPLIT = 2,
 } PostFXSpecOccMode;
 
 // Mirrors MAX_SHADOW_LIGHTS (shadow.h) without postfx learning about the

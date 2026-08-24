@@ -66,7 +66,13 @@ const float HEIGHT_BIAS = 0.04;       // Min sin(elevation) a sample needs to co
 // Xv = ndc.x * (-z) / focalX, Yv likewise; a jitter-constant XY offset cancels
 // in the relative sVec the occlusion math uses.
 #include "depth.glsl"
-#include "spec_lobe.glsl"
+
+// Cosine of the GGX reflection lobe's half-angle from perceptual roughness: a
+// mirror at 0, near-hemispheric at 1.
+float specLobeCos(float perceptualRoughness)
+{
+    return exp2(-3.321928 * perceptualRoughness * perceptualRoughness);
+}
 
 // 32-bit population count (SWAR). GLSL 3.30 has uint + bit ops but not the
 // bitCount() builtin (added in 4.00), so we roll our own to stay on 330.
@@ -125,10 +131,10 @@ uint sectorBits(float lo, float hi)
 // The [0,1] clamp is the HORIZON REFERENCE, and it is why this needs no second
 // term. A reflection lobe always hangs partly below its own horizon and the
 // BRDF has already zeroed that half, so the cone form this replaces had to
-// measure itself against a second overlap against an open hemisphere; clamping
-// the sector range does the same thing exactly, for nothing. It was the
-// approximation in that reference, not the reference itself, that the
-// TRUST_OPEN fade was covering for.
+// measure itself against a second cone overlap against an open hemisphere;
+// clamping the sector range does the same thing exactly, for nothing. It was
+// that reference being an approximation -- not the idea of having one -- that
+// the cone needed a smoothstep to hide, and which rang wherever it failed.
 uint lobeSectors(float lo, float hi)
 {
     // Entirely below the horizon: this slice sees no part of the lobe. Tested
