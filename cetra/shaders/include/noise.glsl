@@ -9,7 +9,7 @@
 // than inlining a fourth copy.
 //
 // TWO SHADERS ARE EXEMPT and must stay that way:
-//   ssr_frag.glsl:191        inline IGN. The include's dot() form rounds
+//   ssr_frag.glsl:211        inline IGN. The include's dot() form rounds
 //                            differently from the explicit multiply-add, the
 //                            hash's low bits steer a traced ray, and migrating
 //                            was MEASURED at 31,800 px.

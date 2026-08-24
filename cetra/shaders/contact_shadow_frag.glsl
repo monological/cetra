@@ -222,7 +222,7 @@ void main() {
     // INLINE, and not include/noise.glsl's ign() -- do not tidy this. The
     // include spells the same function as a dot(), which rounds differently
     // from this explicit multiply-add, and the hash's low bits steer where the
-    // march starts. ssr_frag.glsl:191 declined the identical migration on a
+    // march starts. ssr_frag.glsl:211 declined the identical migration on a
     // measured 31,800 px, and unlike ssr this one is covered by the
     // contact_debug golden, so the same edit here is a 0 px bet against a
     // transformation already known to be hostile.
