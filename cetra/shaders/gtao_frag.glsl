@@ -68,8 +68,10 @@ uint popCount(uint v)
 }
 
 // Bits for every sector the normalised range [lo, hi] (each in [0,1] across the
-// hemisphere) covers by at least HALF -- the paper's ROUND criterion, which is
-// the hit test the method is specified with and not a tuning choice.
+// hemisphere) covers by at least HALF -- the paper's ROUND criterion. The paper
+// and the authors' own published reference shader disagree about this: the text
+// and Figure 5 both say round, the reference code takes floor/ceil. What settles
+// it is the bias below, not which source is quoted.
 //
 // The rounded EDGES are how the paper realises "half covered" in O(1): a sector
 // is set when the slab reaches its midpoint. That is an approximation of true

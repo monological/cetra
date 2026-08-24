@@ -24,12 +24,18 @@ bitmasks the UpdateHorizon() function from GTAO is not needed anymore, because
 we don't need to apply any falloff" -- the thickness model replaces it. Anyone
 tempted to "fix" the hard `len > radius` reject should read that first.
 
-**Deviates -- the hit criterion.** Sec. 3: "we used the ROUND criterion which
-requires the sector to be half covered by the sample." `sectorBits`
-(gtao_frag.glsl) instead takes `floor(lo*N)` and `ceil((hi-lo)*N)`, which sets
-any sector the sample touches at all. A sample grazing one per cent of a sector
-occludes it fully. That is a systematic over-occlusion bias, and it is not a
-tuning choice -- it is the criterion the paper names, spelled differently.
+**Follows -- and the paper disagrees with its own reference code -- the hit
+criterion.** Sec. 3 and Figure 5's caption both specify the ROUND criterion: a
+sector is occluded when "at least half covered by the sample". The authors'
+published reference shader does NOT do that; it takes `floor` for the start index
+and `ceil` for the width, setting any sector the sample touches at all.
+`sectorBits` (gtao_frag.glsl) shipped the reference form and moved to the paper's
+in spec 11.76. The move stands without either authority, which is why it was made:
+marking every touched sector adds about half a sector of phantom width per slab,
+per slice, and that is a systematic darkening no denoiser removes because it is not
+noise. Measured across the change -- heavily-occluded regions lightened ~1.3%,
+fully open regions bit-identical. Anyone reading the reference implementation and
+finding it disagrees with this shader has found the discrepancy, not a bug.
 
 **Deviates -- what the bitmask is used for, and this is the big one.** Sec. 3.2
 positions the bitmask as SUPERSEDING the bent-normal-and-cone approach:
