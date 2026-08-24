@@ -740,16 +740,20 @@ typedef struct PostFXGBufferWrites {
     bool sss;       // attachment 4 (skin diffuse)
     bool spec;      // attachment 7 (split ambient specular)
     GLuint oit_fbo; // 0 when the OIT accumulate did not run this frame
-    // Which form the accumulation is in: moment-weighted layers already carry
-    // their own transmittance and composite as a straight sum, while
-    // weighted-blended ones are a weighted average and must be divided by their
-    // own weight first. Adjacent to oit_fbo because it is meaningless when that
-    // is 0.
-    bool oit_moment_weighted;
     // The moment atlas, 0 when the generation pass did not run: b1..b4 in the
-    // lower half, b0 in the upper. Carries what the aux attachment structurally
-    // cannot -- how much of a pixel a translucent stack supplies, and at what
-    // depth. Beside the two above because it is meaningless without them.
+    // lower half, b0 in the upper. Adjacent to oit_fbo because it is meaningless
+    // when that is 0.
+    //
+    // It carries TWO answers, which is why there is no bool beside it. Non-zero
+    // says the accumulation is in moment-weighted FORM -- those layers already
+    // carry their own transmittance and composite as a straight sum, where
+    // weighted-blended ones are an average and must be divided by their own
+    // weight first. And it is the atlas itself, holding what the aux attachment
+    // structurally cannot: how much of a pixel a translucent stack supplies and
+    // at what depth. One field because a frame cannot have one without the
+    // other -- the generation pass publishes nothing unless its targets exist --
+    // and two fields could disagree, which would mis-composite every translucent
+    // pixel in the frame while looking like a flag someone forgot to set.
     GLuint oit_moment_atlas;
     // The interval that atlas's depth warp is stated over. Passed rather than
     // reconstructed from the projection because the FAR plane does not survive

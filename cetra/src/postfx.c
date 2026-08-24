@@ -3120,7 +3120,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
     // OIT: composite the accumulated transparent layer over the resolved opaque
     // scene before any downstream HDR pass (TAA/SSR/bloom/tonemap) reads it.
     if (writes->oit_fbo != 0)
-        postfx_run_oit(fx, writes->oit_fbo, writes->oit_moment_weighted);
+        postfx_run_oit(fx, writes->oit_fbo, writes->oit_moment_atlas != 0);
 
     if (mode == POSTFX_TONEMAP_PASSTHROUGH) {
         // Display-ready frame: copy to the target, skipping bloom and tone

@@ -1826,7 +1826,6 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
                                         .spec = engine->spec_this_frame,
                                         .oit_fbo =
                                             engine->oit_this_frame ? engine->oit_fbo : 0,
-                                        .oit_moment_weighted = engine->moments_this_frame,
                                         .oit_moment_atlas = engine->moments_this_frame
                                                                 ? engine->moment_atlas_texture
                                                                 : 0,
