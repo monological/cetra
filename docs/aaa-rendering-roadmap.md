@@ -148,8 +148,10 @@ under them.
   their quotient because everything downstream averages them. Collapsing 32 bits to a direction and
   a scalar and rebuilding a cone from the pair was manufacturing the bands it was blamed for: on
   `cornell_rooms` the AO through the artifact is strictly monotone while the cone term plunged to 0
-  and rang. The cone survives as `--spec-occ bent`, unconverted on purpose, so the old answer is
-  still computable and the new one stays falsifiable.
+  and rang. 11.76 kept the cone as `--spec-occ bent` so the old answer stayed computable;
+  **11.77 deleted it**, because that argument was false — the gate arm never ran the mode, and
+  the cone had been falsified through git against the pre-change renderer instead. The ladder is
+  off / legacy / split.
 - **Probe capture renders the full scene at arbitrary positions** (`reflection_probe_capture`,
   `probe.c:50-263`, camera save/substitute + 6 faces via `ibl_capture_views`) — the DDGI-reusable
   machinery. Octahedral encoding exists (`include/octahedral.glsl`, used by the DDGI atlas this
@@ -407,9 +409,10 @@ New: `gi_volume.c/h`, `gi_project_frag.glsl`, `gi_border_frag.glsl`, `include/oc
 **Owns foundations:** octahedral encode/decode include; generalized capture-at-position helper;
 atlas+gutter machinery. **Depends on:** A1+A2 soft (probes should capture clustered/area-lit scenes).
 
-### A5. Bent-normal specular occlusion from GTAO (Jimenez 2016) — Effort M — **DONE (specs 11.3 + 11.4), and the default was REPLACED in 11.76**
-**Read this heading literally: the shipped default is no longer bent-normal spec occlusion.** The
-entry below is the 11.3/11.4 design and is still exactly what `--spec-occ bent` runs. What changed
+### A5. Bent-normal specular occlusion from GTAO (Jimenez 2016) — Effort M — **DONE (11.3 + 11.4), REPLACED as the default in 11.76, and DELETED in 11.77**
+**Read this heading literally: bent-normal specular occlusion is no longer in the engine.** The
+entry below is the 11.3/11.4 design, kept as the record of what was built and why it went — it is
+no longer reachable by any flag. What changed
 is that the cone was the wrong consumer of a bitmask: 11.3's own "look review found mottling that is
 architectural, not tunable" was the first sighting of it, 11.75 fixed a hard cliff in the same
 function, and 11.76 removed the reconstruction instead of tuning it. Two things this entry asserts
