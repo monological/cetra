@@ -71,9 +71,39 @@ def _default_bin_dir():
     return debug
 
 
+def _bin(name):
+    """An app binary in BIN_DIR, spelled the way the host names executables."""
+    return os.path.join(BIN_DIR, name + (".exe" if sys.platform == "win32" else ""))
+
+
 BIN_DIR = os.environ.get("CETRA_BIN_DIR") or _default_bin_dir()
-RENDER = os.path.join(BIN_DIR, "render")
+RENDER = _bin("render")
 SCALE = 1000.0
+
+# Every sample coordinate and every stored golden in this suite was measured
+# against a framebuffer TWICE the requested -W/-H, because that is what a HiDPI
+# context hands back. Most arms already read fractionally and do not care
+# (_beach_pixel says so in its own docstring); two cannot:
+#
+#   - ao-ring's window is absolute -- AO_RING_ROWS (745, 815) against an arm
+#     rendering -W 800 -H 600. At 1x the buffer is 800x600 and every sampled row
+#     is past the bottom edge, which is an IndexError that takes the whole run
+#     down rather than failing one arm.
+#   - cloud-shadow reads a --sky-debug tile that sky.c draws at ABSOLUTE pixel
+#     offsets. At 1x that tile is not displaced, it is off the frame entirely, so
+#     no rescaling of the sample box could recover it.
+#
+# The second is why the REQUEST is scaled rather than the readings. A HiDPI
+# machine multiplies by one and is byte-identical to before; a 1x machine asks
+# for double and gets the same framebuffer, so absolute coordinates land, the
+# debug tile is on screen, and an absolute pixel-count threshold means the same
+# thing on both. Nothing downstream learns which platform it is on.
+#
+# Note this was never only a portability question: a Mac on a 1x external monitor
+# breaks the suite in exactly the same way, which is why the scale is MEASURED
+# below and not keyed off sys.platform.
+CALIBRATED_FB_SCALE = 2
+_FB_SCALE = None
 
 
 def _cscn_camera(name, **extra):
@@ -224,20 +254,78 @@ def render(scene, out, extra, frames=30):
     240 and 400 for trace cadence and walk geometry.
     """
     cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out]
-    r = subprocess.run(cmd + extra, capture_output=True, text=True)
+    r = _run(cmd + extra, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return r.stdout + r.stderr
     return None
 
 
+def _scale_argv(argv):
+    """One app command with its framebuffer request brought to the calibrated size.
+
+    Guarded on argv[0] so anything that is not one of our binaries -- magick
+    above all -- passes through untouched, which is what makes it safe to route
+    every subprocess call in this file through here.
+    """
+    mult = CALIBRATED_FB_SCALE // (_FB_SCALE or CALIBRATED_FB_SCALE)
+    if mult == 1 or not argv or argv[0] not in (RENDER, FOREST):
+        return argv
+    out = list(argv)
+    for i in range(len(out) - 1):
+        if out[i] in ("-W", "-H"):
+            out[i + 1] = str(int(out[i + 1]) * mult)
+    return out
+
+
+def _run(cmd, **kw):
+    """subprocess.run for the app binaries, framebuffer request scaled.
+
+    A wrapper rather than 45 edited argv builders: a site that forgot would read
+    the wrong pixels and still report a number, which is the failure this whole
+    mechanism exists to prevent.
+    """
+    return subprocess.run(_scale_argv(cmd), **kw)
+
+
+def _detect_fb_scale(workdir):
+    """Framebuffer pixels per requested pixel, measured on this machine.
+
+    Rendered rather than inferred: the answer is a property of the DISPLAY, not
+    the OS, so a Mac on a 1x external monitor answers 1 and must. Falls back to
+    the calibrated value if the probe cannot render at all, which leaves the
+    suite behaving exactly as it did before this existed.
+    """
+    global _FB_SCALE
+    probe = os.path.join(workdir, "_fbscale.ppm")
+    scene = os.path.join(ROOT, "assets", "parallax_fixture.gltf")
+    r = subprocess.run([RENDER, "-m", scene, "-x", "-f", "1", "-W", "100", "-H", "100",
+                        "-S", probe], capture_output=True, text=True)
+    if r.returncode == 0 and os.path.exists(probe):
+        w, _, _ = _read_ppm(probe)
+        _FB_SCALE = max(1, int(round(w / 100.0)))
+    else:
+        _FB_SCALE = CALIBRATED_FB_SCALE
+    return _FB_SCALE
+
+
 def compare(a, b):
-    """Return (differing pixels, peak absolute error as a 0..1 fraction)."""
+    """Return (differing pixels, peak absolute error as a 0..1 fraction).
+
+    A magick that could not read one of the two answers with a message rather
+    than a number ("compare: unable to open image ..."), which used to raise out
+    of here and take the whole run down over one missing frame. Reported as a
+    full-frame difference instead: the caller is asking whether two images agree,
+    and one that does not exist does not agree.
+    """
     def metric(name):
         r = subprocess.run(["magick", "compare", "-metric", name, a, b, "null:"],
                            capture_output=True, text=True)
         return (r.stderr or r.stdout).strip()
 
-    ae = int(float(metric("AE").split()[0]))
+    try:
+        ae = int(float(metric("AE").split()[0]))
+    except (ValueError, IndexError):
+        return sys.maxsize, 1.0
     # PAE prints "257 (0.00392157)"; the parenthesised value is the normalised one.
     pae_raw = metric("PAE")
     pae = float(pae_raw.split("(")[1].rstrip(")")) if "(" in pae_raw else 0.0
@@ -456,7 +544,7 @@ def _skin_render(workdir, tag, extra):
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
            "--no-sss", "--no-shadows", "--no-bloom", "-W", "800", "-H", "500",
            "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return out
@@ -755,7 +843,7 @@ def _skin_sample(workdir, tag, dims, extra):
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
            "--no-shadows", "--no-bloom", "--no-dither",
            "-W", dims[0], "-H", dims[1], "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     w, h, pix = _read_ppm(out)
@@ -907,7 +995,7 @@ def _flare_render(workdir, tag, extra):
     scene = os.path.join(ROOT, "assets", "flare_fixture.cscn")
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-auto-exposure", "-E", "1.0", "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return _read_ppm(out)
@@ -1116,7 +1204,7 @@ def run_sss_banding_gate(workdir):
     # gate would start failing on dither amplitude rather than on kernel rings.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
            "--no-shadows", "--no-bloom", "--no-dither", "-W", "1200", "-H", "750", "-S", out]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print("  sss-band     ERROR while rendering the curvature fixture")
         return ["sss-band"]
@@ -1334,7 +1422,7 @@ def run_penumbra_gate(workdir):
         out = os.path.join(workdir, f"penumbra_{tag}.ppm")
         cmd = [RENDER, "-m", fixture, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
                "-W", "800", "-H", "600", "-S", out] + extra
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = _run(cmd, capture_output=True, text=True)
         if r.returncode != 0 or not os.path.exists(out):
             print(f"  penumbra     ERROR while rendering the fixture ({tag})")
             return ["penumbra"]
@@ -1481,7 +1569,7 @@ def _dir_render(workdir, scene, tag, extra):
     out = os.path.join(workdir, f"dir_{tag}.ppm")
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", scene), "-x", "-f", "30",
            "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600", "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return _read_ppm(out)
@@ -1559,7 +1647,7 @@ def _taa_churn(workdir, fixture, tag, extra):
     cmd = [RENDER, "-m", fixture, "-x", "-f", "120", "--no-auto-exposure", "-E", "1.0",
            "--taa", "--headless-jitter", "--screenshot-every", "30",
            "-W", "800", "-H", "600", "-S", base] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     f90 = base[:-4] + "_000090.ppm"
     f120 = base[:-4] + "_000120.ppm"
     # Both frames can exist and still be wrong if the run died between them, so
@@ -1757,7 +1845,7 @@ def _oit_render(workdir, tag, extra):
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-auto-exposure", "-E", "1.0", "--no-vignette", "--no-bloom",
            "--no-ssao", "--no-ssr", "--no-dither", "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return out
@@ -2717,7 +2805,7 @@ def _catcher_render(workdir, tag, extra):
     # CATCHER_HIDDEN_TOL on its own, before any ordering error contributes.
     cmd = [RENDER, "-m", scene, "--no-recenter", "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-vignette", "--no-dither", "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return out
@@ -3095,7 +3183,7 @@ def _origin_forest(workdir, tag, offset, extra, frames="40", mode="6", size=("80
            "--render-mode", mode, "--seed", "1337", "--world-offset", repr(offset),
            "--cam-eye", f"{offset},40,{offset + 120}",
            "--cam-target", f"{offset},10,{offset}", "-S", path] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(path):
         return None, ""
     return path, r.stdout + r.stderr
@@ -3133,7 +3221,7 @@ def _origin_trace(offset, extra):
     cmd = [FOREST, "-x", "-f", "70", "-W", "200", "-H", "150", "--no-fog",
            "--render-mode", "6", "--seed", "1337", "--world-offset", repr(offset),
            "--trace-player"] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         return None
     return [{"t": float(m.group(1)), "x": float(m.group(2)), "y": float(m.group(3)),
@@ -3999,7 +4087,7 @@ def _tsl_render(workdir, tag, extra):
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-auto-exposure", "-E", "1.0", "--no-pcss", "--no-ssao", "--no-ssr",
            "--no-bloom", "--no-dither", "--no-vignette", "-S", out] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return out
@@ -4296,7 +4384,7 @@ def _profiled_run(workdir, tag, extra, screenshot=None, fixture=GPU_FIXTURE, siz
     for a whole extra render to see one line.
     """
     out = screenshot or os.path.join(workdir, f"gpu_{tag}.ppm")
-    r = subprocess.run(_gpu_cmd(out, extra, True, fixture, size, frames),
+    r = _run(_gpu_cmd(out, extra, True, fixture, size, frames),
                        capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print(f"  profiler     ERROR {tag} exited {r.returncode}: "
@@ -4430,7 +4518,7 @@ def run_profiler_gate(workdir):
     # The claim the goldens cannot make: they run WITHOUT the flag, so they say
     # nothing about whether wrapping every pass in a query moves a pixel.
     off_ppm = os.path.join(workdir, "gpu_off.ppm")
-    r = subprocess.run(_gpu_cmd(off_ppm, [], False), capture_output=True, text=True)
+    r = _run(_gpu_cmd(off_ppm, [], False), capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(off_ppm):
         print("  gpu-off      ERROR while rendering without the flag")
         failures.append("gpu-off")
@@ -4585,7 +4673,7 @@ def _submit_sum_detail(tables, label):
                 f"{'identity holds in each' if ok else f'violations {bad}'}")
 
 
-FOREST = os.path.join(BIN_DIR, "forest")
+FOREST = _bin("forest")
 _FOREST_CHAINS = re.compile(r"Forest: (\d+) LOD chains built, (\d+) refused")
 _FOREST_MESHES = re.compile(r"Forest: (\d+) distinct meshes")
 # What the terrain contributed. Since spec 11.63 that is not a constant: the
@@ -4656,7 +4744,7 @@ def _forest_run(tag, extra, cam=None):
     # same one.
     cmd = ([FOREST, "-x", "-f", "20", "-W", "800", "-H", "450", "--profiler", "--no-fog"]
            + (cam or FOREST_CAM) + extra)
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print(f"  forest       ERROR {tag} exited {r.returncode}: "
               f"{(r.stdout + r.stderr).strip()[-300:]}")
@@ -4912,7 +5000,7 @@ def _cloudshadow_map_stats(workdir, scene, tag, extra):
            "-W", CLOUDSHADOW_TILE_SIZE[0], "-H", CLOUDSHADOW_TILE_SIZE[1],
            "-S", tile, "--cloud-coverage", CLOUDSHADOW_COVERAGE,
            "--sky-debug", "--no-auto-exposure", "-E", "1.0"] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(tile):
         return None, (r.stdout + r.stderr)[-200:]
     tw, _, tpix = _read_ppm(tile)
@@ -6121,7 +6209,7 @@ def _water_probe(extra, scene=None):
     """
     cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "2",
            "-W", "200", "-H", "150", "--water-probe"] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     head, rows = {}, []
     for line in (r.stdout + r.stderr).splitlines():
         if not line.startswith("water-probe "):
@@ -6363,7 +6451,7 @@ def _water_fft_probe(extra, scene=None):
     """
     cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "4",
            "-W", "200", "-H", "150", "--water-fft-probe"] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     head, rows, impulse = {}, [], {}
     for line in (r.stdout + r.stderr).splitlines():
         if not line.startswith("water-fft-probe "):
@@ -7650,7 +7738,7 @@ SHORE_TWIN_MIN_DRIFT = 0.05
 def _beach_render(out, extra, frames=30):
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", BEACH_FIXTURE), "-x", "-f", str(frames),
            "-W", BEACH_SIZE[0], "-H", BEACH_SIZE[1], "-S", out] + WATER_PIN + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return r.stdout + r.stderr
     return None
@@ -7926,7 +8014,7 @@ def run_beach_gate(workdir):
     # tones, which is precisely what the accumulation exists to avoid.
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", BEACH_FIXTURE), "-x", "-f", "3",
            "-W", "320", "-H", "240", "--shore-probe"] + BEACH_BED + BEACH_GERSTNER
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
 
     def _fields(line):
         # Tagged lines, so the kind is read rather than sniffed from whether a field parses as
@@ -8157,7 +8245,7 @@ def _terrain_run(workdir, tag, extra):
     # No -S: every arm here reads printed numbers and none looks at a pixel, so a
     # screenshot is a full readback and a file write for nothing.
     cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--no-fog"] + extra
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     if r.returncode != 0:
         print(f"  terrain      ERROR {tag} exited {r.returncode}: {text.strip()[-300:]}")
@@ -9017,7 +9105,7 @@ def _raiden_render(out, extra):
            "-a", os.path.join(ROOT, "my_models", "animations", "strut_walk.fbx"),
            "-s", os.path.join(ROOT, "my_models", "animations", "T-Pose.fbx"),
            "-x", "-f", "120", "--no-springs", "--no-auto-exposure", "-E", "1.0", "-S", out]
-    r = subprocess.run(cmd + extra, capture_output=True, text=True)
+    r = _run(cmd + extra, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return r.stdout + r.stderr
     return None
@@ -9367,7 +9455,7 @@ def _quadtree_probe(extra, cam=None):
     """
     cmd = ([FOREST, "-x", "-f", "3", "-W", "400", "-H", "240", "--no-fog", "--seed", "1337",
             "--terrain-quadtree-probe"] + (cam or FOREST_CAM) + extra)
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     summary = _QT_SUMMARY.search(text)
     seam = _QT_SEAM.search(text)
@@ -9417,7 +9505,7 @@ def _grid_tiles(extra):
     # No -S -- this docstring already says nothing here looks at a pixel.
     cmd = ([FOREST, "-x", "-f", "1", "-W", "160", "-H", "120", "--no-fog", "--seed", "1337",
             "--no-quadtree"] + extra)
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     m = _FOREST_TERRAIN.search(r.stdout + r.stderr)
     if r.returncode != 0 or not m:
         return None
@@ -9577,7 +9665,7 @@ def run_quadtree_gate(workdir):
         out = os.path.join(workdir, f"quadtree_{tag}.ppm")
         cmd = ([FOREST, "-x", "-f", "12", "-W", "400", "-H", "240", "--no-fog", "--no-sky",
                 "--seed", "1337", "-S", out] + FOREST_CAM + extra)
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = _run(cmd, capture_output=True, text=True)
         shots[tag] = out if r.returncode == 0 and os.path.exists(out) else None
     if not all(shots.values()):
         print("  quadtree-depth ERROR while rendering the prepass comparison")
@@ -9627,7 +9715,7 @@ def run_quadtree_gate(workdir):
         cmd = ([FOREST, "-x", "-f", "3", "-W", "800", "-H", "500", "--no-fog", "--no-sky",
                 "--seed", "1337", "--render-mode", "6",
                 "--cam-eye", "0,60,220", "--cam-target", "0,-10,-120", "-S", out] + extra)
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = _run(cmd, capture_output=True, text=True)
         mshots[tag] = out if r.returncode == 0 and os.path.exists(out) else None
     if not all(mshots.values()):
         print("  quadtree-render ERROR while rendering the morph comparison")
@@ -9676,7 +9764,7 @@ def _region_run(extra, frames="400"):
     # No -S: every region arm reads probe rows and trace lines, never a pixel.
     cmd = ([FOREST, "-x", "-f", frames, "-W", "320", "-H", "200", "--no-fog", "--seed", "1337",
             "--region-probe"] + extra)
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     m = _REGION_SUMMARY.search(text)
     if r.returncode != 0 or not m:
@@ -9729,7 +9817,7 @@ def _island_probe(extra):
     """The height probe's island rows, as (header, rows) or (None, [])."""
     cmd = ([FOREST, "-x", "-f", "1", "-W", "200", "-H", "150", "--no-fog", "--seed", "1337",
             "--terrain-height-probe"] + extra)
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     head = _ISLAND_HEADER.search(text)
     rows = [{"az": int(m.group(1)), "r": float(m.group(2)), "h": float(m.group(3)),
@@ -9859,7 +9947,7 @@ def run_island_gate(workdir):
     def shore(extra):
         cmd = ([FOREST, "-x", "-f", "1", "-W", "200", "-H", "150", "--no-fog", "--seed", "1337",
                 "--scatter-probe"] + extra)
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = _run(cmd, capture_output=True, text=True)
         m = _SCATTER_SHORE.search(r.stdout + r.stderr)
         if r.returncode != 0 or not m:
             return None
@@ -10867,7 +10955,7 @@ def run_translucent_offpath_gate(workdir):
             out = os.path.join(workdir, f"tsloff_{name}_{tag}.ppm")
             cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
                    "-S", out] + extra + flag
-            r = subprocess.run(cmd, capture_output=True, text=True)
+            r = _run(cmd, capture_output=True, text=True)
             # The exit code, not just the file: a render that dies partway can
             # leave a short or half-written PPM behind, and existence alone
             # would read that as a successful frame and compare it. The child's
@@ -11171,7 +11259,7 @@ def _probe_run(workdir, tag, mutate=None, extra=None, frames=30, fixture=None):
     out = os.path.join(workdir, f"probe_{tag}.ppm")
     cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300",
            "-S", out] + PROBE_SKY + (extra or [])
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None, None, None, r.stdout + r.stderr
     w, h, pix = _read_ppm(out)
@@ -11468,7 +11556,7 @@ def _config_run(workdir, name, extra, model=CONFIG_FIXTURE, frames=2):
     cmd = [RENDER, "-x", "-f", str(frames), "-S", ppm, "--config-dump", dump]
     if model:
         cmd += ["-m", os.path.join(ROOT, "assets", model), "-W", "400", "-H", "300"]
-    r = subprocess.run(cmd + extra, capture_output=True, text=True)
+    r = _run(cmd + extra, capture_output=True, text=True)
     return ppm, dump, r.stdout + r.stderr
 
 
@@ -12240,7 +12328,7 @@ def _sss_tag_render(workdir, tag, scene, samples):
     out = os.path.join(workdir, f"ssstag_{tag}.ppm")
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", SSS_TAG_SIZE[0], "-H", SSS_TAG_SIZE[1],
            "--msaa", str(samples), "--no-bloom", "-S", out]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return out
@@ -12363,7 +12451,7 @@ def _vary_render(workdir, tag, mode, samples):
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", VARY_FIXTURE), "-x", "-f", "30",
            "-W", "800", "-H", "600", "--render-mode", str(mode), "--msaa", str(samples),
            "-S", out]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
     return out
@@ -12869,7 +12957,7 @@ def _probe_render(scene, flag, prefix, extra=None, frames=30):
     # No -S, and no workdir: every caller reads probe ROWS off stdout, so the
     # frames these used to write were a readback and a file write nobody opened.
     cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", flag]
-    r = subprocess.run(cmd + (extra or []), capture_output=True, text=True)
+    r = _run(cmd + (extra or []), capture_output=True, text=True)
     text = r.stdout + r.stderr
     rows = []
     for line in text.splitlines():
@@ -14994,7 +15082,7 @@ def _layers_scatter_arm():
 
     cmd = [forest, "-x", "-f", "1", "-W", "200", "-H", "120", "--erode", "--erode-res", "256",
            "--erode-iterations", "120", "--scatter-probe"]
-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    r = _run(cmd, capture_output=True, text=True, cwd=ROOT)
     m = _SCATTER_PROBE.search(r.stdout + r.stderr)
     if not m:
         print("  layers-scatter    ERROR  the run printed no probe row")
@@ -15121,7 +15209,7 @@ def _decal_run(workdir, tag, mutate=None, extra=None, frames=4):
     cmd = [RENDER, "-m", scene, "-t", os.path.join(ROOT, "assets"), "-x", "-f", str(frames),
            "-W", "400", "-H", "300", "-S", out,
            "--no-auto-exposure", "-E", "1.0"] + (extra or [])
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None, None, None, r.stdout + r.stderr
     w, h, pix = _read_ppm(out)
@@ -15747,8 +15835,8 @@ def main():
     if args.bin_dir:
         global BIN_DIR, RENDER, FOREST
         BIN_DIR = os.path.abspath(args.bin_dir)
-        RENDER = os.path.join(BIN_DIR, "render")
-        FOREST = os.path.join(BIN_DIR, "forest")
+        RENDER = _bin("render")
+        FOREST = _bin("forest")
 
     if args.list:
         for selector, banner, _ in GATE_GROUPS:
@@ -15777,6 +15865,15 @@ def main():
             sys.exit(f"--only {args.only!r} matched no group; --list to see them")
 
     workdir = tempfile.mkdtemp(prefix="cetra_gates_")
+    # Said out loud for the same reason the binary directory is: the framebuffer
+    # a number was measured on is part of the number. 2 is what this suite's
+    # sample coordinates were authored against, so it renders unchanged; 1 asks
+    # for double and lands on the same buffer.
+    scale = _detect_fb_scale(workdir)
+    print(f"framebuffer: {scale}x the requested size"
+          + ("" if scale == CALIBRATED_FB_SCALE
+             else f" -- requests scaled x{CALIBRATED_FB_SCALE // scale} to reach the "
+                  f"{CALIBRATED_FB_SCALE}x buffer this suite was calibrated on"))
     failures = []
     try:
         for _, banner, fn in groups:

@@ -52,8 +52,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # debug-baked goldens is a comparison across two builds, which this repo's own
 # rule says does not hold. Change the build type here only together with
 # --rebake, and only deliberately.
+def _bin(name):
+    """An app binary in BIN_DIR, spelled the way the host names executables."""
+    return os.path.join(BIN_DIR, name + (".exe" if sys.platform == "win32" else ""))
+
+
 BIN_DIR = os.environ.get("CETRA_BIN_DIR") or os.path.join(ROOT, "out", "bin")
-RENDER = os.path.join(BIN_DIR, "render")
+RENDER = _bin("render")
+
+# Framebuffer pixels per requested pixel, measured once per run. Every recipe
+# below states both numbers -- a "size" that is the stored golden's, and a -W/-H
+# in its flags that is half of it -- because these were baked on a HiDPI display,
+# where a request comes back doubled. _env_mismatch already reports the fallout
+# on a 1x machine; this is what stops it happening, by asking for whatever lands
+# on the recipe's own stated size.
+_FB_SCALE = None
 ASSETS = os.path.join(ROOT, "assets")
 
 # Every recipe carries the frame size it was baked at. `size` is the size of the
@@ -263,10 +276,47 @@ def golden_path(name):
     return os.path.join(ASSETS, f"{name}_golden.png")
 
 
+def _detect_fb_scale():
+    """Framebuffer pixels per requested pixel, measured on this machine.
+
+    Rendered rather than inferred: it is a property of the DISPLAY, not the OS, so
+    a Mac on a 1x external monitor answers 1 and must. On failure it answers with
+    the scale the corpus was baked at, which leaves every recipe's flags as
+    authored and the run behaving exactly as it did before this existed.
+    """
+    global _FB_SCALE
+    if _FB_SCALE is not None:
+        return _FB_SCALE
+    fd, probe = tempfile.mkstemp(suffix=".ppm")
+    os.close(fd)
+    r = subprocess.run([RENDER, "-m", os.path.join(ROOT, "assets", "parallax_fixture.gltf"),
+                        "-x", "-f", "1", "-W", "100", "-H", "100", "-S", probe],
+                       capture_output=True, text=True, cwd=ROOT)
+    got = _dims(probe) if r.returncode == 0 else None
+    _FB_SCALE = max(1, int(round(got[0] / 100.0))) if got else 2
+    return _FB_SCALE
+
+
+def _sized_flags(recipe):
+    """The recipe's flags with -W/-H asking for the golden's own stored size.
+
+    The recipe states the answer -- "size" is the framebuffer the golden holds --
+    so the request is derived from it rather than from a global assumption about
+    how much a display doubles.
+    """
+    scale = _detect_fb_scale()
+    flags = list(recipe["flags"])
+    want = {"-W": recipe["size"][0], "-H": recipe["size"][1]}
+    for i in range(len(flags) - 1):
+        if flags[i] in want:
+            flags[i + 1] = str(max(1, want[flags[i]] // scale))
+    return flags
+
+
 def _render(recipe, out):
     """Render one recipe. Returns None on success, else the tail of its output."""
     cmd = ([RENDER, "-m", os.path.join(ROOT, recipe["scene"]), "-x"]
-           + recipe["flags"] + ["-S", out])
+           + _sized_flags(recipe) + ["-S", out])
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
     if r.returncode != 0 or not os.path.exists(out):
         return (r.stdout + r.stderr)[-400:]
@@ -376,7 +426,7 @@ def main():
     if args.bin_dir:
         global BIN_DIR, RENDER
         BIN_DIR = os.path.abspath(args.bin_dir)
-        RENDER = os.path.join(BIN_DIR, "render")
+        RENDER = _bin("render")
 
     if args.list:
         for r in RECIPES:
