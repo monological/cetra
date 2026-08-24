@@ -441,6 +441,16 @@ keeps the 0-diff gate. Follow-up (not v1): bent normal as the DDGI/IBL diffuse s
 New files: none (edits only). CLI: `--bent-spec-occ`.
 **Owns foundations:** bent-normal availability in the AO chain (later: SSGI directionality, SSR
 occlusion). **Depends on:** nothing.
+**That foundation is now UNCLAIMED, and the reason it was booked is the reason to doubt it.**
+Since 11.77 nothing in a normal frame reads the bent normal — debug view 9 is its only consumer.
+The listed successors want it because it is a cheap directional signal; 11.76 measured that a
+collapsed mean direction loses to the full 32-bit sector mask for exactly that purpose, and the
+mask is right there in the same shader. So none of these three should assume the bent normal is
+what they want. **This is not an argument for deleting it either** — it removes the reason to
+keep it and leaves the question open. What settles it is a COST measurement, which nobody has
+taken: the production loop is 32 sectors x 2 slices per pixel (the shader's own comment calls it
+the one place it pays real ALU for this), and `.gba` is three of the AO target's four channels
+carried through the blur, the temporal accumulation and the bilateral upsample.
 
 ### A7. Punctual shadow maps — shadows for all four light types — Effort M — **DONE (spec 9.8)**
 Directional lights had cascades; spot lights had exactly one map ("the flashlight", first spot in
@@ -3105,7 +3115,7 @@ said ~30, which understates the cost by about 3.5x. The fix is still one functio
 | Key-light view-space direction publication to postfx | A3 | future light-aware post passes |
 | Octahedral encode/decode include (`include/octahedral.glsl`) | A4 — **delivered** | bent-normal storage, oct G-buffer normals |
 | Capture-at-position helper (`scene_capture_faces`, render.c) | A4 — **delivered**, and it grew an optional depth cubemap: pass one and it renders straight into the destination faces at native size, because a blit cannot carry depth between differently-sized targets | future probe features |
-| Bent normal in the AO chain | A5 | SSGI directionality, SSR occlusion, DDGI sampling |
+| Bent normal in the AO chain | A5 — **delivered, and since 11.77 UNREAD**: debug view 9 is its only consumer. The three listed successors want a cheap directional signal, and 11.76 measured the full 32-bit sector mask beating a collapsed mean direction at precisely that. Do not assume this is the foundation you want; see A5 for the open cost question | SSGI directionality, SSR occlusion, DDGI sampling |
 | `create_texture_3d_float` + `include/froxel.glsl` (slice count parameterized, so a differently-sized volume reuses it) | B1 | B9 aerial perspective, B2 clouds, future volumetrics |
 | CPU 3D noise (`noise_worley3`, Perlin-Worley packing, threaded bake) | B2 | ground fog detail, media |
 | Render-res/post-res split — **delivered** as four sizes (`width/height` render, `post_*`, `out_*`, `half_*` = render/2), plus the canvas locals every post-seam pass composites onto | B4 | B5, B7, tonemap |
