@@ -36,11 +36,17 @@ of its own absorbance, so the pane renders at about a FIFTH of its correct value
 on this geometry with no fog at all: 38.9 against the 180.2 it owes, and exactly 180.20
 under `--no-oit-moments`. A twin there would read the moment reconstruction, not the fog.
 
-THE DARK PANE IS THE ANTI-VACUITY ELEMENT. The other three all carry the backdrop's own
-radiance, and for that case a coverage-weighted MIX of the two fog answers and an exact
-per-contribution decomposition give the SAME number -- the algebra collapses when the
-translucent radiance equals the background's. A pane whose emissive differs separates them.
-Without it, the cheaper approximation passes every arm and nothing says so.
+THE DARK PANE IS THE ONE PLACE THE TWO DECOMPOSITIONS DIFFER, and no arm reads that yet.
+The other three carry the backdrop's own radiance, and there an opacity-weighted MIX of the
+two fog answers and an exact per-contribution split agree identically -- the difference term
+carries a factor of (translucent radiance - (1 - opacity) * background), which is zero when
+they match. This pane is the case where it is not.
+
+What that buys TODAY is only a second, differently-lit instance for the lift arm; the ship
+is the mix, so nothing compares the two forms. It is kept because it is the instrument the
+comparison would need, and because a fixture whose every surface has one radiance cannot
+show that the approximation is bounded. Anyone revisiting the exact split starts here --
+and should know the arms cannot currently tell the two apart.
 
 THE GAPS ARE THE CONTROL AND THEY ARE IN-FRAME. Bare backdrop shows between every pair of
 panes, including a wide one dead centre, so the long-path reference is read at the same
@@ -106,11 +112,16 @@ EMISSIVE = 0.50
 # the read stays scalar.
 EMISSIVE_DARK = 0.06
 
-# --- what the gate pins -----------------------------------------------------------------
-# Stated here rather than in the gate so the fixture and the arm cannot disagree about the
-# medium the predictions are made in.
+# --- the medium the gate renders in -------------------------------------------------------
+# The gate IMPORTS these rather than restating them: the asserts below are calibrated in
+# this medium, so a gate pinning a different one would render a fixture whose own checks no
+# longer describe it. The app derives density from the scene radius, which is why it is
+# pinned at all -- inheriting it would let a geometry edit retune the quantity under test.
 FOG_DENSITY = 0.020
-FOG_HEIGHT = 1000.0  # >> the scene, so the medium is uniform
+# Far larger than the scene, which is what makes the medium uniform: airSigma is
+# density * exp(-(y - floorY) / falloff), so a falloff this size leaves optical depth
+# proportional to path length and the transmittances below closed forms.
+FOG_HEIGHT = 1000.0
 
 # ----------------------------------------------------------------------------------------
 # Derived checks. Each of these is a way the fixture could stop testing what it claims to.
@@ -146,8 +157,13 @@ assert abs(bb_min[0] + bb_max[0]) < 1e-6, "bounds not centred in x"
 assert abs(bb_min[2] + bb_max[2]) < 1e-6, "bounds not centred in z"
 assert abs(bb_min[1]) < 1e-6, "bounds do not sit on y=0"
 
-# 5. The two depths are far enough apart, in the medium the gate pins, that the defect is
-#    a large signal rather than a rounding difference. Uniform medium, so tau = d * path.
+# 5. The two depths are far enough apart, in the medium above, that the defect is a large
+#    signal rather than a rounding difference. Uniform medium, so tau = density * path.
+#
+#    A LINEAR-DOMAIN PROXY, deliberately loose. The arms read a display-encoded frame with
+#    in-scatter added, and that compresses this separation by about 1.8x -- measured 0.469
+#    here against 0.264 between the arms' own opaque-pane and backdrop readings. So this
+#    bar is a floor on the physics, not on what the gate sees; the arms carry their own.
 t_near = math.exp(-FOG_DENSITY * PANE_DIST)
 t_far = math.exp(-FOG_DENSITY * BACK_DIST)
 assert t_near - t_far > 0.25, (
@@ -185,8 +201,8 @@ buffer_bytes = pos_bytes + nrm_bytes + idx_bytes
 def unlit(name, value, alpha, blend):
     """Emissive over black albedo: the fragment's colour is this constant.
 
-    `blend` is authored independently of `alpha` -- that is what lets the blend twin carry
-    alpha 1.0 and still take the OIT lane.
+    `blend` is authored independently of `alpha` so a caller states the LANE and the
+    coverage separately; nothing here relies on a particular pairing of the two.
     """
     mat = {
         "name": name,
@@ -338,14 +354,18 @@ scene_desc = {
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "fog_glass_fixture.gltf"), "w") as f:
-    json.dump(gltf, f, indent=1)
-    f.write("\n")
-with open(os.path.join(here, "fog_glass_fixture.cscn"), "w") as f:
-    json.dump(scene_desc, f, indent=1)
-    f.write("\n")
-print("wrote fog_glass_fixture.gltf + .cscn")
-print("  pane path %.1f units (T=%.4f), backdrop path %.1f units (T=%.4f) at density %.4f"
-      % (PANE_DIST, t_near, BACK_DIST, t_far, FOG_DENSITY))
-print("  gaps in x at pane depth: %s" % ", ".join("%.2f" % g for g in gaps))
+# Guarded, unlike most generators here, because the gate IMPORTS this file for the pane
+# layout and the medium it pins -- and a generator that wrote on import would rewrite a
+# committed asset in the middle of a gate run.
+if __name__ == "__main__":
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "fog_glass_fixture.gltf"), "w") as f:
+        json.dump(gltf, f, indent=1)
+        f.write("\n")
+    with open(os.path.join(here, "fog_glass_fixture.cscn"), "w") as f:
+        json.dump(scene_desc, f, indent=1)
+        f.write("\n")
+    print("wrote fog_glass_fixture.gltf + .cscn")
+    print("  pane path %.1f units (T=%.4f), backdrop path %.1f units (T=%.4f) at density %.4f"
+          % (PANE_DIST, t_near, BACK_DIST, t_far, FOG_DENSITY))
+    print("  gaps in x at pane depth: %s" % ", ".join("%.2f" % g for g in gaps))
