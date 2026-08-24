@@ -492,8 +492,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             water_bind_shore(scene ? scene->water : NULL, scene, program);
             // Both are read only inside an OIT sub-pass, so they upload only
             // there: the warp interval the moments are stated over, and (where
-            // the atlas is actually bound) its reciprocal size, which is not the
-            // frame's because the atlas is twice as tall.
+            // the atlas is actually bound) the reciprocal FRAME size. The atlas
+            // is twice as tall, and mboitAtlasUV is the one place that knows it.
             // Named, not "anything but SHADE": the depth prepass is also not the
             // shading pass and has no use for the warp interval.
             if (pass == SUBMIT_PASS_OIT_ACCUMULATE || pass == SUBMIT_PASS_OIT_MOMENTS) {
@@ -502,7 +502,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             }
             if (moments_bound) {
                 const float inv_size[2] = {1.0f / (float)engine->moment_w,
-                                           1.0f / (float)(engine->moment_h * 2)};
+                                           1.0f / (float)engine->moment_h};
                 uniform_set_vec2(u, "oitMomentInvSize", inv_size);
             }
             _update_camera_uniforms(program, camera);

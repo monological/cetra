@@ -14,8 +14,13 @@
 // Split out so the two passes cannot disagree about a constant -- the warp
 // especially, which is the coordinate the moments are moments OF -- and so the
 // atlas layout has one home instead of being restated wherever it is touched.
-// Only pbr_frag includes it today; both passes live there. Same reason
-// preintegrated_skin.glsl is shared (spec 11.13).
+// Same reason preintegrated_skin.glsl is shared (spec 11.13).
+//
+// pbr_frag holds both raster passes. Since 11.78 there is also a reader OUTSIDE
+// the raster -- the atmosphere composite, which wants the stack's depth and
+// opacity rather than its transmittance -- and that is why the atlas readers
+// below take a uv rather than deriving one from gl_FragCoord: a fullscreen pass
+// does not draw at the resolution the moments were written at.
 
 // Depth warp: linear view depth -> [-1, 1], logarithmically. Logarithmic
 // because a moment is a weighted average and a linear parameterisation would
@@ -31,6 +36,17 @@
 float mboitWarpDepth(float viewZ, vec2 nearFar) {
     float t = log(max(viewZ, nearFar.x) / nearFar.x) / log(nearFar.y / nearFar.x);
     return clamp(t, 0.0, 1.0) * 2.0 - 1.0;
+}
+
+// Its inverse, and it lives HERE because a warp and its inverse are one
+// decision: the header's "the warp especially" applies to both halves, and a
+// consumer that reads a mean of warped depths back out needs this one.
+//
+// The forward clamps, so an average of warped values is in range and this lands
+// inside [near, far] for any input the moments can hold.
+float mboitUnwarpDepth(float warped, vec2 nearFar) {
+    float t = clamp(warped, -1.0, 1.0) * 0.5 + 0.5;
+    return nearFar.x * pow(nearFar.y / nearFar.x, t);
 }
 
 // Absorbance of a layer of opacity a: the optical depth whose transmittance is
@@ -130,16 +146,46 @@ float mboitTransmittance(float b0, vec4 moments, float z) {
 
 // The generation pass resolves its two multisample targets into ONE texture of
 // twice the render height: b1..b4 in the lower half, b0 in the upper. That
-// layout is stated here and read back here, so the tap offset and the reciprocal
-// size cannot drift apart; the blit that produces it is engine_end_moment_pass.
+// layout is stated here and read back here, so the tap offset and the fold
+// cannot drift apart; the blit that produces it is engine_end_moment_pass.
+//
+// TWO HALVES OF ONE AGREEMENT, and both belong to this file: the tap that
+// reaches b0, and the fold that squeezes a frame coordinate into the lower half.
+// Exporting only the first is what makes a layout change look safe -- grep finds
+// every MBOIT_ATLAS_B0_TAP and none of the open-coded 0.5s beside them.
 #define MBOIT_ATLAS_B0_TAP vec2(0.0, 0.5)
 
+vec2 mboitAtlasUV(vec2 frameUV) {
+    return vec2(frameUV.x, frameUV.y * 0.5);
+}
+
 // Transmittance in front of this fragment, measured off the atlas rather than
-// guessed from its depth. invAtlasSize is the reciprocal of the ATLAS, so its y
-// is half the frame's.
-float mboitTransmittanceAtlas(sampler2D atlas, vec2 invAtlasSize, vec2 nearFar, float viewZ) {
-    vec2 uv = gl_FragCoord.xy * invAtlasSize;
+// guessed from its depth. Takes the reciprocal of the FRAME, not of the atlas:
+// the fold above is what turns one into the other.
+float mboitTransmittanceAtlas(sampler2D atlas, vec2 invFrameSize, vec2 nearFar, float viewZ) {
+    vec2 uv = mboitAtlasUV(gl_FragCoord.xy * invFrameSize);
     return mboitTransmittance(textureLod(atlas, uv + MBOIT_ATLAS_B0_TAP, 0.0).r,
                               textureLod(atlas, uv, 0.0),
                               mboitWarpDepth(viewZ, nearFar));
+}
+
+// The stack's summary at a frame uv: .x the total absorbance b0, .y the first
+// moment b1. A consumer wanting the stack's DEPTH rather than the transmittance
+// in front of one layer divides them and unwarps.
+//
+// A uv parameter rather than gl_FragCoord, because the consumer for this is a
+// fullscreen pass that does not draw at the resolution the moments were written
+// at, and cannot derive one from its own fragment position.
+vec2 mboitStackAtlas(sampler2D atlas, vec2 frameUV) {
+    vec2 uv = mboitAtlasUV(frameUV);
+    return vec2(textureLod(atlas, uv + MBOIT_ATLAS_B0_TAP, 0.0).r,
+                textureLod(atlas, uv, 0.0).r);
+}
+
+// The fraction of a pixel's radiance the stack supplies -- its OPACITY. Equal to
+// screen coverage only where a layer covers the pixel whole; at MSAA the atlas
+// resolve means b0 is a mean over samples and this is not the mean of the
+// per-sample opacities.
+float mboitStackOpacity(float b0) {
+    return 1.0 - exp(-b0);
 }

@@ -331,7 +331,7 @@ uniform int oitMomentWeighted;
 // a drift there mis-weights every layer silently, where a mode cannot drift at
 // all. The cost a mode would otherwise carry, shading a fragment whose colour is
 // discarded, is paid off by the early-out in main.
-uniform vec2 oitMomentInvSize; // Reciprocal atlas size (twice the frame's height)
+uniform vec2 oitMomentInvSize; // Reciprocal FRAME size; mboitAtlasUV folds it to the atlas
 uniform vec2 oitNearFar; // Camera near/far, the interval the depth warp spans
 // 1 = route ambient specular to SpecOut instead of FragColor. 0 (the GLSL
 // uniform default) is the inline path, so a draw that never sets it -- a

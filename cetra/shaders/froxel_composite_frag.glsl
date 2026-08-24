@@ -20,11 +20,10 @@ uniform sampler2D linDepthTex;      // Aux G-buffer; .z = linear view Z (<0), 0 
 uniform sampler3D integratedVolume; // Fog: front-to-back (inscatter, transmittance)
 uniform sampler3D aerialVolume;     // Atmosphere: same encoding, camera to cell
 uniform sampler2D layerTex; // mode 1 only: an already-composited layer to fold
-// The MBOIT atlas (spec 11.17): b1..b4 in the lower half, b0 in the upper. Read
-// here for what the aux buffer structurally cannot hold -- see the second depth
-// below. Point-sampled and addressed in normalized coordinates rather than off
-// gl_FragCoord, because this pass runs at POST resolution and the atlas is at
-// RENDER resolution; under --render-scale those differ.
+// The MBOIT atlas (spec 11.17), read here for what the aux buffer structurally
+// cannot hold -- see the second depth below. Its layout, and the point sampling
+// it inherits, belong to mboit.glsl; this pass supplies a uv because it draws at
+// two different sizes in its two modes and gl_FragCoord suits neither.
 uniform sampler2D momentTex;
 uniform vec2 oitNearFar; // the interval the moments' depth warp is stated over
 uniform int momentArmed; // 1 = the atlas holds this frame's translucent stack
@@ -40,26 +39,19 @@ uniform int aerialDepth;
 uniform int mode;
 
 #include "froxel.glsl"
-#include "mboit.glsl" // MBOIT_ATLAS_B0_TAP: the atlas layout, stated once
+#include "mboit.glsl" // the moment atlas, its fold and the warp's inverse
 
-// Both media in series, resolved at ONE depth.
-//
-// Factored out because the frame needs it at TWO. The aux buffer holds a single
-// linear Z per pixel and the late pass never writes it -- render.c drops the
-// draw-buffer count to 1 when the opaque scope closes -- so a translucent
-// surface's own depth is simply absent from it, and everything downstream reads
-// the surface BEHIND the glass instead. Water escapes this by writing aux like an
-// opaque surface; a stack of translucent layers cannot, because one slot cannot
-// hold both its depth and the wall's.
-vec4 mediumAt(float dist, bool isSky, float camNearZ) {
+// Both media in series, resolved at ONE depth. `aerialSlices` is the caller's
+// aerial slice count, which is zero for a ray that takes none.
+vec4 mediumAt(float dist, int aerialSlices, float camNearZ) {
     vec4 fogLayer =
-        froxelSampleMedium(integratedVolume, TexCoords, isSky ? fogFar : dist, fogNear, fogFar,
+        froxelSampleMedium(integratedVolume, TexCoords, dist, fogNear, fogFar,
                            froxelDepth, fogDepthDist);
     // Aerial keeps the pure exponential aerial_lut_frag builds it with, as well
     // as its own near.
     vec4 aerialLayer =
         froxelSampleMedium(aerialVolume, TexCoords, dist, camNearZ, aerialFar,
-                           isSky ? 0 : aerialDepth, 1.0);
+                           aerialSlices, 1.0);
 
     // Two media in series. Fog is the nearer one -- a local ground layer, where
     // the atmosphere spans the whole ray -- so the far medium's in-scatter is
@@ -99,56 +91,46 @@ void main() {
     float linZ = texture(linDepthTex, TexCoords).z;
 
     // Sky/background: the aux buffer's sentinel is 0, there is no surface.
+    //
+    // Sky takes fog's full column -- the far slice already holds it -- and NO
+    // aerial perspective: the sky background is drawn from the sky-view LUT,
+    // which is the same integral the aerial volume holds, so applying it there
+    // too would count the same air twice and wash the sky out. A slice count of
+    // zero is how a medium says it is absent.
     bool sky = (linZ >= -1e-4);
     // PLANAR depth, not the ray length the screen-space march used: volume
     // slices are constant-depth planes (froxelViewPos puts every cell of a slice
     // at the same view z), so feeding it a radial distance would index deeper
     // the further a pixel sits off the optical axis.
-    //
-    // Sky takes fog's full column -- the far slice already holds it. It takes
-    // NO aerial perspective, though: the sky background is drawn from the
-    // sky-view LUT, which is the same integral the aerial volume holds, so
-    // applying it there too would count the same air twice and wash the sky out.
-    vec4 layer = mediumAt(-linZ, sky, camNearZ);
+    vec4 layer = mediumAt(sky ? fogFar : -linZ, sky ? 0 : aerialDepth, camNearZ);
 
     // The translucent stack, at its own depth (spec 11.78).
     //
-    // The moments already measure it: b0 is the stack's total absorbance along
-    // this pixel, and b1/b0 is the absorbance-weighted mean of the WARPED depth,
-    // so one atlas fetch gives both how much of the pixel is translucent and how
-    // far off that part of it is. Nothing else in the frame carries either.
+    // A translucent surface's own depth is not in the aux buffer, and one slot
+    // cannot hold both it and the wall's. The moments can: b0 is the stack's
+    // total absorbance along this pixel and b1/b0 the absorbance-weighted mean
+    // of its warped depth, so one fetch gives both how much of the pixel the
+    // stack supplies and how far off that part of it is.
     //
     // The blend is affine in (in-scatter, transmittance), so weighting the two
-    // answers by coverage is the same as fogging the two contributions separately
-    // -- given that the translucent contribution is `cover` of the pixel. That is
-    // exact when the layers carry the background's own radiance and when coverage
-    // is 0 or 1, and an approximation between: a bright pane over a dark wall
-    // takes a share of the wall's fog in proportion to how much of the pixel the
-    // wall still supplies. The exact split wants the un-composited translucent
-    // colour, and the accumulation buffer holding it is upstream of the TAA
-    // resolve this pass deliberately runs after, so subtracting it here would mix
-    // a filtered pixel with an unfiltered one.
+    // answers by opacity is the same as fogging the two contributions
+    // separately. Exact when the layers carry the background's own radiance and
+    // when opacity is 0 or 1; between, a bright pane over a dark wall takes a
+    // share of the wall's fog in proportion to how much of the pixel the wall
+    // still supplies. The exact split needs the un-composited translucent
+    // colour, which is a SIGNED correction from an unfiltered buffer applied
+    // against a canvas the TAA resolve has already filtered -- on a moving
+    // silhouette that overshoots and can ring where TAA exists to stabilise.
+    // A bounded approximation is the better trade.
     if (momentArmed == 1) {
-        vec2 mUV = vec2(TexCoords.x, TexCoords.y * 0.5);
-        float b0 = textureLod(momentTex, mUV + MBOIT_ATLAS_B0_TAP, 0.0).r;
-        // No stack here: leave the surface answer exactly as it was computed, so
-        // every pixel of every fog frame without translucency in front of it is
-        // bit-identical to the frame before this feature existed.
-        // Deleting this changes nothing measurable on this driver -- b0 is 0 on a
-        // pixel with nothing translucent in front of it, cover is then 0, and
-        // mix() returns the surface answer whatever its other argument holds. It
-        // stays because b1/b0 is 0/0 there, which GLSL leaves undefined, and
-        // mix(a, NaN, 0.0) is NaN wherever the hardware propagates 0 * NaN. A
-        // guard against undefined behaviour, not against a wrong number.
-        if (b0 > 1e-5) {
-            float b1 = textureLod(momentTex, mUV, 0.0).r;
-            // Invert mboitWarpDepth. It clamps its own output, so a mean of
-            // clamped values is in range and this lands inside [near, far].
-            float t = clamp(b1 / b0, -1.0, 1.0) * 0.5 + 0.5;
-            float zTrans = oitNearFar.x * pow(oitNearFar.y / oitNearFar.x, t);
-            // The stack transmits exp(-b0), so it accounts for the rest.
-            float cover = 1.0 - exp(-b0);
-            layer = mix(layer, mediumAt(zTrans, false, camNearZ), cover);
+        vec2 stack = mboitStackAtlas(momentTex, TexCoords);
+        // Skips the second medium evaluation -- two volume taps and the series
+        // fold -- on every pixel with nothing translucent in front of it, which
+        // is most of a frame. It also keeps b1/b0 away from 0/0.
+        if (stack.x > 1e-5) {
+            float zTrans = mboitUnwarpDepth(stack.y / stack.x, oitNearFar);
+            layer = mix(layer, mediumAt(zTrans, aerialDepth, camNearZ),
+                        mboitStackOpacity(stack.x));
         }
     }
 

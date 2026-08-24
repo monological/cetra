@@ -2784,15 +2784,12 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     // The translucent stack's own depth and coverage (spec 11.78). Armed only with
     // a moment atlas: the weighted-blended accumulation carries no depth
     // statistic, so --no-oit-moments keeps the single-depth composite exactly.
-    const bool moments_armed = writes != NULL && writes->oit_moment_atlas != 0 &&
-                               writes->oit_far > writes->oit_near && writes->oit_near > 0.0f;
+    const bool moments_armed = writes->oit_moment_atlas != 0;
     glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, moments_armed ? writes->oit_moment_atlas : 0);
+    glBindTexture(GL_TEXTURE_2D, writes->oit_moment_atlas);
     glActiveTexture(GL_TEXTURE0);
     uniform_set_int(cu, "momentArmed", moments_armed ? 1 : 0);
-    const float oit_near_far[2] = {moments_armed ? writes->oit_near : 1.0f,
-                                   moments_armed ? writes->oit_far : 2.0f};
-    uniform_set_vec2(cu, "oitNearFar", oit_near_far);
+    uniform_set_vec2(cu, "oitNearFar", writes->oit_near_far);
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogNear", postfx_fog_near(fx, projection));
     uniform_set_float(cu, "fogFar", fx->fog_far);

@@ -1830,10 +1830,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
                                         .oit_moment_atlas = engine->moments_this_frame
                                                                 ? engine->moment_atlas_texture
                                                                 : 0,
-                                        .oit_near = engine->camera ? engine->camera->near_clip
-                                                                   : 0.0f,
-                                        .oit_far = engine->camera ? engine->camera->far_clip
-                                                                  : 0.0f};
+                                        .oit_near_far = {
+                                            engine->camera ? engine->camera->near_clip : 1.0f,
+                                            engine->camera ? engine->camera->far_clip : 2.0f}};
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR, &writes,
                engine->draw_projection, engine->view_matrix);
 
