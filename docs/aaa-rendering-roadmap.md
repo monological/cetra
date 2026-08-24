@@ -138,10 +138,18 @@ under them.
   them. This bullet said they shade as point lights, which stopped being true two tracks ago. Karis
   sphere-light lobe widening still applies to all lights.
 - **GTAO** is 2023 visibility-bitmask (2 slices × 8 steps, 32-bit sector mask). The bent normal is
-  no longer merely *derivable* — spec 11.3 derives it: the AO target is **RGBA8** and `.gba` carries
-  the encoded bent normal, so the channels are neither spare nor discarded. Specular occlusion has
-  its own pass, `spec_occ_composite_frag.glsl`, consuming that normal and 11.4's attachment-7 split;
-  it was a scalar heuristic in the tonemap when this was written.
+  no longer merely *derivable* — spec 11.3 derives it: the AO target is **RGBA16F** since 11.75 and
+  `.gba` carries the encoded bent normal, so the channels are neither spare nor discarded. Specular
+  occlusion has its own pass, `spec_occ_composite_frag.glsl`, feeding 11.4's attachment-7 split; it
+  was a scalar heuristic in the tonemap when this was written.
+  **Since 11.76 the default mode no longer consumes the bent normal at all.** The sector mask is a
+  directional visibility function, and the reflection lobe is now tested against it *inside the
+  sweep*, where the mask exists — attachment 2, RG16F, carrying the estimator's two sums rather than
+  their quotient because everything downstream averages them. Collapsing 32 bits to a direction and
+  a scalar and rebuilding a cone from the pair was manufacturing the bands it was blamed for: on
+  `cornell_rooms` the AO through the artifact is strictly monotone while the cone term plunged to 0
+  and rang. The cone survives as `--spec-occ bent`, unconverted on purpose, so the old answer is
+  still computable and the new one stays falsifiable.
 - **Probe capture renders the full scene at arbitrary positions** (`reflection_probe_capture`,
   `probe.c:50-263`, camera save/substitute + 6 faces via `ibl_capture_views`) — the DDGI-reusable
   machinery. Octahedral encoding exists (`include/octahedral.glsl`, used by the DDGI atlas this
@@ -399,7 +407,18 @@ New: `gi_volume.c/h`, `gi_project_frag.glsl`, `gi_border_frag.glsl`, `include/oc
 **Owns foundations:** octahedral encode/decode include; generalized capture-at-position helper;
 atlas+gutter machinery. **Depends on:** A1+A2 soft (probes should capture clustered/area-lit scenes).
 
-### A5. Bent-normal specular occlusion from GTAO (Jimenez 2016) — Effort M — **DONE (specs 11.3 + 11.4)**
+### A5. Bent-normal specular occlusion from GTAO (Jimenez 2016) — Effort M — **DONE (specs 11.3 + 11.4), and the default was REPLACED in 11.76**
+**Read this heading literally: the shipped default is no longer bent-normal spec occlusion.** The
+entry below is the 11.3/11.4 design and is still exactly what `--spec-occ bent` runs. What changed
+is that the cone was the wrong consumer of a bitmask: 11.3's own "look review found mottling that is
+architectural, not tunable" was the first sighting of it, 11.75 fixed a hard cliff in the same
+function, and 11.76 removed the reconstruction instead of tuning it. Two things this entry asserts
+are now false for the default path — **"Widen existing AO targets rather than second MRT"** (the
+lobe sums are a second MRT, ~8 MB at 1080p, because they are a different quantity rather than more
+channels of the same one) and the `acos(sqrt(1-ao))` aperture (there is no aperture; the lobe is
+counted in sectors). The measured attempt to keep the cone and fix its aperture from the bent
+normal's LENGTH is written up in spec 11.76 and failed on contact washout — worth reading before
+anyone tries it again.
 11.3 built the machinery behind `--spec-occ <off|legacy|bent>` but its look review found
 mottling on smooth metal that is architectural, not tunable: the reflection vector queries at
 normal-map frequency while the bent normal is a half-res geometry-scale field, and the
