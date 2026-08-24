@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.15.0 — 2026-08-24
+
+- **A composite cache for layered ground** — a world-XZ splat's blend baked once into a macro pair, read back at `3 + 2A` taps against the per-texel path's 9/17/25, with the flat case byte-exact.
+- **Virtual texture pages** — a 64-slot guttered atlas at 4x the fallback's density, filled by frustum prediction and a feedback vote pass read through a fixed-latency PBO ring.
+- **Roads** — a world-XZ polyline overriding the splat weights toward one of the material's own layers *before* the height blend, so a road is made of a layer rather than painted over one.
+- **Terrain streaming** — an fp32 tiled pyramid paged off disk, one rectangular window resident per level; growing a world is free, only refining it costs.
+- **A mirror in every room** — up to eight reflection probes blended per fragment off a per-froxel mask, stored as octahedral roughness rows tenanting the GI atlas.
+- **Clustered decals** — marks projected through an oriented box, selected by a 16-bit froxel mask, as tenants of the material texture array, so they reach the late pass and probe captures.
+- **The session in a file** — ~230 settings dumped to JSON and restored through one descriptor table walked in both directions, so a tuned frame can be handed to someone else.
+- **One chain for the environment** — a restored or dragged sun re-derives the env cube, the sky-mirroring probes and the GI volume through a single function.
+- **A depth-aware AO upsample** — a joint-bilateral magnify plus 16-bit storage, removing the doughnut at every occluder's contact and the contour bands across the floor.
+- **Specular occlusion from the visibility bitmask** — the reflection lobe tested against the sector mask while it is still live, carried as two sums and divided at the consumer; the 2011 cone and the bent mode it served are gone.
+
+## v0.14.0 — 2026-08-21
+
+- **Terrain becomes data** — two sources behind one pure function: the runtime fBm, or a stored field sampled bicubically, loadable from a 16-bit heightmap and writable back out.
+- **Hydraulic erosion** — a Mei virtual-pipes sim, threaded and bit-identical at any worker count, producing the flow, deposit and wear masks that the vertex tint, the splat bake and the scatter all read.
+- **Layered surfaces** — N material layers blended per texel from a splat map, height-weighted and world-aligned, as more tenants of a texture array that was already bound.
+- **The world stops being measured from one point** — an offset materialised into every coordinate plus a runtime origin shift; the dominant cost turns out to be anything reading a world position as an identity, not precision.
+- **A CDLOD terrain quadtree** — fine patches near the camera and coarse ones away, so the patch count tracks how many levels there are rather than how much ground they cover, with the morph window riding two vertex attributes.
+- **Cluster LOD** — meshoptimizer's cluster DAG behind a C API, every level indexing the original vertex buffer with boundaries locked, so cracks are structurally impossible.
+- **An island with resident regions** — `apps/forest` becomes a walkable island, props and collision paged in per region around the player.
+- **The review paydown** — 11.63's findings applied with every number re-measured, after a whole perf backlog written against `-O0` arithmetic retired on one release run.
+- **A suite you can afford to run** — the gate suite drops from 14:51 to 10:17, from running the apps out of a release build.
+- **The array gets its real name** — `MaterialTextureArray`, and `create_material` stops hand-assigning fifty fields after a `malloc`.
+
+## v0.13.0 — 2026-08-19
+
+- **Emissive geometry becomes a light** — a rectangle plane-fitted to an emissive mesh and registered as a real LTC area panel, the fit cached in local space while placement runs per frame.
+- **`foliageShadows` joins the material vocabulary** — imported alpha-masked foliage can opt back into the shadow map, which until now only a compiled C app could reach.
+- **An ivy arcade** — the first imported foliage scene in the corpus, and the first asset carrying authored per-vertex wind data.
+- **A histogram for the meter** — auto-exposure through a 64-bin histogram with a metering mask and percentile tails, gathered one fragment per bin because GL 4.1 has no atomics.
+- **The cull hole closed** — wind-responsive and skinned meshes were exempt from frustum culling; both carry conservative bounds now, the wind one shared with the shader through a header both languages compile.
+- **The bound gets a probe** — measured by driving the real shader through transform feedback rather than a CPU port, and `AABB` gets the five operations every consumer had been hand-rolling.
+- **Contact shadows for the lights that cannot have a map** — the march reaches every clustered point and spot with no shadow layer, folded into one channel weighted by each light's contribution.
+- **IES photometric profiles** — a real luminaire's measured distribution replacing a spot's analytic cone, fully asymmetric, in a uniform block that costs no sampler unit.
+- **3D LUT colour grading** — a `.cube` table applied after the display encode, tetrahedral by default, with an identity table bit-exact.
+- **The shore ring was never missing** — a gate arm red for four specs was reading sunlit sand, not a broken surf.
+
 ## v0.12.0 — 2026-08-17
 
 - **Cloud shadows on the ground** — the deck's sun-transmittance map reaches `pbr_frag`, the shadow catcher and water's caustics, riding a sampler unit the opaque pass never uses.
