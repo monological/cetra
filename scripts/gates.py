@@ -5801,10 +5801,20 @@ MOON_LIT_TOL = 0.12          # measured worst 0.043 across the four rungs
 MOON_LIMB_COS_MIN = 0.906
 MOON_LIMB_OFFSET_MIN = 0.10  # of the disc radius; measured worst 0.30
 MOON_KS_RATIO_MIN = 5.0      # full/quarter, against a predicted 10.99 through the tonemap
-MOON_MARIA_DRIFT_MAX = 0.01  # 0.000 correct against 0.044 sun-locked; see the arm
-# Where the drift read starts, as a fraction of the lit face's own peak. Stated
-# relatively because an absolute floor emptied the set outright the moment the
-# disc radiance was retuned -- the same bar failing the other way.
+# Correct code reads 0.013 and a sun-locked maria field 0.113; the bar sits
+# between them. It is NOT zero any more and cannot be: since the surface gained
+# relief, a pixel bright under one sun roll can sit in a crater's own shadow
+# under another, so the albedo ratio the arm reads carries a couple of 8-bit
+# codes of quantization that no threshold removes. Before relief this read an
+# exact 0.000.
+MOON_MARIA_DRIFT_MAX = 0.026
+# Where the drift read starts, as a fraction of the lit face's own peak, and it
+# has to be a high one now that the surface has RELIEF: a pixel bright under one
+# sun roll can sit in a crater's own shadow under another, and the albedo ratio
+# across that pair is mostly quantization. Requiring both rolls to be strongly
+# lit is what keeps the read about the albedo pattern rather than the shading.
+# Stated relatively because an absolute floor emptied the set outright the moment
+# the disc radiance was retuned -- the same bar failing the other way.
 MOON_MARIA_BASE_FRAC = 0.45
 # The rest of the bars, hoisted out of the arm bodies with their MEASURED readings
 # beside them -- the shape the block above already had and the arms had been ignoring.

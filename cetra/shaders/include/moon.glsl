@@ -41,10 +41,31 @@ const float MOON_MARIA_GRAIN = 0.13;
 // How far the seas' own coordinate is pushed around before it is thresholded.
 // This is what turns round blobs into lobed shapes with inlets.
 const float MOON_MARIA_WARP = 0.55;
-// Crater lattice frequencies. The two are not a harmonic pair on purpose --
-// an integer ratio prints the lattice as a visible grid of same-size craters.
+// Crater lattice frequencies, three octaves. Not a harmonic series on purpose:
+// integer ratios print the lattice as a visible grid of same-size craters.
 const float MOON_CRATER_BIG = 5.3;
-const float MOON_CRATER_SMALL = 13.7;
+const float MOON_CRATER_MID = 13.7;
+const float MOON_CRATER_SMALL = 34.1;
+// Relief, in units of the moon's own radius. Real lunar relief is tiny against
+// the globe -- Tycho's rim stands about 0.3% of a lunar radius -- so GAIN is how
+// far the normal is TILTED rather than a displacement: the usual bump-mapping
+// bargain, where the silhouette stays a circle (it should) while the shading
+// behaves as though it did not.
+const float MOON_RELIEF_GAIN = 1.0;
+const float MOON_RELIEF_EPS = 0.0035;
+// Where the fine octaves fade, in face units per pixel. Past FAR the surface is
+// smooth, which is correct rather than a compromise: a moon a few pixels across
+// has no resolvable craters, and a gradient sampled finer than the pixel is the
+// definition of aliasing.
+const float MOON_LOD_NEAR = 0.004;
+const float MOON_LOD_FAR = 0.03;
+// The seas sit LOWER than the highlands, which is what makes their shores read
+// as coastlines rather than as paint. Plus wrinkle ridges in them, and the
+// broken relief of the highlands.
+const float MOON_MARIA_DEPTH = 0.006;
+const float MOON_RIDGE_MARIA = 0.0018;
+const float MOON_RIDGE_LAND = 0.0035;
+const float MOON_RIDGE_SCALE = 9.0;
 // Ray systems: how far they reach across the face, and how bright.
 const float MOON_RAY_REACH = 0.85;
 const float MOON_RAY_GAIN = 0.16;
@@ -64,26 +85,26 @@ const vec3 MOON_TINT = vec3(1.00, 0.98, 0.95);
 const float MOON_GLOW = 0.020;
 
 /*
- * CRATERS, which are the thing that makes a lunar surface read as a surface.
+ * TOPOGRAPHY. This is a HEIGHT field, not an albedo one, and the distinction is
+ * the whole reason the surface reads as a surface.
  *
- * Value noise cannot produce them at any octave count: what the eye is looking
- * for is CIRCLES with raised bright rims and darker floors, and noise has no
- * circular structure in it. Without these the disc reads as stains no matter
- * how the maria are tuned, which is where this file started.
+ * A painted crater is a ring of light and dark that looks identical from every
+ * sun angle. A crater with a SHAPE has a rim that catches grazing light on one
+ * side and drops its own bowl into shadow on the other, and the two swap as the
+ * phase moves. That is what the eye reads as relief, and no albedo map produces
+ * it, because it is not a colour.
  *
- * One crater per lattice cell, jittered off the cell centre, with a hashed
- * radius. Searched over the 3x3x3 neighbourhood because a jittered centre can
- * reach into its neighbours; on the FACE vector rather than the projected
- * offset, so craters foreshorten toward the limb the way real ones do -- equal
- * surface distances compress in projection for free.
- *
- * Returns a signed brightness delta, so a surface with no crater over it is
- * exactly unchanged.
+ * The profile is the real one: a depressed floor, a rim crest standing ABOVE the
+ * surrounding plain, and an ejecta apron falling back outside it. Polynomials
+ * rather than exp/pow -- this runs 27 cells per octave per height sample, and
+ * the normal costs three height samples.
  */
-float moonCraterField(vec3 face, float scale, float rimGain, float floorGain) {
+float moonCraterHeight(vec3 face, float scale, float amp, float fade) {
+    if (fade <= 0.0)
+        return 0.0;
     vec3 sp = face * scale;
     vec3 base = floor(sp);
-    float acc = 0.0;
+    float h = 0.0;
     for (int i = -1; i <= 1; i++) {
         for (int j = -1; j <= 1; j++) {
             for (int k = -1; k <= 1; k++) {
@@ -93,25 +114,60 @@ float moonCraterField(vec3 face, float scale, float rimGain, float floorGain) {
                 uint h1 = starPcg(h0);
                 uint h2 = starPcg(h1);
                 uint h3 = starPcg(h2);
-                // Jittered centre, and a radius that varies a lot: a real
-                // field is mostly small craters with a few large ones, so the
-                // radius is cubed to skew it that way.
                 vec3 jitter = vec3(starUnit(h0), starUnit(h1), starUnit(h2));
+                // Heavy-tailed: a crater field is overwhelmingly small ones with
+                // a few large. A linear radius reads as a golf ball.
                 float rr = starUnit(h3);
                 float rr2 = rr * rr;
-                float radius = 0.07 + 0.62 * rr2 * rr2 * rr;
+                float radius = 0.10 + 0.55 * rr2 * rr2 * rr;
                 float d = length(sp - (cell + jitter)) / radius;
-                if (d < 1.25) {
-                    // Bright raised rim just inside the edge, dark floor in the
-                    // middle. Both fade out past the rim so the apron is soft.
-                    float rim = smoothstep(0.55, 0.92, d) * (1.0 - smoothstep(0.92, 1.25, d));
-                    float bowl = 1.0 - smoothstep(0.0, 0.80, d);
-                    acc += rimGain * rim - floorGain * bowl;
-                }
+                if (d >= 1.55)
+                    continue;
+                float bowl = -max(0.0, 1.0 - d * d / 0.62);
+                float rt = 1.0 - min(1.0, abs(d - 1.02) / 0.34);
+                float rim = rt * rt * (3.0 - 2.0 * rt);
+                float at = 1.0 - min(1.0, abs(d - 1.32) / 0.26);
+                float apron = at * at * (3.0 - 2.0 * at) * 0.22;
+                // radius/scale, NOT radius: the lattice works in face*scale
+                // space, so an unconverted height carries the octave's own
+                // frequency into the slope. Left uncorrected the fine octaves
+                // were an order of magnitude out and the normal was noise.
+                // Depth tracks radius, as real craters do -- a basin is deep, a
+                // pit is shallow.
+                h += amp * (radius / scale) * (bowl * 0.75 + rim * 0.85 + apron) * fade;
             }
         }
     }
-    return acc;
+    return h;
+}
+
+// Ridged noise: wrinkle ridges in the seas, broken relief in the highlands. The
+// fold at the peak is what makes a CREST rather than a smooth swell.
+float moonRidges(vec3 face, float scale) {
+    float n = starNoise3(face * scale);
+    float r = 1.0 - abs(2.0 * n - 1.0);
+    return r * r;
+}
+
+/*
+ * Elevation at a point on the face, in units of the moon's own radius.
+ *
+ * `cover` damps everything inside the maria: they are basalt floods, so they
+ * really are smooth and low beside the highlands, and whatever cratering was
+ * there before the flood is under it. `lod` fades the finest octaves as a pixel
+ * grows past them -- without it the normal aliases into a boiling mess at any
+ * small disc, which is most framings.
+ */
+float moonHeight(vec3 face, float cover, float lod) {
+    float land = 1.0 - cover;
+    float h = moonCraterHeight(face, MOON_CRATER_BIG, 0.14, mix(0.25, 1.0, land));
+    h += moonCraterHeight(face, MOON_CRATER_MID, 0.11, mix(0.10, 1.0, land) * lod);
+    h += moonCraterHeight(face, MOON_CRATER_SMALL, 0.08,
+                          mix(0.05, 1.0, land) * lod * lod);
+    h -= cover * MOON_MARIA_DEPTH;
+    h += cover * MOON_RIDGE_MARIA * moonRidges(face, MOON_RIDGE_SCALE);
+    h += land * MOON_RIDGE_LAND * lod * (moonRidges(face, MOON_RIDGE_SCALE * 2.3) - 0.35);
+    return h;
 }
 
 /*
@@ -172,28 +228,9 @@ vec3 moonDisc(float edge, vec3 dir, vec3 moonDir, vec3 sunDir, float cosRadius, 
     vec2 q = vec2(dot(dir, du), dot(dir, dv));
     vec2 p = q * (s / max(length(q), 1e-8)); // inside the unit disc
 
-    // The lunar surface normal at this pixel: the eye-facing pole is -moonDir,
-    // the lateral part is the disc offset. Orthographic, because the moon is
-    // 220 lunar radii away.
-    vec3 n = du * p.x + dv * p.y - moonDir * nz;
-
-    // THE TERMINATOR IS dot(n, sunDir) CROSSING ZERO. Lit fraction, limb
-    // orientation and the crescent's tilt on screen all fall out of this one
-    // dot product -- which is why there is no phase to author here and no way
-    // to draw a crescent whose horns face the wrong way.
-    //
-    // A soft STEP, not a cosine, for the reason MOON_LIMB carries. Its width
-    // is ONE PIXEL in disc units: the disc is a few pixels across at gate
-    // resolution and tens at 1080p, so a fixed constant is a hard edge at one
-    // and a smear at the other. The stars' lesson and the stars' mechanism.
-    float discRadius = sqrt(2.0 * (1.0 - cosRadius)); // sin(R), small-angle
-    float soft = clamp(pixel / max(discRadius, 1e-6), 0.02, 0.5);
-    float lit = smoothstep(-soft, soft, dot(n, sunDir));
-
-    // Maria over the LOCKED face frame rather than the world normal: indexed
-    // by n the pattern would swim across the disc as the moon moved, and
-    // indexed by the sun-relative frame the terminator builds it would spin
-    // with the phase.
+    // The face vector: the surface point in the disc's own frame, +z toward the
+    // viewer. Everything below is a function of it, so the whole surface is
+    // locked to the face and cannot swim as the moon crosses the sky.
     vec3 face = vec3(p, nz);
 
     /*
@@ -215,23 +252,64 @@ vec3 moonDisc(float edge, vec3 dir, vec3 moonDir, vec3 sunDir, float cosRadius, 
     float cover = texture(moonMapTex, muv).r;
     float seas = mix(1.0, MOON_MARIA_ALBEDO, cover);
 
-    // Craters at two scales over everything, then the fine mottle. Rims are
-    // brighter and floors darker on the HIGHLANDS than on the seas, which is
-    // what the photographs show -- basalt has less to throw up.
-    // Craters are scarce on the seas: basalt flooded them, which is why the
-    // real maria look smooth beside the highlands.
-    float craterScale = mix(1.0, 0.18, cover);
-    float craters = moonCraterField(face, MOON_CRATER_BIG, 0.15, 0.10) +
-                    moonCraterField(face, MOON_CRATER_SMALL, 0.085, 0.05);
-    float grain = starNoise3(face * MOON_MARIA_FINE);
+    /*
+     * THE RELIEF NORMAL, which is what turns a painted disc into a surface.
+     *
+     * Finite-difference the height field along two tangents and tilt the sphere
+     * normal by the gradient. Three height samples, each walking the crater
+     * lattice, so this is the expensive part of the moon by a wide margin -- and
+     * it runs for the few thousand pixels inside the disc and nowhere else.
+     */
+    float discAng = sqrt(2.0 * (1.0 - cosRadius));
+    float px = pixel / max(discAng, 1e-6); // one pixel, in face units
+    float lod = 1.0 - smoothstep(MOON_LOD_NEAR, MOON_LOD_FAR, px);
+    // A pixel or the finest feature, whichever is larger: sampling the gradient
+    // finer than the pixel is the definition of aliasing.
+    float eps = max(px, MOON_RELIEF_EPS);
 
-    // A few ray systems, on the highlands only -- rays over a dark sea is the
-    // one arrangement the moon does not show.
+    vec3 axis = abs(face.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tanU = normalize(cross(axis, face));
+    vec3 tanV = cross(face, tanU);
+    float h0 = moonHeight(face, cover, lod);
+    float hU = moonHeight(normalize(face + tanU * eps), cover, lod);
+    float hV = moonHeight(normalize(face + tanV * eps), cover, lod);
+    vec3 relief = normalize(face - (tanU * (hU - h0) + tanV * (hV - h0)) *
+                                       (MOON_RELIEF_GAIN / eps));
+
+    // Back to world: the face frame's axes are (du, dv, -moonDir).
+    vec3 n = du * relief.x + dv * relief.y - moonDir * relief.z;
+
+    /*
+     * LOMMEL-SEELIGER, not Lambert, and it is the honest version of the hack it
+     * replaces. The regolith backscatters, so brightness goes as mu0/(mu0+mu):
+     * at full phase mu0 and mu are equal everywhere and the disc reads a flat
+     * 0.5, which is exactly why a real full moon has no centre-to-limb shading
+     * and why cosine lighting renders a snooker ball. Near the terminator the
+     * same expression falls off slowly and lets crater walls throw their own
+     * shade, which is where all the relief lives.
+     *
+     * The previous version faked the flat full moon with a hard smoothstep on
+     * dot(n, sunDir) and had no relief at all. This gives both from one term.
+     *
+     * Normalised so a head-on full moon reads 1, since the bare ratio is 0.5
+     * there.
+     */
+    float mu0 = dot(n, sunDir);
+    float mu = dot(n, -moonDir);
+    float lit = max(mu0, 0.0) / max(mu0 + mu, 1e-3) * 2.0;
+    // One pixel of softening on the zero crossing, so the terminator is not a
+    // stair at large disc sizes.
+    lit *= smoothstep(-px, px, mu0);
+    lit = clamp(lit, 0.0, 1.4);
+
+    // The albedo is the map, a fine mottle, and the ray systems. The craters
+    // are NOT here any more -- they are height, and the light does their
+    // shading, which is the whole change.
+    float grain = starNoise3(face * MOON_MARIA_FINE);
     float rays = moonRays(face, normalize(vec3(-0.15, -0.62, 0.77)), MOON_RAY_REACH) +
                  0.6 * moonRays(face, normalize(vec3(0.55, 0.35, 0.76)), MOON_RAY_REACH * 0.7);
-
     float surface = seas * (1.0 + MOON_MARIA_GRAIN * (grain - 0.5)) +
-                    craters * craterScale + rays * MOON_RAY_GAIN * craterScale;
+                    rays * MOON_RAY_GAIN * (1.0 - cover);
     float albedo = mix(1.0, clamp(surface, 0.25, 1.35), maria);
 
     // Mild rim darkening, on the eye-facing component already in hand.

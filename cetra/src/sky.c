@@ -198,7 +198,7 @@ static const float SKY_NIGHT_FLOOR_COLOR[3] = {0.55f, 0.72f, 1.0f};
 // blank cream oval and the channels saturated unevenly, which is where the
 // orange cast came from. The detail only appeared at -E 0.22, and that ratio is
 // what set this.
-#define SKY_MOON_DISC_RADIANCE  1.1f
+#define SKY_MOON_DISC_RADIANCE  0.80f
 // The aureole reaches this many DISC RADII at life size (~2 degrees).
 #define SKY_MOON_GLOW_RADII     8.0f
 
@@ -1476,10 +1476,19 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     uniform_set_float(u, "moonGlowAng",
                       glm_rad(moon_radius_deg / sqrtf(moon_size) * SKY_MOON_GLOW_RADII));
     uniform_set_float(u, "moonGlow", sky->moon_glow ? 1.0f : 0.0f);
-    float moon_intensity = sky->moon_enabled ? night * sky->moon_brightness *
-                                                   sky_moon_phase_factor(sky) *
-                                                   SKY_MOON_DISC_RADIANCE
-                                             : 0.0f;
+    /*
+     * No phase factor here, and its absence is the point. The DISC's brightness
+     * distribution comes from the Lommel-Seeliger term in the shader, which
+     * already dims toward new moon because that is what the geometry does --
+     * multiplying by the Krisciunas-Schaefer factor as well counted the phase
+     * twice and left a gibbous moon several times darker than it should be.
+     *
+     * The LIGHT still takes it, and must: that factor is the disc-INTEGRATED
+     * brightness, which is exactly the quantity a directional needs and exactly
+     * not the one a per-pixel shading model wants.
+     */
+    float moon_intensity =
+        sky->moon_enabled ? night * sky->moon_brightness * SKY_MOON_DISC_RADIANCE : 0.0f;
     uniform_set_float(u, "moonIntensity", moon_intensity);
     uniform_set_float(u, "moonEarthshine", sky->moon_earthshine ? 1.0f : 0.0f);
     uniform_set_float(u, "moonMaria", sky->moon_maria ? 1.0f : 0.0f);
