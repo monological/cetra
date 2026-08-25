@@ -89,36 +89,80 @@ The sync drops `.git`, so the remote tree has no history to derive a version fro
 `CMakeLists.txt` refuses to configure. `build.sh` writes a `VERSION` file onto the remote after the
 transfer, which is the escape hatch that file's own error message names.
 
-## Linux (`cetra-linux`)
+## Linux (`cetra-linux`) — on the host's GPU
 
-The guest has **no display adapter at all** — `lspci` lists none, so there is no `/dev/dri`, no DRM
-module and no display server. Mesa's software rasterizer covers it:
+The guest reaches the host's Intel UHD 770 through **virtio-gpu with virgl**, so it renders on real
+hardware while the host keeps its display. It reports `virgl (Mesa Intel(R) Graphics (RPL-S))` at
+**GL 4.3 core**, above the 4.1 the engine asks for. It did not start out that way — the VM was
+defined with no display adapter at all — so all of the following is required, and **three of the
+four steps are invisible failures**: each one leaves you with a working renderer that is silently
+llvmpipe.
 
-```bash
-sudo apt-get install -y xvfb mesa-utils gdb imagemagick
+**1. Host: the domain needs a 3D video device and a headless GL context.** In `linbuild`'s XML,
+before `</devices>`:
+
+```xml
+<video>
+  <model type='virtio' heads='1' primary='yes'>
+    <acceleration accel3d='yes'/>
+  </model>
+</video>
+<graphics type='egl-headless'>
+  <gl rendernode='/dev/dri/renderD128'/>
+</graphics>
 ```
 
-Run anything that opens a window under a virtual framebuffer:
+`egl-headless` rather than SPICE: this is a build machine with no display, and it gives
+virglrenderer a host GL context without a display server or a listening port. Needs
+`libvirglrenderer1` on the host (present) and a QEMU with `virtio-gpu-gl` (present). Requires a
+guest stop/start — video devices do not hotplug — but **not** a host reboot, so the other guests
+are unaffected.
+
+**2. Host: QEMU must be able to open the render node.** `/dev/dri/renderD128` is `root:render` mode
+660 and the `render` group ships **empty**, so `sudo usermod -aG render libvirt-qemu`. Without it
+QEMU cannot open the GPU and falls back silently.
+
+**3. Guest: the user must be able to open it too.** Exactly the same trap one level down —
+`sudo usermod -aG render,video neo`. Until then Mesa reports llvmpipe and nothing says why; the
+tell is that `python3 -c "open('/dev/dri/renderD128','rb')"` raises `PermissionError`. Group
+membership applies at login, so reconnect before testing.
+
+**4. Xvfb cannot use the GPU, so a real X server is needed.** Xvfb is a software framebuffer with
+no DRI: under it Mesa is llvmpipe no matter how well steps 1-3 went. The virtio GPU exposes a
+`card0-Virtual-1` connector, so Xorg drives it headless:
 
 ```bash
-xvfb-run -s '-screen 0 1280x1024x24' ./out/bin/render -m assets/c64.fbx -x -f 2 -S /tmp/f.ppm
+sudo apt-get install -y xserver-xorg-core xserver-xorg-video-modesetting xinit
+sudo nohup Xorg :1 -noreset -nolisten tcp vt7 > /tmp/xorg.log 2>&1 &
+DISPLAY=:1 glxinfo -B | grep renderer      # must say virgl, not llvmpipe
 ```
 
-The gate suite wants a **bigger virtual screen than that**, because on a 1x display it asks for
-double the nominal size to land on the framebuffer the arms were calibrated against, and its largest
-render is 2400x1500. A screen that cannot hold the window clips it:
+Then everything runs against `DISPLAY=:1`. **Check that renderer line before trusting a number off
+this machine** — every failure mode above ends in a working llvmpipe, not an error.
+
+Kernel confirmation that the host side worked, in `dmesg`:
+`[drm] features: +virgl +edid` — if that reads `-virgl`, step 1 or 2 is wrong.
+
+### Still needed on the guest
+
+```bash
+sudo apt-get install -y mesa-utils gdb imagemagick xvfb
+```
+
+`xvfb` stays worth having as the software fallback for bisecting a suspected driver difference;
+`mesa-utils` provides the `glxinfo` check above, `gdb` because a crash here is otherwise a bare
+exit code with an empty log (stderr is block-buffered into a file and dies unflushed).
+
+### If you fall back to software
+
+`xvfb-run` still works and reports llvmpipe at GL 4.5, which also clears 4.1. It is the right tool
+for deciding whether something is a driver difference rather than a bug, and the wrong one for
+anything timed. Note the screen must be **bigger than the frame**: on a 1x display the suite asks
+for double the nominal size and its largest render is 2400x1500, so a small virtual screen clips it.
 
 ```bash
 xvfb-run -s '-screen 0 2560x2048x24' python3 scripts/gates.py
 ```
-
-`llvmpipe` reports **GL 4.5 core**, comfortably above the 4.1 the engine asks for; check with
-`xvfb-run glxinfo -B`. `mesa-utils` is only for that check, `gdb` only for backtraces — but both earn
-their place, since a crash here is otherwise a bare exit code with an empty log (stderr is
-block-buffered into a file and dies unflushed with the process).
-
-The alternative to software GL is giving the guest `virtio-gpu`, or passing the host's Intel UHD 770
-through. Neither is set up; llvmpipe is enough to prove a binary runs.
 
 ## Windows (`cetra-win`)
 
@@ -169,8 +213,8 @@ Each platform's invocation differs only in what has to be wrapped around it:
 # macOS
 python3 scripts/gates.py
 
-# Linux -- a virtual framebuffer, big enough for the doubled request
-xvfb-run -s '-screen 0 2560x2048x24' python3 scripts/gates.py
+# Linux -- against the Xorg running on the virtio GPU
+DISPLAY=:1 python3 scripts/gates.py
 
 # Windows -- UTF-8 mode, and the preset does not build to out/bin
 python -X utf8 scripts/gates.py --bin-dir out/windows-debug/bin
@@ -179,5 +223,9 @@ python -X utf8 scripts/gates.py --bin-dir out/windows-debug/bin
 The first line of output names the binary directory and the second the framebuffer scale. Both are
 part of any result read off this machine, which is why they are printed rather than assumed.
 
-Expect the two guests to be **slow**: on a 1x display the suite asks for double the nominal size,
-which is four times the pixels, and llvmpipe draws every one of them on the CPU.
+**Windows is still software-rendered and therefore slow**, and on a 1x display the suite asks for
+double the nominal size, which is four times the pixels for llvmpipe to draw on the CPU. Prefer
+`--only <group>` there. Linux on virgl is far better but not a Mac: measured 12.7 s against 17.0 s
+for the same 30-frame `cornell_rooms` capture, a 1.34x saving rather than an order of magnitude,
+because the suite's cost is ~339 process **startups** and shader compiles, which no GPU shortens.
+Fill-heavy groups (water, forest) gain much more than that average suggests.
