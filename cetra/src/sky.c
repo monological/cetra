@@ -29,6 +29,13 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->sun_elevation_deg = 35.0f;
     sky->sun_azimuth_deg = 135.0f;
     sky->sun_disc_deg = 0.53f;
+    // Stars OFF in the library: three gate arms read a sub-horizon sky and
+    // assume a quiet backdrop, and off-by-default is what protects them. Apps
+    // and scene files opt in.
+    sky->stars_enabled = false;
+    sky->stars_brightness = 1.0f;
+    sky->latitude_deg = 45.0f;
+    sky->star_hour_deg = 0.0f;
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky->publish_fog_ambient = true;
     sky->aerial_enabled = true;
@@ -725,6 +732,25 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     float cos_radius = cosf(glm_rad(sky->sun_disc_deg * 0.5f));
     uniform_set_float(u, "sunCosRadius", cos_radius);
     uniform_set_float(u, "sunIntensity", 20.0f);
+    // Stars fade in through civil twilight (+3 to -8 degrees). A visibility
+    // ramp standing in for the exposure adaptation the engine refuses
+    // (exposure_auto_gain caps at 1), not physics -- real stars are up all
+    // day. Sampled live like the disc size; no bake depends on it.
+    float night = 1.0f - glm_smoothstep(-8.0f, 3.0f, sky->sun_elevation_deg);
+    float star_intensity = sky->stars_enabled ? night * sky->stars_brightness : 0.0f;
+    uniform_set_float(u, "starIntensity", star_intensity);
+    // World dir -> celestial frame: tilt the celestial pole down to an
+    // altitude equal to the latitude (toward +Z, the azimuth-0 north), then
+    // turn about it by the hour angle. Column-major, applied as frame * dir.
+    {
+        mat4 tilt, spin, frame4;
+        glm_rotate_make(tilt, glm_rad(sky->latitude_deg - 90.0f), (vec3){1.0f, 0.0f, 0.0f});
+        glm_rotate_make(spin, glm_rad(sky->star_hour_deg), (vec3){0.0f, 1.0f, 0.0f});
+        glm_mat4_mul(spin, tilt, frame4);
+        mat3 frame;
+        glm_mat4_pick3(frame4, frame);
+        uniform_set_mat3(u, "starFrame", (float*)frame);
+    }
     if (clouds) {
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex[sky->clouds.prev_frame & 1]);

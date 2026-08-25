@@ -19,6 +19,8 @@ uniform vec2 screenSize;    // composite target size, for gl_FragCoord -> uv
 uniform vec3 sunDir;        // world-space unit vector TOWARD the sun
 uniform float sunCosRadius; // cos of the sun's angular RADIUS
 uniform float sunIntensity; // scalar disc radiance scale
+uniform mat3 starFrame;     // world dir -> celestial frame (latitude + hour angle)
+uniform float starIntensity; // star radiance scale; 0 = daylight / disabled
 
 #include "sky_radiance.glsl"
 
@@ -27,8 +29,10 @@ void main()
     vec3 dir = normalize(TexCoords);
     float r = Rg + VIEW_ALTITUDE;
 
-    vec3 sky =
-        skyRadiance(dir, sunDir, r, skyViewLut, transmittanceLut, sunCosRadius, sunIntensity);
+    // Stars live inside skyRadiance, so the deck transmittance multiply
+    // below occludes them with no extra work.
+    vec3 sky = skyRadiance(dir, sunDir, r, skyViewLut, transmittanceLut, sunCosRadius,
+                           sunIntensity, starFrame, starIntensity);
 
     vec4 cloud = texture(cloudTex, gl_FragCoord.xy / screenSize);
     // Cloud radiance is absolute like the sky's; cap the in-scatter at the

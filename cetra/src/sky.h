@@ -142,6 +142,17 @@ typedef struct SkyAtmosphere {
     float sun_disc_deg;
     vec3 sun_dir; // unit vector TOWARD the sun (derived; sky_update_sun_dir)
 
+    // Night star field (spec 11.79), screen-space background only -- never the
+    // env cube or the IBL, the sun-disc rule. Visibility ramps in through
+    // civil twilight from the sun elevation; the ramp stands in for an
+    // exposure adaptation the engine deliberately does not perform
+    // (exposure_auto_gain only ever darkens). latitude sets the celestial
+    // pole's altitude, hour_angle turns the sky about it.
+    bool stars_enabled;
+    float stars_brightness; // star radiance scale at full night (1 = default)
+    float latitude_deg;
+    float star_hour_deg;
+
     // Optional coupling to the scene's directional key light (set by the app
     // once; NULL = pure-IBL sky). sky_apply_sun_to_light retints/redirects it
     // from the atmosphere so a sun move drives the shadows and fog too.

@@ -16,6 +16,8 @@ uniform sampler2D transmittanceLut;
 uniform vec3 sunDir;       // world-space unit vector TOWARD the sun
 uniform float sunCosRadius; // cos of the sun's angular RADIUS
 uniform float sunIntensity; // scalar disc radiance scale
+uniform mat3 starFrame;     // world dir -> celestial frame (latitude + hour angle)
+uniform float starIntensity; // star radiance scale; 0 = daylight / disabled
 
 #include "sky_radiance.glsl"
 
@@ -24,8 +26,8 @@ void main()
     vec3 dir = normalize(TexCoords);
     float r = Rg + VIEW_ALTITUDE;
 
-    vec3 sky =
-        skyRadiance(dir, sunDir, r, skyViewLut, transmittanceLut, sunCosRadius, sunIntensity);
+    vec3 sky = skyRadiance(dir, sunDir, r, skyViewLut, transmittanceLut, sunCosRadius,
+                           sunIntensity, starFrame, starIntensity);
 
     FragColor = vec4(min(sky, vec3(30000.0)) * preExposure, 1.0);
 }
