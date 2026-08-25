@@ -163,6 +163,45 @@ typedef struct SkyAtmosphere {
     bool night_floor_enabled;
     float night_floor_brightness; // scale on the baked radiance (1 = default)
 
+    // The day/night cycle (spec 11.81). One clock: cycle_hour (0-24, solar
+    // noon at 12, a DOUBLE so the gate's Python twin reproduces it exactly)
+    // drives the sun along the celestial equator of the stars' own latitude
+    // frame, and the star field's hour advances in lock-step. day_seconds is
+    // real seconds per full day; 0 = frozen (the clock holds, and once
+    // converged the tick is a structural no-op -- which is also what keeps
+    // config-perturb's enabled-flip round-trippable).
+    bool cycle_enabled;
+    float cycle_day_seconds;
+    double cycle_hour;
+    // Owned by the tick while the cycle runs: the star-hour offset latched on
+    // the enable edge, so an app-authored band placement survives as the
+    // phase the sky wheels from.
+    bool cycle_latched;
+    double cycle_star_base;
+    // True when the sun has moved past what the last completed sliced bake
+    // captured; cleared when a fresh slice cycle starts.
+    bool cycle_dirty;
+
+    /*
+     * The time-sliced env re-bake (spec 11.81). The atomic bake costs ~0.11 s
+     * -- ~90% of it the two prefilter chains, NOT the six env faces -- so the
+     * cycle spreads the same work items across frames into SHADOW textures
+     * and swaps them into IBLResources atomically. `item` is the cursor into
+     * the generated work schedule (-1 = idle); the frozen LUT is what the six
+     * env faces sample, because all faces of one cube must see ONE sun while
+     * the live sky_view_lut keeps tracking the sun per frame.
+     */
+    struct {
+        int item; // -1 idle, else next work item
+        GLuint frozen_lut;
+        GLuint shadow_env;
+        GLuint shadow_irr;
+        GLuint shadow_prefilter;
+        GLuint shadow_charlie;
+        vec3 latched_sun_dir;
+        bool clouds_bake;
+    } slicer;
+
     // Optional coupling to the scene's directional key light (set by the app
     // once; NULL = pure-IBL sky). sky_apply_sun_to_light retints/redirects it
     // from the atmosphere so a sun move drives the shadows and fog too.
@@ -273,6 +312,23 @@ void sky_apply_sun_to_light(SkyAtmosphere* sky);
 // sun drives (sky_bake) and retint the coupled key light. Used by the GUI's
 // dynamic sun; cheap enough (small env) to run live per slider change.
 int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine);
+
+// The sun's position at `hour` (0-24, solar noon 12) on the celestial
+// equator of the given latitude -- the equinox path, which is what makes
+// noon altitude 90-lat and sunrise/set land at 6/18. DOUBLE domain
+// throughout, converting to float only at the end: the cycle-quiesce gate
+// arm holds this against a Python twin computed in doubles, and a float32
+// formula loses the bit-identity that comparison rests on.
+void sky_sun_path(double latitude_deg, double hour, float* out_elevation_deg,
+                  float* out_azimuth_deg);
+
+// The per-frame heart of the day/night cycle (spec 11.81), called by the
+// engine loop BEFORE the GI sweep and the shadow pass -- the key light it
+// rewrites is what the cascades then fit, and a completed slice's swap must
+// land before the frame's first bind_ibl_textures. A structural no-op when
+// the cycle is off or frozen-and-converged.
+void sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, const struct Engine* engine,
+                    float dt);
 
 // Rebuild the aerial-perspective volume for this frame's camera. Unlike the
 // other bakes this is per-frame, because the volume is the camera's frustum.

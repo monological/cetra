@@ -2566,6 +2566,15 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
 
         Scene* shadow_scene = get_current_scene(engine);
 
+        // The day/night cycle's tick (spec 11.81), BEFORE the GI sweep and
+        // the shadow pass: the key light it rewrites is what the cascades
+        // then fit, and a completed slice's swap must land before this
+        // frame's first bind_ibl_textures. A structural no-op when the cycle
+        // is off.
+        if (shadow_scene && shadow_scene->sky && shadow_scene->ibl)
+            sky_cycle_tick(shadow_scene->sky, shadow_scene->ibl, engine,
+                           (float)engine->render_delta);
+
         // GI probe captures, while the volume is dirty. Deliberately BEFORE the
         // shadow pass: a capture needs the camera-independent single-cascade map
         // and bakes its own, and the pass below then restores the camera-fit
