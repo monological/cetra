@@ -101,12 +101,19 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->night_floor = cscn->env_night_floor_enabled ? 1 : 0;
     if (cscn->has_env_night_floor_brightness && args->night_floor_brightness < 0.0f)
         args->night_floor_brightness = cscn->env_night_floor_brightness;
-    // `enabled` arms it; day_seconds is only a rate. Authoring a rate without
-    // the switch leaves the cycle off, which is why the two are separate here.
-    if (cscn->has_env_cycle && cscn->env_cycle_enabled && args->day_cycle < 0.0f)
-        args->day_cycle = cscn->has_env_cycle_day_seconds ? cscn->env_cycle_day_seconds : 0.0f;
-    if (cscn->has_env_cycle_hour && args->time_of_day < 0.0f)
-        args->time_of_day = cscn->env_cycle_hour;
+    // The `enabled` key arms it; day_seconds is only a rate, so authoring a
+    // rate without the switch leaves the cycle off. --no-day-cycle drops the
+    // WHOLE authored block including its hour: the block is one thing a file
+    // asked for, and the --no-stars rule is that the flag undoes the request
+    // rather than half of it. An explicit --time-of-day still wins, since the
+    // CLI-wins order is what these sentinels exist for.
+    if (!args->no_day_cycle) {
+        if (cscn->has_env_cycle && cscn->env_cycle_enabled && args->day_cycle < 0.0f)
+            args->day_cycle =
+                cscn->has_env_cycle_day_seconds ? cscn->env_cycle_day_seconds : 0.0f;
+        if (cscn->has_env_cycle_hour && args->time_of_day < 0.0f)
+            args->time_of_day = cscn->env_cycle_hour;
+    }
     if (args->tonemap_mode == 0) {
         switch (cscn->tonemap) {
             case CSCENE_TONEMAP_AGX:
