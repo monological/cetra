@@ -1198,8 +1198,13 @@ static void sky_cycle_advance(SkyAtmosphere* sky, float dt) {
         sky->cycle_latched = true;
     }
 
+    // Captured BEFORE the wrap: the moon's lag advances by a fraction of this
+    // same interval, and cycle_hour's wrap destroys the evidence of how far it
+    // moved.
+    double advanced = 0.0;
     if (sky->cycle_day_seconds > 0.0f) {
-        sky->cycle_hour += (24.0 / (double)sky->cycle_day_seconds) * (double)dt;
+        advanced = (24.0 / (double)sky->cycle_day_seconds) * (double)dt;
+        sky->cycle_hour += advanced;
         while (sky->cycle_hour >= 24.0)
             sky->cycle_hour -= 24.0;
     }
@@ -1210,23 +1215,55 @@ static void sky_cycle_advance(SkyAtmosphere* sky, float dt) {
     // low latitude both derivatives approach zero).
     sky->stars_hour_deg = (float)(sky->cycle_star_base + (sky->cycle_hour - 12.0) * 15.0);
 
-    // Derive-and-compare rather than track "did it move": float equality
-    // makes a frozen, already-seeded cycle a true no-op, and a config restore
-    // that changed the hour is picked up the same way.
+    // The moon's lag, beside the hour it is a lag ON, and above the sun's
+    // comparison for the star hour's reason stated one comment up.
+    sky->cycle_moon_offset += advanced / SKY_SYNODIC_DAYS;
+    while (sky->cycle_moon_offset >= 24.0)
+        sky->cycle_moon_offset -= 24.0;
+
+    /*
+     * Derive-and-compare rather than track "did it move": float equality makes
+     * a frozen, already-seeded cycle a true no-op, and a config restore that
+     * changed the hour is picked up the same way.
+     *
+     * This is the SUN's early-out, not the function's -- it used to be a bare
+     * `return` and everything below it inherited the stall the star hour was
+     * hoisted above to avoid.
+     */
     float el, az;
     sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour, &el, &az);
-    if (el == sky->sun_elevation_deg && az == sky->sun_azimuth_deg)
-        return;
+    if (el != sky->sun_elevation_deg || az != sky->sun_azimuth_deg) {
+        sky->sun_elevation_deg = el;
+        sky->sun_azimuth_deg = az;
+        sky_update_sun_dir(sky); // sun_dir + the zenith march
+        sky_apply_sun_to_light(sky);
+        sky->cycle_dirty = true;
 
-    sky->sun_elevation_deg = el;
-    sky->sun_azimuth_deg = az;
-    sky_update_sun_dir(sky); // sun_dir + the zenith march
-    sky_apply_sun_to_light(sky);
-    sky->cycle_dirty = true;
+        // The LIVE view LUT tracks the sun every tick -- the on-screen sky
+        // moves continuously while the IBL converges behind it.
+        sky_bake_view_lut(sky);
+    }
 
-    // The LIVE view LUT tracks the sun every tick -- the on-screen sky moves
-    // continuously while the IBL converges behind it.
-    sky_bake_view_lut(sky);
+    /*
+     * The moon rides sky_sun_path a second time at a shifted hour, which puts
+     * it on the SAME great circle as the sun. That is astronomically wrong by
+     * up to 28 degrees of declination across a real month -- and it is exactly
+     * as wrong as the sun already is, since this is the EQUINOX path and the
+     * sun has no declination here either. Reusing it means one celestial model
+     * rather than two to keep in step, and the gate's Python twin comes free.
+     *
+     * MINUS the offset, so a growing lag makes the moon transit LATER, which
+     * is the direction it really drifts. Left UNWRAPPED on purpose: sky_sun_path
+     * takes sin and cos of the hour, and -5 h against 19 h agree mathematically
+     * but not bitwise -- the gate's 0 px identity leg rests on that.
+     *
+     * No comparison guarding it, unlike the sun's above, because there is
+     * nothing to protect: the moon is not in the view LUT and not in the env
+     * cube, so a moon move costs two trig calls and a few float writes.
+     */
+    if (sky->moon_enabled)
+        sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour - sky->cycle_moon_offset,
+                     &sky->moon_elevation_deg, &sky->moon_azimuth_deg);
 }
 
 // Spend one frame's budget on the sliced re-bake. Separate from the advance

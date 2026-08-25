@@ -954,9 +954,23 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
     // filter's ping target, and the default blur is 0, so allocating it eagerly
     // was doubling the feature's resting cost for a texture no draw touches.
     const bool want_scratch = ss->msm_blur > 0.0f;
-    if (ss->msm_allocated_layers != layers || ss->msm_allocated_size != size ||
+    // GROW-ONLY on the layer count, which is the depth array's own policy 400
+    // lines down ("a larger array serves any smaller count, so shrinking never
+    // reallocates") and was not this one's. It matters now because the caster
+    // count OSCILLATES: each sky body clears cast_shadows as it sets, so a
+    // running day/night cycle walked this 1 -> 2 -> 1 twice a day and freed and
+    // rebuilt a 24-48 MB RGBA16F array every time.
+    //
+    // Surplus layers are inert, not merely unused: the resolve loop below runs
+    // to `layers`, and the shader bounds its reads by numShadowLights, which is
+    // the same live count. Neither ever addresses one.
+    //
+    // The SIZE keeps its exact test -- a size change really does need a new
+    // texture, and it shrinks only when a user lowers --msm-size, which is not
+    // a per-frame event.
+    if (ss->msm_allocated_layers < layers || ss->msm_allocated_size != size ||
         (want_scratch && !ss->msm_scratch)) {
-        const bool resized = ss->msm_allocated_layers != layers || ss->msm_allocated_size != size;
+        const bool resized = ss->msm_allocated_layers < layers || ss->msm_allocated_size != size;
         if (resized)
             free_msm_arrays(ss);
         if (!ss->msm_array)
