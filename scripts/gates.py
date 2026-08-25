@@ -5598,21 +5598,35 @@ def run_cycle_gate(workdir):
 
     # The slicer against the atomic bake, sun held still. Frames well past the
     # rebake so the schedule has converged and swapped.
-    sliced = os.path.join(workdir, "cycle_sliced.ppm")
-    plain = os.path.join(workdir, "cycle_plain.ppm")
+    #
+    # TWO scenes, and the second is not thoroughness. This fixture has no
+    # sheen, so nothing in its frame reads the Charlie prefilter chain --
+    # deleting that chain from the slicer entirely leaves it 0 px, measured.
+    # sheen_fixture is what makes the arm cover all four handles the swap
+    # moves; without it a third of the schedule is asserted by nothing.
     base = ["--sun-elevation", "12", "--sun-azimuth", "40"] + STARS_PIN
-    err = render(scene, sliced, base + ["--cycle-rebake-at", "2"], frames=60) or \
-        render(scene, plain, base, frames=60)
-    if err:
-        print(f"  cycle-slice ERROR render failed: {err.strip()[-200:]}")
-        failures.append("cycle-slice")
-    else:
+    slice_scenes = [("sky", scene, base),
+                    ("sheen", os.path.join(ROOT, "assets", "sheen_fixture.gltf"),
+                     ["--sky"] + base)]
+    for tag, path, flags in slice_scenes:
+        if not os.path.exists(path):
+            print(f"  cycle-slice SKIP  ({os.path.basename(path)} not present)")
+            break
+        sliced = os.path.join(workdir, f"cycle_sliced_{tag}.ppm")
+        plain = os.path.join(workdir, f"cycle_plain_{tag}.ppm")
+        err = render(path, sliced, flags + ["--cycle-rebake-at", "2"], frames=60) or \
+            render(path, plain, flags, frames=60)
+        if err:
+            print(f"  cycle-slice ERROR render failed: {err.strip()[-200:]}")
+            failures.append("cycle-slice")
+            break
         px, _ = compare(sliced, plain)
         ok = px == 0
-        print(f"  cycle-slice {'PASS' if ok else 'FAIL'}  sliced re-bake vs atomic {px} px "
-              f"(want 0: the slicer IS the atomic bake)")
+        print(f"  cycle-slice {'PASS' if ok else 'FAIL'}  {tag}: sliced re-bake vs atomic "
+              f"{px} px (want 0: the slicer IS the atomic bake)")
         if not ok:
             failures.append("cycle-slice")
+            break
 
     # A moving clock: three captures across a sunset from one run.
     moving = os.path.join(workdir, "cycle_move.ppm")
