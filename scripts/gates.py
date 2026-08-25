@@ -5132,6 +5132,194 @@ def run_cloud_shadow_gate(workdir):
     return failures
 
 
+# --- stars (spec 11.79): the procedural night star field --------------------------------
+#
+# All on aerial_fixture, the suite's sky fixture -- NOT tree, which is documented at 31k
+# px run-to-run. Exposure pinned on every arm. Every quantitative read is the star
+# CONTRIBUTION -- the delta against a --no-stars twin at the same configuration -- never
+# raw brightness: the twilight sky's own radiance dominates a raw read and moves the
+# OPPOSITE way as the sun drops (the beach-shoreline lesson, where an argmax read dry
+# sand for four specs).
+STARS_FIXTURE = "aerial_fixture.gltf"
+STARS_PIN = ["--no-auto-exposure", "-E", "1.0"]
+# The upper sky. The fixture's terrain silhouette cuts the sky off around 0.55 of frame
+# height at this camera; box fractions are vertical-fov fractions, so they hold at any
+# width the suite renders.
+STARS_BAND = (0.05, 0.04, 0.95, 0.42)
+# LOW vs HIGH view elevation for the extinction arm. The committed frame spans about
+# -12..+28 degrees (eye (0,400,500) -> target (0,3211,-19500) at fov 40), so there is no
+# zenith to read: low sits just above the silhouette (~+6..9 deg, airmass ~8), high at
+# the top of frame (~+23..27 deg, airmass ~2.3), which still separates cleanly.
+STARS_LOW_BAND = (0.05, 0.47, 0.95, 0.54)
+STARS_HIGH_BAND = (0.05, 0.02, 0.95, 0.12)
+STARS_NIGHT_ELEV = "-12"
+# The emerge ladder. +5 is above the ramp's top edge (+3), so its contribution is an
+# exact zero and the ladder's first step doubles as the ramp-zeroing read.
+STARS_EMERGE_ELEVS = ["5", "0", "-6", "-12"]
+STARS_DAY_ELEV = "35"
+# Bars, measured on the shipping field at 400x300. Wide floors: the direction is the
+# claim, and every measured value sits an order of magnitude past its bar. Measured:
+# night 163,822 px; emerge 0 / 0.00144 / 0.00977 / 0.01127; horizon luma 0.355 (the
+# airmass arithmetic predicts ~0.39) with R/B 2.245 against 1.256; deck/clear 0.017 --
+# the default 0.45-coverage deck is nearly opaque at night, and the after-the-multiply
+# mutation this arm exists for reads ~1.0.
+STARS_NIGHT_MIN_PX = 2000
+STARS_EMERGE_FLOOR = 5e-4
+STARS_HORIZON_LUMA_MAX = 0.75
+STARS_HORIZON_RB_MIN = 1.05
+STARS_CLOUDS_MAX = 0.85
+
+
+def _stars_delta(on_path, off_path, box):
+    """Mean per-channel star contribution over a fractional box, plus moved pixels.
+
+    Linear-decoded on-minus-off, so the sky under the stars and the deterministic
+    dither pattern cancel exactly and what remains is what the stars added.
+    """
+    w, h, on = _read_ppm(on_path)
+    _, _, off = _read_ppm(off_path)
+    x0, x1 = int(box[0] * w), int(box[2] * w)
+    y0, y1 = int(box[1] * h), int(box[3] * h)
+    n = 0
+    moved = 0
+    acc = [0.0, 0.0, 0.0]
+    for y in range(y0, y1):
+        row = y * w
+        for x in range(x0, x1):
+            o = (row + x) * 3
+            hit = False
+            for k in range(3):
+                acc[k] += _SRGB_TO_LINEAR[on[o + k]] - _SRGB_TO_LINEAR[off[o + k]]
+                hit = hit or on[o + k] != off[o + k]
+            if hit:
+                moved += 1
+            n += 1
+    return [c / max(n, 1) for c in acc], moved
+
+
+def _stars_pair(workdir, tag, elev, extra=None, frames=30):
+    """Render the stars-on / stars-off twin at one elevation; returns (on, off, err)."""
+    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    on = os.path.join(workdir, f"stars_{tag}_on.ppm")
+    off = os.path.join(workdir, f"stars_{tag}_off.ppm")
+    common = ["--sun-elevation", elev] + STARS_PIN + (extra or [])
+    err = render(scene, on, ["--stars"] + common, frames=frames) or \
+        render(scene, off, ["--no-stars"] + common, frames=frames)
+    return on, off, err
+
+
+def run_stars_gate(workdir):
+    """The procedural night star field (spec 11.79).
+
+    Six arms, every read a delta against a --no-stars twin at the same configuration:
+
+      stars-night     at -12 the field moves real pixels in the sky band.
+      stars-daylight  at +35 stars on vs off is 0 px over the WHOLE frame. Both legs
+                      upload starIntensity 0 by design (ramp at zero vs disabled), so
+                      this is the guard that the ramp actually zeroes -- deleting or
+                      mis-ranging the elevation ramp is what it catches.
+      stars-emerge    the contribution at +5 / 0 / -6 / -12 is strictly increasing,
+                      with +5 an exact zero (above the ramp's top edge). A constant
+                      starIntensity fails the ordering.
+      stars-horizon   the low-sky contribution is dimmer AND redder than the high-sky
+                      one -- the transmittance term. Dropping transmittanceToSky from
+                      the star term is what it catches.
+      stars-clouds    with --clouds at -12 the sky-band contribution shrinks: the deck
+                      occludes stars because the term sits under the cloud.a multiply.
+                      Moving it after that multiply is what it catches. Whole band, not
+                      deck-vs-gap boxes: the deck drifts with wind.
+      stars-det       two runs of the -12 leg are 0 px.
+    """
+    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  stars-night SKIP  ({STARS_FIXTURE} not present)")
+        return []
+    failures = []
+    deltas = {}
+    night_on = night_off = None
+    for elev in STARS_EMERGE_ELEVS:
+        on, off, err = _stars_pair(workdir, f"e{elev}", elev)
+        if err:
+            print(f"  stars-night ERROR render failed: {err.strip()[-200:]}")
+            return ["stars-night"]
+        deltas[elev] = _stars_delta(on, off, STARS_BAND)
+        if elev == STARS_NIGHT_ELEV:
+            night_on, night_off = on, off
+
+    rgb, moved = deltas[STARS_NIGHT_ELEV]
+    ok = moved >= STARS_NIGHT_MIN_PX
+    print(f"  stars-night  {'PASS' if ok else 'FAIL'}  {moved} px moved in the sky band "
+          f"at {STARS_NIGHT_ELEV} (want >={STARS_NIGHT_MIN_PX})")
+    if not ok:
+        failures.append("stars-night")
+
+    d_on, d_off, err = _stars_pair(workdir, "day", STARS_DAY_ELEV)
+    if err:
+        print(f"  stars-daylight ERROR render failed: {err.strip()[-200:]}")
+        failures.append("stars-daylight")
+    else:
+        _, day_moved = _stars_delta(d_on, d_off, (0.0, 0.0, 1.0, 1.0))
+        ok = day_moved == 0
+        print(f"  stars-daylight {'PASS' if ok else 'FAIL'}  {day_moved} px at "
+              f"+{STARS_DAY_ELEV} (want 0: the ramp must zero exactly)")
+        if not ok:
+            failures.append("stars-daylight")
+
+    lumas = [sum(deltas[e][0]) / 3.0 for e in STARS_EMERGE_ELEVS]
+    steps = " -> ".join(f"{v:.6f}" for v in lumas)
+    ok = (deltas[STARS_EMERGE_ELEVS[0]][1] == 0 and
+          all(lumas[i] < lumas[i + 1] for i in range(len(lumas) - 1)) and
+          lumas[-1] >= STARS_EMERGE_FLOOR)
+    print(f"  stars-emerge {'PASS' if ok else 'FAIL'}  band contribution {steps} "
+          f"(want strictly increasing, +5 exactly 0, final >={STARS_EMERGE_FLOOR})")
+    if not ok:
+        failures.append("stars-emerge")
+
+    lo, _ = _stars_delta(night_on, night_off, STARS_LOW_BAND)
+    hi, _ = _stars_delta(night_on, night_off, STARS_HIGH_BAND)
+    lo_l, hi_l = sum(lo) / 3.0, sum(hi) / 3.0
+    lo_rb = lo[0] / max(lo[2], 1e-9)
+    hi_rb = hi[0] / max(hi[2], 1e-9)
+    ok = lo_l <= hi_l * STARS_HORIZON_LUMA_MAX and lo_rb >= hi_rb * STARS_HORIZON_RB_MIN
+    print(f"  stars-horizon {'PASS' if ok else 'FAIL'}  low/high luma "
+          f"{lo_l / max(hi_l, 1e-9):.3f} (want <={STARS_HORIZON_LUMA_MAX}), "
+          f"low R/B {lo_rb:.3f} vs high {hi_rb:.3f} "
+          f"(want >={STARS_HORIZON_RB_MIN}x)")
+    if not ok:
+        failures.append("stars-horizon")
+
+    c_on, c_off, err = _stars_pair(workdir, "cloud", STARS_NIGHT_ELEV,
+                                   extra=["--clouds"], frames=CLOUDSHADOW_FRAMES)
+    if err:
+        print(f"  stars-clouds ERROR render failed: {err.strip()[-200:]}")
+        failures.append("stars-clouds")
+    else:
+        cloud_rgb, _ = _stars_delta(c_on, c_off, STARS_BAND)
+        cloud_l = sum(cloud_rgb) / 3.0
+        clear_l = sum(rgb) / 3.0
+        ratio = cloud_l / max(clear_l, 1e-9)
+        ok = ratio <= STARS_CLOUDS_MAX
+        print(f"  stars-clouds {'PASS' if ok else 'FAIL'}  deck/clear contribution "
+              f"{ratio:.3f} (want <={STARS_CLOUDS_MAX})")
+        if not ok:
+            failures.append("stars-clouds")
+
+    det = os.path.join(workdir, "stars_det.ppm")
+    err = render(scene, det, ["--stars", "--sun-elevation", STARS_NIGHT_ELEV] + STARS_PIN)
+    if err:
+        print(f"  stars-det   ERROR render failed: {err.strip()[-200:]}")
+        failures.append("stars-det")
+    else:
+        _, det_moved = _stars_delta(night_on, det, (0.0, 0.0, 1.0, 1.0))
+        ok = det_moved == 0
+        print(f"  stars-det    {'PASS' if ok else 'FAIL'}  {det_moved} px between two "
+              f"runs (want 0)")
+        if not ok:
+            failures.append("stars-det")
+
+    return failures
+
+
 FOGVOL_FIXTURE = "fog_volume_fixture.cscn"
 # Three strips at the same rows, so the vignette and the tone curve cancel out of every
 # comparison. left and right are the two boxes; gap is bare backdrop between them.
@@ -15756,6 +15944,8 @@ GATE_GROUPS = [
     ("fogdepth", "fog at the translucent depth (spec 11.78):", run_fogdepth_gate),
     ("cloud-shadow", "cloud shadows into the fog and onto the ground (specs 11.39, 11.41):",
      run_cloud_shadow_gate),
+    ("stars", "night star field (contribution, ramp, extinction, deck; spec 11.79):",
+     run_stars_gate),
     ("water", "water surface (determinism, absorption, shoreline, reach; specs 11.32-11.35):",
      run_water_gate),
     ("beach", "the shoaling bed the eye can see (surf ring, turquoise, bound; spec 11.44):",
