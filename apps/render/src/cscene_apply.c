@@ -97,6 +97,10 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->stars_latitude = cscn->env_stars_latitude_deg;
     if (cscn->has_env_stars_hour && args->stars_hour < -900.0f)
         args->stars_hour = cscn->env_stars_hour_deg;
+    if (cscn->has_env_night_floor && args->night_floor < 0)
+        args->night_floor = cscn->env_night_floor_enabled ? 1 : 0;
+    if (cscn->has_env_night_floor_brightness && args->night_floor_brightness < 0.0f)
+        args->night_floor_brightness = cscn->env_night_floor_brightness;
     if (args->tonemap_mode == 0) {
         switch (cscn->tonemap) {
             case CSCENE_TONEMAP_AGX:

@@ -153,6 +153,18 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
                           "environment.stars");
     }
 
+    // sky-mode night floor (spec 11.80), the stars block's shape: every key
+    // independent with its own presence flag.
+    const cJSON* nfloor = cJSON_GetObjectItemCaseSensitive(env, "night_floor");
+    if (cJSON_IsObject(nfloor)) {
+        d->has_env_night_floor = get_bool(nfloor, "enabled", &d->env_night_floor_enabled);
+        d->has_env_night_floor_brightness =
+            get_float(nfloor, "brightness", &d->env_night_floor_brightness);
+        static const char* const nfloor_known[] = {"enabled", "brightness"};
+        warn_unknown_keys(nfloor, nfloor_known, sizeof(nfloor_known) / sizeof(nfloor_known[0]),
+                          "environment.night_floor");
+    }
+
     /*
      * Report a key nothing above read. Same closed-block reasoning as parse_water, and
      * the same failure it is here for: water_fixture.cscn authored sun_elevation and
@@ -162,7 +174,7 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      * say so -- a --sun-elevation 26 render moves 85% of that frame.
      */
     static const char* const known[] = {"mode",    "hdr", "probe_scene", "intensity",
-                                        "ambient", "sun", "stars"};
+                                        "ambient", "sun", "stars",       "night_floor"};
     warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 

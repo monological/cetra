@@ -755,6 +755,7 @@ typedef struct {
     int no_fog;
     int no_falling_leaves;
     int no_stars; // stars are ON here: this app is the night sky's home
+    int no_night_floor; // the floor is ON here too, for the same reason
     float star_hour; // Milky Way rotation about the pole, degrees
     const char* config_path; // restore a config snapshot (GUI Dump Config writes one)
     int seed;
@@ -829,6 +830,8 @@ static void print_usage(const char* prog) {
     printf("                          the sun drops through civil twilight)\n");
     printf("      --star-hour <deg>   Turn the star field about the celestial pole,\n");
     printf("                          which is what moves the Milky Way band\n");
+    printf("      --no-night-floor    Disable the night-sky floor (the airglow that\n");
+    printf("                          lights the world once the sun sets)\n");
     printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
     printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
@@ -967,6 +970,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_falling_leaves = 1;
         } else if (!strcmp(s, "--no-stars")) {
             a->no_stars = 1;
+        } else if (!strcmp(s, "--no-night-floor")) {
+            a->no_night_floor = 1;
         } else if (!strcmp(s, "--star-hour") && has_next) {
             a->star_hour = (float)atof(argv[++i]);
         } else if ((!strcmp(s, "-c") || !strcmp(s, "--config")) && has_next) {
@@ -1181,6 +1186,7 @@ int main(int argc, char** argv) {
         // ON here where the library defaults off: this app is the ask's home,
         // and its 0.8 degree sun is already inside the fade-in ramp.
         sky->stars_enabled = args.no_stars == 0;
+        sky->night_floor_enabled = args.no_night_floor == 0;
         sky->stars_hour_deg = args.star_hour;
         /*
          * This world's scale, which nothing set until spec 11.44 (the GUI offered a slider

@@ -115,125 +115,128 @@ typedef struct {
     // WaterFoamDebug (water.h), as an int since args structs here don't carry engine
     // headers. The instrument whitecap coverage is measured with; see Water.foam_debug.
     int water_foam_debug;
-    int no_water_surf;          // Bisect lever: no incident wave at the shore
-    int no_water_foam_history;  // Bisect lever: foam from this frame's fold only
-    int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
-    int no_water_lod;           // Bisect lever: full wave detail at any cell footprint
-    int no_water_wetness;       // Bisect lever: the swash wets no material it runs over
-    int no_water_film;          // Bisect lever: the closed-form run-up, with no swash solver
-    int shore_probe;            // Print the CPU twin of the run-up, the film's own drive
-    int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
-    int no_water;               // Drop a water surface a scene file asked for
-    int water_probe;            // Print the CPU wave query over a grid, then continue
-    int water_fft_probe;        // Print the transformed spectrum's measured statistics
-    int wind_bound_probe;       // Print the measured wind displacement beside its cull bound
-    int ies_probe;              // Print every loaded IES profile and a sweep of its angles
-    int emissive_lights;        // Derive an LTC area panel from every emissive mesh
-    int emissive_light_probe;   // Print the area panel every emissive mesh would derive
-    int exposure_probe;         // Print what the meter decided, per metered frame
-    float meter_low;            // Metering low percentile (<0 = leave the default)
-    float meter_high;           // Metering high percentile (<0 = leave the default)
-    int meter_mode;             // MeteringMode override (-1 = leave the default)
-    float meter_radius;         // Spot / centre-weight radius (<0 = leave the default)
-    float adapt_up;             // Per-frame adaptation rate, scene brightening (<0 = default)
-    float adapt_down;           // Per-frame adaptation rate, scene darkening (<0 = default)
-    int gi_rate;                // Probes captured per frame while dirty (0 = default)
-    int gi_debug;               // Blit the probe atlas into the frame corner
-    int sky;                    // Procedural physically-based sky instead of -e
-    int sky_debug;              // Blit the sky LUTs into the frame corner
-    int clouds;                 // Volumetric cloud layer (implies --sky)
-    int no_fog_volumes;         // Drop any fogVolumes[] a scene file authored. The only way
-                                // off, mirroring --no-water: a volume has no CLI counterpart
-                                // to omit, so authoring is the only way on.
-    int no_decals;              // Drop any decals[] a scene file authored. Same rule, same
-                                // reason: authoring is the only way on.
-    int no_cloud_shadows;       // Keep the deck, drop the shadow it casts into the fog. A
-                                // bisect lever rather than a feature: the shadow is on with
-                                // the clouds, because a cloud that casts none is wrong.
-    float cloud_coverage;       // 0..1; negative = keep the engine default
-    float cloud_density;        // extinction scale; negative = default
-    float cloud_wind_kmh;       // drift speed; negative = default (still)
-    float cloud_wind_deg;       // drift direction; negative = default
-    float sun_elevation;        // Sky sun elevation in degrees (-999 = default)
-    float sun_azimuth;          // Sky sun azimuth in degrees (-999 = default)
-    int stars;                  // Night star field: 1 on (implies --sky), 0 off, -1 unset
-                                // (a .cscn environment.stars seeds it; CLI wins)
-    float stars_brightness;     // Star radiance scale (negative = keep the default)
-    float stars_latitude;       // Celestial pole altitude in degrees (-999 = default;
-                                // .cscn-only, no CLI flag)
-    float stars_hour;           // Sky rotation about the pole in degrees (-999 = default;
-                                // .cscn-only, no CLI flag)
-    float world_scale;          // World units per km for the atmosphere (-1 = default)
-    int flip_uv;                // Force the UV V-flip ON (asset baked opposite to format default)
-    int no_unit_scale;          // Skip import unit normalization (raw file units)
-    float import_scale;         // Extra uniform scale on top of unit normalization (1 = none)
-    int no_aerial;              // Disable aerial perspective (on by default with --sky)
-    int sky_rebake_stress;      // Diagnostic: N headless sun re-bakes then restore
-    int fog;                    // Enable volumetric fog
-    float fog_density;          // Extinction override (0 = scene-scaled)
-    float fog_height;           // Height falloff override (0 = scene-scaled)
-    float fog_anisotropy;       // Scatter anisotropy (-999 = keep engine default)
-    float fog_near;             // Volume near (-1 = keep engine default; 0 derives from far)
-    float fog_far;              // Volume far (-1 = keep engine default)
-    float fog_depth_dist;       // Slice bias exponent (-1 = keep engine default)
-    int contact_shadows;        // Enable screen-space contact shadows
-    int contact_shadows_debug;  // Show the raw contact-shadow visibility term
-    float cs_distance;          // March reach override (-1 = scene-scaled)
-    float cs_strength;          // Darkening weight override (-1 = engine default)
-    int albedo_debug;           // Show the resolved albedo G-buffer
-    int no_normals_mrt;         // Disable the normals G-buffer
-    int normals_debug;          // Show the resolved normals G-buffer
-    int no_ssr;                 // Disable screen-space reflections
-    int no_ssr_full_res;        // Trace SSR at half res (the old, serrated path)
-    int no_ssr_temporal;        // Disable SSR temporal accumulation (raw single-frame march)
-    int no_ssr_denoise;         // Disable the SSR denoiser (deterministic march, no jitter)
-    float ssr_jitter;           // SSR stochastic ray-jitter spread override (-1 = default)
-    int ssr_debug;              // Show the reflection buffer
-    float ssr_strength;         // SSR strength override (-1 = default)
-    float specular_aa;          // Specular AA strength override (-1 = default)
-    int no_energy_comp;         // Disable multi-scatter energy compensation
-    int no_refraction;          // Disable screen-space refraction
-    int no_clearcoat;           // Disable the clearcoat second specular lobe
-    int no_specular;            // Disable KHR_materials_specular F0 tint + weight
-    int no_sheen;               // Disable KHR_materials_sheen cloth lobe
-    int no_parallax;            // Disable parallax occlusion mapping (POM)
-    float parallax_scale;       // POM depth override (< 0 = keep engine default)
-    int no_sss;                 // Disable separable subsurface scattering
-    int no_skin_preint;         // Disable pre-integrated skin diffuse (§11.13)
-    float curvature_scale;      // Pre-integration strength override (< 0 = keep the material's)
-    int oit;                    // OIT for blend meshes; -1 unset, 0 off, 1 on (engine default ON)
-    int oit_moments;            // Absorbance-moment weight in the accumulate; same tri-state
-    int no_layers_vt;           // Per-texel blend on every layered material (cache off)
-    int layers_vt_res;          // Composite-cache resolution override; 0 = derived
-    int no_layers_vt_pages;     // Fallback atlas alone -- stage 1 exactly
-    int no_layers_vt_feedback;  // Residency on prediction alone (no vote pass)
-    int layers_vt_page_slots;   // Physical page slots in use; 0 = all
-    int layers_vt_page_budget;  // Page bakes per frame; 0 = default
-    int layers_vt_probe;        // Print page residency every N frames; 0 = off
-    int show_lights;            // Draw light gizmos (position + cull radius)
-    int cluster_heatmap;        // Tint by cluster light count
-    int area_light;             // --area-light given: spawn one LTC panel
-    float area_light_pos[3];    // Panel center (world)
-    float area_light_dir[3];    // Panel normal; it lights the side this points at
-    float area_light_size[2];   // Panel width x height (world units)
-    float area_light_intensity; // Emitted radiance
-    float area_light_color[3];  // Panel tint (default white)
-    int point_light_grid;       // N: spawn an NxN point-light test grid (0 = off)
-    float plg_radius;           // Grid spacing == per-light cull radius
-    float plg_intensity;        // Grid light intensity
-    float sss_radius;           // SSS scatter radius override (< 0 = fixture default)
-    float sss_color[3];         // SSS scatter color override (< 0 in [0] = fixture default)
-    int no_bloom;               // Disable bloom
-    int bloom_enable;           // -1 = keep default; 0/1 force (scene file)
-    float bloom_strength;       // -1 = keep engine default
-    float bloom_threshold;      // -1 = keep engine default
-    float ibl_intensity;        // -1 = keep engine default
-    int no_scene_file;          // Ignore any .cscn (input still allowed, look skipped)
-    int tonemap_mode;           // PostFXTonemapMode override (0 = keep default;
-                                // coincides with PASSTHROUGH, which is a blit
-                                // path and never user-set)
-    int ssaa;                   // Supersampling factor (0 = keep engine default)
-    float render_scale;         // TAAU render-res scale [0.5, 1) (0 = full res)
+    int no_water_surf;            // Bisect lever: no incident wave at the shore
+    int no_water_foam_history;    // Bisect lever: foam from this frame's fold only
+    int no_water_coverage;        // Bisect lever: hard shoreline cutoff, no coverage
+    int no_water_lod;             // Bisect lever: full wave detail at any cell footprint
+    int no_water_wetness;         // Bisect lever: the swash wets no material it runs over
+    int no_water_film;            // Bisect lever: the closed-form run-up, with no swash solver
+    int shore_probe;              // Print the CPU twin of the run-up, the film's own drive
+    int water_bed_dome;           // Install the analytic dome bed provider (shoaling)
+    int no_water;                 // Drop a water surface a scene file asked for
+    int water_probe;              // Print the CPU wave query over a grid, then continue
+    int water_fft_probe;          // Print the transformed spectrum's measured statistics
+    int wind_bound_probe;         // Print the measured wind displacement beside its cull bound
+    int ies_probe;                // Print every loaded IES profile and a sweep of its angles
+    int emissive_lights;          // Derive an LTC area panel from every emissive mesh
+    int emissive_light_probe;     // Print the area panel every emissive mesh would derive
+    int exposure_probe;           // Print what the meter decided, per metered frame
+    float meter_low;              // Metering low percentile (<0 = leave the default)
+    float meter_high;             // Metering high percentile (<0 = leave the default)
+    int meter_mode;               // MeteringMode override (-1 = leave the default)
+    float meter_radius;           // Spot / centre-weight radius (<0 = leave the default)
+    float adapt_up;               // Per-frame adaptation rate, scene brightening (<0 = default)
+    float adapt_down;             // Per-frame adaptation rate, scene darkening (<0 = default)
+    int gi_rate;                  // Probes captured per frame while dirty (0 = default)
+    int gi_debug;                 // Blit the probe atlas into the frame corner
+    int sky;                      // Procedural physically-based sky instead of -e
+    int sky_debug;                // Blit the sky LUTs into the frame corner
+    int clouds;                   // Volumetric cloud layer (implies --sky)
+    int no_fog_volumes;           // Drop any fogVolumes[] a scene file authored. The only way
+                                  // off, mirroring --no-water: a volume has no CLI counterpart
+                                  // to omit, so authoring is the only way on.
+    int no_decals;                // Drop any decals[] a scene file authored. Same rule, same
+                                  // reason: authoring is the only way on.
+    int no_cloud_shadows;         // Keep the deck, drop the shadow it casts into the fog. A
+                                  // bisect lever rather than a feature: the shadow is on with
+                                  // the clouds, because a cloud that casts none is wrong.
+    float cloud_coverage;         // 0..1; negative = keep the engine default
+    float cloud_density;          // extinction scale; negative = default
+    float cloud_wind_kmh;         // drift speed; negative = default (still)
+    float cloud_wind_deg;         // drift direction; negative = default
+    float sun_elevation;          // Sky sun elevation in degrees (-999 = default)
+    float sun_azimuth;            // Sky sun azimuth in degrees (-999 = default)
+    int stars;                    // Night star field: 1 on (implies --sky), 0 off, -1 unset
+                                  // (a .cscn environment.stars seeds it; CLI wins)
+    float stars_brightness;       // Star radiance scale (negative = keep the default)
+    float stars_latitude;         // Celestial pole altitude in degrees (-999 = default;
+                                  // .cscn-only, no CLI flag)
+    float stars_hour;             // Sky rotation about the pole in degrees (-999 = default;
+                                  // .cscn-only, no CLI flag)
+    int night_floor;              // Night-sky floor: 1 on (implies --sky), 0 off, -1 unset
+                                  // (a .cscn environment.night_floor seeds it; CLI wins)
+    float night_floor_brightness; // Floor radiance scale (negative = keep the default)
+    float world_scale;            // World units per km for the atmosphere (-1 = default)
+    int flip_uv;                  // Force the UV V-flip ON (asset baked opposite to format default)
+    int no_unit_scale;            // Skip import unit normalization (raw file units)
+    float import_scale;           // Extra uniform scale on top of unit normalization (1 = none)
+    int no_aerial;                // Disable aerial perspective (on by default with --sky)
+    int sky_rebake_stress;        // Diagnostic: N headless sun re-bakes then restore
+    int fog;                      // Enable volumetric fog
+    float fog_density;            // Extinction override (0 = scene-scaled)
+    float fog_height;             // Height falloff override (0 = scene-scaled)
+    float fog_anisotropy;         // Scatter anisotropy (-999 = keep engine default)
+    float fog_near;               // Volume near (-1 = keep engine default; 0 derives from far)
+    float fog_far;                // Volume far (-1 = keep engine default)
+    float fog_depth_dist;         // Slice bias exponent (-1 = keep engine default)
+    int contact_shadows;          // Enable screen-space contact shadows
+    int contact_shadows_debug;    // Show the raw contact-shadow visibility term
+    float cs_distance;            // March reach override (-1 = scene-scaled)
+    float cs_strength;            // Darkening weight override (-1 = engine default)
+    int albedo_debug;             // Show the resolved albedo G-buffer
+    int no_normals_mrt;           // Disable the normals G-buffer
+    int normals_debug;            // Show the resolved normals G-buffer
+    int no_ssr;                   // Disable screen-space reflections
+    int no_ssr_full_res;          // Trace SSR at half res (the old, serrated path)
+    int no_ssr_temporal;          // Disable SSR temporal accumulation (raw single-frame march)
+    int no_ssr_denoise;           // Disable the SSR denoiser (deterministic march, no jitter)
+    float ssr_jitter;             // SSR stochastic ray-jitter spread override (-1 = default)
+    int ssr_debug;                // Show the reflection buffer
+    float ssr_strength;           // SSR strength override (-1 = default)
+    float specular_aa;            // Specular AA strength override (-1 = default)
+    int no_energy_comp;           // Disable multi-scatter energy compensation
+    int no_refraction;            // Disable screen-space refraction
+    int no_clearcoat;             // Disable the clearcoat second specular lobe
+    int no_specular;              // Disable KHR_materials_specular F0 tint + weight
+    int no_sheen;                 // Disable KHR_materials_sheen cloth lobe
+    int no_parallax;              // Disable parallax occlusion mapping (POM)
+    float parallax_scale;         // POM depth override (< 0 = keep engine default)
+    int no_sss;                   // Disable separable subsurface scattering
+    int no_skin_preint;           // Disable pre-integrated skin diffuse (§11.13)
+    float curvature_scale;        // Pre-integration strength override (< 0 = keep the material's)
+    int oit;                      // OIT for blend meshes; -1 unset, 0 off, 1 on (engine default ON)
+    int oit_moments;              // Absorbance-moment weight in the accumulate; same tri-state
+    int no_layers_vt;             // Per-texel blend on every layered material (cache off)
+    int layers_vt_res;            // Composite-cache resolution override; 0 = derived
+    int no_layers_vt_pages;       // Fallback atlas alone -- stage 1 exactly
+    int no_layers_vt_feedback;    // Residency on prediction alone (no vote pass)
+    int layers_vt_page_slots;     // Physical page slots in use; 0 = all
+    int layers_vt_page_budget;    // Page bakes per frame; 0 = default
+    int layers_vt_probe;          // Print page residency every N frames; 0 = off
+    int show_lights;              // Draw light gizmos (position + cull radius)
+    int cluster_heatmap;          // Tint by cluster light count
+    int area_light;               // --area-light given: spawn one LTC panel
+    float area_light_pos[3];      // Panel center (world)
+    float area_light_dir[3];      // Panel normal; it lights the side this points at
+    float area_light_size[2];     // Panel width x height (world units)
+    float area_light_intensity;   // Emitted radiance
+    float area_light_color[3];    // Panel tint (default white)
+    int point_light_grid;         // N: spawn an NxN point-light test grid (0 = off)
+    float plg_radius;             // Grid spacing == per-light cull radius
+    float plg_intensity;          // Grid light intensity
+    float sss_radius;             // SSS scatter radius override (< 0 = fixture default)
+    float sss_color[3];           // SSS scatter color override (< 0 in [0] = fixture default)
+    int no_bloom;                 // Disable bloom
+    int bloom_enable;             // -1 = keep default; 0/1 force (scene file)
+    float bloom_strength;         // -1 = keep engine default
+    float bloom_threshold;        // -1 = keep engine default
+    float ibl_intensity;          // -1 = keep engine default
+    int no_scene_file;            // Ignore any .cscn (input still allowed, look skipped)
+    int tonemap_mode;             // PostFXTonemapMode override (0 = keep default;
+                                  // coincides with PASSTHROUGH, which is a blit
+                                  // path and never user-set)
+    int ssaa;                     // Supersampling factor (0 = keep engine default)
+    float render_scale;           // TAAU render-res scale [0.5, 1) (0 = full res)
     // Diagnostic render-scale schedule (--render-scale-at): switch to
     // scale_at_value[i] on frame scale_at_frame[i]. Empty on a normal run.
     int scale_at_count;

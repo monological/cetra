@@ -212,6 +212,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "                         once the sun drops through civil twilight)\n");
     fprintf(stderr, "      --no-stars         Drop a star field a scene file asked for\n");
     fprintf(stderr, "      --stars-brightness <f> Star radiance scale (implies --stars)\n");
+    fprintf(stderr, "      --night-floor      Night-sky floor: airglow lighting the world\n");
+    fprintf(stderr, "                         once the sun sets (implies --sky)\n");
+    fprintf(stderr, "      --no-night-floor   Drop a floor a scene file asked for\n");
+    fprintf(stderr, "      --night-floor-brightness <f> Floor radiance scale (implies it)\n");
     fprintf(stderr, "      --cloud-coverage <f> Cloud sky fraction 0..1 (implies --clouds)\n");
     fprintf(stderr, "      --cloud-density <f>  Cloud extinction scale (implies --clouds)\n");
     fprintf(stderr, "      --cloud-wind <kmh[,deg]> Cloud drift (implies --clouds)\n");
@@ -435,6 +439,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->stars_brightness = -1.0f;
     args->stars_latitude = -999.0f;
     args->stars_hour = -999.0f;
+    args->night_floor = -1;
+    args->night_floor_brightness = -1.0f;
     args->cloud_coverage = -1.0f; // -1 = keep the engine default
     args->cloud_density = -1.0f;
     args->cloud_wind_kmh = -1.0f;
@@ -1031,6 +1037,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->stars_brightness = (float)atof(argv[i]);
             args->stars = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--night-floor") == 0) {
+            args->night_floor = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--no-night-floor") == 0) {
+            args->night_floor = 0;
+        } else if (strcmp(argv[i], "--night-floor-brightness") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->night_floor_brightness = (float)atof(argv[i]);
+            args->night_floor = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--no-decals") == 0) {
             args->no_decals = 1;
@@ -2901,6 +2920,10 @@ int main(int argc, char** argv) {
                 sky->stars_latitude_deg = args.stars_latitude;
             if (args.stars_hour > -900.0f)
                 sky->stars_hour_deg = args.stars_hour;
+            if (args.night_floor >= 0)
+                sky->night_floor_enabled = args.night_floor != 0;
+            if (args.night_floor_brightness >= 0.0f)
+                sky->night_floor_brightness = args.night_floor_brightness;
             sky->clouds.enabled = args.clouds != 0;
             if (args.no_cloud_shadows)
                 sky->clouds.shadows_enabled = false;

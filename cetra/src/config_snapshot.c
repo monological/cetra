@@ -322,6 +322,23 @@ static void _apply_sun_angle(ConfigApplyCtx* ctx, void* base, const ConfigField*
 }
 
 /*
+ * The night floor's switch lives in the baked sky-view LUT (spec 11.80), so
+ * it rides the same deferred flags as the angles above -- and sun_moved
+ * specifically, because env_changed alone re-bakes nothing in a session
+ * with no cloud noise. Bool-typed, so it cannot share their float compare;
+ * the brightness row reuses _apply_sun_angle directly.
+ */
+static void _apply_night_floor_enabled(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                                       const double* v, int n) {
+    const bool want = v[0] != 0.0;
+    if (want == *(const bool*)_field_ptr_const(base, f))
+        return;
+    _store_value(f, base, v, n);
+    ctx->sun_moved = true;
+    ctx->env_changed = true;
+}
+
+/*
  * A cloud field, which the env cube, the sky-mirroring probes and the GI volume
  * are all derived from exactly as they are from the sun.
  *
@@ -609,6 +626,11 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "stars_brightness", stars_brightness),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "stars_latitude", stars_latitude_deg),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "stars_hour", stars_hour_deg),
+    // The floor is BAKED (spec 11.80), so both rows defer the sun's re-bake.
+    CFG_ROW_FN(CFG_SKY, CFG_BOOL, "sky", "night_floor", night_floor_enabled,
+               _apply_night_floor_enabled),
+    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "night_floor_brightness", night_floor_brightness,
+               _apply_sun_angle),
     CFG_ROW_FN(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled, _apply_cloud_enabled),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage, _apply_cloud_field),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type, _apply_cloud_field),

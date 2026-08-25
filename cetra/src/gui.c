@@ -530,6 +530,15 @@ static void _engine_gui_panel(Engine* engine) {
             // Stars are sampled live like the disc; no re-bake on any of it.
             igCheckbox("Stars", &sky->stars_enabled);
             igSliderFloat("Star Brightness", &sky->stars_brightness, 0.0f, 4.0f, "%.2f", 0);
+            // The floor lives in the baked LUT (spec 11.80), so its edits
+            // ride the sun's own re-bake chain -- the established price of
+            // touching baked sky state.
+            bool floor_toggled = igCheckbox("Night Floor", &sky->night_floor_enabled);
+            sun_moved |= floor_toggled;
+            sun_released |= floor_toggled;
+            sun_moved |= igSliderFloat("Floor Brightness", &sky->night_floor_brightness,
+                                       0.0f, 4.0f, "%.2f", 0);
+            sun_released |= igIsItemDeactivatedAfterEdit();
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
             if (sun_released)

@@ -411,6 +411,10 @@ typedef struct CetraSceneDesc {
     float env_stars_latitude_deg;
     bool has_env_stars_hour;
     float env_stars_hour_deg;
+    bool has_env_night_floor; // the "enabled" key specifically was authored (spec 11.80)
+    bool env_night_floor_enabled;
+    bool has_env_night_floor_brightness;
+    float env_night_floor_brightness;
 
     CSceneLight lights[CSCENE_MAX_LIGHTS];
     int light_count;
