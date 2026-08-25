@@ -5915,25 +5915,26 @@ def _moon_disc_field(on_path, off_path, cam, disc_deg, m_el, m_az):
 
 
 def _moon_probe(scene, m_el, m_az, s_el, s_az):
-    """Run --moon-probe at one configuration and return its printed numbers.
+    """The `phase` row of --moon-probe at one configuration, as floats.
 
-    A raw read, and the only one in the group -- it is arithmetic rather than radiance,
-    and it is the whole reason the arm can hold a closed form exactly where a pixel arm
-    can only hold a direction.
+    Through _probe_render like every other probe in the tree. The first draft hand-rolled
+    a positional parser and was wrong twice over: the `dir` triple desynced the pairing so
+    a FLOAT became a dict key, and dropping the tag let the sun row's el/az overwrite the
+    body row's. It passed only because the arm reads four keys that neither bug reached.
     """
-    cmd = [RENDER, "-m", scene, "-x", "-f", "2", "-W", "200", "-H", "150",
-           "--sky", "--moon", "--moon-probe",
-           "--sun-elevation", f"{s_el}", "--sun-azimuth", f"{s_az:.6f}",
-           "--moon-elevation", f"{m_el}", "--moon-azimuth", f"{m_az}"] + STARS_PIN
-    r = _run(cmd, capture_output=True, text=True)
+    rows, _ = _probe_render(scene, "--moon-probe", "moon-probe", frames=2,
+                            extra=["--sky", "--moon",
+                                   "--sun-elevation", f"{s_el:.6f}",
+                                   "--sun-azimuth", f"{s_az:.6f}",
+                                   "--moon-elevation", f"{m_el}",
+                                   "--moon-azimuth", f"{m_az}"] + STARS_PIN)
     got = {}
-    for line in (r.stdout + r.stderr).splitlines():
-        if not line.startswith("moon-probe "):
-            continue
-        parts = line.split()[2:]
-        for i in range(0, len(parts) - 1, 2):
+    for rec in rows:
+        for k, v in rec.items():
+            if k == "kind":
+                continue
             try:
-                got[parts[i]] = float(parts[i + 1])
+                got[k] = float(v)
             except ValueError:
                 pass
     return got
@@ -6190,16 +6191,18 @@ def run_moon_gate(workdir):
         failures.append("moon-terminator")
 
     # --- moon-maria: textured, and locked to the FACE -----------------------
-    maria_common = disc_common
-    m_flat, ef = _moon_render(workdir, "maria_flat", maria_common + ["--no-moon-maria"])
+    maria_err = None
+    m_flat, ef = _moon_render(workdir, "maria_flat", disc_common + ["--no-moon-maria"])
     if ef:
         print(f"  moon-maria ERROR render failed: {ef.strip()[-200:]}")
         failures.append("moon-maria")
     else:
         w, h, a = _read_ppm(d_on)
         _, _, b = _read_ppm(m_flat)
-        rad2, ccx2, ccy2, _, _, _ = _moon_disc_field(
-            d_on, d_off, cam, float(MOON_DISC_BIG), MOON_EL_HIGH, MOON_AZ)
+        # The same geometry moon-disc already derived from the same arguments --
+        # it is a pure projection, so re-running the scan to recover it cost two
+        # PPM decodes and a 79k-pixel walk for three numbers still in scope.
+        rad2, ccx2, ccy2 = radius, cx, cy
         vals = []
         for y in range(max(0, int(ccy2 - rad2)), min(h, int(ccy2 + rad2) + 1)):
             for x in range(max(0, int(ccx2 - rad2)), min(w, int(ccx2 + rad2) + 1)):
@@ -6233,9 +6236,12 @@ def run_moon_gate(workdir):
             r_common = ["--sun-elevation", f"{r_el:.6f}", "--sun-azimuth", f"{r_az:.6f}",
                         "--moon-elevation", f"{MOON_EL_HIGH}", "--moon-azimuth", f"{MOON_AZ}",
                         "--sky-disc", MOON_DISC_BIG] + cam_argv + MOON_DISC_FLAGS
-            r_on, _ = _moon_render(workdir, f"maria_r{int(roll)}_on", r_common)
-            r_off, _ = _moon_render(workdir, f"maria_r{int(roll)}_off",
-                                    r_common + ["--no-moon-maria"])
+            r_on, er1 = _moon_render(workdir, f"maria_r{int(roll)}_on", r_common)
+            r_off, er2 = _moon_render(workdir, f"maria_r{int(roll)}_off",
+                                      r_common + ["--no-moon-maria"])
+            if er1 or er2:
+                maria_err = (er1 or er2).strip()[-160:]
+                break
             _, _, ra = _read_ppm(r_on)
             _, _, rb = _read_ppm(r_off)
             cur = {}
@@ -6259,14 +6265,16 @@ def run_moon_gate(workdir):
         # story, and what this leg claims is about the whole pattern.
         drift = (sum(abs(alb[0.0][k] - alb[90.0][k]) for k in both) / len(both)) \
             if both else float("nan")
-        ok = moved >= 200 and sigma > 0.0 and (sigma / max(abs(mean), 1e-6)) >= 0.25 and \
+        ok = maria_err is None and moved >= 200 and sigma > 0.0 and \
+            (sigma / max(abs(mean), 1e-6)) >= 0.25 and \
             len(both) >= 500 and drift <= MOON_MARIA_DRIFT_MAX
         print(f"  moon-maria {'PASS' if ok else 'FAIL'}  {moved} px of the lit face carry "
               f"maria (want >=200), sigma/|mean| {sigma / max(abs(mean), 1e-6):.2f} "
               f"(want >=0.25: a flat tint reads 0), and the pattern drifts {drift:.3f} "
               f"across two sun rolls over {len(both)} shared px "
               f"(want <={MOON_MARIA_DRIFT_MAX}: locked to "
-              f"the FACE, not the sun)")
+              f"the FACE, not the sun)"
+              f"{(' -- ' + maria_err) if maria_err else ''}")
         if not ok:
             failures.append("moon-maria")
 
@@ -6313,12 +6321,16 @@ def run_moon_gate(workdir):
             break
         rgb, moved = _stars_delta(on, off, NIGHTFLOOR_GROUND_BAND)
         light_rows.append((elong, sum(rgb) / 3.0, moved))
-    ratio = (light_rows[0][1] / light_rows[1][1]) if len(light_rows) == 2 and \
-        light_rows[1][1] > 0 else 0.0
-    ok = light_err is None and len(light_rows) == 2 and light_rows[0][1] > 0 and \
+    # Bound before the print, not inside it: the ok test short-circuits safely on a
+    # failed leg and the format string does not, so this used to be a traceback --
+    # and main() has no per-group try, so it took the whole suite with it.
+    full = light_rows[0][1] if len(light_rows) > 0 else float("nan")
+    quarter = light_rows[1][1] if len(light_rows) > 1 else float("nan")
+    ratio = (full / quarter) if len(light_rows) == 2 and quarter > 0 else 0.0
+    ok = light_err is None and len(light_rows) == 2 and full > 0 and \
         ratio >= MOON_KS_RATIO_MIN
-    print(f"  moon-light {'PASS' if ok else 'FAIL'}  terrain lift full {light_rows[0][1]:.5f} "
-          f"vs quarter {light_rows[1][1] if len(light_rows) > 1 else float('nan'):.5f} = "
+    print(f"  moon-light {'PASS' if ok else 'FAIL'}  terrain lift full {full:.5f} "
+          f"vs quarter {quarter:.5f} = "
           f"{ratio:.2f}x (want >={MOON_KS_RATIO_MIN}, predicted 10.99; an ambient lift "
           f"reads 1.00){(' -- ' + light_err) if light_err else ''}")
     if not ok:
@@ -6506,11 +6518,21 @@ def run_moon_gate(workdir):
              "--moon-azimuth", f"{MOON_AZ}", "--night-floor", "--no-shadows"] + STARS_PIN
     c_a = os.path.join(workdir, "moon_cfg_a.ppm")
     c_b = os.path.join(workdir, "moon_cfg_b.ppm")
-    e9 = render(cfg_src, c_a, tuned + ["--config-dump", dump])
-    cfg = {}
-    if not e9 and os.path.exists(dump):
+    # A SECOND dump, from a run that asked for no moon at all. Without it the
+    # "off by default" half of this arm was decoration: `tuned` passes --moon, so
+    # sky.moon is true in that snapshot, and asserting the key is PRESENT says
+    # nothing about the default. That is the vacuity this group's own docstring
+    # cites 11.81 about, committed here.
+    bare = os.path.join(workdir, "moon_config_bare.json")
+    c_c = os.path.join(workdir, "moon_cfg_bare.ppm")
+    e9 = render(cfg_src, c_a, tuned + ["--config-dump", dump]) or \
+        render(cfg_src, c_c, ["--sky", "--config-dump", bare] + STARS_PIN)
+    cfg, cfg_bare = {}, {}
+    if not e9 and os.path.exists(dump) and os.path.exists(bare):
         with open(dump) as fh:
             cfg = json.load(fh)
+        with open(bare) as fh:
+            cfg_bare = json.load(fh)
         e9 = render(cfg_src, c_b, ["--config", dump])
     if e9 or not cfg:
         print(f"  moon-config ERROR {(e9 or 'no snapshot written').strip()[-200:]}")
@@ -6520,22 +6542,27 @@ def run_moon_gate(workdir):
         px, _ = compare(c_a, c_b)
         has = all(k in sky_rows for k in
                   ("moon", "moon_brightness", "moon_elevation", "moon_azimuth",
-                   "cycle_moon_offset"))
+                   "cycle_moon_offset", "moon_earthshine", "moon_maria"))
+        default_off = cfg_bare.get("sky", {}).get("moon") is False
         disc = sky_rows.get("sun_disc")
-        ok = px == 0 and has and disc is not None and abs(disc - 0.53) < 1e-6
-        print(f"  moon-config {'PASS' if ok else 'FAIL'}  restored {px} px (want 0), five "
-              f"moon rows carried={has}, shipping disc {disc} (want 0.53 exactly)")
+        want_disc = float(MOON_DISC_SHIPPING)
+        ok = px == 0 and has and default_off and disc is not None and \
+            abs(disc - want_disc) < 1e-6
+        print(f"  moon-config {'PASS' if ok else 'FAIL'}  restored {px} px (want 0), seven "
+              f"moon rows carried={has}, a no-moon session dumps moon false={default_off}, "
+              f"shipping disc {disc} (want {want_disc} exactly)")
         if not ok:
             failures.append("moon-config")
 
     # --- moon-det: two runs of the heaviest configuration --------------------
-    det_a, ea2 = _moon_render(workdir, "det_a", disc_common)
+    # d_on is already one run of exactly disc_common, so this is the second --
+    # the stars-det shape, and one process back.
     det_b, eb2 = _moon_render(workdir, "det_b", disc_common)
-    if ea2 or eb2:
-        print(f"  moon-det ERROR render failed: {(ea2 or eb2).strip()[-200:]}")
+    if eb2:
+        print(f"  moon-det ERROR render failed: {eb2.strip()[-200:]}")
         failures.append("moon-det")
     else:
-        px, _ = compare(det_a, det_b)
+        px, _ = compare(d_on, det_b)
         ok = px == 0
         print(f"  moon-det {'PASS' if ok else 'FAIL'}  {px} px between two runs (want 0: "
               f"the maria are the group's only new hash)")
@@ -13006,15 +13033,22 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "sky.stars_hour": "advanced in lock-step with the sun while the cycle runs",
     "lights[sky_sun].intensity": "sky_apply_sun_to_light rewrites the coupled key light every "
                                  "tick while the cycle runs",
-    # The moon's three, same cause and one step further: the cycle derives its
-    # angles from cycle_hour MINUS the lag, and advances the lag itself at the
-    # synodic rate. So all three are the tick's while the clock runs, exactly
-    # as the sun's two above are. Note there is no lights[sky_moon] entry --
-    # this fixture authors no moon, so no moon light exists to perturb, and
-    # gates.py fails on a STALE exception as loudly as on a missing one.
+    # The moon's, same cause and one step further: the cycle derives its angles
+    # from cycle_hour MINUS the lag, and advances the lag itself at the synodic
+    # rate. So all three are the tick's while the clock runs, exactly as the
+    # sun's two above are -- and lights[sky_moon].intensity joins them for the
+    # sun light's reason, since the sky rewrites its coupled lights every tick.
+    #
+    # That last entry is here because the moon light is created UNCONDITIONALLY
+    # on any sky scene. It was gated on moon_enabled for one commit, and this
+    # comment then said no such light existed to perturb -- which was true when
+    # written and false the moment the gating came off. The suite caught it as
+    # a DROPPED value; the comment could not catch itself.
     "sky.moon_elevation": "derived from cycle_hour and the lag by the tick while the cycle runs",
     "sky.moon_azimuth": "derived from cycle_hour and the lag by the tick while the cycle runs",
     "sky.cycle_moon_offset": "the tick advances the lag at the synodic rate while the cycle runs",
+    "lights[sky_moon].intensity": "sky_update_moon rewrites the coupled moon light every "
+                                  "frame, cycle or not",
 }
 
 

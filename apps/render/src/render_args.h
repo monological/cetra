@@ -181,6 +181,11 @@ typedef struct {
                                   // bake with no hour arithmetic in it (-1 = never)
     int moon;                     // The moon: 1 on (implies --sky), 0 off, -1 unset
                                   // (a .cscn environment.moon seeds it; CLI wins)
+    int no_moon;                  // --no-moon, STICKY and applied last. The value flags
+                                  // (--moon-elevation and friends) each arm the feature,
+                                  // so a plain `moon = 0` is order-dependent: --no-moon
+                                  // --moon-elevation 30 would render a moon. The
+                                  // --no-day-cycle shape, for the same reason
     float moon_brightness;        // Moon radiance scale, disc AND light (negative = default)
     float moon_elevation;         // Degrees (-999 = default). Owned by the cycle while it runs
     float moon_azimuth;           // Degrees (-999 = default). Owned by the cycle while it runs

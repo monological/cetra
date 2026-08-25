@@ -245,7 +245,7 @@ typedef struct ShadowSystem {
     GLuint msm_quad_vao;
     GLuint msm_quad_vbo;
     ShaderProgram* msm_program;
-    int msm_allocated_layers; // Layer capacity built; a count change rebuilds
+    int msm_allocated_layers; // Layer capacity built; GROWS only, never shrinks
     int msm_allocated_size;   // Edge built at; a size change rebuilds
     bool msm_enabled;         // true = sample moments; PCSS cannot run alongside
     // Whether the resolve actually produced an array THIS frame. The bind reads

@@ -248,6 +248,18 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
             continue;
 
         if (light->type == LIGHT_DIRECTIONAL) {
+            // A directional delivering nothing costs a full trip of pbr_frag's
+            // per-light body on EVERY fragment -- it has no distance to cull
+            // against and no attenuation early-out, unlike the clustered types
+            // whose `radius == 0` skip is a dozen lines down. Dropping it here
+            // is exactly that rule applied to the one type that was missing it.
+            //
+            // Not a moon-shaped special case: the SUN's intensity is an exact
+            // zero below the horizon, so every night frame in the corpus has
+            // always shaded a dead directional. An exact 0 px identity either
+            // way -- every term in the loop scales by the radiance.
+            if (light->intensity <= 0.0f)
+                continue;
             if (num_dir >= LC_MAX_DIR_LIGHTS) {
                 if (!ctx->warned_dir_overflow) {
                     log_warn("More than %d directional lights; extras ignored", LC_MAX_DIR_LIGHTS);

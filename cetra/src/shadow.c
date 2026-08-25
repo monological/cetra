@@ -954,12 +954,16 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
     // filter's ping target, and the default blur is 0, so allocating it eagerly
     // was doubling the feature's resting cost for a texture no draw touches.
     const bool want_scratch = ss->msm_blur > 0.0f;
-    // GROW-ONLY on the layer count, which is the depth array's own policy 400
-    // lines down ("a larger array serves any smaller count, so shrinking never
-    // reallocates") and was not this one's. It matters now because the caster
-    // count OSCILLATES: each sky body clears cast_shadows as it sets, so a
-    // running day/night cycle walked this 1 -> 2 -> 1 twice a day and freed and
-    // rebuilt a 24-48 MB RGBA16F array every time.
+    // GROW-ONLY on the layer count. It matters because the caster count
+    // OSCILLATES: each sky body clears cast_shadows as it sets, so a running
+    // day/night cycle walks this 1 -> 2 -> 1 twice a day and was freeing and
+    // rebuilding a 24-48 MB RGBA16F array every time.
+    //
+    // The depth array is NOT the precedent, though it looks like one: it is
+    // sized by MAX_SHADOW_LIGHTS, the compile-time ceiling, so no per-frame
+    // value reaches it and it has no shrink to refuse. This is the only
+    // allocation in the file keyed on a count that varies per frame, which is
+    // why it is the only one that needed the rule.
     //
     // Surplus layers are inert, not merely unused: the resolve loop below runs
     // to `layers`, and the shader bounds its reads by numShadowLights, which is
@@ -973,17 +977,28 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
         const bool resized = ss->msm_allocated_layers < layers || ss->msm_allocated_size != size;
         if (resized)
             free_msm_arrays(ss);
+        // The HIGH-WATER MARK, not the live count, and it is what makes the
+        // grow-only test above honest. The block is also entered on the
+        // scratch clause -- switching a blur on mid-run -- which can happen
+        // while the count is BELOW what the array already holds. Allocating
+        // and recording the live count there would size the scratch smaller
+        // than its array and write the capacity down, so the next crossing
+        // would take the grow branch and perform exactly the free-and-rebuild
+        // this test exists to delete.
+        const int want_layers =
+            layers > ss->msm_allocated_layers ? layers : ss->msm_allocated_layers;
         if (!ss->msm_array)
-            ss->msm_array = create_texture_2d_array_float(size, size, layers, GL_RGBA16F, GL_RGBA);
+            ss->msm_array =
+                create_texture_2d_array_float(size, size, want_layers, GL_RGBA16F, GL_RGBA);
         if (want_scratch && !ss->msm_scratch)
             ss->msm_scratch =
-                create_texture_2d_array_float(size, size, layers, GL_RGBA16F, GL_RGBA);
+                create_texture_2d_array_float(size, size, want_layers, GL_RGBA16F, GL_RGBA);
         if (!ss->msm_array || (want_scratch && !ss->msm_scratch)) {
             log_error("Failed to allocate moment shadow cascades");
             free_msm_arrays(ss);
             return false;
         }
-        ss->msm_allocated_layers = layers;
+        ss->msm_allocated_layers = want_layers;
         ss->msm_allocated_size = size;
         // What is actually resident, not what a blurred configuration would
         // cost, and stated as the amount --msm adds ON TOP of the depth cascades.

@@ -1105,7 +1105,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->moon = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--no-moon") == 0) {
-            args->moon = 0;
+            args->no_moon = 1;
         } else if (strcmp(argv[i], "--moon-brightness") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -3044,13 +3044,10 @@ int main(int argc, char** argv) {
                             "Note: --time-of-day overrides --sun-elevation/--sun-azimuth\n");
                 sky->cycle_hour = (double)args.time_of_day;
             }
-            // Seed whenever the cycle is armed, not only when an hour was
-            // given: otherwise `--day-cycle 0` -- which reads as "arm it,
-            // frozen, change nothing" -- lets the first tick derive from the
-            // default hour and teleport the sun. Seeding here rather than in
-            // the tick is what makes frame 0 already correct.
-            if (args.moon >= 0)
-                sky->moon_enabled = args.moon != 0;
+            // --no-moon wins wherever it appeared, so it cannot be undone by a
+            // value flag that arms the feature as a side effect.
+            if (args.moon >= 0 || args.no_moon)
+                sky->moon_enabled = args.moon > 0 && !args.no_moon;
             if (args.moon_brightness >= 0.0f)
                 sky->moon_brightness = args.moon_brightness;
             if (args.moon_elevation > -900.0f)
@@ -3140,13 +3137,10 @@ int main(int argc, char** argv) {
                  * reproduce. The GUI checkbox has the same problem for the
                  * same reason.
                  *
-                 * It costs nothing when disabled, and that is structural
-                 * rather than hopeful. sky_apply_moon_to_light gives a
-                 * disabled moon intensity 0 and cast_shadows false; the
-                 * classification pass skips non-casting lights BEFORE it
-                 * counts directionals (shadow.c), so the caster count and
-                 * every cascade layer are untouched, and the cluster's extra
-                 * entry contributes radiance x 0 x NdotL.
+                 * A disabled moon has intensity 0 and casts nothing, so it
+                 * neither lights nor shadows -- and the cluster now drops a
+                 * zero-intensity directional before packing it, so it does not
+                 * shade either.
                  *
                  * Inside the --no-key-light guard because that flag means "no
                  * analytic lights", and the moon is one.
@@ -3156,7 +3150,7 @@ int main(int argc, char** argv) {
                     set_light_name(moon, "sky_moon");
                     set_light_type(moon, LIGHT_DIRECTIONAL);
                     sky->moon_light = moon;
-                    sky_apply_moon_to_light(sky);
+                    sky_update_moon(sky);
                     add_light_to_scene(scene, moon);
                     SceneNode* moon_node = create_node();
                     set_node_light(moon_node, moon);
@@ -4081,11 +4075,11 @@ int main(int argc, char** argv) {
         float dot = glm_vec3_dot((float*)s->moon_dir, (float*)s->sun_dir);
         float elong = glm_deg(acosf(glm_clamp(dot, -1.0f, 1.0f)));
         float alpha = 180.0f - elong;
-        printf("moon-probe body el %.6f az %.6f dir %.6f %.6f %.6f\n", s->moon_elevation_deg,
+        printf("moon-probe body el=%.6f az=%.6f dir=%.6f,%.6f,%.6f\n", s->moon_elevation_deg,
                s->moon_azimuth_deg, s->moon_dir[0], s->moon_dir[1], s->moon_dir[2]);
-        printf("moon-probe sun el %.6f az %.6f elongation %.6f alpha %.6f\n",
+        printf("moon-probe sun el=%.6f az=%.6f elongation=%.6f alpha=%.6f\n",
                s->sun_elevation_deg, s->sun_azimuth_deg, elong, alpha);
-        printf("moon-probe phase lit %.6f ks %.6f intensity %.6f\n", sky_moon_lit_fraction(s),
+        printf("moon-probe phase lit=%.6f ks=%.6f intensity=%.6f\n", sky_moon_lit_fraction(s),
                sky_moon_phase_factor(s), s->moon_light ? s->moon_light->intensity : 0.0f);
     }
 

@@ -1292,7 +1292,7 @@ int main(int argc, char** argv) {
             set_light_type(moon_light, LIGHT_DIRECTIONAL);
             set_light_size(moon_light, 6.0f, 6.0f);
             sky->moon_light = moon_light;
-            sky_apply_moon_to_light(sky); // owns cast_shadows: on iff it is lighting
+            sky_update_moon(sky); // owns direction, tint, intensity and cast_shadows
             add_light_to_scene(scene, moon_light);
 
             SceneNode* moon_node = create_node();

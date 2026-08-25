@@ -661,6 +661,14 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_elevation", moon_elevation_deg),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_azimuth", moon_azimuth_deg),
     CFG_ROW(CFG_SKY, CFG_DOUBLE, "sky", "cycle_moon_offset", cycle_moon_offset),
+    // The two bisect levers are SETTINGS, carried for the reason water's three
+    // identical-in-kind ones are (see caustics/glitter/shore_coverage below):
+    // a session run with either one off would otherwise dump a snapshot that
+    // silently restores it on. Silent by construction, too -- config-perturb
+    // enumerates this table, so a field never added here is not merely
+    // uncovered by the arm that finds uncovered fields, it is unreachable.
+    CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "moon_earthshine", moon_earthshine),
+    CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "moon_maria", moon_maria),
     CFG_ROW_FN(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled, _apply_cloud_enabled),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage, _apply_cloud_field),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type, _apply_cloud_field),

@@ -369,12 +369,6 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
 // shared by the app's setup and the GUI's live re-bake.
 void sky_apply_sun_to_light(SkyAtmosphere* sky);
 
-// Apply the current moon to the coupled second directional (sky->moon_light),
-// the sun's policy above with the phase folded in. No-op when no light is
-// coupled. Reached through sky_update_moon rather than called directly, so no
-// site that moves the sun can forget that the moon's brightness depends on it.
-void sky_apply_moon_to_light(SkyAtmosphere* sky);
-
 // The moon's brightness as a fraction of a full moon's, from the current sun
 // and moon directions. 1 at full, ~0.09 at quarter, ~0 at new -- a real moon
 // is NOT a Lambertian sphere, and this is the whole visual signature.

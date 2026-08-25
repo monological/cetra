@@ -45,11 +45,18 @@ const vec3 MOON_TINT = vec3(1.00, 0.98, 0.95);
 //           flow is undefined in GLSL 330)
 vec3 moonDisc(float edge, vec3 dir, vec3 moonDir, vec3 sunDir, float cosRadius, float pixel,
               float earthshine, float maria) {
-    // Normalised disc radius. s = sin(theta)/sin(R) exactly; 1 - edge equals
-    // that to a few parts per million at a half-degree disc, so the sun's own
-    // `edge` IS the disc coordinate and no second trig call is needed.
+    // The disc coordinate, from the sun block's own `edge` rather than a
+    // second trig call: s is the normalised radius and nz the eye-facing
+    // component, and since s^2 = 1 - edge exactly, nz is just sqrt(edge).
+    //
+    // The approximation this rests on -- that 1 - edge stands in for
+    // sin^2(theta)/sin^2(R) -- is a few parts per million at the shipping
+    // half-degree disc, but the gate arms drive it to 40 degrees where it is
+    // off by ~1.5% near centre. Harmless for the look at any real size, and
+    // named here because that residual shows up in moon-lit's ladder rather
+    // than being a defect in the phase geometry.
     float s = sqrt(max(1.0 - edge, 0.0));
-    float nz = sqrt(max(1.0 - s * s, 0.0));
+    float nz = sqrt(max(edge, 0.0));
 
     // Disc-local axes. "Up" is world up projected into the disc plane, so the
     // face keeps a fixed orientation as the moon crosses the sky -- what a
@@ -92,8 +99,8 @@ vec3 moonDisc(float edge, vec3 dir, vec3 moonDir, vec3 sunDir, float cosRadius, 
         mix(1.0, mix(MOON_MARIA_ALBEDO, 1.0, smoothstep(MOON_MARIA_LOW, MOON_MARIA_HIGH, m)),
             maria);
 
-    // Mild rim darkening on the already-computed edge.
-    float limb = MOON_LIMB + (1.0 - MOON_LIMB) * sqrt(max(edge, 0.0));
+    // Mild rim darkening, on the eye-facing component already in hand.
+    float limb = MOON_LIMB + (1.0 - MOON_LIMB) * nz;
 
     vec3 tint = mix(MOON_EARTHSHINE_TINT, MOON_TINT, lit);
     return tint * (albedo * limb * mix(MOON_EARTHSHINE * earthshine, 1.0, lit));

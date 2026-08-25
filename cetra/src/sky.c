@@ -240,15 +240,23 @@ static void sky_medium_at(float h, float scatter[3], float extinction[3]) {
 
 static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out);
 
+// Elevation/azimuth to a unit vector, azimuth 0 = +Z increasing toward +X.
+// Extracted for sky_horizon_fade's reason: the convention is a policy both sky
+// bodies must share, and a second copy is where a body ends up in a mirrored
+// sky that still looks like a sky.
+static void sky_dir_from_angles(float elevation_deg, float azimuth_deg, vec3 out) {
+    const float el = glm_rad(elevation_deg);
+    const float az = glm_rad(azimuth_deg);
+    out[0] = cosf(el) * sinf(az);
+    out[1] = sinf(el);
+    out[2] = cosf(el) * cosf(az);
+}
+
 void sky_update_sun_dir(SkyAtmosphere* sky) {
     if (!sky)
         return;
 
-    float el = glm_rad(sky->sun_elevation_deg);
-    float az = glm_rad(sky->sun_azimuth_deg);
-    sky->sun_dir[0] = cosf(el) * sinf(az);
-    sky->sun_dir[1] = sinf(el);
-    sky->sun_dir[2] = cosf(el) * cosf(az);
+    sky_dir_from_angles(sky->sun_elevation_deg, sky->sun_azimuth_deg, sky->sun_dir);
 
     // Both CPU marches below depend on nothing but sun_dir, and this is its
     // single mutation point -- so they run here, once per sun move, rather than
@@ -848,25 +856,53 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
     return sky_bake_ex(sky, ibl, engine, false);
 }
 
-void sky_apply_sun_to_light(SkyAtmosphere* sky) {
-    if (!sky || !sky->sun_light)
+/*
+ * How a sky body becomes a light, stated once.
+ *
+ * Direction: the light travels away from the body. Colour: atmospheric
+ * transmittance along the body's own air column, so both redden at the horizon
+ * for one reason and through one march. Intensity: the base scaled by the
+ * shared horizon fade and by whatever else the body brings. Shadows: on iff it
+ * is delivering light.
+ *
+ * ONE function rather than two near-twins, and the reason is the last line.
+ * The cast test has to be the intensity the line above it just set -- written
+ * twice, the moon's copy dropped moon_brightness and a moon dialled to zero
+ * still claimed a cascade slot, which costs a full scene traversal per cascade
+ * every frame because the caster count never consults intensity. Sharing the
+ * body is what makes that unwritable rather than merely fixed.
+ *
+ * The threshold is not zero. A body's own factors can be tiny without being
+ * zero -- the phase law bottoms out at 2.8e-4 rather than 0, so a NEW moon
+ * would otherwise cast all night at 19 stops under the sun. A thousandth of
+ * the base is below anything a frame can show and far above where the law
+ * flattens.
+ */
+#define SKY_LIGHT_CAST_FLOOR 1e-3f
+
+static void sky_apply_body_to_light(struct Light* light, const vec3 dir, float elevation_deg,
+                                    float base, float scale) {
+    if (!light)
         return;
 
-    // Direction: the light travels away from the sun. Color: atmospheric
-    // transmittance toward the disc (warm near the horizon). Intensity: the
-    // base scaled by a fade that reaches zero as the disc sinks below the
-    // horizon, so a night sky casts no direct light (and no shadow).
     vec3 travel;
-    glm_vec3_negate_to(sky->sun_dir, travel);
-    set_light_direction(sky->sun_light, travel);
+    glm_vec3_negate_to((float*)dir, travel);
+    set_light_direction(light, travel);
 
     vec3 color = {0};
-    sky_sun_transmittance(sky, color);
-    set_light_color(sky->sun_light, color);
+    sky_transmittance_at(dir[1], color);
+    set_light_color(light, color);
 
-    float fade = sky_horizon_fade(sky->sun_elevation_deg);
-    set_light_intensity(sky->sun_light, sky->sun_base_intensity * fade);
-    set_light_cast_shadows(sky->sun_light, fade > 0.0f);
+    const float intensity = base * sky_horizon_fade(elevation_deg) * scale;
+    set_light_intensity(light, intensity);
+    set_light_cast_shadows(light, intensity > base * SKY_LIGHT_CAST_FLOOR);
+}
+
+void sky_apply_sun_to_light(SkyAtmosphere* sky) {
+    if (!sky)
+        return;
+    sky_apply_body_to_light(sky->sun_light, sky->sun_dir, sky->sun_elevation_deg,
+                            sky->sun_base_intensity, 1.0f);
 }
 
 /*
@@ -912,53 +948,36 @@ float sky_moon_lit_fraction(const SkyAtmosphere* sky) {
     return 0.5f * (1.0f + sky_moon_cos_phase(sky));
 }
 
-void sky_apply_moon_to_light(SkyAtmosphere* sky) {
-    if (!sky || !sky->moon_light)
-        return;
+/*
+ * The moon's scale on the shared body policy above. Everything here is a
+ * RATIO except one: the transmittance, the phase law and the night ramp are
+ * all dimensionless, and SKY_MOON_LIGHT_FRACTION is the LEVEL -- a look
+ * constant for the night floor's reason, since nothing lifts a dim world and
+ * this number IS the moonlight. The physical ratio is 0.25 lux against
+ * ~120,000, nineteen stops, which renders black.
+ *
+ * sky_night_factor is what keeps a daytime moon from adding a second key
+ * light to a sunlit frame, and it BOUNDS the two-caster window by
+ * construction: an exact zero above +3 degrees, so above that the moon cannot
+ * cast and the daylight caster count is what it always was.
+ */
+static float sky_moon_light_scale(const SkyAtmosphere* sky) {
+    if (!sky->moon_enabled)
+        return 0.0f;
+    return SKY_MOON_LIGHT_FRACTION * sky->moon_brightness * sky_moon_phase_factor(sky) *
+           sky_night_factor(sky);
+}
 
-    vec3 travel;
-    glm_vec3_negate_to(sky->moon_dir, travel);
-    set_light_direction(sky->moon_light, travel);
-
-    // The same column of air the sun's tint comes from, at the moon's own
-    // elevation: moonlight IS sunlight, so it reddens at the horizon for
-    // exactly the sun's reason.
-    vec3 color = {0};
-    sky_transmittance_at(sky->moon_dir[1], color);
-    set_light_color(sky->moon_light, color);
-
-    /*
-     * Four factors, and THREE of them are physical. The transmittance above,
-     * the phase law and the horizon fade are all ratios;
-     * SKY_MOON_LIGHT_FRACTION is the LEVEL, and it is a look constant for the
-     * reason the night floor's radiance carries a paragraph about: nothing
-     * lifts a dim world here, so this number IS the moonlight. The physical
-     * ratio is 0.25 lux against ~120,000 = 2.1e-6, nineteen stops, which
-     * renders black.
-     *
-     * sky_night_factor is the fourth, and it is what keeps a daytime moon
-     * from adding a second key light to a sunlit frame. It also BOUNDS the
-     * two-caster window by construction: it is an exact zero above +3
-     * degrees, so above that the moon never casts and the daylight caster
-     * count is what it always was.
-     */
-    float fade = sky_horizon_fade(sky->moon_elevation_deg) * sky_night_factor(sky);
-    float lit = sky->moon_enabled ? sky_moon_phase_factor(sky) : 0.0f;
-    set_light_intensity(sky->moon_light, sky->sun_base_intensity * SKY_MOON_LIGHT_FRACTION *
-                                             sky->moon_brightness * lit * fade);
-    set_light_cast_shadows(sky->moon_light, lit * fade > 0.0f);
+static void sky_apply_moon_to_light(SkyAtmosphere* sky) {
+    sky_apply_body_to_light(sky->moon_light, sky->moon_dir, sky->moon_elevation_deg,
+                            sky->sun_base_intensity, sky_moon_light_scale(sky));
 }
 
 void sky_update_moon(SkyAtmosphere* sky) {
     if (!sky)
         return;
 
-    float el = glm_rad(sky->moon_elevation_deg);
-    float az = glm_rad(sky->moon_azimuth_deg);
-    sky->moon_dir[0] = cosf(el) * sinf(az);
-    sky->moon_dir[1] = sinf(el);
-    sky->moon_dir[2] = cosf(el) * cosf(az);
-
+    sky_dir_from_angles(sky->moon_elevation_deg, sky->moon_azimuth_deg, sky->moon_dir);
     sky_apply_moon_to_light(sky);
 }
 
