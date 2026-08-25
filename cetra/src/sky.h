@@ -136,7 +136,10 @@ typedef struct SkyAtmosphere {
     bool debug_luts; // blit the LUTs onto the composited frame
 
     // Sun placement (degrees; the app and GUI own these). Azimuth 0 = +Z,
-    // increasing toward +X. Disc size is the angular DIAMETER.
+    // increasing toward +X. Disc size is the angular DIAMETER, and since
+    // 11.82 it sizes BOTH sky bodies: the moon subtends 0.52 degrees against
+    // the sun's 0.53, which is why total eclipses work at all, and a second
+    // field for that difference would be a knob nobody can see.
     float sun_elevation_deg;
     float sun_azimuth_deg;
     float sun_disc_deg;
@@ -186,6 +189,41 @@ typedef struct SkyAtmosphere {
     // True when the sun has moved past what the last completed sliced bake
     // captured; cleared when a fresh slice cycle starts.
     bool cycle_dirty;
+    // Hours the moon LAGS the sun, advancing at the synodic rate while the
+    // clock runs (24 hours of lag per 29.53 simulated days). One rate behind
+    // two facts, because they are the same fact: the moon transits ~50
+    // minutes later each day, and its phase evolves through the month. 0 =
+    // new (the moon at the sun), 12 = full (opposite it).
+    double cycle_moon_offset;
+
+    /*
+     * The moon (spec 11.82). Mirrors the sun above, with two asymmetries that
+     * are the whole reason this block is short.
+     *
+     * The PHASE is derived from the two directions and stored nowhere
+     * (sky_moon_phase_factor): it is what decides the terminator, the lit
+     * fraction and the brightness together, so a stored copy would be a
+     * second place for it to go stale -- and a stale phase still renders a
+     * plausible moon, which is the worst kind of wrong. The disc SIZE is
+     * sun_disc_deg, for the reason stated up there.
+     *
+     * Nothing here is baked. The disc is analytic in the two background
+     * shaders only and the energy ships as moon_light -- the sun-disc firefly
+     * rule (sky_env_frag.glsl) for the third time, after the sun and the
+     * stars -- so every field is a live uniform or a per-frame light rewrite,
+     * and none of them re-bake anything. That is what lets sky_update_moon
+     * run unconditionally instead of needing change detection.
+     */
+    bool moon_enabled;
+    float moon_brightness; // the ONE look scale; drives the disc AND the light
+    float moon_elevation_deg;
+    float moon_azimuth_deg;
+    vec3 moon_dir; // unit vector TOWARD the moon (derived; sky_update_moon)
+    // Optional coupling to a second directional, the sun_light pattern below.
+    // NULL = the disc without the light, which is a legitimate configuration:
+    // an app that wants a moon in the sky and no second caster just never
+    // sets it.
+    struct Light* moon_light;
 
     /*
      * The time-sliced env re-bake (spec 11.81). The atomic bake costs ~0.11 s
@@ -270,6 +308,18 @@ void free_sky_atmosphere(SkyAtmosphere* sky);
 // Derive sun_dir from sun_elevation_deg / sun_azimuth_deg
 void sky_update_sun_dir(SkyAtmosphere* sky);
 
+// Derive moon_dir from moon_elevation_deg / moon_azimuth_deg and push the
+// result onto moon_light. Called UNCONDITIONALLY once per frame.
+//
+// Paying four trig calls and a pow every frame is what lets the CLI, a scene
+// file, the GUI sliders, a config restore and the cycle all write the two
+// angles with no change detection, no deferred re-bake flags and no apply
+// hooks. It is affordable only because nothing the moon touches is baked --
+// and it is NECESSARY rather than merely convenient, because the moon's
+// brightness is a function of the SUN's direction, so every site that moves
+// the sun also changes the moon.
+void sky_update_moon(SkyAtmosphere* sky);
+
 // CPU evaluation of the atmospheric transmittance toward the sun at the
 // current sun elevation (the same integral the transmittance LUT bakes),
 // giving the sun's color: white at the zenith, reddening toward the
@@ -313,6 +363,17 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
 // No-op when no light is coupled. The single owner of the sun->light policy,
 // shared by the app's setup and the GUI's live re-bake.
 void sky_apply_sun_to_light(SkyAtmosphere* sky);
+
+// Apply the current moon to the coupled second directional (sky->moon_light),
+// the sun's policy above with the phase folded in. No-op when no light is
+// coupled. Reached through sky_update_moon rather than called directly, so no
+// site that moves the sun can forget that the moon's brightness depends on it.
+void sky_apply_moon_to_light(SkyAtmosphere* sky);
+
+// The moon's brightness as a fraction of a full moon's, from the current sun
+// and moon directions. 1 at full, ~0.09 at quarter, ~0 at new -- a real moon
+// is NOT a Lambertian sphere, and this is the whole visual signature.
+float sky_moon_phase_factor(const SkyAtmosphere* sky);
 
 // One "the sun moved" entry point: re-derive sun_dir, re-bake everything the
 // sun drives (sky_bake) and retint the coupled key light. Used by the GUI's

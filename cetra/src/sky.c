@@ -46,6 +46,21 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->cycle_day_seconds = 0.0f;
     sky->cycle_hour = 12.0;
     sky->slicer.item = -1;
+    // OFF for the floor's and the stars' reason, and one more of its own: the
+    // moon is a second CASTING directional, so a default-on moon would change
+    // the caster count in every night frame in the corpus.
+    sky->moon_enabled = false;
+    sky->moon_brightness = 1.0f;
+    // A gibbous moon high in the north-west against the default 35/135 sun:
+    // elongation 125 degrees, so a phase angle of 55 and a factor of 0.26.
+    // Deliberately not degenerate -- at the sun's own angles the phase angle
+    // would be 0 and the moon would sit inside the sun's disc, and at the
+    // exact anti-sun point it is below the horizon whenever the sun is up.
+    sky->moon_elevation_deg = 20.0f;
+    sky->moon_azimuth_deg = 315.0f;
+    // Full moon when the cycle is armed: the postcard is the default, and the
+    // month runs from there.
+    sky->cycle_moon_offset = 12.0;
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky->publish_fog_ambient = true;
     sky->aerial_enabled = true;
@@ -64,6 +79,9 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     // wrong, not un-featured. --no-cloud-shadows clears it, for bisecting.
     sky->clouds.shadows_enabled = true;
     sky_update_sun_dir(sky);
+    // moon_dir alongside sun_dir: sky_moon_phase_factor reads both, and an
+    // undirected moon would read as full at the zenith rather than as absent.
+    sky_update_moon(sky);
 
     return sky;
 }
@@ -149,11 +167,44 @@ static const float SKY_OZONE_ABSORB[3] = {0.650e-3f, 1.881e-3f, 0.085e-3f};
 #define SKY_NIGHT_FLOOR_RADIANCE 0.03f
 static const float SKY_NIGHT_FLOOR_COLOR[3] = {0.55f, 0.72f, 1.0f};
 
+/*
+ * The moon (spec 11.82), C-side only for the night floor's reason: the shader
+ * receives products, so there is no GLSL copy to keep in sync.
+ *
+ * The synodic month is the one constant behind two facts, because they ARE
+ * one fact: the moon returns to the same phase every 29.53 days, which makes
+ * 24/29.53 = 0.813 hours the lag it gains per day (the "rises ~50 minutes
+ * later" figure) and simultaneously the rate its phase evolves.
+ *
+ * The other two are LEVELS and are look-calibrated, not physical, for the
+ * night floor's reason one comment up. Their physical references, so the gap
+ * is a recorded choice rather than an accident: a full moon delivers ~0.25 lux
+ * against the sun's ~120,000, a ratio of 2.1e-6; and its surface radiance is
+ * ~1/400,000 of the sun's, which against the disc's own sunIntensity of 20
+ * would be 5e-5. Both render black.
+ */
+#define SKY_SYNODIC_DAYS        29.530588
+#define SKY_MOON_LIGHT_FRACTION 0.04f
+#define SKY_MOON_DISC_RADIANCE  4.0f
+
 // The one definition of "night": the civil-twilight fade the stars, the
 // floor and the zenith ambient all share. 0 at +3 degrees and above -- an
 // EXACT zero, which the daylight gate arms assert -- 1 from -8 down.
 static float sky_night_factor(const SkyAtmosphere* sky) {
     return 1.0f - glm_smoothstep(-8.0f, 3.0f, sky->sun_elevation_deg);
+}
+
+// The horizon fade a sky body's LIGHT rides out on: 1 at and above +3
+// degrees, an exact 0 at and below 0. Extracted for the ramp above's reason
+// -- the sun has used this window since the sky shipped and the moon must use
+// the SAME one, or a moonrise lights the world before the disc clears the
+// horizon it is drawn behind.
+//
+// It is NOT sky_night_factor's window and the two are easy to confuse: that
+// one runs to -8 and answers "is it dark enough to see this", while this one
+// answers "is this body above the horizon". The moon's light multiplies both.
+static float sky_horizon_fade(float elevation_deg) {
+    return glm_clamp(elevation_deg / 3.0f, 0.0f, 1.0f);
 }
 
 // colour x base x brightness x ramp, or zero: the premultiplied floor the
@@ -203,12 +254,12 @@ void sky_update_sun_dir(SkyAtmosphere* sky) {
     sky_zenith_radiance(sky, sky->zenith_radiance);
 }
 
-void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
-    if (!sky) {
-        out_color[0] = out_color[1] = out_color[2] = 0.0f;
-        return;
-    }
-    float mu = sky->sun_dir[1]; // cos(zenith) = sin(elevation)
+// The transmittance march itself, in terms of the one thing it depends on:
+// mu = cos(zenith) = sin(elevation) of whatever body is being looked toward.
+// Extracted for the moon, which needs the same integral at its own elevation
+// -- moonlight IS sunlight, so it reddens near the horizon for exactly the
+// sun's reason and must do it through exactly the sun's arithmetic.
+static void sky_transmittance_at(float mu, vec3 out_color) {
     if (mu <= 0.0f) {
         out_color[0] = out_color[1] = out_color[2] = 0.0f;
         return;
@@ -232,6 +283,10 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
     }
     for (int c = 0; c < 3; c++)
         out_color[c] = expf(-depth[c]);
+}
+
+void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
+    sky_transmittance_at(sky ? sky->sun_dir[1] : -1.0f, out_color);
 }
 
 // Zenith sky radiance: the single-scattering integral straight up, which is
@@ -807,9 +862,92 @@ void sky_apply_sun_to_light(SkyAtmosphere* sky) {
     sky_sun_transmittance(sky, color);
     set_light_color(sky->sun_light, color);
 
-    float fade = glm_clamp(sky->sun_elevation_deg / 3.0f, 0.0f, 1.0f);
+    float fade = sky_horizon_fade(sky->sun_elevation_deg);
     set_light_intensity(sky->sun_light, sky->sun_base_intensity * fade);
     set_light_cast_shadows(sky->sun_light, fade > 0.0f);
+}
+
+/*
+ * Krisciunas & Schaefer 1991's brightness term, normalised to 1 at full moon:
+ *
+ *     10^(-0.4 * (0.026*|a| + 4e-9*a^4))       a in degrees
+ *
+ * NOT a Lambertian lit fraction, and the gap between them is the whole reason
+ * this is a named law rather than a dot product. Measured quarter-moon light
+ * is an eighth to a tenth of full; this gives 0.091 at a = 90 where cosine
+ * geometry gives 0.5. The cause is real -- lunar regolith backscatters, and
+ * near opposition the shadows hide behind the grains that cast them. A moon
+ * lit Lambertian reads as a spotlight that never quite turns off.
+ *
+ * `a` is the SUN-MOON-OBSERVER angle, measured AT THE MOON: 0 at full (the
+ * moon opposite the sun), 180 at new (the moon at the sun). From here the
+ * moon->observer direction is -moon_dir and the moon->sun direction is
+ * sun_dir, so cos(a) = -dot(moon_dir, sun_dir) -- the NEGATIVE of the
+ * elongation's cosine. That sign is written out because getting it wrong
+ * inverts the feature and still renders a plausible moon, and because the two
+ * readings AGREE at 90 degrees, which is exactly where a ladder that does not
+ * straddle it would fail to notice.
+ *
+ * Derived, never stored: a phase field would be a second place for this to go
+ * stale, and a stale phase is silent.
+ */
+float sky_moon_phase_factor(const SkyAtmosphere* sky) {
+    if (!sky)
+        return 0.0f;
+    float c = -glm_vec3_dot((float*)sky->moon_dir, (float*)sky->sun_dir);
+    float a = glm_deg(acosf(glm_clamp(c, -1.0f, 1.0f)));
+    float a2 = a * a;
+    return powf(10.0f, -0.4f * (0.026f * a + 4.0e-9f * a2 * a2));
+}
+
+void sky_apply_moon_to_light(SkyAtmosphere* sky) {
+    if (!sky || !sky->moon_light)
+        return;
+
+    vec3 travel;
+    glm_vec3_negate_to(sky->moon_dir, travel);
+    set_light_direction(sky->moon_light, travel);
+
+    // The same column of air the sun's tint comes from, at the moon's own
+    // elevation: moonlight IS sunlight, so it reddens at the horizon for
+    // exactly the sun's reason.
+    vec3 color = {0};
+    sky_transmittance_at(sky->moon_dir[1], color);
+    set_light_color(sky->moon_light, color);
+
+    /*
+     * Four factors, and THREE of them are physical. The transmittance above,
+     * the phase law and the horizon fade are all ratios;
+     * SKY_MOON_LIGHT_FRACTION is the LEVEL, and it is a look constant for the
+     * reason the night floor's radiance carries a paragraph about: nothing
+     * lifts a dim world here, so this number IS the moonlight. The physical
+     * ratio is 0.25 lux against ~120,000 = 2.1e-6, nineteen stops, which
+     * renders black.
+     *
+     * sky_night_factor is the fourth, and it is what keeps a daytime moon
+     * from adding a second key light to a sunlit frame. It also BOUNDS the
+     * two-caster window by construction: it is an exact zero above +3
+     * degrees, so above that the moon never casts and the daylight caster
+     * count is what it always was.
+     */
+    float fade = sky_horizon_fade(sky->moon_elevation_deg) * sky_night_factor(sky);
+    float lit = sky->moon_enabled ? sky_moon_phase_factor(sky) : 0.0f;
+    set_light_intensity(sky->moon_light, sky->sun_base_intensity * SKY_MOON_LIGHT_FRACTION *
+                                             sky->moon_brightness * lit * fade);
+    set_light_cast_shadows(sky->moon_light, lit * fade > 0.0f);
+}
+
+void sky_update_moon(SkyAtmosphere* sky) {
+    if (!sky)
+        return;
+
+    float el = glm_rad(sky->moon_elevation_deg);
+    float az = glm_rad(sky->moon_azimuth_deg);
+    sky->moon_dir[0] = cosf(el) * sinf(az);
+    sky->moon_dir[1] = sinf(el);
+    sky->moon_dir[2] = cosf(el) * cosf(az);
+
+    sky_apply_moon_to_light(sky);
 }
 
 int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine) {
@@ -1128,6 +1266,16 @@ bool sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, float dt) {
         sky_cycle_advance(sky, dt);
     else
         sky->cycle_latched = false;
+
+    // Unconditional, and ABOVE the slicer's early-out rather than beside the
+    // pump: the moon is not baked, so on most frames there is nothing to slice
+    // and the return below is taken -- a moon update placed after it would run
+    // only on baking frames and freeze in between.
+    //
+    // This is the whole moon update: direction, phase, tint and the light,
+    // every frame, from whoever last wrote the two angles. It costs the change
+    // detection and the apply hooks the sun needs, and it buys their absence.
+    sky_update_moon(sky);
 
     // A requested re-bake pumps with the cycle OFF: that is the whole shape of
     // --cycle-rebake-at, a sliced pass over an unmoved sun.
