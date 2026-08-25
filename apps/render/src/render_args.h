@@ -166,6 +166,13 @@ typedef struct {
     int night_floor;              // Night-sky floor: 1 on (implies --sky), 0 off, -1 unset
                                   // (a .cscn environment.night_floor seeds it; CLI wins)
     float night_floor_brightness; // Floor radiance scale (negative = keep the default)
+    float day_cycle;              // Real seconds per 24h day; 0 = frozen clock, enabled
+                                  // either way. Negative = cycle off (the default)
+    float time_of_day;            // Hours 0-24, solar noon at 12 (-1 = unset). Wins over
+                                  // --sun-elevation/--sun-azimuth when both are given
+    int cycle_rebake_at;          // Diagnostic: force one SLICED rebake at frame N with the
+                                  // sun unchanged, so the slicer compares against the atomic
+                                  // bake with no hour arithmetic in it (-1 = never)
     float world_scale;            // World units per km for the atmosphere (-1 = default)
     int flip_uv;                  // Force the UV V-flip ON (asset baked opposite to format default)
     int no_unit_scale;            // Skip import unit normalization (raw file units)

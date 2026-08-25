@@ -756,6 +756,8 @@ typedef struct {
     int no_falling_leaves;
     int no_stars; // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
+    float day_cycle;    // real seconds per 24h day; 0 = frozen clock, <0 = cycle off
+    float time_of_day;  // hours 0-24, solar noon at 12 (-1 = unset)
     float star_hour; // Milky Way rotation about the pole, degrees
     const char* config_path; // restore a config snapshot (GUI Dump Config writes one)
     int seed;
@@ -832,6 +834,10 @@ static void print_usage(const char* prog) {
     printf("                          which is what moves the Milky Way band\n");
     printf("      --no-night-floor    Disable the night-sky floor (the airglow that\n");
     printf("                          lights the world once the sun sets)\n");
+    printf("      --day-cycle <s>     Run the day/night cycle: real seconds per 24h\n");
+    printf("                          day (0 = frozen clock, sun placed by the hour)\n");
+    printf("      --time-of-day <h>   Hours 0-24, solar noon at 12; wins over\n");
+    printf("                          --sun-elevation/--sun-azimuth\n");
     printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
     printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
@@ -882,6 +888,10 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     // library default leaves it behind the camera. No sentinel: unlike
     // render there is no scene file between the CLI and this default.
     a->star_hour = 90.0f;
+    // <0 = cycle off, the default: the static frame stays what this app
+    // renders unless motion is asked for. 0 is a legal request (frozen).
+    a->day_cycle = -1.0f;
+    a->time_of_day = -1.0f;
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
     a->water_level = -9999.0f;
@@ -972,6 +982,10 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_stars = 1;
         } else if (!strcmp(s, "--no-night-floor")) {
             a->no_night_floor = 1;
+        } else if (!strcmp(s, "--day-cycle") && has_next) {
+            a->day_cycle = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--time-of-day") && has_next) {
+            a->time_of_day = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--star-hour") && has_next) {
             a->star_hour = (float)atof(argv[++i]);
         } else if ((!strcmp(s, "-c") || !strcmp(s, "--config")) && has_next) {
@@ -1188,6 +1202,19 @@ int main(int argc, char** argv) {
         sky->stars_enabled = args.no_stars == 0;
         sky->night_floor_enabled = args.no_night_floor == 0;
         sky->stars_hour_deg = args.star_hour;
+        if (args.day_cycle >= 0.0f) {
+            sky->cycle_enabled = true;
+            sky->cycle_day_seconds = args.day_cycle;
+        }
+        // Last and it wins, seeding the sun so frame 0 is already right --
+        // which is also what makes a frozen cycle a true no-op.
+        if (args.time_of_day >= 0.0f) {
+            sky->cycle_hour = (double)args.time_of_day;
+            sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour,
+                         &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
+            sun_elevation = sky->sun_elevation_deg; // the GUI mirrors these
+            sun_azimuth = sky->sun_azimuth_deg;
+        }
         /*
          * This world's scale, which nothing set until spec 11.44 (the GUI offered a slider
          * for it and no code ever wrote it), so the sky ran at its 1-unit-is-a-metre default

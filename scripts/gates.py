@@ -11901,6 +11901,9 @@ CONFIG_LOOK = ["--no-ssr", "--no-ssao", "--tonemap", "agx", "--sharpen", "0.8",
 # local fails config-coverage until somebody writes down what it sets.
 CONFIG_GUI_LOCALS = {
     "fft": "wave_model",
+    # The Time of Day slider edits a float mirror because cycle_hour is a
+    # DOUBLE -- the one field whose precision its gate arm rests on.
+    "hour": "cycle_hour",
     "interp": "lut_interp",
     "mode": "meter_mode",
     "msaa": "msaa_samples",
@@ -11951,6 +11954,19 @@ CONFIG_PERTURB_EXCEPTIONS = {
     # config-clouds is the arm that reads both halves of that.
     "sky.clouds.enabled": "the session baked no cloud noise, so the row refuses rather than "
                           "storing a flag every consumer ignores",
+    # Perturb flips sky.cycle ON and gives cycle_day_seconds a non-zero value,
+    # so the restored session runs a clock -- and a running clock OWNS these
+    # five, deriving them every frame from the hour it is advancing. That is
+    # the feature working, the same ownership the GUI states by disabling its
+    # sun sliders while the cycle runs; with the cycle off (every other scene
+    # and every other arm here) all five round-trip normally. Noted as one
+    # group because they have one cause: spec 11.81's tick.
+    "sky.cycle_hour": "the clock advances it every frame while the cycle runs",
+    "sky.sun_elevation": "derived from cycle_hour by the tick while the cycle runs",
+    "sky.sun_azimuth": "derived from cycle_hour by the tick while the cycle runs",
+    "sky.stars_hour": "advanced in lock-step with the sun while the cycle runs",
+    "lights.intensity": "sky_apply_sun_to_light rewrites the coupled key light every tick "
+                        "while the cycle runs",
 }
 
 

@@ -69,6 +69,12 @@ typedef enum ConfigType {
     CFG_BOOL = 0,
     CFG_INT,
     CFG_FLOAT,
+    // A genuine double field, not a wider float: the day/night hour is one
+    // (spec 11.81), because its gate arm holds the sun path against a Python
+    // twin and float32 loses the bit-identity that rests on. Carried through
+    // the same double pipeline every other type already decodes into, so it
+    // is the one type that neither narrows nor widens on the way.
+    CFG_DOUBLE,
     CFG_VEC2,
     CFG_VEC3,
     // Stored as an int, written as one of `labels`. Named rather than numbered
@@ -631,6 +637,12 @@ static const ConfigField CFG_FIELDS[] = {
                _apply_night_floor_enabled),
     CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "night_floor_brightness", night_floor_brightness,
                _apply_sun_angle),
+    // The cycle (spec 11.81): plain stores. Nothing here needs the deferred
+    // re-bake flags -- the tick reads all three next frame and drives the
+    // bake itself, which is the whole point of it owning the sun.
+    CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "cycle", cycle_enabled),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "cycle_day_seconds", cycle_day_seconds),
+    CFG_ROW(CFG_SKY, CFG_DOUBLE, "sky", "cycle_hour", cycle_hour),
     CFG_ROW_FN(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled, _apply_cloud_enabled),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage, _apply_cloud_field),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type, _apply_cloud_field),
@@ -962,6 +974,8 @@ static bool _write_field(cJSON* obj, const ConfigField* f, const void* base) {
         return cJSON_AddNumberToObject(obj, f->key, *(const int*)p) != NULL;
     case CFG_FLOAT:
         return cJSON_AddNumberToObject(obj, f->key, *(const float*)p) != NULL;
+    case CFG_DOUBLE:
+        return cJSON_AddNumberToObject(obj, f->key, *(const double*)p) != NULL;
     case CFG_VEC2:
     case CFG_VEC3: {
         const float* v = (const float*)p;
@@ -1253,6 +1267,7 @@ static int _decode_value(const ConfigField* f, const cJSON* item, double* out) {
         return 1;
     case CFG_INT:
     case CFG_FLOAT:
+    case CFG_DOUBLE:
         if (!cJSON_IsNumber(item))
             return 0;
         out[0] = item->valuedouble;
@@ -1303,6 +1318,9 @@ static void _store_value(const ConfigField* f, void* base, const double* v, int 
         break;
     case CFG_FLOAT:
         *(float*)p = (float)v[0];
+        break;
+    case CFG_DOUBLE:
+        *(double*)p = v[0];
         break;
     case CFG_VEC2:
     case CFG_VEC3: {

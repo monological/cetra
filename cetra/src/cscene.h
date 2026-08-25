@@ -415,6 +415,10 @@ typedef struct CetraSceneDesc {
     bool env_night_floor_enabled;
     bool has_env_night_floor_brightness;
     float env_night_floor_brightness;
+    bool has_env_cycle; // the "day_seconds" key specifically was authored (spec 11.81)
+    float env_cycle_day_seconds;
+    bool has_env_cycle_hour;
+    float env_cycle_hour;
 
     CSceneLight lights[CSCENE_MAX_LIGHTS];
     int light_count;

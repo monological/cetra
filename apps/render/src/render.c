@@ -216,6 +216,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "                         once the sun sets (implies --sky)\n");
     fprintf(stderr, "      --no-night-floor   Drop a floor a scene file asked for\n");
     fprintf(stderr, "      --night-floor-brightness <f> Floor radiance scale (implies it)\n");
+    fprintf(stderr, "      --day-cycle <s>    Day/night cycle: real seconds per 24h day\n");
+    fprintf(stderr, "                         (0 = frozen clock; implies --sky)\n");
+    fprintf(stderr, "      --time-of-day <h>  Hours 0-24, solar noon at 12; wins over\n");
+    fprintf(stderr, "                         --sun-elevation/--sun-azimuth\n");
+    fprintf(stderr, "      --cycle-rebake-at <n> Diagnostic: one sliced rebake at frame n\n");
     fprintf(stderr, "      --cloud-coverage <f> Cloud sky fraction 0..1 (implies --clouds)\n");
     fprintf(stderr, "      --cloud-density <f>  Cloud extinction scale (implies --clouds)\n");
     fprintf(stderr, "      --cloud-wind <kmh[,deg]> Cloud drift (implies --clouds)\n");
@@ -441,6 +446,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->stars_hour = -999.0f;
     args->night_floor = -1;
     args->night_floor_brightness = -1.0f;
+    args->day_cycle = -1.0f; // <0 = cycle off; 0 is a legal request (frozen)
+    args->time_of_day = -1.0f;
+    args->cycle_rebake_at = -1;
     args->cloud_coverage = -1.0f; // -1 = keep the engine default
     args->cloud_density = -1.0f;
     args->cloud_wind_kmh = -1.0f;
@@ -1038,6 +1046,26 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->stars_brightness = (float)atof(argv[i]);
             args->stars = 1;
             args->sky = 1;
+        } else if (strcmp(argv[i], "--day-cycle") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->day_cycle = (float)atof(argv[i]);
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--time-of-day") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->time_of_day = (float)atof(argv[i]);
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--cycle-rebake-at") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->cycle_rebake_at = atoi(argv[i]);
         } else if (strcmp(argv[i], "--night-floor") == 0) {
             args->night_floor = 1;
             args->sky = 1;
@@ -1973,6 +2001,18 @@ static void render_frame_update(Engine* engine, float dt) {
             scene->shadow_system->enabled = false;
             fprintf(stderr, "frame %d: shadow system disabled\n",
                     frame_schedule->shadows_off_at);
+        }
+    }
+    // One SLICED re-bake at an unmoved sun (spec 11.81). The comparison it
+    // exists for cannot be made any other way: with the sun held, the slicer's
+    // output must equal the startup atomic bake byte for byte, and nothing
+    // about the hour arithmetic is in the picture.
+    if (frame_schedule->cycle_rebake_at == (int)engine->total_frames) {
+        Scene* scene = get_current_scene(engine);
+        if (scene && scene->sky) {
+            sky_cycle_request_rebake(scene->sky);
+            fprintf(stderr, "frame %d: sliced sky rebake requested\n",
+                    frame_schedule->cycle_rebake_at);
         }
     }
     // A camera TELEPORT (spec 11.67): the worst case for page residency, which
@@ -2924,6 +2964,22 @@ int main(int argc, char** argv) {
                 sky->night_floor_enabled = args.night_floor != 0;
             if (args.night_floor_brightness >= 0.0f)
                 sky->night_floor_brightness = args.night_floor_brightness;
+            if (args.day_cycle >= 0.0f) {
+                sky->cycle_enabled = true;
+                sky->cycle_day_seconds = args.day_cycle;
+            }
+            // The hour LAST and it wins, which is the CLI-ordering's own last
+            // word: seeding the sun here rather than leaving it to the first
+            // tick is what makes frame 0 already correct and a frozen cycle a
+            // true no-op.
+            if (args.time_of_day >= 0.0f) {
+                if (args.sun_elevation > -900.0f || args.sun_azimuth > -900.0f)
+                    fprintf(stderr,
+                            "Note: --time-of-day overrides --sun-elevation/--sun-azimuth\n");
+                sky->cycle_hour = (double)args.time_of_day;
+                sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour,
+                             &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
+            }
             sky->clouds.enabled = args.clouds != 0;
             if (args.no_cloud_shadows)
                 sky->clouds.shadows_enabled = false;

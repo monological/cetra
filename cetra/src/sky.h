@@ -330,6 +330,12 @@ void sky_sun_path(double latitude_deg, double hour, float* out_elevation_deg,
 void sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, const struct Engine* engine,
                     float dt);
 
+// Ask the slicer for a fresh pass over the CURRENT sun, without moving it --
+// the diagnostic `--cycle-rebake-at` drives this, and it is what lets a
+// sliced bake be compared against the startup atomic one with no hour
+// arithmetic anywhere in the comparison.
+void sky_cycle_request_rebake(SkyAtmosphere* sky);
+
 // Rebuild the aerial-perspective volume for this frame's camera. Unlike the
 // other bakes this is per-frame, because the volume is the camera's frustum.
 // Requires the static LUTs; a no-op without them.

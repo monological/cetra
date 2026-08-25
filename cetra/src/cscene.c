@@ -165,6 +165,18 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
                           "environment.night_floor");
     }
 
+    // sky-mode day/night cycle (spec 11.81). day_seconds is what ARMS it --
+    // 0 is a legal request meaning "frozen clock, sun placed by the hour" --
+    // so a file authoring `hour` alone places the sun without animating it.
+    const cJSON* cycle = cJSON_GetObjectItemCaseSensitive(env, "cycle");
+    if (cJSON_IsObject(cycle)) {
+        d->has_env_cycle = get_float(cycle, "day_seconds", &d->env_cycle_day_seconds);
+        d->has_env_cycle_hour = get_float(cycle, "hour", &d->env_cycle_hour);
+        static const char* const cycle_known[] = {"day_seconds", "hour"};
+        warn_unknown_keys(cycle, cycle_known, sizeof(cycle_known) / sizeof(cycle_known[0]),
+                          "environment.cycle");
+    }
+
     /*
      * Report a key nothing above read. Same closed-block reasoning as parse_water, and
      * the same failure it is here for: water_fixture.cscn authored sun_elevation and
@@ -173,8 +185,9 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      * arm was calibrated against the frame rather than the authoring, and nothing could
      * say so -- a --sun-elevation 26 render moves 85% of that frame.
      */
-    static const char* const known[] = {"mode",    "hdr", "probe_scene", "intensity",
-                                        "ambient", "sun", "stars",       "night_floor"};
+    static const char* const known[] = {"mode",  "hdr",   "probe_scene", "intensity",
+                                        "ambient", "sun", "stars",       "night_floor",
+                                        "cycle"};
     warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 

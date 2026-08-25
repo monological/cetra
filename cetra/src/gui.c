@@ -517,6 +517,12 @@ static void _engine_gui_panel(Engine* engine) {
             // env size) and retints the coupled key light through one path.
             bool sun_moved = false;
             bool sun_released = false;
+            // The cycle OWNS the sun while it runs (spec 11.81): its tick
+            // rewrites both angles every frame, so a slider fighting it is a
+            // trap rather than a control. Time of Day is the way to place
+            // the sun then.
+            if (sky->cycle_enabled)
+                igBeginDisabled(true);
             sun_moved |=
                 igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -18.0f, 89.0f, "%.1f deg",
                               0);
@@ -524,6 +530,8 @@ static void _engine_gui_panel(Engine* engine) {
             sun_moved |=
                 igSliderFloat("Sun Azimuth", &sky->sun_azimuth_deg, 0.0f, 360.0f, "%.1f deg", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
+            if (sky->cycle_enabled)
+                igEndDisabled();
             // Disc size feeds only the analytic background sun (sampled live);
             // it is not in the env cube, so it needs no re-bake.
             igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f deg", 0);
@@ -543,6 +551,16 @@ static void _engine_gui_panel(Engine* engine) {
                 sky_update_sun(sky, scene->ibl, engine);
             if (sun_released)
                 scene_environment_changed(scene, engine);
+
+            // The cycle (spec 11.81). Nothing here calls a bake: the tick
+            // owns that, and hour edits reach the sky by being read next
+            // frame. Day Length 0 freezes the clock, which is what makes Time
+            // of Day a scrub rather than a starting point.
+            igCheckbox("Day Cycle", &sky->cycle_enabled);
+            igSliderFloat("Day Length", &sky->cycle_day_seconds, 0.0f, 600.0f, "%.0f s", 0);
+            float hour = (float)sky->cycle_hour;
+            if (igSliderFloat("Time of Day", &hour, 0.0f, 24.0f, "%.2f h", 0))
+                sky->cycle_hour = (double)hour;
 
             // Cloud layer (only offered once the noise fields exist). The
             // screen march follows every slider live; the env/IBL copy and

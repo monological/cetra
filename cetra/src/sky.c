@@ -975,18 +975,29 @@ static void sky_slicer_run_item(SkyAtmosphere* sky, struct IBLResources* ibl,
     }
 }
 
+void sky_cycle_request_rebake(SkyAtmosphere* sky) {
+    if (!sky)
+        return;
+    sky->cycle_dirty = true;
+    sky->slicer.item = -1; // restart from the top on the next tick
+}
+
 void sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, const struct Engine* engine,
                     float dt) {
     if (!sky || !ibl || !engine || !sky->enabled)
         return;
-    if (!sky->cycle_enabled) {
-        sky->cycle_latched = false;
-        return;
-    }
     // The slicer leans on programs the startup atomic bake resolved; without
     // it there is nothing to slice against.
     if (!ibl->precomputed || !ibl->prefilter_program)
         return;
+    if (!sky->cycle_enabled) {
+        sky->cycle_latched = false;
+        // A requested rebake still runs with the cycle off: that is the whole
+        // shape of --cycle-rebake-at, a sliced pass over an unmoved sun.
+        if (!sky->cycle_dirty && sky->slicer.item < 0)
+            return;
+        goto slice;
+    }
 
     if (!sky->cycle_latched) {
         // The app's authored star-hour placement survives as the phase the
@@ -1030,6 +1041,7 @@ void sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, const struct E
     if (sky->slicer.item < 0 && !sky->cycle_dirty)
         return;
 
+slice:;
     GLint prev_viewport[4];
     GLint prev_framebuffer;
     glGetIntegerv(GL_VIEWPORT, prev_viewport);

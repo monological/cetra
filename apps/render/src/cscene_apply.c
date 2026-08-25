@@ -101,6 +101,10 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->night_floor = cscn->env_night_floor_enabled ? 1 : 0;
     if (cscn->has_env_night_floor_brightness && args->night_floor_brightness < 0.0f)
         args->night_floor_brightness = cscn->env_night_floor_brightness;
+    if (cscn->has_env_cycle && args->day_cycle < 0.0f)
+        args->day_cycle = cscn->env_cycle_day_seconds;
+    if (cscn->has_env_cycle_hour && args->time_of_day < 0.0f)
+        args->time_of_day = cscn->env_cycle_hour;
     if (args->tonemap_mode == 0) {
         switch (cscn->tonemap) {
             case CSCENE_TONEMAP_AGX:
