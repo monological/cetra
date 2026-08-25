@@ -144,4 +144,15 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
 void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
                            int dst_base_size, int mip_levels);
 
+// The resumable pieces the atomic bakes are drivers over (spec 11.81): each
+// is self-contained -- bindings, uniforms and the RBO respec re-established
+// per call -- so the day/night slicer can run one in isolation frames after
+// any other, and an atomic caller running them back to back executes the
+// same arithmetic. All leave FBO 0 bound; callers restore their viewport.
+void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels);
+void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, int env_size);
+void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_cube,
+                         GLuint dst_cube, int dst_base_size, int mip_levels, int mip,
+                         int face_first, int face_count);
+
 #endif // _IBL_H_

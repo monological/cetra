@@ -345,8 +345,10 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
 
-// Create prefilter cubemap with manually allocated mip levels
-static void create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels) {
+// Create prefilter cubemap with manually allocated mip levels. Public since
+// spec 11.81: the day/night slicer allocates its shadow chain up front and
+// then fills it one ibl_prefilter_slice at a time.
+void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels) {
     glGenTextures(1, texture);
     glBindTexture(GL_TEXTURE_CUBE_MAP, *texture);
 
@@ -395,8 +397,12 @@ static void render_equirect_to_cubemap(IBLResources* ibl, mat4 projection, const
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, const mat4 views[6],
-                                          int env_size) {
+// The irradiance convolution as one self-contained slice: source and
+// destination are caller handles (the atomic bake passes the live fields, the
+// day/night slicer its shadows), and every binding, uniform and the RBO
+// respec is re-established per call so it can run in isolation frames after
+// any other slice. Leaves FBO 0 bound; caller restores its viewport.
+void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, int env_size) {
     ShaderProgram* program = ibl->irradiance_program;
     if (!program)
         return;
@@ -404,12 +410,23 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
     glUseProgram(program->id);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, ibl->environment_cubemap);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, src_cube);
     uniform_set_int(program->uniforms, "environmentMap", 0);
+
+    mat4 views[6];
+    mat4 projection = {{0}};
+    vec3 origin = {0.0f, 0.0f, 0.0f};
+    ibl_capture_views(origin, views);
+    get_cubemap_projection(projection);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
     // Integrate from the mip whose faces are ~64px: dense enough for the
     // convolution, coarse enough that small bright lights are pre-averaged in
     uniform_set_float(program->uniforms, "sampleMipLevel", log2f((float)env_size / 64.0f));
+
+    GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
 
     glViewport(0, 0, IBL_IRRADIANCE_SIZE, IBL_IRRADIANCE_SIZE);
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
@@ -420,12 +437,16 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
     for (int i = 0; i < 6; ++i) {
         uniform_set_mat4(program->uniforms, "view", (float*)views[i]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ibl->irradiance_map, 0);
+                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cube, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         ibl_render_unit_cube(ibl);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (cull_was_enabled)
+        glEnable(GL_CULL_FACE);
+    if (blend_was_enabled)
+        glEnable(GL_BLEND);
 }
 
 // Prefilter an arbitrary cubemap with the given filter program (GGX or
@@ -435,15 +456,17 @@ static void render_irradiance_convolution(IBLResources* ibl, mat4 projection, co
 // origin is irrelevant; the source face size drives the importance sampler's
 // solid-angle mip selection. Uses the shared capture FBO/RBO and leaves FBO 0
 // bound; caller restores its own viewport.
-void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
-                           int dst_base_size, int mip_levels) {
+// One slice of a prefilter chain: faces [face_first, face_first+face_count)
+// of ONE mip, into an already-allocated destination. Self-contained -- every
+// binding, uniform and the RBO respec is re-established per call -- so the
+// day/night slicer (spec 11.81) can run it in isolation frames apart, and
+// the atomic driver below runs the exact same code back to back: one
+// arithmetic, whatever the schedule. Leaves FBO 0 bound.
+void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_cube,
+                         GLuint dst_cube, int dst_base_size, int mip_levels, int mip,
+                         int face_first, int face_count) {
     if (!program)
         return;
-
-    if (*dst)
-        glDeleteTextures(1, dst);
-    create_prefilter_cubemap(dst, dst_base_size, mip_levels);
-    GLuint dst_cube = *dst;
 
     glUseProgram(program->id);
 
@@ -468,22 +491,20 @@ void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src
 
     glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
 
-    for (int mip = 0; mip < mip_levels; ++mip) {
-        int mip_size = dst_base_size >> mip;
-        glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mip_size, mip_size);
-        glViewport(0, 0, mip_size, mip_size);
+    int mip_size = dst_base_size >> mip;
+    glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mip_size, mip_size);
+    glViewport(0, 0, mip_size, mip_size);
 
-        float roughness = (float)mip / (float)(mip_levels - 1);
-        uniform_set_float(program->uniforms, "roughness", roughness);
+    float roughness = (float)mip / (float)(mip_levels - 1);
+    uniform_set_float(program->uniforms, "roughness", roughness);
 
-        for (int i = 0; i < 6; ++i) {
-            uniform_set_mat4(program->uniforms, "view", (float*)views[i]);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cube, mip);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            ibl_render_unit_cube(ibl);
-        }
+    for (int i = face_first; i < face_first + face_count; ++i) {
+        uniform_set_mat4(program->uniforms, "view", (float*)views[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cube, mip);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        ibl_render_unit_cube(ibl);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -492,6 +513,19 @@ void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src
         glEnable(GL_CULL_FACE);
     if (blend_was_enabled)
         glEnable(GL_BLEND);
+}
+
+void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
+                           int dst_base_size, int mip_levels) {
+    if (!program)
+        return;
+
+    if (*dst)
+        glDeleteTextures(1, dst);
+    ibl_create_prefilter_cubemap(dst, dst_base_size, mip_levels);
+
+    for (int mip = 0; mip < mip_levels; ++mip)
+        ibl_prefilter_slice(ibl, program, src_cube, *dst, dst_base_size, mip_levels, mip, 0, 6);
 }
 
 // Bake the split-sum BRDF tables: GGX A/B in RG, the Charlie sheen
@@ -573,12 +607,6 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     setup_capture_fbo(ibl, env_size);
     ibl_init_cube_vao(ibl);
 
-    mat4 capture_views[6];
-    mat4 capture_projection = {{0}};
-    vec3 capture_origin = {0.0f, 0.0f, 0.0f};
-    ibl_capture_views(capture_origin, capture_views);
-    get_cubemap_projection(capture_projection);
-
     GLint prev_viewport[4];
     GLint prev_framebuffer;
     glGetIntegerv(GL_VIEWPORT, prev_viewport);
@@ -595,7 +623,7 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     if (ibl->irradiance_map)
         glDeleteTextures(1, &ibl->irradiance_map);
     ibl_create_cubemap_texture(&ibl->irradiance_map, IBL_IRRADIANCE_SIZE, false);
-    render_irradiance_convolution(ibl, capture_projection, capture_views, env_size);
+    ibl_irradiance_slice(ibl, ibl->environment_cubemap, ibl->irradiance_map, env_size);
 
     log_info("  Generating prefiltered environment map...");
     ibl_prefilter_cubemap(ibl, ibl->prefilter_program, ibl->environment_cubemap,
