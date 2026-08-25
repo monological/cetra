@@ -218,8 +218,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --night-floor-brightness <f> Floor radiance scale (implies it)\n");
     fprintf(stderr, "      --day-cycle <s>    Day/night cycle: real seconds per 24h day\n");
     fprintf(stderr, "                         (0 = frozen clock; implies --sky)\n");
-    fprintf(stderr, "      --time-of-day <h>  Hours 0-24, solar noon at 12; wins over\n");
-    fprintf(stderr, "                         --sun-elevation/--sun-azimuth\n");
+    fprintf(stderr, "      --no-day-cycle     Drop a cycle a scene file asked for\n");
+    fprintf(stderr, "      --time-of-day <h>  Hours 0-24, solar noon at 12 (implies --sky).\n");
+    fprintf(stderr, "                         Wins over --sun-elevation/--sun-azimuth; on\n");
+    fprintf(stderr, "                         its own it places a STATIC sun by the hour\n");
     fprintf(stderr, "      --cycle-rebake-at <n> Diagnostic: one sliced rebake at frame n\n");
     fprintf(stderr, "      --cloud-coverage <f> Cloud sky fraction 0..1 (implies --clouds)\n");
     fprintf(stderr, "      --cloud-density <f>  Cloud extinction scale (implies --clouds)\n");
@@ -1060,6 +1062,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->time_of_day = (float)atof(argv[i]);
             args->sky = 1;
+        } else if (strcmp(argv[i], "--no-day-cycle") == 0) {
+            args->no_day_cycle = 1;
         } else if (strcmp(argv[i], "--cycle-rebake-at") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1121,6 +1125,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->sun_elevation = (float)atof(argv[i]);
+            args->sun_angle_flagged = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--sun-azimuth") == 0) {
             if (++i >= argc) {
@@ -1128,6 +1133,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->sun_azimuth = (float)atof(argv[i]);
+            args->sun_angle_flagged = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--world-scale") == 0) {
             if (++i >= argc) {
@@ -2964,22 +2970,28 @@ int main(int argc, char** argv) {
                 sky->night_floor_enabled = args.night_floor != 0;
             if (args.night_floor_brightness >= 0.0f)
                 sky->night_floor_brightness = args.night_floor_brightness;
-            if (args.day_cycle >= 0.0f) {
+            if (args.day_cycle >= 0.0f && !args.no_day_cycle) {
                 sky->cycle_enabled = true;
                 sky->cycle_day_seconds = args.day_cycle;
             }
-            // The hour LAST and it wins, which is the CLI-ordering's own last
-            // word: seeding the sun here rather than leaving it to the first
-            // tick is what makes frame 0 already correct and a frozen cycle a
-            // true no-op.
             if (args.time_of_day >= 0.0f) {
-                if (args.sun_elevation > -900.0f || args.sun_azimuth > -900.0f)
+                // Flagged, not merely set: a .cscn's environment.sun seeds
+                // these same fields, so testing them would print this note on
+                // any sky scene that authors a sun -- including the fixture
+                // the cycle's own gate arms use.
+                if (args.sun_angle_flagged)
                     fprintf(stderr,
                             "Note: --time-of-day overrides --sun-elevation/--sun-azimuth\n");
                 sky->cycle_hour = (double)args.time_of_day;
+            }
+            // Seed whenever the cycle is armed, not only when an hour was
+            // given: otherwise `--day-cycle 0` -- which reads as "arm it,
+            // frozen, change nothing" -- lets the first tick derive from the
+            // default hour and teleport the sun. Seeding here rather than in
+            // the tick is what makes frame 0 already correct.
+            if (sky->cycle_enabled || args.time_of_day >= 0.0f)
                 sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour,
                              &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
-            }
             sky->clouds.enabled = args.clouds != 0;
             if (args.no_cloud_shadows)
                 sky->clouds.shadows_enabled = false;

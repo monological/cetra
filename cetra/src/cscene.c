@@ -165,14 +165,19 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
                           "environment.night_floor");
     }
 
-    // sky-mode day/night cycle (spec 11.81). day_seconds is what ARMS it --
-    // 0 is a legal request meaning "frozen clock, sun placed by the hour" --
-    // so a file authoring `hour` alone places the sun without animating it.
+    // sky-mode day/night cycle (spec 11.81). `enabled` ARMS it, exactly as in
+    // the stars and night_floor blocks above -- a file describes values, a
+    // flag takes actions, and letting `day_seconds` arm would have made this
+    // block the one exception to a convention stated 40 lines up. So
+    // `hour` alone places the sun and animates nothing, and `day_seconds`
+    // alone sets a rate for a cycle somebody still has to turn on.
     const cJSON* cycle = cJSON_GetObjectItemCaseSensitive(env, "cycle");
     if (cJSON_IsObject(cycle)) {
-        d->has_env_cycle = get_float(cycle, "day_seconds", &d->env_cycle_day_seconds);
+        d->has_env_cycle = get_bool(cycle, "enabled", &d->env_cycle_enabled);
+        d->has_env_cycle_day_seconds =
+            get_float(cycle, "day_seconds", &d->env_cycle_day_seconds);
         d->has_env_cycle_hour = get_float(cycle, "hour", &d->env_cycle_hour);
-        static const char* const cycle_known[] = {"day_seconds", "hour"};
+        static const char* const cycle_known[] = {"enabled", "day_seconds", "hour"};
         warn_unknown_keys(cycle, cycle_known, sizeof(cycle_known) / sizeof(cycle_known[0]),
                           "environment.cycle");
     }

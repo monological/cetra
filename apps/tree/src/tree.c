@@ -589,8 +589,19 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
          *   both of which look like sky state and are not.
          */
         igSeparatorText("Sun");
+        // These file statics mirror the sky, and under a cycle the sky is the
+        // one moving: re-read every frame or the panel shows the sun the run
+        // STARTED with. The engine panel's own sliders grey out the same way,
+        // and a user sees both panels at once.
+        bool cycling = sky && sky->cycle_enabled;
+        if (cycling) {
+            sun_elevation = sky->sun_elevation_deg;
+            sun_azimuth = sky->sun_azimuth_deg;
+        }
+        igBeginDisabled(cycling);
         bool sun_moved = igSliderFloat("Elevation", &sun_elevation, -18.0f, 89.0f, "%.1f deg", 0);
         sun_moved |= igSliderFloat("Azimuth", &sun_azimuth, 0.0f, 360.0f, "%.1f deg", 0);
+        igEndDisabled();
         if (sun_moved && sky) {
             sky->sun_elevation_deg = sun_elevation;
             sky->sun_azimuth_deg = sun_azimuth;
@@ -610,6 +621,10 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
             // Retint only. The light's COLOUR is deliberately not offered: it comes from
             // atmospheric transmittance, which is what keeps the sun matching the sky it is in,
             // and a picker here would make this a second owner of it.
+            //
+            // sun_base_intensity is the cycle-safe one: sky_apply_sun_to_light
+            // scales it by the elevation fade rather than replacing it, so the
+            // tick does not fight this slider.
             if (igSliderFloat("Intensity", &sky->sun_base_intensity, 0.0f, 40.0f, "%.1f", 0))
                 sky_apply_sun_to_light(sky);
         }
@@ -1206,10 +1221,13 @@ int main(int argc, char** argv) {
             sky->cycle_enabled = true;
             sky->cycle_day_seconds = args.day_cycle;
         }
-        // Last and it wins, seeding the sun so frame 0 is already right --
-        // which is also what makes a frozen cycle a true no-op.
-        if (args.time_of_day >= 0.0f) {
+        if (args.time_of_day >= 0.0f)
             sky->cycle_hour = (double)args.time_of_day;
+        // Seed whenever the cycle is armed, not only when an hour was given:
+        // otherwise `--day-cycle 0` lets the first tick derive from the
+        // default hour and teleport the sun off this app's authored 0.8
+        // degrees. The hour wins over --sun-elevation/--sun-azimuth.
+        if (sky->cycle_enabled || args.time_of_day >= 0.0f) {
             sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour,
                          &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
             sun_elevation = sky->sun_elevation_deg; // the GUI mirrors these

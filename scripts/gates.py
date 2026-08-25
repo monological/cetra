@@ -11902,8 +11902,10 @@ CONFIG_LOOK = ["--no-ssr", "--no-ssao", "--tonemap", "agx", "--sharpen", "0.8",
 CONFIG_GUI_LOCALS = {
     "fft": "wave_model",
     # The Time of Day slider edits a float mirror because cycle_hour is a
-    # DOUBLE -- the one field whose precision its gate arm rests on.
-    "hour": "cycle_hour",
+    # double (an accumulator; see config_snapshot.c's CFG_DOUBLE). Named
+    # tod_hour rather than hour: this map is keyed on the bare local, so a
+    # generic name silently captures the next local that shares it.
+    "tod_hour": "cycle_hour",
     "interp": "lut_interp",
     "mode": "meter_mode",
     "msaa": "msaa_samples",
@@ -11965,8 +11967,8 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "sky.sun_elevation": "derived from cycle_hour by the tick while the cycle runs",
     "sky.sun_azimuth": "derived from cycle_hour by the tick while the cycle runs",
     "sky.stars_hour": "advanced in lock-step with the sun while the cycle runs",
-    "lights.intensity": "sky_apply_sun_to_light rewrites the coupled key light every tick "
-                        "while the cycle runs",
+    "lights[sky_sun].intensity": "sky_apply_sun_to_light rewrites the coupled key light every "
+                                 "tick while the cycle runs",
 }
 
 
@@ -12015,8 +12017,15 @@ def _config_diff_scalars(asked, got, path="", top=True, out=None):
                 continue
             _config_diff_scalars(v, got[k], f"{path}.{k}" if path else k, False, out)
     elif isinstance(asked, list) and isinstance(got, list):
-        for a, g in zip(asked, got):
-            _config_diff_scalars(a, g, path, False, out)
+        # Carry the element's identity into the path. Without it every light
+        # reports as a bare `lights.intensity`, so one exception excuses the
+        # whole array -- a build that stopped restoring intensity entirely
+        # would pass. The `name` key is skipped as a VALUE above and used as a
+        # LABEL here.
+        for i, (a, g) in enumerate(zip(asked, got)):
+            label = a.get("name") if isinstance(a, dict) else None
+            elem = f"{path}[{label if label else i}]"
+            _config_diff_scalars(a, g, elem, False, out)
     elif isinstance(asked, bool):
         if asked != got:
             out.append(path)

@@ -147,8 +147,13 @@ typedef struct SkyAtmosphere {
     // civil twilight from the sun elevation; the ramp stands in for an
     // exposure adaptation the engine deliberately does not perform
     // (exposure_auto_gain only ever darkens). The latitude sets the celestial
-    // pole's altitude, the hour turns the sky about it -- both stars_-prefixed
-    // because only the star frame reads them.
+    // pole's altitude and the hour turns the sky about it.
+    //
+    // The stars_ prefix is now HISTORY, not scope: since 11.81 the latitude is
+    // the observer's, read by sky_sun_path to place the SUN on the same
+    // celestial frame, and stars_hour_deg is written by the cycle's tick. The
+    // authored spellings (environment.stars.latitude, the sky.stars_latitude
+    // snapshot row) are what pin the C names -- renaming those breaks files.
     bool stars_enabled;
     float stars_brightness; // star radiance scale at full night (1 = default)
     float stars_latitude_deg;

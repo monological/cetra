@@ -51,7 +51,10 @@ void ibl_capture_views(vec3 origin, mat4 views[6]) {
     }
 }
 
-static void get_cubemap_projection(mat4 projection) {
+// The 90-degree frustum every cube-face draw shares. Public since 11.81: the
+// sky's env faces and the prefilter that integrates over them must agree, and
+// a second copy of the near/far is a silent divergence rather than an error.
+void ibl_cubemap_projection(mat4 projection) {
     glm_perspective(glm_rad(90.0f), 1.0f, 0.1f, 10.0f, projection);
 }
 
@@ -417,7 +420,7 @@ void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, i
     mat4 projection = {{0}};
     vec3 origin = {0.0f, 0.0f, 0.0f};
     ibl_capture_views(origin, views);
-    get_cubemap_projection(projection);
+    ibl_cubemap_projection(projection);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
     // Integrate from the mip whose faces are ~64px: dense enough for the
     // convolution, coarse enough that small bright lights are pre-averaged in
@@ -449,13 +452,6 @@ void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, i
         glEnable(GL_BLEND);
 }
 
-// Prefilter an arbitrary cubemap with the given filter program (GGX or
-// Charlie kernel -- one environmentMap/roughness/resolution contract) into a
-// manually-mipped destination it (re)allocates (roughness =
-// mip / (mip_levels - 1)). Direction-only unit-cube render, so the source
-// origin is irrelevant; the source face size drives the importance sampler's
-// solid-angle mip selection. Uses the shared capture FBO/RBO and leaves FBO 0
-// bound; caller restores its own viewport.
 // One slice of a prefilter chain: faces [face_first, face_first+face_count)
 // of ONE mip, into an already-allocated destination. Self-contained -- every
 // binding, uniform and the RBO respec is re-established per call -- so the
@@ -480,7 +476,7 @@ void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_c
     mat4 projection = {{0}};
     vec3 origin = {0.0f, 0.0f, 0.0f};
     ibl_capture_views(origin, views);
-    get_cubemap_projection(projection);
+    ibl_cubemap_projection(projection);
     uniform_set_mat4(program->uniforms, "projection", (float*)projection);
     uniform_set_float(program->uniforms, "resolution", (float)src_resolution);
 
@@ -515,6 +511,14 @@ void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_c
         glEnable(GL_BLEND);
 }
 
+// Prefilter an arbitrary cubemap with the given filter program (GGX or
+// Charlie kernel -- one environmentMap/roughness/resolution contract) into a
+// manually-mipped destination it (RE)ALLOCATES (roughness =
+// mip / (mip_levels - 1)) -- the lifecycle the slice above deliberately does
+// not own. Direction-only unit-cube render, so the source origin is
+// irrelevant; the source face size drives the importance sampler's
+// solid-angle mip selection. Uses the shared capture FBO/RBO and leaves FBO 0
+// bound; caller restores its own viewport.
 void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
                            int dst_base_size, int mip_levels) {
     if (!program)
@@ -680,7 +684,7 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
     mat4 capture_projection = {{0}};
     vec3 capture_origin = {0.0f, 0.0f, 0.0f};
     ibl_capture_views(capture_origin, capture_views);
-    get_cubemap_projection(capture_projection);
+    ibl_cubemap_projection(capture_projection);
 
     GLint prev_viewport[4];
     GLint prev_framebuffer;

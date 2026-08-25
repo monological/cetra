@@ -101,8 +101,10 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->night_floor = cscn->env_night_floor_enabled ? 1 : 0;
     if (cscn->has_env_night_floor_brightness && args->night_floor_brightness < 0.0f)
         args->night_floor_brightness = cscn->env_night_floor_brightness;
-    if (cscn->has_env_cycle && args->day_cycle < 0.0f)
-        args->day_cycle = cscn->env_cycle_day_seconds;
+    // `enabled` arms it; day_seconds is only a rate. Authoring a rate without
+    // the switch leaves the cycle off, which is why the two are separate here.
+    if (cscn->has_env_cycle && cscn->env_cycle_enabled && args->day_cycle < 0.0f)
+        args->day_cycle = cscn->has_env_cycle_day_seconds ? cscn->env_cycle_day_seconds : 0.0f;
     if (cscn->has_env_cycle_hour && args->time_of_day < 0.0f)
         args->time_of_day = cscn->env_cycle_hour;
     if (args->tonemap_mode == 0) {

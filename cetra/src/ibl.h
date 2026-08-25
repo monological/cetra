@@ -144,12 +144,22 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
 void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
                            int dst_base_size, int mip_levels);
 
-// The resumable pieces the atomic bakes are drivers over (spec 11.81): each
-// is self-contained -- bindings, uniforms and the RBO respec re-established
-// per call -- so the day/night slicer can run one in isolation frames after
-// any other, and an atomic caller running them back to back executes the
-// same arithmetic. All leave FBO 0 bound; callers restore their viewport.
+// The 90-degree frustum every cube-face draw shares -- the sky's env faces
+// and the prefilter integrating over them must agree on it.
+void ibl_cubemap_projection(mat4 projection);
+
+// Allocate a manually-mipped prefilter destination (no framebuffer involved);
+// the two slices below fill one already allocated.
 void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels);
+
+// The resumable pieces the atomic bakes are drivers over (spec 11.81): each
+// re-establishes its own bindings, uniforms, viewport, cull/blend and the
+// capture RBO's storage per call, so the day/night slicer can run one in
+// isolation frames after any other and an atomic caller running them back to
+// back executes the same arithmetic. Both leave FBO 0 bound and expect the
+// shared capture FBO to keep its depth attachment (setup_capture_fbo or
+// sky_env_face_slice makes it; nothing detaches it). Callers restore their
+// own viewport.
 void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, int env_size);
 void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_cube,
                          GLuint dst_cube, int dst_base_size, int mip_levels, int mip,

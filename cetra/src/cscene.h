@@ -415,7 +415,9 @@ typedef struct CetraSceneDesc {
     bool env_night_floor_enabled;
     bool has_env_night_floor_brightness;
     float env_night_floor_brightness;
-    bool has_env_cycle; // the "day_seconds" key specifically was authored (spec 11.81)
+    bool has_env_cycle; // the "enabled" key specifically was authored (spec 11.81)
+    bool env_cycle_enabled;
+    bool has_env_cycle_day_seconds;
     float env_cycle_day_seconds;
     bool has_env_cycle_hour;
     float env_cycle_hour;

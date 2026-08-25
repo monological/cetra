@@ -70,8 +70,12 @@ typedef enum ConfigType {
     CFG_INT,
     CFG_FLOAT,
     // A genuine double field, not a wider float: the day/night hour is one
-    // (spec 11.81), because its gate arm holds the sun path against a Python
-    // twin and float32 loses the bit-identity that rests on. Carried through
+    // (spec 11.81), because it is an ACCUMULATOR -- near hour 24 a float32 ulp
+    // is 1.9e-6 h against a 4.4e-6 h per-frame increment on a 24-real-hour
+    // day, so a float clock quantises and then stalls. (Not, as this said at
+    // first, the gate arm's bit-identity: every hour INPUT narrows through a
+    // float on the way in. What the arm rests on is sky_sun_path's double
+    // domain, which sky.h states where that function lives.) Carried through
     // the same double pipeline every other type already decodes into, so it
     // is the one type that neither narrows nor widens on the way.
     CFG_DOUBLE,
@@ -311,10 +315,12 @@ static void _apply_fog_ambient(ConfigApplyCtx* ctx, void* base, const ConfigFiel
  * against a half-restored sun.
  *
  * Flagged on a CHANGE, not on the row being present. Every snapshot of a scene
- * with a sky carries both angles, so flagging on presence re-bakes the
- * transmittance, multiscatter and sky-view LUTs, the environment cube and the
- * GGX prefilter on every restore -- including the common one, where the file is
- * restored onto the scene it was taken from and the sun has not moved at all.
+ * with a sky carries both angles, so flagging on presence re-bakes the sky-view
+ * LUT, the environment cube and the GGX prefilter on every restore -- including
+ * the common one, where the file is restored onto the scene it was taken from
+ * and the sun has not moved at all. (Transmittance and multiscatter are NOT in
+ * that set: they are sun-independent, baked once by sky_bake_static_luts, and
+ * no sun path touches them.)
  * That is 0.11 s a restore, and it drags sky_apply_sun_to_light along with it,
  * which overwrites the sun light's intensity the `lights` array just restored.
  */

@@ -170,6 +170,12 @@ typedef struct {
                                   // either way. Negative = cycle off (the default)
     float time_of_day;            // Hours 0-24, solar noon at 12 (-1 = unset). Wins over
                                   // --sun-elevation/--sun-azimuth when both are given
+    int sun_angle_flagged;        // A sun angle came from the COMMAND LINE, not from a
+                                  // .cscn's environment.sun -- which also seeds those
+                                  // fields, so they cannot report a conflict by themselves
+    int no_day_cycle;             // Drop a cycle a scene file asked for. The --no-stars /
+                                  // --no-night-floor rule: authoring is the only way on,
+                                  // so the CLI needs a way off
     int cycle_rebake_at;          // Diagnostic: force one SLICED rebake at frame N with the
                                   // sun unchanged, so the slicer compares against the atomic
                                   // bake with no hour arithmetic in it (-1 = never)

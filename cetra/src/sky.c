@@ -654,10 +654,10 @@ static void sky_env_face_slice(SkyAtmosphere* sky, struct IBLResources* ibl, GLu
     glViewport(0, 0, SKY_ENV_SIZE, SKY_ENV_SIZE);
 
     mat4 views[6];
-    mat4 projection;
+    mat4 projection = {{0}};
     vec3 origin = {0.0f, 0.0f, 0.0f};
     ibl_capture_views(origin, views);
-    glm_perspective(glm_rad(90.0f), 1.0f, 0.1f, 10.0f, projection);
+    ibl_cubemap_projection(projection);
 
     glUseProgram(env->id);
     glActiveTexture(GL_TEXTURE0);
