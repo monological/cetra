@@ -1283,23 +1283,22 @@ int main(int argc, char** argv) {
             set_node_light(sun_node, sun_light);
             add_child_node(root, sun_node);
 
-            // The moon's own directional, created only when the moon is on --
-            // the render app's reasoning, and the same restore contract.
-            if (sky->moon_enabled) {
-                Light* moon_light = create_light();
-                set_light_name(moon_light, "moon");
-                set_light_type(moon_light, LIGHT_DIRECTIONAL);
-                set_light_cast_shadows(moon_light, true);
-                set_light_size(moon_light, 6.0f, 6.0f);
-                sky->moon_light = moon_light;
-                sky_apply_moon_to_light(sky);
-                add_light_to_scene(scene, moon_light);
+            // The moon's own directional, created unconditionally for the
+            // reason render.c states at length: a config restore cannot make a
+            // Light, and a disabled moon costs nothing because it neither
+            // casts nor emits.
+            Light* moon_light = create_light();
+            set_light_name(moon_light, "moon");
+            set_light_type(moon_light, LIGHT_DIRECTIONAL);
+            set_light_size(moon_light, 6.0f, 6.0f);
+            sky->moon_light = moon_light;
+            sky_apply_moon_to_light(sky); // owns cast_shadows: on iff it is lighting
+            add_light_to_scene(scene, moon_light);
 
-                SceneNode* moon_node = create_node();
-                set_node_name(moon_node, "moon");
-                set_node_light(moon_node, moon_light);
-                add_child_node(root, moon_node);
-            }
+            SceneNode* moon_node = create_node();
+            set_node_name(moon_node, "moon");
+            set_node_light(moon_node, moon_light);
+            add_child_node(root, moon_node);
 
             printf("Sky: sun at elevation %.1f azimuth %.1f\n", sky->sun_elevation_deg,
                    sky->sun_azimuth_deg);

@@ -3131,29 +3131,37 @@ int main(int argc, char** argv) {
                     add_child_node(scene->root_node, sun_node);
                 }
                 /*
-                 * The moon's second directional, created ONLY when the moon is
-                 * enabled -- the sky.clouds.enabled shape, and for its reason:
-                 * a config restore cannot conjure a Light, so the row has to
-                 * refuse rather than store a flag every consumer ignores.
+                 * The moon's second directional, created UNCONDITIONALLY --
+                 * not gated on moon_enabled, and the reason is what a config
+                 * snapshot can and cannot do. Restoring cannot CREATE a Light,
+                 * so a moon light that exists only when the flag was passed
+                 * makes `sky.moon` a row that restores a disc and no light:
+                 * measured at 139,768 px against the session it claims to
+                 * reproduce. The GUI checkbox has the same problem for the
+                 * same reason.
                  *
-                 * It also keeps the caster count in every existing frame
-                 * exactly what it was, which is what the 27 goldens rest on.
+                 * It costs nothing when disabled, and that is structural
+                 * rather than hopeful. sky_apply_moon_to_light gives a
+                 * disabled moon intensity 0 and cast_shadows false; the
+                 * classification pass skips non-casting lights BEFORE it
+                 * counts directionals (shadow.c), so the caster count and
+                 * every cascade layer are untouched, and the cluster's extra
+                 * entry contributes radiance x 0 x NdotL.
+                 *
                  * Inside the --no-key-light guard because that flag means "no
                  * analytic lights", and the moon is one.
                  */
-                if (sky->moon_enabled) {
-                    Light* moon = create_light();
-                    if (moon) {
-                        set_light_name(moon, "sky_moon");
-                        set_light_type(moon, LIGHT_DIRECTIONAL);
-                        sky->moon_light = moon;
-                        sky_apply_moon_to_light(sky);
-                        add_light_to_scene(scene, moon);
-                        SceneNode* moon_node = create_node();
-                        set_node_light(moon_node, moon);
-                        set_node_name(moon_node, "sky_moon");
-                        add_child_node(scene->root_node, moon_node);
-                    }
+                Light* moon = create_light();
+                if (moon) {
+                    set_light_name(moon, "sky_moon");
+                    set_light_type(moon, LIGHT_DIRECTIONAL);
+                    sky->moon_light = moon;
+                    sky_apply_moon_to_light(sky);
+                    add_light_to_scene(scene, moon);
+                    SceneNode* moon_node = create_node();
+                    set_node_light(moon_node, moon);
+                    set_node_name(moon_node, "sky_moon");
+                    add_child_node(scene->root_node, moon_node);
                 }
                 // Ground the model on the virtual floor
                 scene->shadow_catcher = true;
