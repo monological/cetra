@@ -870,15 +870,23 @@ typedef struct {
 /*
  * Weighted texels the tick spends per frame.
  *
- * The weights are an unmeasured cost MODEL, not measurements, and two of the
- * inputs are known to be rough: the x2 prefilter factor implies a GGX+Charlie
- * cost well under what 11.0 measured for the same draws, and an env face is
- * weighted independently of clouds_bake though a cloud face marches 24 steps
- * per texel. The model only has to rank items and bound a frame, which it
- * does; the budget is then set BELOW the heaviest single item (a mip-0
- * prefilter face at 131072) so the pump's overshoot guard can actually bite.
- * A real per-item timing pass belongs in the spec before either number is
- * treated as authoritative.
+ * The weights are a cost MODEL and two inputs are rough: the x2 prefilter
+ * factor implies a GGX+Charlie cost under what 11.0 measured for the same
+ * draws, and an env face is weighted independently of clouds_bake though a
+ * cloud face marches 24 steps per texel. The model only has to RANK items and
+ * bound a frame.
+ *
+ * The budget sits just under the heaviest single item (a mip-0 prefilter face
+ * at 131072) so the pump's overshoot guard bites and those run alone.
+ * MEASURED at 800x500 through the "sky cycle" profiler scope: 4.74 ms GPU on
+ * an average slice frame here, 1.87 ms with the budget forced to 1 (one item
+ * per frame, ~43 ticks instead of ~20).
+ *
+ * The difference is not headroom to claim: a mip-0 face is ONE item and
+ * cannot be split at face granularity, so the per-frame PEAK is that face's
+ * cost either way. Lowering the budget only spreads the cheap items thinner
+ * and lengthens convergence. Going below that peak needs sub-face slicing,
+ * which is a schedule change rather than a constant.
  */
 #define SKY_SLICE_BUDGET 120000
 
