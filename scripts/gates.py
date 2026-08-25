@@ -5152,22 +5152,26 @@ STARS_BAND = (0.05, 0.04, 0.95, 0.42)
 # the top of frame (~+23..27 deg, airmass ~2.3), which still separates cleanly.
 STARS_LOW_BAND = (0.05, 0.47, 0.95, 0.54)
 STARS_HIGH_BAND = (0.05, 0.02, 0.95, 0.12)
-STARS_NIGHT_ELEV = "-12"
 # The emerge ladder. +5 is above the ramp's top edge (+3), so its contribution is an
-# exact zero and the ladder's first step doubles as the ramp-zeroing read.
+# exact zero and the ladder's first step doubles as the ramp-zeroing read. Four other
+# arms hang off the last rung's pair, so the night elevation is DEFINED as that rung
+# rather than restated beside it.
 STARS_EMERGE_ELEVS = ["5", "0", "-6", "-12"]
+STARS_NIGHT_ELEV = STARS_EMERGE_ELEVS[-1]
 STARS_DAY_ELEV = "35"
 # Bars, measured on the shipping field at 400x300. Wide floors: the direction is the
-# claim, and every measured value sits an order of magnitude past its bar. Measured:
-# night 163,822 px; emerge 0 / 0.00144 / 0.00977 / 0.01127; horizon luma 0.355 (the
-# airmass arithmetic predicts ~0.39) with R/B 2.245 against 1.256; deck/clear 0.017 --
-# the default 0.45-coverage deck is nearly opaque at night, and the after-the-multiply
+# claim. Night, emerge and clouds sit an order of magnitude past their bars; horizon's
+# margin is ~2x and CANNOT be wider, since the airmass arithmetic itself predicts ~0.39
+# against the 0.75 bar. Measured: night 163,822 px; emerge 0 / 0.00144 / 0.00977 /
+# 0.01127; horizon luma 0.355 with R/B 2.245 against 1.256; deck/clear 0.017 -- the
+# default 0.45-coverage deck is nearly opaque at night, and the after-the-multiply
 # mutation this arm exists for reads ~1.0.
 STARS_NIGHT_MIN_PX = 2000
 STARS_EMERGE_FLOOR = 5e-4
 STARS_HORIZON_LUMA_MAX = 0.75
 STARS_HORIZON_RB_MIN = 1.05
 STARS_CLOUDS_MAX = 0.85
+STARS_CSCN_MIN_PX = 2000
 
 
 def _stars_delta(on_path, off_path, box):
@@ -5229,6 +5233,13 @@ def run_stars_gate(workdir):
                       Moving it after that multiply is what it catches. Whole band, not
                       deck-vs-gap boxes: the deck drifts with wind.
       stars-det       two runs of the -12 leg are 0 px.
+      stars-cscn      the authored environment.stars block IS the flag path: a variant
+                      authoring enabled+brightness renders 0 px from its flag twin (the
+                      ies-flag idiom), a variant rotating the cscn-ONLY latitude and
+                      hour moves real pixels (those two fields have no CLI flag, so
+                      nothing else can prove their plumbing is alive), and --no-stars
+                      beats an authoring file at 0 px. Deleting the parse is what the
+                      first reading catches.
     """
     scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
     if not os.path.exists(scene):
@@ -5258,7 +5269,7 @@ def run_stars_gate(workdir):
         print(f"  stars-daylight ERROR render failed: {err.strip()[-200:]}")
         failures.append("stars-daylight")
     else:
-        _, day_moved = _stars_delta(d_on, d_off, (0.0, 0.0, 1.0, 1.0))
+        day_moved, _ = compare(d_on, d_off)
         ok = day_moved == 0
         print(f"  stars-daylight {'PASS' if ok else 'FAIL'}  {day_moved} px at "
               f"+{STARS_DAY_ELEV} (want 0: the ramp must zero exactly)")
@@ -5266,12 +5277,14 @@ def run_stars_gate(workdir):
             failures.append("stars-daylight")
 
     lumas = [sum(deltas[e][0]) / 3.0 for e in STARS_EMERGE_ELEVS]
+    _, top_rung_moved = deltas[STARS_EMERGE_ELEVS[0]]
     steps = " -> ".join(f"{v:.6f}" for v in lumas)
-    ok = (deltas[STARS_EMERGE_ELEVS[0]][1] == 0 and
+    ok = (top_rung_moved == 0 and
           all(lumas[i] < lumas[i + 1] for i in range(len(lumas) - 1)) and
           lumas[-1] >= STARS_EMERGE_FLOOR)
     print(f"  stars-emerge {'PASS' if ok else 'FAIL'}  band contribution {steps} "
-          f"(want strictly increasing, +5 exactly 0, final >={STARS_EMERGE_FLOOR})")
+          f"(want strictly increasing, +{STARS_EMERGE_ELEVS[0]} exactly 0, "
+          f"final >={STARS_EMERGE_FLOOR})")
     if not ok:
         failures.append("stars-emerge")
 
@@ -5310,12 +5323,52 @@ def run_stars_gate(workdir):
         print(f"  stars-det   ERROR render failed: {err.strip()[-200:]}")
         failures.append("stars-det")
     else:
-        _, det_moved = _stars_delta(night_on, det, (0.0, 0.0, 1.0, 1.0))
+        det_moved, _ = compare(night_on, det)
         ok = det_moved == 0
         print(f"  stars-det    {'PASS' if ok else 'FAIL'}  {det_moved} px between two "
               f"runs (want 0)")
         if not ok:
             failures.append("stars-det")
+
+    # The authored scene key, held to the flag path by generated twins (the ies-flag
+    # idiom). The authored variant pins the library-default latitude/hour so the flag
+    # twin CAN match it; the moved variant then rotates exactly the two fields no flag
+    # reaches.
+    cscn_src = os.path.join(ROOT, "assets", "aerial_fixture.cscn")
+    authored = os.path.join(workdir, "stars_cscn_authored.cscn")
+    rotated = os.path.join(workdir, "stars_cscn_rotated.cscn")
+
+    def _stars_author(hour, lat):
+        def mutate(d):
+            d["environment"]["sun"] = {"elevation": -12.0, "azimuth": 40.0}
+            d["environment"]["stars"] = {"enabled": True, "brightness": 1.5,
+                                         "latitude": lat, "hour_angle": hour}
+        return mutate
+
+    cscn_copy(cscn_src, authored, _stars_author(0.0, 45.0))
+    cscn_copy(cscn_src, rotated, _stars_author(120.0, 10.0))
+    a_frame = os.path.join(workdir, "stars_cscn_a.ppm")
+    b_frame = os.path.join(workdir, "stars_cscn_b.ppm")
+    c_frame = os.path.join(workdir, "stars_cscn_c.ppm")
+    off_frame = os.path.join(workdir, "stars_cscn_off.ppm")
+    err = render(authored, a_frame, STARS_PIN) or \
+        render(scene, b_frame,
+               ["--stars", "--stars-brightness", "1.5", "--sun-elevation",
+                STARS_NIGHT_ELEV] + STARS_PIN) or \
+        render(rotated, c_frame, STARS_PIN) or \
+        render(authored, off_frame, ["--no-stars"] + STARS_PIN)
+    if err:
+        print(f"  stars-cscn  ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["stars-cscn"]
+    flag_px, _ = compare(a_frame, b_frame)
+    rot_px, _ = compare(a_frame, c_frame)
+    cli_px, _ = compare(off_frame, night_off)
+    ok = flag_px == 0 and rot_px >= STARS_CSCN_MIN_PX and cli_px == 0
+    print(f"  stars-cscn   {'PASS' if ok else 'FAIL'}  authored vs flags {flag_px} px "
+          f"(want 0), latitude+hour rotated {rot_px} px (want >={STARS_CSCN_MIN_PX}: "
+          f"no flag reaches those two), --no-stars over the file {cli_px} px (want 0)")
+    if not ok:
+        failures.append("stars-cscn")
 
     return failures
 

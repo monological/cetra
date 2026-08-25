@@ -2898,9 +2898,9 @@ int main(int argc, char** argv) {
             if (args.stars_brightness >= 0.0f)
                 sky->stars_brightness = args.stars_brightness;
             if (args.stars_latitude > -900.0f)
-                sky->latitude_deg = args.stars_latitude;
+                sky->stars_latitude_deg = args.stars_latitude;
             if (args.stars_hour > -900.0f)
-                sky->star_hour_deg = args.stars_hour;
+                sky->stars_hour_deg = args.stars_hour;
             sky->clouds.enabled = args.clouds != 0;
             if (args.no_cloud_shadows)
                 sky->clouds.shadows_enabled = false;

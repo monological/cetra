@@ -131,8 +131,11 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
         d->has_env_sun = ge && ga;
     }
 
-    // sky-mode star field (spec 11.79). Every key optional past "enabled";
-    // unset ones keep the sky's own defaults.
+    // sky-mode star field (spec 11.79). Every key independent, each with its
+    // own presence flag (this file's stated convention; the sun block's
+    // both-or-nothing is the outlier) -- so a block authoring only
+    // "brightness" stores it and arms nothing, which is deliberate: a file
+    // describes values, a flag takes actions.
     const cJSON* stars = cJSON_GetObjectItemCaseSensitive(env, "stars");
     if (cJSON_IsObject(stars)) {
         d->has_env_stars = get_bool(stars, "enabled", &d->env_stars_enabled);

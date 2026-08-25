@@ -34,8 +34,8 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     // and scene files opt in.
     sky->stars_enabled = false;
     sky->stars_brightness = 1.0f;
-    sky->latitude_deg = 45.0f;
-    sky->star_hour_deg = 0.0f;
+    sky->stars_latitude_deg = 45.0f;
+    sky->stars_hour_deg = 0.0f;
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky->publish_fog_ambient = true;
     sky->aerial_enabled = true;
@@ -744,8 +744,8 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     // turn about it by the hour angle. Column-major, applied as frame * dir.
     {
         mat4 tilt, spin, frame4;
-        glm_rotate_make(tilt, glm_rad(sky->latitude_deg - 90.0f), (vec3){1.0f, 0.0f, 0.0f});
-        glm_rotate_make(spin, glm_rad(sky->star_hour_deg), (vec3){0.0f, 1.0f, 0.0f});
+        glm_rotate_make(tilt, glm_rad(sky->stars_latitude_deg - 90.0f), (vec3){1.0f, 0.0f, 0.0f});
+        glm_rotate_make(spin, glm_rad(sky->stars_hour_deg), (vec3){0.0f, 1.0f, 0.0f});
         glm_mat4_mul(spin, tilt, frame4);
         mat3 frame;
         glm_mat4_pick3(frame4, frame);

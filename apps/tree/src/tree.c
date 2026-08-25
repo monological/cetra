@@ -755,7 +755,7 @@ typedef struct {
     int no_fog;
     int no_falling_leaves;
     int no_stars; // stars are ON here: this app is the night sky's home
-    float star_hour; // Milky Way rotation about the pole, degrees (-999 = default)
+    float star_hour; // Milky Way rotation about the pole, degrees
     const char* config_path; // restore a config snapshot (GUI Dump Config writes one)
     int seed;
     float sun_elevation;
@@ -875,7 +875,10 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     a->seed = 42;
     a->sun_elevation = 0.8f;
     a->sun_azimuth = 193.0f;
-    a->star_hour = -999.0f; // -999 = keep the sky default; 0 is a legal hour
+    // 90 puts the Milky Way's arc across this app's default framing; the
+    // library default leaves it behind the camera. No sentinel: unlike
+    // render there is no scene file between the CLI and this default.
+    a->star_hour = 90.0f;
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
     a->water_level = -9999.0f;
@@ -1178,9 +1181,7 @@ int main(int argc, char** argv) {
         // ON here where the library defaults off: this app is the ask's home,
         // and its 0.8 degree sun is already inside the fade-in ramp.
         sky->stars_enabled = args.no_stars == 0;
-        // 90 puts the Milky Way's arc across this app's default framing;
-        // the library default leaves it behind the camera.
-        sky->star_hour_deg = args.star_hour > -900.0f ? args.star_hour : 90.0f;
+        sky->stars_hour_deg = args.star_hour;
         /*
          * This world's scale, which nothing set until spec 11.44 (the GUI offered a slider
          * for it and no code ever wrote it), so the sky ran at its 1-unit-is-a-metre default
@@ -1665,7 +1666,7 @@ int main(int argc, char** argv) {
     // app just configured -- the render app's ordering, for the same reason.
     if (args.config_path) {
         if (config_snapshot_apply_file(engine, scene, args.config_path) < 0)
-            return 1;
+            return -1;
     }
 
     engine_run(engine, NULL, render_scene_callback);

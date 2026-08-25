@@ -1,8 +1,8 @@
 // Procedural star field for the sky background (spec 11.79). Two octahedral
-// lattices over the direction sphere: a 128x128 BRIGHT field (~9k stars at
-// the shipping occupancy, the naked-eye count to magnitude 6.5) and a
-// 256x256 faint WASH -- the thousands of barely-resolved stars that make a
-// dark sky read as deep rather than as a scatter of dots. Evaluated only by
+// lattices over the direction sphere: a BRIGHT field (~9k stars at the
+// shipping occupancy, the naked-eye count to magnitude 6.5) and a twice-fine
+// faint WASH -- the thousands of barely-resolved stars that make a dark sky
+// read as deep rather than as a scatter of dots. Evaluated only by
 // the two background variants; the env/IBL path must never carry this, for
 // the same firefly reason sky_env_frag refuses the sun disc.
 //
@@ -44,7 +44,20 @@ const float STAR_BASE = 0.5;
 // at 60 the two brightest stars in a frame ballooned into globes. Every
 // star under the cap is untouched by this number.
 const float STAR_FLUX_CAP = 25.0;
+// The wash: the faint layer's own dials, one per bright-field counterpart.
+// Its cap and scale keep every wash star well under saturation -- brighter
+// and it stops being texture and joins the crowd.
+const float STAR_WASH_OCCUPANCY = 0.5;
+const float STAR_WASH_FLUX_CAP = 6.0;
+const float STAR_WASH_SCALE = 0.35;  // of STAR_BASE
+// How much the Milky Way band multiplies each layer's star density.
+const float STAR_BAND_DENSITY = 1.1;
+const float STAR_WASH_BAND_DENSITY = 1.0;
 const float STAR_GLOW = 0.12;        // Milky Way band peak radiance
+// How much of the atmosphere's spectral tint a star keeps (the magnitude is
+// always kept). Full extinction paints the sun orange at the horizon, and on
+// a whole field of point sources it reads as grime rather than reddening.
+const float STAR_TINT_SATURATION = 0.35;
 
 // The band's pole in the celestial frame: the galactic pole sits ~63 deg
 // from the celestial pole, which is what tips the band across the sky
@@ -72,9 +85,14 @@ float starUnit(uint h) {
     return float(h) * (1.0 / 4294967296.0);
 }
 
-// Seed for a lattice cell; successive per-cell values chain starPcg from it.
+// The one composition of it: three lanes folded to one seed. Successive
+// per-cell values chain starPcg from the result.
+uint starHash3(uvec3 v) {
+    return starPcg(v.x + starPcg(v.y + starPcg(v.z)));
+}
+
 uint starCellSeed(vec2 cell, uint seed) {
-    return starPcg(uint(int(cell.x)) + starPcg(uint(int(cell.y)) + starPcg(seed)));
+    return starHash3(uvec3(uint(int(cell.x)), uint(int(cell.y)), seed));
 }
 
 // 3D value noise for the band's lane structure, on the same integer hash.
@@ -87,14 +105,14 @@ float starNoise3(vec3 p) {
     vec3 f = fract(p);
     vec3 u = f * f * (3.0 - 2.0 * f);
     uvec3 b = uvec3(ivec3(i));
-    float n000 = starUnit(starPcg(b.x + starPcg(b.y + starPcg(b.z))));
-    float n100 = starUnit(starPcg(b.x + 1u + starPcg(b.y + starPcg(b.z))));
-    float n010 = starUnit(starPcg(b.x + starPcg(b.y + 1u + starPcg(b.z))));
-    float n110 = starUnit(starPcg(b.x + 1u + starPcg(b.y + 1u + starPcg(b.z))));
-    float n001 = starUnit(starPcg(b.x + starPcg(b.y + starPcg(b.z + 1u))));
-    float n101 = starUnit(starPcg(b.x + 1u + starPcg(b.y + starPcg(b.z + 1u))));
-    float n011 = starUnit(starPcg(b.x + starPcg(b.y + 1u + starPcg(b.z + 1u))));
-    float n111 = starUnit(starPcg(b.x + 1u + starPcg(b.y + 1u + starPcg(b.z + 1u))));
+    float n000 = starUnit(starHash3(b + uvec3(0u, 0u, 0u)));
+    float n100 = starUnit(starHash3(b + uvec3(1u, 0u, 0u)));
+    float n010 = starUnit(starHash3(b + uvec3(0u, 1u, 0u)));
+    float n110 = starUnit(starHash3(b + uvec3(1u, 1u, 0u)));
+    float n001 = starUnit(starHash3(b + uvec3(0u, 0u, 1u)));
+    float n101 = starUnit(starHash3(b + uvec3(1u, 0u, 1u)));
+    float n011 = starUnit(starHash3(b + uvec3(0u, 1u, 1u)));
+    float n111 = starUnit(starHash3(b + uvec3(1u, 1u, 1u)));
     return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
                mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
 }
@@ -117,8 +135,9 @@ vec3 starColor(float h) {
 // own cell at every resolution -- a single-cell tap shipped, and truncated
 // edge-adjacent stars along their cell boundaries into hard diagonal
 // wedges. Neighbours across the octahedral fold are adjacent on the sphere
-// too (the fold is continuous), and the square's outer border maps to the
-// nadir, where the caller's transmittance is already zero.
+// too (the fold is continuous), and the square's outer border decodes
+// at-or-below the horizon (the edge midpoints ARE the horizon, the corners
+// the nadir), where the caller's transmittance is already zero.
 //
 // `scale` is the flux-1 peak radiance; the glare wing grows with the star's
 // own brightness (bright sources flare, faint ones stay points).
@@ -165,10 +184,12 @@ vec3 starRadiance(vec3 dir) {
     float band = exp(-s * s / (2.0 * STAR_BAND_WIDTH * STAR_BAND_WIDTH));
 
     // The bright field, then the faint wash on a twice-fine lattice.
-    vec3 star = starLayer(dir, STAR_GRID, STAR_OCCUPANCY * (1.0 + 1.1 * band),
+    vec3 star = starLayer(dir, STAR_GRID,
+                          STAR_OCCUPANCY * (1.0 + STAR_BAND_DENSITY * band),
                           STAR_FLUX_CAP, STAR_BASE, sigma) +
-                starLayer(dir, STAR_GRID * 2.0, 0.5 * (1.0 + 1.0 * band), 6.0,
-                          STAR_BASE * 0.35, sigma);
+                starLayer(dir, STAR_GRID * 2.0,
+                          STAR_WASH_OCCUPANCY * (1.0 + STAR_WASH_BAND_DENSITY * band),
+                          STAR_WASH_FLUX_CAP, STAR_BASE * STAR_WASH_SCALE, sigma);
 
     // Unresolved glow with dark-lane structure, faintly blue like the real
     // integrated light.

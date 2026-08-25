@@ -27,13 +27,12 @@ vec3 skyRadiance(vec3 dir, vec3 sunDir, float r, sampler2D skyViewLut,
     // transmittance dims them toward the horizon and zeroes them where the
     // ray hits ground; sitting inside `sky` is what puts them under the
     // clouds variant's deck transmittance. starIntensity carries the
-    // CPU-side night ramp, so daylight is an exact zero. The TINT is applied
-    // at half saturation: the full spectral extinction is what paints the
-    // sun orange at the horizon, and on a whole field of point sources it
-    // reads as grime rather than as reddening.
+    // CPU-side night ramp, so daylight is an exact zero. The tint is applied
+    // at partial saturation -- a star look decision, so the constant lives
+    // with the rest of them in stars.glsl.
     if (starIntensity > 0.0) {
         vec3 t = transmittanceToSky(transmittanceLut, r, dir.y);
-        t = mix(vec3(dot(t, vec3(0.2126, 0.7152, 0.0722))), t, 0.35);
+        t = mix(vec3(dot(t, vec3(0.2126, 0.7152, 0.0722))), t, STAR_TINT_SATURATION);
         sky += starRadiance(starFrame * dir) * t * starIntensity;
     }
 

@@ -403,7 +403,7 @@ typedef struct CetraSceneDesc {
     bool has_env_sun; // sky-mode sun angles authored (else the sky default)
     float env_sun_elevation_deg;
     float env_sun_azimuth_deg;
-    bool has_env_stars; // sky-mode star field authored (spec 11.79)
+    bool has_env_stars; // the "enabled" key specifically was authored (spec 11.79)
     bool env_stars_enabled;
     bool has_env_stars_brightness;
     float env_stars_brightness;

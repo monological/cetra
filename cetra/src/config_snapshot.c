@@ -607,8 +607,8 @@ static const ConfigField CFG_FIELDS[] = {
     // stores, nothing re-bakes.
     CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "stars", stars_enabled),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "stars_brightness", stars_brightness),
-    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "latitude", latitude_deg),
-    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "star_hour", star_hour_deg),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "stars_latitude", stars_latitude_deg),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "stars_hour", stars_hour_deg),
     CFG_ROW_FN(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled, _apply_cloud_enabled),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage, _apply_cloud_field),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type, _apply_cloud_field),
