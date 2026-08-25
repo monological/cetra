@@ -5776,7 +5776,13 @@ MOON_DISC_SHIPPING = 0.53
 # spreads the disc's energy across the whole frame, so an arm asserting the disc is
 # confined to its own solid angle would be reading the blur kernel. --no-dither for the
 # neighbouring reason -- the maria read is a small-signal sigma where +/-1 LSB is large.
-MOON_DISC_FLAGS = STARS_PIN + ["--no-bloom", "--no-dither"]
+# --no-moon-glow on every DISC arm, for the reason --no-bloom is there: the
+# aureole is real light OUTSIDE the disc, so an arm asserting the disc is
+# confined to its own solid angle would be reading the halo. The halo has its
+# own arm. (It also has to come off because the halo's width follows the DRAWN
+# radius, and these arms drive that to 12 degrees for measurement -- which is a
+# halo most of a frame wide, wanted by nobody.)
+MOON_DISC_FLAGS = STARS_PIN + ["--no-bloom", "--no-dither", "--no-moon-glow"]
 
 # create_sky_atmosphere's own cycle_moon_offset default. Named rather than typed
 # out, because moon-cycle's 0 px identity rests on the C and this twin agreeing
@@ -5796,6 +5802,10 @@ MOON_LIMB_COS_MIN = 0.906
 MOON_LIMB_OFFSET_MIN = 0.10  # of the disc radius; measured worst 0.30
 MOON_KS_RATIO_MIN = 5.0      # full/quarter, against a predicted 10.99 through the tonemap
 MOON_MARIA_DRIFT_MAX = 0.01  # 0.000 correct against 0.044 sun-locked; see the arm
+# Where the drift read starts, as a fraction of the lit face's own peak. Stated
+# relatively because an absolute floor emptied the set outright the moment the
+# disc radiance was retuned -- the same bar failing the other way.
+MOON_MARIA_BASE_FRAC = 0.45
 # The rest of the bars, hoisted out of the arm bodies with their MEASURED readings
 # beside them -- the shape the block above already had and the arms had been ignoring.
 # Each pairs the reading on correct code with what that arm's named mutation produces,
@@ -6205,9 +6215,17 @@ def run_moon_gate(workdir):
         if s_el > -MOON_DISC_BIG * 0.5:
             term_err = f"roll {roll:.0f} puts the sun at {s_el:.1f}, not clear of its own disc"
             break
+        # --no-moon-maria, and it ISOLATES this arm's claim rather than dodging
+        # one. What is under test is which way the terminator FACES; the maria
+        # are a fixed albedo pattern the lit region slides across, so they pull a
+        # contribution-weighted centroid off the sunward axis by however much sea
+        # happens to be lit. Deepening the seas took the worst roll from 16.7 to
+        # 32 degrees without the terminator moving at all. They are asserted
+        # separately, by moon-maria.
         common = ["--sun-elevation", f"{s_el:.6f}", "--sun-azimuth", f"{s_az:.6f}",
                   "--moon-elevation", f"{MOON_EL_HIGH}", "--moon-azimuth", f"{MOON_AZ}",
-                  "--sky-disc", str(MOON_DISC_BIG)] + cam_argv + MOON_DISC_FLAGS
+                  "--sky-disc", str(MOON_DISC_BIG), "--no-moon-maria"] + cam_argv + \
+            MOON_DISC_FLAGS
         on, off, et = _moon_pair(workdir, f"term{int(roll)}", common)
         if et:
             term_err = et.strip()[-160:]
@@ -6295,6 +6313,10 @@ def run_moon_gate(workdir):
                 break
             _, _, ra = _read_ppm(r_on)
             _, _, rb = _read_ppm(r_off)
+            roll_peak = 0.0
+            for _, _, o in _moon_face_pixels(cx, cy, radius, w, h, 0.9):
+                roll_peak = max(roll_peak,
+                                sum(_SRGB_TO_LINEAR[rb[o + k]] for k in range(3)) / 3.0)
             cur = {}
             for x, y, o in _moon_face_pixels(cx, cy, radius, w, h, 0.9):
                 base = sum(_SRGB_TO_LINEAR[rb[o + k]] for k in range(3)) / 3.0
@@ -6302,7 +6324,7 @@ def run_moon_gate(workdir):
                 # cancels everything but the albedo, and a ratio of two small 8-bit codes
                 # is mostly quantization -- at 0.05 the worst pixel read 0.127 on CORRECT
                 # code, which is noise wearing the shape of a finding.
-                if base < 0.25:
+                if base < MOON_MARIA_BASE_FRAC * roll_peak:
                     continue
                 cur[(x, y)] = (sum(_SRGB_TO_LINEAR[ra[o + k]] for k in range(3)) / 3.0) / base
             alb[roll] = cur

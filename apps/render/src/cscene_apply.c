@@ -118,6 +118,8 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->moon = cscn->env_moon_enabled ? 1 : 0;
     if (cscn->has_env_moon_brightness && args->moon_brightness < 0.0f)
         args->moon_brightness = cscn->env_moon_brightness;
+    if (cscn->has_env_moon_size && args->moon_size < 0.0f)
+        args->moon_size = cscn->env_moon_size;
     if (cscn->has_env_moon_elevation && args->moon_elevation < -900.0f)
         args->moon_elevation = cscn->env_moon_elevation_deg;
     if (cscn->has_env_moon_azimuth && args->moon_azimuth < -900.0f)

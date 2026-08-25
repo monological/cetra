@@ -772,6 +772,7 @@ typedef struct {
     int no_stars; // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
     int no_moon;        // and the moon: this app is where a night sky is looked at
+    float moon_size;    // times life size the disc is drawn (<0 = the library's 1.0)
     float day_cycle;    // real seconds per 24h day; 0 = frozen clock, <0 = cycle off
     float time_of_day;  // hours 0-24, solar noon at 12 (-1 = unset)
     float star_hour; // Milky Way rotation about the pole, degrees
@@ -856,6 +857,8 @@ static void print_usage(const char* prog) {
     printf("                          --sun-elevation/--sun-azimuth\n");
     printf("      --no-moon           Disable the moon (its phase and position both\n");
     printf("                          follow the sun, so the day cycle moves it)\n");
+    printf("      --moon-size <f>     Draw the moon f times life size (default 1). The\n");
+    printf("                          disc and its halo only -- the light never scales\n");
     printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
     printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
@@ -910,6 +913,7 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     // renders unless motion is asked for. 0 is a legal request (frozen).
     a->day_cycle = -1.0f;
     a->time_of_day = -1.0f;
+    a->moon_size = -1.0f;
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
     a->water_level = -9999.0f;
@@ -1002,6 +1006,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_night_floor = 1;
         } else if (!strcmp(s, "--no-moon")) {
             a->no_moon = 1;
+        } else if (!strcmp(s, "--moon-size") && has_next) {
+            a->moon_size = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--day-cycle") && has_next) {
             a->day_cycle = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--time-of-day") && has_next) {
@@ -1222,6 +1228,8 @@ int main(int argc, char** argv) {
         sky->stars_enabled = args.no_stars == 0;
         sky->night_floor_enabled = args.no_night_floor == 0;
         sky->moon_enabled = args.no_moon == 0;
+        if (args.moon_size > 0.0f)
+            sky->moon_size = args.moon_size;
         sky->stars_hour_deg = args.star_hour;
         if (args.day_cycle >= 0.0f) {
             sky->cycle_enabled = true;

@@ -227,11 +227,14 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "                         second casting light (implies --sky)\n");
     fprintf(stderr, "      --no-moon          Drop a moon a scene file asked for\n");
     fprintf(stderr, "      --moon-brightness <f> Moon radiance scale, disc and light\n");
+    fprintf(stderr, "      --moon-size <f>    Draw the moon f times life size (default 1;\n");
+    fprintf(stderr, "                         the disc and its halo only, never the light)\n");
     fprintf(stderr, "      --moon-elevation <d> Moon elevation in degrees (implies --moon).\n");
     fprintf(stderr, "                         The day cycle owns this while it runs\n");
     fprintf(stderr, "      --moon-azimuth <d> Moon azimuth in degrees (implies --moon)\n");
     fprintf(stderr, "      --no-moon-maria    Diagnostic: a uniform lunar face\n");
     fprintf(stderr, "      --no-earthshine    Diagnostic: a black dark limb\n");
+    fprintf(stderr, "      --no-moon-glow     Diagnostic: no aureole, the disc alone\n");
     fprintf(stderr, "      --moon-probe       Print the derived phase: elongation, phase\n");
     fprintf(stderr, "                         angle, lit fraction and the brightness law\n");
     fprintf(stderr, "      --sky-disc <d>     Angular DIAMETER of BOTH sky discs, degrees\n");
@@ -466,6 +469,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->cycle_rebake_at = -1;
     args->moon = -1; // -1 = unset (a .cscn may seed it; CLI wins)
     args->moon_brightness = -1.0f;
+    args->moon_size = -1.0f;
     args->moon_elevation = -999.0f;
     args->moon_azimuth = -999.0f;
     args->sky_disc = -1.0f;
@@ -1114,6 +1118,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->moon_brightness = (float)atof(argv[i]);
             args->moon = 1;
             args->sky = 1;
+        } else if (strcmp(argv[i], "--moon-size") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->moon_size = (float)atof(argv[i]);
+            args->moon = 1;
+            args->sky = 1;
         } else if (strcmp(argv[i], "--moon-elevation") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1134,6 +1146,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_moon_maria = 1;
         } else if (strcmp(argv[i], "--no-earthshine") == 0) {
             args->no_moon_earthshine = 1;
+        } else if (strcmp(argv[i], "--no-moon-glow") == 0) {
+            args->no_moon_glow = 1;
         } else if (strcmp(argv[i], "--moon-probe") == 0) {
             args->moon_probe = 1;
         } else if (strcmp(argv[i], "--sky-disc") == 0) {
@@ -3050,6 +3064,8 @@ int main(int argc, char** argv) {
                 sky->moon_enabled = args.moon > 0 && !args.no_moon;
             if (args.moon_brightness >= 0.0f)
                 sky->moon_brightness = args.moon_brightness;
+            if (args.moon_size > 0.0f)
+                sky->moon_size = args.moon_size;
             if (args.moon_elevation > -900.0f)
                 sky->moon_elevation_deg = args.moon_elevation;
             if (args.moon_azimuth > -900.0f)
@@ -3058,6 +3074,8 @@ int main(int argc, char** argv) {
                 sky->moon_maria = false;
             if (args.no_moon_earthshine)
                 sky->moon_earthshine = false;
+            if (args.no_moon_glow)
+                sky->moon_glow = false;
             if (args.sky_disc > 0.0f)
                 sky->sun_disc_deg = args.sky_disc;
             // Seed whenever the cycle is armed, not only when an hour was

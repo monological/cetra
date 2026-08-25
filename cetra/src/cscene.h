@@ -425,6 +425,8 @@ typedef struct CetraSceneDesc {
     bool env_moon_enabled;
     bool has_env_moon_brightness;
     float env_moon_brightness;
+    bool has_env_moon_size;
+    float env_moon_size;
     bool has_env_moon_elevation;
     float env_moon_elevation_deg;
     bool has_env_moon_azimuth;

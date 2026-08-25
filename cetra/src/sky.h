@@ -216,6 +216,28 @@ typedef struct SkyAtmosphere {
      */
     bool moon_enabled;
     float moon_brightness; // the ONE look scale; drives the disc AND the light
+    /*
+     * How many times life size the moon is DRAWN. 1 = the real 0.53 degrees it
+     * shares with the sun.
+     *
+     * A multiplier rather than a second absolute size, because what it buys is
+     * ARTISTIC LICENCE and saying so is the point: the physical relationship
+     * stays stated once, up beside sun_disc_deg, and the sun is untouched at
+     * any value.
+     *
+     * It exists because the "huge moon" everyone pictures is not a thing a
+     * renderer can reproduce honestly. A low moon LOOKS enormous and is in fact
+     * 1.7% SMALLER than at the zenith -- one Earth radius further away -- so
+     * the illusion lives in the viewer and does not survive a photograph, which
+     * is what a render is. The other half of those images is a 600mm lens,
+     * i.e. a narrow fov, which the camera already offers. Drawing it oversize
+     * is what films and games actually do, and it is licence, not physics.
+     *
+     * Affects only the DISC and its aureole. The light does not scale with it:
+     * a moon drawn six times life size is still lit by a moon, and coupling
+     * them would make a look knob silently a lighting knob.
+     */
+    float moon_size;
     float moon_elevation_deg;
     float moon_azimuth_deg;
     // Two bisect levers, on by default, in the --no-water-glitter idiom: each
@@ -223,6 +245,7 @@ typedef struct SkyAtmosphere {
     // twin to difference against. Neither is a look setting.
     bool moon_earthshine; // false = the dark limb is black
     bool moon_maria;      // false = a uniform face
+    bool moon_glow;       // false = no aureole, the disc alone
     vec3 moon_dir;        // unit vector TOWARD the moon (derived; sky_update_moon)
     // Optional coupling to a second directional, the sun_light pattern below.
     // NULL = the disc without the light, which is a legitimate configuration:

@@ -565,6 +565,9 @@ static void _engine_gui_panel(Engine* engine) {
             // above: the tick owns them and a fighting slider is a trap.
             igCheckbox("Moon", &sky->moon_enabled);
             igSliderFloat("Moon Brightness", &sky->moon_brightness, 0.0f, 4.0f, "%.2f", 0);
+            // Draws the moon oversize, which is licence rather than physics --
+            // the disc and its halo only, never the light.
+            igSliderFloat("Moon Size", &sky->moon_size, 0.5f, 12.0f, "%.1fx", 0);
             igBeginDisabled(sky->cycle_enabled);
             igSliderFloat("Moon Elevation", &sky->moon_elevation_deg, -18.0f, 89.0f, "%.1f deg",
                           0);

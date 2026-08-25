@@ -28,6 +28,9 @@ uniform float sunIntensity;   // scalar disc radiance scale
 uniform mat3 starFrame;       // world dir -> celestial frame (latitude + hour angle)
 uniform float starIntensity;  // star radiance scale; 0 = daylight / disabled
 uniform vec3 moonDir;         // world-space unit vector TOWARD the moon
+uniform float moonCosRadius;  // cos of the moon's DRAWN angular radius (sun's x moon_size)
+uniform float moonGlowAng;    // aureole angular width, radians
+uniform float moonGlow;       // 1 = the aureole, 0 = the disc alone
 uniform float moonIntensity;  // disc radiance scale; 0 = new moon / day / disabled
 uniform float moonEarthshine; // 1 = the dark limb is Earth-lit, 0 = black
 uniform float moonMaria;      // 1 = the face is textured, 0 = uniform
@@ -67,16 +70,36 @@ vec3 skyRadiance(vec3 dir, float r, sampler2D skyViewLut, sampler2D transmittanc
     // the CPU-side phase law and the shared night ramp, so a new moon and a
     // daylit sky are both an exact zero and this block costs nothing. It
     // reuses sunCosRadius: the two discs subtend 0.53 and 0.52 degrees.
-    if (moonIntensity > 0.0) {
+    if (moonIntensity > 0.0 && dir.y > 0.0) {
         // The derivative is taken HERE, under a uniform condition and above
         // the per-pixel disc test -- the stars' rule and its reason.
         float pixel = length(fwidth(dir));
         float cosVM = dot(dir, moonDir);
-        if (cosVM > sunCosRadius && dir.y > 0.0) {
-            float edge = (cosVM - sunCosRadius) / (1.0 - sunCosRadius);
-            vec3 moonT = transmittanceToSky(transmittanceLut, r, moonDir.y);
+        vec3 moonT = transmittanceToSky(transmittanceLut, r, moonDir.y);
+
+        // The AUREOLE, and it runs for every sky ray rather than only inside
+        // the disc: it is air between the eye and the moon scattering moonlight
+        // sideways, so it belongs to the sky and not to the body. This is what
+        // makes a bright moon read as PRESENT against a star field instead of
+        // as one more bright dot -- the disc alone is a few pixels at its real
+        // size and disappears among the stars.
+        //
+        // A Lorentzian in the angle, which is the cheap stand-in for the Mie
+        // forward-scattering wing: 1 - cosVM is ang^2/2 for the small angles
+        // that matter, so the whole falloff is a dot, a divide and a
+        // multiply-add with no acos and no exp.
+        //
+        // The width arrives as a uniform because the relation between it and
+        // the drawn size is a LOOK decision, and those live in sky.c with the
+        // rest of them.
+        float glow = moonGlow * MOON_GLOW /
+                     (1.0 + 2.0 * max(1.0 - cosVM, 0.0) / (moonGlowAng * moonGlowAng));
+        sky += moonT * moonIntensity * MOON_TINT * glow;
+
+        if (cosVM > moonCosRadius) {
+            float edge = (cosVM - moonCosRadius) / (1.0 - moonCosRadius);
             sky += moonT * moonIntensity *
-                   moonDisc(edge, dir, moonDir, sunDir, sunCosRadius, pixel, moonEarthshine,
+                   moonDisc(edge, dir, moonDir, sunDir, moonCosRadius, pixel, moonEarthshine,
                             moonMaria);
         }
     }

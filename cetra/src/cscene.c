@@ -190,9 +190,10 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     if (cJSON_IsObject(moon)) {
         d->has_env_moon = get_bool(moon, "enabled", &d->env_moon_enabled);
         d->has_env_moon_brightness = get_float(moon, "brightness", &d->env_moon_brightness);
+        d->has_env_moon_size = get_float(moon, "size", &d->env_moon_size);
         d->has_env_moon_elevation = get_float(moon, "elevation", &d->env_moon_elevation_deg);
         d->has_env_moon_azimuth = get_float(moon, "azimuth", &d->env_moon_azimuth_deg);
-        static const char* const moon_known[] = {"enabled", "brightness", "elevation",
+        static const char* const moon_known[] = {"enabled", "brightness", "size", "elevation",
                                                  "azimuth"};
         warn_unknown_keys(moon, moon_known, sizeof(moon_known) / sizeof(moon_known[0]),
                           "environment.moon");

@@ -187,10 +187,13 @@ typedef struct {
                                   // --moon-elevation 30 would render a moon. The
                                   // --no-day-cycle shape, for the same reason
     float moon_brightness;        // Moon radiance scale, disc AND light (negative = default)
+    float moon_size;              // How many times life size the DISC is drawn (negative =
+                                  // default 1). Artistic licence, not physics -- see sky.h
     float moon_elevation;         // Degrees (-999 = default). Owned by the cycle while it runs
     float moon_azimuth;           // Degrees (-999 = default). Owned by the cycle while it runs
     int no_moon_maria;            // Diagnostic: a uniform lunar face, for a gate twin
     int no_moon_earthshine;       // Diagnostic: a black dark limb, for a gate twin
+    int no_moon_glow;             // Diagnostic: no aureole, the disc alone
     int moon_probe;               // Print the derived phase quantities -- the only way a
                                   // NUMERIC claim about the phase is checkable from outside
     float sky_disc;               // Angular DIAMETER of both sky discs (-1 = default 0.53).

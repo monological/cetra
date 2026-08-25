@@ -658,6 +658,7 @@ static const ConfigField CFG_FIELDS[] = {
     // without the second caster -- so there is nothing to refuse ON BEHALF of.
     CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "moon", moon_enabled),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_brightness", moon_brightness),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_size", moon_size),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_elevation", moon_elevation_deg),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_azimuth", moon_azimuth_deg),
     CFG_ROW(CFG_SKY, CFG_DOUBLE, "sky", "cycle_moon_offset", cycle_moon_offset),
@@ -669,6 +670,7 @@ static const ConfigField CFG_FIELDS[] = {
     // uncovered by the arm that finds uncovered fields, it is unreachable.
     CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "moon_earthshine", moon_earthshine),
     CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "moon_maria", moon_maria),
+    CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "moon_glow", moon_glow),
     CFG_ROW_FN(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled, _apply_cloud_enabled),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage, _apply_cloud_field),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type, _apply_cloud_field),

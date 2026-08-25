@@ -51,6 +51,7 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     // the caster count in every night frame in the corpus.
     sky->moon_enabled = false;
     sky->moon_brightness = 1.0f;
+    sky->moon_size = 1.0f; // life size; the default frame is the physical one
     // A gibbous moon high in the north-west against the default 35/135 sun:
     // elongation 125 degrees, so a phase angle of 55 and a factor of 0.26.
     // Deliberately not degenerate -- at the sun's own angles the phase angle
@@ -60,6 +61,7 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->moon_azimuth_deg = 315.0f;
     sky->moon_earthshine = true;
     sky->moon_maria = true;
+    sky->moon_glow = true;
     // Full moon when the cycle is armed: the postcard is the default, and the
     // month runs from there.
     sky->cycle_moon_offset = 12.0;
@@ -187,7 +189,15 @@ static const float SKY_NIGHT_FLOOR_COLOR[3] = {0.55f, 0.72f, 1.0f};
  */
 #define SKY_SYNODIC_DAYS        29.530588
 #define SKY_MOON_LIGHT_FRACTION 0.04f
-#define SKY_MOON_DISC_RADIANCE  4.0f
+// Calibrated so a full moon sits just under the tonemap's shoulder rather than
+// through it. At 4.0 the disc clipped: every albedo variation between the seas
+// and the highlands compressed into the top codes, so the surface read as a
+// blank cream oval and the channels saturated unevenly, which is where the
+// orange cast came from. The detail only appeared at -E 0.22, and that ratio is
+// what set this.
+#define SKY_MOON_DISC_RADIANCE  1.1f
+// The aureole reaches this many DISC RADII at life size (~2 degrees).
+#define SKY_MOON_GLOW_RADII     8.0f
 
 // The one definition of "night": the civil-twilight fade the stars, the
 // floor and the zenith ambient all share. 0 at +3 degrees and above -- an
@@ -1416,6 +1426,27 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     // constant against sunIntensity's 20; the physical surface radiance is
     // ~1/400,000 of the sun's, which would be 5e-5 here and invisible.
     uniform_set_vec3(u, "moonDir", sky->moon_dir);
+    // The DRAWN radius: the shared physical angle times the moon's look scale.
+    // Clamped only against a degenerate zero, which would divide by nothing in
+    // the aureole's width.
+    const float moon_size = fmaxf(sky->moon_size, 1e-3f);
+    const float moon_radius_deg = sky->sun_disc_deg * 0.5f * moon_size;
+    uniform_set_float(u, "moonCosRadius", cosf(glm_rad(moon_radius_deg)));
+    /*
+     * The aureole's width, and it grows as the SQUARE ROOT of the drawn size
+     * rather than with it. A real halo is a couple of degrees around a
+     * half-degree moon whatever the moon is doing -- roughly the radii factor
+     * below -- so scaling it linearly with an oversize disc is licence chasing
+     * licence: at twelve times life size that is a fifty-degree halo, which
+     * floods the star field the moon is supposed to hang in front of.
+     *
+     * The root keeps a life-size moon physical (~2 degrees), lets an oversize
+     * one keep a halo in proportion to look at, and reaches only ~7 degrees at
+     * the GUI's largest setting.
+     */
+    uniform_set_float(u, "moonGlowAng",
+                      glm_rad(moon_radius_deg / sqrtf(moon_size) * SKY_MOON_GLOW_RADII));
+    uniform_set_float(u, "moonGlow", sky->moon_glow ? 1.0f : 0.0f);
     float moon_intensity = sky->moon_enabled ? night * sky->moon_brightness *
                                                    sky_moon_phase_factor(sky) *
                                                    SKY_MOON_DISC_RADIANCE
