@@ -218,7 +218,12 @@ typedef struct SkyAtmosphere {
     float moon_brightness; // the ONE look scale; drives the disc AND the light
     float moon_elevation_deg;
     float moon_azimuth_deg;
-    vec3 moon_dir; // unit vector TOWARD the moon (derived; sky_update_moon)
+    // Two bisect levers, on by default, in the --no-water-glitter idiom: each
+    // removes one term of the disc so a gate arm has an otherwise-identical
+    // twin to difference against. Neither is a look setting.
+    bool moon_earthshine; // false = the dark limb is black
+    bool moon_maria;      // false = a uniform face
+    vec3 moon_dir;        // unit vector TOWARD the moon (derived; sky_update_moon)
     // Optional coupling to a second directional, the sun_light pattern below.
     // NULL = the disc without the light, which is a legitimate configuration:
     // an app that wants a moon in the sky and no second caster just never

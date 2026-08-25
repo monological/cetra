@@ -58,6 +58,8 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     // exact anti-sun point it is below the horizon whenever the sun is up.
     sky->moon_elevation_deg = 20.0f;
     sky->moon_azimuth_deg = 315.0f;
+    sky->moon_earthshine = true;
+    sky->moon_maria = true;
     // Full moon when the cycle is armed: the postcard is the default, and the
     // month runs from there.
     sky->cycle_moon_offset = 12.0;
@@ -1351,6 +1353,19 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
         glm_mat4_pick3(frame4, frame);
         uniform_set_mat3(u, "starFrame", (float*)frame);
     }
+    // The moon rides the same ramp the stars do, times the phase law -- so a
+    // new moon and a daylit sky are both an exact zero and the disc block in
+    // sky_radiance.glsl costs nothing. SKY_MOON_DISC_RADIANCE is the look
+    // constant against sunIntensity's 20; the physical surface radiance is
+    // ~1/400,000 of the sun's, which would be 5e-5 here and invisible.
+    uniform_set_vec3(u, "moonDir", sky->moon_dir);
+    float moon_intensity = sky->moon_enabled ? night * sky->moon_brightness *
+                                                   sky_moon_phase_factor(sky) *
+                                                   SKY_MOON_DISC_RADIANCE
+                                             : 0.0f;
+    uniform_set_float(u, "moonIntensity", moon_intensity);
+    uniform_set_float(u, "moonEarthshine", sky->moon_earthshine ? 1.0f : 0.0f);
+    uniform_set_float(u, "moonMaria", sky->moon_maria ? 1.0f : 0.0f);
     if (clouds) {
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex[sky->clouds.prev_frame & 1]);

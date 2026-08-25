@@ -18,6 +18,10 @@ uniform float sunCosRadius; // cos of the sun's angular RADIUS
 uniform float sunIntensity; // scalar disc radiance scale
 uniform mat3 starFrame;     // world dir -> celestial frame (latitude + hour angle)
 uniform float starIntensity; // star radiance scale; 0 = daylight / disabled
+uniform vec3 moonDir;         // world-space unit vector TOWARD the moon
+uniform float moonIntensity;  // disc radiance scale; 0 = new moon / day / disabled
+uniform float moonEarthshine; // 1 = the dark limb is Earth-lit, 0 = black
+uniform float moonMaria;      // 1 = the face is textured, 0 = uniform
 
 #include "sky_radiance.glsl"
 
@@ -27,7 +31,8 @@ void main()
     float r = Rg + VIEW_ALTITUDE;
 
     vec3 sky = skyRadiance(dir, sunDir, r, skyViewLut, transmittanceLut, sunCosRadius,
-                           sunIntensity, starFrame, starIntensity);
+                           sunIntensity, starFrame, starIntensity, moonDir, moonIntensity,
+                           moonEarthshine, moonMaria);
 
     FragColor = vec4(min(sky, vec3(30000.0)) * preExposure, 1.0);
 }
