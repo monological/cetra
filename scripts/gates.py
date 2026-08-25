@@ -5769,14 +5769,19 @@ MOON_ELONGS = [180.0, 135.0, 90.0, 45.0]
 # convenient: the phase construction is a function of position on the unit-sphere face,
 # so angular radius SCALES the picture and cannot rotate it. The shipping 0.53 is pinned
 # exactly and separately, by moon-config reading the dumped row.
-MOON_DISC_BIG = "12"
-MOON_DISC_HUGE = "40"
-MOON_DISC_SHIPPING = "0.53"
+MOON_DISC_BIG = 12.0
+MOON_DISC_HUGE = 40.0
+MOON_DISC_SHIPPING = 0.53
 # --no-bloom on every disc arm is load-bearing rather than hygiene: the bloom pyramid
 # spreads the disc's energy across the whole frame, so an arm asserting the disc is
 # confined to its own solid angle would be reading the blur kernel. --no-dither for the
 # neighbouring reason -- the maria read is a small-signal sigma where +/-1 LSB is large.
 MOON_DISC_FLAGS = STARS_PIN + ["--no-bloom", "--no-dither"]
+
+# create_sky_atmosphere's own cycle_moon_offset default. Named rather than typed
+# out, because moon-cycle's 0 px identity rests on the C and this twin agreeing
+# about it: a change there with no change here reads as a moon that moved.
+MOON_CYCLE_LAG = 12.0
 
 MOON_PROBE_TOL = 1e-4        # float32 C against doubles here, and acos is ill-conditioned at +-1
 MOON_LIT_TOL = 0.12          # measured worst 0.043 across the four rungs
@@ -5791,6 +5796,23 @@ MOON_LIMB_COS_MIN = 0.906
 MOON_LIMB_OFFSET_MIN = 0.10  # of the disc radius; measured worst 0.30
 MOON_KS_RATIO_MIN = 5.0      # full/quarter, against a predicted 10.99 through the tonemap
 MOON_MARIA_DRIFT_MAX = 0.01  # 0.000 correct against 0.044 sun-locked; see the arm
+# The rest of the bars, hoisted out of the arm bodies with their MEASURED readings
+# beside them -- the shape the block above already had and the arms had been ignoring.
+# Each pairs the reading on correct code with what that arm's named mutation produces,
+# so a reader can tell margin from a knife edge.
+MOON_DISC_FILL_MIN = 0.55     # 0.72 measured, ceiling 0.71 lit at this elongation
+MOON_DISC_HIT_FRAC = 0.02     # of the frame's own peak: "this pixel carries the disc"
+MOON_LIT_HIT_FRAC = 0.10      # of peak; rides the peak because it falls 100x over the ladder
+MOON_MARIA_MIN_PX = 200       # 10,614 measured; 0 with the maria term deleted
+MOON_MARIA_SIGMA_MIN = 0.25   # 0.86 measured; a flat tint reads 0
+MOON_MARIA_OVERLAP_MIN = 500  # 10,779 measured; keeps the drift read from being empty
+MOON_EARTH_MIN_PX = 50        # 3,641 measured on the dark limb
+MOON_EARTH_GAIN_MIN = 1e-5    # 3.93e-03 measured; 0 with earthshine deleted
+MOON_EARTH_LIT_RATIO = 4.0    # lit-side move must stay under this x the dark gain (1.17e-04)
+MOON_ENV_SKY_MIN = 200        # 73,707 measured; the anti-vacuity half of moon-env
+MOON_SHADOW_MIN_PX = 500      # 786 measured; 0 with cast_shadows forced false
+MOON_CLOUDS_MAX = 0.85        # 0.005 measured under full overcast; ~1.0 after the multiply
+MOON_CYCLE_MOVE_MIN = 2000    # 480,000 measured between two hours
 
 
 def _moon_dir(el_deg, az_deg):
@@ -5879,39 +5901,76 @@ def _moon_render(workdir, tag, extra, frames=30, moon=True):
     return out, err
 
 
-def _moon_disc_field(on_path, off_path, cam, disc_deg, m_el, m_az):
-    """Per-pixel linear twin-delta inside the predicted disc, plus what leaked outside it.
+def _moon_disc_geometry(cam, disc_deg, m_el, m_az, w, h):
+    """(radius_px, cx, cy) for the predicted disc -- PURE PROJECTION, no pixels read.
 
-    Returns (radius_px, cx, cy, cells, peak, outside_moved) where cells is a list of
-    (x, y, delta) for pixels inside the mask. Scans a box around the predicted disc
-    rather than the frame: a few thousand iterations instead of a hundred thousand.
+    Split from the scan below because it is a closed form of the camera and the two
+    angles, so an arm that wants only the geometry should not pay two PPM decodes and a
+    Python walk to recover it. The radius comes from the angular size through the same
+    vertical fov the projector uses, so an arm asserts the render against geometry rather
+    than against itself.
     """
-    w, h, on = _read_ppm(on_path)
-    _, _, off = _read_ppm(off_path)
     project = _projector(cam, w, h)
     eye = cam["eye"]
     d = _moon_dir(m_el, m_az)
-    centre = tuple(e + 20000.0 * c for e, c in zip(eye, d))
-    cx, cy = project(centre)
-    # The disc's pixel radius from its angular one, through the same vertical fov the
-    # projector uses -- derived rather than measured, so the arm is asserting the render
-    # against geometry instead of against itself.
+    cx, cy = project(tuple(e + 20000.0 * c for e, c in zip(eye, d)))
     radius = (h * 0.5) * math.tan(math.radians(disc_deg * 0.5)) / \
         math.tan(math.radians(cam["fovy_deg"]) * 0.5)
+    return radius, cx, cy
+
+
+def _moon_face_pixels(cx, cy, radius, w, h, frac=1.0):
+    """Yield (x, y, offset) over the disc at `frac` of its radius.
+
+    One statement of the mask geometry, which three arms were walking with their own
+    copies at 1.0, 0.9 and 0.85 -- differences that were silent because each was written
+    out separately.
+    """
+    r = radius * frac
+    for y in range(max(0, int(cy - r)), min(h, int(cy + r) + 1)):
+        row = y * w
+        for x in range(max(0, int(cx - r)), min(w, int(cx + r) + 1)):
+            if math.hypot(x - cx, y - cy) <= r:
+                yield x, y, (row + x) * 3
+
+
+def _moon_disc_cells(on_path, off_path, geom):
+    """(cells, peak, outside) for a twin pair inside a predicted disc.
+
+    cells is [(x, y, delta)] of linear on-minus-off inside the mask; outside counts
+    pixels that moved beyond it. The delta is computed only INSIDE the radius test --
+    it is six table lookups, and the surrounding band needs nothing but the byte
+    inequality, which took this from 61.8 ms per call to 16.7.
+    """
+    w, h, on = _read_ppm(on_path)
+    _, _, off = _read_ppm(off_path)
+    radius, cx, cy = geom
     cells, peak, outside = [], 0.0, 0
     pad = int(radius * 3.0) + 8
     for y in range(max(0, int(cy) - pad), min(h, int(cy) + pad + 1)):
+        row = y * w
         for x in range(max(0, int(cx) - pad), min(w, int(cx) + pad + 1)):
-            o = (y * w + x) * 3
-            delta = sum(_SRGB_TO_LINEAR[on[o + k]] - _SRGB_TO_LINEAR[off[o + k]]
-                        for k in range(3)) / 3.0
+            o = (row + x) * 3
             r = math.hypot(x - cx, y - cy)
             if r <= radius:
+                delta = sum(_SRGB_TO_LINEAR[on[o + k]] - _SRGB_TO_LINEAR[off[o + k]]
+                            for k in range(3)) / 3.0
                 cells.append((x, y, delta))
                 peak = max(peak, delta)
             elif r > radius + 4.0 and any(on[o + k] != off[o + k] for k in range(3)):
                 outside += 1
-    return radius, cx, cy, cells, peak, outside
+    return cells, peak, outside
+
+
+def _moon_pair(workdir, tag, extra, frames=30):
+    """The moon-on / moon-off twin at one configuration -> (on, off, err).
+
+    The shape _stars_pair and _nightfloor_pair already have; this group was written
+    without it and spelled the pair out five times.
+    """
+    on, e1 = _moon_render(workdir, tag + "_on", extra, frames=frames)
+    off, e2 = _moon_render(workdir, tag + "_off", extra, frames=frames, moon=False)
+    return on, off, e1 or e2
 
 
 def _moon_probe(scene, m_el, m_az, s_el, s_az):
@@ -6086,20 +6145,21 @@ def run_moon_gate(workdir):
     cam, cam_argv = _moon_camera(MOON_EL_HIGH, MOON_AZ)
     disc_common = ["--sun-elevation", f"{disc_sun_el:.6f}", "--sun-azimuth", f"{s_az_full:.6f}",
                    "--moon-elevation", f"{MOON_EL_HIGH}", "--moon-azimuth", f"{MOON_AZ}",
-                   "--sky-disc", MOON_DISC_BIG] + cam_argv + MOON_DISC_FLAGS
-    d_on, e1 = _moon_render(workdir, "disc_on", disc_common)
-    d_off, e2 = _moon_render(workdir, "disc_off", disc_common, moon=False)
-    if e1 or e2:
-        print(f"  moon-disc ERROR render failed: {(e1 or e2).strip()[-200:]}")
+                   "--sky-disc", str(MOON_DISC_BIG)] + cam_argv + MOON_DISC_FLAGS
+    d_on, d_off, ed = _moon_pair(workdir, "disc", disc_common)
+    if ed:
+        print(f"  moon-disc ERROR render failed: {ed.strip()[-200:]}")
         failures.append("moon-disc")
         return failures
-    radius, cx, cy, cells, peak, outside = _moon_disc_field(
-        d_on, d_off, cam, float(MOON_DISC_BIG), MOON_EL_HIGH, MOON_AZ)
-    hit = sum(1 for _, _, v in cells if v > 0.02 * peak)
+    fw, fh, _ = _read_ppm(d_on)
+    geom = _moon_disc_geometry(cam, MOON_DISC_BIG, MOON_EL_HIGH, MOON_AZ, fw, fh)
+    radius, cx, cy = geom
+    cells, peak, outside = _moon_disc_cells(d_on, d_off, geom)
+    hit = sum(1 for _, _, v in cells if v > MOON_DISC_HIT_FRAC * peak)
     fill = hit / max(1, len(cells))
-    ok = fill >= 0.55 and outside == 0 and peak > 0.0
+    ok = fill >= MOON_DISC_FILL_MIN and outside == 0 and peak > 0.0
     print(f"  moon-disc {'PASS' if ok else 'FAIL'}  {fill:.2f} of the predicted mask "
-          f"carries the disc (want >=0.55; a lit fraction of {_moon_phase(MOON_EL_HIGH, MOON_AZ, disc_sun_el, s_az_full)[2]:.2f} "
+          f"carries the disc (want >={MOON_DISC_FILL_MIN}; a lit fraction of {_moon_phase(MOON_EL_HIGH, MOON_AZ, disc_sun_el, s_az_full)[2]:.2f} "
           f"is the ceiling), {outside} px moved outside it (want 0), peak {peak:.4f}")
     if not ok:
         failures.append("moon-disc")
@@ -6111,17 +6171,17 @@ def run_moon_gate(workdir):
         lit_sun_el, s_az = _moon_sun_at_elongation(MOON_EL_LOW, MOON_AZ, elong)
         common = ["--sun-elevation", f"{lit_sun_el:.6f}", "--sun-azimuth", f"{s_az:.6f}",
                   "--moon-elevation", f"{MOON_EL_LOW}", "--moon-azimuth", f"{MOON_AZ}",
-                  "--sky-disc", MOON_DISC_BIG] + lit_argv + MOON_DISC_FLAGS
-        on, e1 = _moon_render(workdir, f"lit{int(elong)}_on", common)
-        off, e2 = _moon_render(workdir, f"lit{int(elong)}_off", common, moon=False)
-        if e1 or e2:
-            lit_err = (e1 or e2).strip()[-160:]
+                  "--sky-disc", str(MOON_DISC_BIG)] + lit_argv + MOON_DISC_FLAGS
+        on, off, el_err = _moon_pair(workdir, f"lit{int(elong)}", common)
+        if el_err:
+            lit_err = el_err.strip()[-160:]
             break
-        _, _, _, cells, peak, _ = _moon_disc_field(
-            on, off, lit_cam, float(MOON_DISC_BIG), MOON_EL_LOW, MOON_AZ)
+        cells, peak, _ = _moon_disc_cells(
+            on, off,
+            _moon_disc_geometry(lit_cam, MOON_DISC_BIG, MOON_EL_LOW, MOON_AZ, fw, fh))
         # A tenth of this frame's own peak: the threshold has to ride the peak because
         # the peak itself falls by two orders across the ladder, which is the phase law.
-        got = sum(1 for _, _, v in cells if v > 0.10 * peak) / max(1, len(cells))
+        got = sum(1 for _, _, v in cells if v > MOON_LIT_HIT_FRAC * peak) / max(1, len(cells))
         want = _moon_phase(MOON_EL_LOW, MOON_AZ, lit_sun_el, s_az)[2]
         lit_rows.append((elong, got, want))
         lit_worst = max(lit_worst, abs(got - want))
@@ -6142,19 +6202,18 @@ def run_moon_gate(workdir):
     for roll in MOON_ROLLS:
         s_el, s_az = _moon_sun_at_elongation(MOON_EL_HIGH, MOON_AZ, MOON_ELONG_ROLL, roll)
         s = _moon_dir(s_el, s_az)
-        if s_el > -float(MOON_DISC_BIG) * 0.5:
+        if s_el > -MOON_DISC_BIG * 0.5:
             term_err = f"roll {roll:.0f} puts the sun at {s_el:.1f}, not clear of its own disc"
             break
         common = ["--sun-elevation", f"{s_el:.6f}", "--sun-azimuth", f"{s_az:.6f}",
                   "--moon-elevation", f"{MOON_EL_HIGH}", "--moon-azimuth", f"{MOON_AZ}",
-                  "--sky-disc", MOON_DISC_BIG] + cam_argv + MOON_DISC_FLAGS
-        on, ea = _moon_render(workdir, f"term{int(roll)}_on", common)
-        off, eb = _moon_render(workdir, f"term{int(roll)}_off", common, moon=False)
-        if ea or eb:
-            term_err = (ea or eb).strip()[-160:]
+                  "--sky-disc", str(MOON_DISC_BIG)] + cam_argv + MOON_DISC_FLAGS
+        on, off, et = _moon_pair(workdir, f"term{int(roll)}", common)
+        if et:
+            term_err = et.strip()[-160:]
             break
-        rad, ccx, ccy, cells, peak, _ = _moon_disc_field(
-            on, off, cam, float(MOON_DISC_BIG), MOON_EL_HIGH, MOON_AZ)
+        rad, ccx, ccy = geom
+        cells, _, _ = _moon_disc_cells(on, off, geom)
         wsum = sum(v for _, _, v in cells if v > 0.0)
         if wsum <= 0.0:
             term_err = f"roll {roll:.0f} carried no contribution at all"
@@ -6199,21 +6258,13 @@ def run_moon_gate(workdir):
     else:
         w, h, a = _read_ppm(d_on)
         _, _, b = _read_ppm(m_flat)
-        # The same geometry moon-disc already derived from the same arguments --
-        # it is a pure projection, so re-running the scan to recover it cost two
-        # PPM decodes and a 79k-pixel walk for three numbers still in scope.
-        rad2, ccx2, ccy2 = radius, cx, cy
         vals = []
-        for y in range(max(0, int(ccy2 - rad2)), min(h, int(ccy2 + rad2) + 1)):
-            for x in range(max(0, int(ccx2 - rad2)), min(w, int(ccx2 + rad2) + 1)):
-                if math.hypot(x - ccx2, y - ccy2) > rad2 * 0.9:
-                    continue
-                o = (y * w + x) * 3
-                lit_here = sum(_SRGB_TO_LINEAR[b[o + k]] for k in range(3)) / 3.0
-                if lit_here < 0.02:  # the dark limb carries no maria to measure
-                    continue
-                vals.append(sum(_SRGB_TO_LINEAR[a[o + k]] - _SRGB_TO_LINEAR[b[o + k]]
-                                for k in range(3)) / 3.0)
+        for _, _, o in _moon_face_pixels(cx, cy, radius, w, h, 0.9):
+            lit_here = sum(_SRGB_TO_LINEAR[b[o + k]] for k in range(3)) / 3.0
+            if lit_here < 0.02:  # the dark limb carries no maria to measure
+                continue
+            vals.append(sum(_SRGB_TO_LINEAR[a[o + k]] - _SRGB_TO_LINEAR[b[o + k]]
+                            for k in range(3)) / 3.0)
         moved = sum(1 for v in vals if abs(v) > 1e-4)
         mean = sum(vals) / max(1, len(vals))
         var = sum((v - mean) ** 2 for v in vals) / max(1, len(vals))
@@ -6235,7 +6286,7 @@ def run_moon_gate(workdir):
             r_el, r_az = _moon_sun_at_elongation(MOON_EL_HIGH, MOON_AZ, MOON_ELONG_ROLL, roll)
             r_common = ["--sun-elevation", f"{r_el:.6f}", "--sun-azimuth", f"{r_az:.6f}",
                         "--moon-elevation", f"{MOON_EL_HIGH}", "--moon-azimuth", f"{MOON_AZ}",
-                        "--sky-disc", MOON_DISC_BIG] + cam_argv + MOON_DISC_FLAGS
+                        "--sky-disc", str(MOON_DISC_BIG)] + cam_argv + MOON_DISC_FLAGS
             r_on, er1 = _moon_render(workdir, f"maria_r{int(roll)}_on", r_common)
             r_off, er2 = _moon_render(workdir, f"maria_r{int(roll)}_off",
                                       r_common + ["--no-moon-maria"])
@@ -6245,32 +6296,27 @@ def run_moon_gate(workdir):
             _, _, ra = _read_ppm(r_on)
             _, _, rb = _read_ppm(r_off)
             cur = {}
-            for y in range(max(0, int(ccy2 - rad2)), min(h, int(ccy2 + rad2) + 1)):
-                for x in range(max(0, int(ccx2 - rad2)), min(w, int(ccx2 + rad2) + 1)):
-                    if math.hypot(x - ccx2, y - ccy2) > rad2 * 0.9:
-                        continue
-                    o = (y * w + x) * 3
-                    base = sum(_SRGB_TO_LINEAR[rb[o + k]] for k in range(3)) / 3.0
-                    # WELL clear of the terminator, not merely non-black. The ratio is
-                    # what cancels everything but the albedo, and a ratio of two small
-                    # 8-bit codes is mostly quantization -- at 0.05 the worst pixel read
-                    # 0.127 on CORRECT code, which is noise wearing the shape of a
-                    # finding.
-                    if base < 0.25:
-                        continue
-                    cur[(x, y)] = (sum(_SRGB_TO_LINEAR[ra[o + k]] for k in range(3)) / 3.0) / base
+            for x, y, o in _moon_face_pixels(cx, cy, radius, w, h, 0.9):
+                base = sum(_SRGB_TO_LINEAR[rb[o + k]] for k in range(3)) / 3.0
+                # WELL clear of the terminator, not merely non-black. The ratio is what
+                # cancels everything but the albedo, and a ratio of two small 8-bit codes
+                # is mostly quantization -- at 0.05 the worst pixel read 0.127 on CORRECT
+                # code, which is noise wearing the shape of a finding.
+                if base < 0.25:
+                    continue
+                cur[(x, y)] = (sum(_SRGB_TO_LINEAR[ra[o + k]] for k in range(3)) / 3.0) / base
             alb[roll] = cur
         both = set(alb[0.0]) & set(alb[90.0])
         # The MEAN, not the max: one worst pixel over ten thousand is a quantization
         # story, and what this leg claims is about the whole pattern.
         drift = (sum(abs(alb[0.0][k] - alb[90.0][k]) for k in both) / len(both)) \
             if both else float("nan")
-        ok = maria_err is None and moved >= 200 and sigma > 0.0 and \
-            (sigma / max(abs(mean), 1e-6)) >= 0.25 and \
-            len(both) >= 500 and drift <= MOON_MARIA_DRIFT_MAX
+        ok = maria_err is None and moved >= MOON_MARIA_MIN_PX and sigma > 0.0 and \
+            (sigma / max(abs(mean), 1e-6)) >= MOON_MARIA_SIGMA_MIN and \
+            len(both) >= MOON_MARIA_OVERLAP_MIN and drift <= MOON_MARIA_DRIFT_MAX
         print(f"  moon-maria {'PASS' if ok else 'FAIL'}  {moved} px of the lit face carry "
-              f"maria (want >=200), sigma/|mean| {sigma / max(abs(mean), 1e-6):.2f} "
-              f"(want >=0.25: a flat tint reads 0), and the pattern drifts {drift:.3f} "
+              f"maria (want >={MOON_MARIA_MIN_PX}), sigma/|mean| {sigma / max(abs(mean), 1e-6):.2f} "
+              f"(want >={MOON_MARIA_SIGMA_MIN}: a flat tint reads 0), and the pattern drifts {drift:.3f} "
               f"across two sun rolls over {len(both)} shared px "
               f"(want <={MOON_MARIA_DRIFT_MAX}: locked to "
               f"the FACE, not the sun)"
@@ -6288,18 +6334,15 @@ def run_moon_gate(workdir):
         _, _, b = _read_ppm(e_off)
         _, _, ref = _read_ppm(d_off)
         dark, lit_side = [], []
-        for y in range(max(0, int(cy - radius)), min(h, int(cy + radius) + 1)):
-            for x in range(max(0, int(cx - radius)), min(w, int(cx + radius) + 1)):
-                if math.hypot(x - cx, y - cy) > radius * 0.85:
-                    continue
-                o = (y * w + x) * 3
-                on_v = sum(_SRGB_TO_LINEAR[a[o + k]] for k in range(3)) / 3.0
-                no_e = sum(_SRGB_TO_LINEAR[b[o + k]] for k in range(3)) / 3.0
-                bg = sum(_SRGB_TO_LINEAR[ref[o + k]] for k in range(3)) / 3.0
-                (lit_side if no_e - bg > 1e-3 else dark).append(on_v - no_e)
+        for _, _, o in _moon_face_pixels(cx, cy, radius, w, h, 0.85):
+            on_v = sum(_SRGB_TO_LINEAR[a[o + k]] for k in range(3)) / 3.0
+            no_e = sum(_SRGB_TO_LINEAR[b[o + k]] for k in range(3)) / 3.0
+            bg = sum(_SRGB_TO_LINEAR[ref[o + k]] for k in range(3)) / 3.0
+            (lit_side if no_e - bg > 1e-3 else dark).append(on_v - no_e)
         gain = sum(dark) / max(1, len(dark))
         lit_mean = sum(lit_side) / max(1, len(lit_side))
-        ok = len(dark) > 50 and gain > 1e-5 and abs(lit_mean) < gain * 4.0
+        ok = len(dark) > MOON_EARTH_MIN_PX and gain > MOON_EARTH_GAIN_MIN and \
+            abs(lit_mean) < gain * MOON_EARTH_LIT_RATIO
         print(f"  moon-earthshine {'PASS' if ok else 'FAIL'}  the dark limb gains "
               f"{gain:.2e} over {len(dark)} px (want >0), while the lit side moves "
               f"{lit_mean:.2e} (want small beside it: earthshine is the DARK side's term)")
@@ -6314,10 +6357,9 @@ def run_moon_gate(workdir):
         common = ["--sun-elevation", f"{lg_sun_el:.6f}", "--sun-azimuth", f"{s_az:.6f}",
                   "--moon-elevation", f"{MOON_EL_LOW}", "--moon-azimuth", f"{MOON_AZ}",
                   "--night-floor", "--moon-brightness", "6"] + STARS_PIN
-        on, ea = _moon_render(workdir, f"lgt{int(elong)}_on", common)
-        off, eb = _moon_render(workdir, f"lgt{int(elong)}_off", common, moon=False)
-        if ea or eb:
-            light_err = (ea or eb).strip()[-160:]
+        on, off, elg = _moon_pair(workdir, f"lgt{int(elong)}", common)
+        if elg:
+            light_err = elg.strip()[-160:]
             break
         rgb, moved = _stars_delta(on, off, NIGHTFLOOR_GROUND_BAND)
         light_rows.append((elong, sum(rgb) / 3.0, moved))
@@ -6351,19 +6393,19 @@ def run_moon_gate(workdir):
                   "--moon-elevation", f"{MOON_EL_ENV}", "--moon-azimuth", f"{MOON_AZ}",
                   "--night-floor", "--no-bloom"] + STARS_PIN
     e_small, e3 = _moon_render(workdir, "env_small",
-                               env_common + ["--sky-disc", MOON_DISC_SHIPPING])
+                               env_common + ["--sky-disc", str(MOON_DISC_SHIPPING)])
     e_huge, e4 = _moon_render(workdir, "env_huge",
-                              env_common + ["--sky-disc", MOON_DISC_HUGE])
+                              env_common + ["--sky-disc", str(MOON_DISC_HUGE)])
     if e3 or e4:
         print(f"  moon-env ERROR render failed: {(e3 or e4).strip()[-200:]}")
         failures.append("moon-env")
     else:
         _, ground_moved = _stars_delta(e_small, e_huge, NIGHTFLOOR_GROUND_BAND)
         _, sky_moved = _stars_delta(e_small, e_huge, STARS_BAND)
-        ok = ground_moved == 0 and sky_moved >= 200
+        ok = ground_moved == 0 and sky_moved >= MOON_ENV_SKY_MIN
         print(f"  moon-env {'PASS' if ok else 'FAIL'}  a 40-degree disc against the "
               f"shipping 0.53 moves {ground_moved} px of TERRAIN (want 0: it never "
-              f"entered the bake) while moving {sky_moved} px of sky (want >=200, or "
+              f"entered the bake) while moving {sky_moved} px of sky (want >={MOON_ENV_SKY_MIN}, or "
               f"the arm is 0-vs-0)")
         if not ok:
             failures.append("moon-env")
@@ -6388,9 +6430,9 @@ def run_moon_gate(workdir):
     else:
         cast_px, _ = compare(s_on, s_off)
         control_px, _ = compare(s_none, s_none_ns)
-        ok = cast_px >= 500 and control_px == 0
+        ok = cast_px >= MOON_SHADOW_MIN_PX and control_px == 0
         print(f"  moon-shadow {'PASS' if ok else 'FAIL'}  --no-shadows moves {cast_px} px "
-              f"under the moon (want >=500: it built a map and used it), against {control_px} "
+              f"under the moon (want >={MOON_SHADOW_MIN_PX}: it built a map and used it), against {control_px} "
               f"px with no moon at all (want 0, or the sun was casting and the first leg "
               f"is not the moon's)")
         if not ok:
@@ -6401,28 +6443,20 @@ def run_moon_gate(workdir):
     # multiply for the STARS term; a moon term added after that multiply passes it and
     # fails nothing. Coverage is pinned at 1.0 because the moon is a point and cannot
     # use the stars' whole-band dodge -- it would simply sit in a gap.
-    cl_common = ["--sun-elevation", f"{disc_sun_el:.6f}", "--sun-azimuth", f"{s_az_full:.6f}",
-                 "--moon-elevation", f"{MOON_EL_HIGH}", "--moon-azimuth", f"{MOON_AZ}",
-                 "--sky-disc", MOON_DISC_BIG] + cam_argv + MOON_DISC_FLAGS
-    c_clear_on, e14 = _moon_render(workdir, "cl_clear_on", cl_common, frames=60)
-    c_clear_off, e15 = _moon_render(workdir, "cl_clear_off", cl_common, frames=60, moon=False)
+    cl_common = disc_common  # the same framing; the deck is the only variable
     deck = ["--clouds", "--cloud-coverage", "1.0"]
-    c_deck_on, e16 = _moon_render(workdir, "cl_deck_on", cl_common + deck, frames=60)
-    c_deck_off, e17 = _moon_render(workdir, "cl_deck_off", cl_common + deck, frames=60,
-                                   moon=False)
-    if e14 or e15 or e16 or e17:
-        print(f"  moon-clouds ERROR render failed: "
-              f"{(e14 or e15 or e16 or e17).strip()[-200:]}")
+    c_clear_on, c_clear_off, ec1 = _moon_pair(workdir, "cl_clear", cl_common, frames=60)
+    c_deck_on, c_deck_off, ec2 = _moon_pair(workdir, "cl_deck", cl_common + deck, frames=60)
+    if ec1 or ec2:
+        print(f"  moon-clouds ERROR render failed: {(ec1 or ec2).strip()[-200:]}")
         failures.append("moon-clouds")
     else:
-        _, _, _, _, clear_peak, _ = _moon_disc_field(
-            c_clear_on, c_clear_off, cam, float(MOON_DISC_BIG), MOON_EL_HIGH, MOON_AZ)
-        _, _, _, _, deck_peak, _ = _moon_disc_field(
-            c_deck_on, c_deck_off, cam, float(MOON_DISC_BIG), MOON_EL_HIGH, MOON_AZ)
+        _, clear_peak, _ = _moon_disc_cells(c_clear_on, c_clear_off, geom)
+        _, deck_peak, _ = _moon_disc_cells(c_deck_on, c_deck_off, geom)
         frac = deck_peak / clear_peak if clear_peak > 0 else float("nan")
-        ok = clear_peak > 0.0 and frac <= 0.85
+        ok = clear_peak > 0.0 and frac <= MOON_CLOUDS_MAX
         print(f"  moon-clouds {'PASS' if ok else 'FAIL'}  the disc keeps {frac:.3f} of its "
-              f"peak under a full overcast (want <=0.85: it rides inside the sky "
+              f"peak under a full overcast (want <={MOON_CLOUDS_MAX}: it rides inside the sky "
               f"accumulator, under the cloud.a multiply)")
         if not ok:
             failures.append("moon-clouds")
@@ -6431,9 +6465,8 @@ def run_moon_gate(workdir):
     # The twin subtracts the lag WITHOUT wrapping, exactly as the C does: sky_sun_path
     # takes sin and cos of the hour, so -5 h and 19 h agree mathematically and not
     # bitwise, and this leg is a 0 px identity.
-    hour, lag = 7.25, 12.0
-    lat = 45.0
-    m_el, m_az = _cycle_sun_path(lat, hour - lag)
+    hour, lat = CYCLE_QUIESCE_HOUR, CYCLE_LATITUDE
+    m_el, m_az = _cycle_sun_path(lat, hour - MOON_CYCLE_LAG)
     s_el2, s_az2 = _cycle_sun_path(lat, hour)
     cyc_common = ["--night-floor", "--moon-brightness", "6"] + STARS_PIN
     c_clock, e5 = _moon_render(workdir, "cyc_clock",
@@ -6451,10 +6484,10 @@ def run_moon_gate(workdir):
     else:
         same, _ = compare(c_clock, c_expl)
         moved, _ = compare(c_clock, c_other)
-        ok = same == 0 and moved >= 2000
+        ok = same == 0 and moved >= MOON_CYCLE_MOVE_MIN
         print(f"  moon-cycle {'PASS' if ok else 'FAIL'}  a frozen clock at hour {hour} "
               f"vs the twin's explicit angles {same} px (want 0; moon el={m_el:.6f} "
-              f"az={m_az:.6f}), and a different hour moves {moved} px (want >=2000, or "
+              f"az={m_az:.6f}), and a different hour moves {moved} px (want >={MOON_CYCLE_MOVE_MIN}, or "
               f"a tick that never writes the moon would pass the identity)")
         if not ok:
             failures.append("moon-cycle")
@@ -6545,7 +6578,7 @@ def run_moon_gate(workdir):
                    "cycle_moon_offset", "moon_earthshine", "moon_maria"))
         default_off = cfg_bare.get("sky", {}).get("moon") is False
         disc = sky_rows.get("sun_disc")
-        want_disc = float(MOON_DISC_SHIPPING)
+        want_disc = MOON_DISC_SHIPPING
         ok = px == 0 and has and default_off and disc is not None and \
             abs(disc - want_disc) < 1e-6
         print(f"  moon-config {'PASS' if ok else 'FAIL'}  restored {px} px (want 0), seven "

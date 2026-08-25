@@ -1238,12 +1238,7 @@ int main(int argc, char** argv) {
                          &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
             sun_elevation = sky->sun_elevation_deg; // the GUI mirrors these
             sun_azimuth = sky->sun_azimuth_deg;
-            // The moon in the same breath: the cycle owns its angles too, so
-            // arming without seeding leaves the first tick to teleport it.
-            if (sky->moon_enabled)
-                sky_sun_path((double)sky->stars_latitude_deg,
-                             sky->cycle_hour - sky->cycle_moon_offset,
-                             &sky->moon_elevation_deg, &sky->moon_azimuth_deg);
+            sky_place_moon_from_clock(sky);
         }
         sky_update_moon(sky);
         /*

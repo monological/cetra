@@ -395,6 +395,26 @@ int sky_update_sun(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* 
 void sky_sun_path(double latitude_deg, double hour, float* out_elevation_deg,
                   float* out_azimuth_deg);
 
+/*
+ * Place the moon from the clock: sky_sun_path at the LAGGED hour, so both
+ * bodies ride one celestial model rather than two kept in step by hand. That
+ * puts the moon on the same great circle as the sun -- astronomically wrong by
+ * up to 28 degrees of declination across a month, and exactly as wrong as the
+ * sun already is, since that path is the equinox one.
+ *
+ * MINUS the lag, so a growing lag makes the moon transit LATER, which is the
+ * direction it really drifts. Left UNWRAPPED on purpose: sky_sun_path takes sin
+ * and cos of the hour, so -5 h and 19 h agree mathematically and not bitwise,
+ * and a gate arm asserts 0 px on exactly that.
+ *
+ * One function rather than a line in three files. Both apps must seed the moon
+ * before the first frame -- an armed cycle otherwise teleports it on the first
+ * tick, the trap spec 11.81 shipped for the sun -- so the sign and the absent
+ * wrap had three homes, two of them outside the module that owns the clock.
+ * No-op when the moon is off.
+ */
+void sky_place_moon_from_clock(SkyAtmosphere* sky);
+
 // The per-frame heart of the day/night cycle (spec 11.81), called by the
 // engine loop BEFORE the GI sweep and the shadow pass -- the key light it
 // rewrites is what the cascades then fit, and a completed slice's swap must

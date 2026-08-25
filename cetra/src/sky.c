@@ -1217,6 +1217,13 @@ void sky_cycle_request_rebake(SkyAtmosphere* sky) {
     sky->slicer.item = -1; // restart from the top on the next tick
 }
 
+void sky_place_moon_from_clock(SkyAtmosphere* sky) {
+    if (!sky || !sky->moon_enabled)
+        return;
+    sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour - sky->cycle_moon_offset,
+                 &sky->moon_elevation_deg, &sky->moon_azimuth_deg);
+}
+
 // Advance the clock and everything the sun drives per frame. CPU plus one
 // small LUT bake; the heavy re-bake is the pump's job.
 static void sky_cycle_advance(SkyAtmosphere* sky, float dt) {
@@ -1273,26 +1280,10 @@ static void sky_cycle_advance(SkyAtmosphere* sky, float dt) {
         sky_bake_view_lut(sky);
     }
 
-    /*
-     * The moon rides sky_sun_path a second time at a shifted hour, which puts
-     * it on the SAME great circle as the sun. That is astronomically wrong by
-     * up to 28 degrees of declination across a real month -- and it is exactly
-     * as wrong as the sun already is, since this is the EQUINOX path and the
-     * sun has no declination here either. Reusing it means one celestial model
-     * rather than two to keep in step, and the gate's Python twin comes free.
-     *
-     * MINUS the offset, so a growing lag makes the moon transit LATER, which
-     * is the direction it really drifts. Left UNWRAPPED on purpose: sky_sun_path
-     * takes sin and cos of the hour, and -5 h against 19 h agree mathematically
-     * but not bitwise -- the gate's 0 px identity leg rests on that.
-     *
-     * No comparison guarding it, unlike the sun's above, because there is
-     * nothing to protect: the moon is not in the view LUT and not in the env
-     * cube, so a moon move costs two trig calls and a few float writes.
-     */
-    if (sky->moon_enabled)
-        sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour - sky->cycle_moon_offset,
-                     &sky->moon_elevation_deg, &sky->moon_azimuth_deg);
+    // No comparison guarding the moon, unlike the sun's above, because there
+    // is nothing to protect: it is not in the view LUT and not in the env
+    // cube, so a moon move costs two trig calls and a few float writes.
+    sky_place_moon_from_clock(sky);
 }
 
 // Spend one frame's budget on the sliced re-bake. Separate from the advance

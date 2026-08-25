@@ -7,10 +7,32 @@
 #include "stars.glsl"
 #include "moon.glsl"
 
-vec3 skyRadiance(vec3 dir, vec3 sunDir, float r, sampler2D skyViewLut,
-                 sampler2D transmittanceLut, float sunCosRadius, float sunIntensity,
-                 mat3 starFrame, float starIntensity, vec3 moonDir, float moonIntensity,
-                 float moonEarthshine, float moonMaria)
+// The sky's own VALUE uniforms, declared here rather than passed in. Both
+// callers uploaded an identical block and threaded it through an identical
+// argument list, so the parameterisation carried no information and cost a row
+// of same-typed positional slots -- transposing two of them at one call site
+// compiles clean and renders a plausible moon with a black limb and a flat
+// face, which is the failure class this file exists to make unrepresentable.
+//
+// The SAMPLERS stay parameters, which is the header's stated reason and
+// applies to them alone: every caller binds its own units. This is the shape
+// view.glsl (included by both callers, one line above) and csm.glsl already
+// use.
+//
+// It also tightens the firefly rule from a convention into a topology fact:
+// the uniforms exist only inside this file, so including it gets the whole
+// sky and not including it gets none of it. There is nothing left to drift.
+uniform vec3 sunDir;          // world-space unit vector TOWARD the sun
+uniform float sunCosRadius;   // cos of the angular RADIUS shared by both discs
+uniform float sunIntensity;   // scalar disc radiance scale
+uniform mat3 starFrame;       // world dir -> celestial frame (latitude + hour angle)
+uniform float starIntensity;  // star radiance scale; 0 = daylight / disabled
+uniform vec3 moonDir;         // world-space unit vector TOWARD the moon
+uniform float moonIntensity;  // disc radiance scale; 0 = new moon / day / disabled
+uniform float moonEarthshine; // 1 = the dark limb is Earth-lit, 0 = black
+uniform float moonMaria;      // 1 = the face is textured, 0 = uniform
+
+vec3 skyRadiance(vec3 dir, float r, sampler2D skyViewLut, sampler2D transmittanceLut)
 {
     vec3 sky = texture(skyViewLut, skyViewUv(dir, sunDir, r)).rgb;
 

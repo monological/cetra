@@ -3068,14 +3068,7 @@ int main(int argc, char** argv) {
             if (sky->cycle_enabled || args.time_of_day >= 0.0f) {
                 sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour,
                              &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
-                // The moon in the same breath and for the same reason: the
-                // cycle owns both angles, so arming it without seeding leaves
-                // the first tick to teleport the moon off whatever the flags
-                // or the scene file just placed.
-                if (sky->moon_enabled)
-                    sky_sun_path((double)sky->stars_latitude_deg,
-                                 sky->cycle_hour - sky->cycle_moon_offset,
-                                 &sky->moon_elevation_deg, &sky->moon_azimuth_deg);
+                sky_place_moon_from_clock(sky);
             }
             sky_update_moon(sky);
             sky->clouds.enabled = args.clouds != 0;
