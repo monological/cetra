@@ -23,10 +23,6 @@
 // resolution. The glare wing scales with the star's own brightness, because
 // tree ships bloom at 0.015 and the glow has to come from the PSF itself.
 //
-// The jitter stays inside the inner 80% of the cell so the footprint never
-// crosses a cell edge and one tap suffices -- the octahedral seam folds are
-// never straddled.
-//
 // The caller passes the direction already rotated into the CELESTIAL frame
 // (starFrame), so the grid pole sits on the celestial pole: under a turning
 // sky the field rigidly wheels and the pole cell holds still, which is what
@@ -97,25 +93,41 @@ vec3 starColor(float h) {
     return mix(vec3(1.0), c, 0.5);
 }
 
-// One star lattice: at most one star in the cell containing `dir`.
+// One star lattice: at most one star per cell, gathered over the 3x3
+// neighbourhood of the cell containing `dir`. The gather is correctness,
+// not thoroughness: the footprint is sized in PIXELS while the cells are
+// fixed in angle, so no bake-time jitter margin can keep a star inside its
+// own cell at every resolution -- a single-cell tap shipped, and truncated
+// edge-adjacent stars along their cell boundaries into hard diagonal
+// wedges. Neighbours across the octahedral fold are adjacent on the sphere
+// too (the fold is continuous), and the square's outer border maps to the
+// nadir, where the caller's transmittance is already zero.
+//
 // `scale` is the flux-1 peak radiance; the glare wing grows with the star's
 // own brightness (bright sources flare, faint ones stay points).
 vec3 starLayer(vec3 dir, float grid, float occupancy, float fluxCap, float scale,
                float sigma) {
     vec2 g = (octEncode(dir) * 0.5 + 0.5) * grid;
-    vec2 cell = floor(g);
-    vec2 p = (cell + 0.5 + grid) * STAR_LATTICE;
-    if (hash21(p, STAR_K_OCCUPY) >= occupancy)
-        return vec3(0.0);
-    vec2 jitter = (vec2(hash21(p, STAR_K_JX), hash21(p, STAR_K_JY)) - 0.5) * 0.8;
-    vec3 starDir = octDecode((cell + 0.5 + jitter) / grid * 2.0 - 1.0);
-    // Chord length ~ angle at these widths.
-    float d2 = dot(dir - starDir, dir - starDir);
-    float flux = min(pow(hash21(p, STAR_K_FLUX) + 1e-3, -0.6667), fluxCap);
+    vec2 base = floor(g);
     float s2 = sigma * sigma;
-    float wing = STAR_HALO * clamp(flux * scale * 0.5, 0.0, 1.0);
-    float fall = exp(-d2 / (2.0 * s2)) + wing * exp(-d2 / (2.0 * 16.0 * s2));
-    return starColor(hash21(p, STAR_K_COLOR)) * (flux * scale * fall);
+    vec3 sum = vec3(0.0);
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            vec2 cell = base + vec2(float(dx), float(dy));
+            vec2 p = (cell + 0.5 + grid) * STAR_LATTICE;
+            if (hash21(p, STAR_K_OCCUPY) >= occupancy)
+                continue;
+            vec2 jitter = vec2(hash21(p, STAR_K_JX), hash21(p, STAR_K_JY)) - 0.5;
+            vec3 starDir = octDecode((cell + 0.5 + jitter) / grid * 2.0 - 1.0);
+            // Chord length ~ angle at these widths.
+            float d2 = dot(dir - starDir, dir - starDir);
+            float flux = min(pow(hash21(p, STAR_K_FLUX) + 1e-3, -0.6667), fluxCap);
+            float wing = STAR_HALO * clamp(flux * scale * 0.5, 0.0, 1.0);
+            float fall = exp(-d2 / (2.0 * s2)) + wing * exp(-d2 / (2.0 * 16.0 * s2));
+            sum += starColor(hash21(p, STAR_K_COLOR)) * (flux * scale * fall);
+        }
+    }
+    return sum;
 }
 
 // Star radiance along a celestial-frame direction, in the sky's absolute
