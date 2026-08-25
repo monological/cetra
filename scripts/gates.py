@@ -5790,6 +5790,7 @@ MOON_LIT_TOL = 0.12          # measured worst 0.043 across the four rungs
 MOON_LIMB_COS_MIN = 0.906
 MOON_LIMB_OFFSET_MIN = 0.10  # of the disc radius; measured worst 0.30
 MOON_KS_RATIO_MIN = 5.0      # full/quarter, against a predicted 10.99 through the tonemap
+MOON_MARIA_DRIFT_MAX = 0.01  # 0.000 correct against 0.044 sun-locked; see the arm
 
 
 def _moon_dir(el_deg, az_deg):
@@ -6214,10 +6215,58 @@ def run_moon_gate(workdir):
         mean = sum(vals) / max(1, len(vals))
         var = sum((v - mean) ** 2 for v in vals) / max(1, len(vals))
         sigma = math.sqrt(var)
-        ok = moved >= 200 and sigma > 0.0 and (sigma / max(abs(mean), 1e-6)) >= 0.25
+        # THE THIRD LEG, and it is the one that earns the arm its "locked to the face"
+        # claim. The first two are satisfied by a maria field evaluated in ANY frame --
+        # including the sun-relative one the terminator code already builds, which is
+        # the natural wrong turn and which makes the pattern spin with the phase.
+        # The bar is placed BETWEEN the two readings, by killing the twin first:
+        # correct reads 0.000 -- exactly, because the face frame is a function of the
+        # moon vector alone and both rolls share it -- against 0.044 mutated. 0.01 sits
+        # four times under the mutation and is unreachable by anything face-locked.
+        #
+        # The comparison is the ALBEDO, on divided by off, because that is what the
+        # maria multiply and it is therefore independent of how brightly the two rolls
+        # happen to be lit. Compared only where both rolls light the same face patch.
+        alb = {}
+        for roll in (0.0, 90.0):
+            r_el, r_az = _moon_sun_at_elongation(MOON_EL_HIGH, MOON_AZ, MOON_ELONG_ROLL, roll)
+            r_common = ["--sun-elevation", f"{r_el:.6f}", "--sun-azimuth", f"{r_az:.6f}",
+                        "--moon-elevation", f"{MOON_EL_HIGH}", "--moon-azimuth", f"{MOON_AZ}",
+                        "--sky-disc", MOON_DISC_BIG] + cam_argv + MOON_DISC_FLAGS
+            r_on, _ = _moon_render(workdir, f"maria_r{int(roll)}_on", r_common)
+            r_off, _ = _moon_render(workdir, f"maria_r{int(roll)}_off",
+                                    r_common + ["--no-moon-maria"])
+            _, _, ra = _read_ppm(r_on)
+            _, _, rb = _read_ppm(r_off)
+            cur = {}
+            for y in range(max(0, int(ccy2 - rad2)), min(h, int(ccy2 + rad2) + 1)):
+                for x in range(max(0, int(ccx2 - rad2)), min(w, int(ccx2 + rad2) + 1)):
+                    if math.hypot(x - ccx2, y - ccy2) > rad2 * 0.9:
+                        continue
+                    o = (y * w + x) * 3
+                    base = sum(_SRGB_TO_LINEAR[rb[o + k]] for k in range(3)) / 3.0
+                    # WELL clear of the terminator, not merely non-black. The ratio is
+                    # what cancels everything but the albedo, and a ratio of two small
+                    # 8-bit codes is mostly quantization -- at 0.05 the worst pixel read
+                    # 0.127 on CORRECT code, which is noise wearing the shape of a
+                    # finding.
+                    if base < 0.25:
+                        continue
+                    cur[(x, y)] = (sum(_SRGB_TO_LINEAR[ra[o + k]] for k in range(3)) / 3.0) / base
+            alb[roll] = cur
+        both = set(alb[0.0]) & set(alb[90.0])
+        # The MEAN, not the max: one worst pixel over ten thousand is a quantization
+        # story, and what this leg claims is about the whole pattern.
+        drift = (sum(abs(alb[0.0][k] - alb[90.0][k]) for k in both) / len(both)) \
+            if both else float("nan")
+        ok = moved >= 200 and sigma > 0.0 and (sigma / max(abs(mean), 1e-6)) >= 0.25 and \
+            len(both) >= 500 and drift <= MOON_MARIA_DRIFT_MAX
         print(f"  moon-maria {'PASS' if ok else 'FAIL'}  {moved} px of the lit face carry "
               f"maria (want >=200), sigma/|mean| {sigma / max(abs(mean), 1e-6):.2f} "
-              f"(want >=0.25: a flat tint reads 0)")
+              f"(want >=0.25: a flat tint reads 0), and the pattern drifts {drift:.3f} "
+              f"across two sun rolls over {len(both)} shared px "
+              f"(want <={MOON_MARIA_DRIFT_MAX}: locked to "
+              f"the FACE, not the sun)")
         if not ok:
             failures.append("moon-maria")
 
