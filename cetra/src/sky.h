@@ -238,6 +238,7 @@ typedef struct SkyAtmosphere {
     ShaderProgram* aerial_program;
 
     GLuint quad_vao, quad_vbo;
+    GLuint lut_fbo; // reused by every 2D LUT bake; the view LUT re-bakes per frame
 
     ShaderProgram* transmittance_program;
     ShaderProgram* multiscatter_program;
@@ -327,8 +328,11 @@ void sky_sun_path(double latitude_deg, double hour, float* out_elevation_deg,
 // rewrites is what the cascades then fit, and a completed slice's swap must
 // land before the frame's first bind_ibl_textures. A structural no-op when
 // the cycle is off or frozen-and-converged.
-void sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, const struct Engine* engine,
-                    float dt);
+// Returns true when a sliced re-bake COMPLETED this frame, which is the
+// caller's cue to re-derive whatever else the environment feeds (the GI
+// volume). Reported rather than done here because sky.c deliberately does not
+// know what a Scene is -- see scene_environment_changed's own comment.
+bool sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, float dt);
 
 // Ask the slicer for a fresh pass over the CURRENT sun, without moving it --
 // the diagnostic `--cycle-rebake-at` drives this, and it is what lets a

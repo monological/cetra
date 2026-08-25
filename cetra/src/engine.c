@@ -2571,9 +2571,19 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
         // then fit, and a completed slice's swap must land before this
         // frame's first bind_ibl_textures. A structural no-op when the cycle
         // is off.
-        if (shadow_scene && shadow_scene->sky && shadow_scene->ibl)
-            sky_cycle_tick(shadow_scene->sky, shadow_scene->ibl, engine,
-                           (float)engine->render_delta);
+        if (shadow_scene && shadow_scene->sky && shadow_scene->ibl) {
+            profiler_scope_begin_if(engine->profiler,
+                                    shadow_scene->sky->slicer.item >= 0 ||
+                                        shadow_scene->sky->cycle_dirty,
+                                    "sky cycle");
+            bool env_swapped = sky_cycle_tick(shadow_scene->sky, shadow_scene->ibl,
+                                              (float)engine->render_delta);
+            profiler_scope_end(engine->profiler);
+            // The scene owns what re-derives from its environment; the sky
+            // only reports that its chain moved.
+            if (env_swapped && shadow_scene->gi_volume)
+                gi_volume_mark_dirty(shadow_scene->gi_volume);
+        }
 
         // GI probe captures, while the volume is dirty. Deliberately BEFORE the
         // shadow pass: a capture needs the camera-independent single-cascade map

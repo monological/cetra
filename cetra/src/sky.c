@@ -4,11 +4,9 @@
 
 #include "sky.h"
 #include "engine.h"
-#include "gi_volume.h"
 #include "ibl.h"
 #include "light.h"
 #include "postfx.h"
-#include "scene.h"
 #include "texture.h"
 #include "util.h"
 #include "ext/log.h"
@@ -102,6 +100,8 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteVertexArrays(1, &sky->quad_vao);
     if (sky->quad_vbo)
         glDeleteBuffers(1, &sky->quad_vbo);
+    if (sky->lut_fbo)
+        glDeleteFramebuffers(1, &sky->lut_fbo);
     if (sky->slicer.frozen_lut)
         glDeleteTextures(1, &sky->slicer.frozen_lut);
     if (sky->slicer.shadow_env)
@@ -280,20 +280,25 @@ static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
 #define SKY_BAKE_SCRATCH_UNIT 6
 static void bake_lut_2d(SkyAtmosphere* sky, ShaderProgram* program, GLuint* texture, int width,
                         int height) {
-    if (*texture)
-        glDeleteTextures(1, texture);
-    glActiveTexture(GL_TEXTURE0 + SKY_BAKE_SCRATCH_UNIT);
-    glGenTextures(1, texture);
-    glBindTexture(GL_TEXTURE_2D, *texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glActiveTexture(GL_TEXTURE0);
+    // Allocate on first use and KEEP it. Every destination here has a fixed
+    // size, and since 11.81 the view LUT is re-baked every frame of a running
+    // cycle -- delete-before-gen would churn a texture and an FBO per frame,
+    // which is exactly why bake_aerial_volume below keeps its own volume.
+    if (!*texture) {
+        glActiveTexture(GL_TEXTURE0 + SKY_BAKE_SCRATCH_UNIT);
+        glGenTextures(1, texture);
+        glBindTexture(GL_TEXTURE_2D, *texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glActiveTexture(GL_TEXTURE0);
+    }
 
-    GLuint fbo;
-    glGenFramebuffers(1, &fbo);
+    if (!sky->lut_fbo)
+        glGenFramebuffers(1, &sky->lut_fbo);
+    GLuint fbo = sky->lut_fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texture, 0);
 
@@ -315,7 +320,6 @@ static void bake_lut_2d(SkyAtmosphere* sky, ShaderProgram* program, GLuint* text
     if (blend_was)
         glEnable(GL_BLEND);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
 }
 
 // The 3D sibling of bake_lut_2d: one draw per layer into an attachment-less
@@ -590,11 +594,20 @@ static void sky_debug_draw_noise(SkyAtmosphere* sky, GLuint volume, int channel,
     draw_fullscreen_quad(sky->quad_vao);
 }
 
-// Bake a sky-view LUT from the current sun into the caller's texture
+// Whether an env bake should march the cloud deck. ONE statement of it: the
+// atomic path and the slicer disagreeing here means a GUI drag (which goes
+// through sky_bake, i.e. with_clouds false) leaves a cloudless env cube that
+// the slicer then silently replaces with a clouded one.
+static bool sky_clouds_bake_wanted(const SkyAtmosphere* sky) {
+    return sky->clouds.enabled && sky->clouds.noise_baked && sky->env_clouds_program != NULL;
+}
+
+// Bake a sky-view LUT into the caller's texture from the caller's SUN
 // (samples transmittance + multiscatter on units 0/1). Small fullscreen
-// RGBA16F pass. Target is a parameter since 11.81: the live LUT and the
-// cycle slicer's frozen copy are the same bake aimed at different handles.
-static void sky_bake_view_lut_to(SkyAtmosphere* sky, GLuint* dst) {
+// RGBA16F pass. Both are parameters since 11.81: the live LUT tracks the sun
+// per frame while the slicer's frozen copy must hold the latched one, and a
+// bake that read the live sun for both would seam the env cube's faces.
+static void sky_bake_view_lut_to(SkyAtmosphere* sky, GLuint* dst, const vec3 sun_dir) {
     // Bind the two source LUTs on units 0/1 and set the sun before the bake;
     // bake_lut_2d re-uses this program, allocates the dest on the scratch unit
     // (6), and draws — leaving these bindings intact.
@@ -605,7 +618,7 @@ static void sky_bake_view_lut_to(SkyAtmosphere* sky, GLuint* dst) {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, sky->multiscatter_lut);
     uniform_set_int(sky->view_program->uniforms, "multiscatterLut", 1);
-    uniform_set_float(sky->view_program->uniforms, "sunCosZenith", sky->sun_dir[1]);
+    uniform_set_float(sky->view_program->uniforms, "sunCosZenith", sun_dir[1]);
     vec3 nf = {0};
     sky_night_floor(sky, nf);
     uniform_set_vec3(sky->view_program->uniforms, "nightFloor", nf);
@@ -614,7 +627,7 @@ static void sky_bake_view_lut_to(SkyAtmosphere* sky, GLuint* dst) {
 }
 
 static void sky_bake_view_lut(SkyAtmosphere* sky) {
-    sky_bake_view_lut_to(sky, &sky->sky_view_lut);
+    sky_bake_view_lut_to(sky, &sky->sky_view_lut, sky->sun_dir);
 }
 
 // One env-cube face, self-contained (spec 11.81): FBO/RBO respec, program
@@ -723,8 +736,17 @@ int sky_bake_ex(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* eng
     // The cadence split: a with-clouds bake marches 24 steps per env texel,
     // which belongs on slider RELEASE and startup, never on the per-drag
     // re-bake this function also serves.
-    bool clouds_bake = with_clouds && sky->clouds.enabled && sky->clouds.noise_baked &&
-                       sky->env_clouds_program != NULL;
+    bool clouds_bake = with_clouds && sky_clouds_bake_wanted(sky);
+    // An atomic bake is the authoritative statement of the environment, so it
+    // CANCELS any slice in flight: otherwise that slice's swap lands a few
+    // frames later carrying content baked from the frozen LUT taken before
+    // this call, and the edit that triggered the bake visibly reverts. Covers
+    // the GUI's floor/cloud controls, a config restore and --cycle-rebake-at
+    // alike. Re-armed dirty so a running cycle re-converges from the new sun.
+    if (sky->slicer.item >= 0) {
+        sky->slicer.item = -1;
+        sky->cycle_dirty = sky->cycle_enabled;
+    }
     if (sky->quad_vao == 0)
         create_fullscreen_quad_vao(&sky->quad_vao, &sky->quad_vbo);
     // Reuse the IBL toolkit's unit cube for the six env-face draws (the probe
@@ -845,16 +867,34 @@ typedef struct {
     int weight; // texels x a rough per-texel cost factor
 } SkySliceItem;
 
-// Weighted texels the tick spends per frame. Sized by measurement (see spec
-// 11.81's timing table) so no slice frame spikes; a full cycle is the total
-// weight over this, roughly 18 ticks.
-#define SKY_SLICE_BUDGET 160000
+/*
+ * Weighted texels the tick spends per frame.
+ *
+ * The weights are an unmeasured cost MODEL, not measurements, and two of the
+ * inputs are known to be rough: the x2 prefilter factor implies a GGX+Charlie
+ * cost well under what 11.0 measured for the same draws, and an env face is
+ * weighted independently of clouds_bake though a cloud face marches 24 steps
+ * per texel. The model only has to rank items and bound a frame, which it
+ * does; the budget is then set BELOW the heaviest single item (a mip-0
+ * prefilter face at 131072) so the pump's overshoot guard can actually bite.
+ * A real per-item timing pass belongs in the spec before either number is
+ * treated as authoritative.
+ */
+#define SKY_SLICE_BUDGET 120000
 
 #define SKY_SLICE_MAX_ITEMS 64
 static SkySliceItem sky_slice_schedule[SKY_SLICE_MAX_ITEMS];
 static int sky_slice_count = 0;
 
 static void sky_slice_add(int kind, int mip, int face_first, int face_count, int weight) {
+    if (sky_slice_count >= SKY_SLICE_MAX_ITEMS) {
+        // Silent overflow of a file-static array is the one failure here that
+        // corrupts rather than degrades, and the cap is only comfortable at
+        // today's sizes: raising SKY_PREFILTER_MIPS walks straight into it.
+        log_error("Sky slice schedule overflow (cap %d); raise SKY_SLICE_MAX_ITEMS",
+                  SKY_SLICE_MAX_ITEMS);
+        return;
+    }
     SkySliceItem* it = &sky_slice_schedule[sky_slice_count++];
     it->kind = (unsigned char)kind;
     it->mip = (signed char)mip;
@@ -867,7 +907,10 @@ static void sky_slice_add_chain(int kind, int base, int mips) {
     for (int mip = 0; mip < mips; mip++) {
         int size = base >> mip;
         int face_weight = size * size * 2; // prefilter texels run importance loops
-        if (size >= 128) {
+        // Split by face exactly when a whole mip would not fit the budget --
+        // derived rather than written as a resolution, so changing the budget
+        // moves the split with it instead of silently disagreeing.
+        if (face_weight * 6 > SKY_SLICE_BUDGET) {
             for (int f = 0; f < 6; f++)
                 sky_slice_add(kind, mip, f, 1, face_weight);
         } else {
@@ -894,36 +937,56 @@ static void sky_slice_build_schedule(void) {
 
 // Start a sliced re-bake: latch the sun and the clouds decision, allocate the
 // shadow targets. The frozen LUT is item 0's job, not this one's.
-static void sky_slicer_start(SkyAtmosphere* sky) {
+//
+// Returns false and starts nothing when a program the schedule needs is
+// missing: the slices themselves early-return SILENTLY, so a half-rendered
+// shadow chain would be swapped in over a good live one -- where the atomic
+// path returns -1 and installs nothing.
+static bool sky_slicer_start(SkyAtmosphere* sky, const struct IBLResources* ibl) {
+    if (!sky->view_program || !sky->env_program || !ibl->irradiance_program ||
+        !ibl->prefilter_program || !ibl->charlie_prefilter_program)
+        return false;
     sky_slice_build_schedule();
     glm_vec3_copy(sky->sun_dir, sky->slicer.latched_sun_dir);
-    sky->slicer.clouds_bake = sky->clouds.enabled && sky->clouds.noise_baked &&
-                              sky->env_clouds_program != NULL;
-    if (sky->slicer.shadow_env)
-        glDeleteTextures(1, &sky->slicer.shadow_env);
-    if (sky->slicer.shadow_irr)
-        glDeleteTextures(1, &sky->slicer.shadow_irr);
-    if (sky->slicer.shadow_prefilter)
-        glDeleteTextures(1, &sky->slicer.shadow_prefilter);
-    if (sky->slicer.shadow_charlie)
-        glDeleteTextures(1, &sky->slicer.shadow_charlie);
-    ibl_create_cubemap_texture(&sky->slicer.shadow_env, SKY_ENV_SIZE, true);
-    ibl_create_cubemap_texture(&sky->slicer.shadow_irr, IBL_IRRADIANCE_SIZE, false);
-    ibl_create_prefilter_cubemap(&sky->slicer.shadow_prefilter, SKY_PREFILTER_SIZE,
-                                 SKY_PREFILTER_MIPS);
-    ibl_create_prefilter_cubemap(&sky->slicer.shadow_charlie, IBL_CHARLIE_PREFILTER_SIZE,
-                                 IBL_CHARLIE_PREFILTER_MIPS);
+    sky->slicer.clouds_bake = sky_clouds_bake_wanted(sky);
+    if (sky->slicer.clouds_bake && !sky->env_clouds_program)
+        return false;
+    // Adopt the outgoing chain rather than allocating a new one: the two sets
+    // already coexist for a whole cycle, so peak VRAM is unchanged and this
+    // removes ~12.6 MB of allocate-and-free every cycle, forever. Safe because
+    // the formats and sizes are identical by construction and the schedule
+    // rewrites every (mip, face) of all four before the next swap.
+    if (!sky->slicer.shadow_env)
+        ibl_create_cubemap_texture(&sky->slicer.shadow_env, SKY_ENV_SIZE, true);
+    if (!sky->slicer.shadow_irr)
+        ibl_create_cubemap_texture(&sky->slicer.shadow_irr, IBL_IRRADIANCE_SIZE, false);
+    if (!sky->slicer.shadow_prefilter)
+        ibl_create_prefilter_cubemap(&sky->slicer.shadow_prefilter, SKY_PREFILTER_SIZE,
+                                     SKY_PREFILTER_MIPS);
+    if (!sky->slicer.shadow_charlie)
+        ibl_create_prefilter_cubemap(&sky->slicer.shadow_charlie, IBL_CHARLIE_PREFILTER_SIZE,
+                                     IBL_CHARLIE_PREFILTER_MIPS);
+    // Set-and-leave, like the rest of the codebase's use of it: the slices
+    // that follow all want it and nothing ever disables it.
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
     sky->slicer.item = 0;
     sky->cycle_dirty = false;
+    return true;
 }
 
 // Run one work item. Every piece is the atomic bake's own code aimed at the
-// shadow handles.
-static void sky_slicer_run_item(SkyAtmosphere* sky, struct IBLResources* ibl,
-                                const struct Engine* engine, const SkySliceItem* it) {
+// shadow handles. Returns true when a SWAP landed, which is the caller's cue
+// to tell the scene its environment moved -- sky.c deliberately does not know
+// what a Scene is (scene.h states that invariant).
+static bool sky_slicer_run_item(SkyAtmosphere* sky, struct IBLResources* ibl,
+                                const SkySliceItem* it) {
     switch ((SkySliceKind)it->kind) {
         case SKY_SLICE_LUT:
-            sky_bake_view_lut_to(sky, &sky->slicer.frozen_lut);
+            // From the LATCHED sun, not the live one: every face of one cube
+            // must see one sun, and leaving that to "item 0 happens to run in
+            // the same tick as the start" is a seam waiting for a scheduler
+            // change.
+            sky_bake_view_lut_to(sky, &sky->slicer.frozen_lut, sky->slicer.latched_sun_dir);
             break;
         case SKY_SLICE_ENV_FACE:
             sky_env_face_slice(sky, ibl, sky->slicer.frozen_lut, sky->slicer.latched_sun_dir,
@@ -947,32 +1010,27 @@ static void sky_slicer_run_item(SkyAtmosphere* sky, struct IBLResources* ibl,
                                 IBL_CHARLIE_PREFILTER_MIPS, it->mip, it->face_first,
                                 it->face_count);
             break;
-        case SKY_SLICE_SWAP:
-            // The old live set dies, the shadows become live -- together with
-            // max_reflection_lod, the one non-texture field welded to the
-            // prefilter chain.
-            if (ibl->environment_cubemap)
-                glDeleteTextures(1, &ibl->environment_cubemap);
-            if (ibl->irradiance_map)
-                glDeleteTextures(1, &ibl->irradiance_map);
-            if (ibl->prefilter_map)
-                glDeleteTextures(1, &ibl->prefilter_map);
-            if (ibl->charlie_prefilter_map)
-                glDeleteTextures(1, &ibl->charlie_prefilter_map);
+        case SKY_SLICE_SWAP: {
+            // The two chains trade places -- together with max_reflection_lod,
+            // the one non-texture field welded to the prefilter chain. The
+            // outgoing set becomes the next cycle's shadow rather than dying.
+            GLuint prev_env = ibl->environment_cubemap;
+            GLuint prev_irr = ibl->irradiance_map;
+            GLuint prev_pre = ibl->prefilter_map;
+            GLuint prev_cha = ibl->charlie_prefilter_map;
             ibl->environment_cubemap = sky->slicer.shadow_env;
             ibl->irradiance_map = sky->slicer.shadow_irr;
             ibl->prefilter_map = sky->slicer.shadow_prefilter;
             ibl->charlie_prefilter_map = sky->slicer.shadow_charlie;
             ibl->max_reflection_lod = (float)(SKY_PREFILTER_MIPS - 1);
-            sky->slicer.shadow_env = 0;
-            sky->slicer.shadow_irr = 0;
-            sky->slicer.shadow_prefilter = 0;
-            sky->slicer.shadow_charlie = 0;
-            Scene* scene = get_current_scene(engine);
-            if (scene && scene->gi_volume)
-                gi_volume_mark_dirty(scene->gi_volume);
-            break;
+            sky->slicer.shadow_env = prev_env;
+            sky->slicer.shadow_irr = prev_irr;
+            sky->slicer.shadow_prefilter = prev_pre;
+            sky->slicer.shadow_charlie = prev_cha;
+            return true;
+        }
     }
+    return false;
 }
 
 void sky_cycle_request_rebake(SkyAtmosphere* sky) {
@@ -982,28 +1040,13 @@ void sky_cycle_request_rebake(SkyAtmosphere* sky) {
     sky->slicer.item = -1; // restart from the top on the next tick
 }
 
-void sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, const struct Engine* engine,
-                    float dt) {
-    if (!sky || !ibl || !engine || !sky->enabled)
-        return;
-    // The slicer leans on programs the startup atomic bake resolved; without
-    // it there is nothing to slice against.
-    if (!ibl->precomputed || !ibl->prefilter_program)
-        return;
-    if (!sky->cycle_enabled) {
-        sky->cycle_latched = false;
-        // A requested rebake still runs with the cycle off: that is the whole
-        // shape of --cycle-rebake-at, a sliced pass over an unmoved sun.
-        if (!sky->cycle_dirty && sky->slicer.item < 0)
-            return;
-        goto slice;
-    }
-
+// Advance the clock and everything the sun drives per frame. CPU plus one
+// small LUT bake; the heavy re-bake is the pump's job.
+static void sky_cycle_advance(SkyAtmosphere* sky, float dt) {
     if (!sky->cycle_latched) {
         // The app's authored star-hour placement survives as the phase the
         // sky wheels from.
-        sky->cycle_star_base =
-            (double)sky->stars_hour_deg - (sky->cycle_hour - 12.0) * 15.0;
+        sky->cycle_star_base = (double)sky->stars_hour_deg - (sky->cycle_hour - 12.0) * 15.0;
         sky->cycle_latched = true;
     }
 
@@ -1013,58 +1056,88 @@ void sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, const struct E
             sky->cycle_hour -= 24.0;
     }
 
+    // The star field is a function of the HOUR, so it is written beside the
+    // hour -- not inside the sun comparison below, where it would stall
+    // whenever the sun's own float angles happened not to move (near noon at
+    // low latitude both derivatives approach zero).
+    sky->stars_hour_deg = (float)(sky->cycle_star_base + (sky->cycle_hour - 12.0) * 15.0);
+
     // Derive-and-compare rather than track "did it move": float equality
     // makes a frozen, already-seeded cycle a true no-op, and a config restore
     // that changed the hour is picked up the same way.
     float el, az;
     sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour, &el, &az);
-    if (el != sky->sun_elevation_deg || az != sky->sun_azimuth_deg) {
-        sky->sun_elevation_deg = el;
-        sky->sun_azimuth_deg = az;
-        sky->stars_hour_deg =
-            (float)(sky->cycle_star_base + (sky->cycle_hour - 12.0) * 15.0);
-        sky_update_sun_dir(sky); // sun_dir + the zenith march
-        sky_apply_sun_to_light(sky);
-        sky->cycle_dirty = true;
-
-        GLint prev_viewport[4];
-        GLint prev_framebuffer;
-        glGetIntegerv(GL_VIEWPORT, prev_viewport);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
-        // The LIVE view LUT tracks the sun every tick -- the on-screen sky
-        // moves continuously while the IBL converges behind it.
-        sky_bake_view_lut(sky);
-        glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-        glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
-    }
-
-    if (sky->slicer.item < 0 && !sky->cycle_dirty)
+    if (el == sky->sun_elevation_deg && az == sky->sun_azimuth_deg)
         return;
 
-slice:;
-    GLint prev_viewport[4];
-    GLint prev_framebuffer;
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
-    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+    sky->sun_elevation_deg = el;
+    sky->sun_azimuth_deg = az;
+    sky_update_sun_dir(sky); // sun_dir + the zenith march
+    sky_apply_sun_to_light(sky);
+    sky->cycle_dirty = true;
 
-    if (sky->slicer.item < 0)
-        sky_slicer_start(sky);
+    // The LIVE view LUT tracks the sun every tick -- the on-screen sky moves
+    // continuously while the IBL converges behind it.
+    sky_bake_view_lut(sky);
+}
+
+// Spend one frame's budget on the sliced re-bake. Separate from the advance
+// because the two are genuinely different jobs on different clocks: a
+// --cycle-rebake-at request pumps without advancing, and a frozen cycle
+// advances without pumping.
+static void sky_slicer_pump(SkyAtmosphere* sky, struct IBLResources* ibl, bool* out_swapped) {
+    if (sky->slicer.item < 0 && !sky_slicer_start(sky, ibl))
+        return;
 
     int spent = 0;
-    while (sky->slicer.item >= 0 && sky->slicer.item < sky_slice_count &&
-           spent < SKY_SLICE_BUDGET) {
+    while (sky->slicer.item >= 0) {
         const SkySliceItem* it = &sky_slice_schedule[sky->slicer.item];
-        sky_slicer_run_item(sky, ibl, engine, it);
+        // Do not START an item that overshoots -- testing only "have I spent
+        // the budget" lets a tick run a full item past it, and the heaviest
+        // item is comparable to the budget itself, so the real ceiling would
+        // be ~2x what the constant says. The `spent == 0` leg keeps a single
+        // over-budget item from deadlocking the schedule.
+        if (spent && spent + it->weight > SKY_SLICE_BUDGET)
+            break;
+        if (sky_slicer_run_item(sky, ibl, it))
+            *out_swapped = true;
         spent += it->weight;
         sky->slicer.item++;
         if (sky->slicer.item >= sky_slice_count)
             sky->slicer.item = -1; // converged; restarts next tick if dirty
     }
+}
+
+bool sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, float dt) {
+    if (!sky || !ibl || !sky->enabled)
+        return false;
+    // The slicer leans on state the startup atomic bake established; without
+    // it there is nothing to slice against.
+    if (!ibl->precomputed)
+        return false;
+
+    if (sky->cycle_enabled)
+        sky_cycle_advance(sky, dt);
+    else
+        sky->cycle_latched = false;
+
+    // A requested re-bake pumps with the cycle OFF: that is the whole shape of
+    // --cycle-rebake-at, a sliced pass over an unmoved sun.
+    if (sky->slicer.item < 0 && !sky->cycle_dirty)
+        return false;
+
+    GLint prev_viewport[4];
+    GLint prev_framebuffer;
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
+
+    bool swapped = false;
+    sky_slicer_pump(sky, ibl, &swapped);
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
     glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
     glActiveTexture(GL_TEXTURE0);
+    return swapped;
 }
 
 void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view,
