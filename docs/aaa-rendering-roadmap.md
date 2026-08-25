@@ -12,7 +12,8 @@ passes + LUTs + probe bakes on GL 4.1. The plan will be committed to `specs/` as
 each tier item later gets its own subplan (feature branch + spec) before implementation.
 
 **Status: Tiers 1-3 are closed.** Every item is DONE, REJECTED-with-a-measurement, or CLOSED-and-split
-— the original plan is finished. **Tier 4 (Tracks C/D/E below) is the new frontier**, and it is shaped
+— the original plan is finished. **Tier 4 (Tracks C/D/E below, plus rows 45-46 added to Track B
+after the fact) is the new frontier**, and it is shaped
 by a different constraint than Tiers 1-3 were: those items could each be built as another gated
 fullscreen pass, and Tier 4's cannot. Four structural walls now decide what is reachable at all; they
 are stated before Track C because half the Tier 4 items are blocked on one of them.
@@ -28,7 +29,8 @@ one to carry into any future entry here: "16/16" is a link-time property and blo
 per-pass, per-type, per-byte-count property, and this document asked only the first question for the
 length of the roadmap.
 
-Everything in Tracks C/D/E is a **sketch**, in the sense this document has taught the word: a
+Everything in Tracks C/D/E — and B10/B11, which joined Tier 4 later — is a **sketch**, in the sense
+this document has taught the word: a
 pre-implementation guess whose load-bearing claims are wrong often enough that B3 lists four, B6 lists
 three, and A6 lists two of three premises stale by the time the code landed. Read each Tier 4 row as
 a hypothesis with an effort guess attached, not as a design.
@@ -835,6 +837,79 @@ FBO, the fog volume's dimensions and the `sliceIndex` uniform, and reports failu
 it "one extra tap": the composite's single blend carries one (inscatter, transmittance) pair and the
 fog pass early-returned with fog off, so the two media are combined analytically inside one
 composite and `postfx_run_fog` became `postfx_run_atmosphere`.*
+
+### B10. Night sky — stars — Effort S/M
+Greenfield: `star|night|moon|celestial` has zero first-party hits, and this roadmap had
+neither booked nor rejected it. The below-horizon atmosphere is already correct and already
+gated — spec 4.7's checklist includes "below-horizon night (no NaN speckle)" — but Hillaire
+models scattered SUNLIGHT only, so what it renders at −10° is a black void.
+
+**The insertion point is `sky_radiance.glsl`, beside the sun disc, and it decides most of the
+design.** The sun disc is already an analytic point source added to the LUT sample and
+attenuated by `transmittanceToSky` — a star field is that pattern a second time, and four
+properties fall out of the one line: extinction and reddening at the horizon come from the
+existing transmittance LUT; the ground cut is free (`transmittanceToSky` returns zero when
+the ray hits ground); clouds occlude for free (the clouds variant computes `sky * cloud.a`,
+so a term inside `skyRadiance` sits under the deck); and containment is structural, since the
+include has exactly two consumers — the two background programs, at 2 and 3 of 16 sampler
+declarations. The env/IBL path must NOT carry stars, and that rule already exists in the
+codebase: `sky_env_frag.glsl:6-11` refuses the 0.53° sun disc because a point source aliases
+the prefilter into fireflies, and stars are smaller.
+
+**Procedural behind `starRadiance(vec3 dir)`, and a baked catalog texture is rejected on
+arithmetic**: a 2048-wide equirect is 0.176°/texel against ~0.03°/px on screen, so it is
+always magnified and every star lands as a ~5 px blob; sharpness at screen density needs
+~11k wide, ~350 MB. What the procedural field must get right is the magnitude distribution
+(counts go as 10^(0.6m), so flux is Pareto −2.5 — a few dominant stars over a faint wash),
+restrained Planckian colour, and a Milky Way band, which no point catalog gives anyway (it
+is unresolved stars) and which carries more of the look than constellations do. The upgrade
+path for real constellations is instanced point sprites (~9k quads), a body swap behind the
+same signature — not the texture, which pays the asset cost AND the blur.
+
+**The fade is half emergent, and the half that is not is an engine invariant.** Auto-exposure
+is darkening-only by explicit design (`exposure_auto_gain` caps at 1.0 — "brightening is what
+it must not do"), so stars vanishing in daylight is free, and stars appearing at night is a
+CPU-side elevation ramp uniform beside the hard-coded `sunIntensity` — a visibility ramp
+standing in for an adaptation the engine refuses, and the comment should say so. A
+`mat3 starFrame` uniform (latitude → pole altitude, hour angle → rotation) is what makes B11
+turn the sky instead of freezing it.
+
+**OFF by default in the library, and three gates are protected by nothing else**:
+`cornell_rooms` renders at −10° and would take stars across its golden, `dither-band-inverse`
+reads flat runs in `aerial_fixture`'s sky gradient that stars would shorten, and
+`EMISSIVE_SPEC_SKY` pins −10° assuming a low-variance backdrop. Deliberately out of scope,
+booked so the gaps are visible: the night-sky floor (airglow + zodiacal light + integrated
+starlight, ~2e-4 cd/m² — without it the WORLD at night is black, since the key light fades
+out over 3°→0°), the moon (the dominant night light, a disc plus a real casting directional),
+and the Purkinje shift in the tonemap.
+**Depends on:** nothing. **Wall 1:** unaffected — the background programs have 13-14 free units.
+
+### B11. Day/night cycle — Effort M
+An animated sun, which today would be a slideshow: a sun move re-bakes the sky-view LUT, the
+env cube AND the GGX prefilter, priced at **0.11 s** by the config-snapshot restore
+(`config_snapshot.c:303-314`) — per frame that is ~9 fps. The GUI slider survives it because
+a drag releases; a cycle never releases.
+
+**The shape is a time-sliced env bake, and the constraint that picks it is that STATIC must
+not get worse.** One cube face per frame, then one prefilter mip per frame, then swap —
+~13 frames of latency, invisible at any sane cycle rate, same texels at full quality. The
+rejected alternatives: cheapening the bake (smaller cube, fewer mips) degrades every static
+frame the goldens hold; threshold stepping (re-bake per 0.5° moved) pops on reflective
+surfaces, and tree's night scene is mostly sea. A stationary sun must quiesce byte-identical
+to today's path — the goldens-0-px prediction is the acceptance bar. Half the machinery
+already exists: `sky_bake_view_lut` is already factored out (the 192×108 LUT is fine every
+frame), CSM refits per frame regardless, the GI volume already updates as a gradual sweep,
+and the key light already tracks elevation. The DRIVER lives in the app (tree's frame
+callback has `render_delta` in hand); the amortisation lives in `sky.c`.
+
+**Three consequences to book, not fix here.** The cycle forces B10's deferred night floor —
+it drives through sunset every run, and past the key-light fade the bottom half of the frame
+is black. Probe sets cannot follow the sun (`scene_environment_changed` defers set relight by
+design), so a probed interior under a cycle holds capture-time lighting. And shadow motion is
+not in the motion vectors, so creeping shadows smear slightly under TAA — negligible at
+realistic rates, visible at fast time-lapse.
+**Depends on:** B10 (soft — a cycle without stars has a black night; B10 without B11 just
+holds `starFrame` constant). **Wall 1:** unaffected.
 
 ## The four walls (Tier 4 preamble)
 
@@ -2766,6 +2841,8 @@ not scheduled.
 | 42 | **D9 Terrain material layers** | M | **DONE (11.60).** By 11.45's rule (`ocean.glsl:63-78`) N layers are ONE shape — and the row was still one step short: it wanted "a program with room", when the declaration was already there. `materialArray` is bound on every draw and `material_texture_layer_for` knows nothing about masks, so layers became further tenants of it for **zero new declarations, zero new units and zero new programs**. The `pbr_skinned` precedent it cited is a second VERTEX shader over the same fragment shader; the only real second surface program, `water_frag`, has no clustered lights, punctual shadows, LTC or GI, which is right for an ocean and ruinous for terrain. **The test is whether the LIGHTING MODEL differs, not the texture count.** Shipped world-aligned (triplanar) with a height-weighted blend and a splat whose coordinate SPACE the material states — because world XZ cannot address a vertical surface and a mesh-local reading makes the weights swim on a moving prop. It also shipped inert in `apps/forest` and was caught in review: terrain writes UV1 as a literal zero, so the ground sampled one splat texel, through a green suite. |
 | 43 | ~~D10 Virtual-texture compositing~~ | — | **Stages 1 AND 2 SHIPPED (11.66, 11.67).** Stage 1: the composite atlas plus a runtime detail term — `3 + 2A` taps against the per-texel 9/17/25, independent of layer count, byte-exact on flat content, zero new sampler declarations. Stage 2: a 64-slot guttered page atlas at 4x the fallback's density (a ratio, bounding the virtual grid at 34² forever), the page table in a UBO on binding 7, the page pair on units 3/4 freed by refusal, frustum-predicted residency sorted (seen, distance, id), and a depth-tested GPU vote pass read back through a fixed-latency PBO ring — deterministic by construction, +0.23 ms GPU, 0 px on today's content by design. What remains is CONTENT, and the general-mesh era where feedback becomes the only correct source. **First content SHIPPED (11.68): roads — and NOT drawn into the atlas FBO**, which is how this row described the plan. A road is a procedural splat-weight override inside `sampleLayeredSurface`, before the height blend, so the bake inherits it by calling the same function unchanged and the fallback, the pages, the per-texel path, the dominant index and the detail term all follow with no bake code. Segments in a UBO on binding 8, zero samplers. **Pages remain a 0 px identity on shipping configuration** — at the derived resolution all three legs agree to five decimal places; roads are the first content a forced-coarse fallback can distinguish, reading 48 through pages against 66 through the fallback just inside a road's edge. Their caps are small on purpose: 4 roads of 16 points on ONE material per scene. |
 | 44 | ~~D11 Large-world origin rebasing~~ | M/L | **SHIPPED (spec 11.62)** as origin SHIFTING rather than fp64, and the hardcoded far-cascade centre below is fixed with it. This row read as unbuilt for seven specs while its own entry said DONE -- found by the sweep after 11.69, and the reason to state it here is that the ledger is what gets read when someone asks what is left. Independent of 39-43 and needed by anything wanting a world past a few kilometres: fp32 world coordinates cannot hold still, which is why UE4 capped at ~20 km and UE5 shipped fp64 Large World Coordinates. **It also fixes a defect that is already live and has nothing to do with world size** — the outermost shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) while the inner ones follow the camera, so terrain placed away from the origin loses its far shadows with no diagnostic. `terrain.h` already warns about this and works around it by centring the terrain. |
+| 45 | **B10 Night sky — stars** | S/M | The below-horizon sky is already correct (4.7's "no NaN speckle" gate) and already reachable (`--sun-elevation -10`, which `cornell_rooms` ships); what it renders is black, because Hillaire models scattered sunlight only. A procedural star field behind `starRadiance(vec3)` in `sky_radiance.glsl`, beside the sun disc whose pattern it repeats — horizon extinction, the ground cut and cloud occlusion all fall out of the existing terms. Baked catalog texture rejected on arithmetic (always magnified: 0.176°/texel vs 0.03°/px); sprites are the later body swap if real constellations ever matter. OFF by default in the library — three existing gate arms assume a quiet sub-horizon backdrop and are protected by nothing else. The fade in is a CPU elevation ramp, because auto-exposure is darkening-only by design and cannot brighten a night on its own. |
+| 46 | **B11 Day/night cycle** | M | Today an animated sun is a slideshow: one sun move re-bakes view LUT + env cube + GGX prefilter at a measured 0.11 s. The item is a time-sliced env bake (face per frame, mip per frame, swap), chosen because the constraint is that STATIC must not get worse — cheapening the bake degrades every golden, threshold stepping pops on the sea. A stationary sun quiesces byte-identical; goldens 0 px is the acceptance bar. Driver in the app, amortisation in `sky.c`. Forces B10's deferred night floor (past the key-light fade the world is black), and probe sets hold capture-time lighting by design. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
