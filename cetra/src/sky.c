@@ -36,6 +36,10 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->stars_brightness = 1.0f;
     sky->stars_latitude_deg = 45.0f;
     sky->stars_hour_deg = 0.0f;
+    // OFF for the stars' reason: the sub-horizon gate arms assume a black
+    // sky, and the goldens' 0 px rests on the default being an exact zero.
+    sky->night_floor_enabled = false;
+    sky->night_floor_brightness = 1.0f;
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
     sky->publish_fog_ambient = true;
     sky->aerial_enabled = true;
@@ -114,6 +118,37 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
 static const float SKY_RAYLEIGH_SCATTER[3] = {5.802e-3f, 13.558e-3f, 33.1e-3f};
 static const float SKY_OZONE_ABSORB[3] = {0.650e-3f, 1.881e-3f, 0.085e-3f};
 
+/*
+ * The night-sky floor (spec 11.80): what the sky between the stars emits --
+ * airglow, zodiacal light, integrated starlight. C-side ONLY, unlike the
+ * atmosphere constants above: the shader receives the product premultiplied,
+ * so there is no GLSL copy to keep in sync.
+ *
+ * The radiance is a look-calibrated constant, not physics, and the reason is
+ * the same one the star ramp carries: exposure_auto_gain only ever DARKENS,
+ * so no adaptation lifts a dim world and this number IS the night brightness.
+ */
+#define SKY_NIGHT_FLOOR_RADIANCE 0.03f
+static const float SKY_NIGHT_FLOOR_COLOR[3] = {0.55f, 0.72f, 1.0f};
+
+// The one definition of "night": the civil-twilight fade the stars, the
+// floor and the zenith ambient all share. 0 at +3 degrees and above -- an
+// EXACT zero, which the daylight gate arms assert -- 1 from -8 down.
+static float sky_night_factor(const SkyAtmosphere* sky) {
+    return 1.0f - glm_smoothstep(-8.0f, 3.0f, sky->sun_elevation_deg);
+}
+
+// colour x base x brightness x ramp, or zero: the premultiplied floor the
+// LUT bake uploads and the zenith march adds.
+static void sky_night_floor(const SkyAtmosphere* sky, vec3 out) {
+    glm_vec3_zero(out);
+    if (!sky->night_floor_enabled)
+        return;
+    float s = SKY_NIGHT_FLOOR_RADIANCE * sky->night_floor_brightness * sky_night_factor(sky);
+    for (int c = 0; c < 3; c++)
+        out[c] = SKY_NIGHT_FLOOR_COLOR[c] * s;
+}
+
 // The medium at altitude h (km): the C analogue of atmosphereAt() in
 // include/atmosphere.glsl. Either output may be NULL when a caller wants only
 // the other -- the two density exponentials are the expensive part and are
@@ -188,6 +223,12 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
 // Cached on sun move by sky_update_sun_dir; never call this per frame.
 static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
     glm_vec3_zero(out);
+    // The floor first (spec 11.80): an isotropic radiance field's ambient IS
+    // its radiance, and below the horizon it is most of what there is --
+    // before it, night fog scattered literally nothing.
+    vec3 nf = {0};
+    sky_night_floor(sky, nf);
+    glm_vec3_add(out, nf, out);
     if (sky->sun_dir[1] <= 0.0f)
         return; // sun below the horizon: no skylight to scatter
 
@@ -533,6 +574,9 @@ static void sky_bake_view_lut(SkyAtmosphere* sky) {
     glBindTexture(GL_TEXTURE_2D, sky->multiscatter_lut);
     uniform_set_int(sky->view_program->uniforms, "multiscatterLut", 1);
     uniform_set_float(sky->view_program->uniforms, "sunCosZenith", sky->sun_dir[1]);
+    vec3 nf = {0};
+    sky_night_floor(sky, nf);
+    uniform_set_vec3(sky->view_program->uniforms, "nightFloor", nf);
     glActiveTexture(GL_TEXTURE0);
     bake_lut_2d(sky, sky->view_program, &sky->sky_view_lut, SKY_VIEW_W, SKY_VIEW_H);
 }
@@ -732,11 +776,11 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     float cos_radius = cosf(glm_rad(sky->sun_disc_deg * 0.5f));
     uniform_set_float(u, "sunCosRadius", cos_radius);
     uniform_set_float(u, "sunIntensity", 20.0f);
-    // Stars fade in through civil twilight (+3 to -8 degrees). A visibility
+    // Stars fade in through the shared civil-twilight ramp. A visibility
     // ramp standing in for the exposure adaptation the engine refuses
     // (exposure_auto_gain caps at 1), not physics -- real stars are up all
     // day. Sampled live like the disc size; no bake depends on it.
-    float night = 1.0f - glm_smoothstep(-8.0f, 3.0f, sky->sun_elevation_deg);
+    float night = sky_night_factor(sky);
     float star_intensity = sky->stars_enabled ? night * sky->stars_brightness : 0.0f;
     uniform_set_float(u, "starIntensity", star_intensity);
     // World dir -> celestial frame: tilt the celestial pole down to an

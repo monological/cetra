@@ -14,6 +14,14 @@ out vec4 FragColor;
 uniform sampler2D transmittanceLut;
 uniform sampler2D multiscatterLut;
 uniform float sunCosZenith; // dot(sunDir, up) -- the sun's elevation
+// The night-sky floor (spec 11.80): airglow + zodiacal light + integrated
+// starlight, premultiplied on the CPU (colour x base x brightness x the
+// civil-twilight ramp; vec3(0) = off, which adds a literal zero). Living in
+// THIS bake is the design: everything that needs the floor -- the
+// background, the env cube and so the whole IBL, the cloud march's ambient
+// -- already samples this LUT, and the LUT re-bakes exactly when the ramp's
+// one input (the sun) moves.
+uniform vec3 nightFloor;
 
 #include "sky_lut.glsl"
 
@@ -96,5 +104,15 @@ void main()
 
     // Scale to the engine's linear range; keep HDR (bloom uses it) but
     // bound against fp16 overflow
-    FragColor = vec4(min(L * SUN_ILLUMINANCE, vec3(100.0)), 1.0);
+    vec3 sky = min(L * SUN_ILLUMINANCE, vec3(100.0));
+    // The floor sits above the atmosphere's bulk, so `through` -- this ray's
+    // own transmittance to the top -- dims it toward the horizon with no new
+    // lookup. The TINT rides at partial saturation, the stars' rule: full
+    // spectral extinction painted the whole lower sky a muddy brown at any
+    // radiance worth having. A ground-hitting ray must not glow.
+    if (!ground) {
+        vec3 t = mix(vec3(dot(through, vec3(0.2126, 0.7152, 0.0722))), through, 0.35);
+        sky += nightFloor * t;
+    }
+    FragColor = vec4(sky, 1.0);
 }

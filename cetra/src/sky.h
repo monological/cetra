@@ -154,6 +154,15 @@ typedef struct SkyAtmosphere {
     float stars_latitude_deg;
     float stars_hour_deg;
 
+    // The night-sky floor (spec 11.80): the sky between the stars, and what a
+    // moonless world is lit by. Baked into the sky-view LUT, so it reaches
+    // the background, the env cube, the IBL and the cloud ambient through
+    // the samplers they already have; the same civil-twilight ramp as the
+    // stars fades it in. Editing either field requires the sun-move re-bake
+    // chain (sky_update_sun), not a live uniform.
+    bool night_floor_enabled;
+    float night_floor_brightness; // scale on the baked radiance (1 = default)
+
     // Optional coupling to the scene's directional key light (set by the app
     // once; NULL = pure-IBL sky). sky_apply_sun_to_light retints/redirects it
     // from the atmosphere so a sun move drives the shadows and fog too.
