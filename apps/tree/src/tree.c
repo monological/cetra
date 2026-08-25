@@ -21,6 +21,7 @@
 #include "cetra/light.h"
 #include "cetra/texture.h"
 #include "cetra/app.h"
+#include "cetra/config_snapshot.h"
 #include "cetra/sky.h"
 #include "cetra/water.h"
 #include "cetra/ibl.h"
@@ -755,6 +756,7 @@ typedef struct {
     int no_falling_leaves;
     int no_stars; // stars are ON here: this app is the night sky's home
     float star_hour; // Milky Way rotation about the pole, degrees (-999 = default)
+    const char* config_path; // restore a config snapshot (GUI Dump Config writes one)
     int seed;
     float sun_elevation;
     float sun_azimuth;
@@ -827,6 +829,8 @@ static void print_usage(const char* prog) {
     printf("                          the sun drops through civil twilight)\n");
     printf("      --star-hour <deg>   Turn the star field about the celestial pole,\n");
     printf("                          which is what moves the Milky Way band\n");
+    printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
+    printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)ground_shore_height());
@@ -962,6 +966,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_stars = 1;
         } else if (!strcmp(s, "--star-hour") && has_next) {
             a->star_hour = (float)atof(argv[++i]);
+        } else if ((!strcmp(s, "-c") || !strcmp(s, "--config")) && has_next) {
+            a->config_path = argv[++i];
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
@@ -1654,6 +1660,13 @@ int main(int argc, char** argv) {
     set_engine_show_fps(engine, !args.headless);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
+
+    // Last before the loop, so the snapshot lands on top of everything this
+    // app just configured -- the render app's ordering, for the same reason.
+    if (args.config_path) {
+        if (config_snapshot_apply_file(engine, scene, args.config_path) < 0)
+            return 1;
+    }
 
     engine_run(engine, NULL, render_scene_callback);
 
