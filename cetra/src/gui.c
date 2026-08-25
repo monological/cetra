@@ -551,12 +551,30 @@ static void _engine_gui_panel(Engine* engine) {
                 igSameLine(0, -1);
                 igTextDisabled("(the day cycle owns the sun)");
             }
-            // Disc size feeds only the analytic background sun (sampled live);
-            // it is not in the env cube, so it needs no re-bake.
-            igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f deg", 0);
+            // Disc size feeds only the analytic background discs (sampled
+            // live); neither is in the env cube, so it needs no re-bake. It
+            // sizes BOTH sky bodies since 11.82, which is why it is no longer
+            // called "Sun Disc".
+            igSliderFloat("Disc Size", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f deg", 0);
             // Stars are sampled live like the disc; no re-bake on any of it.
             igCheckbox("Stars", &sky->stars_enabled);
             igSliderFloat("Star Brightness", &sky->stars_brightness, 0.0f, 4.0f, "%.2f", 0);
+            // The moon is live too -- the disc is analytic and the light is a
+            // per-frame rewrite, so nothing here touches a bake. Its angles
+            // are greyed under a running cycle for the sun sliders' reason
+            // above: the tick owns them and a fighting slider is a trap.
+            igCheckbox("Moon", &sky->moon_enabled);
+            igSliderFloat("Moon Brightness", &sky->moon_brightness, 0.0f, 4.0f, "%.2f", 0);
+            igBeginDisabled(sky->cycle_enabled);
+            igSliderFloat("Moon Elevation", &sky->moon_elevation_deg, -18.0f, 89.0f, "%.1f deg",
+                          0);
+            igSliderFloat("Moon Azimuth", &sky->moon_azimuth_deg, 0.0f, 360.0f, "%.1f deg", 0);
+            igEndDisabled();
+            // The phase as a READOUT, in the one place a user would look for a
+            // slider to set it. It is the angle between the two bodies, so
+            // there is nothing here to author -- moving either one moves it.
+            if (sky->moon_enabled)
+                igTextDisabled("phase %.0f%% lit", 100.0f * sky_moon_lit_fraction(sky));
             // The floor lives in the baked LUT (spec 11.80), so its edits
             // ride the sun's own re-bake chain -- the established price of
             // touching baked sky state.

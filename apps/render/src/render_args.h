@@ -179,6 +179,18 @@ typedef struct {
     int cycle_rebake_at;          // Diagnostic: force one SLICED rebake at frame N with the
                                   // sun unchanged, so the slicer compares against the atomic
                                   // bake with no hour arithmetic in it (-1 = never)
+    int moon;                     // The moon: 1 on (implies --sky), 0 off, -1 unset
+                                  // (a .cscn environment.moon seeds it; CLI wins)
+    float moon_brightness;        // Moon radiance scale, disc AND light (negative = default)
+    float moon_elevation;         // Degrees (-999 = default). Owned by the cycle while it runs
+    float moon_azimuth;           // Degrees (-999 = default). Owned by the cycle while it runs
+    int no_moon_maria;            // Diagnostic: a uniform lunar face, for a gate twin
+    int no_moon_earthshine;       // Diagnostic: a black dark limb, for a gate twin
+    int moon_probe;               // Print the derived phase quantities -- the only way a
+                                  // NUMERIC claim about the phase is checkable from outside
+    float sky_disc;               // Angular DIAMETER of both sky discs (-1 = default 0.53).
+                                  // Diagnostic: the moon is a few pixels at its real size,
+                                  // so no arm can read its INTERIOR without this
     float world_scale;            // World units per km for the atmosphere (-1 = default)
     int flip_uv;                  // Force the UV V-flip ON (asset baked opposite to format default)
     int no_unit_scale;            // Skip import unit normalization (raw file units)

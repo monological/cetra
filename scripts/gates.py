@@ -12195,6 +12195,15 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "sky.stars_hour": "advanced in lock-step with the sun while the cycle runs",
     "lights[sky_sun].intensity": "sky_apply_sun_to_light rewrites the coupled key light every "
                                  "tick while the cycle runs",
+    # The moon's three, same cause and one step further: the cycle derives its
+    # angles from cycle_hour MINUS the lag, and advances the lag itself at the
+    # synodic rate. So all three are the tick's while the clock runs, exactly
+    # as the sun's two above are. Note there is no lights[sky_moon] entry --
+    # this fixture authors no moon, so no moon light exists to perturb, and
+    # gates.py fails on a STALE exception as loudly as on a missing one.
+    "sky.moon_elevation": "derived from cycle_hour and the lag by the tick while the cycle runs",
+    "sky.moon_azimuth": "derived from cycle_hour and the lag by the tick while the cycle runs",
+    "sky.cycle_moon_offset": "the tick advances the lag at the synodic rate while the cycle runs",
 }
 
 

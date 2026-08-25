@@ -114,6 +114,14 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         if (cscn->has_env_cycle_hour && args->time_of_day < 0.0f)
             args->time_of_day = cscn->env_cycle_hour;
     }
+    if (cscn->has_env_moon && args->moon < 0)
+        args->moon = cscn->env_moon_enabled ? 1 : 0;
+    if (cscn->has_env_moon_brightness && args->moon_brightness < 0.0f)
+        args->moon_brightness = cscn->env_moon_brightness;
+    if (cscn->has_env_moon_elevation && args->moon_elevation < -900.0f)
+        args->moon_elevation = cscn->env_moon_elevation_deg;
+    if (cscn->has_env_moon_azimuth && args->moon_azimuth < -900.0f)
+        args->moon_azimuth = cscn->env_moon_azimuth_deg;
     if (args->tonemap_mode == 0) {
         switch (cscn->tonemap) {
             case CSCENE_TONEMAP_AGX:

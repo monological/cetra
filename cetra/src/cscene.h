@@ -421,6 +421,14 @@ typedef struct CetraSceneDesc {
     float env_cycle_day_seconds;
     bool has_env_cycle_hour;
     float env_cycle_hour;
+    bool has_env_moon; // the "enabled" key specifically was authored (spec 11.82)
+    bool env_moon_enabled;
+    bool has_env_moon_brightness;
+    float env_moon_brightness;
+    bool has_env_moon_elevation;
+    float env_moon_elevation_deg;
+    bool has_env_moon_azimuth;
+    float env_moon_azimuth_deg;
 
     CSceneLight lights[CSCENE_MAX_LIGHTS];
     int light_count;

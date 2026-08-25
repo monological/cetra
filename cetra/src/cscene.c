@@ -182,6 +182,22 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
                           "environment.cycle");
     }
 
+    // sky-mode moon (spec 11.82), the same shape again. No `phase` key and
+    // that is the design rather than an omission: the phase is the angle
+    // between the two bodies, so authoring it beside a position would let a
+    // file describe a full moon sitting next to the sun.
+    const cJSON* moon = cJSON_GetObjectItemCaseSensitive(env, "moon");
+    if (cJSON_IsObject(moon)) {
+        d->has_env_moon = get_bool(moon, "enabled", &d->env_moon_enabled);
+        d->has_env_moon_brightness = get_float(moon, "brightness", &d->env_moon_brightness);
+        d->has_env_moon_elevation = get_float(moon, "elevation", &d->env_moon_elevation_deg);
+        d->has_env_moon_azimuth = get_float(moon, "azimuth", &d->env_moon_azimuth_deg);
+        static const char* const moon_known[] = {"enabled", "brightness", "elevation",
+                                                 "azimuth"};
+        warn_unknown_keys(moon, moon_known, sizeof(moon_known) / sizeof(moon_known[0]),
+                          "environment.moon");
+    }
+
     /*
      * Report a key nothing above read. Same closed-block reasoning as parse_water, and
      * the same failure it is here for: water_fixture.cscn authored sun_elevation and
@@ -190,9 +206,9 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      * arm was calibrated against the frame rather than the authoring, and nothing could
      * say so -- a --sun-elevation 26 render moves 85% of that frame.
      */
-    static const char* const known[] = {"mode",  "hdr",   "probe_scene", "intensity",
-                                        "ambient", "sun", "stars",       "night_floor",
-                                        "cycle"};
+    static const char* const known[] = {"mode",        "hdr",   "probe_scene", "intensity",
+                                        "ambient",     "sun",   "stars",       "night_floor",
+                                        "cycle",       "moon"};
     warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 

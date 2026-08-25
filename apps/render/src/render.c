@@ -223,6 +223,19 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "                         Wins over --sun-elevation/--sun-azimuth; on\n");
     fprintf(stderr, "                         its own it places a STATIC sun by the hour\n");
     fprintf(stderr, "      --cycle-rebake-at <n> Diagnostic: one sliced rebake at frame n\n");
+    fprintf(stderr, "      --moon             The moon: a disc with a derived phase and a\n");
+    fprintf(stderr, "                         second casting light (implies --sky)\n");
+    fprintf(stderr, "      --no-moon          Drop a moon a scene file asked for\n");
+    fprintf(stderr, "      --moon-brightness <f> Moon radiance scale, disc and light\n");
+    fprintf(stderr, "      --moon-elevation <d> Moon elevation in degrees (implies --moon).\n");
+    fprintf(stderr, "                         The day cycle owns this while it runs\n");
+    fprintf(stderr, "      --moon-azimuth <d> Moon azimuth in degrees (implies --moon)\n");
+    fprintf(stderr, "      --no-moon-maria    Diagnostic: a uniform lunar face\n");
+    fprintf(stderr, "      --no-earthshine    Diagnostic: a black dark limb\n");
+    fprintf(stderr, "      --moon-probe       Print the derived phase: elongation, phase\n");
+    fprintf(stderr, "                         angle, lit fraction and the brightness law\n");
+    fprintf(stderr, "      --sky-disc <d>     Angular DIAMETER of BOTH sky discs, degrees\n");
+    fprintf(stderr, "                         (default 0.53; the moon subtends 0.52)\n");
     fprintf(stderr, "      --cloud-coverage <f> Cloud sky fraction 0..1 (implies --clouds)\n");
     fprintf(stderr, "      --cloud-density <f>  Cloud extinction scale (implies --clouds)\n");
     fprintf(stderr, "      --cloud-wind <kmh[,deg]> Cloud drift (implies --clouds)\n");
@@ -451,6 +464,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->day_cycle = -1.0f; // <0 = cycle off; 0 is a legal request (frozen)
     args->time_of_day = -1.0f;
     args->cycle_rebake_at = -1;
+    args->moon = -1; // -1 = unset (a .cscn may seed it; CLI wins)
+    args->moon_brightness = -1.0f;
+    args->moon_elevation = -999.0f;
+    args->moon_azimuth = -999.0f;
+    args->sky_disc = -1.0f;
     args->cloud_coverage = -1.0f; // -1 = keep the engine default
     args->cloud_density = -1.0f;
     args->cloud_wind_kmh = -1.0f;
@@ -1082,6 +1100,48 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->night_floor_brightness = (float)atof(argv[i]);
             args->night_floor = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--moon") == 0) {
+            args->moon = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--no-moon") == 0) {
+            args->moon = 0;
+        } else if (strcmp(argv[i], "--moon-brightness") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->moon_brightness = (float)atof(argv[i]);
+            args->moon = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--moon-elevation") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->moon_elevation = (float)atof(argv[i]);
+            args->moon = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--moon-azimuth") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->moon_azimuth = (float)atof(argv[i]);
+            args->moon = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--no-moon-maria") == 0) {
+            args->no_moon_maria = 1;
+        } else if (strcmp(argv[i], "--no-earthshine") == 0) {
+            args->no_moon_earthshine = 1;
+        } else if (strcmp(argv[i], "--moon-probe") == 0) {
+            args->moon_probe = 1;
+        } else if (strcmp(argv[i], "--sky-disc") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->sky_disc = (float)atof(argv[i]);
             args->sky = 1;
         } else if (strcmp(argv[i], "--no-decals") == 0) {
             args->no_decals = 1;
@@ -2989,9 +3049,38 @@ int main(int argc, char** argv) {
             // frozen, change nothing" -- lets the first tick derive from the
             // default hour and teleport the sun. Seeding here rather than in
             // the tick is what makes frame 0 already correct.
-            if (sky->cycle_enabled || args.time_of_day >= 0.0f)
+            if (args.moon >= 0)
+                sky->moon_enabled = args.moon != 0;
+            if (args.moon_brightness >= 0.0f)
+                sky->moon_brightness = args.moon_brightness;
+            if (args.moon_elevation > -900.0f)
+                sky->moon_elevation_deg = args.moon_elevation;
+            if (args.moon_azimuth > -900.0f)
+                sky->moon_azimuth_deg = args.moon_azimuth;
+            if (args.no_moon_maria)
+                sky->moon_maria = false;
+            if (args.no_moon_earthshine)
+                sky->moon_earthshine = false;
+            if (args.sky_disc > 0.0f)
+                sky->sun_disc_deg = args.sky_disc;
+            // Seed whenever the cycle is armed, not only when an hour was
+            // given: otherwise `--day-cycle 0` -- which reads as "arm it,
+            // frozen, change nothing" -- lets the first tick derive from the
+            // default hour and teleport the sun. Seeding here rather than in
+            // the tick is what makes frame 0 already correct.
+            if (sky->cycle_enabled || args.time_of_day >= 0.0f) {
                 sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour,
                              &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
+                // The moon in the same breath and for the same reason: the
+                // cycle owns both angles, so arming it without seeding leaves
+                // the first tick to teleport the moon off whatever the flags
+                // or the scene file just placed.
+                if (sky->moon_enabled)
+                    sky_sun_path((double)sky->stars_latitude_deg,
+                                 sky->cycle_hour - sky->cycle_moon_offset,
+                                 &sky->moon_elevation_deg, &sky->moon_azimuth_deg);
+            }
+            sky_update_moon(sky);
             sky->clouds.enabled = args.clouds != 0;
             if (args.no_cloud_shadows)
                 sky->clouds.shadows_enabled = false;
@@ -3040,6 +3129,31 @@ int main(int argc, char** argv) {
                     set_node_light(sun_node, sun);
                     set_node_name(sun_node, "sky_sun");
                     add_child_node(scene->root_node, sun_node);
+                }
+                /*
+                 * The moon's second directional, created ONLY when the moon is
+                 * enabled -- the sky.clouds.enabled shape, and for its reason:
+                 * a config restore cannot conjure a Light, so the row has to
+                 * refuse rather than store a flag every consumer ignores.
+                 *
+                 * It also keeps the caster count in every existing frame
+                 * exactly what it was, which is what the 27 goldens rest on.
+                 * Inside the --no-key-light guard because that flag means "no
+                 * analytic lights", and the moon is one.
+                 */
+                if (sky->moon_enabled) {
+                    Light* moon = create_light();
+                    if (moon) {
+                        set_light_name(moon, "sky_moon");
+                        set_light_type(moon, LIGHT_DIRECTIONAL);
+                        sky->moon_light = moon;
+                        sky_apply_moon_to_light(sky);
+                        add_light_to_scene(scene, moon);
+                        SceneNode* moon_node = create_node();
+                        set_node_light(moon_node, moon);
+                        set_node_name(moon_node, "sky_moon");
+                        add_child_node(scene->root_node, moon_node);
+                    }
                 }
                 // Ground the model on the virtual floor
                 scene->shadow_catcher = true;
@@ -3942,6 +4056,30 @@ int main(int argc, char** argv) {
     // the sequence is a probe whose output a reader has to place before trusting.
     if (args.ies_probe)
         ies_library_probe(scene->ies_library);
+
+    /*
+     * --moon-probe: the derived phase, printed. It exists because the moon's
+     * correctness is a NUMERIC claim no frame can make -- a phase angle read
+     * as its own supplement, or a Lambertian law standing in for the
+     * photometric one, both render a plausible moon. Sampled after the loop
+     * so it reports whatever the cycle last put on the clock.
+     *
+     * Beside the IES probe rather than in sky.c for its reason too: a probe
+     * that runs at a different point in the sequence is one whose output a
+     * reader has to place before trusting.
+     */
+    if (args.moon_probe && scene->sky) {
+        const SkyAtmosphere* s = scene->sky;
+        float dot = glm_vec3_dot((float*)s->moon_dir, (float*)s->sun_dir);
+        float elong = glm_deg(acosf(glm_clamp(dot, -1.0f, 1.0f)));
+        float alpha = 180.0f - elong;
+        printf("moon-probe body el %.6f az %.6f dir %.6f %.6f %.6f\n", s->moon_elevation_deg,
+               s->moon_azimuth_deg, s->moon_dir[0], s->moon_dir[1], s->moon_dir[2]);
+        printf("moon-probe sun el %.6f az %.6f elongation %.6f alpha %.6f\n",
+               s->sun_elevation_deg, s->sun_azimuth_deg, elong, alpha);
+        printf("moon-probe phase lit %.6f ks %.6f intensity %.6f\n", sky_moon_lit_fraction(s),
+               sky_moon_phase_factor(s), s->moon_light ? s->moon_light->intensity : 0.0f);
+    }
 
     // AFTER the loop, for a reason the fit does not have but its RADIANCE does:
     // an emissive texture's mean is read from its top mip, and textures stream in

@@ -649,6 +649,18 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "cycle", cycle_enabled),
     CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "cycle_day_seconds", cycle_day_seconds),
     CFG_ROW(CFG_SKY, CFG_DOUBLE, "sky", "cycle_hour", cycle_hour),
+    // The moon (spec 11.82): plain stores, for the cycle's reason and one
+    // more of its own -- sky_update_moon runs unconditionally every frame, so
+    // a restored angle is picked up next tick with nothing to re-bake and no
+    // apply hook to write. `moon` is the enable, and it stores rather than
+    // refuses: unlike sky.clouds.enabled, whose noise bake is a one-shot at
+    // startup, a moon with no moon_light is a legitimate state -- the disc
+    // without the second caster -- so there is nothing to refuse ON BEHALF of.
+    CFG_ROW(CFG_SKY, CFG_BOOL, "sky", "moon", moon_enabled),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_brightness", moon_brightness),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_elevation", moon_elevation_deg),
+    CFG_ROW(CFG_SKY, CFG_FLOAT, "sky", "moon_azimuth", moon_azimuth_deg),
+    CFG_ROW(CFG_SKY, CFG_DOUBLE, "sky", "cycle_moon_offset", cycle_moon_offset),
     CFG_ROW_FN(CFG_CLOUDS, CFG_BOOL, "sky.clouds", "enabled", enabled, _apply_cloud_enabled),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "coverage", coverage, _apply_cloud_field),
     CFG_ROW_FN(CFG_CLOUDS, CFG_FLOAT, "sky.clouds", "cloud_type", cloud_type, _apply_cloud_field),

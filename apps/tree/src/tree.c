@@ -771,6 +771,7 @@ typedef struct {
     int no_falling_leaves;
     int no_stars; // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
+    int no_moon;        // and the moon: this app is where a night sky is looked at
     float day_cycle;    // real seconds per 24h day; 0 = frozen clock, <0 = cycle off
     float time_of_day;  // hours 0-24, solar noon at 12 (-1 = unset)
     float star_hour; // Milky Way rotation about the pole, degrees
@@ -853,6 +854,8 @@ static void print_usage(const char* prog) {
     printf("                          day (0 = frozen clock, sun placed by the hour)\n");
     printf("      --time-of-day <h>   Hours 0-24, solar noon at 12; wins over\n");
     printf("                          --sun-elevation/--sun-azimuth\n");
+    printf("      --no-moon           Disable the moon (its phase and position both\n");
+    printf("                          follow the sun, so the day cycle moves it)\n");
     printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
     printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
@@ -997,6 +1000,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_stars = 1;
         } else if (!strcmp(s, "--no-night-floor")) {
             a->no_night_floor = 1;
+        } else if (!strcmp(s, "--no-moon")) {
+            a->no_moon = 1;
         } else if (!strcmp(s, "--day-cycle") && has_next) {
             a->day_cycle = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--time-of-day") && has_next) {
@@ -1216,6 +1221,7 @@ int main(int argc, char** argv) {
         // and its 0.8 degree sun is already inside the fade-in ramp.
         sky->stars_enabled = args.no_stars == 0;
         sky->night_floor_enabled = args.no_night_floor == 0;
+        sky->moon_enabled = args.no_moon == 0;
         sky->stars_hour_deg = args.star_hour;
         if (args.day_cycle >= 0.0f) {
             sky->cycle_enabled = true;
@@ -1232,7 +1238,14 @@ int main(int argc, char** argv) {
                          &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
             sun_elevation = sky->sun_elevation_deg; // the GUI mirrors these
             sun_azimuth = sky->sun_azimuth_deg;
+            // The moon in the same breath: the cycle owns its angles too, so
+            // arming without seeding leaves the first tick to teleport it.
+            if (sky->moon_enabled)
+                sky_sun_path((double)sky->stars_latitude_deg,
+                             sky->cycle_hour - sky->cycle_moon_offset,
+                             &sky->moon_elevation_deg, &sky->moon_azimuth_deg);
         }
+        sky_update_moon(sky);
         /*
          * This world's scale, which nothing set until spec 11.44 (the GUI offered a slider
          * for it and no code ever wrote it), so the sky ran at its 1-unit-is-a-metre default
@@ -1269,6 +1282,24 @@ int main(int argc, char** argv) {
             set_node_name(sun_node, "sun");
             set_node_light(sun_node, sun_light);
             add_child_node(root, sun_node);
+
+            // The moon's own directional, created only when the moon is on --
+            // the render app's reasoning, and the same restore contract.
+            if (sky->moon_enabled) {
+                Light* moon_light = create_light();
+                set_light_name(moon_light, "moon");
+                set_light_type(moon_light, LIGHT_DIRECTIONAL);
+                set_light_cast_shadows(moon_light, true);
+                set_light_size(moon_light, 6.0f, 6.0f);
+                sky->moon_light = moon_light;
+                sky_apply_moon_to_light(sky);
+                add_light_to_scene(scene, moon_light);
+
+                SceneNode* moon_node = create_node();
+                set_node_name(moon_node, "moon");
+                set_node_light(moon_node, moon_light);
+                add_child_node(root, moon_node);
+            }
 
             printf("Sky: sun at elevation %.1f azimuth %.1f\n", sky->sun_elevation_deg,
                    sky->sun_azimuth_deg);

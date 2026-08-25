@@ -380,6 +380,13 @@ void sky_apply_moon_to_light(SkyAtmosphere* sky);
 // is NOT a Lambertian sphere, and this is the whole visual signature.
 float sky_moon_phase_factor(const SkyAtmosphere* sky);
 
+// The GEOMETRIC lit fraction of the moon's visible disc, (1 + cos a)/2 -- 1 at
+// full, 0.5 at quarter, 0 at new. What the eye reads as the SHAPE, and
+// deliberately not the same number as the brightness above: the two disagree
+// by an order of magnitude at quarter phase, which is the whole point of the
+// photometric law. For readouts and diagnostics; nothing shades from it.
+float sky_moon_lit_fraction(const SkyAtmosphere* sky);
+
 // One "the sun moved" entry point: re-derive sun_dir, re-bake everything the
 // sun drives (sky_bake) and retint the coupled key light. Used by the GUI's
 // dynamic sun; cheap enough (small env) to run live per slider change.

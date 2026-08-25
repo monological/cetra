@@ -893,13 +893,23 @@ void sky_apply_sun_to_light(SkyAtmosphere* sky) {
  * Derived, never stored: a phase field would be a second place for this to go
  * stale, and a stale phase is silent.
  */
+// cos of the phase angle: the NEGATIVE of the elongation's, see above.
+static float sky_moon_cos_phase(const SkyAtmosphere* sky) {
+    return glm_clamp(-glm_vec3_dot((float*)sky->moon_dir, (float*)sky->sun_dir), -1.0f, 1.0f);
+}
+
 float sky_moon_phase_factor(const SkyAtmosphere* sky) {
     if (!sky)
         return 0.0f;
-    float c = -glm_vec3_dot((float*)sky->moon_dir, (float*)sky->sun_dir);
-    float a = glm_deg(acosf(glm_clamp(c, -1.0f, 1.0f)));
+    float a = glm_deg(acosf(sky_moon_cos_phase(sky)));
     float a2 = a * a;
     return powf(10.0f, -0.4f * (0.026f * a + 4.0e-9f * a2 * a2));
+}
+
+float sky_moon_lit_fraction(const SkyAtmosphere* sky) {
+    if (!sky)
+        return 0.0f;
+    return 0.5f * (1.0f + sky_moon_cos_phase(sky));
 }
 
 void sky_apply_moon_to_light(SkyAtmosphere* sky) {
