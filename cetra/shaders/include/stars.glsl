@@ -39,7 +39,11 @@ const float STAR_HALO = 0.10;        // glare-wing ceiling, reached by the brigh
 // deep tail landed in view -- a field whose peaks never saturate reads as
 // dirty specks at any density.
 const float STAR_BASE = 0.5;
-const float STAR_FLUX_CAP = 60.0;    // Pareto tail clamp
+// Pareto tail clamp. 25, down from 60: the wing scales with flux, so the
+// tail's ceiling is what bounds the LARGEST saturated halo in the sky --
+// at 60 the two brightest stars in a frame ballooned into globes. Every
+// star under the cap is untouched by this number.
+const float STAR_FLUX_CAP = 25.0;
 const float STAR_GLOW = 0.12;        // Milky Way band peak radiance
 
 // The band's pole in the celestial frame: the galactic pole sits ~63 deg
