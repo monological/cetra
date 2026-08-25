@@ -28,7 +28,6 @@
 // sky the field rigidly wheels and the pole cell holds still, which is what
 // a real sky does about Polaris.
 #include "octahedral.glsl"
-#include "noise.glsl"
 
 const float STAR_GRID = 128.0;       // bright-field cells per octahedral axis
 const float STAR_OCCUPANCY = 0.42;   // base fraction of cells holding a star
@@ -49,35 +48,49 @@ const float STAR_GLOW = 0.12;        // Milky Way band peak radiance
 const vec3 STAR_BAND_POLE = vec3(0.0, 0.4540, 0.8910);
 const float STAR_BAND_WIDTH = 0.15;  // across-band sigma of dot(dir, pole)
 
-// Per-purpose hash keys (noise.glsl's parameterised-hash contract: the FORM
-// is shared, the pattern is this file's own). Cell ids are an integer
-// lattice, where the sin-fract hash is known to collide heavily (roadmap
-// E10), so every lookup goes through an irrational pre-scale first; the grid
-// size joins the input so the two lattices decorrelate.
-const vec2 STAR_LATTICE = vec2(0.618034, 0.754878);
-const vec2 STAR_K_OCCUPY = vec2(157.3, 269.5);
-const vec2 STAR_K_JX = vec2(419.2, 371.9);
-const vec2 STAR_K_JY = vec2(269.5, 183.3);
-const vec2 STAR_K_FLUX = vec2(113.5, 271.9);
-const vec2 STAR_K_COLOR = vec2(345.7, 143.1);
-const vec3 STAR_K_NOISE = vec3(127.1, 311.7, 74.7);
+// PCG integer hash (O'Neill), NOT noise.glsl's sin-fract -- and the reason
+// is measured, not taste. Cell ids are a regular integer lattice, and the
+// sin-fract hash on such a lattice is the exact case roadmap E10 quantified:
+// 1047 distinct values of 4096, worst duplicate repeated 20 times. Shipped
+// here first behind an irrational pre-scale, which only changes the step of
+// what is still an arithmetic progression through sin -- and rendered as
+// visible STRINGS of stars along lattice rows: correlated occupancy runs
+// with correlated jitter. That is E10's own revival clause (a demonstrated
+// artifact) on a NEW consumer; the four existing sin-fract consumers are
+// untouched and E10's rejection of migrating them stands.
+uint starPcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
 
-// 3D value noise for the band's lane structure. Over the DIRECTION rather
-// than the octahedral square, because interpolation across the oct seam
-// would print the fold as a line in the glow; the per-star taps never
-// interpolate, so only the smooth term needs this.
+float starUnit(uint h) {
+    return float(h) * (1.0 / 4294967296.0);
+}
+
+// Seed for a lattice cell; successive per-cell values chain starPcg from it.
+uint starCellSeed(vec2 cell, uint seed) {
+    return starPcg(uint(int(cell.x)) + starPcg(uint(int(cell.y)) + starPcg(seed)));
+}
+
+// 3D value noise for the band's lane structure, on the same integer hash.
+// Over the DIRECTION rather than the octahedral square, because
+// interpolation across the oct seam would print the fold as a line in the
+// glow; the per-star taps never interpolate, so only the smooth term needs
+// this.
 float starNoise3(vec3 p) {
     vec3 i = floor(p);
     vec3 f = fract(p);
     vec3 u = f * f * (3.0 - 2.0 * f);
-    float n000 = hash13(i + vec3(0.0, 0.0, 0.0), STAR_K_NOISE);
-    float n100 = hash13(i + vec3(1.0, 0.0, 0.0), STAR_K_NOISE);
-    float n010 = hash13(i + vec3(0.0, 1.0, 0.0), STAR_K_NOISE);
-    float n110 = hash13(i + vec3(1.0, 1.0, 0.0), STAR_K_NOISE);
-    float n001 = hash13(i + vec3(0.0, 0.0, 1.0), STAR_K_NOISE);
-    float n101 = hash13(i + vec3(1.0, 0.0, 1.0), STAR_K_NOISE);
-    float n011 = hash13(i + vec3(0.0, 1.0, 1.0), STAR_K_NOISE);
-    float n111 = hash13(i + vec3(1.0, 1.0, 1.0), STAR_K_NOISE);
+    uvec3 b = uvec3(ivec3(i));
+    float n000 = starUnit(starPcg(b.x + starPcg(b.y + starPcg(b.z))));
+    float n100 = starUnit(starPcg(b.x + 1u + starPcg(b.y + starPcg(b.z))));
+    float n010 = starUnit(starPcg(b.x + starPcg(b.y + 1u + starPcg(b.z))));
+    float n110 = starUnit(starPcg(b.x + 1u + starPcg(b.y + 1u + starPcg(b.z))));
+    float n001 = starUnit(starPcg(b.x + starPcg(b.y + starPcg(b.z + 1u))));
+    float n101 = starUnit(starPcg(b.x + 1u + starPcg(b.y + starPcg(b.z + 1u))));
+    float n011 = starUnit(starPcg(b.x + starPcg(b.y + 1u + starPcg(b.z + 1u))));
+    float n111 = starUnit(starPcg(b.x + 1u + starPcg(b.y + 1u + starPcg(b.z + 1u))));
     return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
                mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
 }
@@ -114,17 +127,21 @@ vec3 starLayer(vec3 dir, float grid, float occupancy, float fluxCap, float scale
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             vec2 cell = base + vec2(float(dx), float(dy));
-            vec2 p = (cell + 0.5 + grid) * STAR_LATTICE;
-            if (hash21(p, STAR_K_OCCUPY) >= occupancy)
+            uint h = starCellSeed(cell, uint(grid));
+            if (starUnit(h) >= occupancy)
                 continue;
-            vec2 jitter = vec2(hash21(p, STAR_K_JX), hash21(p, STAR_K_JY)) - 0.5;
+            uint hjx = starPcg(h);
+            uint hjy = starPcg(hjx);
+            uint hf = starPcg(hjy);
+            uint hc = starPcg(hf);
+            vec2 jitter = vec2(starUnit(hjx), starUnit(hjy)) - 0.5;
             vec3 starDir = octDecode((cell + 0.5 + jitter) / grid * 2.0 - 1.0);
             // Chord length ~ angle at these widths.
             float d2 = dot(dir - starDir, dir - starDir);
-            float flux = min(pow(hash21(p, STAR_K_FLUX) + 1e-3, -0.6667), fluxCap);
+            float flux = min(pow(starUnit(hf) + 1e-3, -0.6667), fluxCap);
             float wing = STAR_HALO * clamp(flux * scale * 0.5, 0.0, 1.0);
             float fall = exp(-d2 / (2.0 * s2)) + wing * exp(-d2 / (2.0 * 16.0 * s2));
-            sum += starColor(hash21(p, STAR_K_COLOR)) * (flux * scale * fall);
+            sum += starColor(starUnit(hc)) * (flux * scale * fall);
         }
     }
     return sum;
