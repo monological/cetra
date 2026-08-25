@@ -12,7 +12,7 @@ passes + LUTs + probe bakes on GL 4.1. The plan will be committed to `specs/` as
 each tier item later gets its own subplan (feature branch + spec) before implementation.
 
 **Status: Tiers 1-3 are closed.** Every item is DONE, REJECTED-with-a-measurement, or CLOSED-and-split
-— the original plan is finished. **Tier 4 (Tracks C/D/E below, plus rows 45-46 added to Track B
+— the original plan is finished. **Tier 4 (Tracks C/D/E below, plus rows 45-49 added to Track B
 after the fact) is the new frontier**, and it is shaped
 by a different constraint than Tiers 1-3 were: those items could each be built as another gated
 fullscreen pass, and Tier 4's cannot. Four structural walls now decide what is reachable at all; they
@@ -29,7 +29,7 @@ one to carry into any future entry here: "16/16" is a link-time property and blo
 per-pass, per-type, per-byte-count property, and this document asked only the first question for the
 length of the roadmap.
 
-Everything in Tracks C/D/E — and B10/B11, which joined Tier 4 later — is a **sketch**, in the sense
+Everything in Tracks C/D/E — and B10-B14, which joined Tier 4 later — is a **sketch**, in the sense
 this document has taught the word: a
 pre-implementation guess whose load-bearing claims are wrong often enough that B3 lists four, B6 lists
 three, and A6 lists two of three premises stale by the time the code landed. Read each Tier 4 row as
@@ -889,11 +889,10 @@ turn the sky instead of freezing it.
 **OFF by default in the library, and three gates are protected by nothing else**:
 `cornell_rooms` renders at −10° and would take stars across its golden, `dither-band-inverse`
 reads flat runs in `aerial_fixture`'s sky gradient that stars would shorten, and
-`EMISSIVE_SPEC_SKY` pins −10° assuming a low-variance backdrop. Deliberately out of scope,
-booked so the gaps are visible: the night-sky floor (airglow + zodiacal light + integrated
-starlight, ~2e-4 cd/m² — without it the WORLD at night is black, since the key light fades
-out over 3°→0°), the moon (the dominant night light, a disc plus a real casting directional),
-and the Purkinje shift in the tonemap.
+`EMISSIVE_SPEC_SKY` pins −10° assuming a low-variance backdrop. The three things this item
+deliberately left out each have their own row now: **B12** the night-sky floor, **B13** the
+moon, **B14** the Purkinje shift — a deferred list buried inside a DONE entry is exactly the
+"never rows here" failure D3's water follow-ups recorded.
 **Depends on:** nothing. **Wall 1:** unaffected — the background programs have 13-14 free units.
 
 ### B11. Day/night cycle — Effort M
@@ -914,14 +913,75 @@ frame), CSM refits per frame regardless, the GI volume already updates as a grad
 and the key light already tracks elevation. The DRIVER lives in the app (tree's frame
 callback has `render_delta` in hand); the amortisation lives in `sky.c`.
 
-**Three consequences to book, not fix here.** The cycle forces B10's deferred night floor —
-it drives through sunset every run, and past the key-light fade the bottom half of the frame
+**Three consequences to book, not fix here.** The cycle forces B12 (the night floor) — it
+drives through sunset every run, and past the key-light fade the bottom half of the frame
 is black. Probe sets cannot follow the sun (`scene_environment_changed` defers set relight by
 design), so a probed interior under a cycle holds capture-time lighting. And shadow motion is
 not in the motion vectors, so creeping shadows smear slightly under TAA — negligible at
 realistic rates, visible at fast time-lapse.
 **Depends on:** B10 (soft — a cycle without stars has a black night; B10 without B11 just
-holds `starFrame` constant). **Wall 1:** unaffected.
+holds `starFrame` constant) and B12 (see above — sequence the floor FIRST, so the cycle
+lands on a working night rather than driving through a black one). **Wall 1:** unaffected.
+
+### B12. Night-sky floor — Effort S/M
+The radiance of the sky between the stars, which Hillaire cannot produce because it models
+scattered SUNLIGHT only: airglow (the upper atmosphere's own chemiluminescence), zodiacal
+light, and integrated starlight, together ~2e-4 cd/m². Without it the 11.79 night is stars
+over a void — the key light fades out over 3°→0° (`sky_apply_sun_to_light`), the env cube
+goes black with the sky, and the WORLD below the star field is unlit, which every night
+screenshot of `apps/tree` shows (a day-bright sea against a night sky is the same mismatch
+from the other side).
+
+**The design constraint that separates it from B10: this one MUST reach `sky_env_frag`.**
+The whole point is lighting the GROUND through the env cube and the IBL, and the smooth
+term is safe there — the firefly rule that bans the sun disc and the stars from the env
+bake bars POINT sources aliasing the prefilter importance sampler, not a near-constant
+floor. So it is a lighting change, not a screen-space one: env bake + background + the
+`zenith_radiance` / fog-ambient publish, ramped in by the same civil-twilight window the
+stars use. **And the exposure honesty applies a second time**: `exposure_auto_gain` only
+ever darkens, so no adaptation will lift a dim world — the floor's authored radiance IS the
+night brightness, a look-calibrated constant like the star ramp, and should be commented as
+such rather than dressed up as physics.
+**Depends on:** nothing (B11 depends on IT). **Wall 1:** unaffected — no new sampler
+anywhere; it is a term in shaders that already run.
+
+### B13. The moon — Effort L
+The dominant natural night light — ~0.25 lux at full, ~250× the starlit floor — and the
+reason most game nights are readable at all: moonlit night is vastly easier to light than
+moonless. **A LIGHT, not a backdrop**: a disc with phase and earthshine on the dark limb,
+plus a real casting directional whose intensity and colour follow phase and altitude.
+
+The sun's own split applies verbatim and is the reason this is tractable: the disc is
+analytic in the background shaders only (the same env-bake firefly rule — a 0.5° disc
+aliases the prefilter, so its direct energy ships as the analytic light instead, exactly as
+`sky_env_frag`'s header records for the sun), the light rides `sky_apply_sun_to_light`'s
+pattern with its own elevation/azimuth pair, and the shadow system already holds up to 3
+casting directionals. The disc itself is the sun-disc pattern a third time in
+`sky_radiance.glsl`. What is genuinely new: phase (drives both the terminator on the disc
+and the light's intensity), a second transmittance-tinted directional, and the authoring
+surface (`environment.moon`, flags, config rows — the 11.79 plumbing shape a second time).
+**Order note:** arguably ahead of B11 on look value — a moonlit static night beats a cycled
+black one — and B11's time-sliced bake would inherit a second slow-moving light for free.
+**Depends on:** B12 (the floor is what the dark limb and shadowed ground sit against).
+**Wall 1:** unaffected.
+
+### B14. Purkinje / scotopic shift — Effort S/M
+The perceptual half of night: in dim light the rods take over, colour drains, everything
+shifts blue and reds go near-black — it is why moonlight "looks" blue when its spectrum is
+sunlight's. Kirk & O'Brien 2011 is the standard model. This is what makes a dark frame read
+as NIGHT rather than as an underexposed day photo, and it is the difference no amount of
+radiance tuning in B12/B13 can supply.
+
+Lives in `tonemap_frag`'s finishing stack, driven by the metered luminance the exposure
+system already reads back to the CPU every frame — no new measurement machinery. Two things
+make it a hypothesis row rather than a small task: its POSITION in a stack with two
+standing contracts (dither last, LUT after `displayEncode` — a retinal response most
+plausibly belongs before the tonemap operator, which is a third positional claim to argue),
+and its blast radius — every dim frame in every app moves, so it needs an opt-in, a gate
+arm, and defaults chosen against real night frames. **Judge it only after B12 (and ideally
+B13) put those frames on screen.**
+**Depends on:** B12 (soft — there is nothing to calibrate against until a night frame
+exists). **Wall 1:** unaffected — the tonemap program declares 12 of 16.
 
 ## The four walls (Tier 4 preamble)
 
@@ -2854,7 +2914,10 @@ not scheduled.
 | 43 | ~~D10 Virtual-texture compositing~~ | — | **Stages 1 AND 2 SHIPPED (11.66, 11.67).** Stage 1: the composite atlas plus a runtime detail term — `3 + 2A` taps against the per-texel 9/17/25, independent of layer count, byte-exact on flat content, zero new sampler declarations. Stage 2: a 64-slot guttered page atlas at 4x the fallback's density (a ratio, bounding the virtual grid at 34² forever), the page table in a UBO on binding 7, the page pair on units 3/4 freed by refusal, frustum-predicted residency sorted (seen, distance, id), and a depth-tested GPU vote pass read back through a fixed-latency PBO ring — deterministic by construction, +0.23 ms GPU, 0 px on today's content by design. What remains is CONTENT, and the general-mesh era where feedback becomes the only correct source. **First content SHIPPED (11.68): roads — and NOT drawn into the atlas FBO**, which is how this row described the plan. A road is a procedural splat-weight override inside `sampleLayeredSurface`, before the height blend, so the bake inherits it by calling the same function unchanged and the fallback, the pages, the per-texel path, the dominant index and the detail term all follow with no bake code. Segments in a UBO on binding 8, zero samplers. **Pages remain a 0 px identity on shipping configuration** — at the derived resolution all three legs agree to five decimal places; roads are the first content a forced-coarse fallback can distinguish, reading 48 through pages against 66 through the fallback just inside a road's edge. Their caps are small on purpose: 4 roads of 16 points on ONE material per scene. |
 | 44 | ~~D11 Large-world origin rebasing~~ | M/L | **SHIPPED (spec 11.62)** as origin SHIFTING rather than fp64, and the hardcoded far-cascade centre below is fixed with it. This row read as unbuilt for seven specs while its own entry said DONE -- found by the sweep after 11.69, and the reason to state it here is that the ledger is what gets read when someone asks what is left. Independent of 39-43 and needed by anything wanting a world past a few kilometres: fp32 world coordinates cannot hold still, which is why UE4 capped at ~20 km and UE5 shipped fp64 Large World Coordinates. **It also fixes a defect that is already live and has nothing to do with world size** — the outermost shadow cascade is fitted around a hardcoded `{0,0,0}` (`shadow.c:1250`) while the inner ones follow the camera, so terrain placed away from the origin loses its far shadows with no diagnostic. `terrain.h` already warns about this and works around it by centring the terrain. |
 | 45 | **B10 Night sky — stars** | S/M | **DONE (11.79).** See the B10 entry for the as-built record; the sketch below stands as written except the star model itself, rebuilt three times against photographed defects. Original row: The below-horizon sky is already correct (4.7's "no NaN speckle" gate) and already reachable (`--sun-elevation -10`, which `cornell_rooms` ships); what it renders is black, because Hillaire models scattered sunlight only. A procedural star field behind `starRadiance(vec3)` in `sky_radiance.glsl`, beside the sun disc whose pattern it repeats — horizon extinction, the ground cut and cloud occlusion all fall out of the existing terms. Baked catalog texture rejected on arithmetic (always magnified: 0.176°/texel vs 0.03°/px); sprites are the later body swap if real constellations ever matter. OFF by default in the library — three existing gate arms assume a quiet sub-horizon backdrop and are protected by nothing else. The fade in is a CPU elevation ramp, because auto-exposure is darkening-only by design and cannot brighten a night on its own. |
-| 46 | **B11 Day/night cycle** | M | Today an animated sun is a slideshow: one sun move re-bakes view LUT + env cube + GGX prefilter at a measured 0.11 s. The item is a time-sliced env bake (face per frame, mip per frame, swap), chosen because the constraint is that STATIC must not get worse — cheapening the bake degrades every golden, threshold stepping pops on the sea. A stationary sun quiesces byte-identical; goldens 0 px is the acceptance bar. Driver in the app, amortisation in `sky.c`. Forces B10's deferred night floor (past the key-light fade the world is black), and probe sets hold capture-time lighting by design. |
+| 46 | **B11 Day/night cycle** | M | Today an animated sun is a slideshow: one sun move re-bakes view LUT + env cube + GGX prefilter at a measured 0.11 s. The item is a time-sliced env bake (face per frame, mip per frame, swap), chosen because the constraint is that STATIC must not get worse — cheapening the bake degrades every golden, threshold stepping pops on the sea. A stationary sun quiesces byte-identical; goldens 0 px is the acceptance bar. Driver in the app, amortisation in `sky.c`. Forces B12 (past the key-light fade the world is black — sequence the floor first), and probe sets hold capture-time lighting by design. |
+| 47 | **B12 Night-sky floor** | S/M | Airglow + zodiacal + integrated starlight, ~2e-4 cd/m² — the radiance Hillaire cannot produce because it models scattered sunlight only, and the reason the 11.79 night is stars over a black world. Unlike the stars it MUST reach `sky_env_frag`: the point is lighting the ground through the env cube and IBL, and a near-constant floor is safe where the prefilter's firefly rule bans point sources. Ramped by the stars' civil-twilight window. The exposure honesty a second time: auto-exposure only darkens, so the authored radiance IS the night brightness. B11 depends on it — sequence the floor before the cycle. |
+| 48 | **B13 The moon** | L | The dominant night light (~0.25 lux full, ~250× the floor) and how game nights become readable. A LIGHT, not a backdrop: disc + phase + earthshine, plus a real casting directional following phase and altitude. The sun's split applies verbatim — analytic disc in the background only (the env-bake firefly rule), energy as the analytic light, `sky_apply_sun_to_light` as the template, 3 casting-directional slots already exist. New: phase, a second transmittance-tinted directional, and the authoring surface (the 11.79 plumbing shape again). Arguably ahead of B11 on look value: a moonlit static night beats a cycled black one. |
+| 49 | **B14 Purkinje shift** | S/M | Rod vision: desaturate + blue-shift in dim light (Kirk & O'Brien 2011) — what makes a dark frame read as night rather than as an underexposed day. Lives in `tonemap_frag`, driven by the metered luminance the CPU already reads back. A hypothesis row for two reasons: its position in a finishing stack with two standing order contracts, and a blast radius of every dim frame in every app — needs an opt-in, a gate arm, and defaults chosen against real night frames, which do not exist until B12/B13 land. Judge it last. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
