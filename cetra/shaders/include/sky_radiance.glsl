@@ -35,7 +35,8 @@ uniform float moonIntensity;  // disc radiance scale; 0 = new moon / day / disab
 uniform float moonEarthshine; // 1 = the dark limb is Earth-lit, 0 = black
 uniform float moonMaria;      // 1 = the face is textured, 0 = uniform
 
-vec3 skyRadiance(vec3 dir, float r, sampler2D skyViewLut, sampler2D transmittanceLut)
+vec3 skyRadiance(vec3 dir, float r, sampler2D skyViewLut, sampler2D transmittanceLut,
+                 sampler2D moonMapTex)
 {
     vec3 sky = texture(skyViewLut, skyViewUv(dir, sunDir, r)).rgb;
 
@@ -100,7 +101,7 @@ vec3 skyRadiance(vec3 dir, float r, sampler2D skyViewLut, sampler2D transmittanc
             float edge = (cosVM - moonCosRadius) / (1.0 - moonCosRadius);
             sky += moonT * moonIntensity *
                    moonDisc(edge, dir, moonDir, sunDir, moonCosRadius, pixel, moonEarthshine,
-                            moonMaria);
+                            moonMaria, moonMapTex);
         }
     }
 

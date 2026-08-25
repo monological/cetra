@@ -17,6 +17,9 @@
 // snooker ball, which is the classic tell. 0.85 against the sun's own 0.4 --
 // the same functional form, the opposite intent.
 const float MOON_LIMB = 0.85;
+// Local, because this file is included by programs that define neither.
+const float MOON_TAU = 6.28318530718;
+const float MOON_PI = 3.14159265359;
 /*
  * The maria: basalt seas, roughly half the highlands' albedo.
  *
@@ -143,7 +146,7 @@ float moonRays(vec3 face, vec3 centre, float reach) {
 //           control flow (the stars' rule: a derivative inside non-uniform
 //           flow is undefined in GLSL 330)
 vec3 moonDisc(float edge, vec3 dir, vec3 moonDir, vec3 sunDir, float cosRadius, float pixel,
-              float earthshine, float maria) {
+              float earthshine, float maria, sampler2D moonMapTex) {
     // The disc coordinate, from the sun block's own `edge` rather than a
     // second trig call: s is the normalised radius and nz the eye-facing
     // component, and since s^2 = 1 - edge exactly, nz is just sqrt(edge).
@@ -193,21 +196,31 @@ vec3 moonDisc(float edge, vec3 dir, vec3 moonDir, vec3 sunDir, float cosRadius, 
     // with the phase.
     vec3 face = vec3(p, nz);
 
-    // The seas. DOMAIN-WARPED, because the shapes are the tell: unwarped noise
-    // through a threshold gives round blobs, and real maria are large irregular
-    // lobed regions with inlets. One cheap warp turns one into the other.
-    vec3 warp = vec3(starNoise3(face * 1.7 + 11.0), starNoise3(face * 1.7 + 23.0),
-                     starNoise3(face * 1.7 + 37.0)) - 0.5;
-    vec3 mface = face + warp * MOON_MARIA_WARP;
-    float m = 0.62 * starNoise3(mface * MOON_MARIA_COARSE) +
-              0.38 * starNoise3(mface * MOON_MARIA_MID);
-    float seas = mix(MOON_MARIA_ALBEDO, 1.0,
-                     smoothstep(MOON_MARIA_LOW, MOON_MARIA_HIGH, m));
+    /*
+     * THE SEAS COME FROM DATA, and everything else here stays procedural.
+     *
+     * Where the maria are is a historical accident -- Imbrium is a basin that
+     * happened to be flooded -- so no noise reproduces it, and three octaves of
+     * warped value noise gave a plausible cratered world that was not the Moon.
+     * The map is 256x128 of coverage compiled into the binary (moon_map.h), the
+     * ltc_lut.h shape, built from the published centres and extents.
+     *
+     * Equirectangular lookup on the face vector: the disc centre is the
+     * sub-observer point, so latitude is asin(y) and longitude atan2(x, z)
+     * with the near side at zero -- which also makes the foreshortening toward
+     * the limb fall out, since equal steps in the face vector are unequal steps
+     * in longitude there.
+     */
+    vec2 muv = vec2(atan(face.x, face.z) / MOON_TAU + 0.5, 0.5 - asin(clamp(face.y, -1.0, 1.0)) / MOON_PI);
+    float cover = texture(moonMapTex, muv).r;
+    float seas = mix(1.0, MOON_MARIA_ALBEDO, cover);
 
     // Craters at two scales over everything, then the fine mottle. Rims are
     // brighter and floors darker on the HIGHLANDS than on the seas, which is
     // what the photographs show -- basalt has less to throw up.
-    float craterScale = mix(0.18, 1.0, smoothstep(MOON_MARIA_ALBEDO, 1.0, seas));
+    // Craters are scarce on the seas: basalt flooded them, which is why the
+    // real maria look smooth beside the highlands.
+    float craterScale = mix(1.0, 0.18, cover);
     float craters = moonCraterField(face, MOON_CRATER_BIG, 0.15, 0.10) +
                     moonCraterField(face, MOON_CRATER_SMALL, 0.085, 0.05);
     float grain = starNoise3(face * MOON_MARIA_FINE);
