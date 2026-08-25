@@ -588,7 +588,7 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
          *   both of which look like sky state and are not.
          */
         igSeparatorText("Sun");
-        bool sun_moved = igSliderFloat("Elevation", &sun_elevation, -5.0f, 89.0f, "%.1f deg", 0);
+        bool sun_moved = igSliderFloat("Elevation", &sun_elevation, -18.0f, 89.0f, "%.1f deg", 0);
         sun_moved |= igSliderFloat("Azimuth", &sun_azimuth, 0.0f, 360.0f, "%.1f deg", 0);
         if (sun_moved && sky) {
             sky->sun_elevation_deg = sun_elevation;
@@ -753,6 +753,8 @@ typedef struct {
     int no_shadows;
     int no_fog;
     int no_falling_leaves;
+    int no_stars; // stars are ON here: this app is the night sky's home
+    float star_hour; // Milky Way rotation about the pole, degrees (-999 = default)
     int seed;
     float sun_elevation;
     float sun_azimuth;
@@ -821,6 +823,10 @@ static void print_usage(const char* prog) {
     printf("      --no-shadows        Disable the shadow pass\n");
     printf("      --no-fog            Disable the volumetric fog\n");
     printf("      --no-falling-leaves Disable the falling-leaf particles\n");
+    printf("      --no-stars          Disable the night star field (visible only once\n");
+    printf("                          the sun drops through civil twilight)\n");
+    printf("      --star-hour <deg>   Turn the star field about the celestial pole,\n");
+    printf("                          which is what moves the Milky Way band\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)ground_shore_height());
@@ -865,6 +871,7 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     a->seed = 42;
     a->sun_elevation = 0.8f;
     a->sun_azimuth = 193.0f;
+    a->star_hour = -999.0f; // -999 = keep the sky default; 0 is a legal hour
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
     a->water_level = -9999.0f;
@@ -951,6 +958,10 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_fog = 1;
         } else if (!strcmp(s, "--no-falling-leaves")) {
             a->no_falling_leaves = 1;
+        } else if (!strcmp(s, "--no-stars")) {
+            a->no_stars = 1;
+        } else if (!strcmp(s, "--star-hour") && has_next) {
+            a->star_hour = (float)atof(argv[++i]);
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
@@ -1158,6 +1169,12 @@ int main(int argc, char** argv) {
     if (sky && ibl) {
         sky->sun_elevation_deg = sun_elevation;
         sky->sun_azimuth_deg = sun_azimuth;
+        // ON here where the library defaults off: this app is the ask's home,
+        // and its 0.8 degree sun is already inside the fade-in ramp.
+        sky->stars_enabled = args.no_stars == 0;
+        // 90 puts the Milky Way's arc across this app's default framing;
+        // the library default leaves it behind the camera.
+        sky->star_hour_deg = args.star_hour > -900.0f ? args.star_hour : 90.0f;
         /*
          * This world's scale, which nothing set until spec 11.44 (the GUI offered a slider
          * for it and no code ever wrote it), so the sky ran at its 1-unit-is-a-metre default

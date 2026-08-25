@@ -89,6 +89,14 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         if (args->sun_azimuth < -900.0f)
             args->sun_azimuth = cscn->env_sun_azimuth_deg;
     }
+    if (cscn->has_env_stars && args->stars < 0)
+        args->stars = cscn->env_stars_enabled ? 1 : 0;
+    if (cscn->has_env_stars_brightness && args->stars_brightness < 0.0f)
+        args->stars_brightness = cscn->env_stars_brightness;
+    if (cscn->has_env_stars_latitude && args->stars_latitude < -900.0f)
+        args->stars_latitude = cscn->env_stars_latitude_deg;
+    if (cscn->has_env_stars_hour && args->stars_hour < -900.0f)
+        args->stars_hour = cscn->env_stars_hour_deg;
     if (args->tonemap_mode == 0) {
         switch (cscn->tonemap) {
             case CSCENE_TONEMAP_AGX:

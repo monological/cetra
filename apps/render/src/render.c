@@ -208,6 +208,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sky              Procedural physically-based sky (instead of -e)\n");
     fprintf(stderr, "      --sky-debug        Blit the sky LUTs into the frame corner\n");
     fprintf(stderr, "      --clouds           Volumetric cloud layer (implies --sky)\n");
+    fprintf(stderr, "      --stars            Night star field (implies --sky; visible only\n");
+    fprintf(stderr, "                         once the sun drops through civil twilight)\n");
+    fprintf(stderr, "      --no-stars         Drop a star field a scene file asked for\n");
+    fprintf(stderr, "      --stars-brightness <f> Star radiance scale (implies --stars)\n");
     fprintf(stderr, "      --cloud-coverage <f> Cloud sky fraction 0..1 (implies --clouds)\n");
     fprintf(stderr, "      --cloud-density <f>  Cloud extinction scale (implies --clouds)\n");
     fprintf(stderr, "      --cloud-wind <kmh[,deg]> Cloud drift (implies --clouds)\n");
@@ -427,6 +431,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->oit = -1;                     // -1 = unset; both default ON in the engine
     args->oit_moments = -1;
     args->sun_elevation = -999.0f; // -999 = keep the sky default
+    args->stars = -1;             // -1 = unset (a .cscn may seed it; CLI wins)
+    args->stars_brightness = -1.0f;
+    args->stars_latitude = -999.0f;
+    args->stars_hour = -999.0f;
     args->cloud_coverage = -1.0f; // -1 = keep the engine default
     args->cloud_density = -1.0f;
     args->cloud_wind_kmh = -1.0f;
@@ -1010,6 +1018,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->sky = 1;
         } else if (strcmp(argv[i], "--clouds") == 0) {
             args->clouds = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--stars") == 0) {
+            args->stars = 1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--no-stars") == 0) {
+            args->stars = 0;
+        } else if (strcmp(argv[i], "--stars-brightness") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->stars_brightness = (float)atof(argv[i]);
+            args->stars = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--no-decals") == 0) {
             args->no_decals = 1;
@@ -2872,6 +2893,14 @@ int main(int argc, char** argv) {
             if (args.world_scale > 0.0f)
                 sky->world_units_per_km = args.world_scale;
             sky->aerial_enabled = !args.no_aerial;
+            if (args.stars >= 0)
+                sky->stars_enabled = args.stars != 0;
+            if (args.stars_brightness >= 0.0f)
+                sky->stars_brightness = args.stars_brightness;
+            if (args.stars_latitude > -900.0f)
+                sky->latitude_deg = args.stars_latitude;
+            if (args.stars_hour > -900.0f)
+                sky->star_hour_deg = args.stars_hour;
             sky->clouds.enabled = args.clouds != 0;
             if (args.no_cloud_shadows)
                 sky->clouds.shadows_enabled = false;

@@ -131,6 +131,25 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
         d->has_env_sun = ge && ga;
     }
 
+    // sky-mode star field (spec 11.79). Every key optional past "enabled";
+    // unset ones keep the sky's own defaults.
+    const cJSON* stars = cJSON_GetObjectItemCaseSensitive(env, "stars");
+    if (cJSON_IsObject(stars)) {
+        d->has_env_stars = get_bool(stars, "enabled", &d->env_stars_enabled);
+        d->has_env_stars_brightness =
+            get_float(stars, "brightness", &d->env_stars_brightness);
+        d->has_env_stars_latitude =
+            get_float(stars, "latitude", &d->env_stars_latitude_deg);
+        d->has_env_stars_hour = get_float(stars, "hour_angle", &d->env_stars_hour_deg);
+        // The nested `sun` object above has no such call and that is how
+        // water_fixture ran at the wrong sun for four specs; a new nested
+        // block starts closed.
+        static const char* const stars_known[] = {"enabled", "brightness", "latitude",
+                                                  "hour_angle"};
+        warn_unknown_keys(stars, stars_known, sizeof(stars_known) / sizeof(stars_known[0]),
+                          "environment.stars");
+    }
+
     /*
      * Report a key nothing above read. Same closed-block reasoning as parse_water, and
      * the same failure it is here for: water_fixture.cscn authored sun_elevation and
@@ -139,8 +158,8 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      * arm was calibrated against the frame rather than the authoring, and nothing could
      * say so -- a --sun-elevation 26 render moves 85% of that frame.
      */
-    static const char* const known[] = {"mode", "hdr", "probe_scene", "intensity",
-                                        "ambient", "sun"};
+    static const char* const known[] = {"mode",    "hdr", "probe_scene", "intensity",
+                                        "ambient", "sun", "stars"};
     warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 

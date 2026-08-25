@@ -156,6 +156,13 @@ typedef struct {
     float cloud_wind_deg;       // drift direction; negative = default
     float sun_elevation;        // Sky sun elevation in degrees (-999 = default)
     float sun_azimuth;          // Sky sun azimuth in degrees (-999 = default)
+    int stars;                  // Night star field: 1 on (implies --sky), 0 off, -1 unset
+                                // (a .cscn environment.stars seeds it; CLI wins)
+    float stars_brightness;     // Star radiance scale (negative = keep the default)
+    float stars_latitude;       // Celestial pole altitude in degrees (-999 = default;
+                                // .cscn-only, no CLI flag)
+    float stars_hour;           // Sky rotation about the pole in degrees (-999 = default;
+                                // .cscn-only, no CLI flag)
     float world_scale;          // World units per km for the atmosphere (-1 = default)
     int flip_uv;                // Force the UV V-flip ON (asset baked opposite to format default)
     int no_unit_scale;          // Skip import unit normalization (raw file units)

@@ -403,6 +403,14 @@ typedef struct CetraSceneDesc {
     bool has_env_sun; // sky-mode sun angles authored (else the sky default)
     float env_sun_elevation_deg;
     float env_sun_azimuth_deg;
+    bool has_env_stars; // sky-mode star field authored (spec 11.79)
+    bool env_stars_enabled;
+    bool has_env_stars_brightness;
+    float env_stars_brightness;
+    bool has_env_stars_latitude;
+    float env_stars_latitude_deg;
+    bool has_env_stars_hour;
+    float env_stars_hour_deg;
 
     CSceneLight lights[CSCENE_MAX_LIGHTS];
     int light_count;

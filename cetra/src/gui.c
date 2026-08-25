@@ -518,7 +518,7 @@ static void _engine_gui_panel(Engine* engine) {
             bool sun_moved = false;
             bool sun_released = false;
             sun_moved |=
-                igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -6.0f, 89.0f, "%.1f deg",
+                igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -18.0f, 89.0f, "%.1f deg",
                               0);
             sun_released |= igIsItemDeactivatedAfterEdit();
             sun_moved |=
@@ -527,6 +527,9 @@ static void _engine_gui_panel(Engine* engine) {
             // Disc size feeds only the analytic background sun (sampled live);
             // it is not in the env cube, so it needs no re-bake.
             igSliderFloat("Sun Disc", &sky->sun_disc_deg, 0.1f, 3.0f, "%.2f deg", 0);
+            // Stars are sampled live like the disc; no re-bake on any of it.
+            igCheckbox("Stars", &sky->stars_enabled);
+            igSliderFloat("Star Brightness", &sky->stars_brightness, 0.0f, 4.0f, "%.2f", 0);
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
             if (sun_released)
