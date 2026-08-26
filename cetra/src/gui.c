@@ -1040,6 +1040,10 @@ static void _engine_gui_panel(Engine* engine) {
         // in daylight, so dragging these in a lit scene does nothing, by design.
         _begin_effect_group("Purkinje Shift", &fx->purkinje_enabled);
         igSliderFloat("Rod Blend", &fx->purkinje_strength, 0.0f, 1.0f, "%.2f", 0);
+        // Narrower than the CLI's [-30, 30] and [0, 4] on purpose: these are the
+        // usable range, and a slider spanning the validation bound would put the
+        // whole shipping look in a few pixels of travel. A restored snapshot
+        // beyond a slider's end is clamped the first time it is dragged.
         igSliderFloat("Mesopic Bias", &fx->purkinje_bias_ev, -12.0f, 12.0f, "%.1f stops", 0);
         igSliderFloat("Rod Acuity Loss", &fx->purkinje_acuity, 0.0f, 2.0f, "%.2f", 0);
         igSliderFloat("Rod Noise", &fx->purkinje_noise, 0.0f, 2.0f, "%.2f", 0);

@@ -59,7 +59,16 @@ uniform float purkinjeBiasEV;   // stops, added to BOTH ramps
 uniform int purkinjeHasMeter;   // 0 = adaptTex holds nothing; fall back to local alone
 uniform float purkinjeAcuity;   // 0 = no spatial pooling
 uniform float purkinjeNoise;    // 0 = no rod noise
-uniform sampler2D purkinjeAdaptTex; // the metering 1x1: mean log2 absolute cd/m^2
+// The metering 1x1: the percentile-clipped mean log2 of absolute cd/m^2.
+//
+// IT IS THE METERING STATISTIC, not a neutral frame average, and that has a
+// consequence worth knowing before tuning either: post.metering's mask and
+// percentiles shape it, so --meter-mode, --meter-radius, --meter-low and
+// --meter-high all move the rod shift -- on a frame where the exposure is
+// pinned and nothing else suggests the meter is live. meter_low defaults to
+// 0.70 for auto-exposure's sake, and that tuning is now load-bearing for a
+// second consumer that had no say in it.
+uniform sampler2D purkinjeAdaptTex;
 
 /*
  * The rod weight, and the two gates are MULTIPLIED because both failure cases

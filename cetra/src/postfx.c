@@ -1826,8 +1826,17 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
  * readback is gated on `automatic` exactly as it always was; these draws are
  * not, so a scene that pins its exposure -- which is every fixture in the
  * corpus -- still has a metered frame luminance for anything that wants one.
- * Cheap on its own: the 5.253 ms the comment below quotes is the blocking read
- * draining the pipeline, not this.
+ * Cheap on its own, and the number matters because the claim is what lets these
+ * draws run under a pinned exposure where nothing reads them back: MEASURED at
+ * 0.223 ms GPU / 0.360 ms CPU at 1600x1000 in a debug build, through the
+ * "luminance measure" scope. Taken on a LIGHT frame (--no-ssr --no-ssao
+ * --no-bloom) deliberately: the profiler cannot price a small scope inside a
+ * heavy one, so the same measurement beside a 7.5 ms SSR pass reads 0.805 and
+ * is measuring the queue rather than the work.
+ *
+ * The 5.253 ms the comment below quotes is the blocking READ draining the
+ * pipeline -- an order of magnitude more, and the whole reason it is a separate
+ * function.
  */
 static void postfx_measure_luminance(PostFX* fx, GLuint scene_tex) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);

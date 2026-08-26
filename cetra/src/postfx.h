@@ -95,6 +95,10 @@ typedef enum PostFXDebugView {
     // inserted: the shader compares debugView against integer literals, so a
     // renumber would silently point every view at its neighbour.
     POSTFX_DEBUG_PURKINJE = 10,
+    // Not a view. The label array's assert names THIS rather than the last
+    // enumerator, so appending a view without naming it is a compile error --
+    // where naming the last one by hand passes, since the count still matches.
+    POSTFX_DEBUG_COUNT,
 } PostFXDebugView;
 
 // How the AO factor treats specular. Legacy blends AO toward unoccluded by

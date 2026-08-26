@@ -205,7 +205,7 @@ _Static_assert(sizeof(CFG_CAMERA_MODES) / sizeof(*CFG_CAMERA_MODES) == CAMERA_MO
                "CFG_CAMERA_MODES must name every CameraMode");
 _Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_AGX + 1,
                "CFG_TONEMAPS must name every PostFXTonemapMode");
-_Static_assert(sizeof(CFG_DEBUG_VIEWS) / sizeof(*CFG_DEBUG_VIEWS) == POSTFX_DEBUG_PURKINJE + 1,
+_Static_assert(sizeof(CFG_DEBUG_VIEWS) / sizeof(*CFG_DEBUG_VIEWS) == POSTFX_DEBUG_COUNT,
                "CFG_DEBUG_VIEWS must name every PostFXDebugView");
 _Static_assert(sizeof(CFG_SPEC_OCC) / sizeof(*CFG_SPEC_OCC) == POSTFX_SPEC_OCC_SPLIT + 1,
                "CFG_SPEC_OCC must name every PostFXSpecOccMode");
