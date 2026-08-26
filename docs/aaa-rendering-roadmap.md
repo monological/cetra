@@ -1039,6 +1039,57 @@ B13) put those frames on screen.**
 **Depends on:** B12 (soft — there is nothing to calibrate against until a night frame
 exists). **Wall 1:** unaffected — the tonemap program declares 12 of 16.
 
+### B15. Water at night — Effort M
+Render `tree` at a sun elevation of −12 and the frame is a black tree silhouette against a
+full star field, over a sea that is **flat daytime turquoise**. Everything else in the shot
+went to night correctly. This is B13's best image and the renderer cannot currently produce
+it — `tree` and `forest` are mostly sea, so the one shot that would sell a moon hardest is
+the one that is broken.
+
+**Two independent defects, and only the first is what makes the frame look wrong.**
+
+**The in-scatter is a constant, not a response to illumination.** `water.c:1851` uploads
+`water->scatter` raw and `water_frag.glsl:1056` spends it as
+`waterScatter * preExposure * (1.0 - T)` — an authored colour in absolute scene radiance,
+multiplied by nothing that knows how much light is falling on the water. So it behaves like
+an EMISSIVE: when the sun sets and every other term in the frame collapses, the water body
+keeps its daytime colour at full strength. Note the file's own header already says this out
+loud ("the authored scatter colour" sits in its list of absolute-radiance inputs) — it is
+a stated design that was only ever exercised in daylight, not an oversight in the code.
+The fix wants a real answer rather than a fudge factor: in-scattered radiance is
+(incident irradiance × single-scatter albedo), so it should be DERIVED from the light
+reaching the surface — the same sky/IBL term the reflection already samples — with the
+authored colour becoming the albedo it tints rather than the radiance it emits. That
+changes every daylight water frame, which is why this is M and not S: two goldens
+(`water_fixture`, `water_submerged`) and 35 arms across the `water` and `beach` groups are
+calibrated against the current behaviour.
+
+**Water sees exactly ONE directional, and picks the sky's SUN by name.** `water.c:1876`
+prefers `scene->sky->sun_light`, deliberately — spec 11.41 put that there because scanning
+for the first directional found whatever the scene file listed first, so caustics focused
+from one light while the deck occluded another. At night that preference backfires: the
+sun light still EXISTS below the horizon, so `sunAvailable` stays 1 and the fallback scan
+never runs, while `sky_horizon_fade` (`clamp(elevation/3, 0, 1)`) has zeroed its intensity.
+Water ends up holding a direction pointing at a sun underground and `sunRadiance` of exactly
+zero, and never looks past it to the moon, which is a second directional. Everything keyed
+off that term goes to zero with it: the specular glitter, the Cox-Munk sun lobe (11.42) and
+the caustics. **A moonlit sea's defining feature is the glitter path**, so this is the half
+that would make the picture good rather than merely correct.
+
+The selection wants to become "the brightest available directional" rather than "the sky's
+sun", which keeps 11.41's fix intact (it was about not picking arbitrarily, not about
+picking the sun specifically) while letting the moon inherit the term when it is the only
+light left. It reaches the caustics, the glitter's cascade lookup, the foam's direct term
+and `sunAvailable`'s meaning, so it needs its own arms — a night frame where the glitter
+path points at the moon, and a daylight frame that is 0 px against today.
+
+**Order note:** arguably BEFORE B14. That row already says to judge Purkinje against real
+night frames; a frame with a lit tropical ocean in it is not one, and tuning a rod-vision
+model against it would calibrate the perceptual model to compensate for a radiometric bug.
+**Depends on:** B13 (there is no second directional to hand water until the moon exists).
+**Wall 1:** unaffected — `water_frag` declares 11 of 16 since 11.45, and neither half of
+this needs a new one.
+
 ## The four walls (Tier 4 preamble)
 
 Tiers 1-3 shared a shape: each item was another gated, lazily-allocated fullscreen pass, and the
@@ -2974,6 +3025,7 @@ not scheduled.
 | 47 | **B12 Night-sky floor** | S/M | **DONE (11.80).** See the B12 entry for the as-built record. Original row: Airglow + zodiacal + integrated starlight, ~2e-4 cd/m² — the radiance Hillaire cannot produce because it models scattered sunlight only, and the reason the 11.79 night is stars over a black world. Unlike the stars it MUST reach `sky_env_frag`: the point is lighting the ground through the env cube and IBL, and a near-constant floor is safe where the prefilter's firefly rule bans point sources. Ramped by the stars' civil-twilight window. The exposure honesty a second time: auto-exposure only darkens, so the authored radiance IS the night brightness. B11 depends on it — sequence the floor before the cycle. |
 | 48 | **B13 The moon** | L | **DONE (11.82).** See the B13 entry for the as-built record — phase is derived rather than authored, a full moon is flat rather than Lambertian, the disc size is shared with the sun, and the surface (relief AND albedo, ~43,000 overprinting craters) is baked at startup because a per-pixel lattice caps the population rather than the cost. Carries the spec's largest finding: it passed every arm while not looking like the Moon, and the look-calibration phase that was meant to catch that had been scoped as a two-constant tuning step. Original row: The dominant night light (~0.25 lux full, ~250× the floor) and how game nights become readable. A LIGHT, not a backdrop: disc + phase + earthshine, plus a real casting directional following phase and altitude. The sun's split applies verbatim — analytic disc in the background only (the env-bake firefly rule), energy as the analytic light, `sky_apply_sun_to_light` as the template, 3 casting-directional slots already exist. New: phase, a second transmittance-tinted directional, and the authoring surface (the 11.79 plumbing shape again). Arguably ahead of B11 on look value: a moonlit static night beats a cycled black one. |
 | 49 | **B14 Purkinje shift** | S/M | Rod vision: desaturate + blue-shift in dim light (Kirk & O'Brien 2011) — what makes a dark frame read as night rather than as an underexposed day. Lives in `tonemap_frag`, driven by the metered luminance the CPU already reads back. A hypothesis row for two reasons: its position in a finishing stack with two standing order contracts, and a blast radius of every dim frame in every app — needs an opt-in, a gate arm, and defaults chosen against real night frames, which do not exist until B12/B13 land. Judge it last. |
+| 50 | **B15 Water at night** | M | The moon's best image, and the renderer cannot produce it: `tree` at sun −12 is a black tree against a full star field over a **flat daytime turquoise sea**. Two independent defects. The in-scatter is an authored ABSOLUTE constant (`water.c:1851` into `water_frag.glsl:1056`) multiplied by nothing that knows how lit the water is, so it behaves like an emissive and never dims — a stated design that was only ever exercised in daylight. And water sees exactly ONE directional and picks the sky's SUN by name (`water.c:1876`, spec 11.41's fix for a different bug), so at night it holds a below-horizon light of zero radiance and never reaches the moon — killing the glitter, the Cox-Munk lobe and the caustics together. Fix the first and the frame stops being wrong; fix the second and it becomes the shot. M rather than S because 2 goldens and 35 arms across the `water` and `beach` groups are calibrated against the current in-scatter. **Arguably before B14**, whose own row says to judge it against real night frames. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
