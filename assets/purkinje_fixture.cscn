@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "purkinje_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "PkFill",
+   "type": "directional",
+   "direction": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.02,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   0.0,
+   19.4
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "fov": 40.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 3.2
+ }
+}
