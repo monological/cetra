@@ -200,12 +200,16 @@ void set_light_range(Light* light, float range) {
 // LSB); the derived cull radius is where attenuation crosses it.
 #define LIGHT_CULL_EPSILON (1.0f / 256.0f)
 
+float light_effective_intensity(const struct Light* light) {
+    const float peak = fmaxf(light->color[0], fmaxf(light->color[1], light->color[2]));
+    return light->intensity * peak;
+}
+
 float light_cull_radius(const struct Light* light) {
     if (light->range > 0.0f)
         return light->range;
 
-    float peak = fmaxf(light->color[0], fmaxf(light->color[1], light->color[2]));
-    float i_eff = light->intensity * peak;
+    float i_eff = light_effective_intensity(light);
     if (i_eff <= 0.0f)
         return 0.0f;
 

@@ -141,6 +141,16 @@ void set_light_range(Light* light, float range);
 // clustering.
 float light_cull_radius(const struct Light* light);
 
+// How strong a light is as ONE number: intensity scaled by its brightest channel. The
+// codebase's answer to that question, so anything comparing or thresholding lights uses
+// this rather than re-deriving it -- the reduction was written out twice before, in
+// light_cull_radius and in water's key-light pick, and a third would have made it a rule
+// with no home.
+//
+// Peak rather than luminance because it answers "does this light still do anything",
+// where a saturated blue must not be discounted for having no green in it.
+float light_effective_intensity(const struct Light* light);
+
 // An orthonormal frame from an authored direction and an authored roll
 // reference. Always buildable -- a degenerate `dir` falls back to -Y and a
 // degenerate or parallel `ref` to the canonical perpendicular -- which every

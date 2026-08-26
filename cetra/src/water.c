@@ -11,6 +11,7 @@
 #include "ubo.h"
 #include "ext/log.h"
 #include "ibl.h"
+#include "light.h" // light_effective_intensity, for the key-light rank
 #include "profiler.h"
 #include "program.h"
 #include "scene.h"
@@ -1511,9 +1512,17 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
 }
 
 /*
- * The BRIGHTEST directional wins, ranked by intensity x peak channel -- light_cull_radius's
- * own reduction, which is this codebase's answer to "how strong is this light".
- * Directionals are all in lux, so they compare without conversion.
+ * The directional DELIVERING MOST to the water: light_effective_intensity times the cosine
+ * against world up. Directionals are all in lux, so they compare without conversion.
+ *
+ * The cosine is the half that is easy to leave out and wrong to. Every consumer of this
+ * pick weights by that same cosine -- water_incident_light by `toward[1]`, the shader by
+ * `max(sunDir.y, 0.0)` -- so ranking on normal incidence alone ranks a quantity nobody
+ * spends. A grazing 20-lux light at 1 degree outranks a 10-lux sun at 35 and then delivers
+ * 0.35 against 5.7, leaving the sea dark, the glitter track on the horizon and the caustics
+ * focused along a ray that skims the surface. Ranking on the delivered quantity also makes
+ * the sun/moon crossover CONTINUOUS: the two candidates are equal in what they deliver at
+ * the moment they are equal in rank, so nothing steps as one overtakes the other.
  *
  * This KEEPS spec 11.41's fix rather than reverting it. That fix replaced a scan for the
  * first directional -- which found whichever light the scene file happened to list first,
@@ -1521,12 +1530,12 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
  * the sky's sun by name. Choosing by name fails the other way: a sun below the horizon
  * still EXISTS, with sky_horizon_fade holding its intensity at zero, so water held a
  * direction pointing underground, took a radiance of exactly zero, and could never reach
- * the moon beside it. Brightest is deterministic AND meaningful, which by-name and
- * first-in-array were each only half of.
+ * the moon beside it. Brightest-delivered is deterministic AND meaningful, which by-name
+ * and first-in-array were each only half of.
  *
  * Strict > keeps the earliest in scene order on a tie, so the pick is stable. A weight of
- * zero selects NOTHING, which is what switches the caustics off in true darkness rather
- * than focusing a light that is not delivering any.
+ * zero selects NOTHING -- which now covers a light pointing UP as well as one with no
+ * radiance, since neither delivers anything to a horizontal surface.
  */
 const struct Light* water_key_light(const struct Scene* scene) {
     if (!scene)
@@ -1537,8 +1546,10 @@ const struct Light* water_key_light(const struct Scene* scene) {
         const Light* l = scene->lights[i];
         if (!l || l->type != LIGHT_DIRECTIONAL)
             continue;
-        const float peak = fmaxf(l->color[0], fmaxf(l->color[1], l->color[2]));
-        const float weight = l->intensity * peak;
+        vec3 toward;
+        glm_vec3_negate_to((float*)l->direction, toward);
+        glm_vec3_normalize(toward);
+        const float weight = light_effective_intensity(l) * fmaxf(toward[1], 0.0f);
         if (weight > best_weight) {
             best_weight = weight;
             best = l;
@@ -1548,12 +1559,29 @@ const struct Light* water_key_light(const struct Scene* scene) {
 }
 
 void water_incident_light(const struct Scene* scene, vec3 out) {
-    // The sky's ambient. sky->zenith_radiance is the cached CPU march the fog is already
-    // driven from -- recomputed only when the sun moves, which is also the only thing
-    // that changes it.
+    /*
+     * The environment's ambient, from whichever source this scene HAS -- and the two
+     * branches are not interchangeable niceties. The shader gates its half on
+     * `iblEnabled`, so gating this one on the sky alone left every `-e <hdr>` scene with
+     * an ambient of exactly zero here and the full HDR ambient there. With no directional
+     * either (a model that ships its own lights), the submerged medium's whole source
+     * function went to black while the surface over it stayed lit.
+     *
+     * Sky first because it is free: zenith_radiance is already cached and re-marched only
+     * when the sun moves, where ambient_up is only computed at HDR load. A scene with a
+     * sky also has an IBL baked from it, so the order is what picks the cheaper twin.
+     */
     glm_vec3_zero(out);
-    if (scene && scene->sky)
+    if (!scene)
+        return;
+    if (scene->sky)
         glm_vec3_copy((float*)scene->sky->zenith_radiance, out);
+    else if (scene->ibl)
+        glm_vec3_copy((float*)scene->ibl->ambient_up, out);
+    // The same scale the shader applies to its own tap. Absent here until 11.84's review,
+    // which left --ibl-intensity moving the surface and not the volume under it.
+    if (scene->ibl)
+        glm_vec3_scale(out, scene->ibl->intensity, out);
 
     // Plus the key's irradiance on a HORIZONTAL surface. Cosine against world up rather
     // than the wave facet: this lights a volume under a plane, not the surface a specular

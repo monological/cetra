@@ -1252,7 +1252,7 @@ int main(int argc, char** argv) {
          * more moonlight is more light, and the in-scatter still tracks it.
          */
         sky->moon_size = 6.0f;
-        sky->moon_brightness = 4.0f;
+        sky->moon_brightness = 2.0f;
         if (args.moon_size > 0.0f)
             sky->moon_size = args.moon_size;
         if (args.moon_brightness >= 0.0f)

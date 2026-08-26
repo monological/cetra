@@ -138,6 +138,41 @@ void free_ibl_resources(IBLResources* ibl) {
  * azimuth phi = (u-0.5)*2*pi with x = cos(e)cos(phi), z = cos(e)sin(phi).
  * cos(e) weights for per-row solid angle.
  */
+/*
+ * Mean radiance over the upper hemisphere, weighted by each row's own solid angle
+ * (spec 11.84). See IBLResources.ambient_up for what it stands in for and why it is
+ * computed here rather than read back off the prefiltered cube.
+ *
+ * The equirect's row-to-elevation mapping is extract_light_lobes' below, restated rather
+ * than shared because that function folds it into a direction vector it needs for other
+ * reasons; here only the sign of y and the cos weight matter.
+ */
+static void compute_ambient_up(IBLResources* ibl, const float* data, int width, int height) {
+    const int stride = 4;
+    const int cols = (width + stride - 1) / stride; // samples per row, at this stride
+    double sum[3] = {0.0, 0.0, 0.0};
+    double weight = 0.0;
+    for (int r = 0; r < height; r += stride) {
+        const float v = ((float)r + 0.5f) / (float)height;
+        const float elev = (v - 0.5f) * (float)GLM_PI;
+        if (sinf(elev) <= 0.0f)
+            continue; // below the horizon: it is not what lights a horizontal surface
+        const double w = cosf(elev); // the row's solid angle, which vanishes at the pole
+        for (int c = 0; c < width; c += stride) {
+            const float* px = data + ((size_t)r * (size_t)width + (size_t)c) * 3;
+            for (int k = 0; k < 3; k++)
+                sum[k] += (double)px[k] * w;
+        }
+        weight += w * (double)cols;
+    }
+    if (weight <= 0.0) {
+        glm_vec3_zero(ibl->ambient_up);
+        return;
+    }
+    for (int k = 0; k < 3; k++)
+        ibl->ambient_up[k] = (float)(sum[k] / weight);
+}
+
 static void extract_light_lobes(IBLResources* ibl, const float* data, int width, int height) {
     const int stride = 4;
     const float lobe_cos = cosf(glm_rad(35.0f)); // Cluster radius: 35 degrees
@@ -287,6 +322,7 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glGenerateMipmap(GL_TEXTURE_2D);
 
+    compute_ambient_up(ibl, data, width, height);
     extract_light_lobes(ibl, data, width, height);
 
     stbi_image_free(data);

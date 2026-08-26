@@ -6051,6 +6051,9 @@ def run_nightfloor_gate(workdir):
       nightfloor-cscn     the authored environment.night_floor block IS the flag path
                           (0 px from its flag twin), and --no-night-floor beats the
                           authoring file at 0 px. Deleting the parse is what it catches.
+
+    Read as deltas throughout: the floor is a small absolute lift, so an on-frame alone
+    says nothing about whether the term arrived.
     """
     scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
     if not os.path.exists(scene):
@@ -8494,45 +8497,37 @@ def _water_glitter_box():
 _CSCN_KEY = r'"([A-Za-z0-9_]+)"'
 
 
-def _cscn_refused_keys(func, block):
-    """Keys `func` names in a `... is gone` refusal, from the C source (spec 11.84).
-
-    A THIRD category, and it exists because the reader below cannot see one: a refusal
-    tests for its key with the same `(block, "name")` shape every accessor uses, so a
-    refused key reads as read. It is neither tolerated by known[] nor authored by the
-    fixture, so without this it drifts both of those assertions at once.
-
-    Keyed off the user-visible message rather than the control flow around it, which
-    makes that message load-bearing: delete the sentence and the arm notices.
-    """
-    src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
-    body = src.split("static void %s(" % func)[1].split("\nstatic ")[0]
-    return set(re.findall(r'"cscene: %s\.(\w+) is gone' % block, body))
-
-
 def _cscn_key_sets(func, block):
-    """Return (keys `func` reads off `block`, keys its known[] tolerates), from the C source.
+    """(keys `func` reads off `block`, keys its known[] tolerates, keys it REFUSES).
 
-    Read rather than transcribed. A copy of either list here would be a third place to keep
-    in step, which is the failure this is meant to catch in the first two.
+    Read rather than transcribed. A copy of any of the three here would be another place to
+    keep in step, which is the failure this is meant to catch in the first place.
 
     Parameterised over the function and the cJSON variable so parse_water and
     parse_wave_train share one reader. Each call still slices ONE function body and ONE
-    closed known[], so neither assertion is weakened by the sharing -- what would weaken
-    them is a single regex spanning both nesting levels, which this is not.
+    closed known[], so no assertion is weakened by the sharing -- what would weaken them is
+    a single regex spanning both nesting levels, which this is not.
+
+    The refused set is a THIRD category and comes from the same slice because it cannot be
+    told apart by shape: a refusal tests for its key with the same `(block, "name")` form
+    every accessor uses, so a refused key reads as read. It belongs to neither known[] nor
+    the fixture, so without it a retirement drifts both of those at once. Keyed off the
+    user-visible message rather than the control flow around it, which makes that sentence
+    load-bearing -- delete it and the arm notices.
 
     Fails LOUDLY on a formatting change: renaming `known`, or a formatter moving the brace
     off `known[] = {`, raises IndexError here rather than returning an empty set.
     """
     src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
-    body = src.split("static void %s(" % func)[1].split("\nstatic ")[0]
+    body = _c_function_body(src, "static void %s(" % func)
     # Every read names the block: get_float(water, "level", ...), get_vec3, get_bool,
     # get_floats, cJSON_GetObjectItemCaseSensitive for waves, and since spec 11.48
     # parse_wave_train(water, "windSea", ...) for each nested train -- which the same
     # pattern catches, because a sub-object is a key of water like any other.
     read = set(re.findall(r'\(%s,\s*' % block + _CSCN_KEY, body))
     known = set(re.findall(_CSCN_KEY, body.split("known[] = {")[1].split("};")[0]))
-    return read, known
+    refused = set(re.findall(r'"cscene: %s\.(\w+) is gone' % block, body))
+    return read, known, refused
 
 
 def _cscn_wave_train_names():
@@ -8881,8 +8876,14 @@ WATER_NIGHT_MOON = ["--moon"]
 # while the sun stays put makes it a thin crescent -- 0.009 lux against 0.33. Enough
 # for a specular track, nowhere near enough to read as illumination, which is why
 # water-night-lit uses the unplaced moon above.
-WATER_NIGHT_MOON_AHEAD = WATER_NIGHT_MOON + ["--moon-elevation", "22",
-                                             "--moon-azimuth", "180"]
+WATER_NIGHT_MOON_AHEAD = WATER_NIGHT_MOON + [
+    "--moon-elevation", repr(WATER_GLITTER_SUN["sun"]["elevation"]),
+    "--moon-azimuth", repr(WATER_GLITTER_SUN["sun"]["azimuth"])]
+# The specular box is the daylight arm's, so a re-framed glitter arm must carry this one
+# with it -- which only holds while the angles are DERIVED above rather than transcribed.
+# Measured 19.99x on the daylight sun; a crescent moon's track is dimmer but the box is
+# near-black without it, so a third of the daylight ratio still fails any misplacement.
+WATER_NIGHT_GLITTER_RATIO = 1.5
 # Measured 16,318 px. A third of it is clear of noise and well under the signal.
 WATER_NIGHT_GLITTER_MIN_PX = 5000
 # A directional that is BRIGHT by intensity and nearly black by colour, which is the
@@ -8917,6 +8918,11 @@ WATER_NIGHT_CAUSTIC_MIN_PX = 8000
 WATER_NIGHT_LIT_DAY_MIN = 0.008
 WATER_NIGHT_LIT_RATIO_MIN = 20.0
 WATER_NIGHT_LIT_MOON_MIN = 1.0e-4
+# Derived rather than measured, because the measurement cannot support it: the dark leg
+# reads 0.00000 at the precision it is printed, which establishes only "< 5e-6" and says
+# nothing about the margin. One 8-bit code at the darkest end is _SRGB_TO_LINEAR[1] =
+# 3.0e-4, spread over a 12x12 box that is ~2.1e-6 per stray sample -- so this bar is
+# "about five stray codes", which is a reason a reader can check.
 WATER_NIGHT_LIT_DARK_MAX = 1.0e-5
 # One value put on each field in turn, which is what makes water-glow a comparison rather
 # than two readings: with no light above the horizon the glow must still light the body
@@ -8925,6 +8931,12 @@ WATER_NIGHT_LIT_DARK_MAX = 1.0e-5
 #
 # apps/tree's own authored sea, so the arm exercises the magnitude a real scene uses.
 WATER_GLOW_VALUE = [0.03, 0.13, 0.14]
+ZERO3 = [0.0, 0.0, 0.0]
+# Both halves off, which is the shared baseline every separability read is taken against.
+WATER_SCATTER_OFF = {"scatterAlbedo": ZERO3, "scatterGlow": ZERO3}
+# Measured 342,413 px for the glow. A seventeenth of it, which is loose because this bar is
+# only load-bearing when the albedo leg reads exactly 0 and drives the ratio below to
+# infinity; at the measured 151 px the ratio is what decides the arm.
 WATER_GLOW_MIN_PX = 20000
 # Measured 342,413 px for the glow against 151 for the albedo. The albedo leg is not 0
 # and should not be asserted as 0: a sky at -12 degrees is very dark rather than black,
@@ -8934,15 +8946,34 @@ WATER_GLOW_MIN_PX = 20000
 WATER_GLOW_RATIO_MIN = 100.0
 
 
-def _water_night_variant(src, dst, mutate=None):
+def _vec3_field(head, key):
+    """A `x,y,z` probe field as three floats, zeros when the field is absent.
+
+    Absent rather than raising, so an arm reading a field an older binary does not print
+    fails on its own assertion rather than on a parse.
+    """
+    raw = head.get(key)
+    if not raw:
+        return [0.0, 0.0, 0.0]
+    return [float(v) for v in raw.split(",")]
+
+
+def _water_night_variant(src, dst, overrides=None, mutate=None):
     """The fixture with no lights of its own, so the sky's sun and moon are the candidates.
 
-    `mutate` runs after the strip, for an arm that also needs its own framing or wave
-    model -- the _water_glitter_variant shape, and for its reason: what this group varies
-    is not always inside the water block.
+    `overrides` merges into the water block, which is what most arms here want and is
+    _water_cscn_variant's body -- taken as data rather than as a callback so the six call
+    sites cannot disagree about how they reach that block. They did: five wrote a bare
+    `d["water"]` where the shared helper uses `d.setdefault`, which is a KeyError waiting
+    for the first fixture that authors no water block.
+
+    `mutate` is the general escape, for the two arms that vary something outside it (a
+    camera, an extra light). Runs after the merge.
     """
     def strip(d):
         d["lights"] = []
+        if overrides:
+            _merge_water_block(d.setdefault("water", {}), overrides)
         if mutate:
             mutate(d)
 
@@ -8952,31 +8983,39 @@ def _water_night_variant(src, dst, mutate=None):
 def run_water_night_gate(workdir):
     """The sea after dark: which light it takes, and what it does when there is none.
 
-    water-night-pick     --water-probe names the picked directional across an elevation
-                         ladder straddling the sun/moon crossover. The by-name pick this
-                         replaced answers sky_sun at every rung, including the four where
-                         its intensity is exactly 0.
-    water-night-weight   the rank is intensity x PEAK CHANNEL, not intensity. The only
-                         arm that can see the difference: every real candidate in the
-                         corpus is near-white, so it takes an authored decoy to separate
-                         the two rules at all.
-    water-night-glitter  the moon puts a specular track on the water. Exactly 0 before
-                         the pick moved, because the glitter multiplies sunRadiance and
-                         a faded sun's is the zero vector.
-    water-night-caustic  caustics are OFF with nothing above the horizon, and LIVE under
-                         both a moon and a sun. The dark leg alone passes on a build with
-                         no caustics at all, so neither leg is safe without the others.
-    water-night-lit      the in-scatter is a FRACTION of the light that falls on the sea,
-                         not a constant: its own contribution is 0.0163 by day, 0.0002
-                         under a moon and exactly 0 with nothing above the horizon.
-                         Before 11.84's second half all three read the same number.
-    water-glow           the two halves are SEPARABLE. With nothing above the horizon the
-                         glow alone still lights the body and the albedo alone is exactly
-                         nothing -- which is what makes a stylised night sea authorable
-                         without giving up a dark realistic one.
-    water-scatter-refuse the old `scatter` key is refused BY NAME. Its units changed, so
-                         an old value still parses and would mean something six times too
-                         large; silence would render a plausible frame.
+      water-night-pick     --water-probe names the picked directional across an elevation
+                           ladder straddling the sun/moon crossover. The by-name pick this
+                           replaced answers sky_sun at every rung, including the four where
+                           its intensity is exactly 0.
+      water-night-incident the CPU twin of the incident term falls with the sun and lifts
+                           under a moon. water_incident_light drives the SUBMERGED medium
+                           and every submerged arm runs in daylight, so without this the
+                           function 11.84 added has no coverage at all.
+      water-night-weight   the rank is intensity x PEAK CHANNEL, not intensity. The only
+                           arm that can see the difference: every real candidate in the
+                           corpus is near-white, so it takes an authored decoy to separate
+                           the two rules at all.
+      water-night-glitter  the moon puts a specular track on the water. Exactly 0 before
+                           the pick moved, because the glitter multiplies sunRadiance and
+                           a faded sun's is the zero vector.
+      water-night-caustic  caustics are OFF with nothing above the horizon, and LIVE under
+                           both a moon and a sun. The dark leg alone passes on a build with
+                           no caustics at all, so neither leg is safe without the others.
+      water-night-lit      the in-scatter is a FRACTION of the light that falls on the sea,
+                           not a constant: its own contribution is 0.0163 by day, 0.0002
+                           under a moon and exactly 0 with nothing above the horizon.
+                           Before 11.84's second half all three read the same number.
+      water-glow           the two halves are SEPARABLE. With nothing above the horizon the
+                           glow alone still lights the body and the albedo alone is exactly
+                           nothing -- which is what makes a stylised night sea authorable
+                           without giving up a dark realistic one.
+      water-scatter-refuse the old `scatter` key is refused BY NAME. Its units changed, so
+                           an old value still parses and would mean something around five
+                           times too large; silence would render a plausible frame.
+
+    Every arm here is a twin DELTA rather than a brightness read, and that is forced by
+    the fixture: water_fixture's geometry is EMISSIVE over a black base, so its water band
+    reads 0.2207 at midnight against 0.2478 at noon whatever the sea does.
     """
     failures = []
     scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
@@ -8990,34 +9029,66 @@ def run_water_night_gate(workdir):
     for elev, expect in WATER_NIGHT_PICK_LADDER:
         head, _ = _water_probe(base + WATER_NIGHT_MOON + ["--sun-elevation", elev],
                                scene=night)
-        picks.append((elev, head.get("key", "?"), float(head.get("intensity", "0"))))
+        picks.append((elev, head.get("key", "?"), float(head.get("intensity", "0")),
+                      _vec3_field(head, "incident")))
         want.append(expect)
     got = [p[1] for p in picks]
     # Every rung must also be DELIVERING light. The defect was a key with a direction and
     # no radiance, which "the right name" alone would not have caught.
-    lit = all(p[2] > 0.0 for p in picks)
-    ok = got == want and lit
+    delivering = all(p[2] > 0.0 for p in picks)
+    ok = got == want and delivering
     print(f"  water-night-pick {'PASS' if ok else 'FAIL'}  " +
-          " ".join(f"{e}:{k}@{i:.3f}" for e, k, i in picks) +
-          f" (want {' '.join(want)}, all delivering: {lit})")
+          " ".join(f"{e}:{k}@{i:.3f}" for e, k, i, _inc in picks) +
+          f" (want {' '.join(want)}, all delivering: {delivering})")
     if not ok:
         failures.append("water-night-pick")
 
+    # The INCIDENT term itself, off the same eight probes -- the CPU twin of what
+    # water-night-lit asserts about the shader, and the quantity 11.84 added. It was
+    # printed by --water-probe and read by nothing, so water_incident_light shipped with
+    # no coverage at all: the submerged arms that consume it all run in daylight.
+    #
+    # Monotone in sun elevation while the sun is the key, because that is the one shape a
+    # wrong sign, a missing cosine or a stale cache all break. Compared only across the
+    # sun's own rungs: the moon takes over below the horizon and rises on a different
+    # schedule, so a single monotone run across the crossover would be asserting the sun
+    # and the moon are one curve.
+    sun_inc = [sum(p[3]) for p in picks if p[1] == "sky_sun"]
+    falling = all(sun_inc[i] >= sun_inc[i + 1] for i in range(len(sun_inc) - 1))
+    moon_up = sum(next(p[3] for p in picks if p[1] == "sky_moon"))
+    lit_head, _ = _water_probe(base + ["--sun-elevation", WATER_NIGHT_SUN_DOWN,
+                                       "--no-moon"], scene=night)
+    moon_off = sum(_vec3_field(lit_head, "incident"))
+    ok = falling and len(sun_inc) >= 2 and moon_up > moon_off
+    print(f"  water-night-incident {'PASS' if ok else 'FAIL'}  falls with the sun across "
+          f"{len(sun_inc)} rungs ({', '.join(f'{v:.3f}' for v in sun_inc)}): {falling}; "
+          f"and a moon lifts it off its floor, {moon_off:.5f} -> {moon_up:.5f} "
+          f"(want >, or the CPU twin never reached the light the pick found)")
+    if not ok:
+        failures.append("water-night-incident")
+
     # The peak-channel factor, which nothing else in the suite can see: every real
     # candidate is near-white, so `intensity x peak` and `intensity` agree on all of them.
-    # The moon has to beat a light carrying three times its raw intensity and a fortieth
+    # The moon has to beat a light carrying SIX times its raw intensity and a twenty-fifth
     # of its colour.
     decoy = os.path.join(workdir, "water_night_decoy.cscn")
     _water_night_variant(scene, decoy,
-                         lambda d: d["lights"].append(dict(WATER_NIGHT_DECOY)))
-    head, _ = _water_probe(base + ["--moon", "--sun-elevation", WATER_NIGHT_SUN_DOWN],
-                           scene=decoy)
+                         mutate=lambda d: d["lights"].append(dict(WATER_NIGHT_DECOY)))
+    head, _ = _water_probe(base + WATER_NIGHT_MOON +
+                           ["--sun-elevation", WATER_NIGHT_SUN_DOWN], scene=decoy)
     picked = head.get("key", "?")
-    ok = picked == "sky_moon"
-    print(f"  water-night-weight {'PASS' if ok else 'FAIL'}  picked {picked} over a "
-          f"{WATER_NIGHT_DECOY['intensity']}-intensity light at colour "
-          f"{WATER_NIGHT_DECOY['color'][0]} (want sky_moon: ranking by raw intensity "
-          f"takes the decoy, weighting by peak channel takes the moon)")
+    # And the arm's own PREMISE, which is otherwise only in a comment: the winner must be
+    # the light with the LOWER raw intensity. If moonlight ever rises past the decoy's,
+    # both ranking rules pick the moon and this arm silently covers nothing -- and it is
+    # the only arm that can see the peak factor, so there is no pair to catch that.
+    won_with = float(head.get("intensity", "0"))
+    premise = 0.0 < won_with < WATER_NIGHT_DECOY["intensity"]
+    ok = picked == "sky_moon" and premise
+    print(f"  water-night-weight {'PASS' if ok else 'FAIL'}  picked {picked} at "
+          f"{won_with:.3f} over a {WATER_NIGHT_DECOY['intensity']}-intensity light at "
+          f"colour {WATER_NIGHT_DECOY['color'][0]} (want sky_moon, and it must win from "
+          f"BELOW on raw intensity or the two rules agree and nothing is tested: "
+          f"{premise})")
     if not ok:
         failures.append("water-night-weight")
 
@@ -9028,7 +9099,7 @@ def run_water_night_gate(workdir):
         d["camera"] = dict(WATER_GLITTER_CAMERA)
         _merge_water_block(d.setdefault("water", {}), WATER_GLITTER_WATER)
 
-    _water_night_variant(scene, glit, frame_it)
+    _water_night_variant(scene, glit, mutate=frame_it)
     g_common = base + WATER_NIGHT_MOON_AHEAD + ["--sun-elevation", WATER_NIGHT_SUN_DOWN]
     g_on = os.path.join(workdir, "water_night_glitter_on.ppm")
     g_off = os.path.join(workdir, "water_night_glitter_off.ppm")
@@ -9040,21 +9111,37 @@ def run_water_night_gate(workdir):
         failures.append("water-night-glitter")
     else:
         ae_g, _ = compare(g_off, g_on)
-        ok = ae_g >= WATER_NIGHT_GLITTER_MIN_PX
+        # WHERE, not just how much. A whole-frame count passes on a track anywhere in
+        # frame -- a mirrored azimuth, a sign error on the moon direction, or a lobe built
+        # from the view vector instead of the light all move more than the floor. The box
+        # is the daylight arm's, derived from the same camera and the same 22/180 the moon
+        # is placed at, which is what placing it there was FOR.
+        gw, gh, g_on_pix = _read_ppm(g_on)
+        _, _, g_off_pix = _read_ppm(g_off)
+        g_box = _water_glitter_box()
+        g_lum_on = _water_box_luma(g_on_pix, gw, gh, g_box)
+        g_lum_off = _water_box_luma(g_off_pix, gw, gh, g_box)
+        g_ratio = g_lum_on / max(g_lum_off, 1e-6)
+        ok = ae_g >= WATER_NIGHT_GLITTER_MIN_PX and g_ratio >= WATER_NIGHT_GLITTER_RATIO
         print(f"  water-night-glitter {'PASS' if ok else 'FAIL'}  the moon's track moves "
               f"{ae_g} px (want >={WATER_NIGHT_GLITTER_MIN_PX}; exactly 0 before the pick "
-              f"reached a light that delivers any)")
+              f"reached a light that delivers any) and lands in the specular box, "
+              f"{g_lum_off:.4f} -> {g_lum_on:.4f} = {g_ratio:.2f}x (want "
+              f">={WATER_NIGHT_GLITTER_RATIO}x)")
         if not ok:
             failures.append("water-night-glitter")
 
     # Caustics: off in true darkness, live under either source.
     caustic = os.path.join(workdir, "water_night_caustic.cscn")
-    _water_night_variant(scene, caustic,
-                         lambda d: _merge_water_block(d.setdefault("water", {}),
-                                                      WATER_GLITTER_WATER))
-    legs = (("dark", ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"]),
-            ("moonlit", ["--sun-elevation", WATER_NIGHT_SUN_DOWN] + WATER_NIGHT_MOON),
-            ("day", ["--sun-elevation", "35"]))
+    _water_night_variant(scene, caustic)
+    # Spectral by FLAG, not by borrowing the glitter arm's water block: caustics are
+    # FFT-only, and reaching that through a constant named for another arm hid the reason.
+    # The day leg leaves the fixture's own sun elevation alone.
+    caustic_waves = ["--water-waves", "fft"]
+    legs = (("dark", ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"] + caustic_waves),
+            ("moonlit", ["--sun-elevation", WATER_NIGHT_SUN_DOWN] + WATER_NIGHT_MOON +
+             caustic_waves),
+            ("day", caustic_waves))
     moved, cerr = {}, None
     for tag, flags in legs:
         on = os.path.join(workdir, f"water_night_caustic_{tag}_on.ppm")
@@ -9081,21 +9168,21 @@ def run_water_night_gate(workdir):
     # Does the sea know what time it is. Read as the in-scatter's own contribution --
     # the authored value against a zero-scatter twin -- because a brightness read on this
     # fixture measures its emissive backdrop, not its water.
-    auth = os.path.join(workdir, "water_night_lit_auth.cscn")
-    zero = os.path.join(workdir, "water_night_lit_zero.cscn")
-    _water_night_variant(scene, auth)
-    _water_night_variant(scene, zero,
-                         lambda d: _merge_water_block(d["water"],
-                                                      {"scatterAlbedo": [0.0, 0.0, 0.0],
-                                                       "scatterGlow": [0.0, 0.0, 0.0]}))
+    #
+    # `night` IS the authored side: it is the fixture with its lights stripped and nothing
+    # else touched. A second copy of it was built here and was byte-identical.
+    zero = os.path.join(workdir, "water_night_zero.cscn")
+    _water_night_variant(scene, zero, WATER_SCATTER_OFF)
+    # The DAY leg takes no --sun-elevation: the fixture authors its own 35, and naming it
+    # again here is a second place for that number to live.
     lit, lerr = {}, None
-    for tag, flags in (("day", ["--sun-elevation", "35"]),
+    for tag, flags in (("day", []),
                        ("moonlit", ["--sun-elevation", WATER_NIGHT_SUN_DOWN] +
                         WATER_NIGHT_MOON),
                        ("dark", ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"])):
         pa = os.path.join(workdir, f"water_night_lit_{tag}_a.ppm")
         pz = os.path.join(workdir, f"water_night_lit_{tag}_z.ppm")
-        lerr = render(auth, pa, base + flags) or render(zero, pz, base + flags)
+        lerr = render(night, pa, base + flags) or render(zero, pz, base + flags)
         if lerr:
             break
         wa, ha, pixa = _read_ppm(pa)
@@ -9111,58 +9198,53 @@ def run_water_night_gate(workdir):
         print(f"  water-night-lit ERROR render failed: {lerr.strip()[-200:]}")
         failures.append("water-night-lit")
     else:
-        ratio = lit["day"] / lit["moonlit"] if lit["moonlit"] > 0 else float("inf")
+        lit_ratio = lit["day"] / lit["moonlit"] if lit["moonlit"] > 0 else float("inf")
         ok = (lit["day"] >= WATER_NIGHT_LIT_DAY_MIN and
-              ratio >= WATER_NIGHT_LIT_RATIO_MIN and
+              lit_ratio >= WATER_NIGHT_LIT_RATIO_MIN and
               lit["moonlit"] >= WATER_NIGHT_LIT_MOON_MIN and
               lit["dark"] <= WATER_NIGHT_LIT_DARK_MAX)
         print(f"  water-night-lit {'PASS' if ok else 'FAIL'}  in-scatter contributes "
               f"{lit['day']:.5f} by day (want >={WATER_NIGHT_LIT_DAY_MIN}), "
               f"{lit['moonlit']:.5f} under a moon (want >={WATER_NIGHT_LIT_MOON_MIN}: the "
-              f"moon LIGHTS it, it does not merely switch off) and {lit['dark']:.5f} with "
+              f"moon LIGHTS it, it does not merely switch off) and {lit['dark']:.2e} with "
               f"nothing above the horizon (want <={WATER_NIGHT_LIT_DARK_MAX}); "
-              f"day/moonlit {ratio:.1f}x (want >={WATER_NIGHT_LIT_RATIO_MIN}, an authored "
+              f"day/moonlit {lit_ratio:.1f}x (want >={WATER_NIGHT_LIT_RATIO_MIN}, an authored "
               f"constant reads 1.0x)")
         if not ok:
             failures.append("water-night-lit")
 
     # The two halves are separable, read where the difference is unambiguous: no light
     # above the horizon at all, so the albedo term is multiplied by exactly zero.
+    # One value put on each field in turn, which is what makes this a comparison rather
+    # than two readings: the glow must still light the body where the albedo does nothing.
+    # Equal magnitudes matter -- a glow that merely moved MORE would pass on a build that
+    # had quietly kept both terms responding to light.
+    #
+    # The OFF leg is `zero`, already built above and rendered under these very flags as
+    # the lit arm's dark twin. Both were duplicated before.
     dark_flags = base + ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"]
+    p_night_dark = os.path.join(workdir, "water_night_lit_dark_a.ppm")
+    p_off = os.path.join(workdir, "water_night_lit_dark_z.ppm")
     glow_scn = os.path.join(workdir, "water_glow.cscn")
     alb_scn = os.path.join(workdir, "water_glow_albedo.cscn")
     _water_night_variant(scene, glow_scn,
-                         lambda d: _merge_water_block(d["water"],
-                                                      {"scatterAlbedo": [0.0, 0.0, 0.0],
-                                                       "scatterGlow": WATER_GLOW_VALUE}))
-    # The same magnitude on the OTHER field, which with no incident light must do nothing.
-    # Equal magnitudes matter: a glow that merely moved MORE than an albedo would pass on
-    # a build that had quietly kept both terms responding to light.
+                         {"scatterAlbedo": ZERO3, "scatterGlow": WATER_GLOW_VALUE})
     _water_night_variant(scene, alb_scn,
-                         lambda d: _merge_water_block(d["water"],
-                                                      {"scatterAlbedo": WATER_GLOW_VALUE,
-                                                       "scatterGlow": [0.0, 0.0, 0.0]}))
-    off_scn = os.path.join(workdir, "water_glow_off.cscn")
-    _water_night_variant(scene, off_scn,
-                         lambda d: _merge_water_block(d["water"],
-                                                      {"scatterAlbedo": [0.0, 0.0, 0.0],
-                                                       "scatterGlow": [0.0, 0.0, 0.0]}))
+                         {"scatterAlbedo": WATER_GLOW_VALUE, "scatterGlow": ZERO3})
     p_glow = os.path.join(workdir, "water_glow.ppm")
     p_alb = os.path.join(workdir, "water_glow_albedo.ppm")
-    p_off = os.path.join(workdir, "water_glow_off.ppm")
-    gerr = (render(glow_scn, p_glow, dark_flags) or render(alb_scn, p_alb, dark_flags) or
-            render(off_scn, p_off, dark_flags))
+    gerr = lerr or render(glow_scn, p_glow, dark_flags) or render(alb_scn, p_alb, dark_flags)
     if gerr:
         print(f"  water-glow ERROR render failed: {gerr.strip()[-200:]}")
         failures.append("water-glow")
     else:
         ae_glow, _ = compare(p_off, p_glow)
         ae_alb, _ = compare(p_off, p_alb)
-        ratio = ae_glow / ae_alb if ae_alb else float("inf")
-        ok = ae_glow >= WATER_GLOW_MIN_PX and ratio >= WATER_GLOW_RATIO_MIN
+        glow_ratio = ae_glow / ae_alb if ae_alb else float("inf")
+        ok = ae_glow >= WATER_GLOW_MIN_PX and glow_ratio >= WATER_GLOW_RATIO_MIN
         print(f"  water-glow {'PASS' if ok else 'FAIL'}  with nothing above the horizon "
               f"the glow moves {ae_glow} px (want >={WATER_GLOW_MIN_PX}) against {ae_alb} "
-              f"px for the SAME value on the albedo, {ratio:.0f}x (want "
+              f"px for the SAME value on the albedo, {glow_ratio:.0f}x (want "
               f">={WATER_GLOW_RATIO_MIN:.0f}x; not 0 px, because a -12 degree sky is very "
               f"dark rather than black and a fraction of it is the albedo doing its job)")
         if not ok:
@@ -9170,14 +9252,16 @@ def run_water_night_gate(workdir):
 
     # The old key is refused by name, and the refusal is what the author reads.
     stale = os.path.join(workdir, "water_stale_key.cscn")
-    _water_night_variant(scene, stale,
-                         lambda d: _merge_water_block(d["water"],
-                                                      {"scatter": WATER_GLOW_VALUE}))
+    _water_night_variant(scene, stale, {"scatter": WATER_GLOW_VALUE})
     r = _run([RENDER, "-m", stale, "-x", "-f", "2", "-W", "200", "-H", "150"] + base,
              capture_output=True, text=True)
     log = r.stdout + r.stderr
     named = "water.scatter is gone" in log
     tells = "scatterAlbedo" in log and "scatterGlow" in log
+    # Both halves, because cscene.c says both must fire: the specific message carries the
+    # migration and the generic one is what listing the key in known[] would silence. That
+    # comment argues its way to a double warning, so the double warning is the contract.
+    generic = "not a recognised water parameter" in log
     # And it must not have been APPLIED: the stale scene has to render as the twin that
     # never mentioned it. A warning that fires while the value still lands is worse than
     # no warning, because it reads as handled.
@@ -9186,15 +9270,22 @@ def run_water_night_gate(workdir):
     # The stale scene adds a dead key and changes nothing else, so what it must equal is
     # the fixture, not a sea with no in-scatter at all.
     p_stale = os.path.join(workdir, "water_stale_key.ppm")
-    p_auth_dark = os.path.join(workdir, "water_auth_dark.ppm")
-    serr = render(stale, p_stale, dark_flags) or render(auth, p_auth_dark, dark_flags)
-    ae_stale, _ = (compare(p_auth_dark, p_stale) if not serr else (-1, None))
-    ok = named and tells and ae_stale == 0
-    print(f"  water-scatter-refuse {'PASS' if ok else 'FAIL'}  refused by name: {named}, "
-          f"names both replacements: {tells}, and {ae_stale} px against the twin that "
-          f"never authored it (want 0: warned AND ignored, not warned and applied)")
-    if not ok:
+    serr = render(stale, p_stale, dark_flags) or render(night, p_night_dark, dark_flags)
+    if serr:
+        # Reported rather than folded into the verdict. Swallowing it printed a bare
+        # `-1 px` FAIL with no diagnostic, which is the one failure mode a reader cannot
+        # act on and every other arm in this file avoids.
+        print(f"  water-scatter-refuse ERROR render failed: {serr.strip()[-200:]}")
         failures.append("water-scatter-refuse")
+    else:
+        ae_stale, _ = compare(p_night_dark, p_stale)
+        ok = named and tells and generic and ae_stale == 0
+        print(f"  water-scatter-refuse {'PASS' if ok else 'FAIL'}  refused by name: "
+              f"{named}, names both replacements: {tells}, still reported as unknown: "
+              f"{generic}, and {ae_stale} px against the twin that never authored it "
+              f"(want 0: warned AND ignored, not warned and applied)")
+        if not ok:
+            failures.append("water-scatter-refuse")
 
     return failures
 
@@ -9795,10 +9886,9 @@ def run_water_gate(workdir):
         # authors. A key added to the parser and not to the fixture leaves the corpus with
         # no coverage of it; a key in the fixture the parser does not read is a typo that
         # authors nothing, which is exactly what get_float cannot distinguish from absence.
-        read_keys, known_keys = _cscn_key_sets("parse_water", "water")
+        read_keys, known_keys, refused_keys = _cscn_key_sets("parse_water", "water")
         # Minus the refused ones, which the reader cannot tell from accepted keys and
         # which belong in neither of the two sets below (spec 11.84).
-        refused_keys = _cscn_refused_keys("parse_water", "water")
         accepted_keys = read_keys - refused_keys
         fixture_water = json.load(open(os.path.join(ROOT, "assets", WATER_FIXTURE))).get("water", {})
         fixture_keys = {k for k in fixture_water if not k.startswith("_")}
@@ -9820,7 +9910,7 @@ def run_water_gate(workdir):
         # 11.48). Checking only the outer level would let a train's key set drift freely,
         # which is where the coverage matters most: every one of those eight is unreachable
         # from the command line, so the fixture is the corpus's only exercise of them.
-        train_read, train_known = _cscn_key_sets("parse_wave_train", "train")
+        train_read, train_known, _ = _cscn_key_sets("parse_wave_train", "train")
         if train_read != train_known:
             drifted.append(f"parse_wave_train reads {sorted(train_read ^ train_known)} "
                            "but its known[] list disagrees")
@@ -13837,6 +13927,11 @@ _ARM_DOCUMENTED = re.compile(r"^  " + _ARM_NAME + r"(?=\s)", re.M)
 # carries the same name, and several are emitted from a guard ABOVE the arm they belong
 # to -- reading those as the arm's position reports a false order mismatch.
 _ARM_PRINTED = re.compile(r'print\(f?"  ' + _ARM_NAME + r'[^"]*PASS')
+# The same shape at ANY other indent. Only consulted when the strict form found nothing,
+# and only against names the function is known to PRINT -- prose is full of lines that
+# begin with a word and a space, so an indent-only test reports every docstring in the
+# file. See run_gate_docs_gate for what it is telling apart.
+_ARM_ASTRAY = re.compile(r"^ *" + _ARM_NAME + r"(?= +\S)", re.M)
 
 
 def run_probe_set_gate(workdir):
@@ -14731,15 +14826,33 @@ def run_gate_docs_gate(workdir):
     del workdir # static: nothing is rendered and nothing is written
     problems, checked, listless = [], 0, 0
     for selector, _banner, fn in GATE_GROUPS:
-        documented = _ARM_DOCUMENTED.findall(inspect.getdoc(fn) or "")
-        if not documented:
-            listless += 1
-            continue
+        doc = inspect.getdoc(fn) or ""
+        documented = _ARM_DOCUMENTED.findall(doc)
         printed, seen = [], set()
         for name in _ARM_PRINTED.findall(inspect.getsource(fn)):
             if name not in seen:
                 seen.add(name)
                 printed.append(name)
+        if not documented:
+            # A list at the WRONG INDENT reads as no list at all -- the silent-pass
+            # direction, since the group then looks like one that never claimed anything.
+            # Easy to land on: getdoc strips the COMMON indent, so a docstring whose
+            # every line is indented equally delivers its arm names at column 0 however
+            # deeply they were written, and indenting the block FURTHER does not help.
+            # It needs a shallower prose line to anchor the strip. Two groups shipped
+            # this way, one of them the arm list this check exists to hold.
+            #
+            # Tested against names the function actually PRINTS rather than by indent
+            # alone: prose is full of lines beginning with a word and a space, so the
+            # looser test reports every docstring in the file.
+            astray = [n for n in _ARM_ASTRAY.findall(doc) if n in seen]
+            if astray:
+                problems.append(f"{selector}: names arms {sorted(set(astray))} but at an "
+                                "indent this cannot verify -- the list wants a shallower "
+                                "prose line to anchor getdoc's common-indent strip")
+                continue
+            listless += 1
+            continue
         if not printed:
             problems.append(f"{selector}: lists arms but names none in a literal")
             continue
@@ -18347,7 +18460,8 @@ GATE_GROUPS = [
      run_water_gate),
     ("beach", "the shoaling bed the eye can see (surf ring, turquoise, bound; spec 11.44):",
      run_beach_gate),
-    ("water-night", "the sea after dark: which light it takes, and none (spec 11.84):",
+    ("water-night", "the sea after dark: which light it takes, and what it does with none "
+     "(spec 11.84):",
      run_water_night_gate),
     ("emissive", "emissive geometry as area lights (fit, intent, light; spec 11.49):",
      run_emissive_gate),

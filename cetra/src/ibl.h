@@ -76,6 +76,23 @@ typedef struct IBLResources {
     float intensity;
     float max_reflection_lod;
 
+    /*
+     * Solid-angle-weighted mean radiance of the environment's UPPER hemisphere, in
+     * absolute scene radiance and before `intensity` (spec 11.84).
+     *
+     * The CPU twin of `textureLod(prefilteredMap, +Y, maxReflectionLOD)` -- what a shader
+     * reads when it wants "ambient from above" -- for the passes that need that number
+     * without a sampler. Computed from the equirect already in memory during HDR load, so
+     * it costs one pass over a buffer that is in cache rather than a glGetTexImage: a
+     * readback at bake time would stall every frame under --day-cycle, where the env
+     * re-bakes continuously.
+     *
+     * Zero on the procedural-sky path, which never loads an equirect. That path has its
+     * own cheaper answer in SkyAtmosphere.zenith_radiance, and a consumer picks whichever
+     * exists -- the two are different approximations of the same quantity.
+     */
+    vec3 ambient_up;
+
     // Bright light lobes extracted from the environment during HDR load
     // (for aiming analytic shadow-casting lights). Ordered by energy,
     // energies normalized so they sum to 1.
