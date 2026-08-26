@@ -530,6 +530,15 @@ typedef struct PostFX {
     // before the tonemap rather than in the finishing block with the others.
     bool ca_enabled;
     float ca_strength; // Channel separation at the corner, in pixels
+    // Purkinje / scotopic shift (spec 11.83): the RETINA's spectral response, so
+    // it lands after the lens effects above and before the tone curve, which
+    // stands in for the response curve. Not in the finishing block, which is all
+    // downstream of the tonemap.
+    bool purkinje_enabled;
+    float purkinje_strength; // Blend toward full rod vision; 0 is a bit-exact identity
+    // Stops, added to both ramps. ONE knob, because the quantity it corrects for
+    // -- this engine's photometric scale -- is one unknown scalar.
+    float purkinje_bias_ev;
     bool grain_enabled;
     float grain_strength;
     // Dither applied at the 8-bit write, so a shallow gradient stops quantizing

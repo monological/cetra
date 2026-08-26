@@ -684,6 +684,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->vignette_radius = 0.6f;
     fx->ca_enabled = false;
     fx->ca_strength = 3.0f; // pixels at the corner
+    // Off: a perceptual model is a look, and the criterion three lines down is
+    // that a defect fix defaults on and a look defaults off.
+    fx->purkinje_enabled = false;
+    fx->purkinje_strength = 0.7f;
+    fx->purkinje_bias_ev = 0.0f;
     fx->grain_enabled = false;
     fx->grain_strength = 0.015f;
     // On by default: banding is a defect of the 8-bit write, not a look.
@@ -791,6 +796,9 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // down to 1x1 by glGenerateMipmap, and there is no adapted-luminance
     // ping-pong beside it either, though this comment described one until 11.52:
     // that pass was deleted in f98ab0a.
+    //
+    // The 1x1 is read by the CPU for auto-exposure AND sampled on unit 7 by the
+    // tonemap's Purkinje stage (spec 11.83), so it outlives a pinned exposure.
     if (!create_color_fbo(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
                           &fx->lum_texture) ||
         !create_color_fbo(LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS, GL_RG32F,
@@ -1800,7 +1808,19 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
 // _motion_blur, _flare. This grew from one draw plus a mipmap into three draws
 // into three framebuffers while sitting inline, which is how it ended up the
 // only multi-FBO chain in postfx_run that had not made that move.
-static float postfx_run_metering(PostFX* fx, GLuint scene_tex) {
+/*
+ * The three draws, and nothing else. Split from the readback below because the
+ * two have different consumers: auto-exposure needs the VALUE on the CPU, and
+ * the Purkinje shift needs only the 1x1 TEXTURE, which it samples on unit 7.
+ *
+ * That split is what lets a rod model work under a pinned exposure. The
+ * readback is gated on `automatic` exactly as it always was; these draws are
+ * not, so a scene that pins its exposure -- which is every fixture in the
+ * corpus -- still has a metered frame luminance for anything that wants one.
+ * Cheap on its own: the 5.253 ms the comment below quotes is the blocking read
+ * draining the pipeline, not this.
+ */
+static void postfx_measure_luminance(PostFX* fx, GLuint scene_tex) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
     glViewport(0, 0, LUM_MEASURE_SIZE, LUM_MEASURE_SIZE);
     glUseProgram(fx->lum_measure_program->id);
@@ -1843,12 +1863,16 @@ static float postfx_run_metering(PostFX* fx, GLuint scene_tex) {
     uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles",
                      (vec2){fx->exposure->meter_low, fx->exposure->meter_high});
     draw_fullscreen_quad(fx->quad_vao);
+    check_gl_error("postfx luminance measure");
+}
 
-    // The read BLOCKS. A PBO plus a fence would not (measured 0.033 ms against
-    // 5.253), but it lands each measurement whenever the GPU happens to finish,
-    // which makes adaptation depend on frame timing -- and equal headless runs
-    // then stop matching. This engine trades that the other way round
-    // everywhere else, so it does here too.
+// The read BLOCKS. A PBO plus a fence would not (measured 0.033 ms against
+// 5.253), but it lands each measurement whenever the GPU happens to finish,
+// which makes adaptation depend on frame timing -- and equal headless runs then
+// stop matching. This engine trades that the other way round everywhere else,
+// so it does here too. It is also why this is its own function: the cost lives
+// here, and the consumer that does not need the value does not pay it.
+static float postfx_read_luminance(PostFX* fx) {
     float measured = 0.0f;
     glBindTexture(GL_TEXTURE_2D, fx->lum_reduce_texture);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT, &measured);
@@ -3641,23 +3665,36 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             scene_tex = fx->dof_texture;
         }
 
-        // Auto-exposure. The measurement half is postfx_run_metering; the
-        // adaptation half -- the blend toward it, and the deadband -- is
-        // exposure.c's, because the value has to reach the CPU anyway: nothing on
-        // the GPU consumes it now that the tonemap applies no exposure.
-        //
-        // That split replaced a second fullscreen pass which blended into a 1x1
-        // ping-pong pair, purely so the tonemap could sample the result. Reading
-        // the value directly deleted that pass, its shader, the ping-pong and
-        // its validity flag.
+        /*
+         * The frame's luminance, and it now has TWO consumers with different
+         * needs -- which is why the draws and the readback are separate calls.
+         *
+         * Auto-exposure wants the VALUE: the adaptation half (the blend toward
+         * it, and the deadband) is exposure.c's, because the number has to reach
+         * the CPU to be blended at all. That split replaced a second fullscreen
+         * pass blending into a 1x1 ping-pong pair, purely so the tonemap could
+         * sample the result; reading the value directly deleted that pass, its
+         * shader, the ping-pong and its validity flag.
+         *
+         * The Purkinje shift wants the TEXTURE, which it samples on unit 7 --
+         * so the 1x1 has a GPU reader again, and the ping-pong's descendant is
+         * back in a smaller form. It needs the draws under a PINNED exposure
+         * too, where auto-exposure runs nothing at all, so the two gates below
+         * are deliberately different.
+         */
         const bool metering = fx->exposure && fx->exposure->automatic;
+        if (fx->exposure && (fx->exposure->automatic || fx->purkinje_enabled)) {
+            profiler_scope_begin(fx->profiler, "luminance measure");
+            postfx_measure_luminance(fx, scene_tex);
+            profiler_scope_end(fx->profiler);
+        }
         if (metering) {
             // Its own scope, and the number it reports is not comparable with
             // the others: the blocking read inside drains the pipeline, so this
             // row carries the whole frame's outstanding GPU work rather than the
-            // cost of three small draws.
-            profiler_scope_begin(fx->profiler, "exposure meter (drains)");
-            float measured = postfx_run_metering(fx, scene_tex);
+            // cost of the three draws above.
+            profiler_scope_begin(fx->profiler, "exposure read (drains)");
+            float measured = postfx_read_luminance(fx);
             exposure_submit_measurement(fx->exposure, measured);
             // After the submit, so the report carries this frame's adapted value
             // rather than last frame's. `measured` is passed in because the
@@ -3712,7 +3749,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // Debug view shows the GI as composited (accumulated + denoised)
         glBindTexture(GL_TEXTURE_2D, ssgi_active ? gi_result_tex : 0);
         glActiveTexture(GL_TEXTURE7);
-        glBindTexture(GL_TEXTURE_2D, 0); // was adapted luminance; applied upstream now
+        // The metered 1x1, back on the unit its own ancestor held. That slot
+        // carried an adapted-luminance texture until the tonemap stopped
+        // applying exposure; the Purkinje shift wants a frame luminance again,
+        // so it reads the meter's own output rather than reviving a second
+        // reduction beside it. Bound whenever a meter exists -- the shader is
+        // told separately whether it may be trusted, since an unwritten R32F
+        // target has undefined content.
+        glBindTexture(GL_TEXTURE_2D, fx->exposure ? fx->lum_reduce_texture : 0);
         glActiveTexture(GL_TEXTURE8); // lens flare (unit 8 was the retired fog debug buffer)
         glBindTexture(GL_TEXTURE_2D, flare_active ? fx->flare_texture : 0);
         glActiveTexture(GL_TEXTURE9);
