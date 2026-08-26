@@ -772,7 +772,8 @@ typedef struct {
     int no_stars; // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
     int no_moon;        // and the moon: this app is where a night sky is looked at
-    float moon_size;    // times life size the disc is drawn (<0 = this app's 6.0)
+    float moon_size;    // times life size the disc is drawn (<0 = this app's 6.0;
+                        // 0 hides the disc and keeps its light)
     // The ONE look scale, driving the disc AND the light it casts -- so this is the knob
     // that lights the sea, where moon_size only makes the disc easier to see. Separate
     // because a life-size moon is a dozen pixels and the two wants are independent.
@@ -1255,7 +1256,10 @@ int main(int argc, char** argv) {
          */
         sky->moon_size = 6.0f;
         sky->moon_brightness = 2.0f;
-        if (args.moon_size > 0.0f)
+        // Both on >= 0, so `--moon-size 0` means what it says: hide the disc and keep the
+        // light, which is a thing someone asks for and which a > test silently answered
+        // with the app default instead.
+        if (args.moon_size >= 0.0f)
             sky->moon_size = args.moon_size;
         if (args.moon_brightness >= 0.0f)
             sky->moon_brightness = args.moon_brightness;

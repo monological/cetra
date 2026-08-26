@@ -697,10 +697,15 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Steepness", &water->steepness, 0.0f, 1.0f, "%.2f", 0);
             igSliderFloat("Roughness", &water->roughness, 0.0f, 0.3f, "%.3f", 0);
             igColorEdit3("Absorption", water->absorption, ImGuiColorEditFlags_Float);
-            // Two pickers because the two are different quantities: a reflectance the
-            // light drives, and a radiance added regardless. HDR on the glow, which can
-            // legitimately exceed 1 -- it is scene radiance, not a colour.
-            igColorEdit3("Scatter Albedo", water->scatter_albedo, ImGuiColorEditFlags_Float);
+            // Two controls because the two are different quantities: a reflectance the
+            // light drives, and a radiance added regardless.
+            //
+            // The albedo gets SLIDERS rather than a colour wheel. Water's is a few per
+            // cent -- the library default is (0.0038, 0.0219, 0.0321) -- which a picker
+            // renders as a black swatch you cannot aim, and its useful range is far below
+            // the 0..1 a picker spans. The glow stays a picker, and HDR, because it is
+            // scene radiance and can legitimately exceed 1.
+            igSliderFloat3("Scatter Albedo", water->scatter_albedo, 0.0f, 0.2f, "%.4f", 0);
             igColorEdit3("Scatter Glow", water->scatter_glow,
                          ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
             // Spectral cascades allocate 24 textures and 45 passes a frame, so the
