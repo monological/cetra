@@ -322,6 +322,28 @@ int remove_light_from_scene(Scene* scene, Light* light);
 
 Light* find_light_by_name(Scene* scene, const char* name);
 
+/*
+ * The directional DELIVERING most light here, ranked by light_effective_intensity.
+ * NULL where none of them delivers anything, which is a real state and not an error --
+ * an overcast night has no key.
+ *
+ * `surface_normal` orients the question and is the only thing consumers disagree about.
+ * Pass one to rank by what reaches a surface facing that way, which brings in the cosine:
+ * a grazing light can be bright and deliver almost nothing, so on a horizontal plane a
+ * 20-lux light at 1 degree loses to a 10-lux sun at 35. Pass NULL for a volume or a
+ * billboard, which has no preferred facing and wants radiance alone.
+ *
+ * Here rather than in a consumer because "which directional actually matters" is a
+ * question about the SCENE, and the answers were drifting: this replaces a by-name pick in
+ * water and a first-in-array scan in the particle renderer, and postfx's contact-shadow
+ * march still keys off scene order among casters. A light BELOW the horizon still exists
+ * with its intensity faded to zero, so any rule that does not look at radiance picks it
+ * and never reaches the moon standing beside it.
+ *
+ * Strict > keeps the earliest in scene order on a tie, so the pick is stable.
+ */
+const Light* scene_key_directional(const Scene* scene, const float* surface_normal);
+
 // particle systems (scene-owned; ticked + rendered automatically by the engine)
 int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys);
 // Advance every particle system's sim. Call from a fixed-timestep update (run_game

@@ -8930,6 +8930,20 @@ WATER_NIGHT_LIT_DARK_MAX = 1.0e-5
 # rules out a build where the two fields quietly behave alike.
 #
 # apps/tree's own authored sea, so the arm exercises the magnitude a real scene uses.
+# Ambient dust, authored onto the night fixture so there are MOTES to light. Big and dense
+# against the library recipe, because this is read as a whole-frame mean and the shipping
+# defaults are a haze: 0.0015-unit motes at 110/s contribute below the noise.
+#
+# Dust spawns in a box around the SCENE CENTRE (apply_cscene_dust), so the host fixture has
+# to be one whose camera looks at its own middle -- moon_fixture aims 40 degrees up and away
+# from the model, and reads an exact 0.000000 contribution.
+WATER_NIGHT_DUST = {"enabled": True, "spawnRate": 3000.0, "lifetime": [8.0, 12.0],
+                    "size": [0.02, 0.05], "color": [1.0, 1.0, 1.0, 0.9], "colorJitter": 0.0}
+# Measured 1.18x with the moon against 0.993x on the first-in-array scan this replaced.
+# The bar sits between, and the separation is all there is to have: uSunColor takes the
+# light's COLOUR and not its intensity, so a brighter moon does not widen it (1.18x at
+# moon-brightness 2, 6 and 12 alike).
+WATER_NIGHT_MOTE_RATIO = 1.08
 WATER_GLOW_VALUE = [0.03, 0.13, 0.14]
 ZERO3 = [0.0, 0.0, 0.0]
 # Both halves off, which is the shared baseline every separability read is taken against.
@@ -8944,6 +8958,21 @@ WATER_GLOW_MIN_PX = 20000
 # doing exactly what it says. A ratio is the honest bar; 100x still fails any build where
 # the two fields behave alike.
 WATER_GLOW_RATIO_MIN = 100.0
+
+
+def _frame_mean_luma(path):
+    """Linear-luma mean over a whole PPM.
+
+    Whole-frame because its consumer reads a DIFFERENCE of two frames -- what a scene
+    element contributes, wherever it happens to land. A box would need to know where the
+    thing being measured is, which for drifting particles is the question, not the input.
+    """
+    w, h, pix = _read_ppm(path)
+    total = 0.0
+    for i in range(0, len(pix), 3):
+        total += (0.2126 * _SRGB_TO_LINEAR[pix[i]] + 0.7152 * _SRGB_TO_LINEAR[pix[i + 1]] +
+                  0.0722 * _SRGB_TO_LINEAR[pix[i + 2]])
+    return total / float(w * h)
 
 
 def _vec3_field(head, key):
@@ -9012,6 +9041,10 @@ def run_water_night_gate(workdir):
       water-scatter-refuse the old `scatter` key is refused BY NAME. Its units changed, so
                            an old value still parses and would mean something around five
                            times too large; silence would render a plausible frame.
+      water-night-motes    PARTICLES take the same key by the same rule. The renderer
+                           scanned for the first directional, which is the sun, whose
+                           colour is black below the horizon -- so ambient dust was lit by
+                           nothing every night and the moon never reached a mote.
 
     Every arm here is a twin DELTA rather than a brightness read, and that is forced by
     the fixture: water_fixture's geometry is EMISSIVE over a black base, so its water band
@@ -9286,6 +9319,39 @@ def run_water_night_gate(workdir):
               f"(want 0: warned AND ignored, not warned and applied)")
         if not ok:
             failures.append("water-scatter-refuse")
+
+    # PARTICLES take the same key, through the same rule. The renderer scanned for the
+    # first directional in scene order, which is the sun -- and a sun below the horizon
+    # still exists with its colour faded to black, so the motes took a key of exactly zero
+    # every night and the moon standing beside it never lit one.
+    #
+    # Read as the motes' OWN contribution (dust on minus dust off) so everything the moon
+    # does to the rest of the frame cancels: at -12 with a big disc up, a plain on/off
+    # comparison moves 99.9% of the frame and says nothing about particles.
+    dusty = os.path.join(workdir, "water_night_dust.cscn")
+    _water_night_variant(scene, dusty, mutate=lambda d: d.update({"dust": WATER_NIGHT_DUST}))
+    motes, merr = {}, None
+    for tag, flags in (("moonlit", ["--sun-elevation", WATER_NIGHT_SUN_DOWN] +
+                        WATER_NIGHT_MOON),
+                       ("dark", ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"])):
+        p_on = os.path.join(workdir, f"water_night_dust_{tag}_on.ppm")
+        p_off = os.path.join(workdir, f"water_night_dust_{tag}_off.ppm")
+        merr = render(dusty, p_on, base + flags) or render(night, p_off, base + flags)
+        if merr:
+            break
+        motes[tag] = _frame_mean_luma(p_on) - _frame_mean_luma(p_off)
+    if merr:
+        print(f"  water-night-motes ERROR render failed: {merr.strip()[-200:]}")
+        failures.append("water-night-motes")
+    else:
+        mote_ratio = motes["moonlit"] / motes["dark"] if motes["dark"] > 0 else float("inf")
+        ok = motes["dark"] > 0.0 and mote_ratio >= WATER_NIGHT_MOTE_RATIO
+        print(f"  water-night-motes {'PASS' if ok else 'FAIL'}  ambient dust contributes "
+              f"{motes['dark']:.6f} with no moon and {motes['moonlit']:.6f} under one, "
+              f"{mote_ratio:.2f}x (want >={WATER_NIGHT_MOTE_RATIO}x; the first-in-array "
+              f"scan reads 0.99x, and the dark leg must be >0 or there are no motes)")
+        if not ok:
+            failures.append("water-night-motes")
 
     return failures
 

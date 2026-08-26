@@ -1514,50 +1514,22 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
 }
 
 /*
- * The directional DELIVERING MOST to the water: light_effective_intensity times the cosine
- * against world up. Directionals are all in lux, so they compare without conversion.
+ * Water's own orientation of scene_key_directional, which owns the rule and the reason
+ * the cosine is in it.
  *
- * The cosine is the half that is easy to leave out and wrong to. Every consumer of this
- * pick weights by that same cosine -- water_incident_light by `toward[1]`, the shader by
- * `max(sunDir.y, 0.0)` -- so ranking on normal incidence alone ranks a quantity nobody
- * spends. A grazing 20-lux light at 1 degree outranks a 10-lux sun at 35 and then delivers
- * 0.35 against 5.7, leaving the sea dark, the glitter track on the horizon and the caustics
- * focused along a ray that skims the surface. Ranking on the delivered quantity also makes
- * the sun/moon crossover CONTINUOUS: the two candidates are equal in what they deliver at
- * the moment they are equal in rank, so nothing steps as one overtakes the other.
+ * Kept as a named call rather than inlined at the four sites that want it, because "which
+ * light does the WATER take" is asked by the caustics, the sun lobe, the foam and the
+ * probe, and they must never disagree -- 11.41 exists because two of them once did.
  *
- * This KEEPS spec 11.41's fix rather than reverting it. That fix replaced a scan for the
- * first directional -- which found whichever light the scene file happened to list first,
- * so caustics were focused from one light while the deck above occluded another -- with
- * the sky's sun by name. Choosing by name fails the other way: a sun below the horizon
- * still EXISTS, with sky_horizon_fade holding its intensity at zero, so water held a
- * direction pointing underground, took a radiance of exactly zero, and could never reach
- * the moon beside it. Brightest-delivered is deterministic AND meaningful, which by-name
- * and first-in-array were each only half of.
- *
- * Strict > keeps the earliest in scene order on a tie, so the pick is stable. A weight of
- * zero selects NOTHING -- which now covers a light pointing UP as well as one with no
- * radiance, since neither delivers anything to a horizontal surface.
+ * The pick replaced the sky's sun BY NAME. That failed below the horizon, where the sun
+ * still exists with sky_horizon_fade holding its intensity at zero: water held a direction
+ * pointing underground, took a radiance of exactly zero, and could never reach the moon
+ * beside it.
  */
 const struct Light* water_key_light(const struct Scene* scene) {
-    if (!scene)
-        return NULL;
-    const Light* best = NULL;
-    float best_weight = 0.0f;
-    for (size_t i = 0; i < scene->light_count; i++) {
-        const Light* l = scene->lights[i];
-        if (!l || l->type != LIGHT_DIRECTIONAL)
-            continue;
-        vec3 toward;
-        glm_vec3_negate_to((float*)l->direction, toward);
-        glm_vec3_normalize(toward);
-        const float weight = light_effective_intensity(l) * fmaxf(toward[1], 0.0f);
-        if (weight > best_weight) {
-            best_weight = weight;
-            best = l;
-        }
-    }
-    return best;
+    // World UP, because the still plane is what this lights: the body is a volume under a
+    // horizontal surface, not the wave facet the specular lobe stands on.
+    return scene_key_directional(scene, (vec3){0.0f, 1.0f, 0.0f});
 }
 
 void water_incident_light(const struct Scene* scene, vec3 out) {

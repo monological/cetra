@@ -341,6 +341,32 @@ int remove_light_from_scene(Scene* scene, Light* light) {
     return -1;
 }
 
+const Light* scene_key_directional(const Scene* scene, const float* surface_normal) {
+    if (!scene)
+        return NULL;
+    const Light* best = NULL;
+    float best_weight = 0.0f;
+    for (size_t i = 0; i < scene->light_count; i++) {
+        const Light* l = scene->lights[i];
+        if (!l || l->type != LIGHT_DIRECTIONAL)
+            continue;
+        float weight = light_effective_intensity(l);
+        if (surface_normal) {
+            // Lights store the direction they SHINE; the cosine is against the
+            // direction toward the source.
+            vec3 toward;
+            glm_vec3_negate_to((float*)l->direction, toward);
+            glm_vec3_normalize(toward);
+            weight *= fmaxf(glm_vec3_dot(toward, (float*)surface_normal), 0.0f);
+        }
+        if (weight > best_weight) {
+            best_weight = weight;
+            best = l;
+        }
+    }
+    return best;
+}
+
 Light* find_light_by_name(Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;

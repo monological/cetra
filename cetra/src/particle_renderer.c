@@ -142,13 +142,16 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
     // location-guarded, so it only touches uniforms the particle shader declares.
     uniform_set_float(u, "uAmbient", PARTICLE_AMBIENT_FLOOR);
     if (ctx->scene) {
-        const Light* sun = NULL;
-        for (size_t i = 0; i < ctx->scene->light_count; i++) {
-            if (ctx->scene->lights[i] && ctx->scene->lights[i]->type == LIGHT_DIRECTIONAL) {
-                sun = ctx->scene->lights[i];
-                break;
-            }
-        }
+        // The brightest directional, not the first in scene order. A scene lists its sun
+        // before its moon, and a sun below the horizon still EXISTS with its colour faded
+        // to black (sky_apply_body_to_light) -- so the first-in-array scan this replaced
+        // handed the motes a key of exactly zero every night and the moon standing beside
+        // it never lit a falling leaf.
+        //
+        // NULL normal: a mote is a billboard with no preferred facing, so it wants the
+        // light with the most radiance rather than the most reaching a plane. That is the
+        // one thing it disagrees with water about.
+        const Light* sun = scene_key_directional(ctx->scene, NULL);
         if (sun)
             uniform_set_vec3(u, "uSunColor", sun->color);
         if (ctx->scene->shadow_system)
