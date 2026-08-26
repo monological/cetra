@@ -767,7 +767,7 @@ typedef struct {
     const char* screenshot;
     int width, height;
     int no_shadows;
-    int no_fog;
+    int fog; // fog is OFF here: the haze flattens a dusk scene (77cf780c)
     int no_falling_leaves;
     int no_stars; // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
@@ -848,7 +848,7 @@ static void print_usage(const char* prog) {
     printf("      --sun-elevation D   Sun elevation in degrees\n");
     printf("      --sun-azimuth D     Sun azimuth in degrees\n");
     printf("      --no-shadows        Disable the shadow pass\n");
-    printf("      --no-fog            Disable the volumetric fog\n");
+    printf("      --fog               Enable the volumetric fog (off by default here)\n");
     printf("      --no-falling-leaves Disable the falling-leaf particles\n");
     printf("      --no-stars          Disable the night star field (visible only once\n");
     printf("                          the sun drops through civil twilight)\n");
@@ -1006,8 +1006,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->fov = (float)atof(argv[++i]) * (float)M_PI / 180.0f;
         } else if (!strcmp(s, "--no-shadows")) {
             a->no_shadows = 1;
-        } else if (!strcmp(s, "--no-fog")) {
-            a->no_fog = 1;
+        } else if (!strcmp(s, "--fog")) {
+            a->fog = 1;
         } else if (!strcmp(s, "--no-falling-leaves")) {
             a->no_falling_leaves = 1;
         } else if (!strcmp(s, "--no-stars")) {
@@ -1697,7 +1697,11 @@ int main(int argc, char** argv) {
         // and unset it would render at 70% and simply magnify.
         fx->taa_enabled = true;
 
-        fx->fog_enabled = false;
+        // Off unless asked for: the haze flattens this scene, and without it the
+        // dusk sky reads as a gradient and the ground has depth. The parameters
+        // below stay live either way -- the GUI's own Fog checkbox is what they
+        // are tuned for, and --fog is the only way to reach that state headless.
+        fx->fog_enabled = args.fog != 0;
         fx->fog_density = 0.0005f;
         fx->fog_height_falloff = 75.0f;
         fx->fog_floor_y = 0.0f;
