@@ -33,6 +33,7 @@
  * single knob that migrates them if the scale is ever fixed.
  */
 #include "scotopic_weights.glsl"
+#include "noise.glsl"
 
 // The mesopic band, in log2 absolute scene radiance. Measured on aerial_fixture:
 // daylight meters -2.47, sunset -4.37, night -6.67.
@@ -47,10 +48,21 @@ const float PK_GLOBAL_HI = -4.0;
 const float PK_LOCAL_LO = -8.0;
 const float PK_LOCAL_HI = -3.0;
 
+// How far rod pooling smears detail, in texels at full weight. Scotopic vision
+// is genuinely INDISTINCT, not merely grey -- many rods share one ganglion cell,
+// which buys sensitivity by spending resolution.
+const float PK_ACUITY_TEXELS = 2.5;
+// Rod noise amplitude at full weight, as a fraction of the local value. Photon
+// arrivals are Poisson, so the visible grain rises as the signal falls; this is
+// the cheap stand-in, scaled by the weight rather than by a real sqrt(N).
+const float PK_NOISE_AMOUNT = 0.28;
+
 uniform int purkinjeEnabled;
 uniform float purkinjeStrength; // 0 is a bit-exact identity
 uniform float purkinjeBiasEV;   // stops, added to BOTH ramps
 uniform int purkinjeHasMeter;   // 0 = adaptTex holds nothing; fall back to local alone
+uniform float purkinjeAcuity;   // 0 = no spatial pooling
+uniform float purkinjeNoise;    // 0 = no rod noise
 uniform sampler2D purkinjeAdaptTex; // the metering 1x1: mean log2 absolute cd/m^2
 
 /*
@@ -111,7 +123,8 @@ vec3 purkinjeWeight(vec3 c) {
  * night frame and fights both the WS_* ceilings and the tone curve's shoulder --
  * and mix(c, x, 0.0) is EXACTLY c, which the additive form is not.
  */
-vec3 purkinjeApply(vec3 c) {
+vec3 purkinjeApply(vec3 c, vec2 uv, vec2 texel, float aoFactor, vec3 bloomAdd,
+                   sampler2D sceneTex, float seed) {
     if (purkinjeEnabled == 0)
         return c;
     float w = purkinjeWeight(c).x;
@@ -120,5 +133,55 @@ vec3 purkinjeApply(vec3 c) {
     // exactly, not nearly. Belt and braces over a mix that is already exact.
     if (w <= 0.0)
         return c;
-    return mix(c, dot(c, PURKINJE_SCOTOPIC_W) * PURKINJE_ROD_TINT, w);
+
+    /*
+     * ACUITY. Rods pool spatially, so the dark parts of the frame lose detail
+     * rather than only colour -- which is the half that reads as "I cannot quite
+     * see" instead of "someone applied a blue filter".
+     *
+     * Four taps of the RAW scene, composited once with the CENTRE's aoFactor and
+     * bloomAdd. Reusing the centre's is the sharpen block's own precedent, and
+     * here it matters more: pooling the composited neighbours would blur the AO
+     * and bloom gradients too, which belong to the lens and to the geometry
+     * rather than to the retina.
+     *
+     * The sampler is a PARAMETER, which is this codebase's convention for an
+     * include that must not know its caller's unit ledger -- sky_radiance.glsl
+     * and probe_specular.glsl both do it. It also means the taps skip chromatic
+     * aberration, which is correct in the small: CA displaces channels by a
+     * fraction of a texel and this is a low-pass over several.
+     */
+    if (purkinjeAcuity > 0.0) {
+        float r = PK_ACUITY_TEXELS * purkinjeAcuity * w;
+        vec3 sum = texture(sceneTex, uv + vec2(texel.x, 0.0) * r).rgb +
+                   texture(sceneTex, uv - vec2(texel.x, 0.0) * r).rgb +
+                   texture(sceneTex, uv + vec2(0.0, texel.y) * r).rgb +
+                   texture(sceneTex, uv - vec2(0.0, texel.y) * r).rgb;
+        vec3 pooled = min(sum * 0.25, vec3(WS_SCENE_MAX)) * aoFactor + bloomAdd;
+        c = mix(c, pooled, w);
+    }
+
+    c = mix(c, dot(c, PURKINJE_SCOTOPIC_W) * PURKINJE_ROD_TINT, w);
+
+    /*
+     * ROD NOISE, and it is a different thing from the grain stage downstream.
+     * Grain is SENSOR noise laid over a finished look, which is why it sits
+     * after the display encode. This is RETINAL: photon arrivals are Poisson, so
+     * a dim scene is genuinely noisy to the eye before any transfer curve, and
+     * it scales with how far into rod vision the pixel is.
+     *
+     * Rides the grain stage's own frame seed rather than carrying a second one:
+     * that value is already documented as deterministic across equal --frames
+     * runs, and a third source of per-frame randomness is a third thing to keep
+     * that way.
+     *
+     * Multiplicative, so it vanishes in true black rather than lifting it -- the
+     * night frame is half at the radiance floor and additive noise there would
+     * print static onto pixels that carry no light at all.
+     */
+    if (purkinjeNoise > 0.0) {
+        float n = hash21(uv * 1024.0 + seed, vec2(12.9898, 78.233)) - 0.5;
+        c *= 1.0 + n * PK_NOISE_AMOUNT * purkinjeNoise * w;
+    }
+    return c;
 }

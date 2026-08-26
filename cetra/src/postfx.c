@@ -689,6 +689,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->purkinje_enabled = false;
     fx->purkinje_strength = 0.7f;
     fx->purkinje_bias_ev = 0.0f;
+    fx->purkinje_acuity = 1.0f;
+    fx->purkinje_noise = 1.0f;
     fx->grain_enabled = false;
     fx->grain_strength = 0.015f;
     // On by default: banding is a defect of the 8-bit write, not a look.
@@ -3843,6 +3845,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // 1x1 there whenever an Exposure exists, but its CONTENT is only defined
         // once the measure draws have run -- which they do under the same
         // condition. Told rather than inferred: the shader cannot see either.
+        uniform_set_float(tm, "purkinjeAcuity", fx->purkinje_acuity);
+        uniform_set_float(tm, "purkinjeNoise", fx->purkinje_noise);
         uniform_set_int(tm, "purkinjeHasMeter",
                         (fx->exposure && (fx->exposure->automatic || fx->purkinje_enabled)) ? 1
                                                                                             : 0);

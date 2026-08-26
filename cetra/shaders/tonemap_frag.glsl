@@ -454,7 +454,11 @@ vec3 ditherPattern(vec2 p)
                 ditherTap(p, 0.71, vec2(31.0, 3.0), 2.13, vec2(97.0, 61.0)));
 }
 
-vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
+// `uv` is this tap's own coordinate, not TexCoords: the Purkinje acuity term
+// resamples the scene around it, and under --sharpen this runs at five
+// different taps. Passing the centre's would pool the same neighbourhood five
+// times and the unsharp mask would measure nothing.
+vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd, vec2 uv)
 {
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
     // curves turn INF into NaN, which displays as a black pixel
@@ -465,7 +469,7 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
     // high-pass the Purkinje term itself, ringing every luminance edge. And
     // AFTER the sanitize above, which is what keeps the identity exact -- on a
     // +INF texel mix(c, INF * tint, 0.0) is NaN, not c.
-    c = purkinjeApply(c);
+    c = purkinjeApply(c, uv, texelSize, aoFactor, bloomAdd, hdrTex, grainSeed);
     return toneSelect(c);
 }
 
@@ -590,18 +594,18 @@ void main()
         return;
     }
 
-    vec3 color = sceneToToned(sceneTap(TexCoords), aoFactor, bloomAdd);
+    vec3 color = sceneToToned(sceneTap(TexCoords), aoFactor, bloomAdd, TexCoords);
 
     // Sharpen: unsharp mask on the tonemapped result (4-tap cross)
     if (sharpenEnabled == 1) {
         vec3 blur = sceneToToned(sceneTap(TexCoords + vec2(texelSize.x, 0.0)), aoFactor,
-                                 bloomAdd) +
+                                 bloomAdd, TexCoords + vec2(texelSize.x, 0.0)) +
                     sceneToToned(sceneTap(TexCoords - vec2(texelSize.x, 0.0)), aoFactor,
-                                 bloomAdd) +
+                                 bloomAdd, TexCoords - vec2(texelSize.x, 0.0)) +
                     sceneToToned(sceneTap(TexCoords + vec2(0.0, texelSize.y)), aoFactor,
-                                 bloomAdd) +
+                                 bloomAdd, TexCoords + vec2(0.0, texelSize.y)) +
                     sceneToToned(sceneTap(TexCoords - vec2(0.0, texelSize.y)), aoFactor,
-                                 bloomAdd);
+                                 bloomAdd, TexCoords - vec2(0.0, texelSize.y));
         color = clamp(color + sharpenStrength * (color - blur * 0.25), 0.0, 1.0);
     }
 

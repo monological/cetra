@@ -349,6 +349,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --purkinje-strength <s>  Blend toward full rod vision, 0..1\n");
     fprintf(stderr, "      --purkinje-bias <stops>  Shift both mesopic ramps; the one knob that\n"
                     "                         migrates them if the photometric scale changes\n");
+    fprintf(stderr, "      --purkinje-acuity <s>  Rod spatial pooling; dark detail softens\n");
+    fprintf(stderr, "      --no-purkinje-acuity   Bisect lever: the shift with no pooling\n");
+    fprintf(stderr, "      --purkinje-noise <s>   Retinal photon noise (not the sensor grain)\n");
+    fprintf(stderr, "      --no-purkinje-noise    Bisect lever: the shift with no rod noise\n");
     fprintf(stderr, "      --purkinje-debug   Rod weight as (total, local gate, global gate)\n");
     fprintf(stderr, "      --dof              Depth of field, autofocused on the subject\n");
     fprintf(stderr, "      --no-dof           Force depth of field off (e.g. with --film)\n");
@@ -445,6 +449,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // is meaningful (it drags the effect toward daylight, which is how a gate
     // arm reaches it), so no in-range number can mean "unset".
     args->purkinje_bias_ev = -999.0f;
+    args->purkinje_acuity = -1.0f;
+    args->purkinje_noise = -1.0f;
     args->dof_focus = -1.0f;
     args->dof_range = -1.0f;
     args->dof_max_coc = -1.0f;
@@ -1695,6 +1701,29 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->purkinje_bias_ev = (float)v;
+            args->purkinje = 1;
+        } else if (strcmp(argv[i], "--no-purkinje-acuity") == 0) {
+            args->no_purkinje_acuity = 1;
+        } else if (strcmp(argv[i], "--no-purkinje-noise") == 0) {
+            args->no_purkinje_noise = 1;
+        } else if (strcmp(argv[i], "--purkinje-acuity") == 0 ||
+                   strcmp(argv[i], "--purkinje-noise") == 0) {
+            const bool is_acuity = strcmp(argv[i], "--purkinje-acuity") == 0;
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            char* end = NULL;
+            double v = strtod(argv[i], &end);
+            if (end == argv[i] || *end != '\0' || v < 0.0 || v > 4.0) {
+                fprintf(stderr, "Error: %s expects a number in [0, 4]\n",
+                        is_acuity ? "--purkinje-acuity" : "--purkinje-noise");
+                return -1;
+            }
+            if (is_acuity)
+                args->purkinje_acuity = (float)v;
+            else
+                args->purkinje_noise = (float)v;
             args->purkinje = 1;
         } else if (strcmp(argv[i], "--purkinje-debug") == 0) {
             args->debug_purkinje = 1;
@@ -2963,6 +2992,14 @@ int main(int argc, char** argv) {
         // `purkinje = 0` would be order-dependent -- --no-purkinje followed by
         // --purkinje-strength 0.5 would render a shifted frame. The --no-moon
         // lesson, where every off leg of a gate twin was silently on.
+        if (args.purkinje_acuity >= 0.0f)
+            fx->purkinje_acuity = args.purkinje_acuity;
+        if (args.purkinje_noise >= 0.0f)
+            fx->purkinje_noise = args.purkinje_noise;
+        if (args.no_purkinje_acuity)
+            fx->purkinje_acuity = 0.0f;
+        if (args.no_purkinje_noise)
+            fx->purkinje_noise = 0.0f;
         if (args.no_purkinje)
             fx->purkinje_enabled = false;
     }

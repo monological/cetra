@@ -543,6 +543,10 @@ typedef struct PostFX {
     // Stops, added to both ramps. ONE knob, because the quantity it corrects for
     // -- this engine's photometric scale -- is one unknown scalar.
     float purkinje_bias_ev;
+    // The paper's other two halves, separately toggled because each conflicts
+    // with an existing stage and either may want dropping on the numbers.
+    float purkinje_acuity; // Rod spatial pooling; fights the sharpen stage below
+    float purkinje_noise;  // Retinal photon noise; distinct from `grain`, which is the SENSOR's
     bool grain_enabled;
     float grain_strength;
     // Dither applied at the 8-bit write, so a shallow gradient stops quantizing

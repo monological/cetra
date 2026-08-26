@@ -1041,6 +1041,8 @@ static void _engine_gui_panel(Engine* engine) {
         _begin_effect_group("Purkinje Shift", &fx->purkinje_enabled);
         igSliderFloat("Rod Blend", &fx->purkinje_strength, 0.0f, 1.0f, "%.2f", 0);
         igSliderFloat("Mesopic Bias", &fx->purkinje_bias_ev, -12.0f, 12.0f, "%.1f stops", 0);
+        igSliderFloat("Rod Acuity Loss", &fx->purkinje_acuity, 0.0f, 2.0f, "%.2f", 0);
+        igSliderFloat("Rod Noise", &fx->purkinje_noise, 0.0f, 2.0f, "%.2f", 0);
         _end_effect_group();
 
         _begin_effect_group("Sharpen", &fx->sharpen_enabled);

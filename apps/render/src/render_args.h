@@ -333,6 +333,10 @@ typedef struct {
     int no_purkinje;         // Sticky force-off, wins over any value flag
     float purkinje_strength; // -1 = keep the default; 0 is a bit-exact identity
     float purkinje_bias_ev;  // Stops, added to both ramps. -999 = unset (0 is meaningful)
+    float purkinje_acuity;   // Rod spatial pooling scale (-1 = keep the default)
+    float purkinje_noise;    // Retinal noise scale (-1 = keep the default)
+    int no_purkinje_acuity;  // Bisect lever: the spectral shift with no pooling
+    int no_purkinje_noise;   // Bisect lever: the spectral shift with no rod noise
     int dof;                 // --dof: enable depth of field
     int no_dof;              // Force DoF off (e.g. --film --no-dof)
     float dof_focus;         // Focus distance in view units (-1 = auto: subject)
