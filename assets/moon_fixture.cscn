@@ -1,0 +1,34 @@
+{
+  "version": 1,
+
+  "_comment": "The moon, framed (spec 11.82). Open it and the frame IS the feature: a near-full lunar disc filling most of the view over the star field, which is the one thing about this feature that cannot be read off a number. Every other moon arm measures a property; this one is for looking at.",
+
+  "_comment_models": "Borrowed rather than authored -- sss_msaa_fixture on sss_fixture.gltf is the precedent -- because what this file is FOR is the sky, and a scene file must name a model. Nothing of it is in frame: the camera points 40 degrees up with a 40-degree field, so the horizon sits a full 20 degrees below the bottom edge.",
+  "models": [
+    { "path": "aerial_fixture.gltf" }
+  ],
+
+  "environment": {
+    "mode": "sky",
+
+    "_comment_sun": "Below the horizon by more than civil twilight, so the sky is genuinely night and starIntensity has reached its full ramp. The AZIMUTH is what sets the phase -- 180 degrees opposite the moon puts it near full, and this sits 20 degrees off that, which lands the terminator just inside the right limb. That sliver is where all the relief is: a dead-full moon has the light head-on and shows albedo alone.",
+    "sun": { "elevation": -14.0, "azimuth": 20.0 },
+
+    "stars": { "enabled": true },
+
+    "_comment_moon": "size 49 is 49 times life size, and it is a LOOK, not a physical frame -- the real disc is half a degree and would be twelve pixels here. Authored as `size` rather than by widening `sun_disc_deg`, which is shared with the sun: a 26-degree sun disc is drawn wherever the view ray is above the horizon, so a sun this far down is only invisible by arithmetic that a later elevation change would quietly break.",
+    "moon": { "enabled": true, "size": 49.0, "elevation": 40.0, "azimuth": 200.0 }
+  },
+
+  "_comment_camera": "The target is the eye plus 100 times the moon's own unit direction at the elevation and azimuth above, so the disc is dead centre. Recompute it if either angle moves -- nothing derives this.",
+  "camera": {
+    "eye": [0.0, 5.0, 0.0],
+    "target": [-26.2003, 69.2788, -71.9846],
+    "fov": 40.0
+  },
+
+  "_comment_post": "`exposure` with no `auto_exposure` key beside it is what PINS the meter, which this file needs: the frame is one bright disc on black, and an auto meter reads the black and blows the moon out.",
+  "post": {
+    "exposure": 1.0
+  }
+}
