@@ -1021,7 +1021,36 @@ black one — and B11's time-sliced bake would inherit a second slow-moving ligh
 **Depends on:** B12 (the floor is what the dark limb and shadowed ground sit against).
 **Wall 1:** unaffected.
 
-### B14. Purkinje / scotopic shift — Effort S/M
+### B14. Purkinje / scotopic shift — Effort S/M — **DONE (spec 11.83)**
+
+*As built: the row's framing was right about WHAT and wrong about WHERE and HOW, and both
+corrections are recorded here because the row stated them confidently.*
+
+***"Lives in `tonemap_frag`'s finishing stack"* is false**, and this row's own parenthetical
+said so three lines later without the headline ever being corrected. The finishing stack is
+entirely downstream of `toneSelect`. It splices into `sceneToToned`, on the file's THIRD siting
+rule: the gamma line orders stages by whose data space they were authored in, while chromatic
+aberration is already sited by the OPTICAL CHAIN as a lens effect "before the sensor" — so the
+sensor's spectral response lands after the lens and before the response curve, with grain (already
+"sensor noise") as its other half.*
+
+***"driven by the metered luminance the exposure system already reads back to the CPU — no new
+measurement machinery"* does not work.** `adapted_luminance` is never written under
+`--no-auto-exposure`, which is all 27 goldens and ~60 gate arms, so a term keyed to it would have
+been structurally invisible to this repo's own instruments and inert on every pinned scene. Nobody
+had checked. The fix was small and better: split `postfx_run_metering` so the three draws run
+whenever the shift is on while the blocking readback stays gated on `automatic`, and sample the
+1×1 on unit 7 — where its own ancestor lived.*
+
+*And a third thing the row could not have known: **the weight needs TWO gates multiplied**, because
+this engine's whole day-to-night range is 4.2 stops where reality is ~17. Measured, the day frame's
+darkest half sits BELOW the night frame's brightest third, so no per-pixel threshold separates a
+shaded corner at noon from a whole night frame — and without the global veto a noon shadow takes
+wLocal 0.997. Every threshold is therefore a LOOK constant, with `purkinjeBiasEV` as the one knob
+that migrates them if 10.2 phase 5 lands. Fifteen gate arms; the falsification round found TWO that
+were not testing their own claim, including one blind spot that was structural — every colour arm
+read chromaticity, which the rod weights divide out of, so "reds go near-black" had no coverage at
+all until an arm read luminance instead.*
 The perceptual half of night: in dim light the rods take over, colour drains, everything
 shifts blue and reds go near-black — it is why moonlight "looks" blue when its spectrum is
 sunlight's. Kirk & O'Brien 2011 is the standard model. This is what makes a dark frame read
@@ -3024,7 +3053,7 @@ not scheduled.
 | 46 | **B11 Day/night cycle** | M | **DONE (11.81).** See the B11 entry for the as-built record — the cost is inverted from this row's sketch, the tick lives in the engine loop, and the peak slice is irreducible at face granularity. Original row: Today an animated sun is a slideshow: one sun move re-bakes view LUT + env cube + GGX prefilter at a measured 0.11 s. The item is a time-sliced env bake (face per frame, mip per frame, swap), chosen because the constraint is that STATIC must not get worse — cheapening the bake degrades every golden, threshold stepping pops on the sea. A stationary sun quiesces byte-identical; goldens 0 px is the acceptance bar. Driver in the app, amortisation in `sky.c`. Forces B12 (past the key-light fade the world is black — sequence the floor first), and probe sets hold capture-time lighting by design. |
 | 47 | **B12 Night-sky floor** | S/M | **DONE (11.80).** See the B12 entry for the as-built record. Original row: Airglow + zodiacal + integrated starlight, ~2e-4 cd/m² — the radiance Hillaire cannot produce because it models scattered sunlight only, and the reason the 11.79 night is stars over a black world. Unlike the stars it MUST reach `sky_env_frag`: the point is lighting the ground through the env cube and IBL, and a near-constant floor is safe where the prefilter's firefly rule bans point sources. Ramped by the stars' civil-twilight window. The exposure honesty a second time: auto-exposure only darkens, so the authored radiance IS the night brightness. B11 depends on it — sequence the floor before the cycle. |
 | 48 | **B13 The moon** | L | **DONE (11.82).** See the B13 entry for the as-built record — phase is derived rather than authored, a full moon is flat rather than Lambertian, the disc size is shared with the sun, and the surface (relief AND albedo, ~43,000 overprinting craters) is baked at startup because a per-pixel lattice caps the population rather than the cost. Carries the spec's largest finding: it passed every arm while not looking like the Moon, and the look-calibration phase that was meant to catch that had been scoped as a two-constant tuning step. Original row: The dominant night light (~0.25 lux full, ~250× the floor) and how game nights become readable. A LIGHT, not a backdrop: disc + phase + earthshine, plus a real casting directional following phase and altitude. The sun's split applies verbatim — analytic disc in the background only (the env-bake firefly rule), energy as the analytic light, `sky_apply_sun_to_light` as the template, 3 casting-directional slots already exist. New: phase, a second transmittance-tinted directional, and the authoring surface (the 11.79 plumbing shape again). Arguably ahead of B11 on look value: a moonlit static night beats a cycled black one. |
-| 49 | **B14 Purkinje shift** | S/M | Rod vision: desaturate + blue-shift in dim light (Kirk & O'Brien 2011) — what makes a dark frame read as night rather than as an underexposed day. Lives in `tonemap_frag`, driven by the metered luminance the CPU already reads back. A hypothesis row for two reasons: its position in a finishing stack with two standing order contracts, and a blast radius of every dim frame in every app — needs an opt-in, a gate arm, and defaults chosen against real night frames, which do not exist until B12/B13 land. Judge it last. |
+| 49 | **B14 Purkinje shift** | S/M | **DONE (11.83).** See the B14 entry for the as-built record — it is NOT in the finishing stack (that is all downstream of the tonemap; it sites by the optical chain, after the lens and before the response curve), and the metered-luminance drive this row proposed does not exist under `--no-auto-exposure`, which is every golden. The weight is two gates MULTIPLIED, because at 4.2 stops of day-to-night range a daylight shadow and a night frame overlap and no per-pixel threshold separates them. Original row: Rod vision: desaturate + blue-shift in dim light (Kirk & O'Brien 2011) — what makes a dark frame read as night rather than as an underexposed day. Lives in `tonemap_frag`, driven by the metered luminance the CPU already reads back. A hypothesis row for two reasons: its position in a finishing stack with two standing order contracts, and a blast radius of every dim frame in every app — needs an opt-in, a gate arm, and defaults chosen against real night frames, which do not exist until B12/B13 land. Judge it last. |
 | 50 | **B15 Water at night** | M | The moon's best image, and the renderer cannot produce it: `tree` at sun −12 is a black tree against a full star field over a **flat daytime turquoise sea**. Two independent defects. The in-scatter is an authored ABSOLUTE constant (`water.c:1851` into `water_frag.glsl:1056`) multiplied by nothing that knows how lit the water is, so it behaves like an emissive and never dims — a stated design that was only ever exercised in daylight. And water sees exactly ONE directional and picks the sky's SUN by name (`water.c:1876`, spec 11.41's fix for a different bug), so at night it holds a below-horizon light of zero radiance and never reaches the moon — killing the glitter, the Cox-Munk lobe and the caustics together. Fix the first and the frame stops being wrong; fix the second and it becomes the shot. M rather than S because 2 goldens and 35 arms across the `water` and `beach` groups are calibrated against the current in-scatter. **Arguably before B14**, whose own row says to judge it against real night frames. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
