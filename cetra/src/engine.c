@@ -1815,7 +1815,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     // skips the water pass must not leave a medium behind for the volume to integrate.
     water_publish_to_postfx(
         fx_scene && water_will_draw(fx_scene->water, engine, frame_mode) ? fx_scene->water : NULL,
-        engine);
+        fx_scene, engine);
     // Unconditional, including with no scene: count 0 is the off state, and only a
     // publish every frame can reach it after a scene that had volumes goes away.
     scene_publish_fog_volumes_to_postfx(fx_scene, engine->postfx);

@@ -86,9 +86,9 @@
    0.06
   ],
   "scatter": [
-   0.04,
-   0.16,
-   0.18
+   0.0084,
+   0.0386,
+   0.054
   ],
   "caustics": true,
   "shoreCoverage": true,

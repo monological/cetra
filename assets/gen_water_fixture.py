@@ -265,7 +265,17 @@ scene_desc = {
         "ior": 1.333,
         # Clear water per metre, and this fixture's unit IS a metre (spec 11.36).
         "absorption": [0.45, 0.09, 0.06],
-        "scatter": [0.02, 0.1, 0.12],
+        # A FRACTION of the light that falls on the water, not a radiance (spec 11.84).
+        # Derived rather than re-authored: the previous absolute [0.02, 0.1, 0.12] divided
+        # by this scene's own daylight incident, which --water-probe reports as
+        # (5.2123, 4.5738, 3.7345). So the frame 30-odd arms are calibrated against is
+        # reproduced, and the sea now knows what time it is.
+        #
+        # It carries this sun's WARMTH inverted -- more blue than the old value's ratio --
+        # because the number it replaces encoded the light's colour as well as the water's.
+        # That is the migration being correct, not an artifact of it: separating the two is
+        # the whole point, and what was authored was their product.
+        "scatter": [0.0038, 0.0219, 0.0321],
         "caustics": True,
         "shoreCoverage": True,
         "farLod": True,

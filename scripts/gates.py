@@ -8852,12 +8852,21 @@ WATER_NIGHT_SUN_DOWN = "-12"
 WATER_NIGHT_PICK_LADDER = [("20", "sky_sun"), ("8", "sky_sun"), ("3", "sky_sun"),
                            ("1", "sky_sun"), ("0", "sky_moon"), ("-2", "sky_moon"),
                            ("-6", "sky_moon"), ("-12", "sky_moon")]
-# The moon put where the glitter framing can see it. Its ELEVATION is its own,
-# but its intensity rides the SUN's (sky_night_factor), which is why the sun
-# stays at -12 while the moon sits at +22 -- the same elevation and azimuth
-# WATER_GLITTER_SUN uses, so the streak lands in the box that arm already
-# derived rather than in a second one written by hand.
-WATER_NIGHT_MOON = ["--moon", "--moon-elevation", "22", "--moon-azimuth", "180"]
+# The moon where the app puts it, which is up and near full at this sun: 0.33 lux
+# against the 0.045 it carries at sunset. Its intensity rides the SUN's elevation
+# through sky_night_factor, so the sun is what has to be down, not the moon.
+WATER_NIGHT_MOON = ["--moon"]
+# The same moon MOVED in front of the camera, for the one arm that needs its
+# reflection rather than its light. Placed at WATER_GLITTER_SUN's own elevation and
+# azimuth so the streak lands in the box that arm already derives.
+#
+# Costs most of its brightness to get there and that is not a defect: PHASE is derived
+# from the sun-moon elongation (spec 11.82), so moving the moon to face the camera
+# while the sun stays put makes it a thin crescent -- 0.009 lux against 0.33. Enough
+# for a specular track, nowhere near enough to read as illumination, which is why
+# water-night-lit uses the unplaced moon above.
+WATER_NIGHT_MOON_AHEAD = WATER_NIGHT_MOON + ["--moon-elevation", "22",
+                                             "--moon-azimuth", "180"]
 # Measured 16,318 px. A third of it is clear of noise and well under the signal.
 WATER_NIGHT_GLITTER_MIN_PX = 5000
 # A directional that is BRIGHT by intensity and nearly black by colour, which is the
@@ -8875,6 +8884,24 @@ WATER_NIGHT_DECOY = {"name": "DimDecoy", "type": "directional",
 # Caustics measured at 27,450 px moonlit and 26,143 by day, against exactly 0
 # with nothing above the horizon. The floor is shared by both live legs.
 WATER_NIGHT_CAUSTIC_MIN_PX = 8000
+# The in-scatter's OWN contribution, isolated against a zero-scatter twin so that
+# whatever the water is drawn over cancels out of both legs.
+#
+# That cancellation is the whole reason this is a delta and not a brightness read.
+# water_fixture's geometry is EMISSIVE over a black base -- bed 0.55 grey, ramp
+# (0.42, 0.34, 0.22) -- which is exactly what makes it a good absorption instrument (a
+# backdrop that cannot vary with the light) and exactly what makes it unable to show
+# night. Its water band reads 0.2207 at midnight against 0.2478 at noon whatever the
+# sea does, because most of that is self-lit sand seen through it. Do not read
+# brightness on this fixture and call it lighting.
+#
+# Measured: 0.01632 by day, 0.00023 under a moon, 0.00000 with nothing above the
+# horizon. Before 11.84's second half all three read 0.0163 -- the SAME number, which
+# is what an authored constant means.
+WATER_NIGHT_LIT_DAY_MIN = 0.008
+WATER_NIGHT_LIT_RATIO_MIN = 20.0
+WATER_NIGHT_LIT_MOON_MIN = 1.0e-4
+WATER_NIGHT_LIT_DARK_MAX = 1.0e-5
 
 
 def _water_night_variant(src, dst, mutate=None):
@@ -8909,11 +8936,10 @@ def run_water_night_gate(workdir):
     water-night-caustic  caustics are OFF with nothing above the horizon, and LIVE under
                          both a moon and a sun. The dark leg alone passes on a build with
                          no caustics at all, so neither leg is safe without the others.
-
-    Deliberately NOT here: whether a moonlit sea is LIT. The in-scatter is an authored
-    constant until 11.84's second half, so the water band reads 0.23850 with a moon
-    against 0.23848 without -- one part in 10,000, and a property no pick can deliver.
-    That arm lands with the half that earns it.
+    water-night-lit      the in-scatter is a FRACTION of the light that falls on the sea,
+                         not a constant: its own contribution is 0.0163 by day, 0.0002
+                         under a moon and exactly 0 with nothing above the horizon.
+                         Before 11.84's second half all three read the same number.
     """
     failures = []
     scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
@@ -8966,7 +8992,7 @@ def run_water_night_gate(workdir):
         _merge_water_block(d.setdefault("water", {}), WATER_GLITTER_WATER)
 
     _water_night_variant(scene, glit, frame_it)
-    g_common = base + WATER_NIGHT_MOON + ["--sun-elevation", WATER_NIGHT_SUN_DOWN]
+    g_common = base + WATER_NIGHT_MOON_AHEAD + ["--sun-elevation", WATER_NIGHT_SUN_DOWN]
     g_on = os.path.join(workdir, "water_night_glitter_on.ppm")
     g_off = os.path.join(workdir, "water_night_glitter_off.ppm")
     err = render(glit, g_on, g_common)
@@ -9014,6 +9040,52 @@ def run_water_night_gate(workdir):
               f">={WATER_NIGHT_CAUSTIC_MIN_PX} on both, or the dark leg is 0-vs-0)")
         if not ok:
             failures.append("water-night-caustic")
+
+    # Does the sea know what time it is. Read as the in-scatter's own contribution --
+    # the authored value against a zero-scatter twin -- because a brightness read on this
+    # fixture measures its emissive backdrop, not its water.
+    auth = os.path.join(workdir, "water_night_lit_auth.cscn")
+    zero = os.path.join(workdir, "water_night_lit_zero.cscn")
+    _water_night_variant(scene, auth)
+    _water_night_variant(scene, zero,
+                         lambda d: _merge_water_block(d["water"], {"scatter": [0.0, 0.0, 0.0]}))
+    lit, lerr = {}, None
+    for tag, flags in (("day", ["--sun-elevation", "35"]),
+                       ("moonlit", ["--sun-elevation", WATER_NIGHT_SUN_DOWN] +
+                        WATER_NIGHT_MOON),
+                       ("dark", ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"])):
+        pa = os.path.join(workdir, f"water_night_lit_{tag}_a.ppm")
+        pz = os.path.join(workdir, f"water_night_lit_{tag}_z.ppm")
+        lerr = render(auth, pa, base + flags) or render(zero, pz, base + flags)
+        if lerr:
+            break
+        wa, ha, pixa = _read_ppm(pa)
+        _, _, pixz = _read_ppm(pz)
+        # Mean absolute channel difference over the three open-water boxes.
+        diffs = []
+        for box in WATER_ABSORB_BOXES:
+            ca = _absorb_box_rgb(pixa, wa, ha, box)
+            cz = _absorb_box_rgb(pixz, wa, ha, box)
+            diffs.append(sum(abs(ca[c] - cz[c]) for c in range(3)) / 3.0)
+        lit[tag] = sum(diffs) / len(diffs)
+    if lerr:
+        print(f"  water-night-lit ERROR render failed: {lerr.strip()[-200:]}")
+        failures.append("water-night-lit")
+    else:
+        ratio = lit["day"] / lit["moonlit"] if lit["moonlit"] > 0 else float("inf")
+        ok = (lit["day"] >= WATER_NIGHT_LIT_DAY_MIN and
+              ratio >= WATER_NIGHT_LIT_RATIO_MIN and
+              lit["moonlit"] >= WATER_NIGHT_LIT_MOON_MIN and
+              lit["dark"] <= WATER_NIGHT_LIT_DARK_MAX)
+        print(f"  water-night-lit {'PASS' if ok else 'FAIL'}  in-scatter contributes "
+              f"{lit['day']:.5f} by day (want >={WATER_NIGHT_LIT_DAY_MIN}), "
+              f"{lit['moonlit']:.5f} under a moon (want >={WATER_NIGHT_LIT_MOON_MIN}: the "
+              f"moon LIGHTS it, it does not merely switch off) and {lit['dark']:.5f} with "
+              f"nothing above the horizon (want <={WATER_NIGHT_LIT_DARK_MAX}); "
+              f"day/moonlit {ratio:.1f}x (want >={WATER_NIGHT_LIT_RATIO_MIN}, an authored "
+              f"constant reads 1.0x)")
+        if not ok:
+            failures.append("water-night-lit")
 
     return failures
 

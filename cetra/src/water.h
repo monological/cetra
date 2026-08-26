@@ -499,7 +499,7 @@ typedef struct Water {
  * Needs the camera to decide which side the eye is on, which is why it takes the
  * engine rather than just the water.
  */
-void water_publish_to_postfx(const Water* water, struct Engine* engine);
+void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine);
 
 /*
  * Publish the scalars shore.glsl stands on to a program that is not the water, so a lit
@@ -528,6 +528,18 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene, Sho
  * the sky's sun was the only candidate, so nothing could have disagreed.
  */
 const struct Light* water_key_light(const struct Scene* scene);
+
+/*
+ * How much light falls on a horizontal water surface, in absolute scene radiance: the
+ * sky's ambient plus the key directional's own irradiance. `scatter` is a FRACTION of
+ * this, so it is the quantity that makes the sea know what time it is.
+ *
+ * The CPU twin of what water_frag builds from the prefiltered environment -- the froxel
+ * medium is driven from this one, the surface from its own. Published because it is the
+ * term 11.84 added and no frame reports it: a sea lit by the wrong amount still looks
+ * like a sea, which is how the constant it replaced survived since 11.32.
+ */
+void water_incident_light(const struct Scene* scene, vec3 out);
 
 // The per-cascade tiling periods and choppiness are columns of water.c's own cascade
 // table and are uploaded from there. They were briefly published here as two extra

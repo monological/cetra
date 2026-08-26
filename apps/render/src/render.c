@@ -4060,10 +4060,14 @@ int main(int argc, char** argv) {
          * the engine instead of with itself.
          */
         const struct Light* key = water_key_light(scene);
-        printf("water-probe key=%s intensity=%.4f dir=%.4f,%.4f,%.4f\n",
+        vec3 incident = {0.0f, 0.0f, 0.0f};
+        water_incident_light(scene, incident);
+        printf("water-probe key=%s intensity=%.4f dir=%.4f,%.4f,%.4f "
+               "incident=%.6f,%.6f,%.6f\n",
                key && key->name ? key->name : "none", key ? (double)key->intensity : 0.0,
                key ? (double)key->direction[0] : 0.0, key ? (double)key->direction[1] : 0.0,
-               key ? (double)key->direction[2] : 0.0);
+               key ? (double)key->direction[2] : 0.0, (double)incident[0],
+               (double)incident[1], (double)incident[2]);
         const float span = w->extent * 0.5f;
         for (int iz = 0; iz < 4; iz++) {
             for (int ix = 0; ix < 4; ix++) {

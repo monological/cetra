@@ -1059,7 +1059,32 @@ void main() {
         bed = vec3(0.0);
     }
     vec3 T = exp(-waterAbsorption * path);
-    vec3 body = bed * T + waterScatter * preExposure * (1.0 - T);
+    /*
+     * What FALLS on the water (spec 11.84). The in-scatter is light that went into the
+     * body and came back out, so it has to be a FRACTION of what went in. Authored as an
+     * absolute radiance it behaved like an emissive: measured on water_fixture, the open
+     * water read 0.23850 under a moon and 0.23848 with no moon at all, and 0.2476 in full
+     * daylight -- a sea that did not know what time it was.
+     *
+     * Two sources, both in absolute scene radiance so the one preExposure below covers
+     * them. The environment's hemispherical average is the prefiltered top mip the foam
+     * already takes for its bubbles -- the same quantity an irradiance cube would give, up
+     * to the pi the sun half carries, and irradianceMap cannot be declared here anyway
+     * (its unit is 11, which is WATER_SHADOW_UNIT, and two sampler types on one image unit
+     * is INVALID_OPERATION at draw). Sampled along world UP rather than the shaded normal:
+     * the body is a volume under a plane, not the wave facet the specular lobe stands on.
+     *
+     * Exactly ZERO with no environment, where the foam's identical tap falls back to
+     * vec3(1.0). That fallback is right there because it MULTIPLIES a shading term; here
+     * it would reinstate the constant this replaces, under a different name.
+     */
+    vec3 incident = vec3(0.0);
+    if (iblEnabled > 0)
+        incident = textureLod(prefilteredMap, vec3(0.0, 1.0, 0.0), maxReflectionLOD).rgb *
+                   iblIntensity;
+    if (sunAvailable == 1)
+        incident += sunRadiance * max(sunDir.y, 0.0);
+    vec3 body = bed * T + waterScatter * incident * preExposure * (1.0 - T);
 
     // Reflected share: the split-sum environment lobe, the same lookup every
     // other material makes. F0 0.020 falls out of IOR 1.333 rather than being

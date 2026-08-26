@@ -503,7 +503,8 @@ void free_water(Water* water) {
     free(water);
 }
 
-void water_publish_to_postfx(const Water* water, struct Engine* engine) {
+void water_publish_to_postfx(const Water* water, const struct Scene* scene,
+                             struct Engine* engine) {
     if (!engine || !engine->postfx)
         return;
     PostFX* fx = engine->postfx;
@@ -535,7 +536,21 @@ void water_publish_to_postfx(const Water* water, struct Engine* engine) {
     fx->water_suppress_aerial = submerged ? 1 : 0;
     fx->water_level_y = water->level;
     memcpy(fx->water_extinction, water->absorption, sizeof(vec3));
-    memcpy(fx->water_inscatter, water->scatter, sizeof(vec3));
+    /*
+     * The same product the surface forms (spec 11.84): scatter is the FRACTION of what
+     * falls on the water that comes back out, so the volume has to be lit by the same
+     * incident light the surface is or being under the sea disagrees with looking at it.
+     *
+     * A THIRD approximation on a path that already documents two. sky->zenith_radiance is
+     * the cached CPU sky ambient -- the same one the fog is driven from -- standing in for
+     * the prefiltered top mip the shader reads: both answer "ambient from above", neither
+     * is the other's number, and a cell carrying one scalar extinction is not the place
+     * that difference would show.
+     */
+    vec3 incident = {0.0f, 0.0f, 0.0f};
+    water_incident_light(scene, incident);
+    for (int c = 0; c < 3; c++)
+        fx->water_inscatter[c] = water->scatter[c] * incident[c];
 }
 
 /*
@@ -1525,6 +1540,31 @@ const struct Light* water_key_light(const struct Scene* scene) {
         }
     }
     return best;
+}
+
+void water_incident_light(const struct Scene* scene, vec3 out) {
+    // The sky's ambient. sky->zenith_radiance is the cached CPU march the fog is already
+    // driven from -- recomputed only when the sun moves, which is also the only thing
+    // that changes it.
+    glm_vec3_zero(out);
+    if (scene && scene->sky)
+        glm_vec3_copy((float*)scene->sky->zenith_radiance, out);
+
+    // Plus the key's irradiance on a HORIZONTAL surface. Cosine against world up rather
+    // than the wave facet: this lights a volume under a plane, not the surface a specular
+    // lobe stands on. A key below the horizon delivers nothing and is not negated into a
+    // contribution.
+    const Light* key = water_key_light(scene);
+    if (!key)
+        return;
+    vec3 toward;
+    glm_vec3_negate_to((float*)key->direction, toward);
+    glm_vec3_normalize(toward);
+    if (toward[1] <= 0.0f)
+        return;
+    vec3 direct;
+    glm_vec3_scale((float*)key->color, key->intensity * toward[1], direct);
+    glm_vec3_add(out, direct, out);
 }
 
 bool water_shore_runup_params(const Water* water, const struct Scene* scene,
