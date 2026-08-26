@@ -184,6 +184,10 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
             args->purkinje_strength = cscn->purkinje_strength;
         if (cscn->has_purkinje_bias_ev && args->purkinje_bias_ev <= -900.0f)
             args->purkinje_bias_ev = cscn->purkinje_bias_ev;
+        if (cscn->has_purkinje_acuity && args->purkinje_acuity < 0.0f)
+            args->purkinje_acuity = cscn->purkinje_acuity;
+        if (cscn->has_purkinje_noise && args->purkinje_noise < 0.0f)
+            args->purkinje_noise = cscn->purkinje_noise;
     }
     if (cscn->has_camera_exposure && args->aperture <= 0.0f) {
         args->aperture = cscn->aperture;

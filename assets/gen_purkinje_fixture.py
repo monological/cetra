@@ -46,7 +46,9 @@ Regenerate: python3 assets/gen_purkinje_fixture.py
 
 import base64
 import json
+import math
 import os
+import re
 import struct
 
 # ---------------------------------------------------------------------------
@@ -62,13 +64,57 @@ LADDER = [LADDER_TOP * (0.5 ** i) for i in range(RUNGS)]  # log2 -2 .. -9
 
 # Scene exposure. Lifts the displayed codes into the readable middle of the 8-bit
 # range without touching the absolute radiance the weight is computed from.
-EXPOSURE = 3.2
+# A POWER OF TWO, which purkinje-absolute depends on: that arm renders this
+# fixture at its authored exposure and again at 4x, and asserts the rod weight is
+# bit-identical because it divides preExposure back out. Both exposures have to
+# be exactly representable and their ratio exact, or the two weights differ in
+# the last fp32 bit and quantize to different 8-bit codes at the ramp's steep
+# part -- measured at 148 px with an authored 3.2 against 4.0.
+EXPOSURE = 4.0
 
-# The shipped ramp edges, restated so the generator can assert the ladder
-# straddles them. NOT shared with the shader through a header: these are a
-# duplicate, and the loop is closed by purkinje-config asserting the ENGINE's own
-# defaults rather than by trusting this copy.
-PK_LOCAL_LO, PK_LOCAL_HI = -8.0, -3.0
+def _shader_const_vec3(name):
+    """A generated const vec3, read out of the shader include."""
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cetra", "shaders",
+                       "include", "scotopic_weights.glsl")
+    with open(os.path.normpath(src)) as fh:
+        text = fh.read()
+    m = re.search(r"const vec3 " + name + r"\s*=\s*vec3\(([^)]*)\)", text)
+    assert m, f"{name} not found in scotopic_weights.glsl"
+    return tuple(float(v) for v in m.group(1).split(","))
+
+
+def _shader_rod_tint():
+    return _shader_const_vec3("PURKINJE_ROD_TINT")
+
+
+def _shader_ramp():
+    """The shipped local ramp, READ out of the shader rather than restated.
+
+    An earlier version copied the two numbers and claimed purkinje-config held
+    them to the engine. It cannot -- they are GLSL consts with no C-side
+    representation, so no config snapshot carries them -- which left this copy
+    held by nothing at all: move the edges in the shader and the straddle
+    asserts below would keep passing against stale values while the ladder had
+    quietly stopped straddling anything.
+
+    gates.py keeps its own independent restatement, and that is correct: its job
+    is to FALSIFY the shader's arithmetic, so it must not read from it. This
+    file's job is the opposite -- to build a ladder that fits the real ramp -- so
+    it reads the real ramp.
+    """
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cetra", "shaders",
+                       "include", "purkinje.glsl")
+    with open(os.path.normpath(src)) as fh:
+        text = fh.read()
+    got = {}
+    for name in ("PK_LOCAL_LO", "PK_LOCAL_HI"):
+        m = re.search(r"const float " + name + r"\s*=\s*(-?[0-9.]+)", text)
+        assert m, f"{name} not found in purkinje.glsl"
+        got[name] = float(m.group(1))
+    return got["PK_LOCAL_LO"], got["PK_LOCAL_HI"]
+
+
+PK_LOCAL_LO, PK_LOCAL_HI = _shader_ramp()
 
 # Chromaticities, one per row, each held constant down its ladder. Normalised so
 # every row's photopic luminance is equal at a given rung -- otherwise a row's
@@ -89,8 +135,12 @@ ROW_CHROMA = [
     _unit_luma((0.16, 1.00, 0.22)),
     _unit_luma((0.16, 0.24, 1.00)),
     _unit_luma((0.85, 0.55, 0.28)),
-    # The rod tint's chromaticity, from gen_scotopic_weights.py's own vector.
-    _unit_luma((0.83952, 1.00942, 1.37921)),
+    # The rod tint's chromaticity, READ from the generated file rather than
+    # transcribed. This is the one vector the feature documents as CHOSEN rather
+    # than derived -- i.e. the one expected to be re-tuned -- and a stale copy
+    # would leave purkinje-rowhue asserting that "the rod-tint row moves least"
+    # about a row that is no longer the rod tint.
+    _unit_luma(_shader_rod_tint()),
 ]
 ROWS, COLS = len(ROW_CHROMA), RUNGS
 
@@ -101,13 +151,13 @@ ROWS, COLS = len(ROW_CHROMA), RUNGS
 # ---------------------------------------------------------------------------
 
 assert LADDER == sorted(LADDER, reverse=True), "the ladder must be monotone"
-_span = __import__("math").log2(LADDER[0] / LADDER[-1])
+_span = math.log2(LADDER[0] / LADDER[-1])
 assert _span >= 5.5, f"the ladder spans only {_span:.2f} stops"
 
 # It must STRADDLE the shipped local ramp, or every rung sits on one side of the
 # transition and the ladder arm reads a constant.
-_lo = __import__("math").log2(LADDER[-1])
-_hi = __import__("math").log2(LADDER[0])
+_lo = math.log2(LADDER[-1])
+_hi = math.log2(LADDER[0])
 assert _lo < PK_LOCAL_LO + 1.0, f"dimmest rung log2 {_lo:.2f} is not below the ramp floor"
 assert _hi > PK_LOCAL_HI - 1.0, f"brightest rung log2 {_hi:.2f} is not above the ramp ceiling"
 
@@ -134,6 +184,8 @@ for i in range(1, ROWS):
 # and so must purkinje-absolute's second leg, which renders the same file at 4x.
 # Otherwise the sanitize clamp binds on one leg only and its exact-0 claim dies
 # for a reason that has nothing to do with the feature.
+# view.glsl's own ceiling, restated. Only backs the safety assert below, so a
+# stale copy weakens a guard rather than moving the fixture.
 WS_SCENE_MAX = 60000.0
 assert LADDER[0] * EXPOSURE * 4.0 < WS_SCENE_MAX * 0.5, "the 4x leg would reach the WS ceiling"
 
@@ -173,7 +225,7 @@ BACK_H = 10.0
 # black-dominated, the mean sits near the measure shader's -26.57 floor and the
 # global gate saturates at exactly 1, which is what lets every arm read the LOCAL
 # ramp cleanly.
-_half_h = CAM_Z * __import__("math").tan(__import__("math").radians(FOV_DEG) * 0.5)
+_half_h = CAM_Z * math.tan(math.radians(FOV_DEG) * 0.5)
 _frame = (2 * _half_h * ASPECT) * (2 * _half_h)
 _coverage = (ROWS * COLS * (2 * PATCH) ** 2) / _frame
 assert _coverage < 0.20, f"patches cover {_coverage:.3f} of frame; the meter would read the chart"

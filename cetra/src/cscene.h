@@ -494,6 +494,10 @@ typedef struct CetraSceneDesc {
     float purkinje_strength;
     bool has_purkinje_bias_ev;
     float purkinje_bias_ev;
+    bool has_purkinje_acuity;
+    float purkinje_acuity;
+    bool has_purkinje_noise;
+    float purkinje_noise;
     // TAAU render-resolution scale in [0.5, 1). Everything before the TAA seam
     // renders at this fraction and the upscale resolve brings it to post res.
     // It rides TAA, which windowed sessions turn on and headless ones do not --

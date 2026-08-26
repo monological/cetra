@@ -269,6 +269,22 @@ RECIPES = [
     {"name": "flare_fixture", "scene": "assets/flare_fixture.cscn", "size": (1600, 1000),
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0",
                "--flare", "0.15", "--chromatic-aberration", "12"]},
+    # The scotopic shift, on the one frame it is legible in (spec 11.83). The
+    # gate group measures the operator's PROPERTIES -- that it drains, shifts
+    # blue, is per-pixel and is exposure-invariant -- and none of those is the
+    # question "does this look like night". This is the only artifact that
+    # answers it, and the only cross-build reference the look will ever have.
+    #
+    # The chart rather than a night scene, deliberately: the corpus's night
+    # frames have almost nothing to drain (the sky is already blue, the terrain
+    # near-achromatic), so a night golden would be a picture of the feature
+    # barely acting. Here every rung and every hue is visible at once.
+    #
+    # Exposure comes from the fixture, which authors it -- see its generator's
+    # header for why that value is load-bearing rather than framing.
+    {"name": "purkinje_night", "scene": "assets/purkinje_fixture.cscn", "size": (1040, 800),
+     "flags": ["-f", "30", "-W", "520", "-H", "400", "--no-auto-exposure", "--no-dither",
+               "--no-vignette", "--no-bloom", "--no-ssao", "--purkinje"]},
 ]
 
 

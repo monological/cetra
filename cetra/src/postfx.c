@@ -1807,7 +1807,10 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
 // axis, so the shifts never degenerate and viewport always agrees with
 // texelSize.
 // Bin the frame's log2 luminances and collapse them to the percentile-clipped
-// mean, returned in log2. GPU only: what happens to the number is exposure.c's.
+// mean, into the 1x1 at fx->lum_reduce_texture. GPU only, and it returns
+// nothing: whoever wants the VALUE calls postfx_read_luminance and pays the
+// stall; whoever wants only the TEXTURE (the Purkinje shift, on unit 7) does
+// not.
 //
 // Its own function for the reason every other multi-draw sequence in this file
 // has one -- postfx_run_bloom, _dof, _ssr, _sss, _oit, _atmosphere,
@@ -3688,13 +3691,34 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
          * too, where auto-exposure runs nothing at all, so the two gates below
          * are deliberately different.
          */
-        const bool metering = fx->exposure && fx->exposure->automatic;
-        if (fx->exposure && (fx->exposure->automatic || fx->purkinje_enabled)) {
+        /*
+         * ONE statement of "does anything want the frame's metered luminance",
+         * because three places depend on the same answer: the draws below, the
+         * unit-7 bind, and the shader uniform that tells the Purkinje stage
+         * whether that texel may be trusted. Written out separately they are
+         * kept in step by eye, and a drift means the shader samples an
+         * unwritten R32F -- exactly what the uniform exists to prevent.
+         *
+         * The DEBUG VIEW is a consumer too, and gating on the feature alone was
+         * a live defect: --purkinje-debug without --purkinje ran no draws, so
+         * the view reported the global gate wide open on every frame. That view
+         * is deliberately not suppressed when the feature is off, so it has to
+         * be armed here instead.
+         *
+         * The bloom pyramid twenty lines down states the same rule for the same
+         * reason: built whenever a consumer wants one, not owned by one of them.
+         */
+        const bool meter_wanted =
+            fx->exposure && (fx->exposure->automatic || fx->purkinje_enabled ||
+                             fx->debug_view == POSTFX_DEBUG_PURKINJE);
+        // The value, not just the texture -- and this half pays the blocking read.
+        const bool adapting = fx->exposure && fx->exposure->automatic;
+        if (meter_wanted) {
             profiler_scope_begin(fx->profiler, "luminance measure");
             postfx_measure_luminance(fx, scene_tex);
             profiler_scope_end(fx->profiler);
         }
-        if (metering) {
+        if (adapting) {
             // Its own scope, and the number it reports is not comparable with
             // the others: the blocking read inside drains the pipeline, so this
             // row carries the whole frame's outstanding GPU work rather than the
@@ -3762,7 +3786,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // reduction beside it. Bound whenever a meter exists -- the shader is
         // told separately whether it may be trusted, since an unwritten R32F
         // target has undefined content.
-        glBindTexture(GL_TEXTURE_2D, fx->exposure ? fx->lum_reduce_texture : 0);
+        glBindTexture(GL_TEXTURE_2D, meter_wanted ? fx->lum_reduce_texture : 0);
         glActiveTexture(GL_TEXTURE8); // lens flare (unit 8 was the retired fog debug buffer)
         glBindTexture(GL_TEXTURE_2D, flare_active ? fx->flare_texture : 0);
         glActiveTexture(GL_TEXTURE9);
@@ -3841,15 +3865,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "purkinjeEnabled", fx->purkinje_enabled ? 1 : 0);
         uniform_set_float(tm, "purkinjeStrength", fx->purkinje_strength);
         uniform_set_float(tm, "purkinjeBiasEV", fx->purkinje_bias_ev);
-        // Whether unit 7 holds a value at all. The bind above puts the metering
-        // 1x1 there whenever an Exposure exists, but its CONTENT is only defined
-        // once the measure draws have run -- which they do under the same
-        // condition. Told rather than inferred: the shader cannot see either.
         uniform_set_float(tm, "purkinjeAcuity", fx->purkinje_acuity);
         uniform_set_float(tm, "purkinjeNoise", fx->purkinje_noise);
-        uniform_set_int(tm, "purkinjeHasMeter",
-                        (fx->exposure && (fx->exposure->automatic || fx->purkinje_enabled)) ? 1
-                                                                                            : 0);
+        // Whether unit 7's content is defined this frame. The shader can see
+        // neither the bind nor the draws, so it is told.
+        uniform_set_int(tm, "purkinjeHasMeter", meter_wanted ? 1 : 0);
         uniform_set_int(tm, "grainEnabled", fx->grain_enabled ? 1 : 0);
         uniform_set_float(tm, "grainStrength", fx->grain_strength);
         // % 4096: same float-hash conditioning bound as PCSS/SSR

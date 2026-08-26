@@ -532,9 +532,14 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
             _ranged_float(pk, "post.purkinje", "strength", 0.0f, 1.0f, &d->purkinje_strength);
         d->has_purkinje_bias_ev =
             _ranged_float(pk, "post.purkinje", "bias_ev", -30.0f, 30.0f, &d->purkinje_bias_ev);
+        d->has_purkinje_acuity =
+            _ranged_float(pk, "post.purkinje", "acuity", 0.0f, 4.0f, &d->purkinje_acuity);
+        d->has_purkinje_noise =
+            _ranged_float(pk, "post.purkinje", "noise", 0.0f, 4.0f, &d->purkinje_noise);
         // Its own closed list. A nested block without one is how water_fixture
         // ran at the wrong sun for four specs.
-        static const char* const pk_known[] = {"enabled", "strength", "bias_ev"};
+        static const char* const pk_known[] = {"enabled", "strength", "bias_ev", "acuity",
+                                               "noise"};
         warn_unknown_keys(pk, pk_known, sizeof(pk_known) / sizeof(pk_known[0]), "post.purkinje");
     }
 

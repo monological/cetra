@@ -7,17 +7,8 @@
  * sunlight's. This is what makes a dark frame read as NIGHT rather than as an
  * underexposed day photo.
  *
- * WHERE THIS SITS, and it is the file's third siting rule rather than a third
- * opinion about the first two. tonemap_frag's header states that the gamma
- * encode divides stages this engine DEFINES from stages whose DATA was authored
- * in display space; that rule places this before the encode and says nothing
- * more. The rule that actually sites it is chromatic aberration's, one screen
- * further down: CA is "a LENS effect: it acts on the light before the sensor".
- * That is an OPTICAL-CHAIN ordering, and this is the sensor's own spectral
- * response -- so it lands after the lens (CA, bloom, flare) and before the tone
- * curve, which stands in for the response curve. Grain is already sited as
- * "sensor noise" after that curve; these are the two halves of one sensor,
- * correctly either side of it.
+ * Sited by tonemap_frag's optical-chain rule; that file's header owns the order
+ * and is where a stage's position is argued.
  *
  * WHAT IS CITED AND WHAT IS NOT. Kirk & O'Brien 2011 is the source for the rod
  * luminance and the mesopic blend. Their acuity and noise terms are elsewhere in
@@ -32,6 +23,11 @@
  * calibrated against this corpus, not against the eye, and purkinjeBiasEV is the
  * single knob that migrates them if the scale is ever fixed.
  */
+// view.glsl for oneOverPreExposure and WS_SCENE_MAX. Included rather than
+// inherited from the caller: include-once makes it free, and relying on
+// tonemap_frag having included it four lines earlier is an ordering dependency
+// between two lines of an unrelated file.
+#include "view.glsl"
 #include "scotopic_weights.glsl"
 #include "noise.glsl"
 
@@ -81,86 +77,97 @@ uniform sampler2D purkinjeAdaptTex; // the metering 1x1: mean log2 absolute cd/m
  * Returns (w, wLocal, wGlobal); the debug view wants all three, and the caller
  * uses only .x.
  */
-vec3 purkinjeWeight(vec3 c) {
-    // c is finite by construction -- the caller sanitized it against
-    // WS_SCENE_MAX one line up, which is what the identity below rests on.
-    float lumPix = dot(c, vec3(0.2126, 0.7152, 0.0722)) * oneOverPreExposure;
-    // The same 1e-8 guard lum_measure_frag uses, so both agree about black.
-    float logLpix = log2(max(lumPix, 1.0e-8));
-    // Edges LO < HI always: smoothstep with edge0 > edge1 is undefined in GLSL,
-    // and the frame it produces is plausible rather than obviously broken.
-    float wLocal = 1.0 - smoothstep(PK_LOCAL_LO + purkinjeBiasEV,
-                                    PK_LOCAL_HI + purkinjeBiasEV, logLpix);
-
+/*
+ * The WHOLE-FRAME gate: is the eye dark-ADAPTED. One texel and some uniforms, so
+ * it is identical for every fragment and its branch is wave-coherent.
+ *
+ * Evaluated FIRST by purkinjeApply, and that ordering is a measurement rather
+ * than taste: in daylight this is exactly 0 while the per-pixel gate below is
+ * ~0.997, so testing the cheap frame-uniform term first lets a whole daylight
+ * frame exit before paying a log2 and a smoothstep per fragment -- five times
+ * over under --sharpen.
+ */
+float purkinjeGlobalWeight() {
     float logLada = texelFetch(purkinjeAdaptTex, ivec2(0, 0), 0).r;
     /*
-     * Two ways the global term can be untrustworthy, and both fall back to 1.0
-     * -- the local gate alone -- rather than to 0.0. A flag that silently does
+     * Two ways the reading can be untrustworthy, and both fall back to 1.0 --
+     * the local gate alone -- rather than to 0.0. A flag that silently does
      * nothing is worse than a degraded picture.
      *
-     * No meter: the C side never ran the draws, and an unwritten R32F target's
-     * content is undefined. The shader cannot know that, so it is told.
+     * No meter: the C side ran no measure draws, and an unwritten R32F target's
+     * content is undefined. The shader cannot know that, so it is told. This is
+     * live for the DEBUG VIEW, which evaluates the weight with the feature off;
+     * the enable gate in purkinjeApply already implies a meter on every other
+     * path.
      *
      * NaN: lum_reduce_frag writes a DELIBERATE NaN on an empty histogram, which
      * spot metering at a small radius reaches. It matters because NaN survives
-     * the guard below -- `w <= 0.0` is FALSE on NaN -- so the identity's own
+     * the `w <= 0.0` guard -- that test is FALSE on NaN -- so the identity's own
      * early-out is exactly what a NaN would slip past, into a NaN frame.
      */
-    float wGlobal = 1.0;
-    if (purkinjeHasMeter != 0 && !isnan(logLada))
-        wGlobal = 1.0 - smoothstep(PK_GLOBAL_LO + purkinjeBiasEV,
-                                   PK_GLOBAL_HI + purkinjeBiasEV, logLada);
+    if (purkinjeHasMeter == 0 || isnan(logLada))
+        return 1.0;
+    // Edges LO < HI always: smoothstep with edge0 > edge1 is undefined in GLSL,
+    // and the frame it produces is plausible rather than obviously broken.
+    return 1.0 - smoothstep(PK_GLOBAL_LO + purkinjeBiasEV,
+                            PK_GLOBAL_HI + purkinjeBiasEV, logLada);
+}
 
-    // Strength scales the WEIGHT and nothing else. Folding it into the tint
-    // instead (mix(vec3(1), TINT, strength)) still desaturates fully at w = 1,
-    // so strength 0 would drain colour while looking, in code, like a control.
-    return vec3(purkinjeStrength * wLocal * wGlobal, wLocal, wGlobal);
+// The PER-PIXEL gate: is there light HERE for the cones to answer. `c` is finite
+// by construction -- the caller sanitized it against WS_SCENE_MAX -- which is
+// what the exact identity rests on.
+float purkinjeLocalWeight(vec3 c) {
+    float lumPix = dot(c, vec3(0.2126, 0.7152, 0.0722)) * oneOverPreExposure;
+    // The same 1e-8 guard lum_measure_frag uses, so both agree about black.
+    float logLpix = log2(max(lumPix, 1.0e-8));
+    return 1.0 - smoothstep(PK_LOCAL_LO + purkinjeBiasEV,
+                            PK_LOCAL_HI + purkinjeBiasEV, logLpix);
 }
 
 /*
- * Apply the shift. A BLEND toward the rod image, not Kirk & O'Brien's additive
- * rod-plus-attenuated-cone sum: an additive term adds energy, which brightens a
- * night frame and fights both the WS_* ceilings and the tone curve's shoulder --
- * and mix(c, x, 0.0) is EXACTLY c, which the additive form is not.
+ * The rod weight, and the two gates are MULTIPLIED because both failure cases
+ * want a veto rather than a vote.
+ *
+ * A daylit shadow is locally dim inside a bright frame; a lamp at night is
+ * locally bright inside a dim one. Blending the two drivers into one lands both
+ * mid-ramp and drains both. A product lets either gate refuse outright -- and
+ * gives two independent routes to an exactly-zero daylight identity.
+ *
+ * MEASURED, on aerial_fixture: the day frame's darkest decile sits at -7.85, so
+ * without the global veto a noon shadow would take wLocal 0.997 -- essentially
+ * the full shift, in sunlight. The product is a requirement, not a preference.
+ *
+ * Returns (w, wLocal, wGlobal). The debug view wants all three, and they are the
+ * factors of the first, so packing them costs nothing over returning w alone.
+ *
+ * Strength scales the WEIGHT and nothing else. Folding it into the tint instead
+ * (mix(vec3(1), TINT, strength)) still desaturates fully at w = 1, so strength 0
+ * would drain colour while looking, in code, like a control.
  */
-vec3 purkinjeApply(vec3 c, vec2 uv, vec2 texel, float aoFactor, vec3 bloomAdd,
-                   sampler2D sceneTex, float seed) {
-    if (purkinjeEnabled == 0)
-        return c;
-    float w = purkinjeWeight(c).x;
-    // Structural identity. smoothstep is exactly 1.0 at or past its high edge,
-    // so a daylight frame gives wGlobal exactly 0 and returns here untouched --
-    // exactly, not nearly. Belt and braces over a mix that is already exact.
-    if (w <= 0.0)
-        return c;
+vec3 purkinjeWeight(vec3 c) {
+    float wGlobal = purkinjeGlobalWeight();
+    float wLocal = purkinjeLocalWeight(c);
+    return vec3(purkinjeStrength * wLocal * wGlobal, wLocal, wGlobal);
+}
 
-    /*
-     * ACUITY. Rods pool spatially, so the dark parts of the frame lose detail
-     * rather than only colour -- which is the half that reads as "I cannot quite
-     * see" instead of "someone applied a blue filter".
-     *
-     * Four taps of the RAW scene, composited once with the CENTRE's aoFactor and
-     * bloomAdd. Reusing the centre's is the sharpen block's own precedent, and
-     * here it matters more: pooling the composited neighbours would blur the AO
-     * and bloom gradients too, which belong to the lens and to the geometry
-     * rather than to the retina.
-     *
-     * The sampler is a PARAMETER, which is this codebase's convention for an
-     * include that must not know its caller's unit ledger -- sky_radiance.glsl
-     * and probe_specular.glsl both do it. It also means the taps skip chromatic
-     * aberration, which is correct in the small: CA displaces channels by a
-     * fraction of a texel and this is a low-pass over several.
-     */
-    if (purkinjeAcuity > 0.0) {
-        float r = PK_ACUITY_TEXELS * purkinjeAcuity * w;
-        vec3 sum = texture(sceneTex, uv + vec2(texel.x, 0.0) * r).rgb +
-                   texture(sceneTex, uv - vec2(texel.x, 0.0) * r).rgb +
-                   texture(sceneTex, uv + vec2(0.0, texel.y) * r).rgb +
-                   texture(sceneTex, uv - vec2(0.0, texel.y) * r).rgb;
-        vec3 pooled = min(sum * 0.25, vec3(WS_SCENE_MAX)) * aoFactor + bloomAdd;
-        c = mix(c, pooled, w);
-    }
+// How far rod pooling smears detail at this weight, in texels. The caller owns
+// the resampling -- it is the scene's business, not the retina's -- so this is
+// the only part of acuity that belongs here.
+float purkinjePoolRadius(float w) {
+    return PK_ACUITY_TEXELS * purkinjeAcuity * w;
+}
 
+/*
+ * Apply the spectral shift. A BLEND toward the rod image, not Kirk & O'Brien's
+ * additive rod-plus-attenuated-cone sum: an additive term adds energy, which
+ * brightens a night frame and fights both the WS_* ceilings and the tone curve's
+ * shoulder -- and mix(c, x, 0.0) is EXACTLY c, which the additive form is not.
+ *
+ * `c` arrives already pooled by the caller when acuity is on, so this is purely
+ * the retina's spectral response plus its noise. No sampler, no texel size, no
+ * composite terms: everything spatial belongs to whoever owns the scene.
+ */
+vec3 purkinjeShift(vec3 c, float w, vec2 uv, float seed) {
     c = mix(c, dot(c, PURKINJE_SCOTOPIC_W) * PURKINJE_ROD_TINT, w);
 
     /*
@@ -171,16 +178,17 @@ vec3 purkinjeApply(vec3 c, vec2 uv, vec2 texel, float aoFactor, vec3 bloomAdd,
      * it scales with how far into rod vision the pixel is.
      *
      * Rides the grain stage's own frame seed rather than carrying a second one:
-     * that value is already documented as deterministic across equal --frames
-     * runs, and a third source of per-frame randomness is a third thing to keep
-     * that way.
+     * that value is already deterministic across equal --frames runs, and a
+     * third source of per-frame randomness is a third thing to keep that way.
+     * The offset keeps the two fields from correlating where their arguments
+     * would otherwise be close.
      *
-     * Multiplicative, so it vanishes in true black rather than lifting it -- the
-     * night frame is half at the radiance floor and additive noise there would
+     * Multiplicative, so it vanishes in true black rather than lifting it -- a
+     * night frame is half at the radiance floor, and additive noise there would
      * print static onto pixels that carry no light at all.
      */
     if (purkinjeNoise > 0.0) {
-        float n = hash21(uv * 1024.0 + seed, vec2(12.9898, 78.233)) - 0.5;
+        float n = hash21(uv * 1024.0 + seed + 37.0, vec2(12.9898, 78.233)) - 0.5;
         c *= 1.0 + n * PK_NOISE_AMOUNT * purkinjeNoise * w;
     }
     return c;

@@ -3970,11 +3970,29 @@ PK_SCENE = "purkinje_fixture.cscn"
 #                  neighbour's ABSOLUTE radiance, which moves that neighbour's
 #                  rod weight. With bloom on, purkinje-ladder reads the bloom
 #                  radius rather than the mesopic ramp.
-PK_PIN = ["--no-auto-exposure", "--no-dither", "--no-vignette", "--no-bloom"]
+#   --no-ssao      LOAD-BEARING TOO, and less obvious: aoFactor MULTIPLIES the
+#                  radiance the local ramp reads (tonemap_frag's composite), and
+#                  the ramp's slope is ~76 codes per stop, so a 0.97 AO factor is
+#                  already 3.4 codes against purkinje-agree's 2.0-code bar. The
+#                  twin models the authored emissive alone.
+#
+# NOTE there is deliberately no -E here. The fixture AUTHORS its exposure, and
+# that authored value is the whole reason its dim rungs are legible in 8 bits --
+# overriding it with -E 1.0 in every arm is how beach_fixture's `waves: fft` and
+# water_fixture's sun both came to be authored and unexercised. Arms that need a
+# different exposure (purkinje-absolute) pass -E explicitly and it wins.
+PK_PIN = ["--no-auto-exposure", "--no-dither", "--no-vignette", "--no-bloom", "--no-ssao"]
 
-# The shipped ramp, restated so the Python twin can evaluate it. Held to the
-# engine's own values by purkinje-config, which reads them out of a snapshot --
-# not by trusting this copy.
+# The shipped ramp, restated so the Python twin can evaluate it. HELD BY
+# purkinje-agree, which evaluates this copy against the rendered debug view --
+# move the edges in the GLSL without moving them here and that arm fails.
+#
+# NOT by purkinje-config, which an earlier version of this comment claimed: that
+# arm reads a config snapshot, and these are GLSL consts with no C-side
+# representation, so no snapshot can carry them. The same shape of false
+# attribution the IES fold shipped for a spec cycle -- a comment naming a holder
+# that cannot hold, which is worse than naming none because the next reader
+# trusts it.
 PK_LOCAL_LO, PK_LOCAL_HI = -8.0, -3.0
 PK_DEFAULT_STRENGTH = 0.7
 # Agreement bar for the twin, in 8-bit codes. One code is the quantization of
@@ -4048,10 +4066,10 @@ def _pk_ladder_radiance():
     return out
 
 
-def _pk_expected_local(radiance, bias=0.0):
+def _pk_expected_local(radiance):
     """The local gate's closed form, evaluated independently of the shader."""
     x = math.log2(max(radiance, 1e-8))
-    t = (x - (PK_LOCAL_LO + bias)) / ((PK_LOCAL_HI + bias) - (PK_LOCAL_LO + bias))
+    t = (x - PK_LOCAL_LO) / (PK_LOCAL_HI - PK_LOCAL_LO)
     t = max(0.0, min(1.0, t))
     return 1.0 - t * t * (3.0 - 2.0 * t)
 
@@ -4098,7 +4116,10 @@ def run_purkinje_gate(workdir):
                          no chromaticity read can see
       purkinje-lamp      a bright disc keeps its colour while its dim surround drains
       purkinje-scene     a night frame moves, a daylight frame is 0 px
-      purkinje-terms     acuity and noise are separable and each does something
+      purkinje-terms     acuity and noise are each scaled by the weight: both are
+                         bit-identical at the lit rung and both move at the dim one
+      purkinje-sharpen   the four sharpen taps run the stage and are inert at zero
+                         weight -- the only arm in the suite that renders --sharpen
       purkinje-strength  0.5 reads half the weight of 1.0; 0 is a bit-exact identity
       purkinje-off       authored == flags; --no-purkinje == never authored
       purkinje-config    the rows exist and read their shipping defaults
@@ -4139,7 +4160,7 @@ def run_purkinje_gate(workdir):
     rungs = sorted(ladder)
 
     # --- purkinje-agree ----------------------------------------------------
-    dbg, err = _pk_render(workdir, "dbg", ["-E", "1.0", "--purkinje", "--purkinje-debug"])
+    dbg, err = _pk_render(workdir, "dbg", ["--purkinje", "--purkinje-debug"])
     if err:
         print(f"  purkinje-agree ERROR {err}")
         return ["purkinje-agree"]
@@ -4158,7 +4179,14 @@ def run_purkinje_gate(workdir):
         failures.append("purkinje-agree")
 
     # --- purkinje-absolute -------------------------------------------------
-    dbg4, err = _pk_render(workdir, "dbg4", ["-E", "4.0", "--purkinje", "--purkinje-debug"])
+    # 4x the fixture's OWN authored exposure, read rather than transcribed --
+    # and a power-of-two ratio, so both exposures and their quotient are exact.
+    # At a non-exact ratio the two weights differ in the last fp32 bit and
+    # quantize to different codes on the ramp's steep part (measured 148 px).
+    with open(os.path.join(ROOT, "assets", PK_SCENE)) as fh:
+        _authored_e = float(json.load(fh)["post"]["exposure"])
+    dbg4, err = _pk_render(workdir, "dbg4",
+                           ["-E", repr(_authored_e * 4.0), "--purkinje", "--purkinje-debug"])
     if err:
         print(f"  purkinje-absolute ERROR {err}")
         failures.append("purkinje-absolute")
@@ -4172,13 +4200,13 @@ def run_purkinje_gate(workdir):
             failures.append("purkinje-absolute")
 
     # --- the on/off pair every colour arm reads ----------------------------
-    off, e1 = _pk_render(workdir, "off", ["-E", "1.0"])
+    off, e1 = _pk_render(workdir, "off", [])
     # SPECTRAL HALF ONLY. Acuity pools across patch boundaries, lifting a dim
     # rung toward its brighter neighbour -- which cancelled the tint's own
     # darkening and made purkinje-blue read R+0 where the shift alone gives R-2.
     # The same confound the generator's pitch assert guards for bloom. Acuity and
     # noise get their own arm rather than contaminating the colour reads.
-    on, e2 = _pk_render(workdir, "on", ["-E", "1.0", "--purkinje", "--no-purkinje-noise",
+    on, e2 = _pk_render(workdir, "on", ["--purkinje", "--no-purkinje-noise",
                                         "--no-purkinje-acuity"])
     if e1 or e2:
         print(f"  purkinje-drain ERROR {e1 or e2}")
@@ -4377,32 +4405,109 @@ def run_purkinje_gate(workdir):
             failures.append("purkinje-scene")
 
     # --- purkinje-terms ----------------------------------------------------
-    spec, _ = _pk_render(workdir, "spec",
-                         ["-E", "1.0", "--purkinje", "--no-purkinje-acuity",
-                          "--no-purkinje-noise"])
-    acu, _ = _pk_render(workdir, "acu", ["-E", "1.0", "--purkinje", "--no-purkinje-noise"])
-    noi, _ = _pk_render(workdir, "noi", ["-E", "1.0", "--purkinje", "--no-purkinje-acuity"])
-    if not (spec and acu and noi):
-        print("  purkinje-terms ERROR (render failed)")
+    # Both terms are SCALED BY THE WEIGHT, and the first version of this arm
+    # could not see that: it asserted only that each moved some pixels, so
+    # deleting `* w` from either -- making the pooling and the noise uniform over
+    # the whole frame -- kept it green. Same shape as the blind spot the
+    # falsification round found in the colour arms: complete against the
+    # structure, blind to what scales it.
+    #
+    # The lever is --purkinje-bias -30, which drags both ramps so far below the
+    # fixture's radiances that every pixel sits past their high edge and w is
+    # EXACTLY 0 frame-wide. A term carrying `* w` is then inert to the pixel; one
+    # that has lost it is not. Two wrong read regions were tried first and are
+    # worth recording: patch CENTRES read 0 for acuity (averaging a constant
+    # returns it), and a patch-edge box reads the lit column moving MORE than the
+    # dim one, because an edge pixel is part backdrop and therefore dim whatever
+    # rung it belongs to -- the effect there scales with the patch's brightness,
+    # not with the weight.
+    # THE LEVER IS STRENGTH, not a zero-weight bias, and the first attempt got
+    # that wrong in an instructive way. Forcing w to 0 frame-wide does not test
+    # the terms at all: purkinjeShift and the pooling are called only when
+    # w > 0, so the CALLER's gate makes both inert whatever the terms do
+    # internally -- the mutation passed. Halving purkinjeStrength halves w
+    # everywhere while keeping it non-zero, so a term carrying `* w` shrinks with
+    # it and one that has lost it does not.
+    HALF = ["--purkinje-strength", "0.35"]
+    spec, e1 = _pk_render(workdir, "spec",
+                          ["--purkinje", "--no-purkinje-acuity", "--no-purkinje-noise"])
+    acu, e2 = _pk_render(workdir, "acu", ["--purkinje", "--no-purkinje-noise"])
+    noi, e3 = _pk_render(workdir, "noi", ["--purkinje", "--no-purkinje-acuity"])
+    h_spec, e4 = _pk_render(workdir, "h_spec",
+                            ["--purkinje", "--no-purkinje-acuity", "--no-purkinje-noise"] + HALF)
+    h_acu, e5 = _pk_render(workdir, "h_acu", ["--purkinje", "--no-purkinje-noise"] + HALF)
+    h_noi, e6 = _pk_render(workdir, "h_noi", ["--purkinje", "--no-purkinje-acuity"] + HALF)
+    err = e1 or e2 or e3 or e4 or e5 or e6
+    if err:
+        print(f"  purkinje-terms ERROR {err}")
         failures.append("purkinje-terms")
     else:
-        ae_a, _ = compare(spec, acu)
-        ae_n2, _ = compare(spec, noi)
-        ok = ae_a > 0 and ae_n2 > 0
-        print(f"  purkinje-terms {'PASS' if ok else 'FAIL'}  over the spectral half alone, "
-              f"acuity adds {ae_a} px and rod noise {ae_n2} px (want both >0: each is its own "
-              f"toggle and neither may be dead)")
+        # ACUITY is measured by EXTENT and NOISE by AMPLITUDE, because that is
+        # how each one carries w. A smaller pooling radius touches fewer pixels
+        # while its peak at a bright edge barely moves (measured 0.957x on PAE,
+        # which is why the first version of this read the wrong statistic);
+        # noise is a multiply, so its peak halves exactly with w.
+        pa_full, _ = compare(spec, acu)
+        pa_half, _ = compare(h_spec, h_acu)
+        _, pn_full = compare(spec, noi)
+        _, pn_half = compare(h_spec, h_noi)
+        ra = pa_half / pa_full if pa_full else 1.0
+        rn = pn_half / pn_full if pn_full else 1.0
+        ok = pa_full > 0 and pn_full > 0 and ra <= 0.85 and rn <= 0.7
+        print(f"  purkinje-terms {'PASS' if ok else 'FAIL'}  halving the strength takes acuity's "
+              f"reach from {pa_full} to {pa_half} px ({ra:.3f}x, want <=0.85) and rod noise's peak "
+              f"from {pn_full:.4f} to {pn_half:.4f} ({rn:.3f}x, want <=0.7) -- each term is scaled "
+              f"by w, and one that lost its `* w` does not shrink when w does")
         if not ok:
             failures.append("purkinje-terms")
 
+    # --- purkinje-sharpen --------------------------------------------------
+    # THE ONLY ARM IN THE SUITE THAT RENDERS --sharpen AT ALL. sceneToToned is
+    # called five times under it, and the four neighbour taps were previously
+    # executed by nothing: --sharpen appears once in this file (with the shift
+    # off) and never in goldens.py, so the whole tap path was dead under gate
+    # conditions.
+    #
+    # WHAT IT HOLDS, stated plainly because it is less than it looks: that the
+    # sharpen taps run the stage, and that they are inert where the weight is
+    # zero. It CANNOT distinguish a tap pooling its own neighbourhood from all
+    # four pooling the centre's -- both produce a plausible frame, and the
+    # difference is a fraction of a texel in an unsharp mask. That claim rests on
+    # the signature, which now takes the coordinate ALONE and derives the sample
+    # from it, so a mismatched pair is unrepresentable rather than merely untested.
+    sh_on, e1 = _pk_render(workdir, "sh_on",
+                           ["--purkinje", "--no-purkinje-noise", "--sharpen", "0.8"])
+    sh_off, e2 = _pk_render(workdir, "sh_off",
+                            ["--purkinje", "--no-purkinje-noise", "--no-purkinje-acuity",
+                             "--sharpen", "0.8"])
+    ZERO_W = ["--purkinje-bias", "-30"]
+    sh_z_on, e3 = _pk_render(workdir, "sh_z_on",
+                             ["--purkinje", "--no-purkinje-noise", "--sharpen", "0.8"] + ZERO_W)
+    sh_z_off, e4 = _pk_render(workdir, "sh_z_off",
+                              ["--purkinje", "--no-purkinje-noise", "--no-purkinje-acuity",
+                               "--sharpen", "0.8"] + ZERO_W)
+    err = e1 or e2 or e3 or e4
+    if err:
+        print(f"  purkinje-sharpen ERROR {err}")
+        failures.append("purkinje-sharpen")
+    else:
+        live, _ = compare(sh_off, sh_on)
+        zero, _ = compare(sh_z_off, sh_z_on)
+        ok = live > 0 and zero == 0
+        print(f"  purkinje-sharpen {'PASS' if ok else 'FAIL'}  under --sharpen the pooling moves "
+              f"{live} px at the shipping ramp and {zero} with the weight forced to zero (want >0 "
+              f"and exactly 0). The only arm that executes the four neighbour taps at all")
+        if not ok:
+            failures.append("purkinje-sharpen")
+
     # --- purkinje-strength -------------------------------------------------
-    half, _ = _pk_render(workdir, "half",
-                         ["-E", "1.0", "--purkinje", "--purkinje-strength", "0.35",
+    half, e_h = _pk_render(workdir, "half",
+                         ["--purkinje", "--purkinje-strength", "0.35",
                           "--purkinje-debug"])
-    zero, _ = _pk_render(workdir, "zero",
-                         ["-E", "1.0", "--purkinje", "--purkinje-strength", "0"])
-    if not (half and zero):
-        print("  purkinje-strength ERROR (render failed)")
+    zero, e_z = _pk_render(workdir, "zero",
+                         ["--purkinje", "--purkinje-strength", "0"])
+    if e_h or e_z:
+        print(f"  purkinje-strength ERROR {e_h or e_z}")
         failures.append("purkinje-strength")
     else:
         # Half the DEFAULT strength must read half the weight, at a patch where
@@ -4422,13 +4527,9 @@ def run_purkinje_gate(workdir):
     authored = os.path.join(workdir, "pk_authored.cscn")
     cscn_copy(os.path.join(ROOT, "assets", PK_SCENE), authored, lambda d: d["post"].update(
         {"purkinje": {"enabled": True, "strength": 0.55}}))
-    a_out = os.path.join(workdir, "pk_authored.ppm")
-    c_out = os.path.join(workdir, "pk_bycli.ppm")
-    n_out = os.path.join(workdir, "pk_authoff.ppm")
-    e1 = render(authored, a_out, PK_PIN + ["-E", "1.0"])
-    e2 = render(os.path.join(ROOT, "assets", PK_SCENE), c_out,
-                PK_PIN + ["-E", "1.0", "--purkinje", "--purkinje-strength", "0.55"])
-    e3 = render(authored, n_out, PK_PIN + ["-E", "1.0", "--no-purkinje"])
+    a_out, e1 = _pk_render(workdir, "authored", [], scene=authored)
+    c_out, e2 = _pk_render(workdir, "bycli", ["--purkinje", "--purkinje-strength", "0.55"])
+    n_out, e3 = _pk_render(workdir, "authoff", ["--no-purkinje"], scene=authored)
     if e1 or e2 or e3:
         print(f"  purkinje-off ERROR {e1 or e2 or e3}")
         failures.append("purkinje-off")
@@ -4446,7 +4547,7 @@ def run_purkinje_gate(workdir):
     dump = os.path.join(workdir, "pk_config.json")
     err = render(os.path.join(ROOT, "assets", PK_SCENE),
                  os.path.join(workdir, "pk_cfg.ppm"),
-                 PK_PIN + ["-E", "1.0", "--config-dump", dump])
+                 PK_PIN + ["--config-dump", dump])
     if err or not os.path.exists(dump):
         print(f"  purkinje-config ERROR {err or 'no dump'}")
         failures.append("purkinje-config")
@@ -4469,13 +4570,13 @@ def run_purkinje_gate(workdir):
             failures.append("purkinje-config")
 
     # --- purkinje-det ------------------------------------------------------
-    det, _ = _pk_render(workdir, "det", ["-E", "1.0", "--purkinje"])
-    heavy, _ = _pk_render(workdir, "heavy", ["-E", "1.0", "--purkinje"])
-    if not (det and heavy):
-        print("  purkinje-det ERROR (render failed)")
+    det_a, e_a = _pk_render(workdir, "det_a", ["--purkinje"])
+    det_b, e_b = _pk_render(workdir, "det_b", ["--purkinje"])
+    if e_a or e_b:
+        print(f"  purkinje-det ERROR {e_a or e_b}")
         failures.append("purkinje-det")
     else:
-        ae, _ = compare(det, heavy)
+        ae, _ = compare(det_a, det_b)
         ok = ae == 0
         print(f"  purkinje-det {'PASS' if ok else 'FAIL'}  {ae} px between two runs of the full "
               f"stack (want 0: the rod noise rides the frame seed, which is deterministic across "
@@ -4484,6 +4585,7 @@ def run_purkinje_gate(workdir):
             failures.append("purkinje-det")
 
     return failures
+
 
 def run_dither_gate(workdir):
     fixture = os.path.join(ROOT, "assets", "aerial_fixture.gltf")
@@ -14282,8 +14384,9 @@ def run_fixture_gen_gate(workdir):
     script moves the writes -- which buys this coverage without 34 scripts having to learn
     a convention they have no other use for. The scratch directory has to MIRROR the tree,
     not just hold the script: the non-golden PNGs are what the textured fixtures read, and
-    one generator loads a module from ../tools, which is symlinked rather than copied
-    because nothing writes outside its own directory.
+    one generator loads a module from ../tools, and one reads constants out of
+    ../cetra/shaders/include; both are symlinked rather than copied because
+    nothing writes outside its own directory.
     """
     src_dir = os.path.join(ROOT, "assets")
     gens = sorted(glob.glob(os.path.join(src_dir, "gen_*.py")))
@@ -14310,6 +14413,15 @@ def run_fixture_gen_gate(workdir):
         tools_link = os.path.join(run_root, "tools")
         if not os.path.exists(tools_link):
             os.symlink(os.path.join(ROOT, "tools"), tools_link)
+        # ...and ../cetra, for the same reason one level further out:
+        # gen_purkinje_fixture reads the shipped ramp edges and the rod tint out
+        # of the shader includes rather than restating them, so its straddle
+        # asserts are claims about the REAL ramp instead of about its own copy.
+        # Symlinked, not copied: nothing here writes into it, and a mirror of the
+        # engine tree per generator would be absurd.
+        cetra_link = os.path.join(run_root, "cetra")
+        if not os.path.exists(cetra_link):
+            os.symlink(os.path.join(ROOT, "cetra"), cetra_link)
         # ALL the generators, not just the one under test: gen_layer_vt_fixture
         # imports gen_layer_fixture for its shared constants, and a mirror
         # without the sibling raised ModuleNotFoundError -- which the classifier

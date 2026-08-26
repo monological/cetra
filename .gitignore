@@ -25,3 +25,7 @@ VERSION
 # with: blender --background --python assets/ivy_arcade/build_arcade.py
 assets/ivy_arcade/ivy_arcade.gltf
 assets/ivy_arcade/ivy_arcade.bin
+
+# The GUI's Dump Config button writes here, into the cwd (gui.c). A tuned
+# session is somebody's working state, not a checked-in default.
+cetra_config.json

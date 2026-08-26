@@ -396,17 +396,36 @@ static void print_usage(const char* prog) {
 // become a silently dead meter.
 #define METER_RADIUS_MIN 0.02f
 
-// One bounded float flag. Bounded because the six metering knobs use a negative
-// sentinel for "not given", so an out-of-range value would otherwise be swallowed
-// by the same test that means absence -- which is the shape this file just spent a
-// commit removing from -E. Rejected here, matching post.metering's parser.
-static int _meter_arg(int argc, char** argv, int* i, float lo, float hi, float* out) {
+/*
+ * One bounded float flag. Bounded because these knobs use a negative sentinel
+ * for "not given", so an out-of-range value would otherwise be swallowed by the
+ * same test that means absence -- the shape this file spent a commit removing
+ * from -E. Rejected here, matching post.metering's and post.purkinje's parsers.
+ *
+ * strtod with an end pointer rather than atof, which maps a non-numeric argument
+ * to 0.0 -- and where the value doubles as an enable, 0.0 reads as "on, at
+ * nothing": the flag says enabled, the image is unchanged, and the next flag is
+ * swallowed as the value. --dither's reasoning, applied to every caller rather
+ * than restated per arm.
+ *
+ * The bound is written as `!(v >= lo && v <= hi)` and NOT as `v < lo || v > hi`.
+ * The two differ on NaN, which strtod accepts from the literal "nan": the second
+ * form is false on both halves and lets it through, and NaN then propagates into
+ * whatever the value drives. This form rejects it.
+ */
+static int _ranged_arg(int argc, char** argv, int* i, float lo, float hi, float* out) {
     const char* flag = argv[*i];
     if (++(*i) >= argc) {
         fprintf(stderr, "Error: %s requires an argument\n", flag);
         return -1;
     }
-    float v = (float)atof(argv[*i]);
+    char* end = NULL;
+    double d = strtod(argv[*i], &end);
+    if (end == argv[*i] || *end != '\0') {
+        fprintf(stderr, "Error: %s needs a number, got '%s'\n", flag, argv[*i]);
+        return -1;
+    }
+    float v = (float)d;
     if (!(v >= lo && v <= hi)) {
         fprintf(stderr, "Error: %s %g is outside [%g, %g]\n", flag, (double)v, (double)lo,
                 (double)hi);
@@ -984,19 +1003,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
         } else if (strcmp(argv[i], "--adapt-up") == 0) {
-            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->adapt_up) != 0)
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->adapt_up) != 0)
                 return -1;
         } else if (strcmp(argv[i], "--adapt-down") == 0) {
-            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->adapt_down) != 0)
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->adapt_down) != 0)
                 return -1;
         } else if (strcmp(argv[i], "--meter-radius") == 0) {
-            if (_meter_arg(argc, argv, &i, METER_RADIUS_MIN, 1.0f, &args->meter_radius) != 0)
+            if (_ranged_arg(argc, argv, &i, METER_RADIUS_MIN, 1.0f, &args->meter_radius) != 0)
                 return -1;
         } else if (strcmp(argv[i], "--meter-low") == 0) {
-            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->meter_low) != 0)
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->meter_low) != 0)
                 return -1;
         } else if (strcmp(argv[i], "--meter-high") == 0) {
-            if (_meter_arg(argc, argv, &i, 0.0f, 1.0f, &args->meter_high) != 0)
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->meter_high) != 0)
                 return -1;
         } else if (strcmp(argv[i], "--no-water") == 0) {
             // Does NOT imply --water, obviously, and it wins over it: this is the
@@ -1671,60 +1690,27 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--no-purkinje") == 0) {
             args->no_purkinje = 1;
         } else if (strcmp(argv[i], "--purkinje-strength") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->purkinje_strength) != 0)
                 return -1;
-            }
-            // strtod with an end pointer, not atof: the value doubles as an
-            // enable, so a typo reading 0 would arm the feature at zero strength
-            // -- the flag says on, the frame is identical, and the next argument
-            // is swallowed as the value. --dither's reasoning.
-            char* end = NULL;
-            double v = strtod(argv[i], &end);
-            if (end == argv[i] || *end != '\0' || v < 0.0 || v > 1.0) {
-                fprintf(stderr, "Error: --purkinje-strength expects a number in [0, 1]\n");
-                return -1;
-            }
-            args->purkinje_strength = (float)v;
             args->purkinje = 1;
         } else if (strcmp(argv[i], "--purkinje-bias") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
-                return -1;
-            }
-            char* end = NULL;
-            double v = strtod(argv[i], &end);
             // Signed and wide: negative drags the mesopic band toward daylight,
-            // which is the only way a gate arm reaches the effect on a lit frame.
-            if (end == argv[i] || *end != '\0' || v < -30.0 || v > 30.0) {
-                fprintf(stderr, "Error: --purkinje-bias expects stops in [-30, 30]\n");
+            // which is the only way to reach the effect on a lit frame.
+            if (_ranged_arg(argc, argv, &i, -30.0f, 30.0f, &args->purkinje_bias_ev) != 0)
                 return -1;
-            }
-            args->purkinje_bias_ev = (float)v;
+            args->purkinje = 1;
+        } else if (strcmp(argv[i], "--purkinje-acuity") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 4.0f, &args->purkinje_acuity) != 0)
+                return -1;
+            args->purkinje = 1;
+        } else if (strcmp(argv[i], "--purkinje-noise") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 4.0f, &args->purkinje_noise) != 0)
+                return -1;
             args->purkinje = 1;
         } else if (strcmp(argv[i], "--no-purkinje-acuity") == 0) {
             args->no_purkinje_acuity = 1;
         } else if (strcmp(argv[i], "--no-purkinje-noise") == 0) {
             args->no_purkinje_noise = 1;
-        } else if (strcmp(argv[i], "--purkinje-acuity") == 0 ||
-                   strcmp(argv[i], "--purkinje-noise") == 0) {
-            const bool is_acuity = strcmp(argv[i], "--purkinje-acuity") == 0;
-            if (++i >= argc) {
-                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
-                return -1;
-            }
-            char* end = NULL;
-            double v = strtod(argv[i], &end);
-            if (end == argv[i] || *end != '\0' || v < 0.0 || v > 4.0) {
-                fprintf(stderr, "Error: %s expects a number in [0, 4]\n",
-                        is_acuity ? "--purkinje-acuity" : "--purkinje-noise");
-                return -1;
-            }
-            if (is_acuity)
-                args->purkinje_acuity = (float)v;
-            else
-                args->purkinje_noise = (float)v;
-            args->purkinje = 1;
         } else if (strcmp(argv[i], "--purkinje-debug") == 0) {
             args->debug_purkinje = 1;
         } else if (strcmp(argv[i], "--dof") == 0) {
@@ -2988,10 +2974,6 @@ int main(int argc, char** argv) {
             fx->purkinje_strength = args.purkinje_strength;
         if (args.purkinje_bias_ev > -900.0f)
             fx->purkinje_bias_ev = args.purkinje_bias_ev;
-        // Sticky, and LAST. Every value flag above arms the feature, so a plain
-        // `purkinje = 0` would be order-dependent -- --no-purkinje followed by
-        // --purkinje-strength 0.5 would render a shifted frame. The --no-moon
-        // lesson, where every off leg of a gate twin was silently on.
         if (args.purkinje_acuity >= 0.0f)
             fx->purkinje_acuity = args.purkinje_acuity;
         if (args.purkinje_noise >= 0.0f)
@@ -3000,6 +2982,10 @@ int main(int argc, char** argv) {
             fx->purkinje_acuity = 0.0f;
         if (args.no_purkinje_noise)
             fx->purkinje_noise = 0.0f;
+        // Sticky, and LAST. Every value flag above arms the feature, so a plain
+        // `purkinje = 0` would be order-dependent -- --no-purkinje followed by
+        // --purkinje-strength 0.5 would render a shifted frame. The --no-moon
+        // lesson, where every off leg of a gate twin was silently on.
         if (args.no_purkinje)
             fx->purkinje_enabled = false;
     }
