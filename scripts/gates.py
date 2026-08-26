@@ -4094,6 +4094,8 @@ def run_purkinje_gate(workdir):
       purkinje-ladder    the drain varies ALONG the ladder, with an interior
                          crossover -- the arm a global implementation fails
       purkinje-rowhue    the rod-tint row moves least of all rows
+      purkinje-scotopic  the rod WEIGHTS: red goes far darker than blue, which
+                         no chromaticity read can see
       purkinje-lamp      a bright disc keeps its colour while its dim surround drains
       purkinje-scene     a night frame moves, a daylight frame is 0 px
       purkinje-terms     acuity and noise are separable and each does something
@@ -4222,21 +4224,23 @@ def run_purkinje_gate(workdir):
         failures.append("purkinje-blue")
 
     # --- purkinje-ladder ---------------------------------------------------
-    # THE arm a global implementation cannot pass: a whole-frame weight drains
-    # every rung identically, so this comes out flat with no interior crossover.
-    drains = []
-    for rung in rungs:
-        a = _pk_chroma(v_off[("red", rung)])
-        b = _pk_chroma(v_on[("red", rung)])
-        drains.append(math.hypot(a[0] - b[0], a[1] - b[1]))
-    rising = all(drains[i] <= drains[i + 1] + 0.004 for i in range(len(drains) - 1))
-    span = drains[-1] - drains[0]
-    interior = [i for i in range(1, len(drains) - 1)
-                if drains[i] > drains[0] + 0.2 * span and drains[i] < drains[-1] - 0.2 * span]
-    ok = rising and span >= 0.05 and len(interior) >= 1
-    print(f"  purkinje-ladder {'PASS' if ok else 'FAIL'}  the red row's shift along 8 rungs: "
-          f"{drains[0]:.4f} -> {drains[-1]:.4f} (span {span:.4f}, want >=0.05), monotone="
-          f"{rising}, {len(interior)} interior rungs (want >=1; a global weight is flat with 0)")
+    # THE arm a global implementation cannot pass, and it reads the WEIGHT
+    # ITSELF rather than a colour shift. The first version measured the red
+    # row's chroma displacement along the ladder and PASSED the global
+    # mutation: with a uniform weight the displacement still varies rung to
+    # rung, because the tone curve is not linear, so it was reading curvature
+    # rather than the ramp. The weight is the quantity that must vary per pixel,
+    # so the weight is what to look at.
+    ws = [seen[("neutral", r)][0] / 255.0 for r in rungs]
+    rising = all(ws[i] <= ws[i + 1] + 0.01 for i in range(len(ws) - 1))
+    span = ws[-1] - ws[0]
+    interior = [i for i in range(1, len(ws) - 1)
+                if ws[0] + 0.15 * span < ws[i] < ws[-1] - 0.15 * span]
+    ok = rising and span >= 0.5 and len(interior) >= 2 and ws[0] <= 0.02
+    print(f"  purkinje-ladder {'PASS' if ok else 'FAIL'}  the rod weight along 8 rungs of ONE "
+          f"chromaticity: {ws[0]:.3f} -> {ws[-1]:.3f} (span {span:.3f}, want >=0.5), monotone="
+          f"{rising}, {len(interior)} interior rungs (want >=2), lit end {ws[0]:.3f} (want "
+          f"<=0.02). A global weight is CONSTANT here: span 0, 0 interior.")
     if not ok:
         failures.append("purkinje-ladder")
 
@@ -4255,6 +4259,33 @@ def run_purkinje_gate(workdir):
           ", ".join(f"{k} {v:.4f}" for k, v in sorted(moves.items(), key=lambda kv: kv[1])))
     if not ok:
         failures.append("purkinje-rowhue")
+
+    # --- purkinje-scotopic -------------------------------------------------
+    # THE ROD WEIGHTS THEMSELVES, and nothing else in this group can see them.
+    # Every colour arm above reads CHROMATICITY, which is scale-invariant -- the
+    # rod image is (rod luminance) x (tint), so its hue is the tint's whatever
+    # the weights are. Replacing PURKINJE_SCOTOPIC_W with photopic luma passed
+    # the entire group, which means "reds go near-black" was untested.
+    #
+    # So this reads LUMINANCE. The rows are normalised to equal PHOTOPIC
+    # luminance by the generator, so off they are equally bright by
+    # construction; on, red must go far darker than blue, because V'(610) is
+    # about 1/32 of V(610) while blue sits near the rods' own peak. Under
+    # photopic weights the two would stay equal, which is the mutation.
+    def _luma(c):
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+    lum_off = {r: _luma(v_off[(r, dim)]) for r in ("red", "blue")}
+    lum_on = {r: _luma(v_on[(r, dim)]) for r in ("red", "blue")}
+    base = abs(lum_off["red"] - lum_off["blue"]) / max(lum_off["red"], 1.0)
+    ratio = (lum_on["red"] / lum_on["blue"]) if lum_on["blue"] else 1.0
+    ok = base <= 0.15 and ratio <= 0.6
+    print(f"  purkinje-scotopic {'PASS' if ok else 'FAIL'}  the rows are equally bright OFF "
+          f"({lum_off['red']:.1f} vs {lum_off['blue']:.1f}, {base:.3f} apart, want <=0.15 -- the "
+          f"generator normalises them to equal photopic luma), and ON red reads {ratio:.3f} of "
+          f"blue (want <=0.6: rods barely see red. Photopic weights read 1.000)")
+    if not ok:
+        failures.append("purkinje-scotopic")
 
     # --- purkinje-lamp -----------------------------------------------------
     # The per-pixel claim on a REAL frame: the moon's disc is locally bright and
