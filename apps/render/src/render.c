@@ -75,6 +75,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -E, --exposure <f>     Fixed exposure: a linear multiplier, or an EV bias\n"
             "                         (any sign) under a post.camera. Pins the frame\n");
     fprintf(stderr, "      --no-auto-exposure Fixed exposure instead of eye adaptation\n");
+    fprintf(stderr, "      --auto-exposure    Keep adapting even where -E or a scene file pins\n");
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
     fprintf(stderr,
@@ -664,6 +665,13 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_recenter = 1;
         } else if (strcmp(argv[i], "--no-auto-exposure") == 0) {
             args->auto_exposure_override = 0;
+            // The other half of a tri-state that only ever had one. Naming an
+            // exposure pins the frame, and every fixture in the corpus does --
+            // so without this there is no way to ask for a live meter on a
+            // scene that authored one, and the exposure gate has to synthesise
+            // a .cscn twin at runtime to reach the path at all.
+        } else if (strcmp(argv[i], "--auto-exposure") == 0) {
+            args->auto_exposure_override = 1;
         } else if (strcmp(argv[i], "--no-flip-uv") == 0) {
             args->no_flip_uv = 1;
         } else if (strcmp(argv[i], "--flip-uv") == 0) {
