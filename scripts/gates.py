@@ -8826,6 +8826,198 @@ def _water_shore_fall(path, window):
     return falls[len(falls) // 2] if falls else float("nan")
 
 
+# ----------------------------------------------------------------------------
+# Water after dark (spec 11.84). No arm in the water or beach groups had ever
+# rendered a sea with the sun below the horizon: both fixtures author +35 and
+# +32 degrees, and the one arm that moves the sun authors +22. So the entire
+# night half of this feature could have shipped broken from any spec since
+# 11.41 without a gate going red, and two defects did.
+#
+# The variant is the committed fixture with its LIGHTS REMOVED, which is the
+# whole instrument. water_fixture authors a 1.2-lux studio key that does not
+# know what time it is, and it outranks a 0.33-lux moon -- so on the file as
+# committed the pick at midnight is that key, correctly, and the sun/moon
+# crossover this group exists to measure is invisible. Removing it leaves the
+# sky's own sun and moon as the only candidates.
+WATER_NIGHT_SUN_DOWN = "-12"
+# Straddles the crossover, which measurement puts between +1 and 0: the sun is
+# still 3.33 lux at +1 and below the moon's 0.045 at 0. Four rungs either side
+# rather than two, because a ladder that only just clears the crossing cannot
+# tell a correct pick from one that happens to switch at the wrong elevation.
+#
+# The below-horizon rungs are what falsify the by-name pick this replaced --
+# that one answers sky_sun at every rung, including the ones where its
+# intensity is exactly 0. The above-horizon rungs falsify the opposite error,
+# a pick that always takes the moon.
+WATER_NIGHT_PICK_LADDER = [("20", "sky_sun"), ("8", "sky_sun"), ("3", "sky_sun"),
+                           ("1", "sky_sun"), ("0", "sky_moon"), ("-2", "sky_moon"),
+                           ("-6", "sky_moon"), ("-12", "sky_moon")]
+# The moon put where the glitter framing can see it. Its ELEVATION is its own,
+# but its intensity rides the SUN's (sky_night_factor), which is why the sun
+# stays at -12 while the moon sits at +22 -- the same elevation and azimuth
+# WATER_GLITTER_SUN uses, so the streak lands in the box that arm already
+# derived rather than in a second one written by hand.
+WATER_NIGHT_MOON = ["--moon", "--moon-elevation", "22", "--moon-azimuth", "180"]
+# Measured 16,318 px. A third of it is clear of noise and well under the signal.
+WATER_NIGHT_GLITTER_MIN_PX = 5000
+# A directional that is BRIGHT by intensity and nearly black by colour, which is the
+# only shape that can tell `intensity x peak` from `intensity` alone. Every real
+# candidate in the corpus -- sun, moon, both fixtures' keys -- is near-white, so the
+# two rules agree everywhere and the peak factor was unfalsifiable without this.
+#
+# 2.0 x 0.04 = 0.08 against the moon's 0.33 x ~1.0: peak-weighted the moon wins,
+# by raw intensity this does, 2.0 to 0.33. Not a contrived shape -- an authored fill
+# at high intensity over a near-black colour is the same trick 11.49 measured on 30 of
+# 32 emissive materials.
+WATER_NIGHT_DECOY = {"name": "DimDecoy", "type": "directional",
+                     "direction": [-0.35, -0.82, -0.45], "color": [0.04, 0.04, 0.04],
+                     "intensity": 2.0, "cast_shadows": False}
+# Caustics measured at 27,450 px moonlit and 26,143 by day, against exactly 0
+# with nothing above the horizon. The floor is shared by both live legs.
+WATER_NIGHT_CAUSTIC_MIN_PX = 8000
+
+
+def _water_night_variant(src, dst, mutate=None):
+    """The fixture with no lights of its own, so the sky's sun and moon are the candidates.
+
+    `mutate` runs after the strip, for an arm that also needs its own framing or wave
+    model -- the _water_glitter_variant shape, and for its reason: what this group varies
+    is not always inside the water block.
+    """
+    def strip(d):
+        d["lights"] = []
+        if mutate:
+            mutate(d)
+
+    cscn_copy(src, dst, strip)
+
+
+def run_water_night_gate(workdir):
+    """The sea after dark: which light it takes, and what it does when there is none.
+
+    water-night-pick     --water-probe names the picked directional across an elevation
+                         ladder straddling the sun/moon crossover. The by-name pick this
+                         replaced answers sky_sun at every rung, including the four where
+                         its intensity is exactly 0.
+    water-night-weight   the rank is intensity x PEAK CHANNEL, not intensity. The only
+                         arm that can see the difference: every real candidate in the
+                         corpus is near-white, so it takes an authored decoy to separate
+                         the two rules at all.
+    water-night-glitter  the moon puts a specular track on the water. Exactly 0 before
+                         the pick moved, because the glitter multiplies sunRadiance and
+                         a faded sun's is the zero vector.
+    water-night-caustic  caustics are OFF with nothing above the horizon, and LIVE under
+                         both a moon and a sun. The dark leg alone passes on a build with
+                         no caustics at all, so neither leg is safe without the others.
+
+    Deliberately NOT here: whether a moonlit sea is LIT. The in-scatter is an authored
+    constant until 11.84's second half, so the water band reads 0.23850 with a moon
+    against 0.23848 without -- one part in 10,000, and a property no pick can deliver.
+    That arm lands with the half that earns it.
+    """
+    failures = []
+    scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
+    base = WATER_PIN + WATER_NO_CATCHER
+    night = os.path.join(workdir, "water_night.cscn")
+    _water_night_variant(scene, night)
+
+    # Which light, across the ladder. Read through the probe rather than off a frame:
+    # a sea lit by the wrong directional still looks like a sea.
+    picks, want = [], []
+    for elev, expect in WATER_NIGHT_PICK_LADDER:
+        head, _ = _water_probe(base + WATER_NIGHT_MOON + ["--sun-elevation", elev],
+                               scene=night)
+        picks.append((elev, head.get("key", "?"), float(head.get("intensity", "0"))))
+        want.append(expect)
+    got = [p[1] for p in picks]
+    # Every rung must also be DELIVERING light. The defect was a key with a direction and
+    # no radiance, which "the right name" alone would not have caught.
+    lit = all(p[2] > 0.0 for p in picks)
+    ok = got == want and lit
+    print(f"  water-night-pick {'PASS' if ok else 'FAIL'}  " +
+          " ".join(f"{e}:{k}@{i:.3f}" for e, k, i in picks) +
+          f" (want {' '.join(want)}, all delivering: {lit})")
+    if not ok:
+        failures.append("water-night-pick")
+
+    # The peak-channel factor, which nothing else in the suite can see: every real
+    # candidate is near-white, so `intensity x peak` and `intensity` agree on all of them.
+    # The moon has to beat a light carrying three times its raw intensity and a fortieth
+    # of its colour.
+    decoy = os.path.join(workdir, "water_night_decoy.cscn")
+    _water_night_variant(scene, decoy,
+                         lambda d: d["lights"].append(dict(WATER_NIGHT_DECOY)))
+    head, _ = _water_probe(base + ["--moon", "--sun-elevation", WATER_NIGHT_SUN_DOWN],
+                           scene=decoy)
+    picked = head.get("key", "?")
+    ok = picked == "sky_moon"
+    print(f"  water-night-weight {'PASS' if ok else 'FAIL'}  picked {picked} over a "
+          f"{WATER_NIGHT_DECOY['intensity']}-intensity light at colour "
+          f"{WATER_NIGHT_DECOY['color'][0]} (want sky_moon: ranking by raw intensity "
+          f"takes the decoy, weighting by peak channel takes the moon)")
+    if not ok:
+        failures.append("water-night-weight")
+
+    # The moon's own specular track, in the box the daylight glitter arm derives.
+    glit = os.path.join(workdir, "water_night_glitter.cscn")
+
+    def frame_it(d):
+        d["camera"] = dict(WATER_GLITTER_CAMERA)
+        _merge_water_block(d.setdefault("water", {}), WATER_GLITTER_WATER)
+
+    _water_night_variant(scene, glit, frame_it)
+    g_common = base + WATER_NIGHT_MOON + ["--sun-elevation", WATER_NIGHT_SUN_DOWN]
+    g_on = os.path.join(workdir, "water_night_glitter_on.ppm")
+    g_off = os.path.join(workdir, "water_night_glitter_off.ppm")
+    err = render(glit, g_on, g_common)
+    if not err:
+        err = render(glit, g_off, g_common + ["--no-water-glitter"])
+    if err:
+        print(f"  water-night-glitter ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-night-glitter")
+    else:
+        ae_g, _ = compare(g_off, g_on)
+        ok = ae_g >= WATER_NIGHT_GLITTER_MIN_PX
+        print(f"  water-night-glitter {'PASS' if ok else 'FAIL'}  the moon's track moves "
+              f"{ae_g} px (want >={WATER_NIGHT_GLITTER_MIN_PX}; exactly 0 before the pick "
+              f"reached a light that delivers any)")
+        if not ok:
+            failures.append("water-night-glitter")
+
+    # Caustics: off in true darkness, live under either source.
+    caustic = os.path.join(workdir, "water_night_caustic.cscn")
+    _water_night_variant(scene, caustic,
+                         lambda d: _merge_water_block(d.setdefault("water", {}),
+                                                      WATER_GLITTER_WATER))
+    legs = (("dark", ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"]),
+            ("moonlit", ["--sun-elevation", WATER_NIGHT_SUN_DOWN] + WATER_NIGHT_MOON),
+            ("day", ["--sun-elevation", "35"]))
+    moved, cerr = {}, None
+    for tag, flags in legs:
+        on = os.path.join(workdir, f"water_night_caustic_{tag}_on.ppm")
+        off = os.path.join(workdir, f"water_night_caustic_{tag}_off.ppm")
+        cerr = render(caustic, on, base + flags) or \
+            render(caustic, off, base + flags + ["--no-water-caustics"])
+        if cerr:
+            break
+        moved[tag], _ = compare(off, on)
+    if cerr:
+        print(f"  water-night-caustic ERROR render failed: {cerr.strip()[-200:]}")
+        failures.append("water-night-caustic")
+    else:
+        ok = (moved["dark"] == 0 and
+              moved["moonlit"] >= WATER_NIGHT_CAUSTIC_MIN_PX and
+              moved["day"] >= WATER_NIGHT_CAUSTIC_MIN_PX)
+        print(f"  water-night-caustic {'PASS' if ok else 'FAIL'}  dark {moved['dark']} px "
+              f"(want 0: nothing above the horizon focuses nothing), moonlit "
+              f"{moved['moonlit']} and day {moved['day']} px (want "
+              f">={WATER_NIGHT_CAUSTIC_MIN_PX} on both, or the dark leg is 0-vs-0)")
+        if not ok:
+            failures.append("water-night-caustic")
+
+    return failures
+
+
 def run_water_gate(workdir):
     """The water surface is alive, deterministic, and absorbs with path length.
 
@@ -17961,6 +18153,8 @@ GATE_GROUPS = [
      run_water_gate),
     ("beach", "the shoaling bed the eye can see (surf ring, turquoise, bound; spec 11.44):",
      run_beach_gate),
+    ("water-night", "the sea after dark: which light it takes, and none (spec 11.84):",
+     run_water_night_gate),
     ("emissive", "emissive geometry as area lights (fit, intent, light; spec 11.49):",
      run_emissive_gate),
     ("probe-set", "clustered specular probes (selection, blend, tenancy; spec 11.70):",
