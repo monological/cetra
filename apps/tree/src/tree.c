@@ -773,6 +773,10 @@ typedef struct {
     int no_night_floor; // the floor is ON here too, for the same reason
     int no_moon;        // and the moon: this app is where a night sky is looked at
     float moon_size;    // times life size the disc is drawn (<0 = the library's 1.0)
+    // The ONE look scale, driving the disc AND the light it casts -- so this is the knob
+    // that lights the sea, where moon_size only makes the disc easier to see. Separate
+    // because a life-size moon is a dozen pixels and the two wants are independent.
+    float moon_brightness; // <0 = the library's 1.0
     float day_cycle;    // real seconds per 24h day; 0 = frozen clock, <0 = cycle off
     float time_of_day;  // hours 0-24, solar noon at 12 (-1 = unset)
     float star_hour; // Milky Way rotation about the pole, degrees
@@ -859,6 +863,8 @@ static void print_usage(const char* prog) {
     printf("                          follow the sun, so the day cycle moves it)\n");
     printf("      --moon-size <f>     Draw the moon f times life size (default 1). The\n");
     printf("                          disc and its halo only -- the light never scales\n");
+    printf("      --moon-brightness <f>  Scale the moon (default 1). Drives the disc AND\n");
+    printf("                          the light, so this is what lights the sea\n");
     printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
     printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
@@ -914,6 +920,7 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     a->day_cycle = -1.0f;
     a->time_of_day = -1.0f;
     a->moon_size = -1.0f;
+    a->moon_brightness = -1.0f;
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
     a->water_level = -9999.0f;
@@ -1008,6 +1015,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->no_moon = 1;
         } else if (!strcmp(s, "--moon-size") && has_next) {
             a->moon_size = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--moon-brightness") && has_next) {
+            a->moon_brightness = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--day-cycle") && has_next) {
             a->day_cycle = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--time-of-day") && has_next) {
@@ -1228,8 +1237,26 @@ int main(int argc, char** argv) {
         sky->stars_enabled = args.no_stars == 0;
         sky->night_floor_enabled = args.no_night_floor == 0;
         sky->moon_enabled = args.no_moon == 0;
+        /*
+         * EXAGGERATED here where the library ships life size, and the two knobs are
+         * turned for different reasons.
+         *
+         * A life-size moon is about a dozen pixels: physically right, and it reads as a
+         * bright star rather than as the moon in a shot whose whole subject is the night
+         * sky. Size is the LOOK and scales the disc and its halo alone.
+         *
+         * Brightness is the LIGHT, and it is raised because this app's sea is the thing
+         * the moon has to sell. At 1.0 the water away from the glitter track sits at the
+         * bottom few codes -- correct for the ~0.3 lux a real moon delivers, and a picture
+         * of nothing. Raising it keeps the sea PHYSICAL, which a scatter glow would not:
+         * more moonlight is more light, and the in-scatter still tracks it.
+         */
+        sky->moon_size = 6.0f;
+        sky->moon_brightness = 4.0f;
         if (args.moon_size > 0.0f)
             sky->moon_size = args.moon_size;
+        if (args.moon_brightness >= 0.0f)
+            sky->moon_brightness = args.moon_brightness;
         sky->stars_hour_deg = args.star_hour;
         if (args.day_cycle >= 0.0f) {
             sky->cycle_enabled = true;
@@ -1632,17 +1659,19 @@ int main(int argc, char** argv) {
              * and it is where the lagoon lives: greener than the library's open-ocean
              * blue, against an extinction that is plain clear seawater.
              *
-             * It rides the GLOW rather than the albedo, and this scene is the reason the
-             * two are separate fields (spec 11.84). The sun here sits 0.8 degrees up, so
-             * almost nothing falls on this water and an albedo -- however large -- returns
-             * a nearly black sea. What is wanted is the turquoise at any hour, which is a
-             * stylised sea and not a lit one. So the app OPTS IN to that explicitly
-             * instead of getting it from a constant nobody chose, and the albedo stays 0:
-             * with a glow this size a physical term on top would be invisible anyway.
+             * It rides the ALBEDO alone (spec 11.84), so the lagoon brightens with the sun,
+             * goes warm at sunset and darkens at night -- it is water rather than paint.
+             *
+             * The GLOW stays zero deliberately. A floor under this was tried and reverted:
+             * it is exactly the authored constant 11.84 removed, wearing a new name, and it
+             * is not needed. What makes the night sea legible here is MOONLIGHT, which is
+             * real light and keeps the whole term physical -- see moon_brightness above.
+             * A scene that genuinely wants a sea glowing with no light on it can still ask,
+             * which is what the field is for; this one does not.
              */
             glm_vec3_divs(water->absorption, GROUND_UNITS_PER_METRE, water->absorption);
-            glm_vec3_zero(water->scatter_albedo);
-            glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter_glow);
+            glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter_albedo);
+            glm_vec3_zero(water->scatter_glow);
             scene->water = water;
         }
     }
