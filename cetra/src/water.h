@@ -51,7 +51,7 @@
  * These were six separate sampler2D on units 0-5, and the driver counts DECLARATIONS rather
  * than units -- so six of water_frag's sixteen went on the cascades alone and the program sat
  * exactly at its ceiling. An array is one declaration holding the same six images, which
- * takes water_frag from 16/16 to 10/16 and leaves units 2-6 and 9-10 free.
+ * takes water_frag from 16/16 to 11/16 and leaves units 2-6 and 9-10 free.
  *
  * Not a workaround for the cap: a cap counted in declarations is a cap on how many DISTINCT
  * shapes of data a program reads, and six identical fields were only ever one shape.
@@ -250,9 +250,9 @@ typedef struct Water {
     // so a bigger number is a shorter sight line. Water absorbs red first, which
     // is why the default is ordered the way it is.
     //
-    // PER WORLD UNIT, and the physical figures below are per METRE: a world whose
-    // unit is not a metre divides them by its own units-per-metre, or its sea is
-    // that factor too absorbing. Neither field below carries a length.
+    // PER WORLD UNIT, where WATER_CLEAR_ABSORPTION_PER_M is per METRE: a world whose
+    // unit is not a metre divides it by its own units-per-metre, or its sea is that
+    // factor too absorbing. The two in-scatter fields carry no length and never convert.
     vec3 absorption;
     // What the body sends back, split into a response and a floor (spec 11.84).
     //
@@ -509,8 +509,9 @@ typedef struct Water {
  * Flatten the body (or its absence) into postfx's per-frame block, so the froxel
  * volume can carry water as a second medium below the surface.
  *
- * Needs the camera to decide which side the eye is on, which is why it takes the
- * engine rather than just the water.
+ * Takes the engine for the camera, which decides which side of the surface the eye is
+ * on, and the scene for the light falling on the water -- the medium's in-scatter is
+ * DERIVED from it (spec 11.84) rather than copied off the Water.
  */
 void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine);
 
@@ -532,13 +533,15 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene, Sho
 
 /*
  * The directional the surface takes its caustics, sun lobe and foam lighting from: the
- * brightest in the scene, ranked by intensity x peak channel. NULL where no directional
- * is delivering any light, which is a real state and not an error -- an overcast night
- * has no key, and caustics that keep focusing one are focusing nothing.
+ * one DELIVERING most to a horizontal surface, which is light_effective_intensity times
+ * the cosine against up. NULL where none of them delivers anything -- no radiance, or
+ * pointing up. A real state and not an error: an overcast night has no key, and caustics
+ * that keep focusing one are focusing nothing.
  *
  * Published so a diagnostic can name the choice. The pick is not observable in a frame:
- * a sea lit by the wrong directional still looks like a sea, and until the moon existed
- * the sky's sun was the only candidate, so nothing could have disagreed.
+ * a sea lit by the wrong directional still looks like a sea. Both fixtures have always
+ * authored a key beside the sky's sun -- what the moon changed is that one of the others
+ * can now win.
  */
 const struct Light* water_key_light(const struct Scene* scene);
 

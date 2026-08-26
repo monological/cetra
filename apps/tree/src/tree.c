@@ -772,11 +772,11 @@ typedef struct {
     int no_stars; // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
     int no_moon;        // and the moon: this app is where a night sky is looked at
-    float moon_size;    // times life size the disc is drawn (<0 = the library's 1.0)
+    float moon_size;    // times life size the disc is drawn (<0 = this app's 6.0)
     // The ONE look scale, driving the disc AND the light it casts -- so this is the knob
     // that lights the sea, where moon_size only makes the disc easier to see. Separate
     // because a life-size moon is a dozen pixels and the two wants are independent.
-    float moon_brightness; // <0 = the library's 1.0
+    float moon_brightness; // <0 = this app's 2.0
     float day_cycle;    // real seconds per 24h day; 0 = frozen clock, <0 = cycle off
     float time_of_day;  // hours 0-24, solar noon at 12 (-1 = unset)
     float star_hour; // Milky Way rotation about the pole, degrees
@@ -861,10 +861,12 @@ static void print_usage(const char* prog) {
     printf("                          --sun-elevation/--sun-azimuth\n");
     printf("      --no-moon           Disable the moon (its phase and position both\n");
     printf("                          follow the sun, so the day cycle moves it)\n");
-    printf("      --moon-size <f>     Draw the moon f times life size (default 1). The\n");
-    printf("                          disc and its halo only -- the light never scales\n");
-    printf("      --moon-brightness <f>  Scale the moon (default 1). Drives the disc AND\n");
-    printf("                          the light, so this is what lights the sea\n");
+    printf("      --moon-size <f>     Draw the moon f times life size (default 6 here,\n");
+    printf("                          where the library ships 1). The disc and its halo\n");
+    printf("                          only -- the light never scales\n");
+    printf("      --moon-brightness <f>  Scale the moon (default 2 here, 1 in the\n");
+    printf("                          library). Drives the disc AND the light, so this\n");
+    printf("                          is what lights the sea\n");
     printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
     printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");

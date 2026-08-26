@@ -10,10 +10,13 @@
  * Beer-Lambert over the real path length the depth buffer gives.
  *
  * Output is LINEAR WORKING SPACE, like every other pass that writes the scene
- * HDR buffer. Anything sampled in absolute scene radiance -- the environment
- * cubemap, the authored scatter colour -- is multiplied by preExposure here; the
- * resolved scene colour is NOT, because it was written pre-exposed and would be
- * counted twice. view.glsl is the authority on that contract.
+ * HDR buffer. Anything in absolute scene radiance -- the environment cubemap, the
+ * key's own radiance, the in-scatter derived from them -- is multiplied by
+ * preExposure here; the resolved scene colour is NOT, because it was written
+ * pre-exposed and would be counted twice. view.glsl is the authority on that
+ * contract. Note the in-scatter is DERIVED and not authored since 11.84:
+ * waterScatterAlbedo is a dimensionless fraction and carries no radiance of its
+ * own, where the field it replaced was listed here as an absolute input.
  */
 
 // The full G-buffer. Every location the opaque draw-buffer list may enable has to
@@ -386,8 +389,10 @@ const float WATER_GLITTER_MAX = 400.0;
 /*
  * Value noise, for breaking foam coverage up after it has been selected.
  *
- * ALU rather than a texture: this program has no sampler declaration to spare, and a hash
- * costs less than the fetch would anyway. Smoothstep interpolation rather than linear, so
+ * ALU rather than a texture: a hash costs less than the fetch would, and a value field
+ * this small is not worth an image. (It read "no sampler declaration to spare" until
+ * 11.84 -- true when written and not since 11.45, which folded six cascades into one
+ * array and left this program at 11 of 16.) Smoothstep interpolation rather than linear, so
  * the derivative is continuous and the pattern has no lattice creases in it.
  */
 float waterHash21(vec2 p) {
@@ -1162,9 +1167,11 @@ void main() {
          *
          * Lambertian, because that is what a layer of entrained air bubbles is. The sky half
          * is the prefiltered environment at its blurriest mip rather than an irradiance
-         * cube: this program declares 16 of 16 samplers so there is no room for one, and the
-         * top mip is already a hemispherical average -- which is the same quantity, up to
-         * the pi that the sun half carries explicitly.
+         * cube: irradianceMap's unit is 11, which is WATER_SHADOW_UNIT, and a samplerCube
+         * against a sampler2DArray on one image unit is INVALID_OPERATION at draw. Not a
+         * declaration budget -- this program declares 11 of 16 since 11.45. The top mip is
+         * already a hemispherical average anyway, the same quantity up to the pi the sun
+         * half carries explicitly.
          */
         /*
          * BUBBLES (spec 11.44). Foam is a crust of entrained air, not a flat coat of paint,
@@ -1173,7 +1180,8 @@ void main() {
          * The relief is value noise sampled three times -- centre and two neighbours -- so
          * its gradient is a difference rather than a second field, which is the same reason
          * ocean.glsl derives a normal from the displacement it drew. Evaluated, not sampled:
-         * this program has no sampler left, and a bubble map would need one.
+         * a bubble map would be an image where a field will do, and it would have to tile
+         * without seams at every distance this surface is seen from.
          *
          * Two things come out of the one field. The gradient tilts the normal, so bubbles
          * catch the sun and the sky at their own angles; the value itself mottles the albedo,

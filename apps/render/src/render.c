@@ -4052,9 +4052,13 @@ int main(int argc, char** argv) {
                w->wave_model == WATER_WAVES_FFT ? "fft" : "gerstner",
                water_waves_available(w) ? 1 : 0, (double)w->level);
         /*
-         * Which directional the surface lights itself from, named. Nothing in a frame can
-         * report this: a sea lit by the wrong one still looks like a sea, and every scene
-         * in the corpus had exactly one candidate until the moon became a second.
+         * Which directional the surface lights itself from, named, and how much light
+         * that adds up to. Nothing in a frame reports either: a sea lit by the wrong
+         * light, or by the wrong amount of it, still looks like a sea.
+         *
+         * Both fixtures have always authored a scene key BESIDE the sky's sun, so there
+         * were always two candidates -- which is what spec 11.41 was about. What the moon
+         * changed is that a second candidate can now WIN.
          *
          * Through water_key_light rather than re-derived here, so the probe agrees with
          * the engine instead of with itself.

@@ -438,8 +438,10 @@ Water* create_water(void) {
     // Stored per world unit, so this default is the physical figure for a world where
     // one unit is one metre; see the field's own contract.
     glm_vec3_copy(WATER_CLEAR_ABSORPTION_PER_M, water->absorption);
-    // The old absolute [0.02, 0.10, 0.12] divided by the daylight incident it was
-    // authored under (spec 11.84), so a scene that authors nothing looks as it did.
+    // The old absolute [0.02, 0.10, 0.12] divided by water_fixture's daylight incident
+    // (spec 11.84). So a scene under roughly that much light looks as it did, and one
+    // under different light now tracks its own -- which is the point, and is why this is
+    // a starting value rather than a constant that reproduces every old frame.
     // The glow stays zero -- a sea that lights itself is something a scene has to ask
     // for, and the calloc already zeroed it.
     glm_vec3_copy((vec3){0.0038f, 0.0219f, 0.0321f}, water->scatter_albedo);

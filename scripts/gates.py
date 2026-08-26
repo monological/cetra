@@ -8310,7 +8310,7 @@ WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
 # so the box is on land whichever way round the wedge faces. Rows 0.420 and 0.460 on the
 # pre-flip ramp.
 WATER_DRY_HEIGHTS = (0.3968, 0.6470)
-# Measured steps are 1.47x and 1.55x, so this is a wide floor under them that
+# Measured steps are 1.48x and 1.52x, so this is a wide floor under them that
 # still fails a constant tint.
 WATER_ABSORB_STEP_MIN = 1.25
 # Dry land reads 2.07 and water never exceeds 0.33 anywhere in the frame, so this

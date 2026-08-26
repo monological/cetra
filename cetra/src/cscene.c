@@ -867,7 +867,8 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
      * the 11.48 precedent and the only detectable option here. Its UNITS changed: it was
      * an absolute radiance and the field that replaces it is a fraction of the incident
      * light, so an old value still parses, still renders, and means something several
-     * times too large -- on water_fixture, six. Silence would hand the author a sea that
+     * times too large -- on water_fixture, 5.3x in red through 3.7x in blue, since the
+     * factor IS that scene's own incident and the incident is not white. Silence would hand the author a sea that
      * is merely wrong rather than a message saying what to do about it.
      */
     if (cJSON_GetObjectItemCaseSensitive(water, "scatter"))
