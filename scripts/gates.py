@@ -4283,7 +4283,8 @@ def run_purkinje_gate(workdir):
     print(f"  purkinje-scotopic {'PASS' if ok else 'FAIL'}  the rows are equally bright OFF "
           f"({lum_off['red']:.1f} vs {lum_off['blue']:.1f}, {base:.3f} apart, want <=0.15 -- the "
           f"generator normalises them to equal photopic luma), and ON red reads {ratio:.3f} of "
-          f"blue (want <=0.6: rods barely see red. Photopic weights read 1.000)")
+          f"blue (want <=0.6: rods barely see red. Correct reads 0.418; photopic weights read "
+          f"0.760, not 1.000 -- the tint and the tone curve both survive the mutation)")
     if not ok:
         failures.append("purkinje-scotopic")
 
