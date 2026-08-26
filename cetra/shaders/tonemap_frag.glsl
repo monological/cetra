@@ -10,6 +10,9 @@ out vec4 FragColor;
 // shading passes wrote under.
 #include "view.glsl"
 #include "noise.glsl"
+// Declares purkinjeAdaptTex on unit 7 -- the metering 1x1, which is why this
+// program samples 13 of 16 rather than 12.
+#include "purkinje.glsl"
 
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
@@ -74,6 +77,21 @@ uniform vec2 texelSize; // Display-pixel size, for the sharpen taps
 // Note the two compose rather than replace: --film turns the lift/gamma/gain
 // grade ON, so --film with a .cube applies this engine's look underneath the
 // colourist's. Defensible, and worth knowing before blaming the table.
+//
+// AND THERE IS A THIRD RULE, which the gamma line above does not reach: stages
+// that model a physical step of IMAGE FORMATION are ordered by the OPTICAL
+// CHAIN, not by anyone's data space. Chromatic aberration is sited that way
+// below ("a LENS effect: it acts on the light before the sensor"), and grain is
+// sited that way here ("sensor noise"). The Purkinje shift (spec 11.83) is the
+// sensor's own SPECTRAL RESPONSE, so it lands between them -- after the lens,
+// before the response curve. The whole chain now reads:
+//
+//   lens aberration -> lens scatter (bloom, flare) -> retinal spectral response
+//   -> the response curve (toneSelect) -> grade -> vignette -> gamma -> LUT
+//   -> sensor noise (grain) -> quantization (dither)
+//
+// Which is why Purkinje is NOT in this stack: everything listed above is
+// downstream of the tonemap, and a retina is not.
 uniform int sharpenEnabled;
 uniform float sharpenStrength;
 uniform int gradeEnabled;
@@ -441,6 +459,13 @@ vec3 sceneToToned(vec3 hdr, float aoFactor, vec3 bloomAdd)
     // Sanitize a +INF texel (half-float overflow upstream) — both tonemap
     // curves turn INF into NaN, which displays as a black pixel
     vec3 c = min(hdr, vec3(WS_SCENE_MAX)) * aoFactor + bloomAdd;
+    // The retina, before the response curve. Inside this function rather than
+    // at the call site so all five sharpen taps see it: shifting the centre
+    // while the neighbours stay un-shifted would make the unsharp mask
+    // high-pass the Purkinje term itself, ringing every luminance edge. And
+    // AFTER the sanitize above, which is what keeps the identity exact -- on a
+    // +INF texel mix(c, INF * tint, 0.0) is NaN, not c.
+    c = purkinjeApply(c);
     return toneSelect(c);
 }
 
@@ -545,6 +570,26 @@ void main()
     // r^2, not r. Lateral chromatic aberration grows faster than linearly
     // toward the corners; a linear ramp reads as a uniform colour cast over the
     // whole frame instead of a corner artifact.
+    /*
+     * The rod weight (spec 11.83), and it is the ONE debug view that is not an
+     * early return at the top of main(): its input is the composited scene
+     * value, which does not exist until this line. Packed (w, wLocal, wGlobal)
+     * so the two gates are separable -- "which one limited this frame" is the
+     * first question a calibration session asks, and a single grey channel
+     * cannot answer it.
+     *
+     * NOT display-encoded: these are weights, not colour. Read the raw bytes,
+     * as --cs-debug's own note says. And deliberately NOT suppressed when the
+     * feature is off, unlike the views gated on their source buffer -- "what
+     * would this stage do here" is exactly the question you want answered while
+     * deciding whether to switch it on.
+     */
+    if (debugView == 10) {
+        vec3 c = min(sceneTap(TexCoords), vec3(WS_SCENE_MAX)) * aoFactor + bloomAdd;
+        FragColor = vec4(purkinjeWeight(c), 1.0);
+        return;
+    }
+
     vec3 color = sceneToToned(sceneTap(TexCoords), aoFactor, bloomAdd);
 
     // Sharpen: unsharp mask on the tonemapped result (4-tap cross)

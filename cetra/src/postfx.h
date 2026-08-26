@@ -91,6 +91,10 @@ typedef enum PostFXDebugView {
     POSTFX_DEBUG_SPEC_OCC = 7, // AO visibility after specular occlusion
     POSTFX_DEBUG_CONTACT = 8,  // Contact-shadow visibility term (before compositing)
     POSTFX_DEBUG_BENT = 9,     // Bent normal from the AO chain, remapped for display
+    // Purkinje rod weight, packed (w, local gate, global gate). Appended, never
+    // inserted: the shader compares debugView against integer literals, so a
+    // renumber would silently point every view at its neighbour.
+    POSTFX_DEBUG_PURKINJE = 10,
 } PostFXDebugView;
 
 // How the AO factor treats specular. Legacy blends AO toward unoccluded by

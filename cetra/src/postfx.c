@@ -899,8 +899,12 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->tonemap_program->uniforms, "ssrTex", 4);
     uniform_set_int(fx->tonemap_program->uniforms, "albedoTex", 5);
     uniform_set_int(fx->tonemap_program->uniforms, "giTex", 6);
-    // Unit 7 was the adapted-luminance texture the tonemap divided by. Exposure
-    // is applied whole at the scene passes now, so nothing samples it here.
+    // Unit 7 held the adapted-luminance texture the tonemap divided by. Exposure
+    // is applied whole at the scene passes now -- but the Purkinje shift wants a
+    // frame luminance again, so the metering 1x1 goes back on that same unit
+    // (spec 11.83). A sampler2D, which is what the note below was insuring
+    // against; the LUT staying on 11 is what makes that harmless.
+    uniform_set_int(fx->tonemap_program->uniforms, "purkinjeAdaptTex", 7);
     uniform_set_int(fx->tonemap_program->uniforms, "auxTex", 9); // linZ + roughness for spec-occ
     uniform_set_int(fx->tonemap_program->uniforms, "csTex", 10); // contact-shadow visibility
     // 11, not the free 7, and the reason is NOT that 7 would be an error today:
@@ -3832,6 +3836,16 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_float(tm, "vignetteRadius", fx->vignette_radius);
         uniform_set_int(tm, "caEnabled", fx->ca_enabled ? 1 : 0);
         uniform_set_float(tm, "caStrength", fx->ca_strength);
+        uniform_set_int(tm, "purkinjeEnabled", fx->purkinje_enabled ? 1 : 0);
+        uniform_set_float(tm, "purkinjeStrength", fx->purkinje_strength);
+        uniform_set_float(tm, "purkinjeBiasEV", fx->purkinje_bias_ev);
+        // Whether unit 7 holds a value at all. The bind above puts the metering
+        // 1x1 there whenever an Exposure exists, but its CONTENT is only defined
+        // once the measure draws have run -- which they do under the same
+        // condition. Told rather than inferred: the shader cannot see either.
+        uniform_set_int(tm, "purkinjeHasMeter",
+                        (fx->exposure && (fx->exposure->automatic || fx->purkinje_enabled)) ? 1
+                                                                                            : 0);
         uniform_set_int(tm, "grainEnabled", fx->grain_enabled ? 1 : 0);
         uniform_set_float(tm, "grainStrength", fx->grain_strength);
         // % 4096: same float-hash conditioning bound as PCSS/SSR

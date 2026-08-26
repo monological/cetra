@@ -179,7 +179,8 @@ static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "ag
 // 6 is a hole: the half-res fog buffer retired with the screen-space march,
 // and the values are the shader's own debugView dispatch, so it cannot be closed.
 static const char* const CFG_DEBUG_VIEWS[] = {"none", "ao",      "normals", "ssr",     "albedo",
-                                              "ssgi", "unused_6", "spec_occ", "contact", "bent"};
+                                              "ssgi", "unused_6", "spec_occ", "contact", "bent",
+                                              "purkinje"};
 static const char* const CFG_SPEC_OCC[] = {"off", "legacy", "split"};
 static const char* const CFG_LUT_INTERP[] = {"trilinear", "tetrahedral"};
 static const char* const CFG_METER_MODES[] = {"uniform", "centre", "spot"};
@@ -204,7 +205,7 @@ _Static_assert(sizeof(CFG_CAMERA_MODES) / sizeof(*CFG_CAMERA_MODES) == CAMERA_MO
                "CFG_CAMERA_MODES must name every CameraMode");
 _Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_AGX + 1,
                "CFG_TONEMAPS must name every PostFXTonemapMode");
-_Static_assert(sizeof(CFG_DEBUG_VIEWS) / sizeof(*CFG_DEBUG_VIEWS) == POSTFX_DEBUG_BENT + 1,
+_Static_assert(sizeof(CFG_DEBUG_VIEWS) / sizeof(*CFG_DEBUG_VIEWS) == POSTFX_DEBUG_PURKINJE + 1,
                "CFG_DEBUG_VIEWS must name every PostFXDebugView");
 _Static_assert(sizeof(CFG_SPEC_OCC) / sizeof(*CFG_SPEC_OCC) == POSTFX_SPEC_OCC_SPLIT + 1,
                "CFG_SPEC_OCC must name every PostFXSpecOccMode");
