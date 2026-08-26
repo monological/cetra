@@ -15,7 +15,7 @@ out vec4 FragColor;
 // this program's to bind.
 uniform sampler2D skyViewLut;
 uniform sampler2D transmittanceLut;
-uniform sampler2D moonMapTex; // the maria, compiled in (moon_map.h)
+uniform sampler2D moonSurfaceTex; // normal + albedo, baked (moon_surface.h)
 
 #include "sky_radiance.glsl"
 
@@ -24,7 +24,7 @@ void main()
     vec3 dir = normalize(TexCoords);
     float r = Rg + VIEW_ALTITUDE;
 
-    vec3 sky = skyRadiance(dir, r, skyViewLut, transmittanceLut, moonMapTex);
+    vec3 sky = skyRadiance(dir, r, skyViewLut, transmittanceLut, moonSurfaceTex);
 
     FragColor = vec4(min(sky, vec3(30000.0)) * preExposure, 1.0);
 }

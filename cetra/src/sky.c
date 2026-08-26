@@ -1,7 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include "moon_map.h"
+#include "moon_surface.h"
 
 #include "sky.h"
 #include "engine.h"
@@ -125,8 +125,8 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteBuffers(1, &sky->quad_vbo);
     if (sky->lut_fbo)
         glDeleteFramebuffers(1, &sky->lut_fbo);
-    if (sky->moon_map_tex)
-        glDeleteTextures(1, &sky->moon_map_tex);
+    if (sky->moon_surface_tex)
+        glDeleteTextures(1, &sky->moon_surface_tex);
     if (sky->slicer.frozen_lut)
         glDeleteTextures(1, &sky->slicer.frozen_lut);
     if (sky->slicer.shadow_env)
@@ -1429,31 +1429,37 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     // constant against sunIntensity's 20; the physical surface radiance is
     // ~1/400,000 of the sun's, which would be 5e-5 here and invisible.
     /*
-     * The maria map. Created on first use rather than at sky construction,
-     * because a scene with no moon should not pay for it -- and never
-     * recreated, since it is constant data compiled into the binary rather
-     * than anything derived from the sun.
+     * The lunar surface. Baked on first use rather than at sky construction, so
+     * a scene with no moon never pays for it, and never rebaked -- the Moon is a
+     * constant body, not anything derived from the sun.
      *
      * GL_REPEAT on S because longitude wraps, CLAMP on T because latitude does
      * not: wrapping T mirrors the south pole onto the north and puts a seam
-     * across the disc. LINEAR because the disc is drawn at up to a few hundred
-     * pixels across a 256-wide map, so it is magnified in every real framing.
+     * across the disc. MIPMAPPED, which is what keeps a small moon smooth -- the
+     * crater field runs far finer than a few hundred pixels can carry, and an
+     * unfiltered normal at that size boils.
+     *
+     * A failed bake leaves the handle at zero, which binds the default texture
+     * and reads black: the disc goes dark rather than the frame going wrong.
      */
-    if (!sky->moon_map_tex) {
-        glGenTextures(1, &sky->moon_map_tex);
-        glBindTexture(GL_TEXTURE_2D, sky->moon_map_tex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, MOON_MAP_W, MOON_MAP_H, 0, GL_RED,
-                     GL_UNSIGNED_BYTE, MOON_MAP);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    if (!sky->moon_surface_tex) {
+        unsigned char* surface = moon_surface_bake(MOON_SURFACE_W, MOON_SURFACE_H, 0);
+        if (surface) {
+            glGenTextures(1, &sky->moon_surface_tex);
+            glBindTexture(GL_TEXTURE_2D, sky->moon_surface_tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, MOON_SURFACE_W, MOON_SURFACE_H, 0, GL_RGBA,
+                         GL_UNSIGNED_BYTE, surface);
+            glGenerateMipmap(GL_TEXTURE_2D);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            free(surface);
+        }
     }
     glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, sky->moon_map_tex);
-    uniform_set_int(u, "moonMapTex", 3);
+    glBindTexture(GL_TEXTURE_2D, sky->moon_surface_tex);
+    uniform_set_int(u, "moonSurfaceTex", 3);
     uniform_set_vec3(u, "moonDir", sky->moon_dir);
     // The DRAWN radius: the shared physical angle times the moon's look scale.
     // Clamped only against a degenerate zero, which would divide by nothing in

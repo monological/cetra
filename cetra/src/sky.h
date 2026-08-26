@@ -296,10 +296,10 @@ typedef struct SkyAtmosphere {
 
     GLuint transmittance_lut; // 256x64  RGBA16F, baked once
     GLuint multiscatter_lut;  // 32x32   RGBA16F, baked once
-    // The maria, 256x128 R8 from the compiled-in map (spec 11.82). Created on
-    // the first frame that draws a moon and never again -- it is constant data,
-    // not a bake, so nothing invalidates it.
-    GLuint moon_map_tex;
+    // The lunar surface (spec 11.82): RGB the body-frame normal, A the albedo.
+    // Baked on the first frame that draws a moon and never again -- the Moon is
+    // a constant body, so nothing invalidates it.
+    GLuint moon_surface_tex;
     GLuint sky_view_lut; // 192x108 RGBA16F, re-baked per sun move (M2)
 
     // Aerial perspective (spec 9.6): a camera-frustum volume of

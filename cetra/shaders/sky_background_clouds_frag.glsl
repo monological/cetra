@@ -16,7 +16,7 @@ out vec4 FragColor;
 // deck's own pair are this program's to bind.
 uniform sampler2D skyViewLut;
 uniform sampler2D transmittanceLut;
-uniform sampler2D moonMapTex; // the maria, compiled in (moon_map.h)
+uniform sampler2D moonSurfaceTex; // normal + albedo, baked (moon_surface.h)
 uniform sampler2D cloudTex;
 uniform vec2 screenSize; // composite target size, for gl_FragCoord -> uv
 
@@ -29,7 +29,7 @@ void main()
 
     // Stars and the moon both live inside skyRadiance, so the deck
     // transmittance multiply below occludes them with no extra work.
-    vec3 sky = skyRadiance(dir, r, skyViewLut, transmittanceLut, moonMapTex);
+    vec3 sky = skyRadiance(dir, r, skyViewLut, transmittanceLut, moonSurfaceTex);
 
     vec4 cloud = texture(cloudTex, gl_FragCoord.xy / screenSize);
     // Cloud radiance is absolute like the sky's; cap the in-scatter at the
