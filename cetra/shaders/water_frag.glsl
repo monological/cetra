@@ -1046,8 +1046,14 @@ void main() {
             // lobe below, which spec 11.42 gave it. The reflection is still not a third:
             // it is the split-sum environment lookup, which carries the deck through the
             // sky bake already.
+            //
+            // Through the SLOT, like its neighbour: the deck is marched along one light's
+            // direction, so its shear only describes the light it was built for. Water
+            // picks the brightest directional and that is the moon at night, whose shadow
+            // this deck is not.
             bed *= 1.0 + focused * WATER_CAUSTIC_GAIN *
-                             cloudSunAt(vec3(crossing.x, WorldPos.y, crossing.y));
+                             cloudSunForSlot(vec3(crossing.x, WorldPos.y, crossing.y),
+                                             sunShadowSlot);
         }
     } else {
         bed = vec3(0.0);

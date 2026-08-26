@@ -8342,6 +8342,12 @@ def _water_probe(extra, scene=None):
 
     An empty header means no surface survived the flags, which is a result rather than a
     failure -- the precedence arm asserts exactly that for --no-water.
+
+    The probe prints two kinds of non-grid line -- the `model=` header and the `key=` row
+    naming the picked directional (spec 11.84) -- and both fold into `head`. Distinguished
+    by the leading token carrying an `=`, not by counting lines: a grid row starts with a
+    bare coordinate, so anything that does not is a header of some kind and a third one
+    added later needs no change here.
     """
     cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "2",
            "-W", "200", "-H", "150", "--water-probe"] + extra
@@ -8351,8 +8357,8 @@ def _water_probe(extra, scene=None):
         if not line.startswith("water-probe "):
             continue
         parts = line.split()[1:]
-        if "model=" in parts[0]:
-            head = dict(p.split("=", 1) for p in parts)
+        if "=" in parts[0]:
+            head.update(dict(p.split("=", 1) for p in parts))
             continue
         row = {"x": float(parts[0]), "z": float(parts[1])}
         row.update({k: v for k, v in (p.split("=", 1) for p in parts[2:])})

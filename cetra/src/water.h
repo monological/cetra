@@ -154,6 +154,7 @@ typedef enum WaterFoamDebug {
 } WaterFoamDebug;
 
 struct Engine;
+struct Light;
 struct Scene;
 
 /*
@@ -515,6 +516,18 @@ void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgr
  * them, which would make the probe agree with itself instead of with the engine.
  */
 bool water_shore_runup_params(const Water* water, const struct Scene* scene, ShoreRunupParams* out);
+
+/*
+ * The directional the surface takes its caustics, sun lobe and foam lighting from: the
+ * brightest in the scene, ranked by intensity x peak channel. NULL where no directional
+ * is delivering any light, which is a real state and not an error -- an overcast night
+ * has no key, and caustics that keep focusing one are focusing nothing.
+ *
+ * Published so a diagnostic can name the choice. The pick is not observable in a frame:
+ * a sea lit by the wrong directional still looks like a sea, and until the moon existed
+ * the sky's sun was the only candidate, so nothing could have disagreed.
+ */
+const struct Light* water_key_light(const struct Scene* scene);
 
 // The per-cascade tiling periods and choppiness are columns of water.c's own cascade
 // table and are uploaded from there. They were briefly published here as two extra

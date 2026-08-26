@@ -1490,6 +1490,43 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
     }
 }
 
+/*
+ * The BRIGHTEST directional wins, ranked by intensity x peak channel -- light_cull_radius's
+ * own reduction, which is this codebase's answer to "how strong is this light".
+ * Directionals are all in lux, so they compare without conversion.
+ *
+ * This KEEPS spec 11.41's fix rather than reverting it. That fix replaced a scan for the
+ * first directional -- which found whichever light the scene file happened to list first,
+ * so caustics were focused from one light while the deck above occluded another -- with
+ * the sky's sun by name. Choosing by name fails the other way: a sun below the horizon
+ * still EXISTS, with sky_horizon_fade holding its intensity at zero, so water held a
+ * direction pointing underground, took a radiance of exactly zero, and could never reach
+ * the moon beside it. Brightest is deterministic AND meaningful, which by-name and
+ * first-in-array were each only half of.
+ *
+ * Strict > keeps the earliest in scene order on a tie, so the pick is stable. A weight of
+ * zero selects NOTHING, which is what switches the caustics off in true darkness rather
+ * than focusing a light that is not delivering any.
+ */
+const struct Light* water_key_light(const struct Scene* scene) {
+    if (!scene)
+        return NULL;
+    const Light* best = NULL;
+    float best_weight = 0.0f;
+    for (size_t i = 0; i < scene->light_count; i++) {
+        const Light* l = scene->lights[i];
+        if (!l || l->type != LIGHT_DIRECTIONAL)
+            continue;
+        const float peak = fmaxf(l->color[0], fmaxf(l->color[1], l->color[2]));
+        const float weight = l->intensity * peak;
+        if (weight > best_weight) {
+            best_weight = weight;
+            best = l;
+        }
+    }
+    return best;
+}
+
 bool water_shore_runup_params(const Water* water, const struct Scene* scene,
                               ShoreRunupParams* out) {
     if (!water || !out)
@@ -1864,21 +1901,11 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     engine_render_size(engine, &rw, &rh);
     uniform_set_vec2(u, "screenSize", (vec2){(float)rw, (float)rh});
 
-    // The sun, for caustics: light focusing is a property of the path from the SUN
-    // through the surface, so it needs the direction light arrives from rather than
-    // anything about the view.
-    //
-    // The SKY's sun first, and that is not a preference (spec 11.41). Scanning for the
-    // first directional finds whichever light the scene file happened to list first,
-    // which in assets/water_fixture.cscn is a non-shadowing key -- so the caustics were
-    // focused from one light while the deck above occluded a different one. Falls back
-    // to the scan for a scene with no sky.
+    // The key directional, for caustics and the sun lobe: light focusing is a property of
+    // the path from the SOURCE through the surface, so it needs the direction light
+    // arrives from rather than anything about the view.
     vec3 sun_dir = {0.0f, 1.0f, 0.0f};
-    const Light* sun = (scene->sky && scene->sky->sun_light) ? scene->sky->sun_light : NULL;
-    for (size_t i = 0; !sun && i < scene->light_count; i++) {
-        if (scene->lights[i] && scene->lights[i]->type == LIGHT_DIRECTIONAL)
-            sun = scene->lights[i];
-    }
+    const Light* sun = water_key_light(scene);
     // Scene radiance, un-pre-exposed, exactly as the clustered UBO packs it for every
     // other surface -- and the sky has already folded atmospheric transmittance into the
     // colour (sky_apply_sun_to_light), so this one vector is the sun's magnitude AND its

@@ -4051,6 +4051,19 @@ int main(int argc, char** argv) {
         printf("water-probe model=%s available=%d level=%.4f\n",
                w->wave_model == WATER_WAVES_FFT ? "fft" : "gerstner",
                water_waves_available(w) ? 1 : 0, (double)w->level);
+        /*
+         * Which directional the surface lights itself from, named. Nothing in a frame can
+         * report this: a sea lit by the wrong one still looks like a sea, and every scene
+         * in the corpus had exactly one candidate until the moon became a second.
+         *
+         * Through water_key_light rather than re-derived here, so the probe agrees with
+         * the engine instead of with itself.
+         */
+        const struct Light* key = water_key_light(scene);
+        printf("water-probe key=%s intensity=%.4f dir=%.4f,%.4f,%.4f\n",
+               key && key->name ? key->name : "none", key ? (double)key->intensity : 0.0,
+               key ? (double)key->direction[0] : 0.0, key ? (double)key->direction[1] : 0.0,
+               key ? (double)key->direction[2] : 0.0);
         const float span = w->extent * 0.5f;
         for (int iz = 0; iz < 4; iz++) {
             for (int ix = 0; ix < 4; ix++) {
