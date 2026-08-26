@@ -343,6 +343,13 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-lut           Force off a LUT a scene file asked for\n");
     fprintf(stderr, "      --lut-strength <s> Blend toward the graded look, 0..1\n");
     fprintf(stderr, "      --lut-interp <trilinear|tetrahedral>  LUT interpolation\n");
+    fprintf(stderr, "      --purkinje         Rod vision in dim light: colour drains, blue\n"
+                    "                         shift, reds near-black (off by default)\n");
+    fprintf(stderr, "      --no-purkinje      Force off a Purkinje shift a scene file asked for\n");
+    fprintf(stderr, "      --purkinje-strength <s>  Blend toward full rod vision, 0..1\n");
+    fprintf(stderr, "      --purkinje-bias <stops>  Shift both mesopic ramps; the one knob that\n"
+                    "                         migrates them if the photometric scale changes\n");
+    fprintf(stderr, "      --purkinje-debug   Rod weight as (total, local gate, global gate)\n");
     fprintf(stderr, "      --dof              Depth of field, autofocused on the subject\n");
     fprintf(stderr, "      --no-dof           Force depth of field off (e.g. with --film)\n");
     fprintf(stderr, "      --dof-focus <m>    Pin focus distance (disables autofocus)\n");
@@ -432,6 +439,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->grade_gain[0] = args->grade_gain[1] = args->grade_gain[2] = 1.0f;
     args->lut_strength = -1.0f;
     args->lut_interp = -1;
+    args->purkinje = -1;
+    args->purkinje_strength = -1.0f;
+    // -999, not -1: a bias of 0 stops is the shipping value and a negative bias
+    // is meaningful (it drags the effect toward daylight, which is how a gate
+    // arm reaches it), so no in-range number can mean "unset".
+    args->purkinje_bias_ev = -999.0f;
     args->dof_focus = -1.0f;
     args->dof_range = -1.0f;
     args->dof_max_coc = -1.0f;
@@ -1647,6 +1660,44 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: --lut-interp expects trilinear or tetrahedral\n");
                 return -1;
             }
+        } else if (strcmp(argv[i], "--purkinje") == 0) {
+            args->purkinje = 1;
+        } else if (strcmp(argv[i], "--no-purkinje") == 0) {
+            args->no_purkinje = 1;
+        } else if (strcmp(argv[i], "--purkinje-strength") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            // strtod with an end pointer, not atof: the value doubles as an
+            // enable, so a typo reading 0 would arm the feature at zero strength
+            // -- the flag says on, the frame is identical, and the next argument
+            // is swallowed as the value. --dither's reasoning.
+            char* end = NULL;
+            double v = strtod(argv[i], &end);
+            if (end == argv[i] || *end != '\0' || v < 0.0 || v > 1.0) {
+                fprintf(stderr, "Error: --purkinje-strength expects a number in [0, 1]\n");
+                return -1;
+            }
+            args->purkinje_strength = (float)v;
+            args->purkinje = 1;
+        } else if (strcmp(argv[i], "--purkinje-bias") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            char* end = NULL;
+            double v = strtod(argv[i], &end);
+            // Signed and wide: negative drags the mesopic band toward daylight,
+            // which is the only way a gate arm reaches the effect on a lit frame.
+            if (end == argv[i] || *end != '\0' || v < -30.0 || v > 30.0) {
+                fprintf(stderr, "Error: --purkinje-bias expects stops in [-30, 30]\n");
+                return -1;
+            }
+            args->purkinje_bias_ev = (float)v;
+            args->purkinje = 1;
+        } else if (strcmp(argv[i], "--purkinje-debug") == 0) {
+            args->debug_purkinje = 1;
         } else if (strcmp(argv[i], "--dof") == 0) {
             args->dof = 1;
         } else if (strcmp(argv[i], "--no-dof") == 0) {
@@ -2705,6 +2756,9 @@ int main(int argc, char** argv) {
     if (args.bent_debug && engine->postfx) {
         engine->postfx->debug_view = POSTFX_DEBUG_BENT;
     }
+    if (args.debug_purkinje && engine->postfx) {
+        engine->postfx->debug_view = POSTFX_DEBUG_PURKINJE;
+    }
     if (args.ssgi && engine->postfx) {
         engine->postfx->ssgi_enabled = true;
     }
@@ -2898,6 +2952,19 @@ int main(int argc, char** argv) {
             postfx_clear_lut(fx);
         else if (args.lut_path)
             postfx_load_lut(fx, args.lut_path);
+
+        if (args.purkinje >= 0)
+            fx->purkinje_enabled = args.purkinje != 0;
+        if (args.purkinje_strength >= 0.0f)
+            fx->purkinje_strength = args.purkinje_strength;
+        if (args.purkinje_bias_ev > -900.0f)
+            fx->purkinje_bias_ev = args.purkinje_bias_ev;
+        // Sticky, and LAST. Every value flag above arms the feature, so a plain
+        // `purkinje = 0` would be order-dependent -- --no-purkinje followed by
+        // --purkinje-strength 0.5 would render a shifted frame. The --no-moon
+        // lesson, where every off leg of a gate twin was silently on.
+        if (args.no_purkinje)
+            fx->purkinje_enabled = false;
     }
     if (args.render_mode > 0) {
         engine->current_render_mode = (RenderMode)args.render_mode;

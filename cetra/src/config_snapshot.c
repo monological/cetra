@@ -546,6 +546,10 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.chromatic_aberration", "enabled", ca_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.chromatic_aberration", "strength", ca_strength),
 
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.purkinje", "enabled", purkinje_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.purkinje", "strength", purkinje_strength),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.purkinje", "bias_ev", purkinje_bias_ev),
+
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.grain", "enabled", grain_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.grain", "strength", grain_strength),
 

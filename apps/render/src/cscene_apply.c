@@ -175,6 +175,16 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->lut_strength = cscn->lut_strength;
     if (cscn->has_lut_interp && args->lut_interp < 0)
         args->lut_interp = cscn->lut_interp;
+    // --no-purkinje drops the WHOLE authored block, not the switch alone: the
+    // block is one thing a file asked for, which is the --no-stars rule.
+    if (!args->no_purkinje) {
+        if (cscn->has_purkinje && args->purkinje < 0)
+            args->purkinje = cscn->purkinje_enabled ? 1 : 0;
+        if (cscn->has_purkinje_strength && args->purkinje_strength < 0.0f)
+            args->purkinje_strength = cscn->purkinje_strength;
+        if (cscn->has_purkinje_bias_ev && args->purkinje_bias_ev <= -900.0f)
+            args->purkinje_bias_ev = cscn->purkinje_bias_ev;
+    }
     if (cscn->has_camera_exposure && args->aperture <= 0.0f) {
         args->aperture = cscn->aperture;
         args->shutter_speed = cscn->shutter_speed;

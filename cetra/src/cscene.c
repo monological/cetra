@@ -522,6 +522,22 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         warn_unknown_keys(lut, lut_known, sizeof(lut_known) / sizeof(lut_known[0]), "post.lut");
     }
 
+    // post.purkinje: the scotopic shift. `enabled` ARMS it and the values alone
+    // do not, the stars/night_floor/cycle convention -- a file describes values,
+    // a flag takes actions.
+    const cJSON* pk = cJSON_GetObjectItemCaseSensitive(post, "purkinje");
+    if (cJSON_IsObject(pk)) {
+        d->has_purkinje = get_bool(pk, "enabled", &d->purkinje_enabled);
+        d->has_purkinje_strength =
+            _ranged_float(pk, "post.purkinje", "strength", 0.0f, 1.0f, &d->purkinje_strength);
+        d->has_purkinje_bias_ev =
+            _ranged_float(pk, "post.purkinje", "bias_ev", -30.0f, 30.0f, &d->purkinje_bias_ev);
+        // Its own closed list. A nested block without one is how water_fixture
+        // ran at the wrong sun for four specs.
+        static const char* const pk_known[] = {"enabled", "strength", "bias_ev"};
+        warn_unknown_keys(pk, pk_known, sizeof(pk_known) / sizeof(pk_known[0]), "post.purkinje");
+    }
+
     // Refused rather than clamped: silently moving an authored number into
     // range hides a typo behind a slightly soft frame, and the author never
     // learns the value they wrote is not the value they got. The bound matches
@@ -567,7 +583,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     static const char* const known[] = {
         "tonemap", "exposure", "auto_exposure",        "camera", "render_scale",
         "flare",   "bloom",    "chromatic_aberration", "fog",     "metering",
-        "lut",
+        "lut",     "purkinje",
     };
     warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }

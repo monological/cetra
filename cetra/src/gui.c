@@ -1034,6 +1034,15 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("CA Pixels", &fx->ca_strength, 0.0f, 40.0f, "%.1f px", 0);
         _end_effect_group();
 
+        // Grouped here and applied earlier still, for the reason above: the
+        // retina's spectral response sits after the lens and before the tone
+        // curve. Visible only on a dim frame -- the global gate is an exact zero
+        // in daylight, so dragging these in a lit scene does nothing, by design.
+        _begin_effect_group("Purkinje Shift", &fx->purkinje_enabled);
+        igSliderFloat("Rod Blend", &fx->purkinje_strength, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Mesopic Bias", &fx->purkinje_bias_ev, -12.0f, 12.0f, "%.1f stops", 0);
+        _end_effect_group();
+
         _begin_effect_group("Sharpen", &fx->sharpen_enabled);
         igSliderFloat("Sharpen Amount", &fx->sharpen_strength, 0.0f, 3.0f, "%.2f", 0);
         _end_effect_group();

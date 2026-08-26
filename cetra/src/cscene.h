@@ -485,6 +485,15 @@ typedef struct CetraSceneDesc {
     bool has_lut_interp;
     // CSCENE_LUT_* below; int for the reason meter_mode is one.
     int lut_interp;
+    // post.purkinje: the scotopic shift (spec 11.83). Every key independent with
+    // its own presence flag, this file's stated convention -- so a block naming
+    // only `strength` stores it and arms nothing.
+    bool has_purkinje;
+    bool purkinje_enabled;
+    bool has_purkinje_strength;
+    float purkinje_strength;
+    bool has_purkinje_bias_ev;
+    float purkinje_bias_ev;
     // TAAU render-resolution scale in [0.5, 1). Everything before the TAA seam
     // renders at this fraction and the upscale resolve brings it to post res.
     // It rides TAA, which windowed sessions turn on and headless ones do not --

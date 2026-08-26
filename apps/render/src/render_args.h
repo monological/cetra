@@ -92,6 +92,7 @@ typedef struct {
     int spec_occ_mode;     // PostFXSpecOccMode override (-1 = keep engine default)
     int spec_occ_debug;    // Show the AO visibility the scene is multiplied by
     int bent_debug;        // Show the bent normal from the AO chain
+    int debug_purkinje;    // Show the rod weight (total, local gate, global gate)
     int no_ao_edge_filter; // Disable the depth-aware AO blur (allow silhouette bleed)
     int ssgi;              // Enable screen-space GI (indirect diffuse)
     int ssgi_debug;        // Show the raw gathered GI radiance
@@ -324,10 +325,18 @@ typedef struct {
     int no_lut;
     float lut_strength; // -1 = keep the default
     int lut_interp;     // -1 unset, else PostFXLutInterp
-    int dof;            // --dof: enable depth of field
-    int no_dof;         // Force DoF off (e.g. --film --no-dof)
-    float dof_focus;    // Focus distance in view units (-1 = auto: subject)
-    float dof_range;    // Ramp-to-full-blur width (-1 = scene-scaled default)
+    // Purkinje / scotopic shift (spec 11.83). `purkinje` is a tri-state because
+    // the value flags below each ARM the feature, so a plain 0 would be
+    // order-dependent -- the --no-moon lesson. no_purkinje is sticky and applied
+    // last for the same reason.
+    int purkinje;            // 1 on, 0 off, -1 unset (a .cscn post.purkinje seeds it)
+    int no_purkinje;         // Sticky force-off, wins over any value flag
+    float purkinje_strength; // -1 = keep the default; 0 is a bit-exact identity
+    float purkinje_bias_ev;  // Stops, added to both ramps. -999 = unset (0 is meaningful)
+    int dof;                 // --dof: enable depth of field
+    int no_dof;              // Force DoF off (e.g. --film --no-dof)
+    float dof_focus;         // Focus distance in view units (-1 = auto: subject)
+    float dof_range;         // Ramp-to-full-blur width (-1 = scene-scaled default)
     float dof_max_coc;
     int dof_blades;          // Aperture blade count (-1 = keep engine default)
     float dof_rotation;      // Aperture rotation in degrees (< 0 = keep default)
