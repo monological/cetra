@@ -275,7 +275,12 @@ scene_desc = {
         # because the number it replaces encoded the light's colour as well as the water's.
         # That is the migration being correct, not an artifact of it: separating the two is
         # the whole point, and what was authored was their product.
-        "scatter": [0.0038, 0.0219, 0.0321],
+        "scatterAlbedo": [0.0038, 0.0219, 0.0321],
+        # Authored at zero rather than omitted. This fixture is a photometric instrument
+        # and a sea that lights itself would put a constant under every ratio it reads --
+        # but the key still has to appear here, because a key the parser reads and the
+        # fixture never authors is a key the corpus has no coverage of at all.
+        "scatterGlow": [0.0, 0.0, 0.0],
         "caustics": True,
         "shoreCoverage": True,
         "farLod": True,

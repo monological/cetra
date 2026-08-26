@@ -247,15 +247,28 @@ typedef struct Water {
 
     // Optical properties of the body, authored rather than derived from a
     // transparency slider. absorption is extinction per world unit per channel,
-    // so a bigger number is a shorter sight line; scatter is the colour the
-    // absorbed energy comes back as. Water absorbs red first, which is why the
-    // default is ordered the way it is.
+    // so a bigger number is a shorter sight line. Water absorbs red first, which
+    // is why the default is ordered the way it is.
     //
     // PER WORLD UNIT, and the physical figures below are per METRE: a world whose
     // unit is not a metre divides them by its own units-per-metre, or its sea is
-    // that factor too absorbing. scatter carries no length and does not convert.
+    // that factor too absorbing. Neither field below carries a length.
     vec3 absorption;
-    vec3 scatter;
+    // What the body sends back, split into a response and a floor (spec 11.84).
+    //
+    // scatter_albedo is DIMENSIONLESS -- the fraction of the light falling on the
+    // water that comes back out of it -- so the sea tracks its own illumination and
+    // goes dark when nothing is lighting it. scatter_glow is absolute radiance added
+    // regardless, which is how a scene asks for a sea that glows at night: a look,
+    // not a measurement, and zero by default.
+    //
+    // The two exist separately because one value cannot be both. An authored constant
+    // reproduces a stylised night and CANNOT produce a dark realistic one; a pure
+    // albedo does the reverse. Which is why the key they replace is refused by name
+    // rather than reinterpreted -- the old numbers still parse and would silently mean
+    // something a few times too large.
+    vec3 scatter_albedo;
+    vec3 scatter_glow;
 
     float roughness; // interface roughness; picks the environment lobe's mip
     float ior;       // 1.333 for water -> F0 0.020
@@ -531,8 +544,8 @@ const struct Light* water_key_light(const struct Scene* scene);
 
 /*
  * How much light falls on a horizontal water surface, in absolute scene radiance: the
- * sky's ambient plus the key directional's own irradiance. `scatter` is a FRACTION of
- * this, so it is the quantity that makes the sea know what time it is.
+ * sky's ambient plus the key directional's own irradiance. `scatter_albedo` is a FRACTION
+ * of this, so it is the quantity that makes the sea know what time it is.
  *
  * The CPU twin of what water_frag builds from the prefiltered environment -- the froxel
  * medium is driven from this one, the surface from its own. Published because it is the

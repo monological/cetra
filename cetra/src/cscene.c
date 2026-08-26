@@ -860,7 +860,22 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     out->has_roughness = get_float(water, "roughness", &out->roughness);
     out->has_ior = get_float(water, "ior", &out->ior);
     out->has_absorption = get_vec3(water, "absorption", out->absorption);
-    out->has_scatter = get_vec3(water, "scatter", out->scatter);
+    out->has_scatter_albedo = get_vec3(water, "scatterAlbedo", out->scatter_albedo);
+    out->has_scatter_glow = get_vec3(water, "scatterGlow", out->scatter_glow);
+    /*
+     * The old `scatter` is refused BY NAME rather than accepted (spec 11.84), which is
+     * the 11.48 precedent and the only detectable option here. Its UNITS changed: it was
+     * an absolute radiance and the field that replaces it is a fraction of the incident
+     * light, so an old value still parses, still renders, and means something several
+     * times too large -- on water_fixture, six. Silence would hand the author a sea that
+     * is merely wrong rather than a message saying what to do about it.
+     */
+    if (cJSON_GetObjectItemCaseSensitive(water, "scatter"))
+        log_warn("cscene: water.scatter is gone (spec 11.84). It was an absolute "
+                 "radiance; use scatterAlbedo for the FRACTION of incident light the "
+                 "body returns (divide the old value by the light falling on it, which "
+                 "--water-probe reports as `incident`), and scatterGlow for a sea that "
+                 "lights itself. Ignored.");
     out->has_caustics = get_bool(water, "caustics", &out->caustics);
     out->has_shore_coverage = get_bool(water, "shoreCoverage", &out->shore_coverage);
     out->has_far_lod = get_bool(water, "farLod", &out->far_lod);
@@ -891,14 +906,21 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
      * now gets a warning per key rather than a silently different sea. That is the loud
      * migration it wanted, and the reason those four are absent below rather than tolerated.
      *
+     * Spec 11.84 did the same to `scatter`, which splits into scatterAlbedo and
+     * scatterGlow. It is absent below for that reason, and a scene still carrying it gets
+     * TWO messages: the specific one above, which is the useful one because its UNITS
+     * changed rather than its name, and the generic one from here. Listing it to silence
+     * the second was tried and is wrong -- this list means "what parse_water reads", a
+     * refused key is not read, and water-fixture-roundtrip asserts exactly that.
+     *
      * water-fixture-roundtrip asserts this list, what parse_water reads and what the fixture
      * authors all agree, rather than trusting anyone to keep them so.
      */
     static const char* const known[] = {
-        "enabled",   "level",         "extent",  "wavelength", "amplitude",  "steepness",
-        "spread",    "windDirection", "waves",   "seaDepth",   "windSea",    "swell",
-        "roughness", "ior",           "absorption", "scatter",  "caustics",  "shoreCoverage",
-        "farLod",
+        "enabled",       "level",       "extent",        "wavelength", "amplitude",
+        "steepness",     "spread",      "windDirection", "waves",      "seaDepth",
+        "windSea",       "swell",       "roughness",     "ior",        "absorption",
+        "scatterAlbedo", "scatterGlow", "caustics",      "shoreCoverage", "farLod",
     };
     warn_unknown_keys(water, known, sizeof(known) / sizeof(known[0]), "water");
 }

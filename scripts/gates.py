@@ -8494,6 +8494,22 @@ def _water_glitter_box():
 _CSCN_KEY = r'"([A-Za-z0-9_]+)"'
 
 
+def _cscn_refused_keys(func, block):
+    """Keys `func` names in a `... is gone` refusal, from the C source (spec 11.84).
+
+    A THIRD category, and it exists because the reader below cannot see one: a refusal
+    tests for its key with the same `(block, "name")` shape every accessor uses, so a
+    refused key reads as read. It is neither tolerated by known[] nor authored by the
+    fixture, so without this it drifts both of those assertions at once.
+
+    Keyed off the user-visible message rather than the control flow around it, which
+    makes that message load-bearing: delete the sentence and the arm notices.
+    """
+    src = open(os.path.join(ROOT, "cetra", "src", "cscene.c")).read()
+    body = src.split("static void %s(" % func)[1].split("\nstatic ")[0]
+    return set(re.findall(r'"cscene: %s\.(\w+) is gone' % block, body))
+
+
 def _cscn_key_sets(func, block):
     """Return (keys `func` reads off `block`, keys its known[] tolerates), from the C source.
 
@@ -8902,6 +8918,20 @@ WATER_NIGHT_LIT_DAY_MIN = 0.008
 WATER_NIGHT_LIT_RATIO_MIN = 20.0
 WATER_NIGHT_LIT_MOON_MIN = 1.0e-4
 WATER_NIGHT_LIT_DARK_MAX = 1.0e-5
+# One value put on each field in turn, which is what makes water-glow a comparison rather
+# than two readings: with no light above the horizon the glow must still light the body
+# and the albedo must do exactly nothing, and asking the SAME number to do both is what
+# rules out a build where the two fields quietly behave alike.
+#
+# apps/tree's own authored sea, so the arm exercises the magnitude a real scene uses.
+WATER_GLOW_VALUE = [0.03, 0.13, 0.14]
+WATER_GLOW_MIN_PX = 20000
+# Measured 342,413 px for the glow against 151 for the albedo. The albedo leg is not 0
+# and should not be asserted as 0: a sky at -12 degrees is very dark rather than black,
+# so a fraction of it is a few hundred pixels of the darkest codes -- the albedo term
+# doing exactly what it says. A ratio is the honest bar; 100x still fails any build where
+# the two fields behave alike.
+WATER_GLOW_RATIO_MIN = 100.0
 
 
 def _water_night_variant(src, dst, mutate=None):
@@ -8940,6 +8970,13 @@ def run_water_night_gate(workdir):
                          not a constant: its own contribution is 0.0163 by day, 0.0002
                          under a moon and exactly 0 with nothing above the horizon.
                          Before 11.84's second half all three read the same number.
+    water-glow           the two halves are SEPARABLE. With nothing above the horizon the
+                         glow alone still lights the body and the albedo alone is exactly
+                         nothing -- which is what makes a stylised night sea authorable
+                         without giving up a dark realistic one.
+    water-scatter-refuse the old `scatter` key is refused BY NAME. Its units changed, so
+                         an old value still parses and would mean something six times too
+                         large; silence would render a plausible frame.
     """
     failures = []
     scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
@@ -9048,7 +9085,9 @@ def run_water_night_gate(workdir):
     zero = os.path.join(workdir, "water_night_lit_zero.cscn")
     _water_night_variant(scene, auth)
     _water_night_variant(scene, zero,
-                         lambda d: _merge_water_block(d["water"], {"scatter": [0.0, 0.0, 0.0]}))
+                         lambda d: _merge_water_block(d["water"],
+                                                      {"scatterAlbedo": [0.0, 0.0, 0.0],
+                                                       "scatterGlow": [0.0, 0.0, 0.0]}))
     lit, lerr = {}, None
     for tag, flags in (("day", ["--sun-elevation", "35"]),
                        ("moonlit", ["--sun-elevation", WATER_NIGHT_SUN_DOWN] +
@@ -9086,6 +9125,76 @@ def run_water_night_gate(workdir):
               f"constant reads 1.0x)")
         if not ok:
             failures.append("water-night-lit")
+
+    # The two halves are separable, read where the difference is unambiguous: no light
+    # above the horizon at all, so the albedo term is multiplied by exactly zero.
+    dark_flags = base + ["--sun-elevation", WATER_NIGHT_SUN_DOWN, "--no-moon"]
+    glow_scn = os.path.join(workdir, "water_glow.cscn")
+    alb_scn = os.path.join(workdir, "water_glow_albedo.cscn")
+    _water_night_variant(scene, glow_scn,
+                         lambda d: _merge_water_block(d["water"],
+                                                      {"scatterAlbedo": [0.0, 0.0, 0.0],
+                                                       "scatterGlow": WATER_GLOW_VALUE}))
+    # The same magnitude on the OTHER field, which with no incident light must do nothing.
+    # Equal magnitudes matter: a glow that merely moved MORE than an albedo would pass on
+    # a build that had quietly kept both terms responding to light.
+    _water_night_variant(scene, alb_scn,
+                         lambda d: _merge_water_block(d["water"],
+                                                      {"scatterAlbedo": WATER_GLOW_VALUE,
+                                                       "scatterGlow": [0.0, 0.0, 0.0]}))
+    off_scn = os.path.join(workdir, "water_glow_off.cscn")
+    _water_night_variant(scene, off_scn,
+                         lambda d: _merge_water_block(d["water"],
+                                                      {"scatterAlbedo": [0.0, 0.0, 0.0],
+                                                       "scatterGlow": [0.0, 0.0, 0.0]}))
+    p_glow = os.path.join(workdir, "water_glow.ppm")
+    p_alb = os.path.join(workdir, "water_glow_albedo.ppm")
+    p_off = os.path.join(workdir, "water_glow_off.ppm")
+    gerr = (render(glow_scn, p_glow, dark_flags) or render(alb_scn, p_alb, dark_flags) or
+            render(off_scn, p_off, dark_flags))
+    if gerr:
+        print(f"  water-glow ERROR render failed: {gerr.strip()[-200:]}")
+        failures.append("water-glow")
+    else:
+        ae_glow, _ = compare(p_off, p_glow)
+        ae_alb, _ = compare(p_off, p_alb)
+        ratio = ae_glow / ae_alb if ae_alb else float("inf")
+        ok = ae_glow >= WATER_GLOW_MIN_PX and ratio >= WATER_GLOW_RATIO_MIN
+        print(f"  water-glow {'PASS' if ok else 'FAIL'}  with nothing above the horizon "
+              f"the glow moves {ae_glow} px (want >={WATER_GLOW_MIN_PX}) against {ae_alb} "
+              f"px for the SAME value on the albedo, {ratio:.0f}x (want "
+              f">={WATER_GLOW_RATIO_MIN:.0f}x; not 0 px, because a -12 degree sky is very "
+              f"dark rather than black and a fraction of it is the albedo doing its job)")
+        if not ok:
+            failures.append("water-glow")
+
+    # The old key is refused by name, and the refusal is what the author reads.
+    stale = os.path.join(workdir, "water_stale_key.cscn")
+    _water_night_variant(scene, stale,
+                         lambda d: _merge_water_block(d["water"],
+                                                      {"scatter": WATER_GLOW_VALUE}))
+    r = _run([RENDER, "-m", stale, "-x", "-f", "2", "-W", "200", "-H", "150"] + base,
+             capture_output=True, text=True)
+    log = r.stdout + r.stderr
+    named = "water.scatter is gone" in log
+    tells = "scatterAlbedo" in log and "scatterGlow" in log
+    # And it must not have been APPLIED: the stale scene has to render as the twin that
+    # never mentioned it. A warning that fires while the value still lands is worse than
+    # no warning, because it reads as handled.
+    #
+    # Against `auth` -- the fixture's own authored sea -- and not against the zeroed twin.
+    # The stale scene adds a dead key and changes nothing else, so what it must equal is
+    # the fixture, not a sea with no in-scatter at all.
+    p_stale = os.path.join(workdir, "water_stale_key.ppm")
+    p_auth_dark = os.path.join(workdir, "water_auth_dark.ppm")
+    serr = render(stale, p_stale, dark_flags) or render(auth, p_auth_dark, dark_flags)
+    ae_stale, _ = (compare(p_auth_dark, p_stale) if not serr else (-1, None))
+    ok = named and tells and ae_stale == 0
+    print(f"  water-scatter-refuse {'PASS' if ok else 'FAIL'}  refused by name: {named}, "
+          f"names both replacements: {tells}, and {ae_stale} px against the twin that "
+          f"never authored it (want 0: warned AND ignored, not warned and applied)")
+    if not ok:
+        failures.append("water-scatter-refuse")
 
     return failures
 
@@ -9687,13 +9796,26 @@ def run_water_gate(workdir):
         # no coverage of it; a key in the fixture the parser does not read is a typo that
         # authors nothing, which is exactly what get_float cannot distinguish from absence.
         read_keys, known_keys = _cscn_key_sets("parse_water", "water")
+        # Minus the refused ones, which the reader cannot tell from accepted keys and
+        # which belong in neither of the two sets below (spec 11.84).
+        refused_keys = _cscn_refused_keys("parse_water", "water")
+        accepted_keys = read_keys - refused_keys
         fixture_water = json.load(open(os.path.join(ROOT, "assets", WATER_FIXTURE))).get("water", {})
         fixture_keys = {k for k in fixture_water if not k.startswith("_")}
-        if read_keys != known_keys:
-            drifted.append(f"parse_water reads {sorted(read_keys ^ known_keys)} "
+        if accepted_keys != known_keys:
+            drifted.append(f"parse_water accepts {sorted(accepted_keys ^ known_keys)} "
                            "but its known[] list disagrees")
-        if read_keys != fixture_keys:
-            drifted.append(f"fixture vs parse_water differ on {sorted(read_keys ^ fixture_keys)}")
+        if accepted_keys != fixture_keys:
+            drifted.append(f"fixture vs parse_water differ on "
+                           f"{sorted(accepted_keys ^ fixture_keys)}")
+        # A refused key must be refused and NOT tolerated: listing it in known[] would
+        # silence the generic warning and leave only the specific one, which is a
+        # defensible-looking change that quietly makes this whole check vacuous.
+        if refused_keys & known_keys:
+            drifted.append(f"refused keys {sorted(refused_keys & known_keys)} are also in "
+                           "known[], so they are tolerated rather than refused")
+        if refused_keys & fixture_keys:
+            drifted.append(f"the fixture authors refused keys {sorted(refused_keys & fixture_keys)}")
         # And the same three-way agreement one level down, for each nested train (spec
         # 11.48). Checking only the outer level would let a train's key set drift freely,
         # which is where the coverage matters most: every one of those eight is unreachable

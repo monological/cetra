@@ -85,10 +85,15 @@
    0.09,
    0.06
   ],
-  "scatter": [
+  "scatterAlbedo": [
    0.0084,
    0.0386,
    0.054
+  ],
+  "scatterGlow": [
+   0.0,
+   0.0,
+   0.0
   ],
   "caustics": true,
   "shoreCoverage": true,

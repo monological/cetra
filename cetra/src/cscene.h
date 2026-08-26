@@ -292,8 +292,10 @@ typedef struct CSceneWater {
     float ior; // 1.333 for water; F0 falls out of it rather than being authored
     bool has_absorption;
     float absorption[3]; // extinction per world unit, per channel
-    bool has_scatter;
-    float scatter[3]; // colour the absorbed energy returns as
+    bool has_scatter_albedo;
+    float scatter_albedo[3]; // fraction of incident light the body sends back
+    bool has_scatter_glow;
+    float scatter_glow[3]; // absolute radiance added regardless; a look, not a measurement
     bool has_caustics;
     bool caustics;
     bool has_shore_coverage;

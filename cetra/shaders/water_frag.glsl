@@ -57,7 +57,8 @@ uniform float time;
 uniform float waterRoughness;
 uniform float waterIor;
 uniform vec3 waterAbsorption; // extinction per world unit, per channel
-uniform vec3 waterScatter;    // in-scattered colour, absolute scene radiance
+uniform vec3 waterScatterAlbedo; // fraction of incident light the body sends back
+uniform vec3 waterScatterGlow;   // added regardless, absolute scene radiance
 
 // Mipped resolve of the opaque scene (colour + skybox), already pre-exposed.
 uniform sampler2D sceneColorTex;
@@ -1084,7 +1085,8 @@ void main() {
                    iblIntensity;
     if (sunAvailable == 1)
         incident += sunRadiance * max(sunDir.y, 0.0);
-    vec3 body = bed * T + waterScatter * incident * preExposure * (1.0 - T);
+    vec3 inscatter = waterScatterAlbedo * incident + waterScatterGlow;
+    vec3 body = bed * T + inscatter * preExposure * (1.0 - T);
 
     // Reflected share: the split-sum environment lobe, the same lookup every
     // other material makes. F0 0.020 falls out of IOR 1.333 rather than being
@@ -1265,7 +1267,11 @@ void main() {
     // Alpha is METALNESS here, not coverage. Water is a dielectric, and 1.0 would
     // tell SSGI to give it no indirect diffuse (kD = 1 - alpha) and tell the
     // spec-occ composite to hand nearly all its energy to the specular answer.
-    AlbedoOut = vec4(waterScatter, 0.0);
+    // The ALBEDO half alone, which is what this attachment has always wanted: SSGI
+    // reads it as a reflectance, un-pre-exposed. Before 11.84 it carried an absolute
+    // radiance here and the mismatch was invisible only because the two were the same
+    // field. The glow is not reflectance and is deliberately left out.
+    AlbedoOut = vec4(waterScatterAlbedo, 0.0);
     DiffuseOut = vec4(0.0);
     // No ambient specular routed out for occlusion: water's reflection stays in
     // FragColor above, so there is nothing here for the spec-occ composite to

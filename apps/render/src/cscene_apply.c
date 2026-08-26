@@ -493,8 +493,10 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
         water->ior = w->ior;
     if (w->has_absorption)
         glm_vec3_copy((float*)w->absorption, water->absorption);
-    if (w->has_scatter)
-        glm_vec3_copy((float*)w->scatter, water->scatter);
+    if (w->has_scatter_albedo)
+        glm_vec3_copy((float*)w->scatter_albedo, water->scatter_albedo);
+    if (w->has_scatter_glow)
+        glm_vec3_copy((float*)w->scatter_glow, water->scatter_glow);
     if (w->has_caustics)
         water->caustics = w->caustics;
     if (w->has_shore_coverage)

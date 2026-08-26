@@ -437,7 +437,11 @@ Water* create_water(void) {
     // Stored per world unit, so this default is the physical figure for a world where
     // one unit is one metre; see the field's own contract.
     glm_vec3_copy(WATER_CLEAR_ABSORPTION_PER_M, water->absorption);
-    glm_vec3_copy((vec3){0.02f, 0.10f, 0.12f}, water->scatter);
+    // The old absolute [0.02, 0.10, 0.12] divided by the daylight incident it was
+    // authored under (spec 11.84), so a scene that authors nothing looks as it did.
+    // The glow stays zero -- a sea that lights itself is something a scene has to ask
+    // for, and the calloc already zeroed it.
+    glm_vec3_copy((vec3){0.0038f, 0.0219f, 0.0321f}, water->scatter_albedo);
     water->roughness = 0.04f;
     water->ior = 1.333f;
     // Lake-scale defaults: a 6 m longest wave at 6 cm, which is a light breeze
@@ -550,7 +554,8 @@ void water_publish_to_postfx(const Water* water, const struct Scene* scene,
     vec3 incident = {0.0f, 0.0f, 0.0f};
     water_incident_light(scene, incident);
     for (int c = 0; c < 3; c++)
-        fx->water_inscatter[c] = water->scatter[c] * incident[c];
+        fx->water_inscatter[c] = water->scatter_albedo[c] * incident[c] +
+                                 water->scatter_glow[c];
 }
 
 /*
@@ -1925,7 +1930,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_float(u, "waterRoughness", water->roughness);
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
-    uniform_set_vec3(u, "waterScatter", (const float*)&water->scatter);
+    uniform_set_vec3(u, "waterScatterAlbedo", (const float*)&water->scatter_albedo);
+    uniform_set_vec3(u, "waterScatterGlow", (const float*)&water->scatter_glow);
     uniform_set_float(u, "waterAmplitude", water->amplitude);
     uniform_set_float(u, "waterWavelength", water->wavelength);
     uniform_set_float(u, "waterSteepness", water_effective_steepness(water));

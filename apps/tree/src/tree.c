@@ -1628,13 +1628,21 @@ int main(int argc, char** argv) {
              * Taken per metre it was a sight line of about a metre, so nothing under the
              * surface could be seen from anywhere.
              *
-             * SCATTER is not divided. It is the colour the absorbed energy comes back as
-             * -- a radiance, with no length in it to convert. It is also where the lagoon
-             * lives: greener than the library's open-ocean blue, against an extinction
-             * that is plain clear seawater.
+             * The in-scatter is not divided either way. It has no length in it to convert,
+             * and it is where the lagoon lives: greener than the library's open-ocean
+             * blue, against an extinction that is plain clear seawater.
+             *
+             * It rides the GLOW rather than the albedo, and this scene is the reason the
+             * two are separate fields (spec 11.84). The sun here sits 0.8 degrees up, so
+             * almost nothing falls on this water and an albedo -- however large -- returns
+             * a nearly black sea. What is wanted is the turquoise at any hour, which is a
+             * stylised sea and not a lit one. So the app OPTS IN to that explicitly
+             * instead of getting it from a constant nobody chose, and the albedo stays 0:
+             * with a glow this size a physical term on top would be invisible anyway.
              */
             glm_vec3_divs(water->absorption, GROUND_UNITS_PER_METRE, water->absorption);
-            glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter);
+            glm_vec3_zero(water->scatter_albedo);
+            glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter_glow);
             scene->water = water;
         }
     }

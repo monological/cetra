@@ -271,7 +271,15 @@ scene_desc = {
         "roughness": 0.06,
         "ior": 1.333,
         "absorption": [0.45, 0.09, 0.06],
-        "scatter": [0.04, 0.16, 0.18],
+        # A FRACTION of the light falling on the water, not a radiance (spec 11.84).
+        # The previous absolute [0.04, 0.16, 0.18] divided by THIS scene's own daylight
+        # incident, (4.7781, 4.1485, 3.3313) -- its own and not water_fixture's, since
+        # the two sit at different sun elevations and this one was always the brighter
+        # operating point of the pair.
+        "scatterAlbedo": [0.0084, 0.0386, 0.054],
+        # No self-lit floor: every arm here reads a depth ramp, and a constant under it
+        # would flatten the ratios that ramp exists to produce.
+        "scatterGlow": [0.0, 0.0, 0.0],
         "caustics": True,
         "shoreCoverage": True,
         "farLod": True,

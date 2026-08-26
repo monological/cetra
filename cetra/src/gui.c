@@ -697,7 +697,12 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Steepness", &water->steepness, 0.0f, 1.0f, "%.2f", 0);
             igSliderFloat("Roughness", &water->roughness, 0.0f, 0.3f, "%.3f", 0);
             igColorEdit3("Absorption", water->absorption, ImGuiColorEditFlags_Float);
-            igColorEdit3("Scatter", water->scatter, ImGuiColorEditFlags_Float);
+            // Two pickers because the two are different quantities: a reflectance the
+            // light drives, and a radiance added regardless. HDR on the glow, which can
+            // legitimately exceed 1 -- it is scene radiance, not a colour.
+            igColorEdit3("Scatter Albedo", water->scatter_albedo, ImGuiColorEditFlags_Float);
+            igColorEdit3("Scatter Glow", water->scatter_glow,
+                         ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
             // Spectral cascades allocate 24 textures and 45 passes a frame, so the
             // switch is offered rather than assumed. Caustics and foam ride on it:
             // both are selected from Jacobian compression, which the Gerstner path
