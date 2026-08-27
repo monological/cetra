@@ -469,10 +469,18 @@ static void texture_upload_compressed_level(TextureBlockFormat format, GLenum gl
 //
 // Returns false only on allocation failure, where the caller still has a usable
 // level 0.
+// The mip chain's alpha-coverage pair, defined below beside texture_wants_dilate
+// where the rest of the desc predicates live.
+static float texture_alpha_coverage(const unsigned char* pixels, int width, int height,
+                                    float cutoff, float scale);
+static void texture_preserve_alpha_coverage(unsigned char* pixels, int width, int height,
+                                            float cutoff, float target);
+
 static bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
-                          int channels, bool is_srgb, TextureUse use, const unsigned char* pixels,
+                          int channels, TextureDesc desc, const unsigned char* pixels,
                           GLenum* out_internal_format) {
-    TextureBlockFormat block = texture_block_format_for(use, channels);
+    const bool is_srgb = desc.is_srgb;
+    TextureBlockFormat block = texture_block_format_for(desc.use, channels);
     GLenum gl_block = texture_block_gl_format(block, is_srgb);
     // Scratch for the encoder, sized for level 0 and reused by every level under
     // it. Allocated before anything is uploaded so a failure falls back to the
@@ -536,6 +544,13 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
         return false;
     }
 
+    // Level 0's surviving fraction, which every level below is held to. Measured
+    // before the loop because level 0 is the reference and is never rewritten.
+    const bool keep_coverage = texture_wants_coverage(channels, desc);
+    const float target =
+        keep_coverage ? texture_alpha_coverage(pixels, width, height, desc.coverage_cutoff, 1.0f)
+                      : 0.0f;
+
     const unsigned char* src = pixels;
     int sw = width, sh = height;
     unsigned char* dst = a;
@@ -546,6 +561,18 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
         // chain is a chain of images, not of encodings, so quantisation error
         // cannot compound down it.
         texture_box_halve(src, sw, sh, channels, srgb_stored, lut, rev, dst);
+        // After the filter and before any encoder, which is the only position
+        // that exists: texture_upload_compressed_level encodes and uploads in
+        // one step and nothing here decodes. In place, so the next level
+        // filters from the rescaled parent -- levels cascade, and each is still
+        // held to level 0 rather than to the one above.
+        //
+        // The DILATE must already have run, and it has: all three producers do
+        // it on level 0 before publishing. Its solidity seed is alpha >= 8/255,
+        // so scaling alpha up first would promote garbage-rgb texels into
+        // colour SOURCES for their neighbours.
+        if (keep_coverage)
+            texture_preserve_alpha_coverage(dst, dw, dh, desc.coverage_cutoff, target);
         if (compressed)
             texture_upload_compressed_level(block, gl_block, level, dw, dh, channels, dst, scratch);
         else
@@ -950,6 +977,73 @@ bool texture_wants_dilate(int channels, TextureDesc desc) {
     return channels == 4 && desc.alpha == TEXTURE_ALPHA_OPACITY;
 }
 
+bool texture_wants_coverage(int channels, TextureDesc desc) {
+    return texture_wants_dilate(channels, desc) && desc.coverage_cutoff > 0.0f;
+}
+
+// What fraction of `pixels` would survive an alpha test at `cutoff`, with alpha
+// pre-multiplied by `scale`.
+//
+// On STORED codes against a stored-code cutoff, with no transfer function
+// anywhere: alpha is never in sRGB space (see texture_box_halve) and a coverage
+// search must not put it there.
+static float texture_alpha_coverage(const unsigned char* pixels, int width, int height,
+                                    float cutoff, float scale) {
+    const size_t count = (size_t)width * (size_t)height;
+    const unsigned char thresh = (unsigned char)(cutoff * 255.0f + 0.5f);
+    size_t above = 0;
+    for (size_t i = 0; i < count; i++) {
+        const float a = (float)pixels[i * 4 + 3] * scale;
+        if (a >= (float)thresh)
+            above++;
+    }
+    return count ? (float)above / (float)count : 0.0f;
+}
+
+
+/*
+ * Scale this level's alpha so the fraction surviving the cutoff matches level
+ * 0's (Castano; Unity ships it as "Mip Maps Preserve Coverage").
+ *
+ * Without it an alpha-tested cutout THINS with distance and eventually
+ * evaporates: a box filter over a soft edge drags alpha toward the transparent
+ * side, so fewer texels clear a threshold that has not moved. The shader's
+ * sharpen fixes how WIDE the transition is; this fixes where it sits.
+ *
+ * A bisection on the scale rather than a closed form, because the target is a
+ * step function of it -- there is no expression to invert. Ten steps over
+ * [0, 4]: the achievable coverage is quantised by the stored byte, so the search
+ * lands on a plateau rather than converging, and iterating further buys nothing.
+ */
+static void texture_preserve_alpha_coverage(unsigned char* pixels, int width, int height,
+                                            float cutoff, float target) {
+    // Castano's search, in his order, and the ORDER is the whole of it: start at
+    // scale 1, test, and stop on equality. A midpoint-first bisection over
+    // [0, 4] never evaluates 1 at all, and since coverage is a step function of
+    // the scale it then returns an arbitrary member of whatever plateau it
+    // converges to -- 0.848 for a level already matching to four decimals here,
+    // rescaling every alpha by 15% to correct nothing.
+    float lo = 0.0f, hi = 4.0f, scale = 1.0f;
+    for (int step = 0; step < 10; step++) {
+        const float got = texture_alpha_coverage(pixels, width, height, cutoff, scale);
+        if (got < target)
+            lo = scale;
+        else if (got > target)
+            hi = scale;
+        else
+            break;
+        scale = 0.5f * (lo + hi);
+    }
+    if (scale == 1.0f)
+        return;
+
+    const size_t count = (size_t)width * (size_t)height;
+    for (size_t i = 0; i < count; i++) {
+        const float a = (float)pixels[i * 4 + 3] * scale;
+        pixels[i * 4 + 3] = (unsigned char)(a > 255.0f ? 255.0f : a + 0.5f);
+    }
+}
+
 Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned char* pixels,
                               int width, int height, int channels, TextureDesc desc) {
     if (!pool || !key || !pixels) {
@@ -975,8 +1069,8 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
     // whenever a block format was chosen. Storing the requested one instead
     // makes texture_gpu_bytes and texture_mean_rgb's sRGB test both wrong.
     GLenum stored = internal_format;
-    texture_upload_image(internal_format, data_format, width, height, channels, desc.is_srgb,
-                         desc.use, pixels, &stored);
+    texture_upload_image(internal_format, data_format, width, height, channels, desc, pixels,
+                         &stored);
     check_gl_error("texture upload");
 
     texture->id = id;

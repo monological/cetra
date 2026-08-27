@@ -755,6 +755,12 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
 
 #define BARK_TEX_SIZE 1024
 #define LEAF_CELL_SIZE 256
+// The leaf cutout's alpha threshold, shared by the material that TESTS against
+// it and the atlas bake that has to hold its coverage down the mip chain. The
+// bake runs before the material exists, so neither can read it from the other,
+// and a drift between them is silent -- the chain would be held to a threshold
+// nothing tests.
+#define LEAF_ALPHA_CUTOFF 0.4f
 
 // One layer map is this square, and the number is NOT a memory decision even
 // though it looks like one.
@@ -917,9 +923,13 @@ static void bake_vegetation_textures(Scene* scene) {
     const int LH = LEAF_CELL_SIZE;
     unsigned char *la = NULL, *ln = NULL, *lr = NULL;
     veg_leaf_cluster_maps(LW, LH, &la, &ln, &lr);
+    // The alpha-TESTED image, so the one whose chain has to hold its coverage
+    // against the cutoff the material below states.
+    TextureDesc leaf_desc = texture_desc(true);
+    leaf_desc.coverage_cutoff = LEAF_ALPHA_CUTOFF;
     set_material_albedo_tex(g_mat_leaf,
                             texture_load_memory_owned(scene->tex_pool, "forest_leaf_albedo", la, LW,
-                                                      LH, 4, texture_desc(true)));
+                                                      LH, 4, leaf_desc));
     set_material_normal_tex(g_mat_leaf,
                             texture_load_memory_owned(scene->tex_pool, "forest_leaf_normal", ln, LW,
                                                       LH, 3,
@@ -2007,7 +2017,7 @@ static void on_init(Game* game) {
     // Cutout, two-sided, and allowed into the shadow map -- foliage_shadows is
     // what dapples the ground, and without alpha_mode the cards are solid quads.
     g_mat_leaf->alpha_mode = ALPHA_MASK;
-    g_mat_leaf->alphaCutoff = 0.4f;
+    g_mat_leaf->alphaCutoff = LEAF_ALPHA_CUTOFF;
     g_mat_leaf->doubleSided = true;
     g_mat_leaf->foliage_shadows = 1;
     // Thin leaves transmit; without it a backlit canopy reads as opaque plastic.

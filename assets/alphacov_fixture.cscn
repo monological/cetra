@@ -1,0 +1,25 @@
+{
+ "models": [
+  {
+   "path": "alphacov_fixture.gltf"
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   8.0,
+   0.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   -30.0
+  ],
+  "fov": 50.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false
+ }
+}

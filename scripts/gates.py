@@ -5444,6 +5444,28 @@ MASK_GONE_CEIL = 0.10
 MASK_SAMPLE_RATIO_MAX = 1.25
 MASK_GRID = 12
 
+# Mip alpha coverage preservation (spec 11.87), on assets/alphacov_fixture.
+#
+# A receding plane wearing a grid of small opaque dots at cutoff 0.5. The dots
+# are the point: a soft edge one texel wide is SYMMETRIC about the threshold, so
+# box-filtering moves as many texels up as down and the surviving fraction holds
+# -- which is why neither leaf atlas drifts (0.3957 at level 0, 0.3964 six levels
+# down) and why neither could test this. An isolated dot has no such symmetry;
+# its coverage falls 0.113 -> 0.125 -> 0.062 -> 0.000 over four halvings.
+ALPHACOV_FIXTURE = "alphacov_fixture.cscn"
+# Read as fractions of frame height. NEAR is where the plane is near level 0 and
+# is the reference; MID is deep enough into the chain that an unpreserved cutout
+# has visibly thinned.
+ALPHACOV_NEAR = (0.80, 0.98)
+ALPHACOV_MID = (0.62, 0.72)
+# A dot is far brighter than the ground it is cut out of, so a luma threshold
+# separates them without needing to know where any individual dot landed.
+ALPHACOV_LUMA = 90.0
+# What fraction of the near field's coverage the mid band must still carry.
+# Measured 0.784 preserved against 0.591 unpreserved, so this sits between them
+# with room either side rather than on top of the passing value.
+ALPHACOV_MIN_RATIO = 0.70
+
 
 def _box_luma(pix, w, h, box):
     """Mean linear luma over a fractional box, on a MASK_GRID square grid.
@@ -10898,6 +10920,68 @@ def run_mask_gate(workdir):
         failures.append("mask-samples")
 
     return failures
+
+
+def _alphacov_frac(pix, w, h, band):
+    """Fraction of a horizontal band bright enough to be a surviving dot."""
+    y0, y1 = int(h * band[0]), int(h * band[1])
+    n = k = 0
+    for y in range(y0, y1):
+        for x in range(w):
+            o = (y * w + x) * 3
+            if 0.2126 * pix[o] + 0.7152 * pix[o + 1] + 0.0722 * pix[o + 2] > ALPHACOV_LUMA:
+                k += 1
+            n += 1
+    return k / n if n else 0.0
+
+
+def run_alphacov_gate(workdir):
+    """An alpha-tested cutout keeps its coverage down the mip chain (spec 11.87).
+
+      alphacov-mip   the mid field still carries most of the near field's dot
+                     coverage. Box-filtering an isolated dot drags its alpha
+                     toward the background rather than toward the mean of an
+                     edge, so an unpreserved chain does not thin the grid, it
+                     DELETES it -- this fixture's coverage runs 0.113 at level 0
+                     and 0.000 by level 3. Castano's per-level rescale is what
+                     holds it, and the arm reads the ratio between two bands of
+                     ONE frame so it needs no stored image and no second build.
+
+    WHY A DOT GRID AND NOT FOLIAGE. Every alpha-tested asset in this corpus is a
+    leaf atlas with a soft edge about a texel wide, and a soft edge is symmetric
+    about the threshold: filtering moves as many texels above it as below, so the
+    surviving fraction barely moves and preservation is inert. Measured on
+    apps/tree's atlas, 0.3957 at level 0 against 0.3964 six levels down. An arm
+    written on that content would pass whether the feature worked or not.
+
+    WHAT IT DOES NOT CLAIM. At the vanishing point both preserved and unpreserved
+    read essentially zero -- once every texel of a level is below the cutoff no
+    scale inside the search's range lifts it back, and the rescale is capped at
+    4x. The claim is the mid field, where there is something left to hold.
+    """
+    scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  alphacov-mip SKIP  ({ALPHACOV_FIXTURE} not present)")
+        return []
+
+    out = os.path.join(workdir, "alphacov.ppm")
+    err = render(scene, out, [])
+    if err:
+        print(f"  alphacov-mip ERROR render failed: {err.strip()[-200:]}")
+        return ["alphacov-mip"]
+
+    w, h, pix = _read_ppm(out)
+    near = _alphacov_frac(pix, w, h, ALPHACOV_NEAR)
+    mid = _alphacov_frac(pix, w, h, ALPHACOV_MID)
+    ratio = mid / near if near > 0 else 0.0
+    # The near band has to actually carry dots, or a frame that rendered nothing
+    # satisfies a ratio of 0/0 and every reading below is meaningless.
+    lit = near > 0.05
+    ok = lit and ratio >= ALPHACOV_MIN_RATIO
+    print(f"  alphacov-mip {'PASS' if ok else 'FAIL'}  dot coverage {near:.4f} near, "
+          f"{mid:.4f} mid, ratio {ratio:.3f} (want >= {ALPHACOV_MIN_RATIO}, and the near band "
+          f"lit above 0.05: {lit}). Without the per-level rescale this reads 0.591.")
+    return [] if ok else ["alphacov-mip"]
 
 
 OVERDRAW_LAYERS = "overdraw_layers.cscn"
@@ -19078,6 +19162,8 @@ GATE_GROUPS = [
     ("draw-list", "draw list (submission order, spec 11.28 Phase 3):", run_draw_list_gate),
     ("lod", "LOD chains (selection by projected size, spec 11.28 Phase 6):", run_lod_gate),
     ("mask", "alpha mask (binary above the cutoff, spec 11.31):", run_mask_gate),
+    ("alphacov", "mip alpha coverage (a cutout keeps its area with distance, spec 11.87):",
+     run_alphacov_gate),
     ("wind-uv", "UV1 carries wind data through import (spec 11.51):", run_wind_uv_gate),
     ("varying", "varyings under partial coverage (spec 11.38):", run_varying_gate),
     ("sss-tag", "subsurface profile tag through the MSAA resolve (spec 11.37):",

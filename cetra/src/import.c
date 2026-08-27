@@ -612,6 +612,12 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
     // a real opacity loaded linear, which is the only case that breaks it.
     TextureDesc desc = texture_desc(is_srgb);
     desc.use = texture_use_for_setter(setter);
+    // The ALBEDO of a masked material is the one image anything alpha-tests, so
+    // the one whose mip chain has to hold its coverage.
+    // extract_material_properties has already run, so the cutoff is here to be
+    // read -- that ordering is what makes this two lines rather than a rework.
+    if (material->alpha_mode == ALPHA_MASK && setter == set_material_albedo_tex)
+        desc.coverage_cutoff = material->alphaCutoff;
 
     if (tex_path[0] == '*' && ai_scene) {
         int idx = atoi(tex_path + 1);

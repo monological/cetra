@@ -182,6 +182,23 @@ typedef struct TextureDesc {
     bool is_srgb;       // stored sRGB-encoded, not linear
     TextureAlpha alpha; // what the alpha channel MEANS
     TextureUse use;     // what the image IS, which decides its block format
+    /*
+     * The alpha cutoff this image will be TESTED against, or 0 for an image
+     * that is not alpha-tested (spec 11.87). Every mip level's alpha is then
+     * rescaled so the fraction of texels above it matches level 0's.
+     *
+     * Without it a cutout thins with distance and eventually evaporates: a box
+     * filter over a soft edge moves the alpha, so the fraction surviving the
+     * test drifts down every level while the test itself stays put.
+     *
+     * A fourth field rather than a fourth entry point, and the one field here
+     * whose ZERO is the safe answer -- so unlike the three above it costs no
+     * call site anything. Safe to BAKE because the cutoff is a load-time
+     * constant: material.h keeps it out of MATERIAL_PARAMS deliberately, since
+     * it decides which pass a mesh draws in, so it reaches neither the GUI nor
+     * a config snapshot.
+     */
+    float coverage_cutoff;
 } TextureDesc;
 
 // The historical inference as a starting point: a colour texture is the one with
@@ -197,6 +214,11 @@ TextureDesc texture_desc(bool is_srgb);
 // filtered or mipped. One function because the answer is needed on three
 // threads at three moments, and it is the same question every time.
 bool texture_wants_dilate(int channels, TextureDesc desc);
+
+// Whether this image's mip chain wants its alpha held to level 0's coverage.
+// Beside the one above because it is the same shape of question and shares its
+// first half: only an RGBA image whose alpha is an opacity can be alpha-tested.
+bool texture_wants_coverage(int channels, TextureDesc desc);
 
 // Global switch behind --no-texture-compression: off stores every texture
 // uncompressed, and pbr_frag then reads a stored Z rather than rebuilding one,

@@ -48,6 +48,12 @@
 
 #define TEXTURE_SIZE      512
 #define BARK_TEXTURE_SIZE 1024
+// The leaf cutout's alpha threshold, shared by the material that TESTS against
+// it and the atlas bake that has to hold its coverage down the mip chain. One
+// constant because the bake runs long before the material exists, so the two
+// cannot read it from each other -- and a drift between them is silent: the
+// chain would be preserved against a threshold nothing uses.
+#define LEAF_ALPHA_CUTOFF 0.4f
 
 /*
  * Generate all procedural textures
@@ -102,8 +108,15 @@ static void generate_procedural_textures(Scene* scene) {
     printf("Generating procedural leaf cluster atlas...\n");
     unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
     veg_leaf_cluster_maps(LW, LH, &leaf_a, &leaf_n, &leaf_r);
+    // The one texture here that is alpha-TESTED, so the one whose mip chain has
+    // to hold its coverage. proc_leaf_sprite below looks like a candidate and is
+    // not: it goes to the billboard renderer, which blends premultiplied alpha
+    // rather than testing it, and rescaling it would change density instead of
+    // preserving a silhouette.
+    TextureDesc leaf_desc = texture_desc(true);
+    leaf_desc.coverage_cutoff = LEAF_ALPHA_CUTOFF;
     leaf_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_albedo", leaf_a, LW, LH,
-                                                4, texture_desc(true));
+                                                4, leaf_desc);
     leaf_normal_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_normal", leaf_n, LW, LH,
                                                 3,
                                                 (TextureDesc){.is_srgb = false,
@@ -1442,7 +1455,7 @@ int main(int argc, char** argv) {
     // Alpha-masked cutout, drawn from both sides, and -- unlike hair cards --
     // allowed into the shadow map, which is what dapples the ground.
     leaf_material->alpha_mode = ALPHA_MASK;
-    leaf_material->alphaCutoff = 0.4f;
+    leaf_material->alphaCutoff = LEAF_ALPHA_CUTOFF;
     leaf_material->doubleSided = true;
     leaf_material->foliage_shadows = 1;
     leaf_material->wind_response = 1.0f;
