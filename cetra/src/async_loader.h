@@ -28,8 +28,7 @@
 typedef struct TextureLoadRequest {
     TexturePool* pool;
     char* filepath;               // file path, or the cache key ("*N") for embedded
-    bool is_srgb;                 // Color data (albedo/emissive) vs linear data textures
-    TextureUse use;               // what the image IS, which decides its block format
+    TextureDesc desc;             // colour space, what the alpha means, what the image IS
     unsigned char* embedded_data; // owned copy of the compressed bytes; NULL = load from file
     int embedded_size;            // byte count of embedded_data
     void* user_data;
@@ -58,11 +57,19 @@ typedef struct TextureLoadResult {
     int width;
     int height;
     int channels;
-    GLenum internal_format;
-    GLenum data_format;
-    // Carried from the request, because the upload happens on the main thread
-    // long after the request is gone and the block format is chosen there.
-    TextureUse use;
+    /*
+     * Carried from the request, because the upload happens on the main thread
+     * long after the request is gone.
+     *
+     * The WHOLE desc and not `use` alone. This used to carry the two GL formats
+     * instead, and the main thread recovered `is_srgb` by testing the internal
+     * format for GL_SRGB / GL_SRGB_ALPHA -- which disagrees with the caller
+     * below three channels, where texture_gl_formats has no sRGB variant to
+     * return and a greyscale albedo comes back linear. Carrying the answer
+     * rather than reconstructing it removes the disagreement instead of
+     * matching it, and the formats are derived where they are used.
+     */
+    TextureDesc desc;
 
     void* user_data;
     void (*callback)(Texture* tex, void* user_data);

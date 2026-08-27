@@ -43,18 +43,18 @@ struct InFlightLoad {
     struct InFlightLoad* next;
 };
 
-// Fill a result from freshly decoded pixels: repair transparent texels (RGBA
-// only) off the main thread, then record what the GL upload will need. Shared
-// by both decode sources so file and embedded textures cannot drift.
+// Fill a result from freshly decoded pixels: repair transparent texels off the
+// main thread where the desc says the alpha is an opacity, then carry the desc
+// forward for the upload. Shared by both decode sources so file and embedded
+// textures cannot drift.
 static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pixels, int width,
-                                    int height, int channels, bool is_srgb,
-                                    TextureUse use) {
-    // Inferred from is_srgb, which is the DEFAULT the file loader's `_ex` form
-    // overrides rather than a law -- a linear RGBA texture's alpha is usually
-    // data, and dilating it overwrites the three channels beside it, but a decal
-    // image is colour with a real opacity loaded linear. Nothing streams one
-    // yet; when something does, this wants the override too.
-    if (channels == 4 && is_srgb) {
+                                    int height, int channels, TextureDesc desc) {
+    // The caller's answer now, not an inference from its colour space -- and in
+    // place, because these bytes are this thread's own until the result is
+    // handed over. Doing it here rather than in texture_pool_publish is the one
+    // deliberate difference between the three producers: it is the only repair
+    // that gets to happen off the main thread.
+    if (texture_wants_dilate(channels, desc)) {
         texture_dilate_transparent_rgb(pixels, width, height);
     }
     result->pixel_data = pixels;
@@ -62,8 +62,7 @@ static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pi
     result->height = height;
     result->channels = channels;
     result->success = true;
-    texture_gl_formats(channels, is_srgb, &result->internal_format, &result->data_format);
-    result->use = use;
+    result->desc = desc;
 }
 
 // Join the decode already running for `key`, or claim the key for this caller.
@@ -276,7 +275,7 @@ static void* worker_thread_func(void* arg) {
                                                          &ew, &eh, &ec, 0)
                                  : NULL;
             if (edata) {
-                finalize_decoded_result(result, edata, ew, eh, ec, req->is_srgb, req->use);
+                finalize_decoded_result(result, edata, ew, eh, ec, req->desc);
             } else {
                 result->success = false;
                 snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
@@ -338,7 +337,7 @@ static void* worker_thread_func(void* arg) {
             goto enqueue_result;
         }
 
-        finalize_decoded_result(result, data, width, height, channels, req->is_srgb, req->use);
+        finalize_decoded_result(result, data, width, height, channels, req->desc);
 
     enqueue_result:
         // Add to completion queue
@@ -601,8 +600,10 @@ static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
 
     req->pool = pool;
     req->filepath = key_copy;
-    req->is_srgb = is_srgb;
-    req->use = use;
+    // The alpha is inferred here, as it always was on this path. Phase 6 hands
+    // the submit API a desc so a streamed decal can state it.
+    req->desc = texture_desc(is_srgb);
+    req->desc.use = use;
     req->embedded_data = copy;
     req->embedded_size = bytes ? nbytes : 0;
     req->callback = callback;
@@ -688,41 +689,18 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
             texture = get_texture_from_pool_threadsafe(pool, result->pool_key);
 
             if (!texture) {
-                // Create texture and upload to GPU
-                texture = create_texture();
-                if (texture) {
-                    GLuint textureID;
-                    glGenTextures(1, &textureID);
-                    glBindTexture(GL_TEXTURE_2D, textureID);
-
-                    texture_set_default_sampler_state();
-
-                    // The shared uploader, not a glTexImage2D + glGenerateMipmap
-                    // pair of its own. This is the path every EXTERNAL model
-                    // texture takes, so a mip or block policy that reached only
-                    // texture.c would reach almost no real content -- and two
-                    // filters that must agree is the thing the CPU chain exists
-                    // to remove.
-                    const bool srgb = result->internal_format == GL_SRGB ||
-                                      result->internal_format == GL_SRGB_ALPHA;
-                    GLenum stored = result->internal_format;
-                    texture_upload_image(result->internal_format, result->data_format,
-                                         result->width, result->height, result->channels, srgb,
-                                         result->use, result->pixel_data, &stored);
-
-                    texture->id = textureID;
-                    texture->filepath = safe_strdup(result->pool_key);
-                    texture->width = result->width;
-                    texture->height = result->height;
-                    // The format the upload actually used, which differs from the
-                    // requested one whenever a block format was chosen.
-                    texture->internal_format = stored;
-                    texture->data_format = result->data_format;
-
-                    add_texture_to_pool_threadsafe(pool, texture);
-
-                    glBindTexture(GL_TEXTURE_2D, 0);
-                }
+                // The shared publish, not a create/bind/upload/insert sequence
+                // of its own. This is the path every EXTERNAL model texture
+                // takes, so a mip, sampler or block policy that reached only
+                // texture.c would reach almost no real content -- which is
+                // exactly how a glGenerateMipmap survived here for a commit
+                // after the other two producers moved to a CPU chain.
+                //
+                // The dilate already ran, on the worker thread, which is the one
+                // step this path deliberately does not share.
+                texture = texture_pool_publish(pool, result->pool_key, result->pixel_data,
+                                               result->width, result->height, result->channels,
+                                               result->desc);
             }
 
             // Free pixel data now that it's on GPU

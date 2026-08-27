@@ -92,11 +92,6 @@ void set_texture_pool_directory(TexturePool* pool, const char* directory);
 Texture* get_texture_from_pool(TexturePool* pool, const char* filepath);
 void add_texture_to_pool(TexturePool* pool, Texture* texture);
 
-// Pick GL formats for an 8-bit image. is_srgb marks color data (albedo,
-// emissive) so the hardware decodes it to linear exactly once on sample;
-// data textures (normals, roughness/metalness, AO, ...) stay linear.
-void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format);
-
 // Float LUT upload from memory (LINEAR / CLAMP_TO_EDGE / no mips baked in).
 // Returns the raw GL name; the caller owns deletion. First user: the LTC
 // area-light tables (spec 9.2).
@@ -167,6 +162,40 @@ typedef enum TextureUse {
     TEXTURE_USE_DATA,   // roughness, metalness, AO, opacity, height
 } TextureUse;
 
+/*
+ * The three facts a loader needs about an image, carried together.
+ *
+ * They are three and not one because they genuinely disagree. Reflectance is
+ * colour-ish and LINEAR; a decal is colour with a real opacity alpha, also
+ * linear, because it lives in the material array; apps/tree's sand albedo is
+ * baked non-sRGB on purpose so the stochastic transform operates on stored
+ * codes. No two of these can be derived from the third.
+ *
+ * A struct rather than three parameters because they arrived one at a time and
+ * cost an entry point each time -- seven of them for three facts, four of which
+ * existed only to default a field. `texture_desc` states the historical
+ * inference once so a caller overrides what it means and inherits the rest.
+ */
+typedef struct TextureDesc {
+    bool is_srgb;       // stored sRGB-encoded, not linear
+    TextureAlpha alpha; // what the alpha channel MEANS
+    TextureUse use;     // what the image IS, which decides its block format
+} TextureDesc;
+
+// The historical inference as a starting point: a colour texture is the one with
+// an opacity in alpha, and an unstated use compresses nothing.
+//
+// NOT a zero initialiser, and that is the reason this exists rather than a
+// `(TextureDesc){0}` at each site: TEXTURE_ALPHA_OPACITY is the zero of its
+// enum, so a zeroed desc claims a LINEAR image has an opacity in alpha -- which
+// dilates a height or an occlusion and overwrites the three channels beside it.
+TextureDesc texture_desc(bool is_srgb);
+
+// Whether this image's transparent texels want their rgb repaired before it is
+// filtered or mipped. One function because the answer is needed on three
+// threads at three moments, and it is the same question every time.
+bool texture_wants_dilate(int channels, TextureDesc desc);
+
 // Global switch behind --no-texture-compression: off stores every texture
 // uncompressed, and pbr_frag then reads a stored Z rather than rebuilding one,
 // so a normal-mapped frame returns to what it was.
@@ -198,23 +227,29 @@ size_t texture_gpu_bytes(const Texture* texture);
 int texture_normal_gate(const Texture* texture);
 
 /*
- * THE upload path: level 0, the mip chain under it, and the block encoding where
- * `use` asks for one. Into the currently bound GL_TEXTURE_2D.
+ * THE path from decoded pixels to a pooled Texture: pick the GL formats, create
+ * and bind the object, set the sampler state, upload level 0 and the CPU mip
+ * chain under it, block-encode where `use` asks for one, record the format the
+ * driver actually took, and insert into `pool` under `key`.
  *
- * Public because there are three call sites -- the file loader, the in-memory
- * loader and the async loader's completion -- and a mip filter that lives at
- * only some of them is two filters that have to agree. They did not: the async
- * path kept glGenerateMipmap for a commit after the other two moved to a CPU
- * chain, which is invisible until a compressed texture arrives and the driver
- * silently cannot fill its levels.
+ * Public because there are three producers -- the file loader, the in-memory
+ * loader and the async loader's completion -- and this body used to be written
+ * out three times. It had already drifted: the async copy re-derived `is_srgb`
+ * by sniffing the internal format it was about to pass, which disagrees with the
+ * caller below three channels, where texture_gl_formats has no sRGB variant to
+ * return. A mip filter or a block policy reaching only some producers is the
+ * same class of defect as the glGenerateMipmap that survived here for a commit.
  *
- * `out_internal_format` receives the format actually used, which is NOT the one
- * passed whenever a block format was chosen. Storing the passed one instead
- * makes texture_gpu_bytes and the sRGB test in texture_mean_rgb both wrong.
+ * `pixels` is NOT retained -- GL takes its own copy and Texture stores no pixel
+ * pointer, so the caller's buffer is dead the moment this returns. Dilation is
+ * the caller's, because the three do it at three different moments and only one
+ * of them is on this thread; the DECISION is texture_wants_dilate above.
+ *
+ * Returns the pooled Texture, or NULL. Does not check the cache: a caller that
+ * can answer from the pool must do so before decoding, not after.
  */
-bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
-                          int channels, bool is_srgb, TextureUse use, const unsigned char* pixels,
-                          GLenum* out_internal_format);
+Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned char* pixels,
+                              int width, int height, int channels, TextureDesc desc);
 
 /*
  * --texture-probe: one line per texture and a total, in the --water-probe idiom.

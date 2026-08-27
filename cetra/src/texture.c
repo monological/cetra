@@ -183,7 +183,17 @@ GLuint create_texture_3d_rgba8_tiling(int width, int height, int depth,
     return tex;
 }
 
-void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLenum* data_format) {
+// Pick GL formats for an 8-bit image. is_srgb marks colour data (albedo,
+// emissive) so the hardware decodes it to linear exactly once on sample; data
+// textures (normals, roughness/metalness, AO, ...) stay linear.
+//
+// Static since the publish body became the one place an upload is arranged.
+// While it was public the async path called it on a worker, stored the two
+// formats on the result, and the main thread read `is_srgb` back OUT of them --
+// which is a lossy round trip below three channels, where there is no sRGB
+// variant to store.
+static void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format,
+                               GLenum* data_format) {
     if (channels == 1) {
         *internal_format = GL_RED;
         *data_format = GL_RED;
@@ -459,7 +469,7 @@ static void texture_upload_compressed_level(TextureBlockFormat format, GLenum gl
 //
 // Returns false only on allocation failure, where the caller still has a usable
 // level 0.
-bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
+static bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
                           int channels, bool is_srgb, TextureUse use, const unsigned char* pixels,
                           GLenum* out_internal_format) {
     TextureBlockFormat block = texture_block_format_for(use, channels);
@@ -919,6 +929,69 @@ void add_texture_to_pool(TexturePool* pool, Texture* texture) {
     }
 }
 
+TextureDesc texture_desc(bool is_srgb) {
+    return (TextureDesc){
+        .is_srgb = is_srgb,
+        // The historical correlation: a colour texture is the one with an
+        // opacity in alpha, and a linear one carries a height or an occlusion
+        // there that dilating would overwrite.
+        .alpha = is_srgb ? TEXTURE_ALPHA_OPACITY : TEXTURE_ALPHA_DATA,
+        // Unstated use means COLOUR, which compresses nothing -- so a caller
+        // that has not been taught the distinction keeps the storage it had.
+        .use = TEXTURE_USE_COLOUR,
+    };
+}
+
+bool texture_wants_dilate(int channels, TextureDesc desc) {
+    return channels == 4 && desc.alpha == TEXTURE_ALPHA_OPACITY;
+}
+
+Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned char* pixels,
+                              int width, int height, int channels, TextureDesc desc) {
+    if (!pool || !key || !pixels) {
+        log_error("Invalid pool, key, or pixel data");
+        return NULL;
+    }
+
+    Texture* texture = create_texture();
+    if (!texture) {
+        return NULL;
+    }
+
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    texture_set_default_sampler_state();
+
+    GLenum internal_format;
+    GLenum data_format;
+    texture_gl_formats(channels, desc.is_srgb, &internal_format, &data_format);
+
+    // The format the driver actually took, which is NOT the one asked for
+    // whenever a block format was chosen. Storing the requested one instead
+    // makes texture_gpu_bytes and texture_mean_rgb's sRGB test both wrong.
+    GLenum stored = internal_format;
+    texture_upload_image(internal_format, data_format, width, height, channels, desc.is_srgb,
+                         desc.use, pixels, &stored);
+    check_gl_error("texture upload");
+
+    texture->id = id;
+    texture->filepath = safe_strdup(key);
+    texture->width = width;
+    texture->height = height;
+    texture->internal_format = stored;
+    texture->data_format = data_format;
+
+    // The locking variant on every path, not only the streamed one. Worker
+    // threads share this pool for the whole session, so the mutex is what makes
+    // the insert correct rather than what makes it slow -- and it is the variant
+    // that refuses a duplicate key in the ARRAY as well as in the cache, where
+    // the plain one appends regardless and would double-count the ledger.
+    add_texture_to_pool_threadsafe(pool, texture);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return texture;
+}
+
 Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb) {
     // The historical correlation, kept as the default: a colour texture is the
     // one with an opacity in alpha.
@@ -935,6 +1008,7 @@ Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath,
 
 Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepath, bool is_srgb,
                                           TextureAlpha alpha, TextureUse use) {
+    const TextureDesc desc = {.is_srgb = is_srgb, .alpha = alpha, .use = use};
     if (!pool || !filepath) {
         log_error("Invalid pool or filepath");
         return NULL;
@@ -967,7 +1041,6 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
         return NULL;
     }
 
-    GLuint textureID = 0;
     int width, height, nrChannels;
 
     Texture* cached_texture = get_texture_from_pool(pool, subpath);
@@ -1010,50 +1083,16 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
     // else: spec 11.60 stores a layer's HEIGHT there and its ambient occlusion in
     // the surface map's, and dilating those overwrites the albedo, the packed
     // normal and the roughness of every texel whose relief dips below 3.1%.
-    if (nrChannels == 4 && alpha == TEXTURE_ALPHA_OPACITY) {
+    if (texture_wants_dilate(nrChannels, desc)) {
+        // In place: this buffer is stbi's and ours to modify, which is what
+        // saves the copy the in-memory path has to make.
         texture_dilate_transparent_rgb(data, width, height);
     }
 
-    Texture* new_texture = create_texture();
+    Texture* new_texture =
+        texture_pool_publish(pool, subpath, data, width, height, nrChannels, desc);
 
-    if (!new_texture) {
-        stbi_image_free(data);
-        free(normalized_path);
-        free(subpath);
-        return NULL;
-    }
-
-    // Generate texture
-    glGenTextures(1, &textureID);
-    glBindTexture(GL_TEXTURE_2D, textureID);
-
-    texture_set_default_sampler_state();
-
-    // Determine format
-    GLenum internal_format;
-    GLenum data_format;
-    texture_gl_formats(nrChannels, is_srgb, &internal_format, &data_format);
-
-    // Upload texture data
-    texture_upload_image(internal_format, data_format, width, height, nrChannels, is_srgb, use,
-                         data, &internal_format);
-    check_gl_error("texture upload");
-
-    // Clean up
     stbi_image_free(data);
-
-    // Update texture properties
-    new_texture->id = textureID;
-    new_texture->filepath = safe_strdup(subpath);
-    new_texture->width = width;
-    new_texture->height = height;
-    new_texture->internal_format = internal_format;
-    new_texture->data_format = data_format;
-
-    // Add texture to the pool
-    add_texture_to_pool(pool, new_texture);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
     free(normalized_path);
     free(subpath);
 
@@ -1069,6 +1108,11 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
 Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
                                        const unsigned char* pixels, int width, int height,
                                        int channels, bool is_srgb, TextureUse use) {
+    // The alpha is still INFERRED on this path, where the file loader takes it.
+    // Phase 6 gives every caller a desc of its own; until then this preserves
+    // exactly what the inference produced.
+    TextureDesc desc = texture_desc(is_srgb);
+    desc.use = use;
     if (!pool || !key || !pixels) {
         log_error("Invalid pool, key, or pixel data");
         return NULL;
@@ -1080,22 +1124,11 @@ Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
         return cached_texture;
     }
 
-    Texture* new_texture = create_texture();
-    if (!new_texture) {
-        return NULL;
-    }
-
-    // RGBA COLOUR sources need their transparent texels' color repaired; work on
-    // a mutable copy since the caller owns the pixel data.
-    //
-    // Still INFERRED from is_srgb here, where the file loader above takes the
-    // decision as a parameter. That is a real gap rather than a considered
-    // split: an app building a decal image procedurally -- which is how
-    // apps/tree and apps/forest make all of theirs -- gets no dilate and no way
-    // to ask for one. It wants the same `_ex` treatment the moment something
-    // needs it.
+    // A COPY, because the caller owns `pixels` and the repair writes into it.
+    // The file path above dilates in place for exactly that reason -- its buffer
+    // came from stbi and is its own.
     unsigned char* dilated = NULL;
-    if (channels == 4 && is_srgb) {
+    if (texture_wants_dilate(channels, desc)) {
         size_t size = (size_t)width * (size_t)height * 4;
         dilated = malloc(size);
         if (dilated) {
@@ -1104,42 +1137,12 @@ Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
         }
     }
 
-    // Generate texture
-    GLuint textureID = 0;
-    glGenTextures(1, &textureID);
-    glBindTexture(GL_TEXTURE_2D, textureID);
-
-    texture_set_default_sampler_state();
-
-    // Determine format
-    GLenum internal_format;
-    GLenum data_format;
-    texture_gl_formats(channels, is_srgb, &internal_format, &data_format);
-
-    // Upload texture data. The `use` is the caller's; the plain form defaults it
-    // to COLOUR, which compresses nothing.
-    //
-    // The DILATE above is still inferred from is_srgb rather than stated, which
-    // is the gap this path has left: an app building a decal image
-    // procedurally gets no dilate and no way to ask for one.
-    texture_upload_image(internal_format, data_format, width, height, channels, is_srgb, use,
-                         dilated ? dilated : pixels, &internal_format);
+    Texture* new_texture = texture_pool_publish(pool, key, dilated ? dilated : pixels, width,
+                                                height, channels, desc);
     free(dilated);
-    check_gl_error("embedded texture upload");
 
-    // Update texture properties
-    new_texture->id = textureID;
-    new_texture->filepath = safe_strdup(key);
-    new_texture->width = width;
-    new_texture->height = height;
-    new_texture->internal_format = internal_format;
-    new_texture->data_format = data_format;
-
-    // Add texture to the pool
-    add_texture_to_pool(pool, new_texture);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    log_info("Loaded embedded texture '%s' (%dx%d, %d channels)", key, width, height, channels);
+    if (new_texture)
+        log_info("Loaded embedded texture '%s' (%dx%d, %d channels)", key, width, height, channels);
 
     return new_texture;
 }
