@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """Generate assets/clearcoat_fixture.gltf, the clearcoat (4.10) test asset.
 
-A row of UV spheres exercising KHR_materials_clearcoat, meant to be viewed under
-an HDR environment (-e ...) so the smooth coat lobe reflects the surroundings:
+A row of UV spheres exercising KHR_materials_clearcoat. An HDR environment
+(-e ...) shows the coat lobe at its best, reflecting the surroundings, but the
+fixture reads under the app's fallback three-point rig too -- which is what its
+golden and its gate arms render, since neither can depend on an HDR:
   - car_paint      : dark-red dielectric base (rough 0.55) + clearcoat 1.0,
-                     coat roughness 0.03 -> a broad soft base highlight PLUS a
-                     tight sharp coat highlight/reflection (the dual-lobe look)
+                     coat roughness 0.06 + the weave below -> a broad soft base
+                     highlight PLUS a tight sharp coat highlight (the dual-lobe
+                     look), broken into dashes by the weave
   - car_paint_nocoat: the same base with NO clearcoat, for an in-frame A/B of
                       what the coat adds (the global --no-clearcoat flag also
                       toggles it)
   - carbon         : near-black metallic base (rough 0.4) + clearcoat 1.0, coat
-                     roughness 0.05 -> lacquered carbon-fibre look
-Geometry is one shared UV sphere; materials are flat factors (no textures), so
-the fixture has no external dependencies. Regenerate with:
+                     roughness 0.08 + the weave -> lacquered carbon-fibre look
+
+Geometry is one shared UV sphere. The two coated materials carry a clearcoat
+NORMAL map -- a procedural carbon-fibre weave, embedded as a data URI, so the
+fixture still has no external dependencies. It is not decoration: it is the one
+tangent-space normal in the corpus that reaches pbr_frag through a path of its
+own, since assimp exposes it at aiTextureType_CLEARCOAT index 2 and import.c's
+index-0 mapping table cannot reach it. Regenerate with:
   python3 assets/gen_clearcoat_fixture.py
 """
 

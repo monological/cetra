@@ -243,6 +243,27 @@ RECIPES = [
      "flags": ["-f", "30", "-W", "800", "-H", "450", "--no-auto-exposure", "-E", "1.0"]},
     {"name": "specular_fixture", "scene": "assets/specular_fixture.gltf", "size": (1600, 900),
      "flags": ["-f", "30", "-W", "800", "-H", "450", "--no-auto-exposure", "-E", "1.0"]},
+    # The third KHR material extension, and until now the only one of the three
+    # with no stored reference at all -- sheen and specular above have had one
+    # for specs. What that cost is on the record: 11.85 tagged the clearcoat
+    # normal NORMAL, so it took BC5, and the shader read a .z that format does
+    # not store, decoding it to -1 -- a coat normal pointing INTO the surface,
+    # 27,364 px at PAE 226/255, past a fully green suite twice over.
+    #
+    # Flags match its two siblings exactly, including the AUTO-FRAMED camera.
+    # Pinning one was considered and is the wrong trade here: auto-framing is a
+    # function of the committed .gltf's own bounds, which fixture-gen holds to
+    # byte equality, so it can only drift if it drifts for sheen and specular
+    # too. The clearcoat gate group pins its own tighter framing instead,
+    # because the weave wants pixels and this golden wants comparability.
+    #
+    # The fixture's generator says it is "meant to be viewed under an HDR
+    # environment"; this renders under the app's fallback three-point rig,
+    # since a golden needing -e could not be regenerated (see roughness_sweep).
+    # The coat lobe is legible either way -- the defect above measured PAE
+    # 226/255 under exactly this lighting.
+    {"name": "clearcoat_fixture", "scene": "assets/clearcoat_fixture.gltf", "size": (1600, 900),
+     "flags": ["-f", "30", "-W", "800", "-H", "450", "--no-auto-exposure", "-E", "1.0"]},
     # --no-sss pins the ANALYTIC falloff alone; its sibling below is the first
     # SSS-on golden and differs only in that flag.
     {"name": "skin_curvature_fixture", "scene": "assets/skin_curvature_fixture.cscn",
