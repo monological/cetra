@@ -31,12 +31,18 @@ multiplied by VertexColor.a (pbr_frag), while baseColorFactor[3] becomes
 material with a fractional baseColorFactor alpha and no texture has coverage
 1.0 and never exercised this at all -- which is one reason it went unnoticed.
 
-Deliberately NOT a golden. Under alpha-to-coverage a fractional alpha is
-SUPPOSED to become fractional sample coverage, so the two quads legitimately
-differ on the 4x MSAA path, and the invariant only holds where MSAA is off.
-The gate arm renders it with --taa (which is what drops the engine to one
-sample) and compares the two quads inside a single frame, so it needs no stored
-image and no cross-run comparison.
+It IS a golden, and this said otherwise for several specs. The gate arms that
+compare the quads inside one frame need no stored image, which is what the old
+claim was reaching for -- but the golden exists for a different reason, and it
+is the only one in the corpus that renders visible MASK geometry at the 4x MSAA
+default, which is where alpha-to-coverage is live.
+
+The equality between the kept quad and the opaque reference holds only at ONE
+sample, because a fractional alpha is supposed to become fractional sample
+coverage; two arms take that path deliberately. What does NOT vary with the
+sample count is which quad is there at all: the 0.2 quad is below the 0.4
+cutoff and must be absent at every count. It was not, for want of an arm asking
+-- see spec 11.87 and `mask-samples`.
 
 Regenerate with: python3 assets/gen_mask_fixture.py
 """

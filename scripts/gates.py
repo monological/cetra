@@ -5435,6 +5435,13 @@ MASK_LIT_FLOOR = 0.15
 # And the discarded quad has to be shown to be ABSENT. Nearer the backdrop than
 # to a lit surface, with room for the vignette and the tonemap toe.
 MASK_GONE_CEIL = 0.10
+# How far the discarded quad may move BETWEEN sample counts, as a ratio (spec
+# 11.87). This is the arm's real bar, because the absolute ceiling above cannot
+# be it: that one was sized to separate backdrop from a lit quad at 0.47, and a
+# cutoff silently replaced by 0.02 only lifts the box to 0.0915 -- under the
+# ceiling, over twice the 1-sample reading. A silhouette is a property of the
+# material, so the two counts have to agree, not merely both look dark.
+MASK_SAMPLE_RATIO_MAX = 1.25
 MASK_GRID = 12
 
 
@@ -10767,11 +10774,17 @@ def run_mask_gate(workdir):
     opaque, and passes -- which is the "masked geometry would render as solid
     quads" failure render.c names.
 
-    --taa is what drops the engine to one sample, and it is load-bearing rather
-    than cosmetic: under alpha-to-coverage a fractional alpha is SUPPOSED to
-    become fractional sample coverage, so on the 4x MSAA path the kept quad
-    legitimately differs from the reference and this invariant does not hold.
+    --taa is what drops the engine to one sample, and the first two arms take
+    that path deliberately: under alpha-to-coverage a fractional alpha becomes
+    fractional sample coverage, so the KEPT quad legitimately differs from the
+    opaque reference at 4x and the equality above does not hold there.
     Exposure and tonemap are pinned by the fixture's own .cscn.
+
+    That legitimacy claim used to be written wider than it is true, and the
+    width is what made spec 11.87's defect unreachable. A coverage dither at an
+    EDGE is legitimate. A quad whose every texel sits below the authored cutoff
+    appearing at all is not -- and it did, because the cutoff was replaced by a
+    fixed 0.02 whenever A2C was live. mask-samples below is the arm that asks.
     """
     scene = os.path.join(ROOT, "assets", MASK_FIXTURE)
     if not os.path.exists(scene):
@@ -10836,6 +10849,53 @@ def run_mask_gate(workdir):
           f"alpha-to-coverage sample mask)")
     if not ok:
         failures.append("mask-prepass")
+
+    # --- mask-samples: the silhouette must not depend on the sample count -----
+    #
+    # The three arms above cannot see this and none of them is at fault. Two run
+    # at one sample, where the A2C branch is not taken at all; the third is a
+    # self-comparison at 4x, so a cutoff that is wrong in BOTH of its renders
+    # still diffs to zero. Nothing in the corpus rendered visible MASK geometry
+    # at two sample counts and compared them.
+    #
+    # --msaa rather than --taa for the 1-sample leg: --taa drops the sample
+    # count AND enables the temporal filter AND (with --headless-jitter) adds
+    # jitter, which is three changes where the question needs one. apps/render
+    # applies --msaa after the TAA policy for exactly this reason.
+    #
+    # The liveness guard is not decoration. "The quad is absent" is satisfied
+    # perfectly by a frame where nothing loaded, so the reference and kept boxes
+    # have to be lit at BOTH counts or the reading proves nothing.
+    reads = {}
+    for samples in (1, 4):
+        shot = os.path.join(workdir, f"mask_s{samples}.ppm")
+        err = render(scene, shot, ["--msaa", str(samples)])
+        if err:
+            print(f"  mask-samples ERROR render failed at {samples}x: {err.strip()[-200:]}")
+            return failures + ["mask-samples"]
+        sw, sh, spix = _read_ppm(shot)
+        reads[samples] = (_box_luma(spix, sw, sh, MASK_REF_BOX),
+                          _box_luma(spix, sw, sh, MASK_KEPT_BOX),
+                          _box_luma(spix, sw, sh, MASK_GONE_BOX))
+
+    lit = all(r >= MASK_LIT_FLOOR and k >= MASK_LIT_FLOOR for r, k, _ in reads.values())
+    # A RATIO between the two counts, not each against MASK_GONE_CEIL. The
+    # absolute ceiling is too slack to fail here and that is not a bug in it: it
+    # was sized to separate "backdrop" from "a lit quad" at 0.47, and the defect
+    # only lifts the box to 0.0915. Asking whether the two counts AGREE is the
+    # question anyway -- the claim is that the silhouette is a property of the
+    # material, not of the framebuffer.
+    gone1, gone4 = reads[1][2], reads[4][2]
+    ratio = gone4 / gone1 if gone1 > 0 else float("inf")
+    ok = lit and ratio <= MASK_SAMPLE_RATIO_MAX and gone4 <= MASK_GONE_CEIL
+    print(f"  mask-samples {'PASS' if ok else 'FAIL'}  the below-cutoff quad reads "
+          f"{gone1:.4f} at 1 sample and {gone4:.4f} at 4, ratio {ratio:.2f} (want <= "
+          f"{MASK_SAMPLE_RATIO_MAX}, and <= {MASK_GONE_CEIL} absolute, and the lit boxes "
+          f"above {MASK_LIT_FLOOR} at both: {lit}). Its alpha is 0.2 against an authored "
+          f"cutoff of 0.4, so it must be absent at every sample count; a cutoff replaced "
+          f"by 0.02 under alpha-to-coverage reads 2.10.")
+    if not ok:
+        failures.append("mask-samples")
 
     return failures
 
