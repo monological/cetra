@@ -260,6 +260,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-energy-comp   Disable multi-scatter specular energy comp\n");
     fprintf(stderr, "      --no-refraction    Disable screen-space refraction\n");
     fprintf(stderr, "      --no-clearcoat     Disable the clearcoat specular lobe\n");
+    fprintf(stderr, "      --clearcoat-debug  Show the coat normal (= --render-mode 13); "
+                    "read the bytes LINEARLY\n");
     fprintf(stderr, "      --no-specular      Disable KHR_materials_specular (F0 tint + weight)\n");
     fprintf(stderr, "      --no-sheen         Disable KHR_materials_sheen (cloth lobe)\n");
     fprintf(stderr, "      --no-parallax      Disable parallax occlusion mapping (POM)\n");
@@ -1347,6 +1349,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_refraction = 1;
         } else if (strcmp(argv[i], "--no-clearcoat") == 0) {
             args->no_clearcoat = 1;
+        } else if (strcmp(argv[i], "--clearcoat-debug") == 0) {
+            // A named spelling of --render-mode 13, set HERE rather than at the
+            // apply site so the two are genuine last-wins against each other
+            // instead of one silently outranking the other.
+            args->render_mode = 13;
         } else if (strcmp(argv[i], "--no-specular") == 0) {
             args->no_specular = 1;
         } else if (strcmp(argv[i], "--no-sheen") == 0) {

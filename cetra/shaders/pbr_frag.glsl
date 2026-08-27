@@ -1010,6 +1010,35 @@ void main() {
         parallaxHeight = texture(heightTex, uv).r;
     }
 
+    /*
+     * THE CLEARCOAT NORMAL, as bytes (--clearcoat-debug, spec 11.86).
+     *
+     * It sits HERE, and not with the other debug views above, for the reason
+     * renderMode 6 sits where it does: this is the first point at which `uv` is
+     * final. The coat lobes read the POM-resolved coordinate, so a view taken
+     * before the march would report a normal the shading never used -- a second
+     * implementation of the thing under test, which is exactly the failure the
+     * albedo view's own comment records.
+     *
+     * EXACT BLACK where there is no coat, and that is the useful half. A
+     * normalized vector cannot encode to black in all three channels -- the
+     * darkest reachable is (-1,-1,-1)/sqrt(3), which stores 0.211 -- so black is
+     * an unambiguous "no coat here". It is what makes an uncoated surface an
+     * in-frame control: an arm reading only a coated one passes on a build that
+     * writes the geometric normal everywhere.
+     *
+     * Debug modes take the passthrough blit, so these bytes reach a screenshot
+     * with no tonemap, no display encode and no dither. Read them LINEARLY --
+     * decoding them as sRGB reports a stored 0.5 as 0.21, which is the trap
+     * --cs-debug already carries.
+     */
+    if (renderMode == 13) {
+        FragColor = (clearcoatEnabled > 0 && clearcoat > 0.0)
+                        ? vec4(clearcoatNormal(uv) * 0.5 + 0.5, 1.0)
+                        : vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+
     // Sample material properties. glTF semantics: the scalar factors
     // modulate the texture (effective value = factor * texture), so a
     // material can globally tint or gloss up its maps
