@@ -47,7 +47,8 @@ struct InFlightLoad {
 // only) off the main thread, then record what the GL upload will need. Shared
 // by both decode sources so file and embedded textures cannot drift.
 static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pixels, int width,
-                                    int height, int channels, bool is_srgb) {
+                                    int height, int channels, bool is_srgb,
+                                    TextureUse use) {
     // Inferred from is_srgb, which is the DEFAULT the file loader's `_ex` form
     // overrides rather than a law -- a linear RGBA texture's alpha is usually
     // data, and dilating it overwrites the three channels beside it, but a decal
@@ -62,6 +63,7 @@ static void finalize_decoded_result(TextureLoadResult* result, unsigned char* pi
     result->channels = channels;
     result->success = true;
     texture_gl_formats(channels, is_srgb, &result->internal_format, &result->data_format);
+    result->use = use;
 }
 
 // Join the decode already running for `key`, or claim the key for this caller.
@@ -274,7 +276,7 @@ static void* worker_thread_func(void* arg) {
                                                          &ew, &eh, &ec, 0)
                                  : NULL;
             if (edata) {
-                finalize_decoded_result(result, edata, ew, eh, ec, req->is_srgb);
+                finalize_decoded_result(result, edata, ew, eh, ec, req->is_srgb, req->use);
             } else {
                 result->success = false;
                 snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
@@ -336,7 +338,7 @@ static void* worker_thread_func(void* arg) {
             goto enqueue_result;
         }
 
-        finalize_decoded_result(result, data, width, height, channels, req->is_srgb);
+        finalize_decoded_result(result, data, width, height, channels, req->is_srgb, req->use);
 
     enqueue_result:
         // Add to completion queue
@@ -555,7 +557,7 @@ void free_async_loader(AsyncLoader* loader) {
  * cannot be expressed.
  */
 static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
-                        const unsigned char* bytes, int nbytes, bool is_srgb,
+                        const unsigned char* bytes, int nbytes, bool is_srgb, TextureUse use,
                         void (*callback)(Texture* tex, void* user_data), void* user_data) {
     // Already decoded and uploaded under this key?
     Texture* cached = get_texture_from_pool_threadsafe(pool, key);
@@ -600,6 +602,7 @@ static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
     req->pool = pool;
     req->filepath = key_copy;
     req->is_srgb = is_srgb;
+    req->use = use;
     req->embedded_data = copy;
     req->embedded_size = bytes ? nbytes : 0;
     req->callback = callback;
@@ -612,6 +615,7 @@ static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
  * Submit texture load request to worker queue
  */
 void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath, bool is_srgb,
+                        TextureUse use,
                         void (*callback)(Texture* tex, void* user_data), void* user_data) {
     if (!loader || !pool || !filepath) {
         log_error("Invalid arguments to load_texture_async");
@@ -629,11 +633,12 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
         return;
     }
 
-    submit_load(loader, pool, filepath, NULL, 0, is_srgb, callback, user_data);
+    submit_load(loader, pool, filepath, NULL, 0, is_srgb, use, callback, user_data);
 }
 
 void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
                                     const unsigned char* data, int data_size, bool is_srgb,
+                                    TextureUse use,
                                     void (*callback)(Texture* tex, void* user_data),
                                     void* user_data) {
     if (!loader || !pool || !key || !data || data_size <= 0) {
@@ -644,7 +649,7 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
         return;
     }
 
-    submit_load(loader, pool, key, data, data_size, is_srgb, callback, user_data);
+    submit_load(loader, pool, key, data, data_size, is_srgb, use, callback, user_data);
 }
 
 /*
@@ -692,16 +697,26 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
 
                     texture_set_default_sampler_state();
 
-                    glTexImage2D(GL_TEXTURE_2D, 0, result->internal_format, result->width,
-                                 result->height, 0, result->data_format, GL_UNSIGNED_BYTE,
-                                 result->pixel_data);
-                    glGenerateMipmap(GL_TEXTURE_2D);
+                    // The shared uploader, not a glTexImage2D + glGenerateMipmap
+                    // pair of its own. This is the path every EXTERNAL model
+                    // texture takes, so a mip or block policy that reached only
+                    // texture.c would reach almost no real content -- and two
+                    // filters that must agree is the thing the CPU chain exists
+                    // to remove.
+                    const bool srgb = result->internal_format == GL_SRGB ||
+                                      result->internal_format == GL_SRGB_ALPHA;
+                    GLenum stored = result->internal_format;
+                    texture_upload_image(result->internal_format, result->data_format,
+                                         result->width, result->height, result->channels, srgb,
+                                         result->use, result->pixel_data, &stored);
 
                     texture->id = textureID;
                     texture->filepath = safe_strdup(result->pool_key);
                     texture->width = result->width;
                     texture->height = result->height;
-                    texture->internal_format = result->internal_format;
+                    // The format the upload actually used, which differs from the
+                    // requested one whenever a block format was chosen.
+                    texture->internal_format = stored;
                     texture->data_format = result->data_format;
 
                     add_texture_to_pool_threadsafe(pool, texture);

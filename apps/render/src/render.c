@@ -332,6 +332,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --dither <lsb>     Output dither amplitude in 8-bit LSB (default on, 1.0)\n");
     fprintf(stderr, "      --no-dither        Disable the default output dither\n");
+    fprintf(stderr, "      --no-texture-compression  Store every texture uncompressed\n");
+    fprintf(stderr, "      --texture-probe    Print the texture memory ledger\n");
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
     fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
     fprintf(stderr,
@@ -1610,6 +1612,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->dither = (float)v;
         } else if (strcmp(argv[i], "--no-dither") == 0) {
             args->no_dither = 1;
+        } else if (strcmp(argv[i], "--no-texture-compression") == 0) {
+            args->no_texture_compression = 1;
+        } else if (strcmp(argv[i], "--texture-probe") == 0) {
+            args->texture_probe = 1;
         } else if (strcmp(argv[i], "--grain") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2560,6 +2566,12 @@ int main(int argc, char** argv) {
         print_usage(argv[0]);
         return 0;
     }
+
+    // Before anything can load a texture, which on this app is the model import
+    // several hundred lines below. A switch applied after the first upload would
+    // leave a scene half compressed and the flag would read as working.
+    if (args.no_texture_compression)
+        texture_set_compression_enabled(false);
 
     /*
      * A config snapshot's `source` block, which is the only half of it that can
@@ -4188,6 +4200,12 @@ int main(int argc, char** argv) {
     // the sequence is a probe whose output a reader has to place before trusting.
     if (args.ies_probe)
         ies_library_probe(scene->ies_library);
+
+    // Beside the others, and for the same reason: the pool is fully populated by
+    // now (the async drain that gates the mask-array build has run), so what it
+    // prints is the storage the frame was actually drawn from.
+    if (args.texture_probe)
+        texture_pool_probe(scene->tex_pool, "scene");
 
     /*
      * --moon-probe: the derived phase, printed. It exists because the moon's

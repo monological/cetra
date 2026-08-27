@@ -356,10 +356,10 @@ static void texture_upload_compressed_level(TextureBlockFormat format, GLenum gl
 //
 // Returns false only on allocation failure, where the caller still has a usable
 // level 0.
-static bool texture_upload_with_mips(GLenum internal_format, GLenum data_format, int width,
-                                     int height, int channels, bool is_srgb,
-                                     TextureBlockFormat block, const unsigned char* pixels,
-                                     GLenum* out_internal_format) {
+bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
+                          int channels, bool is_srgb, TextureUse use, const unsigned char* pixels,
+                          GLenum* out_internal_format) {
+    TextureBlockFormat block = texture_block_format_for(use, channels, is_srgb);
     const GLenum gl_block = texture_block_gl_format(block, is_srgb);
     // Scratch for the encoder, sized for level 0 and reused by every level under
     // it. Allocated before anything is uploaded so a failure falls back to the
@@ -471,6 +471,67 @@ size_t texture_gpu_bytes(const Texture* texture) {
         h = h > 1 ? h / 2 : 1;
     }
     return bytes;
+}
+
+static const char* texture_format_name(GLenum internal_format) {
+    switch (internal_format) {
+    case GL_COMPRESSED_RED_RGTC1:
+        return "BC4";
+    case GL_COMPRESSED_RG_RGTC2:
+        return "BC5";
+    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+        return "DXT1-srgb";
+    case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
+        return "DXT1";
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+        return "DXT5-srgb";
+    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+        return "DXT5";
+    case GL_SRGB:
+        return "SRGB";
+    case GL_SRGB_ALPHA:
+        return "SRGB_ALPHA";
+    case GL_RGB:
+        return "RGB";
+    case GL_RGBA:
+        return "RGBA";
+    case GL_RG:
+        return "RG";
+    case GL_RED:
+        return "RED";
+    default:
+        return "?";
+    }
+}
+
+void texture_pool_probe(const TexturePool* pool, const char* label) {
+    if (!pool) {
+        printf("texture-probe %s: no pool\n", label ? label : "");
+        return;
+    }
+    size_t total = 0, compressed_total = 0, compressed_count = 0;
+    for (size_t i = 0; i < pool->texture_count; i++) {
+        const Texture* t = pool->textures[i];
+        if (!t)
+            continue;
+        const size_t bytes = texture_gpu_bytes(t);
+        total += bytes;
+        // "Compressed" is read off the stored format, so a texture that ASKED
+        // for a block format and did not get one is counted honestly.
+        const char* name = texture_format_name(t->internal_format);
+        const bool is_block = name[0] == 'B' || name[0] == 'D';
+        if (is_block) {
+            compressed_total += bytes;
+            compressed_count++;
+        }
+        printf("texture-probe %s tex %s %dx%d %s %.3f MB\n", label ? label : "",
+               t->filepath ? t->filepath : "?", t->width, t->height, name,
+               (double)bytes / (1024.0 * 1024.0));
+    }
+    printf("texture-probe %s total count=%zu bytes=%zu mb=%.3f compressed_count=%zu "
+           "compressed_mb=%.3f\n",
+           label ? label : "", pool->texture_count, total, (double)total / (1024.0 * 1024.0),
+           compressed_count, (double)compressed_total / (1024.0 * 1024.0));
 }
 
 Texture* create_texture() {
@@ -839,9 +900,8 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
     texture_gl_formats(nrChannels, is_srgb, &internal_format, &data_format);
 
     // Upload texture data
-    const TextureBlockFormat block = texture_block_format_for(use, nrChannels, is_srgb);
-    texture_upload_with_mips(internal_format, data_format, width, height, nrChannels, is_srgb,
-                             block, data, &internal_format);
+    texture_upload_image(internal_format, data_format, width, height, nrChannels, is_srgb, use,
+                         data, &internal_format);
     check_gl_error("texture upload");
 
     // Clean up
@@ -921,8 +981,8 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     // Every embedded and procedurally-built texture therefore keeps the storage
     // it had. It wants the `_used` treatment the moment a procedural normal map
     // is worth compressing -- apps/forest bakes several.
-    texture_upload_with_mips(internal_format, data_format, width, height, channels, is_srgb,
-                             TEXTURE_BLOCK_NONE, dilated ? dilated : pixels, &internal_format);
+    texture_upload_image(internal_format, data_format, width, height, channels, is_srgb,
+                         TEXTURE_USE_COLOUR, dilated ? dilated : pixels, &internal_format);
     free(dilated);
     check_gl_error("embedded texture upload");
 

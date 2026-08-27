@@ -29,6 +29,7 @@ typedef struct TextureLoadRequest {
     TexturePool* pool;
     char* filepath;               // file path, or the cache key ("*N") for embedded
     bool is_srgb;                 // Color data (albedo/emissive) vs linear data textures
+    TextureUse use;               // what the image IS, which decides its block format
     unsigned char* embedded_data; // owned copy of the compressed bytes; NULL = load from file
     int embedded_size;            // byte count of embedded_data
     void* user_data;
@@ -59,6 +60,9 @@ typedef struct TextureLoadResult {
     int channels;
     GLenum internal_format;
     GLenum data_format;
+    // Carried from the request, because the upload happens on the main thread
+    // long after the request is gone and the block format is chosen there.
+    TextureUse use;
 
     void* user_data;
     void (*callback)(Texture* tex, void* user_data);
@@ -131,7 +135,8 @@ void free_async_loader(AsyncLoader* loader);
  * collide between any two glTF scenes.
  */
 void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath, bool is_srgb,
-                        void (*callback)(Texture* tex, void* user_data), void* user_data);
+                        TextureUse use, void (*callback)(Texture* tex, void* user_data),
+                        void* user_data);
 
 // Decode a compressed image already in memory (e.g. a glTF-embedded PNG) on a
 // worker thread. `key` is the pool cache key ("*N"); `data`/`data_size` are the
@@ -139,7 +144,7 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
 // the source aiScene) immediately after this returns.
 void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
                                     const unsigned char* data, int data_size, bool is_srgb,
-                                    void (*callback)(Texture* tex, void* user_data),
+                                    TextureUse use, void (*callback)(Texture* tex, void* user_data),
                                     void* user_data);
 
 /*

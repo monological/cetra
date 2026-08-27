@@ -207,25 +207,48 @@ typedef struct TextureMapping {
     enum aiTextureType ai_type;
     void (*setter)(Material*, Texture*);
     const char* name;
-    bool is_srgb; // Color data; everything else is linear (normals, ORM, ...)
+    bool is_srgb;  // Color data; everything else is linear (normals, ORM, ...)
+    TextureUse use; // What the image IS, which decides its block format (11.85)
 } TextureMapping;
 
+/*
+ * `use` is NOT derivable from `is_srgb`, which is the whole reason it is a
+ * second column: a tangent normal and a roughness mask are both linear and want
+ * opposite formats. This table is the only place in the engine that knows which
+ * is which, because assimp's type is the only thing that says so.
+ *
+ * NORMAL is the entry with teeth. It means "two channels are enough, rebuild the
+ * third", so it must name a tangent-space normal and nothing else -- the two
+ * rows carrying it are the only two whose setter is set_material_normal_tex.
+ *
+ * The glTF ORM rows (METALNESS, DIFFUSE_ROUGHNESS, AMBIENT_OCCLUSION) are DATA,
+ * but assimp hands all three the same packed image, so they usually arrive with
+ * three channels and texture_block_format_for declines them on the channel
+ * count. That is correct rather than a missed case: BC4 keeps one channel, and
+ * which one differs per row.
+ */
 static const TextureMapping texture_mappings[] = {
     // Legacy/FBX texture types
-    {aiTextureType_DIFFUSE, set_material_albedo_tex, "Diffuse", true},
-    {aiTextureType_NORMALS, set_material_normal_tex, "Normal", false},
-    {aiTextureType_METALNESS, set_material_metalness_tex, "Metalness", false},
-    {aiTextureType_DIFFUSE_ROUGHNESS, set_material_roughness_tex, "Roughness", false},
-    {aiTextureType_AMBIENT_OCCLUSION, set_material_ambient_occlusion_tex, "AO", false},
-    {aiTextureType_EMISSIVE, set_material_emissive_tex, "Emissive", true},
-    {aiTextureType_HEIGHT, set_material_height_tex, "Height", false},
-    {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity", false},
-    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen", true}, // KHR sheen color (sRGB)
-    {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance", false},
+    {aiTextureType_DIFFUSE, set_material_albedo_tex, "Diffuse", true, TEXTURE_USE_COLOUR},
+    {aiTextureType_NORMALS, set_material_normal_tex, "Normal", false, TEXTURE_USE_NORMAL},
+    {aiTextureType_METALNESS, set_material_metalness_tex, "Metalness", false, TEXTURE_USE_DATA},
+    {aiTextureType_DIFFUSE_ROUGHNESS, set_material_roughness_tex, "Roughness", false,
+     TEXTURE_USE_DATA},
+    {aiTextureType_AMBIENT_OCCLUSION, set_material_ambient_occlusion_tex, "AO", false,
+     TEXTURE_USE_DATA},
+    {aiTextureType_EMISSIVE, set_material_emissive_tex, "Emissive", true, TEXTURE_USE_COLOUR},
+    {aiTextureType_HEIGHT, set_material_height_tex, "Height", false, TEXTURE_USE_DATA},
+    {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity", false, TEXTURE_USE_DATA},
+    // KHR sheen color (sRGB)
+    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen", true, TEXTURE_USE_COLOUR},
+    {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance", false,
+     TEXTURE_USE_COLOUR},
     // glTF/GLB-specific texture types
-    {aiTextureType_BASE_COLOR, set_material_albedo_tex, "BaseColor", true},
-    {aiTextureType_NORMAL_CAMERA, set_material_normal_tex, "NormalCamera", false},
-    {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor", true},
+    {aiTextureType_BASE_COLOR, set_material_albedo_tex, "BaseColor", true, TEXTURE_USE_COLOUR},
+    {aiTextureType_NORMAL_CAMERA, set_material_normal_tex, "NormalCamera", false,
+     TEXTURE_USE_NORMAL},
+    {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor", true,
+     TEXTURE_USE_COLOUR},
 };
 
 static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
@@ -577,7 +600,7 @@ static AsyncTexCallback* make_async_tex_ctx(Material* mat, void (*setter)(Materi
 // (uncompressed) embedded pixels are handled inline.
 static void load_material_texture(Material* material, TexturePool* tex_pool,
                                   const struct aiScene* ai_scene, AsyncLoader* loader,
-                                  const char* tex_path, bool is_srgb,
+                                  const char* tex_path, bool is_srgb, TextureUse use,
                                   void (*setter)(Material*, Texture*), const char* tex_type_name,
                                   GLenum wrap_s, GLenum wrap_t) {
     if (tex_path[0] == '*' && ai_scene) {
@@ -593,8 +616,8 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
             if (ctx) {
                 load_texture_from_memory_async(loader, tex_pool, tex_path,
                                                (const unsigned char*)ai_tex->pcData,
-                                               (int)ai_tex->mWidth, is_srgb, async_tex_callback,
-                                               ctx);
+                                               (int)ai_tex->mWidth, is_srgb, use,
+                                               async_tex_callback, ctx);
             }
         } else {
             // Raw (uncompressed) embedded pixels: decode inline (rare).
@@ -608,7 +631,7 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
         AsyncTexCallback* ctx =
             make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
         if (ctx) {
-            load_texture_async(loader, tex_pool, tex_path, is_srgb, async_tex_callback, ctx);
+            load_texture_async(loader, tex_pool, tex_path, is_srgb, use, async_tex_callback, ctx);
         }
     }
 }
@@ -640,7 +663,7 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
         if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
                                                NULL, mapmode, NULL)) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, mapping->is_srgb,
-                                  mapping->setter, mapping->name,
+                                  mapping->use, mapping->setter, mapping->name,
                                   gl_wrap_from_assimp(mapmode[0]),
                                   gl_wrap_from_assimp(mapmode[1]));
         }
@@ -658,7 +681,7 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
         AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_LIGHTMAP, 0, &str, NULL, NULL,
                                            NULL, NULL, mapmode, NULL)) {
         load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                              set_material_ambient_occlusion_tex, "Occlusion(lightmap)",
+                              TEXTURE_USE_DATA, set_material_ambient_occlusion_tex, "Occlusion(lightmap)",
                               gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
     }
 
@@ -670,12 +693,12 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
         // Only use if we don't already have metalness/roughness textures
         if (!material->metalness_tex) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                                  set_material_metalness_tex, "MetallicRoughness(metalness)",
+                                  TEXTURE_USE_DATA, set_material_metalness_tex, "MetallicRoughness(metalness)",
                                   gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
         }
         if (!material->roughness_tex) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                                  set_material_roughness_tex, "MetallicRoughness(roughness)",
+                                  TEXTURE_USE_DATA, set_material_roughness_tex, "MetallicRoughness(roughness)",
                                   gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
         }
     }
@@ -686,7 +709,7 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_CLEARCOAT, 2, &str, NULL, NULL,
                                            NULL, NULL, mapmode, NULL)) {
         load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                              set_material_clearcoat_normal_tex, "ClearcoatNormal",
+                              TEXTURE_USE_NORMAL, set_material_clearcoat_normal_tex, "ClearcoatNormal",
                               gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
     }
 

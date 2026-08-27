@@ -179,6 +179,36 @@ bool texture_compression_enabled(void);
 // exactly why the probe asks.
 size_t texture_gpu_bytes(const Texture* texture);
 
+/*
+ * THE upload path: level 0, the mip chain under it, and the block encoding where
+ * `use` asks for one. Into the currently bound GL_TEXTURE_2D.
+ *
+ * Public because there are three call sites -- the file loader, the in-memory
+ * loader and the async loader's completion -- and a mip filter that lives at
+ * only some of them is two filters that have to agree. They did not: the async
+ * path kept glGenerateMipmap for a commit after the other two moved to a CPU
+ * chain, which is invisible until a compressed texture arrives and the driver
+ * silently cannot fill its levels.
+ *
+ * `out_internal_format` receives the format actually used, which is NOT the one
+ * passed whenever a block format was chosen. Storing the passed one instead
+ * makes texture_gpu_bytes and the sRGB test in texture_mean_rgb both wrong.
+ */
+bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
+                          int channels, bool is_srgb, TextureUse use, const unsigned char* pixels,
+                          GLenum* out_internal_format);
+
+/*
+ * --texture-probe: one line per texture and a total, in the --water-probe idiom.
+ *
+ * The instrument exists because texture memory is otherwise invisible from
+ * outside the process, and a saving is a NUMERIC claim no frame can make: a
+ * scene whose normals silently failed to compress renders exactly like one whose
+ * normals compressed, which is the failure this is here to catch. It prints the
+ * internal format the driver holds, not the one the loader asked for.
+ */
+void texture_pool_probe(const TexturePool* pool, const char* label);
+
 // As above, but SAYS what the alpha means instead of inferring it from is_srgb.
 //
 // The inference is right for everything loaded through the plain form: `is_srgb`

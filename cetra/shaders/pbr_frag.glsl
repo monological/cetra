@@ -1193,6 +1193,18 @@ void main() {
         } else {
             nTex = texture(normalTex, uv).rgb * 2.0 - 1.0;
         }
+        // Z is REBUILT from XY rather than read, because a block-compressed
+        // normal has no third channel to read -- BC5 stores two, and no block
+        // format this platform has carries three (spec 11.85).
+        //
+        // Unconditional, so there is one path rather than one per storage
+        // format. That is safe in a way it would not be for arbitrary data: a
+        // tangent-space normal is unit length and points out of the surface, so
+        // z is a function of xy wherever the map is well formed, and where it is
+        // not the stored z was the wrong value. Sitting BEFORE the scale below is
+        // what keeps it equivalent to the glTF formulation, which scales the xy
+        // of the sampled normal and leaves z alone.
+        nTex.z = sqrt(max(1.0 - dot(nTex.xy, nTex.xy), 0.0));
         // Apply normal scale to XY components (glTF normalTexture.scale)
         nTex.xy *= normalScale;
         N = normalize(mat3(T, B, Ng) * nTex);

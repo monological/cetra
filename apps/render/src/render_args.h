@@ -307,6 +307,9 @@ typedef struct {
     int no_vignette; // Force the default vignette off
     float dither;
     int no_dither; // Force the default output dither off
+    // Store every texture uncompressed, which is the pre-11.85 engine exactly.
+    int no_texture_compression;
+    int texture_probe; // Print the texture memory ledger and exit-time totals
     float grain;
     float sharpen;
     float flare;     // Lens ghost strength
