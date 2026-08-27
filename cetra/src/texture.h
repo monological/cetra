@@ -146,9 +146,13 @@ typedef enum TextureAlpha {
  *
  * The same problem TextureAlpha solved one field over: the loader knows only
  * `is_srgb`, which is false for a tangent normal and false for a roughness mask
- * alike, and those two want opposite formats. So the caller states it. The one
- * place that knows is import.c's texture_mappings table, where the assimp type
- * already sits beside the colour-space flag.
+ * alike, and those two want opposite formats. So the caller states it.
+ *
+ * For a MODEL texture the caller is import.c, which derives this from the
+ * material setter rather than tabulating it -- a row is wrong here only if it is
+ * also wrong about which slot it fills, which is not a mistake that hides. For a
+ * procedurally generated one there is no table and the app states it directly,
+ * which is the path every one of this engine's own normal maps takes.
  *
  * TEXTURE_USE_NORMAL is the one with a consequence beyond storage: BC5 carries
  * two channels and pbr_frag RECONSTRUCTS Z, because no block format carries
