@@ -18493,6 +18493,145 @@ def run_decal_gate(workdir):
     return failures
 
 
+
+
+# --- block-compressed textures (spec 11.85) ---------------------------------
+TEXCOMP_FIXTURE = "texcomp_fixture.cscn"
+TEXCOMP_FRAMES = 4
+# BC5 and BC4 against their own uncompressed twin, as a fraction of full scale.
+# PLACED BY MEASUREMENT: the fixture reads 0.0058 and the bar is a shade over it.
+# The formats are near-lossless on this content and the arm exists to catch an
+# encoder that stops being so, not to leave room for one.
+TEXCOMP_DATA_RMSE_MAX = 0.010
+# DXT on the hue wheel, which is its worst case by construction. Measured 0.0331,
+# so this bounds it rather than blessing any value: the point of the arm is that
+# the number stays in the range a human already looked at and accepted.
+TEXCOMP_COLOUR_RMSE_MAX = 0.050
+# ...and a FLOOR under the same number, which is the anti-vacuity half. DXT that
+# silently failed to arm would read 0.0000 and pass a ceiling-only arm.
+TEXCOMP_COLOUR_RMSE_MIN = 0.010
+# Bytes the fixture's three maps must fall to. 1.833 MB compressed against
+# 3.000 MB raw; the bar sits between, so either a lost format or a lost saving
+# moves it.
+TEXCOMP_MB_MAX = 2.4
+
+
+def _texcomp_rmse(a, b):
+    """RMSE as a 0..1 fraction, which is what an error budget is stated in."""
+    r = subprocess.run(["magick", "compare", "-metric", "RMSE", a, b, "null:"],
+                       capture_output=True, text=True)
+    out = (r.stderr or r.stdout).strip()
+    try:
+        return float(out.split("(")[1].rstrip(")"))
+    except (ValueError, IndexError):
+        return 1.0
+
+
+def _texcomp_probe(workdir, extra):
+    """The texture ledger: (total_mb, formats seen, compressed count)."""
+    out = os.path.join(workdir, "_texcomp_probe.ppm")
+    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", TEXCOMP_FIXTURE), "-x",
+           "-f", "3", "-W", "200", "-H", "150", "--texture-probe", "-S", out] + extra
+    r = _run(cmd, capture_output=True, text=True)
+    mb, formats, ncomp = 0.0, set(), 0
+    for line in (r.stdout + r.stderr).splitlines():
+        if "texture-probe scene tex" in line:
+            formats.add(line.split()[-3])
+        elif "texture-probe scene total" in line:
+            for tok in line.split():
+                if tok.startswith("mb="):
+                    mb = float(tok[3:])
+                elif tok.startswith("compressed_count="):
+                    ncomp = int(tok[len("compressed_count="):])
+    return mb, formats, ncomp
+
+
+def run_texcomp_gate(workdir):
+    """Block-compressed textures (spec 11.85), on the one fixture that minifies:
+
+      texcomp-off       --no-texture-compression is byte-identical to a run with
+                        every format declined -- 0 px, the bisect lever. It is
+                        provable here where the error arms are not, because
+                        declining a format is not an approximation of it.
+      texcomp-format    the probe shows BC5 on the normal and BC4 on the single-
+                        channel mask, and the ledger falls below the bar. Reading
+                        the FORMAT and not just the byte count is what separates
+                        "compressed" from "compressed as the wrong thing" -- a
+                        normal stored DXT5 also shrinks, and also renders.
+      texcomp-data      BC5 + BC4 cost less than the stated budget against their
+                        own uncompressed twin. The only item in this roadmap
+                        whose bar cannot be 0 px, so the budget IS the test.
+      texcomp-colour    DXT on albedo is OFF by default (0 px against a
+                        --no-texture-compression twin over the two data formats
+                        alone is NOT the test -- see below), moves when asked
+                        for, and stays inside its own budget. Bounded ABOVE and
+                        BELOW: a build where the colour switch silently did
+                        nothing reads 0.0000 and would pass a ceiling alone.
+
+    WHY THIS FIXTURE AND NOT ANY OTHER. Every golden in the corpus is 0 px with
+    every mip level painted solid black, and so is the raiden recipe -- they sit
+    near the camera and never minify, so none of them samples a level above 0.
+    Most of a compressed texture's bytes are in the chain. This plane recedes to
+    its vanishing point, which is what makes the chain reachable at all.
+    """
+    scene = os.path.join(ROOT, "assets", TEXCOMP_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  texcomp-off SKIP  ({TEXCOMP_FIXTURE} not present)")
+        return []
+    failures = []
+
+    shots = {}
+    for name, extra in (("on", []), ("raw", ["--no-texture-compression"]),
+                        ("colour", ["--texture-compress-colour"])):
+        shots[name] = os.path.join(workdir, f"texcomp_{name}.ppm")
+        err = render(scene, shots[name], extra, frames=TEXCOMP_FRAMES)
+        if err:
+            print(f"  texcomp-off ERROR render failed: {err.strip()[-200:]}")
+            return ["texcomp render"]
+
+    # texcomp-off: the lever reaches the uncompressed frame exactly.
+    raw_mb, raw_formats, raw_ncomp = _texcomp_probe(workdir, ["--no-texture-compression"])
+    ok = raw_ncomp == 0
+    print(f"  texcomp-off    {'PASS' if ok else 'FAIL'}  --no-texture-compression stores "
+          f"{raw_ncomp} compressed of any format (want 0), ledger {raw_mb:.3f} MB")
+    if not ok:
+        failures.append("texcomp-off")
+
+    # texcomp-format: the right format on the right map, and the saving landed.
+    mb, formats, ncomp = _texcomp_probe(workdir, [])
+    ok = "BC5" in formats and "BC4" in formats and ncomp == 2 and mb <= TEXCOMP_MB_MAX
+    print(f"  texcomp-format {'PASS' if ok else 'FAIL'}  formats={sorted(formats)} "
+          f"compressed={ncomp} (want BC5 and BC4, 2 of 3), ledger {mb:.3f} MB "
+          f"(want <= {TEXCOMP_MB_MAX}, raw reads {raw_mb:.3f})")
+    if not ok:
+        failures.append("texcomp-format")
+
+    # texcomp-data: the error budget for the two formats that are on by default.
+    data_rmse = _texcomp_rmse(shots["raw"], shots["on"])
+    ok = data_rmse <= TEXCOMP_DATA_RMSE_MAX
+    print(f"  texcomp-data   {'PASS' if ok else 'FAIL'}  BC5+BC4 RMSE {data_rmse:.4f} of full "
+          f"scale (want <= {TEXCOMP_DATA_RMSE_MAX}), about "
+          f"{data_rmse * 255.0:.1f} of one 8-bit code")
+    if not ok:
+        failures.append("texcomp-data")
+
+    # texcomp-colour: off by default, live when asked, and inside its budget.
+    default_moved, _ = compare(shots["on"], shots["raw"])
+    colour_rmse = _texcomp_rmse(shots["on"], shots["colour"])
+    _, colour_formats, colour_ncomp = _texcomp_probe(workdir, ["--texture-compress-colour"])
+    colour_armed = "DXT1" in colour_formats or "DXT1-srgb" in colour_formats
+    ok = (colour_armed and colour_ncomp == 3
+          and TEXCOMP_COLOUR_RMSE_MIN <= colour_rmse <= TEXCOMP_COLOUR_RMSE_MAX)
+    print(f"  texcomp-colour {'PASS' if ok else 'FAIL'}  default leaves albedo uncompressed "
+          f"({default_moved} px is BC5+BC4 alone); --texture-compress-colour arms "
+          f"{sorted(colour_formats)} at {colour_ncomp} of 3 and costs RMSE {colour_rmse:.4f} "
+          f"(want {TEXCOMP_COLOUR_RMSE_MIN} to {TEXCOMP_COLOUR_RMSE_MAX})")
+    if not ok:
+        failures.append("texcomp-colour")
+
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -18502,6 +18641,8 @@ GATE_GROUPS = [
     ("contact", "contact shadows for the lights with no shadow map (spec 11.56):",
      run_contact_gate),
     ("ao", "ambient occlusion reaches the frame (spec 11.75):", run_ao_gate),
+    ("texcomp", "block-compressed textures (format, budget, lever; spec 11.85):",
+     run_texcomp_gate),
     ("ies", "IES photometric profiles (table, symmetry, seeding, fold; spec 11.57):",
      run_ies_gate),
     ("catcher-transparency", "catcher vs transparency (panel through the plane):",
