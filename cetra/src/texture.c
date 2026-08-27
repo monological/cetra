@@ -198,6 +198,137 @@ void texture_gl_formats(int channels, bool is_srgb, GLenum* internal_format, GLe
     }
 }
 
+// The sRGB electro-optical transfer, tabulated over the 256 byte codes. Filled
+// into the caller's array rather than memoized in a file static: the analytic
+// terrain path already carries that weakness and there is no reason to add a
+// second one, and 256 powf calls per texture is nothing beside the decode that
+// just ran.
+static void texture_srgb_decode_lut(float lut[256]) {
+    for (int i = 0; i < 256; i++) {
+        const float v = (float)i / 255.0f;
+        lut[i] = v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f);
+    }
+}
+
+// The inverse, by binary search over that same table rather than by evaluating
+// the forward transfer. Two reasons, and the second is the load-bearing one:
+// it costs eight compares where powf costs far more on every texel of every
+// level, and it is EXACT against the decode by construction -- the byte it
+// returns is the one whose decoded value is nearest, so encode(decode(b)) == b
+// for all 256 codes and a chain of halvings cannot drift.
+static unsigned char texture_srgb_encode_byte(const float lut[256], float linear) {
+    int lo = 0, hi = 255;
+    while (lo < hi) {
+        const int mid = (lo + hi) / 2;
+        if (lut[mid] < linear)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo > 0 && (linear - lut[lo - 1]) < (lut[lo] - linear))
+        lo--;
+    return (unsigned char)lo;
+}
+
+// One 2x2 box halving.
+//
+// sRGB sources are averaged in LINEAR space, and that is a contract rather than
+// a refinement: texture_mean_rgb reads the 1x1 top mip and decodes it to recover
+// the linear mean, which is only the mean if the averaging happened there. GL
+// specifies the same for its own sRGB mip generation, so this matches what the
+// driver was doing rather than changing it.
+//
+// Alpha is never in that space. It carries a coverage or, since 11.60, a HEIGHT,
+// and is averaged as stored in every format.
+static void texture_box_halve(const unsigned char* src, int sw, int sh, int channels, bool is_srgb,
+                              const float lut[256], unsigned char* dst) {
+    const int dw = sw > 1 ? sw / 2 : 1;
+    const int dh = sh > 1 ? sh / 2 : 1;
+    // Colour occupies the leading three channels where there are three; a 1- or
+    // 2-channel sRGB texture does not occur, but the min keeps the loop honest.
+    const int colour = is_srgb ? (channels < 3 ? channels : 3) : 0;
+    for (int y = 0; y < dh; y++) {
+        // Clamp rather than wrap at an odd far edge, so the last row is averaged
+        // with itself instead of with the opposite side of the image.
+        const int y0 = (sh > 1) ? y * 2 : 0;
+        const int y1 = (y0 + 1 < sh) ? y0 + 1 : y0;
+        for (int x = 0; x < dw; x++) {
+            const int x0 = (sw > 1) ? x * 2 : 0;
+            const int x1 = (x0 + 1 < sw) ? x0 + 1 : x0;
+            const size_t i00 = ((size_t)y0 * (size_t)sw + (size_t)x0) * (size_t)channels;
+            const size_t i01 = ((size_t)y0 * (size_t)sw + (size_t)x1) * (size_t)channels;
+            const size_t i10 = ((size_t)y1 * (size_t)sw + (size_t)x0) * (size_t)channels;
+            const size_t i11 = ((size_t)y1 * (size_t)sw + (size_t)x1) * (size_t)channels;
+            unsigned char* out = &dst[((size_t)y * (size_t)dw + (size_t)x) * (size_t)channels];
+            for (int c = 0; c < channels; c++) {
+                if (c < colour) {
+                    const float sum = lut[src[i00 + c]] + lut[src[i01 + c]] + lut[src[i10 + c]] +
+                                      lut[src[i11 + c]];
+                    out[c] = texture_srgb_encode_byte(lut, sum * 0.25f);
+                } else {
+                    const int sum = (int)src[i00 + c] + (int)src[i01 + c] + (int)src[i10 + c] +
+                                    (int)src[i11 + c];
+                    out[c] = (unsigned char)((sum + 2) / 4);
+                }
+            }
+        }
+    }
+}
+
+// Upload level 0 and every level below it, building the chain on the CPU.
+//
+// This is what replaces glGenerateMipmap, and the reason is compression: a
+// compressed chain cannot be filled by it, because the driver would have to
+// decode, filter and re-encode each level and nothing here does that. The filter
+// therefore has to run before an encoder ever sees a level -- so it runs on the
+// CPU for the uncompressed case too, rather than leaving two filters that have
+// to agree with each other and silently would not.
+//
+// Returns false only on allocation failure, where the caller still has a usable
+// level 0.
+static bool texture_upload_with_mips(GLenum internal_format, GLenum data_format, int width,
+                                     int height, int channels, bool is_srgb,
+                                     const unsigned char* pixels) {
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0, data_format,
+                 GL_UNSIGNED_BYTE, pixels);
+    if (width <= 1 && height <= 1)
+        return true;
+
+    float lut[256];
+    texture_srgb_decode_lut(lut);
+
+    // Two buffers, each big enough for the largest level either will hold, so the
+    // chain ping-pongs without reallocating per level.
+    const size_t cap = ((size_t)width / 2 + 1) * ((size_t)height / 2 + 1) * (size_t)channels;
+    unsigned char* a = malloc(cap);
+    unsigned char* b = malloc(cap);
+    if (!a || !b) {
+        free(a);
+        free(b);
+        log_error("texture mip chain: out of memory at %dx%d", width, height);
+        return false;
+    }
+
+    const unsigned char* src = pixels;
+    int sw = width, sh = height;
+    unsigned char* dst = a;
+    for (GLint level = 1; sw > 1 || sh > 1; level++) {
+        const int dw = sw > 1 ? sw / 2 : 1;
+        const int dh = sh > 1 ? sh / 2 : 1;
+        texture_box_halve(src, sw, sh, channels, is_srgb, lut, dst);
+        glTexImage2D(GL_TEXTURE_2D, level, (GLint)internal_format, dw, dh, 0, data_format,
+                     GL_UNSIGNED_BYTE, dst);
+        src = dst;
+        dst = (dst == a) ? b : a;
+        sw = dw;
+        sh = dh;
+    }
+
+    free(a);
+    free(b);
+    return true;
+}
+
 Texture* create_texture() {
     Texture* texture = (Texture*)malloc(sizeof(Texture));
     if (!texture) {
@@ -557,11 +688,9 @@ Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath,
     texture_gl_formats(nrChannels, is_srgb, &internal_format, &data_format);
 
     // Upload texture data
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,
-                 data);
+    texture_upload_with_mips(internal_format, data_format, width, height, nrChannels, is_srgb,
+                             data);
     check_gl_error("texture upload");
-    glGenerateMipmap(GL_TEXTURE_2D);
-    check_gl_error("mipmap generation");
 
     // Clean up
     stbi_image_free(data);
@@ -634,12 +763,10 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     texture_gl_formats(channels, is_srgb, &internal_format, &data_format);
 
     // Upload texture data
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0, data_format, GL_UNSIGNED_BYTE,
-                 dilated ? dilated : pixels);
+    texture_upload_with_mips(internal_format, data_format, width, height, channels, is_srgb,
+                             dilated ? dilated : pixels);
     free(dilated);
     check_gl_error("embedded texture upload");
-    glGenerateMipmap(GL_TEXTURE_2D);
-    check_gl_error("embedded mipmap generation");
 
     // Update texture properties
     new_texture->id = textureID;
