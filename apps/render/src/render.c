@@ -334,6 +334,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-dither        Disable the default output dither\n");
     fprintf(stderr, "      --no-texture-compression  Store every texture uncompressed\n");
     fprintf(stderr, "      --texture-probe    Print the texture memory ledger\n");
+    fprintf(stderr, "      --texture-compress-colour  Compress albedo too (DXT, lossy)\n");
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
     fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
     fprintf(stderr,
@@ -1616,6 +1617,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_texture_compression = 1;
         } else if (strcmp(argv[i], "--texture-probe") == 0) {
             args->texture_probe = 1;
+        } else if (strcmp(argv[i], "--texture-compress-colour") == 0) {
+            args->texture_compress_colour = 1;
         } else if (strcmp(argv[i], "--grain") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2572,6 +2575,8 @@ int main(int argc, char** argv) {
     // leave a scene half compressed and the flag would read as working.
     if (args.no_texture_compression)
         texture_set_compression_enabled(false);
+    if (args.texture_compress_colour)
+        texture_set_colour_compression_enabled(true);
 
     /*
      * A config snapshot's `source` block, which is the only half of it that can

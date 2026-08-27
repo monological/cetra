@@ -173,6 +173,12 @@ typedef enum TextureUse {
 void texture_set_compression_enabled(bool enabled);
 bool texture_compression_enabled(void);
 
+// Colour is its own switch and defaults OFF. DXT quantises endpoints to RGB565,
+// which is visible on a smooth gradient where BC4 and BC5 are not, so the two
+// halves of this feature are not one decision and are not one flag.
+// --texture-compress-colour turns it on.
+void texture_set_colour_compression_enabled(bool enabled);
+
 // Bytes this texture occupies on the GPU including its mip chain, derived from
 // the internal format the driver actually chose rather than from the channel
 // count the loader passed. Unsized formats mean those two can disagree, which is

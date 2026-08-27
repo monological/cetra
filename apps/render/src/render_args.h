@@ -309,7 +309,8 @@ typedef struct {
     int no_dither; // Force the default output dither off
     // Store every texture uncompressed, which is the pre-11.85 engine exactly.
     int no_texture_compression;
-    int texture_probe; // Print the texture memory ledger and exit-time totals
+    int texture_probe;           // Print the texture memory ledger and exit-time totals
+    int texture_compress_colour; // Opt albedo into DXT, which is the lossy half
     float grain;
     float sharpen;
     float flare;     // Lens ghost strength

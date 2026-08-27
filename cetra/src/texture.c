@@ -281,8 +281,19 @@ static void texture_box_halve(const unsigned char* src, int sw, int sh, int chan
 // without threading a context it otherwise does not need.
 static bool g_texture_compression_enabled = true;
 
+// Colour is a SEPARATE switch and defaults OFF, which is the one default in this
+// feature chosen by taste rather than by measurement. BC5 on a normal and BC4 on
+// a mask cost a fraction of a code; DXT on an albedo quantises endpoints to
+// RGB565 and is visible on a gradient. So the formats whose loss is
+// unobservable are on, and the one whose loss is a judgement is opt-in.
+static bool g_texture_compression_colour = false;
+
 void texture_set_compression_enabled(bool enabled) {
     g_texture_compression_enabled = enabled;
+}
+
+void texture_set_colour_compression_enabled(bool enabled) {
+    g_texture_compression_colour = enabled;
 }
 
 bool texture_compression_enabled(void) {
@@ -313,8 +324,15 @@ static TextureBlockFormat texture_block_format_for(TextureUse use, int channels,
         return channels == 1 ? TEXTURE_BLOCK_BC4 : TEXTURE_BLOCK_NONE;
     case TEXTURE_USE_COLOUR:
     default:
-        (void)is_srgb;
-        return TEXTURE_BLOCK_NONE;
+        // DXT1 without an alpha, DXT5 with one. Both quantise their endpoints to
+        // RGB565, which is visibly poor on a smooth gradient -- so this is the
+        // branch the error budget is actually about, and the one
+        // --no-texture-compression exists to get back from.
+        if (!g_texture_compression_colour)
+            return TEXTURE_BLOCK_NONE;
+        if (channels == 4)
+            return TEXTURE_BLOCK_DXT5;
+        return channels == 3 ? TEXTURE_BLOCK_DXT1 : TEXTURE_BLOCK_NONE;
     }
 }
 
