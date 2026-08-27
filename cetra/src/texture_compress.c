@@ -76,15 +76,10 @@ static void encode_bc4_channel(const unsigned char tile[16 * 4], int channel,
     unsigned char pal[8];
     pal[0] = hi;
     pal[1] = lo;
-    if (hi > lo) {
-        for (int i = 0; i < 6; i++)
-            pal[2 + i] = (unsigned char)(((6 - i) * (int)hi + (1 + i) * (int)lo + 3) / 7);
-    } else {
-        // Constant block: every entry is the same value, so any index decodes
-        // correctly and the loop below picks 0.
-        for (int i = 0; i < 6; i++)
-            pal[2 + i] = hi;
-    }
+    // At hi == lo this yields (7*hi + 3)/7 == hi, so a constant block needs no
+    // case of its own.
+    for (int i = 0; i < 6; i++)
+        pal[2 + i] = (unsigned char)(((6 - i) * (int)hi + (1 + i) * (int)lo + 3) / 7);
 
     unsigned long long bits = 0;
     for (int i = 0; i < 16; i++) {
@@ -102,6 +97,13 @@ static void encode_bc4_channel(const unsigned char tile[16 * 4], int channel,
     }
     for (int i = 0; i < 6; i++)
         out[2 + i] = (unsigned char)((bits >> (8 * i)) & 0xFF);
+}
+
+// Rounded integer division, away from zero on both signs. The float refit
+// rounded when it packed its endpoints; truncating instead biases every one of
+// them toward zero and darkens the image.
+static int idiv_round(int num, int den) {
+    return num >= 0 ? (num + den / 2) / den : -((-num + den / 2) / den);
 }
 
 static unsigned short pack565(int r, int g, int b) {
@@ -147,67 +149,87 @@ static void encode_dxt_colour(const unsigned char tile[16 * 4], bool force_four,
         }
     }
 
-    float e0[3], e1[3];
+    // Endpoints as INTEGERS, and the refit below in integer arithmetic, because
+    // this file's header states determinism as a requirement: the frames these
+    // bytes feed are compared byte for byte, and a float refit is not that. The
+    // original float form differed by 64 bytes between an -O0 and an -O2 build of
+    // the same source -- so out/bin and out/release/bin would have produced
+    // different textures, the "two builds is not two runs" trap this repo already
+    // documents for meshoptimizer's LOD chains. BC4 and BC5 never had it, being
+    // integer throughout.
+    //
+    // Every intermediate is bounded well inside int32: with weights in {0..3}
+    // over 16 texels, sw <= 48, sww <= 144, sp <= 4080, spw <= 12240, and the
+    // largest product below 600k.
+    int e0[3], e1[3];
     for (int c = 0; c < 3; c++) {
-        e0[c] = (float)hi[c];
-        e1[c] = (float)lo[c];
+        e0[c] = hi[c];
+        e1[c] = lo[c];
     }
 
     // Least-squares refit: project each texel onto the current line, then solve
     // for the endpoints that best explain the projections.
     for (int pass = 0; pass < 2; pass++) {
-        float dir[3];
-        float len2 = 0.0f;
+        int dir[3];
+        int len2 = 0;
         for (int c = 0; c < 3; c++) {
             dir[c] = e0[c] - e1[c];
             len2 += dir[c] * dir[c];
         }
-        if (len2 < 1e-6f)
+        if (len2 == 0)
             break;
 
-        float sw = 0.0f, sww = 0.0f, sp[3] = {0.0f, 0.0f, 0.0f}, spw[3] = {0.0f, 0.0f, 0.0f};
+        // Weights are the palette's own four steps held as 0..3 rather than as
+        // thirds, which is what keeps the solve exact. The factor of 3 rides in
+        // the numerators instead.
+        int sw = 0, sww = 0, sp[3] = {0, 0, 0}, spw[3] = {0, 0, 0};
         for (int i = 0; i < 16; i++) {
-            float t = 0.0f;
+            int num = 0;
             for (int c = 0; c < 3; c++)
-                t += ((float)tile[i * 4 + c] - e1[c]) * dir[c];
-            t /= len2;
-            if (t < 0.0f)
-                t = 0.0f;
-            if (t > 1.0f)
-                t = 1.0f;
-            // Snap to the four representable steps so the fit solves for the
-            // palette that will actually be used rather than a continuous line.
-            t = (float)((int)(t * 3.0f + 0.5f)) / 3.0f;
-            sw += t;
-            sww += t * t;
+                num += ((int)tile[i * 4 + c] - e1[c]) * dir[c];
+            // round(3 * num / len2), away from zero on both signs so the snap is
+            // symmetric, then clamped to the four steps.
+            int w = num >= 0 ? (3 * num + len2 / 2) / len2 : -((-3 * num + len2 / 2) / len2);
+            if (w < 0)
+                w = 0;
+            if (w > 3)
+                w = 3;
+            sw += w;
+            sww += w * w;
             for (int c = 0; c < 3; c++) {
-                sp[c] += (float)tile[i * 4 + c];
-                spw[c] += (float)tile[i * 4 + c] * t;
+                sp[c] += (int)tile[i * 4 + c];
+                spw[c] += (int)tile[i * 4 + c] * w;
             }
         }
-        const float det = 16.0f * sww - sw * sw;
-        if (det > -1e-6f && det < 1e-6f)
+        // Nine times the float form's determinant, which cancels against the 3s
+        // the weights carry. Exactly zero or at least 15, so no epsilon.
+        const int den = 16 * sww - sw * sw;
+        if (den == 0)
             break;
         for (int c = 0; c < 3; c++) {
-            float a = (16.0f * spw[c] - sw * sp[c]) / det;
-            float b = (sww * sp[c] - sw * spw[c]) / det;
-            float n0 = b + a;
-            float n1 = b;
-            if (n0 < 0.0f)
-                n0 = 0.0f;
-            if (n0 > 255.0f)
-                n0 = 255.0f;
-            if (n1 < 0.0f)
-                n1 = 0.0f;
-            if (n1 > 255.0f)
-                n1 = 255.0f;
+            // Substituting w = 3t into the least-squares solution puts a factor
+            // of 3 on the SLOPE and none on the intercept -- the 9s from sww and
+            // the determinant cancel. Carrying it on both reads as symmetry and
+            // is wrong by 3x on the intercept.
+            const int a_num = 3 * (16 * spw[c] - sw * sp[c]);
+            const int b_num = sww * sp[c] - sw * spw[c];
+            int n0 = idiv_round(b_num + a_num, den);
+            int n1 = idiv_round(b_num, den);
+            if (n0 < 0)
+                n0 = 0;
+            if (n0 > 255)
+                n0 = 255;
+            if (n1 < 0)
+                n1 = 0;
+            if (n1 > 255)
+                n1 = 255;
             e0[c] = n0;
             e1[c] = n1;
         }
     }
 
-    unsigned short c0 = pack565((int)(e0[0] + 0.5f), (int)(e0[1] + 0.5f), (int)(e0[2] + 0.5f));
-    unsigned short c1 = pack565((int)(e1[0] + 0.5f), (int)(e1[1] + 0.5f), (int)(e1[2] + 0.5f));
+    unsigned short c0 = pack565(e0[0], e0[1], e0[2]);
+    unsigned short c1 = pack565(e1[0], e1[1], e1[2]);
 
     // For DXT1 the ORDER of the endpoints is the mode bit, so c0 must be made the
     // greater to select the four-colour mode. The indices below are chosen
@@ -228,23 +250,25 @@ static void encode_dxt_colour(const unsigned char tile[16 * 4], bool force_four,
     unpack565(c0, p0);
     unpack565(c1, p1);
 
+    // The swap above makes c0 >= c1 whenever !force_four, so the three-colour
+    // mode is reachable only at c0 == c1 -- where p0 == p1 and every palette
+    // entry is the same colour under either mode. Only the INDEX LIMIT below has
+    // to know, and it has to know because index 3 there is transparent black.
     int pal[4][3];
     for (int c = 0; c < 3; c++) {
         pal[0][c] = p0[c];
         pal[1][c] = p1[c];
-        if (force_four || c0 > c1) {
-            pal[2][c] = (2 * p0[c] + p1[c] + 1) / 3;
-            pal[3][c] = (p0[c] + 2 * p1[c] + 1) / 3;
-        } else {
-            pal[2][c] = (p0[c] + p1[c]) / 2;
-            pal[3][c] = 0;
-        }
+        pal[2][c] = (2 * p0[c] + p1[c] + 1) / 3;
+        pal[3][c] = (p0[c] + 2 * p1[c] + 1) / 3;
     }
+    // 1 rather than 3: at collapsed endpoints index 0 is the answer, and this
+    // makes transparent black structurally unreachable instead of merely losing
+    // a tie to a strict less-than.
+    const int limit = (!force_four && c0 == c1) ? 1 : 4;
 
     unsigned int bits = 0;
     for (int i = 0; i < 16; i++) {
         int best = 0, best_err = 1 << 30;
-        const int limit = (force_four || c0 > c1) ? 4 : 3;
         for (int p = 0; p < limit; p++) {
             int err = 0;
             for (int c = 0; c < 3; c++) {

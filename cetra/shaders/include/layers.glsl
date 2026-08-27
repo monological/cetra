@@ -2,6 +2,9 @@
 #define LAYERS_GLSL
 
 #include "triplanar.glsl"
+// The one decode of a two-channel tangent normal, shared with pbr_frag's own
+// normal sites since 11.85 gave them the same storage.
+#include "tangent_normal.glsl"
 // authoredPos: the tiling lattice and the splat rectangle are both locked to the
 // WORLD, so both read a position as an identity rather than as a location.
 #include "world_origin.glsl"
@@ -86,13 +89,12 @@ LayerSurface layerSurfaceNeutral(vec3 worldNormal) {
     return s;
 }
 
-// The surface map's two-channel tangent normal, z reconstructed. ONE decode of
-// the storage format: it is a contract with the array packing and the bake,
-// and it used to be hand-written at seven sites in this file.
+// The surface map's two-channel tangent normal, z reconstructed. The decode now
+// lives in tangent_normal.glsl, because 11.85 gave BC5 the same two-channel
+// storage and re-typed this expression rather than calling it -- so the seven
+// sites this function once collapsed had quietly become ten across three files.
 vec3 layerTangentNormal(vec2 rg) {
-    vec3 t = vec3(rg * 2.0 - 1.0, 0.0);
-    t.z = sqrt(max(1.0 - dot(t.xy, t.xy), 0.0));
-    return t;
+    return tangentNormalFromXY(rg);
 }
 
 // Where the splat is read, in its own space. See Material.splat_space: neither

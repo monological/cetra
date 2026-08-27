@@ -18499,10 +18499,16 @@ def run_decal_gate(workdir):
 TEXCOMP_FIXTURE = "texcomp_fixture.cscn"
 TEXCOMP_FRAMES = 4
 # BC5 and BC4 against their own uncompressed twin, as a fraction of full scale.
-# PLACED BY MEASUREMENT: the fixture reads 0.0058 and the bar is a shade over it.
-# The formats are near-lossless on this content and the arm exists to catch an
-# encoder that stops being so, not to leave room for one.
-TEXCOMP_DATA_RMSE_MAX = 0.010
+#
+# PLACED BY MEASUREMENT at 0.0189, bar a shade over. It read 0.0058 until the Z
+# rebuild was gated on the storage actually being two-channel, and the rise is
+# the arm becoming HONEST rather than a regression: both legs used to rebuild Z,
+# so the term cancelled and the number described the encoder alone. Now the
+# uncompressed leg keeps its stored Z, so this measures what choosing BC5
+# actually costs -- the encoder AND the rebuild BC5 forces. The rebuild is the
+# larger half, because the mip filter does not renormalise and a rebuilt Z runs
+# systematically over the stored one down the chain (20.6 codes by mip 5).
+TEXCOMP_DATA_RMSE_MAX = 0.025
 # DXT on the hue wheel, which is its worst case by construction. Measured 0.0331,
 # so this bounds it rather than blessing any value: the point of the arm is that
 # the number stays in the range a human already looked at and accepted.

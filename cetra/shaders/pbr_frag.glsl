@@ -858,7 +858,8 @@ vec3 clearcoatNormal(vec2 uv) {
         // with it -- the basis stays consistent with the normal it shades,
         // where the old sign-recovery kept the front-face bitangent.
         vec3 Bc = cross(Ngeo, Tc) * TangentW;
-        vec3 cn = texture(clearcoatNormalTex, uv).xyz * 2.0 - 1.0;
+        vec3 cn = tangentNormalDecode(texture(clearcoatNormalTex, uv).xyz,
+                                      clearcoatNormalExists == 2);
         return normalize(mat3(Tc, Bc, Ngeo) * cn);
     }
     return Ngeo;
@@ -1189,22 +1190,11 @@ void main() {
             // asking again here costs arithmetic and returns the same three offsets. It has to
             // be the same ones: two maps on two lattices would show the albedo of one part of
             // the tile over the relief of another.
-            nTex = stochasticSampleNormal(normalTex, stochasticTaps(uv, uv));
+            nTex = stochasticSampleNormal(normalTex, stochasticTaps(uv, uv),
+                                          normalTexExists == 2);
         } else {
-            nTex = texture(normalTex, uv).rgb * 2.0 - 1.0;
+            nTex = tangentNormalDecode(texture(normalTex, uv).rgb, normalTexExists == 2);
         }
-        // Z is REBUILT from XY rather than read, because a block-compressed
-        // normal has no third channel to read -- BC5 stores two, and no block
-        // format this platform has carries three (spec 11.85).
-        //
-        // Unconditional, so there is one path rather than one per storage
-        // format. That is safe in a way it would not be for arbitrary data: a
-        // tangent-space normal is unit length and points out of the surface, so
-        // z is a function of xy wherever the map is well formed, and where it is
-        // not the stored z was the wrong value. Sitting BEFORE the scale below is
-        // what keeps it equivalent to the glTF formulation, which scales the xy
-        // of the sampled normal and leaves z alone.
-        nTex.z = sqrt(max(1.0 - dot(nTex.xy, nTex.xy), 0.0));
         // Apply normal scale to XY components (glTF normalTexture.scale)
         nTex.xy *= normalScale;
         N = normalize(mat3(T, B, Ng) * nTex);

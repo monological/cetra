@@ -185,6 +185,15 @@ void texture_set_colour_compression_enabled(bool enabled);
 // exactly why the probe asks.
 size_t texture_gpu_bytes(const Texture* texture);
 
+// The `normalTexExists` / `clearcoatNormalExists` gate: 0 none, 1 stored with a
+// Z, 2 two-channel and the shader must rebuild it.
+//
+// One function because two call sites is how the base normal and the coat normal
+// came to disagree in the first place -- 11.85 taught the base path to rebuild
+// and left the coat path reading a blue channel BC5 does not store, which is a
+// normal pointing into the surface.
+int texture_normal_gate(const Texture* texture);
+
 /*
  * THE upload path: level 0, the mip chain under it, and the block encoding where
  * `use` asks for one. Into the currently bound GL_TEXTURE_2D.

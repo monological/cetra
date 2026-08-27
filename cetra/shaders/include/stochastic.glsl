@@ -23,6 +23,11 @@
 // The span is what maps the stored [0,1] back to sigma; disagreeing with the bake puts every
 // value on the wrong part of the inverse table.
 #define STOCHASTIC_LUT_SIZE 64
+
+// The two-channel tangent-normal decode. Included here rather than relied on
+// from the includer: this file is pulled in before layers.glsl, which is the
+// other consumer, and an include order is not a dependency.
+#include "tangent_normal.glsl"
 const float STOCHASTIC_SIGMA_SPAN = 3.0;
 
 /*
@@ -180,10 +185,15 @@ vec3 stochasticSample(sampler2D tex, vec2 uv, vec2 footprint) {
  * The mean slope is ZERO: a tangent-space map describes deviation from the surface, so a
  * surface with no net tilt has none.
  */
-vec3 stochasticSampleNormal(sampler2D tex, StochasticTaps t) {
-    vec3 n1 = textureGrad(tex, t.uv1, t.dx, t.dy).xyz * 2.0 - 1.0;
-    vec3 n2 = textureGrad(tex, t.uv2, t.dx, t.dy).xyz * 2.0 - 1.0;
-    vec3 n3 = textureGrad(tex, t.uv3, t.dx, t.dy).xyz * 2.0 - 1.0;
+// `rebuildZ` says the map is two-channel storage (BC5). It has to be decoded HERE
+// rather than by the caller: this divides by z, so a z of -1 does not merely
+// shade wrong, it is floored to 1e-3 and turns a slope of 0.65 into 650 -- a
+// normal 90 degrees off the surface, which renders as a plausible picture rather
+// than as an error.
+vec3 stochasticSampleNormal(sampler2D tex, StochasticTaps t, bool rebuildZ) {
+    vec3 n1 = tangentNormalDecode(textureGrad(tex, t.uv1, t.dx, t.dy).xyz, rebuildZ);
+    vec3 n2 = tangentNormalDecode(textureGrad(tex, t.uv2, t.dx, t.dy).xyz, rebuildZ);
+    vec3 n3 = tangentNormalDecode(textureGrad(tex, t.uv3, t.dx, t.dy).xyz, rebuildZ);
 
     // The floor on z keeps a degenerate or unnormalised texel from producing an infinite slope
     // and taking the whole blend with it.

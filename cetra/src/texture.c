@@ -245,9 +245,14 @@ static void texture_box_halve(const unsigned char* src, int sw, int sh, int chan
                               const float lut[256], unsigned char* dst) {
     const int dw = sw > 1 ? sw / 2 : 1;
     const int dh = sh > 1 ? sh / 2 : 1;
-    // Colour occupies the leading three channels where there are three; a 1- or
-    // 2-channel sRGB texture does not occur, but the min keeps the loop honest.
-    const int colour = is_srgb ? (channels < 3 ? channels : 3) : 0;
+    // How many leading channels are sRGB-ENCODED, which is a property of the
+    // stored format and not of the caller's intent. texture_gl_formats ignores
+    // is_srgb below three channels -- a 1-channel image is always GL_RED and
+    // linear -- so trusting the caller here filtered a greyscale albedo's mips in
+    // a transfer function its own level 0 was not in, and the async path, which
+    // derives the flag from the format, disagreed with the direct path on the
+    // same file.
+    const int colour = is_srgb ? 3 : 0;
     for (int y = 0; y < dh; y++) {
         // Clamp rather than wrap at an odd far edge, so the last row is averaged
         // with itself instead of with the opposite side of the image.
@@ -273,6 +278,25 @@ static void texture_box_halve(const unsigned char* src, int sw, int sh, int chan
                 }
             }
         }
+    }
+}
+
+// Is this STORED format sRGB-encoded?
+//
+// A predicate rather than two equality tests at each site, because block
+// compression added two more spellings of the same fact and the sites that test
+// it are reading a format the loader did not choose. Getting it wrong is silent:
+// texture_mean_rgb hands back an ENCODED value called linear, which 11.49's
+// emissive fit turns into a panel several times too bright, and nothing errors.
+static bool texture_format_is_srgb(GLenum internal_format) {
+    switch (internal_format) {
+    case GL_SRGB:
+    case GL_SRGB_ALPHA:
+    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -302,16 +326,15 @@ bool texture_compression_enabled(void) {
 
 // Which block format a texture takes, or NONE.
 //
-// COLOUR returns NONE for now: phase 7 is where DXT is judged, and until then
-// this being the only branch that declines is what keeps every albedo in the
-// corpus byte-identical.
+// COLOUR is the one use behind a second switch, off by default: BC5 and BC4 cost
+// a fraction of a code where DXT is a judgement.
 //
 // The channel counts are a floor, not a match: a normal map that decoded to
 // three channels still compresses as BC5 on its first two, and a mask that
 // decoded to three (a grey PNG) still compresses as BC4 on its first. What
 // matters is that the channels this format DROPS carry nothing -- which is a
 // statement about the semantic, and the semantic is what the caller just gave.
-static TextureBlockFormat texture_block_format_for(TextureUse use, int channels, bool is_srgb) {
+static TextureBlockFormat texture_block_format_for(TextureUse use, int channels) {
     if (!g_texture_compression_enabled)
         return TEXTURE_BLOCK_NONE;
     switch (use) {
@@ -324,10 +347,10 @@ static TextureBlockFormat texture_block_format_for(TextureUse use, int channels,
         return channels == 1 ? TEXTURE_BLOCK_BC4 : TEXTURE_BLOCK_NONE;
     case TEXTURE_USE_COLOUR:
     default:
-        // DXT1 without an alpha, DXT5 with one. Both quantise their endpoints to
-        // RGB565, which is visibly poor on a smooth gradient -- so this is the
-        // branch the error budget is actually about, and the one
-        // --no-texture-compression exists to get back from.
+        // DXT1 without an alpha, DXT5 with one; the sRGB spelling of each is
+        // chosen by texture_block_gl_format, which is where the colour space is
+        // actually known. Both quantise endpoints to RGB565, visibly poor on a
+        // smooth gradient -- so this is the branch the error budget is about.
         if (!g_texture_compression_colour)
             return TEXTURE_BLOCK_NONE;
         if (channels == 4)
@@ -377,8 +400,8 @@ static void texture_upload_compressed_level(TextureBlockFormat format, GLenum gl
 bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
                           int channels, bool is_srgb, TextureUse use, const unsigned char* pixels,
                           GLenum* out_internal_format) {
-    TextureBlockFormat block = texture_block_format_for(use, channels, is_srgb);
-    const GLenum gl_block = texture_block_gl_format(block, is_srgb);
+    TextureBlockFormat block = texture_block_format_for(use, channels);
+    GLenum gl_block = texture_block_gl_format(block, is_srgb);
     // Scratch for the encoder, sized for level 0 and reused by every level under
     // it. Allocated before anything is uploaded so a failure falls back to the
     // uncompressed path cleanly rather than half way down a chain.
@@ -388,12 +411,18 @@ bool texture_upload_image(GLenum internal_format, GLenum data_format, int width,
         if (!scratch) {
             log_error("texture compression: out of memory at %dx%d, storing uncompressed", width,
                       height);
+            // BOTH, or the pair disagrees and only a conjunction fifty lines down
+            // keeps it from being read as compressed.
             block = TEXTURE_BLOCK_NONE;
+            gl_block = 0;
         }
     }
-    const bool compressed = (gl_block != 0 && block != TEXTURE_BLOCK_NONE);
+    const bool compressed = gl_block != 0;
+    const GLenum stored = compressed ? gl_block : internal_format;
     if (out_internal_format)
-        *out_internal_format = compressed ? gl_block : internal_format;
+        *out_internal_format = stored;
+    // What the mip filter must agree with -- see texture_box_halve's `colour`.
+    const bool srgb_stored = texture_format_is_srgb(stored);
 
     if (compressed)
         texture_upload_compressed_level(block, gl_block, 0, width, height, channels, pixels,
@@ -419,7 +448,14 @@ bool texture_upload_image(GLenum internal_format, GLenum data_format, int width,
         free(a);
         free(b);
         free(scratch);
-        log_error("texture mip chain: out of memory at %dx%d", width, height);
+        // Clamp rather than report. The sampler state is LINEAR_MIPMAP_LINEAR and
+        // GL_TEXTURE_MAX_LEVEL defaults to 1000, so a texture holding only level
+        // 0 is mipmap-INCOMPLETE and samples (0,0,0,1) -- black, not degraded.
+        // Every caller ignored the old bool return, which is why this had to stop
+        // being a caller's problem.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        log_error("texture mip chain: out of memory at %dx%d, storing level 0 only", width,
+                  height);
         return false;
     }
 
@@ -432,7 +468,7 @@ bool texture_upload_image(GLenum internal_format, GLenum data_format, int width,
         // Filtered from the UNCOMPRESSED parent, never from a decoded block. The
         // chain is a chain of images, not of encodings, so quantisation error
         // cannot compound down it.
-        texture_box_halve(src, sw, sh, channels, is_srgb, lut, dst);
+        texture_box_halve(src, sw, sh, channels, srgb_stored, lut, dst);
         if (compressed)
             texture_upload_compressed_level(block, gl_block, level, dw, dh, channels, dst,
                                             scratch);
@@ -499,25 +535,6 @@ size_t texture_gpu_bytes(const Texture* texture) {
     return bytes;
 }
 
-// Is this STORED format sRGB-encoded?
-//
-// A predicate rather than two equality tests at each site, because block
-// compression added two more spellings of the same fact and the sites that test
-// it are reading a format the loader did not choose. Getting it wrong is silent:
-// texture_mean_rgb hands back an ENCODED value called linear, which 11.49's
-// emissive fit turns into a panel several times too bright, and nothing errors.
-static bool texture_format_is_srgb(GLenum internal_format) {
-    switch (internal_format) {
-    case GL_SRGB:
-    case GL_SRGB_ALPHA:
-    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
-    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
-        return true;
-    default:
-        return false;
-    }
-}
-
 static const char* texture_format_name(GLenum internal_format) {
     switch (internal_format) {
     case GL_COMPRESSED_RED_RGTC1:
@@ -547,6 +564,15 @@ static const char* texture_format_name(GLenum internal_format) {
     default:
         return "?";
     }
+}
+
+int texture_normal_gate(const Texture* texture) {
+    if (!texture)
+        return 0;
+    // BC5 is the only two-channel storage this engine produces. Asking the
+    // FORMAT rather than the compression switch is what keeps a texture the pool
+    // handed back from an earlier, differently-configured load honest.
+    return texture->internal_format == GL_COMPRESSED_RG_RGTC2 ? 2 : 1;
 }
 
 void texture_pool_probe(const TexturePool* pool, const char* label) {

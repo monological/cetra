@@ -328,7 +328,13 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     }
 
     uniform_set_int(u, "albedoTexExists", material->albedo_tex ? 1 : 0);
-    uniform_set_int(u, "normalTexExists", material->normal_tex ? 1 : 0);
+    // 0 none, 1 stored with a Z, 2 two-channel. The shader cannot see a storage
+    // format and has to rebuild Z for BC5, which is NOT free on a map that has
+    // one: the mip filter does not renormalise, so a rebuilt Z runs larger than
+    // the stored one and diverges down the chain. Carrying the state on the
+    // existing gate keeps `> 0` true for every reader and costs no uniform --
+    // and it is what makes --no-texture-compression the identity it claims.
+    uniform_set_int(u, "normalTexExists", texture_normal_gate(material->normal_tex));
     uniform_set_int(u, "emissiveTexExists", material->emissive_tex ? 1 : 0);
     // The Exists gates follow the refusal, not the pointers: leaving them at 1
     // with nothing (or a page) bound on units 3/4 would read foreign data as a
@@ -337,7 +343,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
                     material->height_tex && !refuse_maps_34 ? 1 : 0);
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
     uniform_set_int(u, "clearcoatNormalExists",
-                    material->clearcoat_normal_tex && !refuse_maps_34 ? 1 : 0);
+                    refuse_maps_34 ? 0 : texture_normal_gate(material->clearcoat_normal_tex));
 
     // Reset active texture unit
     glActiveTexture(GL_TEXTURE0);
