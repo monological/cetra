@@ -927,6 +927,13 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
 
 Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
                                   int width, int height, int channels, bool is_srgb) {
+    return load_texture_from_memory_used(pool, key, pixels, width, height, channels, is_srgb,
+                                        TEXTURE_USE_COLOUR);
+}
+
+Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
+                                       const unsigned char* pixels, int width, int height,
+                                       int channels, bool is_srgb, TextureUse use) {
     if (!pool || !key || !pixels) {
         log_error("Invalid pool, key, or pixel data");
         return NULL;
@@ -981,8 +988,8 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     // Every embedded and procedurally-built texture therefore keeps the storage
     // it had. It wants the `_used` treatment the moment a procedural normal map
     // is worth compressing -- apps/forest bakes several.
-    texture_upload_image(internal_format, data_format, width, height, channels, is_srgb,
-                         TEXTURE_USE_COLOUR, dilated ? dilated : pixels, &internal_format);
+    texture_upload_image(internal_format, data_format, width, height, channels, is_srgb, use,
+                         dilated ? dilated : pixels, &internal_format);
     free(dilated);
     check_gl_error("embedded texture upload");
 
@@ -1005,9 +1012,17 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
 
 Texture* load_texture_from_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
                                         int width, int height, int channels, bool is_srgb) {
+    return load_texture_from_memory_owned_used(pool, key, pixels, width, height, channels, is_srgb,
+                                               TEXTURE_USE_COLOUR);
+}
+
+Texture* load_texture_from_memory_owned_used(TexturePool* pool, const char* key,
+                                             unsigned char* pixels, int width, int height,
+                                             int channels, bool is_srgb, TextureUse use) {
     if (!pixels)
         return NULL;
-    Texture* tex = load_texture_from_memory(pool, key, pixels, width, height, channels, is_srgb);
+    Texture* tex =
+        load_texture_from_memory_used(pool, key, pixels, width, height, channels, is_srgb, use);
     free(pixels);
     return tex;
 }

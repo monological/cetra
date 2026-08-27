@@ -896,10 +896,13 @@ static void bake_vegetation_textures(Scene* scene) {
         set_material_albedo_tex(
             g_mat_bark, load_texture_from_memory_owned(scene->tex_pool, "forest_bark_albedo",
                                                        veg_bark_albedo(B, B, field), B, B, 3, true));
+        // Stated as a NORMAL so it takes BC5. Procedural maps reach the GPU
+        // through this path rather than through an importer, so nothing else can
+        // know what they are.
         set_material_normal_tex(
-            g_mat_bark, load_texture_from_memory_owned(scene->tex_pool, "forest_bark_normal",
-                                                       veg_bark_normal(B, B, field), B, B, 3,
-                                                       false));
+            g_mat_bark, load_texture_from_memory_owned_used(
+                            scene->tex_pool, "forest_bark_normal", veg_bark_normal(B, B, field), B,
+                            B, 3, false, TEXTURE_USE_NORMAL));
         set_material_roughness_tex(
             g_mat_bark, load_texture_from_memory_owned(scene->tex_pool, "forest_bark_rough",
                                                        veg_bark_roughness(B, B, field), B, B, 3,
@@ -914,9 +917,9 @@ static void bake_vegetation_textures(Scene* scene) {
     set_material_albedo_tex(g_mat_leaf,
                             load_texture_from_memory_owned(scene->tex_pool, "forest_leaf_albedo",
                                                            la, LW, LH, 4, true));
-    set_material_normal_tex(g_mat_leaf,
-                            load_texture_from_memory_owned(scene->tex_pool, "forest_leaf_normal",
-                                                           ln, LW, LH, 3, false));
+    set_material_normal_tex(g_mat_leaf, load_texture_from_memory_owned_used(
+                                            scene->tex_pool, "forest_leaf_normal", ln, LW, LH, 3,
+                                            false, TEXTURE_USE_NORMAL));
     set_material_roughness_tex(g_mat_leaf,
                                load_texture_from_memory_owned(scene->tex_pool, "forest_leaf_rough",
                                                               lr, LW, LH, 3, false));

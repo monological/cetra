@@ -250,6 +250,17 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
 //
 // A NULL `pixels` returns NULL, so a generator that failed needs no guard at the
 // call site.
+// And the two saying what the image IS, for the same reason the file loader has
+// a `_used` form: a procedurally generated normal map is the case that breaks
+// the inference, and this is the path every one of them takes -- apps/forest
+// bakes two, apps/tree more.
+Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
+                                       const unsigned char* pixels, int width, int height,
+                                       int channels, bool is_srgb, TextureUse use);
+Texture* load_texture_from_memory_owned_used(TexturePool* pool, const char* key,
+                                             unsigned char* pixels, int width, int height,
+                                             int channels, bool is_srgb, TextureUse use);
+
 Texture* load_texture_from_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
                                         int width, int height, int channels, bool is_srgb);
 
