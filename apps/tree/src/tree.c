@@ -87,7 +87,9 @@ static void generate_procedural_textures(Scene* scene) {
                                                     texture_desc(true));
         bark_normal_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_normal",
                                                     veg_bark_normal(B, B, bark_field), B, B, 3,
-                                                    texture_desc(false));
+                                                    (TextureDesc){.is_srgb = false,
+                                                                  .alpha = TEXTURE_ALPHA_DATA,
+                                                                  .use = TEXTURE_USE_NORMAL});
         bark_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_roughness",
                                                        veg_bark_roughness(B, B, bark_field), B, B,
                                                        3, texture_desc(false));
@@ -103,7 +105,10 @@ static void generate_procedural_textures(Scene* scene) {
     leaf_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_albedo", leaf_a, LW, LH,
                                                 4, texture_desc(true));
     leaf_normal_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_normal", leaf_n, LW, LH,
-                                                3, texture_desc(false));
+                                                3,
+                                                (TextureDesc){.is_srgb = false,
+                                                              .alpha = TEXTURE_ALPHA_DATA,
+                                                              .use = TEXTURE_USE_NORMAL});
     leaf_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_roughness", leaf_r,
                                                    LW, LH, 3, texture_desc(false));
     leaf_sprite_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_sprite",
@@ -143,7 +148,10 @@ static void generate_procedural_textures(Scene* scene) {
                                                       T, T, 3, texture_desc(false));
         island_normal_tex =
             texture_load_memory_owned(scene->tex_pool, "proc_sand_normal",
-                                      sand_normal(T, T, sand_field), T, T, 3, texture_desc(false));
+                                      sand_normal(T, T, sand_field), T, T, 3,
+                                      (TextureDesc){.is_srgb = false,
+                                                    .alpha = TEXTURE_ALPHA_DATA,
+                                                    .use = TEXTURE_USE_NORMAL});
         island_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_sand_roughness",
                                                          sand_roughness(T, T, sand_field), T, T, 3,
                                                          texture_desc(false));
@@ -772,6 +780,11 @@ typedef struct {
     int no_shadows;
     int fog; // fog is OFF here: the haze flattens a dusk scene (77cf780c)
     int no_falling_leaves;
+    // Print the texture ledger after the procedural bake. Here and not only in
+    // apps/render because every texture in this app is generated rather than
+    // loaded, so it is the only place the memory cost of a procedural map can be
+    // read at all -- and a saving is a numeric claim no frame can make.
+    int texture_probe;
     int no_stars; // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
     int no_moon;        // and the moon: this app is where a night sky is looked at
@@ -853,6 +866,7 @@ static void print_usage(const char* prog) {
     printf("      --no-shadows        Disable the shadow pass\n");
     printf("      --fog               Enable the volumetric fog (off by default here)\n");
     printf("      --no-falling-leaves Disable the falling-leaf particles\n");
+    printf("      --texture-probe   Print the texture memory ledger after the bake\n");
     printf("      --no-stars          Disable the night star field (visible only once\n");
     printf("                          the sun drops through civil twilight)\n");
     printf("      --star-hour <deg>   Turn the star field about the celestial pole,\n");
@@ -1013,6 +1027,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->fog = 1;
         } else if (!strcmp(s, "--no-falling-leaves")) {
             a->no_falling_leaves = 1;
+        } else if (!strcmp(s, "--texture-probe")) {
+            a->texture_probe = 1;
         } else if (!strcmp(s, "--no-stars")) {
             a->no_stars = 1;
         } else if (!strcmp(s, "--no-night-floor")) {
@@ -1227,6 +1243,10 @@ int main(int argc, char** argv) {
 
     // Textures go through the scene's pool, so the scene must exist first.
     generate_procedural_textures(scene);
+    // Directly after the bake, which is the whole ledger: this app loads no
+    // texture from a file.
+    if (args.texture_probe)
+        texture_pool_probe(scene->tex_pool, "scene");
 
     /*
      * Lighting: physically based sky, IBL baked from it, and one sun coupled
