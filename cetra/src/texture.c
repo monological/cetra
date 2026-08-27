@@ -9,6 +9,7 @@
 #include "ext/log.h"
 
 #include "texture.h"
+#include "texture_compress.h"
 #include "util.h"
 
 // Bleed visible RGB into fully-transparent texels. PNGs routinely store
@@ -275,6 +276,75 @@ static void texture_box_halve(const unsigned char* src, int sw, int sh, int chan
     }
 }
 
+// --no-texture-compression. A file static rather than a field on anything,
+// because it is a property of the RUN and every upload path has to see it
+// without threading a context it otherwise does not need.
+static bool g_texture_compression_enabled = true;
+
+void texture_set_compression_enabled(bool enabled) {
+    g_texture_compression_enabled = enabled;
+}
+
+bool texture_compression_enabled(void) {
+    return g_texture_compression_enabled;
+}
+
+// Which block format a texture takes, or NONE.
+//
+// COLOUR returns NONE for now: phase 7 is where DXT is judged, and until then
+// this being the only branch that declines is what keeps every albedo in the
+// corpus byte-identical.
+//
+// The channel counts are a floor, not a match: a normal map that decoded to
+// three channels still compresses as BC5 on its first two, and a mask that
+// decoded to three (a grey PNG) still compresses as BC4 on its first. What
+// matters is that the channels this format DROPS carry nothing -- which is a
+// statement about the semantic, and the semantic is what the caller just gave.
+static TextureBlockFormat texture_block_format_for(TextureUse use, int channels, bool is_srgb) {
+    if (!g_texture_compression_enabled)
+        return TEXTURE_BLOCK_NONE;
+    switch (use) {
+    case TEXTURE_USE_NORMAL:
+        return channels >= 2 ? TEXTURE_BLOCK_BC5 : TEXTURE_BLOCK_NONE;
+    case TEXTURE_USE_DATA:
+        // Only a single-channel source. A 3- or 4-channel linear map is an ORM
+        // or a packed surface map whose channels are DIFFERENT quantities, and
+        // BC4 would keep one and discard the rest.
+        return channels == 1 ? TEXTURE_BLOCK_BC4 : TEXTURE_BLOCK_NONE;
+    case TEXTURE_USE_COLOUR:
+    default:
+        (void)is_srgb;
+        return TEXTURE_BLOCK_NONE;
+    }
+}
+
+static GLenum texture_block_gl_format(TextureBlockFormat format, bool is_srgb) {
+    switch (format) {
+    case TEXTURE_BLOCK_BC4:
+        return GL_COMPRESSED_RED_RGTC1;
+    case TEXTURE_BLOCK_BC5:
+        return GL_COMPRESSED_RG_RGTC2;
+    case TEXTURE_BLOCK_DXT1:
+        return is_srgb ? GL_COMPRESSED_SRGB_S3TC_DXT1_EXT : GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
+    case TEXTURE_BLOCK_DXT5:
+        return is_srgb ? GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT
+                       : GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+    default:
+        return 0;
+    }
+}
+
+// Encode and upload one level. Split out because the mip loop needs it for every
+// level and the caller needs it for level 0, and the block arithmetic is easy to
+// get subtly wrong twice.
+static void texture_upload_compressed_level(TextureBlockFormat format, GLenum gl_format,
+                                            GLint level, int width, int height, int channels,
+                                            const unsigned char* pixels, unsigned char* scratch) {
+    texture_block_encode(format, pixels, width, height, channels, scratch);
+    glCompressedTexImage2D(GL_TEXTURE_2D, level, gl_format, width, height, 0,
+                           (GLsizei)texture_block_image_bytes(format, width, height), scratch);
+}
+
 // Upload level 0 and every level below it, building the chain on the CPU.
 //
 // This is what replaces glGenerateMipmap, and the reason is compression: a
@@ -288,11 +358,36 @@ static void texture_box_halve(const unsigned char* src, int sw, int sh, int chan
 // level 0.
 static bool texture_upload_with_mips(GLenum internal_format, GLenum data_format, int width,
                                      int height, int channels, bool is_srgb,
-                                     const unsigned char* pixels) {
-    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0, data_format,
-                 GL_UNSIGNED_BYTE, pixels);
-    if (width <= 1 && height <= 1)
+                                     TextureBlockFormat block, const unsigned char* pixels,
+                                     GLenum* out_internal_format) {
+    const GLenum gl_block = texture_block_gl_format(block, is_srgb);
+    // Scratch for the encoder, sized for level 0 and reused by every level under
+    // it. Allocated before anything is uploaded so a failure falls back to the
+    // uncompressed path cleanly rather than half way down a chain.
+    unsigned char* scratch = NULL;
+    if (gl_block != 0) {
+        scratch = malloc(texture_block_image_bytes(block, width, height));
+        if (!scratch) {
+            log_error("texture compression: out of memory at %dx%d, storing uncompressed", width,
+                      height);
+            block = TEXTURE_BLOCK_NONE;
+        }
+    }
+    const bool compressed = (gl_block != 0 && block != TEXTURE_BLOCK_NONE);
+    if (out_internal_format)
+        *out_internal_format = compressed ? gl_block : internal_format;
+
+    if (compressed)
+        texture_upload_compressed_level(block, gl_block, 0, width, height, channels, pixels,
+                                        scratch);
+    else
+        glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0, data_format,
+                     GL_UNSIGNED_BYTE, pixels);
+
+    if (width <= 1 && height <= 1) {
+        free(scratch);
         return true;
+    }
 
     float lut[256];
     texture_srgb_decode_lut(lut);
@@ -305,6 +400,7 @@ static bool texture_upload_with_mips(GLenum internal_format, GLenum data_format,
     if (!a || !b) {
         free(a);
         free(b);
+        free(scratch);
         log_error("texture mip chain: out of memory at %dx%d", width, height);
         return false;
     }
@@ -315,9 +411,16 @@ static bool texture_upload_with_mips(GLenum internal_format, GLenum data_format,
     for (GLint level = 1; sw > 1 || sh > 1; level++) {
         const int dw = sw > 1 ? sw / 2 : 1;
         const int dh = sh > 1 ? sh / 2 : 1;
+        // Filtered from the UNCOMPRESSED parent, never from a decoded block. The
+        // chain is a chain of images, not of encodings, so quantisation error
+        // cannot compound down it.
         texture_box_halve(src, sw, sh, channels, is_srgb, lut, dst);
-        glTexImage2D(GL_TEXTURE_2D, level, (GLint)internal_format, dw, dh, 0, data_format,
-                     GL_UNSIGNED_BYTE, dst);
+        if (compressed)
+            texture_upload_compressed_level(block, gl_block, level, dw, dh, channels, dst,
+                                            scratch);
+        else
+            glTexImage2D(GL_TEXTURE_2D, level, (GLint)internal_format, dw, dh, 0, data_format,
+                         GL_UNSIGNED_BYTE, dst);
         src = dst;
         dst = (dst == a) ? b : a;
         sw = dw;
@@ -326,7 +429,48 @@ static bool texture_upload_with_mips(GLenum internal_format, GLenum data_format,
 
     free(a);
     free(b);
+    free(scratch);
     return true;
+}
+
+// GPU footprint including the chain. The 4/3 is the mip tail; a compressed level
+// is counted from its own block arithmetic, which is where the saving actually
+// shows up.
+size_t texture_gpu_bytes(const Texture* texture) {
+    if (!texture || texture->width <= 0 || texture->height <= 0)
+        return 0;
+    size_t bytes = 0;
+    int w = texture->width, h = texture->height;
+    for (;;) {
+        switch (texture->internal_format) {
+        case GL_COMPRESSED_RED_RGTC1:
+            bytes += texture_block_image_bytes(TEXTURE_BLOCK_BC4, w, h);
+            break;
+        case GL_COMPRESSED_RG_RGTC2:
+            bytes += texture_block_image_bytes(TEXTURE_BLOCK_BC5, w, h);
+            break;
+        case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+        case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
+            bytes += texture_block_image_bytes(TEXTURE_BLOCK_DXT1, w, h);
+            break;
+        case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+        case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+            bytes += texture_block_image_bytes(TEXTURE_BLOCK_DXT5, w, h);
+            break;
+        default:
+            // Four bytes whatever the channel count: the formats this engine
+            // passes are UNSIZED, so the driver picks the storage and every
+            // desktop one pads RGB to RGBA. Counting three here would report a
+            // saving that does not exist.
+            bytes += (size_t)w * (size_t)h * 4;
+            break;
+        }
+        if (w <= 1 && h <= 1)
+            break;
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+    }
+    return bytes;
 }
 
 Texture* create_texture() {
@@ -587,6 +731,13 @@ Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bo
 
 Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
                                         TextureAlpha alpha) {
+    // Unstated use means COLOUR, which compresses nothing -- so a caller that has
+    // not been taught the distinction keeps exactly the storage it had.
+    return load_texture_path_into_pool_used(pool, filepath, is_srgb, alpha, TEXTURE_USE_COLOUR);
+}
+
+Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepath, bool is_srgb,
+                                          TextureAlpha alpha, TextureUse use) {
     if (!pool || !filepath) {
         log_error("Invalid pool or filepath");
         return NULL;
@@ -688,8 +839,9 @@ Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath,
     texture_gl_formats(nrChannels, is_srgb, &internal_format, &data_format);
 
     // Upload texture data
+    const TextureBlockFormat block = texture_block_format_for(use, nrChannels, is_srgb);
     texture_upload_with_mips(internal_format, data_format, width, height, nrChannels, is_srgb,
-                             data);
+                             block, data, &internal_format);
     check_gl_error("texture upload");
 
     // Clean up
@@ -762,9 +914,15 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
     GLenum data_format;
     texture_gl_formats(channels, is_srgb, &internal_format, &data_format);
 
-    // Upload texture data
+    // Upload texture data.
+    //
+    // TEXTURE_USE_COLOUR, i.e. uncompressed, and for the same reason this path
+    // still INFERS its dilate above: it takes no statement of what the image is.
+    // Every embedded and procedurally-built texture therefore keeps the storage
+    // it had. It wants the `_used` treatment the moment a procedural normal map
+    // is worth compressing -- apps/forest bakes several.
     texture_upload_with_mips(internal_format, data_format, width, height, channels, is_srgb,
-                             dilated ? dilated : pixels);
+                             TEXTURE_BLOCK_NONE, dilated ? dilated : pixels, &internal_format);
     free(dilated);
     check_gl_error("embedded texture upload");
 

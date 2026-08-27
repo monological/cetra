@@ -148,6 +148,37 @@ typedef enum TextureAlpha {
     TEXTURE_ALPHA_DATA,    // a height, an occlusion, a mask: never touch the rgb
 } TextureAlpha;
 
+/*
+ * What a texture IS, which decides how it may be block-compressed (spec 11.85).
+ *
+ * The same problem TextureAlpha solved one field over: the loader knows only
+ * `is_srgb`, which is false for a tangent normal and false for a roughness mask
+ * alike, and those two want opposite formats. So the caller states it. The one
+ * place that knows is import.c's texture_mappings table, where the assimp type
+ * already sits beside the colour-space flag.
+ *
+ * TEXTURE_USE_NORMAL is the one with a consequence beyond storage: BC5 carries
+ * two channels and pbr_frag RECONSTRUCTS Z, because no block format carries
+ * three. Tagging something a normal that is not one loses its third channel.
+ */
+typedef enum TextureUse {
+    TEXTURE_USE_COLOUR, // albedo, emissive, sheen: sRGB, and the last to compress
+    TEXTURE_USE_NORMAL, // a tangent-space normal, and nothing else
+    TEXTURE_USE_DATA,   // roughness, metalness, AO, opacity, height
+} TextureUse;
+
+// Global switch behind --no-texture-compression. Off leaves every upload path
+// byte-identical to the pre-11.85 engine, which is what makes it the bisect
+// lever rather than merely a setting.
+void texture_set_compression_enabled(bool enabled);
+bool texture_compression_enabled(void);
+
+// Bytes this texture occupies on the GPU including its mip chain, derived from
+// the internal format the driver actually chose rather than from the channel
+// count the loader passed. Unsized formats mean those two can disagree, which is
+// exactly why the probe asks.
+size_t texture_gpu_bytes(const Texture* texture);
+
 // As above, but SAYS what the alpha means instead of inferring it from is_srgb.
 //
 // The inference is right for everything loaded through the plain form: `is_srgb`
@@ -158,6 +189,15 @@ typedef enum TextureAlpha {
 // asks directly rather than lying about its colour space to get the repair.
 Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
                                         TextureAlpha alpha);
+
+// And the same again for what the texture IS, which decides its block format.
+// A third entry point rather than a fourth parameter on the one above: the two
+// facts are independent, every existing caller of `_ex` means TEXTURE_USE_COLOUR
+// by construction (it is the decal path), and widening `_ex` would put a second
+// unexplained enum at each of its call sites -- the exact legibility problem its
+// own header comment says the named pair was introduced to avoid.
+Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepath, bool is_srgb,
+                                          TextureAlpha alpha, TextureUse use);
 
 // The pool does NOT keep `pixels`. glTexImage2D takes GL's own copy and Texture
 // stores no pixel pointer, so the caller's buffer is dead the moment this
