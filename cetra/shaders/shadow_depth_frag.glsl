@@ -22,6 +22,8 @@ uniform vec2 uvOffset;
 uniform vec2 uvScale;
 uniform float uvRotation;
 
+#include "alpha_coverage.glsl"
+
 // Deliberately NOT the whole of pbr_frag's chain, and the two omissions are
 // different in kind.
 //
@@ -45,7 +47,13 @@ void main()
         float alpha = texture(albedoTex, uv).a;
         if (vertexColorExists > 0)
             alpha *= VertexColor.a;
-        if (alpha < alphaCutoff)
+        // Through the shared rule, with a2c 0: a shadow map is single-sampled,
+        // so the binary branch is the only one that applies and this is exactly
+        // the `alpha < alphaCutoff` it replaces. Stated once anyway -- the
+        // camera pass diverged from this cutoff for two specs, and it is the
+        // divergence rather than the value that made a leaf and its own shadow
+        // different shapes.
+        if (alphaMaskCoverage(alpha, alphaCutoff, 0) < 0.5)
             discard; // leaf cutout: the gaps between leaves must let light through
     }
 

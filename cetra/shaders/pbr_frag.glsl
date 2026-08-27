@@ -187,6 +187,7 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 #include "view.glsl"
 #include "velocity.glsl"
 #include "fresnel.glsl"
+#include "alpha_coverage.glsl"
 #include "ltc.glsl"
 // Indirect diffuse from a probe grid, when one is present (spec 9.7). Only the
 // diffuse IBL term changes; specular, clearcoat and sheen stay on the env map.
@@ -386,15 +387,17 @@ const float PI = 3.14159265359;
 // into white sparkle on normal-mapped metal -- get cut.
 const float BRDF_MAX = 1000.0;
 
-// With alpha-to-coverage active only fully invisible fragments are discarded
-// (fractional alpha becomes MSAA coverage); otherwise the binary cutoff
-// applies (alphaCutoff of 0 never discards since alpha is non-negative)
-const float A2C_MIN_ALPHA = 0.02;
-
-bool alphaBelowCutoff(float a)
-{
-    return a < (alphaToCoverage > 0 ? A2C_MIN_ALPHA : alphaCutoff);
-}
+// The least COVERAGE worth keeping. A fragment covering under 2% of a pixel
+// contributes nothing an 8-bit target can show, and on a single-sample buffer
+// there is nothing to dither into, so keeping it would write it at full
+// strength.
+//
+// This used to be a floor on raw ALPHA, and the difference is the whole of spec
+// 11.87: thresholding alpha at 0.02 renders every texel above it at full size,
+// which under MSAA replaced the authored cutoff with a fringe made of the alpha
+// falloff between the two. As a coverage floor it discards what it should and
+// nothing else.
+const float A2C_MIN_COVERAGE = 0.02;
 
 // UV transform for KHR_texture_transform
 vec2 transformUV(vec2 uv) {
@@ -1102,9 +1105,26 @@ void main() {
         texAlpha *= VertexColor.a;
     }
 
-    // Alpha cutoff for hair/foliage - discard early before expensive lighting
-    if (alphaBelowCutoff(texAlpha)) {
-        discard;
+    /*
+     * The masked silhouette, resolved to COVERAGE and written back into
+     * texAlpha (spec 11.87).
+     *
+     * In place, and HERE, because everything downstream reads texAlpha and
+     * nothing between here and the exits needs the raw value: the albedo debug
+     * view, `coverage`, `finalOpacity`, the moments and both depth-only exits
+     * all follow from it. That is what makes one edit reach every pass -- and
+     * it has to stay ABOVE the binary prepass return below, or the prepass and
+     * the shading pass compute different sample masks and GL_LEQUAL deletes
+     * the ones they disagree on.
+     *
+     * Only for a MASKED material. finalOpacity also carries an ALPHA_BLEND
+     * surface's real translucency into the OIT moments, which is a quantity and
+     * not a cutout -- sharpening it would quantise glass to a one-pixel edge.
+     */
+    if (alphaMasked > 0) {
+        texAlpha = alphaMaskCoverage(texAlpha, alphaCutoff, alphaToCoverage);
+        if (texAlpha < A2C_MIN_COVERAGE)
+            discard;
     }
 
     /*
