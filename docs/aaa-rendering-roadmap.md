@@ -3031,6 +3031,18 @@ fixture's hue wheel reads 8.4, which is five times what raiden shows and is why 
 exists. Colour is **opt-in and off by default** — the one default here chosen by taste, since
 BC5 and BC4 are unobservable and DXT is a judgement.*
 
+***Its leftovers closed in spec 11.86, and the largest one had been mis-sized.*** *The deferred
+"seven texture entry points" item was booked as a 27-site sweep. The sweep was the smaller half:
+the eight-step body from decoded pixels to a pooled Texture was written out **three times**, and
+11.85 had shared only the upload. The three had already drifted — `TextureAlpha` reached one of
+them, and the async path recovered `is_srgb` by testing an internal format that has no sRGB
+variant below three channels, so a greyscale albedo mipped in the wrong space on the streamed
+path alone. Seven entry points became three over a `TextureDesc`; two of the seven had no
+callers.* ***And the coverage gap this entry never recorded is the one that mattered***:
+`clearcoat_fixture` *was in neither harness, which is why the coat-normal defect above reached a
+commit. It has a golden and a five-arm group now, each arm falsified by a named mutation.
+`apps/tree` also stopped leaving 13 MB on the table (54.667 → 41.667) for 0.081 of a code.*
+
 ### F1 (original entry) — Effort M
 Every texture in this engine uploads uncompressed, and **no document has ever said so**.
 `texture_gl_formats` (`texture.c:185-197`) hands `glTexImage2D` the UNSIZED internal formats
