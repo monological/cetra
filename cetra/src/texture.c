@@ -357,6 +357,35 @@ void texture_set_colour_compression_enabled(bool enabled) {
     g_texture_compression_colour = enabled;
 }
 
+/*
+ * Does this driver have the S3TC formats? Asked ONCE, lazily, and cached.
+ *
+ * Lazy because the answer needs a live GL context while the compression
+ * switches are set before the engine exists; cached because it is asked per
+ * texture and the query walks the extension list.
+ *
+ * RGTC IS NOT QUERIED AND DOES NOT NEED TO BE. BC4 and BC5 are core in OpenGL
+ * 3.0, so every context this engine can create has them -- which is also why
+ * they carry no extension string and read as absent to a grep. S3TC is a real
+ * extension and genuinely may be missing; without this check, asking for colour
+ * compression there raises INVALID_ENUM and uploads nothing, which is a BLACK
+ * texture rather than a merely uncompressed one.
+ */
+static int g_s3tc_supported = -1; // -1 = not asked yet
+
+static bool texture_s3tc_available(void) {
+    if (g_s3tc_supported < 0) {
+        g_s3tc_supported = glewIsSupported("GL_EXT_texture_compression_s3tc") ? 1 : 0;
+        // Said out loud, once. A caller who passed --texture-compress-colour and
+        // silently got uncompressed storage would read the probe's SRGB rows as a
+        // fault in the feature rather than as a property of the driver.
+        if (!g_s3tc_supported)
+            log_warn("GL_EXT_texture_compression_s3tc is absent; colour textures stay "
+                     "uncompressed (BC4/BC5 are core and unaffected)");
+    }
+    return g_s3tc_supported == 1;
+}
+
 // Which block format a texture takes, or NONE.
 //
 // COLOUR is the one use behind a second switch, off by default: BC5 and BC4 cost
@@ -384,7 +413,7 @@ static TextureBlockFormat texture_block_format_for(TextureUse use, int channels)
             // chosen by texture_block_gl_format, which is where the colour space is
             // actually known. Both quantise endpoints to RGB565, visibly poor on a
             // smooth gradient -- so this is the branch the error budget is about.
-            if (!g_texture_compression_colour)
+            if (!g_texture_compression_colour || !texture_s3tc_available())
                 return TEXTURE_BLOCK_NONE;
             if (channels == 4)
                 return TEXTURE_BLOCK_DXT5;

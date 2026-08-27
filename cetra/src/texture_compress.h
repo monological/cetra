@@ -20,6 +20,14 @@
  * extension string at all, and works. Verified by probe, not by reading version
  * numbers.
  *
+ * THE TWO FAMILIES CARRY DIFFERENT GUARANTEES, which is why only one is queried.
+ * RGTC is CORE in GL 3.0, so BC4 and BC5 exist on every context this engine can
+ * create. S3TC is an EXTENSION and may genuinely be absent on another driver, so
+ * texture.c asks once and declines DXT where it is -- the colour path then
+ * degrades to uncompressed storage instead of raising INVALID_ENUM and uploading
+ * nothing, which would be a BLACK texture rather than a larger one. The default
+ * path cannot fail on a conformant driver; the opt-in path cannot fail silently.
+ *
  * Nothing here touches GL. These are pure functions over pixel buffers so the
  * encoder can be tested, threaded and moved into an offline cook (F2) without
  * dragging a context along.
