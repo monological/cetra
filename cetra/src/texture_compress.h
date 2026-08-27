@@ -29,19 +29,16 @@
 typedef enum TextureBlockFormat {
     TEXTURE_BLOCK_NONE = 0, // store uncompressed
     TEXTURE_BLOCK_BC4,      // one channel, 8 bytes/block  -- masks
-    TEXTURE_BLOCK_BC5,      // two channels, 16 bytes/block -- tangent normals, Z reconstructed
-    TEXTURE_BLOCK_DXT1,     // rgb, 8 bytes/block
-    TEXTURE_BLOCK_DXT5,     // rgb + a, 16 bytes/block
+    // Two channels, 16 bytes/block. The third is REBUILT by the shader: no block
+    // format here carries three, so a compressed tangent normal always costs a
+    // consumer that knows to rebuild Z.
+    TEXTURE_BLOCK_BC5,
+    TEXTURE_BLOCK_DXT1, // rgb, 8 bytes/block
+    TEXTURE_BLOCK_DXT5, // rgb + a, 16 bytes/block
 } TextureBlockFormat;
 
 // Bytes one 4x4 block occupies. 0 for TEXTURE_BLOCK_NONE.
 size_t texture_block_bytes(TextureBlockFormat format);
-
-// How many channels of the source the format actually stores. BC5 keeps two and
-// the third is RECONSTRUCTED by the shader -- there is no block format that
-// carries three, so a compressed tangent normal always costs a shader that knows
-// to rebuild Z.
-int texture_block_channels(TextureBlockFormat format);
 
 // Size of the encoded image, over ceil(w/4) x ceil(h/4) blocks.
 size_t texture_block_image_bytes(TextureBlockFormat format, int width, int height);

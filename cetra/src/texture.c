@@ -475,11 +475,19 @@ size_t texture_gpu_bytes(const Texture* texture) {
         case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
             bytes += texture_block_image_bytes(TEXTURE_BLOCK_DXT5, w, h);
             break;
+        case GL_RED:
+            bytes += (size_t)w * (size_t)h;
+            break;
+        case GL_RG:
+            bytes += (size_t)w * (size_t)h * 2;
+            break;
         default:
-            // Four bytes whatever the channel count: the formats this engine
-            // passes are UNSIZED, so the driver picks the storage and every
-            // desktop one pads RGB to RGBA. Counting three here would report a
-            // saving that does not exist.
+            // Four bytes for anything with colour in it, including the THREE
+            // channel formats: the ones this engine passes are UNSIZED, the
+            // driver picks the storage, and every desktop one pads RGB to RGBA.
+            // Counting three would report a saving that does not exist -- and
+            // counting four for GL_RED, which really is one byte, inflates the
+            // uncompressed side of every comparison a mask takes part in.
             bytes += (size_t)w * (size_t)h * 4;
             break;
         }
@@ -489,6 +497,25 @@ size_t texture_gpu_bytes(const Texture* texture) {
         h = h > 1 ? h / 2 : 1;
     }
     return bytes;
+}
+
+// Is this STORED format sRGB-encoded?
+//
+// A predicate rather than two equality tests at each site, because block
+// compression added two more spellings of the same fact and the sites that test
+// it are reading a format the loader did not choose. Getting it wrong is silent:
+// texture_mean_rgb hands back an ENCODED value called linear, which 11.49's
+// emissive fit turns into a panel several times too bright, and nothing errors.
+static bool texture_format_is_srgb(GLenum internal_format) {
+    switch (internal_format) {
+    case GL_SRGB:
+    case GL_SRGB_ALPHA:
+    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static const char* texture_format_name(GLenum internal_format) {
@@ -643,8 +670,7 @@ bool texture_mean_color(Texture* texture, float* out_rgb) {
     // is STORED -- no decode, where the sampler would have done one. Filtering an
     // sRGB format is specified to happen in linear space, so the top mip is the
     // encoding of the linear mean and decoding it here recovers that mean.
-    bool is_srgb =
-        texture->internal_format == GL_SRGB || texture->internal_format == GL_SRGB_ALPHA;
+    const bool is_srgb = texture_format_is_srgb(texture->internal_format);
     for (int c = 0; c < 3; c++) {
         float v = (float)texel[c] / 255.0f;
         out_rgb[c] = is_srgb ? (v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f)) : v;
@@ -867,8 +893,7 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
          * renders one of the two consumers a full sRGB decode wrong -- markedly
          * too dark or too bright -- with nothing to read.
          */
-        const bool cached_srgb = cached_texture->internal_format == GL_SRGB ||
-                                 cached_texture->internal_format == GL_SRGB_ALPHA;
+        const bool cached_srgb = texture_format_is_srgb(cached_texture->internal_format);
         if (cached_srgb != is_srgb)
             log_warn("texture '%s' is already loaded as %s and is now wanted as %s; "
                      "the pool keys on path, so the first load wins",

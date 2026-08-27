@@ -15,21 +15,6 @@ size_t texture_block_bytes(TextureBlockFormat format) {
     }
 }
 
-int texture_block_channels(TextureBlockFormat format) {
-    switch (format) {
-    case TEXTURE_BLOCK_BC4:
-        return 1;
-    case TEXTURE_BLOCK_BC5:
-        return 2;
-    case TEXTURE_BLOCK_DXT1:
-        return 3;
-    case TEXTURE_BLOCK_DXT5:
-        return 4;
-    default:
-        return 0;
-    }
-}
-
 size_t texture_block_image_bytes(TextureBlockFormat format, int width, int height) {
     const size_t bytes = texture_block_bytes(format);
     if (bytes == 0 || width <= 0 || height <= 0)
@@ -224,18 +209,19 @@ static void encode_dxt_colour(const unsigned char tile[16 * 4], bool force_four,
     unsigned short c0 = pack565((int)(e0[0] + 0.5f), (int)(e0[1] + 0.5f), (int)(e0[2] + 0.5f));
     unsigned short c1 = pack565((int)(e1[0] + 0.5f), (int)(e1[1] + 0.5f), (int)(e1[2] + 0.5f));
 
-    bool swapped = false;
+    // For DXT1 the ORDER of the endpoints is the mode bit, so c0 must be made the
+    // greater to select the four-colour mode. The indices below are chosen
+    // against the palette built after this, so the swap needs no fixup of its
+    // own.
+    //
+    // Equal endpoints are left alone: they select the three-colour mode, whose
+    // index 3 is transparent black -- but index 0 decodes to c0 under both modes
+    // and the loop below picks it for every texel of what is by definition a
+    // constant block. Safe rather than merely tolerated.
     if (!force_four && c0 < c1) {
         const unsigned short t = c0;
         c0 = c1;
         c1 = t;
-        swapped = true;
-    }
-    if (!force_four && c0 == c1) {
-        // Equal endpoints select the three-colour mode, whose index 3 is
-        // transparent black. Index 0 decodes to c0 for both modes, and the loop
-        // below will choose it for every texel of what is by definition a
-        // constant block, so this is safe rather than merely tolerated.
     }
 
     int p0[3], p1[3];
@@ -254,7 +240,6 @@ static void encode_dxt_colour(const unsigned char tile[16 * 4], bool force_four,
             pal[3][c] = 0;
         }
     }
-    (void)swapped;
 
     unsigned int bits = 0;
     for (int i = 0; i < 16; i++) {
