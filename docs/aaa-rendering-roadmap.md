@@ -2969,6 +2969,86 @@ on the tightest sweep so a grid that stopped sweeping reads as a failure rather 
 bound.
 **Depends on:** nothing. **Wall 1:** unaffected.
 
+## Track F — The asset pipeline
+
+*Added after B15 closed the table, by the comparison-against-other-engines habit this document
+recommends to itself and had run exactly once (11.59, which added D6–D11). Every other track asks
+what the renderer DOES; this one asks how content reaches it, and the answer had never been
+written down anywhere. Note `docs/game-engine-status.md` — a third document, and the one that owns
+everything that is not the graphics pipeline — already books audio, animation blending, IK,
+gamepad, save and UI. It does **not** book either row below.*
+
+### F1. Block-compressed textures — Effort M
+Every texture in this engine uploads uncompressed, and **no document has ever said so**.
+`texture_gl_formats` (`texture.c:185-197`) hands `glTexImage2D` the UNSIZED internal formats
+`GL_RED` / `GL_RG` / `GL_RGB` / `GL_RGBA` / `GL_SRGB` / `GL_SRGB_ALPHA` — so the engine does not
+currently state what its textures are stored as at all, and the driver picks. There is not one
+`GL_COMPRESSED_*` token in cetra's own source; every hit in the tree is vendored glew or assimp.
+
+Measured on `apps/forest`, both logged at allocation and neither compressed: the material texture
+array is **11 layers at 2048x1024, 117.3 MB**, and the composite cache's page pair another
+**42.7 MB**.
+
+**What this platform can actually take, measured rather than assumed — and it is NOT what "BC7"
+would suggest.** Apple's GL 4.1 Metal driver advertises exactly one compression extension,
+`GL_EXT_texture_compression_s3tc`. BPTC is core in GL **4.2**, one version above the ceiling, and
+is not exposed as an extension either: `glCompressedTexImage2D` with
+`GL_COMPRESSED_RGBA_BPTC_UNORM` returns `GL_INVALID_ENUM`. **So BC7 is unreachable here**, and any
+plan written around it dies in its first week. What uploads cleanly is RGTC (core since GL 3.0, so
+it carries no extension string to grep for — the reason it reads as absent) and the whole S3TC set
+*including* the sRGB variants:
+
+| format | vs today | for |
+|---|---|---|
+| BC5 `GL_COMPRESSED_RG_RGTC2` | 3-4:1 | normals — two independent 8-bit channels, Z reconstructed |
+| BC4 `GL_COMPRESSED_RED_RGTC1` | 6-8:1 | single-channel masks (rough / metal / AO / opacity) |
+| DXT5 sRGB `GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT` | 4:1 | albedo with alpha |
+| DXT1 sRGB `GL_COMPRESSED_SRGB_S3TC_DXT1_EXT` | 6:1 | albedo without |
+
+**The material texture array is where the win is and also where the problem is.** A
+`sampler2DArray` has ONE internal format for every layer, and since 11.60 and 11.73 that array's
+tenants are masks, layer albedos, packed layer surface maps, splats and decal images — which want
+BC4, DXT5-sRGB, BC5, BC4 and DXT5 respectively. **This is the THIRD time the array's
+single-policy rule has bitten**: one canonical size (11.60), one mip policy (`ocean.glsl`'s note),
+and now one block format. DXT5 on a normal map is precisely the case BC5 exists to avoid, so the
+honest answer is likely to SPLIT the array by format rather than pick a compromise — which costs
+declarations against Wall 1, and is the thing to price before anything is built.
+
+**Nothing here is a look change and everything here is a look risk.** Block compression is lossy,
+so unlike every other item in this document **the 0 px bar is unavailable by construction**. The
+acceptance test has to be a stated per-format error budget measured against the uncompressed
+frame, with the goldens re-baked deliberately. DXT1/DXT5 quantise to RGB565 endpoints and are
+visibly bad on smooth gradients, so a per-texture format CHOICE is part of the item rather than a
+global switch.
+**Depends on:** nothing. **Wall 1:** unaffected by compression itself; possibly WORSENED if the
+array splits by format, which is the first thing to measure.
+
+### F2. An offline asset cook — Effort L
+There is no cooked asset format and no build step that produces one. Every app parses source
+assets through assimp at run time, decodes PNG/JPEG at run time (async, a worker pool sized
+cores-2 clamped to [2,8]), and bakes its procedural content at startup.
+
+**Its beneficiaries are already measured; they have just never been read as one item.** 11.65
+measured `apps/forest` starting in **6.58 s debug against 1.36 s release** — procedural texture
+bakes, 20 cluster-DAG builds, the scatter and erosion, all redone on every launch. 11.64 then
+found the largest single cost inside that is **Jolt's per-region BVH build at 85% of collider
+time**, and 24x between build types. None of that work depends on anything known only at run time.
+
+**The precedent already exists and is one subsystem wide.** `.cts` (11.69) is a cooked,
+offline-produced, streamed format with a manifest and a mip pyramid **the file stores rather than
+re-derives** — written because terrain needed it, and never generalised. F2 is that shape applied
+to everything else: block-compressed textures with their mip chains (F1), packed vertex buffers,
+prebuilt LOD chains and cluster DAGs, and serialized Jolt shapes.
+
+**Decide first what a cook may NOT do**, because this engine's determinism story rests on
+run-time derivation: `terrain_field_seed`, the erosion digest and `cetra_bake_bands` are all
+bit-identical at any worker count WITHIN one build, and this document's own rule is that two
+builds are not two runs. A cooked artefact crosses that line by construction — produced by one
+build, consumed by another — so the format needs a version and a content hash that REFUSES a stale
+artefact rather than quietly rendering one.
+**Depends on:** F1 (soft — the cook's first payload is compressed textures). **Wall 1:**
+unaffected.
+
 ## Sequencing — tiers & rationale
 
 **Tier 1 — the AAA leap (environments):**
@@ -3093,6 +3173,8 @@ not scheduled.
 | 48 | **B13 The moon** | L | **DONE (11.82).** See the B13 entry for the as-built record — phase is derived rather than authored, a full moon is flat rather than Lambertian, the disc size is shared with the sun, and the surface (relief AND albedo, ~43,000 overprinting craters) is baked at startup because a per-pixel lattice caps the population rather than the cost. Carries the spec's largest finding: it passed every arm while not looking like the Moon, and the look-calibration phase that was meant to catch that had been scoped as a two-constant tuning step. Original row: The dominant night light (~0.25 lux full, ~250× the floor) and how game nights become readable. A LIGHT, not a backdrop: disc + phase + earthshine, plus a real casting directional following phase and altitude. The sun's split applies verbatim — analytic disc in the background only (the env-bake firefly rule), energy as the analytic light, `sky_apply_sun_to_light` as the template, 3 casting-directional slots already exist. New: phase, a second transmittance-tinted directional, and the authoring surface (the 11.79 plumbing shape again). Arguably ahead of B11 on look value: a moonlit static night beats a cycled black one. |
 | 49 | **B14 Purkinje shift** | S/M | **DONE (11.83).** See the B14 entry for the as-built record — it is NOT in the finishing stack (that is all downstream of the tonemap; it sites by the optical chain, after the lens and before the response curve), and the metered-luminance drive this row proposed does not exist under `--no-auto-exposure`, which is every golden. The weight is two gates MULTIPLIED, because at 4.2 stops of day-to-night range a daylight shadow and a night frame overlap and no per-pixel threshold separates them. Original row: Rod vision: desaturate + blue-shift in dim light (Kirk & O'Brien 2011) — what makes a dark frame read as night rather than as an underexposed day. Lives in `tonemap_frag`, driven by the metered luminance the CPU already reads back. A hypothesis row for two reasons: its position in a finishing stack with two standing order contracts, and a blast radius of every dim frame in every app — needs an opt-in, a gate arm, and defaults chosen against real night frames, which do not exist until B12/B13 land. Judge it last. |
 | 50 | **B15 Water at night** — **DONE (11.84).** See the B15 entry for the as-built record. **Original row:** | M | The moon's best image, and the renderer cannot produce it: `tree` at sun −12 is a black tree against a full star field over a **flat daytime turquoise sea**. Two independent defects. The in-scatter is an authored ABSOLUTE constant (`water.c:1851` into `water_frag.glsl:1056`) multiplied by nothing that knows how lit the water is, so it behaves like an emissive and never dims — a stated design that was only ever exercised in daylight. And water sees exactly ONE directional and picks the sky's SUN by name (`water.c:1876`, spec 11.41's fix for a different bug), so at night it holds a below-horizon light of zero radiance and never reaches the moon — killing the glitter, the Cox-Munk lobe and the caustics together. Fix the first and the frame stops being wrong; fix the second and it becomes the shot. M rather than S because 2 goldens and 35 arms across the `water` and `beach` groups are calibrated against the current in-scatter. **Arguably before B14**, whose own row says to judge it against real night frames. |
+| 51 | **F1 Block-compressed textures** | M | Every texture uploads UNCOMPRESSED and no document had ever said so — `texture_gl_formats` passes unsized internal formats, so the engine does not state its own storage, and there is not one `GL_COMPRESSED_*` in cetra's own source. Forest's material array alone is 117.3 MB and its page pair 42.7 MB. **BC7 is unreachable on this platform** — BPTC is core in GL 4.2, is not exposed as an extension, and `GL_COMPRESSED_RGBA_BPTC_UNORM` returns `GL_INVALID_ENUM`; RGTC (BC4/BC5) and the full sRGB S3TC set upload cleanly, verified by probe. The catch is that a `sampler2DArray` has one internal format for every layer, and that array's five tenant kinds want four different block formats — the third time its single-policy rule has bitten. **The only item in this document whose 0 px bar is unavailable by construction**, since compression is lossy: it needs a per-format error budget instead. |
+| 52 | **F2 An offline asset cook** | L | No cooked format and no build step that makes one: assimp at run time, PNG decode at run time, procedural bakes at startup. Its beneficiaries are already measured and were never read as one item — forest starts in 6.58 s debug / 1.36 s release (11.65), of which Jolt's per-region BVH build is 85% of collider time (11.64). `.cts` (11.69) is the precedent and is one subsystem wide: a cooked, streamed format whose file STORES the pyramid rather than re-deriving it. The hard part is not the format, it is deciding what a cook may not do — this document's determinism rule is that two builds are not two runs, and a cooked artefact crosses that line by construction, so it needs a hash that refuses a stale one. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.
@@ -3161,6 +3243,18 @@ anyway and the measurement went the other way: the 25-tap end of that range is m
 terrain, and the cache takes it to 5-9 independent of layer count. Nothing is waiting on stage 2's
 paging until the macro itself gains dense content.
 
+**And after B15 closed row 50 the table was, for the first time, empty of anything with a number
+behind it** -- 32 and 37 both booked against themselves, 38 rejected. So the habit two paragraphs
+below was run rather than merely recommended, and it refilled the column exactly as it did in
+11.59: **rows 51 and 52 (F1, F2) are a subject this document never contained.** The finding that
+matters most is the one that would have killed a spec in its first week -- **"BC7/BC5" is the
+obvious plan and BC7 does not exist on this platform**, since BPTC is core in GL 4.2 and Apple's
+4.1 exposes neither it nor an extension for it. RGTC reads as absent for the opposite reason: it
+is core in GL 3.0, so it carries no extension string to grep for and is available anyway. Neither
+half survives being reasoned about; both took a probe. Same lesson as 11.57's, one layer down --
+**re-derive the constraint before accepting the conclusion, and for a platform capability that
+means asking the driver, not the version number.**
+
 **The lesson 11.60 adds is about this table rather than about terrain.** 11.52 recorded that a row's
 stated reasons can rot; 11.53 that a row can be wrong about what it describes; 11.56 that a row's
 premise can name a defect another spec already fixed; 11.59 that the table can be missing an entire
@@ -3175,7 +3269,13 @@ have cost an L as described.
 another spec already fixed. This is the fourth kind and the largest: **a table can be complete with
 respect to itself and still be missing a subject**, and no amount of reading the rows finds it,
 because the absence is not written anywhere. What found it was comparing against engines outside this
-document. Worth doing again for the tracks that have never had that comparison.
+document. Worth doing again for the tracks that have never had that comparison. **Run a second time
+after B15, and it produced Track F** — the asset pipeline, rows 51 and 52. The comparison found
+four candidate subjects and only two were genuinely missing: animation blending, IK and audio are
+all already booked, with effort estimates, in `docs/game-engine-status.md`, **a third document this
+one has never once cited.** So the habit needs a companion: before booking a subject as absent,
+check the other documents, because "not in this table" and "not written down" are different claims
+and this table is not the whole of what is written down.
 
 **39, 40 and 41 are now built (11.59), and the fifth lesson is about the TEST rather than the row.**
 Three of that spec's eight planned arms were green against the exact mutation each existed to catch,
