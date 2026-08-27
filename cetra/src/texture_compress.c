@@ -1,17 +1,18 @@
 #include "texture_compress.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 size_t texture_block_bytes(TextureBlockFormat format) {
     switch (format) {
-    case TEXTURE_BLOCK_BC4:
-    case TEXTURE_BLOCK_DXT1:
-        return 8;
-    case TEXTURE_BLOCK_BC5:
-    case TEXTURE_BLOCK_DXT5:
-        return 16;
-    default:
-        return 0;
+        case TEXTURE_BLOCK_BC4:
+        case TEXTURE_BLOCK_DXT1:
+            return 8;
+        case TEXTURE_BLOCK_BC5:
+        case TEXTURE_BLOCK_DXT5:
+            return 16;
+        default:
+            return 0;
     }
 }
 
@@ -22,6 +23,25 @@ size_t texture_block_image_bytes(TextureBlockFormat format, int width, int heigh
     const size_t bw = ((size_t)width + 3) / 4;
     const size_t bh = ((size_t)height + 3) / 4;
     return bw * bh * bytes;
+}
+
+// What a format needs of its source. The gather replicates red into missing
+// channels, which is silent and wrong for the two-channel formats -- see the
+// header. Checked rather than assumed, because the caller that gets it wrong
+// renders a plausible picture.
+static int texture_block_min_channels(TextureBlockFormat format) {
+    switch (format) {
+        case TEXTURE_BLOCK_BC4:
+            return 1;
+        case TEXTURE_BLOCK_BC5:
+            return 2;
+        case TEXTURE_BLOCK_DXT1:
+            return 3;
+        case TEXTURE_BLOCK_DXT5:
+            return 4;
+        default:
+            return 0;
+    }
 }
 
 // Gather one 4x4 tile, replicating the last real row/column where the image does
@@ -294,7 +314,8 @@ static void encode_dxt_colour(const unsigned char tile[16 * 4], bool force_four,
 void texture_block_encode(TextureBlockFormat format, const unsigned char* src, int width,
                           int height, int channels, unsigned char* dst) {
     const size_t block = texture_block_bytes(format);
-    if (block == 0 || !src || !dst || width <= 0 || height <= 0)
+    if (block == 0 || !src || !dst || width <= 0 || height <= 0 ||
+        channels < texture_block_min_channels(format))
         return;
 
     const int bw = (width + 3) / 4;
@@ -306,26 +327,26 @@ void texture_block_encode(TextureBlockFormat format, const unsigned char* src, i
             gather_block(src, width, height, channels, bx, by, tile);
             unsigned char* out = &dst[((size_t)by * (size_t)bw + (size_t)bx) * block];
             switch (format) {
-            case TEXTURE_BLOCK_BC4:
-                encode_bc4_channel(tile, 0, out);
-                break;
-            case TEXTURE_BLOCK_BC5:
-                // Two independent BC4 blocks, red then green. Independence is the
-                // point: a normal's X and Y have no shared range to exploit, and
-                // giving each its own endpoints is what makes this the format for
-                // tangent normals rather than a colour format pressed into it.
-                encode_bc4_channel(tile, 0, out);
-                encode_bc4_channel(tile, 1, out + 8);
-                break;
-            case TEXTURE_BLOCK_DXT1:
-                encode_dxt_colour(tile, false, out);
-                break;
-            case TEXTURE_BLOCK_DXT5:
-                encode_bc4_channel(tile, 3, out);
-                encode_dxt_colour(tile, true, out + 8);
-                break;
-            default:
-                break;
+                case TEXTURE_BLOCK_BC4:
+                    encode_bc4_channel(tile, 0, out);
+                    break;
+                case TEXTURE_BLOCK_BC5:
+                    // Two independent BC4 blocks, red then green. Independence is the
+                    // point: a normal's X and Y have no shared range to exploit, and
+                    // giving each its own endpoints is what makes this the format for
+                    // tangent normals rather than a colour format pressed into it.
+                    encode_bc4_channel(tile, 0, out);
+                    encode_bc4_channel(tile, 1, out + 8);
+                    break;
+                case TEXTURE_BLOCK_DXT1:
+                    encode_dxt_colour(tile, false, out);
+                    break;
+                case TEXTURE_BLOCK_DXT5:
+                    encode_bc4_channel(tile, 3, out);
+                    encode_dxt_colour(tile, true, out + 8);
+                    break;
+                default:
+                    break;
             }
         }
     }

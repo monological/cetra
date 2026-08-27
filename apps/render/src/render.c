@@ -73,13 +73,12 @@ static void print_usage(const char* prog) {
         "      --cam-target x,y,z Explicit look-at target (overrides --yaw/--pitch/--distance)\n");
     fprintf(stderr, "      --cam-up x,y,z     Explicit up vector (default: 0,1,0)\n");
     fprintf(stderr, "  -E, --exposure <f>     Fixed exposure: a linear multiplier, or an EV bias\n"
-            "                         (any sign) under a post.camera. Pins the frame\n");
+                    "                         (any sign) under a post.camera. Pins the frame\n");
     fprintf(stderr, "      --no-auto-exposure Fixed exposure instead of eye adaptation\n");
     fprintf(stderr, "      --auto-exposure    Keep adapting even where -E or a scene file pins\n");
     fprintf(stderr, "      --ground <radius>  Ground projection dome radius (default: 5x scene)\n");
     fprintf(stderr, "      --no-recenter      Keep the model's authored world position\n");
-    fprintf(stderr,
-            "      --no-flip-uv       Asset baked bottom-left origin (raw DCC exports;\n");
+    fprintf(stderr, "      --no-flip-uv       Asset baked bottom-left origin (raw DCC exports;\n");
     fprintf(stderr, "                         symptom of a wrong choice: mirrored labels)\n");
     fprintf(stderr, "      --flip-uv          Pin the default top-left interpretation\n");
     fprintf(stderr, "      --taa              Enable TAA in headless (temporal passes active;\n");
@@ -87,8 +86,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ground-height <m> HDR capture height above ground (default: 1.2)\n");
     fprintf(stderr, "      --no-ground        Disable HDR ground projection (infinite skybox)\n");
     fprintf(stderr, "      --no-key-light     Pure IBL lighting (no analytic lights/shadows)\n");
-    fprintf(stderr,
-            "      --point-light-grid N[,radius,intensity]  NxN point-light test grid\n");
+    fprintf(stderr, "      --point-light-grid N[,radius,intensity]  NxN point-light test grid\n");
     fprintf(stderr, "      --area-light px,py,pz,dx,dy,dz,w,h,I[,r,g,b]  LTC area panel\n");
     fprintf(stderr, "      --show-lights      Light gizmos (position + cull radius)\n");
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
@@ -121,18 +119,16 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --light-size <f>   Emitter size for penumbra (default: scene-scaled)\n");
     fprintf(stderr, "      --shadow-softness <f> PCSS softness multiplier (default: 1)\n");
     fprintf(stderr, "      --shadow-cascades <n> Shadow cascades per caster, 1-3 (default: 3)\n");
-    fprintf(stderr,
-            "      --shadow-center <x,y,z|auto>  World point the scene-fit map covers "
-            "(default: origin)\n");
+    fprintf(stderr, "      --shadow-center <x,y,z|auto>  World point the scene-fit map covers "
+                    "(default: origin)\n");
     fprintf(stderr, "      --csm-debug        Tint fragments by selected shadow cascade\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr,
             "      --no-spec-occlusion Let GTAO darken specular (alias for --spec-occ off)\n");
-    fprintf(stderr,
-            "      --spec-occ <m>     Specular occlusion: off, legacy, split "
-            "(default: split)\n");
+    fprintf(stderr, "      --spec-occ <m>     Specular occlusion: off, legacy, split "
+                    "(default: split)\n");
     fprintf(stderr, "      --spec-occ-debug   Show the AO visibility the scene multiplies by\n");
     fprintf(stderr, "      --bent-debug       Show the bent normal from the AO chain\n");
     fprintf(stderr, "      --no-ao-edge-filter Disable the depth-aware AO blur\n");
@@ -167,15 +163,12 @@ static void print_usage(const char* prog) {
                     "bounce)\n");
     fprintf(stderr,
             "      --gi-probes x,y,z  Probe grid counts (implies --gi-volume; default 8,4,8)\n");
-    fprintf(stderr,
-            "      --gi-rate <n>      Probes captured per frame while dirty (default 2)\n");
-    fprintf(stderr,
-            "      --gi-debug         Blit the probe atlas into the frame corner\n");
+    fprintf(stderr, "      --gi-rate <n>      Probes captured per frame while dirty (default 2)\n");
+    fprintf(stderr, "      --gi-debug         Blit the probe atlas into the frame corner\n");
     fprintf(stderr, "      --water            Water surface (spec 11.32)\n");
     fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
-    fprintf(stderr,
-            "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
+    fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
@@ -194,12 +187,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --wind-bound-probe Print measured wind travel beside its cull bound\n");
     fprintf(stderr,
             "      --ies-profile <f>  Apply an IES photometric file to every point/spot light\n");
-    fprintf(stderr, "      --ies-probe        Print every loaded IES profile and its angle sweep\n");
+    fprintf(stderr,
+            "      --ies-probe        Print every loaded IES profile and its angle sweep\n");
     fprintf(stderr, "      --emissive-lights  Emissive meshes become LTC area lights\n");
     fprintf(stderr, "      --emissive-light-probe  Print the panel every emissive mesh derives\n");
-    fprintf(stderr,
-            "      --exposure-probe   Print what the meter decided, per frame "
-            "(silent on a pinned frame)\n");
+    fprintf(stderr, "      --exposure-probe   Print what the meter decided, per frame "
+                    "(silent on a pinned frame)\n");
     fprintf(stderr, "      --meter-mode <m>   Metering mask: uniform|centre|spot\n");
     fprintf(stderr, "      --meter-radius <f> Spot/centre radius, fraction of the half-diagonal\n");
     fprintf(stderr, "      --meter-low <f>    Fraction of the darkest pixels ignored (0.70)\n");
@@ -245,9 +238,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --cloud-wind <kmh[,deg]> Cloud drift (implies --clouds)\n");
     fprintf(stderr, "      --sun-elevation <d> Sky sun elevation in degrees (implies --sky)\n");
     fprintf(stderr, "      --sun-azimuth <d>  Sky sun azimuth in degrees (implies --sky)\n");
-    fprintf(stderr,
-            "      --world-scale <f>  World units per km for the atmosphere "
-            "(default 1000, implies --sky)\n");
+    fprintf(stderr, "      --world-scale <f>  World units per km for the atmosphere "
+                    "(default 1000, implies --sky)\n");
     fprintf(stderr, "      --no-aerial        Disable aerial perspective (on by default)\n");
     fprintf(stderr, "      --no-fog-volumes   Drop a scene file's fogVolumes[]\n");
     fprintf(stderr, "      --no-decals        Drop a scene file's decals[]\n");
@@ -256,16 +248,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
-    fprintf(stderr,
-            "      --contact-shadows  Screen-space contact shadows: key light + "
-            "map-less local lights\n");
-    fprintf(stderr,
-            "      --cs-debug         Show the raw contact-shadow term (implies enable)\n");
-    fprintf(stderr,
-            "      --cs-distance <f>  Contact-shadow reach in world units, 0=off (implies "
-            "enable)\n");
-    fprintf(stderr,
-            "      --cs-strength <f>  Contact-shadow darkening 0..1 (implies enable)\n");
+    fprintf(stderr, "      --contact-shadows  Screen-space contact shadows: key light + "
+                    "map-less local lights\n");
+    fprintf(stderr, "      --cs-debug         Show the raw contact-shadow term (implies enable)\n");
+    fprintf(stderr, "      --cs-distance <f>  Contact-shadow reach in world units, 0=off (implies "
+                    "enable)\n");
+    fprintf(stderr, "      --cs-strength <f>  Contact-shadow darkening 0..1 (implies enable)\n");
     fprintf(stderr, "      --albedo-debug     Show the resolved albedo G-buffer\n");
     fprintf(stderr, "      --specular-aa <f>  Specular anti-aliasing strength (default: 1)\n");
     fprintf(stderr, "      --no-specular-aa   Disable specular anti-aliasing\n");
@@ -284,18 +272,12 @@ static void print_usage(const char* prog) {
             "      --no-oit           Unsorted alpha-blend late pass instead of OIT (OIT is on)\n");
     fprintf(stderr,
             "      --no-layers-vt     Per-texel layered blend instead of the composite cache\n");
-    fprintf(stderr,
-            "      --layers-vt-res N  Composite-cache resolution override (diagnostic)\n");
-    fprintf(stderr,
-            "      --no-layers-vt-pages     Fallback atlas alone (no paged near field)\n");
-    fprintf(stderr,
-            "      --no-layers-vt-feedback  Page residency on prediction alone\n");
-    fprintf(stderr,
-            "      --layers-vt-page-slots N Physical page slots in use (diagnostic)\n");
-    fprintf(stderr,
-            "      --layers-vt-probe N      Print page residency every N frames\n");
-    fprintf(stderr,
-            "      --cam-at <frame:ex,ey,ez,tx,ty,tz>  Diagnostic: teleport the camera\n");
+    fprintf(stderr, "      --layers-vt-res N  Composite-cache resolution override (diagnostic)\n");
+    fprintf(stderr, "      --no-layers-vt-pages     Fallback atlas alone (no paged near field)\n");
+    fprintf(stderr, "      --no-layers-vt-feedback  Page residency on prediction alone\n");
+    fprintf(stderr, "      --layers-vt-page-slots N Physical page slots in use (diagnostic)\n");
+    fprintf(stderr, "      --layers-vt-probe N      Print page residency every N frames\n");
+    fprintf(stderr, "      --cam-at <frame:ex,ey,ez,tx,ty,tz>  Diagnostic: teleport the camera\n");
     fprintf(stderr, "      --no-oit-moments   Weighted-blended OIT: the depth curve, not the "
                     "measured moments\n");
     fprintf(stderr, "      --oit / --oit-moments  Restate the defaults (both are already on)\n");
@@ -337,10 +319,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --texture-compress-colour  Compress albedo too (DXT, lossy)\n");
     fprintf(stderr, "      --grain <s>        Film grain strength (enables it)\n");
     fprintf(stderr, "      --sharpen <s>      Unsharp-mask strength (enables it)\n");
-    fprintf(stderr,
-            "      --flare <s>        Lens ghost strength (enables it)\n");
-    fprintf(stderr,
-            "      --chromatic-aberration <px> Channel split at the corner (enables it)\n");
+    fprintf(stderr, "      --flare <s>        Lens ghost strength (enables it)\n");
+    fprintf(stderr, "      --chromatic-aberration <px> Channel split at the corner (enables it)\n");
     fprintf(stderr, "      --grade-lift/gamma/gain r,g,b  Colour grade (enables it)\n");
     fprintf(stderr, "      --lut <f.cube>     3D colour-grading LUT (display-referred)\n");
     fprintf(stderr, "      --no-lut           Force off a LUT a scene file asked for\n");
@@ -448,13 +428,13 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // -1 = unset, so `--water-waves gerstner` can override a scene file that authored
     // fft. A 0 sentinel would make the Gerstner half of the flag unreachable.
     args->water_waves = -1;
-    args->specular_aa = -1.0f;    // -1 = keep the engine default
-    args->ssr_strength = -1.0f;   // -1 = keep the engine default
-    args->ssr_jitter = -1.0f;     // -1 = keep the engine default
-    args->parallax_scale = -1.0f; // -1 = keep the engine default POM depth
-    args->sss_radius = -1.0f;     // -1 = keep the fixture default SSS radius
+    args->specular_aa = -1.0f;     // -1 = keep the engine default
+    args->ssr_strength = -1.0f;    // -1 = keep the engine default
+    args->ssr_jitter = -1.0f;      // -1 = keep the engine default
+    args->parallax_scale = -1.0f;  // -1 = keep the engine default POM depth
+    args->sss_radius = -1.0f;      // -1 = keep the fixture default SSS radius
     args->curvature_scale = -1.0f; // -1 = keep whatever the material authored
-    args->sss_color[0] = -1.0f;   // -1 = keep the fixture default SSS scatter color
+    args->sss_color[0] = -1.0f;    // -1 = keep the fixture default SSS scatter color
     args->vignette = -1.0f;
     args->dither = -1.0f;
     args->grain = -1.0f;
@@ -479,28 +459,28 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->dof_blades = -1;
     args->dof_rotation = -1.0f;
     args->motion_blur_scale = -1.0f;
-    args->light_size = -1.0f;      // -1 = scene-radius default
-    args->point_light_grid = 0;    // off
+    args->light_size = -1.0f;   // -1 = scene-radius default
+    args->point_light_grid = 0; // off
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
-    args->shadows_off_at = -1;          // -1 = never; the transition is the diagnostic
-    args->layer_blend_at_frame = -1;    // -1 = never; same idiom
-    args->road_width_at_frame = -1;     // -1 = never; same idiom
-    args->cam_at_frame = -1;            // -1 = never; same idiom
-    args->shadow_softness = -1.0f;      // -1 = keep the engine default
-    args->msm_blur = -1.0f;             // -1 = keep the engine default
-    args->msm_bleed = -1.0f;            // -1 = keep the engine default
-    args->auto_exposure_override = -1;  // -1 = unset; an authored exposure then pins
+    args->shadows_off_at = -1;         // -1 = never; the transition is the diagnostic
+    args->layer_blend_at_frame = -1;   // -1 = never; same idiom
+    args->road_width_at_frame = -1;    // -1 = never; same idiom
+    args->cam_at_frame = -1;           // -1 = never; same idiom
+    args->shadow_softness = -1.0f;     // -1 = keep the engine default
+    args->msm_blur = -1.0f;            // -1 = keep the engine default
+    args->msm_bleed = -1.0f;           // -1 = keep the engine default
+    args->auto_exposure_override = -1; // -1 = unset; an authored exposure then pins
     args->meter_low = -1.0f;
     args->meter_high = -1.0f;
     args->meter_mode = -1;
     args->meter_radius = -1.0f;
     args->adapt_up = -1.0f;
     args->adapt_down = -1.0f;
-    args->oit = -1;                     // -1 = unset; both default ON in the engine
+    args->oit = -1; // -1 = unset; both default ON in the engine
     args->oit_moments = -1;
     args->sun_elevation = -999.0f; // -999 = keep the sky default
-    args->stars = -1;             // -1 = unset (a .cscn may seed it; CLI wins)
+    args->stars = -1;              // -1 = unset (a .cscn may seed it; CLI wins)
     args->stars_brightness = -1.0f;
     args->stars_latitude = -999.0f;
     args->stars_hour = -999.0f;
@@ -523,9 +503,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // A water plane at y = 0 is the useful default and 0 is a legal level, so the
     // "unset" value has to sit outside every plausible one rather than at zero.
     args->water_level = -9999.0f;
-    args->world_scale = -1.0f; // -1 = keep the sky's default (1 unit = 1 metre)
-    args->spec_occ_mode = -1;  // -1 = keep the engine default
-    args->import_scale = 1.0f; // 1 = none
+    args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
+    args->spec_occ_mode = -1;       // -1 = keep the engine default
+    args->import_scale = 1.0f;      // 1 = none
     args->bloom_enable = -1;        // -1 = keep the engine default
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
@@ -533,9 +513,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->fog_near = -1.0f;         // -1 = keep default (0 is valid: derive from far)
     args->fog_far = -1.0f;
     args->fog_depth_dist = -1.0f;
-    args->ibl_intensity = -1.0f;    // -1 = keep the engine default
-    args->cs_distance = -1.0f;      // -1 = scene-scaled contact-shadow reach
-    args->cs_strength = -1.0f;      // -1 = keep the engine default
+    args->ibl_intensity = -1.0f; // -1 = keep the engine default
+    args->cs_distance = -1.0f;   // -1 = scene-scaled contact-shadow reach
+    args->cs_strength = -1.0f;   // -1 = keep the engine default
     // --area-light's trailing r,g,b are optional; parsing a 9-field form
     // leaves these untouched
     args->area_light_color[0] = 1.0f;
@@ -656,8 +636,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             if (strcmp(argv[i], "auto") == 0) {
                 args->shadow_center_mode = 2;
-            } else if (sscanf(argv[i], "%f,%f,%f", &args->shadow_center[0],
-                              &args->shadow_center[1], &args->shadow_center[2]) == 3) {
+            } else if (sscanf(argv[i], "%f,%f,%f", &args->shadow_center[0], &args->shadow_center[1],
+                              &args->shadow_center[2]) == 3) {
                 args->shadow_center_mode = 1;
             } else {
                 fprintf(stderr, "Error: --shadow-center expects x,y,z or auto\n");
@@ -789,8 +769,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
-            if (sscanf(argv[i], "%d:%f", &args->road_width_at_frame,
-                       &args->road_width_at_value) != 2 ||
+            if (sscanf(argv[i], "%d:%f", &args->road_width_at_frame, &args->road_width_at_value) !=
+                    2 ||
                 args->road_width_at_frame < 0) {
                 fprintf(stderr, "Error: --road-width-at wants frame:value\n");
                 return -1;
@@ -1042,7 +1022,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             if (end == argv[i] || *end != '\0' || mode < WATER_FOAM_DEBUG_OFF ||
                 mode > WATER_FOAM_DEBUG_BREAKING) {
                 fprintf(stderr, "Error: --water-foam-debug wants 0, 1, 2 or 3, got '%s'\n",
-                       argv[i]);
+                        argv[i]);
                 return -1;
             }
             // Does NOT imply --water: this is a view mode for a surface something else
@@ -1451,13 +1431,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             // px,py,pz,dx,dy,dz,w,h,I[,r,g,b] -- color optional (white)
-            int n = sscanf(argv[i], "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f",
-                           &args->area_light_pos[0], &args->area_light_pos[1],
-                           &args->area_light_pos[2], &args->area_light_dir[0],
-                           &args->area_light_dir[1], &args->area_light_dir[2],
-                           &args->area_light_size[0], &args->area_light_size[1],
-                           &args->area_light_intensity, &args->area_light_color[0],
-                           &args->area_light_color[1], &args->area_light_color[2]);
+            int n = sscanf(
+                argv[i], "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", &args->area_light_pos[0],
+                &args->area_light_pos[1], &args->area_light_pos[2], &args->area_light_dir[0],
+                &args->area_light_dir[1], &args->area_light_dir[2], &args->area_light_size[0],
+                &args->area_light_size[1], &args->area_light_intensity, &args->area_light_color[0],
+                &args->area_light_color[1], &args->area_light_color[2]);
             if (n != 9 && n != 12) {
                 fprintf(stderr, "Error: --area-light wants px,py,pz,dx,dy,dz,w,h,I[,r,g,b]\n");
                 return -1;
@@ -1606,8 +1585,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             char* end = NULL;
             double v = strtod(argv[i], &end);
             if (end == argv[i] || *end != '\0' || v < 0.0) {
-                fprintf(stderr, "Error: --dither needs a non-negative number, got '%s'\n",
-                        argv[i]);
+                fprintf(stderr, "Error: --dither needs a non-negative number, got '%s'\n", argv[i]);
                 return -1;
             }
             args->dither = (float)v;
@@ -2162,8 +2140,7 @@ static void render_frame_update(Engine* engine, float dt) {
         Scene* scene = get_current_scene(engine);
         if (scene && scene->shadow_system) {
             scene->shadow_system->enabled = false;
-            fprintf(stderr, "frame %d: shadow system disabled\n",
-                    frame_schedule->shadows_off_at);
+            fprintf(stderr, "frame %d: shadow system disabled\n", frame_schedule->shadows_off_at);
         }
     }
     // One SLICED re-bake at an unmoved sun (spec 11.81). The comparison it
@@ -2219,8 +2196,8 @@ static void render_frame_update(Engine* engine, float dt) {
                 for (int r = 0; r < m->road_count && r < MATERIAL_MAX_ROADS; r++)
                     m->roads[r].width = frame_schedule->road_width_at_value;
             }
-            fprintf(stderr, "frame %d: road width -> %.3f\n",
-                    frame_schedule->road_width_at_frame, frame_schedule->road_width_at_value);
+            fprintf(stderr, "frame %d: road width -> %.3f\n", frame_schedule->road_width_at_frame,
+                    frame_schedule->road_width_at_value);
         }
     }
     for (int i = 0; i < frame_schedule->scale_at_count; i++) {
@@ -2407,9 +2384,9 @@ static void spawn_area_light(Scene* scene, const RenderArgs* args) {
     set_node_name(al_node, "area_light");
     add_child_node(scene->root_node, al_node);
 
-    printf("Area light: %.2fx%.2f at (%.2f, %.2f, %.2f), radiance %.2f\n",
-           args->area_light_size[0], args->area_light_size[1], args->area_light_pos[0],
-           args->area_light_pos[1], args->area_light_pos[2], args->area_light_intensity);
+    printf("Area light: %.2fx%.2f at (%.2f, %.2f, %.2f), radiance %.2f\n", args->area_light_size[0],
+           args->area_light_size[1], args->area_light_pos[0], args->area_light_pos[1],
+           args->area_light_pos[2], args->area_light_intensity);
 }
 
 // Clustered-lighting test harness (spec 9.1): an N x N grid of hue-swept point
@@ -2450,12 +2427,24 @@ static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
             float lo = 0.2f, down = 1.0f - 0.8f * hf, up = 1.0f - 0.8f * (1.0f - hf);
             vec3 c;
             switch ((int)hue % 6) {
-            case 0: c[0] = 1.0f, c[1] = up, c[2] = lo; break;
-            case 1: c[0] = down, c[1] = 1.0f, c[2] = lo; break;
-            case 2: c[0] = lo, c[1] = 1.0f, c[2] = up; break;
-            case 3: c[0] = lo, c[1] = down, c[2] = 1.0f; break;
-            case 4: c[0] = up, c[1] = lo, c[2] = 1.0f; break;
-            default: c[0] = 1.0f, c[1] = lo, c[2] = down; break;
+                case 0:
+                    c[0] = 1.0f, c[1] = up, c[2] = lo;
+                    break;
+                case 1:
+                    c[0] = down, c[1] = 1.0f, c[2] = lo;
+                    break;
+                case 2:
+                    c[0] = lo, c[1] = 1.0f, c[2] = up;
+                    break;
+                case 3:
+                    c[0] = lo, c[1] = down, c[2] = 1.0f;
+                    break;
+                case 4:
+                    c[0] = up, c[1] = lo, c[2] = 1.0f;
+                    break;
+                default:
+                    c[0] = 1.0f, c[1] = lo, c[2] = down;
+                    break;
             }
             set_light_color(pl, c);
             set_light_intensity(pl, intensity);
@@ -2570,14 +2559,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // Before anything can load a texture, which on this app is the model import
-    // several hundred lines below. A switch applied after the first upload would
-    // leave a scene half compressed and the flag would read as working.
-    if (args.no_texture_compression)
-        texture_set_compression_enabled(false);
-    if (args.texture_compress_colour)
-        texture_set_colour_compression_enabled(true);
-
     /*
      * A config snapshot's `source` block, which is the only half of it that can
      * be read this early -- everything else describes objects that do not exist
@@ -2602,6 +2583,12 @@ int main(int argc, char** argv) {
         // after the only chance to bake, and refuses itself when it finds none.
         if (!args.clouds && src->clouds)
             args.clouds = 1;
+        // Same shape, same reason: the block encode is a one-shot at LOAD, so
+        // this is the only point at which a restore can still change it.
+        if (!args.no_texture_compression && src->no_texture_compression)
+            args.no_texture_compression = 1;
+        if (!args.texture_compress_colour && src->texture_compress_colour)
+            args.texture_compress_colour = 1;
         if (!args.lut_path && src->lut[0])
             args.lut_path = src->lut;
         if (!args.texture_dir && src->textures[0])
@@ -2619,6 +2606,16 @@ int main(int argc, char** argv) {
             return -1;
         }
     }
+
+    // AFTER the config source block above, not before it: the switches are a
+    // one-shot at load, so a snapshot that restores them has to be read first or
+    // the restore is silently a no-op. And still before the model import several
+    // hundred lines below -- applied after the first upload, a scene comes out
+    // half compressed and the flag reads as working.
+    if (args.no_texture_compression)
+        texture_set_compression_enabled(false);
+    if (args.texture_compress_colour)
+        texture_set_colour_compression_enabled(true);
 
     // Two environment sources cannot coexist; silent precedence would hide
     // the mistake, so refuse outright
@@ -2704,8 +2701,7 @@ int main(int argc, char** argv) {
     // cross-flag precondition is checked here, because --headless, --taa and
     // --headless-jitter can appear in any argv order and so cannot be
     // evaluated while parsing.
-    if (args.scale_at_count > 0 && args.headless &&
-        (!args.force_taa || !args.headless_jitter)) {
+    if (args.scale_at_count > 0 && args.headless && (!args.force_taa || !args.headless_jitter)) {
         fprintf(stderr, "--render-scale-at needs --taa --headless-jitter under --headless; "
                         "the schedule would be refused\n");
         return -1;
@@ -3493,7 +3489,6 @@ int main(int argc, char** argv) {
     glm_mat4_identity(identity);
     apply_transform_to_nodes(scene->root_node, identity);
 
-
     // Compute scene bounds; center/radius drive every scene-scaled policy below
     vec3 scene_center;
     float scene_radius;
@@ -3661,8 +3656,8 @@ int main(int argc, char** argv) {
             applied++;
         }
         if (profile)
-            printf("--ies-profile: '%s' applied to %d point/spot light(s)\n",
-                   args.ies_profile_path, applied);
+            printf("--ies-profile: '%s' applied to %d point/spot light(s)\n", args.ies_profile_path,
+                   applied);
     }
 
     // Position camera to view the entire scene; fallback only on a degenerate
@@ -3761,9 +3756,8 @@ int main(int argc, char** argv) {
             // Contact-shadow reach is a world-space distance like the AO radius:
             // a few percent of the scene, so the march covers the near-contact
             // gap without streaking. A CLI --cs-distance (incl. 0 = off) wins.
-            engine->postfx->cs_distance = args.cs_distance >= 0.0f
-                                              ? args.cs_distance
-                                              : fmaxf(0.3f, scene_radius * 0.02f);
+            engine->postfx->cs_distance =
+                args.cs_distance >= 0.0f ? args.cs_distance : fmaxf(0.3f, scene_radius * 0.02f);
 
             // Fog parameters are world-space too: fixed meter-scale density
             // on a large-unit scene is invisible (or opaque soup on a tiny
@@ -3992,7 +3986,6 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Warning: --probe requires an HDR environment (-e); skipping capture\n");
     }
 
-
     if (scene->probe_set)
         scene->probe_set->debug_atlas = args.probe_set_debug != 0;
 
@@ -4087,8 +4080,8 @@ int main(int argc, char** argv) {
                "incident=%.6f,%.6f,%.6f\n",
                key && key->name ? key->name : "none", key ? (double)key->intensity : 0.0,
                key ? (double)key->direction[0] : 0.0, key ? (double)key->direction[1] : 0.0,
-               key ? (double)key->direction[2] : 0.0, (double)incident[0],
-               (double)incident[1], (double)incident[2]);
+               key ? (double)key->direction[2] : 0.0, (double)incident[0], (double)incident[1],
+               (double)incident[2]);
         const float span = w->extent * 0.5f;
         for (int iz = 0; iz < 4; iz++) {
             for (int ix = 0; ix < 4; ix++) {
@@ -4096,13 +4089,12 @@ int main(int argc, char** argv) {
                 const float z = -span + span * 2.0f * (float)iz / 3.0f;
                 vec3 n;
                 const float h = water_surface_at(w, x, z, 0.0f, n);
-                printf("water-probe %.4f %.4f h=%.6f n=%.4f,%.4f,%.4f residual=%.8f\n",
-                       (double)x, (double)z, (double)h, (double)n[0], (double)n[1], (double)n[2],
+                printf("water-probe %.4f %.4f h=%.6f n=%.4f,%.4f,%.4f residual=%.8f\n", (double)x,
+                       (double)z, (double)h, (double)n[0], (double)n[1], (double)n[2],
                        (double)water_waves_inverse_residual(w, x, z, 0.0f));
             }
         }
     }
-
 
     // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
     // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
@@ -4137,6 +4129,8 @@ int main(int argc, char** argv) {
         .lut = args.lut_path,
         .textures = args.texture_dir,
         .sky = args.sky != 0,
+        .no_texture_compression = args.no_texture_compression != 0,
+        .texture_compress_colour = args.texture_compress_colour != 0,
         .clouds = args.clouds != 0,
     });
 
@@ -4230,8 +4224,8 @@ int main(int argc, char** argv) {
         float alpha = 180.0f - elong;
         printf("moon-probe body el=%.6f az=%.6f dir=%.6f,%.6f,%.6f\n", s->moon_elevation_deg,
                s->moon_azimuth_deg, s->moon_dir[0], s->moon_dir[1], s->moon_dir[2]);
-        printf("moon-probe sun el=%.6f az=%.6f elongation=%.6f alpha=%.6f\n",
-               s->sun_elevation_deg, s->sun_azimuth_deg, elong, alpha);
+        printf("moon-probe sun el=%.6f az=%.6f elongation=%.6f alpha=%.6f\n", s->sun_elevation_deg,
+               s->sun_azimuth_deg, elong, alpha);
         printf("moon-probe phase lit=%.6f ks=%.6f intensity=%.6f\n", sky_moon_lit_fraction(s),
                sky_moon_phase_factor(s), s->moon_light ? s->moon_light->intensity : 0.0f);
     }
@@ -4294,8 +4288,7 @@ int main(int argc, char** argv) {
                 for (int k = 0; k < 3; k++) {
                     const float t = (float)k * period * 0.37f;
                     printf("shore-probe sample x=%.4f z=%.4f t=%.4f edge=%.6f next=%.6f\n",
-                           (double)x, (double)z, (double)t,
-                           (double)shore_runup_edge(&sp, x, z, t),
+                           (double)x, (double)z, (double)t, (double)shore_runup_edge(&sp, x, z, t),
                            (double)shore_runup_edge(&sp, x, z, t + period));
                 }
             }

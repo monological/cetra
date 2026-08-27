@@ -136,51 +136,51 @@ typedef struct ConfigField {
  * What survives is owner-vs-SECTION mismatch, which files a key under the wrong
  * JSON object and is cosmetic. Corruption to misfiling is the trade.
  */
-#define CFG_STRUCT_CFG_ENGINE Engine
-#define CFG_STRUCT_CFG_POSTFX PostFX
-#define CFG_STRUCT_CFG_EXPOSURE Exposure
-#define CFG_STRUCT_CFG_SCENE Scene
-#define CFG_STRUCT_CFG_CAMERA Camera
-#define CFG_STRUCT_CFG_SHADOW ShadowSystem
-#define CFG_STRUCT_CFG_SKY SkyAtmosphere
-#define CFG_STRUCT_CFG_CLOUDS CloudLayer
-#define CFG_STRUCT_CFG_IBL IBLResources
-#define CFG_STRUCT_CFG_GI GIVolume
-#define CFG_STRUCT_CFG_CLUSTER LightClusterContext
-#define CFG_STRUCT_CFG_WATER Water
+#define CFG_STRUCT_CFG_ENGINE        Engine
+#define CFG_STRUCT_CFG_POSTFX        PostFX
+#define CFG_STRUCT_CFG_EXPOSURE      Exposure
+#define CFG_STRUCT_CFG_SCENE         Scene
+#define CFG_STRUCT_CFG_CAMERA        Camera
+#define CFG_STRUCT_CFG_SHADOW        ShadowSystem
+#define CFG_STRUCT_CFG_SKY           SkyAtmosphere
+#define CFG_STRUCT_CFG_CLOUDS        CloudLayer
+#define CFG_STRUCT_CFG_IBL           IBLResources
+#define CFG_STRUCT_CFG_GI            GIVolume
+#define CFG_STRUCT_CFG_CLUSTER       LightClusterContext
+#define CFG_STRUCT_CFG_WATER         Water
 #define CFG_STRUCT_CFG_WATER_WINDSEA WaterWaveTrain
-#define CFG_STRUCT_CFG_WATER_SWELL WaterWaveTrain
-#define CFG_STRUCT_CFG_PROBE_ELEM ReflectionProbe
-#define CFG_STRUCT_CFG_DECAL_ELEM Decal
-#define CFG_STRUCT_CFG_LIGHT_ELEM Light
+#define CFG_STRUCT_CFG_WATER_SWELL   WaterWaveTrain
+#define CFG_STRUCT_CFG_PROBE_ELEM    ReflectionProbe
+#define CFG_STRUCT_CFG_DECAL_ELEM    Decal
+#define CFG_STRUCT_CFG_LIGHT_ELEM    Light
 
-#define CFG_ROW(owner_, type_, section_, key_, member_)                                            \
+#define CFG_ROW(owner_, type_, section_, key_, member_) \
     {owner_, type_, section_, key_, offsetof(CFG_STRUCT_##owner_, member_), NULL, 0, NULL}
-#define CFG_ROW_ENUM(owner_, section_, key_, member_, labels_)                                     \
-    {owner_,                                                                                       \
-     CFG_ENUM,                                                                                     \
-     section_,                                                                                     \
-     key_,                                                                                         \
-     offsetof(CFG_STRUCT_##owner_, member_),                                                       \
-     labels_,                                                                                      \
-     (int)(sizeof(labels_) / sizeof((labels_)[0])),                                                \
+#define CFG_ROW_ENUM(owner_, section_, key_, member_, labels_) \
+    {owner_,                                                   \
+     CFG_ENUM,                                                 \
+     section_,                                                 \
+     key_,                                                     \
+     offsetof(CFG_STRUCT_##owner_, member_),                   \
+     labels_,                                                  \
+     (int)(sizeof(labels_) / sizeof((labels_)[0])),            \
      NULL}
-#define CFG_ROW_FN(owner_, type_, section_, key_, member_, fn_)                                    \
+#define CFG_ROW_FN(owner_, type_, section_, key_, member_, fn_) \
     {owner_, type_, section_, key_, offsetof(CFG_STRUCT_##owner_, member_), NULL, 0, fn_}
 
 // Enum vocabularies. Index IS the enum value, so a gap would misname every value
 // after it -- the two that do not start at zero say so beside themselves.
 static const char* const CFG_RENDER_MODES[] = {
-    "pbr",     "normals", "world_pos",       "tex_coords",       "tangent_space",
-    "flat",    "albedo",  "simple_lighting", "metallic_rough",   "velocity",
+    "pbr",          "normals",      "world_pos",       "tex_coords",     "tangent_space",
+    "flat",         "albedo",       "simple_lighting", "metallic_rough", "velocity",
     "hdr_hotspots", "sss_hotspots", "extrapolation"};
 static const char* const CFG_CAMERA_MODES[] = {"free", "orbit"};
 static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "agx"};
 // 6 is a hole: the half-res fog buffer retired with the screen-space march,
 // and the values are the shader's own debugView dispatch, so it cannot be closed.
-static const char* const CFG_DEBUG_VIEWS[] = {"none", "ao",      "normals", "ssr",     "albedo",
-                                              "ssgi", "unused_6", "spec_occ", "contact", "bent",
-                                              "purkinje"};
+static const char* const CFG_DEBUG_VIEWS[] = {"none",    "ao",   "normals",  "ssr",
+                                              "albedo",  "ssgi", "unused_6", "spec_occ",
+                                              "contact", "bent", "purkinje"};
 static const char* const CFG_SPEC_OCC[] = {"off", "legacy", "split"};
 static const char* const CFG_LUT_INTERP[] = {"trilinear", "tetrahedral"};
 static const char* const CFG_METER_MODES[] = {"uniform", "centre", "spot"};
@@ -910,6 +910,8 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src) {
     _source.textures = _source_textures;
     _source.sky = src->sky;
     _source.clouds = src->clouds;
+    _source.no_texture_compression = src->no_texture_compression;
+    _source.texture_compress_colour = src->texture_compress_colour;
     // No width/height: the writer takes those from the live engine, which is the
     // only place that knows what the window ended up as.
     _source_set = true;
@@ -917,42 +919,42 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src) {
 
 static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
     switch (owner) {
-    case CFG_ENGINE:
-        return engine;
-    case CFG_POSTFX:
-        return engine ? engine->postfx : NULL;
-    case CFG_EXPOSURE:
-        return engine ? &engine->exposure : NULL;
-    case CFG_SCENE:
-        return scene;
-    case CFG_CAMERA:
-        return engine ? engine->camera : NULL;
-    case CFG_SHADOW:
-        return scene ? scene->shadow_system : NULL;
-    case CFG_SKY:
-        return scene ? scene->sky : NULL;
-    case CFG_CLOUDS:
-        return scene && scene->sky ? &scene->sky->clouds : NULL;
-    case CFG_IBL:
-        return scene ? scene->ibl : NULL;
-    case CFG_GI:
-        return scene ? scene->gi_volume : NULL;
-    case CFG_CLUSTER:
-        return engine ? engine->light_cluster : NULL;
-    case CFG_WATER:
-        return scene ? scene->water : NULL;
-    case CFG_WATER_WINDSEA:
-        return scene && scene->water ? &scene->water->sea.wind_sea : NULL;
-    case CFG_WATER_SWELL:
-        return scene && scene->water ? &scene->water->sea.swell : NULL;
-    case CFG_PROBE_ELEM:
-    case CFG_DECAL_ELEM:
-    case CFG_LIGHT_ELEM:
-    case CFG_MATERIAL_ELEM:
-        // Element owners have no singleton to resolve; the array walk supplies
-        // each base. Answering NULL here is what keeps them out of the scalar
-        // pass rather than needing a second test at every call.
-        return NULL;
+        case CFG_ENGINE:
+            return engine;
+        case CFG_POSTFX:
+            return engine ? engine->postfx : NULL;
+        case CFG_EXPOSURE:
+            return engine ? &engine->exposure : NULL;
+        case CFG_SCENE:
+            return scene;
+        case CFG_CAMERA:
+            return engine ? engine->camera : NULL;
+        case CFG_SHADOW:
+            return scene ? scene->shadow_system : NULL;
+        case CFG_SKY:
+            return scene ? scene->sky : NULL;
+        case CFG_CLOUDS:
+            return scene && scene->sky ? &scene->sky->clouds : NULL;
+        case CFG_IBL:
+            return scene ? scene->ibl : NULL;
+        case CFG_GI:
+            return scene ? scene->gi_volume : NULL;
+        case CFG_CLUSTER:
+            return engine ? engine->light_cluster : NULL;
+        case CFG_WATER:
+            return scene ? scene->water : NULL;
+        case CFG_WATER_WINDSEA:
+            return scene && scene->water ? &scene->water->sea.wind_sea : NULL;
+        case CFG_WATER_SWELL:
+            return scene && scene->water ? &scene->water->sea.swell : NULL;
+        case CFG_PROBE_ELEM:
+        case CFG_DECAL_ELEM:
+        case CFG_LIGHT_ELEM:
+        case CFG_MATERIAL_ELEM:
+            // Element owners have no singleton to resolve; the array walk supplies
+            // each base. Answering NULL here is what keeps them out of the scalar
+            // pass rather than needing a second test at every call.
+            return NULL;
     }
     return NULL;
 }
@@ -1004,40 +1006,40 @@ static bool _write_field(cJSON* obj, const ConfigField* f, const void* base) {
     const void* p = _field_ptr_const(base, f);
 
     switch ((ConfigType)f->type) {
-    case CFG_BOOL:
-        return cJSON_AddBoolToObject(obj, f->key, *(const bool*)p) != NULL;
-    case CFG_INT:
-        return cJSON_AddNumberToObject(obj, f->key, *(const int*)p) != NULL;
-    case CFG_FLOAT:
-        return cJSON_AddNumberToObject(obj, f->key, *(const float*)p) != NULL;
-    case CFG_DOUBLE:
-        return cJSON_AddNumberToObject(obj, f->key, *(const double*)p) != NULL;
-    case CFG_VEC2:
-    case CFG_VEC3: {
-        const float* v = (const float*)p;
-        const int n = f->type == CFG_VEC2 ? 2 : 3;
-        double xyz[3] = {v[0], v[1], n > 2 ? v[2] : 0.0};
-        cJSON* arr = cJSON_CreateDoubleArray(xyz, n);
-        if (!arr)
-            return false;
-        if (!cJSON_AddItemToObject(obj, f->key, arr)) {
-            cJSON_Delete(arr);
-            return false;
+        case CFG_BOOL:
+            return cJSON_AddBoolToObject(obj, f->key, *(const bool*)p) != NULL;
+        case CFG_INT:
+            return cJSON_AddNumberToObject(obj, f->key, *(const int*)p) != NULL;
+        case CFG_FLOAT:
+            return cJSON_AddNumberToObject(obj, f->key, *(const float*)p) != NULL;
+        case CFG_DOUBLE:
+            return cJSON_AddNumberToObject(obj, f->key, *(const double*)p) != NULL;
+        case CFG_VEC2:
+        case CFG_VEC3: {
+            const float* v = (const float*)p;
+            const int n = f->type == CFG_VEC2 ? 2 : 3;
+            double xyz[3] = {v[0], v[1], n > 2 ? v[2] : 0.0};
+            cJSON* arr = cJSON_CreateDoubleArray(xyz, n);
+            if (!arr)
+                return false;
+            if (!cJSON_AddItemToObject(obj, f->key, arr)) {
+                cJSON_Delete(arr);
+                return false;
+            }
+            return true;
         }
-        return true;
-    }
-    case CFG_ENUM: {
-        int value = *(const int*)p;
-        const char* label = _enum_label(f, value);
-        // An out-of-range value is a bug upstream, not here: name it rather than
-        // writing a label that would read back as something else.
-        if (!label) {
-            fprintf(stderr, "Warning: config snapshot: %s.%s holds unknown value %d\n", f->section,
-                    f->key, value);
-            return cJSON_AddNumberToObject(obj, f->key, value) != NULL;
+        case CFG_ENUM: {
+            int value = *(const int*)p;
+            const char* label = _enum_label(f, value);
+            // An out-of-range value is a bug upstream, not here: name it rather than
+            // writing a label that would read back as something else.
+            if (!label) {
+                fprintf(stderr, "Warning: config snapshot: %s.%s holds unknown value %d\n",
+                        f->section, f->key, value);
+                return cJSON_AddNumberToObject(obj, f->key, value) != NULL;
+            }
+            return cJSON_AddStringToObject(obj, f->key, label) != NULL;
         }
-        return cJSON_AddStringToObject(obj, f->key, label) != NULL;
-    }
     }
     return false;
 }
@@ -1057,6 +1059,8 @@ static void _write_source(cJSON* root, Engine* engine) {
             cJSON_AddStringToObject(src, "textures", _source.textures);
         cJSON_AddBoolToObject(src, "sky", _source.sky);
         cJSON_AddBoolToObject(src, "clouds", _source.clouds);
+        cJSON_AddBoolToObject(src, "no_texture_compression", _source.no_texture_compression);
+        cJSON_AddBoolToObject(src, "texture_compress_colour", _source.texture_compress_colour);
     }
     if (engine) {
         cJSON_AddNumberToObject(src, "width", engine->win_width);
@@ -1107,17 +1111,17 @@ static bool _material_row(const MaterialParam* p, ConfigField* out) {
     // which would have read four bytes off a one-byte bool.
     ConfigType type;
     switch (p->type) {
-    case MATERIAL_PARAM_FLOAT:
-        type = CFG_FLOAT;
-        break;
-    case MATERIAL_PARAM_COLOR:
-        type = CFG_VEC3;
-        break;
-    case MATERIAL_PARAM_INT:
-        type = p->enum_labels ? CFG_ENUM : CFG_INT;
-        break;
-    case MATERIAL_PARAM_TEXTURE:
-        return false; // rebinding an image is authoring, not tuning
+        case MATERIAL_PARAM_FLOAT:
+            type = CFG_FLOAT;
+            break;
+        case MATERIAL_PARAM_COLOR:
+            type = CFG_VEC3;
+            break;
+        case MATERIAL_PARAM_INT:
+            type = p->enum_labels ? CFG_ENUM : CFG_INT;
+            break;
+        case MATERIAL_PARAM_TEXTURE:
+            return false; // rebinding an image is authoring, not tuning
     }
     *out = (ConfigField){.owner = CFG_MATERIAL_ELEM,
                          .type = (unsigned char)type,
@@ -1296,46 +1300,46 @@ static int _enum_value(const ConfigField* f, const char* label) {
  */
 static int _decode_value(const ConfigField* f, const cJSON* item, double* out) {
     switch ((ConfigType)f->type) {
-    case CFG_BOOL:
-        if (!cJSON_IsBool(item))
-            return 0;
-        out[0] = cJSON_IsTrue(item) ? 1.0 : 0.0;
-        return 1;
-    case CFG_INT:
-    case CFG_FLOAT:
-    case CFG_DOUBLE:
-        if (!cJSON_IsNumber(item))
-            return 0;
-        out[0] = item->valuedouble;
-        return 1;
-    case CFG_VEC2:
-    case CFG_VEC3: {
-        const int want = f->type == CFG_VEC2 ? 2 : 3;
-        if (!cJSON_IsArray(item) || cJSON_GetArraySize(item) != want)
-            return 0;
-        for (int i = 0; i < want; i++) {
-            const cJSON* e = cJSON_GetArrayItem(item, i);
-            if (!cJSON_IsNumber(e))
+        case CFG_BOOL:
+            if (!cJSON_IsBool(item))
                 return 0;
-            out[i] = e->valuedouble;
-        }
-        return want;
-    }
-    case CFG_ENUM: {
-        // A number is accepted as well as a label, so a hand-edited file that
-        // wrote the raw value still loads; the writer only ever emits labels.
-        if (cJSON_IsNumber(item)) {
+            out[0] = cJSON_IsTrue(item) ? 1.0 : 0.0;
+            return 1;
+        case CFG_INT:
+        case CFG_FLOAT:
+        case CFG_DOUBLE:
+            if (!cJSON_IsNumber(item))
+                return 0;
             out[0] = item->valuedouble;
             return 1;
+        case CFG_VEC2:
+        case CFG_VEC3: {
+            const int want = f->type == CFG_VEC2 ? 2 : 3;
+            if (!cJSON_IsArray(item) || cJSON_GetArraySize(item) != want)
+                return 0;
+            for (int i = 0; i < want; i++) {
+                const cJSON* e = cJSON_GetArrayItem(item, i);
+                if (!cJSON_IsNumber(e))
+                    return 0;
+                out[i] = e->valuedouble;
+            }
+            return want;
         }
-        if (!cJSON_IsString(item) || !item->valuestring)
-            return 0;
-        const int value = _enum_value(f, item->valuestring);
-        if (value < 0)
-            return 0;
-        out[0] = value;
-        return 1;
-    }
+        case CFG_ENUM: {
+            // A number is accepted as well as a label, so a hand-edited file that
+            // wrote the raw value still loads; the writer only ever emits labels.
+            if (cJSON_IsNumber(item)) {
+                out[0] = item->valuedouble;
+                return 1;
+            }
+            if (!cJSON_IsString(item) || !item->valuestring)
+                return 0;
+            const int value = _enum_value(f, item->valuestring);
+            if (value < 0)
+                return 0;
+            out[0] = value;
+            return 1;
+        }
     }
     return 0;
 }
@@ -1345,26 +1349,26 @@ static int _decode_value(const ConfigField* f, const cJSON* item, double* out) {
 static void _store_value(const ConfigField* f, void* base, const double* v, int n) {
     void* p = _field_ptr(base, f);
     switch ((ConfigType)f->type) {
-    case CFG_BOOL:
-        *(bool*)p = v[0] != 0.0;
-        break;
-    case CFG_INT:
-    case CFG_ENUM:
-        *(int*)p = (int)v[0];
-        break;
-    case CFG_FLOAT:
-        *(float*)p = (float)v[0];
-        break;
-    case CFG_DOUBLE:
-        *(double*)p = v[0];
-        break;
-    case CFG_VEC2:
-    case CFG_VEC3: {
-        float* dst = (float*)p;
-        for (int i = 0; i < n; i++)
-            dst[i] = (float)v[i];
-        break;
-    }
+        case CFG_BOOL:
+            *(bool*)p = v[0] != 0.0;
+            break;
+        case CFG_INT:
+        case CFG_ENUM:
+            *(int*)p = (int)v[0];
+            break;
+        case CFG_FLOAT:
+            *(float*)p = (float)v[0];
+            break;
+        case CFG_DOUBLE:
+            *(double*)p = v[0];
+            break;
+        case CFG_VEC2:
+        case CFG_VEC3: {
+            float* dst = (float*)p;
+            for (int i = 0; i < n; i++)
+                dst[i] = (float)v[i];
+            break;
+        }
     }
 }
 
@@ -1413,8 +1417,8 @@ static int _apply_array(ConfigApplyCtx* ctx, const cJSON* root, const ConfigArra
     const cJSON* entry = NULL;
     cJSON_ArrayForEach(entry, array) {
         const cJSON* name_item = cJSON_GetObjectItemCaseSensitive(entry, "name");
-        const char* want = (arr->by_name && cJSON_IsString(name_item)) ? name_item->valuestring
-                                                                      : NULL;
+        const char* want =
+            (arr->by_name && cJSON_IsString(name_item)) ? name_item->valuestring : NULL;
         const cJSON* idx_item = cJSON_GetObjectItemCaseSensitive(entry, "index");
         const int want_index = cJSON_IsNumber(idx_item) ? (int)idx_item->valuedouble : -1;
 
@@ -1528,8 +1532,9 @@ static void _warn_unknown_element_keys(const cJSON* array, ConfigOwner owner,
                 strcmp(item->string, "index") == 0)
                 continue;
             if (!_element_has_key(owner, item->string))
-                fprintf(stderr, "Warning: config snapshot: '%s.%s' is not a known setting; "
-                                "ignored\n",
+                fprintf(stderr,
+                        "Warning: config snapshot: '%s.%s' is not a known setting; "
+                        "ignored\n",
                         array_key, item->string);
         }
     }
@@ -1716,6 +1721,10 @@ bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** 
     _read_back.textures = _read_textures;
     _read_back.sky = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "sky"));
     _read_back.clouds = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "clouds"));
+    _read_back.no_texture_compression =
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "no_texture_compression"));
+    _read_back.texture_compress_colour =
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "texture_compress_colour"));
     _read_back.width = _int_or(src, "width", 0);
     _read_back.height = _int_or(src, "height", 0);
 

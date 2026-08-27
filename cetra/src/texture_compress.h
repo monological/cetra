@@ -1,7 +1,6 @@
 #ifndef _TEXTURE_COMPRESS_H_
 #define _TEXTURE_COMPRESS_H_
 
-#include <stdbool.h>
 #include <stddef.h>
 
 /*
@@ -52,6 +51,13 @@ size_t texture_block_image_bytes(TextureBlockFormat format, int width, int heigh
  * are fitted to real texels -- padding with black drags an edge block's whole
  * palette toward it and prints a dark fringe along the right and bottom of every
  * non-multiple-of-4 texture.
+ *
+ * `channels` must MEET the format: BC4 needs 1, BC5 needs 2, DXT1 needs 3, DXT5
+ * needs 4. Extras are ignored, but a SHORT source is silently filled by
+ * replicating red -- which is right for DXT1 on a greyscale image and wrong for
+ * BC5, where it yields a normal map with G == R: every texel on the diagonal,
+ * Z rebuilt from it, rendering as a plausible and completely wrong surface. The
+ * caller states the format, so the caller owns meeting it.
  *
  * Deterministic: the same input gives the same bytes on any machine and at any
  * optimisation level. That is a requirement rather than a nicety, because the

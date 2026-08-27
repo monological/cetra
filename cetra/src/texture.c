@@ -290,13 +290,13 @@ static void texture_box_halve(const unsigned char* src, int sw, int sh, int chan
 // emissive fit turns into a panel several times too bright, and nothing errors.
 static bool texture_format_is_srgb(GLenum internal_format) {
     switch (internal_format) {
-    case GL_SRGB:
-    case GL_SRGB_ALPHA:
-    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
-    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
-        return true;
-    default:
-        return false;
+        case GL_SRGB:
+        case GL_SRGB_ALPHA:
+        case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+        case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -320,10 +320,6 @@ void texture_set_colour_compression_enabled(bool enabled) {
     g_texture_compression_colour = enabled;
 }
 
-bool texture_compression_enabled(void) {
-    return g_texture_compression_enabled;
-}
-
 // Which block format a texture takes, or NONE.
 //
 // COLOUR is the one use behind a second switch, off by default: BC5 and BC4 cost
@@ -338,40 +334,40 @@ static TextureBlockFormat texture_block_format_for(TextureUse use, int channels)
     if (!g_texture_compression_enabled)
         return TEXTURE_BLOCK_NONE;
     switch (use) {
-    case TEXTURE_USE_NORMAL:
-        return channels >= 2 ? TEXTURE_BLOCK_BC5 : TEXTURE_BLOCK_NONE;
-    case TEXTURE_USE_DATA:
-        // Only a single-channel source. A 3- or 4-channel linear map is an ORM
-        // or a packed surface map whose channels are DIFFERENT quantities, and
-        // BC4 would keep one and discard the rest.
-        return channels == 1 ? TEXTURE_BLOCK_BC4 : TEXTURE_BLOCK_NONE;
-    case TEXTURE_USE_COLOUR:
-    default:
-        // DXT1 without an alpha, DXT5 with one; the sRGB spelling of each is
-        // chosen by texture_block_gl_format, which is where the colour space is
-        // actually known. Both quantise endpoints to RGB565, visibly poor on a
-        // smooth gradient -- so this is the branch the error budget is about.
-        if (!g_texture_compression_colour)
-            return TEXTURE_BLOCK_NONE;
-        if (channels == 4)
-            return TEXTURE_BLOCK_DXT5;
-        return channels == 3 ? TEXTURE_BLOCK_DXT1 : TEXTURE_BLOCK_NONE;
+        case TEXTURE_USE_NORMAL:
+            return channels >= 2 ? TEXTURE_BLOCK_BC5 : TEXTURE_BLOCK_NONE;
+        case TEXTURE_USE_DATA:
+            // Only a single-channel source. A 3- or 4-channel linear map is an ORM
+            // or a packed surface map whose channels are DIFFERENT quantities, and
+            // BC4 would keep one and discard the rest.
+            return channels == 1 ? TEXTURE_BLOCK_BC4 : TEXTURE_BLOCK_NONE;
+        case TEXTURE_USE_COLOUR:
+        default:
+            // DXT1 without an alpha, DXT5 with one; the sRGB spelling of each is
+            // chosen by texture_block_gl_format, which is where the colour space is
+            // actually known. Both quantise endpoints to RGB565, visibly poor on a
+            // smooth gradient -- so this is the branch the error budget is about.
+            if (!g_texture_compression_colour)
+                return TEXTURE_BLOCK_NONE;
+            if (channels == 4)
+                return TEXTURE_BLOCK_DXT5;
+            return channels == 3 ? TEXTURE_BLOCK_DXT1 : TEXTURE_BLOCK_NONE;
     }
 }
 
 static GLenum texture_block_gl_format(TextureBlockFormat format, bool is_srgb) {
     switch (format) {
-    case TEXTURE_BLOCK_BC4:
-        return GL_COMPRESSED_RED_RGTC1;
-    case TEXTURE_BLOCK_BC5:
-        return GL_COMPRESSED_RG_RGTC2;
-    case TEXTURE_BLOCK_DXT1:
-        return is_srgb ? GL_COMPRESSED_SRGB_S3TC_DXT1_EXT : GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
-    case TEXTURE_BLOCK_DXT5:
-        return is_srgb ? GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT
-                       : GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
-    default:
-        return 0;
+        case TEXTURE_BLOCK_BC4:
+            return GL_COMPRESSED_RED_RGTC1;
+        case TEXTURE_BLOCK_BC5:
+            return GL_COMPRESSED_RG_RGTC2;
+        case TEXTURE_BLOCK_DXT1:
+            return is_srgb ? GL_COMPRESSED_SRGB_S3TC_DXT1_EXT : GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
+        case TEXTURE_BLOCK_DXT5:
+            return is_srgb ? GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT
+                           : GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+        default:
+            return 0;
     }
 }
 
@@ -454,8 +450,7 @@ bool texture_upload_image(GLenum internal_format, GLenum data_format, int width,
         // Every caller ignored the old bool return, which is why this had to stop
         // being a caller's problem.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-        log_error("texture mip chain: out of memory at %dx%d, storing level 0 only", width,
-                  height);
+        log_error("texture mip chain: out of memory at %dx%d, storing level 0 only", width, height);
         return false;
     }
 
@@ -470,8 +465,7 @@ bool texture_upload_image(GLenum internal_format, GLenum data_format, int width,
         // cannot compound down it.
         texture_box_halve(src, sw, sh, channels, srgb_stored, lut, dst);
         if (compressed)
-            texture_upload_compressed_level(block, gl_block, level, dw, dh, channels, dst,
-                                            scratch);
+            texture_upload_compressed_level(block, gl_block, level, dw, dh, channels, dst, scratch);
         else
             glTexImage2D(GL_TEXTURE_2D, level, (GLint)internal_format, dw, dh, 0, data_format,
                          GL_UNSIGNED_BYTE, dst);
@@ -497,35 +491,35 @@ size_t texture_gpu_bytes(const Texture* texture) {
     int w = texture->width, h = texture->height;
     for (;;) {
         switch (texture->internal_format) {
-        case GL_COMPRESSED_RED_RGTC1:
-            bytes += texture_block_image_bytes(TEXTURE_BLOCK_BC4, w, h);
-            break;
-        case GL_COMPRESSED_RG_RGTC2:
-            bytes += texture_block_image_bytes(TEXTURE_BLOCK_BC5, w, h);
-            break;
-        case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
-        case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
-            bytes += texture_block_image_bytes(TEXTURE_BLOCK_DXT1, w, h);
-            break;
-        case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
-        case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-            bytes += texture_block_image_bytes(TEXTURE_BLOCK_DXT5, w, h);
-            break;
-        case GL_RED:
-            bytes += (size_t)w * (size_t)h;
-            break;
-        case GL_RG:
-            bytes += (size_t)w * (size_t)h * 2;
-            break;
-        default:
-            // Four bytes for anything with colour in it, including the THREE
-            // channel formats: the ones this engine passes are UNSIZED, the
-            // driver picks the storage, and every desktop one pads RGB to RGBA.
-            // Counting three would report a saving that does not exist -- and
-            // counting four for GL_RED, which really is one byte, inflates the
-            // uncompressed side of every comparison a mask takes part in.
-            bytes += (size_t)w * (size_t)h * 4;
-            break;
+            case GL_COMPRESSED_RED_RGTC1:
+                bytes += texture_block_image_bytes(TEXTURE_BLOCK_BC4, w, h);
+                break;
+            case GL_COMPRESSED_RG_RGTC2:
+                bytes += texture_block_image_bytes(TEXTURE_BLOCK_BC5, w, h);
+                break;
+            case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+            case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
+                bytes += texture_block_image_bytes(TEXTURE_BLOCK_DXT1, w, h);
+                break;
+            case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+            case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+                bytes += texture_block_image_bytes(TEXTURE_BLOCK_DXT5, w, h);
+                break;
+            case GL_RED:
+                bytes += (size_t)w * (size_t)h;
+                break;
+            case GL_RG:
+                bytes += (size_t)w * (size_t)h * 2;
+                break;
+            default:
+                // Four bytes for anything with colour in it, including the THREE
+                // channel formats: the ones this engine passes are UNSIZED, the
+                // driver picks the storage, and every desktop one pads RGB to RGBA.
+                // Counting three would report a saving that does not exist -- and
+                // counting four for GL_RED, which really is one byte, inflates the
+                // uncompressed side of every comparison a mask takes part in.
+                bytes += (size_t)w * (size_t)h * 4;
+                break;
         }
         if (w <= 1 && h <= 1)
             break;
@@ -537,32 +531,32 @@ size_t texture_gpu_bytes(const Texture* texture) {
 
 static const char* texture_format_name(GLenum internal_format) {
     switch (internal_format) {
-    case GL_COMPRESSED_RED_RGTC1:
-        return "BC4";
-    case GL_COMPRESSED_RG_RGTC2:
-        return "BC5";
-    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
-        return "DXT1-srgb";
-    case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
-        return "DXT1";
-    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
-        return "DXT5-srgb";
-    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-        return "DXT5";
-    case GL_SRGB:
-        return "SRGB";
-    case GL_SRGB_ALPHA:
-        return "SRGB_ALPHA";
-    case GL_RGB:
-        return "RGB";
-    case GL_RGBA:
-        return "RGBA";
-    case GL_RG:
-        return "RG";
-    case GL_RED:
-        return "RED";
-    default:
-        return "?";
+        case GL_COMPRESSED_RED_RGTC1:
+            return "BC4";
+        case GL_COMPRESSED_RG_RGTC2:
+            return "BC5";
+        case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+            return "DXT1-srgb";
+        case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
+            return "DXT1";
+        case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+            return "DXT5-srgb";
+        case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+            return "DXT5";
+        case GL_SRGB:
+            return "SRGB";
+        case GL_SRGB_ALPHA:
+            return "SRGB_ALPHA";
+        case GL_RGB:
+            return "RGB";
+        case GL_RGBA:
+            return "RGBA";
+        case GL_RG:
+            return "RG";
+        case GL_RED:
+            return "RED";
+        default:
+            return "?";
     }
 }
 
@@ -665,7 +659,7 @@ bool texture_mean_color(Texture* texture, float* out_rgb) {
     }
 
     // The 1x1 top mip IS the mean, which is the whole trick: the chain already
-    // exists (every load path calls glGenerateMipmap), so an average that would
+    // exists (texture_upload_image builds every level), so an average that would
     // otherwise need the pixels back on the CPU is one texel already sitting in
     // VRAM. Nothing here keeps a copy -- Texture deliberately holds no data
     // pointer -- so without this the mean is simply unobtainable.
@@ -997,7 +991,7 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
 Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
                                   int width, int height, int channels, bool is_srgb) {
     return load_texture_from_memory_used(pool, key, pixels, width, height, channels, is_srgb,
-                                        TEXTURE_USE_COLOUR);
+                                         TEXTURE_USE_COLOUR);
 }
 
 Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
@@ -1050,13 +1044,12 @@ Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
     GLenum data_format;
     texture_gl_formats(channels, is_srgb, &internal_format, &data_format);
 
-    // Upload texture data.
+    // Upload texture data. The `use` is the caller's; the plain form defaults it
+    // to COLOUR, which compresses nothing.
     //
-    // TEXTURE_USE_COLOUR, i.e. uncompressed, and for the same reason this path
-    // still INFERS its dilate above: it takes no statement of what the image is.
-    // Every embedded and procedurally-built texture therefore keeps the storage
-    // it had. It wants the `_used` treatment the moment a procedural normal map
-    // is worth compressing -- apps/forest bakes several.
+    // The DILATE above is still inferred from is_srgb rather than stated, which
+    // is the gap this path has left: an app building a decal image
+    // procedurally gets no dilate and no way to ask for one.
     texture_upload_image(internal_format, data_format, width, height, channels, is_srgb, use,
                          dilated ? dilated : pixels, &internal_format);
     free(dilated);

@@ -46,6 +46,14 @@ typedef struct ConfigSnapshotSource {
     // has to be answered before the engine exists; a row alone would store a
     // flag every consumer then refuses.
     bool clouds;
+    // Texture compression (spec 11.85), here for the same reason clouds is: the
+    // encode is a one-shot at LOAD, so a restore has to answer it before the
+    // engine exists and a table row would store a flag every consumer then
+    // refuses -- the textures are already uploaded by the time an apply runs.
+    // Without these a --texture-compress-colour session does not round-trip, and
+    // that is a measured RMSE 0.0063 on raiden rather than a theoretical one.
+    bool no_texture_compression;
+    bool texture_compress_colour;
     // Window size. Filled by the writer from the live engine and ignored on the
     // way in; a reader takes them from the parsed block. 0 = not recorded.
     int width, height;

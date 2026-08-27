@@ -394,9 +394,9 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
                 struct aiColor4D attenuation_color;
                 if (AI_SUCCESS == aiGetMaterialColor(ai_mat, AI_MATKEY_VOLUME_ATTENUATION_COLOR,
                                                      &attenuation_color)) {
-                    glm_vec3_copy((vec3){attenuation_color.r, attenuation_color.g,
-                                         attenuation_color.b},
-                                  material->attenuation_color);
+                    glm_vec3_copy(
+                        (vec3){attenuation_color.r, attenuation_color.g, attenuation_color.b},
+                        material->attenuation_color);
                 }
             }
             log_info("Material is transmissive: transmission=%.2f ior=%.2f thickness=%.2f "
@@ -553,14 +553,14 @@ static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScen
 // edge texel smeared outward.
 static GLenum gl_wrap_from_assimp(enum aiTextureMapMode mode) {
     switch (mode) {
-    case aiTextureMapMode_Clamp:
-        return GL_CLAMP_TO_EDGE;
-    case aiTextureMapMode_Mirror:
-        return GL_MIRRORED_REPEAT;
-    case aiTextureMapMode_Decal:
-        return GL_CLAMP_TO_BORDER;
-    default:
-        return GL_REPEAT;
+        case aiTextureMapMode_Clamp:
+            return GL_CLAMP_TO_EDGE;
+        case aiTextureMapMode_Mirror:
+            return GL_MIRRORED_REPEAT;
+        case aiTextureMapMode_Decal:
+            return GL_CLAMP_TO_BORDER;
+        default:
+            return GL_REPEAT;
     }
 }
 
@@ -610,19 +610,18 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
     const TextureUse use = texture_use_for_setter(setter);
     if (tex_path[0] == '*' && ai_scene) {
         int idx = atoi(tex_path + 1);
-        const struct aiTexture* ai_tex =
-            (idx >= 0 && (unsigned int)idx < ai_scene->mNumTextures) ? ai_scene->mTextures[idx]
-                                                                     : NULL;
+        const struct aiTexture* ai_tex = (idx >= 0 && (unsigned int)idx < ai_scene->mNumTextures)
+                                             ? ai_scene->mTextures[idx]
+                                             : NULL;
         if (ai_tex && ai_tex->mHeight == 0) {
             // Compressed embedded (PNG/JPG): decode on a worker like a file. For
             // a compressed aiTexture, mWidth is the byte size of pcData.
             AsyncTexCallback* ctx =
                 make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
             if (ctx) {
-                load_texture_from_memory_async(loader, tex_pool, tex_path,
-                                               (const unsigned char*)ai_tex->pcData,
-                                               (int)ai_tex->mWidth, is_srgb, use,
-                                               async_tex_callback, ctx);
+                load_texture_from_memory_async(
+                    loader, tex_pool, tex_path, (const unsigned char*)ai_tex->pcData,
+                    (int)ai_tex->mWidth, is_srgb, use, async_tex_callback, ctx);
             }
         } else {
             // Raw (uncompressed) embedded pixels: decode inline (rare).
@@ -633,8 +632,7 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
             }
         }
     } else {
-        AsyncTexCallback* ctx =
-            make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
+        AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
         if (ctx) {
             load_texture_async(loader, tex_pool, tex_path, is_srgb, use, async_tex_callback, ctx);
         }
@@ -655,10 +653,10 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     // lands on the tiling default this engine used unconditionally before.
     enum aiTextureMapMode mapmode[2];
 
-#define TSL_MAPMODE_RESET()                                                                        \
-    do {                                                                                           \
-        mapmode[0] = aiTextureMapMode_Wrap;                                                        \
-        mapmode[1] = aiTextureMapMode_Wrap;                                                        \
+#define TSL_MAPMODE_RESET()                 \
+    do {                                    \
+        mapmode[0] = aiTextureMapMode_Wrap; \
+        mapmode[1] = aiTextureMapMode_Wrap; \
     } while (0)
 
     // Load textures from the mapping table
@@ -667,8 +665,8 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
         TSL_MAPMODE_RESET();
         if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, mapping->ai_type, 0, &str, NULL, NULL, NULL,
                                                NULL, mapmode, NULL)) {
-            load_material_texture(material, tex_pool, ai_scene, loader, str.data, mapping->is_srgb, mapping->setter, mapping->name,
-                                  gl_wrap_from_assimp(mapmode[0]),
+            load_material_texture(material, tex_pool, ai_scene, loader, str.data, mapping->is_srgb,
+                                  mapping->setter, mapping->name, gl_wrap_from_assimp(mapmode[0]),
                                   gl_wrap_from_assimp(mapmode[1]));
         }
     }
@@ -1610,8 +1608,8 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
         if (matIndex < ai_scene->mNumMaterials) {
             Material* mat = mat_cache[matIndex];
             if (!mat) {
-                mat = process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene,
-                                          loader);
+                mat =
+                    process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene, loader);
                 if (mat) {
                     mat_cache[matIndex] = mat;
                     add_material_to_scene(scene, mat);
@@ -1749,8 +1747,8 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
         return NULL;
     }
 
-    const struct aiScene* ai_scene = import_ai_scene(
-        path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag());
+    const struct aiScene* ai_scene =
+        import_ai_scene(path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag());
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;

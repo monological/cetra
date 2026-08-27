@@ -167,11 +167,14 @@ typedef enum TextureUse {
     TEXTURE_USE_DATA,   // roughness, metalness, AO, opacity, height
 } TextureUse;
 
-// Global switch behind --no-texture-compression. Off leaves every upload path
-// byte-identical to the pre-11.85 engine, which is what makes it the bisect
-// lever rather than merely a setting.
+// Global switch behind --no-texture-compression: off stores every texture
+// uncompressed, and pbr_frag then reads a stored Z rather than rebuilding one,
+// so a normal-mapped frame returns to what it was.
+//
+// It is a lever on STORAGE, and the CPU mip chain is not behind it -- that
+// replaced glGenerateMipmap unconditionally and moves 59,927 px of 480,000 on
+// forest by itself. Bisecting across this spec means the commits, not the flag.
 void texture_set_compression_enabled(bool enabled);
-bool texture_compression_enabled(void);
 
 // Colour is its own switch and defaults OFF. DXT quantises endpoints to RGB565,
 // which is visible on a smooth gradient where BC4 and BC5 are not, so the two
@@ -221,6 +224,11 @@ bool texture_upload_image(GLenum internal_format, GLenum data_format, int width,
  * scene whose normals silently failed to compress renders exactly like one whose
  * normals compressed, which is the failure this is here to catch. It prints the
  * internal format the driver holds, not the one the loader asked for.
+ *
+ * Its line shape is POSITIONAL where every other probe in the tree emits
+ * `<prefix> <kind> k=v ...` and gates.py has a shared parser for that. So this
+ * one costs a bespoke parser it should not; worth converting the next time
+ * either side is touched.
  */
 void texture_pool_probe(const TexturePool* pool, const char* label);
 
@@ -267,8 +275,12 @@ Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsi
 // call site.
 // And the two saying what the image IS, for the same reason the file loader has
 // a `_used` form: a procedurally generated normal map is the case that breaks
-// the inference, and this is the path every one of them takes -- apps/forest
-// bakes two, apps/tree more.
+// the inference, and this is the path every one of them takes.
+//
+// apps/forest states both of its normals. apps/tree states NONE of its three
+// (bark, leaf, sand), so they are stored uncompressed -- which is a saving left
+// on the table rather than a defect, and is why the sand's stochastic path was
+// safe while its Z rebuild was missing.
 Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
                                        const unsigned char* pixels, int width, int height,
                                        int channels, bool is_srgb, TextureUse use);

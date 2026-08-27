@@ -41,6 +41,7 @@ Regenerate with: python3 assets/gen_texcomp_fixture.py
 
 import base64
 import json
+import math
 import os
 import struct
 
@@ -93,25 +94,6 @@ def _roughness(n):
     v = 0.1 + 0.8 * ((steps % 8.0) / 7.0)
     return np.clip(v * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
-
-albedo = _albedo(TEX)
-normal = _normal(TEX)
-rough = _roughness(TEX)
-
-# The asserts are the fixture's own contract; each one failed at least once while
-# this was being written.
-assert albedo[..., 0].std() > 40 and albedo[..., 2].std() > 40, \
-    "albedo must vary hard in more than one channel or DXT error cannot show"
-nx = normal[..., 0].astype(float) / 255.0 * 2.0 - 1.0
-ny = normal[..., 1].astype(float) / 255.0 * 2.0 - 1.0
-assert abs(np.corrcoef(nx.ravel(), ny.ravel())[0, 1]) < 0.1, \
-    "normal x and y must be independent or BC5's separate endpoints go untested"
-assert np.abs(nx).max() > 0.5, "normal slope too gentle: the Z rebuild is flat near the pole"
-assert rough.ndim == 2, "roughness must be single channel or the loader declines BC4"
-
-Image.fromarray(albedo, "RGB").save(os.path.join(HERE, "texcomp_albedo.png"))
-Image.fromarray(normal, "RGB").save(os.path.join(HERE, "texcomp_normal.png"))
-Image.fromarray(rough, "L").save(os.path.join(HERE, "texcomp_rough.png"))
 
 # --- geometry: one long quad, near edge at NEAR, far edge at FAR -------------
 pos = [(-HALF_W, 0.0, -NEAR), (HALF_W, 0.0, -NEAR),
@@ -197,9 +179,62 @@ CSCN = {
     "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
 }
 
-if __name__ == "__main__":
+def main():
+    # The maps are built and saved HERE, not at module scope. gates.py's
+    # _import_fixture_gen states the contract -- "imported for its constants,
+    # writes nothing on import" -- and CLAUDE.md records lut_fixture walking into
+    # exactly this, rewriting committed assets mid-gate.
+    albedo = _albedo(TEX)
+    normal = _normal(TEX)
+    rough = _roughness(TEX)
+
+    # The asserts are the fixture's own contract; each one failed at least once while
+    # this was being written.
+    assert albedo[..., 0].std() > 40 and albedo[..., 2].std() > 40, \
+        "albedo must vary hard in more than one channel or DXT error cannot show"
+    nx = normal[..., 0].astype(float) / 255.0 * 2.0 - 1.0
+    ny = normal[..., 1].astype(float) / 255.0 * 2.0 - 1.0
+    assert abs(np.corrcoef(nx.ravel(), ny.ravel())[0, 1]) < 0.1, \
+        "normal x and y must be independent or BC5's separate endpoints go untested"
+    assert np.abs(nx).max() > 0.5, "normal slope too gentle: the Z rebuild is flat near the pole"
+    assert rough.ndim == 2, "roughness must be single channel or the loader declines BC4"
+
+    Image.fromarray(albedo, "RGB").save(os.path.join(HERE, "texcomp_albedo.png"))
+    Image.fromarray(normal, "RGB").save(os.path.join(HERE, "texcomp_normal.png"))
+    Image.fromarray(rough, "L").save(os.path.join(HERE, "texcomp_rough.png"))
+
+    # THE PROPERTY THIS FIXTURE EXISTS FOR, asserted rather than hoped.
+    #
+    # Its whole justification is that it reaches high mip levels where the rest
+    # of the corpus never leaves level 0. That depth is a joint function of six
+    # numbers across two files -- TEX, UV_PER_UNIT, FAR, the camera height, the
+    # fov, and the gate's render height -- and any one of them can silently
+    # return this to being the same as every other fixture. wind_cull_fixture
+    # derives its frustum half-width from the gate's own fov for the same reason.
+    gate_h = 300 * 2  # gates render 400x300 into a 2x framebuffer
+    cam_y, fov = 8.0, 50.0
+    # World units one pixel covers at the plane's far edge, then texels per pixel.
+    px_at_far = 2.0 * FAR * math.tan(math.radians(fov) * 0.5) / gate_h
+    # Foreshortening at grazing incidence: the along-view extent is stretched by
+    # FAR/cam_y, which is what actually drives the minification.
+    texels_per_px = px_at_far * UV_PER_UNIT * TEX * (FAR / cam_y)
+    reached = math.log2(max(texels_per_px, 1.0))
+    assert reached >= 4.0, (
+        f"the far edge reaches only mip {reached:.1f}; this fixture exists to walk the chain "
+        f"and below ~4 it tests what every other fixture already does")
+
+    # And that the roughness really is one channel ON DISK -- the loader offers
+    # BC4 only to a single-channel source, so a grey RGB here would exercise the
+    # DECLINE path while looking like it tested BC4.
+    assert Image.open(os.path.join(HERE, "texcomp_rough.png")).mode == "L", \
+        "roughness must be saved single-channel or the BC4 arm tests nothing"
+
     with open(os.path.join(HERE, "texcomp_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
     with open(os.path.join(HERE, "texcomp_fixture.cscn"), "w") as f:
         json.dump(CSCN, f, indent=1)
     print(f"wrote texcomp_fixture.gltf, texcomp_fixture.cscn and 3 maps at {TEX}x{TEX}")
+
+
+if __name__ == "__main__":
+    main()

@@ -18539,6 +18539,11 @@ def _texcomp_probe(workdir, extra):
     cmd = [RENDER, "-m", os.path.join(ROOT, "assets", TEXCOMP_FIXTURE), "-x",
            "-f", "3", "-W", "200", "-H", "150", "--texture-probe", "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        # A dead render prints no probe lines, so an empty ledger is
+        # indistinguishable from a compressed-nothing one -- and `ncomp == 0`
+        # then PASSES on a build that cannot start.
+        return None
     mb, formats, ncomp = 0.0, set(), 0
     for line in (r.stdout + r.stderr).splitlines():
         if "texture-probe scene tex" in line:
@@ -18573,6 +18578,13 @@ def run_texcomp_gate(workdir):
                         for, and stays inside its own budget. Bounded ABOVE and
                         BELOW: a build where the colour switch silently did
                         nothing reads 0.0000 and would pass a ceiling alone.
+      texcomp-config    a --texture-compress-colour session restores from its own
+                        snapshot at 0 px. Its own arm because the failure is
+                        silent: the switches are a one-shot at LOAD, so a
+                        descriptor-table row would be stored, read back and
+                        refused by every consumer with the textures already
+                        uploaded -- the config-clouds shape, and spec 11.71's
+                        claim is that the JSON reproduces the pixels.
 
     WHY THIS FIXTURE AND NOT ANY OTHER. Every golden in the corpus is 0 px with
     every mip level painted solid black, and so is the raiden recipe -- they sit
@@ -18596,15 +18608,26 @@ def run_texcomp_gate(workdir):
             return ["texcomp render"]
 
     # texcomp-off: the lever reaches the uncompressed frame exactly.
-    raw_mb, raw_formats, raw_ncomp = _texcomp_probe(workdir, ["--no-texture-compression"])
-    ok = raw_ncomp == 0
+    raw = _texcomp_probe(workdir, ["--no-texture-compression"])
+    if raw is None:
+        print("  texcomp-off    ERROR the --no-texture-compression render failed")
+        return ["texcomp-off"]
+    raw_mb, raw_formats, raw_ncomp = raw
+    # All three counts, not just the zero: a render that died prints no ledger at
+    # all, and `0 == 0` is satisfied by nothing having happened.
+    ok = raw_ncomp == 0 and len(raw_formats) == 3 and raw_mb > 0.0
     print(f"  texcomp-off    {'PASS' if ok else 'FAIL'}  --no-texture-compression stores "
-          f"{raw_ncomp} compressed of any format (want 0), ledger {raw_mb:.3f} MB")
+          f"{raw_ncomp} compressed of any format (want 0) across {len(raw_formats)} formats "
+          f"(want 3, or the render never drew), ledger {raw_mb:.3f} MB (want > 0)")
     if not ok:
         failures.append("texcomp-off")
 
     # texcomp-format: the right format on the right map, and the saving landed.
-    mb, formats, ncomp = _texcomp_probe(workdir, [])
+    got = _texcomp_probe(workdir, [])
+    if got is None:
+        print("  texcomp-format ERROR the default render failed")
+        return failures + ["texcomp-format"]
+    mb, formats, ncomp = got
     ok = "BC5" in formats and "BC4" in formats and ncomp == 2 and mb <= TEXCOMP_MB_MAX
     print(f"  texcomp-format {'PASS' if ok else 'FAIL'}  formats={sorted(formats)} "
           f"compressed={ncomp} (want BC5 and BC4, 2 of 3), ledger {mb:.3f} MB "
@@ -18624,8 +18647,15 @@ def run_texcomp_gate(workdir):
     # texcomp-colour: off by default, live when asked, and inside its budget.
     default_moved, _ = compare(shots["on"], shots["raw"])
     colour_rmse = _texcomp_rmse(shots["on"], shots["colour"])
-    _, colour_formats, colour_ncomp = _texcomp_probe(workdir, ["--texture-compress-colour"])
-    colour_armed = "DXT1" in colour_formats or "DXT1-srgb" in colour_formats
+    got_colour = _texcomp_probe(workdir, ["--texture-compress-colour"])
+    if got_colour is None:
+        print("  texcomp-colour ERROR the colour render failed")
+        return failures + ["texcomp-colour"]
+    _, colour_formats, colour_ncomp = got_colour
+    # The sRGB spelling and ONLY it. A linear DXT1 on an sRGB albedo shrinks
+    # and renders, and is one enum away from the decode bug 50fd0f1d fixed --
+    # accepting both spellings is accepting the one that is wrong.
+    colour_armed = "DXT1-srgb" in colour_formats and "DXT1" not in colour_formats
     ok = (colour_armed and colour_ncomp == 3
           and TEXCOMP_COLOUR_RMSE_MIN <= colour_rmse <= TEXCOMP_COLOUR_RMSE_MAX)
     print(f"  texcomp-colour {'PASS' if ok else 'FAIL'}  default leaves albedo uncompressed "
@@ -18634,6 +18664,34 @@ def run_texcomp_gate(workdir):
           f"(want {TEXCOMP_COLOUR_RMSE_MIN} to {TEXCOMP_COLOUR_RMSE_MAX})")
     if not ok:
         failures.append("texcomp-colour")
+
+
+    # texcomp-config: the snapshot carries the storage choice.
+    #
+    # Its own arm because the failure is SILENT and total -- the settings are a
+    # one-shot at load, so a row in the descriptor table would be stored, read
+    # back, and refused by every consumer with the textures already uploaded.
+    # That is the config-clouds failure spec 11.72 found once; this is the same
+    # shape, and spec 11.71's whole claim is that the JSON reproduces the pixels.
+    cfg = os.path.join(workdir, "texcomp_cfg.json")
+    flag_shot = os.path.join(workdir, "texcomp_cfg_flag.ppm")
+    rest_shot = os.path.join(workdir, "texcomp_cfg_restored.ppm")
+    base = [RENDER, "-m", scene, "-x", "-f", str(TEXCOMP_FRAMES), "-W", "300", "-H", "220"]
+    r1 = _run(base + ["--texture-compress-colour", "--config-dump", cfg, "-S", flag_shot],
+              capture_output=True, text=True)
+    r2 = _run([RENDER, "--config", cfg, "-x", "-f", str(TEXCOMP_FRAMES), "-S", rest_shot],
+              capture_output=True, text=True)
+    if r1.returncode != 0 or r2.returncode != 0 or not os.path.exists(rest_shot):
+        print("  texcomp-config ERROR the dump/restore pair failed to render")
+        failures.append("texcomp-config")
+    else:
+        moved, _ = compare(flag_shot, rest_shot)
+        ok = moved == 0
+        print(f"  texcomp-config {'PASS' if ok else 'FAIL'}  a --texture-compress-colour session "
+              f"restores from its snapshot alone at {moved} px (want 0; without the source-block "
+              f"rows the restore silently renders uncompressed)")
+        if not ok:
+            failures.append("texcomp-config")
 
     return failures
 
