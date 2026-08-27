@@ -38,28 +38,8 @@
 // by how fast alpha moves per pixel is what converts it -- so the transition is
 // one pixel wide whatever the texture's own falloff looks like, and a
 // half-covered pixel reads 0.5 at any resolution or camera angle.
-// Above this rate of change per pixel the alpha is ALIASING rather than
-// resolving, and the remap below stops meaning anything (spec 11.87).
-//
-// It divides by the per-pixel rate to express distance-to-threshold in pixels,
-// which assumes alpha is locally linear across the pixel. On a minified atlas it
-// is not: a leaf whose whole soft edge falls inside one texel footprint reports
-// a rate near 1, and then even a texel deep inside the leaf -- alpha 0.9 against
-// a 0.4 cutoff -- comes back at 0.5 + 0.5/1.0, which clamps to 1 only just, and
-// a slightly higher rate leaves the leaf's INTERIOR partially covered. Whatever
-// is behind then shows through a surface that should be solid.
-//
-// Measured on apps/tree's canopy, against a 4x-supersampled ground truth: a
-// pixel that should read luma 20 read 110 without this, and 24 with it.
-const float ALPHA_ALIASED_RATE = 0.5;
-
 float alphaMaskCoverage(float a, float cutoff, int a2c) {
     if (a2c == 0)
         return step(cutoff, a);
-    // Rate first, because the fallback needs it and a derivative must be taken
-    // before any branch that could diverge on it.
-    float rate = fwidth(a);
-    if (rate > ALPHA_ALIASED_RATE)
-        return step(cutoff, a);
-    return clamp((a - cutoff) / max(rate, 1e-4) + 0.5, 0.0, 1.0);
+    return clamp((a - cutoff) / max(fwidth(a), 1e-4) + 0.5, 0.0, 1.0);
 }
