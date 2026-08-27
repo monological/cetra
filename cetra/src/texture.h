@@ -129,8 +129,6 @@ void texture_set_default_sampler_state(void);
 // visible edges (bright dashes on hair/foliage cards)
 void texture_dilate_transparent_rgb(unsigned char* data, int width, int height);
 
-Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb);
-
 // What an RGBA source's ALPHA means, which decides whether its transparent
 // texels' rgb wants repairing before it is filtered or mipped.
 //
@@ -267,64 +265,43 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
  */
 void texture_pool_probe(const TexturePool* pool, const char* label);
 
-// As above, but SAYS what the alpha means instead of inferring it from is_srgb.
-//
-// The inference is right for everything loaded through the plain form: `is_srgb`
-// means "this is colour beside an opacity", and the linear textures reaching it
-// carry a height or an occlusion in alpha, which dilating would overwrite. A
-// decal image is the case that breaks the correlation -- colour with a real
-// opacity alpha, loaded LINEAR because it lives in the material array -- so it
-// asks directly rather than lying about its colour space to get the repair.
-Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
-                                        TextureAlpha alpha);
+/*
+ * Load a texture FILE into the pool, resolving `filepath` against the pool's
+ * directory. Cached by the resolved path.
+ *
+ * The pool keys on PATH, so a second consumer wanting the same file under a
+ * different desc gets the first one's decision. That is warned about by name
+ * rather than re-keyed: two entries would double the VRAM for one image, and a
+ * scene wanting one file as both a lit albedo and a decal wants two files.
+ */
+Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc desc);
 
-// And the same again for what the texture IS, which decides its block format.
-// A third entry point rather than a fourth parameter on the one above: the two
-// facts are independent, every existing caller of `_ex` means TEXTURE_USE_COLOUR
-// by construction (it is the decal path), and widening `_ex` would put a second
-// unexplained enum at each of its call sites -- the exact legibility problem its
-// own header comment says the named pair was introduced to avoid.
-Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepath, bool is_srgb,
-                                          TextureAlpha alpha, TextureUse use);
+/*
+ * The same from pixels already in memory, cached by `key`.
+ *
+ * The pool does NOT keep `pixels`. GL takes its own copy and Texture stores no
+ * pixel pointer, so the caller's buffer is dead the moment this returns.
+ *
+ * A repeat key returns the existing Texture WITHOUT looking at `pixels` at all,
+ * so a duplicate key silently discards a freshly generated image.
+ */
+Texture* texture_load_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
+                             int width, int height, int channels, TextureDesc desc);
 
-// The pool does NOT keep `pixels`. glTexImage2D takes GL's own copy and Texture
-// stores no pixel pointer, so the caller's buffer is dead the moment this
-// returns and the caller frees it. Stated here because the only place that said
-// so was an implementation comment, and a caller reading the header could not
-// learn it.
-//
-// Cached by `key`: a repeat key returns the existing Texture WITHOUT looking at
-// `pixels` at all, so a duplicate key silently discards a freshly generated
-// image.
-Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
-                                  int width, int height, int channels, bool is_srgb);
-
-// The same, but TAKING OWNERSHIP: uploads and then frees `pixels`.
-//
-// For a procedural bake, which is every caller that generates into a malloc'd
-// buffer and has no use for it afterwards. Both apps that do this had grown
-// their own identical copy of it -- what the helper encodes is a fact about the
-// pool above, not about either app.
-//
-// A NULL `pixels` returns NULL, so a generator that failed needs no guard at the
-// call site.
-// And the two saying what the image IS, for the same reason the file loader has
-// a `_used` form: a procedurally generated normal map is the case that breaks
-// the inference, and this is the path every one of them takes.
-//
-// apps/forest states both of its normals. apps/tree states NONE of its three
-// (bark, leaf, sand), so they are stored uncompressed -- which is a saving left
-// on the table rather than a defect, and is why the sand's stochastic path was
-// safe while its Z rebuild was missing.
-Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
-                                       const unsigned char* pixels, int width, int height,
-                                       int channels, bool is_srgb, TextureUse use);
-Texture* load_texture_from_memory_owned_used(TexturePool* pool, const char* key,
-                                             unsigned char* pixels, int width, int height,
-                                             int channels, bool is_srgb, TextureUse use);
-
-Texture* load_texture_from_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
-                                        int width, int height, int channels, bool is_srgb);
+/*
+ * The same, but TAKING OWNERSHIP: uploads and then frees `pixels`.
+ *
+ * For a procedural bake, which is every caller that generates into a malloc'd
+ * buffer and has no use for it afterwards. Ownership is its own function rather
+ * than a field on TextureDesc, because it is a fact about the BUFFER and the
+ * desc describes the IMAGE -- one desc is meant to be reusable across calls, and
+ * a lifetime bolted into it would not be.
+ *
+ * A NULL `pixels` returns NULL, so a generator that failed needs no guard at the
+ * call site.
+ */
+Texture* texture_load_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
+                                   int width, int height, int channels, TextureDesc desc);
 
 void remove_texture_from_pool(TexturePool* pool, const char* filepath);
 void clear_texture_pool(TexturePool* pool);

@@ -131,18 +131,18 @@ void free_async_loader(AsyncLoader* loader);
  *
  * Submissions are deduplicated by key: a request for a key already decoding
  * attaches to that decode and receives ITS Texture rather than starting a second
- * one. The key therefore decides the result on its own -- `is_srgb` is not part
+ * one. The key therefore decides the result on its own -- the DESC is not part
  * of the identity, so two requests for one key that disagree about it both get
- * the first submitter's choice. A caller that needs the same image in two
- * colorspaces must submit it under two keys. (The texture pool has always been
- * keyed this way; dedup makes it bite sooner and more deterministically.)
+ * the first submitter's choice. A caller that needs the same image under two
+ * descs must submit it under two keys. (The texture pool has always been keyed
+ * this way; dedup makes it bite sooner and more deterministically.)
  *
  * Keys are matched across the whole loader, not per pool. One AsyncLoader must
  * therefore serve one TexturePool at a time -- embedded keys ("*0", "*1", ...)
  * collide between any two glTF scenes.
  */
-void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath, bool is_srgb,
-                        TextureUse use, void (*callback)(Texture* tex, void* user_data),
+void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath,
+                        TextureDesc desc, void (*callback)(Texture* tex, void* user_data),
                         void* user_data);
 
 // Decode a compressed image already in memory (e.g. a glTF-embedded PNG) on a
@@ -150,8 +150,8 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
 // compressed bytes, copied internally so the caller may free/release them (and
 // the source aiScene) immediately after this returns.
 void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
-                                    const unsigned char* data, int data_size, bool is_srgb,
-                                    TextureUse use, void (*callback)(Texture* tex, void* user_data),
+                                    const unsigned char* data, int data_size, TextureDesc desc,
+                                    void (*callback)(Texture* tex, void* user_data),
                                     void* user_data);
 
 /*

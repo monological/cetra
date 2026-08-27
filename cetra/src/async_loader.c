@@ -556,7 +556,7 @@ void free_async_loader(AsyncLoader* loader) {
  * cannot be expressed.
  */
 static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
-                        const unsigned char* bytes, int nbytes, bool is_srgb, TextureUse use,
+                        const unsigned char* bytes, int nbytes, TextureDesc desc,
                         void (*callback)(Texture* tex, void* user_data), void* user_data) {
     // Already decoded and uploaded under this key?
     Texture* cached = get_texture_from_pool_threadsafe(pool, key);
@@ -600,10 +600,7 @@ static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
 
     req->pool = pool;
     req->filepath = key_copy;
-    // The alpha is inferred here, as it always was on this path. Phase 6 hands
-    // the submit API a desc so a streamed decal can state it.
-    req->desc = texture_desc(is_srgb);
-    req->desc.use = use;
+    req->desc = desc;
     req->embedded_data = copy;
     req->embedded_size = bytes ? nbytes : 0;
     req->callback = callback;
@@ -615,9 +612,9 @@ static void submit_load(AsyncLoader* loader, TexturePool* pool, const char* key,
 /*
  * Submit texture load request to worker queue
  */
-void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath, bool is_srgb,
-                        TextureUse use,
-                        void (*callback)(Texture* tex, void* user_data), void* user_data) {
+void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath,
+                        TextureDesc desc, void (*callback)(Texture* tex, void* user_data),
+                        void* user_data) {
     if (!loader || !pool || !filepath) {
         log_error("Invalid arguments to load_texture_async");
         if (callback) {
@@ -634,12 +631,11 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
         return;
     }
 
-    submit_load(loader, pool, filepath, NULL, 0, is_srgb, use, callback, user_data);
+    submit_load(loader, pool, filepath, NULL, 0, desc, callback, user_data);
 }
 
 void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
-                                    const unsigned char* data, int data_size, bool is_srgb,
-                                    TextureUse use,
+                                    const unsigned char* data, int data_size, TextureDesc desc,
                                     void (*callback)(Texture* tex, void* user_data),
                                     void* user_data) {
     if (!loader || !pool || !key || !data || data_size <= 0) {
@@ -650,7 +646,7 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
         return;
     }
 
-    submit_load(loader, pool, key, data, data_size, is_srgb, use, callback, user_data);
+    submit_load(loader, pool, key, data, data_size, desc, callback, user_data);
 }
 
 /*

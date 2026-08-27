@@ -820,11 +820,11 @@ static void bake_terrain_layers(Scene* scene) {
         snprintf(key, sizeof(key), "forest_layer_%s_a", TERRAIN_LAYERS[i].name);
         set_material_layer_albedo_tex(
             g_mat_terrain, i,
-            load_texture_from_memory_owned(scene->tex_pool, key, albedo, T, T, 4, false));
+            texture_load_memory_owned(scene->tex_pool, key, albedo, T, T, 4, texture_desc(false)));
         snprintf(key, sizeof(key), "forest_layer_%s_s", TERRAIN_LAYERS[i].name);
         set_material_layer_surface_tex(
             g_mat_terrain, i,
-            load_texture_from_memory_owned(scene->tex_pool, key, surface, T, T, 4, false));
+            texture_load_memory_owned(scene->tex_pool, key, surface, T, T, 4, texture_desc(false)));
         g_mat_terrain->layers[i].uv_scale = TERRAIN_LAYERS[i].uv_scale;
     }
 
@@ -838,9 +838,8 @@ static void bake_terrain_layers(Scene* scene) {
     unsigned char* splat = malloc((size_t)res * (size_t)res * 3u);
     if (splat && terrain_bake_splat(&g_terrain, res, splat)) {
         set_material_splat_tex(g_mat_terrain,
-                               load_texture_from_memory_owned(scene->tex_pool,
-                                                              "forest_terrain_splat", splat, res,
-                                                              res, 3, false));
+                               texture_load_memory_owned(scene->tex_pool, "forest_terrain_splat",
+                                                         splat, res, res, 3, texture_desc(false)));
     } else {
         free(splat);
         fprintf(stderr, "forest: splat bake failed; the ground falls back to layer 0\n");
@@ -893,20 +892,24 @@ static void bake_vegetation_textures(Scene* scene) {
     float* field = malloc((size_t)B * B * sizeof(float));
     if (field) {
         veg_bark_height_field(field, B, B);
-        set_material_albedo_tex(
-            g_mat_bark, load_texture_from_memory_owned(scene->tex_pool, "forest_bark_albedo",
-                                                       veg_bark_albedo(B, B, field), B, B, 3, true));
+        set_material_albedo_tex(g_mat_bark,
+                                texture_load_memory_owned(scene->tex_pool, "forest_bark_albedo",
+                                                          veg_bark_albedo(B, B, field), B, B, 3,
+                                                          texture_desc(true)));
         // Stated as a NORMAL so it takes BC5. Procedural maps reach the GPU
         // through this path rather than through an importer, so nothing else can
         // know what they are.
         set_material_normal_tex(
-            g_mat_bark, load_texture_from_memory_owned_used(
-                            scene->tex_pool, "forest_bark_normal", veg_bark_normal(B, B, field), B,
-                            B, 3, false, TEXTURE_USE_NORMAL));
-        set_material_roughness_tex(
-            g_mat_bark, load_texture_from_memory_owned(scene->tex_pool, "forest_bark_rough",
-                                                       veg_bark_roughness(B, B, field), B, B, 3,
-                                                       false));
+            g_mat_bark,
+            texture_load_memory_owned(scene->tex_pool, "forest_bark_normal",
+                                      veg_bark_normal(B, B, field), B, B, 3,
+                                      (TextureDesc){.is_srgb = false,
+                                                    .alpha = TEXTURE_ALPHA_DATA,
+                                                    .use = TEXTURE_USE_NORMAL}));
+        set_material_roughness_tex(g_mat_bark,
+                                   texture_load_memory_owned(scene->tex_pool, "forest_bark_rough",
+                                                             veg_bark_roughness(B, B, field), B, B,
+                                                             3, texture_desc(false)));
         free(field);
     }
 
@@ -915,14 +918,17 @@ static void bake_vegetation_textures(Scene* scene) {
     unsigned char *la = NULL, *ln = NULL, *lr = NULL;
     veg_leaf_cluster_maps(LW, LH, &la, &ln, &lr);
     set_material_albedo_tex(g_mat_leaf,
-                            load_texture_from_memory_owned(scene->tex_pool, "forest_leaf_albedo",
-                                                           la, LW, LH, 4, true));
-    set_material_normal_tex(g_mat_leaf, load_texture_from_memory_owned_used(
-                                            scene->tex_pool, "forest_leaf_normal", ln, LW, LH, 3,
-                                            false, TEXTURE_USE_NORMAL));
+                            texture_load_memory_owned(scene->tex_pool, "forest_leaf_albedo", la, LW,
+                                                      LH, 4, texture_desc(true)));
+    set_material_normal_tex(g_mat_leaf,
+                            texture_load_memory_owned(scene->tex_pool, "forest_leaf_normal", ln, LW,
+                                                      LH, 3,
+                                                      (TextureDesc){.is_srgb = false,
+                                                                    .alpha = TEXTURE_ALPHA_DATA,
+                                                                    .use = TEXTURE_USE_NORMAL}));
     set_material_roughness_tex(g_mat_leaf,
-                               load_texture_from_memory_owned(scene->tex_pool, "forest_leaf_rough",
-                                                              lr, LW, LH, 3, false));
+                               texture_load_memory_owned(scene->tex_pool, "forest_leaf_rough", lr,
+                                                         LW, LH, 3, texture_desc(false)));
 }
 
 static Material* make_material(const char* name, vec3 albedo, float roughness, float metallic) {

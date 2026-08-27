@@ -82,29 +82,32 @@ static void generate_procedural_textures(Scene* scene) {
     float* bark_field = malloc((size_t)B * B * sizeof(float));
     if (bark_field) {
         veg_bark_height_field(bark_field, B, B);
-        bark_albedo_tex = load_texture_from_memory_owned(
-            scene->tex_pool, "proc_bark_albedo", veg_bark_albedo(B, B, bark_field), B, B, 3, true);
-        bark_normal_tex = load_texture_from_memory_owned(
-            scene->tex_pool, "proc_bark_normal", veg_bark_normal(B, B, bark_field), B, B, 3, false);
-        bark_roughness_tex =
-            load_texture_from_memory_owned(scene->tex_pool, "proc_bark_roughness",
-                                           veg_bark_roughness(B, B, bark_field), B, B, 3, false);
-        bark_height_tex = load_texture_from_memory_owned(
-            scene->tex_pool, "proc_bark_height", veg_bark_height(B, B, bark_field), B, B, 1, false);
+        bark_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_albedo",
+                                                    veg_bark_albedo(B, B, bark_field), B, B, 3,
+                                                    texture_desc(true));
+        bark_normal_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_normal",
+                                                    veg_bark_normal(B, B, bark_field), B, B, 3,
+                                                    texture_desc(false));
+        bark_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_roughness",
+                                                       veg_bark_roughness(B, B, bark_field), B, B,
+                                                       3, texture_desc(false));
+        bark_height_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_height",
+                                                    veg_bark_height(B, B, bark_field), B, B, 1,
+                                                    texture_desc(false));
         free(bark_field);
     }
 
     printf("Generating procedural leaf cluster atlas...\n");
     unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
     veg_leaf_cluster_maps(LW, LH, &leaf_a, &leaf_n, &leaf_r);
-    leaf_albedo_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_albedo", leaf_a,
-                                                     LW, LH, 4, true);
-    leaf_normal_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_normal", leaf_n,
-                                                     LW, LH, 3, false);
-    leaf_roughness_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_roughness",
-                                                        leaf_r, LW, LH, 3, false);
-    leaf_sprite_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_leaf_sprite",
-                                                     veg_leaf_sprite(T), T, T, 4, true);
+    leaf_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_albedo", leaf_a, LW, LH,
+                                                4, texture_desc(true));
+    leaf_normal_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_normal", leaf_n, LW, LH,
+                                                3, texture_desc(false));
+    leaf_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_roughness", leaf_r,
+                                                   LW, LH, 3, texture_desc(false));
+    leaf_sprite_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_sprite",
+                                                veg_leaf_sprite(T), T, T, 4, texture_desc(true));
 
     /*
      * The ground is SAND (spec 11.44), and its colour is not in this texture.
@@ -136,14 +139,14 @@ static void generate_procedural_textures(Scene* scene) {
         unsigned char* sand_alb = sand_albedo(T, T, sand_field);
         stochastic_gaussianize(sand_alb, T, T, sand_stochastic_lut);
         sand_stochastic_ready = sand_alb != NULL;
-        island_albedo_tex = load_texture_from_memory_owned(scene->tex_pool, "proc_sand_albedo",
-                                                           sand_alb, T, T, 3, false);
+        island_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_sand_albedo", sand_alb,
+                                                      T, T, 3, texture_desc(false));
         island_normal_tex =
-            load_texture_from_memory_owned(scene->tex_pool, "proc_sand_normal",
-                                           sand_normal(T, T, sand_field), T, T, 3, false);
-        island_roughness_tex =
-            load_texture_from_memory_owned(scene->tex_pool, "proc_sand_roughness",
-                                           sand_roughness(T, T, sand_field), T, T, 3, false);
+            texture_load_memory_owned(scene->tex_pool, "proc_sand_normal",
+                                      sand_normal(T, T, sand_field), T, T, 3, texture_desc(false));
+        island_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_sand_roughness",
+                                                         sand_roughness(T, T, sand_field), T, T, 3,
+                                                         texture_desc(false));
         free(sand_field);
     }
 

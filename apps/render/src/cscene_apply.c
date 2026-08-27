@@ -554,20 +554,25 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
     for (int i = 0; i < cscn->decal_count; i++) {
         const CSceneDecal* d = &cscn->decals[i];
 
-        // LINEAR, because the image becomes a layer of the material texture array and
-        // that array is linear -- pbr_frag decodes after the blend, the layered-albedo
-        // arrangement. The alpha is an OPACITY, which is what the plain loader's
-        // is_srgb inference gets wrong about a linear-loaded picture.
-        Texture* albedo = load_texture_path_into_pool_ex(scene->tex_pool, d->image, false,
-                                                         TEXTURE_ALPHA_OPACITY);
+        // The case that breaks every inference, spelled out in full because of
+        // it. LINEAR, because the image becomes a layer of the material texture
+        // array and that array is linear -- pbr_frag decodes after the blend,
+        // the layered-albedo arrangement. But the alpha is a real OPACITY, which
+        // is what the colour-space inference gets wrong about a linear-loaded
+        // picture. And the array is not block-compressed, so the use is COLOUR.
+        Texture* albedo = texture_load_file(scene->tex_pool, d->image,
+                                            (TextureDesc){.is_srgb = false,
+                                                          .alpha = TEXTURE_ALPHA_OPACITY,
+                                                          .use = TEXTURE_USE_COLOUR});
         if (!albedo) {
             fprintf(stderr, "Warning: decal %d: cannot load image '%s'; skipped\n", i, d->image);
             continue;
         }
         Texture* surface = NULL;
         if (d->surface[0] != '\0') {
-            surface = load_texture_path_into_pool_ex(scene->tex_pool, d->surface, false,
-                                                     TEXTURE_ALPHA_DATA);
+            // Packed normal/roughness/AO: three independent quantities, so its
+            // alpha is data and no block format can hold it.
+            surface = texture_load_file(scene->tex_pool, d->surface, texture_desc(false));
             if (!surface)
                 fprintf(stderr, "Warning: decal %d: cannot load surface '%s'; ignored\n", i,
                         d->surface);
@@ -779,7 +784,13 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
                         mo->textures[t].key);
                 continue;
             }
-            Texture* tex = load_texture_path_into_pool(scene->tex_pool, mo->textures[t].path, false);
+            // Linear, and unstated for both other axes. Both texture-typed rows
+            // in MATERIAL_PARAMS today (anisotropyMap, splat) are per-texel data
+            // with no opacity and no block format that fits -- anisotropy is a
+            // doubled angle plus an identity, and a splat is N weights. A COLOUR
+            // row added to that table would need this site to ask the slot.
+            Texture* tex =
+                texture_load_file(scene->tex_pool, mo->textures[t].path, texture_desc(false));
             if (!tex) {
                 fprintf(stderr, "Warning: material '%s': cannot load texture '%s'\n", mo->material,
                         mo->textures[t].path);
@@ -808,7 +819,10 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         int layer_count = 0;
         for (int l = 0; l < mo->layer_count; l++) {
             const CSceneMaterialLayer* src = &mo->layers[l];
-            Texture* albedo = load_texture_path_into_pool(scene->tex_pool, src->albedo, false);
+            // LINEAR despite being an albedo, and that is not a slip: a layer
+            // lives in the material texture array, which is linear RGBA8, and
+            // pbr_frag decodes after the blend. Its alpha is a HEIGHT.
+            Texture* albedo = texture_load_file(scene->tex_pool, src->albedo, texture_desc(false));
             if (!albedo)
                 fprintf(stderr,
                         "Warning: material '%s': layer %d cannot load albedo '%s'; it renders "
@@ -817,7 +831,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             layers[l].albedo = albedo;
             if (src->surface[0]) {
                 layers[l].surface =
-                    load_texture_path_into_pool(scene->tex_pool, src->surface, false);
+                    texture_load_file(scene->tex_pool, src->surface, texture_desc(false));
                 if (!layers[l].surface)
                     fprintf(stderr,
                             "Warning: material '%s': layer %d cannot load surface map '%s'; "

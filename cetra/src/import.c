@@ -484,7 +484,7 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
  * Load embedded texture from aiScene
  */
 static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScene* ai_scene,
-                                      const char* tex_path, bool is_srgb, TextureUse use) {
+                                      const char* tex_path, TextureDesc desc) {
     if (!ai_scene || !tex_path || tex_path[0] != '*') {
         return NULL;
     }
@@ -503,8 +503,8 @@ static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScen
     }
 
     // The pool is keyed by tex_path ("*0", ...) -- the same key
-    // load_texture_from_memory uses below. Check it BEFORE decoding, so an
-    // embedded texture shared across many meshes decodes once, not once per mesh.
+    // texture_load_memory uses below. Check it BEFORE decoding, so an embedded
+    // texture shared across many meshes decodes once, not once per mesh.
     Texture* cached = get_texture_from_pool(tex_pool, tex_path);
     if (cached)
         return cached;
@@ -532,8 +532,7 @@ static Texture* load_embedded_texture(TexturePool* tex_pool, const struct aiScen
         needs_free = false;
     }
 
-    Texture* tex = load_texture_from_memory_used(tex_pool, tex_path, pixels, width, height,
-                                                 channels, is_srgb, use);
+    Texture* tex = texture_load_memory(tex_pool, tex_path, pixels, width, height, channels, desc);
 
     if (needs_free) {
         stbi_image_free(pixels);
@@ -607,7 +606,13 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
                                   const char* tex_path, bool is_srgb,
                                   void (*setter)(Material*, Texture*), const char* tex_type_name,
                                   GLenum wrap_s, GLenum wrap_t) {
-    const TextureUse use = texture_use_for_setter(setter);
+    // The colour space is the table's; what the image IS comes from the setter,
+    // which is the one thing every route through here already agrees on. The
+    // alpha stays the inference: no model texture in this corpus is colour with
+    // a real opacity loaded linear, which is the only case that breaks it.
+    TextureDesc desc = texture_desc(is_srgb);
+    desc.use = texture_use_for_setter(setter);
+
     if (tex_path[0] == '*' && ai_scene) {
         int idx = atoi(tex_path + 1);
         const struct aiTexture* ai_tex = (idx >= 0 && (unsigned int)idx < ai_scene->mNumTextures)
@@ -619,13 +624,13 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
             AsyncTexCallback* ctx =
                 make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
             if (ctx) {
-                load_texture_from_memory_async(
-                    loader, tex_pool, tex_path, (const unsigned char*)ai_tex->pcData,
-                    (int)ai_tex->mWidth, is_srgb, use, async_tex_callback, ctx);
+                load_texture_from_memory_async(loader, tex_pool, tex_path,
+                                               (const unsigned char*)ai_tex->pcData,
+                                               (int)ai_tex->mWidth, desc, async_tex_callback, ctx);
             }
         } else {
             // Raw (uncompressed) embedded pixels: decode inline (rare).
-            Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, is_srgb, use);
+            Texture* tex = load_embedded_texture(tex_pool, ai_scene, tex_path, desc);
             if (tex) {
                 texture_apply_wrap(tex, wrap_s, wrap_t);
                 setter(material, tex);
@@ -634,7 +639,7 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
     } else {
         AsyncTexCallback* ctx = make_async_tex_ctx(material, setter, tex_type_name, wrap_s, wrap_t);
         if (ctx) {
-            load_texture_async(loader, tex_pool, tex_path, is_srgb, use, async_tex_callback, ctx);
+            load_texture_async(loader, tex_pool, tex_path, desc, async_tex_callback, ctx);
         }
     }
 }
@@ -1724,7 +1729,11 @@ void resolve_height_maps(Scene* scene) {
                 continue;
             if (!path_exists(cand))
                 continue;
-            Texture* h = load_texture_path_into_pool(scene->tex_pool, cand, false);
+            // Linear, and its `use` is left UNSTATED, which means COLOUR and so
+            // uncompressed. A displacement field is data and wants BC4 -- but
+            // saying so changes what is stored, and this sweep is meant to
+            // change nothing. A saving left, in the shape 11.85 left several.
+            Texture* h = texture_load_file(scene->tex_pool, cand, texture_desc(false));
             if (h) {
                 set_material_height_tex(mat, h);
                 // Auto-enable POM with the default depth (glTF/FBX carry no POM

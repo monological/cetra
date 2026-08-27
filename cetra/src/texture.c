@@ -992,23 +992,7 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
     return texture;
 }
 
-Texture* load_texture_path_into_pool(TexturePool* pool, const char* filepath, bool is_srgb) {
-    // The historical correlation, kept as the default: a colour texture is the
-    // one with an opacity in alpha.
-    return load_texture_path_into_pool_ex(pool, filepath, is_srgb,
-                                          is_srgb ? TEXTURE_ALPHA_OPACITY : TEXTURE_ALPHA_DATA);
-}
-
-Texture* load_texture_path_into_pool_ex(TexturePool* pool, const char* filepath, bool is_srgb,
-                                        TextureAlpha alpha) {
-    // Unstated use means COLOUR, which compresses nothing -- so a caller that has
-    // not been taught the distinction keeps exactly the storage it had.
-    return load_texture_path_into_pool_used(pool, filepath, is_srgb, alpha, TEXTURE_USE_COLOUR);
-}
-
-Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepath, bool is_srgb,
-                                          TextureAlpha alpha, TextureUse use) {
-    const TextureDesc desc = {.is_srgb = is_srgb, .alpha = alpha, .use = use};
+Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc desc) {
     if (!pool || !filepath) {
         log_error("Invalid pool or filepath");
         return NULL;
@@ -1059,10 +1043,11 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
          * too dark or too bright -- with nothing to read.
          */
         const bool cached_srgb = texture_format_is_srgb(cached_texture->internal_format);
-        if (cached_srgb != is_srgb)
+        if (cached_srgb != desc.is_srgb)
             log_warn("texture '%s' is already loaded as %s and is now wanted as %s; "
                      "the pool keys on path, so the first load wins",
-                     subpath, cached_srgb ? "sRGB" : "linear", is_srgb ? "sRGB" : "linear");
+                     subpath, cached_srgb ? "sRGB" : "linear",
+                     desc.is_srgb ? "sRGB" : "linear");
         free(normalized_path);
         free(subpath);
         return cached_texture;
@@ -1077,12 +1062,11 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
     }
 
     // Only where alpha is an OPACITY. The dilate repairs the rgb of transparent
-    // texels so a cutout's edge does not bleed the atlas background, and callers
-    // that do not say default this to `is_srgb`, which is exactly "this is colour
-    // data" (import.c). A linear RGBA texture's alpha usually means something
-    // else: spec 11.60 stores a layer's HEIGHT there and its ambient occlusion in
-    // the surface map's, and dilating those overwrites the albedo, the packed
-    // normal and the roughness of every texel whose relief dips below 3.1%.
+    // texels so a cutout's edge does not bleed the atlas background. A linear
+    // RGBA texture's alpha usually means something else: spec 11.60 stores a
+    // layer's HEIGHT there and its ambient occlusion in the surface map's, and
+    // dilating those overwrites the albedo, the packed normal and the roughness
+    // of every texel whose relief dips below 3.1%.
     if (texture_wants_dilate(nrChannels, desc)) {
         // In place: this buffer is stbi's and ours to modify, which is what
         // saves the copy the in-memory path has to make.
@@ -1099,20 +1083,8 @@ Texture* load_texture_path_into_pool_used(TexturePool* pool, const char* filepat
     return new_texture;
 }
 
-Texture* load_texture_from_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
-                                  int width, int height, int channels, bool is_srgb) {
-    return load_texture_from_memory_used(pool, key, pixels, width, height, channels, is_srgb,
-                                         TEXTURE_USE_COLOUR);
-}
-
-Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
-                                       const unsigned char* pixels, int width, int height,
-                                       int channels, bool is_srgb, TextureUse use) {
-    // The alpha is still INFERRED on this path, where the file loader takes it.
-    // Phase 6 gives every caller a desc of its own; until then this preserves
-    // exactly what the inference produced.
-    TextureDesc desc = texture_desc(is_srgb);
-    desc.use = use;
+Texture* texture_load_memory(TexturePool* pool, const char* key, const unsigned char* pixels,
+                             int width, int height, int channels, TextureDesc desc) {
     if (!pool || !key || !pixels) {
         log_error("Invalid pool, key, or pixel data");
         return NULL;
@@ -1147,19 +1119,11 @@ Texture* load_texture_from_memory_used(TexturePool* pool, const char* key,
     return new_texture;
 }
 
-Texture* load_texture_from_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
-                                        int width, int height, int channels, bool is_srgb) {
-    return load_texture_from_memory_owned_used(pool, key, pixels, width, height, channels, is_srgb,
-                                               TEXTURE_USE_COLOUR);
-}
-
-Texture* load_texture_from_memory_owned_used(TexturePool* pool, const char* key,
-                                             unsigned char* pixels, int width, int height,
-                                             int channels, bool is_srgb, TextureUse use) {
+Texture* texture_load_memory_owned(TexturePool* pool, const char* key, unsigned char* pixels,
+                                   int width, int height, int channels, TextureDesc desc) {
     if (!pixels)
         return NULL;
-    Texture* tex =
-        load_texture_from_memory_used(pool, key, pixels, width, height, channels, is_srgb, use);
+    Texture* tex = texture_load_memory(pool, key, pixels, width, height, channels, desc);
     free(pixels);
     return tex;
 }
