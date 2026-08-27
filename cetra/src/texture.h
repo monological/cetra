@@ -257,11 +257,6 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
  * scene whose normals silently failed to compress renders exactly like one whose
  * normals compressed, which is the failure this is here to catch. It prints the
  * internal format the driver holds, not the one the loader asked for.
- *
- * Its line shape is POSITIONAL where every other probe in the tree emits
- * `<prefix> <kind> k=v ...` and gates.py has a shared parser for that. So this
- * one costs a bespoke parser it should not; worth converting the next time
- * either side is touched.
  */
 void texture_pool_probe(const TexturePool* pool, const char* label);
 

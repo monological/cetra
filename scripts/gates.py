@@ -18536,32 +18536,27 @@ def _texcomp_rmse(a, b):
 def _texcomp_probe(workdir, extra, scene=None):
     """The texture ledger: (total_mb, formats seen, compressed count).
 
-    `scene` defaults to the texcomp fixture. It is a parameter because the
-    ledger is a property of the LOADER, not of that one asset, and the clearcoat
-    group needs the same read on a fixture whose only texture arrives through a
-    different path entirely -- an embedded data URI at an assimp slot the
-    mapping table cannot reach.
+    `scene` defaults to the texcomp fixture. It is a parameter because the ledger
+    is a property of the LOADER, not of that one asset, and the clearcoat group
+    needs the same read on a fixture whose only texture arrives through a
+    different path entirely -- an embedded data URI at an assimp slot the mapping
+    table cannot reach.
+
+    `workdir` is unused and kept: every caller passes it, and this returning
+    None on a dead render is load-bearing enough that the signature is not worth
+    churning for one argument.
     """
-    out = os.path.join(workdir, "_texcomp_probe.ppm")
-    cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", TEXCOMP_FIXTURE), "-x",
-           "-f", "3", "-W", "200", "-H", "150", "--texture-probe", "-S", out] + extra
-    r = _run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
+    del workdir
+    rows, _ = _probe_render(scene or os.path.join(ROOT, "assets", TEXCOMP_FIXTURE),
+                            "--texture-probe", "texture-probe", extra=extra, frames=3)
+    total = next((r for r in rows if r.get("kind") == "total"), None)
+    if total is None:
         # A dead render prints no probe lines, so an empty ledger is
         # indistinguishable from a compressed-nothing one -- and `ncomp == 0`
         # then PASSES on a build that cannot start.
         return None
-    mb, formats, ncomp = 0.0, set(), 0
-    for line in (r.stdout + r.stderr).splitlines():
-        if "texture-probe scene tex" in line:
-            formats.add(line.split()[-3])
-        elif "texture-probe scene total" in line:
-            for tok in line.split():
-                if tok.startswith("mb="):
-                    mb = float(tok[3:])
-                elif tok.startswith("compressed_count="):
-                    ncomp = int(tok[len("compressed_count="):])
-    return mb, formats, ncomp
+    formats = {r["format"] for r in rows if r.get("kind") == "tex" and "format" in r}
+    return float(total["mb"]), formats, int(total["compressed_count"])
 
 
 def run_texcomp_gate(workdir):

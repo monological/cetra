@@ -652,8 +652,9 @@ int texture_normal_gate(const Texture* texture) {
 }
 
 void texture_pool_probe(const TexturePool* pool, const char* label) {
+    const char* tag = label ? label : "";
     if (!pool) {
-        printf("texture-probe %s: no pool\n", label ? label : "");
+        printf("texture-probe none label=%s\n", tag);
         return;
     }
     size_t total = 0, compressed_total = 0, compressed_count = 0;
@@ -671,14 +672,17 @@ void texture_pool_probe(const TexturePool* pool, const char* label) {
             compressed_total += bytes;
             compressed_count++;
         }
-        printf("texture-probe %s tex %s %dx%d %s %.3f MB\n", label ? label : "",
-               t->filepath ? t->filepath : "?", t->width, t->height, name,
-               (double)bytes / (1024.0 * 1024.0));
+        // `name` LAST, and that is the one ordering decision here: a texture is
+        // keyed by its path, a path may contain a space, and a k=v reader splits
+        // on whitespace. Last means a spacey name can only corrupt itself.
+        printf("texture-probe tex label=%s size=%dx%d format=%s mb=%.3f name=%s\n", tag, t->width,
+               t->height, name, (double)bytes / (1024.0 * 1024.0),
+               t->filepath ? t->filepath : "?");
     }
-    printf("texture-probe %s total count=%zu bytes=%zu mb=%.3f compressed_count=%zu "
+    printf("texture-probe total label=%s count=%zu bytes=%zu mb=%.3f compressed_count=%zu "
            "compressed_mb=%.3f\n",
-           label ? label : "", pool->texture_count, total, (double)total / (1024.0 * 1024.0),
-           compressed_count, (double)compressed_total / (1024.0 * 1024.0));
+           tag, pool->texture_count, total, (double)total / (1024.0 * 1024.0), compressed_count,
+           (double)compressed_total / (1024.0 * 1024.0));
 }
 
 Texture* create_texture() {
