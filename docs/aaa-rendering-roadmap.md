@@ -1632,7 +1632,21 @@ so **D0 is a hard prerequisite for them**~~ — withdrawn on both counts above. 
 just-in-time rule itself: a foundation lands with its first consumer, and D0's only remaining
 candidate consumer is the froxel volume in the transparent pass, which is not scheduled.
 
-### D0. Free two `pbr_frag` sampler units — Effort M — explored, and the count is ONE
+### D0. Free two `pbr_frag` sampler units — Effort M — **REFUSED on investigation (11.85)**
+
+***The first consumer to actually want this unit found the fold unsound, and that closes the
+item.*** `pbr_frag` *reads* `irradianceMap` *on exactly one line, and that line is the ELSE of*
+`giEnabled` *-- the irradiance map is what answers when there is NO GI volume. And*
+`gi_volume_bind` *returns before binding the atlas when the volume is inactive. So the texture
+this entry proposes folding into is the one not bound in precisely the case the fold has to
+serve; making it hold means allocating and binding the GI atlas on every scene that has an
+environment, which couples IBL to a subsystem that is off underneath it.*
+
+*11.85 wanted the unit to split the material array by colour, then measured that the array
+is the wrong prize anyway -- so the item is refused rather than merely unscheduled. The
+entry below stands as the record of what was explored.*
+
+### D0 (original entry) — explored, and the count is ONE
 Not a feature; the unblocking item. The concrete candidate: **unit 11 (IBL irradiance) folds into the
 GI atlas on unit 14** as a single octahedral tile. `pbr_frag` already samples that atlas, the
 octahedral encode/decode include already exists from A4, and a cosine-convolved environment is
@@ -2978,7 +2992,46 @@ written down anywhere. Note `docs/game-engine-status.md` — a third document, a
 everything that is not the graphics pipeline — already books audio, animation blending, IK,
 gamepad, save and UI. It does **not** book either row below.*
 
-### F1. Block-compressed textures — Effort M
+### F1. Block-compressed textures — Effort M — **DONE (spec 11.85)**
+
+*As built: the platform reading below held exactly — BC7 is unreachable, RGTC and S3TC are
+what this driver takes — and the entry's own warning about the array's single-format rule
+turned out to settle the item rather than complicate it. **Four things it did not predict.***
+
+***The array was the wrong prize, and the probe is what said so.*** *Forest's 117.3 MB is
+eleven layers: four albedo-plus-height maps, four packed normal-roughness-AO maps, a splat
+and two roughness masks. The packed maps and the splat are **three independent quantities in
+one image**, which BC4 (one channel) and BC5 (two, paired endpoints) cannot compress without
+corrupting quantities that have nothing to do with each other. **There are no normal maps in
+that array at all** — forest's two are plain material slots. So a split array would have
+compressed two layers of eleven.*
+
+***D0 does not hold, and the first consumer to arrive is what found it.*** `pbr_frag` *reads*
+`irradianceMap` *on exactly one line and that line is the ELSE of* `giEnabled`*, while*
+`gi_volume_bind` *returns before binding the atlas when the volume is inactive. The texture D0
+wants to fold into is the one not bound in the only case the fold has to serve. Making it hold
+means allocating the GI atlas on every scene with an environment. **This roadmap recorded for
+many specs that D0 had no scheduled consumer; it turns out also not to work.***
+
+***A third upload path existed and no document knew.*** `async_loader.c` *had its own*
+`glTexImage2D` *and* `glGenerateMipmap`*, and it is the path every EXTERNAL model texture
+takes — so the CPU mip chain reached two sites of three for one commit. Compression is what
+forced the chain onto the CPU in the first place (a compressed chain cannot be filled by*
+`glGenerateMipmap`*), and that is the kind of defect only a second consumer reveals.*
+
+***And the SUITE could not see any of it.*** *All 28 goldens are 0 px with every mip level
+painted **solid black**, and so is the raiden recipe: they sit near the camera and never
+minify. Most of a compressed texture's bytes are in the chain. The item therefore shipped a
+fixture that recedes to a vanishing point, which is the only thing in the corpus that samples
+a mip at all.*
+
+*Measured on raiden: **81.354 MB → 74.854 MB** with normals and masks, **→ 37.253 MB** with
+colour. Cost RMSE 0.16 of a code (ao_fixture), 0.87 (raiden), 1.5 on the fixture; DXT on the
+fixture's hue wheel reads 8.4, which is five times what raiden shows and is why the fixture
+exists. Colour is **opt-in and off by default** — the one default here chosen by taste, since
+BC5 and BC4 are unobservable and DXT is a judgement.*
+
+### F1 (original entry) — Effort M
 Every texture in this engine uploads uncompressed, and **no document has ever said so**.
 `texture_gl_formats` (`texture.c:185-197`) hands `glTexImage2D` the UNSIZED internal formats
 `GL_RED` / `GL_RG` / `GL_RGB` / `GL_RGBA` / `GL_SRGB` / `GL_SRGB_ALPHA` — so the engine does not
@@ -3173,7 +3226,7 @@ not scheduled.
 | 48 | **B13 The moon** | L | **DONE (11.82).** See the B13 entry for the as-built record — phase is derived rather than authored, a full moon is flat rather than Lambertian, the disc size is shared with the sun, and the surface (relief AND albedo, ~43,000 overprinting craters) is baked at startup because a per-pixel lattice caps the population rather than the cost. Carries the spec's largest finding: it passed every arm while not looking like the Moon, and the look-calibration phase that was meant to catch that had been scoped as a two-constant tuning step. Original row: The dominant night light (~0.25 lux full, ~250× the floor) and how game nights become readable. A LIGHT, not a backdrop: disc + phase + earthshine, plus a real casting directional following phase and altitude. The sun's split applies verbatim — analytic disc in the background only (the env-bake firefly rule), energy as the analytic light, `sky_apply_sun_to_light` as the template, 3 casting-directional slots already exist. New: phase, a second transmittance-tinted directional, and the authoring surface (the 11.79 plumbing shape again). Arguably ahead of B11 on look value: a moonlit static night beats a cycled black one. |
 | 49 | **B14 Purkinje shift** | S/M | **DONE (11.83).** See the B14 entry for the as-built record — it is NOT in the finishing stack (that is all downstream of the tonemap; it sites by the optical chain, after the lens and before the response curve), and the metered-luminance drive this row proposed does not exist under `--no-auto-exposure`, which is every golden. The weight is two gates MULTIPLIED, because at 4.2 stops of day-to-night range a daylight shadow and a night frame overlap and no per-pixel threshold separates them. Original row: Rod vision: desaturate + blue-shift in dim light (Kirk & O'Brien 2011) — what makes a dark frame read as night rather than as an underexposed day. Lives in `tonemap_frag`, driven by the metered luminance the CPU already reads back. A hypothesis row for two reasons: its position in a finishing stack with two standing order contracts, and a blast radius of every dim frame in every app — needs an opt-in, a gate arm, and defaults chosen against real night frames, which do not exist until B12/B13 land. Judge it last. |
 | 50 | **B15 Water at night** — **DONE (11.84).** See the B15 entry for the as-built record. **Original row:** | M | The moon's best image, and the renderer cannot produce it: `tree` at sun −12 is a black tree against a full star field over a **flat daytime turquoise sea**. Two independent defects. The in-scatter is an authored ABSOLUTE constant (`water.c:1851` into `water_frag.glsl:1056`) multiplied by nothing that knows how lit the water is, so it behaves like an emissive and never dims — a stated design that was only ever exercised in daylight. And water sees exactly ONE directional and picks the sky's SUN by name (`water.c:1876`, spec 11.41's fix for a different bug), so at night it holds a below-horizon light of zero radiance and never reaches the moon — killing the glitter, the Cox-Munk lobe and the caustics together. Fix the first and the frame stops being wrong; fix the second and it becomes the shot. M rather than S because 2 goldens and 35 arms across the `water` and `beach` groups are calibrated against the current in-scatter. **Arguably before B14**, whose own row says to judge it against real night frames. |
-| 51 | **F1 Block-compressed textures** | M | Every texture uploads UNCOMPRESSED and no document had ever said so — `texture_gl_formats` passes unsized internal formats, so the engine does not state its own storage, and there is not one `GL_COMPRESSED_*` in cetra's own source. Forest's material array alone is 117.3 MB and its page pair 42.7 MB. **BC7 is unreachable on this platform** — BPTC is core in GL 4.2, is not exposed as an extension, and `GL_COMPRESSED_RGBA_BPTC_UNORM` returns `GL_INVALID_ENUM`; RGTC (BC4/BC5) and the full sRGB S3TC set upload cleanly, verified by probe. The catch is that a `sampler2DArray` has one internal format for every layer, and that array's five tenant kinds want four different block formats — the third time its single-policy rule has bitten. **The only item in this document whose 0 px bar is unavailable by construction**, since compression is lossy: it needs a per-format error budget instead. |
+| 51 | **F1 Block-compressed textures** | M | **DONE (11.85).** See the F1 entry for the as-built record -- the array turned out to be the wrong prize (its packed maps are three independent quantities and no format here compresses one), D0 does not hold (the atlas it folds into is unbound in exactly the no-GI case the fold serves), a THIRD upload path existed in the async loader, and the whole golden corpus is 0 px with every mip painted black. Raiden 81.354 MB -> 74.854 -> 37.253 with colour. **Original row:** Every texture uploads UNCOMPRESSED and no document had ever said so — `texture_gl_formats` passes unsized internal formats, so the engine does not state its own storage, and there is not one `GL_COMPRESSED_*` in cetra's own source. Forest's material array alone is 117.3 MB and its page pair 42.7 MB. **BC7 is unreachable on this platform** — BPTC is core in GL 4.2, is not exposed as an extension, and `GL_COMPRESSED_RGBA_BPTC_UNORM` returns `GL_INVALID_ENUM`; RGTC (BC4/BC5) and the full sRGB S3TC set upload cleanly, verified by probe. The catch is that a `sampler2DArray` has one internal format for every layer, and that array's five tenant kinds want four different block formats — the third time its single-policy rule has bitten. **The only item in this document whose 0 px bar is unavailable by construction**, since compression is lossy: it needs a per-format error budget instead. |
 | 52 | **F2 An offline asset cook** | L | No cooked format and no build step that makes one: assimp at run time, PNG decode at run time, procedural bakes at startup. Its beneficiaries are already measured and were never read as one item — forest starts in 6.58 s debug / 1.36 s release (11.65), of which Jolt's per-region BVH build is 85% of collider time (11.64). `.cts` (11.69) is the precedent and is one subsystem wide: a cooked, streamed format whose file STORES the pyramid rather than re-deriving it. The hard part is not the format, it is deciding what a cook may not do — this document's determinism rule is that two builds are not two runs, and a cooked artefact crosses that line by construction, so it needs a hash that refuses a stale one. |
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
