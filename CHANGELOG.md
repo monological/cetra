@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.16.0 — 2026-08-28
+
+- **Stars** — a procedural night field on two octahedral lattices gathered 3x3, hashed with its own PCG because the sin-fract hash correlates on an integer lattice and renders visible strings of stars.
+- **The night sky stops being black** — airglow, zodiacal light and integrated starlight as one term inside the sky-view LUT bake, so it reaches the env cube and the ground rather than only the backdrop.
+- **One clock turns the whole sky** — a day/night cycle driving sun and stars off a single hour, with the ten-millisecond env re-bake sliced across frames by texel-weighted work items and swapped atomically.
+- **The moon** — phase DERIVED from the sun rather than authored, so a crescent facing the wrong way is unrepresentable; Lommel-Seeliger shading, because a full moon is flat and not a Lambertian sphere; and ~43,000 craters baked by stamps that excavate rather than sum.
+- **The Purkinje shift** — rod vision in dim light, gated on a product of per-pixel radiance and the whole-frame meter, because the day frame's darkest half sits below the night frame's brightest third and no per-pixel threshold separates them.
+- **Water at night** — the in-scatter becomes a fraction of the light falling on the sea plus an optional floor, and the key light is the brightest directional rather than the sun by name, so it can finally be the moon.
+- **Block-compressed textures** — BC5 normals and BC4 masks by what the caller says a texture IS, colour opt-in because DXT is a judgement; raiden 81.4 MB to 37.3. A VRAM win and measurably not a speed one.
+- **One path from pixels to a pooled texture** — the seven steps around the upload had been written out three times and already drifted, so a greyscale albedo mipped in the wrong space on the streamed path only.
+- **The authored alpha cutoff at any sample count** — it was discarded whenever MSAA was on, so a masked material had one silhouette at one sample, a fatter one at four, and a third in its own shadow map.
+- **Coverage preserved down the mip chain** — measured over the bilinear reconstruction rather than by counting texels, applying the best-error scale rather than the bisection's last midpoint, from a pristine source rather than a cascade. Written from memory first, which painted distant cutouts solid past 29 goldens.
+- **Fog at the translucent depth** — the aux buffer holds one Z per pixel, so glass was fogged at the depth of the wall behind it; the MBOIT moments already measure both how much of a pixel is translucent and how far off that part is.
+- **A clone that builds and runs on all three platforms** — every dependency vendored and static, with the gate suite's framebuffer normalised so a HiDPI machine and a 1x one land on the same buffer.
+
 ## v0.15.0 — 2026-08-24
 
 - **A composite cache for layered ground** — a world-XZ splat's blend baked once into a macro pair, read back at `3 + 2A` taps against the per-texel path's 9/17/25, with the flat case byte-exact.

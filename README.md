@@ -57,6 +57,13 @@
 - Hillaire physically-based atmosphere, with aerial perspective and a volumetric cloud layer
 - Cloud shadows: a sun-transmittance map through the deck, reaching the ground, the fog and
   the water
+- A day/night cycle on one clock, driving the sun and the stars together, with the environment
+  re-bake sliced across frames and swapped atomically
+- A procedural star field on two octahedral lattices, ramped through civil twilight
+- A night-sky floor — airglow, zodiacal light and integrated starlight — inside the sky LUT, so
+  it lifts the ground and the environment rather than only the backdrop
+- The moon: phase derived from the sun rather than authored, Lommel-Seeliger shading over a baked
+  crater surface, casting its own light
 - DDGI irradiance probe volume; up to eight parallax-corrected reflection probes, blended per
   fragment off a per-froxel mask
 - Screen-space contact shadows, marching the key light and every local light with no shadow map
@@ -76,6 +83,8 @@
   the breaking face — accumulated per cascade texel so it outlives the wave that made it
 - Volume absorption from per-channel extinction, plus caustics derived from the surface's own
   compression
+- In-scatter as a fraction of the light actually falling on the sea, lit by the brightest
+  directional — so the water tracks its own light and can be lit by the moon
 - A submerged camera turns the body into a second froxel medium
 - Cox-Munk sun glitter, wind-anisotropic, with far-field roughness derived from the spectrum's
   own slope variance
@@ -108,8 +117,12 @@
 - Subsurface scattering: pre-integrated skin diffuse over a screen-space scatter pyramid
 - Anisotropy, and hair with strand orientation and identity riding the same channel
 - Parallax occlusion mapping, thin film, vertex colors, a second UV set
-- 13 texture slots, plus a scene-wide array of unique per-texel images — masks, material layers
+- 14 texture slots, plus a scene-wide array of unique per-texel images — masks, material layers
   and decals — so a whole feature costs a layer index rather than a sampler declaration
+- Block-compressed storage chosen by what the caller says a texture IS: BC5 for normals, BC4 for
+  single-channel masks, colour opt-in because DXT quantises endpoints and is a judgement
+- Alpha-tested cutouts that keep their coverage down the mip chain, and honour their authored
+  cutoff at any sample count
 - Pooled loads and async streaming
 - Procedural generators for terrain, sand, rock, foliage and trees, with histogram-preserving
   stochastic sampling so a tiled texture stops reading as tiled
@@ -122,6 +135,8 @@
 - Froxel volumetric fog (god rays, height haze) with local fog volumes, and aerial perspective
 - Bokeh depth of field, McGuire motion blur, bloom pyramid, lens flare
 - Histogram auto-exposure with uniform / centre-weighted / spot metering and percentile tails
+- The Purkinje shift: rod vision in dim light, gated on both per-pixel radiance and the frame's
+  own metered level, so a daylit shadow stays coloured and a moonlit sea drains
 - ACES / AgX / neutral tonemaps, 3D LUT colour grading from a `.cube` table with tetrahedral
   interpolation, film finish (grain, vignette, chromatic aberration, sharpen, grade, output dither)
 
