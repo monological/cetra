@@ -4874,7 +4874,12 @@ def run_translucent_shadow_gate(workdir):
 # whole post chain writing through a NULL profiler -- left exactly three rows
 # standing, which any count low enough to be safe would have cleared.
 GPU_REQUIRED_ROWS = frozenset(
-    {"shadow cascades", "opaque", "gtao sweep", "ssr", "bloom pyramid", "tonemap + finishing"})
+    {"shadow cascades", "opaque", "gtao sweep", "ssr", "bloom pyramid", "tonemap + finishing",
+     # Unconditional in engine_build_draw_list, and required here because being
+     # ABSENT is the state 11.89 found it in -- a full per-frame scene flatten
+     # billed to nothing, running ahead of the first scope the shadow pass opens.
+     # It reads 0.000 in this column by nature; cpu-attrib is what prices it.
+     "draw list build"})
 GPU_MIN_POSITIVE = 4          # rows that must be strictly > 0, not merely present
 GPU_SUM_MIN = 0.30            # TIMED must be at least this fraction of FRAME
 GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half scale
@@ -5213,6 +5218,38 @@ def run_profiler_gate(workdir):
                   f"{noise * 100.0:.0f}% run-to-run floor")
             if not ok:
                 failures.append("gpu-scale")
+
+        # --- gpu-frame-tracks: the frame row is a measurement, not a constant -
+        # Every ratio a performance spec quotes has FRAME as its denominator, and
+        # a denominator that does not move is worse than a missing one: it reads
+        # as a real number. It WAS one -- profiler_end_frame spent a single
+        # `clamped = dt > 0.1 ? 0.1 : dt` on both the latch window and the frame
+        # accumulator, so the row printed exactly 100.000 ms on every frame
+        # slower than 10 fps, which is the whole regime spec 11.89 works in.
+        #
+        # Rides gpu-scale's three runs rather than rendering its own: same
+        # tables, different row. Half render scale moves this fixture's frame by
+        # ~58% against a 2% floor, so the signal is nowhere near it -- but the
+        # arm still SKIPs rather than guessing if the rows are unusable.
+        #
+        # Scored like gpu-scale, against the floor, and NOT on `separated`.
+        # That flag is directional -- v > max(base), the variant being SLOWER --
+        # so it is False by construction for any arm asserting a drop, and this
+        # arm failed its first green run by reaching for it. gpu-scale's comment
+        # already says why it is unread there; the same reason holds here.
+        frame_timing = _timing_delta([full, full2], [half], row="FRAME (wall)")
+        if frame_timing is None:
+            print("  gpu-frame-tracks SKIP  no usable FRAME (wall) pair to compare")
+        else:
+            f_before, f_after, f_signed, f_noise, _ = frame_timing
+            f_drop = -f_signed
+            ok = f_drop >= GPU_SCALE_DROP and f_noise < GPU_SCALE_DROP
+            print(f"  gpu-frame-tracks {'PASS' if ok else 'FAIL'}  FRAME {f_before:.3f} -> "
+                  f"{f_after:.3f} ms at half scale, {f_drop * 100.0:.0f}% off "
+                  f"(want >= {GPU_SCALE_DROP * 100.0:.0f}%; a clamped or constant row moves 0%), "
+                  f"against a {f_noise * 100.0:.0f}% run-to-run floor")
+            if not ok:
+                failures.append("gpu-frame-tracks")
 
     return failures
 

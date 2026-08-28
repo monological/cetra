@@ -11,9 +11,15 @@ This master plan is a tiered roadmap of SIGGRAPH-grade features, each feasible a
 passes + LUTs + probe bakes on GL 4.1. The plan will be committed to `specs/` as the umbrella spec;
 each tier item later gets its own subplan (feature branch + spec) before implementation.
 
-**Status: Tiers 1-3 are closed.** Every item is DONE, REJECTED-with-a-measurement, or CLOSED-and-split
-— the original plan is finished. **Tier 4 (Tracks C/D/E below, plus rows 45-49 added to Track B
-after the fact) is the new frontier**, and it is shaped
+**Status: Tiers 1-4 are closed, and Tier 5 is the frame budget.** Of Tier 4's rows only three remain
+open, one of which (E7) this document argues against itself. **What is left is not a feature.** This
+plan asks throughout what the renderer does not HAVE, and by 11.88 the answer is "very little" —
+while `apps/forest` renders at **7.8 fps against a 16.6 ms budget**. A feature list has no
+denominator and so cannot see that; Tier 5 (rows 55-60, spec 11.89) is the answer to the question
+this document never asked. Read it before concluding from the tables below that the work is done.
+
+**Tier 4 (Tracks C/D/E below, plus rows 45-49 added to Track B
+after the fact) was the frontier until then**, and it is shaped
 by a different constraint than Tiers 1-3 were: those items could each be built as another gated
 fullscreen pass, and Tier 4's cannot. Four structural walls now decide what is reachable at all; they
 are stated before Track C because half the Tier 4 items are blocked on one of them.
@@ -3242,6 +3248,35 @@ not scheduled.
 | 52 | **F2 An offline asset cook** | L | No cooked format and no build step that makes one: assimp at run time, PNG decode at run time, procedural bakes at startup. Its beneficiaries are already measured and were never read as one item — forest starts in 6.58 s debug / 1.36 s release (11.65), of which Jolt's per-region BVH build is 85% of collider time (11.64). `.cts` (11.69) is the precedent and is one subsystem wide: a cooked, streamed format whose file STORES the pyramid rather than re-deriving it. The hard part is not the format, it is deciding what a cook may not do — this document's determinism rule is that two builds are not two runs, and a cooked artefact crosses that line by construction, so it needs a hash that refuses a stale one. |
 | 53 | **G1 Anti-aliased alpha test** | S/M | **DONE (11.87 + 11.88).** Booked nowhere for 53 rows, which is itself the finding — E6 mentions the prepass/A2C interaction in passing and nothing owned the alpha test itself. Two halves. The SHADER half (11.87): the authored `alphaCutoff` was discarded whenever MSAA was on and a fixed 0.02 compared instead, so a masked material had one silhouette at 1 sample, a fatter one at 4, and a third in its own shadow map, which tests the authored value unconditionally. Golus's sharpening — distance-to-threshold divided by `fwidth`, so the transition is one pixel wide whatever the texture's falloff is — in one shared include reached by the shading pass, the prepass and the shadow pass. The MIP half (11.87, fixed in 11.88): coverage preservation, and 11.88 is the more instructive of the two because 11.87 wrote it **from memory of the technique rather than from the sources** and got three things wrong at once. Coverage is measured over the BILINEAR RECONSTRUCTION, not by counting texels — the count is the form every write-up states and neither NVTT nor DirectXTex implements, and it makes coverage a step function the search cannot land on. The applied scale is the BEST-ERROR one seeded at 1, not the bisection's last midpoint, which is never evaluated. And nobody cascades an 8-bit chain: NVTT cascades in float32, DirectXTex derives every level from the pristine source. Cetra did all three wrong and painted distant cutouts SOLID, past 29 goldens and its own gate — which bounded the mid/near ratio only BELOW, so saturation made it pass harder. **The reference implementations now live in `docs/papers/`**, with what cetra takes from each, because the answers were in shipped code and two of those implementations disagree. |
 | 54 | **G2 Hashed alpha testing / alpha distribution** | M | The named successors to 53, and the reason to state a ceiling rather than call alpha testing solved: Yuksel measures the whole scale-the-alpha family as one that "does not always improve the results" (`docs/papers/yuksel-2018-alpha-distribution-for-alpha-testing.md`, §2), and 11.88's own fixture shows where — past the level a chain goes uniform, coverage is 0 or 1 and no scale reproduces a fraction, so the cutout correctly vanishes rather than thinning. Two candidates, both on hand. **Hashed alpha testing** (Wyman & McGuire, `docs/papers/wyman-mcguire-2017-improved-alpha-testing-hashed-sampling.md`) replaces the fixed threshold with a stable per-fragment hash; spec 11.31 deferred to it and 11.87 chose A2C instead. It costs shader complexity in `pbr_frag` — at 16/16 samplers and ten of twelve UBO blocks — and Yuksel measures it as noisy. **Alpha distribution** (error diffusion or the alpha pyramid) is a pure PRE-PROCESS with no render-time change at all, which is the better fit here: it lands entirely in `texture.c` beside the code 11.88 just rewrote, needs no sampler, no uniform and no shader edit, and the paper's own §3 extends it to alpha-to-coverage, which is the path this engine renders. Sequence it after F2 if a cook ever lands, since both want the same offline step. |
+
+**Tier 5 — the frame budget (spec 11.89, six specs):**
+
+**This table has no denominator, and that is why it could not see the largest thing left.** Every
+row above asks "what does this renderer not have". None asks "how long does a frame take". Measured
+on `apps/forest` — release, M1 Max, 1600x900 Retina, TAA, 120 headless frames — the answer is
+**127.7 ms, 7.8 fps, against a 16.6 ms budget**. GPU-timed 115.2 ms of it, so the frame is
+GPU-bound; shadow (33.7) and opaque (61.9) are 83% of that and the whole post chain is 17%.
+
+Nine root causes, the measurements behind them and the sequencing are in
+`specs/11.89-frame-budget-and-an-honest-instrument.md`, which every row below cites rather than
+re-deriving. Read that before adding a row here.
+
+| # | Item | Effort | Why here |
+|---|------|--------|----------|
+| 55 | **T0 An honest instrument** | S | **DONE (11.89).** `FRAME (wall)` printed exactly 100.000 ms on every forest frame — not a placeholder but a CLAMP applied to the wrong quantity, so the instrument saturated at 10 fps, which is the regime this tier works in. Split into a latch-window bound and a stall bound. Plus the CPU column's backpressure caveat printed where the column is read, and `draw list build` scoped (0.415 ms CPU, 0.000 GPU — small, and worth knowing it is small). **Its first run corrected the spec that built it**: 11.89's draft called the frame CPU-bound off a 126.6 ms CPU column, 58.7 ms of which is one `taa resolve` row against 0.630 ms of GPU. That row is the queue draining, not work. |
+| 56 | **T1 The shadow pass** | L | 33.7 ms GPU + 33 ms of real CPU submission. Four causes in one subsystem: cascades fitted across the whole camera far clip with `lambda` a literal, so **cascade 1 and cascade 2 land within 3% of each other** and one of the three is nearly redundant; runs that must be contiguous, so camera-derived LOD rings shatter shadow batching to 2.79 of a possible 64; `model` re-uploaded per draw where the camera path guards exactly that; and nothing cached, staggered or skipped anywhere. |
+| 57 | **T2 The instance arena** | M | `ubo_upload` orphans and re-sends **12,288 bytes per instanced draw** — ~105 MB/frame across 8,558 draws, on depth draws that fill a third of it. Not what 11.28 measured and rejected: that was a partial write AFTER the orphan, and `ubo.h:229-235` is right about why it lost. The orphan itself is the thing to remove, for a per-frame arena bound with `glBindBufferRange`. |
+| 58 | **T3 The LOD band shrink guard** | S | `--cluster-probe` says canopy band 1 reduces NOTHING (12,740 → 12,740) and rocks carry three identical bands. A band that saves no triangles still costs index memory and a distinct batch key. `lod.c` already refuses this (`LOD_MIN_SHRINK`, *"a level that saves nothing is worse than no level"*); `cluster_build.cpp` never got the rule, and `finalize_mesh` treats the two builders as interchangeable. |
+| 59 | **T4 Shader permutations** | L | The largest single lever on the 60 ms opaque pass, which the fit says is 21.6 ms fixed + 6.67 ms/Mpx. One program for every material, and DCE cannot help because the terminal `FragColor` write is unconditional — the shader says so itself. Calibrated by an in-tree measurement: two `vec3`s live across the body cost **11% of the opaque pass**. Carries `#version 410` + `textureGather` for the PCF/PCSS kernels, which the 4.1 context has always allowed. |
+| 60 | **T5 The small independent wins** | S | `glGetError` 23x/frame unconditional in release; no zero-light early-out in the cluster build; `_item_bounds` recomputed ~7x per item per frame; the shadow/transform ordering bug, which also means LOD is selected from stale positions; 100 MB of dead shadow VRAM. |
+
+**What this tier will NOT do**, each for a reason already measured: E7 occlusion culling (depth
+complexity is 1.81 — the cost is shading and submission, not hidden-object overdraw), chasing the
+SSR/atmosphere/`taa resolve` CPU numbers (backpressure, see 55), turning the depth prepass on
+(11.30/11.31 measured it as a substitute for the sort and the loser on the clock), or raising
+`--lod-bias` (measured: at the default framing the frame gets slower, because it adds draws faster
+than it removes triangles -- note `forest-lod` measures 45% of triangles saved from its OWN wide
+framing and passes, so the lever is the batching and not the bias).
 
 **If only five ever get built: 20 -> 21 -> 22 -> 23 -> 24.** One afternoon, then three items that each
 reuse a shipped subsystem rather than building new machinery, then the instrument the rest needs.

@@ -14,6 +14,19 @@
 // are unreadable, and this is the only smoothing convention the HUD has.
 #define PROFILER_LATCH_SECONDS 0.5
 
+// The longest single frame the latch window will count as one frame's worth of
+// elapsed time. It bounds how far one hitch can stretch the window it lands in;
+// it is NOT a bound on what a frame may cost, and using it as one silently
+// reports every frame below 10 fps as exactly 10 fps.
+#define PROFILER_LATCH_STEP_MAX 0.1
+
+// The longest single frame that counts as a frame at all. Above this it is a
+// stall -- an asset load, a shader compile, a breakpoint -- and averaging it in
+// would describe something other than rendering. Deliberately far above any
+// plausible real frame, because the whole point of the row is to be believable
+// when the frame is slow.
+#define PROFILER_FRAME_MS_MAX 1000.0
+
 // Retired frames whose every scope read back exactly zero before saying so.
 // A driver that accepts the calls and reports nothing is a real failure mode of
 // this platform, and it is indistinguishable from a working one at the call
@@ -313,12 +326,20 @@ void profiler_end_frame(Profiler* profiler, double dt) {
     }
     profiler->frame++;
 
-    // Clamped for the reason the FPS counter clamps: one long hitch should not
-    // stretch the window it happens to land in.
-    double clamped = dt > 0.1 ? 0.1 : dt;
-    profiler->latch_timer += clamped;
-    profiler->frame_accum_ms += clamped * 1000.0;
-    profiler->frame_samples++;
+    // Two bounds, because the window and the measurement want different ones.
+    // The window is clamped for the reason the FPS counter clamps: one long
+    // hitch should not stretch the window it happens to land in. The frame time
+    // is not, past the stall threshold -- these shared one clamp until 11.89,
+    // which pinned the row at exactly 100.000 ms on every frame slower than 10
+    // fps, i.e. saturated it precisely where somebody is reading it.
+    double step = dt > PROFILER_LATCH_STEP_MAX ? PROFILER_LATCH_STEP_MAX : dt;
+    profiler->latch_timer += step;
+
+    double frame_ms = dt * 1000.0;
+    if (frame_ms <= PROFILER_FRAME_MS_MAX) {
+        profiler->frame_accum_ms += frame_ms;
+        profiler->frame_samples++;
+    }
     if (profiler->latch_timer >= PROFILER_LATCH_SECONDS) {
         latch_rows(profiler);
         profiler->latch_timer = 0.0;
@@ -471,6 +492,16 @@ static void print_timing_table(const Profiler* profiler, const char* banner, boo
     // more than a bare total says.
     printf("%-28s %8.3f ms\n", "FRAME (wall)", profiler->frame_ms);
     printf("===== END %s TIMING =====\n", banner);
+    // OUTSIDE the block on purpose: every line between the banners must parse
+    // as a row, and four gates assert the parser's `unparsed` count is zero.
+    //
+    // The caveat is in profiler.h, where nobody reading a number has to be. A
+    // CPU row wraps the whole scope body in wall clock, so a pass that blocks
+    // on a full command queue bills the wait here -- which reads as work, and
+    // has been read that way. Late fullscreen passes are where it lands.
+    if (cpu)
+        printf("(CPU rows include driver backpressure: a blocked pass bills the wait, so a row"
+               " late in the frame is a ceiling and not a cost.)\n");
 }
 
 void profiler_report(Profiler* profiler) {
