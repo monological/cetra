@@ -10980,6 +10980,26 @@ def run_alphacov_gate(workdir):
     this family's known ceiling, not a defect -- see docs/papers/README.md, where
     Yuksel measures the whole approach as one that "does not always improve the
     results". The claim is the mid field, plus the promise not to make it worse.
+
+    AND WHAT THEY DO NOT COVER, which spec 11.88 measured rather than assumed.
+    The implementation has three parts; these two arms see ONE of them.
+
+      measure     chain      applied     far      mid
+      per-texel   cascade    converged   1.0000   0.784 PASS   <- 11.87 as shipped
+      per-texel   pristine   best        0.0000   0.619 FAIL
+      supersamp   cascade    converged   0.0000   0.932 PASS
+      supersamp   pristine   best        0.0000   0.911 PASS   <- as built
+
+    Saturation needs the texel count AND the cascade together: a texel count
+    makes coverage a step function the search cannot land on, so it applies wild
+    scales, and cascading is what lets those compound past the per-level bound.
+    Fix EITHER and the far band goes quiet, which is why the middle two rows
+    pass. So alphacov-mip covers the measure -- reverting it alone drops the
+    ratio to 0.619, a hair above the 0.591 an unpreserved chain reads -- and
+    NOTHING here covers the pristine chain or the best-error scale. Both are
+    correctness-by-reference (NVTT and DirectXTex, docs/papers/README.md) and
+    both are defensive: they matter on content whose target is unreachable
+    rather than on this fixture, whose target the fixed measure can hit.
     """
     scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
     if not os.path.exists(scene):
@@ -11017,8 +11037,8 @@ def run_alphacov_gate(workdir):
     print(f"  alphacov-far {'PASS' if ok else 'FAIL'}  the far field reads {far:.4f} "
           f"(want <= {ALPHACOV_FAR_MAX}, and the near band lit: {lit}). Past the level where "
           f"the chain goes uniform there is no fractional coverage to reproduce, so a correct "
-          f"build thins to nothing here; a rescale that cascades through 8 bits compounds its "
-          f"own per-level cap and paints this band SOLID, reading 1.0000.")
+          f"build thins to nothing here. A texel-counting measure whose chain also cascades "
+          f"paints this band SOLID instead, reading 1.0000.")
     if not ok:
         failures.append("alphacov-far")
 
