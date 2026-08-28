@@ -700,7 +700,15 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
 
             // Per node, and the list is in node order, so consecutive meshes of
             // one node still upload it once.
-            uniform_set_mat4(u, "model", (const float*)node->global_transform);
+            //
+            // Only for a draw carrying one object, the guard the depth prepass
+            // has carried since 11.30: a batched draw reads its transform from
+            // the instance block, and writing `model` anyway dirties the
+            // program's whole uniform block and costs a copy of it at
+            // submission. This pass issues more draws than any other in the
+            // engine and was the one paying for it.
+            if (run == 1)
+                uniform_set_mat4(u, "model", (const float*)node->global_transform);
 
             // Everything the material decides, uploaded once per material
             // rather than once per mesh -- a canopy of leaf cards is hundreds
