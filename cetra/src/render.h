@@ -198,8 +198,13 @@ _Static_assert(sizeof(InstanceChunk) == UBO_INSTANCES_BLOCK_SIZE,
 // stores no shader can observe -- two thirds of the block, on the pass that
 // issues most of the batches. It still SENDS them, for the reason ubo_upload
 // gives; this only skips writing them.
-void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
-                           size_t run, bool shading);
+//
+// `order` maps run positions to list indices, or is NULL for a run that is
+// already contiguous. A caller that reorders its draws to batch them -- the
+// shadow pass, whose depth-only map does not care what order it is drawn in --
+// cannot otherwise describe the run it wants.
+void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
+                           const size_t* order, size_t first, size_t run, bool shading);
 
 // One draw of `instances` copies of `item`, plus the counters that describe it.
 //

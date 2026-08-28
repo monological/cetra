@@ -165,6 +165,7 @@ void free_shadow_system(ShadowSystem* system) {
     free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
     free_msm_resources(system);
     free_tsm_resources(system);
+    free(system->caster_order);
 
     free(system);
 }
@@ -626,55 +627,122 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     return !(set == SHADOW_CASTERS_OPAQUE_TSM && translucent);
 }
 
-// How many casters from `first` one draw can carry: same geometry, all wanted
-// by this set, all visible, capped at a chunk. Same contiguity rule as the
-// camera path -- a skipped item ends the run, because the batch submits
-// whatever the chunk holds.
-static size_t _visible_caster_run(const DrawList* list, size_t first, ShadowCasterSet set,
-                                  const CullView* cull) {
-    const DrawItem* head = &list->items[first];
+// The casters this layer wants, compacted out of the draw list and reordered so
+// they batch. Returns how many, into ss->caster_order.
+//
+// The camera path forms runs over CONTIGUOUS list entries, so one culled item or
+// one LOD change ends a batch. That rule is load-bearing there -- the opaque lane
+// is depth-sorted and the late lanes are order-dependent -- and it is not
+// load-bearing here: a depth-only map is order-independent, so this pass is free
+// to submit its casters in whatever order batches best.
+//
+// Two steps, and neither needs a comparison sort. COMPACT drops everything the
+// layer does not want, so a rejected caster no longer splits its neighbours.
+// Then GROUP stable-partitions each maximal same-mesh span by LOD level, which
+// is where the fragmentation actually lives: levels are chosen from the CAMERA
+// (draw_list.h), so instances of one prototype form concentric rings around it
+// and every ring boundary crossed in graph order used to end a run, even where
+// this layer sees them identically.
+//
+// Stable, and by BUCKET rather than by key, so the order is a pure function of
+// graph order and level -- no mesh pointer is ever compared. Pointer order is
+// not stable across runs, and `submit-exact` asserts two runs agree.
+static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, ShadowCasterSet set,
+                                  const CullView* cull, SubmitStats* stats) {
+    if (list->count > ss->caster_order_cap) {
+        size_t* grown = realloc(ss->caster_order, list->count * sizeof(size_t));
+        if (!grown)
+            return 0;
+        ss->caster_order = grown;
+        ss->caster_order_cap = list->count;
+    }
+
+    size_t n = 0;
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!caster_set_wants(set, item->lane, item->flags))
+            continue;
+        if (stats)
+            stats->meshes_seen++;
+        if (!draw_item_visible(item, cull)) {
+            if (stats)
+                stats->meshes_culled++;
+            continue;
+        }
+        ss->caster_order[n++] = i;
+    }
+
+    // Group in place, one same-mesh span at a time. CETRA_LOD_MAX is 4, so the
+    // inner pass is four sweeps over a span rather than a sort.
+    size_t span_start = 0;
+    while (span_start < n) {
+        const Mesh* mesh = list->items[ss->caster_order[span_start]].mesh;
+        size_t span_end = span_start + 1;
+        while (span_end < n && list->items[ss->caster_order[span_end]].mesh == mesh)
+            span_end++;
+
+        if (span_end - span_start > 1) {
+            size_t out = span_start;
+            for (int level = 0; level < CETRA_LOD_MAX; ++level) {
+                for (size_t i = span_start; i < span_end; ++i) {
+                    size_t idx = ss->caster_order[i];
+                    if (list->items[idx].lod != level)
+                        continue;
+                    // Rotate rather than swap: a swap would reorder the entries
+                    // still waiting for a later bucket, and the order inside a
+                    // bucket has to stay graph order for two runs to agree.
+                    for (size_t k = i; k > out; --k)
+                        ss->caster_order[k] = ss->caster_order[k - 1];
+                    ss->caster_order[out++] = idx;
+                }
+            }
+        }
+        span_start = span_end;
+    }
+    return n;
+}
+
+// How many casters from `first` one draw can carry, over the GROUPED order:
+// same geometry, same level, capped at a chunk. Visibility and set membership
+// were settled when the order was built, so this asks neither.
+static size_t _ordered_caster_run(const DrawList* list, const size_t* order, size_t count,
+                                  size_t first) {
+    const DrawItem* head = &list->items[order[first]];
     size_t n = 1;
-    while (first + n < list->count && n < UBO_INSTANCE_MAX) {
-        const DrawItem* next = &list->items[first + n];
-        if (!caster_set_wants(set, next->lane, next->flags) ||
-            !draw_run_can_join(head, next, cull))
+    while (first + n < count && n < UBO_INSTANCE_MAX) {
+        const DrawItem* next = &list->items[order[first + n]];
+        if (next->mesh != head->mesh || next->lod != head->lod)
             break;
         n++;
     }
     return n;
 }
 
-static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, SubmitState* state,
-                               ShadowCasterSet set, const CullView* cull, const Engine* engine) {
-    if (!list || !engine)
+// The layer's own volume decides visibility, so a rejected caster contributed
+// nothing to it -- the matrix IS the clip volume, and nothing here enables
+// GL_DEPTH_CLAMP, so anything the test rejects the rasterizer would have
+// clipped. That is what makes the map bit-identical rather than merely close,
+// and it holds whatever fit produced the matrix: the padded cascade slices, the
+// outermost whole-scene fit, and the punctual faces that have no pad at all.
+//
+// Enabling depth clamp on this pass -- the usual remedy for a caster between the
+// light and the near plane -- would break that, and would do it silently:
+// casters the test drops would then have contributed.
+static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderProgram* program,
+                               SubmitState* state, ShadowCasterSet set, const CullView* cull,
+                               const Engine* engine) {
+    if (!ss || !list || !engine)
         return;
 
     SubmitStats* stats = profiler_submit(engine->profiler);
     InstanceChunk chunk;
 
-    for (size_t idx = 0; idx < list->count; ++idx) {
-        const DrawItem* item = &list->items[idx];
-        if (!caster_set_wants(set, item->lane, item->flags))
-            continue;
+    size_t count = _build_caster_order(ss, list, set, cull, stats);
+    const size_t* order = ss->caster_order;
 
-        if (stats)
-            stats->meshes_seen++;
-        // The layer's own volume, so a rejected caster contributed nothing to
-        // it -- the matrix IS the clip volume, and nothing here enables
-        // GL_DEPTH_CLAMP, so anything this rejects the rasterizer would have
-        // clipped. That is what makes the map bit-identical rather than merely
-        // close, and it holds whatever fit produced the matrix: the padded
-        // cascade slices, the outermost whole-scene fit, and the punctual faces
-        // that have no pad at all.
-        //
-        // Enabling depth clamp on this pass -- the usual remedy for a caster
-        // between the light and the near plane -- would break that, and would
-        // do it silently: casters this test drops would then have contributed.
-        if (!draw_item_visible(item, cull)) {
-            if (stats)
-                stats->meshes_culled++;
-            continue;
-        }
+    for (size_t pos = 0; pos < count; ++pos) {
+        size_t idx = order[pos];
+        const DrawItem* item = &list->items[idx];
 
         {
             const SceneNode* node = item->node;
@@ -690,13 +758,11 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
             // the shader rather than restating what it does.
             size_t run = 1;
             if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
-                run = _visible_caster_run(list, idx, set, cull);
-            if (stats)
-                stats->meshes_seen += run - 1;
+                run = _ordered_caster_run(list, order, count, pos);
             // No shading transforms: this stage reads uInstModel and nothing
             // else, so the rest of the block is bytes it cannot look at.
             if (run > 1)
-                instance_chunk_upload(engine->instance_ubo, &chunk, list, idx, run, false);
+                instance_chunk_upload(engine->instance_ubo, &chunk, list, order, pos, run, false);
 
             // Per node, and the list is in node order, so consecutive meshes of
             // one node still upload it once.
@@ -746,7 +812,7 @@ static void _draw_shadow_items(const DrawList* list, ShaderProgram* program, Sub
                 (item->flags & DRAW_DOUBLE_SIDED) && set != SHADOW_CASTERS_TRANSLUCENT;
             // The camera's level, not one chosen for this light: see DrawItem.
             submit_draw_run(state, u, item, run, two_sided, stats);
-            idx += run - 1;
+            pos += run - 1;
         }
     }
 }
@@ -873,7 +939,7 @@ static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawLi
     Frustum layer_frustum;
     frustum_extract_from_vp(matrix, &layer_frustum);
     CullView cull = render_cull_view(engine, scene, &layer_frustum);
-    _draw_shadow_items(list, ss->depth_program, state, set, &cull, engine);
+    _draw_shadow_items(ss, list, ss->depth_program, state, set, &cull, engine);
     end_shadow_pass(ss);
 }
 
@@ -1200,7 +1266,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         uniform_set_mat4(au, "lightSpaceMatrix", matrix);
         uniform_set_int(au, "albedoTex", 0);
         engine_upload_displacement_uniforms(engine, scene, au);
-        _draw_shadow_items(&scene->draw_list, ss->tsm_absorb_program, &state,
+        _draw_shadow_items(ss, &scene->draw_list, ss->tsm_absorb_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine);
         glDisable(GL_BLEND);
 
@@ -1239,7 +1305,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         submit_state_reset(&state);
         submit_use_program(&state, ss->depth_program->id);
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-        _draw_shadow_items(&scene->draw_list, ss->depth_program, &state,
+        _draw_shadow_items(ss, &scene->draw_list, ss->depth_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine);
     }
 

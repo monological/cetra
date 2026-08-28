@@ -13647,6 +13647,37 @@ def run_submission_gate(workdir):
     if not ok:
         failures.append("inst-count")
 
+    # --- shadow-batch: the depth pass groups its own casters ----------------
+    # inst-count above only asks that the shadow pass batches AT ALL
+    # (draws < instances), which a run finder walking contiguous list entries
+    # satisfies while still splitting on every culled item and every LOD change.
+    # This asks how WELL, against the only ceiling there is: the chunk size.
+    #
+    # The depth map is order-independent, so this pass reorders its casters to
+    # group them -- which is why it can be held to a bar the camera lane cannot.
+    # The camera lane is depth-sorted and must stay so.
+    #
+    # Measured against the OPAQUE pass rather than the chunk size, because a bar
+    # in chunks cannot be written down: how close a pass gets to the ceiling
+    # depends on how many (mesh, level) groups its scene has, and that is content.
+    # The invariant that IS content-independent is a comparison -- a pass free to
+    # reorder must not batch worse than one that cannot.
+    #
+    # The 0.9 is the shadow pass's structural handicap, not slack: it draws every
+    # cascade, so it carries a partial last chunk per mesh per cascade where the
+    # camera carries one.
+    s_draws, s_inst = shadow.get("draws", 0), shadow.get("instances", 0)
+    o_draws, o_inst = opaque.get("draws", 0), opaque.get("instances", 0)
+    ratio = (s_inst / s_draws) if s_draws else 0.0
+    opaque_ratio = (o_inst / o_draws) if o_draws else 0.0
+    want = opaque_ratio * 0.9
+    ok = s_draws > 0 and ratio >= want
+    print(f"  shadow-batch {'PASS' if ok else 'FAIL'}  {s_inst} casters in {s_draws} draws "
+          f"(ratio {ratio:.1f}, want >= {want:.1f} = 0.9x the opaque pass's {opaque_ratio:.1f}); "
+          f"chunk holds {inst_max}")
+    if not ok:
+        failures.append("shadow-batch")
+
     # --- inst-off: the flag reaches the batching it names -------------------
     # Without this, inst-identity passes trivially for a flag that does nothing
     # -- both runs would simply be the batched path.

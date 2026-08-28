@@ -732,10 +732,11 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
     profiler_cpu_scope_end(engine->profiler);
 }
 
-void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
-                           size_t run, bool shading) {
+void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
+                           const size_t* order, size_t first, size_t run, bool shading) {
     for (size_t k = 0; k < run; ++k) {
-        const SceneNode* node = list->items[first + k].node;
+        size_t idx = order ? order[first + k] : first + k;
+        const SceneNode* node = list->items[idx].node;
         // The casts are cglm's const-incorrectness, not ours: it reads its source
         // matrices and declares them non-const anyway, so a const node cannot be
         // handed over without one. Keeping the node const is the point.
@@ -894,7 +895,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         if (stats)
             stats->meshes_seen += run - 1;
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, NULL, i, run, false);
 
         Mesh* mesh = item->mesh;
         // Only for a draw that carries one object, for the reason
@@ -950,7 +951,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         // would carry a stale basis into the very value the two passes must agree
         // on.
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, NULL, i, run, true);
 
         _submit_item(engine, scene, item, camera, view, projection, RENDER_MODE_PBR, &state,
                      SUBMIT_PASS_DEPTH_ONLY, run);
@@ -1016,7 +1017,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         if (stats)
             stats->meshes_seen += run - 1;
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, NULL, i, run, true);
 
         _submit_item(engine, scene, item, camera, view, projection, render_mode, state, pass, run);
         i += run - 1;

@@ -280,6 +280,13 @@ typedef struct ShadowSystem {
     // casters would then be withheld with nothing representing them -- glass
     // casting nothing at all, which is worse than the defect this replaces.
     bool tsm_live;
+
+    // Draw-list indices for the layer being submitted: the casters this layer
+    // wants, in an order that batches. Grown to the list's size and reused for
+    // every layer of every frame, because the alternative is a malloc per
+    // cascade per punctual face per frame.
+    size_t* caster_order;
+    size_t caster_order_cap;
 } ShadowSystem;
 
 struct Light;
