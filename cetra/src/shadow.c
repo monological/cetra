@@ -627,14 +627,36 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     return !(set == SHADOW_CASTERS_OPAQUE_TSM && translucent);
 }
 
+// An item's level, clamped into the bucket range.
+//
+// select_lod already bounds it, so the clamp is unreachable today -- but the
+// counting pass below INDEXES on this value where the rotate it replaced merely
+// compared it, so an out-of-range level would go from a no-op to a write past
+// the bucket array. Clamped rather than asserted because the cost of being
+// wrong here is a corrupted heap and the cost of the clamp is one compare.
+static inline int _caster_level(const DrawList* list, size_t idx) {
+    int level = list->items[idx].lod;
+    if (level < 0)
+        return 0;
+    return level < CETRA_LOD_MAX ? level : CETRA_LOD_MAX - 1;
+}
+
 // The casters this layer wants, compacted out of the draw list and reordered so
 // they batch. Returns how many, into ss->caster_order.
 //
 // The camera path forms runs over CONTIGUOUS list entries, so one culled item or
 // one LOD change ends a batch. That rule is load-bearing there -- the opaque lane
-// is depth-sorted and the late lanes are order-dependent -- and it is not
-// load-bearing here: a depth-only map is order-independent, so this pass is free
-// to submit its casters in whatever order batches best.
+// is depth-sorted and the late lanes are order-dependent -- and it is not here:
+// a depth map resolves by comparison, so the order casters arrive in cannot
+// change it.
+//
+// TWO OF THE THREE CALLERS ARE DEPTH. The third is the TSM absorbance walk,
+// which runs with the depth test off and additive blending into fp32, so what
+// holds there is commutativity and not exact reassociation -- reordering moves
+// the last bits of a sum, in the texels more than one translucent caster
+// reaches. That is accepted, not overlooked. Anything reordered here on a
+// stronger premise than "commutative up to fp32 rounding" has to answer for
+// that pass first.
 //
 // Two steps, and neither needs a comparison sort. COMPACT drops everything the
 // layer does not want, so a rejected caster no longer splits its neighbours.
@@ -642,19 +664,41 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
 // is where the fragmentation actually lives: levels are chosen from the CAMERA
 // (draw_list.h), so instances of one prototype form concentric rings around it
 // and every ring boundary crossed in graph order used to end a run, even where
-// this layer sees them identically.
+// this layer sees them identically. Measured on apps/forest, the level half is
+// 94% of the win and the compaction 6% -- culled items arrive in long runs
+// because the scatter is Morton-ordered, so they cost few splits, where the
+// rings cut ACROSS that curve and cost thousands.
 //
-// Stable, and by BUCKET rather than by key, so the order is a pure function of
-// graph order and level -- no mesh pointer is ever compared. Pointer order is
-// not stable across runs, and `submit-exact` asserts two runs agree.
+// GROUPING IS CONFINED TO SPANS THE GRAPH ALREADY MADE ADJACENT, which is a
+// weaker thing than it sounds and is worth knowing before relying on it: a
+// scene that interleaves two prototypes has spans of length one and gets
+// nothing from this half. apps/forest buys the adjacency itself by parenting
+// every instance under a global per-prototype group. Grouping the whole list by
+// (mesh id, level) once at build time would remove that precondition and the
+// per-layer repetition with it; it moves zero draws on the one app that has
+// the precondition, so it is booked rather than built.
+//
+// Stable, and by BUCKET rather than by key: a counting pass is linear where a
+// sort is not, and it copies indices rather than DrawItems. Mesh pointers are
+// compared for EQUALITY here, never for order -- an address is not stable
+// across runs and `submit-exact` asserts two runs agree.
 static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, ShadowCasterSet set,
                                   const CullView* cull, SubmitStats* stats) {
-    if (list->count > ss->caster_order_cap) {
-        size_t* grown = realloc(ss->caster_order, list->count * sizeof(size_t));
-        if (!grown)
+    // Twice the list: the upper half is the counting pass's output buffer. One
+    // allocation and one cap rather than a second of each.
+    size_t want = list->count * 2;
+    if (want > ss->caster_order_cap) {
+        size_t* grown = realloc(ss->caster_order, want * sizeof(size_t));
+        if (!grown) {
+            // Returning 0 alone would draw an empty map into a layer that was
+            // just cleared to "nothing occludes" -- a fully lit cascade, which
+            // renders as a plausible frame. Say so instead.
+            log_error("Shadow: could not size the caster order to %zu; layer unshadowed",
+                      want);
             return 0;
+        }
         ss->caster_order = grown;
-        ss->caster_order_cap = list->count;
+        ss->caster_order_cap = want;
     }
 
     size_t n = 0;
@@ -672,8 +716,17 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
         ss->caster_order[n++] = i;
     }
 
-    // Group in place, one same-mesh span at a time. CETRA_LOD_MAX is 4, so the
-    // inner pass is four sweeps over a span rather than a sort.
+    // One same-mesh span at a time: count each level, prefix-sum the counts into
+    // bucket heads, scatter, copy back. Linear in the span.
+    //
+    // The obvious in-place form -- sweep once per level, rotating each match
+    // down to the write head -- is NOT linear. Its move count is exactly the
+    // INVERSION COUNT of the level sequence, so a span of m costs up to 3m²/8,
+    // and clustering the input lowers the constant without touching the order.
+    // It survived apps/forest only because that app's spans are ~435 long;
+    // merging its twenty prototypes into one would have cost 20x for identical
+    // content, which is a perverse price on the thing you do to batch better.
+    size_t* scatter = ss->caster_order + list->count;
     size_t span_start = 0;
     while (span_start < n) {
         const Mesh* mesh = list->items[ss->caster_order[span_start]].mesh;
@@ -681,21 +734,20 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
         while (span_end < n && list->items[ss->caster_order[span_end]].mesh == mesh)
             span_end++;
 
-        if (span_end - span_start > 1) {
-            size_t out = span_start;
-            for (int level = 0; level < CETRA_LOD_MAX; ++level) {
-                for (size_t i = span_start; i < span_end; ++i) {
-                    size_t idx = ss->caster_order[i];
-                    if (list->items[idx].lod != level)
-                        continue;
-                    // Rotate rather than swap: a swap would reorder the entries
-                    // still waiting for a later bucket, and the order inside a
-                    // bucket has to stay graph order for two runs to agree.
-                    for (size_t k = i; k > out; --k)
-                        ss->caster_order[k] = ss->caster_order[k - 1];
-                    ss->caster_order[out++] = idx;
-                }
+        size_t span = span_end - span_start;
+        if (span > 1) {
+            // One past the top level, so the prefix sum below can write the
+            // running total for level L into head[L + 1] before shifting.
+            size_t head[CETRA_LOD_MAX + 1] = {0};
+            for (size_t i = span_start; i < span_end; ++i)
+                head[_caster_level(list, ss->caster_order[i]) + 1]++;
+            for (int level = 0; level < CETRA_LOD_MAX; ++level)
+                head[level + 1] += head[level];
+            for (size_t i = span_start; i < span_end; ++i) {
+                size_t idx = ss->caster_order[i];
+                scatter[head[_caster_level(list, idx)]++] = idx;
             }
+            memcpy(&ss->caster_order[span_start], scatter, span * sizeof(size_t));
         }
         span_start = span_end;
     }
@@ -711,7 +763,7 @@ static size_t _ordered_caster_run(const DrawList* list, const size_t* order, siz
     size_t n = 1;
     while (first + n < count && n < UBO_INSTANCE_MAX) {
         const DrawItem* next = &list->items[order[first + n]];
-        if (next->mesh != head->mesh || next->lod != head->lod)
+        if (!draw_run_key_equal(head, next))
             break;
         n++;
     }
@@ -764,15 +816,11 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             if (run > 1)
                 instance_chunk_upload(engine->instance_ubo, &chunk, list, order, pos, run, false);
 
-            // Per node, and the list is in node order, so consecutive meshes of
-            // one node still upload it once.
-            //
-            // Only for a draw carrying one object, the guard the depth prepass
-            // has carried since 11.30: a batched draw reads its transform from
-            // the instance block, and writing `model` anyway dirties the
-            // program's whole uniform block and costs a copy of it at
-            // submission. This pass issues more draws than any other in the
-            // engine and was the one paying for it.
+            // Only for a draw carrying one object, for the reason
+            // _submit_item's own guard records. Note the grouped order is not
+            // node order, so a node holding several meshes no longer uploads
+            // this once -- the value cache absorbs the repeat, and the meshes
+            // are in different spans by then anyway.
             if (run == 1)
                 uniform_set_mat4(u, "model", (const float*)node->global_transform);
 

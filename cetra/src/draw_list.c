@@ -324,8 +324,12 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
                                          item->node->global_transform);
 }
 
+bool draw_run_key_equal(const DrawItem* head, const DrawItem* next) {
+    return next->mesh == head->mesh && next->lod == head->lod;
+}
+
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullView* view) {
-    return next->mesh == head->mesh && next->lod == head->lod && draw_item_visible(next, view);
+    return draw_run_key_equal(head, next) && draw_item_visible(next, view);
 }
 
 // Distance from `eye` to an item's world-space bound centre, through the same

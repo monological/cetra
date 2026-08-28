@@ -150,13 +150,19 @@ typedef struct CullView {
 // had already drifted on the null guard.
 bool draw_item_visible(const DrawItem* item, const CullView* view);
 
-// Whether `next` can ride in the same draw as the run that `head` started:
-// same geometry AT THE SAME LEVEL, and visible under the same frustum. The
-// caller adds its own "does this pass want it" test -- that part differs per
-// pass, this part does not.
+// Whether two items are the same DRAW: same geometry at the same level.
 //
-// The level joins the key because one draw submits one index range, so two
-// instances of a mesh at different distances cannot share a draw.
+// Split from the visibility half below because a pass that settles visibility
+// once, up front, still has to ask this -- and asking it by spelling the
+// comparison out is how the copies above drifted. The level joins the key
+// because one draw submits one index range, so two instances of a mesh at
+// different distances cannot share a draw.
+bool draw_run_key_equal(const DrawItem* head, const DrawItem* next);
+
+// Whether `next` can ride in the same draw as the run that `head` started:
+// the key above, and visible under the same frustum. The caller adds its own
+// "does this pass want it" test -- that part differs per pass, this part does
+// not.
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullView* view);
 
 // Copy one lane out of `src` into `dst`, ordered coarsely front-to-back so early
@@ -164,9 +170,11 @@ bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullVie
 // batcher still finds its runs. `dst` is a scratch list owned by the caller;
 // `src` is left untouched.
 //
-// A COPY rather than a permutation of `src`, because the shadow pass reads the
-// same list and reorders would follow it there: its runs are formed from
-// adjacency too, and a camera-relative order means nothing in a light's frustum.
+// A COPY rather than a permutation of `src`, because `src` is the stamp-guarded
+// list every other pass reads and a camera-relative order means nothing in a
+// light's frustum. This used to add "and the shadow pass forms its runs from
+// adjacency too" -- it no longer does, it builds its own order, and it would not
+// care what this one did either way.
 //
 // Depth is BUCKETED, and that is the whole design rather than a shortcut. An
 // exact front-to-back sort puts every item at a distinct key, so the batcher --

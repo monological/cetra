@@ -13235,6 +13235,37 @@ def run_forest_gate(workdir):
         if not ok:
             failures.append("forest-lod")
 
+        # --- forest-shadow-lod: LOD must not cost the shadow pass draws -----
+        # Rides forest-lod's pair, because the pair IS the experiment: LOD off
+        # is the same casters with every ring boundary removed, so it is what
+        # the shadow pass would submit if levels never split a batch.
+        #
+        # This is the arm that can see the change 11.90 actually made. The one
+        # in the submission group cannot: instancing_fixture carries 1,042
+        # triangles over two meshes, both under LOD_MIN_TRIANGLES, so every
+        # item there sits at level 0 and the regroup is an identity permutation
+        # -- deleting it outright would not move a number that arm reads.
+        #
+        # Separation is three orders of magnitude, so the bar needs no tuning:
+        # before 11.90 this read 371% (7,630 against 1,621), after it reads
+        # about 5%.
+        # Absent rather than defaulted, for the reason _forest_run's docstring
+        # gives: a missing column read as 0 compares 0 against 0 and passes.
+        s_on = lod_on["submit"].get("shadow cascades")
+        s_off = lod_off["submit"].get("shadow cascades")
+        if not s_on or not s_off:
+            print("  forest-shadow-lod FAIL  no shadow cascades row in one of the pair")
+            failures.append("forest-shadow-lod")
+        else:
+            cost = (s_on["draws"] / s_off["draws"] - 1.0) if s_off["draws"] else 9.9
+            ok = cost <= 0.25
+            print(f"  forest-shadow-lod {'PASS' if ok else 'FAIL'}  shadow draws "
+                  f"{s_on['draws']} with LOD vs {s_off['draws']} without "
+                  f"({cost * 100.0:+.0f}%, want <= +25%): levels must not fragment a pass "
+                  f"that reorders freely")
+            if not ok:
+                failures.append("forest-shadow-lod")
+
     # --- forest-order: spatial ordering is what makes batching work ---------
     # The app's largest finding, and without this arm nothing defends it. The
     # guard is that instances and triangles must be IDENTICAL: the two runs draw
