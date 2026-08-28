@@ -5453,11 +5453,10 @@ MASK_GRID = 12
 # down) and why neither could test this. An isolated dot has no such symmetry;
 # its coverage falls 0.113 -> 0.125 -> 0.062 -> 0.000 over four halvings.
 ALPHACOV_FIXTURE = "alphacov_fixture.cscn"
-# Read as fractions of frame height. NEAR is where the plane is near level 0 and
-# is the reference; MID is deep enough into the chain that an unpreserved cutout
-# has visibly thinned.
-ALPHACOV_NEAR = (0.80, 0.98)
-ALPHACOV_MID = (0.62, 0.72)
+# The three bands are IMPORTED from the generator (_alphacov_gen below), not
+# restated here: where a band lands is a fact about that geometry and the camera
+# it ships with, and the generator asserts each one against them. A copy in this
+# file could only agree by hand.
 # A dot is far brighter than the ground it is cut out of, so a luma threshold
 # separates them without needing to know where any individual dot landed.
 ALPHACOV_LUMA = 90.0
@@ -5465,6 +5464,13 @@ ALPHACOV_LUMA = 90.0
 # Measured 0.784 preserved against 0.591 unpreserved, so this sits between them
 # with room either side rather than on top of the passing value.
 ALPHACOV_MIN_RATIO = 0.70
+# And what the FAR band may NOT carry. It is bounded the opposite way from the
+# ratio above and that is the whole reason it exists: past the level where the
+# chain goes uniform a correct build has nothing left to preserve and thins to
+# nothing, where a saturating one drives every texel over the cutoff and fills
+# in solid. Measured 1.0000 on the cascading build against 0.0000 either side of
+# it in the frame, so the bar is nowhere near either.
+ALPHACOV_FAR_MAX = 0.25
 
 
 def _box_luma(pix, w, h, box):
@@ -10943,9 +10949,12 @@ def run_alphacov_gate(workdir):
                      toward the background rather than toward the mean of an
                      edge, so an unpreserved chain does not thin the grid, it
                      DELETES it -- this fixture's coverage runs 0.113 at level 0
-                     and 0.000 by level 3. Castano's per-level rescale is what
-                     holds it, and the arm reads the ratio between two bands of
-                     ONE frame so it needs no stored image and no second build.
+                     and 0.000 by level 3. The per-level rescale is what holds
+                     it, and the arm reads the ratio between two bands of ONE
+                     frame so it needs no stored image and no second build.
+
+      alphacov-far   and the far field is not SOLID. Bounded the opposite way,
+                     which is the point of it.
 
     WHY A DOT GRID AND NOT FOLIAGE. Every alpha-tested asset in this corpus is a
     leaf atlas with a soft edge about a texel wide, and a soft edge is symmetric
@@ -10954,34 +10963,66 @@ def run_alphacov_gate(workdir):
     apps/tree's atlas, 0.3957 at level 0 against 0.3964 six levels down. An arm
     written on that content would pass whether the feature worked or not.
 
-    WHAT IT DOES NOT CLAIM. At the vanishing point both preserved and unpreserved
-    read essentially zero -- once every texel of a level is below the cutoff no
-    scale inside the search's range lifts it back, and the rescale is capped at
-    4x. The claim is the mid field, where there is something left to hold.
+    WHY TWO ARMS POINTING OPPOSITE WAYS, and this is spec 11.88 paying for spec
+    11.87. A ratio bounded only BELOW cannot fail on over-preservation: a chain
+    that drives the far field solid reads mid HIGHER than near, so the ratio goes
+    up and the arm passes harder the worse the bug gets. 11.87 shipped exactly
+    that -- cascading let the per-level 4x cap compound to an effective 4.41,
+    which lifted a uniform level over the cutoff and painted a solid white band
+    across the distance -- and this gate was green for it. Neither arm is safe
+    alone: alphacov-mip alone passes on a build that saturates, and alphacov-far
+    alone passes on one that preserves nothing, since an empty far field is what
+    correct looks like out there.
+
+    WHAT NEITHER CLAIMS. Past the level where the chain goes uniform the dots are
+    gone and are meant to be: coverage is 0 or 1 there and no scale reproduces a
+    fraction, so preservation has nothing to hold and correctly declines. That is
+    this family's known ceiling, not a defect -- see docs/papers/README.md, where
+    Yuksel measures the whole approach as one that "does not always improve the
+    results". The claim is the mid field, plus the promise not to make it worse.
     """
     scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
     if not os.path.exists(scene):
         print(f"  alphacov-mip SKIP  ({ALPHACOV_FIXTURE} not present)")
+        return []
+    gen = _alphacov_gen()
+    if gen is None:
         return []
 
     out = os.path.join(workdir, "alphacov.ppm")
     err = render(scene, out, [])
     if err:
         print(f"  alphacov-mip ERROR render failed: {err.strip()[-200:]}")
-        return ["alphacov-mip"]
+        return ["alphacov-mip", "alphacov-far"]
 
     w, h, pix = _read_ppm(out)
-    near = _alphacov_frac(pix, w, h, ALPHACOV_NEAR)
-    mid = _alphacov_frac(pix, w, h, ALPHACOV_MID)
+    near = _alphacov_frac(pix, w, h, gen.BAND_NEAR)
+    mid = _alphacov_frac(pix, w, h, gen.BAND_MID)
+    far = _alphacov_frac(pix, w, h, gen.BAND_FAR)
     ratio = mid / near if near > 0 else 0.0
     # The near band has to actually carry dots, or a frame that rendered nothing
-    # satisfies a ratio of 0/0 and every reading below is meaningless.
+    # satisfies a ratio of 0/0 and every reading below is meaningless. Shared by
+    # both arms: an empty frame would otherwise SATISFY the far band's ceiling.
     lit = near > 0.05
+
+    failures = []
     ok = lit and ratio >= ALPHACOV_MIN_RATIO
     print(f"  alphacov-mip {'PASS' if ok else 'FAIL'}  dot coverage {near:.4f} near, "
           f"{mid:.4f} mid, ratio {ratio:.3f} (want >= {ALPHACOV_MIN_RATIO}, and the near band "
           f"lit above 0.05: {lit}). Without the per-level rescale this reads 0.591.")
-    return [] if ok else ["alphacov-mip"]
+    if not ok:
+        failures.append("alphacov-mip")
+
+    ok = lit and far <= ALPHACOV_FAR_MAX
+    print(f"  alphacov-far {'PASS' if ok else 'FAIL'}  the far field reads {far:.4f} "
+          f"(want <= {ALPHACOV_FAR_MAX}, and the near band lit: {lit}). Past the level where "
+          f"the chain goes uniform there is no fractional coverage to reproduce, so a correct "
+          f"build thins to nothing here; a rescale that cascades through 8 bits compounds its "
+          f"own per-level cap and paints this band SOLID, reading 1.0000.")
+    if not ok:
+        failures.append("alphacov-far")
+
+    return failures
 
 
 OVERDRAW_LAYERS = "overdraw_layers.cscn"
@@ -16986,6 +17027,7 @@ def run_cull_gate(workdir):
 
 _LAYER_GEN = None
 _LAYER_VT_GEN = None
+_ALPHACOV_GEN = None
 
 
 def _import_fixture_gen(filename, group="layers"):
@@ -17025,6 +17067,13 @@ def _layer_vt_gen():
     if _LAYER_VT_GEN is None:
         _LAYER_VT_GEN = _import_fixture_gen("gen_layer_vt_fixture.py")
     return _LAYER_VT_GEN
+
+
+def _alphacov_gen():
+    global _ALPHACOV_GEN
+    if _ALPHACOV_GEN is None:
+        _ALPHACOV_GEN = _import_fixture_gen("gen_alphacov_fixture.py", "alphacov-mip")
+    return _ALPHACOV_GEN
 
 
 # How far off the truth the coarse fallback alone must read on the road's edge

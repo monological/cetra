@@ -56,6 +56,22 @@ UV_PER_UNIT = 0.25
 # scene cannot disagree.
 CAM_Y, CAM_TARGET_Z, FOV = 8.0, -30.0, 50.0
 
+GATE_H = 300 * 2     # gates render 400x300 into a 2x framebuffer
+
+# The three horizontal bands every arm reads, as fractions of frame height, and
+# they live HERE rather than in gates.py because where they land is a fact about
+# this geometry -- the asserts below check each one against the camera it is
+# derived from, which a copy in the harness could not do.
+#
+# NEAR is level 0's reference. MID is far enough to have drifted and near enough
+# that preservation still has something to hold. FAR is past the distance where
+# the chain goes UNIFORM, and it is the one that reads the opposite way from the
+# other two: a correct chain has nothing left to preserve out there and thins to
+# nothing, where a saturating one fills in solid.
+BAND_NEAR = (0.80, 0.98)
+BAND_MID = (0.62, 0.72)
+BAND_FAR = (0.26, 0.34)
+
 
 def _alpha_dots(n):
     """A grid of small opaque dots on transparent ground, RGBA.
@@ -85,6 +101,33 @@ def _box_halve_alpha(a):
 
 def _coverage(a, cutoff):
     return float((a >= int(cutoff * 255 + 0.5)).mean())
+
+
+def _plane_z_at_row(y_frac):
+    """World distance of the plane point that projects to this frame row.
+
+    The camera looks DOWN at a ground plane, so a row maps to a distance and the
+    mapping runs to infinity at the horizon -- which is why every band below has
+    to be checked rather than eyeballed: a band a few percent too high is not a
+    band slightly further away, it is one off the end of the plane entirely.
+    """
+    pitch = math.atan2(CAM_Y, abs(CAM_TARGET_Z))
+    ndc_y = 1.0 - 2.0 * y_frac
+    above_axis = math.atan(ndc_y * math.tan(math.radians(FOV) * 0.5))
+    below_horizon = pitch - above_axis
+    if below_horizon <= 0.0:
+        return math.inf          # at or above the horizon; the plane never gets there
+    return CAM_Y / math.tan(below_horizon)
+
+
+def _mip_at_z(z):
+    """Mip level the plane selects at world distance z, in the units the reach
+    assert already used -- one helper so the two cannot drift apart."""
+    if not math.isfinite(z):
+        return math.inf
+    px = 2.0 * z * math.tan(math.radians(FOV) * 0.5) / GATE_H
+    texels_per_px = px * UV_PER_UNIT * TEX * (z / CAM_Y)
+    return math.log2(max(texels_per_px, 1.0))
 
 
 # --- geometry: one long quad, near edge at NEAR, far edge at FAR -------------
@@ -179,25 +222,46 @@ def main():
     # must COLLAPSE down an unpreserved chain. If it does not, preservation is
     # inert here and an arm reading this proves nothing -- which is the state the
     # leaf atlases are in, at 0.3957 against 0.3964 six levels down.
-    a, drifted = alpha0, []
-    for _ in range(4):
+    a, drifted, uniform_level = alpha0, [], None
+    for lvl in range(1, 10):
         a = _box_halve_alpha(a)
-        drifted.append(_coverage(a, CUTOFF))
+        if lvl <= 4:
+            drifted.append(_coverage(a, CUTOFF))
+        if uniform_level is None and a.min() == a.max():
+            uniform_level = lvl
     assert drifted[-1] < cov0 * 0.25, (
         f"coverage only fell {cov0:.3f} -> {drifted[-1]:.3f} over four levels; this fixture "
         f"exists because that collapse is what preservation restores")
 
+    # The far band reads SATURATION, and saturation needs a level with no
+    # structure left in it: once every texel is equal, no scale can reproduce a
+    # fractional coverage, and a rescale that tries anyway drives the whole level
+    # to one side of the cutoff. Without a uniform level this fixture has nothing
+    # for that band to catch.
+    assert uniform_level is not None, \
+        "the chain never goes uniform; the far band has no saturation to read"
+
     Image.fromarray(img, "RGBA").save(os.path.join(HERE, "alphacov_dots.png"))
 
-    # And that the far edge actually reaches those levels. The depth is a joint
+    # And that each band lands where its arm assumes. The depth is a joint
     # function of six numbers across two files, and any one of them can quietly
-    # return this to being a fixture that never leaves level 0.
-    gate_h = 300 * 2  # gates render 400x300 into a 2x framebuffer
-    px_at_far = 2.0 * FAR * math.tan(math.radians(FOV) * 0.5) / gate_h
-    texels_per_px = px_at_far * UV_PER_UNIT * TEX * (FAR / CAM_Y)
-    reached = math.log2(max(texels_per_px, 1.0))
-    assert reached >= 4.0, \
-        f"the far edge reaches only mip {reached:.1f}; the collapse above happens by level 3"
+    # return this to being a fixture that never leaves level 0 -- or slide a band
+    # off the plane, where it reads backdrop and reports a number anyway.
+    for name, (top, bottom) in (("NEAR", BAND_NEAR), ("MID", BAND_MID), ("FAR", BAND_FAR)):
+        z_near, z_far = _plane_z_at_row(bottom), _plane_z_at_row(top)
+        assert math.isfinite(z_far) and z_far <= FAR, \
+            f"band {name} reaches {z_far:.0f} units, past the plane's far edge at {FAR:.0f}"
+        assert z_near >= NEAR, \
+            f"band {name} starts at {z_near:.0f} units, in front of the plane's near edge"
+    # FAR must sit past the level that went uniform, or it is reading the same
+    # drift MID already covers rather than the saturation it exists for.
+    far_mip = _mip_at_z(_plane_z_at_row(BAND_FAR[1]))
+    assert far_mip >= uniform_level, (
+        f"the FAR band's nearest row reaches only mip {far_mip:.1f}, but the chain does not go "
+        f"uniform until level {uniform_level}")
+    near_mip = _mip_at_z(_plane_z_at_row(BAND_NEAR[1]))
+    assert near_mip < uniform_level, \
+        f"the NEAR band already reaches mip {near_mip:.1f}; it is the level-0 reference"
 
     with open(os.path.join(HERE, "alphacov_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
