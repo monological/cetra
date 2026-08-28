@@ -10907,18 +10907,27 @@ def run_mask_gate(workdir):
                           _box_luma(spix, sw, sh, MASK_GONE_BOX))
 
     lit = all(r >= MASK_LIT_FLOOR and k >= MASK_LIT_FLOOR for r, k, _ in reads.values())
-    # A RATIO between the two counts, not each against MASK_GONE_CEIL. The
-    # absolute ceiling is too slack to fail here and that is not a bug in it: it
-    # was sized to separate "backdrop" from "a lit quad" at 0.47, and the defect
-    # only lifts the box to 0.0915. Asking whether the two counts AGREE is the
-    # question anyway -- the claim is that the silhouette is a property of the
-    # material, not of the framebuffer.
+    # A RATIO between the two counts, AND an absolute ceiling on each. The ratio
+    # asks the question this arm exists for -- the silhouette is a property of
+    # the material, not of the framebuffer -- and the ceilings are what stop it
+    # being satisfied by two counts that agree on something wrong.
+    #
+    # Spec 11.88 found that hole: with a ceiling on gone4 alone, a below-cutoff
+    # quad rendering FULLY VISIBLE at one sample passed, since 0.47 against a
+    # suppressed 0.09 is a ratio of 0.19. That is the "masked geometry renders as
+    # solid quads" failure this whole group exists to catch, and this arm is the
+    # only one that renders bare --msaa 1 with no TAA.
+    #
+    # gone1 == 0 is the IDEAL -- perfectly absent -- so it must not become an inf
+    # ratio and fail. `lit` already guarantees the frame rendered, so a zero here
+    # is a real reading and the ratio is simply not needed to judge it.
     gone1, gone4 = reads[1][2], reads[4][2]
-    ratio = gone4 / gone1 if gone1 > 0 else float("inf")
-    ok = lit and ratio <= MASK_SAMPLE_RATIO_MAX and gone4 <= MASK_GONE_CEIL
+    ratio = gone4 / gone1 if gone1 > 0 else 0.0
+    ok = (lit and ratio <= MASK_SAMPLE_RATIO_MAX
+          and gone1 <= MASK_GONE_CEIL and gone4 <= MASK_GONE_CEIL)
     print(f"  mask-samples {'PASS' if ok else 'FAIL'}  the below-cutoff quad reads "
           f"{gone1:.4f} at 1 sample and {gone4:.4f} at 4, ratio {ratio:.2f} (want <= "
-          f"{MASK_SAMPLE_RATIO_MAX}, and <= {MASK_GONE_CEIL} absolute, and the lit boxes "
+          f"{MASK_SAMPLE_RATIO_MAX}, BOTH <= {MASK_GONE_CEIL} absolute, and the lit boxes "
           f"above {MASK_LIT_FLOOR} at both: {lit}). Its alpha is 0.2 against an authored "
           f"cutoff of 0.4, so it must be absent at every sample count; a cutoff replaced "
           f"by 0.02 under alpha-to-coverage reads 2.10.")

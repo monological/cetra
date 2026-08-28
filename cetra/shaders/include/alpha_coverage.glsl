@@ -38,8 +38,15 @@
 // by how fast alpha moves per pixel is what converts it -- so the transition is
 // one pixel wide whatever the texture's own falloff looks like, and a
 // half-covered pixel reads 0.5 at any resolution or camera angle.
+//
+// A cutoff of ZERO takes the binary branch, and that is the file's own claim
+// being honoured rather than a special case bolted on: glTF says a fragment is
+// opaque where `alpha >= cutoff`, so at cutoff 0 EVERY fragment is opaque and
+// `step` says so. The ramp cannot -- a fully transparent texel sits exactly on
+// the threshold there, and a ramp centred on the threshold returns 0.5, which
+// would make a material that discards nothing half-cover its whole surface.
 float alphaMaskCoverage(float a, float cutoff, int a2c) {
-    if (a2c == 0)
+    if (a2c == 0 || cutoff <= 0.0)
         return step(cutoff, a);
     return clamp((a - cutoff) / max(fwidth(a), 1e-4) + 0.5, 0.0, 1.0);
 }

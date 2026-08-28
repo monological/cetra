@@ -1799,7 +1799,22 @@ void resolve_height_maps(Scene* scene) {
                                            "_normal", "_norm",      "_nrm"};
     for (size_t m = 0; m < scene->material_count; m++) {
         Material* mat = scene->materials[m];
-        if (!mat || mat->height_tex)
+        if (!mat)
+            continue;
+        // A masked material carrying a height map breaks a precondition the
+        // shader states and cannot enforce: alpha_coverage.glsl needs `fwidth`
+        // reached from dynamically-uniform flow, and POM's silhouette clip
+        // discards per fragment upstream of it. Nothing in this tree does it, but
+        // a .cscn override can attach a height map to any imported material, so
+        // the combination is reachable from authoring with no other diagnostic.
+        // Benign on desktop GL, which keeps helper invocations alive across
+        // `discard` -- say it anyway rather than rely on that everywhere.
+        if (mat->alpha_mode == ALPHA_MASK && mat->height_tex)
+            log_warn("material '%s' is alpha-masked and carries a height map; parallax discards "
+                     "per fragment, which is where the masked path's derivatives stop being "
+                     "well defined",
+                     mat->name ? mat->name : "?");
+        if (mat->height_tex)
             continue;
         const char* src = mat->albedo_tex ? mat->albedo_tex->filepath
                                           : (mat->normal_tex ? mat->normal_tex->filepath : NULL);

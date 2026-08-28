@@ -586,6 +586,15 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
         // it on level 0 before publishing. Its solidity seed is alpha >= 8/255,
         // so scaling alpha up first would promote garbage-rgb texels into
         // colour SOURCES for their neighbours.
+        //
+        // Under --texture-compress-colour the guarantee is APPROXIMATE and is
+        // left that way. A masked albedo is TEXTURE_USE_COLOUR, so it takes
+        // DXT5, whose alpha is two endpoints and a 3-bit index per 4x4 block --
+        // applied after this, so what the GPU samples is not quite what the
+        // search matched. Inherent to matching coverage on the CPU and then
+        // quantising; the flag is off by default. Refusing colour compression on
+        // a coverage-preserved texture is the fix if anyone wants it, and it
+        // trades VRAM for a correctness nobody has asked for yet.
         const unsigned char* out = dst;
         if (keep_coverage) {
             unsigned char* cov = (dst == a) ? b : a;
