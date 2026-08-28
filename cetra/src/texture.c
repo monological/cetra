@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <float.h>
+#include <math.h>
 
 #include "ext/stb_image.h"
 #include "ext/uthash.h"
@@ -561,23 +563,41 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
         // chain is a chain of images, not of encodings, so quantisation error
         // cannot compound down it.
         texture_box_halve(src, sw, sh, channels, srgb_stored, lut, rev, dst);
-        // After the filter and before any encoder, which is the only position
-        // that exists: texture_upload_compressed_level encodes and uploads in
-        // one step and nothing here decodes. In place, so the next level
-        // filters from the rescaled parent -- levels cascade, and each is still
-        // held to level 0 rather than to the one above.
+        // The rescale goes after the filter and before any encoder, which is the
+        // only position that exists: texture_upload_compressed_level encodes and
+        // uploads in one step and nothing here decodes.
+        //
+        // It writes to a COPY, so the chain that feeds the next halving is the
+        // pristine one. Cascading -- filtering level N+1 from the rescaled level
+        // N -- is what NVTT does and cetra cannot: NVTT's intermediate is float32
+        // where this is uint8, so cascading here puts a clamp at 255 and two
+        // roundings inside a feedback loop. It also defeats the [1/4, 4] bound,
+        // which then applies per level to a residual rather than to the total:
+        // measured, the effective scale reached 4.41 against a cap of 4, lifted a
+        // structureless level over the cutoff, and painted the distance solid.
+        // DirectXTex rescales srcImages[level] for the same reason.
+        //
+        // The copy costs no allocation. box_halve has consumed `src`, and the
+        // buffer the ping-pong is about to swap into is either that spent `src`
+        // or, at level 1, a `b` nothing has touched -- and the next halving
+        // overwrites it regardless.
         //
         // The DILATE must already have run, and it has: all three producers do
         // it on level 0 before publishing. Its solidity seed is alpha >= 8/255,
         // so scaling alpha up first would promote garbage-rgb texels into
         // colour SOURCES for their neighbours.
-        if (keep_coverage)
-            texture_preserve_alpha_coverage(dst, dw, dh, desc.coverage_cutoff, target);
+        const unsigned char* out = dst;
+        if (keep_coverage) {
+            unsigned char* cov = (dst == a) ? b : a;
+            memcpy(cov, dst, (size_t)dw * (size_t)dh * (size_t)channels);
+            texture_preserve_alpha_coverage(cov, dw, dh, desc.coverage_cutoff, target);
+            out = cov;
+        }
         if (compressed)
-            texture_upload_compressed_level(block, gl_block, level, dw, dh, channels, dst, scratch);
+            texture_upload_compressed_level(block, gl_block, level, dw, dh, channels, out, scratch);
         else
             glTexImage2D(GL_TEXTURE_2D, level, (GLint)internal_format, dw, dh, 0, data_format,
-                         GL_UNSIGNED_BYTE, dst);
+                         GL_UNSIGNED_BYTE, out);
         src = dst;
         dst = (dst == a) ? b : a;
         sw = dw;
@@ -981,51 +1001,110 @@ bool texture_wants_coverage(int channels, TextureDesc desc) {
     return texture_wants_dilate(channels, desc) && desc.coverage_cutoff > 0.0f;
 }
 
-// What fraction of `pixels` would survive an alpha test at `cutoff`, with alpha
+// How much of `pixels` survives an alpha test at `cutoff`, with alpha
 // pre-multiplied by `scale`.
 //
-// On STORED codes against a stored-code cutoff, with no transfer function
-// anywhere: alpha is never in sRGB space (see texture_box_halve) and a coverage
-// search must not put it there.
+// MEASURED OVER THE BILINEAR RECONSTRUCTION, NOT OVER TEXELS, which is the one
+// thing about this function that matters. Each 2x2 neighbourhood is sampled on
+// an NxN grid of bilinear taps and the passing taps are counted -- the image as
+// the GPU will actually filter it, rather than as it is stored.
+//
+// A per-texel count is the form every write-up of this technique states, and it
+// is not what NVTT or DirectXTex implement (NVTT carries it as dead code beside
+// this). It cannot work: counting texels makes coverage a STEP function of the
+// scale, with plateaus wide enough that the target usually falls in a gap
+// between two reachable values, and the search then has no way to land on it.
+// Reconstructing first makes coverage effectively continuous, which is what
+// every property downstream of it assumes. See docs/papers/README.md.
+//
+// N = 4 is NVTT's; DirectXTex uses 8 for a smoother estimate at 4x the cost,
+// and this runs once per bisection step per level.
+//
+// Alpha stays in STORED codes with no transfer function anywhere -- it is never
+// in sRGB space (see texture_box_halve) and a coverage search must not put it
+// there -- but the comparison is against the NORMALISED cutoff, because that is
+// what the shader compares (`step(cutoff, a)` on a 0..1 sample).
+#define TEXTURE_COVERAGE_TAPS 4
+
 static float texture_alpha_coverage(const unsigned char* pixels, int width, int height,
                                     float cutoff, float scale) {
-    const size_t count = (size_t)width * (size_t)height;
-    const unsigned char thresh = (unsigned char)(cutoff * 255.0f + 0.5f);
-    size_t above = 0;
-    for (size_t i = 0; i < count; i++) {
-        const float a = (float)pixels[i * 4 + 3] * scale;
-        if (a >= (float)thresh)
-            above++;
+    if (width < 2 || height < 2) {
+        // No 2x2 neighbourhood to reconstruct over. Fall back to the texel count
+        // -- at this size the two agree anyway, since a level this small has no
+        // interior to interpolate across.
+        const size_t count = (size_t)width * (size_t)height;
+        size_t above = 0;
+        for (size_t i = 0; i < count; i++) {
+            const float a = (float)pixels[i * 4 + 3] * scale * (1.0f / 255.0f);
+            if (a >= cutoff)
+                above++;
+        }
+        return count ? (float)above / (float)count : 0.0f;
     }
-    return count ? (float)above / (float)count : 0.0f;
+
+    const int n = TEXTURE_COVERAGE_TAPS;
+    size_t above = 0;
+    for (int y = 0; y < height - 1; y++) {
+        for (int x = 0; x < width - 1; x++) {
+            const size_t o0 = ((size_t)y * (size_t)width + (size_t)x) * 4 + 3;
+            const size_t o1 = o0 + (size_t)width * 4;
+            const float a00 = fminf(pixels[o0] * scale * (1.0f / 255.0f), 1.0f);
+            const float a10 = fminf(pixels[o0 + 4] * scale * (1.0f / 255.0f), 1.0f);
+            const float a01 = fminf(pixels[o1] * scale * (1.0f / 255.0f), 1.0f);
+            const float a11 = fminf(pixels[o1 + 4] * scale * (1.0f / 255.0f), 1.0f);
+            for (int sy = 0; sy < n; sy++) {
+                const float fy = ((float)sy + 0.5f) / (float)n;
+                for (int sx = 0; sx < n; sx++) {
+                    const float fx = ((float)sx + 0.5f) / (float)n;
+                    const float a = a00 * (1.0f - fx) * (1.0f - fy) + a10 * fx * (1.0f - fy) +
+                                    a01 * (1.0f - fx) * fy + a11 * fx * fy;
+                    if (a >= cutoff)
+                        above++;
+                }
+            }
+        }
+    }
+    const size_t taps = (size_t)(width - 1) * (size_t)(height - 1) * (size_t)(n * n);
+    return taps ? (float)above / (float)taps : 0.0f;
 }
 
 
 /*
- * Scale this level's alpha so the fraction surviving the cutoff matches level
- * 0's (Castano; Unity ships it as "Mip Maps Preserve Coverage").
+ * Scale this level's alpha so the coverage surviving the cutoff matches level
+ * 0's (Castano 2010; Unity ships it as "Mip Maps Preserve Coverage", NVTT as
+ * scaleAlphaToCoverage, DirectXTex as ScaleMipMapsAlphaForCoverage).
  *
  * Without it an alpha-tested cutout THINS with distance and eventually
- * evaporates: a box filter over a soft edge drags alpha toward the transparent
- * side, so fewer texels clear a threshold that has not moved. The shader's
- * sharpen fixes how WIDE the transition is; this fixes where it sits.
+ * evaporates: filtering drags alpha toward the transparent side, so less clears
+ * a threshold that has not moved. The shader's sharpen fixes how WIDE the
+ * transition is; this fixes where it sits.
  *
- * A bisection on the scale rather than a closed form, because the target is a
- * step function of it -- there is no expression to invert. Ten steps over
- * [0, 4]: the achievable coverage is quantised by the stored byte, so the search
- * lands on a plateau rather than converging, and iterating further buys nothing.
+ * A bisection rather than a closed form, because the apply is a threshold and
+ * there is nothing to invert. Ten steps over [1/4, 4], both from the references
+ * -- their [0, 4] is asymmetric in log space and the attenuate-to-nothing end
+ * has no use.
+ *
+ * THE APPLIED SCALE IS THE BEST ONE TESTED, NOT THE ONE THE BISECTION LANDS ON,
+ * and that is load-bearing rather than a refinement. The midpoint assigned on
+ * the final step is never evaluated, so applying it writes a coverage nobody
+ * measured. Seeding `best` at 1 also gives the honest answer where the target
+ * is UNREACHABLE -- a level with no structure left in it can only produce 0 or
+ * 1, and declining to touch it is correct: coverage preservation has nothing to
+ * preserve once the shape is gone. See docs/papers/README.md for the ceiling
+ * that puts on this whole approach.
  */
 static void texture_preserve_alpha_coverage(unsigned char* pixels, int width, int height,
                                             float cutoff, float target) {
-    // Castano's search, in his order, and the ORDER is the whole of it: start at
-    // scale 1, test, and stop on equality. A midpoint-first bisection over
-    // [0, 4] never evaluates 1 at all, and since coverage is a step function of
-    // the scale it then returns an arbitrary member of whatever plateau it
-    // converges to -- 0.848 for a level already matching to four decimals here,
-    // rescaling every alpha by 15% to correct nothing.
-    float lo = 0.0f, hi = 4.0f, scale = 1.0f;
+    float lo = 0.25f, hi = 4.0f, scale = 1.0f;
+    float best_scale = 1.0f;
+    float best_error = FLT_MAX;
     for (int step = 0; step < 10; step++) {
         const float got = texture_alpha_coverage(pixels, width, height, cutoff, scale);
+        const float error = fabsf(got - target);
+        if (error < best_error) {
+            best_error = error;
+            best_scale = scale;
+        }
         if (got < target)
             lo = scale;
         else if (got > target)
@@ -1034,12 +1113,12 @@ static void texture_preserve_alpha_coverage(unsigned char* pixels, int width, in
             break;
         scale = 0.5f * (lo + hi);
     }
-    if (scale == 1.0f)
+    if (best_scale == 1.0f)
         return;
 
     const size_t count = (size_t)width * (size_t)height;
     for (size_t i = 0; i < count; i++) {
-        const float a = (float)pixels[i * 4 + 3] * scale;
+        const float a = (float)pixels[i * 4 + 3] * best_scale;
         pixels[i * 4 + 3] = (unsigned char)(a > 255.0f ? 255.0f : a + 0.5f);
     }
 }
