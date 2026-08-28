@@ -2164,6 +2164,13 @@ static void on_init(Game* game) {
         ss->ortho_size = g_terrain.extent;
         ss->near_plane = 0.5f;
         ss->far_plane = g_terrain.extent * 6.0f;
+        // The slices stop at half the island rather than at the camera's 2000,
+        // which is what they were fitted across and is a view distance, not a
+        // shadow one. Across the far clip cascade 1 fitted a 967.8-unit box
+        // against the outermost cascade's 1000 -- a third of the pass spent
+        // re-drawing the ground the third cascade already had at the same
+        // density. The trees whose shadows anyone reads are inside this.
+        ss->shadow_distance = g_terrain.extent * 0.5f;
         ss->cascade_count = SHADOW_CASCADES;
         ss->pcss_enabled = true;
         ss->pcss_softness = 1.2f;

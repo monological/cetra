@@ -193,7 +193,25 @@ typedef struct ShadowSystem {
     // spatial jitter on its a-trous denoiser instead; shadows have no
     // spatial denoiser, so both knobs collapse into this one flag.)
     bool pcss_stochastic;
-    int pcss_frame_index;   // Per-frame rotation seed; frozen when stochastic is off
+    int pcss_frame_index; // Per-frame rotation seed; frozen when stochastic is off
+    // How far the SLICE cascades reach. 0 = the camera far clip, clamped to
+    // far_plane.
+    //
+    // The far clip is a different question and a bad answer to this one: it
+    // says how far you can SEE, where this says how far a shadow needs its own
+    // resolution. Fitting the slices across a kilometre of view distance spends
+    // every one of them on ground the outermost cascade already covers at the
+    // same density -- forest fits cascade 1 to a 967.8-unit box against the
+    // outermost's 1000, a 3% difference for a whole extra scene traversal.
+    //
+    // Set it per app, against that app's content. It does not derive, because
+    // the obvious derivation regresses moment shadows -- see the comment at the
+    // split for what has to be fixed before a default can tighten.
+    float shadow_distance;
+    // Blend between the logarithmic split (resolution where the eye is) and the
+    // uniform one (coverage). 1 = all log, 0 = all uniform. Zhang's practical
+    // split; 0.75 is the usual starting point and was a literal here.
+    float cascade_lambda;
     int cascade_count;      // Cascades per caster (1..SHADOW_CASCADES). 1 = the classic
                             // scene-fit single map, byte-identical to the pre-CSM path;
                             // layers stride by THIS value (layer = slot*cascade_count+c)

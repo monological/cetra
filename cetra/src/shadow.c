@@ -137,6 +137,8 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     system->msm_size = MSM_DEFAULT_SIZE;
     system->msm_blur = MSM_DEFAULT_BLUR;
     system->msm_bleed = MSM_DEFAULT_BLEED;
+    system->shadow_distance = 0.0f; // 0 = derive from ortho_size; see the header
+    system->cascade_lambda = 0.75f;
     system->cascade_count = 1; // library default = classic single map; the app opts in
     system->allocated_cascades = 0;
     system->csm_debug = false;
@@ -1531,9 +1533,26 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         cam.fov_radians = camera->fov_radians;
         cam.aspect_ratio = camera->aspect_ratio;
 
-        const float lambda = 0.75f;
+        const float lambda = ss->cascade_lambda;
         float cam_near = camera->near_clip;
-        float shadow_dist = fminf(ss->far_plane, camera->far_clip);
+        // Unset DERIVES NOTHING, and that is a measurement rather than caution.
+        // Deriving it from ortho_size was tried: it takes forest's cascade 1
+        // from a 967.8-unit box to 255.9 against the outermost's 1000, which is
+        // the separation this field exists for -- and it regresses `pillar-msm`
+        // from 0.0000 to 0.1757, light leaking into a thin caster's band.
+        //
+        // The cause is not the slicing. `scene_pad` below is far_plane * 0.5, a
+        // CONSTANT pushback that does not shrink with the slice, so tightening
+        // one shrinks its extent without shrinking its depth range: cascade 0
+        // went from a 36-unit slice in a 106-unit range to 2.95 in 40, and four
+        // moments cannot hold that. The pad has to be sized to what can cast
+        // into the slice before any default can tighten. Until then this is a
+        // knob an app sets against its own content.
+        float shadow_dist = ss->shadow_distance > 0.0f
+                                ? fminf(ss->shadow_distance, camera->far_clip)
+                                : fminf(ss->far_plane, camera->far_clip);
+        if (shadow_dist <= cam_near)
+            shadow_dist = fminf(ss->far_plane, camera->far_clip);
         for (int c = 0; c < cc; c++) {
             float t = (float)(c + 1) / (float)cc;
             float uniform_split = cam_near + (shadow_dist - cam_near) * t;
