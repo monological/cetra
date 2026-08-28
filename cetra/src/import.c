@@ -244,6 +244,108 @@ static const TextureMapping texture_mappings[] = {
     {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor", true},
 };
 
+/*
+ * The alpha cutoff this IMAGE's mip chain should be built to preserve, asking
+ * every material in the scene rather than the one being loaded.
+ *
+ * Coverage preservation is a property of the image, not of a material. Unity
+ * ships it as a texture IMPORT setting for that reason; glTF has nowhere to put
+ * it, so it has to be inferred from the materials -- and the inference is
+ * underdetermined the moment two of them use one image differently.
+ *
+ * They really do. Raiden's groom reaches image 14 twice, once as ALPHA_MASK at
+ * cutoff 0.5 and once as ALPHA_BLEND, through two glTF textures that share one
+ * source. The pool keys on the image, so one chain serves both and only the
+ * first loader's TextureDesc survives -- and which loads first is not even mesh
+ * order, since compressed embedded textures decode on the worker pool and the
+ * desc is dropped at three separate dedup points (async_loader.c). Asking the
+ * whole scene makes the answer a pure function of the file instead.
+ *
+ * Re-walking rather than caching is the point, and it costs a few thousand
+ * string compares against a PNG decode.
+ *
+ * A material VOTES on its own albedo path:
+ *   ALPHA_MASK    this cutoff -- it alpha-tests, so the chain is for it
+ *   ALPHA_BLEND   veto: it reads alpha as OPACITY, and a rescale would rewrite
+ *                 its translucency
+ *   ALPHA_OPAQUE  abstain: glTF ignores its alpha, so no rescale can reach it
+ * Any veto, or two masked voters wanting different cutoffs, returns 0 -- which
+ * is already this field's "off", so a contested image simply keeps the plain
+ * chain. Losing preservation is the cheap failure; rewriting a blended
+ * material's alpha is not.
+ */
+static float coverage_cutoff_for(const struct aiScene* ai_scene, const char* tex_path) {
+    if (!ai_scene || !tex_path)
+        return 0.0f;
+
+    float agreed = 0.0f;
+    bool vetoed = false, split = false;
+    for (unsigned int i = 0; i < ai_scene->mNumMaterials; i++) {
+        struct aiMaterial* m = ai_scene->mMaterials[i];
+        if (!m)
+            continue;
+
+        // Both albedo rows of texture_mappings: glTF fills BASE_COLOR, FBX and
+        // OBJ fill DIFFUSE, and either can be the one that names this image.
+        struct aiString path;
+        bool uses = false;
+        if (AI_SUCCESS ==
+                aiGetMaterialTexture(m, aiTextureType_BASE_COLOR, 0, &path, NULL, NULL, NULL, NULL,
+                                     NULL, NULL) &&
+            strcmp(path.data, tex_path) == 0)
+            uses = true;
+        if (!uses &&
+            AI_SUCCESS == aiGetMaterialTexture(m, aiTextureType_DIFFUSE, 0, &path, NULL, NULL, NULL,
+                                               NULL, NULL, NULL) &&
+            strcmp(path.data, tex_path) == 0)
+            uses = true;
+        if (!uses)
+            continue;
+
+        struct aiString mode;
+        if (AI_SUCCESS != aiGetMaterialString(m, AI_MATKEY_GLTF_ALPHAMODE, &mode))
+            continue; // no alpha mode is OPAQUE, which abstains
+        if (strcmp(mode.data, "BLEND") == 0) {
+            vetoed = true;
+            continue;
+        }
+        if (strcmp(mode.data, "MASK") != 0)
+            continue;
+
+        ai_real cutoff;
+        const float want = (AI_SUCCESS == aiGetMaterialFloat(m, AI_MATKEY_GLTF_ALPHACUTOFF, &cutoff))
+                               ? (float)cutoff
+                               : 0.5f; // glTF's default, as extract_material_properties has it
+        if (agreed != 0.0f && agreed != want)
+            split = true;
+        agreed = want;
+    }
+
+    // Every voter is counted before deciding, so the log can tell "declined" from
+    // "nobody asked" -- silence on the first is what would leave someone hunting
+    // for why an atlas they authored as a cutout kept none of its coverage.
+    //
+    // It repeats per referencing material, and twice each on a glTF, since
+    // assimp answers both albedo rows of texture_mappings and the caller runs
+    // once per row. Deduping would need state in a function whose whole value is
+    // being a pure function of the file.
+    if (agreed == 0.0f)
+        return 0.0f;
+    if (split) {
+        log_warn("texture '%s' is alpha-tested at more than one cutoff; one mip chain cannot "
+                 "hold both coverages, so neither is preserved",
+                 tex_path);
+        return 0.0f;
+    }
+    if (vetoed) {
+        log_info("texture '%s' is shared by an alpha-blended material, so its mip chain keeps "
+                 "the authored alpha rather than the cutout's coverage",
+                 tex_path);
+        return 0.0f;
+    }
+    return agreed;
+}
+
 // The rule stated once. A new texture slot is wrong here only if it is also
 // wrong about which setter it calls, which is not a mistake that hides.
 static TextureUse texture_use_for_setter(void (*setter)(Material*, Texture*)) {
@@ -612,12 +714,12 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
     // a real opacity loaded linear, which is the only case that breaks it.
     TextureDesc desc = texture_desc(is_srgb);
     desc.use = texture_use_for_setter(setter);
-    // The ALBEDO of a masked material is the one image anything alpha-tests, so
-    // the one whose mip chain has to hold its coverage.
-    // extract_material_properties has already run, so the cutoff is here to be
-    // read -- that ordering is what makes this two lines rather than a rework.
-    if (material->alpha_mode == ALPHA_MASK && setter == set_material_albedo_tex)
-        desc.coverage_cutoff = material->alphaCutoff;
+    // The ALBEDO is the one image anything alpha-tests, so the one whose mip
+    // chain may have to hold a coverage. WHICH cutoff is not this material's to
+    // answer -- the chain is shared by every material reaching the same image,
+    // and they can disagree. See coverage_cutoff_for.
+    if (setter == set_material_albedo_tex)
+        desc.coverage_cutoff = coverage_cutoff_for(ai_scene, tex_path);
 
     if (tex_path[0] == '*' && ai_scene) {
         int idx = atoi(tex_path + 1);
