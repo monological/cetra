@@ -836,10 +836,9 @@ typedef struct {
     // RenderMode override, 0 = PBR. The GUI has always had the combo; without this the debug
     // modes could not be reached headlessly, so anything they diagnose could not be captured.
     int render_mode;
-    // MSAA sample count, 0 = leave the engine default (4). This app runs MSAA *and* TAA, which
-    // is why the extrapolation specks surfaced here first; without the flag the one comparison
-    // that identifies them -- against a single sample, where no coverage is partial -- cannot
-    // be made in the app that shows them.
+    // MSAA sample count, 0 = the app's own default of 1. Raising it is what puts masked
+    // geometry back on the alpha-to-coverage path, which is the comparison the extrapolation
+    // specks (spec 11.38) were identified by and now the comparison for the leaf fringe.
     int msaa;
     /*
      * Keep the TAA jitter under --headless, which is also what lets the render scale stay at
@@ -914,7 +913,8 @@ static void print_usage(const char* prog) {
     printf("      --swell S           Swell train weight, 0 = no swell (default 1; this\n");
     printf("                          app's own swell is 3 m/s over 40 km)\n");
     printf("      --render-mode N     Debug view; 10 = HDR hotspots, 12 = extrapolation\n");
-    printf("      --msaa N            MSAA samples (default 4); 1 has no partial coverage\n");
+    printf("      --msaa N            MSAA samples (default 1, TAA carries the edges);\n");
+    printf("                          above 1 masked geometry takes the alpha-to-coverage path\n");
     printf("      --headless-jitter   Keep TAA jitter and the 0.70 render scale headless:\n");
     printf("                          what the window draws, but NOT deterministic\n");
     printf("      --cam-eye x,y,z     Pin the camera position (exact-repro framing)\n");
@@ -1164,10 +1164,19 @@ int main(int argc, char** argv) {
     // drops back to full resolution unless --headless-jitter, since the resolve
     // reconstructs from the jitter and headless suppresses it.
     set_engine_render_scale(engine, 0.70f);
+    // TAA-only, at ONE sample, which is the policy apps/render already runs and the one this app
+    // had never actually chosen -- it set TAA above and inherited the engine's 4x default, so it
+    // paid for both. TAA carries the edges here, and it is on unconditionally because TAAU needs
+    // its jitter.
+    //
+    // The sample count is not just a cost: above one sample masked geometry takes the
+    // alpha-to-coverage path, so every leaf edge becomes partially covered and mixes the sky or
+    // sea behind it into a bright fringe. Against this app's near-black leaves and a sunset that
+    // reads as an orange outline traced round the whole canopy.
+    //
     // Before init_engine so the count is the one the scene target is first built at, rather than
     // a rebuild on the frame after. The engine clamps it to what the driver offers.
-    if (args.msaa > 0)
-        set_engine_msaa_samples(engine, args.msaa);
+    set_engine_msaa_samples(engine, args.msaa > 0 ? args.msaa : 1);
 
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
