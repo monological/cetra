@@ -3157,7 +3157,7 @@ def _origin_forest(workdir, tag, offset, extra, frames="40", mode="6", size=("80
     reads the player's position, and the player is a physics body -- which is a
     different subsystem's correctness, not this one's.
 
-    --render-mode 6 for the reason AGENTS.md gives: forest's Hillaire sky moves
+    --render-mode 6 for the reason docs/verification.md gives: forest's Hillaire sky moves
     tens of thousands of pixels run to run, and the albedo view is the only mode
     with a 0 px floor. Every arm below measures its own floor anyway.
 
@@ -11907,7 +11907,7 @@ def run_overdraw_gate(workdir):
     # variant the warm ones, or the reverse, and the arm reports the drift as the
     # effect. Measured that way here, the base minimum moved 5.40 -> 4.95 ms
     # between a standalone render and the same render taken first inside the arm.
-    # AGENTS.md states the rule for reading forest's timings and it applies to
+    # docs/verification.md states the rule for reading forest's timings and it applies to
     # every clock in the suite: interleave, and take each config's floor from
     # samples adjacent in time.
     runs, on_runs = [], []
@@ -11944,7 +11944,7 @@ def run_overdraw_gate(workdir):
     #    prepass's second program was part of what the short run timed.
     # 3. All the base renders ran before all the variant renders, so GPU clock
     #    drift over the arm's own runtime landed on the comparison. This tree
-    #    already had the rule (AGENTS.md, on reading forest's timings): A/B/A/B.
+    #    already had the rule (docs/verification.md, on reading forest's timings): A/B/A/B.
     #
     # 4. And then `cost >= 3 * noise` was still wrong, which is why it is gone.
     #    Three times a floor is a statement about a distribution nobody sampled;
@@ -11988,7 +11988,7 @@ RAIDEN = os.path.join(ROOT, "my_models", "raiden", "source", "raiden_textured_ri
 
 
 def _raiden_render(out, extra):
-    """The AGENTS.md baseline recipe, which is 0 px run-to-run.
+    """The docs/verification.md baseline recipe, which is 0 px run-to-run.
 
     Here rather than in a gate because it is the corpus's only ALPHA_MASK +
     ALPHA_BLEND subject: every other fixture is opaque, so it is the only thing
@@ -18366,7 +18366,7 @@ def run_decal_gate(workdir):
         # The scorch too: it is the decal whose frame comes from the canonical
         # perpendicular fallback and the only one carrying a surface map, so it
         # is the one most likely to be wrong -- and its colour went unasserted
-        # while both this file and AGENTS.md quoted it as a reading.
+        # while both this file and docs/verification.md quoted it as a reading.
         scorch = _decal_byte(pix_on, w, h, project, gen.SCORCH_READ)
         floor = _decal_byte(pix_on, w, h, project, gen.FLOOR_CLEAR)
         ok = (_decal_near(poster, gen.POSTER_TR) and _decal_near(wall, wall_substrate) and
