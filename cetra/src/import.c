@@ -243,6 +243,25 @@ static const TextureMapping texture_mappings[] = {
     {aiTextureType_NORMAL_CAMERA, set_material_normal_tex, "NormalCamera", false},
     {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor", true},
 };
+static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
+
+// glTF's alpha vocabulary, read once. Two consumers need it -- the material
+// build and the per-image coverage vote -- and they run at different times, so
+// the second cannot read the first's Material. Sharing the SPELLING is what
+// stops "MASK", "BLEND" and the 0.5 default living in two places.
+static void ai_material_alpha(const struct aiMaterial* m, bool* mask, bool* blend, float* cutoff) {
+    struct aiString mode;
+    if (AI_SUCCESS != aiGetMaterialString(m, AI_MATKEY_GLTF_ALPHAMODE, &mode))
+        return; // absent is OPAQUE, and glTF ignores its alpha
+    if (strcmp(mode.data, "BLEND") == 0) {
+        *blend = true;
+    } else if (strcmp(mode.data, "MASK") == 0) {
+        *mask = true;
+        ai_real c;
+        *cutoff = (AI_SUCCESS == aiGetMaterialFloat(m, AI_MATKEY_GLTF_ALPHACUTOFF, &c)) ? (float)c
+                                                                                        : 0.5f;
+    }
+}
 
 /*
  * The alpha cutoff this IMAGE's mip chain should be built to preserve, asking
@@ -256,80 +275,68 @@ static const TextureMapping texture_mappings[] = {
  * They really do. Raiden's groom reaches image 14 twice, once as ALPHA_MASK at
  * cutoff 0.5 and once as ALPHA_BLEND, through two glTF textures that share one
  * source. The pool keys on the image, so one chain serves both and only the
- * first loader's TextureDesc survives -- and which loads first is not even mesh
- * order, since compressed embedded textures decode on the worker pool and the
- * desc is dropped at three separate dedup points (async_loader.c). Asking the
- * whole scene makes the answer a pure function of the file instead.
+ * first loader's TextureDesc survives -- and which loads first is not mesh order
+ * either, since embedded textures decode on the worker pool. Asking the whole
+ * scene makes the answer a pure function of the file instead.
  *
  * Re-walking rather than caching is the point, and it costs a few thousand
  * string compares against a PNG decode.
  *
- * A material VOTES on its own albedo path:
- *   ALPHA_MASK    this cutoff -- it alpha-tests, so the chain is for it
- *   ALPHA_BLEND   veto: it reads alpha as OPACITY, and a rescale would rewrite
- *                 its translucency
- *   ALPHA_OPAQUE  abstain: glTF ignores its alpha, so no rescale can reach it
- * Any veto, or two masked voters wanting different cutoffs, returns 0 -- which
- * is already this field's "off", so a contested image simply keeps the plain
- * chain. Losing preservation is the cheap failure; rewriting a blended
- * material's alpha is not.
+ * A BLEND material vetoes because it reads alpha as OPACITY and a rescale would
+ * rewrite its translucency; an OPAQUE one abstains because glTF ignores its
+ * alpha, so no rescale can reach it. A veto or a disagreement returns 0, already
+ * this field's "off", and the image keeps its plain chain: losing preservation
+ * is the cheap failure and rewriting a blended material's alpha is not.
  */
 static float coverage_cutoff_for(const struct aiScene* ai_scene, const char* tex_path) {
     if (!ai_scene || !tex_path)
         return 0.0f;
 
-    float agreed = 0.0f;
-    bool vetoed = false, split = false;
+    // A voter COUNT, not an overloaded value: `alphaCutoff: 0` is authorable, so
+    // a cutoff of zero is a legal vote and cannot double as "nobody voted". With
+    // the value alone as the sentinel, two masked materials at 0.0 and 0.5
+    // answered differently depending on which assimp listed first -- which is
+    // the order-dependence this function exists to remove.
+    int masked = 0;
+    float cutoff = 0.0f;
+    bool blended = false, split = false;
+
     for (unsigned int i = 0; i < ai_scene->mNumMaterials; i++) {
         struct aiMaterial* m = ai_scene->mMaterials[i];
         if (!m)
             continue;
 
-        // Both albedo rows of texture_mappings: glTF fills BASE_COLOR, FBX and
-        // OBJ fill DIFFUSE, and either can be the one that names this image.
-        struct aiString path;
+        // Which types are albedo is the mapping table's fact, not one to restate
+        // -- assimp answers several of them for one image, and a row added there
+        // would otherwise leave this silently blind to it.
         bool uses = false;
-        if (AI_SUCCESS ==
-                aiGetMaterialTexture(m, aiTextureType_BASE_COLOR, 0, &path, NULL, NULL, NULL, NULL,
-                                     NULL, NULL) &&
-            strcmp(path.data, tex_path) == 0)
-            uses = true;
-        if (!uses &&
-            AI_SUCCESS == aiGetMaterialTexture(m, aiTextureType_DIFFUSE, 0, &path, NULL, NULL, NULL,
-                                               NULL, NULL, NULL) &&
-            strcmp(path.data, tex_path) == 0)
-            uses = true;
+        for (size_t r = 0; r < texture_mapping_count && !uses; r++) {
+            if (texture_mappings[r].setter != set_material_albedo_tex)
+                continue;
+            struct aiString path;
+            if (AI_SUCCESS == aiGetMaterialTexture(m, texture_mappings[r].ai_type, 0, &path, NULL,
+                                                   NULL, NULL, NULL, NULL, NULL) &&
+                strcmp(path.data, tex_path) == 0)
+                uses = true;
+        }
         if (!uses)
             continue;
 
-        struct aiString mode;
-        if (AI_SUCCESS != aiGetMaterialString(m, AI_MATKEY_GLTF_ALPHAMODE, &mode))
-            continue; // no alpha mode is OPAQUE, which abstains
-        if (strcmp(mode.data, "BLEND") == 0) {
-            vetoed = true;
-            continue;
+        bool is_mask = false, is_blend = false;
+        float want = 0.0f;
+        ai_material_alpha(m, &is_mask, &is_blend, &want);
+        if (is_blend) {
+            blended = true;
+        } else if (is_mask) {
+            if (masked++ > 0 && cutoff != want)
+                split = true;
+            cutoff = want;
         }
-        if (strcmp(mode.data, "MASK") != 0)
-            continue;
-
-        ai_real cutoff;
-        const float want = (AI_SUCCESS == aiGetMaterialFloat(m, AI_MATKEY_GLTF_ALPHACUTOFF, &cutoff))
-                               ? (float)cutoff
-                               : 0.5f; // glTF's default, as extract_material_properties has it
-        if (agreed != 0.0f && agreed != want)
-            split = true;
-        agreed = want;
     }
 
-    // Every voter is counted before deciding, so the log can tell "declined" from
-    // "nobody asked" -- silence on the first is what would leave someone hunting
-    // for why an atlas they authored as a cutout kept none of its coverage.
-    //
-    // It repeats per referencing material, and twice each on a glTF, since
-    // assimp answers both albedo rows of texture_mappings and the caller runs
-    // once per row. Deduping would need state in a function whose whole value is
-    // being a pure function of the file.
-    if (agreed == 0.0f)
+    // Counted first, decided after, so the three outcomes are disjoint and a
+    // split cannot be swallowed by the "nobody asked" arm.
+    if (masked == 0)
         return 0.0f;
     if (split) {
         log_warn("texture '%s' is alpha-tested at more than one cutoff; one mip chain cannot "
@@ -337,13 +344,15 @@ static float coverage_cutoff_for(const struct aiScene* ai_scene, const char* tex
                  tex_path);
         return 0.0f;
     }
-    if (vetoed) {
-        log_info("texture '%s' is shared by an alpha-blended material, so its mip chain keeps "
-                 "the authored alpha rather than the cutout's coverage",
-                 tex_path);
+    if (blended) {
+        // Legitimate and expected -- raiden ships it -- so DEBUG. It is worth
+        // being able to find, not worth reading on every load.
+        log_debug("texture '%s' is shared by an alpha-blended material, so its mip chain keeps "
+                  "the authored alpha rather than the cutout's coverage",
+                  tex_path);
         return 0.0f;
     }
-    return agreed;
+    return cutoff;
 }
 
 // The rule stated once. A new texture slot is wrong here only if it is also
@@ -357,7 +366,6 @@ static TextureUse texture_use_for_setter(void (*setter)(Material*, Texture*)) {
     return TEXTURE_USE_DATA;
 }
 
-static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
 
 /*
  * Extract material properties from assimp material
@@ -450,20 +458,15 @@ static void extract_material_properties(struct aiMaterial* ai_mat, Material* mat
     // Formats without alphaMode leave it OPAQUE here; the lane is decided from
     // the opacity and the opacity map by classify() (draw_list.c), so nothing
     // has to be written back once the textures arrive.
-    struct aiString alphaMode;
-    if (AI_SUCCESS == aiGetMaterialString(ai_mat, AI_MATKEY_GLTF_ALPHAMODE, &alphaMode)) {
-        if (strcmp(alphaMode.data, "MASK") == 0) {
-            material->alpha_mode = ALPHA_MASK;
-            ai_real cutoff;
-            if (AI_SUCCESS == aiGetMaterialFloat(ai_mat, AI_MATKEY_GLTF_ALPHACUTOFF, &cutoff)) {
-                material->alphaCutoff = cutoff;
-            } else {
-                material->alphaCutoff = 0.5f; // glTF default
-            }
-            log_info("Material uses alpha mask mode with cutoff=%.2f", material->alphaCutoff);
-        } else if (strcmp(alphaMode.data, "BLEND") == 0) {
-            material->alpha_mode = ALPHA_BLEND;
-        }
+    bool alpha_mask = false, alpha_blend = false;
+    float alpha_cutoff = 0.0f;
+    ai_material_alpha(ai_mat, &alpha_mask, &alpha_blend, &alpha_cutoff);
+    if (alpha_mask) {
+        material->alpha_mode = ALPHA_MASK;
+        material->alphaCutoff = alpha_cutoff;
+        log_info("Material uses alpha mask mode with cutoff=%.2f", material->alphaCutoff);
+    } else if (alpha_blend) {
+        material->alpha_mode = ALPHA_BLEND;
     }
 
     // KHR_materials_transmission: see-through glass. IOR and volume
@@ -1799,22 +1802,7 @@ void resolve_height_maps(Scene* scene) {
                                            "_normal", "_norm",      "_nrm"};
     for (size_t m = 0; m < scene->material_count; m++) {
         Material* mat = scene->materials[m];
-        if (!mat)
-            continue;
-        // A masked material carrying a height map breaks a precondition the
-        // shader states and cannot enforce: alpha_coverage.glsl needs `fwidth`
-        // reached from dynamically-uniform flow, and POM's silhouette clip
-        // discards per fragment upstream of it. Nothing in this tree does it, but
-        // a .cscn override can attach a height map to any imported material, so
-        // the combination is reachable from authoring with no other diagnostic.
-        // Benign on desktop GL, which keeps helper invocations alive across
-        // `discard` -- say it anyway rather than rely on that everywhere.
-        if (mat->alpha_mode == ALPHA_MASK && mat->height_tex)
-            log_warn("material '%s' is alpha-masked and carries a height map; parallax discards "
-                     "per fragment, which is where the masked path's derivatives stop being "
-                     "well defined",
-                     mat->name ? mat->name : "?");
-        if (mat->height_tex)
+        if (!mat || mat->height_tex)
             continue;
         const char* src = mat->albedo_tex ? mat->albedo_tex->filepath
                                           : (mat->normal_tex ? mat->normal_tex->filepath : NULL);
@@ -1867,6 +1855,19 @@ void resolve_height_maps(Scene* scene) {
             }
             break;
         }
+    }
+
+    // After the sweep, so it also sees the maps the sweep just attached -- which
+    // is the only way this combination is actually reachable. A masked foliage
+    // material with a sibling _height.png is the case; a scene file cannot
+    // produce it, having no height key and no alpha mode to author.
+    // alpha_coverage.glsl holds the precondition and the reasoning.
+    for (size_t m = 0; m < scene->material_count; m++) {
+        Material* mat = scene->materials[m];
+        if (mat && mat->alpha_mode == ALPHA_MASK && mat->height_tex)
+            log_warn("material '%s' is alpha-masked and carries a height map; POM discards per "
+                     "fragment, upstream of where the masked path's derivatives are defined",
+                     mat->name ? mat->name : "?");
     }
 }
 
