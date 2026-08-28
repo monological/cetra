@@ -51,7 +51,9 @@ blog and not the code.
 2. **The applied scale is the best-error one, not the converged one.** It tracks
    `bestAlphaScale` seeded at `1.0f`, updated whenever `fabsf(currentCoverage - desiredCoverage)`
    improves, and applies that — never the tenth bisection midpoint, which was never evaluated.
-3. Range `[0, 4]`, ten steps.
+3. Ten steps of bisection. **Not** its `[0, 4]` range: cetra uses `[1/4, 4]`,
+   since `[0, 4]` is asymmetric in log space and the attenuate-to-nothing end has
+   no use once an unreachable target resolves to scale 1 anyway.
 
 **What cetra deliberately does NOT take:** NVTT cascades — its documented loop calls
 `buildNextMipmap` and `scaleAlphaToCoverage` on the same image in sequence, so each level is
