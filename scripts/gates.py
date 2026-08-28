@@ -5453,16 +5453,14 @@ MASK_GRID = 12
 # down) and why neither could test this. An isolated dot has no such symmetry;
 # its coverage falls 0.113 -> 0.125 -> 0.062 -> 0.000 over four halvings.
 ALPHACOV_FIXTURE = "alphacov_fixture.cscn"
-# The three bands are IMPORTED from the generator (_alphacov_gen below), not
-# restated here: where a band lands is a fact about that geometry and the camera
-# it ships with, and the generator asserts each one against them. A copy in this
-# file could only agree by hand.
 # A dot is far brighter than the ground it is cut out of, so a luma threshold
 # separates them without needing to know where any individual dot landed.
 ALPHACOV_LUMA = 90.0
 # What fraction of the near field's coverage the mid band must still carry.
-# Measured 0.784 preserved against 0.591 unpreserved, so this sits between them
-# with room either side rather than on top of the passing value.
+# Measured 0.911 as built, 0.619 with the per-texel measure restored, and 0.591
+# with no preservation at all -- so the bar sits 0.081 above the nearest
+# falsifying mutation rather than the comfortable margin it had against a
+# renderer that no longer exists.
 ALPHACOV_MIN_RATIO = 0.70
 # And what the FAR band may NOT carry. It is bounded the opposite way from the
 # ratio above and that is the whole reason it exists: past the level where the
@@ -10991,31 +10989,30 @@ def run_alphacov_gate(workdir):
     results". The claim is the mid field, plus the promise not to make it worse.
 
     AND WHAT THEY DO NOT COVER, which spec 11.88 measured rather than assumed.
-    The implementation has three parts; these two arms see ONE of them.
-
-      measure     chain      applied     far      mid
-      per-texel   cascade    converged   1.0000   0.784 PASS   <- 11.87 as shipped
-      per-texel   pristine   best        0.0000   0.619 FAIL
-      supersamp   cascade    converged   0.0000   0.932 PASS
-      supersamp   pristine   best        0.0000   0.911 PASS   <- as built
-
-    Saturation needs the texel count AND the cascade together: a texel count
-    makes coverage a step function the search cannot land on, so it applies wild
-    scales, and cascading is what lets those compound past the per-level bound.
-    Fix EITHER and the far band goes quiet, which is why the middle two rows
-    pass. So alphacov-mip covers the measure -- reverting it alone drops the
-    ratio to 0.619, a hair above the 0.591 an unpreserved chain reads -- and
-    NOTHING here covers the pristine chain or the best-error scale. Both are
-    correctness-by-reference (NVTT and DirectXTex, docs/papers/README.md) and
-    both are defensive: they matter on content whose target is unreachable
-    rather than on this fixture, whose target the fixed measure can hit.
+    The implementation has three parts and these two arms see ONE of them, the
+    coverage measure: reverting it alone drops the ratio to 0.619, a hair above
+    the 0.591 an unpreserved chain reads. Saturation needs the texel count AND
+    the cascade together, so fixing either quiets the far band, and NOTHING here
+    covers the pristine chain or the best-error scale. Both are
+    correctness-by-reference (docs/papers/README.md) and both are defensive:
+    they matter on content whose target is unreachable rather than on this
+    fixture, whose target the fixed measure can hit. Spec 11.88 carries the full
+    matrix -- it is not repeated here, where gate-arm-docs reads a table's first
+    column as arm names.
     """
     scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
     if not os.path.exists(scene):
         print(f"  alphacov-mip SKIP  ({ALPHACOV_FIXTURE} not present)")
+        print(f"  alphacov-far SKIP  ({ALPHACOV_FIXTURE} not present)")
         return []
+    # The bands come from the generator rather than being restated here: where a
+    # band lands is a fact about that geometry and the camera it ships with, and
+    # the generator asserts each against them. A copy here could only agree by
+    # hand. _import_fixture_gen prints its own SKIP; name the second arm too, or
+    # it vanishes without a line.
     gen = _alphacov_gen()
     if gen is None:
+        print("  alphacov-far      SKIP  (gen_alphacov_fixture unavailable)")
         return []
 
     out = os.path.join(workdir, "alphacov.ppm")

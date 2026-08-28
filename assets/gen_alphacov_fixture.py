@@ -56,7 +56,12 @@ UV_PER_UNIT = 0.25
 # scene cannot disagree.
 CAM_Y, CAM_TARGET_Z, FOV = 8.0, -30.0, 50.0
 
-GATE_H = 300 * 2     # gates render 400x300 into a 2x framebuffer
+# The framebuffer height a gate render actually produces. It is a CONSTANT and
+# not a platform variable: gates.py scales its own request so a 1x display asks
+# for double and lands on the same framebuffer as a HiDPI one, precisely so
+# nothing downstream has to know which it is on. Must track CALIBRATED_FB_SCALE
+# there -- every mip level below shifts by one if they disagree.
+GATE_H = 300 * 2
 
 # The three horizontal bands every arm reads, as fractions of frame height, and
 # they live HERE rather than in gates.py because where they land is a fact about
@@ -121,8 +126,7 @@ def _plane_z_at_row(y_frac):
 
 
 def _mip_at_z(z):
-    """Mip level the plane selects at world distance z, in the units the reach
-    assert already used -- one helper so the two cannot drift apart."""
+    """The mip level the plane selects at world distance z, in a gate render."""
     if not math.isfinite(z):
         return math.inf
     px = 2.0 * z * math.tan(math.radians(FOV) * 0.5) / GATE_H
@@ -253,15 +257,34 @@ def main():
             f"band {name} reaches {z_far:.0f} units, past the plane's far edge at {FAR:.0f}"
         assert z_near >= NEAR, \
             f"band {name} starts at {z_near:.0f} units, in front of the plane's near edge"
-    # FAR must sit past the level that went uniform, or it is reading the same
-    # drift MID already covers rather than the saturation it exists for.
+
+    # Then which LEVEL each band selects, and the bound to take is whichever row
+    # of the band is the weak end of the claim -- the nearest row for a floor,
+    # the farthest for a ceiling. The two below only look symmetric.
     far_mip = _mip_at_z(_plane_z_at_row(BAND_FAR[1]))
     assert far_mip >= uniform_level, (
         f"the FAR band's nearest row reaches only mip {far_mip:.1f}, but the chain does not go "
         f"uniform until level {uniform_level}")
-    near_mip = _mip_at_z(_plane_z_at_row(BAND_NEAR[1]))
+
+    # NEAR is the level-0 reference, so its FARTHEST row is what must still be
+    # short of uniform.
+    near_mip = _mip_at_z(_plane_z_at_row(BAND_NEAR[0]))
     assert near_mip < uniform_level, \
         f"the NEAR band already reaches mip {near_mip:.1f}; it is the level-0 reference"
+
+    # MID is the one that fails SILENTLY and in the PASSING direction: slide it
+    # toward NEAR and the ratio rises toward 1 with the feature switched off
+    # entirely, which is the vacuity this whole fixture argues about. So it has
+    # to sit where an unpreserved chain has already collapsed -- the property
+    # ALPHACOV_MIN_RATIO's 0.591 figure comes from -- and still short of uniform,
+    # where there would be nothing left to preserve.
+    mid_far = _mip_at_z(_plane_z_at_row(BAND_MID[0]))
+    assert mid_far < uniform_level, (
+        f"MID reaches mip {mid_far:.1f}, at or past the uniform level {uniform_level} where "
+        f"there is nothing left to preserve")
+    assert drifted[min(int(mid_far), len(drifted)) - 1] < cov0 * 0.25, (
+        "an unpreserved chain has not collapsed by the level MID selects, so the arm would "
+        "read a ratio near 1 with no preservation at all")
 
     with open(os.path.join(HERE, "alphacov_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
