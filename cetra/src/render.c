@@ -400,11 +400,17 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     // Kept for the record: routing this to msaa_samples_actual back when a
     // 1-sample request came back as 2 was tried and rejected. It switched
     // alpha-to-coverage on everywhere -- 1,488,830 px (18%) on the raiden
-    // recipe, all groom, and it looked good -- and was still wrong twice over:
-    // A2C is the technique the TAA era replaced, and with it on everywhere
-    // alphaCutoff is meaningless, since only A2C_MIN_ALPHA is ever compared
-    // against. Soft masked edges under TAA are what hashed alpha testing is
-    // for (spec 11.31 defers it).
+    // recipe, all groom, and it looked good -- and was rejected on two grounds,
+    // ONE OF WHICH NO LONGER HOLDS. The rejection stands on the survivor.
+    //
+    // Void since spec 11.87: that A2C makes alphaCutoff meaningless, because
+    // only a fixed 0.02 was ever compared against. The authored cutoff is what
+    // decides the silhouette now, at any sample count (alpha_coverage.glsl).
+    //
+    // Standing: A2C is the technique the TAA era replaced, and soft masked
+    // edges under TAA are what hashed alpha testing is for -- spec 11.31 defers
+    // to it and 11.87 chose sharpening instead, with the paper on hand at
+    // docs/papers/ so the comparison is a decision rather than a preference.
     bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
     SubmitStats* stats = profiler_submit(engine->profiler);
 
