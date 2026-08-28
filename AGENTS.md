@@ -1196,12 +1196,25 @@ the code beside it.
 
 ## Reviews
 
-always run reviews like /thermo-nuclear-code-quality-review or /simplify in
-background agents. Wait for all the reviews to finish before applying any
-changes.
+Always run code-quality reviews in BACKGROUND agents, and wait for all of them to finish before
+applying any change. Applying fixes while a review is still running means the next one reports
+against a file that has moved, and its line numbers stop resolving.
+
+Two are used here, neither of them shipped with this repository:
+
+- **`/thermo-nuclear-code-quality-review`** — an ultra-strict quality audit from the Cursor Team
+  Kit, at
+  <https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md>.
+  Install it, or read the SKILL.md and apply its standard by hand; the useful part is that it
+  hunts for restructurings that DELETE complexity rather than rearranging it.
+- **`/simplify`** — a fan-out of reviewers over the diff for reuse, simplification, efficiency and
+  whether a fix sits at the right depth. Quality only; it is not a correctness pass.
+
+Neither substitutes for reading the diff.
 
 **File length is not a review finding in this repo, and any review checklist saying otherwise is
-overridden here** -- including the 1000-line threshold. Decomposition is argued from structure:
+overridden here** -- specifically the 1000-line threshold the thermo-nuclear skill treats as a
+presumptive blocker. Decomposition is argued from structure:
 two things in one file that change for different reasons, or a function nobody can hold in their
 head. A file that is long because the subject is long stays long.
 
