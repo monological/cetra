@@ -4877,12 +4877,19 @@ GPU_REQUIRED_ROWS = frozenset(
     {"shadow cascades", "opaque", "gtao sweep", "ssr", "bloom pyramid", "tonemap + finishing",
      # Unconditional in engine_build_draw_list, and required here because being
      # ABSENT is the state 11.89 found it in -- a full per-frame scene flatten
-     # billed to nothing, running ahead of the first scope the shadow pass opens.
-     # It reads 0.000 in this column by nature; cpu-attrib is what prices it.
+     # billed to nothing. Its GPU time is 0.000 by construction (it issues no
+     # GL), so what this asserts is that the scope still REGISTERS: put a
+     # profiler_suspend upstream of the call and the row stops printing.
      "draw list build"})
 GPU_MIN_POSITIVE = 4          # rows that must be strictly > 0, not merely present
 GPU_SUM_MIN = 0.30            # TIMED must be at least this fraction of FRAME
 GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half scale
+# The whole frame, which carries CPU time and everything after the TAAU seam --
+# tonemap, finishing, GUI, present -- that half render scale cannot touch. Same
+# value as GPU_SCALE_DROP today and deliberately not the same constant: the two
+# have different achievable ranges, so tightening one to sharpen a claim about
+# the opaque pass must not silently demand it of a frame that cannot deliver it.
+GPU_FRAME_DROP = 0.20
 
 
 # The report's row format is the assertion surface, so a shifted format has to
@@ -5096,6 +5103,25 @@ def _timing_delta(base_runs, variant_runs, row="opaque"):
     return b, v, (v - b) / b, (b_sorted[1] - b) / b, v > max(b_all)
 
 
+def _scale_drop_detail(timing, label, bar):
+    """(ok, detail) for "this row shed `bar` at half scale". The CALLER prints.
+
+    Split this way for the reason _submit_sum_detail is: gate-arm-docs reads each
+    group's own source for the arm names it runs, so a verdict line printed from
+    in here is invisible to it.
+
+    `separated` is unread, and not for the reason gpu-scale gives for its own
+    copy. That flag is v > max(base) -- the variant being SLOWER -- so it is
+    False whenever the asserted drop actually happens. It is directional, not
+    merely redundant, and an arm that scores on it can never pass.
+    """
+    before, after, signed, noise, _ = timing
+    drop = -signed  # half scale should make it SMALLER
+    return (drop >= bar and noise < bar,
+            f"{label} {before:.3f} -> {after:.3f} ms at half scale, {drop * 100.0:.0f}% off "
+            f"(want >= {bar * 100.0:.0f}%), against a {noise * 100.0:.0f}% run-to-run floor")
+
+
 def run_profiler_gate(workdir):
     if not os.path.exists(os.path.join(ROOT, "assets", GPU_FIXTURE)):
         print(f"  gpu          SKIP  (missing {GPU_FIXTURE})")
@@ -5194,7 +5220,11 @@ def run_profiler_gate(workdir):
     # requires the floor be measured rather than assumed.
     full2, _ = _gpu_table(workdir, "full2", taa + ["--render-scale", "1.0"])
     if full is None or half is None or full2 is None:
-        failures.append("gpu-scale")
+        # Both arms read this trio. Name them both or the second vanishes from
+        # the report without a line, and the failure list under-reports by one.
+        print("  gpu-scale    ERROR while rendering the render-scale trio")
+        print("  gpu-frame    ERROR while rendering the render-scale trio")
+        failures += ["gpu-scale", "gpu-frame"]
     else:
         # Presence before ratio, in _timing_delta: a missing row read as 0 ms
         # scores a vanished pass as a 100% saving.
@@ -5205,51 +5235,39 @@ def run_profiler_gate(workdir):
                   f"repeat={full2.get('opaque')}); the pass was not timed, not cheap")
             failures.append("gpu-scale")
         else:
-            # `separated` is unread here: this arm asserts a large DROP against
-            # an absolute floor bar, which is its own separation test and a
-            # stricter one at these magnitudes (half resolution is not a 5%
-            # effect). prepass-crossover is the caller that needs it.
-            before, after, signed, noise, _ = timing
-            drop = -signed  # half scale should make it SMALLER
-            ok = drop >= GPU_SCALE_DROP and noise < GPU_SCALE_DROP
-            print(f"  gpu-scale    {'PASS' if ok else 'FAIL'}  opaque {before:.3f} -> "
-                  f"{after:.3f} ms at half scale, {drop * 100.0:.0f}% off "
-                  f"(want >= {GPU_SCALE_DROP * 100.0:.0f}%), against a "
-                  f"{noise * 100.0:.0f}% run-to-run floor")
+            ok, detail = _scale_drop_detail(timing, "opaque", GPU_SCALE_DROP)
+            print(f"  gpu-scale    {'PASS' if ok else 'FAIL'}  {detail}")
             if not ok:
                 failures.append("gpu-scale")
 
-        # --- gpu-frame-tracks: the frame row is a measurement, not a constant -
+        # --- gpu-frame: the frame row is a measurement, not a constant --------
         # Every ratio a performance spec quotes has FRAME as its denominator, and
         # a denominator that does not move is worse than a missing one: it reads
-        # as a real number. It WAS one -- profiler_end_frame spent a single
-        # `clamped = dt > 0.1 ? 0.1 : dt` on both the latch window and the frame
-        # accumulator, so the row printed exactly 100.000 ms on every frame
-        # slower than 10 fps, which is the whole regime spec 11.89 works in.
+        # as a real number. Spec 11.89 found it pinned to a constant.
         #
-        # Rides gpu-scale's three runs rather than rendering its own: same
-        # tables, different row. Half render scale moves this fixture's frame by
-        # ~58% against a 2% floor, so the signal is nowhere near it -- but the
-        # arm still SKIPs rather than guessing if the rows are unusable.
+        # Rides gpu-scale's three runs rather than rendering its own.
         #
-        # Scored like gpu-scale, against the floor, and NOT on `separated`.
-        # That flag is directional -- v > max(base), the variant being SLOWER --
-        # so it is False by construction for any arm asserting a drop, and this
-        # arm failed its first green run by reaching for it. gpu-scale's comment
-        # already says why it is unread there; the same reason holds here.
+        # WHAT THIS ARM DOES NOT COVER, because the comment it replaced claimed
+        # otherwise: it is not a regression test for that clamp. The clamp fired
+        # above 100 ms/frame and this fixture runs at ~14, so the arm is green on
+        # the unfixed code too. Nothing in the suite is slow enough to trip it,
+        # which is why the bug survived. Catching it needs FRAME checked against
+        # a clock the profiler does not own; booked, not built.
         frame_timing = _timing_delta([full, full2], [half], row="FRAME (wall)")
         if frame_timing is None:
-            print("  gpu-frame-tracks SKIP  no usable FRAME (wall) pair to compare")
+            # FAIL, not SKIP. _timing_delta returns None for a row that is
+            # missing, zero or negative -- every one of which is a MORE broken
+            # frame row than the constant this arm watches for, and a SKIP
+            # appends nothing so the suite would exit 0 over it.
+            print(f"  gpu-frame    FAIL  no usable FRAME (wall) row (full="
+                  f"{full.get('FRAME (wall)')}, half={half.get('FRAME (wall)')}, "
+                  f"repeat={full2.get('FRAME (wall)')}); missing, zero or negative")
+            failures.append("gpu-frame")
         else:
-            f_before, f_after, f_signed, f_noise, _ = frame_timing
-            f_drop = -f_signed
-            ok = f_drop >= GPU_SCALE_DROP and f_noise < GPU_SCALE_DROP
-            print(f"  gpu-frame-tracks {'PASS' if ok else 'FAIL'}  FRAME {f_before:.3f} -> "
-                  f"{f_after:.3f} ms at half scale, {f_drop * 100.0:.0f}% off "
-                  f"(want >= {GPU_SCALE_DROP * 100.0:.0f}%; a clamped or constant row moves 0%), "
-                  f"against a {f_noise * 100.0:.0f}% run-to-run floor")
+            ok, detail = _scale_drop_detail(frame_timing, "FRAME", GPU_FRAME_DROP)
+            print(f"  gpu-frame    {'PASS' if ok else 'FAIL'}  {detail}")
             if not ok:
-                failures.append("gpu-frame-tracks")
+                failures.append("gpu-frame")
 
     return failures
 

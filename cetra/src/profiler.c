@@ -18,14 +18,15 @@
 // elapsed time. It bounds how far one hitch can stretch the window it lands in;
 // it is NOT a bound on what a frame may cost, and using it as one silently
 // reports every frame below 10 fps as exactly 10 fps.
+//
+// A second bound on the frame TIME was tried here and reverted before it
+// shipped. Dropping a sample above a threshold leaves the scope counters still
+// carrying that frame, so FRAME falls below the TIMED it is documented to bound
+// -- and a window of nothing but slow frames publishes 0.000, a no-data
+// sentinel printed as a measurement. Magnitude is not a proxy for stall-ness
+// either: profiler_suspend is how a caller says "this is not rendering", and it
+// works because the caller knows.
 #define PROFILER_LATCH_STEP_MAX 0.1
-
-// The longest single frame that counts as a frame at all. Above this it is a
-// stall -- an asset load, a shader compile, a breakpoint -- and averaging it in
-// would describe something other than rendering. Deliberately far above any
-// plausible real frame, because the whole point of the row is to be believable
-// when the frame is slow.
-#define PROFILER_FRAME_MS_MAX 1000.0
 
 // Retired frames whose every scope read back exactly zero before saying so.
 // A driver that accepts the calls and reports nothing is a real failure mode of
@@ -51,6 +52,11 @@ typedef struct ProfilerScope {
     double cpu_accum_ms;
     int cpu_samples;
     float cpu_shown_ms;
+    // Whether cpu_samples already counted this frame. A CPU-only scope may open
+    // more than once per frame and its time SUMS; the count must not, or the
+    // published average becomes per-call and stops being comparable with rows
+    // that are per-frame.
+    unsigned char cpu_counted;
 
     // This pass's submission, for the frame just gone. Not latched with the
     // timings: an average over a half-second window would give the one quantity
@@ -65,6 +71,12 @@ struct Profiler {
     unsigned long frame;
     int slot;   // frame % PROFILER_RING
     int active; // scope index with an open query, -1 when none
+
+    // The CPU-only scope's own pair. Separate from `active`/`suppressed` because
+    // there is no query for the two kinds to collide over, so one must not
+    // refuse the other.
+    int cpu_active;
+    int cpu_suppressed;
 
     // Begins refused because one was already open, a name repeated, or the
     // table is full. Counted rather than ignored so the matching ends can be
@@ -123,6 +135,7 @@ Profiler* create_profiler(void) {
         return NULL;
     }
     profiler->active = -1;
+    profiler->cpu_active = -1;
     return profiler;
 }
 
@@ -222,11 +235,15 @@ void profiler_begin_frame(Profiler* profiler) {
     profiler->slot = (int)(profiler->frame % PROFILER_RING);
     retire_slot(profiler, profiler->slot);
     profiler->active = -1;
+    profiler->cpu_active = -1;
     profiler->suppressed = 0;
+    profiler->cpu_suppressed = 0;
     profiler->suspends = 0;
     // Must precede the shadow depth pass, which draws.
-    for (int i = 0; i < profiler->scope_count; ++i)
+    for (int i = 0; i < profiler->scope_count; ++i) {
         profiler->scopes[i].submit = (SubmitStats){0};
+        profiler->scopes[i].cpu_counted = 0;
+    }
 }
 
 SubmitStats* profiler_submit(Profiler* profiler) {
@@ -284,10 +301,11 @@ static void latch_rows(Profiler* profiler) {
     profiler->cpu_total_ms = 0.0f;
     for (int i = 0; i < profiler->scope_count; ++i) {
         ProfilerScope* scope = &profiler->scopes[i];
-        // Row membership is keyed on the GPU sample count alone; the CPU column
-        // rides along on whatever rows that produces.
-        if (scope->samples > 0) {
-            scope->shown_ms = (float)(scope->accum_ms / scope->samples);
+        // Either column earns a row. Keying on the GPU count alone would drop a
+        // CPU-only scope entirely, since it issues no query and retires nothing.
+        if (scope->samples > 0 || scope->cpu_samples > 0) {
+            scope->shown_ms =
+                scope->samples > 0 ? (float)(scope->accum_ms / scope->samples) : 0.0f;
             scope->cpu_shown_ms =
                 scope->cpu_samples > 0 ? (float)(scope->cpu_accum_ms / scope->cpu_samples) : 0.0f;
             profiler->rows[profiler->row_count++] = i;
@@ -326,18 +344,20 @@ void profiler_end_frame(Profiler* profiler, double dt) {
     }
     profiler->frame++;
 
-    // Two bounds, because the window and the measurement want different ones.
-    // The window is clamped for the reason the FPS counter clamps: one long
-    // hitch should not stretch the window it happens to land in. The frame time
-    // is not, past the stall threshold -- these shared one clamp until 11.89,
-    // which pinned the row at exactly 100.000 ms on every frame slower than 10
-    // fps, i.e. saturated it precisely where somebody is reading it.
+    // The window is clamped; the measurement is not. One long hitch should not
+    // stretch the window it lands in, which is why the FPS counter clamps too --
+    // but spending that same bound on the frame time is what pinned this row at
+    // exactly 100.000 ms for every frame below 10 fps, saturating it in the one
+    // regime somebody is reading it.
     double step = dt > PROFILER_LATCH_STEP_MAX ? PROFILER_LATCH_STEP_MAX : dt;
     profiler->latch_timer += step;
 
-    double frame_ms = dt * 1000.0;
-    if (frame_ms <= PROFILER_FRAME_MS_MAX) {
-        profiler->frame_accum_ms += frame_ms;
+    // Frame 0 is skipped: dt for frame N is the duration of frame N-1, and the
+    // first has no predecessor -- the clock is stamped one line above the loop,
+    // so it reports near zero. Counting it drags a 45-frame gate window's mean
+    // toward half the real frame, and 45 frames latch exactly once.
+    if (profiler->frame > 1) {
+        profiler->frame_accum_ms += dt * 1000.0;
         profiler->frame_samples++;
     }
     if (profiler->latch_timer >= PROFILER_LATCH_SECONDS) {
@@ -438,7 +458,45 @@ void profiler_scope_end(Profiler* profiler) {
     ProfilerScope* scope = &profiler->scopes[profiler->active];
     scope->cpu_accum_ms += (glfwGetTime() - scope->cpu_t0) * 1000.0;
     scope->cpu_samples++;
+    scope->cpu_counted = 1;
     profiler->active = -1;
+}
+
+void profiler_cpu_scope_begin(Profiler* profiler, const char* name) {
+    if (!profiler)
+        return;
+    // Nesting is still refused -- one open at a time keeps the accumulate
+    // unambiguous -- but a REPEAT is not, which is the whole point of this pair.
+    if (profiler->suspends > 0 || profiler->cpu_active >= 0) {
+        profiler->cpu_suppressed++;
+        return;
+    }
+    int index = scope_index(profiler, name);
+    if (index < 0) {
+        profiler->cpu_suppressed++;
+        return;
+    }
+    profiler->scopes[index].cpu_t0 = glfwGetTime();
+    profiler->cpu_active = index;
+}
+
+void profiler_cpu_scope_end(Profiler* profiler) {
+    if (!profiler)
+        return;
+    if (profiler->cpu_suppressed > 0) {
+        profiler->cpu_suppressed--;
+        return;
+    }
+    if (profiler->cpu_active < 0)
+        return;
+    ProfilerScope* scope = &profiler->scopes[profiler->cpu_active];
+    scope->cpu_accum_ms += (glfwGetTime() - scope->cpu_t0) * 1000.0;
+    // Time sums across repeats, the frame count does not.
+    if (!scope->cpu_counted) {
+        scope->cpu_counted = 1;
+        scope->cpu_samples++;
+    }
+    profiler->cpu_active = -1;
 }
 
 int profiler_row_count(const Profiler* profiler) {
@@ -492,16 +550,6 @@ static void print_timing_table(const Profiler* profiler, const char* banner, boo
     // more than a bare total says.
     printf("%-28s %8.3f ms\n", "FRAME (wall)", profiler->frame_ms);
     printf("===== END %s TIMING =====\n", banner);
-    // OUTSIDE the block on purpose: every line between the banners must parse
-    // as a row, and four gates assert the parser's `unparsed` count is zero.
-    //
-    // The caveat is in profiler.h, where nobody reading a number has to be. A
-    // CPU row wraps the whole scope body in wall clock, so a pass that blocks
-    // on a full command queue bills the wait here -- which reads as work, and
-    // has been read that way. Late fullscreen passes are where it lands.
-    if (cpu)
-        printf("(CPU rows include driver backpressure: a blocked pass bills the wait, so a row"
-               " late in the frame is a ceiling and not a cost.)\n");
 }
 
 void profiler_report(Profiler* profiler) {
@@ -517,6 +565,13 @@ void profiler_report(Profiler* profiler) {
     // table's bytes are a gate assertion surface.
     print_timing_table(profiler, "GPU", false);
     print_timing_table(profiler, "CPU", true);
+    // Out here rather than inside the printer: every line between the banners
+    // must parse as a row, and this belongs to one column only -- passing that
+    // through a function whose flag means "which column" would make the flag
+    // mean two things.
+    if (profiler->row_count > 0)
+        printf("(CPU rows include driver backpressure: a blocked pass bills the wait, so a row"
+               " late in the frame is a ceiling and not a cost.)\n");
 
     // Counts, per pass and from the last completed frame rather than the latch
     // window: they are exact per frame, and averaging them would turn the one

@@ -99,6 +99,23 @@ void profiler_end_frame(Profiler* profiler, double dt);
 void profiler_scope_begin(Profiler* profiler, const char* name);
 void profiler_scope_end(Profiler* profiler);
 
+// A scope with no GPU query, for work that issues no GL at all.
+//
+// The once-per-frame rule above is GL_TIME_ELAPSED's one-active-query-per-target
+// limit wearing a contract. A scope that opens no query has no such limit, so
+// these SUM across repeats within a frame instead of refusing the second -- which
+// is what makes a function reachable from more than one call site per frame
+// timeable at all. Its GPU row reads 0.000 by construction.
+//
+// The published average is still per FRAME, not per call: repeats add their time
+// and the frame is counted once, so the row stays comparable with every other row
+// and with profiler_frame_ms.
+//
+// Its own open/refusal state, so it neither blocks nor is blocked by an open GPU
+// scope -- there is no query for the two to collide over.
+void profiler_cpu_scope_begin(Profiler* profiler, const char* name);
+void profiler_cpu_scope_end(Profiler* profiler);
+
 // Open a scope only when `timed`, and swallow the matching end when not. For a
 // pass whose gate is known at the call site: it keeps the row absent on frames
 // the pass sits out, without the caller duplicating the work call to put the
@@ -141,13 +158,28 @@ size_t submit_stat_value(const SubmitStats* stats, int row);
 const SubmitStats* profiler_row_submit(const Profiler* profiler, int row);
 
 // Mean wall-clock frame time over the same window, published beside the total
-// as the ceiling to read it against.
+// as the ceiling to read it against. Unbounded above: a slow frame is the thing
+// this row exists to show, and a stall that is not rendering is excluded by the
+// caller through profiler_suspend rather than guessed at here by magnitude.
+//
+// EXCLUDES the run's first frame, whose dt has no predecessor to measure -- the
+// clock is stamped one line before the loop, so frame 0 reports near zero. At a
+// 45-frame gate run that phantom is a whole sample of the only published window.
 //
 // The two are NOT the same quantity and their difference is not a single
 // thing: it is GPU work no scope covers, plus CPU time, plus whatever the GPU
 // spent idle. So a gap does not prove the instrumentation is incomplete -- but
 // a total that tracks the frame closely does bound how much can be missing,
 // and a bare total bounds nothing at all.
+//
+// AND THE COMPARISON IS ONLY VALID FOR A SCOPE THAT RAN EVERY FRAME. Each row
+// divides by its own count -- GPU results the driver returned, frames the scope
+// was entered, frames in the window -- so a scope gated on something occasional
+// publishes a per-occurrence cost beside a per-frame mean, and TIMED sums it in
+// as though it ran throughout. A one-frame 699 ms GI sweep in a 38-frame window
+// prints a TIMED 17.9x its FRAME with nothing wrong in the timing code. Booked
+// as its own spec; the fix is one denominator for all three, which needs every
+// published number re-checked and is not a Phase 0 change.
 float profiler_frame_ms(const Profiler* profiler);
 
 // Samples that survived the depth test between these calls -- for the opaque

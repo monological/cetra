@@ -712,21 +712,14 @@ static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
     return n;
 }
 
-// Scoped HERE rather than at the three call sites, so none of them can be added
-// without it. The stamp folds in total_frames, so this re-flattens the whole
-// graph every frame, and on a scene that re-parents nodes mid-frame (a terrain
-// quadtree re-selecting, a region streaming) it does so TWICE -- once for the
-// shadow pass and again for the camera pass. The third caller is the capture
-// seam, which is profiler_suspend'ed before it gets here.
-//
-// It reads 0.000 in the GPU column because it issues no GL at all; the CPU
-// column is the whole point. Until 11.89 it ran ahead of the first scope the
-// shadow pass opens and was billed to nothing -- which left the shadow row's
-// CPU time carrying a suspicion it turned out not to deserve.
+// The CPU-only scope, because this runs more than once per frame and issues no
+// GL. A GPU scope would refuse the second open and time only the first, which
+// on a scene that re-parents nodes between the two calls is the wrong one:
+// both flatten for real, and the row would report half the cost.
 void engine_build_draw_list(Engine* engine, Scene* scene) {
     if (!engine || !scene)
         return;
-    profiler_scope_begin(engine->profiler, "draw list build");
+    profiler_cpu_scope_begin(engine->profiler, "draw list build");
     LodSelect lod;
     lod.enabled = engine->lod_enabled;
     lod.bias = engine->lod_bias;
@@ -736,7 +729,7 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
         glm_vec3_zero(lod.eye);
     draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
                     &lod);
-    profiler_scope_end(engine->profiler);
+    profiler_cpu_scope_end(engine->profiler);
 }
 
 void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
