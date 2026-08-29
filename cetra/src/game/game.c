@@ -107,6 +107,11 @@ void game_set_update(Game* game, GameUpdateFunc func) {
         game->on_update = func;
 }
 
+void game_set_pre_render(Game* game, GamePreRenderFunc func) {
+    if (game)
+        game->on_pre_render = func;
+}
+
 void game_set_render(Game* game, GameRenderFunc func) {
     if (game)
         game->on_render = func;
@@ -275,6 +280,17 @@ static void game_frame_update(Engine* engine, float dt) {
 
 // engine_run's render hook: hand the app its on_render with the interpolation
 // alpha. The engine owns the framebuffer / G-buffer / present around it.
+static void game_pre_render(Engine* engine, Scene* scene) {
+    (void)scene;
+    Game* game = engine_get_user_data(engine);
+    if (game->on_pre_render) {
+        // The same interpolant on_render gets: the accumulator is untouched
+        // between the two hooks, so a game that positions its camera here and
+        // draws there cannot see them disagree.
+        game->on_pre_render(game, game->accumulator / game->fixed_timestep);
+    }
+}
+
 static void game_scene_render(Engine* engine, Scene* scene) {
     (void)scene;
     Game* game = engine_get_user_data(engine);
@@ -298,7 +314,7 @@ void run_game(Game* game) {
     engine_set_user_data(game->engine, game);
     // Animate from the sim clock, not the wall clock, for the whole loop.
     engine_set_render_clock(game->engine, &game->sim_clock);
-    engine_run(game->engine, game_frame_update, game_scene_render);
+    engine_run(game->engine, game_frame_update, game_pre_render, game_scene_render);
 }
 
 void game_set_physics_world(Game* game, PhysicsWorld* world) {

@@ -1842,7 +1842,7 @@ int main(int argc, char** argv) {
             return -1;
     }
 
-    engine_run(engine, NULL, render_scene_callback);
+    engine_run(engine, NULL, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_mouse_drag_controller(drag_controller);

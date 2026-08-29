@@ -427,7 +427,14 @@ typedef struct Engine {
 // clock is installed. `render` draws the scene -- its output is
 // scene-referred linear HDR (bloom/exposure/tone mapping run in the present
 // pass; only the GUI draws after tone mapping).
+// `pre_render` is where an app puts everything that has to be settled BEFORE
+// the frame's geometry is read: its camera, and any node it adds, removes or
+// moves. The engine propagates the graph immediately after it returns, so a
+// patch attached here gets a global transform this frame, and the shadow pass
+// and the LOD selection below both see this frame's positions rather than last
+// frame's (spec 11.96). Nothing in it may draw -- there is no bound target yet.
 typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
+typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
 
 Engine* create_engine(const char* window_title, int width, int height);
@@ -576,11 +583,15 @@ void set_engine_show_xyz(Engine* engine, bool show_xyz);
 void engine_set_user_data(Engine* engine, void* user_data);
 void* engine_get_user_data(const Engine* engine);
 
-// The unified main loop: owns the frame skeleton (dt, FPS, GUI frame, shadow
-// pass, G-buffer setup, present, screenshot, swap). `update` runs once per frame
-// before rendering (NULL for pure render loops); `render` draws the scene. The
-// render apps and the game framework's run_game all drive the engine through it.
-void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render);
+// The unified main loop: owns the frame skeleton (dt, FPS, GUI frame, transform
+// propagation, shadow pass, G-buffer setup, present, screenshot, swap). The
+// three hooks run in the order they are declared -- `update` once per frame
+// before anything reads the scene, `pre_render` after the sky and origin shift
+// and immediately before the graph is propagated, `render` to draw. Any of them
+// may be NULL. The render apps and the game framework's run_game all drive the
+// engine through it.
+void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre_render,
+                EngineRenderFunc render);
 
 // Substitute an animation clock for the wall clock. `clock` is borrowed and must
 // outlive the loop; engine_run samples it each frame after the update callback

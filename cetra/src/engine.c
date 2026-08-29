@@ -2439,7 +2439,8 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
              (double)scene->world_origin[2]);
 }
 
-void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render) {
+void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre_render,
+                EngineRenderFunc render) {
     if (!engine)
         return;
 
@@ -2600,6 +2601,39 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EngineRenderFunc render
             // only reports that its chain moved.
             if (env_swapped && shadow_scene->gi_volume)
                 gi_volume_mark_dirty(shadow_scene->gi_volume);
+        }
+
+        // The app settles its camera and its graph, then the engine propagates
+        // that graph -- once, here, for everything downstream (spec 11.96).
+        //
+        // THE WINDOW IS ONE STATEMENT WIDE and all three edges are load-bearing.
+        // After engine_apply_origin_shift above, which rewrites root-child
+        // locals and the whole tree's cached globals; a walk before it is undone
+        // by it. After sky_cycle_tick, which rewrites a sun's
+        // original_direction, and the walk is what rotates that by the owning
+        // node -- walk first and a node-parented sun loses its node for the
+        // frame. And before the GI capture below, whose probes a converged
+        // volume never re-bakes, so a capture taken from stale transforms is
+        // wrong permanently rather than for a frame.
+        //
+        // It used to happen in the app's render callback, after all three of
+        // those AND after the shadow pass, so every shadow was drawn from last
+        // frame's transforms and every LOD level chosen from last frame's
+        // positions.
+        // GATED ON THE HOOK, and that is the migration seam rather than a
+        // permanent option. An app that has not moved its graph mutation out of
+        // its render callback must keep propagating there: walking for it here
+        // would stamp the frame, its own call would no-op, and anything it
+        // attached afterwards -- a streamed region, a quadtree patch -- would
+        // draw one frame at the origin with no previous pose. Passing NULL means
+        // "I still own my propagation", and the last app to migrate is what
+        // makes this unconditional.
+        if (shadow_scene && pre_render) {
+            pre_render(engine, shadow_scene);
+            // CPU scope: this issues no GL, like the draw-list build.
+            profiler_cpu_scope_begin(engine->profiler, "transform walk");
+            scene_propagate_transforms(shadow_scene, engine->total_frames);
+            profiler_cpu_scope_end(engine->profiler);
         }
 
         // GI probe captures, while the volume is dirty. Deliberately BEFORE the

@@ -484,7 +484,7 @@ int main() {
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
 
-    engine_run(engine, NULL, render_scene_callback);
+    engine_run(engine, NULL, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_engine(engine);

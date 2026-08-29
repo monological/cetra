@@ -4172,7 +4172,7 @@ int main(int argc, char** argv) {
     }
 
     frame_schedule = &args;
-    engine_run(engine, render_frame_update, render_scene_callback);
+    engine_run(engine, render_frame_update, NULL, render_scene_callback);
 
     // Before free_engine, like the probes below: it reads live engine state.
     // After the loop rather than before it, because the point of a snapshot is

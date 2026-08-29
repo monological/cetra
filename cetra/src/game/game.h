@@ -16,6 +16,12 @@ struct EntityManager;
 // Game callbacks - implement these in your game
 typedef void (*GameInitFunc)(struct Game* game);
 typedef void (*GameUpdateFunc)(struct Game* game, double dt);
+// Everything that must be settled before the frame reads the geometry: the
+// camera, and any node added, removed or moved. The engine propagates the graph
+// as soon as it returns, so the shadow pass and the LOD selection see this
+// frame's positions (spec 11.96). `alpha` is the same interpolant on_render
+// gets. Nothing here may draw.
+typedef void (*GamePreRenderFunc)(struct Game* game, double alpha);
 typedef void (*GameRenderFunc)(struct Game* game, double alpha);
 typedef void (*GameShutdownFunc)(struct Game* game);
 
@@ -81,6 +87,7 @@ typedef struct Game {
     // Callbacks
     GameInitFunc on_init;
     GameUpdateFunc on_update;
+    GamePreRenderFunc on_pre_render;
     GameRenderFunc on_render;
     GameShutdownFunc on_shutdown;
 
@@ -106,6 +113,7 @@ void free_game(Game* game);
 // Set callbacks before running
 void game_set_init(Game* game, GameInitFunc func);
 void game_set_update(Game* game, GameUpdateFunc func);
+void game_set_pre_render(Game* game, GamePreRenderFunc func);
 void game_set_render(Game* game, GameRenderFunc func);
 void game_set_shutdown(Game* game, GameShutdownFunc func);
 
