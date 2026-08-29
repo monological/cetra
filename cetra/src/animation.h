@@ -153,6 +153,23 @@ typedef struct AnimationState {
 
     // Optional spring-bone secondary motion (see springbone.h)
     struct SpringBoneSystem* springs;
+
+    // Dump the first animated pose to stdout: per bone, whether the clip drives
+    // it at all, its bind and animated global positions, the distance between
+    // them, and the skinning matrix's column scales. Off by default.
+    //
+    // The two it exists to catch look nothing alike. A bone the retargeter
+    // failed to map has ch=0 and a large drift -- it is being carried by its
+    // parent instead of animated. A scale that is not 1 is a corrupt matrix,
+    // which reads downstream as geometry that stretches to infinity rather than
+    // as a pose that is merely wrong.
+    //
+    // PER STATE, not per process. It was a file-static counter, so a scene with
+    // two rigs dumped the first one and silently skipped the second -- and the
+    // second is the one you are usually asking about, since the first is the
+    // model that already worked.
+    bool debug_pose_dump;
+    bool debug_pose_dumped; // one-shot latch for the above
 } AnimationState;
 
 // Animation state functions

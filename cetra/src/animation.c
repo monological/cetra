@@ -945,11 +945,10 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
                      state->bone_matrices[i]);
     }
 
-    // One-shot diagnostic dump of the first animated pose
-    static int bm_debug_count = 0;
-    if (bm_debug_count < 1 && anim) {
+    // One-shot diagnostic dump of the first animated pose (opt-in).
+    if (state->debug_pose_dump && !state->debug_pose_dumped && anim) {
         print_bone_drift_debug(state, anim, time);
-        bm_debug_count++;
+        state->debug_pose_dumped = true;
     }
 
     state->active_bone_count = skeleton->bone_count;

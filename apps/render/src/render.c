@@ -361,6 +361,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "                         non-deterministic, but converges temporal SSR/AA)\n");
     fprintf(stderr, "  -b, --show-bones       Enable bone X-ray overlay\n");
     fprintf(stderr, "      --check-stretch    Report triangle edges stretched by skinning\n");
+    fprintf(stderr, "      --anim-debug       Dump the first animated pose: per bone, whether the\n");
+    fprintf(stderr, "                         clip drives it, its bind vs animated position, the\n");
+    fprintf(stderr, "                         drift between them, and its matrix scale\n");
     fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
     fprintf(stderr, "  -S, --screenshot <path> Save final frame as PPM on exit\n");
     fprintf(stderr, "      --screenshot-every <N> Also save numbered frames every N frames\n");
@@ -592,6 +595,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->show_bones = 1;
         } else if (strcmp(argv[i], "--check-stretch") == 0) {
             args->check_stretch = 1;
+        } else if (strcmp(argv[i], "--anim-debug") == 0) {
+            args->anim_debug = 1;
         } else if (strcmp(argv[i], "-F") == 0 || strcmp(argv[i], "--fov") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -3465,6 +3470,7 @@ int main(int argc, char** argv) {
         size_t play_idx = (first_cli_anim < scene->animation_count) ? first_cli_anim : 0;
         anim_state = create_animation_state(scene->skeletons[0]);
         if (anim_state) {
+            anim_state->debug_pose_dump = args.anim_debug != 0;
             set_animation(anim_state, scene->animations[play_idx]);
             anim_state->looping = true;
             play_animation(anim_state);

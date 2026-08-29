@@ -366,6 +366,7 @@ typedef struct {
     int max_frames;      // Exit after this many frames (0 = run forever)
     int show_bones;
     int check_stretch; // One-shot CPU skinning stretch diagnostic
+    int anim_debug;    // One-shot per-bone dump of the first animated pose
     int render_mode;   // RenderMode override for debugging (-1 = PBR)
     float orbit_yaw;   // Camera yaw around the model in degrees (0 = front)
     float orbit_pitch; // Camera pitch in degrees (0 = level, 90 = top-down)
