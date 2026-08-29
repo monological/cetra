@@ -109,6 +109,23 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
 // the camera: see scene_capture_begin.
 void engine_build_draw_list(Engine* engine, struct Scene* scene);
 
+// Point every lit material at the variant carrying exactly the features it can
+// use (spec 11.93). Idempotent, and cheap enough to run unconditionally.
+//
+// EVERY FRAME rather than on a dirty flag, and that is the design. The mask is a
+// pure function of the material's own fields and two scene-wide bits, all of
+// which a GUI slider can change with nothing marked dirty -- so a flag would have
+// to be set by every writer of six fields across three files, and the one that
+// forgot would leave a material on a variant missing a feature it had just been
+// given. Recomputing makes that unrepresentable. The expensive half is compiling
+// a variant, which happens once per distinct mask and is cached by name.
+//
+// Only materials already on a `pbr` variant are re-pointed. Membership is by
+// program NAME because the program cache is name-keyed, so a name is what
+// identity means here -- and pbr_skinned is deliberately not in the family, since
+// it is its own program with its own source.
+void engine_resolve_material_variants(Engine* engine, struct Scene* scene);
+
 // Animation state for skinned mesh rendering
 // Set before rendering to enable bone matrix upload for skinned meshes
 void set_render_animation_state(AnimationState* state);

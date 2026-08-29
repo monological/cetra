@@ -712,6 +712,87 @@ static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
     return n;
 }
 
+// The features THIS material can reach, as a PbrFeature mask.
+//
+// Conservative by construction, and it has to be: a bit set for a feature the
+// material never uses costs occupancy, which is slow. A bit MISSING for one it
+// does use compiles the code away and silently drops it, which is a plausible
+// frame. Every test below is therefore the shader's own gate widened -- it drops
+// the per-fragment terms (a texel's coherence, a height map's contents) that the
+// CPU cannot see and keeps only what a material declares.
+static unsigned _material_pbr_features(const Engine* engine, const Material* mat) {
+    unsigned mask = 0;
+    if (engine->sheen_enabled &&
+        (mat->sheen_color_factor[0] > 0.0f || mat->sheen_color_factor[1] > 0.0f ||
+         mat->sheen_color_factor[2] > 0.0f || mat->sheen_tex))
+        mask |= PBR_FEAT_SHEEN;
+    // The layer index is assigned when the material texture array is built, so a
+    // material carrying a map that has not been packed yet reads as -1 here. The
+    // texture pointer is what says the map EXISTS, and it is the durable half.
+    if (mat->anisotropy > 0.0f || mat->anisotropy_tex)
+        mask |= PBR_FEAT_ANISO;
+    if (engine->parallax_enabled && mat->parallax_scale > 0.0f && mat->height_tex)
+        mask |= PBR_FEAT_PARALLAX;
+    return mask;
+}
+
+// The two bits no material can answer for. A decal belongs to no material at
+// all, and whether a scene has an area light is a fact about the light list.
+static unsigned _scene_pbr_features(const Scene* scene) {
+    unsigned mask = 0;
+    if (scene->decal_count > 0)
+        mask |= PBR_FEAT_DECALS;
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        if (scene->lights[i] && scene->lights[i]->type == LIGHT_AREA) {
+            mask |= PBR_FEAT_AREA;
+            break;
+        }
+    }
+    return mask;
+}
+
+void engine_resolve_material_variants(Engine* engine, Scene* scene) {
+    if (!engine || !scene || !scene->materials)
+        return;
+
+    const unsigned scene_mask = _scene_pbr_features(scene);
+    for (size_t i = 0; i < scene->material_count; ++i) {
+        Material* mat = scene->materials[i];
+        if (!mat || !mat->shader_program || !mat->shader_program->name)
+            continue;
+        // The pbr family only. strncmp rather than equality so a material already
+        // on a variant is re-examined -- the whole point is that its mask moves.
+        if (strncmp(mat->shader_program->name, "pbr", 3) != 0)
+            continue;
+        if (mat->shader_program->name[3] != '\0' && mat->shader_program->name[3] != '-')
+            continue; // pbr_skinned and anything else that merely starts with pbr
+
+        unsigned want = scene_mask | _material_pbr_features(engine, mat);
+        char name[32];
+        if (want == PBR_FEAT_ALL)
+            snprintf(name, sizeof(name), "pbr");
+        else
+            snprintf(name, sizeof(name), "pbr-%u", want);
+        if (strcmp(mat->shader_program->name, name) == 0)
+            continue;
+
+        ShaderProgram* variant = get_engine_shader_program_by_name(engine, name);
+        if (!variant) {
+            variant = create_pbr_program_variant(want);
+            // Keep the material where it is on failure. The full variant always
+            // exists, so the surface stays lit rather than turning black -- the
+            // subtractive polarity paying off at the one place it matters.
+            if (!variant) {
+                log_error("PBR variant %u failed to build; material stays on %s", want,
+                          mat->shader_program->name);
+                continue;
+            }
+            add_shader_program_to_engine(engine, variant);
+        }
+        mat->shader_program = variant;
+    }
+}
+
 // The CPU-only scope, because this runs more than once per frame and issues no
 // GL. A GPU scope would refuse the second open and time only the first, which
 // on a scene that re-parents nodes between the two calls is the wrong one:
@@ -1126,6 +1207,13 @@ void render_current_scene(Engine* engine) {
         log_error("error: render called with NULL camera");
         return;
     }
+
+    // Before anything reads material->shader_program, which the batch key and
+    // the prepass-safety test both do. A capture re-enters here and resolves
+    // again, which is wasted but not wrong -- and a capture that skipped it
+    // would photograph the scene through whatever variants the last main frame
+    // happened to leave behind.
+    engine_resolve_material_variants(engine, scene);
 
     mat4* view = &engine->view_matrix;
     mat4* projection = &engine->projection_matrix; // un-jittered

@@ -469,6 +469,11 @@ ShaderProgram* create_pbr_program_variant(unsigned features) {
         log_error("Failed to initialize PBR shader program (features %u)", features);
         return NULL;
     }
+    // One line per DISTINCT variant, since this runs once per mask and the cache
+    // answers afterwards. It is the only way from outside to see which variant a
+    // scene actually resolved to -- the two are the same picture, which is the
+    // whole point and also why nothing else can tell them apart.
+    log_info("pbr variant %s: features %u of %u", name, features, PBR_FEAT_ALL);
 
     // pbr_vert takes its clip position from object_position.glsl, the same chunk
     // depth_prepass_vert uses, and declares `invariant gl_Position`.
