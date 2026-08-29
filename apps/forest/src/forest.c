@@ -2387,7 +2387,10 @@ static void on_update(Game* game, double dt) {
     }
 }
 
-static void on_render(Game* game, double alpha) {
+// The camera, then residency, then the engine's walk. All three in that order
+// and none of them in the fixed-step update -- see the descent's own comment
+// below for why it needs exactly this eye.
+static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
     Engine* engine = game->engine;
     if (!g_scene || !g_scene->root_node)
@@ -2450,10 +2453,14 @@ static void on_render(Game* game, double alpha) {
     // Against the camera the frame will actually use, which is why it is here and
     // not in the fixed-step update: at a fixed step the selection would lag the
     // view by up to a frame, and the morph is a function of exactly this eye.
+    //
+    // That walk is now the ENGINE's, immediately after this hook returns, which
+    // is what puts it ahead of the shadow pass as well as ahead of the draw
+    // list. Both halves of the ordering this comment describes are unchanged.
     if (camera) {
         // Residency first: the quadtree hangs its patches under a node of its
         // own and does not care, but a region that loads here has to be in the
-        // graph before the transform walk below reaches it.
+        // graph before the transform walk reaches it.
         vec3 focus;
         glm_vec3_copy(g_player ? g_player->position : camera->position, focus);
         regions_update(camera->position, focus);
@@ -2471,9 +2478,14 @@ static void on_render(Game* game, double alpha) {
         }
     }
 
-    scene_propagate_transforms(g_scene, engine->total_frames);
+}
 
-    render_current_scene(engine);
+static void on_render(Game* game, double alpha) {
+    (void)alpha;
+    if (!g_scene || !g_scene->root_node)
+        return;
+
+    render_current_scene(game->engine);
 }
 
 static void on_shutdown(Game* game) {
@@ -2775,6 +2787,7 @@ int main(int argc, char** argv) {
 
     game_set_init(game, on_init);
     game_set_update(game, on_update);
+    game_set_pre_render(game, on_pre_render);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 
