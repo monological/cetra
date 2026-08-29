@@ -432,6 +432,11 @@ GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_p
 GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outlines_shader_program);
 
 // print
+// One `transform-probe node` line per NAMED node, plus a `total` row: whether
+// this frame's walk left its previous pose distinct from its current one, and
+// how far apart they are. Call AFTER the walk.
+void scene_transform_probe(const Scene* scene, int frame);
+
 void print_scene_node(const SceneNode* node, int depth);
 void print_scene(const Scene* scene);
 

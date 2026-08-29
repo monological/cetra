@@ -1163,6 +1163,57 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
     free(stack);
 }
 
+static void _transform_probe_node(const SceneNode* node, int frame, int* named, int* moved) {
+    if (!node)
+        return;
+
+    if (node->name) {
+        // The SAME bit-exact compare the walk itself uses to decide whether a
+        // node's normal matrix needs rebuilding. Not a tolerance: the question
+        // is whether the two matrices are the same object, and a node that
+        // genuinely did not move answers exactly.
+        bool has_moved = memcmp(node->global_transform, node->prev_global_transform,
+                                sizeof(mat4)) != 0;
+        vec3 step;
+        glm_vec3_sub((float*)node->global_transform[3], (float*)node->prev_global_transform[3],
+                     step);
+        printf("transform-probe node frame=%d moved=%d valid=%d step=%.6f pos=%.6f,%.6f,%.6f "
+               "name=%s\n",
+               frame, has_moved ? 1 : 0, node->prev_valid ? 1 : 0, glm_vec3_norm(step),
+               node->global_transform[3][0], node->global_transform[3][1],
+               node->global_transform[3][2], node->name);
+        *named += 1;
+        if (has_moved)
+            *moved += 1;
+    }
+
+    for (size_t i = 0; i < node->children_count; i++)
+        _transform_probe_node(node->children[i], frame, named, moved);
+}
+
+// Whether this frame's walk left each named node a previous pose DISTINCT from
+// its current one (spec 11.96).
+//
+// It exists because the failure it watches for is invisible to every other
+// instrument in this repository. Walking the graph twice in one frame sets
+// prev := global on the second pass, so `moved` reads 0 for everything, every
+// motion vector goes to zero, and TAA stops reprojecting -- while the corpus
+// stays green, because all 29 goldens are static scenes under a static camera
+// where prev == global is already the correct answer.
+//
+// `name` LAST, per texture_pool_probe's rule: a k=v reader splits on
+// whitespace, so a name with a space in it can only corrupt itself.
+void scene_transform_probe(const Scene* scene, int frame) {
+    if (!scene || !scene->root_node) {
+        printf("transform-probe none frame=%d\n", frame);
+        return;
+    }
+
+    int named = 0, moved = 0;
+    _transform_probe_node(scene->root_node, frame, &named, &moved);
+    printf("transform-probe total frame=%d named=%d moved=%d\n", frame, named, moved);
+}
+
 void print_scene_node(const SceneNode* node, int depth) {
     if (!node)
         return;

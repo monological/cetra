@@ -44,6 +44,12 @@ static bool g_use_cpu = false; // --cpu: use the CPU sim backend instead of GPU 
 static SceneNode* g_sphere_node = NULL;
 static ParticleModule* g_sphere_collider = NULL;
 
+// --transform-probe N: dump the prev-vs-current pose of every named node every N
+// frames. This app rather than apps/render because the sphere above is the only
+// RIGID scene-graph mover in the tree that is also headless-deterministic -- it
+// rides game->time with no wall clock, so frame N is position N.
+static int g_transform_probe = 0;
+
 // Visual glass radius; the collision radius is a touch larger so the dust keeps a
 // clean shell around the glass instead of clipping into it.
 #define SPHERE_RADIUS 2.5f
@@ -306,6 +312,10 @@ static void on_render(Game* game, double alpha) {
     reset_and_apply_transform(&engine->model_matrix, &t);
     apply_transform_to_nodes(scene->root_node, engine->model_matrix);
 
+    // AFTER the walk, which is the only point the answer means anything.
+    if (g_transform_probe > 0 && (int)engine->total_frames % g_transform_probe == 0)
+        scene_transform_probe(scene, (int)engine->total_frames);
+
     // The scene's particle systems are ticked + drawn by the engine; nothing to
     // do here but render the scene.
     render_current_scene(engine);
@@ -370,6 +380,8 @@ int main(int argc, char** argv) {
             config.screenshot_path = argv[++i];
         } else if (strcmp(argv[i], "--screenshot-every") == 0 && i + 1 < argc) {
             config.screenshot_every = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--transform-probe") == 0 && i + 1 < argc) {
+            g_transform_probe = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cpu") == 0) {
             g_use_cpu = true;
         }

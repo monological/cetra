@@ -5361,6 +5361,9 @@ def _submit_sum_detail(tables, label):
 
 
 FOREST = _bin("forest")
+# The only RIGID scene-graph mover in the tree that is also headless
+# deterministic -- its sphere rides game->time, so frame N is position N.
+SPORES = _bin("spores")
 _FOREST_CHAINS = re.compile(r"Forest: (\d+) LOD chains built, (\d+) refused")
 _FOREST_MESHES = re.compile(r"Forest: (\d+) distinct meshes")
 # What the terrain contributed. Since spec 11.63 that is not a constant: the
@@ -16160,6 +16163,17 @@ def _probe_render(scene, flag, prefix, extra=None, frames=30):
     cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", flag]
     r = _run(cmd + (extra or []), capture_output=True, text=True)
     text = r.stdout + r.stderr
+    return _probe_rows(text, prefix), text
+
+
+def _probe_rows(text, prefix):
+    """The `<prefix> [tag] k=v ...` lines in `text`, as dicts in emission order.
+
+    Split out of _probe_render because that one hardcodes the RENDER app, and a
+    probe emitted by any other app would otherwise have to restate this loop --
+    which is the duplication _probe_render's own docstring says it exists to
+    prevent.
+    """
     rows = []
     for line in text.splitlines():
         if not line.startswith(prefix + " "):
@@ -16177,7 +16191,7 @@ def _probe_render(scene, flag, prefix, extra=None, frames=30):
                 k, v = tok.split("=", 1)
                 rec[k] = v
         rows.append(rec)
-    return rows, text
+    return rows
 
 
 def _emissive_probe(scene, extra=None, frames=8):
@@ -19300,6 +19314,81 @@ def _pbr_variants(model):
     return variants, full, r.returncode == 0
 
 
+def run_transform_walk_gate(workdir):
+    """The graph is walked ONCE a frame, so a moving node keeps a distinct previous pose.
+
+    This exists because its failure is invisible to everything else in this suite.
+    Walking twice in one frame sets prev := global on the second pass, so every
+    node's previous pose becomes its current one, every motion vector goes to
+    zero and TAA stops reprojecting -- while the corpus stays GREEN, because all
+    29 goldens are static scenes under a static camera where prev == global is
+    already the right answer, and origin-velocity divides by its own steady state
+    so a uniformly dead buffer scores 0 and passes.
+
+      transform-moves     a node the app moves reads a DISTINCT previous pose,
+                          with a step the size of one frame of its path. The
+                          direction a double walk breaks.
+      transform-stills    the nodes the app never moves read prev == global on
+                          the same frames. The other direction, and not a
+                          formality: an arm that only demanded movement would
+                          pass on a walk that had stopped seeding prev at all.
+
+    Read off a probe rather than off pixels, because the quantity IS a pair of
+    CPU-side matrices -- and a velocity buffer would test the shader's upload
+    path at the same time, which this spec does not touch.
+    """
+    del workdir # the probe is stdout; nothing is written
+    if not os.path.exists(SPORES):
+        print("  transform-moves SKIP  (spores not built)")
+        return []
+    arms = ["transform-moves", "transform-stills"]
+
+    # Every 4th frame, so the sphere has travelled a readable distance between
+    # samples. -f 12 is three probed frames plus frame 0.
+    r = _run([SPORES, "-x", "-f", "12", "--transform-probe", "4"],
+             capture_output=True, text=True)
+    rows = _probe_rows(r.stdout + r.stderr, "transform-probe")
+    if r.returncode != 0 or not rows:
+        print(f"  transform-moves ERROR spores exited {r.returncode} or logged no probe")
+        return arms
+
+    # Frame 0 is excluded on purpose: the first walk SEEDS prev from global, so
+    # `moved` is legitimately 0 there for everything. An arm that included it
+    # would be asserting the seed is broken.
+    nodes = [x for x in rows if x.get("kind") == "node" and x.get("frame") != "0"]
+    if not nodes:
+        print("  transform-moves ERROR the probe emitted no node rows past frame 0")
+        return arms
+
+    # --- moves ---------------------------------------------------------------
+    movers = [x for x in nodes if x.get("moved") == "1"]
+    steps = [float(x["step"]) for x in movers]
+    ok = bool(movers) and all(s > 0.0 for s in steps)
+    print(f"  transform-moves {'PASS' if ok else 'FAIL'}  {len(movers)} of {len(nodes)} node rows "
+          f"carry a distinct previous pose, steps {sorted(round(s, 4) for s in steps)} (want at "
+          f"least one, all non-zero: a second walk in the same frame latches prev := global and "
+          f"every one of these reads 0 while the whole suite stays green)")
+    if not ok:
+        failures = ["transform-moves"]
+    else:
+        failures = []
+
+    # --- stills --------------------------------------------------------------
+    # The sphere is the only thing spores moves; the room, the lights and the
+    # emitter are pinned, so they must report the opposite.
+    stills = [x for x in nodes if x.get("moved") == "0"]
+    bad = [x["name"] for x in stills if float(x["step"]) != 0.0]
+    ok = bool(stills) and not bad
+    print(f"  transform-stills {'PASS' if ok else 'FAIL'}  {len(stills)} pinned node rows report "
+          f"prev == global{'' if not bad else f', but {sorted(set(bad))} moved anyway'} (want at "
+          f"least one and none moving: without this the arm above passes on a walk that stopped "
+          f"seeding prev entirely)")
+    if not ok:
+        failures.append("transform-stills")
+
+    return failures
+
+
 def run_pbr_variant_gate(workdir):
     """Lit-surface variants: a material compiles only the features it can use.
 
@@ -19649,6 +19738,7 @@ GATE_GROUPS = [
     ("submission", "submission (draw counts + the CPU column, spec 11.28 / E5):",
      run_submission_gate),
     ("draw-list", "draw list (submission order, spec 11.28 Phase 3):", run_draw_list_gate),
+    ("transform", "the transform walk (once a frame, spec 11.96):", run_transform_walk_gate),
     ("lod", "LOD chains (selection by projected size, spec 11.28 Phase 6):", run_lod_gate),
     ("mask", "alpha mask (binary above the cutoff, spec 11.31):", run_mask_gate),
     ("alphacov", "mip alpha coverage (a cutout keeps its area with distance, spec 11.87):",
@@ -19689,10 +19779,11 @@ def main():
     args = ap.parse_args()
 
     if args.bin_dir:
-        global BIN_DIR, RENDER, FOREST
+        global BIN_DIR, RENDER, FOREST, SPORES
         BIN_DIR = os.path.abspath(args.bin_dir)
         RENDER = _bin("render")
         FOREST = _bin("forest")
+        SPORES = _bin("spores")
 
     if args.list:
         for selector, banner, _ in GATE_GROUPS:
