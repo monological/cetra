@@ -12172,7 +12172,8 @@ def run_prepass_gate(workdir):
 
 _CLUSTER_PROBE = re.compile(
     r"cluster-probe mesh=(\d+) clusters=(\d+) groups=(\d+) dag_levels=(\d+) bands=(\d+) "
-    r"max_index=(\d+) vertex_count=(\d+) foreign=(\d+)((?: band\d+=\d+)+) alias=(\d+)")
+    r"max_index=(\d+) vertex_count=(\d+) foreign=(\d+)((?: band\d+=\d+)+) alias=(\d+)"
+    r"((?: digest\d+=\d+)+)")
 
 # A clustered prototype must reach at least this reduction from its finest band to
 # its coarsest, or the DAG did not produce a usable cut. Well under bark's measured
@@ -12206,10 +12207,12 @@ def run_cluster_gate(workdir):
                          what makes a crack between levels impossible, and it is
                          structural -- no frame can show it, so it is read off the
                          probe rather than rendered.
-      cluster-alias   a band whose cut equals its predecessor's shares that
-                         range instead of storing a second copy, and exactly
-                         those bands do. Structural like the seal: a duplicated
-                         band draws a correct picture, so no frame shows it.
+      cluster-alias   a band shares an earlier band's range exactly when its cut
+                         is byte-identical, checked against a per-band index
+                         digest so the arm asks the builder's own question rather
+                         than a weaker one about triangle counts. Structural like
+                         the seal: a duplicated band draws a correct picture, so
+                         no frame shows it.
       cluster-bands   the cut actually coarsens with distance: band triangle
                          counts never rise, and the geometry that CAN simplify
                          reaches a large reduction. Leaf cards are expected not to
@@ -12217,12 +12220,13 @@ def run_cluster_gate(workdir):
                          clauses of the cut rule in cluster_build.cpp, which emits
                          the same cluster set in every band -- reduction 1.0x.
       cluster-batch   instancing survives. A per-instance cut would have ended
-                         batching; the band quantisation exists so it does not, and
-                         this is the arm that says so -- identical INSTANCE counts
-                         against the chain and no more draws than it, and 0 px
-                         against --no-instancing. Draws were an equality until
-                         11.92 aliased duplicate bands, which made the DAG batch
-                         strictly better than the chain.
+                         batching; the band quantisation exists so it does not,
+                         and this is the arm that says so -- identical INSTANCE
+                         counts against the chain, STRICTLY fewer draws wherever
+                         a band aliases, and --no-instancing degenerating to one
+                         draw per instance. The draw clause was an equality until
+                         11.92 made the DAG batch better; strict is what keeps
+                         the half of 11.92 that wins the draws under a test.
       cluster-parity  the DAG draws about as many triangles as the chain, and
                          both beat --no-lod. Parity is the honest claim on this
                          corpus: boundary locking costs roughly what error-driven
@@ -12273,34 +12277,39 @@ def run_cluster_gate(workdir):
         failures.append("cluster-seal")
 
     # --- alias --------------------------------------------------------------
-    # A band whose cut equals its predecessor's must SHARE that range, not store
+    # A band whose cut equals an earlier band's must SHARE that range, not store
     # a second copy (spec 11.92). Read off the probe for cluster-seal's reason:
     # a duplicated band draws a perfectly correct picture, so no frame can show
-    # this and no other arm in the suite would notice it coming back.
+    # this and no other arm would notice it coming back.
     #
-    # Two clauses, and the second is the one that bites. That some band is
-    # aliased proves the mechanism ran; that the aliased set is exactly the set
-    # whose triangle count equals its predecessor's proves it aliased the right
-    # bands. Without the second, a builder that aliased everything -- drawing
-    # band 0 at every distance -- passes the first and looks fine from a
-    # distance, which is where the ladder is used.
+    # Against the CONTENT DIGEST, not the triangle counts, and that is the whole
+    # strength of the arm. Counts make it wrong in both directions: it could not
+    # catch the builder's index comparison being weakened to a count -- the
+    # mutation cluster_build.cpp names as the dangerous one, since it aliases two
+    # distinct cuts of equal size and draws the wrong geometry -- and it would
+    # turn RED on a future prototype where that coincidence happens and the
+    # builder correctly refuses to alias. The digest makes the biconditional
+    # exactly the builder's own rule.
+    #
+    # Not paired with a "did it ever fire" clause on the corpus. That would read
+    # as a mechanism failure when the honest cause is a simplifier good enough to
+    # leave no duplicate band, which is an improvement.
     alias_rows, alias_bands, mismatched = 0, 0, 0
     for r in rows:
-        bands = [int(v.split("=")[1]) for v in r.group(9).split()]
+        digests = [int(v.split("=")[1]) for v in r.group(11).split()]
         mask = int(r.group(10))
-        for i in range(1, len(bands)):
-            aliased = (mask >> i) & 1
+        for i in range(1, len(digests)):
+            aliased = bool((mask >> i) & 1)
             if aliased:
                 alias_bands += 1
-            if aliased != (bands[i] == bands[i - 1]):
+            if aliased != (digests[i] == digests[i - 1]):
                 mismatched += 1
         if mask:
             alias_rows += 1
-    ok = alias_bands > 0 and mismatched == 0
+    ok = mismatched == 0
     print(f"  cluster-alias {'PASS' if ok else 'FAIL'}  {alias_bands} bands over {alias_rows} "
-          f"prototypes share their predecessor's range (want > 0, or the aliasing never ran), "
-          f"{mismatched} disagreeing with the triangle counts (want 0: every aliased band must "
-          f"be one whose cut did not change, and every such band must be aliased)")
+          f"prototypes share an earlier band's range, {mismatched} disagreeing with the index "
+          f"digests (want 0: a band shares a range exactly when its cut is byte-identical)")
     if not ok:
         failures.append("cluster-alias")
 
@@ -12336,26 +12345,42 @@ def run_cluster_gate(workdir):
     # scene that submitted nothing satisfies all three. forest-batch-off guards
     # exactly this and these arms were written without it.
     drew = dag["opaque"]["draws"] > 0 and uninst["opaque"]["draws"] > 0
-    # NOT EQUAL, and the change is 11.92's. This read `==` because the DAG and the
-    # chain batched identically, and the failure it exists to catch -- a
-    # per-instance cut, which splits every run -- makes the DAG's count EXPLODE.
-    # `<=` still catches that and admits the DAG being better, which since 11.92
-    # it is: aliasing a band onto its predecessor's range merges instances the
-    # chain keeps in separate levels, so 1107 against the chain's 1243.
+    # STRICTLY FEWER where a band aliases, and the strictness is the arm.
     #
-    # Tightening this back to equality would mean asserting the DAG must batch no
-    # better than the chain, which is not a property anyone wants. The clause
-    # doing the real work is `same_inst` -- fewer draws carrying FEWER instances
-    # would be lost geometry, and that is what this pins.
-    no_worse_draws = dag["opaque"]["draws"] <= chain["opaque"]["draws"]
+    # This read `==` while the DAG and the chain batched identically, and the
+    # failure it exists to catch -- a per-instance cut, which splits every run --
+    # makes the DAG's count EXPLODE, so any upper bound catches it. 11.92 relaxed
+    # it to `<=` when aliasing made the DAG batch better, and that was the wrong
+    # repair: the alias is only half the change, and the OTHER half -- collapsing
+    # the selected level onto the range it names -- is the half that produces the
+    # entire draw win. With `<=` that half can be deleted outright and every arm
+    # in this suite stays green, including the alias arm above, which reads the
+    # builder's output and never runs the selector. Strict `<` is what fails the
+    # moment the collapse goes away.
+    #
+    # Conditional on the probe because the property genuinely is: a corpus with
+    # no duplicate band has nothing to win, and demanding a win there would fail
+    # on a better simplifier rather than on a regression.
+    #
+    # `same_inst` is NOT the load-bearing clause and this comment used to say it
+    # was. It pins that no geometry was LOST; it is blind to geometry being
+    # WRONG -- an instance drawing a different band's range at the same triangle
+    # count -- which is the only thing aliasing can break. cluster-alias pins
+    # that, against the index digests.
+    if alias_bands:
+        better_draws = dag["opaque"]["draws"] < chain["opaque"]["draws"]
+    else:
+        better_draws = dag["opaque"]["draws"] <= chain["opaque"]["draws"]
     same_inst = dag["opaque"]["instances"] == chain["opaque"]["instances"]
     unbatched = uninst["opaque"]["draws"] == uninst["opaque"]["instances"]
-    ok = drew and no_worse_draws and same_inst and unbatched
+    ok = drew and better_draws and same_inst and unbatched
     print(f"  cluster-batch {'PASS' if ok else 'FAIL'}  DAG draws {dag['opaque']['draws']} vs "
-          f"chain {chain['opaque']['draws']} (want <=: a per-instance cut would split every run) "
-          f"carrying {dag['opaque']['instances']} vs {chain['opaque']['instances']} instances "
-          f"(want equal); --no-instancing gives {uninst['opaque']['draws']} draws for "
-          f"{uninst['opaque']['instances']} instances (want equal)")
+          f"chain {chain['opaque']['draws']} (want {'<' if alias_bands else '<='}, from "
+          f"{alias_bands} aliased bands: a per-instance cut would split every run, and without "
+          f"the level collapse the two are equal) carrying {dag['opaque']['instances']} vs "
+          f"{chain['opaque']['instances']} instances (want equal); --no-instancing gives "
+          f"{uninst['opaque']['draws']} draws for {uninst['opaque']['instances']} instances "
+          f"(want equal)")
     if not ok:
         failures.append("cluster-batch")
 

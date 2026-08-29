@@ -278,15 +278,66 @@ static inline void mesh_lod_range(const Mesh* mesh, int level, GLsizei* count,
     *offset = (const void*)mesh->lod_offset[level];
 }
 
+// The level this one is INDISTINGUISHABLE from: the lowest naming the same
+// index range. Two levels naming one range are one level, and the cluster
+// builder makes that happen deliberately -- a band whose cut equals its
+// predecessor's shares that range rather than storing a second copy.
+//
+// Callers must go through this rather than compare the arrays, which is the
+// rule stated above them and which three sites broke at once when this arrived.
+// The clamp is INSIDE for a reason that is not tidiness: run before it, the walk
+// reads slots past lod_levels, which create_mesh zeroes -- and two zeroed slots
+// compare EQUAL, so it descends to the first written level and returns a level
+// mesh_lod_range then clamps differently. Two items would draw one range under
+// two keys, which is the fragmentation this exists to remove, with nothing red.
+//
+// Never fires on a chain: lod.c appends each level, so offsets strictly
+// increase, and LOD_MIN_SHRINK forces the counts apart as well.
+static inline int mesh_lod_canonical(const Mesh* mesh, int level) {
+    if (mesh->lod_levels <= 1)
+        return 0;
+    if (level >= mesh->lod_levels)
+        level = mesh->lod_levels - 1;
+    // Walked UPWARD from 0, keeping the last level that STARTED a new range,
+    // rather than downward from `level` while the ranges match. The two find the
+    // same level; this one carries its own bound -- the index is syntactically
+    // inside the array whatever lod_levels claims, where the descending form
+    // relied on a clamp several lines above it and needed the reader (and the
+    // analyser) to connect the two.
+    int canonical = 0;
+    for (int i = 1; i < CETRA_LOD_MAX && i <= level; ++i) {
+        if (mesh->lod_offset[i] != mesh->lod_offset[i - 1] ||
+            mesh->lod_count[i] != mesh->lod_count[i - 1])
+            canonical = i;
+    }
+    return canonical;
+}
+
 // Indices in the EBO: every level end to end, since the chain is appended to
 // the original. Derived rather than stored so there is one answer to "how many
 // indices does this mesh have" per level and one for the buffer, and no third
 // field that a future chain builder could forget to set.
+//
+// The MAX over levels, not the last one's end, and that is the difference
+// between an invariant and a trap. A level may share an earlier level's range,
+// so the last one no longer has to name the end of the buffer -- it happens to
+// today only because an alias points at its immediate predecessor, which
+// resolves to the most recent distinct cut. Comparing a band against ANY earlier
+// one is the obvious next step (cut 2 can equal cut 0 with cut 1 distinct), and
+// under the old form it would have under-reported the size, uploaded a
+// truncated EBO, and drawn off the end of it. Four iterations at upload time
+// delete the whole class instead of documenting it.
 static inline size_t mesh_index_total(const Mesh* mesh) {
     if (mesh->lod_levels <= 1)
         return mesh->index_count;
-    int last = mesh->lod_levels - 1;
-    return mesh->lod_offset[last] / sizeof(unsigned int) + mesh->lod_count[last];
+    size_t total = 0;
+    int top = mesh->lod_levels < CETRA_LOD_MAX ? mesh->lod_levels : CETRA_LOD_MAX;
+    for (int level = 0; level < top; ++level) {
+        size_t end = mesh->lod_offset[level] / sizeof(unsigned int) + mesh->lod_count[level];
+        if (end > total)
+            total = end;
+    }
+    return total;
 }
 
 /*

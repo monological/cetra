@@ -177,26 +177,17 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
         return 0;
 
     float projected = (radius / distance) * (lod->bias > 0.0f ? lod->bias : 1.0f);
-    uint8_t level = 0;
+    int level = 0;
     while (level < CETRA_LOD_MAX - 1 && projected < LOD_SWITCH[level])
         level++;
-    if (level >= mesh->lod_levels)
-        level = (uint8_t)(mesh->lod_levels - 1);
 
-    // Collapse onto the lowest level naming the same index range (spec 11.92).
-    // The cluster builder aliases a band whose cut equals its predecessor's, and
-    // without this the two would still be distinct values of the batch key --
-    // so instances drawing identical triangles from an identical offset could
-    // not share a draw, which is most of what the aliasing exists to fix.
-    //
-    // Reads the range pair rather than a stored canonical index, because the
-    // pair already IS the answer: two levels naming one range are one level, and
-    // a second encoding of that is a second thing to keep in agreement. Costs
-    // nothing on a chain, whose levels never share a range.
-    while (level > 0 && mesh->lod_offset[level] == mesh->lod_offset[level - 1] &&
-           mesh->lod_count[level] == mesh->lod_count[level - 1])
-        level--;
-    return level;
+    // Canonicalised, not just clamped (spec 11.92). The level is the batch key
+    // -- draw_run_key_equal, the sort key's 4-bit field and the shadow pass's
+    // level buckets all read it -- so two levels naming one range have to arrive
+    // as one number HERE. Normalising downstream instead would mean doing it at
+    // each of those three, and the sort key is the one that bites: it groups on
+    // the level, so items that never become adjacent can never be batched.
+    return (uint8_t)mesh_lod_canonical(mesh, level);
 }
 
 // Depth-first, children left to right, a node's meshes before its gizmo --

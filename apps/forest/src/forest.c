@@ -328,21 +328,38 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
             int alias_mask = 0;
             for (int b = 0; b < mesh->lod_levels; ++b) {
                 printf(" band%d=%zu", b, mesh->lod_count[b] / 3);
-                if (b > 0 && mesh->lod_offset[b] == mesh->lod_offset[b - 1] &&
-                    mesh->lod_count[b] == mesh->lod_count[b - 1])
+                if (mesh_lod_canonical(mesh, b) != b)
                     alias_mask |= 1 << b;
             }
-            // Which bands SHARE their predecessor's range (spec 11.92), as a bit
-            // per band. Its own field appended after the bands rather than a
-            // marker inside them: the band list is parsed by an existing arm
-            // whose pattern ends at the first character it does not expect, so a
-            // marker there would have truncated its reading silently and left it
-            // green on half the ladder.
+            // Which bands share an earlier band's range, a bit each, and a
+            // CONTENT digest per band (spec 11.92). Both are their own fields
+            // after the band list rather than markers inside it: that list is
+            // parsed by a pattern which stops at the first character it does not
+            // expect, so a marker there truncates the reading silently and
+            // leaves the arm green over half the ladder.
             //
-            // Worth printing at all because an aliased band is the DAG saying it
-            // cannot simplify inside that band's error budget -- a fact about the
-            // geometry, not about this optimisation.
-            printf(" alias=%d\n", alias_mask);
+            // The digest is what lets the gate ask the question the BUILDER
+            // asks. The builder aliases on an index-content comparison; a gate
+            // holding only the counts cannot tell a genuine alias from two
+            // distinct cuts that happen to be the same size, so it can neither
+            // catch the comparison being weakened to a count nor stay green if
+            // that coincidence ever occurs. region_digest below is the same
+            // trick for the same reason.
+            printf(" alias=%d", alias_mask);
+            for (int b = 0; b < mesh->lod_levels; ++b) {
+                // FNV-1a over the band's indices. Any order-sensitive hash does;
+                // this one is already the app's idiom for "did these bytes
+                // change", and a collision here is a gate that misses a defect,
+                // never a frame that renders wrong.
+                uint32_t h = 2166136261u;
+                const unsigned int* idx = mesh->indices + mesh->lod_offset[b] / sizeof(unsigned int);
+                for (size_t i = 0; i < mesh->lod_count[b]; ++i) {
+                    h ^= idx[i];
+                    h *= 16777619u;
+                }
+                printf(" digest%d=%u", b, h);
+            }
+            printf("\n");
         }
     } else {
         levels = mesh_build_lod_chain(mesh);
