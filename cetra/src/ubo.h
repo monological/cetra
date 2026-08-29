@@ -225,9 +225,14 @@ typedef struct Ubo {
 Ubo* create_ubo(GLsizeiptr size, GLuint binding);
 void free_ubo(Ubo* ubo);
 
-// Replace the buffer contents. Orphans the old storage first
-// (glBufferData(NULL), then glBufferSubData) so the driver never stalls on a
-// store the previous frame may still be reading. size must be <= create size.
+// Replace the buffer contents. Always ORPHANS the old storage, so the driver
+// never stalls on a store the previous draw may still be reading. size must be
+// <= create size.
+//
+// The orphan is not a nicety and the measurement is brutal: dropping it, so
+// that glBufferSubData writes the live allocation, cost 62 ms/frame on forest
+// -- opaque went 158.6 to 208.4 ms and the CPU column to 210.8 as every write
+// synced against the reads in flight (spec 11.91).
 //
 // Always the WHOLE buffer, even where the consumer reads a prefix of it. A
 // partial write after the orphan measured 4.3 ms/frame SLOWER than sending all

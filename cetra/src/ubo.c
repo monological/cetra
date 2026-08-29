@@ -42,8 +42,20 @@ void ubo_upload(Ubo* ubo, const void* data, GLsizeiptr size) {
         return;
     }
     glBindBuffer(GL_UNIFORM_BUFFER, ubo->id);
-    glBufferData(GL_UNIFORM_BUFFER, ubo->size, NULL, GL_DYNAMIC_DRAW); // orphan
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, size, data);
+    if (size == ubo->size) {
+        // Orphan AND fill in one call. glBufferData with a non-NULL pointer
+        // replaces the allocation exactly as the NULL form does, so this keeps
+        // the property the split form was chosen for and drops the second
+        // traversal of the same 12 KB. Measured on forest at -11.0 ms of opaque
+        // GPU against a 1.7% floor (spec 11.91).
+        glBufferData(GL_UNIFORM_BUFFER, ubo->size, data, GL_DYNAMIC_DRAW);
+    } else {
+        // A short write cannot take that form: glBufferData sizes the buffer to
+        // its argument, so passing `size` here would SHRINK the allocation the
+        // binding point describes. Orphan the full size, then fill the prefix.
+        glBufferData(GL_UNIFORM_BUFFER, ubo->size, NULL, GL_DYNAMIC_DRAW);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, size, data);
+    }
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
