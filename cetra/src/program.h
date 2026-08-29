@@ -54,6 +54,16 @@ typedef struct ShaderProgram {
     // made the program NAMESPACE the membership rule, so any future program
     // called "pbr-anything" would have been silently swapped for a variant.
     int pbr_features;
+    // How many sampler uniforms the LINKED program kept, which is not how many
+    // its source declares. GL bounds the first against GL_MAX_TEXTURE_IMAGE_UNITS
+    // (16 on this platform's guarantee) and says nothing about the second, so a
+    // declaration whose every read was compiled away may or may not still be
+    // spending a unit -- that is a question about the driver, and this field is
+    // how it gets asked.
+    //
+    // -1 when the count could not be taken, so a reader cannot mistake "not
+    // measured" for "declares nothing".
+    int sampler_count;
     UT_hash_handle hh;
 } ShaderProgram;
 

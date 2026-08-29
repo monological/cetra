@@ -41,6 +41,9 @@ ShaderProgram* create_program(const char* name) {
     // otherwise, so a program that never heard of this cannot be mistaken for
     // the leanest one and swapped out from under its material.
     program->pbr_features = -1;
+    // Same reason, different zero: 0 samplers is a real answer a post pass could
+    // give, so "never counted" needs a value of its own.
+    program->sampler_count = -1;
 
     return program;
 }
@@ -402,6 +405,87 @@ GLboolean validate_program(ShaderProgram* program) {
     return success;
 }
 
+// Whether a uniform of this type spends one of the program's texture image
+// units.
+//
+// Exhaustive over GL 4.1 rather than over the four types this engine declares,
+// and the difference is not pedantry: the count feeds an assertion about the
+// sampler budget, and a type missing here undercounts SILENTLY -- the program
+// links, the number reads better than the truth, and an arm built on it reports
+// a unit that was never freed.
+static bool _is_sampler_type(GLenum type) {
+    switch (type) {
+    case GL_SAMPLER_1D:
+    case GL_SAMPLER_2D:
+    case GL_SAMPLER_3D:
+    case GL_SAMPLER_CUBE:
+    case GL_SAMPLER_1D_SHADOW:
+    case GL_SAMPLER_2D_SHADOW:
+    case GL_SAMPLER_CUBE_SHADOW:
+    case GL_SAMPLER_1D_ARRAY:
+    case GL_SAMPLER_2D_ARRAY:
+    case GL_SAMPLER_1D_ARRAY_SHADOW:
+    case GL_SAMPLER_2D_ARRAY_SHADOW:
+    case GL_SAMPLER_2D_MULTISAMPLE:
+    case GL_SAMPLER_2D_MULTISAMPLE_ARRAY:
+    case GL_SAMPLER_BUFFER:
+    case GL_SAMPLER_2D_RECT:
+    case GL_SAMPLER_2D_RECT_SHADOW:
+    case GL_INT_SAMPLER_1D:
+    case GL_INT_SAMPLER_2D:
+    case GL_INT_SAMPLER_3D:
+    case GL_INT_SAMPLER_CUBE:
+    case GL_INT_SAMPLER_1D_ARRAY:
+    case GL_INT_SAMPLER_2D_ARRAY:
+    case GL_INT_SAMPLER_2D_MULTISAMPLE:
+    case GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+    case GL_INT_SAMPLER_BUFFER:
+    case GL_INT_SAMPLER_2D_RECT:
+    case GL_UNSIGNED_INT_SAMPLER_1D:
+    case GL_UNSIGNED_INT_SAMPLER_2D:
+    case GL_UNSIGNED_INT_SAMPLER_3D:
+    case GL_UNSIGNED_INT_SAMPLER_CUBE:
+    case GL_UNSIGNED_INT_SAMPLER_1D_ARRAY:
+    case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
+    case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
+    case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+    case GL_UNSIGNED_INT_SAMPLER_BUFFER:
+    case GL_UNSIGNED_INT_SAMPLER_2D_RECT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// How many texture image units the LINKED program spends.
+//
+// Counted from what the linker KEPT, which is the only authority on it. A driver
+// is free to drop a sampler whose every read was compiled away, and whether this
+// one does is not a thing the source can answer -- so the question is put to the
+// program rather than to a grep over the shader.
+static int _count_program_samplers(GLuint program_id) {
+    GLint active = 0;
+    glGetProgramiv(program_id, GL_ACTIVE_UNIFORMS, &active);
+    if (active < 0)
+        return -1;
+
+    int samplers = 0;
+    for (GLint i = 0; i < active; ++i) {
+        // glGetActiveUniform writes the name whether or not the caller wants it,
+        // so the buffer is required. Truncation is harmless: nothing here reads
+        // it, and the type and size arrive in their own out-params.
+        GLchar name[128];
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveUniform(program_id, (GLuint)i, (GLsizei)sizeof(name), NULL, &size, &type, name);
+        // `size` is the array length, and an array of samplers spends a unit per
+        // element rather than one for the declaration.
+        if (_is_sampler_type(type))
+            samplers += size;
+    }
+    return samplers;
+}
+
 void setup_program_uniforms(ShaderProgram* program) {
     if (program == NULL || program->id == 0) {
         log_error("Invalid shader program.");
@@ -423,6 +507,10 @@ void setup_program_uniforms(ShaderProgram* program) {
     // declare (or strip) them. InstanceBlock is the one whose absence the
     // submitter has to know about, so its answer is kept on the program.
     program->instanced = ubo_wire_blocks(program->id);
+
+    // Beside it for the same reason: a fact about the linked program that every
+    // reader wants the answer to rather than the derivation.
+    program->sampler_count = _count_program_samplers(program->id);
 }
 
 // Build the variant carrying exactly `features`. Static: every caller goes
@@ -466,7 +554,12 @@ static ShaderProgram* _create_pbr_variant(const char* name, unsigned features) {
     // Parsed by scripts/gates.py::_PBR_VARIANT. It is the only way from outside
     // to see which variant a scene resolved to, because a correct variant and
     // the uber-shader are the same picture.
-    log_info("pbr variant %s: features %u of %u", name, features, PBR_FEAT_ALL);
+    //
+    // `samplers` is APPENDED rather than woven in, so the existing regex keeps
+    // matching. It is the whole instrument for spec 11.95's question: whether a
+    // declaration whose reads this mask compiled away still spends a unit.
+    log_info("pbr variant %s: features %u of %u samplers %d", name, features, PBR_FEAT_ALL,
+             program->sampler_count);
     return program;
 }
 
