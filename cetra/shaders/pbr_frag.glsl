@@ -994,7 +994,11 @@ void main() {
     // POM active for this material (§4.11). Named once and reused by the
     // self-shadow in the light loop; it is a bool of integer/uniform comparisons,
     // so the OFF path stays byte-identical to the pre-feature code.
+#ifdef CETRA_NO_PARALLAX
+    bool pom = false;
+#else
     bool pom = parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
+#endif
     float parallaxHeight = 0.0; // height at the POM hit, for the self-shadow march
     if (pom) {
         vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
@@ -1153,6 +1157,7 @@ void main() {
      * instructions; keeping them alive is not.
      */
     DecalSurface decalSurf = decalSurfaceNone();
+#ifndef CETRA_NO_DECALS
     if (decalInfo.x > 0 && passMode != 2 && passMode != 3) {
         // Legal in here because the branch is dynamically uniform -- both
         // operands are uniforms -- and after the alpha discard above for the
@@ -1179,6 +1184,7 @@ void main() {
         if (decalSurf.alpha > 0.0)
             albedoMap = mix(albedoMap, sRGBToLinear(decalSurf.albedo), decalSurf.alpha);
     }
+#endif
 
     /*
      * ALBEDO ONLY -- and it sits HERE, apart from the other debug views, because
@@ -1624,7 +1630,11 @@ void main() {
     // 1 - max3(sheenColor) * E(NdotV); the per-light min with E(LdotN) is
     // deliberately skipped. E sits in the engine-owned LUT's blue channel,
     // bound for every scene, so this reads correctly with no environment.
+#ifdef CETRA_NO_SHEEN
+    bool sheenActive = false;
+#else
     bool sheenActive = sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0;
+#endif
     vec3 sheenColorPx;
     float sheenRough;
     float sheenE;
@@ -1717,6 +1727,7 @@ void main() {
     // loop agree; nothing reads them.
     mat3 ltcMinv = mat3(1.0);
     vec2 ltcAmp = vec2(0.0);
+#ifndef CETRA_NO_AREA_LIGHTS
     if (lightCounts.z > 0) {
         // Roughness floor (LTC_MIN_ROUGHNESS). Below it the fitted Minv grows
         // extreme enough to collapse the transformed quad corners toward each
@@ -1733,6 +1744,7 @@ void main() {
         // indexed separately inside ltcPanel (see ltc.glsl)
         ltcAmp = textureLod(ltcTex, vec3(ltcUV, LTC_LAYER_AMP), 0.0).xy;
     }
+#endif
 
     // Anisotropic shading frame, resolved once: it depends on the SURFACE, not
     // on any light, and the loop below runs per light on geometry (hair cards,
@@ -1745,7 +1757,11 @@ void main() {
     // is painted on it.
     vec3 anisoT = T, anisoB = B;
     float aniso = 0.0;
+#ifdef CETRA_NO_ANISO
+    if (false) {
+#else
     if (anisotropy > 0.0 && anisotropyLayer >= 0) {
+#endif
         vec3 dir = normalize(anisoDir.x * T + anisoDir.y * B);
         // Blended by coherence: where the map is unsure the card tangent stands,
         // and the strength falls off with it so an averaged-to-nothing

@@ -72,6 +72,48 @@ void setup_program_uniforms(ShaderProgram* program);
 /*
  * Preset Programs
  */
+/*
+ * Lit-surface variants (spec 11.93).
+ *
+ * A feature a material cannot use still costs it, and the cost is OCCUPANCY
+ * rather than work: every gate in pbr_frag is a dynamically uniform branch that
+ * an unusing scene already skips, so what is left is live values and declared
+ * samplers that every fragment pays for. Measured on forest, whose materials use
+ * none of these five: removing them at compile time took the opaque pass from
+ * 149.2 to 125.1 ms and the frame from 203.7 to 179.0. Guarding one of the same
+ * code paths at RUNTIME instead was worth 0.05 ms, which is the same fact from
+ * the other side.
+ *
+ * The polarity is SUBTRACTIVE -- the defines turn features OFF, and no defines
+ * is exactly today's shader. So a resolver that fails to run, or a mask that is
+ * never assembled, yields the slow program rather than a fast one missing a
+ * feature the material needed. Wrong-and-slow is recoverable; wrong-and-pretty
+ * is what ships.
+ *
+ * SCENE-scoped and MATERIAL-scoped bits both live here, and they are not the
+ * same kind of thing. Decals and area lights are properties of the scene -- a
+ * material cannot know whether either exists -- while sheen, anisotropy and
+ * parallax are the material's own. The mask is the union, so a scene that gains
+ * its first decal changes every material's variant.
+ */
+typedef enum PbrFeature {
+    PBR_FEAT_DECALS = 1u << 0,   // scene: clustered decal marks
+    PBR_FEAT_AREA = 1u << 1,     // scene: LTC area-light panels
+    PBR_FEAT_SHEEN = 1u << 2,    // material: KHR_materials_sheen
+    PBR_FEAT_ANISO = 1u << 3,    // material: anisotropic specular
+    PBR_FEAT_PARALLAX = 1u << 4, // material: POM
+} PbrFeature;
+
+#define PBR_FEAT_ALL \
+    (PBR_FEAT_DECALS | PBR_FEAT_AREA | PBR_FEAT_SHEEN | PBR_FEAT_ANISO | PBR_FEAT_PARALLAX)
+#define PBR_VARIANT_COUNT (PBR_FEAT_ALL + 1)
+
+// The variant carrying exactly `features`. Name is "pbr" for the full set, so
+// the program cache and every log line that already say "pbr" keep meaning what
+// they meant; anything less is "pbr-<mask>".
+ShaderProgram* create_pbr_program_variant(unsigned features);
+
+// The full variant, which is the uber-shader and the engine's default.
 ShaderProgram* create_pbr_program();
 ShaderProgram* create_pbr_skinned_program();
 

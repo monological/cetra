@@ -13,6 +13,21 @@ typedef struct {
     char* source;
 } Shader;
 
+// `source` with a block of preprocessor lines spliced in after its `#version`
+// directive. Caller owns the result; NULL or empty defines returns a plain copy.
+//
+// Splices rather than prepends because `#version` must be the first thing in a
+// translation unit, and returns ONE string rather than feeding glShaderSource a
+// second element so a compile error prints the text the driver actually saw.
+//
+// A free function rather than a parameter on create_shader, which was the first
+// shape and the wrong one: only the lit surface is ever built as a variant, so
+// threading it through create_shader and create_program_from_source would have
+// put a `NULL` at 39 call sites that cannot want one. A variant is a property of
+// the SOURCE, so the caller that knows it is building one splices, and every
+// other path is untouched.
+char* shader_source_with_defines(const char* source, const char* defines);
+
 Shader* create_shader(ShaderType type, const char* source);
 Shader* create_shader_from_path(ShaderType type, const char* file_path);
 void free_shader(Shader* shader);

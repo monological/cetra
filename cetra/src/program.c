@@ -420,12 +420,53 @@ void setup_program_uniforms(ShaderProgram* program) {
     program->instanced = ubo_wire_blocks(program->id);
 }
 
-ShaderProgram* create_pbr_program() {
+ShaderProgram* create_pbr_program_variant(unsigned features) {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("pbr", pbr_vert_shader_str, pbr_frag_shader_str,
-                                              NULL)) == NULL) {
-        log_error("Failed to initialize PBR shader program");
+    // One line per feature the variant does NOT carry. Subtractive, so the empty
+    // block is the uber-shader -- see the polarity note in program.h.
+    char defines[256];
+    defines[0] = '\0';
+    size_t used = 0;
+    static const struct {
+        unsigned bit;
+        const char* line;
+    } DISABLE[] = {
+        {PBR_FEAT_DECALS, "#define CETRA_NO_DECALS 1\n"},
+        {PBR_FEAT_AREA, "#define CETRA_NO_AREA_LIGHTS 1\n"},
+        {PBR_FEAT_SHEEN, "#define CETRA_NO_SHEEN 1\n"},
+        {PBR_FEAT_ANISO, "#define CETRA_NO_ANISO 1\n"},
+        {PBR_FEAT_PARALLAX, "#define CETRA_NO_PARALLAX 1\n"},
+    };
+    for (size_t i = 0; i < sizeof(DISABLE) / sizeof(DISABLE[0]); ++i) {
+        if (features & DISABLE[i].bit)
+            continue;
+        size_t len = strlen(DISABLE[i].line);
+        // Cannot happen at five short lines, and checked anyway: a silently
+        // truncated block is a variant that keeps a feature it was built to drop,
+        // which is slow rather than wrong and would never be noticed.
+        if (used + len >= sizeof(defines)) {
+            log_error("PBR variant defines truncated at feature %u", DISABLE[i].bit);
+            return NULL;
+        }
+        memcpy(defines + used, DISABLE[i].line, len + 1);
+        used += len;
+    }
+
+    char name[32];
+    if (features == PBR_FEAT_ALL)
+        snprintf(name, sizeof(name), "pbr");
+    else
+        snprintf(name, sizeof(name), "pbr-%u", features);
+
+    char* frag = shader_source_with_defines(pbr_frag_shader_str, defines);
+    if (!frag)
+        return NULL;
+    program = create_program_from_source(name, pbr_vert_shader_str, frag, NULL);
+    free(frag);
+
+    if (program == NULL) {
+        log_error("Failed to initialize PBR shader program (features %u)", features);
         return NULL;
     }
 
@@ -433,6 +474,16 @@ ShaderProgram* create_pbr_program() {
     // depth_prepass_vert uses, and declares `invariant gl_Position`.
     program->depth_prepass_safe = true;
     return program;
+}
+
+// EVERY variant has to answer these two, which is why they are set inside the
+// builder above rather than by its callers: a variant that missed
+// depth_prepass_safe lets the prepass stamp depth with no coverage test, which
+// DELETES alpha-masked geometry instead of shading it wrong, and one that missed
+// `instanced` draws every instance of a batch at the first one's transform.
+// Both are silent, and neither is visible in the variant that was tested.
+ShaderProgram* create_pbr_program() {
+    return create_pbr_program_variant(PBR_FEAT_ALL);
 }
 
 ShaderProgram* create_particle_program() {

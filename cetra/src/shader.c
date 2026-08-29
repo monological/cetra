@@ -21,6 +21,46 @@ char* _read_shader_source(const char* filePath) {
     return buffer;
 }
 
+// The source with `defines` spliced in after its `#version` line, or a plain
+// copy when there are none. Caller owns the result.
+//
+// A source with no `#version` gets the block at the FRONT. That is not a
+// tolerated edge case -- GLSL without a version directive is 1.10, where none of
+// this engine's shaders compile, so the only way to reach it is a truncated or
+// misidentified string, and putting the defines first keeps the driver's error
+// pointing at line 1 of the real problem rather than at a define block.
+char* shader_source_with_defines(const char* source, const char* defines) {
+    if (!defines || !*defines)
+        return safe_strdup(source);
+
+    const char* version = strstr(source, "#version");
+    const char* body = source;
+    size_t head = 0;
+    if (version) {
+        const char* eol = strchr(version, '\n');
+        if (eol) {
+            head = (size_t)(eol - source) + 1;
+            body = eol + 1;
+        }
+    }
+
+    size_t defines_len = strlen(defines);
+    size_t body_len = strlen(body);
+    // +1 for a newline after the block, so a defines string without a trailing
+    // one cannot weld itself to the first line of the body.
+    char* out = malloc(head + defines_len + 1 + body_len + 1);
+    if (!out) {
+        log_error("Failed to allocate spliced shader source");
+        return NULL;
+    }
+    memcpy(out, source, head);
+    memcpy(out + head, defines, defines_len);
+    out[head + defines_len] = '\n';
+    memcpy(out + head + defines_len + 1, body, body_len);
+    out[head + defines_len + 1 + body_len] = '\0';
+    return out;
+}
+
 Shader* create_shader_from_path(ShaderType type, const char* file_path) {
     char* source = _read_shader_source(file_path);
     if (!source)
