@@ -234,11 +234,20 @@ void free_ubo(Ubo* ubo);
 // -- opaque went 158.6 to 208.4 ms and the CPU column to 210.8 as every write
 // synced against the reads in flight (spec 11.91).
 //
-// Always the WHOLE buffer, even where the consumer reads a prefix of it. A
-// partial write after the orphan measured 4.3 ms/frame SLOWER than sending all
-// 12 KB on the instance block (spec 11.28): replacing the whole allocation
-// lets the driver hand back a fresh block, where a prefix leaves it owing an
-// answer for the rest, and that costs more than the copy it saves.
+// PREFER TO PASS THE WHOLE BUFFER. A partial write after the orphan measured
+// 4.3 ms/frame SLOWER than sending all 12 KB on the instance block (spec
+// 11.28): replacing the whole allocation lets the driver hand back a fresh
+// block, where a prefix leaves it owing an answer for the rest, and that costs
+// more than the copy it saves. Since 11.91 the whole-buffer case is also the
+// only one that can orphan and fill in a SINGLE call, worth 11.0 ms of opaque
+// GPU -- glBufferData sizes the buffer to its argument, so a prefix length
+// there would shrink the allocation the binding point describes, and a short
+// write therefore keeps the two-call form.
+//
+// Two callers pass a prefix anyway and are right to: the light array and the
+// cluster index pool are tail fields whose live length varies per frame by
+// kilobytes, and 11.28's finding is about a block whose whole extent is
+// potentially read. Nothing here forbids it -- it only costs the single call.
 void ubo_upload(Ubo* ubo, const void* data, GLsizeiptr size);
 
 // Wire a program's named block to a binding point and check the driver's
