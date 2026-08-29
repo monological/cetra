@@ -8,6 +8,14 @@
 
 #include "ext/uthash.h"
 
+// Which VERTEX stage a lit-surface variant is built on (spec 11.95). Up here
+// only because ShaderProgram carries one; the family's rationale and the rest of
+// the variant API are together further down.
+typedef enum PbrFamily {
+    PBR_FAMILY_RIGID = 0, // pbr_vert: instanced, the default for every app
+    PBR_FAMILY_SKINNED,   // pbr_skinned_vert: bone_matrices, one draw per mesh
+} PbrFamily;
+
 typedef struct ShaderProgram {
     GLuint id;
     char* name;
@@ -64,6 +72,13 @@ typedef struct ShaderProgram {
     // -1 when the count could not be taken, so a reader cannot mistake "not
     // measured" for "declares nothing".
     int sampler_count;
+    // Which vertex stage this variant was built on, so the resolver can swap a
+    // material within its own family (spec 11.95).
+    //
+    // Its zero IS meaningful here, unlike pbr_features' -- but harmlessly, since
+    // every read is already behind `pbr_features >= 0` and a program that is not
+    // a variant never reaches one.
+    PbrFamily pbr_family;
     UT_hash_handle hh;
 } ShaderProgram;
 
@@ -125,19 +140,33 @@ void setup_program_uniforms(ShaderProgram* program);
 // for. A material cannot know whether the scene has a decal, so the mask is the
 // union of the two and a scene gaining its first decal changes every material.
 
-// Longest "pbr-<mask>" plus its terminator, with room to spare.
+// PbrFamily (declared above, beside the struct that carries one) is which VERTEX
+// stage a variant is built on. The two families share pbr_frag EXACTLY, so a
+// mask means the same thing in both and the bits above need no per-family
+// reading -- which is the whole reason a second family costs a builder argument
+// rather than a second set of gates.
+//
+// It is a family and not a flag because the vertex source, the cache-key prefix
+// and the resulting `instanced` answer all follow from it together: a skinned
+// program links without an InstanceBlock, which is what keeps 11.28's rule that
+// such a program may never carry more than one instance.
+//
+// Longest "pbr_skinned-<mask>" plus its terminator, with room to spare.
 #define PBR_VARIANT_NAME_MAX 32
 
-// The cache key for a variant, and the ONE place the mask-to-name rule lives.
-// Two sites spelling it differently would miss the lookup forever, compiling and
-// leaking a fresh program every frame while rendering correctly throughout.
-void pbr_variant_name(unsigned features, char* out, size_t n);
+// The cache key for a variant, and the ONE place the family-and-mask-to-name
+// rule lives. Two sites spelling it differently would miss the lookup forever,
+// compiling and leaking a fresh program every frame while rendering correctly
+// throughout.
+void pbr_variant_name(PbrFamily family, unsigned features, char* out, size_t n);
 
-// Compile the variant carrying exactly `features`. Does not register it -- see
-// engine_pbr_variant, which owns the cache and is where callers should go.
-ShaderProgram* create_pbr_program_variant(unsigned features);
+// Compile the variant carrying exactly `features` on `family`'s vertex stage.
+// Does not register it -- see engine_pbr_variant, which owns the cache and is
+// where callers should go.
+ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features);
 
-// The full variant, which is the uber-shader and the engine's default.
+// The full variant of each family, which is the uber-shader and what an app
+// hands to set_shader_programs_for_nodes before the resolver narrows it.
 ShaderProgram* create_pbr_program();
 ShaderProgram* create_pbr_skinned_program();
 

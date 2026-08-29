@@ -516,22 +516,29 @@ void setup_program_uniforms(ShaderProgram* program) {
 // Build the variant carrying exactly `features`. Static: every caller goes
 // through engine_pbr_variant below, so the name is formatted in one place and is
 // only ever a cache key.
-static ShaderProgram* _create_pbr_variant(const char* name, unsigned features) {
+static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, unsigned features) {
     // ONE line, carrying the mask itself. The bits are shared with the shader
     // through pbr_features.glsl, so this cannot drift from what the gates test
     // -- where emitting a set of macro NAMES could, silently and invisibly.
     //
-    // Subtractive still, but now structurally: pbr_frag defaults
+    // Subtractive still, but now structurally: pbr_features.glsl defaults
     // CETRA_PBR_FEATURES to PBR_FEAT_ALL when it is undefined, so a source
-    // compiled with no defines at all -- which is what pbr_skinned does -- is
-    // the uber-shader rather than a variant with every feature stripped.
+    // compiled with no defines at all is the uber-shader rather than a variant
+    // with every feature stripped. Both families go through here now, so nothing
+    // relies on that default -- but it is what makes the failure direction safe.
     char defines[64];
     snprintf(defines, sizeof(defines), "#define CETRA_PBR_FEATURES %u\n", features);
+
+    // The families differ in the VERTEX stage and nowhere else: same pbr_frag,
+    // same mask, same gates. That is what makes a second family an argument here
+    // rather than a second copy of the feature system.
+    const char* vert =
+        family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str : pbr_vert_shader_str;
 
     char* frag = shader_source_with_defines(pbr_frag_shader_str, defines);
     if (!frag)
         return NULL;
-    ShaderProgram* program = create_program_from_source(name, pbr_vert_shader_str, frag, NULL);
+    ShaderProgram* program = create_program_from_source(name, vert, frag, NULL);
     free(frag);
 
     if (program == NULL) {
@@ -539,10 +546,13 @@ static ShaderProgram* _create_pbr_variant(const char* name, unsigned features) {
         return NULL;
     }
     program->pbr_features = (int)features;
+    program->pbr_family = family;
 
-    // pbr_vert takes its clip position from object_position.glsl, the same chunk
-    // depth_prepass_vert uses, and declares `invariant gl_Position`. Set here
-    // rather than by the caller because EVERY variant owes the same answer, and
+    // Both families take their clip position from object_position.glsl, the same
+    // chunk depth_prepass_vert uses, and declare `invariant gl_Position`; the
+    // skinned one's skinning matches the prepass's because both call skin.glsl's
+    // skinMatrix on the same uniforms. Set here rather than by the caller because
+    // EVERY variant owes the same answer, and
     // one that missed it lets the prepass stamp depth with no coverage test --
     // which deletes alpha-masked geometry rather than shading it wrong, and is
     // invisible in whichever variant happened to get tested.
@@ -563,26 +573,28 @@ static ShaderProgram* _create_pbr_variant(const char* name, unsigned features) {
     return program;
 }
 
-// "pbr" for the full set so the cache, and every log line that already says
-// pbr, keep meaning what they meant. ONE function because this string is the
-// program cache's key: a second site spelling it differently would miss the
-// lookup forever and compile and leak a fresh 2,500-line program every frame,
-// rendering correctly the whole time.
-void pbr_variant_name(unsigned features, char* out, size_t n) {
+// The bare family name for the full set, so the cache -- and every log line and
+// app lookup that already says pbr or pbr_skinned -- keeps meaning what it
+// meant. ONE function because this string is the program cache's key: a second
+// site spelling it differently would miss the lookup forever and compile and
+// leak a fresh 2,500-line program every frame, rendering correctly the whole
+// time.
+void pbr_variant_name(PbrFamily family, unsigned features, char* out, size_t n) {
+    const char* prefix = family == PBR_FAMILY_SKINNED ? "pbr_skinned" : "pbr";
     if (features == PBR_FEAT_ALL)
-        snprintf(out, n, "pbr");
+        snprintf(out, n, "%s", prefix);
     else
-        snprintf(out, n, "pbr-%u", features);
+        snprintf(out, n, "%s-%u", prefix, features);
 }
 
-ShaderProgram* create_pbr_program_variant(unsigned features) {
+ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features) {
     char name[PBR_VARIANT_NAME_MAX];
-    pbr_variant_name(features, name, sizeof(name));
-    return _create_pbr_variant(name, features);
+    pbr_variant_name(family, features, name, sizeof(name));
+    return _create_pbr_variant(name, family, features);
 }
 
 ShaderProgram* create_pbr_program() {
-    return create_pbr_program_variant(PBR_FEAT_ALL);
+    return create_pbr_program_variant(PBR_FAMILY_RIGID, PBR_FEAT_ALL);
 }
 
 ShaderProgram* create_particle_program() {
@@ -668,18 +680,7 @@ ShaderProgram* create_wind_probe_program() {
 }
 
 ShaderProgram* create_pbr_skinned_program() {
-    ShaderProgram* program = NULL;
-
-    if ((program = create_program_from_source("pbr_skinned", pbr_skinned_vert_shader_str,
-                                              pbr_frag_shader_str, NULL)) == NULL) {
-        log_error("Failed to initialize skinned PBR shader program");
-        return NULL;
-    }
-
-    // Same chunk, same invariant. Its skinning matches depth_prepass_vert's
-    // because both call skin.glsl's skinMatrix on the same uniforms.
-    program->depth_prepass_safe = true;
-    return program;
+    return create_pbr_program_variant(PBR_FAMILY_SKINNED, PBR_FEAT_ALL);
 }
 
 ShaderProgram* create_shape_program() {

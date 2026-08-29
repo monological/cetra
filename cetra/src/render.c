@@ -769,7 +769,10 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
         if ((unsigned)mat->shader_program->pbr_features == want)
             continue;
 
-        ShaderProgram* variant = engine_pbr_variant(engine, want);
+        // Within the material's OWN family: a skinned mesh must stay on a
+        // skinned vertex stage, and the mask means the same thing in both.
+        ShaderProgram* variant =
+            engine_pbr_variant(engine, mat->shader_program->pbr_family, want);
         // Keep the material where it is on failure. The full variant always
         // exists, so the surface stays lit rather than turning black -- the
         // subtractive polarity paying off at the one place it matters.

@@ -1576,18 +1576,18 @@ ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* pro
     return existing;
 }
 
-ShaderProgram* engine_pbr_variant(Engine* engine, unsigned features) {
+ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned features) {
     if (!engine)
         return NULL;
 
     char name[PBR_VARIANT_NAME_MAX];
-    pbr_variant_name(features, name, sizeof(name));
+    pbr_variant_name(family, features, name, sizeof(name));
 
     ShaderProgram* program = get_engine_shader_program_by_name(engine, name);
     if (program)
         return program;
 
-    program = create_pbr_program_variant(features);
+    program = create_pbr_program_variant(family, features);
     if (!program)
         return NULL;
     add_shader_program_to_engine(engine, program);

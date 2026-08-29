@@ -128,9 +128,9 @@ void engine_build_draw_list(Engine* engine, struct Scene* scene);
 // before the frame makes some.
 //
 // Membership is `ShaderProgram.pbr_features >= 0`, set by the variant builder.
-// pbr_skinned is outside the family -- not because it has its own fragment
-// source, which it does not, but because nothing yet builds skinned variants.
-// Every skinned material therefore stays on the uber-shader.
+// BOTH families are members since 11.95, and a material is swapped within its
+// own -- a skinned mesh onto a skinned vertex stage. The mask means the same
+// thing in either, because they share pbr_frag exactly.
 void engine_resolve_material_variants(Engine* engine, struct Scene* scene);
 
 // Animation state for skinned mesh rendering
