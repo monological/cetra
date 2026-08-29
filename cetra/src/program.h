@@ -44,6 +44,16 @@ typedef struct ShaderProgram {
     // depth along unexpanded lines that nothing ever shades. Its meshes are
     // ALPHA_OPAQUE, so the lane alone cannot tell them apart.
     bool depth_prepass_safe;
+    // Which lit-surface features this program was compiled with, or -1 for a
+    // program that is not a variant at all (spec 11.93). A third derived fact
+    // beside the two above, and for their reason: it is settled at build time,
+    // and every reader wants the answer rather than the derivation.
+    //
+    // It replaced a string test -- the resolver formatted "pbr-<mask>" and
+    // strcmp'd it against this program's name every frame, per material. That
+    // made the program NAMESPACE the membership rule, so any future program
+    // called "pbr-anything" would have been silently swapped for a variant.
+    int pbr_features;
     UT_hash_handle hh;
 } ShaderProgram;
 
@@ -96,21 +106,25 @@ void setup_program_uniforms(ShaderProgram* program);
  * parallax are the material's own. The mask is the union, so a scene that gains
  * its first decal changes every material's variant.
  */
-typedef enum PbrFeature {
-    PBR_FEAT_DECALS = 1u << 0,   // scene: clustered decal marks
-    PBR_FEAT_AREA = 1u << 1,     // scene: LTC area-light panels
-    PBR_FEAT_SHEEN = 1u << 2,    // material: KHR_materials_sheen
-    PBR_FEAT_ANISO = 1u << 3,    // material: anisotropic specular
-    PBR_FEAT_PARALLAX = 1u << 4, // material: POM
-} PbrFeature;
+// The bits, from the file the shader reads them out of. Included rather than
+// restated so a mask emitted here cannot mean something else there.
+#include "../shaders/include/pbr_features.glsl"
 
-#define PBR_FEAT_ALL \
-    (PBR_FEAT_DECALS | PBR_FEAT_AREA | PBR_FEAT_SHEEN | PBR_FEAT_ANISO | PBR_FEAT_PARALLAX)
-#define PBR_VARIANT_COUNT (PBR_FEAT_ALL + 1)
+// DECALS and AREA are the scene's, SHEEN, ANISO and PARALLAX the material's --
+// which is the split _scene_pbr_features and _material_pbr_features are named
+// for. A material cannot know whether the scene has a decal, so the mask is the
+// union of the two and a scene gaining its first decal changes every material.
 
-// The variant carrying exactly `features`. Name is "pbr" for the full set, so
-// the program cache and every log line that already say "pbr" keep meaning what
-// they meant; anything less is "pbr-<mask>".
+// Longest "pbr-<mask>" plus its terminator, with room to spare.
+#define PBR_VARIANT_NAME_MAX 32
+
+// The cache key for a variant, and the ONE place the mask-to-name rule lives.
+// Two sites spelling it differently would miss the lookup forever, compiling and
+// leaking a fresh program every frame while rendering correctly throughout.
+void pbr_variant_name(unsigned features, char* out, size_t n);
+
+// Compile the variant carrying exactly `features`. Does not register it -- see
+// engine_pbr_variant, which owns the cache and is where callers should go.
 ShaderProgram* create_pbr_program_variant(unsigned features);
 
 // The full variant, which is the uber-shader and the engine's default.

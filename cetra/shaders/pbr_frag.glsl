@@ -1,4 +1,19 @@
 #version 330 core
+// Which optional features this compilation carries (spec 11.93). The bits come
+// from the file the C side reads them out of, so a mask emitted there means the
+// same thing here.
+//
+// DEFAULTED WHEN ABSENT, and that is what makes the subtractive polarity
+// structural rather than a convention: a source compiled with no defines at all
+// is the uber-shader. pbr_skinned does exactly that, and under an additive
+// scheme it would silently have become the leanest variant instead of the
+// fullest.
+#include "pbr_features.glsl"
+#ifndef CETRA_PBR_FEATURES
+#define CETRA_PBR_FEATURES PBR_FEAT_ALL
+#endif
+#define CETRA_HAS(f) ((CETRA_PBR_FEATURES & (f)) != 0)
+
 // centroid, matching both vertex stages -- see pbr_vert for why. Without it a partly covered
 // pixel is shaded from extrapolated attributes, which is where the MSAA-only specks came from.
 in vec3 Normal;
@@ -994,11 +1009,8 @@ void main() {
     // POM active for this material (§4.11). Named once and reused by the
     // self-shadow in the light loop; it is a bool of integer/uniform comparisons,
     // so the OFF path stays byte-identical to the pre-feature code.
-#ifdef CETRA_NO_PARALLAX
-    bool pom = false;
-#else
-    bool pom = parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
-#endif
+    bool pom = CETRA_HAS(PBR_FEAT_PARALLAX) &&
+               parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
     float parallaxHeight = 0.0; // height at the POM hit, for the self-shadow march
     if (pom) {
         vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
@@ -1156,9 +1168,13 @@ void main() {
      * pays whether or not it takes this branch. Recomputing them is two
      * instructions; keeping them alive is not.
      */
+    // One predicate, read by both halves of the feature -- the albedo blend here
+    // and the surface blend four hundred lines below. Gating only the first left
+    // the second reading a struct that could never be non-neutral.
+    bool decalsActive = CETRA_HAS(PBR_FEAT_DECALS) &&
+                        decalInfo.x > 0 && passMode != 2 && passMode != 3;
     DecalSurface decalSurf = decalSurfaceNone();
-#ifndef CETRA_NO_DECALS
-    if (decalInfo.x > 0 && passMode != 2 && passMode != 3) {
+    if (decalsActive) {
         // Legal in here because the branch is dynamically uniform -- both
         // operands are uniforms -- and after the alpha discard above for the
         // reason the specular-AA block below already is: this file takes
@@ -1184,7 +1200,6 @@ void main() {
         if (decalSurf.alpha > 0.0)
             albedoMap = mix(albedoMap, sRGBToLinear(decalSurf.albedo), decalSurf.alpha);
     }
-#endif
 
     /*
      * ALBEDO ONLY -- and it sits HERE, apart from the other debug views, because
@@ -1334,7 +1349,11 @@ void main() {
     // Halving the angle on read returns the +T half-plane representative.
     vec2 anisoDir = vec2(1.0, 0.0);
     float anisoCoherence = 0.0;
-    if (anisotropyLayer >= 0) {
+    // The layer index, folded to "absent" for a variant without the feature.
+    // Gating HERE and not only at the shading frame below is what removes the
+    // fetch and the atan/cos/sin with it -- their results stayed live for four
+    // hundred lines, which is register pressure every fragment pays.
+    if (CETRA_HAS(PBR_FEAT_ANISO) && anisotropyLayer >= 0) {
         vec3 texel = texture(materialArray, vec3(uv, float(anisotropyLayer))).rgb;
         vec2 doubled = texel.rg * 2.0 - 1.0;
         anisoCoherence = min(length(doubled), 1.0);
@@ -1630,11 +1649,12 @@ void main() {
     // 1 - max3(sheenColor) * E(NdotV); the per-light min with E(LdotN) is
     // deliberately skipped. E sits in the engine-owned LUT's blue channel,
     // bound for every scene, so this reads correctly with no environment.
-#ifdef CETRA_NO_SHEEN
-    bool sheenActive = false;
-#else
-    bool sheenActive = sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0;
-#endif
+    // One activation predicate folded to a compile-time false, which every site
+    // downstream follows automatically. That is the shape all five gates use:
+    // gating the USES one by one leaves the next added use ungated, and leaves
+    // the declaration alive besides.
+    bool sheenActive = CETRA_HAS(PBR_FEAT_SHEEN) &&
+                       sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0;
     vec3 sheenColorPx;
     float sheenRough;
     float sheenE;
@@ -1722,13 +1742,20 @@ void main() {
     // roughness and view angle, so they hoist out of the light loop: the
     // per-light work is just the quad integral. Gated on the scene's area
     // count, which is uniform across the draw, so a scene without panels
-    // never touches the LUTs. The initializers are dead values, present only
-    // because the compiler cannot see that this gate and the area test in the
-    // loop agree; nothing reads them.
+    // never touches the LUTs.
+    //
+    // The initializers are NOT dead under a variant without the feature, which
+    // is what a previous version of this comment claimed. `areaLightsActive`
+    // gates the panel integral below as well, so they are never read -- and that
+    // pairing is load-bearing rather than tidy. Gating only this block left
+    // ltcPanel running with an identity Minv and a zero amplitude: the diffuse
+    // form factor does not use Minv, so a panel lit the surface correctly while
+    // its specular came out identically zero. A lamp with no highlight is the
+    // plausible-wrong frame the whole subtractive polarity exists to avoid.
+    bool areaLightsActive = CETRA_HAS(PBR_FEAT_AREA) && lightCounts.z > 0;
     mat3 ltcMinv = mat3(1.0);
     vec2 ltcAmp = vec2(0.0);
-#ifndef CETRA_NO_AREA_LIGHTS
-    if (lightCounts.z > 0) {
+    if (areaLightsActive) {
         // Roughness floor (LTC_MIN_ROUGHNESS). Below it the fitted Minv grows
         // extreme enough to collapse the transformed quad corners toward each
         // other, and the edge integral's cross(v1,v2) * theta/sin(theta) turns
@@ -1744,7 +1771,6 @@ void main() {
         // indexed separately inside ltcPanel (see ltc.glsl)
         ltcAmp = textureLod(ltcTex, vec3(ltcUV, LTC_LAYER_AMP), 0.0).xy;
     }
-#endif
 
     // Anisotropic shading frame, resolved once: it depends on the SURFACE, not
     // on any light, and the loop below runs per light on geometry (hair cards,
@@ -1757,11 +1783,7 @@ void main() {
     // is painted on it.
     vec3 anisoT = T, anisoB = B;
     float aniso = 0.0;
-#ifdef CETRA_NO_ANISO
-    if (false) {
-#else
-    if (anisotropy > 0.0 && anisotropyLayer >= 0) {
-#endif
+    if (CETRA_HAS(PBR_FEAT_ANISO) && anisotropy > 0.0 && anisotropyLayer >= 0) {
         vec3 dir = normalize(anisoDir.x * T + anisoDir.y * B);
         // Blended by coherence: where the map is unsure the card tangent stands,
         // and the strength falls off with it so an averaged-to-nothing
@@ -1796,7 +1818,15 @@ void main() {
             // by construction: no shadows, clearcoat, sheen, SSS or POM from
             // a panel. A panel can only ever arrive through the cluster list,
             // which is why this test lives here and not after the branch.
+            //
+            // Classified unconditionally, SHADED only when the feature is
+            // compiled in. A panel that reaches the cluster list of a variant
+            // without it therefore contributes nothing and continues, rather
+            // than falling through to the punctual path below and being shaded
+            // as a point light at its centre.
             if (clusterLights[li].dirType.w == 3.0) {
+                if (!areaLightsActive)
+                    continue;
                 vec2 ff = ltcPanel(N, V, WorldPos, ltcMinv, lightPos,
                                    clusterLights[li].dirType.xyz,
                                    clusterLights[li].upArea.xyz,

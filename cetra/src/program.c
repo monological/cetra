@@ -36,6 +36,11 @@ ShaderProgram* create_program(const char* name) {
     program->shaders = NULL;
     program->shader_count = 0;
     program->uniforms = NULL;
+    // NOT the calloc zero, which is a valid mask meaning "carries no features".
+    // Every program starts as "not a variant" and only the variant builder says
+    // otherwise, so a program that never heard of this cannot be mistaken for
+    // the leanest one and swapped out from under its material.
+    program->pbr_features = -1;
 
     return program;
 }
@@ -420,73 +425,69 @@ void setup_program_uniforms(ShaderProgram* program) {
     program->instanced = ubo_wire_blocks(program->id);
 }
 
-ShaderProgram* create_pbr_program_variant(unsigned features) {
-    ShaderProgram* program = NULL;
-
-    // One line per feature the variant does NOT carry. Subtractive, so the empty
-    // block is the uber-shader -- see the polarity note in program.h.
-    char defines[256];
-    defines[0] = '\0';
-    size_t used = 0;
-    static const struct {
-        unsigned bit;
-        const char* line;
-    } DISABLE[] = {
-        {PBR_FEAT_DECALS, "#define CETRA_NO_DECALS 1\n"},
-        {PBR_FEAT_AREA, "#define CETRA_NO_AREA_LIGHTS 1\n"},
-        {PBR_FEAT_SHEEN, "#define CETRA_NO_SHEEN 1\n"},
-        {PBR_FEAT_ANISO, "#define CETRA_NO_ANISO 1\n"},
-        {PBR_FEAT_PARALLAX, "#define CETRA_NO_PARALLAX 1\n"},
-    };
-    for (size_t i = 0; i < sizeof(DISABLE) / sizeof(DISABLE[0]); ++i) {
-        if (features & DISABLE[i].bit)
-            continue;
-        size_t len = strlen(DISABLE[i].line);
-        // Cannot happen at five short lines, and checked anyway: a silently
-        // truncated block is a variant that keeps a feature it was built to drop,
-        // which is slow rather than wrong and would never be noticed.
-        if (used + len >= sizeof(defines)) {
-            log_error("PBR variant defines truncated at feature %u", DISABLE[i].bit);
-            return NULL;
-        }
-        memcpy(defines + used, DISABLE[i].line, len + 1);
-        used += len;
-    }
-
-    char name[32];
-    if (features == PBR_FEAT_ALL)
-        snprintf(name, sizeof(name), "pbr");
-    else
-        snprintf(name, sizeof(name), "pbr-%u", features);
+// Build the variant carrying exactly `features`. Static: every caller goes
+// through engine_pbr_variant below, so the name is formatted in one place and is
+// only ever a cache key.
+static ShaderProgram* _create_pbr_variant(const char* name, unsigned features) {
+    // ONE line, carrying the mask itself. The bits are shared with the shader
+    // through pbr_features.glsl, so this cannot drift from what the gates test
+    // -- where emitting a set of macro NAMES could, silently and invisibly.
+    //
+    // Subtractive still, but now structurally: pbr_frag defaults
+    // CETRA_PBR_FEATURES to PBR_FEAT_ALL when it is undefined, so a source
+    // compiled with no defines at all -- which is what pbr_skinned does -- is
+    // the uber-shader rather than a variant with every feature stripped.
+    char defines[64];
+    snprintf(defines, sizeof(defines), "#define CETRA_PBR_FEATURES %u\n", features);
 
     char* frag = shader_source_with_defines(pbr_frag_shader_str, defines);
     if (!frag)
         return NULL;
-    program = create_program_from_source(name, pbr_vert_shader_str, frag, NULL);
+    ShaderProgram* program = create_program_from_source(name, pbr_vert_shader_str, frag, NULL);
     free(frag);
 
     if (program == NULL) {
         log_error("Failed to initialize PBR shader program (features %u)", features);
         return NULL;
     }
-    // One line per DISTINCT variant, since this runs once per mask and the cache
-    // answers afterwards. It is the only way from outside to see which variant a
-    // scene actually resolved to -- the two are the same picture, which is the
-    // whole point and also why nothing else can tell them apart.
-    log_info("pbr variant %s: features %u of %u", name, features, PBR_FEAT_ALL);
+    program->pbr_features = (int)features;
 
     // pbr_vert takes its clip position from object_position.glsl, the same chunk
-    // depth_prepass_vert uses, and declares `invariant gl_Position`.
+    // depth_prepass_vert uses, and declares `invariant gl_Position`. Set here
+    // rather than by the caller because EVERY variant owes the same answer, and
+    // one that missed it lets the prepass stamp depth with no coverage test --
+    // which deletes alpha-masked geometry rather than shading it wrong, and is
+    // invisible in whichever variant happened to get tested.
+    //
+    // `instanced` is not set here and never was: setup_program_uniforms resolves
+    // it from the linked program, for every program in the engine.
     program->depth_prepass_safe = true;
+
+    // Parsed by scripts/gates.py::_PBR_VARIANT. It is the only way from outside
+    // to see which variant a scene resolved to, because a correct variant and
+    // the uber-shader are the same picture.
+    log_info("pbr variant %s: features %u of %u", name, features, PBR_FEAT_ALL);
     return program;
 }
 
-// EVERY variant has to answer these two, which is why they are set inside the
-// builder above rather than by its callers: a variant that missed
-// depth_prepass_safe lets the prepass stamp depth with no coverage test, which
-// DELETES alpha-masked geometry instead of shading it wrong, and one that missed
-// `instanced` draws every instance of a batch at the first one's transform.
-// Both are silent, and neither is visible in the variant that was tested.
+// "pbr" for the full set so the cache, and every log line that already says
+// pbr, keep meaning what they meant. ONE function because this string is the
+// program cache's key: a second site spelling it differently would miss the
+// lookup forever and compile and leak a fresh 2,500-line program every frame,
+// rendering correctly the whole time.
+void pbr_variant_name(unsigned features, char* out, size_t n) {
+    if (features == PBR_FEAT_ALL)
+        snprintf(out, n, "pbr");
+    else
+        snprintf(out, n, "pbr-%u", features);
+}
+
+ShaderProgram* create_pbr_program_variant(unsigned features) {
+    char name[PBR_VARIANT_NAME_MAX];
+    pbr_variant_name(features, name, sizeof(name));
+    return _create_pbr_variant(name, features);
+}
+
 ShaderProgram* create_pbr_program() {
     return create_pbr_program_variant(PBR_FEAT_ALL);
 }

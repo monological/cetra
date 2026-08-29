@@ -110,7 +110,8 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
 void engine_build_draw_list(Engine* engine, struct Scene* scene);
 
 // Point every lit material at the variant carrying exactly the features it can
-// use (spec 11.93). Idempotent, and cheap enough to run unconditionally.
+// use (spec 11.93). Idempotent; the steady state is an integer compare per
+// material.
 //
 // EVERY FRAME rather than on a dirty flag, and that is the design. The mask is a
 // pure function of the material's own fields and two scene-wide bits, all of
@@ -118,12 +119,18 @@ void engine_build_draw_list(Engine* engine, struct Scene* scene);
 // to be set by every writer of six fields across three files, and the one that
 // forgot would leave a material on a variant missing a feature it had just been
 // given. Recomputing makes that unrepresentable. The expensive half is compiling
-// a variant, which happens once per distinct mask and is cached by name.
+// a variant, which happens once per distinct mask and is cached.
 //
-// Only materials already on a `pbr` variant are re-pointed. Membership is by
-// program NAME because the program cache is name-keyed, so a name is what
-// identity means here -- and pbr_skinned is deliberately not in the family, since
-// it is its own program with its own source.
+// CALL IT AFTER EVERY WRITER OF THE SCENE BITS IT READS, not merely before the
+// readers of shader_program. Those pull in opposite directions and only the
+// second half is obvious: scene_build_emissive_lights creates the LTC panels
+// this scans for, so a call placed above it decides "no area lights" one line
+// before the frame makes some.
+//
+// Membership is `ShaderProgram.pbr_features >= 0`, set by the variant builder.
+// pbr_skinned is outside the family -- not because it has its own fragment
+// source, which it does not, but because nothing yet builds skinned variants.
+// Every skinned material therefore stays on the uber-shader.
 void engine_resolve_material_variants(Engine* engine, struct Scene* scene);
 
 // Animation state for skinned mesh rendering

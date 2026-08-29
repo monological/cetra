@@ -496,6 +496,15 @@ Scene* get_current_scene(const Engine* engine);
 int add_shader_program_to_engine(Engine* engine, ShaderProgram* program);
 ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* program_name);
 
+// The lit-surface variant carrying exactly `features`, compiled and registered
+// on first ask and answered from the program cache afterwards (spec 11.93).
+//
+// Here rather than in program.c because it is cache management over
+// engine->programs, and program.h cannot see an Engine -- engine.h includes it,
+// not the other way round. The naming rule stays in program.c, where the builder
+// that has to agree with it lives.
+ShaderProgram* engine_pbr_variant(Engine* engine, unsigned features);
+
 // GUI
 void set_engine_show_gui(Engine* engine, bool show_gui);
 void set_engine_show_fps(Engine* engine, bool show_fps);

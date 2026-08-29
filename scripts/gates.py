@@ -19259,72 +19259,103 @@ def _cc_lit_samples(pix, w, h, project, cx):
 # which is the point of the feature and also why no frame can tell them apart.
 _PBR_VARIANT = re.compile(r"pbr variant (pbr[\w-]*): features (\d+) of (\d+)")
 
-# Bit values from program.h. Duplicated because gates.py cannot include a C
-# header, and pinned by pbr-variant-full below, which fails if the full mask ever
-# stops being the union of these.
-PBR_FEAT = {"decals": 1, "area": 2, "sheen": 4, "aniso": 8, "parallax": 16}
+def _pbr_feature_bits():
+    """The feature bits, READ from the file both C and GLSL include.
+
+    Not mirrored. `_ubo_instance_max` established the rule and states the
+    reason: a mirror lets the constant move while the arm goes on asserting the
+    old value -- and passing, because it is checking the renderer against a
+    number it made up. That applies with more force here, because the mask this
+    parses is the contract between the C that emits it and the shader that reads
+    it back.
+    """
+    src = open(os.path.join(ROOT, "cetra", "shaders", "include", "pbr_features.glsl")).read()
+    bits = {m.group(1).lower(): int(m.group(2))
+            for m in re.finditer(r"#define\s+PBR_FEAT_(\w+)\s+(\d+)", src)}
+    full = bits.pop("all", None)
+    return bits, full
 
 
-def _pbr_variants(args, model=None):
-    """Every distinct variant a run built, as {name: features}."""
-    cmd = [RENDER, "-x", "-f", "3", "-W", "200", "-H", "150"]
-    if model:
-        cmd += ["-m", model]
-    cmd += args
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return {m.group(1): int(m.group(2)) for m in _PBR_VARIANT.finditer(r.stdout + r.stderr)}
+def _pbr_variants(model):
+    """Every distinct variant a run built, as {name: features}, and its PBR_FEAT_ALL.
+
+    Returns (variants, full, ok). `ok` is False when the render itself failed --
+    a process that logged its variants at init and then died would otherwise
+    report a pass, which is the shape the house `render()` helper guards against.
+    """
+    r = _run([RENDER, "-x", "-f", "3", "-m", model], capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    variants = {m.group(1): int(m.group(2)) for m in _PBR_VARIANT.finditer(out)}
+    # The C-side PBR_FEAT_ALL, which the log line already carries. Reading it
+    # here rather than taking max() of what happened to be built keeps the arm
+    # true if the engine ever stops building the full variant at init.
+    full = next((int(m.group(3)) for m in _PBR_VARIANT.finditer(out)), None)
+    return variants, full, r.returncode == 0
 
 
 def run_pbr_variant_gate(workdir):
     """Lit-surface variants: a material compiles only the features it can use.
 
-      pbr-variant-full    the full mask is the union of the documented feature
-                          bits. Everything below reads those bits by name, so a
-                          bit added in C and not here would leave the arms
-                          testing a mask that no longer means what they think.
-      pbr-variant-lean    a scene using none of the five resolves to a variant
-                          carrying none of them. This is the arm that says the
-                          resolver ran at all -- without it every fixture could
-                          silently sit on the uber-shader and every pixel arm in
-                          the suite would still pass.
-      pbr-variant-keeps   a fixture that USES a feature resolves to a variant
-                          that HAS it, and renders its golden. The direction that
-                          matters: dropping a feature a material needs produces a
-                          plausible frame, so the pixel check alone cannot find
-                          it and the mask alone cannot prove it was honoured.
+    Every arm reads the builder's own log line, because a correct variant and the
+    uber-shader are the SAME PICTURE -- that is what the feature is for, and it
+    is why no pixel arm anywhere in this suite can see any of this.
+
+      pbr-variant-full    the mask the C side calls PBR_FEAT_ALL is the union of
+                          the bits in pbr_features.glsl, the file C and GLSL both
+                          include. A bit added to one and not the other is the
+                          failure this whole scheme exists to make impossible.
+      pbr-variant-lean    a material using none of the features resolves to a
+                          variant carrying none. The arm that says the resolver
+                          ran at all -- without it every material could sit on
+                          the uber-shader and nothing else here would notice.
+      pbr-variant-keeps   a material that USES a feature resolves to a variant
+                          that HAS it. The direction that matters: dropping a
+                          feature a material needs renders a plausible frame, so
+                          the golden alone cannot be trusted to find it.
+
+    What these do NOT check is the ASSIGNMENT -- which material ended up on which
+    program. They read the variants BUILT. Inverting the resolver's sheen test so
+    the wrong materials get the bit produces the identical set of builds, and only
+    the sheen golden catches that. Closing it needs the resolver to log per
+    material, which is worth doing and is not done here.
     """
     if not os.path.exists(RENDER):
         print("  pbr-variant-full SKIP  (render not built)")
         return []
     failures = []
+    arms = ["pbr-variant-full", "pbr-variant-lean", "pbr-variant-keeps"]
 
     sheen_model = os.path.join(ROOT, "assets", "sheen_fixture.gltf")
     if not os.path.exists(sheen_model):
         print("  pbr-variant-full SKIP  (sheen fixture not present)")
         return []
 
-    built = _pbr_variants([], model=sheen_model)
-    if not built:
-        print("  pbr-variant-full ERROR the variant builder logged nothing")
-        return ["pbr-variant-full", "pbr-variant-lean", "pbr-variant-keeps"]
+    bits, want_full = _pbr_feature_bits()
+    if not bits or want_full is None:
+        print("  pbr-variant-full ERROR could not read pbr_features.glsl")
+        return arms
+
+    built, full, ran = _pbr_variants(sheen_model)
+    if not ran or not built:
+        print("  pbr-variant-full ERROR the render failed or logged no variant")
+        return arms
 
     # --- full ---------------------------------------------------------------
-    full = max(built.values())
-    want_full = 0
-    for bit in PBR_FEAT.values():
-        want_full |= bit
-    ok = full == want_full
-    print(f"  pbr-variant-full {'PASS' if ok else 'FAIL'}  full mask {full} (want {want_full}, "
-          f"the union of {len(PBR_FEAT)} documented bits; a bit added in C and not in this "
-          f"table would leave every arm below reading the wrong mask)")
+    union = 0
+    for bit in bits.values():
+        union |= bit
+    ok = full == want_full == union
+    print(f"  pbr-variant-full {'PASS' if ok else 'FAIL'}  engine reports {full}, "
+          f"pbr_features.glsl declares PBR_FEAT_ALL {want_full} and a union of "
+          f"{union} over {len(bits)} bits (want all three equal: they are the contract "
+          f"between the C that emits a mask and the shader that reads it back)")
     if not ok:
         failures.append("pbr-variant-full")
 
     # --- lean ---------------------------------------------------------------
-    # The sheen fixture's OTHER materials use none of the five, so a lean variant
-    # must exist in the same run that produced the sheen one.
-    lean = [n for n, f in built.items() if f == 0]
-    ok = bool(lean)
+    # The sheen fixture's other materials use none of the features, so a lean
+    # variant must exist in the same run that produced the sheen one.
+    ok = any(f == 0 for f in built.values())
     print(f"  pbr-variant-lean {'PASS' if ok else 'FAIL'}  built {sorted(built)} (want one "
           f"carrying 0 features: without it every material sits on the uber-shader and no "
           f"pixel arm in this suite would notice)")
@@ -19332,9 +19363,7 @@ def run_pbr_variant_gate(workdir):
         failures.append("pbr-variant-lean")
 
     # --- keeps --------------------------------------------------------------
-    # The fixture's sheen material must land on a variant WITH the sheen bit, and
-    # the pixel half is the golden, which this fixture already has.
-    sheen_bit = PBR_FEAT["sheen"]
+    sheen_bit = bits["sheen"]
     kept = [n for n, f in built.items() if f & sheen_bit and f != want_full]
     ok = bool(kept)
     print(f"  pbr-variant-keeps {'PASS' if ok else 'FAIL'}  {sorted(kept)} carry the sheen bit "

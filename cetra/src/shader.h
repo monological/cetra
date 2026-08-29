@@ -14,11 +14,16 @@ typedef struct {
 } Shader;
 
 // `source` with a block of preprocessor lines spliced in after its `#version`
-// directive. Caller owns the result; NULL or empty defines returns a plain copy.
+// directive. Caller owns the result; a NULL source, or NULL/empty defines,
+// returns a plain copy.
 //
 // Splices rather than prepends because `#version` must be the first thing in a
 // translation unit, and returns ONE string rather than feeding glShaderSource a
 // second element so a compile error prints the text the driver actually saw.
+//
+// Follows the block with `#line 2` so the body's reported line numbers do not
+// move -- see the note at the implementation for why that matters more here than
+// it looks.
 //
 // A free function rather than a parameter on create_shader, which was the first
 // shape and the wrong one: only the lit surface is ever built as a variant, so

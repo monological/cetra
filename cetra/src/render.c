@@ -758,36 +758,25 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
     const unsigned scene_mask = _scene_pbr_features(scene);
     for (size_t i = 0; i < scene->material_count; ++i) {
         Material* mat = scene->materials[i];
-        if (!mat || !mat->shader_program || !mat->shader_program->name)
+        // pbr_features is -1 on every program that is not a lit-surface variant,
+        // so this is the whole family test. It replaced a prefix match on the
+        // program NAME, which made the name space the rule and would have
+        // swallowed any future program called "pbr-something".
+        if (!mat || !mat->shader_program || mat->shader_program->pbr_features < 0)
             continue;
-        // The pbr family only. strncmp rather than equality so a material already
-        // on a variant is re-examined -- the whole point is that its mask moves.
-        if (strncmp(mat->shader_program->name, "pbr", 3) != 0)
-            continue;
-        if (mat->shader_program->name[3] != '\0' && mat->shader_program->name[3] != '-')
-            continue; // pbr_skinned and anything else that merely starts with pbr
 
         unsigned want = scene_mask | _material_pbr_features(engine, mat);
-        char name[32];
-        if (want == PBR_FEAT_ALL)
-            snprintf(name, sizeof(name), "pbr");
-        else
-            snprintf(name, sizeof(name), "pbr-%u", want);
-        if (strcmp(mat->shader_program->name, name) == 0)
+        if ((unsigned)mat->shader_program->pbr_features == want)
             continue;
 
-        ShaderProgram* variant = get_engine_shader_program_by_name(engine, name);
+        ShaderProgram* variant = engine_pbr_variant(engine, want);
+        // Keep the material where it is on failure. The full variant always
+        // exists, so the surface stays lit rather than turning black -- the
+        // subtractive polarity paying off at the one place it matters.
         if (!variant) {
-            variant = create_pbr_program_variant(want);
-            // Keep the material where it is on failure. The full variant always
-            // exists, so the surface stays lit rather than turning black -- the
-            // subtractive polarity paying off at the one place it matters.
-            if (!variant) {
-                log_error("PBR variant %u failed to build; material stays on %s", want,
-                          mat->shader_program->name);
-                continue;
-            }
-            add_shader_program_to_engine(engine, variant);
+            log_error("PBR variant %u failed to build; material stays on %s", want,
+                      mat->shader_program->name);
+            continue;
         }
         mat->shader_program = variant;
     }
@@ -1208,12 +1197,6 @@ void render_current_scene(Engine* engine) {
         return;
     }
 
-    // Before anything reads material->shader_program, which the batch key and
-    // the prepass-safety test both do. A capture re-enters here and resolves
-    // again, which is wasted but not wrong -- and a capture that skipped it
-    // would photograph the scene through whatever variants the last main frame
-    // happened to leave behind.
-    engine_resolve_material_variants(engine, scene);
 
     mat4* view = &engine->view_matrix;
     mat4* projection = &engine->projection_matrix; // un-jittered
@@ -1263,6 +1246,18 @@ void render_current_scene(Engine* engine) {
     profiler_scope_begin(engine->profiler, "emissive panels");
     scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
     profiler_scope_end(engine->profiler);
+
+    // AFTER the emissive build and before the passes, and BOTH halves are the
+    // invariant (spec 11.93). A resolver placed only "before the readers" reads
+    // scene->lights one call before the frame's only writer of it, so on the
+    // frame a derived panel first appears every material is already on a
+    // CETRA_NO_AREA_LIGHTS variant while the cluster list has a panel in it.
+    //
+    // The draw list above is not a reader in the sense that matters: it null-
+    // tests shader_program and keys on mesh and level, so a program swapped
+    // after it changes nothing it built. The submit-time reads -- prepass
+    // safety, the instanced test -- are live and see this.
+    engine_resolve_material_variants(engine, scene);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport -- probe-capture faces re-enter here
