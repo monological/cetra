@@ -131,7 +131,14 @@ uniform sampler2D emissiveTex;
 uniform sampler2D sheenTex;          // KHR sheen color (sRGB, unit 8)
 #endif
 uniform sampler2D clearcoatNormalTex; // clearcoat normal map (freed unit)
+// TWO features on one declaration, so it takes both: POM marches it, and a
+// layered material aliases it as vtPageSurfaceTex for the virtual-texture page
+// pair (spec 11.67). The two can never be live together -- render.c refuses
+// units 3/4 to a layered material -- but "not both" is not "neither", and a
+// variant carrying either one still needs the unit.
+#if CETRA_HAS(PBR_FEAT_PARALLAX) || CETRA_HAS(PBR_FEAT_LAYERS)
 uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); white = raised
+#endif
 
 // The scalar masks (roughness/metallic/ao/opacity/microsurface/anisotropy/
 // subsurface) share ONE array texture. Each material selects a layer per mask;
@@ -419,6 +426,10 @@ vec2 transformUV(vec2 uv) {
     return rotated * uvScale + uvOffset;
 }
 
+// The POM pair is the preprocessor's, because between them they hold every read
+// of heightTex outside the virtual-texture page tap -- and a declaration
+// outlives a folded branch, so the reads have to go for the unit to come back.
+#if CETRA_HAS(PBR_FEAT_PARALLAX)
 // Parallax Occlusion Mapping (§4.11): march the height field along the
 // tangent-space view direction Vts and return the UV where the ray first dips
 // below the surface, so a flat plane fakes real relief with self-occlusion.
@@ -478,6 +489,7 @@ float parallaxSelfShadow(vec2 uv, float h0, vec3 Lts) {
     }
     return 1.0 - clamp(shadow * 2.0, 0.0, 1.0);
 }
+#endif // CETRA_HAS(PBR_FEAT_PARALLAX)
 
 // Color space conversions
 vec3 sRGBToLinear(vec3 srgb) {
@@ -1011,9 +1023,10 @@ void main() {
     // POM active for this material (§4.11). Named once and reused by the
     // self-shadow in the light loop; it is a bool of integer/uniform comparisons,
     // so the OFF path stays byte-identical to the pre-feature code.
-    bool pom = CETRA_HAS(PBR_FEAT_PARALLAX) &&
-               parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
     float parallaxHeight = 0.0; // height at the POM hit, for the self-shadow march
+                                // (outside the guard: the light loop reads it either way)
+#if CETRA_HAS(PBR_FEAT_PARALLAX)
+    bool pom = parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
     if (pom) {
         vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
         vec2 uv0 = uv;
@@ -1030,6 +1043,9 @@ void main() {
             discard;
         parallaxHeight = texture(heightTex, uv).r;
     }
+#else
+    const bool pom = false;
+#endif
 
     /*
      * THE CLEARCOAT NORMAL, as bytes (--clearcoat-debug, spec 11.86).
@@ -2054,9 +2070,11 @@ void main() {
         shadow *= cloudSunForSlot(WorldPos, dirShadowSlot);
 
         // POM self-shadow
+#if CETRA_HAS(PBR_FEAT_PARALLAX)
         if (pom) {
             shadow *= parallaxSelfShadow(uv, parallaxHeight, normalize(transpose(TBN) * L));
         }
+#endif
 
         // Clearcoat: a second thin smooth dielectric GGX lobe (fixed F0 = 0.04,
         // IOR 1.5) over the base, on the coat normal Nc. The base term is
