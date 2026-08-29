@@ -17,6 +17,18 @@
 // Every fetch uses textureLod(..., 0.0): these run inside the clustered light
 // loop, which is non-uniform control flow where implicit-derivative sampling
 // is undefined. The tables are mip-less anyway.
+//
+// COMPILED OUT WHOLE on a variant without area lights (spec 11.95), declaration
+// included -- which is the point, because a sampler survives having every read
+// folded away and goes on spending one of the sixteen units. The file gates
+// itself rather than being gated at its include site: it is the only place that
+// knows ltcTex is what it is, and a guard around the `#include` would take the
+// functions pbr_frag calls along with it.
+//
+// pbr_features.glsl defaults the mask to the full set, so a shader that never
+// heard of variants includes this and keeps everything.
+#include "pbr_features.glsl"
+#if CETRA_HAS(PBR_FEAT_AREA)
 
 uniform sampler2DArray ltcTex; // layer 0 inverse-M, layer 1 magnitude/Fresnel + .w (TEXUNIT_LTC)
 
@@ -151,3 +163,5 @@ vec2 ltcPanel(vec3 N, vec3 V, vec3 P, mat3 Minv, vec3 center, vec3 dir, vec3 up,
     return vec2(_ltcIntegrate(basis, P, p0, p1, p2, p3),
                 _ltcIntegrate(Minv * basis, P, p0, p1, p2, p3));
 }
+
+#endif // CETRA_HAS(PBR_FEAT_AREA)

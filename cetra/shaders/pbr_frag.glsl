@@ -1,18 +1,9 @@
 #version 330 core
 // Which optional features this compilation carries (spec 11.93). The bits come
 // from the file the C side reads them out of, so a mask emitted there means the
-// same thing here.
-//
-// DEFAULTED WHEN ABSENT, and that is what makes the subtractive polarity
-// structural rather than a convention: a source compiled with no defines at all
-// is the uber-shader. pbr_skinned does exactly that, and under an additive
-// scheme it would silently have become the leanest variant instead of the
-// fullest.
+// same thing here -- as do the default and CETRA_HAS, which live there too so
+// that a chunk can gate its own sampler declaration.
 #include "pbr_features.glsl"
-#ifndef CETRA_PBR_FEATURES
-#define CETRA_PBR_FEATURES PBR_FEAT_ALL
-#endif
-#define CETRA_HAS(f) ((CETRA_PBR_FEATURES & (f)) != 0)
 
 // centroid, matching both vertex stages -- see pbr_vert for why. Without it a partly covered
 // pixel is shaded from extrapolated attributes, which is where the MSAA-only specks came from.
@@ -136,7 +127,9 @@ uniform vec3 camPos;
 uniform sampler2D albedoTex;
 uniform sampler2D normalTex;
 uniform sampler2D emissiveTex;
+#if CETRA_HAS(PBR_FEAT_SHEEN)
 uniform sampler2D sheenTex;          // KHR sheen color (sRGB, unit 8)
+#endif
 uniform sampler2D clearcoatNormalTex; // clearcoat normal map (freed unit)
 uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); white = raised
 
@@ -302,8 +295,10 @@ uniform samplerCube prefilteredMap;
 // The sheen environment: the same env convolved through the Charlie kernel
 // (spec 10.7.1). Its unit is never probe-overridden, so sheen always reads
 // the global environment.
+#if CETRA_HAS(PBR_FEAT_SHEEN)
 uniform samplerCube charliePrefilteredMap;
 uniform float maxCharlieLOD;
+#endif
 uniform sampler2D brdfLUT;
 uniform int iblEnabled;
 uniform float iblIntensity;
@@ -559,11 +554,18 @@ float maxComp(vec3 v) {
 
 // Resolved KHR sheen color: the factor, optionally modulated by the sheen color
 // texture (unit 8, sRGB). (0,0,0) for a material carrying no sheen.
+//
+// The map read is the PREPROCESSOR's, not the branch's, because it is the last
+// thing naming sheenTex -- and a declaration outlives a folded branch (spec
+// 11.95 measured a lean variant still spending all 16 units). The factor stands
+// alone without it, so no else arm is owed.
 vec3 sheenColorAt(vec2 uv) {
     vec3 c = sheenColorFactor;
+#if CETRA_HAS(PBR_FEAT_SHEEN)
     if (sheenTexExists > 0) {
         c *= texture(sheenTex, uv).rgb;
     }
+#endif
     return c;
 }
 
@@ -1744,15 +1746,21 @@ void main() {
     // count, which is uniform across the draw, so a scene without panels
     // never touches the LUTs.
     //
-    // The initializers are NOT dead under a variant without the feature, which
-    // is what a previous version of this comment claimed. `areaLightsActive`
-    // gates the panel integral below as well, so they are never read -- and that
-    // pairing is load-bearing rather than tidy. Gating only this block left
-    // ltcPanel running with an identity Minv and a zero amplitude: the diffuse
-    // form factor does not use Minv, so a panel lit the surface correctly while
-    // its specular came out identically zero. A lamp with no highlight is the
-    // plausible-wrong frame the whole subtractive polarity exists to avoid.
-    bool areaLightsActive = CETRA_HAS(PBR_FEAT_AREA) && lightCounts.z > 0;
+    // PREPROCESSOR rather than a folded branch (spec 11.95), because ltc.glsl
+    // gates its own declaration the same way and a read surviving here would
+    // reference a sampler that no longer exists. What that buys beyond the unit:
+    // ltcMinv and ltcAmp are eleven floats live across the whole light loop on
+    // every variant, panels or none.
+    //
+    // It also makes an old defect unreachable instead of merely avoided. Gating
+    // only this block -- which 11.93 shipped -- left ltcPanel running with an
+    // identity Minv and a zero amplitude: the diffuse form factor does not use
+    // Minv, so a panel lit the surface correctly while its specular came out
+    // identically zero. Pairing this region with the integral below fixed it,
+    // but pairing is a thing a reader has to notice. One condition removing both
+    // is a thing they cannot get wrong.
+#if CETRA_HAS(PBR_FEAT_AREA)
+    bool areaLightsActive = lightCounts.z > 0;
     mat3 ltcMinv = mat3(1.0);
     vec2 ltcAmp = vec2(0.0);
     if (areaLightsActive) {
@@ -1771,6 +1779,7 @@ void main() {
         // indexed separately inside ltcPanel (see ltc.glsl)
         ltcAmp = textureLod(ltcTex, vec3(ltcUV, LTC_LAYER_AMP), 0.0).xy;
     }
+#endif
 
     // Anisotropic shading frame, resolved once: it depends on the SURFACE, not
     // on any light, and the loop below runs per light on geometry (hair cards,
@@ -1825,8 +1834,7 @@ void main() {
             // than falling through to the punctual path below and being shaded
             // as a point light at its centre.
             if (clusterLights[li].dirType.w == 3.0) {
-                if (!areaLightsActive)
-                    continue;
+#if CETRA_HAS(PBR_FEAT_AREA)
                 vec2 ff = ltcPanel(N, V, WorldPos, ltcMinv, lightPos,
                                    clusterLights[li].dirType.xyz,
                                    clusterLights[li].upArea.xyz,
@@ -1891,6 +1899,9 @@ void main() {
                 if (sss) {
                     sssDiffuse += areaDiff * clusterLights[li].colorIntensity.xyz * aShadow;
                 }
+#endif
+                // Outside the guard: this is what "classified unconditionally"
+                // above is made of.
                 continue;
             }
 
@@ -2296,6 +2307,12 @@ void main() {
         // dimmed by the same hoisted sheenScale as the analytic path -- one
         // layer-over-base energy convention. Guarded so the base ambient
         // lines above stay byte-identical when sheen is off.
+        //
+        // The whole block is the preprocessor's, because it is the only reader
+        // of charliePrefilteredMap and the declaration outlives a folded branch.
+        // It assigns nothing the code below needs -- ambient and ambSpec both
+        // already hold their unsheened values -- so it needs no else arm.
+#if CETRA_HAS(PBR_FEAT_SHEEN)
         if (sheenActive) {
             vec3 sheenPre = textureLod(charliePrefilteredMap, R, sheenRough * maxCharlieLOD).rgb;
             // Sheen dims BOTH shares (same layer-over-base convention as the
@@ -2309,6 +2326,7 @@ void main() {
                           sheenColorPx * sheenPre * sheenE * aoMap * iblIntensity;
             }
         }
+#endif
     } else {
         // No IBL: a uniform ambient the scene authors, in cd/m^2 like every other
         // emitter. Diffuse-only, so it yields to transmission like the other
