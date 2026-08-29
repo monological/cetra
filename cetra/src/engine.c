@@ -2620,16 +2620,14 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // those AND after the shadow pass, so every shadow was drawn from last
         // frame's transforms and every LOD level chosen from last frame's
         // positions.
-        // GATED ON THE HOOK, and that is the migration seam rather than a
-        // permanent option. An app that has not moved its graph mutation out of
-        // its render callback must keep propagating there: walking for it here
-        // would stamp the frame, its own call would no-op, and anything it
-        // attached afterwards -- a streamed region, a quadtree patch -- would
-        // draw one frame at the origin with no previous pose. Passing NULL means
-        // "I still own my propagation", and the last app to migrate is what
-        // makes this unconditional.
-        if (shadow_scene && pre_render) {
-            pre_render(engine, shadow_scene);
+        // UNCONDITIONAL, which puts a contract on the hook: an app that adds,
+        // removes or moves a node must do it HERE and not in its render
+        // callback. Do it there and the frame is already stamped, the app's own
+        // scene_propagate_transforms no-ops, and the new node draws once at the
+        // origin with no previous pose to give it a motion vector.
+        if (shadow_scene) {
+            if (pre_render)
+                pre_render(engine, shadow_scene);
             // CPU scope: this issues no GL, like the draw-list build.
             profiler_cpu_scope_begin(engine->profiler, "transform walk");
             scene_propagate_transforms(shadow_scene, engine->total_frames);

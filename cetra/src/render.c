@@ -1242,8 +1242,10 @@ void render_current_scene(Engine* engine) {
 
     // Derived emissive panels (spec 11.49), immediately upstream of the only
     // thing that reads them. Here and not in scene_sync_materials because
-    // PLACEMENT needs this frame's transforms, and that runs before the app's
-    // apply_transform_to_nodes -- the same one-frame lag the shadow pass has.
+    // PLACEMENT needs this frame's transforms -- which since spec 11.96 it
+    // simply has, the engine having propagated the graph before the shadow pass
+    // rather than each app doing it here. This comment used to record the same
+    // one-frame lag the shadow pass had; both are gone.
     //
     // A cube-capture face re-enters here, so this runs six more times per
     // capture; it is idempotent and epoch-gated, so those are placement only.

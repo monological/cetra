@@ -433,6 +433,11 @@ typedef struct Engine {
 // patch attached here gets a global transform this frame, and the shadow pass
 // and the LOD selection below both see this frame's positions rather than last
 // frame's (spec 11.96). Nothing in it may draw -- there is no bound target yet.
+//
+// Mutating the graph from `render` INSTEAD is the one way to get this wrong,
+// and it fails quietly: the frame is already propagated and stamped by then, so
+// the new node keeps the identity transform it was created with and draws once
+// at the world origin with no previous pose.
 typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
