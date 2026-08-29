@@ -165,14 +165,20 @@ void create_scene_light(Scene* scene) {
     add_child_node(scene->root_node, light_node);
 }
 
-void render_scene_callback(Engine* engine, Scene* current_scene) {
+// The camera this frame's geometry is read against. The engine propagates the
+// graph as soon as this returns, and the shadow pass fits its cascades to the
+// camera set here.
+void pre_render_callback(Engine* engine, Scene* current_scene) {
     if (!engine || !current_scene->root_node || !engine->camera)
         return;
 
     update_engine_camera_lookat(engine);
     update_engine_camera_perspective(engine);
+}
 
-    scene_propagate_transforms(current_scene, engine->total_frames);
+void render_scene_callback(Engine* engine, Scene* current_scene) {
+    if (!engine || !current_scene->root_node)
+        return;
 
     render_current_scene(engine);
 }
@@ -484,7 +490,7 @@ int main() {
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);
 
-    engine_run(engine, NULL, NULL, render_scene_callback);
+    engine_run(engine, NULL, pre_render_callback, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_engine(engine);

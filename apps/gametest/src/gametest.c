@@ -538,23 +538,27 @@ static void on_update(Game* game, double dt) {
     }
 }
 
+// Pre-render callback - the camera the frame's geometry is read against. The
+// engine propagates the graph as soon as this returns.
+static void on_pre_render(Game* game, double alpha) {
+    (void)alpha;
+
+    Engine* engine = game->engine;
+    if (drag_controller && app_can_process_3d_input(engine)) {
+        mouse_drag_update(drag_controller, glfwGetTime());
+    }
+}
+
 // Render callback - runs every frame
 static void on_render(Game* game, double alpha) {
     (void)alpha;
 
     Engine* engine = game->engine;
-    Scene* scene = game->scene;
+    const Scene* scene = game->scene;
 
     if (!scene || !scene->root_node) {
         return;
     }
-
-    // Update camera with drag controller
-    if (drag_controller && app_can_process_3d_input(engine)) {
-        mouse_drag_update(drag_controller, glfwGetTime());
-    }
-
-    scene_propagate_transforms(scene, engine->total_frames);
 
     // Disable backface culling for glass transparency
     glDisable(GL_CULL_FACE);
@@ -625,6 +629,7 @@ int main(int argc, const char* argv[]) {
     // Set game callbacks
     game_set_init(game, on_init);
     game_set_update(game, on_update);
+    game_set_pre_render(game, on_pre_render);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 

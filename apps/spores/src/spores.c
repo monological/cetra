@@ -297,6 +297,14 @@ static void on_update(Game* game, double dt) {
     }
 }
 
+static void on_pre_render(Game* game, double alpha) {
+    (void)alpha;
+    Engine* engine = game->engine;
+    if (g_drag && app_can_process_3d_input(engine)) {
+        mouse_drag_update(g_drag, glfwGetTime());
+    }
+}
+
 static void on_render(Game* game, double alpha) {
     (void)alpha;
     Engine* engine = game->engine;
@@ -304,13 +312,8 @@ static void on_render(Game* game, double alpha) {
     if (!scene || !scene->root_node)
         return;
 
-    if (g_drag && app_can_process_3d_input(engine)) {
-        mouse_drag_update(g_drag, glfwGetTime());
-    }
-
-    scene_propagate_transforms(scene, engine->total_frames);
-
-    // AFTER the walk, which is the only point the answer means anything.
+    // The engine walked the graph before the shadow pass, so this reads what
+    // that walk produced -- which is the only point the answer means anything.
     if (g_transform_probe > 0 && (int)engine->total_frames % g_transform_probe == 0)
         scene_transform_probe(scene, (int)engine->total_frames);
 
@@ -395,6 +398,7 @@ int main(int argc, char** argv) {
     set_engine_key_callback(game->engine, key_callback);
     game_set_init(game, on_init);
     game_set_update(game, on_update);
+    game_set_pre_render(game, on_pre_render);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 
