@@ -2246,7 +2246,17 @@ static void render_frame_update(Engine* engine, float dt) {
     }
 }
 
-void render_scene_callback(Engine* engine, Scene* current_scene) {
+// Everything the frame's geometry depends on: the POSE, and the camera it is
+// read against. The engine propagates the graph as soon as this returns, and the
+// shadow pass follows.
+//
+// The animation belongs here and not in render, which is the half of this app's
+// staleness the roadmap row did not name: the depth pass draws skinned casters
+// from the state set_render_animation_state publishes, so a rig's shadow lagged
+// its body for the same reason its transform did. The snapshot and the update
+// stay adjacent -- animation_snapshot_prev_pose is the skinned analogue of the
+// node walk's prev := global latch and carries the identical double-call hazard.
+void pre_render_callback(Engine* engine, Scene* current_scene) {
     SceneNode* root_node = current_scene->root_node;
 
     if (!engine || !root_node)
@@ -2307,7 +2317,11 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         }
     }
 
-    scene_propagate_transforms(current_scene, engine->total_frames);
+}
+
+void render_scene_callback(Engine* engine, Scene* current_scene) {
+    if (!engine || !current_scene->root_node)
+        return;
 
     render_current_scene(engine);
 
@@ -4172,7 +4186,7 @@ int main(int argc, char** argv) {
     }
 
     frame_schedule = &args;
-    engine_run(engine, render_frame_update, NULL, render_scene_callback);
+    engine_run(engine, render_frame_update, pre_render_callback, render_scene_callback);
 
     // Before free_engine, like the probes below: it reads live engine state.
     // After the loop rather than before it, because the point of a snapshot is
