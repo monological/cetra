@@ -180,6 +180,7 @@ extern "C" bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out) {
     size_t offset[CETRA_LOD_MAX] = {0};
     size_t count[CETRA_LOD_MAX] = {0};
     float band_error[CETRA_LOD_MAX] = {0.0f};
+    size_t live_start = 0; // element index of the previous DISTINCT cut
 
     for (int band = 0; band < CETRA_LOD_MAX; ++band) {
         // error <= LIMIT * radius / projected, from screen_error ~ error *
@@ -206,6 +207,47 @@ extern "C" bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out) {
             // a too-high level to the last one, so the bands below still serve.
             break;
         }
+
+        // A band whose cut is the PREVIOUS band's cut, aliased onto it rather
+        // than stored twice (spec 11.92). This is not a builder defect being
+        // papered over: band b is the coarsest cut whose error fits the limit at
+        // distance b, so an equal cut means nothing in the DAG simplifies within
+        // that budget and band b-1's triangles are the correct answer there.
+        // Refusing the band -- the chain builder's LOD_MIN_SHRINK rule -- would
+        // draw geometry coarser than the limit allows, and on a canopy would
+        // discard a band 2 that is genuinely half of band 0.
+        //
+        // What the duplicate costs is a second copy of the indices and, because
+        // draw_run_key_equal keys on (mesh, lod), a distinct batch key for
+        // instances drawing identical triangles from an identical offset.
+        // Aliasing settles both, and select_lod collapses the level onto the
+        // range so the key merges with no extra state to keep in agreement.
+        //
+        // COMPARED BY CONTENT, NOT BY COUNT. The chain builder compares counts
+        // because its levels are independent simplifications and the question is
+        // "did this shrink"; here the question is "is this the same cut", and two
+        // different cuts can coincidentally share a triangle count. Aliasing
+        // those would draw the wrong geometry at that distance -- a plausible
+        // frame, which is the failure mode that survives review.
+        const size_t emitted = packed.size() - start;
+        if (band > 0 && emitted == count[band - 1] &&
+            memcmp(packed.data() + start, packed.data() + live_start, emitted * sizeof(unsigned int)) == 0) {
+            packed.resize(start);
+            offset[band] = offset[band - 1];
+            count[band] = count[band - 1];
+            // The PREVIOUS band's error, because that is the geometry this band
+            // now draws. This band's own limit would overstate the deviation of
+            // triangles that never took it.
+            band_error[band] = band_error[band - 1];
+            mesh->lod_levels = band + 1;
+            continue;
+        }
+
+        // Where the previous DISTINCT cut begins, in elements. Tracked rather
+        // than divided out of offset[] at the compare above: that array holds
+        // BYTE offsets for the EBO, and mixing the two units in pointer
+        // arithmetic is the shape of a real bug even when it is not one.
+        live_start = start;
         offset[band] = start * sizeof(unsigned int);
         count[band] = packed.size() - start;
         band_error[band] = limit;

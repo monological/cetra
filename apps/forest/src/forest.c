@@ -325,9 +325,24 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
                    "max_index=%d vertex_count=%zu foreign=%d",
                    g_distinct_meshes, st.clusters, st.groups, st.levels, mesh->lod_levels,
                    st.max_index, mesh->vertex_count, st.foreign_indices);
-            for (int b = 0; b < mesh->lod_levels; ++b)
+            int alias_mask = 0;
+            for (int b = 0; b < mesh->lod_levels; ++b) {
                 printf(" band%d=%zu", b, mesh->lod_count[b] / 3);
-            printf("\n");
+                if (b > 0 && mesh->lod_offset[b] == mesh->lod_offset[b - 1] &&
+                    mesh->lod_count[b] == mesh->lod_count[b - 1])
+                    alias_mask |= 1 << b;
+            }
+            // Which bands SHARE their predecessor's range (spec 11.92), as a bit
+            // per band. Its own field appended after the bands rather than a
+            // marker inside them: the band list is parsed by an existing arm
+            // whose pattern ends at the first character it does not expect, so a
+            // marker there would have truncated its reading silently and left it
+            // green on half the ladder.
+            //
+            // Worth printing at all because an aliased band is the DAG saying it
+            // cannot simplify inside that band's error budget -- a fact about the
+            // geometry, not about this optimisation.
+            printf(" alias=%d\n", alias_mask);
         }
     } else {
         levels = mesh_build_lod_chain(mesh);
