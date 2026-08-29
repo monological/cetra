@@ -42,6 +42,10 @@ Scene* create_scene() {
     }
     memset(scene, 0, sizeof(Scene));
 
+    // Not the memset zero, which for a mat4 is the matrix that collapses the
+    // whole scene to a point rather than the one that leaves it alone.
+    glm_mat4_identity(scene->root_transform);
+
     // Initialize the Scene structure
     scene->root_node = NULL;
     scene->lights = NULL;
@@ -1161,6 +1165,23 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
     }
 
     free(stack);
+}
+
+bool scene_propagate_transforms(Scene* scene, uint64_t frame) {
+    if (!scene || !scene->root_node)
+        return false;
+    if (scene->transform_valid && scene->transform_frame == frame)
+        return false;
+
+    // Seeded from the scene's own root transform, which used to arrive as a
+    // matrix each app composed and handed in -- making "where is the scene" a
+    // thing seven callers could answer differently, and five of them answered
+    // it with a freshly built identity every frame.
+    apply_transform_to_nodes(scene->root_node, scene->root_transform);
+
+    scene->transform_frame = frame;
+    scene->transform_valid = true;
+    return true;
 }
 
 static void _transform_probe_node(const SceneNode* node, int frame, int* named, int* moved) {

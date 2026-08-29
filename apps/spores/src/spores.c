@@ -308,9 +308,7 @@ static void on_render(Game* game, double alpha) {
         mouse_drag_update(g_drag, glfwGetTime());
     }
 
-    Transform t = {.position = {0, 0, 0}, .rotation = {0, 0, 0}, .scale = {1, 1, 1}};
-    reset_and_apply_transform(&engine->model_matrix, &t);
-    apply_transform_to_nodes(scene->root_node, engine->model_matrix);
+    scene_propagate_transforms(scene, engine->total_frames);
 
     // AFTER the walk, which is the only point the answer means anything.
     if (g_transform_probe > 0 && (int)engine->total_frames % g_transform_probe == 0)

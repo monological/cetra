@@ -263,7 +263,6 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // the loss of shading that hidden leaves were contributing -- see 11.30.
     engine->opaque_sort_enabled = true;
 
-    glm_mat4_identity(engine->model_matrix);
     glm_mat4_identity(engine->view_matrix);
     glm_mat4_identity(engine->projection_matrix);
     glm_mat4_identity(engine->view_proj);

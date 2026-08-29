@@ -554,10 +554,7 @@ static void on_render(Game* game, double alpha) {
         mouse_drag_update(drag_controller, glfwGetTime());
     }
 
-    // Apply transforms
-    Transform t = {.position = {0, 0, 0}, .rotation = {0, 0, 0}, .scale = {1, 1, 1}};
-    reset_and_apply_transform(&engine->model_matrix, &t);
-    apply_transform_to_nodes(scene->root_node, engine->model_matrix);
+    scene_propagate_transforms(scene, engine->total_frames);
 
     // Disable backface culling for glass transparency
     glDisable(GL_CULL_FACE);

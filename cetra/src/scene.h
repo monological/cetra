@@ -112,6 +112,9 @@ void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
                                    ShaderProgram* skinned);
 
 // move
+// The PRIMITIVE. scene_propagate_transforms is the per-frame entry point and is
+// what a frame should call; this one stays the right call for a one-shot at
+// load, which must not stamp or frame 0 would find the graph already walked.
 void apply_transform_to_nodes(SceneNode* node, mat4 transform);
 
 /*
@@ -188,6 +191,30 @@ typedef struct Scene {
     // changing a material's alpha mode, does, and both are seen at the next
     // frame's rebuild.
     DrawList draw_list;
+    // Which frame's transform walk this graph is carrying, and whether it has
+    // had one at all (spec 11.96). What they buy is that a SECOND walk in one
+    // frame becomes a no-op instead of a catastrophe: the walk latches
+    // prev_global_transform := global_transform on entry, so running it twice
+    // makes every node's previous pose its current one, zeroes every motion
+    // vector and stops TAA reprojecting.
+    //
+    // DELIBERATELY NOT keyed on scene_graph_epoch(), unlike the draw list above.
+    // The two want opposite things from a mid-frame mutation: the list must
+    // rebuild, because a new mesh has to be drawn; the walk must NOT re-run,
+    // because re-walking re-latches the prev pose of every node that did not
+    // move. A node attached mid-frame is served by the next frame's walk and by
+    // prev_valid, which is what stops it reporting a trip from the origin.
+    uint64_t transform_frame;
+    bool transform_valid;
+    // What the walk seeds the root with -- where the whole scene sits. Identity
+    // for most apps; apps/render puts its model-recentre offset here and
+    // apps/pcb its board offset.
+    //
+    // Beside the root's own local rather than folded INTO it, and that is not a
+    // preference: a scene loaded from a model may already have a non-identity
+    // root local, and overwriting it silently loses the model's own placement.
+    // guard_thin_panel is the fixture that says so -- 732,291 px.
+    mat4 root_transform;
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
     size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame
                                     // opaque-color resolve refraction samples from
@@ -294,6 +321,12 @@ void free_scene(Scene* scene);
 
 // root
 void set_scene_root_node(Scene* scene, SceneNode* root_node);
+
+// Propagate the graph ONCE for `frame`, from the root's own local transform.
+// Returns whether it actually walked; a second call at the same frame is a
+// no-op, which is the point -- see transform_frame above.
+// Pass engine->total_frames.
+bool scene_propagate_transforms(Scene* scene, uint64_t frame);
 
 // camera
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);

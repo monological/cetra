@@ -1907,16 +1907,21 @@ static const RenderArgs* frame_schedule = NULL;
  */
 static vec3 model_recenter_offset = {0.0f, 0.0f, 0.0f};
 
-// Bake the recenter offset into the model matrix and node globals. Called
-// before every frame's draw and before the load-time probe capture (which
-// renders node globals directly); re-application is idempotent.
-static void apply_model_recenter(Engine* engine, SceneNode* root_node) {
+// Put the recenter offset on the SCENE's root transform, then walk once so the
+// load-time consumers that read node globals directly -- the scene bounds, the
+// probe capture, the GI fit -- see it.
+//
+// The offset is settled at load from the model's bounds and never moves after,
+// so this is a one-shot rather than the per-frame re-application it used to be.
+// The walk goes through the PRIMITIVE deliberately: stamping it would tell frame
+// 0 the graph had already been propagated this frame.
+static void apply_model_recenter(Scene* scene) {
     Transform transform = {
         .position = {model_recenter_offset[0], model_recenter_offset[1], model_recenter_offset[2]},
         .rotation = {0.0f, 0.0f, 0.0f},
         .scale = {1.0f, 1.0f, 1.0f}};
-    reset_and_apply_transform(&engine->model_matrix, &transform);
-    apply_transform_to_nodes(root_node, engine->model_matrix);
+    reset_and_apply_transform(&scene->root_transform, &transform);
+    apply_transform_to_nodes(scene->root_node, scene->root_transform);
 }
 
 /*
@@ -2302,7 +2307,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
         }
     }
 
-    apply_model_recenter(engine, root_node);
+    scene_propagate_transforms(current_scene, engine->total_frames);
 
     render_current_scene(engine);
 
@@ -3853,7 +3858,7 @@ int main(int argc, char** argv) {
     // recenter inside --probe silently fitted the grid to pre-recenter bounds
     // whenever --gi-volume ran without it -- which is exactly how the golden is
     // generated.
-    apply_model_recenter(engine, scene->root_node);
+    apply_model_recenter(scene);
 
     // The GI probe volume. Only allocated here -- the capture sweep runs inside
     // the render loop, where the scene has its final transforms and the async

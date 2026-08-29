@@ -284,7 +284,6 @@ typedef struct Engine {
                                   // is how a constant-colour surface is authored, so most
                                   // emissive geometry in the wild is not a lamp.
 
-    mat4 model_matrix;
     mat4 view_matrix;
     mat4 projection_matrix; // Un-jittered truth: frustum culling, motion vectors
     mat4 view_proj;         // Un-jittered projection*view for the current frame, computed once in

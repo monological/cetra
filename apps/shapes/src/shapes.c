@@ -166,26 +166,13 @@ void create_scene_light(Scene* scene) {
 }
 
 void render_scene_callback(Engine* engine, Scene* current_scene) {
-    SceneNode* root_node = current_scene->root_node;
-
-    if (!engine || !root_node)
+    if (!engine || !current_scene->root_node || !engine->camera)
         return;
-
-    const Camera* camera = engine->camera;
-
-    if (!camera)
-        return;
-
-    Transform transform = {.position = {0.0f, 0.0f, 0.0f},
-                           .rotation = {0.0f, 0.0f, 0.0f},
-                           .scale = {1.0f, 1.0f, 1.0f}};
 
     update_engine_camera_lookat(engine);
     update_engine_camera_perspective(engine);
 
-    reset_and_apply_transform(&engine->model_matrix, &transform);
-
-    apply_transform_to_nodes(root_node, engine->model_matrix);
+    scene_propagate_transforms(current_scene, engine->total_frames);
 
     render_current_scene(engine);
 }
