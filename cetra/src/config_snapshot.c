@@ -621,6 +621,11 @@ static const ConfigField CFG_FIELDS[] = {
     // takes it once and no flag, key or slider reaches it either.
     CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "enabled", enabled),
     CFG_ROW(CFG_SHADOW, CFG_INT, "shadow", "cascades", cascade_count),
+    // Where the slices reach and how they are spaced. Beside `cascades` because
+    // the three decide one thing together -- restoring the count without them
+    // reproduces a different set of cascades under the same number.
+    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow", "distance", shadow_distance),
+    CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow", "split_lambda", cascade_lambda),
     CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "cascade_tint", csm_debug),
     CFG_ROW(CFG_SHADOW, CFG_BOOL, "shadow", "translucent", tsm_enabled),
     CFG_ROW(CFG_SHADOW, CFG_FLOAT, "shadow", "bias", shadow_bias),

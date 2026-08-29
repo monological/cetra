@@ -199,12 +199,21 @@ _Static_assert(sizeof(InstanceChunk) == UBO_INSTANCES_BLOCK_SIZE,
 // issues most of the batches. It still SENDS them, for the reason ubo_upload
 // gives; this only skips writing them.
 //
-// `order` maps run positions to list indices, or is NULL for a run that is
-// already contiguous. A caller that reorders its draws to batch them -- the
-// shadow pass, whose depth-only map does not care what order it is drawn in --
-// cannot otherwise describe the run it wants.
-void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
-                           const size_t* order, size_t first, size_t run, bool shading);
+// `first` indexes `list->items`; the run is `run` consecutive entries from it.
+void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
+                           size_t run, bool shading);
+
+// The same, for a pass that submits its items in an order of its own: `first`
+// and `run` index `order`, and `order` maps those positions to `list->items`.
+//
+// Two entry points rather than a nullable `order`, because the index space of
+// `first` is what changes between them and a NULL test cannot say so. Passing a
+// list-space `first` alongside an order reads entries that are all valid
+// indices, fills the block with the wrong transforms, and submits the same draw
+// and instance counts -- a wrong picture no counter can see.
+void instance_chunk_upload_ordered(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
+                                   const size_t* order, size_t order_count, size_t first,
+                                   size_t run, bool shading);
 
 // One draw of `instances` copies of `item`, plus the counters that describe it.
 //

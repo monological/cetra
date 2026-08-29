@@ -150,13 +150,19 @@ typedef struct CullView {
 // had already drifted on the null guard.
 bool draw_item_visible(const DrawItem* item, const CullView* view);
 
-// Whether two items are the same DRAW: same geometry at the same level.
+// Whether two items are the same DRAW: same geometry at the same level. The
+// level joins the key because one draw submits one index range, so two
+// instances of a mesh at different distances cannot share a draw.
 //
-// Split from the visibility half below because a pass that settles visibility
-// once, up front, still has to ask this -- and asking it by spelling the
-// comparison out is how the copies above drifted. The level joins the key
-// because one draw submits one index range, so two instances of a mesh at
-// different distances cannot share a draw.
+// ONLY FOR A CALLER THAT HAS ALREADY SETTLED VISIBILITY. This asks half of
+// draw_run_can_join, and the half it omits is the one whose two answers
+// disagreeing shifts every instance behind it.
+//
+// `draw_run_can_join(head, next, NULL)` is exactly equivalent and was the
+// rejected alternative: a NULL view is documented above as how a pass says it
+// does not cull, and a pass that culls EARLY would then be indistinguishable
+// from one that does not cull at all -- so removing its up-front filter would
+// silently start accepting invisible items instead of failing to compile.
 bool draw_run_key_equal(const DrawItem* head, const DrawItem* next);
 
 // Whether `next` can ride in the same draw as the run that `head` started:
@@ -172,9 +178,14 @@ bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullVie
 //
 // A COPY rather than a permutation of `src`, because `src` is the stamp-guarded
 // list every other pass reads and a camera-relative order means nothing in a
-// light's frustum. This used to add "and the shadow pass forms its runs from
-// adjacency too" -- it no longer does, it builds its own order, and it would not
-// care what this one did either way.
+// light's frustum.
+//
+// The shadow pass no longer needs `src`'s adjacency for its runs to be CORRECT
+// -- it builds its own order. It still needs it for them to be LARGE: that order
+// only regroups within spans of one mesh that the graph already made adjacent,
+// so permuting `src` in place would scatter a prototype across this sort's depth
+// buckets and leave the shadow pass spans of a handful each. Correctness would
+// survive; most of what 11.90 bought would not.
 //
 // Depth is BUCKETED, and that is the whole design rather than a shortcut. An
 // exact front-to-back sort puts every item at a distinct key, so the batcher --

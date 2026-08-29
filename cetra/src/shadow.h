@@ -300,11 +300,17 @@ typedef struct ShadowSystem {
     bool tsm_live;
 
     // Draw-list indices for the layer being submitted: the casters this layer
-    // wants, in an order that batches. Grown to the list's size and reused for
-    // every layer of every frame, because the alternative is a malloc per
-    // cascade per punctual face per frame.
+    // wants, in an order that batches. Reused for every layer of every frame,
+    // because the alternative is a malloc per cascade per punctual face per
+    // frame. Live only for the duration of one submission; the live LENGTH is
+    // returned, never stored here.
+    //
+    // TWO REGIONS, and the count is the allocation rather than the item cap:
+    // the lower half holds the order, the upper half is the counting pass's
+    // output. Named `_alloc` because a bounds check written against an item
+    // count would be off by 2x and would pass. Grows only, never shrinks.
     size_t* caster_order;
-    size_t caster_order_cap;
+    size_t caster_order_alloc;
 } ShadowSystem;
 
 struct Light;

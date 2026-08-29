@@ -137,7 +137,7 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     system->msm_size = MSM_DEFAULT_SIZE;
     system->msm_blur = MSM_DEFAULT_BLUR;
     system->msm_bleed = MSM_DEFAULT_BLEED;
-    system->shadow_distance = 0.0f; // 0 = derive from ortho_size; see the header
+    system->shadow_distance = 0.0f; // 0 = the camera far clip; see the header
     system->cascade_lambda = 0.75f;
     system->cascade_count = 1; // library default = classic single map; the app opts in
     system->allocated_cascades = 0;
@@ -629,18 +629,32 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     return !(set == SHADOW_CASTERS_OPAQUE_TSM && translucent);
 }
 
+// Whether two items belong in one span: everything draw_run_key_equal wants
+// EXCEPT the level, which the bucket pass sorts within a span rather than
+// splitting on. Derived from that function by construction -- temporarily equal
+// levels, ask, restore -- so a component added to the key reaches here without
+// anyone remembering to come and add it.
+static bool _caster_span_member(const DrawItem* head, const DrawItem* next) {
+    DrawItem probe = *next;
+    probe.lod = head->lod;
+    return draw_run_key_equal(head, &probe);
+}
+
 // An item's level, clamped into the bucket range.
 //
-// select_lod already bounds it, so the clamp is unreachable today -- but the
-// counting pass below INDEXES on this value where the rotate it replaced merely
-// compared it, so an out-of-range level would go from a no-op to a write past
-// the bucket array. Clamped rather than asserted because the cost of being
-// wrong here is a corrupted heap and the cost of the clamp is one compare.
-static inline int _caster_level(const DrawList* list, size_t idx) {
-    int level = list->items[idx].lod;
-    if (level < 0)
-        return 0;
-    return level < CETRA_LOD_MAX ? level : CETRA_LOD_MAX - 1;
+// select_lod already bounds it and the field is unsigned, so this cannot fire
+// today -- but the counting pass INDEXES on this value where the code it
+// replaced merely compared it, so an out-of-range level goes from a no-op to a
+// write past the bucket array. Clamped rather than asserted because this file
+// has no runtime asserts and the failure it prevents is a smashed stack.
+//
+// What a clamp costs if it ever does fire, stated so it is not mistaken for
+// free: the item buckets with real level 3 while _ordered_caster_run still
+// compares the raw level, so the run breaks anyway. Fragmented runs and no
+// signal -- a slower frame, not a wrong one.
+static inline int _caster_level(const DrawItem* item) {
+    unsigned level = item->lod;
+    return level < CETRA_LOD_MAX ? (int)level : CETRA_LOD_MAX - 1;
 }
 
 // The casters this layer wants, compacted out of the draw list and reordered so
@@ -685,11 +699,11 @@ static inline int _caster_level(const DrawList* list, size_t idx) {
 // compared for EQUALITY here, never for order -- an address is not stable
 // across runs and `submit-exact` asserts two runs agree.
 static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, ShadowCasterSet set,
-                                  const CullView* cull, SubmitStats* stats) {
+                                  bool group, const CullView* cull, SubmitStats* stats) {
     // Twice the list: the upper half is the counting pass's output buffer. One
-    // allocation and one cap rather than a second of each.
+    // allocation and one count rather than a second of each.
     size_t want = list->count * 2;
-    if (want > ss->caster_order_cap) {
+    if (want > ss->caster_order_alloc) {
         size_t* grown = realloc(ss->caster_order, want * sizeof(size_t));
         if (!grown) {
             // Returning 0 alone would draw an empty map into a layer that was
@@ -700,7 +714,7 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
             return 0;
         }
         ss->caster_order = grown;
-        ss->caster_order_cap = want;
+        ss->caster_order_alloc = want;
     }
 
     size_t n = 0;
@@ -728,12 +742,32 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
     // It survived apps/forest only because that app's spans are ~435 long;
     // merging its twenty prototypes into one would have cost 20x for identical
     // content, which is a perverse price on the thing you do to batch better.
-    size_t* scatter = ss->caster_order + list->count;
+    //
+    // Skipped entirely when the caller cannot batch: the order it produces is
+    // read only through _ordered_caster_run, and with instancing off every run
+    // is one item whatever order they arrive in. That also keeps
+    // --no-instancing a single-variable control, which matters because the
+    // reorder moves the TSM absorbance sum (see the header).
+    if (!group)
+        return n;
+
+    // Inside the loop, where n > 0 is established: `caster_order + count` on an
+    // empty list is NULL + 0, which nothing here would dereference but which C
+    // does not define.
     size_t span_start = 0;
+    size_t* scatter = ss->caster_order + list->count;
     while (span_start < n) {
-        const Mesh* mesh = list->items[ss->caster_order[span_start]].mesh;
+        // A span is items draw_run_key_equal would accept but for their LEVEL,
+        // which the bucket pass below is about to sort them by. Spelling it as
+        // `.mesh ==` here would put a third copy of that key in the tree -- and
+        // this one is the copy that matters, because a key that gains a
+        // component while the partition still groups on two produces runs that
+        // are merely not maximal. Nothing fails; the pass just gets slower, and
+        // submit-exact compares two runs of one build so it cannot see it.
+        const DrawItem* first = &list->items[ss->caster_order[span_start]];
         size_t span_end = span_start + 1;
-        while (span_end < n && list->items[ss->caster_order[span_end]].mesh == mesh)
+        while (span_end < n &&
+               _caster_span_member(first, &list->items[ss->caster_order[span_end]]))
             span_end++;
 
         size_t span = span_end - span_start;
@@ -742,12 +776,12 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
             // running total for level L into head[L + 1] before shifting.
             size_t head[CETRA_LOD_MAX + 1] = {0};
             for (size_t i = span_start; i < span_end; ++i)
-                head[_caster_level(list, ss->caster_order[i]) + 1]++;
+                head[_caster_level(&list->items[ss->caster_order[i]]) + 1]++;
             for (int level = 0; level < CETRA_LOD_MAX; ++level)
                 head[level + 1] += head[level];
             for (size_t i = span_start; i < span_end; ++i) {
                 size_t idx = ss->caster_order[i];
-                scatter[head[_caster_level(list, idx)]++] = idx;
+                scatter[head[_caster_level(&list->items[idx])]++] = idx;
             }
             memcpy(&ss->caster_order[span_start], scatter, span * sizeof(size_t));
         }
@@ -791,7 +825,12 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
     SubmitStats* stats = profiler_submit(engine->profiler);
     InstanceChunk chunk;
 
-    size_t count = _build_caster_order(ss, list, set, cull, stats);
+    // Loop-invariant, so it is settled once rather than re-asked per draw -- and
+    // it is what decides whether the order is worth grouping at all.
+    const bool batching = engine->instancing_enabled && engine->instance_ubo &&
+                          program->instanced;
+
+    size_t count = _build_caster_order(ss, list, set, batching, cull, stats);
     const size_t* order = ss->caster_order;
 
     for (size_t pos = 0; pos < count; ++pos) {
@@ -810,13 +849,12 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             // a single global pose, which every instance of one mesh shares by
             // definition. Gated on the program all the same, so this follows
             // the shader rather than restating what it does.
-            size_t run = 1;
-            if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
-                run = _ordered_caster_run(list, order, count, pos);
+            size_t run = batching ? _ordered_caster_run(list, order, count, pos) : 1;
             // No shading transforms: this stage reads uInstModel and nothing
             // else, so the rest of the block is bytes it cannot look at.
             if (run > 1)
-                instance_chunk_upload(engine->instance_ubo, &chunk, list, order, pos, run, false);
+                instance_chunk_upload_ordered(engine->instance_ubo, &chunk, list, order, count,
+                                              pos, run, false);
 
             // Only for a draw carrying one object, for the reason
             // _submit_item's own guard records. Note the grouped order is not
@@ -1533,7 +1571,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         cam.fov_radians = camera->fov_radians;
         cam.aspect_ratio = camera->aspect_ratio;
 
-        const float lambda = ss->cascade_lambda;
         float cam_near = camera->near_clip;
         // Unset DERIVES NOTHING, and that is a measurement rather than caution.
         // Deriving it from ortho_size was tried: it takes forest's cascade 1
@@ -1541,18 +1578,35 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         // the separation this field exists for -- and it regresses `pillar-msm`
         // from 0.0000 to 0.1757, light leaking into a thin caster's band.
         //
-        // The cause is not the slicing. `scene_pad` below is far_plane * 0.5, a
-        // CONSTANT pushback that does not shrink with the slice, so tightening
-        // one shrinks its extent without shrinking its depth range: cascade 0
-        // went from a 36-unit slice in a 106-unit range to 2.95 in 40, and four
-        // moments cannot hold that. The pad has to be sized to what can cast
-        // into the slice before any default can tighten. Until then this is a
+        // The cause is not the slicing, it is the RATIO the fit ends up with.
+        // compute_cascade_light_space_matrix spends [0.1, 2*radius + scene_pad]
+        // of depth on a box 2*radius wide, so depth-per-unit-of-extent is
+        // 1 + scene_pad/(2*radius) -- and scene_pad is far_plane * 0.5, fixed.
+        // Tightening a slice therefore shrinks BOTH, but not equally: on
+        // dir_shadow that ratio goes 1.96 to 12.7, and four moments cannot hold
+        // the second. Sizing the pad to what can actually cast into the slice
+        // is the prerequisite for any tightening default. Until then this is a
         // knob an app sets against its own content.
+        const float fallback_dist = fminf(ss->far_plane, camera->far_clip);
         float shadow_dist = ss->shadow_distance > 0.0f
                                 ? fminf(ss->shadow_distance, camera->far_clip)
-                                : fminf(ss->far_plane, camera->far_clip);
-        if (shadow_dist <= cam_near)
-            shadow_dist = fminf(ss->far_plane, camera->far_clip);
+                                : fallback_dist;
+        // Only the SET arm can be rescued -- the unset one already is the
+        // fallback, so re-assigning it there would be a no-op guarding nothing.
+        // A split ladder that starts at or below the near plane makes
+        // powf(dist/near, t) collapse to zero and takes the texel snap's
+        // 2*radius/map_size with it.
+        if (ss->shadow_distance > 0.0f && shadow_dist <= cam_near) {
+            log_error("Shadow: shadow_distance %.3f is inside the near plane %.3f; using %.3f",
+                      (double)ss->shadow_distance, (double)cam_near, (double)fallback_dist);
+            shadow_dist = fallback_dist;
+        }
+        // Nothing writes cascade_lambda yet, so this cannot fire today -- but it
+        // is a public field, and outside [0,1] the blend EXTRAPOLATES: a split
+        // can land below its predecessor while the last stays pinned to
+        // shadow_dist, which hands the fit a slice whose far is behind its near
+        // and centres a cascade box behind the camera.
+        const float lambda = glm_clamp(ss->cascade_lambda, 0.0f, 1.0f);
         for (int c = 0; c < cc; c++) {
             float t = (float)(c + 1) / (float)cc;
             float uniform_split = cam_near + (shadow_dist - cam_near) * t;

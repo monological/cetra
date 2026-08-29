@@ -732,8 +732,11 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
     profiler_cpu_scope_end(engine->profiler);
 }
 
-void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
-                           const size_t* order, size_t first, size_t run, bool shading) {
+// The body both entry points share. `order` NULL means the run is contiguous;
+// the two public names are what say which index space the caller is in, so this
+// one stays private and nobody chooses the NULL by accident.
+static void _instance_chunk_fill(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
+                                 const size_t* order, size_t first, size_t run, bool shading) {
     for (size_t k = 0; k < run; ++k) {
         size_t idx = order ? order[first + k] : first + k;
         const SceneNode* node = list->items[idx].node;
@@ -757,6 +760,24 @@ void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
     // last batch left there -- unread either way, since the shader indexes
     // [0, run) and reads only what its stage declares.
     ubo_upload(ubo, chunk, sizeof(*chunk));
+}
+
+void instance_chunk_upload(Ubo* ubo, InstanceChunk* chunk, const DrawList* list, size_t first,
+                           size_t run, bool shading) {
+    _instance_chunk_fill(ubo, chunk, list, NULL, first, run, shading);
+}
+
+void instance_chunk_upload_ordered(Ubo* ubo, InstanceChunk* chunk, const DrawList* list,
+                                   const size_t* order, size_t order_count, size_t first,
+                                   size_t run, bool shading) {
+    // The bound the plain form gets from the list and this one has nowhere else
+    // to get: `order_count` exists to be checked here.
+    if (!order || first + run > order_count) {
+        log_error("Instance upload: run [%zu,%zu) escapes an order of %zu", first, first + run,
+                  order_count);
+        return;
+    }
+    _instance_chunk_fill(ubo, chunk, list, order, first, run, shading);
 }
 
 void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item, size_t instances,
@@ -895,7 +916,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         if (stats)
             stats->meshes_seen += run - 1;
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, NULL, i, run, false);
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
 
         Mesh* mesh = item->mesh;
         // Only for a draw that carries one object, for the reason
@@ -951,7 +972,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         // would carry a stale basis into the very value the two passes must agree
         // on.
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, NULL, i, run, true);
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
         _submit_item(engine, scene, item, camera, view, projection, RENDER_MODE_PBR, &state,
                      SUBMIT_PASS_DEPTH_ONLY, run);
@@ -1017,7 +1038,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         if (stats)
             stats->meshes_seen += run - 1;
         if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, NULL, i, run, true);
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
         _submit_item(engine, scene, item, camera, view, projection, render_mode, state, pass, run);
         i += run - 1;

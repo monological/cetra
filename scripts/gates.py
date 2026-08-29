@@ -13246,23 +13246,38 @@ def run_forest_gate(workdir):
         # item there sits at level 0 and the regroup is an identity permutation
         # -- deleting it outright would not move a number that arm reads.
         #
-        # Separation is three orders of magnitude, so the bar needs no tuning:
-        # before 11.90 this read 371% (7,630 against 1,621), after it reads
-        # about 5%.
+        # The bar is CONTENT, not mechanism, and it is worth saying so. The
+        # mechanism bound is one extra partial chunk per (mesh, level, cascade)
+        # group a level split creates; 25% is where that lands on this scatter,
+        # diluted by the terrain quadtree's one-instance patch draws, which are
+        # identical on both sides. Separation is 15x on the excess -- the same
+        # comparison read +371% before 11.90 -- not the three orders of
+        # magnitude an earlier draft of this comment claimed.
+        #
+        # Instances asserted equal for the reason forest-lod and forest-order
+        # both assert it: visibility is bound-based and level-independent, so
+        # the pair must see the same casters. Without it a regression that
+        # OVER-culls lowers draws with LOD on and passes.
+        #
         # Absent rather than defaulted, for the reason _forest_run's docstring
         # gives: a missing column read as 0 compares 0 against 0 and passes.
         s_on = lod_on["submit"].get("shadow cascades")
         s_off = lod_off["submit"].get("shadow cascades")
         if not s_on or not s_off:
-            print("  forest-shadow-lod FAIL  no shadow cascades row in one of the pair")
+            which = "LOD-on" if not s_on else "LOD-off"
+            print(f"  forest-shadow-lod FAIL  no shadow cascades row in the {which} run")
+            failures.append("forest-shadow-lod")
+        elif not s_off["draws"]:
+            print("  forest-shadow-lod FAIL  the LOD-off run drew no shadow casters at all")
             failures.append("forest-shadow-lod")
         else:
-            cost = (s_on["draws"] / s_off["draws"] - 1.0) if s_off["draws"] else 9.9
-            ok = cost <= 0.25
+            same_cast = s_on["instances"] == s_off["instances"]
+            cost = s_on["draws"] / s_off["draws"] - 1.0
+            ok = cost <= 0.25 and same_cast
             print(f"  forest-shadow-lod {'PASS' if ok else 'FAIL'}  shadow draws "
                   f"{s_on['draws']} with LOD vs {s_off['draws']} without "
-                  f"({cost * 100.0:+.0f}%, want <= +25%): levels must not fragment a pass "
-                  f"that reorders freely")
+                  f"({cost * 100.0:+.0f}%, want <= +25%), both carrying {s_on['instances']} "
+                  f"casters (want equal): levels must not fragment a pass that reorders freely")
             if not ok:
                 failures.append("forest-shadow-lod")
 
@@ -13293,6 +13308,27 @@ def run_forest_gate(workdir):
               f"triangles (want fewer draws for identical work)")
         if not ok:
             failures.append("forest-order")
+
+        # --- forest-shadow-order: the depth pass is order-INDEPENDENT --------
+        # The complement of the arm above, on the same two runs, and an EXACT
+        # equality rather than an inequality: the shadow pass compacts and
+        # regroups, so its per-(mesh, level) counts depend on which casters a
+        # layer wants and not on the order they arrive in. Scatter order is the
+        # camera lane's problem alone since 11.90, and this is what says so.
+        #
+        # Free: both runs are already rendered and memoized for forest-order.
+        so = sorted_run["submit"].get("shadow cascades")
+        uo = unsorted_run["submit"].get("shadow cascades")
+        if not so or not uo:
+            print("  forest-shadow-order FAIL  no shadow cascades row in one of the pair")
+            failures.append("forest-shadow-order")
+        else:
+            ok = so["draws"] == uo["draws"] and so["instances"] == uo["instances"]
+            print(f"  forest-shadow-order {'PASS' if ok else 'FAIL'}  Morton {so['draws']} draws "
+                  f"vs unsorted {uo['draws']} carrying {so['instances']} and {uo['instances']} "
+                  f"casters (want both identical: reordering makes scatter order irrelevant here)")
+            if not ok:
+                failures.append("forest-shadow-order")
 
     # --- forest-rest: a character with no input does not travel -------------
     # Slope sliding is invisible from inside the app, because the camera follows
@@ -13688,24 +13724,28 @@ def run_submission_gate(workdir):
     # group them -- which is why it can be held to a bar the camera lane cannot.
     # The camera lane is depth-sorted and must stay so.
     #
-    # Measured against the OPAQUE pass rather than the chunk size, because a bar
-    # in chunks cannot be written down: how close a pass gets to the ceiling
-    # depends on how many (mesh, level) groups its scene has, and that is content.
-    # The invariant that IS content-independent is a comparison -- a pass free to
-    # reorder must not batch worse than one that cannot.
+    # This is the ONLY arm that can see the compaction half of 11.90 -- a culled
+    # item no longer ending a run. forest-shadow-lod cannot: compaction is
+    # present on both sides of its LOD-on/LOD-off pair and cancels exactly. It
+    # is in turn blind to the LEVEL half, because this fixture's two meshes are
+    # under LOD_MIN_TRIANGLES so every item here sits at level 0. Two arms, two
+    # mechanisms; neither is redundant and neither is sufficient.
     #
-    # The 0.9 is the shadow pass's structural handicap, not slack: it draws every
-    # cascade, so it carries a partial last chunk per mesh per cascade where the
-    # camera carries one.
+    # The bar is DERIVED, the way inst-count derives its own: summing ceil over
+    # k groups is at most ceil of the sum plus k-1, so that bound is exact at
+    # full visibility and slackens by one draw per group as cascades cull.
+    # An earlier form compared against the opaque pass at 0.9x, which was worse
+    # twice over -- the "handicap" it claimed cancels in a ratio (equal sets
+    # drawn three times triple both terms), so the 0.9 was really undeclared
+    # slack against culling; and it tied a shadow assertion to a lane whose
+    # fragmentation is a tuning knob, in the direction that makes this arm
+    # weaker as that knob moves.
     s_draws, s_inst = shadow.get("draws", 0), shadow.get("instances", 0)
-    o_draws, o_inst = opaque.get("draws", 0), opaque.get("instances", 0)
-    ratio = (s_inst / s_draws) if s_draws else 0.0
-    opaque_ratio = (o_inst / o_draws) if o_draws else 0.0
-    want = opaque_ratio * 0.9
-    ok = s_draws > 0 and ratio >= want
+    groups = 2 * SUBMIT_CASCADES  # the glTF's two meshes, once per cascade
+    want = -(-s_inst // inst_max) + groups - 1
+    ok = 0 < s_draws <= want
     print(f"  shadow-batch {'PASS' if ok else 'FAIL'}  {s_inst} casters in {s_draws} draws "
-          f"(ratio {ratio:.1f}, want >= {want:.1f} = 0.9x the opaque pass's {opaque_ratio:.1f}); "
-          f"chunk holds {inst_max}")
+          f"(want 0 < draws <= {want} = ceil({s_inst}/{inst_max}) + {groups} - 1)")
     if not ok:
         failures.append("shadow-batch")
 
