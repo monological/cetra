@@ -338,6 +338,40 @@ the BUILD tree, not the source tree, so a read-only checkout builds and two buil
 never fight over one file. Edit the `.glsl` sources, never the header.
 `post_vert.glsl` is the shared fullscreen-triangle vertex shader for all post passes.
 
+**The lit surface is not one program but a family of VARIANTS** (spec 11.93), and this is the
+first thing to know before editing `pbr_frag.glsl`. `program.c` splices
+`#define CETRA_PBR_FEATURES <mask>` in after the `#version` line
+(`shader_source_with_defines`, plus a `#line 2` so every body line number survives), and the
+shader gates six optional features on it. `render.c`'s resolver recomputes each material's mask
+EVERY FRAME — the mask is a pure function of six material fields and three scene facts, all of
+which a GUI slider moves with nothing marked dirty — and `engine_pbr_variant` compiles and
+caches one program per distinct mask. `apps/forest` resolves to two: `pbr-32` for its layered
+terrain, `pbr-0` for everything else.
+
+Three rules the next editor needs:
+
+- **The polarity is SUBTRACTIVE and that is structural, not stylistic.** No defines at all means
+  the uber-shader, because `pbr_features.glsl` defaults the mask to `PBR_FEAT_ALL`. So a
+  resolver that fails to run, or a mask never assembled, yields the SLOW program — never a fast
+  one missing a feature its material needed. Wrong-and-slow is recoverable; wrong-and-pretty is
+  what ships.
+- **The C-to-GLSL contract is a shared NUMBER, not a shared name.** The first shape had C emit
+  macro names (`#define CETRA_NO_SHEEN 1`) for the shader to `#ifdef`, and its failure was
+  untypeable and silent: rename either side and the guard never fires, the picture stays
+  correct, and the optimisation just stops happening.
+- **What a gate is worth depends on WHERE it is.** Every feature gate is a dynamically uniform
+  branch an unusing scene already skips, so guarding one at runtime is worth ~0.05 ms; removing
+  the same code at compile time was worth 24. The cost is OCCUPANCY — live values, and declared
+  samplers — which every fragment pays whether or not the branch is taken. A runtime `if` around
+  a gated feature is therefore close to free and close to pointless.
+
+**Two FAMILIES share that fragment source**, differing only in the vertex stage: `pbr` and
+`pbr_skinned` (spec 11.95). One mask means the same thing in both, which is why a second family
+cost a builder argument rather than a second set of gates. `instanced` still falls out of the
+link — a skinned program has no `InstanceBlock`, so 11.28's rule that it never carries more than
+one instance holds without anything asserting it. **Nothing in the golden corpus is skinned**, so
+`pbr-variant-skinned` is the only instrument that can see that family at all.
+
 **`include/noise.glsl` owns three hashes, and two shaders are exempt from using them.** `ign` is
 interleaved-gradient noise for SCREEN-space dither; `hash21(vec2 p, vec2 k)` and `hash13(vec3 p,
 vec3 k)` are the sin-fract value hash, with **`k` as a parameter** because water keys off
@@ -362,7 +396,7 @@ curl noise and tile offsets are all arbitrary by design), and **zero of the 27 g
 of the four hashes** — both water goldens are Gerstner with no bed, so `foam` is identically 0 and
 the bubble hash is never evaluated. Note `ign` is not one of the four and never was.
 
-**Two include files are compiled by BOTH languages, and there are rules.** `shore_constants.glsl`
+**THREE include files are compiled by BOTH languages, and there are rules.** `shore_constants.glsl`
 (from `shore_runup.h`) and `wind_bounds.glsl` (from `wind.c`) exist because a number the GPU and the
 CPU must agree on is the half that drifts -- the swash solver runs host-side, and the wind bound that
 makes a swaying mesh cullable is a CPU bound on GPU arithmetic. Both are `#define`s only: **the `f`
@@ -371,6 +405,16 @@ expression it touches to a precision the shader does not have (11.53 shipped wit
 evaluated in double for a spec cycle), and nothing in them may use a type, a function or a qualifier
 -- `const`, `static` and `float[3](...)` each belong to one side only. Numbers only. If you are about
 to invent this technique, you are not: read `shore_constants.glsl`'s header first.
+
+**`pbr_features.glsl` (from `program.h`) is the third**, and it generalises the technique past a
+shared constant to a shared VOCABULARY: the lit-surface variant bits (spec 11.93), which C emits as
+a mask and the shader reads back through the same names. It carries no `f` suffixes -- these are mask
+bits rather than amplitudes, and an integer means the same thing to both preprocessors -- and since
+11.95 it also holds `CETRA_HAS`, a function-like macro over those numbers, plus the `#ifndef`
+default that makes an un-spliced source the uber-shader. That is still "numbers only" in the sense
+that matters: no type, no function, no qualifier. It lives there rather than in `pbr_frag` so a
+CHUNK can gate its own sampler declaration -- `ltc.glsl` decides when `ltcTex` exists, which is a
+thing only that file should know. C sees both macros and wants neither; they are inert on that side.
 
 **Never regenerate it into `cetra/src/`.** That was the old location, it is gitignored,
 and a quoted `#include` finds the including file's own directory first -- so an in-tree
@@ -636,9 +680,17 @@ the Charlie sheen environment (9), the CSM depth array or its MSM replacement (1
 the three IBL textures (11 irradiance, 12 prefilter, 13 BRDF LUT), the skybox/GI
 atlas (14) and the punctual shadow array (15).
 
-**The ledger is full at 16/16 and the driver counts sampler DECLARATIONS, not uses**,
-so there is no seventeenth sampler in `pbr_frag` even for a unit nothing binds. Five
-escapes are precedented: ride an existing declaration when the consumers are provably
+**The uber-shader is full at 16/16 and the driver counts sampler DECLARATIONS, not uses**,
+so there is no seventeenth sampler in `pbr_frag` even for a unit nothing binds. That second
+clause was tested rather than assumed in spec 11.95 and it HELD: a `pbr-0` variant, whose
+every read of `ltcTex` had already been folded away by 11.93's constant branches, still
+reported 16 active samplers. A declaration outlives a dead read. **A VARIANT is not full,
+and that is 11.95's whole result** -- `pbr-0` spends **12**, because gating the reads with
+the PREPROCESSOR rather than a branch lets the declaration go too (`sheenTex`,
+`charliePrefilteredMap`, `ltcTex`, and `heightTex` where neither parallax nor layers are
+carried). Ask which units a variant needs before assuming the ledger; the answer for the
+common case is four short of the ceiling.
+Five escapes are precedented: ride an existing declaration when the consumers are provably
 mutually exclusive (11.17's moments over `sceneColorTex`, and 11.66's composite-cache
 pair over `albedoTex`/`normalTex` — the strongest exclusivity in the file, since the
 same `layerCount > 0` bit that arms the cache is the one that skips both reads, so it
@@ -672,6 +724,24 @@ POM march as the independent justification. Note 11.66 also shows the tenancy es
 composite atlas in `materialArray` would have promoted every other layer in the scene
 to its resolution through the canonical-size rule, so it owns plain 2D textures
 instead.
+
+**The SIXTH escape is different in kind from the five above, because it RETURNS units
+rather than routing around them** (spec 11.95): gate the declaration itself on the
+variant's feature mask, `#if CETRA_HAS(...)`, and a program that provably cannot sample a
+texture stops paying for it. Reach for this FIRST -- it is the only one that leaves the
+ledger emptier than it found it, and the other five all start by conceding the unit is
+gone. Four conditions make it work, and a want that fails them needs one of the five
+instead. The feature must have a BIT (a scene or material fact the CPU can answer, in
+`pbr_features.glsl`) -- which is why `clearcoatNormalTex` is still ungated, clearcoat being
+decided by a uniform. Every read must move to the preprocessor WITH the declaration, since
+a surviving read references a name that no longer exists -- a compile error, which is the
+good failure. The chunk that declares gates ITSELF (`ltc.glsl` decides when `ltcTex`
+exists; a guard at the include site would take the functions `pbr_frag` calls with it). And
+the units come back PER VARIANT, not globally: a scene whose materials use everything still
+declares sixteen, so this buys headroom for the common case rather than an unconditional
+slot. Note the win is the unit and not the clock -- freeing `heightTex` measured 0 ms, and
+the two BODIES removed on the way (the LTC library, the layered blend) are where the
+milliseconds were.
 
 This is the roadmap's Wall 1, and **the list of what it blocks is shorter than it looks —
 this paragraph named the cloud shadow map in `pbr_frag` as blocked for a spec cycle after
