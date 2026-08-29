@@ -27,11 +27,17 @@
 #define PBR_FEAT_SHEEN    4
 #define PBR_FEAT_ANISO    8
 #define PBR_FEAT_PARALLAX 16
+// Whether this material is a LAYERED surface (spec 11.95). Unlike the five
+// above, the body it gates is called unconditionally today: the `layerCount <= 0`
+// early-out lives INSIDE sampleLayeredSurface and sampleCachedSurface, so an
+// unlayered material links the whole four-layer triplanar blend and carries a
+// LayerSurface across the light loop to reach a branch it never takes.
+#define PBR_FEAT_LAYERS   32
 
 // The union, written out rather than OR-ed together, because an expression here
 // would have to parse identically in C, GLSL and the Python that reads this file
 // for scripts/gates.py. A literal is the only form all three agree on.
-#define PBR_FEAT_ALL 31
+#define PBR_FEAT_ALL 63
 
 // The mask this compilation carries, and the test for a bit in it.
 //

@@ -1076,6 +1076,20 @@ void main() {
     // and it has to be made HERE too, which the first draft of this claimed in a
     // comment and did not do. A material sampling (branch phase, flex weight) as
     // a splat coordinate renders plausible garbage.
+    // The CALL is what the feature bit removes, not the branch below it. Both
+    // callees early-out on `layerCount <= 0` INTERNALLY, so an unlayered material
+    // was linking the whole four-layer triplanar blend and carrying a
+    // LayerSurface across the light loop to reach an `if (layered)` it never
+    // takes (spec 11.95).
+    //
+    // layerSurf stays DECLARED on the else arm rather than gating its four
+    // readers: each of those is the head of an `if (layered) ... else if ...`
+    // chain, and splitting a chain across #if is how a preprocessor edit becomes
+    // unreadable. Unassigned and read only under a compile-time false, it is a
+    // dead local -- which is a thing compilers do remove, unlike a sampler
+    // declaration, and the measurement below is what says so rather than the
+    // assumption.
+#if CETRA_HAS(PBR_FEAT_LAYERS)
     bool layered = layerCount > 0;
     vec2 splatUV1 = (texCoords2Exists > 0 && uWindMode == 0) ? TexCoords2 : vec2(0.0);
     // Cached against per-texel is a UNIFORM branch, so the derivative-taking
@@ -1087,6 +1101,10 @@ void main() {
                                         normalize(Normal));
     else
         layerSurf = sampleLayeredSurface(materialArray, WorldPos, normalize(Normal), splatUV1);
+#else
+    const bool layered = false;
+    LayerSurface layerSurf;
+#endif
 
     vec3 albedoMap = albedo;
     float texAlpha = 1.0;  // Alpha from albedo texture (for hair/foliage)

@@ -733,6 +733,11 @@ static unsigned _material_pbr_features(const Engine* engine, const Material* mat
         mask |= PBR_FEAT_ANISO;
     if (engine->parallax_enabled && mat->parallax_scale > 0.0f && mat->height_tex)
         mask |= PBR_FEAT_PARALLAX;
+    // Exactly the shader's own `layerCount > 0`, which is this field uploaded.
+    // No engine toggle widens it: layers_vt_enabled picks WHICH of the two
+    // layered paths runs, not whether the material is layered at all.
+    if (mat->layer_count > 0)
+        mask |= PBR_FEAT_LAYERS;
     return mask;
 }
 
