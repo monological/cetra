@@ -738,7 +738,15 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
-void render_scene_callback(Engine* engine, Scene* scene) {
+// Everything that decides what the frame's geometry IS, and where it is seen
+// from. The engine propagates the graph as soon as this returns, so a slider
+// moved here regenerates before the shadow pass flattens the graph rather than
+// after -- which also retires the freed-mesh hazard render.c:1232 records
+// against this app by name.
+//
+// The GUI belongs here and not in render: igNewFrame fires before this hook, and
+// the panel is what writes the params the three tests below read.
+void pre_render_callback(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->root_node) {
         return;
     }
@@ -772,8 +780,12 @@ void render_scene_callback(Engine* engine, Scene* scene) {
         // clock, not the frame clock: drag damping is input response.
         mouse_drag_update(drag_controller, glfwGetTime());
     }
+}
 
-    scene_propagate_transforms(scene, engine->total_frames);
+void render_scene_callback(Engine* engine, Scene* scene) {
+    if (!engine || !scene || !scene->root_node) {
+        return;
+    }
 
     render_current_scene(engine);
 }
@@ -1842,7 +1854,7 @@ int main(int argc, char** argv) {
             return -1;
     }
 
-    engine_run(engine, NULL, NULL, render_scene_callback);
+    engine_run(engine, NULL, pre_render_callback, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_mouse_drag_controller(drag_controller);
