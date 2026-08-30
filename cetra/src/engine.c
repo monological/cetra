@@ -2620,17 +2620,17 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // those AND after the shadow pass, so every shadow was drawn from last
         // frame's transforms and every LOD level chosen from last frame's
         // positions.
-        // UNCONDITIONAL, which puts a contract on the hook: an app that adds,
-        // removes or moves a node must do it HERE and not in its render
-        // callback. Do it there and the frame is already stamped, the app's own
-        // scene_propagate_transforms no-ops, and the new node draws once at the
-        // origin with no previous pose to give it a motion vector.
         if (shadow_scene) {
+            // The latch first and the walk second, and only the latch is
+            // once-a-frame: it is the step that is not idempotent, so the engine
+            // owns it and nothing else calls it. The walk that follows may be
+            // re-run by anyone.
+            scene_latch_prev_transforms(shadow_scene);
             if (pre_render)
                 pre_render(engine, shadow_scene);
             // CPU scope: this issues no GL, like the draw-list build.
             profiler_cpu_scope_begin(engine->profiler, "transform walk");
-            scene_propagate_transforms(shadow_scene, engine->total_frames);
+            scene_propagate_transforms(shadow_scene);
             profiler_cpu_scope_end(engine->profiler);
         }
 

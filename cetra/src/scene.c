@@ -1070,7 +1070,10 @@ static void _rotate_light_axis(mat4 global_transform, const vec3 local, vec3 out
     }
 }
 
-void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
+// The traversal itself. Static since 11.96: both load-time callers went through
+// scene_propagate_transforms once the walk stopped needing an unstamped variant,
+// so "where does the root sit" has exactly one answer.
+static void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
     if (!root)
         return;
 
@@ -1095,13 +1098,12 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         mat4 parent_transform;
         glm_mat4_copy(stack[stack_size].parent_transform, parent_transform);
 
-        // Remember last frame's transform for motion vectors, then recompute.
-        glm_mat4_copy(node->global_transform, node->prev_global_transform);
         glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
 
-        // Only for nodes that actually moved. The copy above makes
-        // prev_global_transform the previous frame's value, so this comparison
-        // IS "did this node move", and it is bit-exact rather than a tolerance.
+        // Only for nodes that actually moved. scene_latch_prev_transforms left
+        // prev_global_transform holding the previous frame's value, so this
+        // comparison IS "did this node move", and it is bit-exact rather than a
+        // tolerance.
         // Worth the compare because bones are SceneNodes: a rigged model is
         // mostly nodes whose transform is recomputed and mostly unchanged, and
         // an unconditional inverse there costs more than the draw path it saves.
@@ -1111,6 +1113,11 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         // That is why the prev_valid seed below has to come after this and not
         // before it: seeding first makes every first visit compare equal, and a
         // node that never moves again never gets a normal matrix at all.
+        //
+        // Re-running this whole function is harmless. The second pass recomputes
+        // the same global from the same inputs, compares it against the same
+        // prev, and finds prev_valid already set -- which is what makes the walk
+        // safe to call again after a late graph change (spec 11.96).
         if (memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) != 0) {
             mat4 inv_global;
             glm_mat4_inv(node->global_transform, inv_global);
@@ -1167,21 +1174,29 @@ void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
     free(stack);
 }
 
-bool scene_propagate_transforms(Scene* scene, uint64_t frame) {
+static void _latch_prev_transform(SceneNode* node) {
+    if (!node)
+        return;
+    glm_mat4_copy(node->global_transform, node->prev_global_transform);
+    for (size_t i = 0; i < node->children_count; i++)
+        _latch_prev_transform(node->children[i]);
+}
+
+void scene_latch_prev_transforms(Scene* scene) {
     if (!scene || !scene->root_node)
-        return false;
-    if (scene->transform_valid && scene->transform_frame == frame)
-        return false;
+        return;
+    _latch_prev_transform(scene->root_node);
+}
+
+void scene_propagate_transforms(Scene* scene) {
+    if (!scene || !scene->root_node)
+        return;
 
     // Seeded from the scene's own root transform, which used to arrive as a
     // matrix each app composed and handed in -- making "where is the scene" a
     // thing seven callers could answer differently, and five of them answered
     // it with a freshly built identity every frame.
     apply_transform_to_nodes(scene->root_node, scene->root_transform);
-
-    scene->transform_frame = frame;
-    scene->transform_valid = true;
-    return true;
 }
 
 static void _transform_probe_node(const SceneNode* node, int frame, int* named, int* moved) {

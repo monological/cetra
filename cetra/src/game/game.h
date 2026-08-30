@@ -21,6 +21,10 @@ typedef void (*GameUpdateFunc)(struct Game* game, double dt);
 // as soon as it returns, so the shadow pass and the LOD selection see this
 // frame's positions (spec 11.96). `alpha` is the same interpolant on_render
 // gets. Nothing here may draw.
+//
+// on_update is equally early and equally fine for moving a node -- it runs well
+// before the walk. What this hook is FOR is the work that needs the frame's
+// final camera, which the fixed step does not have.
 typedef void (*GamePreRenderFunc)(struct Game* game, double alpha);
 typedef void (*GameRenderFunc)(struct Game* game, double alpha);
 typedef void (*GameShutdownFunc)(struct Game* game);

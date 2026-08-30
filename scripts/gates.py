@@ -19315,32 +19315,42 @@ def _pbr_variants(model):
 
 
 def run_transform_walk_gate(workdir):
-    """The graph is walked ONCE a frame, so a moving node keeps a distinct previous pose.
+    """A moving node keeps a distinct previous pose, and every node's is seeded.
 
-    This exists because its failure is invisible to everything else in this suite.
-    Walking twice in one frame sets prev := global on the second pass, so every
-    node's previous pose becomes its current one, every motion vector goes to
-    zero and TAA stops reprojecting -- while the corpus stays GREEN, because all
-    29 goldens are static scenes under a static camera where prev == global is
-    already the right answer, and origin-velocity divides by its own steady state
+    These exist because their failures are invisible to everything else in this
+    suite. All 29 goldens are static scenes under a static camera, so a build
+    with every motion vector dead renders 0 px against every one of them --
+    measured, not assumed -- and origin-velocity divides by its own steady state,
     so a uniformly dead buffer scores 0 and passes.
+
+    What they guard is the previous-pose half of the walk: scene.c latches it in
+    its own pass, and both of the ways that pass can go wrong are silent.
 
       transform-moves     a node the app moves reads a DISTINCT previous pose,
                           and the step is one frame of its path -- measured
                           against the chord between consecutive samples, so the
-                          bar calibrates itself. Bounded BOTH ways: a double
-                          walk drives the ratio to 0, dropping the latch
-                          entirely freezes prev and drives it to 2 and 3.
-      transform-stills    every node carries a SEEDED previous pose, and the
-                          ones the app never moves read prev == global. The seed
-                          is the half a pixel arm cannot reach: an unseeded node
+                          bar calibrates itself off whatever path the fixture
+                          drives. Bounded BOTH ways: no latch at all freezes prev
+                          at the frame-0 pose and the ratio grows a frame per
+                          sample, no walk at all drives it to 0.
+      transform-stills    every node carries a SEEDED previous pose, and the ones
+                          the app never moves read prev == global. The seed is
+                          the half a pixel arm cannot reach: an unseeded node
                           reports travel from the world origin, which is a smear
-                          for one node and most of the frame for a region's
-                          worth arriving together.
+                          for one node and most of the frame for a region's worth
+                          arriving together.
+
+    Not guarded here because it is no longer representable: walking twice in one
+    frame. While the latch was fused into the walk that zeroed every motion
+    vector; since the split the walk is idempotent and a second call recomputes
+    the same values. Verified by calling it twice on purpose -- these arms stay
+    green, where before the split the same mutation drove the ratio to 0.
 
     Read off a probe rather than off pixels, because the quantity IS a pair of
     CPU-side matrices -- and a velocity buffer would test the shader's upload
-    path at the same time, which this spec does not touch.
+    path at the same time, which this spec does not touch. That leaves the
+    consumer half of the chain (prev -> uPrevModel -> velocity -> TAA) still
+    uninstrumented, which is booked rather than closed here.
     """
     del workdir # the probe is stdout; nothing is written
     if not os.path.exists(SPORES):
@@ -19373,10 +19383,9 @@ def run_transform_walk_gate(workdir):
 
     # --- moves ---------------------------------------------------------------
     # Bounded BOTH ways, and the upper bound is the half that took a review to
-    # notice. `step > 0` alone catches the double walk, which drives it to zero,
-    # and passes the opposite failure: drop the latch entirely and prev freezes
-    # at the frame-0 pose, so step grows by a frame each sample -- measured 2.001
-    # and 3.004 against a 0.4% spread on the true build.
+    # notice. `step > 0` alone passes the failure where prev freezes at the
+    # frame-0 pose, because step then GROWS -- measured 2.001 and 3.004 against a
+    # 0.4% spread on the true build.
     #
     # The bar is the node's own chord between consecutive samples, so it
     # calibrates itself off whatever path the fixture drives and survives
@@ -19397,8 +19406,8 @@ def run_transform_walk_gate(workdir):
     ok = bool(movers) and bool(ratios) and all(0.9 <= r <= 1.1 for r in ratios)
     print(f"  transform-moves {'PASS' if ok else 'FAIL'}  {len(movers)} of {len(nodes)} node rows "
           f"carry a distinct previous pose, and each step is "
-          f"{sorted(round(r, 3) for r in ratios)} of the chord it travelled (want 0.9..1.1: a "
-          f"second walk drives this to 0, dropping the latch to 2.001 and 3.004)")
+          f"{sorted(round(r, 3) for r in ratios)} of the chord it travelled (want 0.9..1.1: "
+          f"dropping the latch reads 2.001 and 3.004, dropping the walk reads 0)")
     if not ok:
         failures.append("transform-moves")
 

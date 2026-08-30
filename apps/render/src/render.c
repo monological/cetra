@@ -1921,7 +1921,7 @@ static void apply_model_recenter(Scene* scene) {
         .rotation = {0.0f, 0.0f, 0.0f},
         .scale = {1.0f, 1.0f, 1.0f}};
     reset_and_apply_transform(&scene->root_transform, &transform);
-    apply_transform_to_nodes(scene->root_node, scene->root_transform);
+    scene_propagate_transforms(scene);
 }
 
 /*
@@ -3516,10 +3516,10 @@ int main(int argc, char** argv) {
 
     set_shader_programs_for_nodes(scene->root_node, pbr_shader_program, pbr_skinned_program);
 
-    // Propagate transforms before computing bounds (needed for correct global_transform values)
-    mat4 identity;
-    glm_mat4_identity(identity);
-    apply_transform_to_nodes(scene->root_node, identity);
+    // Propagate transforms before computing bounds (needed for correct global_transform values).
+    // The scene's root transform is still identity here -- the recentre offset
+    // that fills it is derived from the bounds this walk produces.
+    scene_propagate_transforms(scene);
 
     // Compute scene bounds; center/radius drive every scene-scaled policy below
     vec3 scene_center;

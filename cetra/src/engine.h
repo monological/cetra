@@ -434,10 +434,11 @@ typedef struct Engine {
 // and the LOD selection below both see this frame's positions rather than last
 // frame's (spec 11.96). Nothing in it may draw -- there is no bound target yet.
 //
-// Mutating the graph from `render` INSTEAD is the one way to get this wrong,
-// and it fails quietly: the frame is already propagated and stamped by then, so
-// the new node keeps the identity transform it was created with and draws once
-// at the world origin with no previous pose.
+// Mutating the graph LATER than this -- from `render` -- is recoverable rather
+// than fatal: call scene_propagate_transforms again and the new node gets its
+// global. It is still the wrong place, because everything between the two reads
+// the graph as it stood here, so the shadow pass and the LOD selection will not
+// see the change until the next frame.
 typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);

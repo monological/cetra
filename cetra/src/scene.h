@@ -112,10 +112,6 @@ void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
                                    ShaderProgram* skinned);
 
 // move
-// The PRIMITIVE. scene_propagate_transforms is the per-frame entry point and is
-// what a frame should call; this one stays the right call for a one-shot at
-// load, which must not stamp or frame 0 would find the graph already walked.
-void apply_transform_to_nodes(SceneNode* node, mat4 transform);
 
 /*
  * A box of denser air, folded into the froxel fog volume (spec 11.39).
@@ -191,21 +187,6 @@ typedef struct Scene {
     // changing a material's alpha mode, does, and both are seen at the next
     // frame's rebuild.
     DrawList draw_list;
-    // Which frame's transform walk this graph is carrying, and whether it has
-    // had one at all (spec 11.96). What they buy is that a SECOND walk in one
-    // frame becomes a no-op instead of a catastrophe: the walk latches
-    // prev_global_transform := global_transform on entry, so running it twice
-    // makes every node's previous pose its current one, zeroes every motion
-    // vector and stops TAA reprojecting.
-    //
-    // DELIBERATELY NOT keyed on scene_graph_epoch(), unlike the draw list above.
-    // The two want opposite things from a mid-frame mutation: the list must
-    // rebuild, because a new mesh has to be drawn; the walk must NOT re-run,
-    // because re-walking re-latches the prev pose of every node that did not
-    // move. A node attached mid-frame is served by the next frame's walk and by
-    // prev_valid, which is what stops it reporting a trip from the origin.
-    uint64_t transform_frame;
-    bool transform_valid;
     // What the walk seeds the root with -- where the whole scene sits. Identity
     // for most apps; apps/render puts its model-recentre offset here and
     // apps/pcb its board offset.
@@ -214,6 +195,11 @@ typedef struct Scene {
     // preference: a scene loaded from a model may already have a non-identity
     // root local, and overwriting it silently loses the model's own placement.
     // guard_thin_panel is the fixture that says so -- 732,291 px.
+    //
+    // NOT shifted by scene_apply_origin_delta, which moves the root's CHILDREN.
+    // Correct while both users store a pure translation and the two features do
+    // not co-occur; a rotation or scale here would make the shift compose in the
+    // wrong frame.
     mat4 root_transform;
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
     size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame
@@ -322,11 +308,24 @@ void free_scene(Scene* scene);
 // root
 void set_scene_root_node(Scene* scene, SceneNode* root_node);
 
-// Propagate the graph ONCE for `frame`, from the root's own local transform.
-// Returns whether it actually walked; a second call at the same frame is a
-// no-op, which is the point -- see transform_frame above.
-// Pass engine->total_frames.
-bool scene_propagate_transforms(Scene* scene, uint64_t frame);
+// Recompute every node's global transform from the root down. IDEMPOTENT --
+// running it twice in a frame recomputes the same values, so an app that adds or
+// moves a node after the engine's walk may simply call it again (spec 11.96).
+//
+// That is bought by scene_latch_prev_transforms below owning the previous-pose
+// snapshot. While the two were one function, a second walk overwrote every
+// node's previous pose with its current one, zeroed every motion vector and
+// stopped TAA reprojecting -- a failure no golden in the corpus can see.
+void scene_propagate_transforms(Scene* scene);
+
+// Snapshot every node's current global as its previous, for the motion vectors
+// the next frame will draw. ENGINE-OWNED and exactly once a frame, immediately
+// before the walk: it is the one step here that is not idempotent, which is why
+// it is not folded into the walk that is.
+//
+// The same split prev_view_proj already has, and for the same reason -- see the
+// stash at the end of render_current_scene.
+void scene_latch_prev_transforms(Scene* scene);
 
 // camera
 void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);
