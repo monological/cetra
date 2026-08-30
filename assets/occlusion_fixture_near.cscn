@@ -1,0 +1,93 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "occlusion_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "OcclusionSun",
+   "type": "directional",
+   "direction": [
+    0.2,
+    -0.6,
+    -0.77
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": true
+  }
+ ],
+ "camera": {
+  "eye": [
+   -3.85,
+   10.0,
+   0.03
+  ],
+  "target": [
+   -3.85,
+   10.0,
+   -20.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ },
+ "occluders": [
+  {
+   "boxMin": [
+    -6.48,
+    5.42,
+    -0.58
+   ],
+   "boxMax": [
+    -1.2200000000000002,
+    14.58,
+    -0.02
+   ]
+  },
+  {
+   "boxMin": [
+    1.2200000000000002,
+    5.42,
+    -0.58
+   ],
+   "boxMax": [
+    6.48,
+    14.58,
+    -0.02
+   ]
+  },
+  {
+   "boxMin": [
+    -1.18,
+    5.42,
+    -0.58
+   ],
+   "boxMax": [
+    1.18,
+    8.78,
+    -0.02
+   ]
+  },
+  {
+   "boxMin": [
+    -1.18,
+    11.22,
+    -0.58
+   ],
+   "boxMax": [
+    1.18,
+    14.58,
+    -0.02
+   ]
+  }
+ ]
+}

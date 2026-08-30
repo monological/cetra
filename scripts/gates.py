@@ -19772,6 +19772,12 @@ OCCLUSION_MAT = "occlusion_fixture_mat.cscn"
 # authored height automatically, so nothing would ever compare a literal in
 # this file against the fixture. A variant makes the drift unrepresentable.
 OCCLUSION_INSIDE = "occlusion_fixture_inside.cscn"
+# The camera almost touching a wall slab, so the derived near plane clips the
+# wall open and the renderer shows the room through the shell. The regression
+# it pins: a raster standing any face the eye is not in front of -- the
+# pre-classification back face -- deletes 118,794 px of what the near clip
+# made visible.
+OCCLUSION_NEAR = "occlusion_fixture_near.cscn"
 # The probe's two instrument floors, the CULL_BOUND_FLOOR pattern: floors on
 # the INSTRUMENT, not the engine. catch measured 0.9413 on the portal sweep --
 # the hierarchy giving ground would lower it, never raise it -- and 1534 of
@@ -19798,6 +19804,10 @@ def run_occlusion_gate(workdir):
                      inward-rounded footprint deletes a visible sliver.
       occl-inside    the camera inside the room: 0 px, and the culled count equals
                      the no-occlusion run's (frustum work, nothing added).
+      occl-near      the camera almost touching a slab, near plane clipping the
+                     wall open: 0 px and equal counts -- the one framing where a
+                     non-front face standing in for the shell culls VISIBLE
+                     geometry, invisible to every other arm's camera.
       occl-bare      the variant with NO occluders key: 0 px and equal counts --
                      the empty-context path no flag can reach.
       occl-sum       seen == instances + culled on the profiled run: occlusion
@@ -19911,6 +19921,19 @@ def run_occlusion_gate(workdir):
               f"camera, so its boxes must contribute nothing)")
         if not ok:
             failures.append("occl-inside")
+
+    # --- occl-near: the near plane opens the wall; the raster must agree ----
+    near = identity_pair("occl_near", OCCLUSION_NEAR)
+    if near is None:
+        failures.append("occl-near")
+    else:
+        ae, c_on, c_off = near
+        ok = ae == 0 and c_on is not None and c_on == c_off
+        print(f"  occl-near    {'PASS' if ok else 'FAIL'}  {ae} px and culled "
+              f"{c_on} == {c_off} (want 0 px and equality: the near clip shows the "
+              f"room through the slab, so no face may stand across the frame)")
+        if not ok:
+            failures.append("occl-near")
 
     # --- occl-bare: the path no flag reaches --------------------------------
     bare = identity_pair("occl_bare", OCCLUSION_BARE)

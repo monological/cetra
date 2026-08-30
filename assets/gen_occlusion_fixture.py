@@ -11,13 +11,17 @@ with real occlusion in them.
                       three visible through the window (occl_door_*), and one
                       marginal mesh whose projection pokes into the window by a
                       couple of mask texels (occl_door_marginal). Camera outside.
-                      Four .cscn variants from one .gltf:
+                      Five .cscn variants from one .gltf:
                         occlusion_fixture.cscn        occluders:[] = 4 interior boxes
                         occlusion_fixture_bare.cscn   no occluders key at all --
                                                       the empty-context path no
                                                       flag can reach
                         occlusion_fixture_inside.cscn the same boxes with the
                                                       camera inside the room
+                        occlusion_fixture_near.cscn   the same boxes with the
+                                                      camera almost touching a
+                                                      slab, so the near plane
+                                                      clips the wall open
                         occlusion_fixture_mat.cscn    no boxes; the occl_wall
                                                       material carries occluder=on
 
@@ -33,6 +37,9 @@ Arms served (the `occlusion` gate group):
   occl-material  the _mat variant culls the same count through the material row
   occl-doorway   0 px vs --no-occlusion-cull with the marginal mesh in frame
   occl-inside    the _inside variant culls nothing and moves nothing
+  occl-near      the _near variant culls nothing and moves nothing -- the
+                 near-clipped wall shows the room, so a face that should not
+                 stand (a back face, before classification) deletes it
   occl-bare      the _bare variant culls nothing and moves nothing
   occl-sum       seen == instances + culled on the profiled run
   occl-shadow    cascade submit rows identical on vs off
@@ -468,8 +475,22 @@ def build_portal():
 
     assert hidden >= 3 and len(DOOR_XS) >= 3, "a counted class needs >= 3 members"
 
+    # occl-near: the camera almost touching the left slab, so the app's derived
+    # near plane reaches past the slab's front face and clips the wall open --
+    # the renderer shows the room through the opened shell, and a raster that
+    # stands any non-front face across the frame culls what is now visible
+    # (measured at 118,794 px before faces were classified). The eye sits
+    # centred on the slab band so the slab, not the window, fills the frame.
+    near_eye = (-(WIN_X + WALL_X) / 2.0, CY, 0.03)
+    assert near_eye[2] > 0.0, "near camera is not in front of the wall solid"
+    assert -WALL_X + 1.0 < near_eye[0] < -WIN_X - 1.0, \
+        "near camera is not centred on the left slab band"
+    for box in boxes:
+        inside = all(box["boxMin"][k] < near_eye[k] < box["boxMax"][k] for k in range(3))
+        assert not inside, "near camera sits inside an occluder box"
+
     camera = {"eye": [0.0, CY, EYE_Z], "target": [0.0, CY, 0.0], "fov": FOV_DEG}
-    return b, boxes, camera, inside_eye, hidden
+    return b, boxes, camera, inside_eye, near_eye, hidden
 
 
 def build_scatter():
@@ -568,7 +589,7 @@ def write_json(name, payload):
         f.write("\n")
 
 
-portal, portal_boxes, portal_cam, inside_eye, hidden_n = build_portal()
+portal, portal_boxes, portal_cam, inside_eye, near_eye, hidden_n = build_portal()
 write_json("occlusion_fixture.gltf", portal.gltf())
 base_cscn = {
     "version": 1,
@@ -589,6 +610,11 @@ write_json("occlusion_fixture_inside.cscn",
             "camera": {"eye": list(inside_eye),
                        "target": [inside_eye[0], inside_eye[1], inside_eye[2] - 12.0],
                        "fov": FOV_DEG}})
+write_json("occlusion_fixture_near.cscn",
+           {**base_cscn, "occluders": portal_boxes,
+            "camera": {"eye": list(near_eye),
+                       "target": [near_eye[0], near_eye[1], -20.0],
+                       "fov": FOV_DEG}})
 write_json("occlusion_fixture_mat.cscn",
            {**base_cscn, "materials": {"occl_wall": {"occluder": "on"}}})
 
@@ -603,7 +629,8 @@ write_json("occlusion_scatter.cscn", {
     "occluders": scatter_boxes,
 })
 
-print(f"wrote occlusion_fixture.gltf (+4 .cscn): {hidden_n} hidden, "
-      f"{len(DOOR_XS)} door, 1 marginal, inside eye {inside_eye}")
+print(f"wrote occlusion_fixture.gltf (+5 .cscn): {hidden_n} hidden, "
+      f"{len(DOOR_XS)} door, 1 marginal, inside eye {inside_eye}, "
+      f"near eye {near_eye}")
 print(f"wrote occlusion_scatter.gltf (+1 .cscn): {sc_hidden} of {sc_total} "
       f"instances behind {len(scatter_boxes)} pillars")
