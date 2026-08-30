@@ -26,7 +26,6 @@
 // sentinel printed as a measurement. Magnitude is not a proxy for stall-ness
 // either: profiler_suspend is how a caller says "this is not rendering", and it
 // works because the caller knows.
-//
 #define PROFILER_LATCH_STEP_MAX 0.1
 
 // Retired frames whose every scope read back exactly zero before saying so.
