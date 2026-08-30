@@ -166,7 +166,11 @@ graph change. **No golden can see that failure** -- all 29 are static scenes und
 a static camera, measured -- which is what the `transform` and `shadow-lag` gate
 groups exist for.
 
-**Scene passes** (`render_current_scene`, in order):
+**Scene passes** (`render_current_scene`, in order). Before any of them, right after the draw-list
+build, the **occlusion pass** (spec 11.98) rasterises this frame's authored occluders into a CPU
+masked depth buffer and settles every item's `occluded` bit once — camera-pass-only (the one
+`CullView` constructor initialises the switch false and one site sets it), skipped under captures,
+and the whole off state for a scene with no occluders is two integer compares. Then:
 opaque + alpha-masked (writes the G-buffer) -> skybox (procedural sky / IBL cubemap /
 probe debug) -> **shadow catcher** -> refraction resolve (mip'd opaque color, if
 transmissive) -> **water** (`--water`, spec 11.32) -> transparent pass (with an **OIT**
@@ -263,6 +267,7 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | `engine.c/h` | Window, input, render loop, camera modes, G-buffer/MSAA, program cache, embedded PostFX |
 | `scene.c/h` | Scene graph, hierarchical transforms, owns lights/materials/particles/shadow/IBL/sky |
 | `render.c/h` | Scene traversal + the ordered scene passes (opaque/skybox/transparent/OIT/particles) |
+| `occlusion.c/h` | CPU masked occlusion culling (spec 11.98): authored proxies rasterised into a 256x144 fixed-point buffer from THIS frame's camera, one conservative test per item per frame. No GL in the module; conservative by four stated roundings, so a violated authoring contract (a box poking out of its mesh) is the only path to a wrong pixel — and the probe checks that too |
 | `program.c/h`, `shader.c/h`, `uniform.c/h` | Shader program compile, uniform setup |
 | `common.h` | Vertex-attribute + sampler-unit + render-mode enums |
 

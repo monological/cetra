@@ -233,6 +233,15 @@ of it**: every tap lies inside `[0, span]`, where a mirror and a modulo agree ex
 tap-sampling alone left the C fold unreachable from outside the process. Those rows ask for
 `span + d` and pair it against `span - d`. Note the probe still says nothing about the SHADER's
 fold -- for that see `ies-mirror`, which has to look at a frame),
+`--occlusion-probe` (spec 11.98 — the masked occlusion buffer against its brute-force twin, as
+`occlusion-probe` k=v rows after the loop with no GL and no frame. Two-sided: hierarchical-hidden
+must imply reference-hidden with zero exceptions over the scene's items AND a seeded frustum sweep,
+and the catch rate must clear a floor so the safety half cannot pass by hiding nothing. The twin
+replays the RECORDED box set the frame accepted — not a re-gather, which could drift — through the
+same raster path at 4x resolution, so what it verifies is the hierarchy: the tile fold, the footprint
+rounding, the mask. Also validates every material-flagged proxy's interior contract, box against its
+own triangles, with both violation kinds judged against the 3x3 neighbourhood because the
+conservative fill leaves a diagonal seam a box face does not have. Read by `occl-probe`),
 `--wind-bound-probe` (spec 11.54 — per wind-responsive mesh, the largest displacement `windOffset`
 can be driven to beside the bound `wind_max_offset` claims, as `max_abs` / `max_l2` / `bound` and
 their ratios. **It drives the REAL shader through transform feedback**, not a CPU port: the two
@@ -312,7 +321,12 @@ which is what makes an uncoated surface an in-frame control),
 `--no-oit` / `--no-oit-moments`, `--no-instancing`, `--no-frustum-cull` (spec 11.53 — submit every
 item, culled or not. A bisect lever in the `--no-instancing` idiom and 0 px by construction, since
 culling only ever removes geometry that contributed nothing; it is what the `cull` gate group compares
-against), `--no-lod` / `--lod-bias <f>`,
+against),
+`--no-occlusion-cull` (spec 11.98 — occlusion rejection off, the same kind of lever held to the same
+0 px bar: the cull is conservative by four stated roundings, so this differing from the default is a
+defect and the `occlusion` group's identity arms are what say so. Camera-pass-only either way — shadow
+layers and captures never see the occlusion answer, so the flag cannot move them),
+`--no-lod` / `--lod-bias <f>`,
 `--no-sort-opaque` (front-to-back opaque ordering is ON by default, spec 11.30, and it is the larger
 of the two overdraw levers by a wide margin — `apps/forest` opaque 306 → 169 ms. Still **not** a 0 px
 flag, but only barely and no longer for the reason 11.30 gave: masked materials stopped blending in
