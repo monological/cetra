@@ -25,7 +25,7 @@ up as a difference. The corpus must not be re-baked off macOS.
 ## Contents
 
 - [Running the gates](#running-the-gates) — which binaries a number describes, what a release run
-  moves, why frame counts are a correctness question
+  moves, why frame counts are a correctness question, how to read a `--profiler` table
 - [Deterministic renders](#deterministic-renders) — the bar, the noise floor, reading a diff
 - [What breaks determinism](#what-breaks-determinism) — the per-source table, and the trap that
   two runs of one build are not two builds
@@ -78,6 +78,33 @@ while risking an arm that reads a pose silently reading a different one. Frame c
 correctness question here, not a performance one — `render()`'s docstring records what the engine
 actually forces, which is about two frames for a static pinned capture, and 60 / 150 / 240 / 400
 where the accumulators, the meter, the trace cadence and the walk geometry genuinely demand them.
+
+### Reading a `--profiler` table
+
+Three things about the numbers, all of which have been got wrong at least once.
+
+**Every row is per FRAME, not per call or per occurrence** (spec 11.97). A pass entered once in the
+window and a pass entered every frame both publish what they cost the AVERAGE frame, which is what
+makes the rows addable and `TIMED` meaningful. Before 11.97 each column divided by its own count and
+a gated scope published a per-occurrence cost in a column of per-frame means — `dir_shadow_fixture
+--gi-volume` printed a CPU `TIMED` 21x its `FRAME`, with nothing wrong in the clock.
+
+**`FRAME (wall)` and `PERIOD` are different quantities and neither substitutes for the other.**
+FRAME is the frame's own bracket, begin to end; PERIOD is begin to begin, so it also carries the
+swap, the vsync wait and the poll. For the CPU column `TIMED <= FRAME` is an IDENTITY — flat scopes,
+all closing inside the bracket — so a violation is a bug in `profiler.c` and never a slow frame. For
+the GPU column it is a loose bound both ways, because the driver runs behind and a pass's time can
+land outside the bracket that submitted it. PERIOD is the one that matches an fps counter and the
+one a budget is read against; headless has vsync off, so the two nearly agree there and diverge in a
+window.
+
+**A 0.000 GPU row is not a free pass.** It is either a free pass, a driver that accepts timer
+queries without measuring (which is what `gpu-nonzero` watches for), or — before 11.97 — a result
+that was never collected, since an unready query was dropped rather than waited for. Five forest
+rows read exactly 0.000 that way while running every frame. The ring is drained at each latch now
+and a give-up is reported by name, but **any 0.000 GPU row quoted from a spec before 11.97 should be
+read as unmeasured rather than as free.**
+
 ## Deterministic renders
 
 ### The bar, and the noise floor
