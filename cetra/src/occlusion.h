@@ -49,6 +49,7 @@ enum {
 // struct; it is declared here so the engine can own one by pointer.
 typedef struct OcclusionContext {
     mat4 view_proj; // latched at begin(); the UNJITTERED camera matrix
+    vec3 eye;       // the camera's world position, for the inside-a-box skip
 
     // Nearest occluder front-face depth per pixel (GL_LESS semantics), EMPTY
     // where nothing landed. Overlapping occluders merge by min for free.
@@ -69,7 +70,10 @@ void free_occlusion_context(OcclusionContext* context);
 // the buffer to EMPTY and latches the matrix; finish folds pixels into
 // tile_zmax and decides `active` -- a frame whose occluders all clipped away or
 // sat behind the camera covers no tile and the per-item walk is skipped.
-void occlusion_begin(OcclusionContext* context, mat4 view_proj);
+// `eye` is the camera's world position: a box the eye sits inside is SKIPPED,
+// because a proxy proves nothing from inside itself and the asset contract
+// makes "camera inside a proxy" an authoring situation, not a rendering one.
+void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec3 eye);
 // transform may be NULL for a box already in world space (the authored kind).
 void occlusion_add_box(OcclusionContext* context, const vec3 box_min, const vec3 box_max,
                        mat4 transform);
@@ -93,9 +97,10 @@ void occlusion_cull_list(OcclusionContext* context, struct DrawList* list,
 
 // The same clip/round/fill path into a caller's buffer at any size -- the
 // probe's reference twin rasterises through THIS at full resolution, so the
-// hierarchy and the quantisation are the only things it does not share.
-void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec3 box_min,
-                                  const vec3 box_max, mat4 transform);
+// hierarchy and the quantisation are the only things it does not share. The
+// inside-a-box skip is part of the path, which is why `eye` is here too.
+void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec3 eye,
+                                  const vec3 box_min, const vec3 box_max, mat4 transform);
 // Triangle-exact raster of a mesh's CPU arrays (they survive upload) under the
 // same rounding. Validation only: the probe compares a flagged mesh's box
 // raster against its triangles to check the interior contract.
