@@ -2934,7 +2934,7 @@ worth reading up on rather than deriving.
 **Shipped as CPU masked software occlusion culling** (the Frostbite / Intel-MOC family): authored
 occluder proxies rasterised into a 256×144 fixed-point CPU depth buffer with per-tile coverage
 folded into an EMPTY sentinel, from THIS frame's camera, before the draw list is culled. One test
-after the frustum test in `draw_item_visible`, settled once per frame as a byte on `DrawItem`.
+ahead of the frustum test in `draw_item_visible`, settled once per frame as a byte on `DrawItem`.
 Camera-pass-only structurally (one `CullView` constructor initialises the switch false; one site
 sets it), skipped under captures, rejections folded into `meshes_culled` so every existing
 submission gate held unmodified. Two authoring channels: a top-level `occluders: [{boxMin,boxMax}]`
@@ -2957,6 +2957,18 @@ scatter twin, culling a third of the triangles splits one instanced run, draws 5
 unasserted clock still netted ahead (1.878 → 1.800 ms). forest is unchanged byte-for-byte: it
 authors no occluders, and the feature's whole off state is two integer compares. The win is
 author-opt-in, priced on the fixture built to price it, not implied scene-wide.
+
+**One defect survived the ledger and fell to the review round** (recorded in the spec): the first
+raster stood ALL SIX faces of a box, on the argument that min-merge makes a back face harmless —
+true along any ray that passes through both faces, false once the near plane clips the front face
+away, because the renderer then shows through the opened shell while the raster still stands the
+back face across the frame. Measured at **118,794 px of visible scene culled** (24.7% of frame)
+with the eye a near-plane's depth from a wall — the one regime where the conservatism contract's
+arithmetic was arguing about the wrong surface. Faces are now CLASSIFIED: only a face whose
+outward side holds the eye rasterises, which keeps exactly the region the renderer keeps and
+subsumes the camera-inside-a-box skip as a theorem instead of a second mechanism. The regime has
+its own fixture variant and identity arm (`occl-near`), red at exactly that count under the
+reverted fix and green nowhere else — no other camera in the suite can see the difference.
 **Depends on:** nothing now. **Wall 1:** unaffected — no sampler, no uniform, no shader edit.
 
 ### E8. Fixing the wind cull — Effort S — **DONE (spec 11.53)**
