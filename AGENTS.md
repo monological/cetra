@@ -125,13 +125,46 @@ Each G-buffer target is only written when a post pass that consumes it is active
    the scene target + post chain if the derived sizes disagree with what they
    were last built at. Skips the frame entirely (keeping the frame clock and
    the `--frames` limit running) when the window is 0x0 or a rebuild failed.
-2. **Shadow depth pass** (`render_shadow_depth_pass`) -- gated on
+2. **App update callback** -- input, physics, the game framework's fixed step.
+3. **Origin shift**, then the **sky cycle tick**.
+4. **App PRE-RENDER callback, then the engine's transform walk**
+   (`scene_latch_prev_transforms` + `scene_propagate_transforms`). See below --
+   this is a one-statement-wide window and all three of its edges are
+   load-bearing.
+5. **GI probe captures**, while the volume is dirty.
+6. **Shadow depth pass** (`render_shadow_depth_pass`) -- gated on
    `scene->shadow_system->enabled`; runs before the scene FBO is bound.
-3. Bind scene MSAA FBO, set supersampled viewport + draw buffers, clear.
-4. Async texture uploads (<=5/frame), mask-array build, POM height resolve.
-5. App render callback -> `render_current_scene`.
-6. `engine_present_frame` -> PostFX chain + GUI.
-7. Screenshot capture (headless/CI), swap buffers.
+7. Bind scene MSAA FBO, set supersampled viewport + draw buffers, clear.
+8. Async texture uploads (<=5/frame), mask-array build, POM height resolve.
+9. App render callback -> `render_current_scene`.
+10. `engine_present_frame` -> PostFX chain + GUI.
+11. Screenshot capture (headless/CI), swap buffers.
+
+**Step 4 is where an app puts anything the frame's geometry depends on** (spec
+11.96): its camera, and any node it adds, removes or moves. It exists because
+the walk used to be each app's own call in its RENDER callback, i.e. after the
+shadow pass -- so every shadow in every app was drawn from LAST frame's
+transforms and every LOD level chosen from stale positions. `apps/render` also
+stepped its skeletal pose there, so a rig's shadow lagged its body for the same
+reason; both halves moved together.
+
+**The window is one statement wide and its edges are not stylistic.** It has to
+land AFTER the origin shift, which rewrites root-child locals and the whole
+tree's cached globals; AFTER the sky cycle tick, which rewrites a sun's
+`original_direction` that the walk then rotates by the owning node; and BEFORE
+the GI capture, whose probes a converged volume never re-bakes, so a capture from
+stale transforms is wrong permanently rather than for a frame. Spec 11.94
+recorded the update callback at step 2 as the right hook; the first two edges
+refute that.
+
+**The walk is idempotent and the latch is not**, which is why they are two
+functions. `apply_transform_to_nodes` used to fuse `prev := global` into the
+traversal, so a second walk in one frame made every node's previous pose its
+current one, zeroed every motion vector and stopped TAA reprojecting. The engine
+owns the latch and calls it once; anyone may call the walk again after a late
+graph change. **No golden can see that failure** -- all 29 are static scenes under
+a static camera, measured -- which is what the `transform` and `shadow-lag` gate
+groups exist for.
 
 **Scene passes** (`render_current_scene`, in order):
 opaque + alpha-masked (writes the G-buffer) -> skybox (procedural sky / IBL cubemap /
@@ -1224,7 +1257,9 @@ add_child_node(scene->root_node, node);
 ```c
 Engine* engine = create_engine("Title", 1920, 1080);
 init_engine(engine);
-engine_run(engine, update_callback, render_callback);  // NULL update for a pure render loop
+// Three hooks, in frame order; any may be NULL. pre_render is where the camera
+// and any graph change go -- the engine propagates the graph right after it.
+engine_run(engine, update_callback, pre_render_callback, render_callback);
 free_engine(engine);
 ```
 
