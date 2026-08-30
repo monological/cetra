@@ -19326,12 +19326,17 @@ def run_transform_walk_gate(workdir):
     so a uniformly dead buffer scores 0 and passes.
 
       transform-moves     a node the app moves reads a DISTINCT previous pose,
-                          with a step the size of one frame of its path. The
-                          direction a double walk breaks.
-      transform-stills    the nodes the app never moves read prev == global on
-                          the same frames. The other direction, and not a
-                          formality: an arm that only demanded movement would
-                          pass on a walk that had stopped seeding prev at all.
+                          and the step is one frame of its path -- measured
+                          against the chord between consecutive samples, so the
+                          bar calibrates itself. Bounded BOTH ways: a double
+                          walk drives the ratio to 0, dropping the latch
+                          entirely freezes prev and drives it to 2 and 3.
+      transform-stills    every node carries a SEEDED previous pose, and the
+                          ones the app never moves read prev == global. The seed
+                          is the half a pixel arm cannot reach: an unseeded node
+                          reports travel from the world origin, which is a smear
+                          for one node and most of the frame for a region's
+                          worth arriving together.
 
     Read off a probe rather than off pixels, because the quantity IS a pair of
     CPU-side matrices -- and a velocity buffer would test the shader's upload
@@ -19343,13 +19348,18 @@ def run_transform_walk_gate(workdir):
         return []
     arms = ["transform-moves", "transform-stills"]
 
-    # Every 4th frame, so the sphere has travelled a readable distance between
-    # samples. -f 12 is three probed frames plus frame 0.
-    r = _run([SPORES, "-x", "-f", "12", "--transform-probe", "4"],
+    failures = []
+
+    # EVERY frame, because `step` is a one-frame delta -- the sampling stride
+    # never enters it, so a wider stride buys no distance and costs whole frames.
+    # -f 4 is frames 0..3, i.e. three usable rows after frame 0 rather than the
+    # two a stride of 4 gave.
+    r = _run([SPORES, "-x", "-f", "4", "--transform-probe", "1"],
              capture_output=True, text=True)
     rows = _probe_rows(r.stdout + r.stderr, "transform-probe")
     if r.returncode != 0 or not rows:
-        print(f"  transform-moves ERROR spores exited {r.returncode} or logged no probe")
+        for arm in arms:
+            print(f"  {arm} ERROR spores exited {r.returncode} or logged no probe")
         return arms
 
     # Frame 0 is excluded on purpose: the first walk SEEDS prev from global, so
@@ -19357,32 +19367,59 @@ def run_transform_walk_gate(workdir):
     # would be asserting the seed is broken.
     nodes = [x for x in rows if x.get("kind") == "node" and x.get("frame") != "0"]
     if not nodes:
-        print("  transform-moves ERROR the probe emitted no node rows past frame 0")
+        for arm in arms:
+            print(f"  {arm} ERROR the probe emitted no node rows past frame 0")
         return arms
 
     # --- moves ---------------------------------------------------------------
+    # Bounded BOTH ways, and the upper bound is the half that took a review to
+    # notice. `step > 0` alone catches the double walk, which drives it to zero,
+    # and passes the opposite failure: drop the latch entirely and prev freezes
+    # at the frame-0 pose, so step grows by a frame each sample -- measured 2.001
+    # and 3.004 against a 0.4% spread on the true build.
+    #
+    # The bar is the node's own chord between consecutive samples, so it
+    # calibrates itself off whatever path the fixture drives and survives
+    # anyone retuning it. Measured spread on the true build is 0.4%.
     movers = [x for x in nodes if x.get("moved") == "1"]
-    steps = [float(x["step"]) for x in movers]
-    ok = bool(movers) and all(s > 0.0 for s in steps)
+    by_name = {}
+    for x in sorted(nodes, key=lambda r: int(r["frame"])):
+        by_name.setdefault(x["name"], []).append(x)
+    ratios = []
+    for name, rowsx in by_name.items():
+        for a, b in zip(rowsx, rowsx[1:]):
+            span = int(b["frame"]) - int(a["frame"])
+            pa = [float(v) for v in a["pos"].split(",")]
+            pb = [float(v) for v in b["pos"].split(",")]
+            chord = sum((pb[i] - pa[i]) ** 2 for i in range(3)) ** 0.5
+            if chord > 0.0:
+                ratios.append(float(b["step"]) / (chord / span))
+    ok = bool(movers) and bool(ratios) and all(0.9 <= r <= 1.1 for r in ratios)
     print(f"  transform-moves {'PASS' if ok else 'FAIL'}  {len(movers)} of {len(nodes)} node rows "
-          f"carry a distinct previous pose, steps {sorted(round(s, 4) for s in steps)} (want at "
-          f"least one, all non-zero: a second walk in the same frame latches prev := global and "
-          f"every one of these reads 0 while the whole suite stays green)")
+          f"carry a distinct previous pose, and each step is "
+          f"{sorted(round(r, 3) for r in ratios)} of the chord it travelled (want 0.9..1.1: a "
+          f"second walk drives this to 0, dropping the latch to 2.001 and 3.004)")
     if not ok:
-        failures = ["transform-moves"]
-    else:
-        failures = []
+        failures.append("transform-moves")
 
     # --- stills --------------------------------------------------------------
-    # The sphere is the only thing spores moves; the room, the lights and the
-    # emitter are pinned, so they must report the opposite.
+    # `valid`, NOT `step`. The first draft compared step against 0 on rows whose
+    # `moved` was already 0 -- and moved==0 IS a memcmp over the whole mat4, so
+    # the translation is bit-equal and step is exactly 0 by construction. It
+    # asserted nothing, and passed every mutation it named.
+    #
+    # prev_valid is what actually carries the seed: delete the seeding branch and
+    # it reads 0 on every row forever, while a node that was never moved still
+    # reports prev == global because create_node leaves both identity. That is
+    # the failure this arm is for, and it is the one the pixel corpus cannot see
+    # -- a node whose prev is unseeded reports travel from the world origin.
     stills = [x for x in nodes if x.get("moved") == "0"]
-    bad = [x["name"] for x in stills if float(x["step"]) != 0.0]
-    ok = bool(stills) and not bad
+    unseeded = sorted({x["name"] for x in nodes if x.get("valid") != "1"})
+    ok = bool(stills) and not unseeded
     print(f"  transform-stills {'PASS' if ok else 'FAIL'}  {len(stills)} pinned node rows report "
-          f"prev == global{'' if not bad else f', but {sorted(set(bad))} moved anyway'} (want at "
-          f"least one and none moving: without this the arm above passes on a walk that stopped "
-          f"seeding prev entirely)")
+          f"prev == global and all {len(nodes)} carry a seeded previous pose"
+          f"{'' if not unseeded else f', except {unseeded}'} (want every row seeded: an unseeded "
+          f"node reports a trip from the world origin, which no golden in this corpus can see)")
     if not ok:
         failures.append("transform-stills")
 
