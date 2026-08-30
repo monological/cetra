@@ -1296,7 +1296,6 @@ static void build_rock_prototypes(void) {
         }
         finalize_mesh(g_rocks[i], g_mat_rock, true);
     }
-
 }
 
 static int scatter_rocks(Placement* items, int count, float x0, float z0, float span) {
@@ -2472,7 +2471,6 @@ static void on_pre_render(Game* game, double alpha) {
                 terrain_stream_probe(g_stream, &g_terrain, engine->total_frames, final);
         }
     }
-
 }
 
 static void on_render(Game* game, double alpha) {

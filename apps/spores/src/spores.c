@@ -314,7 +314,7 @@ static void on_render(Game* game, double alpha) {
     // The engine walked the graph before the shadow pass, so this reads what
     // that walk produced -- which is the only point the answer means anything.
     if (g_transform_probe > 0 && (int)engine->total_frames % g_transform_probe == 0)
-        scene_transform_probe(scene, (int)engine->total_frames);
+        scene_transform_probe(scene, engine->total_frames);
 
     // The scene's particle systems are ticked + drawn by the engine; nothing to
     // do here but render the scene.

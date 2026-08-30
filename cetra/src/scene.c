@@ -500,6 +500,11 @@ void scene_set_world_origin(Scene* scene, const vec3 new_origin) {
 // are absolutes, and prev_global_transform has to take the SAME delta as
 // global_transform or the difference between them, which is what the whole motion
 // pipeline reads, reports the shift as a screen-wide velocity for one frame.
+//
+// The prev half is belt-and-braces since 11.96: scene_latch_prev_transforms runs
+// between the shift and the walk and overwrites it with the shifted global
+// anyway. Kept so this function is correct on its own rather than by where the
+// engine happens to call it.
 static void shift_node_tree(SceneNode* node, const vec3 delta) {
     if (!node)
         return;
@@ -1095,10 +1100,14 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
         // Pop from stack
         stack_size--;
         SceneNode* node = stack[stack_size].node;
-        mat4 parent_transform;
-        glm_mat4_copy(stack[stack_size].parent_transform, parent_transform);
 
-        glm_mat4_mul(parent_transform, node->original_transform, node->global_transform);
+        // Straight off the popped slot. The child pushes below overwrite it, but
+        // strictly after this is the only thing that reads it -- and the
+        // destination is on the node rather than the stack, so the multiply
+        // cannot alias its own source. The defensive copy this replaced cost 64
+        // bytes per node per frame, which on forest is ~580 KB nothing read.
+        glm_mat4_mul(stack[stack_size].parent_transform, node->original_transform,
+                     node->global_transform);
 
         // Only for nodes that actually moved. scene_latch_prev_transforms left
         // prev_global_transform holding the previous frame's value, so this
@@ -1199,10 +1208,12 @@ void scene_propagate_transforms(Scene* scene) {
     apply_transform_to_nodes(scene->root_node, scene->root_transform);
 }
 
-static void _transform_probe_node(const SceneNode* node, int frame, int* named, int* moved) {
+static void _transform_probe_node(const SceneNode* node, size_t frame, int* nodes, int* named,
+                                  int* movers) {
     if (!node)
         return;
 
+    *nodes += 1;
     if (node->name) {
         // The SAME bit-exact compare the walk itself uses to decide whether a
         // node's normal matrix needs rebuilding. Not a tolerance: the question
@@ -1210,44 +1221,50 @@ static void _transform_probe_node(const SceneNode* node, int frame, int* named, 
         // genuinely did not move answers exactly.
         bool has_moved = memcmp(node->global_transform, node->prev_global_transform,
                                 sizeof(mat4)) != 0;
-        vec3 step;
-        glm_vec3_sub((float*)node->global_transform[3], (float*)node->prev_global_transform[3],
-                     step);
-        printf("transform-probe node frame=%d moved=%d valid=%d step=%.6f pos=%.6f,%.6f,%.6f "
+        float step = glm_vec3_distance((float*)node->global_transform[3],
+                                       (float*)node->prev_global_transform[3]);
+        printf("transform-probe node frame=%zu moved=%d valid=%d step=%.6f pos=%.6f,%.6f,%.6f "
                "name=%s\n",
-               frame, has_moved ? 1 : 0, node->prev_valid ? 1 : 0, glm_vec3_norm(step),
+               frame, has_moved ? 1 : 0, node->prev_valid ? 1 : 0, step,
                node->global_transform[3][0], node->global_transform[3][1],
                node->global_transform[3][2], node->name);
         *named += 1;
         if (has_moved)
-            *moved += 1;
+            *movers += 1;
     }
 
     for (size_t i = 0; i < node->children_count; i++)
-        _transform_probe_node(node->children[i], frame, named, moved);
+        _transform_probe_node(node->children[i], frame, nodes, named, movers);
 }
 
 // Whether this frame's walk left each named node a previous pose DISTINCT from
-// its current one (spec 11.96).
+// its current one, and whether that pose was ever seeded (spec 11.96).
 //
-// It exists because the failure it watches for is invisible to every other
-// instrument in this repository. Walking the graph twice in one frame sets
-// prev := global on the second pass, so `moved` reads 0 for everything, every
-// motion vector goes to zero, and TAA stops reprojecting -- while the corpus
-// stays green, because all 29 goldens are static scenes under a static camera
-// where prev == global is already the correct answer.
+// It exists because the failures it watches for are invisible to every other
+// instrument in this repository: all 29 goldens are static scenes under a static
+// camera, so a build with every motion vector dead renders 0 px against every
+// one of them.
+//
+// Only NAMED nodes emit a row -- a scene loaded from a GLB is mostly unnamed, so
+// the total row carries the full count as well as the named one. Without it the
+// arms would be reasoning about a subset and could not tell.
+//
+// `movers` and not `moved` on that row, because `moved` is a BOOLEAN on the node
+// rows: a reader filtering on it alone would pick up the totals and find no
+// `step` key. Dispatch on the tag.
 //
 // `name` LAST, per texture_pool_probe's rule: a k=v reader splits on
 // whitespace, so a name with a space in it can only corrupt itself.
-void scene_transform_probe(const Scene* scene, int frame) {
+void scene_transform_probe(const Scene* scene, size_t frame) {
     if (!scene || !scene->root_node) {
-        printf("transform-probe none frame=%d\n", frame);
+        printf("transform-probe none frame=%zu\n", frame);
         return;
     }
 
-    int named = 0, moved = 0;
-    _transform_probe_node(scene->root_node, frame, &named, &moved);
-    printf("transform-probe total frame=%d named=%d moved=%d\n", frame, named, moved);
+    int nodes = 0, named = 0, movers = 0;
+    _transform_probe_node(scene->root_node, frame, &nodes, &named, &movers);
+    printf("transform-probe total frame=%zu nodes=%d named=%d movers=%d\n", frame, nodes, named,
+           movers);
 }
 
 void print_scene_node(const SceneNode* node, int depth) {

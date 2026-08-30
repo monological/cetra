@@ -16149,14 +16149,11 @@ def _emissive_worst(base, other):
 
 
 def _probe_render(scene, flag, prefix, extra=None, frames=30):
-    """Run a --*-probe flag headless and return ([{key: str}], combined output).
+    """Run one of the RENDER app's --*-probe flags headless, and parse what it printed.
 
-    Probe lines are `<prefix> [tag] k=v k=v ...`, and every probe in the tree
-    emits that shape -- so parsing it lives here rather than being written out
-    per subsystem, which it was six times before this existed.
-
-    Values stay STRINGS. Callers cast what they need: the emissive probe carries
-    `center=1,2,3`, which a blanket float() would drop on the floor.
+    Returns ([{key: str}], combined output). The parsing is _probe_rows below,
+    which is also what an app other than render goes through -- this one only
+    owns the invocation.
     """
     # No -S, and no workdir: every caller reads probe ROWS off stdout, so the
     # frames these used to write were a readback and a file write nobody opened.
@@ -16169,10 +16166,17 @@ def _probe_render(scene, flag, prefix, extra=None, frames=30):
 def _probe_rows(text, prefix):
     """The `<prefix> [tag] k=v ...` lines in `text`, as dicts in emission order.
 
-    Split out of _probe_render because that one hardcodes the RENDER app, and a
-    probe emitted by any other app would otherwise have to restate this loop --
-    which is the duplication _probe_render's own docstring says it exists to
-    prevent.
+    Every probe in the tree emits that shape, so the parsing lives HERE rather
+    than being written out per subsystem -- which it was six times before this
+    existed, and is still three more in this file that predate it.
+
+    Values stay STRINGS. Callers cast what they need: the emissive probe carries
+    `center=1,2,3`, which a blanket float() would drop on the floor.
+
+    Split out of _probe_render, which hardcodes the RENDER app, once a probe
+    emitted by another app needed the same loop. A row leading with TWO bare
+    tokens does not fit -- _water_probe's grid rows are the case, and would read
+    the second as a key.
     """
     rows = []
     for line in text.splitlines():

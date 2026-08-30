@@ -2316,7 +2316,6 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
             update_engine_camera_perspective(engine);
         }
     }
-
 }
 
 void render_scene_callback(Engine* engine, Scene* current_scene) {
