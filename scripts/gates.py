@@ -19327,17 +19327,22 @@ def run_shadow_lag_gate(workdir):
     move and cast -- the wind quads, the abandoned-window curtains -- displace
     vertices in the shader, which was never stale.
 
-      shadow-lag-still   frames 14 and 15 are identical. The clip holds still
-                         until t=0.25, so nothing in the scene moves and the arm
-                         below cannot be reading noise or nondeterminism.
-      shadow-lag-tracks  frames 15 and 16 DIFFER. Frame 16 is the first with the
-                         caster displaced, and the caster is out of frame, so the
-                         only thing that can change is its shadow. A shadow drawn
-                         from frame 15's pose makes the two frames identical.
+      shadow-lag-holds   at frame 15 the moving scene and a PARKED twin are
+                         identical. The clip has not started, so they are the
+                         same scene, and anything here makes the arm below
+                         unreadable.
+      shadow-lag-tracks  at frame 16 they DIFFER. That is the first displaced
+                         frame, and the caster is out of shot, so the only thing
+                         that can differ is its shadow: a correct one has left
+                         the parked position, a lagging one is still on it.
 
-    CONSTANT VELOCITY WOULD SHOW NOTHING, which is why the clip holds and then
-    starts: a lagging shadow and a tracking one are displaced by the same amount
-    between consecutive frames once both are moving. The arm reads the ONSET.
+    BOTH ARMS READ AGAINST THE TWIN rather than against an earlier frame of the
+    same run. Comparing consecutive frames also discriminates, but only while the
+    motion onset falls exactly between the two sampled frames -- retime the clip
+    or change the frame rate and it silently stops testing anything. Against a
+    parked twin the read is ABSOLUTE: at the first displaced frame a correct
+    shadow has left the parked position and a lagging one is still sitting on it,
+    whatever the sampling.
 
     What it covers is the SKINNED pose reaching the depth pass -- the caster
     moves by a bone, because a .cscn cannot express a moving object and a
@@ -19345,44 +19350,60 @@ def run_shadow_lag_gate(workdir):
     node-transform half is the transform-walk group's, off the CPU probe.
 
     Falsified by restoring the pre-fix ordering (update_animation after the
-    shadow pass rather than before): tracks reads 0 px where it reads 551.
+    shadow pass rather than before): tracks reads 0 px where it reads 8617, and
+    the shadow's onset slips from frame 16 to 17.
+
+    FALSIFY WITH AN EXPLICIT --bin-dir. This suite auto-selects out/release/bin
+    whenever its forest is no older than the debug one, and a mutation confined
+    to apps/render never re-links forest -- so a debug-only rebuild leaves the
+    selector on a stale RELEASE binary and three consecutive falsification runs
+    come back green against code that was never built.
     """
     del workdir # frames go to a temp path the arm indexes; nothing is compared to a golden
-    scene = os.path.join(ROOT, "assets", "shadow_lag_fixture.cscn")
-    if not os.path.exists(RENDER) or not os.path.exists(scene):
-        print("  shadow-lag-still SKIP  (render or shadow_lag_fixture not present)")
+    moving = os.path.join(ROOT, "assets", "shadow_lag_fixture.cscn")
+    parked = os.path.join(ROOT, "assets", "shadow_lag_still.cscn")
+    if not os.path.exists(RENDER) or not all(os.path.exists(p) for p in (moving, parked)):
+        print("  shadow-lag-holds SKIP  (render or shadow_lag fixtures not present)")
         return []
-    arms = ["shadow-lag-still", "shadow-lag-tracks"]
+    arms = ["shadow-lag-holds", "shadow-lag-tracks"]
 
-    with tempfile.TemporaryDirectory() as tmp:
-        base = os.path.join(tmp, "lag.ppm")
+    def _frames(scene, tag, tmp):
+        base = os.path.join(tmp, f"{tag}.ppm")
         r = _run([RENDER, "-m", scene, "-x", "-f", "18", "--no-auto-exposure", "-E", "1.0",
                   "-W", "400", "-H", "300", "--screenshot-every", "1", "-S", base],
                  capture_output=True, text=True)
-        frames = {n: base[:-4] + f"_{n:06d}.ppm" for n in (14, 15, 16)}
-        if r.returncode != 0 or not all(os.path.exists(p) for p in frames.values()):
-            for arm in arms:
-                print(f"  {arm} ERROR render exited {r.returncode} or wrote no numbered frames")
-            return arms
+        got = {n: base[:-4] + f"_{n:06d}.ppm" for n in (15, 16)}
+        ok = r.returncode == 0 and all(os.path.exists(p) for p in got.values())
+        return got, ok
 
-        still = compare(frames[14], frames[15])[0]
-        moved = compare(frames[15], frames[16])[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        mv, ok_m = _frames(moving, "moving", tmp)
+        st, ok_s = _frames(parked, "parked", tmp)
+        if not (ok_m and ok_s):
+            for arm in arms:
+                print(f"  {arm} ERROR a render failed or wrote no numbered frames")
+            return arms
+        holds = compare(mv[15], st[15])[0]
+        tracks = compare(mv[16], st[16])[0]
 
     failures = []
-    ok = still == 0
-    print(f"  shadow-lag-still {'PASS' if ok else 'FAIL'}  frames 14 and 15 differ by {still} px "
-          f"(want 0: the clip holds until t=0.25, so anything here is noise the arm below would "
-          f"read as a moving shadow)")
+    ok = holds == 0
+    print(f"  shadow-lag-holds {'PASS' if ok else 'FAIL'}  at frame 15 the moving scene and the "
+          f"parked twin differ by {holds} px (want 0: the clip has not started, so the two are the "
+          f"same scene and anything here would make the arm below unreadable)")
     if not ok:
-        failures.append("shadow-lag-still")
+        failures.append("shadow-lag-holds")
 
-    # A floor rather than a bar: the exact count depends on the shadow's screen
-    # size, and what is being asserted is that the shadow RESPONDED at all. The
-    # broken build reads exactly 0.
-    ok = moved > 100
-    print(f"  shadow-lag-tracks {'PASS' if ok else 'FAIL'}  frames 15 and 16 differ by {moved} px "
-          f"(want > 100: the caster is out of frame so this is its shadow alone, and drawing that "
-          f"from the previous frame's pose reads exactly 0)")
+    # AGAINST THE PARKED TWIN, not against frame 15 of itself, and that is the
+    # whole arm. The shadow's own sequence advances one step per frame in a
+    # correct build AND a lagging one, so a difference of differences is blind to
+    # this -- an earlier version compared consecutive frames and could not tell
+    # them apart. Read absolutely: at the first displaced frame a correct shadow
+    # has LEFT the parked position and a lagging one is still sitting on it.
+    ok = tracks > 100
+    print(f"  shadow-lag-tracks {'PASS' if ok else 'FAIL'}  at frame 16 they differ by {tracks} px "
+          f"(want > 100: the caster is out of frame so this is its shadow alone, and a shadow drawn "
+          f"from the previous frame's pose is still exactly where the parked twin puts it)")
     if not ok:
         failures.append("shadow-lag-tracks")
 

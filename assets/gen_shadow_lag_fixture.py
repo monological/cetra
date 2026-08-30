@@ -106,12 +106,29 @@ _lo = (-CASTER_HALF, CASTER_Y - CASTER_HALF_Y, -CASTER_HALF)
 _hi = (CASTER_HALF, CASTER_Y + CASTER_HALF_Y, CASTER_HALF)
 caster_pos = [(x, y, z) for y in (_lo[1], _hi[1]) for z in (_lo[2], _hi[2])
               for x in (_lo[0], _hi[0])]
-# Winding is irrelevant to a body that is never seen and only writes depth, so
-# both triangles of every face are emitted in one order and the box is closed.
-_F = [(0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4), (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5)]
+# WINDING IS NOT IRRELEVANT HERE, which is the trap this box already fell into.
+# A first draft emitted all six faces in one index order; three came out wound
+# inward, were backface-culled, and left two VERTICAL quads -- whose shadow under
+# a near-vertical sun is a line rather than a rectangle. It rendered as two thin
+# lines and read as a shadow-map problem.
+#
+# So the winding is asserted rather than trusted: every triangle's normal must
+# point away from the box centre.
+_F = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
 caster_idx = []
 for a, b, c, d in _F:
     caster_idx += [a, b, c, a, c, d]
+
+_centre = tuple((_lo[i] + _hi[i]) * 0.5 for i in range(3))
+for _t in range(0, len(caster_idx), 3):
+    _p = [caster_pos[caster_idx[_t + k]] for k in range(3)]
+    _u = [_p[1][i] - _p[0][i] for i in range(3)]
+    _v = [_p[2][i] - _p[0][i] for i in range(3)]
+    _n = (_u[1] * _v[2] - _u[2] * _v[1], _u[2] * _v[0] - _u[0] * _v[2],
+          _u[0] * _v[1] - _u[1] * _v[0])
+    _out = [_p[0][i] - _centre[i] for i in range(3)]
+    assert sum(_n[i] * _out[i] for i in range(3)) > 0.0, (
+        f"caster triangle {_t // 3} is wound inward; it will be culled and cast nothing")
 
 ground_nrm = [(0.0, 1.0, 0.0)] * 4
 ground_uv = [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
@@ -242,12 +259,41 @@ cscn = {
     "post": POST,
 }
 
+# THE STILL TWIN: the caster parked at the origin, so the arm can read the
+# shadow's position ABSOLUTELY rather than as a change between frames.
+#
+# Comparing consecutive frames of the moving scene also works, but only while the
+# motion onset falls exactly between the two sampled frames -- retime the clip or
+# change the frame rate and it quietly stops testing anything. Against the twin,
+# a correct shadow has left the parked position at the first displaced frame and
+# a lagging one is still on it, whatever the sampling.
+#
+# Same pattern as wind_uv_fixture's _still twin, and for the same reason: one
+# frame of the moving scene cannot substitute for a reference.
+still_gltf = json.loads(json.dumps(gltf))
+_still_trans = b"".join(struct.pack("<3f", 0.0, 0.0, 0.0) for _ in TRANSLATIONS)
+_still_bytes = buffer_bytes.replace(trans_b, _still_trans)
+assert _still_bytes != buffer_bytes and len(_still_bytes) == len(buffer_bytes), (
+    "the still twin's translation block did not substitute cleanly")
+still_gltf["buffers"][0]["uri"] = ("data:application/octet-stream;base64," +
+                                   base64.b64encode(_still_bytes).decode("ascii"))
+still_gltf["asset"]["generator"] = "gen_shadow_lag_fixture.py (still twin)"
+
+still_cscn = json.loads(json.dumps(cscn))
+still_cscn["models"] = [{"path": "shadow_lag_still.gltf"}]
+
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, "shadow_lag_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
 with open(os.path.join(here, "shadow_lag_fixture.cscn"), "w") as f:
     json.dump(cscn, f, indent=1)
+    f.write("\n")
+with open(os.path.join(here, "shadow_lag_still.gltf"), "w") as f:
+    json.dump(still_gltf, f, indent=1)
+    f.write("\n")
+with open(os.path.join(here, "shadow_lag_still.cscn"), "w") as f:
+    json.dump(still_cscn, f, indent=1)
     f.write("\n")
 
 print(f"hold until t={HOLD_T} (frame {HOLD_FRAME}), then {TRAVEL_X} units by t={END_T}")
