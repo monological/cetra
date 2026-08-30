@@ -4,7 +4,9 @@
 
 #include "occlusion.h"
 
+#include "draw_list.h"
 #include "mesh.h"
+#include "scene.h"
 
 #include "ext/log.h"
 
@@ -377,6 +379,30 @@ bool occlusion_test_aabb(const OcclusionContext* context, const vec3 world_min,
         }
     }
     return true;
+}
+
+void occlusion_cull_list(OcclusionContext* context, struct DrawList* list,
+                         const struct CullView* view) {
+    if (!context || !list || !context->active)
+        return;
+    for (size_t i = 0; i < list->count; ++i) {
+        DrawItem* item = &list->items[i];
+        // The same box the frustum test uses, margins and pose included.
+        // Unboundable means visible AND never occlusion-cull.
+        AABB box;
+        if (!draw_item_bounds(item, view, &box))
+            continue;
+        // Zeroed because they are out-params of a call in another translation
+        // unit, which static analysis reads as a use before write.
+        vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
+        aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, world_min,
+                       world_max);
+        context->tested++;
+        if (occlusion_test_aabb(context, world_min, world_max)) {
+            item->occluded = 1;
+            context->culled++;
+        }
+    }
 }
 
 const uint16_t* occlusion_depth_pixels(const OcclusionContext* context, int* w, int* h) {

@@ -175,7 +175,7 @@ typedef struct Mesh {
     // is a lerp between two stored values, so this extreme is really reached. It
     // is exact in Y, which is the only axis the morph moves in; the culler
     // expands all three, so the box it builds is exact there and conservative in
-    // X and Z. Read by draw_list.c's _item_bounds, for the same reason wind's is:
+    // X and Z. Read by draw_list.c's draw_item_bounds, for the same reason wind's is:
     // a mesh whose displacement is unbounded cannot be frustum-culled without
     // dropping geometry that is on screen.
     //

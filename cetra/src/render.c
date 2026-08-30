@@ -28,6 +28,7 @@
 #include "profiler.h"
 #include "emissive_light.h"
 #include "light_cluster.h"
+#include "occlusion.h"
 #include "util.h"
 #include "shadow.h"
 #include "intersect.h"
@@ -74,9 +75,46 @@ AnimationState* get_render_animation_state(void) {
 }
 
 CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustum* frustum) {
+    // .occlusion stays false here: render_occlusion_pass is the ONE writer of
+    // true, and only on the camera pass's view. The shadow layers and every
+    // capture build their views through this same constructor, which is what
+    // keeps a camera answer out of a light's cull without any of them opting
+    // out.
     CullView view = {engine->frustum_cull_enabled ? frustum : NULL, scene ? scene->wind : NULL,
                      get_render_animation_state()};
     return view;
+}
+
+// The occlusion pass (spec 11.98): rasterise this frame's occluders, settle
+// every item's bit once, and arm the camera view. Static because the frame
+// site in render_current_scene is its only legal caller -- anywhere else is
+// either before the transforms are final or inside a capture.
+static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) {
+    if (!engine->occlusion_cull_enabled || !engine->occlusion || !engine->camera)
+        return;
+    DrawList* list = &scene->draw_list;
+    // The whole off state for an unoccluded scene: two integer compares.
+    if (scene->occluder_count == 0 && list->occluder_flag_count == 0)
+        return;
+
+    occlusion_begin(engine->occlusion, engine->view_proj, engine->camera->position);
+    for (int i = 0; i < scene->occluder_count; ++i)
+        occlusion_add_box(engine->occlusion, scene->occluders[i].box_min,
+                          scene->occluders[i].box_max, NULL);
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (item->flags & DRAW_OCCLUDER)
+            occlusion_add_box(engine->occlusion, item->mesh->aabb.min, item->mesh->aabb.max,
+                              item->node->global_transform);
+    }
+    occlusion_finish(engine->occlusion);
+
+    // Occluders that all clipped away or sat behind the camera cover nothing;
+    // the item walk would test every box against an empty buffer.
+    if (!occlusion_active(engine->occlusion))
+        return;
+    occlusion_cull_list(engine->occlusion, list, cull);
+    cull->occlusion = true;
 }
 
 void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
@@ -1244,6 +1282,19 @@ void render_current_scene(Engine* engine) {
     // per-frame flag resets and the prev_view_proj stash below, poisoning the
     // NEXT frame's motion vectors as well as this one's composite.
     engine_build_draw_list((Engine*)engine, scene);
+
+    // Occlusion culling (spec 11.98), HERE for three reasons that are all
+    // ordering. It reads the unjittered view_proj published above; it writes
+    // bits onto the list the build call above just finalised, so a pre-render
+    // graph mutation cannot zero them by triggering a later rebuild; and it
+    // must precede every camera sweep below, which is what makes one answer
+    // serve all of them. Skipped under a capture: the buffer is the MAIN
+    // camera's, and a cube face testing against it would be conservative in
+    // neither direction -- into a baked cubemap, permanently.
+    profiler_cpu_scope_begin(engine->profiler, "occlusion");
+    if (!engine->capturing)
+        render_occlusion_pass((Engine*)engine, scene, &cull);
+    profiler_cpu_scope_end(engine->profiler);
 
     // Derived emissive panels (spec 11.49), immediately upstream of the only
     // thing that reads them.

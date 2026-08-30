@@ -64,6 +64,14 @@ typedef struct DrawItem {
     // pass. A per-light level would let a caster's depth-map silhouette
     // disagree with the surface it is shaded with, which reads as acne.
     uint8_t lod;
+    // The occlusion pass's per-frame CAMERA answer (spec 11.98) -- not a
+    // material fact like `flags`, which is why it is not a flag bit. Zero at
+    // build; written once between the build and the first camera sweep; read
+    // only through a CullView that set `occlusion`. On the item rather than in
+    // a side array because the lane sort COPIES items in permuted order and
+    // the shadow pass indexes through its own caster order -- the byte rides
+    // both for free where an index into the original list survives neither.
+    uint8_t occluded;
 } DrawItem;
 
 typedef struct DrawList {
@@ -143,6 +151,13 @@ typedef struct CullView {
     const Frustum* frustum;
     const struct Wind* wind;           // the scene's field; NULL = nothing sways
     const struct AnimationState* pose; // the live pose; NULL = every mesh is at bind
+    // True only on the camera pass's view, and only on frames the occlusion
+    // pass ran: says draw_item_visible may read item->occluded. False from the
+    // one constructor, so the shadow layers, the TSM walks and every capture
+    // keep their exact behaviour without being touched -- occlusion is a
+    // CAMERA answer, and a pass culling against a light's volume must never
+    // see it.
+    bool occlusion;
 } CullView;
 
 // Whether this item survives the frustum.
@@ -155,6 +170,14 @@ typedef struct CullView {
 // the other shifts every instance behind it. Four hand-written copies of this
 // had already drifted on the null guard.
 bool draw_item_visible(const DrawItem* item, const CullView* view);
+
+// The object-space box the geometry this item draws actually occupies -- wind
+// and morph margins included, a live pose folded in. False = no bound can be
+// established, which a caller must read as "visible AND never occlusion-cull":
+// culling on a bound the geometry can leave drops something on screen.
+// Exported for the occlusion pass, which needs the same box the frustum test
+// uses -- a second bound would be a second thing to keep in agreement.
+bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out);
 
 // Whether two items are the same DRAW: same geometry at the same level. The
 // level joins the key because one draw submits one index range, so two

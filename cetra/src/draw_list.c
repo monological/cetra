@@ -106,7 +106,7 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
     // and that stays where its import box says: opaque lane (holes in masked or
     // blended geometry let the background through), unskinned (a pose leaves
     // the bind box), and undisplaced (morph and wind move the surface AWAY from
-    // a static box -- note _item_bounds ADDS those margins for occludees; an
+    // a static box -- note draw_item_bounds ADDS those margins for occludees; an
     // occluder would have to shrink by them, and a shrunken box of unknowable
     // shape is just "off"). doubleSided is deliberately allowed: a closed
     // double-sided crate occludes fine, and openness is the author's contract,
@@ -148,7 +148,7 @@ _Static_assert(sizeof(LOD_SWITCH) / sizeof(LOD_SWITCH[0]) == CETRA_LOD_MAX - 1,
 // undisplaced, and at bind pose for a skinned mesh. `out_radius` may be NULL
 // for a caller that only wants the centre.
 //
-// That is deliberately NOT the bound the culler tests (_item_bounds), and the
+// That is deliberately NOT the bound the culler tests (draw_item_bounds), and the
 // two answer different questions: culling needs the envelope the geometry can
 // reach, where LOD and depth ordering want the size and place of the geometry
 // itself. Feeding them the envelope would pick a level from a grass blade's
@@ -287,12 +287,9 @@ static void _posed_bounds(const Mesh* mesh, const AnimationState* pose, AABB* ou
 }
 
 // The object-space box the geometry this item draws actually occupies, which is
-// mesh->aabb only for a mesh that neither sways nor poses.
-//
-// Returns false when no bound can be established, which the caller reads as
-// visible. That is the honest answer rather than a fallback: culling on a bound
-// the geometry can leave drops something on screen.
-static bool _item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
+// mesh->aabb only for a mesh that neither sways nor poses. Contract in the
+// header, where the occlusion pass reads it too.
+bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
     const Mesh* mesh = item->mesh;
     *out = mesh->aabb;
 
@@ -338,10 +335,17 @@ static bool _item_bounds(const DrawItem* item, const CullView* view, AABB* out) 
 }
 
 bool draw_item_visible(const DrawItem* item, const CullView* view) {
-    if (!view || !view->frustum)
+    if (!view)
+        return true;
+    // Settled once per frame by the occlusion pass, read here O(items x
+    // passes): one load against the frustum test's arithmetic, and valid
+    // independently of it.
+    if (view->occlusion && item->occluded)
+        return false;
+    if (!view->frustum)
         return true;
     AABB box;
-    if (!_item_bounds(item, view, &box))
+    if (!draw_item_bounds(item, view, &box))
         return true;
     return frustum_test_aabb_transformed(view->frustum, box.min, box.max,
                                          item->node->global_transform);
