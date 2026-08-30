@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -4891,6 +4892,26 @@ GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half sc
 # the opaque pass must not silently demand it of a frame that cannot deliver it.
 GPU_FRAME_DROP = 0.20
 
+# Milliseconds of slack on the two ORDERING arms. Both compare quantities the
+# profiler prints at three decimal places, so the tolerance is for the rounding
+# and nothing else -- the defect these catch is measured in whole multiples, not
+# in fractions of a millisecond. Same value cpu-bound uses, for the same reason.
+GPU_ORDER_SLACK = 0.05
+# How far PERIOD may sit from a clock the profiler does not own. Wide on
+# purpose: this arm is not a precision check on the frame time, it is the only
+# thing in the suite that can catch the whole row being saturated, clamped or
+# divided by the wrong count. Spec 11.89's clamp pinned it at exactly 100.000 ms
+# and every arm here stayed green.
+GPU_WALL_TOLERANCE = 0.35
+# The two legs of that comparison. Startup cancels by differencing, so what the
+# long one has to buy is a SECOND latch window -- profiler_report publishes the
+# last one latched, and at 45 frames that is still the first, which is warm-up.
+# Stated here rather than leaning on _gpu_cmd's default, because the difference
+# of the two is a DIVISOR: taking one from a default and one from a constant is
+# how the arm silently starts dividing by the wrong number of frames.
+GPU_WALL_SHORT_FRAMES = "45"
+GPU_WALL_FRAMES = "90"
+
 
 # The report's row format is the assertion surface, so a shifted format has to
 # report as a named FAIL rather than as missing rows -- the arms below would
@@ -5123,14 +5144,59 @@ def _scale_drop_detail(timing, label, bar):
 
 
 def run_profiler_gate(workdir):
+    """Per-pass GPU and CPU timing, and whether the numbers mean what they say.
+
+      gpu-parse       every line between the banners parses as a row, so a shifted
+                      report format fails by name instead of as missing passes.
+      gpu-rows        the required passes are present, BY NAME -- a count cannot say
+                      which one vanished.
+      gpu-nonzero     enough passes read above zero, and all are finite. A driver that
+                      accepts timer queries and measures nothing looks identical to a
+                      working one until here.
+      gpu-sum         TIMED covers at least a third of FRAME. Loose, and the only thing
+                      standing between the table and a third of the frame going unnamed.
+      gpu-off         profiled and unprofiled renders are 0 px apart. The instrument
+                      must not move what it measures, and no golden runs with the flag.
+      gpu-dof         a pass that is OFF has no row, and turning it on produces one that
+                      costs something. Without it every arm above passes against a
+                      profiler printing plausible constants.
+      gpu-scale       the opaque row sheds time at half render scale -- attached to real
+                      work rather than to the frame counter.
+      gpu-frame       the frame row moves with load, so it is a measurement and not a
+                      constant. Every ratio a perf spec quotes has it as denominator.
+      gpu-period      FRAME <= PERIOD. FRAME is the frame's own bracket and PERIOD the
+                      wall period that contains it, so this is an ordering the profiler
+                      cannot violate without its clock being wrong.
+      gpu-gated       TIMED <= FRAME on a fixture with a GATED scope, in both columns.
+                      See below -- this is the arm the group did not have.
+      gpu-wall        PERIOD agrees with a clock the profiler does not own, differenced
+                      across a 45- and a 90-frame run so startup cancels.
+
+    THE LAST THREE EXIST BECAUSE EVERY ARM ABOVE THEM IS BLIND TO SPEC 11.97's DEFECT.
+    Each published number divided by its own count -- GPU results the driver returned,
+    frames the scope was entered, frames in the window -- so a scope gated on something
+    occasional published a per-OCCURRENCE cost in a column of per-FRAME means, and TIMED
+    summed it in as though it ran throughout. `dir_shadow_fixture --gi-volume` printed
+    a CPU TIMED of 736.855 ms against a 35.049 ms FRAME: 21x a ceiling that profiler.h
+    and gates.py both assert. Nothing was wrong with the clock.
+
+    gpu-sum could not see it -- it is a LOWER bound, and the defect makes TIMED too big.
+    cpu-bound (run_submission_gate) asserts the ceiling and was green only because its
+    fixture has no conditional scope. So the fixture is the arm: --gi-volume, whose first
+    sweep runs every probe in ONE frame and is the largest conditional scope in the tree.
+    """
     if not os.path.exists(os.path.join(ROOT, "assets", GPU_FIXTURE)):
         print(f"  gpu          SKIP  (missing {GPU_FIXTURE})")
         return []
 
     on_ppm = os.path.join(workdir, "gpu_on.ppm")
-    base, unparsed = _gpu_table(workdir, "base", [], screenshot=on_ppm)
-    if base is None:
+    # The whole report rather than the GPU block alone: gpu-period reads both
+    # timing columns, and re-rendering to see the second one would pay a full
+    # render for a table this run already printed.
+    base_tables = _profiled_run(workdir, "base", [], screenshot=on_ppm)
+    if base_tables is None:
         return ["gpu"]
+    base, unparsed = base_tables["gpu"], base_tables["unparsed"]["gpu"]
     failures = []
 
     ok = unparsed == 0
@@ -5268,6 +5334,104 @@ def run_profiler_gate(workdir):
             print(f"  gpu-frame    {'PASS' if ok else 'FAIL'}  {detail}")
             if not ok:
                 failures.append("gpu-frame")
+
+    # --- gpu-period: the bracket sits inside the period ---------------------
+    # FRAME is the frame's own bracket; PERIOD is the wall time from one frame's
+    # start to the next, which contains it plus the swap, the vsync wait and the
+    # poll. FRAME <= PERIOD is therefore an ordering the profiler cannot violate
+    # while its clock is right, and it is what connects the TIGHT ceiling the CPU
+    # column is read against to a number still comparable with an fps counter.
+    #
+    # Reads the base run's own tables. Both columns print both rows and the two
+    # are frame-wide quantities, so a disagreement between the columns is itself
+    # the failure.
+    missing = [c for c in ("gpu", "cpu")
+               if base_tables[c].get("FRAME (wall)") is None
+               or base_tables[c].get("PERIOD") is None]
+    if missing:
+        print(f"  gpu-period   FAIL  {', '.join(missing)} table carries no FRAME/PERIOD "
+              f"pair (frame={base_tables['gpu'].get('FRAME (wall)')}, "
+              f"period={base_tables['gpu'].get('PERIOD')}); a missing row is a more "
+              f"broken report than a wrong one")
+        failures.append("gpu-period")
+    else:
+        over = {c: (base_tables[c]["FRAME (wall)"], base_tables[c]["PERIOD"])
+                for c in ("gpu", "cpu")
+                if base_tables[c]["FRAME (wall)"] > base_tables[c]["PERIOD"] + GPU_ORDER_SLACK}
+        ok = not over
+        print(f"  gpu-period   {'PASS' if ok else 'FAIL'}  FRAME "
+              f"{base_tables['gpu']['FRAME (wall)']:.3f} ms inside PERIOD "
+              f"{base_tables['gpu']['PERIOD']:.3f} ms"
+              f"{'' if ok else '; INVERTED in ' + ', '.join(over)}")
+        if not ok:
+            failures.append("gpu-period")
+
+    # --- gpu-occasional: the ceiling holds when a scope is CONDITIONAL ------
+    # The arm this group did not have. Everything above runs on a fixture where
+    # every scope runs every frame, which is the one case the three denominators
+    # agree in -- so the whole group was blind to a scope that runs SOMETIMES.
+    #
+    # --gi-volume is the strongest available instance rather than a convenient
+    # one: the volume's first sweep runs every probe in a SINGLE frame, so it is
+    # a several-hundred-millisecond scope entered once in a run, which is exactly
+    # the shape that publishes a per-occurrence cost beside per-frame means.
+    gi = _profiled_run(workdir, "gi", ["--gi-volume"])
+    if gi is None:
+        failures.append("gpu-gated")
+    else:
+        # Both columns. The GPU one was over by 3.4x where the CPU one was over
+        # by 21x, so an arm reading either alone would have called it fixed while
+        # the other stayed wrong.
+        bad = {}
+        for col in ("gpu", "cpu"):
+            timed, frame = gi[col].get("TIMED"), gi[col].get("FRAME (wall)")
+            if timed is None or frame is None or frame <= 0.0:
+                bad[col] = "no TIMED/FRAME pair"
+            elif timed > frame + GPU_ORDER_SLACK:
+                bad[col] = f"{timed:.3f} > {frame:.3f} ms ({timed / frame:.1f}x)"
+        ok = not bad
+        print(f"  gpu-gated    {'PASS' if ok else 'FAIL'}  TIMED within FRAME on a "
+              f"gated scope: "
+              + ("both columns" if ok
+                 else "; ".join(f"{c} {d}" for c, d in bad.items())))
+        if not ok:
+            failures.append("gpu-gated")
+
+    # --- gpu-wall: checked against a clock the profiler does not own --------
+    # Booked by spec 11.89 and never built, and it is the arm that would have
+    # caught the clamp that pinned this row at exactly 100.000 ms: every arm in
+    # this group compares the profiler against ITSELF, so a row that is
+    # internally consistent and externally wrong passes all of them.
+    #
+    # Differenced across two run lengths so process startup -- context creation,
+    # asset load, shader compile -- cancels instead of being estimated. The long
+    # leg is what makes the comparison fair: profiler_report publishes the LAST
+    # LATCHED window, so a 45-frame run publishes its first, which is warm-up.
+    t0 = time.monotonic()
+    short = _profiled_run(workdir, "wall_short", [], frames=GPU_WALL_SHORT_FRAMES)
+    t_short = time.monotonic() - t0
+    t0 = time.monotonic()
+    long_run = _profiled_run(workdir, "wall_long", [], frames=GPU_WALL_FRAMES)
+    t_long = time.monotonic() - t0
+    extra_frames = int(GPU_WALL_FRAMES) - int(GPU_WALL_SHORT_FRAMES)
+    if short is None or long_run is None:
+        print("  gpu-wall     ERROR while rendering the two run lengths")
+        failures.append("gpu-wall")
+    else:
+        harness_ms = (t_long - t_short) / extra_frames * 1000.0
+        period = long_run["gpu"].get("PERIOD")
+        if period is None or period <= 0.0 or harness_ms <= 0.0:
+            print(f"  gpu-wall     FAIL  no usable pair (PERIOD={period}, harness="
+                  f"{harness_ms:.3f} ms/frame over {extra_frames} extra frames)")
+            failures.append("gpu-wall")
+        else:
+            rel = abs(period - harness_ms) / harness_ms
+            ok = rel <= GPU_WALL_TOLERANCE
+            print(f"  gpu-wall     {'PASS' if ok else 'FAIL'}  PERIOD {period:.3f} ms "
+                  f"against {harness_ms:.3f} ms/frame measured outside the process "
+                  f"({rel * 100.0:.0f}% apart, want <= {GPU_WALL_TOLERANCE * 100.0:.0f}%)")
+            if not ok:
+                failures.append("gpu-wall")
 
     return failures
 
