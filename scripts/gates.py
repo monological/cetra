@@ -19768,6 +19768,14 @@ OCCLUSION_MAT = "occlusion_fixture_mat.cscn"
 # coordinates are hardcoded here on cull-skin-away's precedent, with the assert
 # as the thing that keeps the two from drifting.
 OCCLUSION_INSIDE_CAM = ["--cam-eye", "0,10,-4", "--cam-target", "0,10,-16"]
+# The probe's two instrument floors, the CULL_BOUND_FLOOR pattern: floors on
+# the INSTRUMENT, not the engine. catch measured 0.9413 on the portal sweep --
+# the hierarchy giving ground would lower it, never raise it -- and 1534 of
+# 2048 sweep boxes landed reference-hidden; a sweep starved of hidden boxes is
+# a safety property tested against nothing (the first sweep shipped at 13 of
+# 2048 and would have proven anything).
+OCC_CATCH_FLOOR = 0.80
+OCC_SWEEP_MIN_HIDDEN = 800
 
 
 def _occlusion_hidden_count():
@@ -19797,6 +19805,11 @@ def run_occlusion_gate(workdir):
       occl-shadow    the shadow-cascade submit rows are IDENTICAL on vs off --
                      occlusion is camera-only, and a caster hidden from the camera
                      still casts.
+      occl-probe     the brute-force twin, two-sided: hierarchical-hidden implies
+                     reference-hidden with ZERO exceptions over the scene and a
+                     seeded sweep, AND the catch rate clears a floor so the probe
+                     cannot pass by hiding nothing. Plus the interior contract on
+                     every flagged proxy, box against its own triangles.
 
     The corpus's first fixtures with real occlusion in them: everything else is
     either fully visible or frustum-culled, so a culler that hides on-screen
@@ -19923,6 +19936,67 @@ def run_occlusion_gate(workdir):
               f"off (a caster hidden from the camera still casts)")
         if not ok:
             failures.append("occl-shadow")
+
+    # --- occl-probe: the brute-force twin, both jaws -------------------------
+    # The raster path is SHARED between the buffer and the reference by design
+    # (three consumers that cannot round differently), so what this verifies is
+    # the HIERARCHY -- the tile fold, the footprint rounding, the mask --
+    # against a per-pixel test at 4x resolution over the identical box set.
+    # The identity arms above carry the raster half.
+    rows, _ = _probe_render(os.path.join(ROOT, "assets", OCCLUSION_FIXTURE),
+                            "--occlusion-probe", "occlusion-probe")
+    mat_rows, _ = _probe_render(os.path.join(ROOT, "assets", OCCLUSION_MAT),
+                                "--occlusion-probe", "occlusion-probe")
+    bare_rows, _ = _probe_render(os.path.join(ROOT, "assets", OCCLUSION_BARE),
+                                 "--occlusion-probe", "occlusion-probe")
+    summary = next((r for r in rows if r.get("kind") == "summary"), None)
+    sweep = next((r for r in rows if r.get("kind") == "sweep"), None)
+    items = [r for r in rows if r.get("kind") == "item"]
+    bare_head = next((r for r in bare_rows if r.get("kind") == "header"), None)
+    proxies = [r for r in mat_rows if r.get("kind") == "proxy"]
+    if summary is None or sweep is None or not items or bare_head is None:
+        print("  occl-probe   FAIL  probe rows missing (summary/sweep/items/bare header)")
+        failures.append("occl-probe")
+    else:
+        problems = []
+        # Jaw one: safety, zero exceptions, scene and sweep alike.
+        if int(summary["violations"]) != 0 or int(sweep["violations"]) != 0:
+            problems.append(f"violations scene={summary['violations']} "
+                            f"sweep={sweep['violations']} (want 0: hierarchical-hidden "
+                            f"must imply reference-hidden)")
+        # Jaw two: efficacy with the vacuity guard.
+        if int(sweep["ref_hidden"]) < OCC_SWEEP_MIN_HIDDEN:
+            problems.append(f"sweep ref_hidden {sweep['ref_hidden']} < "
+                            f"{OCC_SWEEP_MIN_HIDDEN}: the safety jaw is tested "
+                            f"against nothing")
+        elif float(sweep["catch"]) < OCC_CATCH_FLOOR:
+            problems.append(f"catch {sweep['catch']} < {OCC_CATCH_FLOOR}")
+        # The fixture's own classes, cross-checked by the exact raster.
+        bad_hidden = [r["name"] for r in items if r["name"].startswith("occl_hidden_")
+                      and (r["hier"] != "1" or r["ref"] != "1")]
+        bad_door = [r["name"] for r in items if r["name"].startswith("occl_door")
+                    and r["hier"] != "0"]
+        if bad_hidden:
+            problems.append(f"{len(bad_hidden)} occl_hidden_* not hidden by both tests")
+        if bad_door:
+            problems.append(f"door meshes culled: {bad_door}")
+        # The empty path answers by name.
+        if bare_head.get("available") != "0" or bare_head.get("reason") != "nooccluders":
+            problems.append(f"bare header {bare_head} (want available=0 reason=nooccluders)")
+        # The interior contract on the material-flagged walls.
+        bad_proxy = [r["name"] for r in proxies
+                     if int(r["poke"]) != 0 or int(r["near"]) != 0]
+        if not proxies:
+            problems.append("no proxy rows on the material variant")
+        elif bad_proxy:
+            problems.append(f"interior contract violated: {bad_proxy}")
+        ok = not problems
+        print(f"  occl-probe   {'PASS' if ok else 'FAIL'}  "
+              + (f"0 violations over {len(items)} items + {sweep['boxes']} sweep boxes, "
+                 f"catch {sweep['catch']} (floor {OCC_CATCH_FLOOR}), "
+                 f"{len(proxies)} proxies clean" if ok else "; ".join(problems)))
+        if not ok:
+            failures.append("occl-probe")
 
     return failures
 

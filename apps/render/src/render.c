@@ -19,6 +19,7 @@
 #include "cetra/engine.h"
 #include "cetra/profiler.h"
 #include "cetra/light_cluster.h"
+#include "cetra/occlusion.h"
 #include "cetra/import.h"
 #include "cetra/render.h"
 #include "cetra/transform.h"
@@ -108,6 +109,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-instancing    One draw per mesh, no batching\n");
     fprintf(stderr, "      --no-frustum-cull  Submit every item, culled or not\n");
     fprintf(stderr, "      --no-occlusion-cull  Occlusion rejection off (spec 11.98)\n");
+    fprintf(stderr, "      --occlusion-probe  Print the masked buffer against its exact twin\n");
     fprintf(stderr, "      --no-sort-opaque   Draw opaques in graph order (default: sorted)\n");
     fprintf(stderr, "      --depth-prepass    Depth-only pass before shading (default off)\n");
     fprintf(stderr, "      --no-lod           Draw every mesh at LOD level 0\n");
@@ -795,6 +797,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_frustum_cull = 1;
         } else if (strcmp(argv[i], "--no-occlusion-cull") == 0) {
             args->no_occlusion_cull = 1;
+        } else if (strcmp(argv[i], "--occlusion-probe") == 0) {
+            args->occlusion_probe = 1;
         } else if (strcmp(argv[i], "--no-sort-opaque") == 0) {
             args->no_sort_opaque = 1;
         } else if (strcmp(argv[i], "--depth-prepass") == 0) {
@@ -4229,6 +4233,11 @@ int main(int argc, char** argv) {
     // whose output a reader has to place before trusting.
     if (args.wind_bound_probe)
         wind_bound_probe(scene);
+
+    // Needs no GL and no frame -- it reads the occlusion buffer as the LAST
+    // frame left it, which is exactly the state the arms want validated.
+    if (args.occlusion_probe)
+        occlusion_probe_print(engine->occlusion, scene);
 
     // Needs no GL and no frame either -- the profiles are parsed and resampled at
     // scene load and nothing since has touched them. Beside the others for the

@@ -39,6 +39,17 @@ enum {
 #define OCCLUSION_DEPTH_EMPTY 0xFFFFu
 #define OCCLUSION_DEPTH_MAX   0xFFFEu
 
+// What add_box accepted, kept so the probe can replay EXACTLY the frame's set
+// into its reference buffer. Re-assembling the set in the probe would be a
+// second copy of the gather that could drift from the one the frame used --
+// at which point the probe validates a different question than the one asked.
+typedef struct OcclusionBoxRec {
+    vec3 box_min;
+    vec3 box_max;
+    mat4 transform;
+    bool transformed; // false = box_min/box_max are world space already
+} OcclusionBoxRec;
+
 // Fixed-size working set, allocated once -- the LightClusterContext charter.
 // The buffer is fixed-resolution in NDC, so render scale, TAAU, supersampling
 // and window size never touch it. Depth is FIXED-POINT because -O2 moves CPU
@@ -57,10 +68,11 @@ typedef struct OcclusionContext {
     // Farthest pixel per tile after finish() -- what the test compares against.
     uint16_t tile_zmax[OCCLUSION_TILES_Y][OCCLUSION_TILES_X];
 
-    int occluder_count;    // boxes accepted this frame (skipped ones excluded)
-    size_t tested, culled; // occlusion_cull_list's tallies, for the probe
-    bool active;           // finish() found at least one fully covered tile
-    bool warned_overflow;  // boxes past the cap are dropped and said once
+    int occluder_count; // boxes accepted this frame (skipped ones excluded)
+    OcclusionBoxRec boxes[OCCLUSION_MAX_OCCLUDERS]; // the accepted set, for the probe
+    size_t tested, culled;                          // occlusion_cull_list's tallies, for the probe
+    bool active;          // finish() found at least one fully covered tile
+    bool warned_overflow; // boxes past the cap are dropped and said once
 } OcclusionContext;
 
 OcclusionContext* create_occlusion_context(void);
@@ -107,6 +119,17 @@ void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj,
 struct Mesh;
 void occlusion_rasterize_mesh_into(uint16_t* depth, int w, int h, mat4 view_proj,
                                    const struct Mesh* mesh, mat4 transform);
+
+// The brute-force twin, printed as `occlusion-probe <tag> k=v` rows on stdout
+// (the wind-bound-probe shape). Reads the buffer as the LAST frame left it, so
+// it runs after the loop with no GL and no frame. What it verifies is the
+// HIERARCHY -- the tile fold, the footprint rounding, the mask -- against a
+// per-pixel test at reference resolution over the identical box set; the
+// raster path itself is shared by design, and the identity arms carry that
+// half. Also validates every DRAW_OCCLUDER item's interior contract by
+// rastering its box against its own triangles.
+struct Scene;
+void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene);
 
 // Integer state reads for the probe. Buffers are hashed by the caller when
 // asked rather than digested every frame.
