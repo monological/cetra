@@ -452,6 +452,13 @@ void profiler_end_frame(Profiler* profiler) {
     if (profiler->active >= 0) {
         log_error("Profiler: scope '%s' was never closed",
                   profiler->scopes[profiler->active].name);
+        // Closing it matters as much as reporting it, and this is the recovery
+        // the samples query below already had. A query left active fails the
+        // next frame's glBeginQuery with INVALID_OPERATION while `issued` and
+        // `active` are set regardless, so the NEXT scope's glEndQuery closes
+        // this one's query instead: from then on every GPU row is some other
+        // pass's time under this pass's name, and nothing says so.
+        glEndQuery(GL_TIME_ELAPSED);
         profiler->active = -1;
     }
     // Same recovery for the samples query, which had none: an early return
@@ -575,7 +582,14 @@ void profiler_cpu_scope_begin(Profiler* profiler, const char* name) {
         return;
     // Nesting is still refused -- one open at a time keeps the accumulate
     // unambiguous -- but a REPEAT is not, which is the whole point of this pair.
-    if (profiler->suspends > 0 || profiler->cpu_active >= 0) {
+    //
+    // Refused inside an open GPU scope too, and that is not symmetry for its own
+    // sake. Both kinds accumulate through cpu_accum_ms off one cpu_t0 per scope,
+    // so overlapping them bills the same wall time twice and TIMED stops being
+    // bounded by the frame that contains it -- which profiler_frame_ms now calls
+    // an identity rather than a convention. Flatness was true of every call site
+    // and enforced at none of them.
+    if (profiler->suspends > 0 || profiler->cpu_active >= 0 || profiler->active >= 0) {
         profiler->cpu_suppressed++;
         return;
     }

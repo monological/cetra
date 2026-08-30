@@ -112,8 +112,10 @@ void profiler_scope_end(Profiler* profiler);
 // and the frame is counted once, so the row stays comparable with every other row
 // and with profiler_frame_ms.
 //
-// Its own open/refusal state, so it neither blocks nor is blocked by an open GPU
-// scope -- there is no query for the two to collide over.
+// Its own open/refusal state, so a repeat of one kind cannot be mistaken for a
+// nesting of the other. It IS refused inside an open GPU scope, though: the two
+// share one wall clock per scope, so overlapping them would bill the same time
+// twice and cost profiler_frame_ms the identity it claims.
 void profiler_cpu_scope_begin(Profiler* profiler, const char* name);
 void profiler_cpu_scope_end(Profiler* profiler);
 
