@@ -19776,6 +19776,11 @@ OCCLUSION_INSIDE_CAM = ["--cam-eye", "0,10,-4", "--cam-target", "0,10,-16"]
 # 2048 and would have proven anything).
 OCC_CATCH_FLOOR = 0.80
 OCC_SWEEP_MIN_HIDDEN = 800
+# The crossover's exclusion bar: effects under this are too small to close a
+# roadmap row on, whatever `separated` says. The regression test is `separated`
+# itself, non-overlap over four interleaved pairs -- the reading order the
+# prepass crossover settled.
+OCC_WIN_MIN = 0.05
 
 
 def _occlusion_hidden_count():
@@ -19810,6 +19815,13 @@ def run_occlusion_gate(workdir):
                      seeded sweep, AND the catch rate clears a floor so the probe
                      cannot pass by hiding nothing. Plus the interior contract on
                      every flagged proxy, box against its own triangles.
+      occl-fragment  the measured LOSS: on the scatter twin, culling a third of
+                     the triangles SPLITS one instanced run -- draws up while
+                     triangles down, as integers. The clock delta is printed with
+                     its sign, unasserted; the sign is the finding.
+      occl-crossover the measured WIN: the portal room's opaque row, steady
+                     state, interleaved pairs, non-overlap required. What closes
+                     roadmap row 37 with a number instead of an opinion.
 
     The corpus's first fixtures with real occlusion in them: everything else is
     either fully visible or frustum-culled, so a culler that hides on-screen
@@ -19997,6 +20009,66 @@ def run_occlusion_gate(workdir):
                  f"{len(proxies)} proxies clean" if ok else "; ".join(problems)))
         if not ok:
             failures.append("occl-probe")
+
+    # --- occl-fragment: where the feature loses, as integers ----------------
+    # One shared mesh in one instanced run, a pillar fence hiding every third
+    # column: culling removes a third of the triangles and SPLITS the run. The
+    # draw count rising while the triangle count falls is the loss mechanism
+    # demonstrated structurally; whether the clock nets out is printed with its
+    # sign and deliberately not asserted -- the sign IS the finding, and either
+    # answer is a result.
+    sc_on = _profiled_run(workdir, "occl_sc_on", [], fixture="occlusion_scatter.cscn",
+                          size=("400", "300"), frames="30")
+    sc_off = _profiled_run(workdir, "occl_sc_off", ["--no-occlusion-cull"],
+                           fixture="occlusion_scatter.cscn", size=("400", "300"),
+                           frames="30")
+    if sc_on is None or sc_off is None or sc_on["submit"].get("opaque") is None or \
+            sc_off["submit"].get("opaque") is None:
+        print("  occl-fragment FAIL  no opaque submission rows on the scatter twin")
+        failures.append("occl-fragment")
+    else:
+        d_on = sc_on["submit"]["opaque"]["draws"]
+        d_off = sc_off["submit"]["opaque"]["draws"]
+        t_on = sc_on["submit"]["opaque"]["triangles"]
+        t_off = sc_off["submit"]["opaque"]["triangles"]
+        g_on = sc_on["gpu"].get("opaque", 0.0)
+        g_off = sc_off["gpu"].get("opaque", 0.0)
+        ok = d_on > d_off and t_on < t_off
+        print(f"  occl-fragment {'PASS' if ok else 'FAIL'}  draws {d_off} -> {d_on} while "
+              f"triangles {t_off} -> {t_on} (want draws UP, triangles DOWN: culling "
+              f"fragments the run); opaque clock {g_off:.3f} -> {g_on:.3f} ms, unasserted")
+        if not ok:
+            failures.append("occl-fragment")
+
+    # --- occl-crossover: the measured win, roadmap row 37's number ----------
+    # The prepass crossover's whole design, copied: 800x600 because the GPU
+    # timer's own jitter dwarfs the effect at 400x300; -f 150 because a
+    # 45-frame run publishes the warm-up window; INTERLEAVED pairs so clock and
+    # thermal drift land on both configs; `separated` as the regression test
+    # with OCC_WIN_MIN only excluding an effect too small to care about.
+    runs_on, runs_off = [], []
+    for pair in range(4):
+        a = _profiled_run(workdir, f"occl_x_on{pair}", [], fixture=OCCLUSION_FIXTURE,
+                          size=("800", "600"), frames="150")
+        b = _profiled_run(workdir, f"occl_x_off{pair}", ["--no-occlusion-cull"],
+                          fixture=OCCLUSION_FIXTURE, size=("800", "600"), frames="150")
+        if a is not None:
+            runs_on.append(a["gpu"])
+        if b is not None:
+            runs_off.append(b["gpu"])
+    timing = _timing_delta(runs_on, runs_off)
+    if timing is None:
+        print("  occl-crossover FAIL  no usable opaque rows across the interleave")
+        failures.append("occl-crossover")
+    else:
+        on_ms, off_ms, delta, floor, separated = timing
+        ok = delta >= OCC_WIN_MIN and separated
+        print(f"  occl-crossover {'PASS' if ok else 'FAIL'}  opaque {on_ms:.3f} ms culled vs "
+              f"{off_ms:.3f} ms not ({delta * 100.0:+.0f}%, want >= {OCC_WIN_MIN * 100.0:.0f}% "
+              f"and separated={separated}), floor {floor * 100.0:.0f}% over 4 interleaved "
+              f"pairs")
+        if not ok:
+            failures.append("occl-crossover")
 
     return failures
 
