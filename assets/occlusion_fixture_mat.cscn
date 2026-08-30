@@ -1,0 +1,48 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "occlusion_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "OcclusionSun",
+   "type": "directional",
+   "direction": [
+    0.2,
+    -0.6,
+    -0.77
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": true
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   10.0,
+   10.0
+  ],
+  "target": [
+   0.0,
+   10.0,
+   0.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ },
+ "materials": {
+  "occl_wall": {
+   "occluder": "on"
+  }
+ }
+}
