@@ -19760,6 +19760,173 @@ def run_transform_walk_gate(workdir):
     return failures
 
 
+OCCLUSION_FIXTURE = "occlusion_fixture.cscn"
+OCCLUSION_BARE = "occlusion_fixture_bare.cscn"
+OCCLUSION_MAT = "occlusion_fixture_mat.cscn"
+# The generator's inside-the-room camera, asserted there to sit between the
+# wall's back face and the first hidden layer and inside no authored box; the
+# coordinates are hardcoded here on cull-skin-away's precedent, with the assert
+# as the thing that keeps the two from drifting.
+OCCLUSION_INSIDE_CAM = ["--cam-eye", "0,10,-4", "--cam-target", "0,10,-16"]
+
+
+def _occlusion_hidden_count():
+    """The occl_hidden_* population, read from the committed .gltf rather than
+    mirrored as a constant -- the fixture is the one statement of the layout."""
+    with open(os.path.join(ROOT, "assets", "occlusion_fixture.gltf")) as f:
+        gltf = json.load(f)
+    return sum(1 for n in gltf.get("nodes", [])
+               if n.get("name", "").startswith("occl_hidden_"))
+
+
+def run_occlusion_gate(workdir):
+    """Occlusion culling: authored occluders, masked software depth (spec 11.98).
+
+      occl-hidden    the portal room's opaque pass culls EXACTLY the occl_hidden_*
+                     population -- as wrong when it culls some as when it culls none.
+      occl-material  the material row alone reaches the same exact count.
+      occl-doorway   0 px against --no-occlusion-cull, with the marginal mesh's
+                     sliver in frame -- conservatism at the jamb, where an
+                     inward-rounded footprint deletes a visible sliver.
+      occl-inside    the camera inside the room: 0 px, and the culled count equals
+                     the no-occlusion run's (frustum work, nothing added).
+      occl-bare      the variant with NO occluders key: 0 px and equal counts --
+                     the empty-context path no flag can reach.
+      occl-sum       seen == instances + culled on the profiled run: occlusion
+                     rejections fold into the ONE counter every existing gate reads.
+      occl-shadow    the shadow-cascade submit rows are IDENTICAL on vs off --
+                     occlusion is camera-only, and a caster hidden from the camera
+                     still casts.
+
+    The corpus's first fixtures with real occlusion in them: everything else is
+    either fully visible or frustum-culled, so a culler that hides on-screen
+    geometry -- or hides nothing -- is green everywhere but here. The counted
+    claims are integers off the submission table, on the cull group's reasoning:
+    a pixel identity alone passes a culler that culls nothing.
+    """
+    if not os.path.exists(os.path.join(ROOT, "assets", OCCLUSION_FIXTURE)):
+        print("  occlusion    SKIP  (missing fixture)")
+        return []
+    failures = []
+    hidden = _occlusion_hidden_count()
+
+    on_ppm = os.path.join(workdir, "occl_on.ppm")
+    off_ppm = os.path.join(workdir, "occl_off.ppm")
+    on = _profiled_run(workdir, "occl_on", [], screenshot=on_ppm,
+                       fixture=OCCLUSION_FIXTURE, size=("400", "300"), frames="30")
+    off = _profiled_run(workdir, "occl_off", ["--no-occlusion-cull"], screenshot=off_ppm,
+                        fixture=OCCLUSION_FIXTURE, size=("400", "300"), frames="30")
+    if on is None or off is None:
+        return ["occlusion"]
+
+    # --- occl-hidden: the exact count, and the exact remainder --------------
+    opaque = on["submit"].get("opaque")
+    if opaque is None:
+        print("  occl-hidden  FAIL  no opaque submission row")
+        failures.append("occl-hidden")
+    else:
+        seen = opaque["meshes seen"]
+        culled = opaque["meshes culled"]
+        instances = opaque["instances"]
+        ok = culled == hidden and instances == seen - hidden and seen > hidden
+        print(f"  occl-hidden  {'PASS' if ok else 'FAIL'}  culled {culled} of {seen} "
+              f"(want exactly {hidden}, the occl_hidden_* population; "
+              f"{instances} drawn, want {seen - hidden})")
+        if not ok:
+            failures.append("occl-hidden")
+
+    # --- occl-material: the row is a real second channel --------------------
+    mat = _profiled_run(workdir, "occl_mat", [], fixture=OCCLUSION_MAT,
+                        size=("400", "300"), frames="30")
+    if mat is None or mat["submit"].get("opaque") is None:
+        print("  occl-material FAIL  no opaque submission row")
+        failures.append("occl-material")
+    else:
+        culled = mat["submit"]["opaque"]["meshes culled"]
+        ok = culled == hidden
+        print(f"  occl-material {'PASS' if ok else 'FAIL'}  the material-row variant "
+              f"culled {culled} (want {hidden}: the wall slabs' own AABBs must reach "
+              f"the buffer through the row alone)")
+        if not ok:
+            failures.append("occl-material")
+
+    # --- occl-doorway: the conservative identity ----------------------------
+    ae, _ = compare(on_ppm, off_ppm)
+    ok = ae == 0
+    print(f"  occl-doorway {'PASS' if ok else 'FAIL'}  {ae} px between culled and "
+          f"--no-occlusion-cull (want exactly 0: the marginal sliver at the jamb is "
+          f"the first thing a rounding mistake deletes)")
+    if not ok:
+        failures.append("occl-doorway")
+
+    # --- occl-inside: from inside the room, occlusion adds nothing ----------
+    in_on_ppm = os.path.join(workdir, "occl_in_on.ppm")
+    in_off_ppm = os.path.join(workdir, "occl_in_off.ppm")
+    in_on = _profiled_run(workdir, "occl_in_on", OCCLUSION_INSIDE_CAM,
+                          screenshot=in_on_ppm, fixture=OCCLUSION_FIXTURE,
+                          size=("400", "300"), frames="30")
+    in_off = _profiled_run(workdir, "occl_in_off",
+                           OCCLUSION_INSIDE_CAM + ["--no-occlusion-cull"],
+                           screenshot=in_off_ppm, fixture=OCCLUSION_FIXTURE,
+                           size=("400", "300"), frames="30")
+    if in_on is None or in_off is None:
+        failures.append("occl-inside")
+    else:
+        ae, _ = compare(in_on_ppm, in_off_ppm)
+        c_on = in_on["submit"].get("opaque", {}).get("meshes culled")
+        c_off = in_off["submit"].get("opaque", {}).get("meshes culled")
+        ok = ae == 0 and c_on is not None and c_on == c_off
+        print(f"  occl-inside  {'PASS' if ok else 'FAIL'}  {ae} px and culled "
+              f"{c_on} == {c_off} (want 0 px and equality: the wall is behind the "
+              f"camera, so its boxes must contribute nothing)")
+        if not ok:
+            failures.append("occl-inside")
+
+    # --- occl-bare: the path no flag reaches --------------------------------
+    bare_on_ppm = os.path.join(workdir, "occl_bare_on.ppm")
+    bare_off_ppm = os.path.join(workdir, "occl_bare_off.ppm")
+    bare_on = _profiled_run(workdir, "occl_bare_on", [], screenshot=bare_on_ppm,
+                            fixture=OCCLUSION_BARE, size=("400", "300"), frames="30")
+    bare_off = _profiled_run(workdir, "occl_bare_off", ["--no-occlusion-cull"],
+                             screenshot=bare_off_ppm, fixture=OCCLUSION_BARE,
+                             size=("400", "300"), frames="30")
+    if bare_on is None or bare_off is None:
+        failures.append("occl-bare")
+    else:
+        ae, _ = compare(bare_on_ppm, bare_off_ppm)
+        c_on = bare_on["submit"].get("opaque", {}).get("meshes culled")
+        c_off = bare_off["submit"].get("opaque", {}).get("meshes culled")
+        ok = ae == 0 and c_on is not None and c_on == c_off
+        print(f"  occl-bare    {'PASS' if ok else 'FAIL'}  {ae} px and culled "
+              f"{c_on} == {c_off} on the no-occluders variant (the empty-context "
+              f"early-out, which no flag can select and no other arm reads)")
+        if not ok:
+            failures.append("occl-bare")
+
+    # --- occl-sum: rejections land in the one denominator -------------------
+    ok, detail = _submit_sum_detail(on, "portal")
+    print(f"  occl-sum     {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("occl-sum")
+
+    # --- occl-shadow: camera-only, structurally -----------------------------
+    s_on = on["submit"].get("shadow cascades")
+    s_off = off["submit"].get("shadow cascades")
+    if s_on is None or s_off is None:
+        print(f"  occl-shadow  FAIL  no shadow-cascades row (on={s_on is not None}, "
+              f"off={s_off is not None}); the fixture's sun casts")
+        failures.append("occl-shadow")
+    else:
+        ok = s_on == s_off
+        print(f"  occl-shadow  {'PASS' if ok else 'FAIL'}  cascade rows "
+              f"{'identical' if ok else f'differ: {s_on} vs {s_off}'} between on and "
+              f"off (a caster hidden from the camera still casts)")
+        if not ok:
+            failures.append("occl-shadow")
+
+    return failures
+
+
 def run_pbr_variant_gate(workdir):
     """Lit-surface variants: a material compiles only the features it can use.
 
@@ -20106,6 +20273,8 @@ GATE_GROUPS = [
      run_translucent_offpath_gate),
     ("profiler", "gpu timing (per-pass queries, spec 11.27 / E4):", run_profiler_gate),
     ("cull", "wind and skinned geometry is cullable (spec 11.53):", run_cull_gate),
+    ("occlusion", "occlusion culling (authored occluders, masked software depth, spec 11.98):",
+     run_occlusion_gate),
     ("submission", "submission (draw counts + the CPU column, spec 11.28 / E5):",
      run_submission_gate),
     ("draw-list", "draw list (submission order, spec 11.28 Phase 3):", run_draw_list_gate),
