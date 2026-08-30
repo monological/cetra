@@ -47,7 +47,6 @@
 #include "cetra/sky.h"
 #include "cetra/water.h"
 #include "cetra/wind.h"
-#include "cetra/transform.h"
 #include "cetra/util.h"
 
 #include "cetra/game/character.h"
@@ -1694,9 +1693,9 @@ static unsigned region_digest(const Region* r) {
 // reloads, the node-local digest was bit-identical and the arm stayed green;
 // composed, it reads 0 of 15 cells matching.
 //
-// Not global_transform, which would be simpler: the region probe runs before
-// apply_transform_to_nodes, so a global is one frame stale and a region loaded
-// on the probe frame has none at all. The parent's local IS its world here --
+// Not global_transform, which would be simpler: the region probe runs before the
+// frame's transform walk, so a global is one frame stale and a region loaded on
+// the probe frame has none at all. The parent's local IS its world here --
 // prototype groups are root children.
 static unsigned region_digest_authored(const Region* r) {
     unsigned h = 2166136261u;
@@ -2448,15 +2447,11 @@ static void on_pre_render(Game* game, double alpha) {
         update_engine_camera_perspective(engine);
     }
 
-    // The descent, before the transform walk that gives a newly attached patch
-    // its global transform and before the draw list is asked what to draw.
+    // The descent, before the engine's transform walk gives a newly attached
+    // patch its global transform and before the draw list is asked what to draw.
     // Against the camera the frame will actually use, which is why it is here and
     // not in the fixed-step update: at a fixed step the selection would lag the
     // view by up to a frame, and the morph is a function of exactly this eye.
-    //
-    // That walk is now the ENGINE's, immediately after this hook returns, which
-    // is what puts it ahead of the shadow pass as well as ahead of the draw
-    // list. Both halves of the ordering this comment describes are unchanged.
     if (camera) {
         // Residency first: the quadtree hangs its patches under a node of its
         // own and does not care, but a region that loads here has to be in the

@@ -19,7 +19,6 @@
 #include "cetra/import.h"
 #include "cetra/render.h"
 #include "cetra/geometry.h"
-#include "cetra/transform.h"
 #include "cetra/light.h"
 
 #define FBX_MODEL_PATH  "./models/room.fbx"

@@ -2720,7 +2720,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         }
         profiler_scope_end(engine->profiler);
 
-        Scene* current_scene = get_current_scene(engine);
+        // The SAME scene the walk above propagated, not a fresh lookup. The
+        // pre-render hook can switch the active scene, and re-reading it here
+        // would draw one that no pass this frame prepared -- no transform walk,
+        // no cascade fit, no GI capture. Since 11.96 there is app code between
+        // the two points, so this stopped being a distinction without a
+        // difference.
+        Scene* current_scene = shadow_scene;
 
         // Process pending async texture uploads (max 5 per frame to avoid stutter)
         if (current_scene && current_scene->tex_pool && engine->async_loader) {

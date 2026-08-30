@@ -24,7 +24,6 @@
 #include "cetra/geometry.h"
 #include "cetra/light.h"
 #include "cetra/app.h"
-#include "cetra/transform.h"
 #include "cetra/game/game.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/physics.h"

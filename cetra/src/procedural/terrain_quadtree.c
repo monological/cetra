@@ -287,11 +287,15 @@ void terrain_quadtree_rebuild(TerrainQuadtree* qt, const vec3 eye) {
     // node" is this tree's own invariant and the shift is the one thing that
     // breaks it.
     glm_mat4_identity(qt->root->original_transform);
-    // Re-selected HERE rather than left to the next descent, and that is the
-    // whole reason this is one call. An origin shift lands before the shadow
-    // pass and the GI captures, which are the first things in a frame to read
-    // world positions -- so a tree left empty until the app's render callback
-    // builds its shadow map out of a world with no ground in it.
+    // Re-selected HERE rather than left to the next descent, so a rebuild leaves
+    // a populated tree whoever asked for it.
+    //
+    // It used to be load-bearing for a different reason: the shift lands before
+    // the shadow pass and the GI captures, and apps descended in their RENDER
+    // callback, so without this the frame's first readers of world position saw
+    // no ground at all. Since spec 11.96 an app descends in its pre-render hook,
+    // between the two, and apps/forest does -- so what this now covers is a
+    // caller that rebuilds without descending, not a frame-order hazard.
     terrain_quadtree_update(qt, eye);
 }
 

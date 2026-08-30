@@ -278,8 +278,8 @@ static void game_frame_update(Engine* engine, float dt) {
     game->sim_clock.time = game->time;
 }
 
-// engine_run's render hook: hand the app its on_render with the interpolation
-// alpha. The engine owns the framebuffer / G-buffer / present around it.
+// engine_run's pre-render hook: hand the app its on_pre_render before the engine
+// propagates the graph, so a node it moves is drawn where it moved it.
 static void game_pre_render(Engine* engine, Scene* scene) {
     (void)scene;
     Game* game = engine_get_user_data(engine);
@@ -291,6 +291,8 @@ static void game_pre_render(Engine* engine, Scene* scene) {
     }
 }
 
+// engine_run's render hook: hand the app its on_render with the interpolation
+// alpha. The engine owns the framebuffer / G-buffer / present around it.
 static void game_scene_render(Engine* engine, Scene* scene) {
     (void)scene;
     Game* game = engine_get_user_data(engine);

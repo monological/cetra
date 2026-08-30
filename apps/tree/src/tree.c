@@ -17,7 +17,6 @@
 #include "cetra/engine.h"
 #include "cetra/render.h"
 #include "cetra/geometry.h"
-#include "cetra/transform.h"
 #include "cetra/light.h"
 #include "cetra/texture.h"
 #include "cetra/app.h"
@@ -741,8 +740,8 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 // Everything that decides what the frame's geometry IS, and where it is seen
 // from. The engine propagates the graph as soon as this returns, so a slider
 // moved here regenerates before the shadow pass flattens the graph rather than
-// after -- which also retires the freed-mesh hazard render.c:1232 records
-// against this app by name.
+// after -- which is why the draw list keys on the graph epoch and not the frame
+// index, a hazard this app used to be the live example of.
 //
 // The GUI belongs here and not in render: igNewFrame fires before this hook, and
 // the panel is what writes the params the three tests below read.

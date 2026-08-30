@@ -3530,10 +3530,10 @@ int main(int argc, char** argv) {
     // (y=0, centered in x/z). Everything anchored at the origin -- the
     // ground-projection dome, the shadow catcher, the orbit pivot -- assumes the
     // model stands there; off-origin assets (e.g. authored floating at y=189)
-    // otherwise streak the projected environment and z-fight. The offset rides
-    // the per-frame model matrix (so animation-driven node transforms compose
-    // under it untouched); a pure translation leaves the radius unchanged, so
-    // the cached center just shifts by the offset.
+    // otherwise streak the projected environment and z-fight. The offset sits on
+    // the scene's root transform, which every walk seeds from, so node
+    // transforms compose under it untouched; a pure translation leaves the
+    // radius unchanged, so the cached center just shifts by the offset.
     vec3 bb_min, bb_max;
     compute_scene_bounds(scene, bb_min, bb_max);
     if (!args.no_recenter) {

@@ -1218,10 +1218,12 @@ void render_current_scene(Engine* engine) {
     Frustum frustum;
     frustum_extract_from_vp(engine->view_proj, &frustum);
 
-    // Built here, after the app's callback has stepped the animation, so the
-    // pose these passes cull against is the pose they are about to upload. The
-    // shadow pass builds its own for the same reason and gets a different
-    // answer, which is correct: it draws a different pose.
+    // The pose these passes cull against is the pose they are about to upload,
+    // and since 11.96 it is also the pose the shadow pass drew: the app steps
+    // the animation in its pre-render hook, ahead of both. The shadow pass still
+    // builds its own cull view and still gets a different answer -- the
+    // difference is now its FRUSTUM alone, which is what it always should have
+    // been. It used to be the pose as well, and this comment used to bless that.
     CullView cull = render_cull_view(engine, scene, &frustum);
 
     // Flatten once. Cube captures re-enter here six times with their own
@@ -1230,9 +1232,12 @@ void render_current_scene(Engine* engine) {
     // still culls against its own frustum at submit.
     //
     // The frame index alone would NOT be enough: an app that rebuilds geometry
-    // in its render callback (apps/tree on a slider) frees meshes the shadow
-    // pass already flattened, and a list reused on frame index would then draw
-    // freed memory. The graph epoch is what makes that a rebuild.
+    // mid-frame frees meshes an earlier pass already flattened, and a list
+    // reused on frame index would then draw freed memory. The graph epoch is
+    // what makes that a rebuild. apps/tree is the app that does this, on a
+    // slider -- it rebuilds in its pre-render hook now, ahead of the shadow
+    // pass, so the hazard is one an app could reintroduce rather than one
+    // currently live.
     //
     // A build failure falls through with an empty list rather than returning:
     // every consumer loops over count, and returning here would skip the
@@ -1241,11 +1246,7 @@ void render_current_scene(Engine* engine) {
     engine_build_draw_list((Engine*)engine, scene);
 
     // Derived emissive panels (spec 11.49), immediately upstream of the only
-    // thing that reads them. Here and not in scene_sync_materials because
-    // PLACEMENT needs this frame's transforms -- which since spec 11.96 it
-    // simply has, the engine having propagated the graph before the shadow pass
-    // rather than each app doing it here. This comment used to record the same
-    // one-frame lag the shadow pass had; both are gone.
+    // thing that reads them.
     //
     // A cube-capture face re-enters here, so this runs six more times per
     // capture; it is idempotent and epoch-gated, so those are placement only.

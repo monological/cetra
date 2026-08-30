@@ -26,7 +26,6 @@
 #include "cetra/geometry.h"
 #include "cetra/light.h"
 #include "cetra/camera.h"
-#include "cetra/transform.h"
 #include "cetra/app.h"
 #include "cetra/game/game.h"
 #include "cetra/noise.h"
