@@ -107,6 +107,7 @@ static void print_usage(const char* prog) {
                     "HUD tables, and stdout at exit\n");
     fprintf(stderr, "      --no-instancing    One draw per mesh, no batching\n");
     fprintf(stderr, "      --no-frustum-cull  Submit every item, culled or not\n");
+    fprintf(stderr, "      --no-occlusion-cull  Occlusion rejection off (spec 11.98)\n");
     fprintf(stderr, "      --no-sort-opaque   Draw opaques in graph order (default: sorted)\n");
     fprintf(stderr, "      --depth-prepass    Depth-only pass before shading (default off)\n");
     fprintf(stderr, "      --no-lod           Draw every mesh at LOD level 0\n");
@@ -792,6 +793,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_instancing = 1;
         } else if (strcmp(argv[i], "--no-frustum-cull") == 0) {
             args->no_frustum_cull = 1;
+        } else if (strcmp(argv[i], "--no-occlusion-cull") == 0) {
+            args->no_occlusion_cull = 1;
         } else if (strcmp(argv[i], "--no-sort-opaque") == 0) {
             args->no_sort_opaque = 1;
         } else if (strcmp(argv[i], "--depth-prepass") == 0) {
@@ -2698,6 +2701,8 @@ int main(int argc, char** argv) {
         engine->instancing_enabled = false;
     if (args.no_frustum_cull)
         engine->frustum_cull_enabled = false;
+    if (args.no_occlusion_cull)
+        engine->occlusion_cull_enabled = false;
     if (args.no_sort_opaque)
         engine->opaque_sort_enabled = false;
     if (args.depth_prepass)
@@ -4030,6 +4035,7 @@ int main(int argc, char** argv) {
      */
     apply_cscene_water(scene, cscn);
     apply_cscene_fog_volumes(scene, cscn);
+    apply_cscene_occluders(scene, cscn);
     // (decals were applied above, before the probe capture -- see the note there)
     if (args.no_water) {
         free_water(scene->water);

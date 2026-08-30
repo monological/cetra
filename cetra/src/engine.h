@@ -161,6 +161,9 @@ typedef struct Engine {
     // Clustered-forward lighting (spec 9.1). The module owns its own GPU
     // buffers and scratch; rebuilt per render_current_scene invocation.
     struct LightClusterContext* light_cluster;
+    // CPU masked occlusion culling (spec 11.98). Fixed working set, no GL;
+    // rebuilt per camera frame, skipped under captures.
+    struct OcclusionContext* occlusion;
     // ViewParams (spec 10.1): the working-space contract every pass writing
     // scene radiance reads. Engine-owned rather than PostFX-owned because it
     // must be live during the SCENE passes, which run before postfx does.
@@ -187,6 +190,11 @@ typedef struct Engine {
     // contributed nothing, so this is expected to be 0 px and its job is to say
     // so when it is not.
     bool frustum_cull_enabled;
+    // false = no occlusion rejection (spec 11.98). The same kind of lever as
+    // frustum_cull_enabled and held to the same bar: a conservative cull is
+    // expected to be 0 px, and this is what says so when it is not. Camera pass
+    // only, so shadow layers and captures are identical either way.
+    bool occlusion_cull_enabled;
     // false = every vertex draws its own surface, never its parent's -- the
     // CDLOD morph off, in all five geometry programs at once. A bisect lever
     // whose whole purpose is to be VISIBLE: it is the only thing that makes the

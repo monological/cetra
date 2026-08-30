@@ -19,6 +19,7 @@
 #define CSCENE_MAX_FOG_VOLUMES     8
 #define CSCENE_MAX_PROBES          8
 #define CSCENE_MAX_DECALS          16
+#define CSCENE_MAX_OCCLUDERS       64
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
 #define CSCENE_MAX_MATERIALS       8
 #define CSCENE_MAX_NAME            128
@@ -344,6 +345,21 @@ typedef struct CSceneProbe {
 } CSceneProbe;
 
 /*
+ * occluders[] -- world-space boxes the occlusion cull treats as solid (spec 11.98). A
+ * top-level block for the reason the neighbours are: a thing placed in the world.
+ *
+ * Both keys REQUIRED. A defaulted box is worse here than for the blocks above: a probe or
+ * fog volume at the origin renders as something visibly odd, where a degenerate occluder
+ * simply covers nothing -- a silent hole in what the author believes is culling.
+ *
+ * Mirrors Occluder in scene.h. The author's interior contract lives on that struct.
+ */
+typedef struct CSceneOccluder {
+    float box_min[3];
+    float box_max[3];
+} CSceneOccluder;
+
+/*
  * decals[] -- marks projected onto the surfaces inside them (spec 11.73). A top-level
  * block for the reason the two above are: a decal is a thing placed in the world.
  *
@@ -559,6 +575,9 @@ typedef struct CetraSceneDesc {
 
     CSceneProbe probes[CSCENE_MAX_PROBES];
     int probe_count;
+
+    CSceneOccluder occluders[CSCENE_MAX_OCCLUDERS];
+    int occluder_count;
 
     CSceneDecal decals[CSCENE_MAX_DECALS];
     int decal_count;

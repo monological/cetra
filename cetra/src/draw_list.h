@@ -45,6 +45,7 @@ enum {
     DRAW_ALPHA_MASKED = 1u << 0,
     DRAW_FOLIAGE = 1u << 1, // alpha-masked and opted back into casting
     DRAW_DOUBLE_SIDED = 1u << 2,
+    DRAW_OCCLUDER = 1u << 3, // material claims the AABB as an occlusion proxy, guards passed
 };
 
 // How a view picks a level out of a mesh's LOD chain.
@@ -73,6 +74,11 @@ typedef struct DrawList {
     // Population per lane, known at build. Two of the three late-pass gate
     // counts are exactly these, so nothing has to scan for them.
     size_t lane_count[DRAW_LANE_COUNT];
+
+    // Items carrying DRAW_OCCLUDER, known at build for the same reason: it is
+    // half of the occlusion pass's is-there-anything-to-do check, which must
+    // cost integer compares on a scene that authored nothing.
+    size_t occluder_flag_count;
 
     // Nodes wanting an axis gizmo. A second, much smaller output of the same
     // walk rather than a lane: a gizmo has no mesh, so as a lane it would put a

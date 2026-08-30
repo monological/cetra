@@ -17,6 +17,7 @@
 #include "engine.h"
 #include "gui.h"
 #include "light_cluster.h"
+#include "occlusion.h"
 #include "transform.h"
 #include "intersect.h"
 #include "shadow.h"
@@ -249,6 +250,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
     // --no-instancing is the escape hatch.
     engine->instancing_enabled = true;
     engine->frustum_cull_enabled = true;
+    engine->occlusion_cull_enabled = true;
     engine->morph_enabled = true;
     engine->oit_moments_enabled = true;
     engine->emissive_lights_enabled = false; // see engine.h: emissive is mostly not a lamp
@@ -373,6 +375,7 @@ void free_engine(Engine* engine) {
     }
 
     free_light_cluster_context(engine->light_cluster);
+    free_occlusion_context(engine->occlusion);
     free_ubo(engine->view_ubo);
     free_ubo(engine->instance_ubo);
     free_ubo(engine->vt_pages_ubo);
@@ -866,6 +869,7 @@ int init_engine(Engine* engine) {
 
     // Clustered-forward lighting (spec 9.1): owns its own UBOs + scratch
     engine->light_cluster = create_light_cluster_context();
+    engine->occlusion = create_occlusion_context();
     engine->view_ubo = create_ubo(UBO_VIEW_BLOCK_SIZE, UBO_BINDING_VIEW);
     engine->instance_ubo = create_ubo(UBO_INSTANCES_BLOCK_SIZE, UBO_BINDING_INSTANCES);
     // Zero-filled at create, so a shader reading the page table before the

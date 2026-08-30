@@ -51,6 +51,8 @@ static bool push(DrawList* list, DrawItem item) {
         return false;
     list->items[list->count++] = item;
     list->lane_count[item.lane]++;
+    if (item.flags & DRAW_OCCLUDER)
+        list->occluder_flag_count++;
     return true;
 }
 
@@ -100,6 +102,19 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
 
     *lane = transmissive ? DRAW_LANE_TRANSMISSIVE : (blend ? DRAW_LANE_BLEND : DRAW_LANE_OPAQUE);
 
+    // An occlusion proxy must be geometry light provably cannot pass through
+    // and that stays where its import box says: opaque lane (holes in masked or
+    // blended geometry let the background through), unskinned (a pose leaves
+    // the bind box), and undisplaced (morph and wind move the surface AWAY from
+    // a static box -- note _item_bounds ADDS those margins for occludees; an
+    // occluder would have to shrink by them, and a shrunken box of unknowable
+    // shape is just "off"). doubleSided is deliberately allowed: a closed
+    // double-sided crate occludes fine, and openness is the author's contract,
+    // checked by the probe rather than guessed at here.
+    bool occluder = mat->occluder && !transmissive && !blend && !masked &&
+                    !mesh->is_skinned && mesh->morph_max_offset == 0.0f &&
+                    mat->wind_response == 0.0f;
+
     *flags = 0;
     if (masked)
         *flags |= DRAW_ALPHA_MASKED;
@@ -107,6 +122,8 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
         *flags |= DRAW_FOLIAGE;
     if (mat->doubleSided)
         *flags |= DRAW_DOUBLE_SIDED;
+    if (occluder)
+        *flags |= DRAW_OCCLUDER;
 }
 
 // Projected size at which a level gives way to the next, as the ratio of a
@@ -233,6 +250,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     list->count = 0;
     list->gizmo_count = 0;
     memset(list->lane_count, 0, sizeof(list->lane_count));
+    list->occluder_flag_count = 0;
     list->valid = false;
     if (!append_node(list, scene->root_node, lod))
         return false;

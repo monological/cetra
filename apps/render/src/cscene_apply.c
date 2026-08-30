@@ -537,6 +537,30 @@ void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn) {
     }
 }
 
+_Static_assert(CSCENE_MAX_OCCLUDERS <= SCENE_MAX_OCCLUDERS,
+               "the parser cannot author more occluders than a scene can hold");
+
+/*
+ * The scene file's occluders (spec 11.98). Printed for the fog-volume reason: a box
+ * placed where nothing stands behind it culls nothing and is indistinguishable from
+ * one that failed to parse. Inverted boxes are refused by add_occluder_to_scene.
+ */
+void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn)
+        return;
+    for (int i = 0; i < cscn->occluder_count; i++) {
+        const CSceneOccluder* o = &cscn->occluders[i];
+        Occluder out;
+        glm_vec3_copy((float*)o->box_min, out.box_min);
+        glm_vec3_copy((float*)o->box_max, out.box_max);
+        if (add_occluder_to_scene(scene, &out) < 0)
+            continue; // an inverted box is dropped, not a reason to stop the rest
+        printf("Scene file: occluder box (%.2f %.2f %.2f)..(%.2f %.2f %.2f)\n",
+               (double)out.box_min[0], (double)out.box_min[1], (double)out.box_min[2],
+               (double)out.box_max[0], (double)out.box_max[1], (double)out.box_max[2]);
+    }
+}
+
 /*
  * The scene file's decals (spec 11.73). No CLI counterpart, the fog-volume rule: a decal
  * needs a place, a size, a facing AND an image, which is far more than a flag can carry --

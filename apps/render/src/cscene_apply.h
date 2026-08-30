@@ -47,6 +47,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
 // Runs BEFORE the CLI water block, which overrides whatever it finds.
 void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn);
+void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn);
 
 // Attach the scene file's decals (spec 11.73), loading each image into the
 // texture pool. Marks the material texture array dirty, since a decal image

@@ -559,6 +559,14 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
     for (int i = 0; i < scene->fog_volume_count; ++i)
         glm_vec3_sub(scene->fog_volumes[i].center, (float*)delta, scene->fog_volumes[i].center);
 
+    // An unshifted occluder keeps occluding at its old address, which deletes
+    // visible geometry -- a wrong-pixel bug, not drift. Node-attached occluders
+    // (the material-flagged kind) shift with their tree above.
+    for (int i = 0; i < scene->occluder_count; ++i) {
+        glm_vec3_sub(scene->occluders[i].box_min, (float*)delta, scene->occluders[i].box_min);
+        glm_vec3_sub(scene->occluders[i].box_max, (float*)delta, scene->occluders[i].box_max);
+    }
+
     shadow_system_shift_origin(scene->shadow_system, delta);
     probe_set_shift_origin(scene->probe_set, delta);
     gi_volume_shift_origin(scene->gi_volume, delta);
@@ -576,6 +584,24 @@ int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
         return -1;
     }
     scene->fog_volumes[scene->fog_volume_count++] = *volume;
+    return 0;
+}
+
+int add_occluder_to_scene(Scene* scene, const Occluder* occluder) {
+    if (!scene || !occluder)
+        return -1;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (occluder->box_min[axis] >= occluder->box_max[axis]) {
+            log_warn("scene: occluder box inverted on axis %d (%.3f >= %.3f); dropped",
+                     axis, occluder->box_min[axis], occluder->box_max[axis]);
+            return -1;
+        }
+    }
+    if (scene->occluder_count >= SCENE_MAX_OCCLUDERS) {
+        log_warn("scene: more than %d occluders; extra ignored", SCENE_MAX_OCCLUDERS);
+        return -1;
+    }
+    scene->occluders[scene->occluder_count++] = *occluder;
     return 0;
 }
 

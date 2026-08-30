@@ -739,6 +739,44 @@ static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
+ * occluders[] -- boxes the occlusion cull treats as solid (spec 11.98).
+ *
+ * Both keys REQUIRED, and the required-key rule bites harder here than on the
+ * neighbours: a defaulted probe renders visibly wrong, where a defaulted
+ * occluder covers nothing and reads as culling that quietly is not happening.
+ * Inversion (min >= max) is checked at APPLY, not here -- this module parses
+ * shape, not meaning, and the Scene's add function owns the refusal.
+ */
+static void parse_occluders(CetraSceneDesc* d, const cJSON* root) {
+    static const char* known[] = {"boxMin", "boxMax"};
+
+    const cJSON* occluders = cJSON_GetObjectItemCaseSensitive(root, "occluders");
+    if (!cJSON_IsArray(occluders))
+        return;
+    const cJSON* o = NULL;
+    cJSON_ArrayForEach(o, occluders) {
+        if (d->occluder_count >= CSCENE_MAX_OCCLUDERS) {
+            log_warn("cscene: more than %d occluders; extras ignored", CSCENE_MAX_OCCLUDERS);
+            break;
+        }
+        if (!cJSON_IsObject(o)) {
+            log_warn("cscene: occluder that is not an object; skipped");
+            continue;
+        }
+        warn_unknown_keys(o, known, sizeof(known) / sizeof(known[0]), "occluder");
+
+        CSceneOccluder* out = &d->occluders[d->occluder_count];
+        memset(out, 0, sizeof(*out));
+        if (!get_floats(o, "boxMin", out->box_min, 3) ||
+            !get_floats(o, "boxMax", out->box_max, 3)) {
+            log_warn("cscene: occluder needs both boxMin and boxMax; skipped");
+            continue;
+        }
+        d->occluder_count++;
+    }
+}
+
+/*
  * decals[] -- a mark projected onto whatever is inside its box (spec 11.73).
  *
  * Four required keys, the probe rule: a decal is a picture, a box and a facing, and a
@@ -1257,6 +1295,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_water(d, root);
     parse_fog_volumes(d, root);
     parse_probes(d, root);
+    parse_occluders(d, root);
     parse_decals(d, root);
     parse_materials(d, root);
     parse_camera(d, root);

@@ -448,6 +448,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "lod", lod_enabled),
     CFG_ROW(CFG_ENGINE, CFG_FLOAT, "engine.draw", "lod_bias", lod_bias),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "frustum_cull", frustum_cull_enabled),
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "occlusion_cull", occlusion_cull_enabled),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "morph", morph_enabled),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "opaque_sort", opaque_sort_enabled),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.draw", "depth_prepass", depth_prepass_enabled),

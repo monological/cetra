@@ -164,6 +164,12 @@ typedef struct Material {
     // a bool would write four bytes into one.
     int foliage_shadows;
 
+    // 1 = this mesh's AABB may be rasterised as an occlusion proxy (spec
+    // 11.98). The claim is the author's: the box must sit inside the opaque
+    // volume the mesh draws. Inert unless the mesh classifies opaque, unmasked,
+    // unskinned and undisplaced. An int for foliage_shadows' reason above.
+    int occluder;
+
     // Wind response (World-Position Offset cloth; see wind.h). The per-material
     // half of the wind split: the Scene owns the wind field, a material opts in
     // here. 0 = rigid (the shader early-outs -> no motion). The height-mask
@@ -404,6 +410,16 @@ typedef struct MaterialParam {
  * makes editing opacity here work at all. Before that the slider moved a number
  * nothing read. So the rule is: a param may imply a lane, as long as the lane is
  * DERIVED from it every frame rather than cached at load.
+ *
+ * occluder (11.98) is admitted on foliage_shadows' precedent but is honestly
+ * STRONGER than it, and the difference belongs here rather than smoothed over:
+ * under a violated interior contract its failure mode is wrong pixels on OTHER
+ * meshes, not an ugly surface on its own. What keeps it a row anyway is that
+ * every mechanically checkable way the claim could be false is guarded inert at
+ * classification -- opaque lane, unmasked, unskinned, undisplaced -- and the one
+ * thing left, the author's promise that the box sits inside the mesh's opaque
+ * volume, is exactly what the occlusion probe's box-against-triangles raster
+ * verifies. It cannot move a lane; classify() never reads it for that.
  *
  * Subsurface is absent for a different reason: its consumer is PostFX's
  * scatter-profile table rather than any field here, so no offset describes it.

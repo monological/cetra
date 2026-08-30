@@ -136,6 +136,17 @@ typedef struct FogVolume {
     vec3 tint;     // scattering colour; white leaves the surrounding air's colour alone
 } FogVolume;
 
+#define SCENE_MAX_OCCLUDERS 64
+
+// A world-space box the occlusion cull may treat as solid (spec 11.98). The
+// author's contract: it must sit ENTIRELY inside opaque geometry. The raster is
+// conservative everywhere else, so a violated contract -- a box poking out of
+// its mesh -- is the one path by which this feature can delete a visible pixel.
+typedef struct Occluder {
+    vec3 box_min;
+    vec3 box_max;
+} Occluder;
+
 /*
  * Scene
  */
@@ -221,6 +232,12 @@ typedef struct Scene {
     // Boxes of denser air, folded into the froxel volume (spec 11.39). Count 0 = none.
     FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES];
     int fog_volume_count;
+
+    // Authored occlusion proxies (spec 11.98). Count 0 = none, which with no
+    // occluder-flagged material is the whole off state: the occlusion pass
+    // returns after two integer compares.
+    Occluder occluders[SCENE_MAX_OCCLUDERS];
+    int occluder_count;
 
     // Marks projected onto the surfaces inside them (spec 11.73). Count 0 = none,
     // which is the whole off state: nothing allocates and the shader's loop is
@@ -432,6 +449,11 @@ void scene_environment_changed(Scene* scene, struct Engine* engine);
 
 // fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
 int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);
+
+// occluders. Same contract. Refuses an inverted box (min >= max on any axis)
+// rather than storing it: a degenerate occluder rasterises nothing, so keeping
+// it would be a silent hole in what the author believes is covered.
+int add_occluder_to_scene(Scene* scene, const Occluder* occluder);
 
 // decals. Same contract; the caller owns resolving the textures and orienting
 // the frame, so this bounds-checks, copies, and RETAINS the two images.

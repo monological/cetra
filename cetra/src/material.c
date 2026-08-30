@@ -28,6 +28,11 @@ static const char* const EMISSIVE_LIGHT_NAMES[] = {"light", "off"};
 // the corpus would start casting.
 static const char* const FOLIAGE_SHADOW_NAMES[] = {"off", "on"};
 
+// Same polarity as FOLIAGE_SHADOW_NAMES and for the same reason: being an
+// occlusion proxy is an opt-in claim about the surface, and a calloc'd
+// material must not make it.
+static const char* const OCCLUDER_NAMES[] = {"off", "on"};
+
 // Group order here is the order an editor shows them in, and it is deliberate:
 // the handful of properties that describe every surface come first, and the
 // ones that only matter to a material that opted into a feature follow. A flat
@@ -117,6 +122,16 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"foliageShadows", "Shadows", .offset = offsetof(Material, foliage_shadows),
      .type = MATERIAL_PARAM_INT, .enum_labels = FOLIAGE_SHADOW_NAMES,
      .enum_count = (int)(sizeof(FOLIAGE_SHADOW_NAMES) / sizeof(FOLIAGE_SHADOW_NAMES[0]))},
+
+    // Says the mesh's AABB may be rasterised as an occlusion proxy (spec
+    // 11.98). Its own group for foliageShadows' reason: nothing about how the
+    // surface shades. Guarded four ways at classification -- opaque lane, not
+    // alpha-masked, not skinned, not displaced -- so every mechanically
+    // checkable way the claim could be false is inert; what remains is the
+    // author's interior contract, which the occlusion probe checks.
+    {"occluder", "Occlusion", .offset = offsetof(Material, occluder),
+     .type = MATERIAL_PARAM_INT, .enum_labels = OCCLUDER_NAMES,
+     .enum_count = (int)(sizeof(OCCLUDER_NAMES) / sizeof(OCCLUDER_NAMES[0]))},
 };
 
 #undef MP

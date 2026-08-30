@@ -1021,6 +1021,7 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Instancing", &engine->instancing_enabled);
         igCheckbox("Sort Opaque Front-to-Back", &engine->opaque_sort_enabled);
         igCheckbox("Depth Prepass", &engine->depth_prepass_enabled);
+        igCheckbox("Occlusion Culling", &engine->occlusion_cull_enabled);
         // The bias greys out with selection because it has no meaning without
         // it: level 0 is level 0 at any distance.
         _begin_effect_group("LOD", &engine->lod_enabled);
