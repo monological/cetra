@@ -1,0 +1,47 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "shadow_lag_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "ShadowLagSun",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -1.0,
+    -0.05
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": true
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   3.0,
+   6.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "fov": 40.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false,
+  "bloom": {
+   "enabled": false
+  }
+ }
+}
