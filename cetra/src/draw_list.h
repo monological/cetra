@@ -66,11 +66,10 @@ typedef struct DrawItem {
     uint8_t lod;
     // The occlusion pass's per-frame CAMERA answer (spec 11.98) -- not a
     // material fact like `flags`, which is why it is not a flag bit. Zero at
-    // build; written once between the build and the first camera sweep; read
+    // build; written by the occlusion pass before the first camera sweep; read
     // only through a CullView that set `occlusion`. On the item rather than in
-    // a side array because the lane sort COPIES items in permuted order and
-    // the shadow pass indexes through its own caster order -- the byte rides
-    // both for free where an index into the original list survives neither.
+    // a side array because the lane sort COPIES items in permuted order, and a
+    // side array indexed by original position would not survive the copy.
     uint8_t occluded;
 } DrawItem;
 
@@ -152,11 +151,10 @@ typedef struct CullView {
     const struct Wind* wind;           // the scene's field; NULL = nothing sways
     const struct AnimationState* pose; // the live pose; NULL = every mesh is at bind
     // True only on the camera pass's view, and only on frames the occlusion
-    // pass ran: says draw_item_visible may read item->occluded. False from the
-    // one constructor, so the shadow layers, the TSM walks and every capture
-    // keep their exact behaviour without being touched -- occlusion is a
+    // pass ran: says draw_item_visible may read item->occluded. Occlusion is a
     // CAMERA answer, and a pass culling against a light's volume must never
-    // see it.
+    // see it; who initialises this and who may set it is render_cull_view's
+    // contract, stated there.
     bool occlusion;
 } CullView;
 

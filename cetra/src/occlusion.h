@@ -68,9 +68,8 @@ typedef struct OcclusionContext {
     // Farthest pixel per tile after finish() -- what the test compares against.
     uint16_t tile_zmax[OCCLUSION_TILES_Y][OCCLUSION_TILES_X];
 
-    int occluder_count; // boxes accepted this frame (skipped ones excluded)
+    int occluder_count;                             // boxes accepted this frame
     OcclusionBoxRec boxes[OCCLUSION_MAX_OCCLUDERS]; // the accepted set, for the probe
-    size_t tested, culled;                          // occlusion_cull_list's tallies, for the probe
     bool active;          // finish() found at least one fully covered tile
     bool warned_overflow; // boxes past the cap are dropped and said once
 } OcclusionContext;
@@ -82,9 +81,10 @@ void free_occlusion_context(OcclusionContext* context);
 // the buffer to EMPTY and latches the matrix; finish folds pixels into
 // tile_zmax and decides `active` -- a frame whose occluders all clipped away or
 // sat behind the camera covers no tile and the per-item walk is skipped.
-// `eye` is the camera's world position: a box the eye sits inside is SKIPPED,
-// because a proxy proves nothing from inside itself and the asset contract
-// makes "camera inside a proxy" an authoring situation, not a rendering one.
+// `eye` is the camera's world position, which face classification needs: only
+// faces whose outward side holds the eye rasterise, and from inside a box that
+// is none of them -- the inside case costs nothing to state and nothing to
+// check.
 void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec3 eye);
 // transform may be NULL for a box already in world space (the authored kind).
 void occlusion_add_box(OcclusionContext* context, const vec3 box_min, const vec3 box_max,
@@ -104,13 +104,13 @@ bool occlusion_test_aabb(const OcclusionContext* context, const vec3 world_min,
 // occlusion fields are not read.
 struct DrawList;
 struct CullView;
-void occlusion_cull_list(OcclusionContext* context, struct DrawList* list,
+void occlusion_cull_list(const OcclusionContext* context, struct DrawList* list,
                          const struct CullView* view);
 
-// The same clip/round/fill path into a caller's buffer at any size -- the
-// probe's reference twin rasterises through THIS at full resolution, so the
-// hierarchy and the quantisation are the only things it does not share. The
-// inside-a-box skip is part of the path, which is why `eye` is here too.
+// The same classify/clip/round/fill path into a caller's buffer at any size --
+// the probe's reference twin rasterises through THIS at full resolution, so
+// the hierarchy is the only thing it does not share. Face classification is
+// part of the path, which is why `eye` is here too.
 void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec3 eye,
                                   const vec3 box_min, const vec3 box_max, mat4 transform);
 // Triangle-exact raster of a mesh's CPU arrays (they survive upload) under the
@@ -128,15 +128,13 @@ void occlusion_rasterize_mesh_into(uint16_t* depth, int w, int h, mat4 view_proj
 // raster path itself is shared by design, and the identity arms carry that
 // half. Also validates every DRAW_OCCLUDER item's interior contract by
 // rastering its box against its own triangles.
+// `view` must be the frame's own cull view (render_cull_view builds it) so the
+// probe derives each item's bounds under the same wind and POSE the frame
+// culled with -- a hand-rolled view here was a second construction site for a
+// struct documented as having one, and its NULL pose made the ref test re-bound
+// skinned items at bind while their hier bit was set posed.
 struct Scene;
-void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene);
-
-// Integer state reads for the probe. Buffers are hashed by the caller when
-// asked rather than digested every frame.
-const uint16_t* occlusion_depth_pixels(const OcclusionContext* context, int* w, int* h);
-const uint16_t* occlusion_tiles(const OcclusionContext* context, int* tx, int* ty);
-int occlusion_occluder_count(const OcclusionContext* context);
-size_t occlusion_tested_count(const OcclusionContext* context);
-size_t occlusion_culled_count(const OcclusionContext* context);
+void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene,
+                           const struct CullView* view);
 
 #endif // _OCCLUSION_H_

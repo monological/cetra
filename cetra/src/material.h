@@ -166,8 +166,7 @@ typedef struct Material {
 
     // 1 = this mesh's AABB may be rasterised as an occlusion proxy (spec
     // 11.98). The claim is the author's: the box must sit inside the opaque
-    // volume the mesh draws. Inert unless the mesh classifies opaque, unmasked,
-    // unskinned and undisplaced. An int for foliage_shadows' reason above.
+    // volume the mesh draws. An int for foliage_shadows' reason above.
     int occluder;
 
     // Wind response (World-Position Offset cloth; see wind.h). The per-material
@@ -415,11 +414,11 @@ typedef struct MaterialParam {
  * STRONGER than it, and the difference belongs here rather than smoothed over:
  * under a violated interior contract its failure mode is wrong pixels on OTHER
  * meshes, not an ugly surface on its own. What keeps it a row anyway is that
- * every mechanically checkable way the claim could be false is guarded inert at
- * classification -- opaque lane, unmasked, unskinned, undisplaced -- and the one
- * thing left, the author's promise that the box sits inside the mesh's opaque
- * volume, is exactly what the occlusion probe's box-against-triangles raster
- * verifies. It cannot move a lane; classify() never reads it for that.
+ * every mechanically checkable way the claim could be false is guarded inert
+ * at classification, and the one thing left, the author's promise that the box
+ * sits inside the mesh's opaque volume, is exactly what the occlusion probe's
+ * box-against-triangles raster verifies. It cannot move a lane; classify()
+ * never reads it for that.
  *
  * Subsurface is absent for a different reason: its consumer is PostFX's
  * scatter-profile table rather than any field here, so no offset describes it.

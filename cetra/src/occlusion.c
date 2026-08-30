@@ -27,11 +27,22 @@
 // coverage, tested item depth <= the item's true nearest depth, and
 // item_q >= tile_zmax implies the true item stands behind a true surface.
 //
-// FACES ARE NOT CLASSIFIED. All six of a box's faces rasterise, because the
-// per-pixel merge is MIN and a back face is farther than the front face along
-// any ray through both -- classification would change no pixel, and at this
-// resolution the doubled fill is cheaper than the orientation bugs it invites
-// (a mirrored transform flips winding; nothing here has to care).
+// FACES ARE CLASSIFIED, and the near plane is why. A first version rasterised
+// all six on the argument that min-merge makes a back face harmless -- true
+// along any ray that passes through both faces, and FALSE once the near plane
+// clips the front face away: the renderer then shows THROUGH the opened shell
+// (front near-clipped, interior backface-culled) while an unclassified raster
+// still stood the back face across the frame. Measured on the portal fixture
+// with the eye a near-plane's depth from the wall: 118,794 px of visible scene
+// culled, 24.7% of the frame. Only faces whose OUTWARD side holds the eye
+// rasterise, so the raster keeps exactly the region the renderer keeps.
+//
+// Classification also SUBSUMES the camera-inside-a-box skip: from inside, no
+// face is front-facing and the box covers nothing -- a theorem here where an
+// explicit inside test was a second mechanism to keep right. Orientation is
+// winding-agnostic (the outward normal is fixed against the opposite corner),
+// so a mirrored transform still needs no care. Edge-on faces classify as back
+// and cover nothing, which is the conservative side.
 //
 // FIXED-POINT ON PURPOSE: -O2 reassociates float arithmetic and has moved CPU
 // results in this tree before (the erosion digest). The floats feeding the
@@ -39,6 +50,14 @@
 // fixture keeps every counted mesh away from decision boundaries by asserted
 // margins -- but within one build the buffer is bytes, and a probe can digest
 // bytes.
+//
+// And the conservatism is exact only up to FLOAT rounding in the fill's edge
+// functions -- the rounding directions are all chosen safely, but the edge
+// tests themselves are float, so the fill requires OCC_FILL_EPS of slack
+// rather than bare non-negativity. Shrinking coverage is the safe direction;
+// without the bias, cameras in the elongated near-wedge regime produced fills
+// the 4x reference refused (probe violations=4, from float cancellation, not
+// from any rounding choice).
 
 // Clip-space guards. W_EPS is light_cluster.c's near-degenerate bound; the
 // side planes are clipped OUTSET by SIDE_SLACK rather than exactly, because a
@@ -48,6 +67,11 @@
 // inside the visible frame.
 #define OCC_W_EPS 1e-6f
 #define OCC_SIDE_SLACK 1.05f
+// Pixel-space slack the fill's edge test must clear -- see the float caveat in
+// the header. Edge-function magnitudes are bounded by the outset clip
+// (coordinates <= ~1.05 * buffer size), so 1e-3 dwarfs the cancellation error
+// while costing far less than one pixel of coverage.
+#define OCC_FILL_EPS 1e-3f
 
 typedef struct ClipPoly {
     // 4 corners, clipped by up to 6 planes: each clip adds at most one vertex.
@@ -135,16 +159,15 @@ static void raster_convex_clip(uint16_t* depth, int w, int h, ClipPoly* poly) {
         return; // edge-on: covers nothing, which is the conservative answer
     float flip = area2 > 0.0f ? 1.0f : -1.0f;
 
-    int x0 = (int)floorf(fminf(fminf(px[0], px[1]), px[2]));
-    int x1 = (int)ceilf(px[0]);
-    int y0 = (int)floorf(py[0]);
-    int y1 = (int)ceilf(py[0]);
-    for (int i = 0; i < poly->count; ++i) {
-        x0 = (int)fminf((float)x0, floorf(px[i]));
-        x1 = (int)fmaxf((float)x1, ceilf(px[i]));
-        y0 = (int)fminf((float)y0, floorf(py[i]));
-        y1 = (int)fmaxf((float)y1, ceilf(py[i]));
+    float bx0 = px[0], bx1 = px[0], by0 = py[0], by1 = py[0];
+    for (int i = 1; i < poly->count; ++i) {
+        bx0 = fminf(bx0, px[i]);
+        bx1 = fmaxf(bx1, px[i]);
+        by0 = fminf(by0, py[i]);
+        by1 = fmaxf(by1, py[i]);
     }
+    int x0 = (int)floorf(bx0), x1 = (int)ceilf(bx1);
+    int y0 = (int)floorf(by0), y1 = (int)ceilf(by1);
     if (x0 < 0)
         x0 = 0;
     if (y0 < 0)
@@ -155,29 +178,22 @@ static void raster_convex_clip(uint16_t* depth, int w, int h, ClipPoly* poly) {
         y1 = h;
 
     // Inner-conservative fill: a pixel fills only when the WORST corner of its
-    // footprint square is inside every edge. Evaluating the worst corner is
-    // the whole test -- if the corner the edge most disfavours is in, the
-    // square is in.
+    // footprint square clears every edge by OCC_FILL_EPS -- if the corner the
+    // edge most disfavours is in, the square is in.
+    float ex[10], ey[10];
     for (int e = 0; e < poly->count; ++e) {
         int j = (e + 1) % poly->count;
-        float ex = -(py[j] - py[e]) * flip; // inward normal
-        float ey = (px[j] - px[e]) * flip;
-        // Precompute per-edge: offset of the worst footprint corner.
-        poly->v[e][0] = ex;
-        poly->v[e][1] = ey;
-        poly->v[e][2] = px[e];
-        poly->v[e][3] = py[e];
+        ex[e] = -(py[j] - py[e]) * flip; // inward normal
+        ey[e] = (px[j] - px[e]) * flip;
     }
     for (int yy = y0; yy < y1; ++yy) {
         uint16_t* row = depth + (size_t)yy * (size_t)w;
         for (int xx = x0; xx < x1; ++xx) {
             int inside = 1;
             for (int e = 0; e < poly->count && inside; ++e) {
-                float ex = poly->v[e][0];
-                float ey = poly->v[e][1];
-                float cx = (float)xx + (ex > 0.0f ? 0.0f : 1.0f);
-                float cy = (float)yy + (ey > 0.0f ? 0.0f : 1.0f);
-                if (ex * (cx - poly->v[e][2]) + ey * (cy - poly->v[e][3]) < 0.0f)
+                float cx = (float)xx + (ex[e] > 0.0f ? 0.0f : 1.0f);
+                float cy = (float)yy + (ey[e] > 0.0f ? 0.0f : 1.0f);
+                if (ex[e] * (cx - px[e]) + ey[e] * (cy - py[e]) < OCC_FILL_EPS)
                     inside = 0;
             }
             if (inside && q < row[xx])
@@ -198,49 +214,53 @@ static void transform_point(mat4 view_proj, mat4 transform, const float* p, floa
     memcpy(out, clip, sizeof(float) * 4);
 }
 
-static bool eye_inside_box(const vec3 eye, const vec3 box_min, const vec3 box_max,
-                           mat4 transform) {
-    // In OBJECT space, where the box is axis-aligned whatever the node did.
-    // The margin makes "on the surface" count as inside: skipping is the safe
-    // direction, and an eye grazing a face has its near plane inside the box.
-    vec3 e;
-    if (transform) {
-        mat4 inv;
-        glm_mat4_inv(transform, inv);
-        glm_mat4_mulv3(inv, (float*)eye, 1.0f, e);
-    } else {
-        glm_vec3_copy((float*)eye, e);
-    }
-    const float margin = 1e-3f;
-    for (int k = 0; k < 3; ++k)
-        if (e[k] < box_min[k] - margin || e[k] > box_max[k] + margin)
-            return false;
-    return true;
-}
-
 void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec3 eye,
                                   const vec3 box_min, const vec3 box_max, mat4 transform) {
     if (!depth || w <= 0 || h <= 0)
         return;
-    if (eye_inside_box(eye, box_min, box_max, transform))
-        return;
 
+    vec3 world[8];
     float clip[8][4];
     for (int c = 0; c < 8; ++c) {
-        const float p[3] = {(c & 1) ? box_max[0] : box_min[0], (c & 2) ? box_max[1] : box_min[1],
-                      (c & 4) ? box_max[2] : box_min[2]};
-        transform_point(view_proj, transform, p, clip[c]);
+        vec3 p = {(c & 1) ? box_max[0] : box_min[0], (c & 2) ? box_max[1] : box_min[1],
+                  (c & 4) ? box_max[2] : box_min[2]};
+        if (transform)
+            glm_mat4_mulv3(transform, p, 1.0f, world[c]);
+        else
+            glm_vec3_copy(p, world[c]);
+        vec4 hw = {world[c][0], world[c][1], world[c][2], 1.0f};
+        vec4 hc;
+        glm_mat4_mulv(view_proj, hw, hc);
+        memcpy(clip[c], hc, sizeof(float) * 4);
     }
-    // Corner indices of the six faces; orientation is irrelevant (see the
-    // header comment: min-merge makes classification a no-op).
-    static const int faces[6][4] = {
-        {0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3},
+
+    // Corner indices of the six faces, each with one corner of the OPPOSITE
+    // face -- what fixes the outward normal without trusting winding, so a
+    // mirrored transform needs no care. Only front faces rasterise; the header
+    // says why that is correctness, not perf.
+    static const int faces[6][5] = {
+        {0, 1, 3, 2, 4}, {4, 6, 7, 5, 0}, {0, 4, 5, 1, 2},
+        {2, 3, 7, 6, 0}, {0, 2, 6, 4, 1}, {1, 5, 7, 3, 0},
     };
     for (int f = 0; f < 6; ++f) {
+        const int* fc = faces[f];
+        vec3 e1, e2, n, to_opp, to_eye;
+        glm_vec3_sub(world[fc[1]], world[fc[0]], e1);
+        glm_vec3_sub(world[fc[2]], world[fc[0]], e2);
+        glm_vec3_cross(e1, e2, n);
+        glm_vec3_sub(world[fc[4]], world[fc[0]], to_opp);
+        if (glm_vec3_dot(n, to_opp) > 0.0f)
+            glm_vec3_negate(n);
+        glm_vec3_sub((float*)eye, world[fc[0]], to_eye);
+        // <= skips edge-on and degenerate faces too: both cover nothing,
+        // which is the conservative side.
+        if (glm_vec3_dot(n, to_eye) <= 0.0f)
+            continue;
+
         ClipPoly poly;
         poly.count = 4;
         for (int i = 0; i < 4; ++i)
-            memcpy(poly.v[i], clip[faces[f][i]], sizeof(float) * 4);
+            memcpy(poly.v[i], clip[fc[i]], sizeof(float) * 4);
         raster_convex_clip(depth, w, h, &poly);
     }
 }
@@ -268,8 +288,6 @@ void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec3 eye) 
     // Every byte 0xFF is every pixel OCCLUSION_DEPTH_EMPTY.
     memset(context->depth, 0xFF, sizeof(context->depth));
     context->occluder_count = 0;
-    context->tested = 0;
-    context->culled = 0;
     context->active = false;
 }
 
@@ -285,8 +303,9 @@ void occlusion_add_box(OcclusionContext* context, const vec3 box_min, const vec3
         }
         return;
     }
-    if (eye_inside_box(context->eye, box_min, box_max, transform))
-        return; // skipped boxes do not count toward the frame's set
+    // No inside-a-box skip: from inside, classification rejects every face and
+    // the box covers nothing on its own -- recording it is harmless and keeps
+    // the probe's replay exactly the frame's set.
     OcclusionBoxRec* rec = &context->boxes[context->occluder_count++];
     glm_vec3_copy((float*)box_min, rec->box_min);
     glm_vec3_copy((float*)box_max, rec->box_max);
@@ -321,115 +340,18 @@ bool occlusion_active(const OcclusionContext* context) {
     return context && context->active;
 }
 
-bool occlusion_test_aabb(const OcclusionContext* context, const vec3 world_min,
-                         const vec3 world_max) {
-    if (!context || !context->active)
-        return false;
-    // cglm's API is not const-correct; the cast keeps mat4's alignment where a
-    // pointer-to-array cast would shed it.
-    OcclusionContext* mut = (OcclusionContext*)context;
-
-    float ndc_min[3] = {1e30f, 1e30f, 1e30f};
-    float ndc_max[3] = {-1e30f, -1e30f, -1e30f};
-    for (int c = 0; c < 8; ++c) {
-        const float p[3] = {(c & 1) ? world_max[0] : world_min[0],
-                      (c & 2) ? world_max[1] : world_min[1],
-                      (c & 4) ? world_max[2] : world_min[2]};
-        float clip[4];
-        transform_point(mut->view_proj, NULL, p, clip);
-        // A box touching the near plane or reaching behind the camera cannot
-        // be culled -- the conservative bail, light_cluster.c's idiom.
-        if (clip[3] < OCC_W_EPS || clip[2] + clip[3] <= 0.0f)
-            return false;
-        float inv_w = 1.0f / clip[3];
-        for (int k = 0; k < 3; ++k) {
-            float v = clip[k] * inv_w;
-            if (v < ndc_min[k])
-                ndc_min[k] = v;
-            if (v > ndc_max[k])
-                ndc_max[k] = v;
-        }
+// The occludee half BOTH tests share: the box's conservatively nearest
+// quantised depth and its NDC rect, or false when it touches the near plane or
+// reaches behind the camera and may not be considered at all (the conservative
+// bail, light_cluster.c's idiom). Shared by design rather than by copy -- the
+// probe verifies the hierarchy DOWNSTREAM of this point, and a drifted second
+// copy of the prologue would have it validating a different question.
+static bool project_occludee(mat4 view_proj, const vec3 world_min, const vec3 world_max,
+                             float ndc_min[3], float ndc_max[3], uint16_t* item_q) {
+    for (int k = 0; k < 3; ++k) {
+        ndc_min[k] = 1e30f;
+        ndc_max[k] = -1e30f;
     }
-
-    // Nearest depth, floored toward near.
-    float fq = floorf((ndc_min[2] * 0.5f + 0.5f) * (float)OCCLUSION_DEPTH_MAX);
-    if (fq < 0.0f)
-        fq = 0.0f;
-    if (fq > (float)OCCLUSION_DEPTH_MAX)
-        fq = (float)OCCLUSION_DEPTH_MAX;
-    uint16_t item_q = (uint16_t)fq;
-
-    // Outward-rounded footprint, in tiles. Clamping to the buffer is safe:
-    // whatever hangs past NDC +-1 is outside the frustum, which the frustum
-    // test owns.
-    int px0 = (int)floorf((ndc_min[0] * 0.5f + 0.5f) * (float)OCCLUSION_W);
-    int px1 = (int)ceilf((ndc_max[0] * 0.5f + 0.5f) * (float)OCCLUSION_W);
-    int py0 = (int)floorf((ndc_min[1] * 0.5f + 0.5f) * (float)OCCLUSION_H);
-    int py1 = (int)ceilf((ndc_max[1] * 0.5f + 0.5f) * (float)OCCLUSION_H);
-    int tx0 = px0 < 0 ? 0 : px0 / OCCLUSION_TILE_W;
-    int ty0 = py0 < 0 ? 0 : py0 / OCCLUSION_TILE_H;
-    int tx1 = (px1 - 1) / OCCLUSION_TILE_W;
-    int ty1 = (py1 - 1) / OCCLUSION_TILE_H;
-    if (tx0 >= OCCLUSION_TILES_X || ty0 >= OCCLUSION_TILES_Y || tx1 < 0 || ty1 < 0)
-        return false; // wholly off-buffer: nothing here may claim it hidden
-    if (tx1 >= OCCLUSION_TILES_X)
-        tx1 = OCCLUSION_TILES_X - 1;
-    if (ty1 >= OCCLUSION_TILES_Y)
-        ty1 = OCCLUSION_TILES_Y - 1;
-
-    for (int ty = ty0; ty <= ty1; ++ty) {
-        for (int tx = tx0; tx <= tx1; ++tx) {
-            uint16_t zmax = context->tile_zmax[ty][tx];
-            if (zmax == OCCLUSION_DEPTH_EMPTY || item_q < zmax)
-                return false;
-        }
-    }
-    return true;
-}
-
-void occlusion_cull_list(OcclusionContext* context, struct DrawList* list,
-                         const struct CullView* view) {
-    if (!context || !list || !context->active)
-        return;
-    for (size_t i = 0; i < list->count; ++i) {
-        DrawItem* item = &list->items[i];
-        // The same box the frustum test uses, margins and pose included.
-        // Unboundable means visible AND never occlusion-cull.
-        AABB box;
-        if (!draw_item_bounds(item, view, &box))
-            continue;
-        // Zeroed because they are out-params of a call in another translation
-        // unit, which static analysis reads as a use before write.
-        vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
-        aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, world_min,
-                       world_max);
-        context->tested++;
-        if (occlusion_test_aabb(context, world_min, world_max)) {
-            item->occluded = 1;
-            context->culled++;
-        }
-    }
-}
-
-// --- the probe --------------------------------------------------------------
-
-// Reference resolution: 4x the mask in each axis. Finer only sharpens the
-// reference; the property being checked (hierarchical-hidden implies
-// reference-hidden) is one-directional, so the exact factor is not load-bearing.
-#define OCC_REF_W (OCCLUSION_W * 4)
-#define OCC_REF_H (OCCLUSION_H * 4)
-#define OCC_SWEEP_COUNT 2048
-#define OCC_SWEEP_SEED 1226u
-#define OCC_PROBE_VIOLATION_CAP 8
-
-// Per-pixel exact test against the reference buffer: the same corner
-// projection, bail and quantisation as occlusion_test_aabb, with the tile fold
-// and the outward footprint replaced by the pixels themselves. What the twin
-// does NOT share is exactly the hierarchy it exists to check.
-static bool ref_test_aabb(const uint16_t* depth, mat4 view_proj, const vec3 world_min,
-                          const vec3 world_max) {
-    float ndc_min[3] = {1e30f, 1e30f, 1e30f};
-    float ndc_max[3] = {-1e30f, -1e30f, -1e30f};
     for (int c = 0; c < 8; ++c) {
         const float p[3] = {(c & 1) ? world_max[0] : world_min[0],
                             (c & 2) ? world_max[1] : world_min[1],
@@ -447,12 +369,107 @@ static bool ref_test_aabb(const uint16_t* depth, mat4 view_proj, const vec3 worl
                 ndc_max[k] = v;
         }
     }
+    // Nearest depth, floored toward near.
     float fq = floorf((ndc_min[2] * 0.5f + 0.5f) * (float)OCCLUSION_DEPTH_MAX);
     if (fq < 0.0f)
         fq = 0.0f;
     if (fq > (float)OCCLUSION_DEPTH_MAX)
         fq = (float)OCCLUSION_DEPTH_MAX;
-    uint16_t item_q = (uint16_t)fq;
+    *item_q = (uint16_t)fq;
+    return true;
+}
+
+bool occlusion_test_aabb(const OcclusionContext* context, const vec3 world_min,
+                         const vec3 world_max) {
+    if (!context || !context->active)
+        return false;
+    // cglm's API is not const-correct; the cast keeps mat4's alignment where a
+    // pointer-to-array cast would shed it.
+    OcclusionContext* mut = (OcclusionContext*)context;
+
+    float ndc_min[3], ndc_max[3];
+    uint16_t item_q;
+    if (!project_occludee(mut->view_proj, world_min, world_max, ndc_min, ndc_max, &item_q))
+        return false;
+
+    // Outward-rounded footprint, in tiles. Clamping to the buffer is safe:
+    // whatever hangs past NDC +-1 is outside the frustum, which the frustum
+    // test owns.
+    int px0 = (int)floorf((ndc_min[0] * 0.5f + 0.5f) * (float)OCCLUSION_W);
+    int px1 = (int)ceilf((ndc_max[0] * 0.5f + 0.5f) * (float)OCCLUSION_W);
+    int py0 = (int)floorf((ndc_min[1] * 0.5f + 0.5f) * (float)OCCLUSION_H);
+    int py1 = (int)ceilf((ndc_max[1] * 0.5f + 0.5f) * (float)OCCLUSION_H);
+    // Wholly off-buffer: nothing here may claim it hidden. Checked on the
+    // PIXEL bounds, before the divisions -- C truncates toward zero, so
+    // (px1 - 1) / TILE_W reads 0 for px1 anywhere in [-6, 0] and a box off
+    // the left edge would otherwise be tested against tile column 0.
+    if (px1 <= 0 || py1 <= 0 || px0 >= OCCLUSION_W || py0 >= OCCLUSION_H)
+        return false;
+    int tx0 = px0 < 0 ? 0 : px0 / OCCLUSION_TILE_W;
+    int ty0 = py0 < 0 ? 0 : py0 / OCCLUSION_TILE_H;
+    int tx1 = (px1 - 1) / OCCLUSION_TILE_W;
+    int ty1 = (py1 - 1) / OCCLUSION_TILE_H;
+    if (tx1 >= OCCLUSION_TILES_X)
+        tx1 = OCCLUSION_TILES_X - 1;
+    if (ty1 >= OCCLUSION_TILES_Y)
+        ty1 = OCCLUSION_TILES_Y - 1;
+
+    for (int ty = ty0; ty <= ty1; ++ty) {
+        for (int tx = tx0; tx <= tx1; ++tx) {
+            uint16_t zmax = context->tile_zmax[ty][tx];
+            if (zmax == OCCLUSION_DEPTH_EMPTY || item_q < zmax)
+                return false;
+        }
+    }
+    return true;
+}
+
+void occlusion_cull_list(const OcclusionContext* context, struct DrawList* list,
+                         const struct CullView* view) {
+    if (!context || !list || !context->active)
+        return;
+    for (size_t i = 0; i < list->count; ++i) {
+        DrawItem* item = &list->items[i];
+        // WRITTEN both ways, not only set: the pass is then idempotent, so an
+        // embedder driving render_current_scene twice in one frame (same stamp,
+        // no rebuild) gets each camera's own answer instead of the OR of both.
+        item->occluded = 0;
+        // The same box the frustum test uses, margins and pose included.
+        // Unboundable means visible AND never occlusion-cull.
+        AABB box;
+        if (!draw_item_bounds(item, view, &box))
+            continue;
+        // Zeroed because they are out-params of a call in another translation
+        // unit, which static analysis reads as a use before write.
+        vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
+        aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, world_min,
+                       world_max);
+        if (occlusion_test_aabb(context, world_min, world_max))
+            item->occluded = 1;
+    }
+}
+
+// --- the probe --------------------------------------------------------------
+
+// Reference resolution: 4x the mask in each axis. Finer only sharpens the
+// reference; the property being checked (hierarchical-hidden implies
+// reference-hidden) is one-directional, so the exact factor is not load-bearing.
+#define OCC_REF_W (OCCLUSION_W * 4)
+#define OCC_REF_H (OCCLUSION_H * 4)
+#define OCC_SWEEP_COUNT 2048
+#define OCC_SWEEP_SEED 1226u
+#define OCC_PROBE_VIOLATION_CAP 8
+
+// Per-pixel exact test against the reference buffer: the shared occludee
+// prologue (project_occludee -- shared by design, see its comment), with the
+// tile fold and the outward footprint replaced by the pixels themselves. What
+// the twin does NOT share is exactly the hierarchy it exists to check.
+static bool ref_test_aabb(const uint16_t* depth, mat4 view_proj, const vec3 world_min,
+                          const vec3 world_max) {
+    float ndc_min[3], ndc_max[3];
+    uint16_t item_q;
+    if (!project_occludee(view_proj, world_min, world_max, ndc_min, ndc_max, &item_q))
+        return false;
 
     int px0 = (int)floorf((ndc_min[0] * 0.5f + 0.5f) * (float)OCC_REF_W);
     int px1 = (int)ceilf((ndc_max[0] * 0.5f + 0.5f) * (float)OCC_REF_W);
@@ -477,6 +494,66 @@ static bool ref_test_aabb(const uint16_t* depth, mat4 view_proj, const vec3 worl
     return true;
 }
 
+// The interior contract, per flagged item: the box may never claim coverage
+// the triangles do not back. Two violation kinds, BOTH judged against the
+// pixel's 3x3 mesh neighbourhood rather than the pixel alone, because the
+// conservative fill leaves a seam along each quad's diagonal that a box face
+// does not have -- a seam pixel reads as uncovered, or as covered by a farther
+// face showing through the slit, and either way its neighbours carry the true
+// surface. `poke` is a box pixel whose whole neighbourhood is EMPTY (a real
+// poke-out is a region; a seam is a line). `near` is a box pixel nearer than
+// the NEAREST depth anywhere in the neighbourhood, past quantisation slack.
+static void probe_proxies(OcclusionContext* context, const DrawList* list) {
+    const size_t ref_px = sizeof(uint16_t) * OCC_REF_W * OCC_REF_H;
+    uint16_t* box_buf = malloc(ref_px);
+    uint16_t* mesh_buf = malloc(ref_px);
+    if (!box_buf || !mesh_buf) {
+        free(box_buf);
+        free(mesh_buf);
+        return;
+    }
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!(item->flags & DRAW_OCCLUDER))
+            continue;
+        memset(box_buf, 0xFF, ref_px);
+        memset(mesh_buf, 0xFF, ref_px);
+        occlusion_rasterize_box_into(box_buf, OCC_REF_W, OCC_REF_H, context->view_proj,
+                                     context->eye, item->mesh->aabb.min, item->mesh->aabb.max,
+                                     item->node->global_transform);
+        occlusion_rasterize_mesh_into(mesh_buf, OCC_REF_W, OCC_REF_H, context->view_proj,
+                                      item->mesh, item->node->global_transform);
+        size_t covered = 0, poke = 0, near_viol = 0;
+        for (int y = 0; y < OCC_REF_H; ++y) {
+            for (int x = 0; x < OCC_REF_W; ++x) {
+                uint16_t b = box_buf[(size_t)y * OCC_REF_W + x];
+                if (b == OCCLUSION_DEPTH_EMPTY)
+                    continue;
+                covered++;
+                uint16_t nearest = OCCLUSION_DEPTH_EMPTY;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int nx = x + dx, ny = y + dy;
+                        if (nx < 0 || ny < 0 || nx >= OCC_REF_W || ny >= OCC_REF_H)
+                            continue;
+                        uint16_t m = mesh_buf[(size_t)ny * OCC_REF_W + nx];
+                        if (m < nearest)
+                            nearest = m;
+                    }
+                }
+                if (nearest == OCCLUSION_DEPTH_EMPTY)
+                    poke++;
+                else if (b + 4 < nearest)
+                    near_viol++;
+            }
+        }
+        printf("occlusion-probe proxy pixels=%zu poke=%zu near=%zu name=%s\n", covered, poke,
+               near_viol, item->node->name ? item->node->name : "?");
+    }
+    free(box_buf);
+    free(mesh_buf);
+}
+
 // A frustum-distributed world box off the LCG: an NDC point unprojected, given
 // a half-size. Deterministic by seed, printed in the header so a failure names
 // its reproduction.
@@ -489,8 +566,9 @@ static float lcg_unit(uint32_t* state) {
     return (float)(lcg_next(state) >> 8) / 16777216.0f;
 }
 
-void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene) {
-    if (!context || !scene) {
+void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene,
+                           const struct CullView* view) {
+    if (!context || !scene || !view) {
         printf("occlusion-probe header available=0 reason=nocontext\n");
         return;
     }
@@ -520,7 +598,6 @@ void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene)
     }
 
     DrawList* list = &scene->draw_list;
-    CullView view = {NULL, scene->wind, NULL, false};
     printf("occlusion-probe header available=1 w=%d h=%d ref_w=%d ref_h=%d occluders=%d "
            "items=%zu sweep=%d seed=%u\n",
            OCCLUSION_W, OCCLUSION_H, OCC_REF_W, OCC_REF_H, context->occluder_count, list->count,
@@ -533,7 +610,7 @@ void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene)
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
         AABB box;
-        if (!draw_item_bounds(item, &view, &box))
+        if (!draw_item_bounds(item, view, &box))
             continue;
         vec3 wmin = {0.0f, 0.0f, 0.0f}, wmax = {0.0f, 0.0f, 0.0f};
         aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, wmin, wmax);
@@ -551,64 +628,7 @@ void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene)
                item->node->name ? item->node->name : "?");
     }
 
-    // The interior contract, per flagged item: the box may never claim
-    // coverage the triangles do not back. Two violation kinds, BOTH judged
-    // against the pixel's 3x3 mesh neighbourhood rather than the pixel alone,
-    // because the conservative fill leaves a seam along each quad's diagonal
-    // that a box face does not have -- a seam pixel reads as uncovered, or as
-    // covered by a farther face showing through the slit, and either way its
-    // neighbours carry the true surface. `poke` is a box pixel whose whole
-    // neighbourhood is EMPTY (a real poke-out is a region; a seam is a line).
-    // `near` is a box pixel nearer than the NEAREST depth anywhere in the
-    // neighbourhood, past quantisation slack.
-    for (size_t i = 0; i < list->count; ++i) {
-        const DrawItem* item = &list->items[i];
-        if (!(item->flags & DRAW_OCCLUDER))
-            continue;
-        size_t ref_px = sizeof(uint16_t) * OCC_REF_W * OCC_REF_H;
-        uint16_t* box_buf = malloc(ref_px);
-        uint16_t* mesh_buf = malloc(ref_px);
-        if (!box_buf || !mesh_buf) {
-            free(box_buf);
-            free(mesh_buf);
-            break;
-        }
-        memset(box_buf, 0xFF, ref_px);
-        memset(mesh_buf, 0xFF, ref_px);
-        occlusion_rasterize_box_into(box_buf, OCC_REF_W, OCC_REF_H, mut->view_proj,
-                                     context->eye, item->mesh->aabb.min, item->mesh->aabb.max,
-                                     item->node->global_transform);
-        occlusion_rasterize_mesh_into(mesh_buf, OCC_REF_W, OCC_REF_H, mut->view_proj,
-                                      item->mesh, item->node->global_transform);
-        size_t covered = 0, poke = 0, near_viol = 0;
-        for (int y = 0; y < OCC_REF_H; ++y) {
-            for (int x = 0; x < OCC_REF_W; ++x) {
-                uint16_t b = box_buf[(size_t)y * OCC_REF_W + x];
-                if (b == OCCLUSION_DEPTH_EMPTY)
-                    continue;
-                covered++;
-                uint16_t nearest = OCCLUSION_DEPTH_EMPTY;
-                for (int dy = -1; dy <= 1; ++dy) {
-                    for (int dx = -1; dx <= 1; ++dx) {
-                        int nx = x + dx, ny = y + dy;
-                        if (nx < 0 || ny < 0 || nx >= OCC_REF_W || ny >= OCC_REF_H)
-                            continue;
-                        uint16_t m = mesh_buf[(size_t)ny * OCC_REF_W + nx];
-                        if (m < nearest)
-                            nearest = m;
-                    }
-                }
-                if (nearest == OCCLUSION_DEPTH_EMPTY)
-                    poke++;
-                else if (b + 4 < nearest)
-                    near_viol++;
-            }
-        }
-        printf("occlusion-probe proxy pixels=%zu poke=%zu near=%zu name=%s\n", covered, poke,
-               near_viol, item->node->name ? item->node->name : "?");
-        free(box_buf);
-        free(mesh_buf);
-    }
+    probe_proxies(mut, list);
 
     // The seeded sweep: frustum-distributed boxes neither authored nor drawn,
     // so the two tests are compared where no fixture geometry shaped the
@@ -666,34 +686,6 @@ void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene)
     printf("occlusion-probe summary items=%zu hidden_hier=%zu hidden_ref=%zu violations=%d\n",
            list->count, hidden_hier, hidden_ref, violations);
     free(ref);
-}
-
-const uint16_t* occlusion_depth_pixels(const OcclusionContext* context, int* w, int* h) {
-    if (w)
-        *w = OCCLUSION_W;
-    if (h)
-        *h = OCCLUSION_H;
-    return context ? &context->depth[0][0] : NULL;
-}
-
-const uint16_t* occlusion_tiles(const OcclusionContext* context, int* tx, int* ty) {
-    if (tx)
-        *tx = OCCLUSION_TILES_X;
-    if (ty)
-        *ty = OCCLUSION_TILES_Y;
-    return context ? &context->tile_zmax[0][0] : NULL;
-}
-
-int occlusion_occluder_count(const OcclusionContext* context) {
-    return context ? context->occluder_count : 0;
-}
-
-size_t occlusion_tested_count(const OcclusionContext* context) {
-    return context ? context->tested : 0;
-}
-
-size_t occlusion_culled_count(const OcclusionContext* context) {
-    return context ? context->culled : 0;
 }
 
 OcclusionContext* create_occlusion_context(void) {

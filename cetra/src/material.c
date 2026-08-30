@@ -125,10 +125,9 @@ const MaterialParam MATERIAL_PARAMS[] = {
 
     // Says the mesh's AABB may be rasterised as an occlusion proxy (spec
     // 11.98). Its own group for foliageShadows' reason: nothing about how the
-    // surface shades. Guarded four ways at classification -- opaque lane, not
-    // alpha-masked, not skinned, not displaced -- so every mechanically
-    // checkable way the claim could be false is inert; what remains is the
-    // author's interior contract, which the occlusion probe checks.
+    // surface shades. The guards that make a false claim inert live at
+    // classification, where they are derived; the admission argument is
+    // material.h's charter.
     {"occluder", "Occlusion", .offset = offsetof(Material, occluder),
      .type = MATERIAL_PARAM_INT, .enum_labels = OCCLUDER_NAMES,
      .enum_count = (int)(sizeof(OCCLUDER_NAMES) / sizeof(OCCLUDER_NAMES[0]))},

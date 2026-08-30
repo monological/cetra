@@ -421,6 +421,10 @@ bool draw_list_sort_lane(DrawList* dst, const DrawList* src, uint8_t lane, const
     dst->count = 0;
     dst->gizmo_count = 0;
     memset(dst->lane_count, 0, sizeof(dst->lane_count));
+    // push() below maintains this like any build would; without the reset it
+    // grows without bound on the reused scratch list, and "known at build"
+    // becomes false on the one DrawList that is rebuilt every pass.
+    dst->occluder_flag_count = 0;
 
     size_t n = src->lane_count[lane];
     if (n == 0) {

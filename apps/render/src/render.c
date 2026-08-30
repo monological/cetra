@@ -4235,9 +4235,13 @@ int main(int argc, char** argv) {
         wind_bound_probe(scene);
 
     // Needs no GL and no frame -- it reads the occlusion buffer as the LAST
-    // frame left it, which is exactly the state the arms want validated.
-    if (args.occlusion_probe)
-        occlusion_probe_print(engine->occlusion, scene);
+    // frame left it, which is exactly the state the arms want validated. The
+    // view comes from the one constructor so the probe re-derives bounds under
+    // the frame's own wind and pose.
+    if (args.occlusion_probe) {
+        CullView probe_view = render_cull_view(engine, scene, NULL);
+        occlusion_probe_print(engine->occlusion, scene, &probe_view);
+    }
 
     // Needs no GL and no frame either -- the profiles are parsed and resampled at
     // scene load and nothing since has touched them. Beside the others for the
