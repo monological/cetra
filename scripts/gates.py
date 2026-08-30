@@ -5515,17 +5515,20 @@ SUBMIT_CASCADES = 3   # pinned on the command line below, not inherited from the
 SKIN_FIXTURE = "skinned_instance_fixture.gltf"
 
 
-def _fixture_mesh_nodes(name="instancing_fixture.gltf"):
+def _fixture_mesh_nodes(name="instancing_fixture.gltf", prefix=None):
     """Mesh-bearing node count, read from the fixture rather than copied.
 
     A hand-mirrored constant goes stale the moment the generator changes and
     takes the arm with it -- silently, because the arm would still pass against
-    whatever it was told to expect.
+    whatever it was told to expect. `prefix` narrows the count to one of a
+    fixture's name-classes, which is how the occlusion arms read their
+    populations.
     """
     path = os.path.join(ROOT, "assets", name)
     with open(path) as f:
         gltf = json.load(f)
-    return sum(1 for n in gltf["nodes"] if "mesh" in n)
+    return sum(1 for n in gltf["nodes"]
+               if "mesh" in n and (prefix is None or n.get("name", "").startswith(prefix)))
 
 
 def _ubo_instance_max():
@@ -19763,11 +19766,12 @@ def run_transform_walk_gate(workdir):
 OCCLUSION_FIXTURE = "occlusion_fixture.cscn"
 OCCLUSION_BARE = "occlusion_fixture_bare.cscn"
 OCCLUSION_MAT = "occlusion_fixture_mat.cscn"
-# The generator's inside-the-room camera, asserted there to sit between the
-# wall's back face and the first hidden layer and inside no authored box; the
-# coordinates are hardcoded here on cull-skin-away's precedent, with the assert
-# as the thing that keeps the two from drifting.
-OCCLUSION_INSIDE_CAM = ["--cam-eye", "0,10,-4", "--cam-target", "0,10,-16"]
+# The inside-the-room camera is a FOURTH .cscn variant rather than --cam-eye
+# flags, because a hardcoded coordinate here cannot be kept honest: the
+# generator's asserts constrain its own inside_eye, which tracks the room's
+# authored height automatically, so nothing would ever compare a literal in
+# this file against the fixture. A variant makes the drift unrepresentable.
+OCCLUSION_INSIDE = "occlusion_fixture_inside.cscn"
 # The probe's two instrument floors, the CULL_BOUND_FLOOR pattern: floors on
 # the INSTRUMENT, not the engine. catch measured 0.9413 on the portal sweep --
 # the hierarchy giving ground would lower it, never raise it -- and 1534 of
@@ -19781,15 +19785,6 @@ OCC_SWEEP_MIN_HIDDEN = 800
 # itself, non-overlap over four interleaved pairs -- the reading order the
 # prepass crossover settled.
 OCC_WIN_MIN = 0.05
-
-
-def _occlusion_hidden_count():
-    """The occl_hidden_* population, read from the committed .gltf rather than
-    mirrored as a constant -- the fixture is the one statement of the layout."""
-    with open(os.path.join(ROOT, "assets", "occlusion_fixture.gltf")) as f:
-        gltf = json.load(f)
-    return sum(1 for n in gltf.get("nodes", [])
-               if n.get("name", "").startswith("occl_hidden_"))
 
 
 def run_occlusion_gate(workdir):
@@ -19815,10 +19810,10 @@ def run_occlusion_gate(workdir):
                      seeded sweep, AND the catch rate clears a floor so the probe
                      cannot pass by hiding nothing. Plus the interior contract on
                      every flagged proxy, box against its own triangles.
-      occl-fragment  the measured LOSS: on the scatter twin, culling a third of
-                     the triangles SPLITS one instanced run -- draws up while
-                     triangles down, as integers. The clock delta is printed with
-                     its sign, unasserted; the sign is the finding.
+      occl-fragment  the measured LOSS: on the scatter twin, culling EXACTLY the
+                     pillared columns' instances SPLITS one instanced run --
+                     draws up while triangles down, as integers off the .gltf's
+                     own name classes. The clock is printed as context only.
       occl-crossover the measured WIN: the portal room's opaque row, steady
                      state, interleaved pairs, non-overlap required. What closes
                      roadmap row 37 with a number instead of an opinion.
@@ -19833,14 +19828,31 @@ def run_occlusion_gate(workdir):
         print("  occlusion    SKIP  (missing fixture)")
         return []
     failures = []
-    hidden = _occlusion_hidden_count()
+    size = ("400", "300")
+    hidden = _fixture_mesh_nodes("occlusion_fixture.gltf", prefix="occl_hidden_")
+
+    def identity_pair(tag, fixture):
+        """An on/off run pair with screenshots: (ae, culled_on, culled_off), or
+        None on a failed render. The CALLER prints -- gate-arm-docs reads this
+        group's own source for the arm names it runs."""
+        p_on = os.path.join(workdir, f"{tag}_on.ppm")
+        p_off = os.path.join(workdir, f"{tag}_off.ppm")
+        r_on = _profiled_run(workdir, f"{tag}_on", [], screenshot=p_on, fixture=fixture,
+                             size=size, frames="30")
+        r_off = _profiled_run(workdir, f"{tag}_off", ["--no-occlusion-cull"],
+                              screenshot=p_off, fixture=fixture, size=size, frames="30")
+        if r_on is None or r_off is None:
+            return None
+        ae, _ = compare(p_on, p_off)
+        return (ae, r_on["submit"].get("opaque", {}).get("meshes culled"),
+                r_off["submit"].get("opaque", {}).get("meshes culled"))
 
     on_ppm = os.path.join(workdir, "occl_on.ppm")
     off_ppm = os.path.join(workdir, "occl_off.ppm")
     on = _profiled_run(workdir, "occl_on", [], screenshot=on_ppm,
-                       fixture=OCCLUSION_FIXTURE, size=("400", "300"), frames="30")
+                       fixture=OCCLUSION_FIXTURE, size=size, frames="30")
     off = _profiled_run(workdir, "occl_off", ["--no-occlusion-cull"], screenshot=off_ppm,
-                        fixture=OCCLUSION_FIXTURE, size=("400", "300"), frames="30")
+                        fixture=OCCLUSION_FIXTURE, size=size, frames="30")
     if on is None or off is None:
         return ["occlusion"]
 
@@ -19885,21 +19897,14 @@ def run_occlusion_gate(workdir):
         failures.append("occl-doorway")
 
     # --- occl-inside: from inside the room, occlusion adds nothing ----------
-    in_on_ppm = os.path.join(workdir, "occl_in_on.ppm")
-    in_off_ppm = os.path.join(workdir, "occl_in_off.ppm")
-    in_on = _profiled_run(workdir, "occl_in_on", OCCLUSION_INSIDE_CAM,
-                          screenshot=in_on_ppm, fixture=OCCLUSION_FIXTURE,
-                          size=("400", "300"), frames="30")
-    in_off = _profiled_run(workdir, "occl_in_off",
-                           OCCLUSION_INSIDE_CAM + ["--no-occlusion-cull"],
-                           screenshot=in_off_ppm, fixture=OCCLUSION_FIXTURE,
-                           size=("400", "300"), frames="30")
-    if in_on is None or in_off is None:
+    # Culled counts are compared BETWEEN runs rather than against zero: the
+    # inside camera legitimately frustum-culls the room behind it, and equality
+    # is the claim that occlusion added nothing on top.
+    inside = identity_pair("occl_in", OCCLUSION_INSIDE)
+    if inside is None:
         failures.append("occl-inside")
     else:
-        ae, _ = compare(in_on_ppm, in_off_ppm)
-        c_on = in_on["submit"].get("opaque", {}).get("meshes culled")
-        c_off = in_off["submit"].get("opaque", {}).get("meshes culled")
+        ae, c_on, c_off = inside
         ok = ae == 0 and c_on is not None and c_on == c_off
         print(f"  occl-inside  {'PASS' if ok else 'FAIL'}  {ae} px and culled "
               f"{c_on} == {c_off} (want 0 px and equality: the wall is behind the "
@@ -19908,19 +19913,11 @@ def run_occlusion_gate(workdir):
             failures.append("occl-inside")
 
     # --- occl-bare: the path no flag reaches --------------------------------
-    bare_on_ppm = os.path.join(workdir, "occl_bare_on.ppm")
-    bare_off_ppm = os.path.join(workdir, "occl_bare_off.ppm")
-    bare_on = _profiled_run(workdir, "occl_bare_on", [], screenshot=bare_on_ppm,
-                            fixture=OCCLUSION_BARE, size=("400", "300"), frames="30")
-    bare_off = _profiled_run(workdir, "occl_bare_off", ["--no-occlusion-cull"],
-                             screenshot=bare_off_ppm, fixture=OCCLUSION_BARE,
-                             size=("400", "300"), frames="30")
-    if bare_on is None or bare_off is None:
+    bare = identity_pair("occl_bare", OCCLUSION_BARE)
+    if bare is None:
         failures.append("occl-bare")
     else:
-        ae, _ = compare(bare_on_ppm, bare_off_ppm)
-        c_on = bare_on["submit"].get("opaque", {}).get("meshes culled")
-        c_off = bare_off["submit"].get("opaque", {}).get("meshes culled")
+        ae, c_on, c_off = bare
         ok = ae == 0 and c_on is not None and c_on == c_off
         print(f"  occl-bare    {'PASS' if ok else 'FAIL'}  {ae} px and culled "
               f"{c_on} == {c_off} on the no-occluders variant (the empty-context "
@@ -20012,16 +20009,21 @@ def run_occlusion_gate(workdir):
 
     # --- occl-fragment: where the feature loses, as integers ----------------
     # One shared mesh in one instanced run, a pillar fence hiding every third
-    # column: culling removes a third of the triangles and SPLITS the run. The
-    # draw count rising while the triangle count falls is the loss mechanism
-    # demonstrated structurally; whether the clock nets out is printed with its
-    # sign and deliberately not asserted -- the sign IS the finding, and either
-    # answer is a result.
+    # column: culling removes exactly the pillared columns' instances and
+    # SPLITS the run -- draws up while triangles down. The culled count is
+    # EXACT, derived from the .gltf's own name classes, on cull-wind's rule: a
+    # build that culls "some" is as wrong as one that culls none. The clock is
+    # printed as context only; at this size the GPU timer's own jitter dwarfs
+    # it, which is the crossover's whole reason for existing.
+    with open(os.path.join(ROOT, "assets", "occlusion_scatter.gltf")) as f:
+        sc_names = [n.get("name", "") for n in json.load(f).get("nodes", [])]
+    pillar_cols = {n.split("_")[-1] for n in sc_names if n.startswith("occl_pillar_")}
+    sc_hidden = sum(1 for n in sc_names
+                    if n.startswith("occl_inst_") and n.split("_")[2] in pillar_cols)
     sc_on = _profiled_run(workdir, "occl_sc_on", [], fixture="occlusion_scatter.cscn",
-                          size=("400", "300"), frames="30")
+                          size=size, frames="30")
     sc_off = _profiled_run(workdir, "occl_sc_off", ["--no-occlusion-cull"],
-                           fixture="occlusion_scatter.cscn", size=("400", "300"),
-                           frames="30")
+                           fixture="occlusion_scatter.cscn", size=size, frames="30")
     if sc_on is None or sc_off is None or sc_on["submit"].get("opaque") is None or \
             sc_off["submit"].get("opaque") is None:
         print("  occl-fragment FAIL  no opaque submission rows on the scatter twin")
@@ -20031,12 +20033,15 @@ def run_occlusion_gate(workdir):
         d_off = sc_off["submit"]["opaque"]["draws"]
         t_on = sc_on["submit"]["opaque"]["triangles"]
         t_off = sc_off["submit"]["opaque"]["triangles"]
+        c_on = sc_on["submit"]["opaque"]["meshes culled"]
+        c_off = sc_off["submit"]["opaque"]["meshes culled"]
         g_on = sc_on["gpu"].get("opaque", 0.0)
         g_off = sc_off["gpu"].get("opaque", 0.0)
-        ok = d_on > d_off and t_on < t_off
-        print(f"  occl-fragment {'PASS' if ok else 'FAIL'}  draws {d_off} -> {d_on} while "
-              f"triangles {t_off} -> {t_on} (want draws UP, triangles DOWN: culling "
-              f"fragments the run); opaque clock {g_off:.3f} -> {g_on:.3f} ms, unasserted")
+        ok = c_on == sc_hidden and c_off == 0 and d_on > d_off and t_on < t_off
+        print(f"  occl-fragment {'PASS' if ok else 'FAIL'}  culled {c_on} of want exactly "
+              f"{sc_hidden} (off run {c_off}, want 0); draws {d_off} -> {d_on} while "
+              f"triangles {t_off} -> {t_on} (want draws UP, triangles DOWN); opaque "
+              f"clock {g_off:.3f} -> {g_on:.3f} ms as context")
         if not ok:
             failures.append("occl-fragment")
 

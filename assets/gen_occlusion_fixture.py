@@ -11,13 +11,15 @@ with real occlusion in them.
                       three visible through the window (occl_door_*), and one
                       marginal mesh whose projection pokes into the window by a
                       couple of mask texels (occl_door_marginal). Camera outside.
-                      Three .cscn variants from one .gltf:
-                        occlusion_fixture.cscn      occluders:[] = 4 interior boxes
-                        occlusion_fixture_bare.cscn no occluders key at all --
-                                                    the empty-context path no
-                                                    flag can reach
-                        occlusion_fixture_mat.cscn  no boxes; the occl_wall
-                                                    material carries occluder=on
+                      Four .cscn variants from one .gltf:
+                        occlusion_fixture.cscn        occluders:[] = 4 interior boxes
+                        occlusion_fixture_bare.cscn   no occluders key at all --
+                                                      the empty-context path no
+                                                      flag can reach
+                        occlusion_fixture_inside.cscn the same boxes with the
+                                                      camera inside the room
+                        occlusion_fixture_mat.cscn    no boxes; the occl_wall
+                                                      material carries occluder=on
 
   occlusion_scatter   The measured LOSS: one shared mesh instanced 24x in a
                       grid (one long instanced run), a sparse pillar fence
@@ -30,9 +32,14 @@ Arms served (the `occlusion` gate group):
   occl-hidden    meshes culled == the occl_hidden_* count, exactly
   occl-material  the _mat variant culls the same count through the material row
   occl-doorway   0 px vs --no-occlusion-cull with the marginal mesh in frame
-  occl-inside    camera inside the room culls nothing and moves nothing
+  occl-inside    the _inside variant culls nothing and moves nothing
   occl-bare      the _bare variant culls nothing and moves nothing
-  occl-fragment  scatter: draws up, triangles down
+  occl-sum       seen == instances + culled on the profiled run
+  occl-shadow    cascade submit rows identical on vs off
+  occl-probe     the brute-force twin over the name classes this file defines
+                 (occl_hidden_* / occl_door* hier-vs-ref, occl_wall proxies)
+  occl-fragment  scatter: exactly the pillared instances culled, draws up,
+                 triangles down
   occl-crossover the portal room's opaque-clock win
 
 EVERY geometric property an arm depends on is asserted below rather than
@@ -126,8 +133,8 @@ def ndc_x(wall_x):
     return wall_x / HALF_W
 
 
-def ndc_y(wall_y, cy=CY, half_h=HALF_H):
-    return (wall_y - cy) / half_h
+def ndc_y(wall_y):
+    return (wall_y - CY) / HALF_H
 
 
 def unproject(wall_c, z, eye_z, cy):
@@ -168,11 +175,9 @@ def box_mesh_data(hx, hy, hz):
         ((0, 0, -1), [(+1, -1, -1), (-1, -1, -1), (-1, +1, -1), (+1, +1, -1)]),
     ]
     pos, nrm, idx = b"", b"", b""
-    verts = []
     for f, (normal, corners) in enumerate(faces):
         base = f * 4
         world = [(cx * hx, cy_ * hy, cz * hz) for cx, cy_, cz in corners]
-        verts.extend(world)
         for c in world:
             pos += struct.pack("<3f", *c)
             nrm += struct.pack("<3f", *normal)
@@ -301,15 +306,44 @@ def node_world_bounds(builder):
     return lo, hi
 
 
-def assert_recenter_noop(builder, tag):
+# A quarter turn about X, R_x(-90): y' = z, z' = -y, so the plane's +Z normal
+# lands on +Y and the floor faces UP. The inverse turn faces it down and
+# backface culling deletes it -- which is why the mapping is asserted below
+# rather than trusted, the file's own winding rule applied to its last mesh.
+FLOOR_ROTATION = [-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]
+
+
+def add_floor_and_assert_recentered(builder, tag, pa, na, ia, material, half_x, floor_z):
+    """The floor strip, and the recenter no-op it exists to guarantee.
+
+    Bounds are taken BEFORE the floor is added, because its rotation is the one
+    transform node_world_bounds cannot fold; the floor's true world box is
+    unioned by hand. The authored occluders:[] boxes are world-space on the
+    Scene and do NOT follow a recenter shift, so the shift must be zero, not
+    merely small.
+    """
     lo, hi = node_world_bounds(builder)
+    assert lo[1] > 0.0, f"{tag}: geometry dips below the floor ({lo[1]})"
+
+    builder.add_plane_node("occl_floor", pa, na, ia, material,
+                           (0.0, 0.0, 0.0), (half_x, floor_z, 1.0))
+    builder.nodes[-1]["rotation"] = FLOOR_ROTATION
+    # Quaternion-rotate the plane's +Z normal: its y component is 2(yz - wx),
+    # and it must come out +1 or the floor faces down and backface culling
+    # deletes it.
+    x, y, z, w = FLOOR_ROTATION
+    rotated_y = 2.0 * (y * z - w * x)
+    assert rotated_y > 0.99, f"{tag}: floor faces {rotated_y:+.2f}Y; must face up"
+
+    lo[1] = 0.0  # the floor's own y
+    lo[0] = min(-half_x, lo[0])
+    hi[0] = max(half_x, hi[0])
+    lo[2] = min(-floor_z, lo[2])
+    hi[2] = max(floor_z, hi[2])
     cx = (lo[0] + hi[0]) * 0.5
     cz = (lo[2] + hi[2]) * 0.5
-    # The authored occluders:[] boxes are world-space on the Scene and do NOT
-    # follow a recenter shift, so the shift must be zero, not merely small.
     assert abs(cx) < 1e-4, f"{tag}: recenter would shift x by {-cx}"
     assert abs(cz) < 1e-4, f"{tag}: recenter would shift z by {-cz}"
-    assert abs(lo[1]) < 1e-4, f"{tag}: recenter would shift y by {-lo[1]}"
 
 
 def build_portal():
@@ -419,32 +453,12 @@ def build_portal():
     assert wall_side / HALF_W >= 2.0 * TILE_X, "marginal wall side under 2 tiles"
     assert MARGINAL_HY <= WIN_Y - DOOR_MARGIN, "marginal leaves the window rows"
 
-    # The floor strip: what makes the recenter a no-op by construction (z
-    # bounds symmetric, min y exactly 0) rather than by flag. Bounds are taken
-    # BEFORE it is added, because its rotation is the one transform
-    # node_world_bounds cannot fold; its true world box is unioned by hand.
-    lo, hi = node_world_bounds(b)
     deepest = min(LAYER_Z)
     floor_z = max(abs(deepest) + 1.0, EYE_Z + 1.0)
-    b.add_plane_node("occl_floor", pa, na, ia, prop_mat,
-                     (0.0, 0.0, 0.0), (WALL_X + 1.0, floor_z, 1.0))
-    # A plane spans [-1,1]^2 in XY; the floor must lie in XZ. Rotate a quarter
-    # turn about X: y' = -z, z' = y.
-    b.nodes[-1]["rotation"] = [-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]
+    add_floor_and_assert_recentered(b, "portal", pa, na, ia, prop_mat, WALL_X + 1.0, floor_z)
 
-    assert lo[1] > 0.0, f"portal: geometry dips below the floor ({lo[1]})"
-    lo[1] = 0.0  # the floor's own y
-    lo[2] = min(-floor_z, lo[2])
-    hi[2] = max(floor_z, hi[2])
-    lo[0] = min(-(WALL_X + 1.0), lo[0])
-    hi[0] = max(WALL_X + 1.0, hi[0])
-    cx_b = (lo[0] + hi[0]) * 0.5
-    cz_b = (lo[2] + hi[2]) * 0.5
-    assert abs(cx_b) < 1e-4, f"portal: recenter would shift x by {-cx_b}"
-    assert abs(cz_b) < 1e-4, f"portal: recenter would shift z by {-cz_b}"
-
-    # occl-inside: the flag-driven camera sits behind the wall, in front of the
-    # first layer, inside no authored box.
+    # occl-inside: the camera in its own .cscn variant sits behind the wall, in
+    # front of the first layer, inside no authored box.
     inside_eye = (0.0, CY, -4.0)
     assert inside_eye[2] < -WALL_THICK and inside_eye[2] > max(LAYER_Z), \
         "inside camera is not between the wall and the first layer"
@@ -533,18 +547,7 @@ def build_scatter():
     lo, hi = node_world_bounds(b)
     floor_z = SC_EYE_Z + 1.0
     floor_x = max(span + 3.0, abs(lo[0]), abs(hi[0]))
-    b.add_plane_node("occl_floor", pa, na, ia, prop_mat,
-                     (0.0, 0.0, 0.0), (floor_x, floor_z, 1.0))
-    b.nodes[-1]["rotation"] = [-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]
-
-    assert lo[1] > 0.0, f"scatter: geometry dips below the floor ({lo[1]})"
-    lo[1] = 0.0
-    lo[2] = min(-floor_z, lo[2])
-    hi[2] = max(floor_z, hi[2])
-    lo[0] = min(-floor_x, lo[0])
-    hi[0] = max(floor_x, hi[0])
-    assert abs((lo[0] + hi[0]) * 0.5) < 1e-4, "scatter: recenter would shift x"
-    assert abs((lo[2] + hi[2]) * 0.5) < 1e-4, "scatter: recenter would shift z"
+    add_floor_and_assert_recentered(b, "scatter", pa, na, ia, prop_mat, floor_x, floor_z)
 
     hidden_count = len(hidden_cols) * SC_ROWS
     assert hidden_count >= 3, "a counted class needs >= 3 members"
@@ -576,6 +579,16 @@ base_cscn = {
 }
 write_json("occlusion_fixture.cscn", {**base_cscn, "occluders": portal_boxes})
 write_json("occlusion_fixture_bare.cscn", base_cscn)
+# The inside camera as its own variant rather than gate-side --cam-eye flags:
+# a coordinate hardcoded in gates.py cannot be kept honest, because the asserts
+# above constrain inside_eye against values that track CY automatically --
+# nothing would ever compare a mirrored literal. A file makes drift
+# unrepresentable.
+write_json("occlusion_fixture_inside.cscn",
+           {**base_cscn, "occluders": portal_boxes,
+            "camera": {"eye": list(inside_eye),
+                       "target": [inside_eye[0], inside_eye[1], inside_eye[2] - 12.0],
+                       "fov": FOV_DEG}})
 write_json("occlusion_fixture_mat.cscn",
            {**base_cscn, "materials": {"occl_wall": {"occluder": "on"}}})
 
@@ -590,7 +603,7 @@ write_json("occlusion_scatter.cscn", {
     "occluders": scatter_boxes,
 })
 
-print(f"wrote occlusion_fixture.gltf (+3 .cscn): {hidden_n} hidden, "
+print(f"wrote occlusion_fixture.gltf (+4 .cscn): {hidden_n} hidden, "
       f"{len(DOOR_XS)} door, 1 marginal, inside eye {inside_eye}")
 print(f"wrote occlusion_scatter.gltf (+1 .cscn): {sc_hidden} of {sc_total} "
       f"instances behind {len(scatter_boxes)} pillars")
