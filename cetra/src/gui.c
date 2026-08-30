@@ -1178,6 +1178,12 @@ static void _engine_gui_panel(Engine* engine) {
             igText("%.3f ms", profiler_frame_ms(engine->profiler));
             igTableNextColumn();
             igText(" ");
+            igTableNextColumn();
+            igText("PERIOD");
+            igTableNextColumn();
+            igText("%.3f ms", profiler_period_ms(engine->profiler));
+            igTableNextColumn();
+            igText(" ");
             igEndTable();
         }
 

@@ -4897,20 +4897,34 @@ GPU_FRAME_DROP = 0.20
 # and nothing else -- the defect these catch is measured in whole multiples, not
 # in fractions of a millisecond. Same value cpu-bound uses, for the same reason.
 GPU_ORDER_SLACK = 0.05
+# The rows in a timing table that are NOT passes. Every arm that walks the table
+# looking for passes has to drop these, and it was three hand-written copies of
+# the same tuple until PERIOD arrived and had to be added to all of them -- one
+# of which is in a different gate, so a miss would have failed as "this pass
+# costs more than the frame" about a row that is not a pass.
+FRAME_ROWS = ("TIMED", "FRAME (wall)", "PERIOD")
 # How far PERIOD may sit from a clock the profiler does not own. Wide on
-# purpose: this arm is not a precision check on the frame time, it is the only
-# thing in the suite that can catch the whole row being saturated, clamped or
+# purpose, and the width is the HARNESS's noise rather than the profiler's:
+# differencing two process times cancels startup's MEAN but not its variance, so
+# whatever that varies by lands on this arm divided by the frame difference.
+# Measured across two runs at a 45-frame difference: PERIOD held to 0.1% (11.955
+# then 11.945 ms) while the outside measurement moved 26% (15.259 then 12.147).
+# The frame counts below are what buy the margin back; this bound is then set
+# against what the arm is FOR, which is a row that is saturated, clamped or
 # divided by the wrong count. Spec 11.89's clamp pinned it at exactly 100.000 ms
-# and every arm here stayed green.
-GPU_WALL_TOLERANCE = 0.35
-# The two legs of that comparison. Startup cancels by differencing, so what the
-# long one has to buy is a SECOND latch window -- profiler_report publishes the
-# last one latched, and at 45 frames that is still the first, which is warm-up.
+# -- 8x, not 40% -- and every arm in this group stayed green through it.
+GPU_WALL_TOLERANCE = 0.40
+# The two legs of that comparison, and the gap between them is the whole design:
+# startup variance is divided by the DIFFERENCE, so 120 extra frames cost about
+# a second of render and shrink the harness noise above by 2.7x. The long leg
+# must also outlast a second latch window, since profiler_report publishes the
+# last one latched and at 45 frames that is still the first, which is warm-up.
+#
 # Stated here rather than leaning on _gpu_cmd's default, because the difference
-# of the two is a DIVISOR: taking one from a default and one from a constant is
+# is a DIVISOR: taking one end from a default and the other from a constant is
 # how the arm silently starts dividing by the wrong number of frames.
 GPU_WALL_SHORT_FRAMES = "45"
-GPU_WALL_FRAMES = "90"
+GPU_WALL_FRAMES = "165"
 
 
 # The report's row format is the assertion surface, so a shifted format has to
@@ -5205,7 +5219,7 @@ def run_profiler_gate(workdir):
     if not ok:
         failures.append("gpu-parse")
 
-    named = {k: v for k, v in base.items() if k not in ("TIMED", "FRAME (wall)")}
+    named = {k: v for k, v in base.items() if k not in FRAME_ROWS}
 
     # By name, not by count: a count cannot say WHICH pass vanished, and the
     # real defect left three rows standing.
@@ -14127,7 +14141,7 @@ def run_submission_gate(workdir):
     # arm was written after reproducing.
     frame_ms = cpu.get("FRAME (wall)", 0.0)
     over = {name: ms for name, ms in cpu.items()
-            if name not in ("TIMED", "FRAME (wall)") and ms > frame_ms + 0.05}
+            if name not in FRAME_ROWS and ms > frame_ms + 0.05}
     timed_ok = cpu.get("TIMED", 0.0) <= frame_ms + 0.05
     ok = frame_ms > 0.0 and not over and timed_ok
     print(f"  cpu-bound    {'PASS' if ok else 'FAIL'}  TIMED {cpu.get('TIMED')} ms and every row "
@@ -14142,7 +14156,7 @@ def run_submission_gate(workdir):
     # leaves the set entirely at higher resolution. So it SKIPs when the set is
     # empty; cpu-bound above is the arm that always applies.
     blit_rows = [(n, cpu.get(n, 0.0)) for n, ms in gpu.items()
-                 if ms == 0.0 and n not in ("TIMED", "FRAME (wall)")]
+                 if ms == 0.0 and n not in FRAME_ROWS]
     hits = [(n, c) for n, c in blit_rows if c > 0.0]
     if not blit_rows:
         print("  cpu-attrib   SKIP  no zero-GPU rows at this size")

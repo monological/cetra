@@ -2486,7 +2486,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // Closes the frame the begin above opened. Skipping it would stall
             // the ring index and the latch for as long as the window stays
             // minimized, so the table would freeze rather than empty.
-            profiler_end_frame(engine->profiler, engine->delta_time);
+            profiler_end_frame(engine->profiler);
             _engine_advance_frame(engine);
             if (engine->headless)
                 glfwPollEvents();
@@ -2763,7 +2763,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         engine->current_render_mode = saved_render_mode;
 
         engine_present_frame(engine, frame_mode);
-        profiler_end_frame(engine->profiler, engine->delta_time);
+        profiler_end_frame(engine->profiler);
 
         // Engine-owned frame limit (CI/headless): requests close so the
         // final-frame screenshot below fires this same iteration.

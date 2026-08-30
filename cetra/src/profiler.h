@@ -81,11 +81,12 @@ SubmitStats profiler_submit_total(const Profiler* profiler);
 // that render nothing: the ring index and the display latch both advance here,
 // and a frame that skips end freezes both.
 //
-// dt is the frame's wall-clock delta in seconds. It drives the latch, and it is
-// also reported alongside the pass rows as the denominator they should be read
-// against -- see profiler_frame_ms.
+// The bracket is also the clock. begin stamps, end measures, and nothing is
+// passed in -- a caller's delta is the duration of the frame BEFORE the one
+// whose scopes it would be divided against, and it contains the swap and the
+// vsync wait, neither of which any scope can be inside. See profiler_frame_ms.
 void profiler_begin_frame(Profiler* profiler);
-void profiler_end_frame(Profiler* profiler, double dt);
+void profiler_end_frame(Profiler* profiler);
 
 // name must be a string literal with static lifetime: it is stored by pointer
 // and never copied.
@@ -157,30 +158,43 @@ size_t submit_stat_value(const SubmitStats* stats, int row);
 // caller can walk scopes once and read time and submission together.
 const SubmitStats* profiler_row_submit(const Profiler* profiler, int row);
 
-// Mean wall-clock frame time over the same window, published beside the total
-// as the ceiling to read it against. Unbounded above: a slow frame is the thing
+// Mean time inside the frame BRACKET over the same window -- the frame's own
+// work, measured from begin to end. Unbounded above: a slow frame is the thing
 // this row exists to show, and a stall that is not rendering is excluded by the
 // caller through profiler_suspend rather than guessed at here by magnitude.
 //
-// EXCLUDES the run's first frame, whose dt has no predecessor to measure -- the
-// clock is stamped one line before the loop, so frame 0 reports near zero. At a
-// 45-frame gate run that phantom is a whole sample of the only published window.
+// EVERY PUBLISHED ROW DIVIDES BY THE SAME COUNT, the frames in the window, so
+// every row means the same thing: what this cost the average frame. A scope
+// entered once in a window and a scope entered every frame are therefore
+// ADDABLE, which is what lets TIMED be read against this at all. Each column
+// used to divide by its own count -- GPU results the driver returned, frames
+// the scope was entered, frames in the window -- and a scope gated on something
+// occasional then published a per-occurrence cost beside per-frame means. A
+// one-frame GI sweep printed a TIMED 21x this row with nothing wrong in the
+// clock (spec 11.97).
 //
-// The two are NOT the same quantity and their difference is not a single
-// thing: it is GPU work no scope covers, plus CPU time, plus whatever the GPU
-// spent idle. So a gap does not prove the instrumentation is incomplete -- but
-// a total that tracks the frame closely does bound how much can be missing,
-// and a bare total bounds nothing at all.
-//
-// AND THE COMPARISON IS ONLY VALID FOR A SCOPE THAT RAN EVERY FRAME. Each row
-// divides by its own count -- GPU results the driver returned, frames the scope
-// was entered, frames in the window -- so a scope gated on something occasional
-// publishes a per-occurrence cost beside a per-frame mean, and TIMED sums it in
-// as though it ran throughout. A one-frame 699 ms GI sweep in a 38-frame window
-// prints a TIMED 17.9x its FRAME with nothing wrong in the timing code. Booked
-// as its own spec; the fix is one denominator for all three, which needs every
-// published number re-checked and is not a Phase 0 change.
+// For the CPU column TIMED <= FRAME is an IDENTITY: scopes are flat and every
+// one closes inside this bracket. A violation is a bug here, never a slow
+// frame. For the GPU column it is a loose bound in both directions -- the
+// driver runs behind, so a pass's time can land outside the bracket that
+// submitted it -- and the gap there also carries whatever the GPU spent idle,
+// so it bounds how much can be missing rather than measuring it.
 float profiler_frame_ms(const Profiler* profiler);
+
+// Mean time from one frame's start to the next: the whole period, including the
+// swap, the vsync wait and the poll, none of which the bracket above contains.
+//
+// Both are published because they answer different questions and neither
+// answers the other's. FRAME is the ceiling the rows are inside of. This is
+// what the frame COST, so it is the one that matches an fps counter and the one
+// a budget is read against -- a vsync-locked frame doing 3 ms of work in a
+// 16.7 ms period has five sixths of its budget left, and the bracket alone
+// reads as though it had none.
+//
+// FRAME <= PERIOD always, and exactly rather than approximately: both are banked
+// for the same frame at the same moment, so they cannot land in different
+// windows or be divided by different counts.
+float profiler_period_ms(const Profiler* profiler);
 
 // Samples that survived the depth test between these calls -- for the opaque
 // pass, the samples the uber-shader actually ran for. Against the frame's sample
