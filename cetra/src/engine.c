@@ -2483,9 +2483,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // core while a window sits minimized (GLFW's iconify pattern).
             // Headless has no events to wake on, so it polls and relies on the
             // frame limit to end the run.
-            // Closes the frame the begin above opened. Skipping it would stall
-            // the ring index and the latch for as long as the window stays
-            // minimized, so the table would freeze rather than empty.
+            // Closes the frame the begin above opened. Skipping it would leave
+            // the frame counter and the ring slot where they are for as long as
+            // the window stays minimized, after which every scope is refused as
+            // a repeat and the table freezes rather than emptying.
             profiler_end_frame(engine->profiler);
             _engine_advance_frame(engine);
             if (engine->headless)

@@ -4892,17 +4892,22 @@ GPU_SCALE_DROP = 0.20         # render-res passes must shed this much at half sc
 # the opaque pass must not silently demand it of a frame that cannot deliver it.
 GPU_FRAME_DROP = 0.20
 
-# Milliseconds of slack on the two ORDERING arms. Both compare quantities the
-# profiler prints at three decimal places, so the tolerance is for the rounding
-# and nothing else -- the defect these catch is measured in whole multiples, not
-# in fractions of a millisecond. Same value cpu-bound uses, for the same reason.
+# Milliseconds of slack on every ORDERING comparison in this file. The
+# quantities are printed at three decimal places, so this is the tolerance for
+# the rounding and nothing else -- the defects these arms catch are measured in
+# whole multiples, not in fractions of a millisecond. It is a constant rather
+# than a literal because cpu-bound in the submission gate wants the same value,
+# and a comment claiming two sites agree is not the same as their agreeing.
 GPU_ORDER_SLACK = 0.05
-# The rows in a timing table that are NOT passes. Every arm that walks the table
-# looking for passes has to drop these, and it was three hand-written copies of
-# the same tuple until PERIOD arrived and had to be added to all of them -- one
-# of which is in a different gate, so a miss would have failed as "this pass
-# costs more than the frame" about a row that is not a pass.
-FRAME_ROWS = ("TIMED", "FRAME (wall)", "PERIOD")
+# The GPU column's own bar for TIMED against FRAME, which is a MULTIPLE where
+# the CPU column's is a rounding slack. That asymmetry is the profiler's, not a
+# convenience: FRAME is the frame's CPU-side bracket, and profiler.h states that
+# only the CPU column is inside it -- the driver runs behind, so a pass's GPU
+# time can legitimately land outside the bracket that submitted it. Asserting
+# the CPU identity on the GPU column would go red on correct code the first time
+# a fixture is GPU-bound enough. The bar still catches what it is for: spec
+# 11.97's defect read 3.4x to 5.3x here.
+GPU_TIMED_CEILING = 2.0
 # How far PERIOD may sit from a clock the profiler does not own. Wide on
 # purpose, and the width is the HARNESS's noise rather than the profiler's:
 # differencing two process times cancels startup's MEAN but not its variance, so
@@ -4925,6 +4930,14 @@ GPU_WALL_TOLERANCE = 0.40
 # how the arm silently starts dividing by the wrong number of frames.
 GPU_WALL_SHORT_FRAMES = "45"
 GPU_WALL_FRAMES = "165"
+# Short enough that the run NEVER latches, which is what makes gpu-gated
+# deterministic rather than a race. profiler_report publishes the last latched
+# window, and the GI volume's one-shot sweep is in the FIRST -- so at any length
+# that latches more than once, whether the arm sees the gated scope at all
+# depends on how fast the machine is. Measured at 45 frames: the published table
+# had 17 rows and none of them was `gi capture`, so the arm was green without
+# testing anything. Below one window the fallback publishes the whole run.
+GPU_GATED_FRAMES = "5"
 
 
 # The report's row format is the assertion surface, so a shifted format has to
@@ -5006,6 +5019,30 @@ _REPORT_BANNERS = {"GPU TIMING": "gpu", "CPU TIMING": "cpu", "SUBMISSION": "subm
 SUBMIT_COLS = ("meshes seen", "meshes culled", "draws", "instances", "material switches",
                "triangles")
 _SUBMIT_NAME_WIDTH = 28
+
+# A timing block's rows that are not passes -- whole-frame quantities that happen
+# to share the row format. Filed here with the rest of the report's vocabulary
+# rather than beside a threshold, because that is what it is: a statement about
+# the shape of the table, read from two different gates.
+#
+# Named for the predicate it is used in, which is always `not in`. It was three
+# hand-written copies of the same tuple until PERIOD arrived and had to be added
+# to all of them -- and one copy is in another gate, where a miss would have
+# failed as "this pass costs more than the frame" about a row that is not a pass.
+NON_PASS_ROWS = frozenset({"TIMED", "FRAME (wall)", "PERIOD"})
+
+
+def _within(value, ceiling, factor=1.0):
+    """Is `value` inside `ceiling`, allowing a multiple of it plus rounding?
+
+    False when either is missing, because a row that did not print is a more
+    broken report than a row with the wrong number in it and must not read as
+    passing. The caller reports WHICH is missing; this only answers the
+    comparison.
+    """
+    if value is None or ceiling is None:
+        return False
+    return value <= ceiling * factor + GPU_ORDER_SLACK
 
 
 def _report_tables(text):
@@ -5181,23 +5218,26 @@ def run_profiler_gate(workdir):
       gpu-period      FRAME <= PERIOD. FRAME is the frame's own bracket and PERIOD the
                       wall period that contains it, so this is an ordering the profiler
                       cannot violate without its clock being wrong.
-      gpu-gated       TIMED <= FRAME on a fixture with a GATED scope, in both columns.
-                      See below -- this is the arm the group did not have.
+      gpu-gated       TIMED <= FRAME with a GATED scope in the published window. See
+                      below -- this is the arm the group did not have.
       gpu-wall        PERIOD agrees with a clock the profiler does not own, differenced
-                      across a 45- and a 90-frame run so startup cancels.
+                      across two run lengths so startup cancels.
 
-    THE LAST THREE EXIST BECAUSE EVERY ARM ABOVE THEM IS BLIND TO SPEC 11.97's DEFECT.
-    Each published number divided by its own count -- GPU results the driver returned,
-    frames the scope was entered, frames in the window -- so a scope gated on something
-    occasional published a per-OCCURRENCE cost in a column of per-FRAME means, and TIMED
-    summed it in as though it ran throughout. `dir_shadow_fixture --gi-volume` printed
-    a CPU TIMED of 736.855 ms against a 35.049 ms FRAME: 21x a ceiling that profiler.h
-    and gates.py both assert. Nothing was wrong with the clock.
+    THE LAST THREE COVER WHAT THE ARMS ABOVE THEM STRUCTURALLY CANNOT SEE -- an
+    ordering, a gated scope, and an external clock. Each arm's own comment carries its
+    provenance; only gpu-gated is about spec 11.97's defect.
+
+    That defect: each published number divided by its own count -- GPU results the driver
+    returned, frames the scope was entered, frames in the window -- so a scope gated on
+    something occasional published a per-OCCURRENCE cost in a column of per-FRAME means,
+    and TIMED summed it in as though it ran throughout. `dir_shadow_fixture --gi-volume`
+    printed a CPU TIMED of 736.855 ms against a 35.049 ms FRAME: 21x a ceiling that
+    profiler.h and gates.py both assert. Nothing was wrong with the clock.
 
     gpu-sum could not see it -- it is a LOWER bound, and the defect makes TIMED too big.
     cpu-bound (run_submission_gate) asserts the ceiling and was green only because its
-    fixture has no conditional scope. So the fixture is the arm: --gi-volume, whose first
-    sweep runs every probe in ONE frame and is the largest conditional scope in the tree.
+    fixture has no gated scope. So the fixture is the arm: --gi-volume, whose first sweep
+    runs every probe in ONE frame and is the largest gated scope in the tree.
     """
     if not os.path.exists(os.path.join(ROOT, "assets", GPU_FIXTURE)):
         print(f"  gpu          SKIP  (missing {GPU_FIXTURE})")
@@ -5219,7 +5259,7 @@ def run_profiler_gate(workdir):
     if not ok:
         failures.append("gpu-parse")
 
-    named = {k: v for k, v in base.items() if k not in FRAME_ROWS}
+    named = {k: v for k, v in base.items() if k not in NON_PASS_ROWS}
 
     # By name, not by count: a count cannot say WHICH pass vanished, and the
     # real defect left three rows standing.
@@ -5356,56 +5396,67 @@ def run_profiler_gate(workdir):
     # while its clock is right, and it is what connects the TIGHT ceiling the CPU
     # column is read against to a number still comparable with an fps counter.
     #
-    # Reads the base run's own tables. Both columns print both rows and the two
-    # are frame-wide quantities, so a disagreement between the columns is itself
-    # the failure.
-    missing = [c for c in ("gpu", "cpu")
-               if base_tables[c].get("FRAME (wall)") is None
-               or base_tables[c].get("PERIOD") is None]
-    if missing:
-        print(f"  gpu-period   FAIL  {', '.join(missing)} table carries no FRAME/PERIOD "
-              f"pair (frame={base_tables['gpu'].get('FRAME (wall)')}, "
-              f"period={base_tables['gpu'].get('PERIOD')}); a missing row is a more "
-              f"broken report than a wrong one")
+    # Read ONCE, not once per column. Both rows are whole-frame quantities and
+    # print_timing_table emits them unswitched, so the two columns carry the same
+    # two floats by construction -- a per-column loop here would evaluate the
+    # identical comparison twice and could never report one column alone. What is
+    # worth asserting instead is exactly that construction: if the columns ever
+    # disagree, the printer has grown a `cpu` branch it should not have.
+    frame, period = base.get("FRAME (wall)"), base.get("PERIOD")
+    same = base_tables["cpu"].get("PERIOD") == period
+    if frame is None or period is None:
+        print(f"  gpu-period   FAIL  no FRAME/PERIOD pair (frame={frame}, period="
+              f"{period}); a missing row is a more broken report than a wrong one")
         failures.append("gpu-period")
     else:
-        over = {c: (base_tables[c]["FRAME (wall)"], base_tables[c]["PERIOD"])
-                for c in ("gpu", "cpu")
-                if base_tables[c]["FRAME (wall)"] > base_tables[c]["PERIOD"] + GPU_ORDER_SLACK}
-        ok = not over
-        print(f"  gpu-period   {'PASS' if ok else 'FAIL'}  FRAME "
-              f"{base_tables['gpu']['FRAME (wall)']:.3f} ms inside PERIOD "
-              f"{base_tables['gpu']['PERIOD']:.3f} ms"
-              f"{'' if ok else '; INVERTED in ' + ', '.join(over)}")
+        ok = _within(frame, period) and same
+        print(f"  gpu-period   {'PASS' if ok else 'FAIL'}  FRAME {frame:.3f} ms inside "
+              f"PERIOD {period:.3f} ms"
+              + ("" if ok else
+                 "; INVERTED" if not _within(frame, period) else
+                 f"; the two columns disagree on PERIOD "
+                 f"({base_tables['cpu'].get('PERIOD')} vs {period})"))
         if not ok:
             failures.append("gpu-period")
 
-    # --- gpu-occasional: the ceiling holds when a scope is CONDITIONAL ------
+    # --- gpu-gated: the ceiling holds when a scope runs on SOME frames ------
     # The arm this group did not have. Everything above runs on a fixture where
     # every scope runs every frame, which is the one case the three denominators
-    # agree in -- so the whole group was blind to a scope that runs SOMETIMES.
+    # agreed in even under the defect -- so the whole group was blind to a scope
+    # that runs sometimes.
     #
     # --gi-volume is the strongest available instance rather than a convenient
     # one: the volume's first sweep runs every probe in a SINGLE frame, so it is
     # a several-hundred-millisecond scope entered once in a run, which is exactly
-    # the shape that publishes a per-occurrence cost beside per-frame means.
-    gi = _profiled_run(workdir, "gi", ["--gi-volume"])
+    # the shape that published a per-occurrence cost beside per-frame means.
+    #
+    # GPU_GATED_FRAMES is load-bearing -- see its comment. The row has to be in
+    # the published window for this arm to be testing anything, and it is
+    # asserted below rather than assumed, because the failure is silent: at 45
+    # frames the table came back with 17 rows, none of them the sweep, and the
+    # arm passed.
+    gi = _profiled_run(workdir, "gi", ["--gi-volume"], frames=GPU_GATED_FRAMES)
     if gi is None:
         failures.append("gpu-gated")
     else:
-        # Both columns. The GPU one was over by 3.4x where the CPU one was over
-        # by 21x, so an arm reading either alone would have called it fixed while
-        # the other stayed wrong.
+        # Both columns, at DIFFERENT bars, because the profiler makes different
+        # promises about them: the CPU one is an identity and the GPU one is not
+        # (GPU_TIMED_CEILING). Reading either alone would have missed half the
+        # defect -- the GPU column was over by 3.4x where the CPU column was over
+        # by 21x.
         bad = {}
-        for col in ("gpu", "cpu"):
+        for col, factor in (("gpu", GPU_TIMED_CEILING), ("cpu", 1.0)):
             timed, frame = gi[col].get("TIMED"), gi[col].get("FRAME (wall)")
-            if timed is None or frame is None or frame <= 0.0:
+            if "gi capture" not in gi[col]:
+                bad[col] = "no `gi capture` row: the gated scope is not in this window"
+            elif timed is None or frame is None or frame <= 0.0:
                 bad[col] = "no TIMED/FRAME pair"
-            elif timed > frame + GPU_ORDER_SLACK:
-                bad[col] = f"{timed:.3f} > {frame:.3f} ms ({timed / frame:.1f}x)"
+            elif not _within(timed, frame, factor):
+                bad[col] = (f"{timed:.3f} vs {frame:.3f} ms ({timed / frame:.1f}x, "
+                            f"want <= {factor:.1f}x)")
         ok = not bad
-        print(f"  gpu-gated    {'PASS' if ok else 'FAIL'}  TIMED within FRAME on a "
-              f"gated scope: "
+        print(f"  gpu-gated    {'PASS' if ok else 'FAIL'}  TIMED within FRAME with a "
+              f"gated scope in the window: "
               + ("both columns" if ok
                  else "; ".join(f"{c} {d}" for c, d in bad.items())))
         if not ok:
@@ -14141,8 +14192,8 @@ def run_submission_gate(workdir):
     # arm was written after reproducing.
     frame_ms = cpu.get("FRAME (wall)", 0.0)
     over = {name: ms for name, ms in cpu.items()
-            if name not in FRAME_ROWS and ms > frame_ms + 0.05}
-    timed_ok = cpu.get("TIMED", 0.0) <= frame_ms + 0.05
+            if name not in NON_PASS_ROWS and not _within(ms, frame_ms)}
+    timed_ok = _within(cpu.get("TIMED", 0.0), frame_ms)
     ok = frame_ms > 0.0 and not over and timed_ok
     print(f"  cpu-bound    {'PASS' if ok else 'FAIL'}  TIMED {cpu.get('TIMED')} ms and every row "
           f"<= FRAME {frame_ms} ms; over-budget rows: {over or 'none'}")
@@ -14156,7 +14207,7 @@ def run_submission_gate(workdir):
     # leaves the set entirely at higher resolution. So it SKIPs when the set is
     # empty; cpu-bound above is the arm that always applies.
     blit_rows = [(n, cpu.get(n, 0.0)) for n, ms in gpu.items()
-                 if ms == 0.0 and n not in FRAME_ROWS]
+                 if ms == 0.0 and n not in NON_PASS_ROWS]
     hits = [(n, c) for n, c in blit_rows if c > 0.0]
     if not blit_rows:
         print("  cpu-attrib   SKIP  no zero-GPU rows at this size")

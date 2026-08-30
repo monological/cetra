@@ -27,10 +27,6 @@
 // either: profiler_suspend is how a caller says "this is not rendering", and it
 // works because the caller knows.
 //
-// That failure now arrives through a different door and the door is here: the
-// frame is measured by this file rather than handed in, so this is the only
-// clamp left anywhere near it, and clamping the accumulator instead of the
-// window is the same lie in one fewer place.
 #define PROFILER_LATCH_STEP_MAX 0.1
 
 // Retired frames whose every scope read back exactly zero before saying so.
@@ -40,12 +36,6 @@
 // than papered over, so the gate's nonzero arm fails instead of passing on
 // numbers from somewhere else.
 #define PROFILER_ZERO_FRAMES_TO_WARN 8
-
-// How many times the latch drain polls one query before giving up on it. A bound
-// on pathology, not a tuned number: a query issued up to PROFILER_RING frames
-// ago is normally ready on the first poll, and the only thing this has to do is
-// refuse to spin forever on a driver that never signals.
-#define PROFILER_DRAIN_SPINS 1000
 
 typedef struct ProfilerScope {
     const char* name; // borrowed literal, never freed
@@ -59,24 +49,17 @@ typedef struct ProfilerScope {
     double cpu_accum_ms;
     float cpu_shown_ms;
 
-    // Frames in this window the scope was entered. NOT a denominator -- every
-    // published row divides by the window's frame count, which is what makes a
-    // pass that ran on some frames comparable with one that ran on all. This
-    // decides only whether the scope gets a ROW: a pass that did not run has
+    // Whether this scope ran at all this window, which is a BIT and not a count:
+    // every published row divides by the window's frame count, so how many
+    // frames this particular scope ran on is not a quantity anything needs. It
+    // decides only whether the scope gets a ROW -- a pass that did not run has
     // none, which is what lets a gate assert a disabled pass is absent rather
     // than present at zero.
     //
-    // There is deliberately no second count for GPU results. The two used to
-    // disagree -- results land PROFILER_RING frames late and an unready slot
-    // was dropped -- and dividing each column by its own count is what let a
-    // scope entered once in a window publish a per-occurrence cost beside
-    // per-frame means. The ring is drained at every latch instead, so the
-    // results in accum_ms are the frames counted here.
-    int frames_entered;
-    // Whether this frame already counted. A CPU-only scope may open more than
-    // once per frame and its time SUMS; the frame must be counted once, or a
-    // row's presence starts depending on how many times it was called.
-    unsigned char entered_this_frame;
+    // Not derived from accum_ms > 0: this driver really does return zero
+    // nanoseconds for work that happened, which is what the zero-streak warning
+    // below exists for, and a scope that ran and measured zero must still show.
+    unsigned char ran_this_window;
 
     // This pass's submission, for the frame just gone. Not latched with the
     // timings: an average over a half-second window would give the one quantity
@@ -109,11 +92,7 @@ struct Profiler {
     // PREVIOUS one did, which is what makes the period measurable without the
     // caller passing anything in.
     double frame_t0;
-    // The bracket end_frame measured, banked at the next begin. Both of a
-    // frame's clocks are only complete there: its period needs the next frame's
-    // start, so banking the bracket at end_frame instead would put the two in
-    // different windows and cost the FRAME <= PERIOD ordering its exactness.
-    double pending_bracket_ms;
+    double frame_t1;        // and closed. FRAME <= PERIOD is frame_t1 <= the next t0
     double frame_accum_ms;  // the brackets: work, no swap and no vsync wait
     double period_accum_ms; // begin-to-begin: everything the frame cost
     int frame_samples;      // the ONE denominator every published row divides by
@@ -136,7 +115,8 @@ struct Profiler {
 
     int zero_streak;
     int warned_zero;
-    int warned_drain;
+    int dropped; // results the GPU had not finished when their slot came round
+    int warned_dropped;
 };
 
 // The one place the submission vocabulary is written. Both consumers walk it,
@@ -181,18 +161,6 @@ void free_profiler(Profiler* profiler) {
     free(profiler);
 }
 
-// This frame counts once for this scope, however many times it closed. Shared
-// by both scope kinds so the guard cannot be right on one path and absent on the
-// other: the GPU path used to increment unguarded and lean on the
-// once-per-frame query rule instead, which is the same answer reached by a
-// different mechanism and only one of them was written down.
-static void mark_entered(ProfilerScope* scope) {
-    if (scope->entered_this_frame)
-        return;
-    scope->entered_this_frame = 1;
-    scope->frames_entered++;
-}
-
 // Scope index for a name, appending on first sight. Compared by content rather
 // than pointer: identical literals in different translation units are not
 // required to share an address, and two rows for one pass would be worse than
@@ -215,23 +183,53 @@ static int scope_index(Profiler* profiler, const char* name) {
     return index;
 }
 
-// Collect the ring slot about to be overwritten. Availability is checked, never
-// waited on: a slot whose result is not ready is dropped, costing one sample out
-// of a half-second window, where blocking would cost the measurement its
-// meaning.
-static void retire_slot(Profiler* profiler, int slot) {
+// Whether one query's result may be taken now.
+//
+// `wait` is the whole difference between the two callers, and it is one branch
+// rather than two functions because everything around it -- the issued flag, the
+// zero-streak accounting, the samples query riding the same slot -- is identical
+// and was worth writing once.
+//
+// Waiting is a plain GL_QUERY_RESULT read, which BLOCKS by definition. Polling
+// availability in a loop first would be a thousand driver round-trips
+// re-deriving what that one call does, under a give-up bound protecting against
+// a driver the spec forbids.
+static int result_ready(GLuint query, bool wait) {
+    if (wait)
+        return 1;
+    GLuint available = 0;
+    glGetQueryObjectuiv(query, GL_QUERY_RESULT_AVAILABLE, &available);
+    return available != 0;
+}
+
+// Collect one ring slot. Per frame this is the slot about to be overwritten and
+// `wait` is false: a result the driver has not finished is DROPPED, because
+// blocking here would stall the pipeline this exists to measure and would bill
+// the stall to whichever pass happened to be wrapped. At a latch it is every
+// slot with `wait` true -- see drain_ring.
+//
+// A dropped result is counted. It costs the window a frame of one scope's GPU
+// time while `frame_samples` still counts that frame, so the row understates by
+// however many were lost: the same numerator-against-a-different-denominator
+// error this file exists to have stopped making, in the one place it survives.
+// Silent is what made it hard to find the first time.
+static void retire_slot(Profiler* profiler, int slot, bool wait) {
     int saw_any = 0;
     int saw_nonzero = 0;
     for (int i = 0; i < profiler->scope_count; ++i) {
         ProfilerScope* scope = &profiler->scopes[i];
         if (!scope->issued[slot])
             continue;
+        // Cleared before the result is taken, and it has to be: the slot is
+        // reissued next time round the ring and profiler_scope_begin refuses a
+        // scope whose flag is still set, so leaving it up to retry later would
+        // stop the scope being timed at all rather than recover anything.
         scope->issued[slot] = 0;
 
-        GLuint available = 0;
-        glGetQueryObjectuiv(scope->query[slot], GL_QUERY_RESULT_AVAILABLE, &available);
-        if (!available)
+        if (!result_ready(scope->query[slot], wait)) {
+            profiler->dropped++;
             continue;
+        }
 
         GLuint64 ns = 0;
         glGetQueryObjectui64v(scope->query[slot], GL_QUERY_RESULT, &ns);
@@ -241,19 +239,16 @@ static void retire_slot(Profiler* profiler, int slot) {
             saw_nonzero = 1;
     }
 
-    // The depth-complexity query rides the same slot and the same
-    // check-never-wait rule. Kept out of the zero-streak accounting below: zero
-    // samples passed is a legitimate answer (a frame aimed at empty sky), where
-    // zero nanoseconds is not.
+    // The depth-complexity query rides the same slot and the same rule. Kept out
+    // of the zero-streak accounting below: zero samples passed is a legitimate
+    // answer (a frame aimed at empty sky), where zero nanoseconds is not.
     if (profiler->samples_generated && profiler->samples_issued[slot]) {
-        GLuint available = 0;
-        glGetQueryObjectuiv(profiler->samples_query[slot], GL_QUERY_RESULT_AVAILABLE, &available);
-        // The flag clears only once the result has actually been taken. Clearing
-        // it first -- as this did -- drops an unready result permanently and
-        // leaves samples_shaded holding an older frame's number with nothing to
-        // say so. The slot is about to be reissued either way, so the worst case
-        // is one lost sample rather than a stale reading that looks live.
-        if (available) {
+        // The flag clears only once the result has actually been taken, which is
+        // the opposite of the rule above and for the opposite reason: nothing
+        // refuses on this flag, so holding it lets a later retire recover the
+        // result instead of leaving samples_shaded on an older frame's number
+        // with nothing to say so.
+        if (result_ready(profiler->samples_query[slot], wait)) {
             GLuint64 passed = 0;
             glGetQueryObjectui64v(profiler->samples_query[slot], GL_QUERY_RESULT, &passed);
             profiler->samples_shaded = (size_t)passed;
@@ -273,86 +268,77 @@ static void retire_slot(Profiler* profiler, int slot) {
 }
 
 // Take every outstanding result before publishing a window, waiting for the ones
-// the GPU has not finished. Called once per latch and nowhere else.
+// the GPU has not finished. Called at a latch and nowhere else.
 //
 // This is the ONE place the never-wait rule is suspended, and the rule survives
 // intact where it was written: a per-frame block would stall the pipeline this
-// exists to measure and would bill the stall to whichever pass was wrapped. This
-// blocks once every PROFILER_LATCH_SECONDS, outside every scope and outside the
-// frame bracket, so it can lengthen the next period and charge nothing to any
-// published number.
+// exists to measure. Once every PROFILER_LATCH_SECONDS is a different trade, and
+// the caller keeps the wait out of both published clocks by re-stamping after it.
 //
 // It is what buys the single denominator. Without it the results in accum_ms are
 // a SAMPLE of the window's frames -- the newest queries are still in flight, and
 // at the start of a run the ring has not filled at all -- so dividing by the
 // frame count understates by however many are outstanding. Measured at the run
 // lengths the gates use, that is 8-11%, and it is worst in the first window,
-// which is the one profiler_report publishes.
-//
-// The wait is bounded and the give-up is reported. A driver that never signals
-// would otherwise turn a lost sample into a hang, which is a worse failure than
-// the one being fixed.
+// which is the one a short run publishes.
 static void drain_ring(Profiler* profiler) {
-    int stuck = 0;
-    for (int slot = 0; slot < PROFILER_RING; ++slot) {
-        for (int i = 0; i < profiler->scope_count; ++i) {
-            ProfilerScope* scope = &profiler->scopes[i];
-            if (!scope->issued[slot])
-                continue;
-            GLuint available = 0;
-            for (int spin = 0; spin < PROFILER_DRAIN_SPINS && !available; ++spin)
-                glGetQueryObjectuiv(scope->query[slot], GL_QUERY_RESULT_AVAILABLE,
-                                    &available);
-            if (!available)
-                stuck++;
-        }
-        retire_slot(profiler, slot);
-    }
-    if (stuck > 0 && !profiler->warned_drain) {
-        log_error("Profiler: %d timer queries did not land within %d polls; the rows "
-                  "below are short by that many frames of GPU time.",
-                  stuck, PROFILER_DRAIN_SPINS);
-        profiler->warned_drain = 1;
-    }
+    for (int slot = 0; slot < PROFILER_RING; ++slot)
+        retire_slot(profiler, slot, true);
 }
 
-// Defined below, beside the accessors that read what it publishes; the frame
-// bracket is the only caller and it reads better next to the drain.
 static void latch_rows(Profiler* profiler);
+
+// Close the books on the frame that ended, given the moment the next one starts.
+//
+// `closed_at` is the only thing this cannot work out for itself, and it is why
+// banking happens at the START of the next frame rather than at end_frame: a
+// frame's PERIOD does not exist until its successor begins. Its bracket and its
+// period are banked in the same breath under one count, which is what makes
+// FRAME <= PERIOD exact rather than off by a frame at every window boundary.
+//
+// Two callers, and the second is not optional. The render loop banks frame N-1
+// at the begin of frame N; profiler_report banks the LAST frame, which no
+// begin_frame will ever reach. Without that the numerator carries a frame the
+// denominator does not -- rows inflated by N/(N-1), and a CPU TIMED that exceeds
+// the FRAME it is documented to be inside of. Measured before it was fixed:
+// 33.859 against 33.084 ms at 14 frames, fifteen times the slack the gates
+// allow.
+static void bank_frame(Profiler* profiler, double closed_at) {
+    const double period = closed_at - profiler->frame_t0;
+    profiler->period_accum_ms += period * 1000.0;
+    profiler->frame_accum_ms += (profiler->frame_t1 - profiler->frame_t0) * 1000.0;
+    profiler->frame_samples++;
+    // The window is clamped; the measurement is not. One long hitch should not
+    // stretch the window it lands in -- and with every row now divided by the
+    // window's frame count, that clamp is also what stops a single expensive
+    // frame becoming a window that is nothing but itself.
+    profiler->latch_timer +=
+        period > PROFILER_LATCH_STEP_MAX ? PROFILER_LATCH_STEP_MAX : period;
+}
 
 void profiler_begin_frame(Profiler* profiler) {
     if (!profiler)
         return;
     profiler->slot = (int)(profiler->frame % PROFILER_RING);
-    retire_slot(profiler, profiler->slot);
+    retire_slot(profiler, profiler->slot, false);
 
-    // Close the books on the frame that just ended, and latch here rather than
-    // at its end. This is the first moment BOTH of its clocks are complete: the
-    // bracket end_frame measured, and the period that needs this frame's start
-    // to exist at all. Banked together, they land in the same window and share
-    // one count, which is what makes FRAME <= PERIOD exact rather than off by a
-    // frame at every window boundary.
-    //
-    // Frame 0 banks nothing because it has no predecessor to measure a period
-    // against. That is the same sample the old caller-supplied dt had to skip,
-    // arrived at from the geometry of the bracket rather than from a special
-    // case about a first frame.
-    const double now = glfwGetTime();
+    // Frame 0 banks nothing because it has no predecessor. That is the same
+    // sample the old caller-supplied dt had to skip, arrived at from the
+    // geometry of the bracket rather than from a special case about a first
+    // frame.
+    double now = glfwGetTime();
     if (profiler->frame > 0) {
-        const double period = now - profiler->frame_t0;
-        profiler->period_accum_ms += period * 1000.0;
-        profiler->frame_accum_ms += profiler->pending_bracket_ms;
-        profiler->frame_samples++;
-        // The window is clamped; the measurement is not. One long hitch should
-        // not stretch the window it lands in -- and with every row now divided
-        // by the window's frame count, that clamp is also what stops a single
-        // expensive frame becoming a window that is nothing but itself.
-        profiler->latch_timer +=
-            period > PROFILER_LATCH_STEP_MAX ? PROFILER_LATCH_STEP_MAX : period;
+        bank_frame(profiler, now);
         if (profiler->latch_timer >= PROFILER_LATCH_SECONDS) {
             drain_ring(profiler);
             latch_rows(profiler);
             profiler->latch_timer = 0.0;
+            // Re-stamped so the drain's wait lands in NEITHER published clock.
+            // Taken before it, the block would sit inside this frame's bracket
+            // -- inflating the FRAME that TIMED is read against, and making
+            // every arm that compares the two easier to pass by however long the
+            // instrument stalled.
+            now = glfwGetTime();
         }
     }
     profiler->frame_t0 = now;
@@ -363,10 +349,8 @@ void profiler_begin_frame(Profiler* profiler) {
     profiler->cpu_suppressed = 0;
     profiler->suspends = 0;
     // Must precede the shadow depth pass, which draws.
-    for (int i = 0; i < profiler->scope_count; ++i) {
+    for (int i = 0; i < profiler->scope_count; ++i)
         profiler->scopes[i].submit = (SubmitStats){0};
-        profiler->scopes[i].entered_this_frame = 0;
-    }
 }
 
 SubmitStats* profiler_submit(Profiler* profiler) {
@@ -432,8 +416,8 @@ static void latch_rows(Profiler* profiler) {
         // spent and TIMED can be read against FRAME.
         //
         // Whether the scope RAN is a separate question from what it is divided
-        // by, and it is the only thing frames_entered decides.
-        if (scope->frames_entered > 0 && frames > 0) {
+        // by, and it is the only thing ran_this_window decides.
+        if (scope->ran_this_window && frames > 0) {
             scope->shown_ms = (float)(scope->accum_ms / frames);
             scope->cpu_shown_ms = (float)(scope->cpu_accum_ms / frames);
             profiler->rows[profiler->row_count++] = i;
@@ -442,13 +426,23 @@ static void latch_rows(Profiler* profiler) {
         }
         scope->accum_ms = 0.0;
         scope->cpu_accum_ms = 0.0;
-        scope->frames_entered = 0;
+        scope->ran_this_window = 0;
     }
     profiler->frame_ms = frames > 0 ? (float)(profiler->frame_accum_ms / frames) : 0.0f;
     profiler->period_ms = frames > 0 ? (float)(profiler->period_accum_ms / frames) : 0.0f;
     profiler->frame_accum_ms = 0.0;
     profiler->period_accum_ms = 0.0;
     profiler->frame_samples = 0;
+
+    // Said once, at the point the numbers it damaged are published. A dropped
+    // result is a frame of GPU time missing from a row whose denominator still
+    // counts that frame, so the row reads low by an amount nothing else states.
+    if (profiler->dropped > 0 && !profiler->warned_dropped) {
+        log_error("Profiler: %d timer results were not ready when their slot came "
+                  "round and were dropped; GPU rows read low by that many frames.",
+                  profiler->dropped);
+        profiler->warned_dropped = 1;
+    }
 }
 
 void profiler_end_frame(Profiler* profiler) {
@@ -475,15 +469,15 @@ void profiler_end_frame(Profiler* profiler) {
         glEndQuery(GL_SAMPLES_PASSED);
         profiler->samples_open = 0;
     }
-    // What this frame's work cost, measured rather than taken from the caller.
-    // Banked at the next begin, where the period that contains it is also
-    // known -- see profiler_begin_frame.
+    // Where this frame's work ended. A stamp rather than a duration, so all
+    // three timestamps meet in bank_frame and neither end is holding a
+    // half-computed number in units the field beside it does not share.
     //
-    // This is the bracket and not the wall period: the swap, the vsync wait and
-    // the poll are all outside it. That is what makes it a ceiling the CPU rows
-    // are actually inside of, and it is why PERIOD is published beside it for
-    // anything asking what the frame cost end to end.
-    profiler->pending_bracket_ms = (glfwGetTime() - profiler->frame_t0) * 1000.0;
+    // The bracket this closes is not the wall period: the swap, the vsync wait
+    // and the poll are all outside it. That is what makes it a ceiling the CPU
+    // rows are actually inside of, and it is why PERIOD is published beside it
+    // for anything asking what the frame cost end to end.
+    profiler->frame_t1 = glfwGetTime();
     profiler->frame++;
 }
 
@@ -534,7 +528,13 @@ void profiler_scope_begin(Profiler* profiler, const char* name) {
     // silently truncates the outer pass and hands its remainder to the next
     // row -- the failure this instrument exists to detect, inside the
     // instrument.
-    if (profiler->suspends > 0 || profiler->active >= 0) {
+    //
+    // `cpu_active` is in that list for the same reason the CPU begin checks
+    // `active`: flatness is ONE invariant and an entry that enforces half of it
+    // is an entry somebody walks through. Overlapping scopes bill the same wall
+    // time to two rows, which is what would cost profiler_frame_ms the identity
+    // it claims.
+    if (profiler->suspends > 0 || profiler->active >= 0 || profiler->cpu_active >= 0) {
         profiler->suppressed++;
         return;
     }
@@ -578,7 +578,7 @@ void profiler_scope_end(Profiler* profiler) {
     glEndQuery(GL_TIME_ELAPSED);
     ProfilerScope* scope = &profiler->scopes[profiler->active];
     scope->cpu_accum_ms += (glfwGetTime() - scope->cpu_t0) * 1000.0;
-    mark_entered(scope);
+    scope->ran_this_window = 1;
     profiler->active = -1;
 }
 
@@ -589,11 +589,10 @@ void profiler_cpu_scope_begin(Profiler* profiler, const char* name) {
     // unambiguous -- but a REPEAT is not, which is the whole point of this pair.
     //
     // Refused inside an open GPU scope too, and that is not symmetry for its own
-    // sake. Both kinds accumulate through cpu_accum_ms off one cpu_t0 per scope,
-    // so overlapping them bills the same wall time twice and TIMED stops being
-    // bounded by the frame that contains it -- which profiler_frame_ms now calls
-    // an identity rather than a convention. Flatness was true of every call site
-    // and enforced at none of them.
+    // sake: overlapping scopes bill the same wall time to two rows, so TIMED
+    // stops being bounded by the frame that contains it -- which
+    // profiler_frame_ms now calls an identity rather than a convention.
+    // Flatness was true of every call site and enforced at none of them.
     if (profiler->suspends > 0 || profiler->cpu_active >= 0 || profiler->active >= 0) {
         profiler->cpu_suppressed++;
         return;
@@ -618,7 +617,7 @@ void profiler_cpu_scope_end(Profiler* profiler) {
         return;
     ProfilerScope* scope = &profiler->scopes[profiler->cpu_active];
     scope->cpu_accum_ms += (glfwGetTime() - scope->cpu_t0) * 1000.0;
-    mark_entered(scope);
+    scope->ran_this_window = 1;
     profiler->cpu_active = -1;
 }
 
@@ -691,11 +690,27 @@ static void print_timing_table(const Profiler* profiler, const char* banner, boo
 void profiler_report(Profiler* profiler) {
     if (!profiler)
         return;
+    // The loop has ended, so the frame that just finished will never reach a
+    // begin_frame to be banked by. Bank it here or its scope time sits in the
+    // numerator while its frame is missing from the denominator -- every row
+    // inflated by N/(N-1), and a CPU TIMED larger than the FRAME it is
+    // documented to be inside of. That is the same off-by-one this spec deleted
+    // at the head of a run, and it was still live at the tail.
+    if (profiler->frame > 0)
+        bank_frame(profiler, glfwGetTime());
+
     // A run shorter than one latch window has collected samples but published
     // nothing. Reporting the empty table would say "every pass was free" about
     // a frame that plainly was not.
-    if (profiler->row_count == 0)
+    //
+    // Drained like any other latch, and this is the case the drain matters MOST
+    // in: a short run never fills the ring, so without it every GPU row is a
+    // result that never landed, printed as 0.000. The never-wait rule protects
+    // a running pipeline and there is none left here.
+    if (profiler->row_count == 0) {
+        drain_ring(profiler);
         latch_rows(profiler);
+    }
 
     // Timings in two tables rather than one two-column table, because the GPU
     // table's bytes are a gate assertion surface.

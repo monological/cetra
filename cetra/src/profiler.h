@@ -34,10 +34,11 @@
 
 #define PROFILER_MAX_SCOPES 64
 
-// Frames of latency between issuing a query and reading it. Results are only
-// ever taken when the driver says they are ready; a blocking read would stall
-// the pipeline this exists to measure, and would report the stall as the cost
-// of whichever pass happened to be wrapped.
+// Frames of latency between issuing a query and reading it. Inside a frame a
+// result is only ever taken when the driver says it is ready, and one that is
+// not is dropped: blocking there would stall the pipeline this exists to
+// measure and would report the stall as the cost of whichever pass was wrapped.
+// The exception is the once-per-window drain, which does wait -- see profiler.c.
 #define PROFILER_RING 4
 
 typedef struct Profiler Profiler;
@@ -78,8 +79,10 @@ SubmitStats* profiler_submit(Profiler* profiler);
 SubmitStats profiler_submit_total(const Profiler* profiler);
 
 // Frame bracket. Every frame that calls begin must call end, including frames
-// that render nothing: the ring index and the display latch both advance here,
-// and a frame that skips end freezes both.
+// that render nothing. A frame that skips end never advances the frame counter,
+// so the ring slot never moves and every scope is refused as "opened twice in
+// one frame" from then on, while the latch keeps firing and republishing the
+// same stale bracket as though it were a measurement.
 //
 // The bracket is also the clock. begin stamps, end measures, and nothing is
 // passed in -- a caller's delta is the duration of the frame BEFORE the one
