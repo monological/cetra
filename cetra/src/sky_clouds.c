@@ -5,6 +5,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include "cook.h"
 #include "engine.h"
 #include "noise.h"
 #include "texture.h"
@@ -136,22 +137,41 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky) {
 
     double t0 = glfwGetTime();
 
-    NoisePerm perm;
-    noise_perm_init(&perm, CLOUD_NOISE_SEED);
-
     const int ss = SKY_CLOUD_SHAPE_SIZE;
     const int ds = SKY_CLOUD_DETAIL_SIZE;
-    unsigned char* shape = malloc((size_t)ss * ss * ss * 4);
-    unsigned char* detail = malloc((size_t)ds * ds * ds * 4);
-    if (!shape || !detail) {
-        log_error("Cloud noise bake: allocation failed");
-        free(shape);
-        free(detail);
-        return -1;
-    }
+    const size_t shape_bytes = (size_t)ss * ss * ss * 4;
+    const size_t detail_bytes = (size_t)ds * ds * ds * 4;
 
-    int workers = bake_field(shape, &perm, ss, 0);
-    bake_field(detail, &perm, ds, 1);
+    // The seed is an engine constant, so the sizes are the whole cook key
+    // (spec 11.99). One artefact, two sections: the fields hit or bake as one.
+    CookKey ck = cook_key("cloud-noise/1");
+    cook_key_i32(&ck, ss);
+    cook_key_i32(&ck, ds);
+    cook_key_u32(&ck, CLOUD_NOISE_SEED);
+
+    unsigned char* shape = NULL;
+    unsigned char* detail = NULL;
+    int workers = 0;
+    CookBlob fields[2];
+    if (cook_fetch(&ck, fields, 2)) {
+        shape = fields[0].data;
+        detail = fields[1].data;
+    } else {
+        NoisePerm perm;
+        noise_perm_init(&perm, CLOUD_NOISE_SEED);
+        shape = malloc(shape_bytes);
+        detail = malloc(detail_bytes);
+        if (!shape || !detail) {
+            log_error("Cloud noise bake: allocation failed");
+            free(shape);
+            free(detail);
+            return -1;
+        }
+        workers = bake_field(shape, &perm, ss, 0);
+        bake_field(detail, &perm, ds, 1);
+        CookBlob out[2] = {{shape, shape_bytes}, {detail, detail_bytes}};
+        cook_store(&ck, out, 2);
+    }
 
     double t1 = glfwGetTime();
 

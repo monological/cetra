@@ -66,21 +66,26 @@ typedef struct {
     int translucent_shadows;    // Per-texel transmittance for hair/glass/foliage casters
     int no_translucent_shadows; // Force it off (the off-path and inverse arms)
     int profiler_enabled;       // Per-pass GPU + CPU time and submission counts
-    int no_instancing;          // Force one draw per mesh (the identity arm)
-    int no_frustum_cull;        // Submit every item, culled or not (the bisect lever)
-    int no_occlusion_cull;      // Occlusion rejection off (spec 11.98's lever)
-    int occlusion_probe;        // Print the masked buffer against its brute-force twin
-    int no_sort_opaque;         // Draw the opaque lane in graph order (default is sorted)
-    int depth_prepass;          // Position-only depth for non-masked opaques (default off)
-    int no_lod;                 // Draw every mesh at LOD level 0
-    float lod_bias;             // LOD distance bias (0 = keep engine default)
-    int msm;                    // Moment shadow maps; excludes PCSS
-    int msm_size;               // Moment cascade edge (0 = keep engine default)
-    float msm_blur;             // Moment blur spacing in texels (-1 = default)
-    float msm_bleed;            // Moment leak cutoff (-1 = default)
-    float light_size;           // Emitter size override (-1 = scene default)
-    float shadow_softness;      // PCSS softness override (-1 = default)
-    int shadow_cascades;        // Cascades per caster (0 = keep engine default)
+    // The derived-data cook (spec 11.99). cook is the pre-warm verb: a
+    // headless one-frame run whose deliverable is the cook rows and summary.
+    int cook;
+    int no_cook;
+    const char* cook_dir;
+    int no_instancing;     // Force one draw per mesh (the identity arm)
+    int no_frustum_cull;   // Submit every item, culled or not (the bisect lever)
+    int no_occlusion_cull; // Occlusion rejection off (spec 11.98's lever)
+    int occlusion_probe;   // Print the masked buffer against its brute-force twin
+    int no_sort_opaque;    // Draw the opaque lane in graph order (default is sorted)
+    int depth_prepass;     // Position-only depth for non-masked opaques (default off)
+    int no_lod;            // Draw every mesh at LOD level 0
+    float lod_bias;        // LOD distance bias (0 = keep engine default)
+    int msm;               // Moment shadow maps; excludes PCSS
+    int msm_size;          // Moment cascade edge (0 = keep engine default)
+    float msm_blur;        // Moment blur spacing in texels (-1 = default)
+    float msm_bleed;       // Moment leak cutoff (-1 = default)
+    float light_size;      // Emitter size override (-1 = scene default)
+    float shadow_softness; // PCSS softness override (-1 = default)
+    int shadow_cascades;   // Cascades per caster (0 = keep engine default)
     // World point the scene-fit shadow map is built around. 0 = the engine
     // default, which is the origin; 1 = the explicit vector below; 2 = the
     // scene's own bounds centre. A scene authored away from the origin needs

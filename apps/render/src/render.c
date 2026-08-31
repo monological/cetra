@@ -16,6 +16,7 @@
 #include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
+#include "cetra/cook.h"
 #include "cetra/engine.h"
 #include "cetra/profiler.h"
 #include "cetra/light_cluster.h"
@@ -106,6 +107,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-translucent-shadows  Force them off\n");
     fprintf(stderr, "      --profiler         Per-pass GPU + CPU time and submission counts: "
                     "HUD tables, and stdout at exit\n");
+    fprintf(stderr, "      --cook             Warm the derived-data cache and exit (headless)\n");
+    fprintf(stderr, "      --no-cook          Bake everything live; touch no cache\n");
+    fprintf(stderr, "      --cook-dir <p>     Cache directory (default cooked/, or CETRA_COOK_DIR)\n");
     fprintf(stderr, "      --no-instancing    One draw per mesh, no batching\n");
     fprintf(stderr, "      --no-frustum-cull  Submit every item, culled or not\n");
     fprintf(stderr, "      --no-occlusion-cull  Occlusion rejection off (spec 11.98)\n");
@@ -813,6 +817,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->lod_bias = strtof(argv[i], NULL);
         } else if (strcmp(argv[i], "--profiler") == 0) {
             args->profiler_enabled = 1;
+        } else if (strcmp(argv[i], "--cook") == 0) {
+            args->cook = 1;
+        } else if (strcmp(argv[i], "--no-cook") == 0) {
+            args->no_cook = 1;
+        } else if (strcmp(argv[i], "--cook-dir") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return false;
+            }
+            args->cook_dir = argv[i];
         } else if (strcmp(argv[i], "--msm") == 0) {
             args->msm = 1;
         } else if (strcmp(argv[i], "--msm-size") == 0) {
@@ -2696,6 +2710,21 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    if (args.cook && args.no_cook) {
+        fprintf(stderr, "Error: --cook asks to warm the cache --no-cook refuses to touch\n");
+        return -1;
+    }
+    if (args.cook) {
+        // The pre-warm verb IS a headless one-frame run: loading and frame 0
+        // reach every derivation site, and the cook rows are the deliverable.
+        args.headless = 1;
+        if (args.max_frames <= 0)
+            args.max_frames = 1;
+    }
+    // Before init_engine and before any texture loads: the publish path is a
+    // fetch site (spec 11.99).
+    cook_init(args.cook_dir, !args.no_cook);
+
     Engine* engine = create_engine("Cetra Engine", args.width, args.height);
 
     set_engine_headless(engine, args.headless != 0);
@@ -4354,6 +4383,7 @@ int main(int argc, char** argv) {
     }
     free_mouse_drag_controller(drag_controller);
     free_engine(engine);
+    cook_shutdown();
 
     printf("Goodbye Friend...\n");
 

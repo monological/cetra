@@ -20442,6 +20442,10 @@ def run_cook_gate(workdir):
                     hard-coded) and re-cooks the seeded ones (layers, splat,
                     Jolt regions), and 4242's frame and digests equal its own
                     live run -- the key IS the identity, in both directions.
+      cook-texture  the render app's cooked mip chains: the texcomp fixture --
+                    the one whose camera actually MINIFIES, so the chain is
+                    sampled -- at 0 px warm vs live, with the warm run
+                    reporting texture hits and no cooks.
 
     Every run uses its OWN cook dir under the workdir, never the suite's
     shared one: these arms measure the cache itself, so what is in the dir
@@ -20567,6 +20571,42 @@ def run_cook_gate(workdir):
               f"cross-serves)")
         if not ok:
             failures.append("cook-key")
+
+    # --- cook-texture: the render app's cooked mip chains -------------------
+    dt = os.path.join(workdir, "cook_dt")
+    tex_live_ppm = os.path.join(workdir, "cook_tex_live.ppm")
+    tex_warm_ppm = os.path.join(workdir, "cook_tex_warm.ppm")
+    scene = os.path.join(ROOT, "assets", TEXCOMP_FIXTURE)
+
+    def texture_run(tag, extra, shot):
+        cmd = [RENDER, "-m", scene, "-x", "-f", "2", "-W", "400", "-H", "300",
+               "--no-auto-exposure", "-E", "1.0", "-S", shot] + extra
+        r = _run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"  cook         ERROR {tag} exited {r.returncode}")
+            return None
+        text = r.stdout + r.stderr
+        summary = _COOK_SUMMARY.search(text)
+        return {"cooked": int(summary.group(1)) if summary else 0,
+                "hit": int(summary.group(2)) if summary else 0,
+                "tex_rows": len([s for s, _, _, _, _ in _COOK_ROW.findall(text)
+                                 if s == "texture-mips/1"])}
+
+    tex_live = texture_run("tex_live", ["--no-cook"], tex_live_ppm)
+    tex_cold = texture_run("tex_cold", ["--cook-dir", dt], tex_warm_ppm)
+    tex_warm = texture_run("tex_warm", ["--cook-dir", dt], tex_warm_ppm)
+    if tex_live is None or tex_cold is None or tex_warm is None:
+        failures.append("cook-texture")
+    else:
+        ae, _ = compare(tex_live_ppm, tex_warm_ppm)
+        ok = (ae == 0 and tex_cold["cooked"] > 0 and tex_warm["cooked"] == 0 and
+              tex_warm["tex_rows"] > 0)
+        print(f"  cook-texture {'PASS' if ok else 'FAIL'}  {ae} px warm vs live on the "
+              f"minifying fixture, {tex_cold['cooked']} chains cooked then {tex_warm['tex_rows']} "
+              f"hit with {tex_warm['cooked']} re-cooks (want 0 px, >0, >0, 0: the cooked chain "
+              f"is the derived chain, byte for byte)")
+        if not ok:
+            failures.append("cook-texture")
 
     return failures
 
