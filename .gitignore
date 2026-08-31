@@ -27,3 +27,10 @@ assets/ivy_arcade/ivy_arcade.bin
 # The GUI's Dump Config button writes here, into the cwd (gui.c). A tuned
 # session is somebody's working state, not a checked-in default.
 cetra_config.json
+
+# The derived-data cook's cache (spec 11.99). Derived data on the ivy-arcade
+# argument above: every producer is committed and deterministic, the artefacts
+# are content-addressed, and a deleted cache costs one warm-up run. Gates and
+# goldens never read this directory -- they isolate onto their own workdir via
+# CETRA_COOK_DIR.
+cooked/

@@ -484,6 +484,10 @@ def main():
         recipes = [r for r in RECIPES if r["name"] in set(names)]
 
     workdir = tempfile.mkdtemp(prefix="cetra_goldens_")
+    # A per-run cook cache (spec 11.99): a persistent one can move golden
+    # pixels through a mip chain another build cooked. Same line gates.py
+    # carries, same reason.
+    os.environ["CETRA_COOK_DIR"] = os.path.join(workdir, "cook")
     try:
         if args.rebake is not None:
             print(f"re-baking {len(recipes)} golden(s):")

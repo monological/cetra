@@ -11429,7 +11429,14 @@ def _terrain_run(workdir, tag, extra):
     """
     # No -S: every arm here reads printed numbers and none looks at a pixel, so a
     # screenshot is a full readback and a file write for nothing.
-    cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--no-fog"] + extra
+    #
+    # --no-cook on the whole group (spec 11.99): these arms measure the LIVE
+    # sim. The archetype hazard is terrain-threads, whose three runs differ
+    # only in --erode-workers -- a count deliberately NOT in the cook key, so
+    # warm, runs 2-3 would hit and the three digests would be copies of one
+    # artefact: vacuously green on a broken band split. The others read probe
+    # rows a cook hit refuses to print.
+    cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--no-fog", "--no-cook"] + extra
     r = _run(cmd, capture_output=True, text=True)
     text = r.stdout + r.stderr
     if r.returncode != 0:
@@ -20372,6 +20379,162 @@ def run_clearcoat_gate(workdir):
     return failures
 
 
+_COOK_ROW = re.compile(r"^cook site=(\S+) name=(\S+) result=(\w+) bytes=(\d+) key=([0-9a-f]{16})",
+                       re.M)
+_COOK_SUMMARY = re.compile(r"^cook-summary \S+ cooked=(\d+) hit=(\d+) miss=(\d+) refused=(\d+)",
+                           re.M)
+
+
+def _cook_run(workdir, tag, extra, shot=None):
+    """One forest run for the cook group: 320x200, two frames, render mode 6
+    (the albedo debug view -- forest's one 0 px path, and the one every cooked
+    texture lands in). Returns {text, rows, cooked, hit, refused, digests}."""
+    cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--render-mode", "6",
+           "--region-probe"] + extra
+    if shot:
+        cmd += ["-S", shot]
+    r = _run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  cook         ERROR {tag} exited {r.returncode}")
+        return None
+    text = r.stdout + r.stderr
+    summary = _COOK_SUMMARY.search(text)
+    return {
+        "text": text,
+        "rows": _COOK_ROW.findall(text),
+        "cooked": int(summary.group(1)) if summary else 0,
+        "hit": int(summary.group(2)) if summary else 0,
+        "refused": int(summary.group(4)) if summary else 0,
+        # The region digests are the CONTROL: the scatter is never cooked, so
+        # a cook defect cannot move them -- them moving means the arm's own
+        # harness drifted, not the cache.
+        "digests": sorted(
+            re.findall(r"region-probe cell rx=\S+ rz=\S+ .*?digest=[0-9a-f]+ authored=[0-9a-f]+",
+                       text)),
+    }
+
+
+def run_cook_gate(workdir):
+    """The derived-data cook (spec 11.99): a transparent content-addressed
+    cache over the deterministic startup bakes, plus the --cook pre-warm verb.
+
+      cook-identity a warm cooked run equals a live --no-cook run: the
+                    render-mode-6 frame at 0 px (every cooked texture lands in
+                    it) and the region digests equal (the uncooked control).
+      cook-hit      the second run of one command against one dir bakes
+                    nothing: cooked=0, and its hits equal the cold run's cooks.
+      cook-lever    --no-cook against a warm dir runs live: zero cook rows,
+                    and the frame still equals the live run's.
+      cook-miss     one artefact corrupted byte-wise is refused BY NAME,
+                    re-cooked in the same run, and the frame still equals the
+                    live run's -- the fallback that makes a torn cache cost a
+                    bake, never a pixel.
+      cook-determinism two cold cooks into two dirs are byte-identical,
+                    artefact by artefact, within one build.
+
+    Every run uses its OWN cook dir under the workdir, never the suite's
+    shared one: these arms measure the cache itself, so what is in the dir
+    must be exactly what this group put there.
+    """
+    failures = []
+    d1 = os.path.join(workdir, "cook_d1")
+    d2 = os.path.join(workdir, "cook_d2")
+    live_ppm = os.path.join(workdir, "cook_live.ppm")
+    warm_ppm = os.path.join(workdir, "cook_warm.ppm")
+    lever_ppm = os.path.join(workdir, "cook_lever.ppm")
+    miss_ppm = os.path.join(workdir, "cook_miss.ppm")
+
+    live = _cook_run(workdir, "live", ["--no-cook"], shot=live_ppm)
+    cold = _cook_run(workdir, "cold", ["--cook-dir", d1])
+    warm = _cook_run(workdir, "warm", ["--cook-dir", d1], shot=warm_ppm)
+    if live is None or cold is None or warm is None:
+        return ["cook"]
+
+    # --- cook-identity ------------------------------------------------------
+    ae, _ = compare(live_ppm, warm_ppm)
+    ok = ae == 0 and live["digests"] and live["digests"] == warm["digests"]
+    print(f"  cook-identity {'PASS' if ok else 'FAIL'}  warm vs live: {ae} px and "
+          f"{len(live['digests'])} region digests equal (want 0 px and equality: a cook hit "
+          f"must be the bake it replaced, byte for byte where bytes are compared)")
+    if not ok:
+        failures.append("cook-identity")
+
+    # --- cook-hit -----------------------------------------------------------
+    ok = cold["cooked"] > 0 and warm["cooked"] == 0 and warm["hit"] == cold["cooked"]
+    print(f"  cook-hit     {'PASS' if ok else 'FAIL'}  cold cooked {cold['cooked']}, warm "
+          f"cooked {warm['cooked']} with {warm['hit']} hits (want >0, 0, and equality: the "
+          f"second run of one command must bake nothing)")
+    if not ok:
+        failures.append("cook-hit")
+
+    # --- cook-lever ---------------------------------------------------------
+    lever = _cook_run(workdir, "lever", ["--cook-dir", d1, "--no-cook"], shot=lever_ppm)
+    if lever is None:
+        failures.append("cook-lever")
+    else:
+        ae, _ = compare(live_ppm, lever_ppm)
+        ok = len(lever["rows"]) == 0 and ae == 0
+        print(f"  cook-lever   {'PASS' if ok else 'FAIL'}  --no-cook against the warm dir: "
+              f"{len(lever['rows'])} cook rows and {ae} px vs live (want 0 and 0: the lever "
+              f"must run the bakes and touch nothing)")
+        if not ok:
+            failures.append("cook-lever")
+
+    # --- cook-miss ----------------------------------------------------------
+    # Corrupt ONE artefact byte-wise, mid-payload -- the terrain-stream-refuse
+    # idiom: the size stays right, so only the payload hash can catch it.
+    victims = sorted(f for f in os.listdir(d1) if f.endswith(".cca"))
+    if not victims:
+        print("  cook-miss    FAIL  the cold cook left no artefacts to corrupt")
+        failures.append("cook-miss")
+    else:
+        victim = os.path.join(d1, victims[0])
+        with open(victim, "r+b") as f:
+            f.seek(os.path.getsize(victim) // 2)
+            byte = f.read(1)
+            f.seek(-1, 1)
+            f.write(bytes([byte[0] ^ 0x40]))
+        miss = _cook_run(workdir, "miss", ["--cook-dir", d1], shot=miss_ppm)
+        if miss is None:
+            failures.append("cook-miss")
+        else:
+            ae, _ = compare(live_ppm, miss_ppm)
+            refused_named = "refused" in miss["text"] and victims[0] in miss["text"]
+            recooked = miss["cooked"] >= 1
+            ok = refused_named and recooked and ae == 0
+            print(f"  cook-miss    {'PASS' if ok else 'FAIL'}  corrupt {victims[0]}: "
+                  f"named={refused_named} recooked={recooked} {ae} px vs live (want "
+                  f"named, re-cooked and 0 px: a torn cache costs a bake, never a pixel)")
+            if not ok:
+                failures.append("cook-miss")
+
+    # --- cook-determinism ---------------------------------------------------
+    second = _cook_run(workdir, "cold2", ["--cook-dir", d2])
+    if second is None:
+        failures.append("cook-determinism")
+    else:
+        a = sorted(f for f in os.listdir(d1) if f.endswith(".cca"))
+        b = sorted(f for f in os.listdir(d2) if f.endswith(".cca"))
+        same_names = a == b and len(a) > 0
+        diffs = []
+        if same_names:
+            for name in a:
+                with open(os.path.join(d1, name), "rb") as fa:
+                    da = fa.read()
+                with open(os.path.join(d2, name), "rb") as fb:
+                    db = fb.read()
+                if da != db:
+                    diffs.append(name)
+        ok = same_names and not diffs
+        print(f"  cook-determinism {'PASS' if ok else 'FAIL'}  {len(a)} artefacts in both "
+              f"dirs, {len(diffs)} differ (want same names and zero diffs: two cold cooks "
+              f"of one build are one cook)")
+        if not ok:
+            failures.append("cook-determinism")
+
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -20438,6 +20601,8 @@ GATE_GROUPS = [
     ("origin", "a world away from the origin, and one that moves under it (spec 11.62 / D11):",
      run_origin_gate),
     ("terrain", "Heightfield terrain and erosion (spec 11.59 / D6-D8):", run_terrain_gate),
+    ("cook", "the derived-data cook (transparent cache + --cook pre-warm; spec 11.99):",
+     run_cook_gate),
     ("terrain-stream", "terrain streaming (spec 11.69 / D4):", run_terrain_stream_gate),
     ("layers", "layered surfaces and their composite cache (specs 11.60, 11.66):",
      run_layers_gate),
@@ -20527,6 +20692,13 @@ def main():
             sys.exit(f"--only {args.only!r} matched no group; --list to see them")
 
     workdir = tempfile.mkdtemp(prefix="cetra_gates_")
+    # The suite's own cook cache (spec 11.99), never the developer's persistent
+    # one: a repo-root cache may hold artefacts cooked by ANOTHER BUILD, and a
+    # gate reading them would land cross-build content in triangle counts and
+    # pixels silently. One dir per run means everything a gate reads was cooked
+    # by the binary under test; arms that measure a LIVE bake still pass
+    # --no-cook on top.
+    os.environ["CETRA_COOK_DIR"] = os.path.join(workdir, "cook")
     # Said out loud for the same reason the binary directory is: the framebuffer
     # a number was measured on is part of the number. 2 is what this suite's
     # sample coordinates were authored against, so it renders unchanged; 1 asks

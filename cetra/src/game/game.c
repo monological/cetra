@@ -2,6 +2,7 @@
 #include "entity.h"
 #include "physics.h"
 #include "character.h"
+#include "../cook.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +39,8 @@ Game* create_game(const GameConfig* config) {
     set_engine_headless(game->engine, config->headless);
     // Same reason: init_engine is where the profiler is built.
     set_engine_profiler(game->engine, config->profiler);
+    // And before on_init, whose bakes are the fetch sites.
+    cook_init(config->cook_dir, !config->no_cook);
 
     // Initialize engine
     if (init_engine(game->engine) != 0) {
@@ -93,6 +96,8 @@ void free_game(Game* game) {
     if (game->engine) {
         free_engine(game->engine);
     }
+
+    cook_shutdown();
 
     free(game);
 }

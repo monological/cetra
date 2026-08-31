@@ -56,6 +56,11 @@ typedef struct GameConfig {
     // during init_engine and create_game owns that call -- so a game-framework
     // app had no way to enable it at all.
     bool profiler;
+    // The derived-data cook (spec 11.99). Config fields for the profiler's
+    // reason: cook_init must precede init_engine and on_init, and create_game
+    // owns both calls.
+    const char* cook_dir; // NULL = CETRA_COOK_DIR, then the repo default
+    bool no_cook;         // true = every fetch misses and nothing is stored
 } GameConfig;
 
 // Main game structure

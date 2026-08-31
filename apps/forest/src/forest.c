@@ -31,6 +31,7 @@
 #include <cglm/cglm.h>
 
 #include "cetra/camera.h"
+#include "cetra/cook.h"
 #include "cetra/engine.h"
 #include "cetra/ibl.h"
 #include "cetra/light.h"
@@ -114,6 +115,11 @@ typedef struct ForestArgs {
     const char* screenshot;
     int screenshot_every; // also save numbered frames every N (0 = only the final one)
     int profiler;
+    // The derived-data cook (spec 11.99). cook is the pre-warm verb: a headless
+    // one-frame run whose deliverable is the cook rows and the summary.
+    int cook;
+    int no_cook;
+    const char* cook_dir;
     int no_lod;
     // Bisect lever (spec 11.63): build lod.c chains instead of cluster DAGs.
     // NOT an off switch for LOD -- both fill the same lod_* ranges, so this
@@ -252,6 +258,15 @@ static float g_cam_yaw = 0.6f;
 static float g_cam_pitch = 0.28f;
 static const float CAM_DISTANCE = 14.0f;
 
+// Where on_init's time goes, as startup-ms k=v rows (spec 11.99 Phase 0): the
+// attribution that decides which sites are worth a cook bracket. Wall clock,
+// the existing erosion-bracket idiom; a row is a reading, not a claim.
+static double g_startup_cluster_ms;
+static double g_startup_t0;
+static void startup_ms(const char* site, double t0) {
+    printf("startup-ms site=%s ms=%.1f\n", site, (glfwGetTime() - t0) * 1000.0);
+}
+
 // Reported at startup, and the numbers the gate arms read from the log.
 static size_t g_distinct_meshes;
 static size_t g_prototype_tris;
@@ -311,7 +326,23 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
     mesh->material = material;
     int levels = 0;
     MeshClusterStats st;
+    // The builder's INPUT, digested before it rewrites the index buffer. What
+    // it answers (spec 11.99): whether debug and release hand the builder the
+    // same bytes -- the precondition for a cooked DAG being shared across
+    // builds rather than cooked once per build type.
+    uint64_t input_digest = 0;
+    if (g_args.cluster_probe && cluster && !g_args.no_clusters) {
+        input_digest = 14695981039346656037ull;
+        const unsigned char* vb = (const unsigned char*)mesh->vertices;
+        for (size_t i = 0; i < mesh->vertex_count * 3u * sizeof(float); ++i)
+            input_digest = (input_digest ^ vb[i]) * 1099511628211ull;
+        const unsigned char* ib = (const unsigned char*)mesh->indices;
+        for (size_t i = 0; i < mesh->index_count * sizeof(unsigned int); ++i)
+            input_digest = (input_digest ^ ib[i]) * 1099511628211ull;
+    }
+    double cluster_t0 = glfwGetTime();
     if (cluster && !g_args.no_clusters && mesh_build_cluster_lod(mesh, &st)) {
+        g_startup_cluster_ms += (glfwGetTime() - cluster_t0) * 1000.0;
         levels = mesh->lod_levels;
         g_clustered_meshes++;
         g_clusters_built += st.clusters;
@@ -358,7 +389,13 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
                 }
                 printf(" digest%d=%u", b, h);
             }
-            printf("\n");
+            // Last, PAST everything the band-list pattern reads -- an earlier
+            // draft put this beside foreign= and truncated that pattern's
+            // reading, which is exactly the failure the alias= comment above
+            // records. The builder's INPUT bytes, digested before the build
+            // rewrote them: what settles whether debug and release can share
+            // a cooked DAG (spec 11.99 -- they can exactly where this agrees).
+            printf(" input=%016llx\n", (unsigned long long)input_digest);
         }
     } else {
         levels = mesh_build_lod_chain(mesh);
@@ -843,16 +880,68 @@ static const struct {
 _Static_assert(sizeof(TERRAIN_LAYERS) / sizeof(TERRAIN_LAYERS[0]) <= MATERIAL_MAX_LAYERS,
                "a fifth ground would arm a layer count the shader silently clamps away");
 
+// What the terrain's surface IS, folded for a cook key (spec 11.99): the
+// analytic params, and the field's content bytes when one is installed --
+// which transitively captures erosion, a heightmap, and any future seeding
+// change. Returns false when the content is unfoldable (a streamed field's
+// level-0 planes are not resident), and the caller bakes live.
+static bool fold_terrain_content(CookKey* key) {
+    cook_key_f32(key, g_terrain.extent);
+    cook_key_f32(key, g_terrain.center[0]);
+    cook_key_f32(key, g_terrain.center[1]);
+    cook_key_f32(key, g_terrain.height);
+    cook_key_f32(key, g_terrain.base_freq);
+    cook_key_f32(key, g_terrain.lacunarity);
+    cook_key_f32(key, g_terrain.gain);
+    cook_key_i32(key, g_terrain.octaves);
+    cook_key_u32(key, g_terrain.seed);
+    cook_key_f32(key, g_terrain.island_start);
+    cook_key_f32(key, g_terrain.island_depth);
+    const TerrainField* field = g_terrain.field;
+    if (!field) {
+        cook_key_u32(key, 0u); // analytic; the marker keeps the two cases apart
+        return true;
+    }
+    if (field->stream)
+        return false;
+    cook_key_u32(key, 1u);
+    cook_key_i32(key, field->res);
+    size_t plane = (size_t)field->res * (size_t)field->res * sizeof(float);
+    cook_key_bytes(key, field->height, plane);
+    cook_key_bytes(key, field->flow, plane);
+    cook_key_bytes(key, field->deposit, plane);
+    cook_key_bytes(key, field->wear, plane);
+    return true;
+}
+
 // The ground, as a layered surface (spec 11.60). Replaces a white albedo times a
 // per-vertex tint at 2.6 units, which is why the terrain did not hold up at
 // walking distance whatever the palette was.
 static void bake_terrain_layers(Scene* scene) {
     const int T = TERRAIN_LAYER_TEX_SIZE;
     int count = (int)(sizeof(TERRAIN_LAYERS) / sizeof(TERRAIN_LAYERS[0]));
+    double layers_t0 = glfwGetTime();
     for (int i = 0; i < count; i++) {
         unsigned char *albedo = NULL, *surface = NULL;
-        terrain_layer_maps(TERRAIN_LAYERS[i].kind, T, g_args.seed + (unsigned)i * 977u, &albedo,
-                           &surface);
+        // Keyed per map, not as one blob, so a fifth ground invalidates
+        // nothing. The seed derivation is an input like any other.
+        unsigned seed = g_args.seed + (unsigned)i * 977u;
+        CookKey ck = cook_key("terrain-layer/1");
+        cook_key_name(&ck, TERRAIN_LAYERS[i].name);
+        cook_key_i32(&ck, (int32_t)TERRAIN_LAYERS[i].kind);
+        cook_key_i32(&ck, T);
+        cook_key_u32(&ck, seed);
+        CookBlob maps[2];
+        if (cook_fetch(&ck, maps, 2)) {
+            albedo = maps[0].data;
+            surface = maps[1].data;
+        } else {
+            terrain_layer_maps(TERRAIN_LAYERS[i].kind, T, seed, &albedo, &surface);
+            if (albedo && surface) {
+                CookBlob out[2] = {{albedo, (size_t)T * T * 4u}, {surface, (size_t)T * T * 4u}};
+                cook_store(&ck, out, 2);
+            }
+        }
         char key[64];
         snprintf(key, sizeof(key), "forest_layer_%s_a", TERRAIN_LAYERS[i].name);
         set_material_layer_albedo_tex(
@@ -864,7 +953,9 @@ static void bake_terrain_layers(Scene* scene) {
             texture_load_memory_owned(scene->tex_pool, key, surface, T, T, 4, texture_desc(false)));
         g_mat_terrain->layers[i].uv_scale = TERRAIN_LAYERS[i].uv_scale;
     }
+    startup_ms("terrain-layers", layers_t0);
 
+    double splat_t0 = glfwGetTime();
     int res = g_terrain.field ? g_terrain.field->res : TERRAIN_SPLAT_FALLBACK_RES;
     // One texture over the whole domain, so a streamed field's resolution is
     // the wrong thing to follow it with: 8193 square would be a 201 MB upload
@@ -872,8 +963,24 @@ static void bake_terrain_layers(Scene* scene) {
     // real answer is the splat pyramid D10 owns -- this is a bound, not a fix.
     if (g_terrain.field && g_terrain.field->stream && res > TERRAIN_SPLAT_STREAM_MAX_RES)
         res = TERRAIN_SPLAT_STREAM_MAX_RES;
-    unsigned char* splat = malloc((size_t)res * (size_t)res * 3u);
-    if (splat && terrain_bake_splat(&g_terrain, res, splat)) {
+    CookKey sk = cook_key("terrain-splat/1");
+    cook_key_i32(&sk, res);
+    bool splat_keyed = fold_terrain_content(&sk);
+    CookBlob splat_blob = {NULL, 0};
+    unsigned char* splat = NULL;
+    bool splat_ok = false;
+    if (splat_keyed && cook_fetch(&sk, &splat_blob, 1)) {
+        splat = splat_blob.data;
+        splat_ok = true;
+    } else {
+        splat = malloc((size_t)res * (size_t)res * 3u);
+        splat_ok = splat && terrain_bake_splat(&g_terrain, res, splat);
+        if (splat_ok && splat_keyed) {
+            CookBlob out = {splat, (size_t)res * (size_t)res * 3u};
+            cook_store(&sk, &out, 1);
+        }
+    }
+    if (splat_ok) {
         set_material_splat_tex(g_mat_terrain,
                                texture_load_memory_owned(scene->tex_pool, "forest_terrain_splat",
                                                          splat, res, res, 3, texture_desc(false)));
@@ -881,6 +988,7 @@ static void bake_terrain_layers(Scene* scene) {
         free(splat);
         fprintf(stderr, "forest: splat bake failed; the ground falls back to layer 0\n");
     }
+    startup_ms("terrain-splat", splat_t0);
 
     // The splat is a function of world XZ over the terrain's own square, which
     // is what makes it work at all here: terrain tiles carry no UV1 (build_grid
@@ -926,34 +1034,71 @@ static void bake_terrain_layers(Scene* scene) {
 // is the difference between a canopy and a cloud of confetti.
 static void bake_vegetation_textures(Scene* scene) {
     const int B = BARK_TEX_SIZE;
-    float* field = malloc((size_t)B * B * sizeof(float));
-    if (field) {
-        veg_bark_height_field(field, B, B);
+    // The bakes' seeds are hard-coded inside veg_*, so the size is the whole
+    // key and the recipe version stands for the algorithm -- the cleanest cook
+    // site in the tree: byte-identical on every launch of every configuration.
+    unsigned char *ba = NULL, *bn = NULL, *br = NULL;
+    CookKey bk = cook_key("veg-bark/1");
+    cook_key_i32(&bk, B);
+    CookBlob bark[3];
+    if (cook_fetch(&bk, bark, 3)) {
+        ba = bark[0].data;
+        bn = bark[1].data;
+        br = bark[2].data;
+    } else {
+        float* field = malloc((size_t)B * B * sizeof(float));
+        if (field) {
+            veg_bark_height_field(field, B, B);
+            ba = veg_bark_albedo(B, B, field);
+            bn = veg_bark_normal(B, B, field);
+            br = veg_bark_roughness(B, B, field);
+            free(field);
+        }
+        if (ba && bn && br) {
+            CookBlob out[3] = {{ba, (size_t)B * B * 3u},
+                               {bn, (size_t)B * B * 3u},
+                               {br, (size_t)B * B * 3u}};
+            cook_store(&bk, out, 3);
+        }
+    }
+    if (ba && bn && br) {
         set_material_albedo_tex(g_mat_bark,
                                 texture_load_memory_owned(scene->tex_pool, "forest_bark_albedo",
-                                                          veg_bark_albedo(B, B, field), B, B, 3,
-                                                          texture_desc(true)));
+                                                          ba, B, B, 3, texture_desc(true)));
         // Stated as a NORMAL so it takes BC5. Procedural maps reach the GPU
         // through this path rather than through an importer, so nothing else can
         // know what they are.
-        set_material_normal_tex(
-            g_mat_bark,
-            texture_load_memory_owned(scene->tex_pool, "forest_bark_normal",
-                                      veg_bark_normal(B, B, field), B, B, 3,
-                                      (TextureDesc){.is_srgb = false,
-                                                    .alpha = TEXTURE_ALPHA_DATA,
-                                                    .use = TEXTURE_USE_NORMAL}));
+        set_material_normal_tex(g_mat_bark,
+                                texture_load_memory_owned(scene->tex_pool, "forest_bark_normal",
+                                                          bn, B, B, 3,
+                                                          (TextureDesc){.is_srgb = false,
+                                                                        .alpha = TEXTURE_ALPHA_DATA,
+                                                                        .use = TEXTURE_USE_NORMAL}));
         set_material_roughness_tex(g_mat_bark,
                                    texture_load_memory_owned(scene->tex_pool, "forest_bark_rough",
-                                                             veg_bark_roughness(B, B, field), B, B,
-                                                             3, texture_desc(false)));
-        free(field);
+                                                             br, B, B, 3, texture_desc(false)));
     }
 
     const int LW = LEAF_CELL_SIZE * TG_LEAF_VARIANTS;
     const int LH = LEAF_CELL_SIZE;
     unsigned char *la = NULL, *ln = NULL, *lr = NULL;
-    veg_leaf_cluster_maps(LW, LH, &la, &ln, &lr);
+    CookKey lk = cook_key("veg-leaf/1");
+    cook_key_i32(&lk, LW);
+    cook_key_i32(&lk, LH);
+    CookBlob leaf[3];
+    if (cook_fetch(&lk, leaf, 3)) {
+        la = leaf[0].data;
+        ln = leaf[1].data;
+        lr = leaf[2].data;
+    } else {
+        veg_leaf_cluster_maps(LW, LH, &la, &ln, &lr);
+        if (la && ln && lr) {
+            CookBlob out[3] = {{la, (size_t)LW * LH * 4u},
+                               {ln, (size_t)LW * LH * 3u},
+                               {lr, (size_t)LW * LH * 3u}};
+            cook_store(&lk, out, 3);
+        }
+    }
     // The alpha-TESTED image, so the one whose chain has to hold its coverage
     // against the cutoff the material below states.
     TextureDesc leaf_desc = texture_desc(true);
@@ -1940,6 +2085,7 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
 
 static void on_init(Game* game) {
     Engine* engine = game->engine;
+    g_startup_t0 = glfwGetTime();
     g_pbr = get_engine_shader_program_by_name(engine, "pbr");
 
     g_scene = create_scene();
@@ -2013,6 +2159,7 @@ static void on_init(Game* game) {
     else if (g_args.heightmap && g_args.erode)
         fprintf(stderr, "forest: --heightmap wins over --erode; the bake and any --erode-save "
                         "are skipped\n");
+    double field_t0 = glfwGetTime();
     if (g_args.terrain_stream) {
         float radius = g_args.region_radius > 0.0f ? g_args.region_radius : REGION_LOAD_RADIUS;
         float span = g_args.region_span > 0.0f ? g_args.region_span : REGION_SPAN_DEFAULT;
@@ -2036,6 +2183,7 @@ static void on_init(Game* game) {
     // After the pyramid, because the levels are what a stream file stores.
     if (g_args.terrain_stream_save && g_terrain.field == &g_field)
         save_stream();
+    startup_ms("terrain-field", field_t0);
     if (g_args.height_probe)
         terrain_height_probe(&g_terrain);
 
@@ -2067,7 +2215,9 @@ static void on_init(Game* game) {
     // this can be, not the material on its own.
     g_mat_rock = make_material("rock", (vec3){0.085f, 0.082f, 0.078f}, 0.88f, 0.0f);
 
+    double veg_t0 = glfwGetTime();
     bake_vegetation_textures(g_scene);
+    startup_ms("veg-textures", veg_t0);
     bake_terrain_layers(g_scene);
 
     // A breeze across the valley. phase_variation is what makes TREE_COUNT copies
@@ -2092,9 +2242,14 @@ static void on_init(Game* game) {
     EntityManager* em = create_entity_manager(game);
     game_set_entity_manager(game, em);
 
+    double terr_t0 = glfwGetTime();
     build_terrain();
+    startup_ms("terrain-geom", terr_t0);
+    double proto_t0 = glfwGetTime();
     build_tree_prototypes();
     build_rock_prototypes();
+    startup_ms("prototypes", proto_t0);
+    printf("startup-ms site=cluster-lod ms=%.1f\n", g_startup_cluster_ms);
     if (g_args.no_regions) {
         // One region covering the whole domain, always resident. The scatter and
         // the collider then run exactly once, which is what this app did before
@@ -2112,7 +2267,9 @@ static void on_init(Game* game) {
     glm_vec3_copy(spawn, home);
     if (g_args.cam_set)
         glm_vec3_copy(g_args.cam_eye, home);
+    double regions_t0 = glfwGetTime();
     regions_update(home, spawn);
+    startup_ms("regions", regions_t0);
     if (g_args.scatter_probe && g_probe_items)
         scatter_probe(g_probe_items, (int)g_probe_count);
     printf("Trees and rocks: %d prototypes, %d region(s) of %d resident\n",
@@ -2123,10 +2280,12 @@ static void on_init(Game* game) {
     // ref from these pointers, so dropping the last one when the near regions
     // happen not to use a prototype would free the mesh and leave the pointer
     // behind. They are released at shutdown instead.
+    double sky_t0 = glfwGetTime();
     if (g_args.no_sky)
         build_fallback_sun();
     else
         build_sky_and_sun(engine);
+    startup_ms("sky", sky_t0);
 
     // Flood it. This is the whole point of the water system's height provider:
     // terrain_height_at is a pure function of (params, x, z), so it satisfies
@@ -2281,6 +2440,7 @@ static void on_init(Game* game) {
     set_engine_show_gui(engine, !engine->headless);
     set_engine_show_fps(engine, !engine->headless);
 
+    startup_ms("on-init-total", g_startup_t0);
     printf("Forest: %zu distinct meshes, %zu prototype triangles, %zu nodes\n", g_distinct_meshes,
            g_prototype_tris, g_node_count);
     printf("Forest: %zu LOD chains built, %zu refused\n", g_chains_built, g_chains_refused);
@@ -2548,6 +2708,9 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --layers-vt-probe N       Print page residency every N frames\n");
     fprintf(stderr, "      --no-sort-opaque    Draw opaques in graph order\n");
     fprintf(stderr, "      --depth-prepass     Depth-only pass before shading\n");
+    fprintf(stderr, "      --cook              Warm the derived-data cache and exit (headless)\n");
+    fprintf(stderr, "      --no-cook           Bake everything live; touch no cache\n");
+    fprintf(stderr, "      --cook-dir <p>      Cache directory (default cooked/, or CETRA_COOK_DIR)\n");
     fprintf(stderr, "      --taa               TAA headless too (diagnostic)\n");
     fprintf(stderr, "      --msaa <n>          Sample count, overriding the TAA/headless policy\n");
     fprintf(stderr, "      --headless-jitter   Sub-pixel jitter headless\n");
@@ -2620,6 +2783,12 @@ int main(int argc, char** argv) {
             g_args.screenshot_every = atoi(argv[++i]);
         } else if (!strcmp(a, "--profiler")) {
             g_args.profiler = 1;
+        } else if (!strcmp(a, "--cook")) {
+            g_args.cook = 1;
+        } else if (!strcmp(a, "--no-cook")) {
+            g_args.no_cook = 1;
+        } else if (!strcmp(a, "--cook-dir") && i + 1 < argc) {
+            g_args.cook_dir = argv[++i];
         } else if (!strcmp(a, "--no-clusters")) {
             g_args.no_clusters = 1;
         } else if (!strcmp(a, "--no-quadtree")) {
@@ -2762,6 +2931,18 @@ int main(int argc, char** argv) {
     // Both or neither: half a camera would silently aim at the origin.
     g_args.cam_set = cam_eye_set && cam_target_set;
 
+    if (g_args.cook && g_args.no_cook) {
+        fprintf(stderr, "forest: --cook asks to warm the cache --no-cook refuses to touch\n");
+        return 1;
+    }
+    if (g_args.cook) {
+        // The pre-warm verb IS a headless one-frame run: on_init and frame 0
+        // reach every derivation site, and the cook rows are the deliverable.
+        g_args.headless = 1;
+        if (g_args.frames <= 0)
+            g_args.frames = 1;
+    }
+
     GameConfig config = game_default_config();
     config.title = "Cetra Forest";
     config.width = g_args.width > 0 ? g_args.width : 1600;
@@ -2771,6 +2952,8 @@ int main(int argc, char** argv) {
     config.screenshot_path = g_args.screenshot;
     config.screenshot_every = g_args.screenshot_every;
     config.profiler = g_args.profiler != 0;
+    config.cook_dir = g_args.cook_dir;
+    config.no_cook = g_args.no_cook != 0;
 
     Game* game = create_game(&config);
     if (!game) {
