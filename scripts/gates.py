@@ -5747,10 +5747,11 @@ ALPHACOV_FIXTURE = "alphacov_fixture.cscn"
 # separates them without needing to know where any individual dot landed.
 ALPHACOV_LUMA = 90.0
 # What fraction of the near field's coverage the mid band must still carry.
-# Measured 0.911 as built, 0.619 with the per-texel measure restored, and 0.591
-# with no preservation at all -- so the bar sits 0.081 above the nearest
-# falsifying mutation rather than the comfortable margin it had against a
-# renderer that no longer exists.
+# Measured 0.911 as 11.88 built it, 0.619 with the per-texel measure restored,
+# and 0.591 with no preservation at all -- so the bar sat 0.081 above the
+# nearest falsifying mutation. Re-measured under 11.100: 0.904 as built (level
+# 3's rescale became a dither) and 0.622 with the rescale broken, so the
+# margin is 0.078 and the numbers above are the pre-distribution record.
 ALPHACOV_MIN_RATIO = 0.70
 # And what the FAR band may NOT carry. It is bounded the opposite way from the
 # ratio above and that is the whole reason it exists: past the level where the
@@ -11384,7 +11385,8 @@ def run_alphacov_gate(workdir):
     ok = lit and ratio >= ALPHACOV_MIN_RATIO
     print(f"  alphacov-mip {'PASS' if ok else 'FAIL'}  dot coverage {near:.4f} near, "
           f"{mid:.4f} mid, ratio {ratio:.3f} (want >= {ALPHACOV_MIN_RATIO}, and the near band "
-          f"lit above 0.05: {lit}). Without the per-level rescale this reads 0.591.")
+          f"lit above 0.05: {lit}). Without the per-level rescale this reads 0.622 -- it read "
+          f"0.591 before 11.100, whose level-3 dither now cushions the mid band a little.")
     if not ok:
         failures.append("alphacov-mip")
 
@@ -11400,10 +11402,11 @@ def run_alphacov_gate(workdir):
 
     ok = lit and far <= ALPHACOV_FAR_MAX
     print(f"  alphacov-far {'PASS' if ok else 'FAIL'}  the far field reads {far:.4f} "
-          f"(want <= {ALPHACOV_FAR_MAX}, and the near band lit: {lit}). Past the level where "
-          f"the chain goes uniform there is no fractional coverage to reproduce, so a correct "
-          f"build thins to nothing here. A texel-counting measure whose chain also cascades "
-          f"paints this band SOLID instead, reading 1.0000.")
+          f"(want <= {ALPHACOV_FAR_MAX}, and the near band lit: {lit}). Since 11.100 these "
+          f"levels are distributed too, but their visibility budgets are 2, 1 and 0 ON texels, "
+          f"so near-empty is still what correct looks like out here -- the band guards "
+          f"SATURATION: the inverted-budget mutation reads 1.0000, and so did 11.87's "
+          f"texel-counting cascade.")
     if not ok:
         failures.append("alphacov-far")
 
