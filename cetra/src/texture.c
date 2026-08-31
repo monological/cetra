@@ -538,9 +538,13 @@ static float texture_alpha_coverage(const unsigned char* pixels, int width, int 
  * writes a coverage nobody measured. Seeding `best` at 1 also gives the honest
  * answer where the target is UNREACHABLE -- a level with no structure left can
  * only produce 0 or 1, and declining to touch it is correct.
+ *
+ * Returns the residual miss at the applied scale, in the measure's own
+ * currency -- the caller reads it against TEXTURE_DISTRIBUTE_MISS to decide
+ * that no scale can reach this target and distribution has to answer instead.
  */
-static void texture_preserve_alpha_coverage(unsigned char* pixels, int width, int height,
-                                            float cutoff, float target) {
+static float texture_preserve_alpha_coverage(unsigned char* pixels, int width, int height,
+                                             float cutoff, float target) {
     float lo = 0.25f, hi = 4.0f, scale = 1.0f;
     float best_scale = 1.0f;
     float best_error = FLT_MAX;
@@ -560,13 +564,113 @@ static void texture_preserve_alpha_coverage(unsigned char* pixels, int width, in
         scale = 0.5f * (lo + hi);
     }
     if (best_scale == 1.0f)
-        return;
+        return best_error;
 
     const size_t count = (size_t)width * (size_t)height;
     for (size_t i = 0; i < count; i++) {
         const float a = (float)pixels[i * 4 + 3] * best_scale;
         pixels[i * 4 + 3] = (unsigned char)(a > 255.0f ? 255.0f : a + 0.5f);
     }
+    return best_error;
+}
+
+// Where the rescale hands over to distribution (spec 11.100): the residual
+// coverage miss above which the target is judged unreachable by any scale.
+// Measured with the replay across the on-disk corpus, per level after the
+// best-error rescale: the ivy leaf atlas's worst structured level misses by
+// 0.0021 and the dot fixture's structured levels by 0.0016 or less, while the
+// dots' first UNREACHABLE level (level 3 -- structured, but its reachable
+// coverage stops 0.0502 short of the 0.113 target) and every uniform level
+// after it miss by 0.0502-0.1127, and a 1x1 whose fractional target rounds
+// away misses by ~0.5. So 0.03 sits 0.028 above the largest miss that must
+// not fire and 0.020 below the smallest that must. 0.05 was the prior and is
+// refused for sitting 0.0002 from a real level's reading.
+#define TEXTURE_DISTRIBUTE_MISS 0.03f
+// And the band of targets worth distributing toward, half a uint8 code from
+// either end: outside it, empty or solid IS the correct distant answer.
+#define TEXTURE_DISTRIBUTE_MIN 0.002f
+
+/*
+ * Distribute this level's alpha to BINARY {0, 255} so the fraction of ON
+ * texels lands at `target` -- Yuksel 2018's error diffusion (spec 11.100),
+ * the answer where the rescale's scale cannot reach a fractional target.
+ * Reads alpha from `pristine` (the unrescaled box-halved level) and rewrites
+ * every alpha byte of `out`; RGB stays the pristine copy's.
+ *
+ * The authored cutoff never enters. Binary alpha passes or fails identically
+ * at any cutoff in (0, 1], so the field is normalized to mean `target` and
+ * quantized against 1/2 -- which dissolves the paper's threshold-1/2 design
+ * centre and absorbs the half-code-per-halving drift of the integer box
+ * filter. Diffusion conserves the running sum, so the ON count lands at
+ * round(target * N) up to the boundary cells each row discards -- the
+ * paper's own edge behaviour, made deterministic.
+ *
+ * Two deviations from the paper's letter, both recorded in
+ * docs/papers/README.md: SERPENTINE scan (reverse direction on odd rows,
+ * kernel mirrored), because raster Floyd-Steinberg grows directional worms
+ * exactly on the low-density uniform fields this fires on; and the LAST ROW
+ * flows its full residual ahead along the row instead of dropping 9/16 of
+ * every texel's error off the bottom edge, which keeps conservation O(1)
+ * for the Nx1 levels and the 2x2/1x1 tail -- at 1x1 the whole function
+ * degenerates to majority-rounding the target, the only stable answer a
+ * single texel has.
+ *
+ * Deterministic by construction: multiplies, adds and compares in a fixed
+ * serial order, no PRNG -- the cook's bit-identical-artefact charter is why
+ * the paper's alpha-pyramid variant, which REQUIRES random tie-breaking,
+ * was refused (spec 11.100).
+ *
+ * Returns false only when the two error rows cannot be allocated; the
+ * caller keeps the rescaled bytes for this level and re-arms.
+ */
+static bool texture_distribute_alpha(const unsigned char* pristine, unsigned char* out,
+                                     int width, int height, float target) {
+    const size_t count = (size_t)width * (size_t)height;
+    uint64_t sum = 0;
+    for (size_t i = 0; i < count; i++)
+        sum += pristine[i * 4 + 3];
+    if (sum == 0)
+        return true; // no mass to place; transparent is the honest answer
+    const float k = (float)((double)target * (double)count / (double)sum);
+
+    // Two error rows with one guard cell each side, so x-1 and x+1 always
+    // land in-buffer and what reaches a guard is discarded.
+    const size_t rw = (size_t)width + 2;
+    float* err = calloc(2 * rw, sizeof(float));
+    if (!err) {
+        log_warn("alpha distribution: out of memory at %dx%d, keeping the rescale", width,
+                 height);
+        return false;
+    }
+    float* cur = err + 1;
+    float* nxt = err + rw + 1;
+    for (int y = 0; y < height; y++) {
+        const bool ltr = (y & 1) == 0;
+        const bool last_row = (y == height - 1);
+        const int step = ltr ? 1 : -1;
+        int x = ltr ? 0 : width - 1;
+        for (int i = 0; i < width; i++, x += step) {
+            const size_t o = ((size_t)y * (size_t)width + (size_t)x) * 4 + 3;
+            const float v = fminf((float)pristine[o] * k, 1.0f) + cur[x];
+            const int q = v >= 0.5f;
+            const float e = v - (float)q;
+            out[o] = q ? 255 : 0;
+            if (last_row) {
+                cur[x + step] += e;
+            } else {
+                cur[x + step] += e * (7.0f / 16.0f);
+                nxt[x - step] += e * (3.0f / 16.0f);
+                nxt[x] += e * (5.0f / 16.0f);
+                nxt[x + step] += e * (1.0f / 16.0f);
+            }
+        }
+        float* swap = cur;
+        cur = nxt;
+        nxt = swap;
+        memset(nxt - 1, 0, rw * sizeof(float));
+    }
+    free(err);
+    return true;
 }
 
 // The derived chain as data: every level's stored bytes -- encoded blocks or
@@ -682,11 +786,22 @@ static void texture_derive_levels(TextureBlockFormat* block, GLenum internal_for
 
     // Level 0's surviving fraction, which every level below is held to.
     // Measured before the loop because level 0 is the reference and is never
-    // rewritten.
+    // rewritten -- which is also Yuksel's own fix for magnification: a
+    // distributed level 0 prints texel staircases at every close-up edge.
     const bool keep_coverage = texture_wants_coverage(channels, desc);
     const float target =
         keep_coverage ? texture_alpha_coverage(pixels, width, height, desc.coverage_cutoff, 1.0f)
                       : 0.0f;
+    // Distribution only chases a target that is genuinely fractional: outside
+    // this band, empty or solid is the correct distant answer and the rescale's
+    // decline stands.
+    const bool fractional =
+        keep_coverage && target > TEXTURE_DISTRIBUTE_MIN && target < 1.0f - TEXTURE_DISTRIBUTE_MIN;
+    // Latched once the first level fires and held for every level under it, so
+    // the mip ramp never alternates smooth/dithered/smooth across a trilinear
+    // blend -- and the bisection is skipped where its answer is already known
+    // to be refused.
+    bool distributing = false;
 
     const unsigned char* src = pixels;
     int sw = width, sh = height;
@@ -708,7 +823,9 @@ static void texture_derive_levels(TextureBlockFormat* block, GLenum internal_for
         // bound by applying it per level to a residual rather than to the
         // total. Measured, the effective scale reached 4.41 against a cap of
         // 4, lifted a structureless level over the cutoff, and painted the
-        // distance solid.
+        // distance solid. Past TEXTURE_DISTRIBUTE_MISS the rescale hands over
+        // to distribution, which reads the same pristine buffer and holds the
+        // same target -- so the chain-feed rule survives the handover intact.
         //
         // The DILATE must already have run, and it has: all three producers do
         // it on level 0 before publishing. Its solidity seed is alpha >= 8/255,
@@ -718,7 +835,27 @@ static void texture_derive_levels(TextureBlockFormat* block, GLenum internal_for
         const unsigned char* out = dst;
         if (keep_coverage) {
             memcpy(next, dst, (size_t)dw * (size_t)dh * (size_t)channels);
-            texture_preserve_alpha_coverage(next, dw, dh, desc.coverage_cutoff, target);
+            bool dithered = false;
+            if (distributing)
+                dithered = texture_distribute_alpha(dst, next, dw, dh, target);
+            if (!dithered) {
+                distributing = false;
+                const float miss =
+                    texture_preserve_alpha_coverage(next, dw, dh, desc.coverage_cutoff, target);
+                // The handover (spec 11.100): a miss past the threshold means
+                // no scale reaches this target -- 11.88's recorded ceiling --
+                // so the level is re-dithered from the pristine bytes,
+                // overwriting the rescale's. Replaced, never composed: the
+                // dither normalizes the pristine alpha itself, and running it
+                // over rescaled bytes would double-count the correction.
+                if (fractional && miss > TEXTURE_DISTRIBUTE_MISS &&
+                    texture_distribute_alpha(dst, next, dw, dh, target)) {
+                    distributing = true;
+                    log_info("Alpha distribution: %dx%d level %d onward (target %.4f, "
+                             "rescale missed by %.4f)",
+                             width, height, stack->count, target, miss);
+                }
+            }
             out = next;
         }
         if (!texture_encode_push(stack, *block, dw, dh, channels, out, scratch)) {
@@ -794,7 +931,7 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
     const TextureBlockFormat keyed_block = block; // what the key promises the payload is
     GLenum gl_block = texture_block_gl_format(block, desc.is_srgb);
 
-    CookKey tk = cook_key("texture-mips/2");
+    CookKey tk = cook_key("texture-mips/3");
     cook_key_i32(&tk, width);
     cook_key_i32(&tk, height);
     cook_key_i32(&tk, channels);

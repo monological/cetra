@@ -5759,16 +5759,23 @@ ALPHACOV_MIN_RATIO = 0.70
 # in solid. Measured 1.0000 on the cascading build against 0.0000 either side of
 # it in the frame, so the bar is nowhere near either.
 ALPHACOV_FAR_MAX = 0.25
-# The DEEP band (spec 11.100): past the uniform level, where no scale can
-# reproduce a fractional coverage, alpha DISTRIBUTION keeps the field alive at
-# roughly the level-0 coverage instead of letting it vanish. Two-sided because
-# it is a fidelity band: the floor fails the build that still vanishes (the
-# pre-11.100 build reads 0.0114 here), the ceiling fails one whose visibility
-# budget saturates (the inverted-budget mutation reads ~1.0). PROVISIONAL until
-# the shipped build is measured; the finalized values state their distance to
-# each falsifying reading, per ALPHACOV_MIN_RATIO's idiom.
-ALPHACOV_DEEP_MIN = 0.03
-ALPHACOV_DEEP_MAX = 0.30
+# The DEEP signal (spec 11.100): the facing quad's mean luma above the sky
+# background, in 8-bit codes. Past the uniform level, where no scale can
+# reproduce a fractional coverage, alpha DISTRIBUTION keeps the quad alive at
+# roughly the level-0 coverage instead of letting it vanish. MEAN luma and not
+# a bright-pixel count, because a dither's mass arrives spread thin -- the
+# count instrument read the distributing build LOWER (0.0027) than the
+# vanishing one (0.0114) on the grazing plane, and a mean conserves the mass a
+# threshold deletes. Two-sided because it is a fidelity band: the floor fails
+# a build that still vanishes -- measured +3.21, edge taps of the rescaled
+# level 3, not the ~0 the backdrop argument predicts -- and the ceiling fails
+# one whose visibility budget saturates (~the full dot-minus-sky lift, +160).
+# The distributing build reads +20.97, consistent with perceived coverage
+# 21/162 = 0.13 against the 0.113 target: the floor sits 4.8 above the
+# vanishing reading and 13 under the true one. Ceiling re-measured against the
+# saturating mutation in the 11.100 ledger.
+ALPHACOV_DEEP_MIN = 8.0
+ALPHACOV_DEEP_MAX = 60.0
 
 
 def _box_luma(pix, w, h, box):
@@ -11248,6 +11255,25 @@ def _alphacov_frac(pix, w, h, band):
     return k / n if n else 0.0
 
 
+def _alphacov_mean(pix, w, h, box):
+    """Mean luma over a fractional (x0, y0, x1, y1) box.
+
+    The deep arm's instrument, and deliberately not a bright-pixel count: a
+    dither's coverage arrives as mass spread thin, so a threshold deletes most
+    of it while a mean conserves it -- counted, the distributing build read
+    LOWER than the vanishing one.
+    """
+    x0, y0 = int(w * box[0]), int(h * box[1])
+    x1, y1 = int(w * box[2]), int(h * box[3])
+    s = n = 0
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            o = (y * w + x) * 3
+            s += 0.2126 * pix[o] + 0.7152 * pix[o + 1] + 0.0722 * pix[o + 2]
+            n += 1
+    return s / n if n else 0.0
+
+
 def run_alphacov_gate(workdir):
     """An alpha-tested cutout keeps its coverage down the mip chain (spec 11.87).
 
@@ -11260,17 +11286,24 @@ def run_alphacov_gate(workdir):
                      it, and the arm reads the ratio between two bands of ONE
                      frame so it needs no stored image and no second build.
 
-      alphacov-deep  the deep field is ALIVE, and not solid (spec 11.100). Its
-                     rows sit entirely past the level where the chain goes
-                     uniform, where no scale can reproduce a fractional
-                     coverage -- alpha distribution is what answers there, so
-                     this band is bounded on BOTH sides: the floor fails a
-                     build that still vanishes (the pre-11.100 build reads
-                     0.0114 -- not 0.0000, the band's near edge catches a
-                     little trilinear bleed from level 3), the ceiling fails
-                     one whose visibility budget saturates. It cannot live on
-                     FAR's rows, whose levels carry budgets of 2, 1 and 0 ON
-                     texels -- near-empty is CORRECT out there.
+      alphacov-deep  the FACING QUAD is alive, and not solid (spec 11.100).
+                     It hangs in the sky at mip ~4.9, past the level where the
+                     chain goes uniform and no scale can reproduce a
+                     fractional coverage -- alpha distribution is what answers
+                     there, so its mean-luma signal over the sky background is
+                     bounded on BOTH sides: the floor fails a build that still
+                     vanishes (the quad discards to backdrop), the ceiling
+                     fails one whose visibility budget saturates. Read as a
+                     MEAN, not a bright-pixel count, and on FACING geometry,
+                     not the plane -- both by measurement: on the grazing
+                     plane, anisotropic filtering averages the sparse dither
+                     into a smooth low-alpha field the sharpened test then
+                     deletes, so the distributing build counted LOWER there
+                     (0.0027) than the vanishing one (0.0114, rescaled-cluster
+                     bleed) and no floor separates them in the honest
+                     direction. That grazing loss is a real ceiling of the
+                     technique, recorded in spec 11.100; the quad is Yuksel's
+                     own experimental geometry.
 
       alphacov-far   and the far field is not SOLID. Bounded the opposite way
                      from the ratio, which is the point of it.
@@ -11338,8 +11371,9 @@ def run_alphacov_gate(workdir):
     w, h, pix = _read_ppm(out)
     near = _alphacov_frac(pix, w, h, gen.BAND_NEAR)
     mid = _alphacov_frac(pix, w, h, gen.BAND_MID)
-    deep = _alphacov_frac(pix, w, h, gen.BAND_DEEP)
     far = _alphacov_frac(pix, w, h, gen.BAND_FAR)
+    sky = _alphacov_mean(pix, w, h, (0.0, gen.BAND_SKY[0], 1.0, gen.BAND_SKY[1]))
+    deep = _alphacov_mean(pix, w, h, gen.BOX_DEEP) - sky
     ratio = mid / near if near > 0 else 0.0
     # The near band has to actually carry dots, or a frame that rendered nothing
     # satisfies a ratio of 0/0 and every reading below is meaningless. Shared by
@@ -11355,11 +11389,12 @@ def run_alphacov_gate(workdir):
         failures.append("alphacov-mip")
 
     ok = lit and ALPHACOV_DEEP_MIN <= deep <= ALPHACOV_DEEP_MAX
-    print(f"  alphacov-deep {'PASS' if ok else 'FAIL'}  the deep field reads {deep:.4f} "
-          f"(want {ALPHACOV_DEEP_MIN} <= deep <= {ALPHACOV_DEEP_MAX}, and the near band lit: "
-          f"{lit}). Every row of this band is past the uniform level, where a scale cannot "
-          f"reproduce a fractional coverage -- distribution keeps it alive at roughly the "
-          f"level-0 coverage, a vanishing build reads 0.0114, a saturating one ~1.0.")
+    print(f"  alphacov-deep {'PASS' if ok else 'FAIL'}  the facing quad reads {deep:+.2f} luma "
+          f"over the sky's {sky:.2f} (want {ALPHACOV_DEEP_MIN} <= signal <= {ALPHACOV_DEEP_MAX}, "
+          f"and the near band lit: {lit}). The quad sits at mip ~4.9, past the uniform level, "
+          f"where a scale cannot reproduce a fractional coverage -- distribution keeps it alive "
+          f"at roughly the level-0 coverage; a vanishing build discards it to backdrop, a "
+          f"saturating one lifts the box by the full dot-minus-sky difference.")
     if not ok:
         failures.append("alphacov-deep")
 
@@ -20662,7 +20697,7 @@ def run_cook_gate(workdir):
         text = r.stdout + r.stderr
         out = _cook_counts(text)
         out["tex_rows"] = len([s for s, _, _, _, _ in _COOK_ROW.findall(text)
-                               if s == "texture-mips/2"])
+                               if s == "texture-mips/3"])
         return out
 
     tex_live = texture_run("tex_live", ["--no-cook"], shot=tex_live_ppm)

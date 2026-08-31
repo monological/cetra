@@ -7,7 +7,8 @@
  "scenes": [
   {
    "nodes": [
-    0
+    0,
+    1
    ]
   }
  ],
@@ -15,6 +16,10 @@
   {
    "name": "alphacov_plane",
    "mesh": 0
+  },
+  {
+   "name": "alphacov_quad",
+   "mesh": 1
   }
  ],
  "meshes": [
@@ -28,6 +33,20 @@
       "TEXCOORD_0": 2
      },
      "indices": 3,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "alphacov_quad",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 4,
+      "NORMAL": 5,
+      "TEXCOORD_0": 6
+     },
+     "indices": 7,
      "material": 0
     }
    ]
@@ -98,6 +117,40 @@
    "componentType": 5123,
    "count": 6,
    "type": "SCALAR"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -5.0,
+    8.5,
+    -100.0
+   ],
+   "max": [
+    5.0,
+    18.5,
+    -100.0
+   ]
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
   }
  ],
  "bufferViews": [
@@ -124,12 +177,36 @@
    "byteOffset": 128,
    "byteLength": 12,
    "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 140,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 188,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 236,
+   "byteLength": 32,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 268,
+   "byteLength": 12,
+   "target": 34963
   }
  ],
  "buffers": [
   {
-   "uri": "data:application/octet-stream;base64,AABIwwAAAAAAAIC/AABIQwAAAAAAAIC/AABIQwAAAAAAAMjDAABIwwAAAAAAAMjDAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAMhCAAAAAAAAyEIAgMdCAAAAAACAx0IAAAEAAgAAAAIAAwA=",
-   "byteLength": 140
+   "uri": "data:application/octet-stream;base64,AABIwwAAAAAAAIC/AABIQwAAAAAAAIC/AABIQwAAAAAAAMjDAABIwwAAAAAAAMjDAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAMhCAAAAAAAAyEIAgMdCAAAAAACAx0IAAAEAAgAAAAIAAwAAAKDAAAAIQQAAyMIAAKBAAAAIQQAAyMIAAKBAAACUQQAAyMIAAKDAAACUQQAAyMIAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgEAAAAAAAACAQAAAgEAAAAAAAACAQAAAAQACAAAAAgADAA==",
+   "byteLength": 280
   }
  ]
 }

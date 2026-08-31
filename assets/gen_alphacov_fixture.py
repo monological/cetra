@@ -56,11 +56,12 @@ UV_PER_UNIT = 0.25
 # scene cannot disagree.
 CAM_Y, CAM_TARGET_Z, FOV = 8.0, -30.0, 50.0
 
-# The framebuffer height a gate render actually produces. It is a CONSTANT and
+# The framebuffer size a gate render actually produces. It is a CONSTANT and
 # not a platform variable: gates.py scales its own request so a 1x display asks
 # for double and lands on the same framebuffer as a HiDPI one, precisely so
 # nothing downstream has to know which it is on. Must track CALIBRATED_FB_SCALE
 # there -- every mip level below shifts by one if they disagree.
+GATE_W = 400 * 2
 GATE_H = 300 * 2
 
 # The three horizontal bands every arm reads, as fractions of frame height, and
@@ -82,10 +83,37 @@ GATE_H = 300 * 2
 # and 0 ON texels per level, so a CORRECT distributing build legitimately reads
 # near-empty and a floor would either fail correctness or be too low to fail
 # anything.
+#
+# AND THE GRAZING PLANE CANNOT CARRY DEEP'S ARM AT ALL, which was measured
+# rather than predicted (spec 11.100): at ~15 degrees under anisotropic
+# filtering, the sampler averages a sparse binary dither along the compressed
+# axis into a smooth low-alpha field, and the sharpened alpha test then deletes
+# it -- the distributing build reads LOWER here (0.0027) than the vanishing one
+# (0.0114, rescaled-cluster bleed), so no floor separates them in the honest
+# direction. That is a real ceiling of the technique under grazing anisotropy,
+# recorded in the 11.100 spec; the arm reads the FACING QUAD below instead,
+# which is Yuksel's own experimental geometry (his Fig. 6): anisotropy ~1, mip
+# pinned by distance, perceived coverage tracks the bilinear tent.
 BAND_NEAR = (0.80, 0.98)
 BAND_MID = (0.62, 0.72)
 BAND_DEEP = (0.40, 0.52)
 BAND_FAR = (0.26, 0.34)
+# Background reference for the quad's mean-luma signal: sky rows, above the
+# horizon, off the plane and off the quad.
+BAND_SKY = (0.02, 0.06)
+
+# The facing quad: an XY-plane square at QUAD_D down -z, UVs tiled QUAD_UV
+# times so the read box averages over many dither periods, sized so its texel
+# footprint sits between the uniform level and the budget starvation line.
+# main() derives its projected centre row and its mip from the same camera the
+# bands use, and asserts both.
+QUAD_D = 100.0     # world units down -z
+QUAD_SIZE = 10.0   # world units, square
+QUAD_Y = 13.5      # centre height; lands the projection in the sky rows
+QUAD_UV = 4.0      # uv repeats across the quad
+# The 2D read box the deep arm samples, (x0, y0, x1, y1) as frame fractions --
+# inside the quad's projection with margin, asserted in main().
+BOX_DEEP = (0.47, 0.11, 0.53, 0.19)
 
 
 def _alpha_dots(n):
@@ -144,7 +172,8 @@ def _mip_at_z(z):
     return math.log2(max(texels_per_px, 1.0))
 
 
-# --- geometry: one long quad, near edge at NEAR, far edge at FAR -------------
+# --- geometry: one long quad, near edge at NEAR, far edge at FAR, and the
+# facing quad the deep arm reads ----------------------------------------------
 pos = [(-HALF_W, 0.0, -NEAR), (HALF_W, 0.0, -NEAR),
        (HALF_W, 0.0, -FAR), (-HALF_W, 0.0, -FAR)]
 nrm = [(0.0, 1.0, 0.0)] * 4
@@ -153,10 +182,20 @@ _v = (FAR - NEAR) * UV_PER_UNIT
 uv = [(0.0, 0.0), (_u, 0.0), (_u, _v), (0.0, _v)]
 idx = [0, 1, 2, 0, 2, 3]
 
+_qh = QUAD_SIZE * 0.5
+qpos = [(-_qh, QUAD_Y - _qh, -QUAD_D), (_qh, QUAD_Y - _qh, -QUAD_D),
+        (_qh, QUAD_Y + _qh, -QUAD_D), (-_qh, QUAD_Y + _qh, -QUAD_D)]
+qnrm = [(0.0, 0.0, 1.0)] * 4
+quv = [(0.0, 0.0), (QUAD_UV, 0.0), (QUAD_UV, QUAD_UV), (0.0, QUAD_UV)]
+
 _chunks = [
     (b"".join(struct.pack("<3f", *p) for p in pos), 34962),
     (b"".join(struct.pack("<3f", *n) for n in nrm), 34962),
     (b"".join(struct.pack("<2f", *t) for t in uv), 34962),
+    (b"".join(struct.pack("<H", i) for i in idx), 34963),
+    (b"".join(struct.pack("<3f", *p) for p in qpos), 34962),
+    (b"".join(struct.pack("<3f", *n) for n in qnrm), 34962),
+    (b"".join(struct.pack("<2f", *t) for t in quv), 34962),
     (b"".join(struct.pack("<H", i) for i in idx), 34963),
 ]
 buf = b"".join(c for c, _ in _chunks)
@@ -176,11 +215,15 @@ mx = [max(p[i] for p in pos) for i in range(3)]
 GLTF = {
     "asset": {"version": "2.0", "generator": "gen_alphacov_fixture.py"},
     "scene": 0,
-    "scenes": [{"nodes": [0]}],
-    "nodes": [{"name": "alphacov_plane", "mesh": 0}],
+    "scenes": [{"nodes": [0, 1]}],
+    "nodes": [{"name": "alphacov_plane", "mesh": 0},
+              {"name": "alphacov_quad", "mesh": 1}],
     "meshes": [{"name": "alphacov_plane", "primitives": [
         {"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
-         "indices": 3, "material": 0}]}],
+         "indices": 3, "material": 0}]},
+               {"name": "alphacov_quad", "primitives": [
+        {"attributes": {"POSITION": 4, "NORMAL": 5, "TEXCOORD_0": 6},
+         "indices": 7, "material": 0}]}],
     "materials": [{
         "name": "alphacov_dots",
         "alphaMode": "MASK",
@@ -198,6 +241,12 @@ GLTF = {
         {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
         {"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"},
         {"bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR"},
+        {"bufferView": 4, "componentType": 5126, "count": 4, "type": "VEC3",
+         "min": [min(p[i] for p in qpos) for i in range(3)],
+         "max": [max(p[i] for p in qpos) for i in range(3)]},
+        {"bufferView": 5, "componentType": 5126, "count": 4, "type": "VEC3"},
+        {"bufferView": 6, "componentType": 5126, "count": 4, "type": "VEC2"},
+        {"bufferView": 7, "componentType": 5123, "count": 6, "type": "SCALAR"},
     ],
     "bufferViews": _views(_chunks),
     "buffers": [{"uri": "data:application/octet-stream;base64," +
@@ -315,6 +364,53 @@ def main():
     assert deep_budget >= 4.0, (
         f"the DEEP band's farthest row selects a level with a budget of {deep_budget:.1f} ON "
         f"texels; below 4 the band is starved and near-empty is correct, which is FAR's job")
+
+    # THE FACING QUAD, projected through the same camera the bands derive from.
+    # Its read box must sit inside the projection with margin, its rows must be
+    # sky rows (so BAND_SKY is its backdrop too), and its texel footprint must
+    # sit past the uniform level with a budget of several texels -- the same
+    # two-sided placement DEEP asserts on the plane, on geometry the arm can
+    # actually read.
+    t = math.tan(math.radians(FOV) * 0.5)
+    aspect = GATE_W / GATE_H
+    fwd = np.array([0.0, -CAM_Y, CAM_TARGET_Z], dtype=float)
+    fwd /= np.linalg.norm(fwd)
+    right = np.cross(fwd, np.array([0.0, 1.0, 0.0]))
+    right /= np.linalg.norm(right)
+    up = np.cross(right, fwd)
+
+    def _project(p):
+        v = np.array(p, dtype=float) - np.array([0.0, CAM_Y, 0.0])
+        depth = float(v @ fwd)
+        return (0.5 + 0.5 * float(v @ right) / (depth * t * aspect),
+                0.5 - 0.5 * float(v @ up) / (depth * t), depth)
+
+    qh = QUAD_SIZE * 0.5
+    corners = [_project((sx * qh, QUAD_Y + sy * qh, -QUAD_D))
+               for sx in (-1.0, 1.0) for sy in (-1.0, 1.0)]
+    col0, col1 = min(c[0] for c in corners), max(c[0] for c in corners)
+    row0, row1 = min(c[1] for c in corners), max(c[1] for c in corners)
+    bx0, by0, bx1, by1 = BOX_DEEP
+    margin = 0.01
+    assert col0 + margin <= bx0 and bx1 <= col1 - margin \
+        and row0 + margin <= by0 and by1 <= row1 - margin, (
+        f"BOX_DEEP {BOX_DEEP} is not inside the quad's projection "
+        f"({col0:.3f},{row0:.3f})..({col1:.3f},{row1:.3f}) with {margin} margin")
+    assert row1 < BAND_FAR[0], (
+        f"the quad's projection reaches row {row1:.3f}, into the plane's FAR band at "
+        f"{BAND_FAR[0]}; its backdrop must be sky")
+    assert BAND_SKY[1] <= row0 or BAND_SKY[0] >= row1, \
+        "BAND_SKY overlaps the quad; the background reference must be pure backdrop"
+
+    _, _, qdepth = _project((0.0, QUAD_Y, -QUAD_D))
+    quad_mip = math.log2(max((QUAD_UV * TEX / QUAD_SIZE) * (2.0 * qdepth * t / GATE_H), 1.0))
+    assert quad_mip >= uniform_level, (
+        f"the quad sits at mip {quad_mip:.2f}, short of the uniform level {uniform_level}; "
+        f"it would read preserved structure, not distribution")
+    quad_budget = cov0 * (TEX * TEX) / 4 ** math.ceil(quad_mip)
+    assert quad_budget >= 4.0, (
+        f"the quad's mip {quad_mip:.2f} selects a level with a budget of {quad_budget:.1f} ON "
+        f"texels; below 4 it is starved and near-empty becomes correct")
 
     with open(os.path.join(HERE, "alphacov_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
