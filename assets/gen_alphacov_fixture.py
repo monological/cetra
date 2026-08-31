@@ -73,8 +73,18 @@ GATE_H = 300 * 2
 # the chain goes UNIFORM, and it is the one that reads the opposite way from the
 # other two: a correct chain has nothing left to preserve out there and thins to
 # nothing, where a saturating one fills in solid.
+#
+# DEEP sits between MID and FAR, entirely past the uniform level -- where no
+# scale can reproduce a fractional coverage, which is 11.88's recorded ceiling
+# and the regime alpha distribution (spec 11.100) exists for -- and still
+# shallow enough that the level-0 coverage buys each selected level a budget of
+# several texels. It cannot live on FAR: out there the budget rounds to 2, 1
+# and 0 ON texels per level, so a CORRECT distributing build legitimately reads
+# near-empty and a floor would either fail correctness or be too low to fail
+# anything.
 BAND_NEAR = (0.80, 0.98)
 BAND_MID = (0.62, 0.72)
+BAND_DEEP = (0.40, 0.52)
 BAND_FAR = (0.26, 0.34)
 
 
@@ -251,7 +261,8 @@ def main():
     # function of six numbers across two files, and any one of them can quietly
     # return this to being a fixture that never leaves level 0 -- or slide a band
     # off the plane, where it reads backdrop and reports a number anyway.
-    for name, (top, bottom) in (("NEAR", BAND_NEAR), ("MID", BAND_MID), ("FAR", BAND_FAR)):
+    for name, (top, bottom) in (("NEAR", BAND_NEAR), ("MID", BAND_MID),
+                                ("DEEP", BAND_DEEP), ("FAR", BAND_FAR)):
         z_near, z_far = _plane_z_at_row(bottom), _plane_z_at_row(top)
         assert math.isfinite(z_far) and z_far <= FAR, \
             f"band {name} reaches {z_far:.0f} units, past the plane's far edge at {FAR:.0f}"
@@ -285,6 +296,25 @@ def main():
     assert drifted[min(int(mid_far), len(drifted)) - 1] < cov0 * 0.25, (
         "an unpreserved chain has not collapsed by the level MID selects, so the arm would "
         "read a ratio near 1 with no preservation at all")
+
+    # DEEP's two bounds face opposite ways. Its NEAREST row must already be past
+    # the uniform level, because the band's claim is about the regime where a
+    # scale provably cannot reproduce a fractional coverage -- a row short of
+    # that reads preserved structure and the arm would half-measure 11.88's
+    # feature instead of 11.100's. And its FARTHEST row must select a level
+    # whose distribution budget is still several texels -- take the CEIL of the
+    # fractional mip, so even the finer neighbour of the trilinear pair carries
+    # enough ON texels to read. Past that the budget rounds toward zero and
+    # near-empty becomes the correct answer, which is FAR's regime, not DEEP's.
+    deep_near_mip = _mip_at_z(_plane_z_at_row(BAND_DEEP[1]))
+    assert deep_near_mip >= uniform_level, (
+        f"the DEEP band's nearest row reaches only mip {deep_near_mip:.1f}, short of the "
+        f"uniform level {uniform_level}; it would read preserved structure, not distribution")
+    deep_far_mip = _mip_at_z(_plane_z_at_row(BAND_DEEP[0]))
+    deep_budget = cov0 * (TEX * TEX) / 4 ** math.ceil(deep_far_mip)
+    assert deep_budget >= 4.0, (
+        f"the DEEP band's farthest row selects a level with a budget of {deep_budget:.1f} ON "
+        f"texels; below 4 the band is starved and near-empty is correct, which is FAR's job")
 
     with open(os.path.join(HERE, "alphacov_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)

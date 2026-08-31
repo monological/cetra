@@ -5759,6 +5759,16 @@ ALPHACOV_MIN_RATIO = 0.70
 # in solid. Measured 1.0000 on the cascading build against 0.0000 either side of
 # it in the frame, so the bar is nowhere near either.
 ALPHACOV_FAR_MAX = 0.25
+# The DEEP band (spec 11.100): past the uniform level, where no scale can
+# reproduce a fractional coverage, alpha DISTRIBUTION keeps the field alive at
+# roughly the level-0 coverage instead of letting it vanish. Two-sided because
+# it is a fidelity band: the floor fails the build that still vanishes (the
+# pre-11.100 build reads 0.0114 here), the ceiling fails one whose visibility
+# budget saturates (the inverted-budget mutation reads ~1.0). PROVISIONAL until
+# the shipped build is measured; the finalized values state their distance to
+# each falsifying reading, per ALPHACOV_MIN_RATIO's idiom.
+ALPHACOV_DEEP_MIN = 0.03
+ALPHACOV_DEEP_MAX = 0.30
 
 
 def _box_luma(pix, w, h, box):
@@ -11250,8 +11260,20 @@ def run_alphacov_gate(workdir):
                      it, and the arm reads the ratio between two bands of ONE
                      frame so it needs no stored image and no second build.
 
-      alphacov-far   and the far field is not SOLID. Bounded the opposite way,
-                     which is the point of it.
+      alphacov-deep  the deep field is ALIVE, and not solid (spec 11.100). Its
+                     rows sit entirely past the level where the chain goes
+                     uniform, where no scale can reproduce a fractional
+                     coverage -- alpha distribution is what answers there, so
+                     this band is bounded on BOTH sides: the floor fails a
+                     build that still vanishes (the pre-11.100 build reads
+                     0.0114 -- not 0.0000, the band's near edge catches a
+                     little trilinear bleed from level 3), the ceiling fails
+                     one whose visibility budget saturates. It cannot live on
+                     FAR's rows, whose levels carry budgets of 2, 1 and 0 ON
+                     texels -- near-empty is CORRECT out there.
+
+      alphacov-far   and the far field is not SOLID. Bounded the opposite way
+                     from the ratio, which is the point of it.
 
     WHY A DOT GRID AND NOT FOLIAGE. Every alpha-tested asset in this corpus is a
     leaf atlas with a soft edge about a texel wide, and a soft edge is symmetric
@@ -11293,6 +11315,7 @@ def run_alphacov_gate(workdir):
     scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
     if not os.path.exists(scene):
         print(f"  alphacov-mip SKIP  ({ALPHACOV_FIXTURE} not present)")
+        print(f"  alphacov-deep SKIP  ({ALPHACOV_FIXTURE} not present)")
         print(f"  alphacov-far SKIP  ({ALPHACOV_FIXTURE} not present)")
         return []
     # The bands come from the generator rather than being restated here: where a
@@ -11302,6 +11325,7 @@ def run_alphacov_gate(workdir):
     # it vanishes without a line.
     gen = _alphacov_gen()
     if gen is None:
+        print("  alphacov-deep     SKIP  (gen_alphacov_fixture unavailable)")
         print("  alphacov-far      SKIP  (gen_alphacov_fixture unavailable)")
         return []
 
@@ -11309,11 +11333,12 @@ def run_alphacov_gate(workdir):
     err = render(scene, out, [])
     if err:
         print(f"  alphacov-mip ERROR render failed: {err.strip()[-200:]}")
-        return ["alphacov-mip", "alphacov-far"]
+        return ["alphacov-mip", "alphacov-deep", "alphacov-far"]
 
     w, h, pix = _read_ppm(out)
     near = _alphacov_frac(pix, w, h, gen.BAND_NEAR)
     mid = _alphacov_frac(pix, w, h, gen.BAND_MID)
+    deep = _alphacov_frac(pix, w, h, gen.BAND_DEEP)
     far = _alphacov_frac(pix, w, h, gen.BAND_FAR)
     ratio = mid / near if near > 0 else 0.0
     # The near band has to actually carry dots, or a frame that rendered nothing
@@ -11328,6 +11353,15 @@ def run_alphacov_gate(workdir):
           f"lit above 0.05: {lit}). Without the per-level rescale this reads 0.591.")
     if not ok:
         failures.append("alphacov-mip")
+
+    ok = lit and ALPHACOV_DEEP_MIN <= deep <= ALPHACOV_DEEP_MAX
+    print(f"  alphacov-deep {'PASS' if ok else 'FAIL'}  the deep field reads {deep:.4f} "
+          f"(want {ALPHACOV_DEEP_MIN} <= deep <= {ALPHACOV_DEEP_MAX}, and the near band lit: "
+          f"{lit}). Every row of this band is past the uniform level, where a scale cannot "
+          f"reproduce a fractional coverage -- distribution keeps it alive at roughly the "
+          f"level-0 coverage, a vanishing build reads 0.0114, a saturating one ~1.0.")
+    if not ok:
+        failures.append("alphacov-deep")
 
     ok = lit and far <= ALPHACOV_FAR_MAX
     print(f"  alphacov-far {'PASS' if ok else 'FAIL'}  the far field reads {far:.4f} "
