@@ -62,6 +62,14 @@ build-type-dependent**. The control is exact — `--no-lod`'s raw 65,098,553 tri
 in both, so the simplifier's arithmetic moved and the geometry did not. **Forest triangle counts
 are therefore not comparable across build types**, which is why gates prints the directory it used.
 
+The cook (spec 11.99) narrows that where the key allows sharing: two builds reading one cook dir
+draw whichever build cooked first, so the counts agree by serving one artefact rather than by
+agreeing arithmetic. It does NOT collapse the forest movers in practice — the tree prototypes'
+vertex bytes themselves differ across builds (Phase 0 measured 12 of 20 input digests moving), so
+their DAG entries split by content and each build still cooks its own. The suite is unaffected
+either way: gates runs against a per-invocation cache dir, so everything an arm reads was cooked
+by the binary under test.
+
 ### Goldens must not follow the gates onto release
 
 **Goldens are a different matter and must not follow blindly.** They are committed PNGs, `-O2`
@@ -172,6 +180,7 @@ first.
 | **Orbit camera** | YES -- auto-rotation disabled in headless | `--cam-eye`/`--cam-target` for exact repro |
 | GTAO / SSR temporal accumulation | frame-count driven, not wall-clock; no drift observed across builds | `--no-ssr --no-ssao` if isolating |
 | **A config snapshot** (spec 11.71) | **It pins the LOOK, not the frame index.** Everything above still applies underneath it: `--config` restores ~230 settings including the adaptation state, so exposure continues rather than re-approaching, but it does not restore the frame counter, the temporal histories or the async-load order. A snapshot plus the same `-f` is reproducible; a snapshot at a different frame count is a different frame | it IS the pin -- and dump `--config-dump` from the run you want to reproduce, rather than transcribing flags |
+| **Cooked artefacts** (spec 11.99) | **Deterministic by construction, and the one SANCTIONED crossing of this table's rule**: the cook key carries content and recipe/library versions, never the build type, so an artefact cooked by one build may serve another. Where a producer's bytes differ across builds (the tree meshes under -O2) the content fold splits the entries with no policy; where they agree (the rocks) sharing is what happens. Bounded by the container's version-and-checksum refusal | `--no-cook` (or a fresh `--cook-dir`) whenever the measurement is OF a bake; `CETRA_COOK_DIR` to pin where a comparison reads from. gates.py and goldens.py isolate onto their workdirs automatically |
 
 ### Assets, and which are safe
 
@@ -335,6 +344,12 @@ Capture the "before" from the base commit BEFORE starting work (`git stash`,
 build, render, `git stash pop`). Both builds must be complete -- **never pipe
 `./build.sh` through `head`**, which SIGPIPEs the build mid-link and leaves a
 stale binary that renders the old code.
+
+**And run both legs `--no-cook` when the change touches anything a bake produces** (spec 11.99).
+The cache is content-keyed on INPUTS, not on the code -- a changed bake whose recipe version was
+not bumped computes the same key, the after leg silently renders the before's artefact, and a
+real change reads 0 px. The inverted-confidence failure this file exists to prevent, in its
+newest form.
 
 For a pure refactor there is a stronger check than pixels: diff the generated
 GLSL. `out/include/cetra/shader_strings.h` is reproducible (sorted), so unescaping

@@ -345,6 +345,8 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 |--------|---------|
 | `text.c/h` | SDF text rendering (stb_truetype) with glow |
 | `app.c/h` | App helpers (mouse-drag orbit controller, input gating) |
+| `cook.c/h` | The derived-data cook (spec 11.99): a transparent content-addressed cache over every deterministic startup derivation — the UE DDC model — plus the `--cook` pre-warm verb on forest and render. THE KEY IS THE IDENTITY (input bytes + recipe version + library version where a library owns the byte format), so a stale artefact is unfindable rather than detected; a miss always bakes live; a corrupt `.cca` is refused by name against a payload hash and treated as a miss. Process-global behind `cook_init`, main-thread-only, `cooked/` gitignored at the repo root, `CETRA_COOK_DIR`/`CETRA_NO_COOK` the env levers. **Never fold a worker count into a key, and never measure a bake without `--no-cook`** — gates and goldens isolate onto per-run cache dirs automatically. What may NOT be cooked is stated in the header charter (GPU resamples, GL handles, the scatter) |
+| `physics_cook.h/.cpp` | Jolt shape serialize/restore behind a C header — the one-C++-TU escape (`cluster_build.cpp`'s precedent), because JoltC binds none of Jolt's serialization. Exports `JPH_VERSION_ID` as the mandatory cook-key axis. The stream classes carry istream EOF semantics, and that is load-bearing: Jolt checks `IsEOF()` after a stream's LAST field, so a positional implementation refused every restore ever written (the 11.99 ledger's caught-live row) |
 | `config_snapshot.c/h` | The live session as JSON (spec 11.71): ~230 settings dumped and restored. **ONE descriptor table, walked in both directions** — the writer and the reader cannot list different fields because there is only one list, which is the drift `render.c`'s `frame_schedule` comment records having lived with. Materials ride `MATERIAL_PARAMS` rather than rows of their own, so a property added there is carried for free. What it OMITS is as load-bearing as what it carries: GPU handles, the lazy-alloc guards, the seven per-frame PUBLISHED blocks and the nine temporal histories are not configuration, and restoring one corrupts the frame rather than reproducing it |
 | `util.c/h` | Path handling, GL error checking |
 
@@ -1112,7 +1114,7 @@ determinism-by-source table, the per-asset ledger of what is safe to compare, an
 recipe with the six times it has moved. `scripts/gates.py` asserts analytic properties;
 `scripts/goldens.py` compares 29 committed PNGs.
 
-Three rules belong here rather than in a file you have to open first:
+Four rules belong here rather than in a file you have to open first:
 
 - **Measure the noise floor before quoting any pixel count.** Render one configuration twice and
   diff those. A count without its floor is not a measurement, and skipping it has already produced
@@ -1122,6 +1124,10 @@ Three rules belong here rather than in a file you have to open first:
   so a genuine no-op measured 99.77% of pixels changed and 9 px once pinned.
 - **`--bin-dir out/release/bin` is the fast path for gates and the wrong path for goldens.** They
   are committed PNGs baked from a debug build, and `-O2` moves CPU float results.
+- **Any measurement OF a bake, and both legs of any A/B across a bake change, run `--no-cook`**
+  (spec 11.99). The cache is keyed on inputs, not code: a changed bake with an unbumped recipe
+  version serves the before's artefact to the after leg and a real change reads 0 px. The suites
+  isolate their own cache dirs automatically; hand runs do not.
 
 Both run on macOS, Linux and Windows (`./build.sh --target`, see `docs/build-vms.md`). Most gate
 arms pass everywhere; timing arms and goldens are the two things that do not travel.
@@ -1339,4 +1345,13 @@ be fewer keystrokes.
 Python is still the right tool for a mechanical sweep no human is going to read line by line --
 renaming a symbol across thirty files, regenerating a fixture, reformatting a table. Use it there.
 The test is whether the edit is one somebody would want to see: if it changes behaviour, use Edit.
+
+# ABSOLUTE RULE -- NEVER RUN rm -rf
+
+**NEVER** run `rm -rf` (or any recursive/forced delete) for any reason, including cleaning up
+temp or scratch directories mid-task. It triggers a permission prompt that BLOCKS the session,
+which kills any unattended run dead until a human comes back. Leave stale temp files and
+directories alone -- disk is cheap and a blocked session is not. If a fresh directory is needed,
+use a new differently-named path instead of deleting the old one. If something genuinely must be
+deleted, ask the user and let them do it.
 

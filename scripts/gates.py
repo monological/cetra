@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -20446,6 +20447,13 @@ def run_cook_gate(workdir):
                     the one whose camera actually MINIFIES, so the chain is
                     sampled -- at 0 px warm vs live, with the warm run
                     reporting texture hits and no cooks.
+      cook-speed    cold, warm and --no-cook wall clocks, REPORT-ONLY and
+                    deliberately unasserted: startup wall clock in a suite run
+                    has no honest noise floor (11.65 measured startups
+                    externally), and the ASSERTED form of the speed claim is
+                    cook-hit's cooked=0 -- a count with no floor at all.
+                    Promotion to an asserted non-overlap is one line once this
+                    row's history shows comfortable separation.
 
     Every run uses its OWN cook dir under the workdir, never the suite's
     shared one: these arms measure the cache itself, so what is in the dir
@@ -20607,6 +20615,22 @@ def run_cook_gate(workdir):
               f"is the derived chain, byte for byte)")
         if not ok:
             failures.append("cook-texture")
+
+    # --- cook-speed: the clocks, for the ledger -----------------------------
+    ds = os.path.join(workdir, "cook_ds")
+
+    def speed_run(extra):
+        t0 = time.perf_counter()
+        r = _run([FOREST, "-x", "-f", "1", "-W", "320", "-H", "200"] + extra,
+                 capture_output=True, text=True)
+        return time.perf_counter() - t0 if r.returncode == 0 else None
+
+    cold_s = speed_run(["--cook-dir", ds]) # ONE sample: only the first run is cold
+    warm_s = min(x for x in (speed_run(["--cook-dir", ds]) for _ in range(3)) if x)
+    live_s = min(x for x in (speed_run(["--no-cook"]) for _ in range(3)) if x)
+    print(f"  cook-speed   PASS  cold {cold_s:.2f} s, warm {warm_s:.2f} s (min of 3), live "
+          f"{live_s:.2f} s (min of 3) -- reported, deliberately unasserted: the asserted form "
+          f"of this claim is cook-hit's cooked=0")
 
     return failures
 
