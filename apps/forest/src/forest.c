@@ -1277,6 +1277,65 @@ static void bake_erosion(void) {
         return;
     }
 
+    // The cook key folds the SEEDED input plane rather than the fbm parameters:
+    // the bytes capture the noise, the island shaping and any future seeding
+    // change transitively, for a millisecond of hashing against a multi-second
+    // sim. Every ErosionParams scalar folds EXCEPT workers -- worker-invariance
+    // is the module's own proven contract (terrain-threads), and folding it
+    // would fracture the cache while contradicting the invariant.
+    CookKey ek = cook_key("erosion-field/1");
+    cook_key_i32(&ek, res);
+    cook_key_i32(&ek, ep.iterations);
+    cook_key_f32(&ek, ep.dt);
+    cook_key_f32(&ek, ep.rain);
+    cook_key_f32(&ek, ep.evaporation);
+    cook_key_f32(&ek, ep.capacity);
+    cook_key_f32(&ek, ep.dissolve);
+    cook_key_f32(&ek, ep.deposit);
+    cook_key_f32(&ek, ep.min_tilt);
+    cook_key_f32(&ek, ep.talus);
+    cook_key_f32(&ek, ep.thermal_rate);
+    cook_key_i32(&ek, ep.thermal_every);
+    size_t plane_bytes = (size_t)res * (size_t)res * sizeof(float);
+    cook_key_bytes(&ek, g_field.height, plane_bytes);
+
+    float cell = terrain_field_cell(g_terrain.extent, res);
+    CookBlob sec[5];
+    bool restored = false;
+    if (cook_fetch(&ek, sec, 5)) {
+        if (sec[0].size == 2 * sizeof(float) && sec[1].size == plane_bytes &&
+            sec[2].size == plane_bytes && sec[3].size == plane_bytes &&
+            sec[4].size == plane_bytes) {
+            // memcpy into the field's own planes rather than installing the
+            // sections: TerrainField owns its allocation and level 0 of the
+            // pyramid built later ALIASES the height plane.
+            memcpy(&g_field.min_y, sec[0].data, sizeof(float));
+            memcpy(&g_field.max_y, (const char*)sec[0].data + sizeof(float), sizeof(float));
+            memcpy(g_field.height, sec[1].data, plane_bytes);
+            memcpy(g_field.flow, sec[2].data, plane_bytes);
+            memcpy(g_field.deposit, sec[3].data, plane_bytes);
+            memcpy(g_field.wear, sec[4].data, plane_bytes);
+            restored = true;
+        }
+        for (int s = 0; s < 5; ++s)
+            free(sec[s].data);
+    }
+    if (restored) {
+        g_terrain.field = &g_field;
+        printf("Terrain eroded: %dx%d cells at %.2f units, %d iterations, cooked\n", res, res,
+               (double)cell, ep.iterations);
+        if (g_args.erode_probe)
+            // A parser fails loudly instead of reading a sim that never ran.
+            printf("terrain-erosion-probe refused reason=cook-hit hint=--no-cook\n");
+        if (g_args.erode_save) {
+            float lo = g_field.min_y, hi = g_field.max_y;
+            if (heightmap_save(&g_field, g_args.erode_save, lo, hi) && g_args.erode_probe)
+                printf("terrain-erosion-probe saved path=%s min=%.9g max=%.9g\n",
+                       g_args.erode_save, (double)lo, (double)hi);
+        }
+        return;
+    }
+
     ErosionStats st;
     double t0 = glfwGetTime();
     bool ok = terrain_erode(&g_field, &g_terrain, &ep, &st);
@@ -1287,10 +1346,19 @@ static void bake_erosion(void) {
         return;
     }
 
+    {
+        float range[2] = {g_field.min_y, g_field.max_y};
+        CookBlob out[5] = {{range, sizeof(range)},
+                           {g_field.height, plane_bytes},
+                           {g_field.flow, plane_bytes},
+                           {g_field.deposit, plane_bytes},
+                           {g_field.wear, plane_bytes}};
+        cook_store(&ek, out, 5);
+    }
+
     // Installed only now. Seeding through a params that already pointed at the
     // field would have sampled the plane it was filling.
     g_terrain.field = &g_field;
-    float cell = terrain_field_cell(g_terrain.extent, res);
     printf("Terrain eroded: %dx%d cells at %.2f units, %d iterations, %d threads, %.0f ms\n", res,
            res, cell, ep.iterations, st.workers, ms);
 

@@ -20389,8 +20389,12 @@ def _cook_run(workdir, tag, extra, shot=None):
     """One forest run for the cook group: 320x200, two frames, render mode 6
     (the albedo debug view -- forest's one 0 px path, and the one every cooked
     texture lands in). Returns {text, rows, cooked, hit, refused, digests}."""
+    # Eroded on purpose: the field feeds the splat, the scatter and the terrain
+    # geometry, so a wrong restored plane moves the region digests AND the
+    # frame -- the erosion leg of every identity claim rides the fixture.
     cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--render-mode", "6",
-           "--region-probe", "--cluster-probe"] + extra
+           "--region-probe", "--cluster-probe", "--erode", "--erode-res", "257",
+           "--erode-iterations", "60"] + extra
     if shot:
         cmd += ["-S", shot]
     r = _run(cmd, capture_output=True, text=True)
@@ -20550,7 +20554,7 @@ def run_cook_gate(workdir):
         failures.append("cook-key")
     else:
         seed_blind = {"veg-bark/1", "veg-leaf/1", "cluster-dag/1"}
-        seeded = {"terrain-layer/1", "terrain-splat/1", "jolt-region/1"}
+        seeded = {"terrain-layer/1", "terrain-splat/1", "jolt-region/1", "erosion-field/1"}
         wrong = [(site, result) for site, _, result, _, _ in key42["rows"]
                  if (site in seed_blind and result != "hit") or
                     (site in seeded and result != "cooked")]
