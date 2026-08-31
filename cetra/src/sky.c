@@ -1443,7 +1443,9 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
      * and reads black: the disc goes dark rather than the frame going wrong.
      */
     if (!sky->moon_surface_tex) {
+        double moon_t0 = glfwGetTime();
         unsigned char* surface = moon_surface_bake(MOON_SURFACE_W, MOON_SURFACE_H, 0);
+        printf("startup-ms site=moon-surface ms=%.1f\n", (glfwGetTime() - moon_t0) * 1000.0);
         if (surface) {
             glGenTextures(1, &sky->moon_surface_tex);
             glBindTexture(GL_TEXTURE_2D, sky->moon_surface_tex);
