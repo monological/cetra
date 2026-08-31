@@ -182,8 +182,12 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky) {
 
     double t2 = glfwGetTime();
     sky->clouds.noise_baked = true;
-    log_info("Cloud noise baked: fields %.1f ms (%d threads), upload+mips %.1f ms",
-             (t1 - t0) * 1000.0, workers, (t2 - t1) * 1000.0);
+    if (workers > 0)
+        log_info("Cloud noise baked: fields %.1f ms (%d threads), upload+mips %.1f ms",
+                 (t1 - t0) * 1000.0, workers, (t2 - t1) * 1000.0);
+    else
+        log_info("Cloud noise restored from cook: fields %.1f ms, upload+mips %.1f ms",
+                 (t1 - t0) * 1000.0, (t2 - t1) * 1000.0);
     return 0;
 }
 

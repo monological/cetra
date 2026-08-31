@@ -1445,16 +1445,20 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
      */
     if (!sky->moon_surface_tex) {
         double moon_t0 = glfwGetTime();
-        // The bake's seeds are fixed, so the dimensions are the whole cook key
-        // (spec 11.99). glGenerateMipmap below stays live either way -- GPU,
-        // cheap, and not a derivation this cache stores.
+        // The tier seeds are fixed, so the dimensions and the bake's seed
+        // argument are the whole cook key (spec 11.99). glGenerateMipmap below
+        // stays live either way -- GPU, cheap, and not a derivation this
+        // cache stores.
         CookKey mk = cook_key("moon-surface/1");
         cook_key_i32(&mk, MOON_SURFACE_W);
         cook_key_i32(&mk, MOON_SURFACE_H);
+        cook_key_u32(&mk, 0u); // the seed passed below; a changed literal must re-key
         CookBlob moon_blob = {NULL, 0};
         unsigned char* surface = NULL;
+        bool moon_cooked = false;
         if (cook_fetch(&mk, &moon_blob, 1)) {
             surface = moon_blob.data;
+            moon_cooked = true;
         } else {
             surface = moon_surface_bake(MOON_SURFACE_W, MOON_SURFACE_H, 0);
             if (surface) {
@@ -1463,7 +1467,8 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
                 cook_store(&mk, &out, 1);
             }
         }
-        printf("startup-ms site=moon-surface ms=%.1f\n", (glfwGetTime() - moon_t0) * 1000.0);
+        log_info("Moon surface %s in %.1f ms", moon_cooked ? "restored from cook" : "baked",
+                 (glfwGetTime() - moon_t0) * 1000.0);
         if (surface) {
             glGenTextures(1, &sky->moon_surface_tex);
             glBindTexture(GL_TEXTURE_2D, sky->moon_surface_tex);

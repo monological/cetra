@@ -67,15 +67,23 @@ typedef struct CookKey {
     bool valid;               // false = recipe did not fit; fetch and store refuse
 } CookKey;
 
+// A key built while the cook is disabled or unconfigured comes back INVALID,
+// and every fold on an invalid key is a no-op -- so a disabled run pays no
+// hashing for fetches that would structurally refuse. Sites therefore build
+// keys unconditionally and stay branch-free.
 CookKey cook_key(const char* recipe);        // "erosion/1" -- name + VERSION, one string
 void cook_key_u32(CookKey* key, uint32_t v); // folds 4 LE bytes
 void cook_key_u64(CookKey* key, uint64_t v);
 void cook_key_i32(CookKey* key, int32_t v);
 void cook_key_f32(CookKey* key, float v);       // the IEEE bit pattern, never text
 void cook_key_str(CookKey* key, const char* s); // folds the bytes INCLUDING the NUL
-// Folds like cook_key_str AND labels the artefact's report rows -- for a
-// recipe stamped more than once per run ("grass", "rock_3").
-void cook_key_name(CookKey* key, const char* name);
+// Labels the artefact's report rows -- for a recipe stamped more than once
+// per run ("grass", "r_2_3"). REPORTING ONLY, never folded: a label is not an
+// input, and the first draft that folded it keyed the cluster DAGs by a
+// build-order ordinal -- two byte-identical meshes cooked two artefacts and
+// an inserted prototype re-keyed every later one. An input that happens to be
+// a string folds through cook_key_str, deliberately spelled at the site.
+void cook_key_label(CookKey* key, const char* name);
 // Folds a u64 LE length prefix, then the bytes -- so no two distinct fold
 // SEQUENCES of the same content can collide by concatenation.
 void cook_key_bytes(CookKey* key, const void* data, size_t bytes);
@@ -94,19 +102,29 @@ typedef struct CookBlob {
 // reconfigures; the counters reset.
 void cook_init(const char* dir, bool enabled);
 void cook_shutdown(void); // prints the cook-summary row if anything ran
-bool cook_is_enabled(void);
 
 // Hit: fills sections[0..section_count-1] and returns true, printing the
 // artefact's result=hit row. ANY other outcome -- disabled, no file, failed
 // integrity, wrong section count (a recipe that changed shape without a
 // version bump; refused loudly for that reason) -- returns false with every
 // section zeroed, and the caller bakes as today.
+//
+// The module validates the CONTAINER; section CONTENT is the caller's. A site
+// whose section sizes are not derivable from its own folded inputs checks
+// them and treats a mismatch as a miss -- with a log_warn naming the
+// artefact, because a silent discard leaves the ledger showing hit-and-cooked
+// for a site that is quietly re-baking every run.
 bool cook_fetch(const CookKey* key, CookBlob* sections, int section_count);
 
 // Write temp + rename, atomic; prints the result=cooked row. The return is
 // for the ledger -- callers ignore it, because the bake's result is already
 // live in memory and a failed store costs the NEXT run, not this one. A store
 // failure warns once and disables further stores.
+//
+// Store BORROWS the sections, so it must run BEFORE any ownership transfer --
+// four sites store a buffer and then hand it to texture_load_memory_owned,
+// which frees it, and reversing that order is a use-after-free only the
+// determinism arm can see, as corrupted bytes on disk.
 bool cook_store(const CookKey* key, const CookBlob* sections, int section_count);
 
 #endif // _COOK_H_

@@ -12,6 +12,8 @@
 
 #include "cook.h"
 
+#include "util.h" // fnv1a64: the 64-bit fold every key and payload hash uses
+
 #include "ext/log.h"
 
 // The .cca container. One file per artefact, flat directory: independent
@@ -40,10 +42,6 @@
 #define COOK_CONTAINER_VERSION 1u
 #define COOK_HEADER_BYTES 64u
 
-// FNV-1a 64: erosion.c's constants. Not util.h's fnv1a_bytes -- 32 bits
-// collides by ~9,300 artefacts (birthday bound) in a content-addressed store.
-#define COOK_FNV_BASIS 14695981039346656037ull
-#define COOK_FNV_PRIME 1099511628211ull
 
 static struct {
     char dir[512];
@@ -85,21 +83,24 @@ static uint64_t get_u64(const unsigned char* p) {
 // --- the fold ---------------------------------------------------------------
 
 static void fold_bytes(CookKey* key, const void* data, size_t bytes) {
-    const unsigned char* p = (const unsigned char*)data;
-    uint64_t h = key->hash;
-    for (size_t i = 0; i < bytes; ++i)
-        h = (h ^ p[i]) * COOK_FNV_PRIME;
-    key->hash = h;
+    // The invalid-key no-op is what makes a DISABLED run cheap: sites fold
+    // multi-megabyte inputs unconditionally, and without this every --no-cook
+    // leg and every app that never called cook_init would pay the full hash
+    // for a fetch that structurally refuses.
+    if (key->valid)
+        key->hash = fnv1a64(key->hash, data, bytes);
 }
 
 CookKey cook_key(const char* recipe) {
     CookKey key;
     memset(&key, 0, sizeof(key));
-    key.hash = COOK_FNV_BASIS;
+    key.hash = FNV1A64_BASIS;
+    if (!g_cook.configured || !g_cook.enabled)
+        return key; // valid stays false; folds no-op, fetch and store refuse
     if (!recipe || strlen(recipe) >= sizeof(key.recipe)) {
         log_warn("cook: recipe '%s' does not fit; this artefact is uncacheable",
                  recipe ? recipe : "(null)");
-        return key; // valid stays false; fetch and store refuse
+        return key;
     }
     strcpy(key.recipe, recipe);
     key.valid = true;
@@ -134,8 +135,7 @@ void cook_key_str(CookKey* key, const char* s) {
         fold_bytes(key, s, strlen(s) + 1);
 }
 
-void cook_key_name(CookKey* key, const char* name) {
-    cook_key_str(key, name);
+void cook_key_label(CookKey* key, const char* name) {
     if (name) {
         strncpy(key->name, name, sizeof(key->name) - 1);
         key->name[sizeof(key->name) - 1] = '\0';
@@ -180,10 +180,6 @@ void cook_shutdown(void) {
     memset(&g_cook, 0, sizeof(g_cook));
 }
 
-bool cook_is_enabled(void) {
-    return g_cook.configured && g_cook.enabled;
-}
-
 // --- paths -------------------------------------------------------------------
 
 // <dir>/<recipe with '/' as '-'>-<16 hex>.cca -- recipe first so ls groups by
@@ -198,36 +194,26 @@ static void artefact_path(char* out, size_t cap, const CookKey* key, const char*
              suffix ? suffix : "");
 }
 
-static bool ensure_dir(void) {
+// A failed mkdir over an existing directory is fine; a missing parent is not.
+// Neither is distinguished here: the store's own fopen is the real check, and
+// it latches store_disabled with one warning.
+static void ensure_dir(void) {
     if (g_cook.dir_made)
-        return true;
+        return;
 #ifdef _WIN32
-    int rc = _mkdir(g_cook.dir);
+    _mkdir(g_cook.dir);
 #else
-    int rc = mkdir(g_cook.dir, 0755);
+    mkdir(g_cook.dir, 0755);
 #endif
-    if (rc != 0) {
-        FILE* probe = fopen(g_cook.dir, "r");
-        if (probe) {
-            fclose(probe); // exists already (or at least opens); good enough
-        }
-        // A failed mkdir over an existing directory is fine; a missing parent
-        // is not. Distinguish by trying to write -- the store's own fopen will
-        // fail and latch store_disabled with one warning.
-    }
     g_cook.dir_made = true;
-    return true;
 }
 
 // --- fetch -------------------------------------------------------------------
 
 static uint64_t hash_sections(const CookBlob* sections, int count) {
-    uint64_t h = COOK_FNV_BASIS;
-    for (int s = 0; s < count; ++s) {
-        const unsigned char* p = (const unsigned char*)sections[s].data;
-        for (size_t i = 0; i < sections[s].size; ++i)
-            h = (h ^ p[i]) * COOK_FNV_PRIME;
-    }
+    uint64_t h = FNV1A64_BASIS;
+    for (int s = 0; s < count; ++s)
+        h = fnv1a64(h, sections[s].data, sections[s].size);
     return h;
 }
 
@@ -236,11 +222,26 @@ static void refuse(const char* path, const char* why) {
     g_cook.refused++;
 }
 
+// Count, warn ONCE, latch. Store is advisory, so the run continues; the latch
+// is what keeps a full disk from warning per artefact.
+static bool store_failed(const char* temp) {
+    g_cook.store_failures++;
+    if (!g_cook.store_disabled) {
+        log_warn("cook: cannot write %s; the cache keeps what it has and this run "
+                 "stores nothing more",
+                 temp);
+        g_cook.store_disabled = true;
+    }
+    return false;
+}
+
 bool cook_fetch(const CookKey* key, CookBlob* sections, int section_count) {
-    if (sections)
-        memset(sections, 0, sizeof(*sections) * (size_t)section_count);
-    if (!g_cook.configured || !g_cook.enabled || !key || !key->valid || !sections ||
-        section_count < 1 || section_count > COOK_MAX_SECTIONS)
+    // Count validated BEFORE the memset it sizes -- the guard exists for the
+    // bad caller, so it cannot run after the damage.
+    if (!sections || section_count < 1 || section_count > COOK_MAX_SECTIONS)
+        return false;
+    memset(sections, 0, sizeof(*sections) * (size_t)section_count);
+    if (!g_cook.configured || !g_cook.enabled || !key || !key->valid)
         return false;
 
     char path[600];
@@ -255,7 +256,6 @@ bool cook_fetch(const CookKey* key, CookBlob* sections, int section_count) {
     unsigned char header[COOK_HEADER_BYTES];
     unsigned char table[16 * COOK_MAX_SECTIONS];
     uint64_t sizes[COOK_MAX_SECTIONS];
-    int freed_to = 0;
     if (fread(header, 1, sizeof(header), f) != sizeof(header)) {
         refuse(path, "shorter than a header");
         goto done;
@@ -315,7 +315,6 @@ bool cook_fetch(const CookKey* key, CookBlob* sections, int section_count) {
             refuse(path, "allocation failed");
             goto done;
         }
-        freed_to = s + 1;
         if (fread(sections[s].data, 1, (size_t)sizes[s], f) != (size_t)sizes[s]) {
             refuse(path, "short read");
             goto done;
@@ -330,7 +329,8 @@ bool cook_fetch(const CookKey* key, CookBlob* sections, int section_count) {
 done:
     fclose(f);
     if (!ok) {
-        for (int s = 0; s < freed_to; ++s)
+        // Pre-zeroed and free(NULL) is defined, so no high-water bookkeeping.
+        for (int s = 0; s < section_count; ++s)
             free(sections[s].data);
         memset(sections, 0, sizeof(*sections) * (size_t)section_count);
         return false;
@@ -382,16 +382,8 @@ bool cook_store(const CookKey* key, const CookBlob* sections, int section_count)
     memcpy(header + 40, key->recipe, strlen(key->recipe) + 1);
 
     FILE* f = fopen(temp, "wb");
-    if (!f) {
-        g_cook.store_failures++;
-        if (!g_cook.store_disabled) {
-            log_warn("cook: cannot write %s; the cache keeps what it has and this run "
-                     "stores nothing more",
-                     temp);
-            g_cook.store_disabled = true;
-        }
-        return false;
-    }
+    if (!f)
+        return store_failed(temp);
     bool ok = fwrite(header, 1, sizeof(header), f) == sizeof(header);
     uint64_t off = COOK_HEADER_BYTES + 16ull * (uint32_t)section_count;
     for (int s = 0; ok && s < section_count; ++s) {
@@ -414,14 +406,7 @@ bool cook_store(const CookKey* key, const CookBlob* sections, int section_count)
     }
     if (!ok) {
         remove(temp);
-        g_cook.store_failures++;
-        if (!g_cook.store_disabled) {
-            log_warn("cook: cannot write %s; the cache keeps what it has and this run "
-                     "stores nothing more",
-                     temp);
-            g_cook.store_disabled = true;
-        }
-        return false;
+        return store_failed(temp);
     }
     g_cook.cooked++;
     uint64_t payload = total - COOK_HEADER_BYTES - 16ull * (uint32_t)section_count;

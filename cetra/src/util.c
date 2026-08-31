@@ -132,6 +132,17 @@ uint32_t fnv1a_bytes(const void* data, size_t bytes) {
     return h;
 }
 
+uint64_t fnv1a64(uint64_t hash, const void* data, size_t bytes) {
+    const uint8_t* p = (const uint8_t*)data;
+    if (!p)
+        return hash;
+    for (size_t b = 0; b < bytes; ++b) {
+        hash ^= p[b];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
 char* safe_strdup(const char* s) {
     if (s == NULL) {
         return NULL; // Return NULL if the input string is NULL

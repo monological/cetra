@@ -64,6 +64,15 @@ char* safe_strdup(const char* s);
 // touch them.
 uint32_t fnv1a_bytes(const void* data, size_t bytes);
 
+// The 64-bit FNV-1a fold, seed-carrying so a digest can span several ranges:
+// start from FNV1A64_BASIS, feed each range the last call's return. 64 bits
+// because a content-addressed store collides a 32-bit key by ~9,300 entries
+// (the birthday bound); the cook's whole key discipline rests on this one
+// (spec 11.99). erosion.c's digest_plane predates it and stays where it is --
+// its output is gate-asserted, and the rule above already says so.
+#define FNV1A64_BASIS 14695981039346656037ull
+uint64_t fnv1a64(uint64_t hash, const void* data, size_t bytes);
+
 /*
  * Memory
  */

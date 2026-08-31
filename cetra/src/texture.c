@@ -607,6 +607,18 @@ static bool texture_level_push(TextureLevelStack* stack, int w, int h, const uns
     return true;
 }
 
+// One level into the stack, encoded when a block format is live -- the pair
+// that is easy to get subtly wrong twice, kept in one place for that reason.
+static bool texture_encode_push(TextureLevelStack* stack, TextureBlockFormat block, int w, int h,
+                                int channels, const unsigned char* pixels,
+                                unsigned char* scratch) {
+    if (block != TEXTURE_BLOCK_NONE) {
+        texture_block_encode(block, pixels, w, h, channels, scratch);
+        return texture_level_push(stack, w, h, scratch, texture_block_image_bytes(block, w, h));
+    }
+    return texture_level_push(stack, w, h, pixels, (size_t)w * (size_t)h * (size_t)channels);
+}
+
 // Filter, coverage-rescale and encode the whole chain into `stack`. Pure CPU:
 // this is what replaces glGenerateMipmap, and the reason is compression -- a
 // compressed chain cannot be driver-filled, because the driver would have to
@@ -614,30 +626,30 @@ static bool texture_level_push(TextureLevelStack* stack, int w, int h, const uns
 // filter therefore runs on the CPU for the uncompressed case too, rather than
 // leaving two filters that have to agree with each other and silently would
 // not.
-static void texture_derive_levels(TextureBlockFormat block, int width, int height, int channels,
-                                  TextureDesc desc, bool srgb_stored, const unsigned char* pixels,
-                                  TextureLevelStack* stack) {
+//
+// `block` is IN-OUT: an encoder that cannot get scratch demotes itself to
+// uncompressed and says so here, where the failure is -- the historical
+// fallback, without a caller diagnosing an empty stack and retrying.
+static void texture_derive_levels(TextureBlockFormat* block, GLenum internal_format, int width,
+                                  int height, int channels, TextureDesc desc,
+                                  const unsigned char* pixels, TextureLevelStack* stack) {
     memset(stack, 0, sizeof(*stack));
-    const bool compressed = block != TEXTURE_BLOCK_NONE;
     // Scratch for the encoder, sized for level 0 and reused by every level
     // under it.
     unsigned char* scratch = NULL;
-    if (compressed) {
-        scratch = malloc(texture_block_image_bytes(block, width, height));
-        if (!scratch)
-            return; // the caller retries uncompressed, the historical fallback
+    if (*block != TEXTURE_BLOCK_NONE) {
+        scratch = malloc(texture_block_image_bytes(*block, width, height));
+        if (!scratch) {
+            log_error("texture compression: out of memory at %dx%d, storing uncompressed",
+                      width, height);
+            *block = TEXTURE_BLOCK_NONE;
+        }
     }
+    GLenum gl_block = texture_block_gl_format(*block, desc.is_srgb);
+    // What the mip filter must agree with -- see texture_box_halve's `colour`.
+    const bool srgb_stored = texture_format_is_srgb(gl_block != 0 ? gl_block : internal_format);
 
-    bool ok;
-    if (compressed) {
-        texture_block_encode(block, pixels, width, height, channels, scratch);
-        ok = texture_level_push(stack, width, height, scratch,
-                                texture_block_image_bytes(block, width, height));
-    } else {
-        ok = texture_level_push(stack, width, height, pixels,
-                                (size_t)width * (size_t)height * (size_t)channels);
-    }
-    if (!ok) {
+    if (!texture_encode_push(stack, *block, width, height, channels, pixels, scratch)) {
         free(scratch);
         return;
     }
@@ -709,15 +721,7 @@ static void texture_derive_levels(TextureBlockFormat block, int width, int heigh
             texture_preserve_alpha_coverage(next, dw, dh, desc.coverage_cutoff, target);
             out = next;
         }
-        if (compressed) {
-            texture_block_encode(block, out, dw, dh, channels, scratch);
-            ok = texture_level_push(stack, dw, dh, scratch,
-                                    texture_block_image_bytes(block, dw, dh));
-        } else {
-            ok = texture_level_push(stack, dw, dh, out,
-                                    (size_t)dw * (size_t)dh * (size_t)channels);
-        }
-        if (!ok) {
+        if (!texture_encode_push(stack, *block, dw, dh, channels, out, scratch)) {
             complete = false;
             break;
         }
@@ -734,8 +738,8 @@ static void texture_derive_levels(TextureBlockFormat block, int width, int heigh
 }
 
 // The GL half: every level verbatim, nothing derived.
-static void texture_upload_levels(const TextureLevelStack* stack, TextureBlockFormat block,
-                                  GLenum gl_block, GLenum internal_format, GLenum data_format) {
+static void texture_upload_levels(const TextureLevelStack* stack, GLenum gl_block,
+                                  GLenum internal_format, GLenum data_format) {
     for (int i = 0; i < stack->count; ++i) {
         if (gl_block != 0)
             glCompressedTexImage2D(GL_TEXTURE_2D, i, gl_block, stack->level[i].w,
@@ -746,7 +750,6 @@ static void texture_upload_levels(const TextureLevelStack* stack, TextureBlockFo
                          stack->level[i].h, 0, data_format, GL_UNSIGNED_BYTE,
                          stack->level[i].data);
     }
-    (void)block;
     if (!stack->complete) {
         // Clamp rather than report. The sampler state is LINEAR_MIPMAP_LINEAR
         // and GL_TEXTURE_MAX_LEVEL defaults to 1000, so an incomplete chain
@@ -770,34 +773,28 @@ static int texture_expected_levels(int width, int height) {
 }
 
 // The cooked-chain meta section: what the fetch must agree with before any
-// level is believed. memset before filling -- tail padding would otherwise be
-// indeterminate bytes in a file the determinism arm compares.
-typedef struct CookedChainMeta {
-    uint32_t block;    // TextureBlockFormat
-    uint32_t gl_block; // 0 = uncompressed
-    uint32_t count;
-    uint32_t level_w[TEXTURE_MAX_LEVELS];
-    uint32_t level_h[TEXTURE_MAX_LEVELS];
-    uint32_t pad;
-} CookedChainMeta;
-
 // Upload level 0 and every level below it, deriving the chain on the CPU --
-// or fetching it from the cook (spec 11.99), whose key folds the level-0
-// bytes, the desc, and the RESOLVED formats: a cooked DXT chain is
-// structurally unfindable on a driver without S3TC, and the compression
-// switches address disjoint entries, because the resolution already consulted
-// both.
+// or fetching it from the cook (spec 11.99). The artefact is the LEVELS and
+// nothing else: format, count and every level's dimensions are pure functions
+// of inputs the key already folds, so a hit recomputes them and validates
+// each fetched section against the size the recipe implies -- a second copy
+// in a meta section was a thing to keep in sync by hand, and the one drift it
+// could catch beyond this is the 64-bit collision the module's charter
+// accepts unguarded. A cooked DXT chain is structurally unfindable on a
+// driver without S3TC, and the compression switches address disjoint entries,
+// because the resolved formats fold into the key.
 //
 // Returns false only on allocation failure, where the caller still has a
-// usable level 0.
+// usable level 0 -- restored below by a direct upload when even the stack's
+// level-0 copy could not be made.
 static bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
                           int channels, TextureDesc desc, const unsigned char* pixels,
                           GLenum* out_internal_format) {
-    const bool is_srgb = desc.is_srgb;
     TextureBlockFormat block = texture_block_format_for(desc.use, channels);
-    GLenum gl_block = texture_block_gl_format(block, is_srgb);
+    const TextureBlockFormat keyed_block = block; // what the key promises the payload is
+    GLenum gl_block = texture_block_gl_format(block, desc.is_srgb);
 
-    CookKey tk = cook_key("texture-mips/1");
+    CookKey tk = cook_key("texture-mips/2");
     cook_key_i32(&tk, width);
     cook_key_i32(&tk, height);
     cook_key_i32(&tk, channels);
@@ -811,78 +808,75 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
     cook_key_bytes(&tk, pixels, (size_t)width * (size_t)height * (size_t)channels);
 
     const int expected = texture_expected_levels(width, height);
-    CookBlob sections[1 + TEXTURE_MAX_LEVELS];
-    if (cook_fetch(&tk, sections, 1 + expected)) {
-        CookedChainMeta meta;
-        bool sane = sections[0].size == sizeof(meta);
-        if (sane) {
-            memcpy(&meta, sections[0].data, sizeof(meta));
-            sane = meta.block == (uint32_t)block && meta.gl_block == (uint32_t)gl_block &&
-                   meta.count == (uint32_t)expected;
+    CookBlob sections[TEXTURE_MAX_LEVELS];
+    if (cook_fetch(&tk, sections, expected)) {
+        TextureLevelStack stack;
+        memset(&stack, 0, sizeof(stack));
+        stack.count = expected;
+        stack.complete = true;
+        bool sane = true;
+        int w = width, h = height;
+        for (int i = 0; i < expected; ++i) {
+            size_t want = block != TEXTURE_BLOCK_NONE
+                              ? texture_block_image_bytes(block, w, h)
+                              : (size_t)w * (size_t)h * (size_t)channels;
+            sane = sane && sections[i].size == want;
+            stack.level[i].w = w;
+            stack.level[i].h = h;
+            stack.level[i].size = sections[i].size;
+            stack.level[i].data = sections[i].data; // adopt the fetch's mallocs
+            w = w > 1 ? w / 2 : 1;
+            h = h > 1 ? h / 2 : 1;
         }
         if (sane) {
-            TextureLevelStack stack;
-            memset(&stack, 0, sizeof(stack));
-            stack.count = expected;
-            stack.complete = true;
-            for (int i = 0; i < expected; ++i) {
-                stack.level[i].w = (int)meta.level_w[i];
-                stack.level[i].h = (int)meta.level_h[i];
-                stack.level[i].size = sections[1 + i].size;
-                stack.level[i].data = sections[1 + i].data; // adopt the fetch's mallocs
-            }
-            free(sections[0].data);
             if (out_internal_format)
                 *out_internal_format = gl_block != 0 ? gl_block : internal_format;
-            texture_upload_levels(&stack, block, gl_block, internal_format, data_format);
+            texture_upload_levels(&stack, gl_block, internal_format, data_format);
             texture_level_stack_free(&stack);
             return true;
         }
-        for (int i = 0; i < 1 + expected; ++i)
-            free(sections[i].data);
+        // A level whose size disagrees with what the recipe implies is a
+        // shape drift the version bump missed -- a miss, said out loud,
+        // because a silent discard leaves the ledger showing hit-and-cooked
+        // for a site quietly re-baking every run.
+        log_warn("cook: texture-mips %016llx sections disagree with the recipe; baking live",
+                 (unsigned long long)tk.hash);
+        texture_level_stack_free(&stack); // frees the adopted sections
     }
 
     TextureLevelStack stack;
-    texture_derive_levels(block, width, height, channels, desc, texture_format_is_srgb(
-                              gl_block != 0 ? gl_block : internal_format),
-                          pixels, &stack);
-    if (stack.count == 0 && block != TEXTURE_BLOCK_NONE) {
-        // The encoder's scratch failed; the historical fallback stores
-        // uncompressed rather than half a chain.
-        log_error("texture compression: out of memory at %dx%d, storing uncompressed", width,
-                  height);
-        block = TEXTURE_BLOCK_NONE;
-        gl_block = 0;
-        texture_derive_levels(block, width, height, channels, desc,
-                              texture_format_is_srgb(internal_format), pixels, &stack);
-    }
+    texture_derive_levels(&block, internal_format, width, height, channels, desc, pixels, &stack);
+    gl_block = texture_block_gl_format(block, desc.is_srgb); // block may have demoted
+    const GLenum stored = gl_block != 0 ? gl_block : internal_format;
     if (out_internal_format)
-        *out_internal_format = gl_block != 0 ? gl_block : internal_format;
+        *out_internal_format = stored;
     if (stack.count == 0) {
+        // Even the stack's level-0 copy failed. The historical envelope --
+        // the caller still has a usable level 0 -- is kept by uploading it
+        // directly from the caller's pixels, uncompressed, and clamping.
+        glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0, data_format,
+                     GL_UNSIGNED_BYTE, pixels);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-        log_error("texture mip chain: out of memory at %dx%d, nothing stored", width, height);
+        if (out_internal_format)
+            *out_internal_format = internal_format;
+        log_error("texture mip chain: out of memory at %dx%d, storing level 0 only", width,
+                  height);
         return false;
     }
 
-    if (stack.complete && stack.count == expected) {
-        CookedChainMeta meta;
-        memset(&meta, 0, sizeof(meta));
-        meta.block = (uint32_t)block;
-        meta.gl_block = (uint32_t)gl_block;
-        meta.count = (uint32_t)stack.count;
-        CookBlob out[1 + TEXTURE_MAX_LEVELS];
-        out[0].data = &meta;
-        out[0].size = sizeof(meta);
+    // No storing a DEMOTED chain: the key promised keyed_block's payload, and
+    // an uncompressed stack under that key would validate as garbage on every
+    // later fetch.
+    if (stack.complete && stack.count == expected && block == keyed_block) {
+        CookBlob out[TEXTURE_MAX_LEVELS];
         for (int i = 0; i < stack.count; ++i) {
-            meta.level_w[i] = (uint32_t)stack.level[i].w;
-            meta.level_h[i] = (uint32_t)stack.level[i].h;
-            out[1 + i].data = stack.level[i].data;
-            out[1 + i].size = stack.level[i].size;
+            out[i].data = stack.level[i].data;
+            out[i].size = stack.level[i].size;
         }
-        cook_store(&tk, out, 1 + stack.count);
+        cook_store(&tk, out, stack.count);
     }
 
-    texture_upload_levels(&stack, block, gl_block, internal_format, data_format);
+    texture_upload_levels(&stack, gl_block, internal_format, data_format);
     bool complete = stack.complete;
     texture_level_stack_free(&stack);
     return complete;

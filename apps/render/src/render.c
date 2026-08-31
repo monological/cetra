@@ -16,6 +16,7 @@
 #include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
+#include "cetra/async_loader.h"
 #include "cetra/cook.h"
 #include "cetra/engine.h"
 #include "cetra/profiler.h"
@@ -2168,6 +2169,14 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 // one at a fixed frame (the equivalence gate, specs/11.8).
 static void render_frame_update(Engine* engine, float dt) {
     (void)dt;
+    // --cook exits when the async loader has DRAINED rather than at a frame
+    // count: uploads publish at <=5 per frame and the workers may still be
+    // decoding at frame 1, so a one-frame run under-warms any texture-heavy
+    // model -- the exact scene the verb exists for. Two frames minimum, so a
+    // model with no async textures still renders once before leaving.
+    if (frame_schedule->cook && engine->total_frames >= 2 &&
+        !async_loader_is_busy(engine->async_loader))
+        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
     // The TRANSITION is the whole point, and it is what --no-shadows cannot
     // reach: that flag clears `enabled` before the first depth pass, so every
     // index the pass maintains is still at its initial value. Turning it off
@@ -2715,11 +2724,10 @@ int main(int argc, char** argv) {
         return -1;
     }
     if (args.cook) {
-        // The pre-warm verb IS a headless one-frame run: loading and frame 0
-        // reach every derivation site, and the cook rows are the deliverable.
+        // The pre-warm verb: headless, exiting when the async loader drains
+        // (see render_frame_update) so a texture-heavy model warms fully. No
+        // frame cap here -- an explicit -f still wins as an upper bound.
         args.headless = 1;
-        if (args.max_frames <= 0)
-            args.max_frames = 1;
     }
     // Before init_engine and before any texture loads: the publish path is a
     // fetch site (spec 11.99).
