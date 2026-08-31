@@ -3146,9 +3146,10 @@ array splits by format, which is the first thing to measure.
 ### F2. An offline asset cook — Effort L — **DONE (spec 11.99), as a transparent cache rather than a build step**
 
 **Shipped as the UE DDC shape, settled with the user before the plan was written**: a
-content-addressed derived-data cache (`cook.c/h`, one `.cca` file per artefact) that every
-deterministic startup derivation is bracketed through — fetch-or-bake-and-store — plus a `--cook`
-pre-warm verb that is nothing but a headless one-frame run with a report. The key IS the identity
+content-addressed derived-data cache (`cook.c/h`, one `.cca` file per artefact) that the heavy
+startup derivations are bracketed through — fetch-or-bake-and-store; the scatter deliberately
+stays live — plus a `--cook` pre-warm verb that is nothing but a headless run with a report,
+exiting when the async loader drains. The key IS the identity
 (input bytes + recipe version + library version where a library owns the byte format: Jolt's
 `JPH_VERSION_ID`, meshoptimizer's version), so a stale artefact is never detected, it is
 **unfindable**; a miss always falls through to the live bake; a corrupt file is refused by name
@@ -3162,7 +3163,7 @@ derive/upload split is what makes a hit provably the bytes a miss would have upl
 **Measured: forest cold 7.5 s debug → warm 2.8 s on the gate fixture; the shipping config's
 on-init went 4.9 s → 0.95 s debug with 59 artefacts hitting.** Phase 0 first attributed the
 5.3 s of startup no spec had named (vegetation first at 1.8 s — not the scatter or the erosion
-11.65 guessed at). Nine gate arms; the ledger's strongest row was caught live rather than
+11.65 guessed at). Eight gate arms; the ledger's strongest row was caught live rather than
 injected: Jolt's restore checks `IsEOF()` after a stream's LAST field, a positional
 implementation refused every restore ever attempted, and the region-collider arm is what noticed.
 The scatter is deliberately NOT cooked (2.6% of release startup, the widest key surface, and the

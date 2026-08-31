@@ -550,11 +550,13 @@ repo root, or `CETRA_COOK_DIR`); `--no-cook` runs every bake live and touches no
 flag any measurement OF a bake must carry**, since a warm cache serves the artefact instead of
 running the work being measured (the terrain group forces it wholesale, because `terrain-threads`
 varies a worker count the cook key deliberately omits); `--cook` is the pre-warm verb, a headless
-one-frame run whose deliverable is the per-artefact `cook site=...` rows and the `cook-summary`.
-A `--cook` against an already-warm directory exits 0 with `cooked=0`, which is success. Note
-`--terrain-erosion-probe` under a cook hit refuses by name rather than printing stats — the sim
-it describes never ran; pass `--no-cook` to measure it. Measured on the gate fixture: cold 7.5 s
-debug, warm 2.8 s.
+run whose deliverable is the per-artefact `cook site=...` rows and the `cook-summary`; on render
+it exits when the async loader has drained, so a texture-heavy model warms fully rather than at
+five publishes per frame. A `--cook` against an already-warm directory exits 0 with `cooked=0`,
+which is success. Note `--terrain-erosion-probe` under a cook hit refuses by name rather than
+printing stats — the sim it describes never ran; pass `--no-cook` to measure it. Measured on the
+gate fixture (eroded 257×60, single samples off the suite's own runs): cold ~6.7 s debug, warm
+~2.7 s.
 
 **And since spec 11.62 it can put its world anywhere, and move it while running.**
 `--world-offset <units>` places the terrain, scatter, lights, camera and physics that far from the

@@ -7,7 +7,7 @@
 
 /*
  * The derived-data cook (spec 11.99, roadmap F2): a transparent cache over
- * every deterministic startup derivation, the UE DDC model. A call site builds
+ * the heavy deterministic startup derivations, the UE DDC model. A call site builds
  * a key from its inputs, asks cook_fetch; a hit returns the stored sections
  * and the site installs them where the bake would have written; a miss falls
  * through to the live bake, whose result cook_store remembers for next time.
