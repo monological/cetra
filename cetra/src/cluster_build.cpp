@@ -320,3 +320,7 @@ static void cluster_seal_stats(const Mesh* mesh, MeshClusterStats* out) {
                 out->foreign_indices++;
     }
 }
+
+extern "C" unsigned cluster_builder_version(void) {
+    return (unsigned)MESHOPTIMIZER_VERSION;
+}

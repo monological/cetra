@@ -33,6 +33,7 @@
 #include "cetra/camera.h"
 #include "cetra/cook.h"
 #include "cetra/engine.h"
+#include "cetra/physics_cook.h"
 #include "cetra/ibl.h"
 #include "cetra/light.h"
 #include "cetra/lod.h"
@@ -322,6 +323,90 @@ static float rnd_range(float lo, float hi) {
  * --no-quadtree. Both builders fill the same lod_* ranges, so nothing downstream
  * -- selection, batching, the sort key -- learns which ran.
  */
+// The cooked cluster DAG's fixed-width meta (spec 11.99): everything the
+// builder writes beside the packed index buffer. memset before filling -- the
+// tail padding would otherwise be indeterminate bytes in a file the
+// determinism arm compares.
+typedef struct CookedDagMeta {
+    uint64_t lod_offset[CETRA_LOD_MAX]; // bytes, as the mesh carries them
+    uint64_t lod_count[CETRA_LOD_MAX];
+    uint32_t lod_error_bits[CETRA_LOD_MAX];
+    uint32_t lod_levels;
+    uint32_t clusters, groups, dag_levels, max_index, foreign;
+    uint32_t pad;
+} CookedDagMeta;
+
+// Fetch-or-build for the cluster DAG. The key folds the arrays the builder
+// consumes -- positions and indices; the prototypes never vary normals or UVs
+// against identical positions, so the narrower fold cannot collide -- plus
+// the builder's own version axis (meshoptimizer's collapse decisions move
+// between ITS releases and between build types, which the content fold
+// already separates).
+static bool cooked_cluster_lod(Mesh* mesh, MeshClusterStats* st) {
+    CookKey k = cook_key("cluster-dag/1");
+    char label[24];
+    snprintf(label, sizeof(label), "mesh_%zu", g_distinct_meshes);
+    cook_key_name(&k, label);
+    cook_key_u64(&k, (uint64_t)mesh->vertex_count);
+    cook_key_u64(&k, (uint64_t)mesh->index_count);
+    cook_key_bytes(&k, mesh->vertices, mesh->vertex_count * 3u * sizeof(float));
+    cook_key_bytes(&k, mesh->indices, mesh->index_count * sizeof(unsigned int));
+    cook_key_i32(&k, CETRA_LOD_MAX);
+    cook_key_u32(&k, cluster_builder_version());
+
+    CookBlob sections[2];
+    if (cook_fetch(&k, sections, 2)) {
+        if (sections[0].size == sizeof(CookedDagMeta)) {
+            CookedDagMeta meta;
+            memcpy(&meta, sections[0].data, sizeof(meta));
+            free(sections[0].data);
+            free(mesh->indices);
+            mesh->indices = sections[1].data; // owned install, the fetch contract
+            for (int b = 0; b < CETRA_LOD_MAX; ++b) {
+                mesh->lod_offset[b] = (size_t)meta.lod_offset[b];
+                mesh->lod_count[b] = (size_t)meta.lod_count[b];
+                memcpy(&mesh->lod_error[b], &meta.lod_error_bits[b], sizeof(float));
+            }
+            mesh->lod_levels = (int)meta.lod_levels;
+            mesh->index_count = mesh->lod_count[0];
+            memset(st, 0, sizeof(*st));
+            st->clusters = (int)meta.clusters;
+            st->groups = (int)meta.groups;
+            st->levels = (int)meta.dag_levels;
+            st->max_index = (int)meta.max_index;
+            st->foreign_indices = (int)meta.foreign;
+            return true;
+        }
+        // A meta of the wrong shape is a recipe drift the version bump missed;
+        // fall through to the live build, which re-stores.
+        free(sections[0].data);
+        free(sections[1].data);
+    }
+
+    if (!mesh_build_cluster_lod(mesh, st))
+        return false;
+    CookedDagMeta meta;
+    memset(&meta, 0, sizeof(meta));
+    uint64_t total = 0;
+    for (int b = 0; b < mesh->lod_levels; ++b) {
+        meta.lod_offset[b] = (uint64_t)mesh->lod_offset[b];
+        meta.lod_count[b] = (uint64_t)mesh->lod_count[b];
+        memcpy(&meta.lod_error_bits[b], &mesh->lod_error[b], sizeof(float));
+        uint64_t end = mesh->lod_offset[b] / sizeof(unsigned int) + mesh->lod_count[b];
+        if (end > total)
+            total = end; // bands may ALIAS an earlier range, so the max is the size
+    }
+    meta.lod_levels = (uint32_t)mesh->lod_levels;
+    meta.clusters = (uint32_t)st->clusters;
+    meta.groups = (uint32_t)st->groups;
+    meta.dag_levels = (uint32_t)st->levels;
+    meta.max_index = (uint32_t)st->max_index;
+    meta.foreign = (uint32_t)st->foreign_indices;
+    CookBlob out[2] = {{&meta, sizeof(meta)}, {mesh->indices, total * sizeof(unsigned int)}};
+    cook_store(&k, out, 2);
+    return true;
+}
+
 static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
     mesh->material = material;
     int levels = 0;
@@ -341,7 +426,7 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
             input_digest = (input_digest ^ ib[i]) * 1099511628211ull;
     }
     double cluster_t0 = glfwGetTime();
-    if (cluster && !g_args.no_clusters && mesh_build_cluster_lod(mesh, &st)) {
+    if (cluster && !g_args.no_clusters && cooked_cluster_lod(mesh, &st)) {
         g_startup_cluster_ms += (glfwGetTime() - cluster_t0) * 1000.0;
         levels = mesh->lod_levels;
         g_clustered_meshes++;
@@ -1676,29 +1761,78 @@ static void region_load(Region* r) {
         fprintf(stderr, "forest: region %d,%d could not allocate its scatter\n", r->rx, r->rz);
     }
 
-    // One static body per region. The mesh is CPU geometry whose only job is
-    // done once Jolt has copied it into its own BVH.
-    Mesh* collider = create_mesh();
+    // One static body per region. On the live path the mesh is CPU geometry
+    // whose only job is done once Jolt has copied it into its own BVH -- which
+    // is why the cook stores the SERIALIZED SHAPE, BVH and all, and a hit
+    // skips the collider mesh build too: its only consumer was Jolt's copy
+    // (spec 11.99; the BVH build is 85% of collider time in both builds).
     int segments = (int)(g_region_span / (2.0f * g_terrain.extent) * (float)COLLIDER_SEGMENTS + 0.5f);
     if (segments < 2)
         segments = 2;
-    if (g_physics && g_entities &&
-        terrain_build_collider_region(&g_terrain, x0, z0, g_region_span, segments, collider)) {
+    if (g_physics && g_entities) {
+        CookKey jk = cook_key("jolt-region/1");
+        char label[24];
+        snprintf(label, sizeof(label), "r_%d_%d", r->rx, r->rz);
+        cook_key_name(&jk, label);
+        bool keyed = fold_terrain_content(&jk);
+        cook_key_f32(&jk, x0);
+        cook_key_f32(&jk, z0);
+        cook_key_f32(&jk, g_region_span);
+        cook_key_i32(&jk, segments);
+        cook_key_u64(&jk, physics_cook_jolt_version());
+
         char name[32];
         snprintf(name, sizeof(name), "terrain_%d_%d", r->rx, r->rz);
-        Entity* e = create_entity(g_entities, name);
-        entity_set_position(e, (vec3){0.0f, 0.0f, 0.0f});
-        PhysicsShapeDesc desc = {.type = SHAPE_MESH, .density = 0.0f};
-        desc.mesh.vertices = collider->vertices;
-        desc.mesh.vertex_count = collider->vertex_count;
-        desc.mesh.indices = collider->indices;
-        desc.mesh.index_count = collider->index_count;
-        if (entity_add_rigid_body(e, g_physics, &desc, MOTION_STATIC, OBJ_LAYER_STATIC))
-            r->collider = e;
-        else
-            destroy_entity(g_entities, e);
+        CookBlob cooked_shape = {NULL, 0};
+        bool restored = false;
+        if (keyed && cook_fetch(&jk, &cooked_shape, 1)) {
+            Entity* e = create_entity(g_entities, name);
+            entity_set_position(e, (vec3){0.0f, 0.0f, 0.0f});
+            PhysicsShapeDesc desc = {.type = SHAPE_COOKED, .density = 0.0f};
+            desc.cooked.data = cooked_shape.data;
+            desc.cooked.size = cooked_shape.size;
+            if (entity_add_rigid_body(e, g_physics, &desc, MOTION_STATIC, OBJ_LAYER_STATIC)) {
+                r->collider = e;
+                restored = true;
+            } else {
+                destroy_entity(g_entities, e);
+            }
+            free(cooked_shape.data);
+        }
+        // A hit whose restore was refused is a MISS in everything but the file
+        // read -- the module's own contract -- so it falls through to the live
+        // build, whose store then overwrites the refused artefact.
+        if (!restored) {
+            Mesh* collider = create_mesh();
+            if (terrain_build_collider_region(&g_terrain, x0, z0, g_region_span, segments,
+                                              collider)) {
+                Entity* e = create_entity(g_entities, name);
+                entity_set_position(e, (vec3){0.0f, 0.0f, 0.0f});
+                PhysicsShapeDesc desc = {.type = SHAPE_MESH, .density = 0.0f};
+                desc.mesh.vertices = collider->vertices;
+                desc.mesh.vertex_count = collider->vertex_count;
+                desc.mesh.indices = collider->indices;
+                desc.mesh.index_count = collider->index_count;
+                RigidBody* rb =
+                    entity_add_rigid_body(e, g_physics, &desc, MOTION_STATIC, OBJ_LAYER_STATIC);
+                if (rb) {
+                    r->collider = e;
+                    if (keyed) {
+                        size_t bytes = 0;
+                        unsigned char* stream = physics_cook_shape_serialize(rb->shape, &bytes);
+                        if (stream) {
+                            CookBlob out = {stream, bytes};
+                            cook_store(&jk, &out, 1);
+                            free(stream);
+                        }
+                    }
+                } else {
+                    destroy_entity(g_entities, e);
+                }
+            }
+            free_mesh(collider);
+        }
     }
-    free_mesh(collider);
 
     r->resident = true;
     g_regions_loaded++;

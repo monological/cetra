@@ -20390,7 +20390,7 @@ def _cook_run(workdir, tag, extra, shot=None):
     (the albedo debug view -- forest's one 0 px path, and the one every cooked
     texture lands in). Returns {text, rows, cooked, hit, refused, digests}."""
     cmd = [FOREST, "-x", "-f", "2", "-W", "320", "-H", "200", "--render-mode", "6",
-           "--region-probe"] + extra
+           "--region-probe", "--cluster-probe"] + extra
     if shot:
         cmd += ["-S", shot]
     r = _run(cmd, capture_output=True, text=True)
@@ -20405,12 +20405,14 @@ def _cook_run(workdir, tag, extra, shot=None):
         "cooked": int(summary.group(1)) if summary else 0,
         "hit": int(summary.group(2)) if summary else 0,
         "refused": int(summary.group(4)) if summary else 0,
-        # The region digests are the CONTROL: the scatter is never cooked, so
-        # a cook defect cannot move them -- them moving means the arm's own
-        # harness drifted, not the cache.
+        # The region digests carry the collider flag and the scatter -- the
+        # scatter is never cooked, so it is the CONTROL; the collider flag is
+        # the restored-Jolt-shape leg. The cluster rows are the DAG leg: band
+        # digests read from whatever index bytes the run drew with.
         "digests": sorted(
             re.findall(r"region-probe cell rx=\S+ rz=\S+ .*?digest=[0-9a-f]+ authored=[0-9a-f]+",
                        text)),
+        "dag": sorted(re.findall(r"cluster-probe mesh=\S+ .*", text)),
     }
 
 
@@ -20431,6 +20433,11 @@ def run_cook_gate(workdir):
                     bake, never a pixel.
       cook-determinism two cold cooks into two dirs are byte-identical,
                     artefact by artefact, within one build.
+      cook-key      a dir warmed at seed 1337 serves seed 4242 exactly the
+                    seed-blind sites (veg, the DAGs -- their seeds are
+                    hard-coded) and re-cooks the seeded ones (layers, splat,
+                    Jolt regions), and 4242's frame and digests equal its own
+                    live run -- the key IS the identity, in both directions.
 
     Every run uses its OWN cook dir under the workdir, never the suite's
     shared one: these arms measure the cache itself, so what is in the dir
@@ -20452,10 +20459,12 @@ def run_cook_gate(workdir):
 
     # --- cook-identity ------------------------------------------------------
     ae, _ = compare(live_ppm, warm_ppm)
-    ok = ae == 0 and live["digests"] and live["digests"] == warm["digests"]
-    print(f"  cook-identity {'PASS' if ok else 'FAIL'}  warm vs live: {ae} px and "
-          f"{len(live['digests'])} region digests equal (want 0 px and equality: a cook hit "
-          f"must be the bake it replaced, byte for byte where bytes are compared)")
+    ok = (ae == 0 and live["digests"] and live["digests"] == warm["digests"] and live["dag"] and
+          live["dag"] == warm["dag"])
+    print(f"  cook-identity {'PASS' if ok else 'FAIL'}  warm vs live: {ae} px, "
+          f"{len(live['digests'])} region digests equal (collider flags ride them) and "
+          f"{len(live['dag'])} cluster rows equal (want 0 px and equality throughout: a cook "
+          f"hit must be the bake it replaced, byte for byte where bytes are compared)")
     if not ok:
         failures.append("cook-identity")
 
@@ -20531,6 +20540,29 @@ def run_cook_gate(workdir):
               f"of one build are one cook)")
         if not ok:
             failures.append("cook-determinism")
+
+    # --- cook-key: the identity cuts both ways ------------------------------
+    live42_ppm = os.path.join(workdir, "cook_live42.ppm")
+    key42_ppm = os.path.join(workdir, "cook_key42.ppm")
+    live42 = _cook_run(workdir, "live42", ["--no-cook", "--seed", "4242"], shot=live42_ppm)
+    key42 = _cook_run(workdir, "key42", ["--cook-dir", d1, "--seed", "4242"], shot=key42_ppm)
+    if live42 is None or key42 is None:
+        failures.append("cook-key")
+    else:
+        seed_blind = {"veg-bark/1", "veg-leaf/1", "cluster-dag/1"}
+        seeded = {"terrain-layer/1", "terrain-splat/1", "jolt-region/1"}
+        wrong = [(site, result) for site, _, result, _, _ in key42["rows"]
+                 if (site in seed_blind and result != "hit") or
+                    (site in seeded and result != "cooked")]
+        ae, _ = compare(live42_ppm, key42_ppm)
+        ok = (not wrong and ae == 0 and live42["digests"] == key42["digests"] and
+              live42["dag"] == key42["dag"])
+        print(f"  cook-key     {'PASS' if ok else 'FAIL'}  seed 4242 against the 1337 dir: "
+              f"{len(wrong)} sites on the wrong side of the key and {ae} px vs its own live "
+              f"run (want 0 and 0: seed-blind sites hit, seeded sites re-cook, nothing "
+              f"cross-serves)")
+        if not ok:
+            failures.append("cook-key")
 
     return failures
 

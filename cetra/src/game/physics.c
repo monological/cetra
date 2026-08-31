@@ -3,6 +3,8 @@
 #include "JoltC/JoltC.h"
 #include "uthash.h"
 
+#include "../physics_cook.h"
+
 #include "../ext/log.h"
 
 #include <math.h>
@@ -523,6 +525,8 @@ JPC_Shape* physics_create_shape_from_desc(const PhysicsShapeDesc* desc) {
         case SHAPE_MESH:
             return physics_create_mesh_shape(desc->mesh.vertices, desc->mesh.vertex_count,
                                              desc->mesh.indices, desc->mesh.index_count);
+        case SHAPE_COOKED:
+            return physics_cook_shape_restore(desc->cooked.data, desc->cooked.size);
         default:
             return NULL;
     }
@@ -568,8 +572,10 @@ RigidBody* entity_add_rigid_body(Entity* entity, PhysicsWorld* world,
 
     // A triangle soup has no inertia tensor, so Jolt cannot integrate one.
     // Refused here with a name rather than left to assert inside the library,
-    // where the message would say nothing about which body was at fault.
-    if (shape_desc->type == SHAPE_MESH && motion_type != MOTION_STATIC) {
+    // where the message would say nothing about which body was at fault. A
+    // cooked shape is a mesh shape by construction and takes the same fence.
+    if ((shape_desc->type == SHAPE_MESH || shape_desc->type == SHAPE_COOKED) &&
+        motion_type != MOTION_STATIC) {
         log_error("Entity '%s': a mesh shape must be MOTION_STATIC", entity->name);
         return NULL;
     }

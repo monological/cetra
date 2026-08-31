@@ -72,6 +72,12 @@ typedef struct MeshClusterStats {
 // the build, on a struct shared by every mesh in every app, at 12 bytes each.
 bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out);
 
+// MESHOPTIMIZER_VERSION, evaluated where that header is visible -- the cook's
+// version axis for anything the simplifier produced (spec 11.99): its collapse
+// decisions move between releases, so a vendored upgrade must orphan cooked
+// DAGs rather than serve them against a builder that would now disagree.
+unsigned cluster_builder_version(void);
+
 #ifdef __cplusplus
 }
 #endif

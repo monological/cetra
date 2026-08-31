@@ -45,13 +45,16 @@ typedef enum {
 typedef enum { MOTION_STATIC, MOTION_KINEMATIC, MOTION_DYNAMIC } PhysicsMotionType;
 
 // Shape types. SHAPE_MESH is STATIC ONLY -- Jolt has no inertia tensor for a
-// triangle soup, so a dynamic or kinematic body cannot carry one.
+// triangle soup, so a dynamic or kinematic body cannot carry one. SHAPE_COOKED
+// carries the same restriction, because the only shapes anything cooks are
+// mesh shapes (spec 11.99).
 typedef enum {
     SHAPE_BOX,
     SHAPE_SPHERE,
     SHAPE_CAPSULE,
     SHAPE_CYLINDER,
-    SHAPE_MESH
+    SHAPE_MESH,
+    SHAPE_COOKED
 } PhysicsShapeType;
 
 // Constraint types
@@ -103,6 +106,12 @@ typedef struct PhysicsShapeDesc {
             const unsigned int* indices;
             size_t index_count;
         } mesh;
+        // A shape physics_cook_shape_serialize wrote, BVH and all, restored
+        // instead of rebuilt (spec 11.99). Borrowed like the mesh arm.
+        struct {
+            const unsigned char* data;
+            size_t size;
+        } cooked;
     };
     float density;
 } PhysicsShapeDesc;
