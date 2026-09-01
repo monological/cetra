@@ -330,13 +330,27 @@ painted distant cutouts SOLID with all 29 goldens at 0 px and its own gate green
 ratio UP. `assets/alphacov_fixture` and the `alphacov` group are the whole
 instrument, bounded in both directions for that reason; spec 11.88 carries the
 matrix of which of the three fixes each arm actually sees, and the answer is one
-of three.
+of three. **Spec 11.100 repeated the lesson one instrument down**: its deep arm's
+first draft counted bright pixels, and the count read the DISTRIBUTING build
+lower than the vanishing one -- grazing anisotropy averages a sparse dither into
+a smooth low-alpha field the sharpened test deletes, so the arm now reads a
+camera-facing quad by MEAN luma, and the grazing loss is recorded as the
+technique's ceiling rather than the arm's. The old "correctly vanishes past the
+uniform level" sentence is retired: distribution answers there, `alphacov-deep`
+is its instrument, and the ledger row that cannot be armed (a rewritten level 0
+-- the dot grid is binary there, so the fixture is blind) is proven live at the
+cook-artefact byte level instead.
 
 **`apps/tree` and `apps/forest` are the feature's only in-tree consumers and
 neither is a golden**, so a change to the mip chain moves both leaf atlases at
 every level with nothing automated able to see it -- the `forest-*` arms read
 submission integers. Compare canopy captures by hand before believing a green
-suite on anything touching `texture_alpha_coverage`.
+suite on anything touching `texture_alpha_coverage`. And do not reach for
+`assets/ivy_arcade` as the hand-A/B content, natural as it looks: it is NOT
+pixel-comparable -- measured 8,674 px between two pinned runs
+(`--no-auto-exposure -E 1.0`) and 9,681 unpinned at 800x600, so anything under
+~9k px on it is noise. Forest's `--render-mode 6` at a fixed camera (0 px) and
+`--no-sky` (40 px) are the floors that work.
 
 ### Capturing a before
 

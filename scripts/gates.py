@@ -11327,24 +11327,32 @@ def run_alphacov_gate(workdir):
     alone passes on one that preserves nothing, since an empty far field is what
     correct looks like out there.
 
-    WHAT NEITHER CLAIMS. Past the level where the chain goes uniform the dots are
-    gone and are meant to be: coverage is 0 or 1 there and no scale reproduces a
-    fraction, so preservation has nothing to hold and correctly declines. That is
-    this family's known ceiling, not a defect -- see docs/papers/README.md, where
-    Yuksel measures the whole approach as one that "does not always improve the
-    results". The claim is the mid field, plus the promise not to make it worse.
+    WHAT NONE OF THEM CLAIM. The old ceiling -- past the uniform level no scale
+    reproduces a fraction -- is ANSWERED since 11.100 by distribution, and the
+    deep arm is its instrument. What stays unclaimed: LEVEL 0's pristineness
+    (the dot grid is binary at level 0, so this fixture is structurally blind
+    to a build that rewrites it -- the 11.100 ledger proved the mutation live
+    at the artefact-byte level and invisible to every frame instrument in the
+    corpus, and records that hole rather than papering it); the GRAZING loss
+    (at ~15 degrees under anisotropic filtering the sampler averages the dither
+    into a smooth low-alpha field the sharpened test deletes -- a real ceiling
+    of the technique, measured in spec 11.100, which is why the deep arm reads
+    the facing quad); and the tail's starvation, where budgets of 2, 1 and 0
+    ON texels make near-empty correct.
 
     AND WHAT THEY DO NOT COVER, which spec 11.88 measured rather than assumed.
-    The implementation has three parts and these two arms see ONE of them, the
-    coverage measure: reverting it alone drops the ratio to 0.619, a hair above
-    the 0.591 an unpreserved chain reads. Saturation needs the texel count AND
-    the cascade together, so fixing either quiets the far band, and NOTHING here
-    covers the pristine chain or the best-error scale. Both are
-    correctness-by-reference (docs/papers/README.md) and both are defensive:
-    they matter on content whose target is unreachable rather than on this
-    fixture, whose target the fixed measure can hit. Spec 11.88 carries the full
-    matrix -- it is not repeated here, where gate-arm-docs reads a table's first
-    column as arm names.
+    The rescale has three parts and the mip arm sees ONE of them, the coverage
+    measure: reverting it alone dropped the ratio to 0.619 on 11.88's build, a
+    hair above that build's unpreserved 0.591. Saturation needs the texel count
+    AND the cascade together, so fixing either quiets the far band, and NOTHING
+    here covers the pristine chain or the best-error scale -- both
+    correctness-by-reference (docs/papers/README.md), both defensive. The
+    DISTRIBUTION's parts fare better: the deep arm sees the feature, its
+    normalization and its level gating, and cook-determinism sees its
+    byte-determinism (a per-process value folded into the arithmetic reads one
+    artefact of 59 differing). Specs 11.88 and 11.100 carry the full matrices
+    -- not repeated here, where gate-arm-docs reads a table's first column as
+    arm names.
     """
     scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
     if not os.path.exists(scene):

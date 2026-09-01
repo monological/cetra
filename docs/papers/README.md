@@ -84,17 +84,37 @@ DirectXTex's 8 is 4x the work per bisection step per level for a smoother estima
 - The supplementary document is figure plates with no extractable text (`pdf2md` reports it
   needs OCR); not converted, and nothing here depends on it.
 
-**What cetra takes from it — two things, and neither is code:**
+**What cetra takes from it — since 11.100, the algorithm itself:**
 
-1. **The honest ceiling on what 11.88 builds.** §2, on this whole family: *"Castaño suggests
-   scaling the alpha values by first finding a desirable alpha threshold per mipmap level... This
-   simple fix can help in some cases, but it does not always improve the results."* Figures 1-3
-   show it failing. Cetra is implementing the technique correctly, not solving alpha testing.
-2. **A third independent vote for the pristine chain.** Both of its algorithms process "each
+1. **§3.1's error diffusion**, as `texture_distribute_alpha` (`texture.c`), firing only where
+   11.88's rescale reports a residual miss past `TEXTURE_DISTRIBUTE_MISS` — the surgical scope,
+   not the paper's every-level one, so structured levels stay byte-identical and the near field
+   keeps A2C's smooth one-pixel edges. Six deviations from the paper's letter, each deliberate:
+   **serpentine scan** (raster FS grows directional worms exactly on the low-density uniform
+   fields this fires on); the **last row flows its full residual ahead** instead of dropping 9/16
+   off the bottom edge, which keeps the ON count conservative for Nx1 levels and makes the 1x1 a
+   majority round; the **target is 11.88's level-0 bilinear-reconstruction coverage**, not §3.2's
+   ᾱN/(2α_τ) — glTF MASK semantics says the thing to preserve across distance is the level-0 TEST
+   RESULT, not ground-truth transparency, and on this corpus the two coincide anyway; the field is
+   **normalized to that target and quantized at 1/2**, so the authored cutoff never enters and the
+   paper's α_τ = 1/2 design centre dissolves; **level 0 is never rewritten** (the paper's own §6
+   fix for magnification, which `texture_derive_levels` already satisfied); and the whole thing is
+   **PRNG-free**, which is what refused §3.2's alpha pyramid — its contention resolution requires
+   randomness the cook's bit-identical-artefact charter cannot admit, its guarantee holds only at
+   α_τ >= 1/2 against authored 0.4s, and Yuksel rates it "arguably marginally better".
+2. **The honest ceiling on what 11.88 builds.** §2, on the scale-the-alpha family: *"This simple
+   fix can help in some cases, but it does not always improve the results."* 11.100 is the answer
+   past that ceiling — and found a ceiling of its own the paper does not discuss: under grazing
+   anisotropy the sampler averages the dither into a smooth low-alpha field the sharpened test
+   deletes, measured on the alphacov plane at 15 degrees.
+3. **A third independent vote for the pristine chain.** Both of its algorithms process "each
    mipmap level completely independently".
 
-**Not implemented:** alpha distribution itself (error diffusion, alpha pyramid). It is the named
-successor and has a roadmap row.
+**Not implemented:** the alpha pyramid (§3.2, refused above); §4's alpha-to-coverage extensions —
+§4.1's sample-mask texture needs a second nearest-filtered sampler the ledger does not have, §4.2's
+hashed mask needs `gl_SampleMask` work, and Yuksel's own verdict is that distribution brings *"no
+apparent qualitative improvement in alpha-to-coverage"*; and §6's texcoord jitter for Moiré, a
+shader change the paper itself used only for its Figure 8.
 
 ### Wyman & McGuire, *Improved Alpha Testing Using Hashed Sampling*, TVCG 2017
 
