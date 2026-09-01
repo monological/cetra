@@ -587,7 +587,13 @@ static float texture_preserve_alpha_coverage(unsigned char* pixels, int width, i
 // refused for sitting 0.0002 from a real level's reading.
 #define TEXTURE_DISTRIBUTE_MISS 0.03f
 // And the band of targets worth distributing toward, half a uint8 code from
-// either end: outside it, empty or solid IS the correct distant answer.
+// either end: outside it, empty or solid IS the correct distant answer. The
+// UPPER edge also carries a second duty (spec 11.100 ledger row 8): a texture
+// with no authored cutoff measures coverage at cutoff 0, where every tap
+// passes and the target reads exactly 1.0 -- outside this band -- so
+// distribution cannot leak onto un-cutoffed content even if
+// texture_wants_coverage's guard is lost. Relaxing the band to `< 1.0f`
+// silently deletes that defense, and no arm can see it go.
 #define TEXTURE_DISTRIBUTE_MIN 0.002f
 
 /*
@@ -605,23 +611,25 @@ static float texture_preserve_alpha_coverage(unsigned char* pixels, int width, i
  * round(target * N) up to the boundary cells each row discards -- the
  * paper's own edge behaviour, made deterministic.
  *
- * Two deviations from the paper's letter, both recorded in
- * docs/papers/README.md: SERPENTINE scan (reverse direction on odd rows,
- * kernel mirrored), because raster Floyd-Steinberg grows directional worms
- * exactly on the low-density uniform fields this fires on; and the LAST ROW
- * flows its full residual ahead along the row instead of dropping 9/16 of
- * every texel's error off the bottom edge, which keeps conservation O(1)
- * for the Nx1 levels and the 2x2/1x1 tail -- at 1x1 the whole function
- * degenerates to majority-rounding the target, the only stable answer a
- * single texel has.
+ * Two deviations from section 3.1's letter inside this routine, both
+ * recorded with the rest in docs/papers/README.md: SERPENTINE scan (reverse
+ * direction on odd rows, kernel mirrored), because raster Floyd-Steinberg
+ * grows directional worms exactly on the low-density uniform fields this
+ * fires on; and the EDGE ROWS keep their residual in play instead of
+ * dropping most of every texel's error off the boundary -- the last row
+ * flows it ahead along the row, and a single-column level flows it straight
+ * down, the transpose of the same rule. Without the transpose a 1xN tail
+ * discarded 11/16 of each row's error and under-placed ON texels, the
+ * rotated form of exactly the defect the last-row rule exists to fix. At
+ * 1x1 the whole function degenerates to majority-rounding the target, the
+ * only stable answer a single texel has.
  *
  * Deterministic by construction: multiplies, adds and compares in a fixed
  * serial order, no PRNG -- the cook's bit-identical-artefact charter is why
  * the paper's alpha-pyramid variant, which REQUIRES random tie-breaking,
  * was refused (spec 11.100).
  *
- * Returns false only when the two error rows cannot be allocated; the
- * caller keeps the rescaled bytes for this level and re-arms.
+ * Returns false only when the two error rows cannot be allocated.
  */
 static bool texture_distribute_alpha(const unsigned char* pristine, unsigned char* out,
                                      int width, int height, float target) {
@@ -657,6 +665,8 @@ static bool texture_distribute_alpha(const unsigned char* pristine, unsigned cha
             out[o] = q ? 255 : 0;
             if (last_row) {
                 cur[x + step] += e;
+            } else if (width == 1) {
+                nxt[x] += e; // single column: the transpose of the last-row rule
             } else {
                 cur[x + step] += e * (7.0f / 16.0f);
                 nxt[x - step] += e * (3.0f / 16.0f);
@@ -835,11 +845,9 @@ static void texture_derive_levels(TextureBlockFormat* block, GLenum internal_for
         const unsigned char* out = dst;
         if (keep_coverage) {
             memcpy(next, dst, (size_t)dw * (size_t)dh * (size_t)channels);
-            bool dithered = false;
             if (distributing)
-                dithered = texture_distribute_alpha(dst, next, dw, dh, target);
-            if (!dithered) {
-                distributing = false;
+                distributing = texture_distribute_alpha(dst, next, dw, dh, target);
+            if (!distributing) {
                 const float miss =
                     texture_preserve_alpha_coverage(next, dw, dh, desc.coverage_cutoff, target);
                 // The handover (spec 11.100): a miss past the threshold means
@@ -931,7 +939,7 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
     const TextureBlockFormat keyed_block = block; // what the key promises the payload is
     GLenum gl_block = texture_block_gl_format(block, desc.is_srgb);
 
-    CookKey tk = cook_key("texture-mips/3");
+    CookKey tk = cook_key("texture-mips/4");
     cook_key_i32(&tk, width);
     cook_key_i32(&tk, height);
     cook_key_i32(&tk, channels);

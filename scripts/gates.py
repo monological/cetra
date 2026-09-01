@@ -5754,27 +5754,28 @@ ALPHACOV_LUMA = 90.0
 # margin is 0.078 and the numbers above are the pre-distribution record.
 ALPHACOV_MIN_RATIO = 0.70
 # And what the FAR band may NOT carry. It is bounded the opposite way from the
-# ratio above and that is the whole reason it exists: past the level where the
-# chain goes uniform a correct build has nothing left to preserve and thins to
-# nothing, where a saturating one drives every texel over the cutoff and fills
-# in solid. Measured 1.0000 on the cascading build against 0.0000 either side of
-# it in the frame, so the bar is nowhere near either.
+# ratio above and that is the whole reason it exists: since 11.100 these levels
+# are DISTRIBUTED too, but their visibility budgets round to 2, 1 and 0 ON
+# texels, so near-empty is still what correct looks like out here and the band
+# guards SATURATION -- an inverted budget reads 1.0000, and so did 11.87's
+# texel-counting cascade (the pre-distribution record: 1.0000 against 0.0000
+# either side of it in the frame).
 ALPHACOV_FAR_MAX = 0.25
 # The DEEP signal (spec 11.100): the facing quad's mean luma above the sky
 # background, in 8-bit codes. Past the uniform level, where no scale can
 # reproduce a fractional coverage, alpha DISTRIBUTION keeps the quad alive at
 # roughly the level-0 coverage instead of letting it vanish. MEAN luma and not
-# a bright-pixel count, because a dither's mass arrives spread thin -- the
-# count instrument read the distributing build LOWER (0.0027) than the
-# vanishing one (0.0114) on the grazing plane, and a mean conserves the mass a
-# threshold deletes. Two-sided because it is a fidelity band: the floor fails
-# a build that still vanishes -- measured +3.21, edge taps of the rescaled
-# level 3, not the ~0 the backdrop argument predicts -- and the ceiling fails
-# one whose visibility budget saturates (~the full dot-minus-sky lift, +160).
-# The distributing build reads +20.97, consistent with perceived coverage
-# 21/162 = 0.13 against the 0.113 target: the floor sits 4.8 above the
-# vanishing reading and 13 under the true one. Ceiling re-measured against the
-# saturating mutation in the 11.100 ledger.
+# a bright-pixel count, and on the quad rather than the plane -- both by
+# measurement; run_alphacov_gate's docstring carries the grazing story.
+# Two-sided because it is a fidelity band: the floor fails a build that still
+# vanishes -- measured +3.21, edge taps of the rescaled level 3, not the ~0
+# the backdrop argument predicts -- and the ceiling fails one whose visibility
+# budget saturates, measured +180.25 under the inverted-budget mutation (past
+# the a-priori "full dot-minus-sky lift" estimate because the mutation also
+# saturates the plane and bloom rides the whole frame). The distributing build
+# reads +20.97, and 20.97/180.25 = 0.116 of the saturated lift against the
+# 0.113 target: the floor sits 4.8 above the vanishing reading and 13 under
+# the true one; the ceiling sits 120 under the saturating one.
 ALPHACOV_DEEP_MIN = 8.0
 ALPHACOV_DEEP_MAX = 60.0
 
@@ -11262,7 +11263,11 @@ def _alphacov_mean(pix, w, h, box):
     The deep arm's instrument, and deliberately not a bright-pixel count: a
     dither's coverage arrives as mass spread thin, so a threshold deletes most
     of it while a mean conserves it -- counted, the distributing build read
-    LOWER than the vanishing one.
+    LOWER than the vanishing one. And deliberately not _box_luma, twice over:
+    its MASK_GRID point sampling can alias against a sparse dither's period
+    where this scans exhaustively, and it averages LINEAR luma where the
+    ALPHACOV_DEEP bounds are calibrated in raw 8-bit codes, the currency
+    ALPHACOV_LUMA already uses.
     """
     x0, y0 = int(w * box[0]), int(h * box[1])
     x1, y1 = int(w * box[2]), int(h * box[3])
@@ -11354,28 +11359,30 @@ def run_alphacov_gate(workdir):
     -- not repeated here, where gate-arm-docs reads a table's first column as
     arm names.
     """
+    # One tuple names the group's arms for every skip and error path, so a
+    # fourth arm cannot be remembered in one path and vanish from another.
+    arms = ("alphacov-mip", "alphacov-deep", "alphacov-far")
     scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
     if not os.path.exists(scene):
-        print(f"  alphacov-mip SKIP  ({ALPHACOV_FIXTURE} not present)")
-        print(f"  alphacov-deep SKIP  ({ALPHACOV_FIXTURE} not present)")
-        print(f"  alphacov-far SKIP  ({ALPHACOV_FIXTURE} not present)")
+        for arm in arms:
+            print(f"  {arm} SKIP  ({ALPHACOV_FIXTURE} not present)")
         return []
     # The bands come from the generator rather than being restated here: where a
     # band lands is a fact about that geometry and the camera it ships with, and
     # the generator asserts each against them. A copy here could only agree by
-    # hand. _import_fixture_gen prints its own SKIP; name the second arm too, or
-    # it vanishes without a line.
+    # hand. _import_fixture_gen prints its own SKIP under the first arm's name;
+    # name the rest too, or they vanish without a line.
     gen = _alphacov_gen()
     if gen is None:
-        print("  alphacov-deep     SKIP  (gen_alphacov_fixture unavailable)")
-        print("  alphacov-far      SKIP  (gen_alphacov_fixture unavailable)")
+        for arm in arms[1:]:
+            print(f"  {arm}     SKIP  (gen_alphacov_fixture unavailable)")
         return []
 
     out = os.path.join(workdir, "alphacov.ppm")
     err = render(scene, out, [])
     if err:
         print(f"  alphacov-mip ERROR render failed: {err.strip()[-200:]}")
-        return ["alphacov-mip", "alphacov-deep", "alphacov-far"]
+        return list(arms)
 
     w, h, pix = _read_ppm(out)
     near = _alphacov_frac(pix, w, h, gen.BAND_NEAR)
@@ -11386,7 +11393,7 @@ def run_alphacov_gate(workdir):
     ratio = mid / near if near > 0 else 0.0
     # The near band has to actually carry dots, or a frame that rendered nothing
     # satisfies a ratio of 0/0 and every reading below is meaningless. Shared by
-    # both arms: an empty frame would otherwise SATISFY the far band's ceiling.
+    # every arm: an empty frame would otherwise SATISFY the far band's ceiling.
     lit = near > 0.05
 
     failures = []
@@ -20708,7 +20715,7 @@ def run_cook_gate(workdir):
         text = r.stdout + r.stderr
         out = _cook_counts(text)
         out["tex_rows"] = len([s for s, _, _, _, _ in _COOK_ROW.findall(text)
-                               if s == "texture-mips/3"])
+                               if s == "texture-mips/4"])
         return out
 
     tex_live = texture_run("tex_live", ["--no-cook"], shot=tex_live_ppm)

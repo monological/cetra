@@ -350,7 +350,10 @@ suite on anything touching `texture_alpha_coverage`. And do not reach for
 pixel-comparable -- measured 8,674 px between two pinned runs
 (`--no-auto-exposure -E 1.0`) and 9,681 unpinned at 800x600, so anything under
 ~9k px on it is noise. Forest's `--render-mode 6` at a fixed camera (0 px) and
-`--no-sky` (40 px) are the floors that work.
+`--no-sky` (40 px) are the floors that work -- both measured at the suite's
+wide framing, `-f 20 -W 800 -H 450 --no-fog --cam-eye 0,300,700 --cam-target
+0,-20,0`; the determinism table's 4 px `--no-sky` figure above is a different
+framing and both are honest at their own configs.
 
 ### Capturing a before
 

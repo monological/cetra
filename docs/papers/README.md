@@ -88,20 +88,25 @@ DirectXTex's 8 is 4x the work per bisection step per level for a smoother estima
 
 1. **§3.1's error diffusion**, as `texture_distribute_alpha` (`texture.c`), firing only where
    11.88's rescale reports a residual miss past `TEXTURE_DISTRIBUTE_MISS` — the surgical scope,
-   not the paper's every-level one, so structured levels stay byte-identical and the near field
-   keeps A2C's smooth one-pixel edges. Six deviations from the paper's letter, each deliberate:
+   not the paper's every-level one, so levels the rescale can still REACH stay byte-identical and
+   the near field keeps A2C's smooth one-pixel edges. (Reachability, not structure, is the
+   criterion: the dots fixture's level 3 is structured and still fires, because its reachable
+   coverage stops 0.05 short of the target.) Four deviations from §3.1's letter, each deliberate:
    **serpentine scan** (raster FS grows directional worms exactly on the low-density uniform
-   fields this fires on); the **last row flows its full residual ahead** instead of dropping 9/16
-   off the bottom edge, which keeps the ON count conservative for Nx1 levels and makes the 1x1 a
-   majority round; the **target is 11.88's level-0 bilinear-reconstruction coverage**, not §3.2's
-   ᾱN/(2α_τ) — glTF MASK semantics says the thing to preserve across distance is the level-0 TEST
-   RESULT, not ground-truth transparency, and on this corpus the two coincide anyway; the field is
+   fields this fires on); **edge rows keep their residual in play** — the last row flows it ahead,
+   a single-column level flows it down — instead of dropping most of it off the boundary, which
+   keeps the ON count conservative for the N×1/1×N tails and makes the 1x1 a majority round; the
+   **target is 11.88's level-0 bilinear-reconstruction coverage**, not §3.2's ᾱN/(2α_τ) — glTF
+   MASK semantics says the thing to preserve across distance is the level-0 TEST RESULT, not
+   ground-truth transparency, and on this corpus the two coincide anyway; and the field is
    **normalized to that target and quantized at 1/2**, so the authored cutoff never enters and the
-   paper's α_τ = 1/2 design centre dissolves; **level 0 is never rewritten** (the paper's own §6
-   fix for magnification, which `texture_derive_levels` already satisfied); and the whole thing is
-   **PRNG-free**, which is what refused §3.2's alpha pyramid — its contention resolution requires
-   randomness the cook's bit-identical-artefact charter cannot admit, its guarantee holds only at
-   α_τ >= 1/2 against authored 0.4s, and Yuksel rates it "arguably marginally better".
+   paper's α_τ = 1/2 design centre dissolves. Two things that are NOT deviations, kept beside
+   them because a reader will look for them here: **level 0 is never rewritten**, which is the
+   paper's own §6 fix for magnification and was already `texture_derive_levels`' shape; and the
+   implementation is **PRNG-free**, which deviates from nothing in §3.1 (Floyd–Steinberg needs no
+   randomness) — the randomness requirement belongs to §3.2's pyramid, and is one of the three
+   reasons that variant was refused (with its α_τ >= 1/2-only guarantee against authored 0.4s,
+   and Yuksel rating it "arguably marginally better").
 2. **The honest ceiling on what 11.88 builds.** §2, on the scale-the-alpha family: *"This simple
    fix can help in some cases, but it does not always improve the results."* 11.100 is the answer
    past that ceiling — and found a ceiling of its own the paper does not discuss: under grazing
@@ -111,10 +116,14 @@ DirectXTex's 8 is 4x the work per bisection step per level for a smoother estima
    mipmap level completely independently".
 
 **Not implemented:** the alpha pyramid (§3.2, refused above); §4's alpha-to-coverage extensions —
-§4.1's sample-mask texture needs a second nearest-filtered sampler the ledger does not have, §4.2's
-hashed mask needs `gl_SampleMask` work, and Yuksel's own verdict is that distribution brings *"no
-apparent qualitative improvement in alpha-to-coverage"*; and §6's texcoord jitter for Moiré, a
-shader change the paper itself used only for its Figure 8.
+§4.1's sample-mask texture needs a second nearest-filtered sampler the ledger does not have,
+§4.2's hashed mask needs `gl_SampleMask` work, and the paper's A2C figures that look good are the
+§4.1 ones. Note the quotable sentence is COMPARATIVE, not absolute: *"As compared to hashed alpha
+testing, alpha distribution produces substantially less noise with alpha testing, but it provides
+no apparent qualitative improvement in alpha-to-coverage"* — i.e. §4 matches hashed's A2C quality
+rather than beating it; it is not Yuksel saying §4 buys nothing over plain A2C. The refusal here
+stands on the sampler ledger and the shader work, not on that quote. Also out: §6's texcoord
+jitter for Moiré, a shader change the paper itself used only for its Figure 8.
 
 ### Wyman & McGuire, *Improved Alpha Testing Using Hashed Sampling*, TVCG 2017
 
