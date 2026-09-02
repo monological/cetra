@@ -256,9 +256,9 @@ size_t texture_gpu_bytes(const Texture* texture);
 // normal pointing into the surface.
 int texture_normal_gate(const Texture* texture);
 
-// The `distributeFromLod` gate: the texture's first binary-dithered mip level,
-// or -1 for none / NULL. One function for the same reason as the one above --
-// the NULL answer lives here, not at each call site.
+// The texture's first binary-dithered mip level, or -1 for none / NULL. One
+// function for the same reason as the one above -- the NULL answer lives
+// here, not at each call site.
 int texture_distribute_from_level(const Texture* texture);
 
 /*

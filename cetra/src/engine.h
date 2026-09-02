@@ -227,7 +227,8 @@ typedef struct Engine {
     bool taa_jitter_this_frame; // The TAA accumulator is live and the projection is jittered
     // false = the jittered alpha lookup (spec 11.101) stays on the plain fetch
     // even while TAA accumulates. A diagnostic lever, not configuration: it
-    // exists so the flicker the jitter removes can be re-measured on demand.
+    // exists so the crawling Moire the jitter dissolves -- and the grain it
+    // trades the band-crawl for -- can be re-measured on demand.
     bool alpha_jitter_enabled;
 
     // The scene is being rendered into an offscreen capture target (a probe face,

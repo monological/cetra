@@ -1187,7 +1187,7 @@ void texture_pool_probe(const TexturePool* pool, const char* label) {
         // `name` LAST, and that is the one ordering decision here: a texture is
         // keyed by its path, a path may contain a space, and a k=v reader splits
         // on whitespace. Last means a spacey name can only corrupt itself.
-        printf("texture-probe tex label=%s size=%dx%d format=%s mb=%.3f dither_from=%d "
+        printf("texture-probe tex label=%s size=%dx%d format=%s mb=%.3f distribute_from=%d "
                "name=%s\n",
                tag, t->width, t->height, name, (double)bytes / (1024.0 * 1024.0),
                t->distribute_from_level, t->filepath ? t->filepath : "?");

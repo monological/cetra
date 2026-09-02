@@ -132,7 +132,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --csm-debug        Tint fragments by selected shadow cascade\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
     fprintf(stderr, "      --no-alpha-jitter  Disable the jittered alpha lookup (11.101), the\n");
-    fprintf(stderr, "                         diagnostic that re-measures the dither flicker\n");
+    fprintf(stderr, "                         diagnostic that restores the dither's Moire\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr,
