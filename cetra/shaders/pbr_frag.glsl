@@ -89,10 +89,9 @@ uniform int foliageShadows;
 uniform float distributeFromLod;
 // The jittered alpha lookup (spec 11.101) is live: TAA is accumulating (with
 // no accumulator the lookup's per-frame noise would arrive raw) and this is
-// not a capture. The frame index rotates the sequence; frozen at 0 when off,
-// so a still frame is a still frame.
+// not a capture. The offset it selects does not vary with time -- see the
+// anchor below, where that is the decision rather than an omission.
 uniform int alphaJitter;
-uniform int alphaJitterFrame;
 // Geometric specular AA strength (0 disables)
 uniform float specularAAStrength;
 

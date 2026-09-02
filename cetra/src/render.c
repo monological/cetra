@@ -512,10 +512,6 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             const bool alpha_jitter = engine->taa_jitter_this_frame &&
                                       engine->alpha_jitter_enabled && !engine->capturing;
             uniform_set_int(u, "alphaJitter", alpha_jitter ? 1 : 0);
-            // Frozen at 0 when off, the pcssFrameIndex idiom: a stale index
-            // must not keep a phase alive.
-            uniform_set_int(u, "alphaJitterFrame",
-                            alpha_jitter ? (int)(engine->total_frames % 4096) : 0);
             // Unit 6 has two disjoint tenants. The moment-weighted accumulate
             // binds the moment atlas there; every other pass binds the
             // refraction source, which is valid only in the late pass after the
