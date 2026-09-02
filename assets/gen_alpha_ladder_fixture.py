@@ -70,7 +70,12 @@ ROW_Y = (0.45, 0.0, -0.45)
 
 # The framebuffer a gate render produces (gates.py CALIBRATED_FB_SCALE; the
 # alphacov generator has the full note). Each card's mip is derived from it,
-# so it is a constant and not a platform variable.
+# so it is a constant and not a platform variable -- and at any OTHER
+# framebuffer height the whole ladder shifts by log2(H / 600): a hand render
+# at -W 800 -H 600 lands at 1600x1200 on a HiDPI host and puts every card one
+# mip finer than its label, which is how a first round of hand measurements
+# disagreed with the gate's. Read the ladder's labels against the gate's
+# size, or against your own window's with that shift in mind.
 GATE_W = 400 * 2
 GATE_H = 300 * 2
 
