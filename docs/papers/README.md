@@ -122,8 +122,19 @@ DirectXTex's 8 is 4x the work per bisection step per level for a smoother estima
 testing, alpha distribution produces substantially less noise with alpha testing, but it provides
 no apparent qualitative improvement in alpha-to-coverage"* — i.e. §4 matches hashed's A2C quality
 rather than beating it; it is not Yuksel saying §4 buys nothing over plain A2C. The refusal here
-stands on the sampler ledger and the shader work, not on that quote. Also out: §6's texcoord
-jitter for Moiré, a shader change the paper itself used only for its Figure 8.
+stands on the sampler ledger and the shader work, not on that quote.
+
+**§6's texcoord jitter for Moiré is TAKEN since 11.101 — and the paper's own scoping of it was
+vindicated the hard way.** Yuksel uses the jitter only for his Figure 8, a still. Spec 11.101
+added an argument the paper lacks — that TAA's accumulator would average the jittered lookups
+into stable fractional coverage — and measured it false at one sample: a binary test under a
+clamped history holds no haze, whatever the sequence. What the jitter measurably does is what the
+paper uses it for (the Moiré dissolves) plus an 8x churn cut on the one-sample path; under
+alpha-to-coverage it is a net loss and is gated off, because the MSAA path already carries the
+dither's coverage at truth level. The shipped shape is a static per-pixel white hash (`hash21`)
+scaled to the sampled mip's texel — not `ign`, whose dominant frequency beats against a lattice
+into crescents when frozen. `assets/alpha_ladder_fixture` is the instrument; the 11.101 spec has
+the four-way table.
 
 ### Wyman & McGuire, *Improved Alpha Testing Using Hashed Sampling*, TVCG 2017
 

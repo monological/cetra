@@ -310,7 +310,15 @@ can make: a scene whose normals silently failed to compress renders exactly like
 normals compressed. It prints the internal format the driver HOLDS, not the one asked for,
 which is what catches a format being declined. Its lines are the house `<prefix> <kind> k=v`
 shape since 11.86, read through `_probe_render` like every other probe; `apps/tree` has
-`--texture-probe` too, and is the only place a purely procedural texture set can be priced),
+`--texture-probe` too, and is the only place a purely procedural texture set can be priced;
+since 11.101 each row also carries `distribute_from=`, the first mip level whose alpha is a
+binary dither -- -1 on every texture whose chain never enters one before its 1x1 tail, which on
+this corpus is everything but a regular lattice), `--no-alpha-jitter` (spec 11.101 — the
+diagnostic lever for the jittered alpha lookup, which is live only while TAA accumulates at one
+sample and is gated off under alpha-to-coverage. With it the dot lattice's deep mips churn 358
+pixels a frame on `assets/alpha_ladder_fixture`; without it 2,917, and the Moire returns. It
+recovers none of the coverage the one-sample path loses -- MSAA 4 is the path that keeps it --
+and it is not snapshotted, being a diagnostic rather than configuration),
 `--clearcoat-debug` (spec 11.86 — the coat normal as bytes, `Nc * 0.5 + 0.5` where there is a
 coat and EXACT black where there is not. A named spelling of `--render-mode 13`, and a render
 MODE rather than a late flag because the quantity is written in `pbr_frag`: any non-PBR mode
