@@ -11512,7 +11512,7 @@ def _ladder_pair(workdir, scene, tag, extra):
     base = os.path.join(workdir, f"ladder_{tag}.ppm")
     cmd = [RENDER, "-m", scene, "-x", "-f", "62", "--screenshot-every", "61",
            "-W", "400", "-H", "300", "-S", base] + extra
-    r = _run(_scale_argv(cmd), capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     f61 = base[:-4] + "_000061.ppm"
     if r.returncode != 0 or not (os.path.exists(f61) and os.path.exists(base)):
         print(f"  ladder       ERROR {tag} run failed: {(r.stdout + r.stderr).strip()[-200:]}")
@@ -11589,7 +11589,7 @@ def run_ladder_gate(workdir):
     out = os.path.join(workdir, "ladder_truth.ppm")
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "400", "-H", "300", "--texture-probe",
            "-S", out]
-    r = _run(_scale_argv(cmd), capture_output=True, text=True)
+    r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print(f"  ladder-fire ERROR truth run failed: {(r.stdout + r.stderr).strip()[-200:]}")
         return list(arms)
@@ -11599,7 +11599,7 @@ def run_ladder_gate(workdir):
     got = {name: seen.get(name) for name in LADDER_FIRE}
     ok = got == LADDER_FIRE
     print(f"  ladder-fire {'PASS' if ok else 'FAIL'}  first dithered level per texture "
-          f"{ {k: v for k, v in got.items()} } (want {LADDER_FIRE}: the foliage and speck rows "
+          f"{got} (want {LADDER_FIRE}: the foliage and speck rows "
           f"never enter a visible dither, the lattice does at 3)")
     if not ok:
         failures.append("ladder-fire")
@@ -11615,7 +11615,7 @@ def run_ladder_gate(workdir):
 
     a2c = _ladder_pair(workdir, scene, "a2c", ["--taa", "--headless-jitter", "--msaa", "4"])
     if a2c is None:
-        return failures + ["ladder-a2c", "ladder-still", "ladder-gate", "ladder-churn"]
+        return failures + list(arms[2:])
     pa, pb, w, h = a2c
     lifts = _ladder_lifts(gen, pb, w, h, dots, deep)
     ratio = (sum(lifts) / len(lifts)) / (sum(truth) / len(truth)) if sum(truth) > 0 else 0.0
@@ -11638,9 +11638,9 @@ def run_ladder_gate(workdir):
     if not ok:
         failures.append("ladder-still")
 
-    one = _ladder_pair(workdir, scene, "one", ["--taa", "--headless-jitter"])
+    one = _ladder_pair(workdir, scene, "one", ["--taa", "--headless-jitter", "--msaa", "1"])
     if one is None:
-        return failures + ["ladder-churn", "ladder-gate"]
+        return failures + list(arms[4:])
     qa, qb, _, _ = one
     flips = _ladder_flips(qa, qb, w, h, row_box)
     ok = flips <= LADDER_CHURN_MAX
