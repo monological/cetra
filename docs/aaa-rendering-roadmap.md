@@ -3420,11 +3420,15 @@ on it: the flow / deposit / wear masks existed, round-tripped through the height
 consumed by a per-VERTEX tint at 2.6 units. **42 is now built too** (11.60), and the masks have a
 consumer that resolves per texel.
 
-What is left is **nothing -- the table is closed**. 54 (G2) went with 11.100, its distribution
-half built and its hashed half recorded as refused-for-now inside the row, which closes the last
-open item. (This sentence read "54 (G2), and nothing else" until then, and the prediction it
-carried held: the change landed inside `texture_derive_levels` plus a recipe bump, with the cook
-absorbing the cost -- though the row it pointed at needed four corrections, recorded there.) The
+What is left is **64 (G3, the interactive AA policy for masked content), and nothing else**.
+54 (G2) went with 11.100, its distribution half built and its hashed half recorded as
+refused-for-now inside the row, and 11.101 -- the flicker that half surfaced on the live TAA path
+-- booked 64 as the policy question it measured its way to and did not decide. (This sentence
+read "nothing -- the table is closed" for the whole of 11.101, with 64 sitting one screen above
+it unmentioned: the same rot this tail keeps recording. Before that it read "54 (G2), and nothing
+else", and the prediction it carried held: the change landed inside `texture_derive_levels` plus
+a recipe bump, with the cook absorbing the cost -- though the row it pointed at needed four
+corrections, recorded there.) The
 comparison habit's third run is now due -- checking the other documents first, per the Track F
 lesson below, since animation blending, IK and audio are already booked in
 `docs/game-engine-status.md` and "not in this table" is not "not written down". (This sentence read 32, 37 and 38 until
