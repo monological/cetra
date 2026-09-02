@@ -1,0 +1,44 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "alpha_ladder_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "LadderKey",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -0.3,
+    -0.95
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   -1.0
+  ],
+  "fov": 50.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false
+ }
+}

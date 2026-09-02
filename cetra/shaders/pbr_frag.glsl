@@ -1158,27 +1158,30 @@ void main() {
             vec4 albedoSample;
             // The jittered alpha lookup (spec 11.101). 11.100's distribution
             // makes deep mips a binary lattice that is static in texture
-            // space and subpixel on screen, and under TAA's camera jitter it
-            // renders as crawling Moire -- comb-teeth interference bands
-            // marching with the jitter ring. A per-pixel per-frame sub-texel
-            // offset decorrelates the lattice from the pixel grid: the bands
-            // dissolve into an even halftone at the correct density. That is
-            // Yuksel 2018 s6's remedy doing exactly what his paper uses it
-            // for. What it does NOT do is calm the per-pixel churn -- at one
-            // sample the test below is a binary step, and an exponentially
-            // weighted history fed a varying binary input holds residual
-            // variance whatever the input sequence, so the flip COUNT does
-            // not drop; the win is the spatial structure, and the churn's
-            // character (grain, not band-crawl). The 11.101 spec carries the
-            // measurements.
+            // space and subpixel on screen; sampled ALIGNED under TAA's
+            // camera jitter at ONE sample it renders as crawling Moire and
+            // loses most of its coverage to the history clamp. A static
+            // per-pixel sub-texel offset decorrelates the lattice from the
+            // pixel grid: the Moire dissolves and the churn drops ~5x on
+            // facing geometry (Yuksel 2018 s6's remedy, doing what his paper
+            // uses it for). What it cannot do is recover the coverage the
+            // one-sample path loses -- a binary test under a clamped
+            // accumulator has no way to hold an 11% haze -- and it is gated
+            // OFF under alpha-to-coverage, where the samples already carry
+            // fractional coverage and the offset measured as a net loss
+            // (coverage down a third, churn up 4x). The MSAA path IS the fix
+            // for the dither on the live path; this is the palliative for
+            // the path that has no samples. The 11.101 spec has the ladder.
             //
-            // The gate is dynamically uniform (three uniforms), and the else
-            // arm is the untouched fetch, so a TAA-off frame carries no new
-            // arithmetic. The lookup is also identical in the depth prepass
-            // and the shading pass -- gl_FragCoord, uniforms and derivatives
-            // agree between them -- so the coverage resolve below reaches the
-            // same discard in both and GL_LEQUAL deletes nothing.
-            if (alphaMasked > 0 && alphaJitter == 1 && distributeFromLod >= 0.0) {
+            // The gate is dynamically uniform (four uniforms), and the else
+            // arm is the untouched fetch, so a TAA-off or A2C frame carries
+            // no new arithmetic. The lookup is also identical in the depth
+            // prepass and the shading pass -- gl_FragCoord, uniforms and
+            // derivatives agree between them -- so the coverage resolve
+            // below reaches the same discard in both and GL_LEQUAL deletes
+            // nothing.
+            if (alphaMasked > 0 && alphaToCoverage == 0 && alphaJitter == 1 &&
+                distributeFromLod >= 0.0) {
                 // The GL 3.3 reference lambda from derivatives --
                 // textureQueryLod is GLSL 400 and this file is 330.
                 vec2 dux = dFdx(uv), duy = dFdy(uv);
@@ -1195,18 +1198,22 @@ void main() {
                     // so extreme minification cannot wrap the offset across
                     // the image under REPEAT.
                     //
-                    // A static per-pixel ign anchor, TRANSLATED uniformly each
-                    // frame by the R2 sequence. The per-frame offset field
-                    // therefore keeps ign's screen-space structure every
-                    // frame; hashing the frame index into the coordinate
-                    // instead (the pcssStochastic shape above) makes each
-                    // frame's field spatially white, and was measured and
-                    // rejected -- the spec records both numbers.
+                    // A STATIC per-pixel WHITE anchor -- hash21, not ign, and
+                    // not rotated per frame. Three variants were measured
+                    // (the spec carries the numbers): rotating the anchor
+                    // per frame reads as boiling, because every rotation
+                    // re-rolls a binary test that no history can settle; a
+                    // static ign anchor is calm but ign's dominant gradient
+                    // frequency beats against the dot lattice under
+                    // perspective and freezes into crescent contours. A
+                    // static white field has no frequency to beat with --
+                    // the interference energy spreads into the grain. The k
+                    // constants are this consumer's own, per noise.glsl's
+                    // contract.
                     float l = min(lod, floor(log2(max(ts.x, ts.y))));
-                    vec2 anchor = vec2(ign(gl_FragCoord.xy), ign(gl_FragCoord.yx));
-                    vec2 seq = fract(anchor + float(alphaJitterFrame) *
-                                                  vec2(0.7548777, 0.5698403));
-                    off = (seq - 0.5) * exp2(l) / ts;
+                    vec2 anchor = vec2(hash21(gl_FragCoord.xy, vec2(97.351, 41.717)),
+                                       hash21(gl_FragCoord.xy, vec2(51.727, 89.269)));
+                    off = (anchor - 0.5) * exp2(l) / ts;
                 }
                 // Jittered coordinate, HONEST footprint (stochastic.glsl's
                 // arrangement): the offset through implicit derivatives would

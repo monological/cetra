@@ -766,6 +766,11 @@ static void _engine_gui_panel(Engine* engine) {
         bool taa = fx->taa_enabled;
         if (igCheckbox("TAA", &taa))
             set_engine_taa_enabled(engine, taa);
+        igSameLine(0, -1);
+        // The jittered alpha lookup (spec 11.101) only does anything while TAA
+        // accumulates, which is why it sits on this row: flip it beside TAA
+        // and MSAA to see a masked material's deep mips with and without it.
+        igCheckbox("Alpha jitter", &engine->alpha_jitter_enabled);
         // TAAU render scale. Applied on release, not per drag tick: each change
         // rebuilds every render target and resets the temporal histories (the
         // sun/cloud sliders defer their re-bake the same way). AlwaysClamp
