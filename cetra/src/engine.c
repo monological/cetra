@@ -216,6 +216,8 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->spec_this_frame = false;
     engine->oit_this_frame = false;
     engine->moments_this_frame = false;
+    engine->taa_jitter_this_frame = false;
+    engine->alpha_jitter_enabled = true;
 
     engine->camera = NULL;
     engine->camera_mode = CAMERA_MODE_ORBIT;

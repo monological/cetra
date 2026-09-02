@@ -906,6 +906,37 @@ static void texture_upload_levels(const TextureLevelStack* stack, GLenum gl_bloc
     }
 }
 
+// First level >= 1 whose alpha is everywhere exactly 0 or 255 with BOTH codes
+// present, or -1. This is where 11.100's distribution begins, detected as the
+// CONDITION -- the binary lattice the shader will sample -- rather than the
+// mechanism, which is what lets a cook hit answer identically to the derive
+// that produced it (the derive never runs on a hit) and makes an OOM
+// un-latch mid-chain read as what it is. Mixed is required because an
+// all-opaque or all-empty level is not a dither, and arming the sampling
+// jitter on a solid level buys nothing. Raw RGBA only: a block-encoded stack
+// stores endpoint and index bytes, not the lattice, and DXT5 re-quantizes
+// alpha after the fact anyway (the caveat at texture_block_format_for).
+static int texture_scan_binary_alpha_from(const TextureLevelStack* stack, int channels) {
+    for (int i = 1; i < stack->count; ++i) {
+        const unsigned char* data = stack->level[i].data;
+        const size_t count = (size_t)stack->level[i].w * (size_t)stack->level[i].h;
+        bool has_on = false, has_off = false;
+        size_t j = 0;
+        for (; j < count; ++j) {
+            const unsigned char a = data[j * (size_t)channels + (size_t)(channels - 1)];
+            if (a == 255)
+                has_on = true;
+            else if (a == 0)
+                has_off = true;
+            else
+                break;
+        }
+        if (j == count && has_on && has_off)
+            return i;
+    }
+    return -1;
+}
+
 // How many levels a full chain holds, for the fetch's expected-section count.
 static int texture_expected_levels(int width, int height) {
     int n = 1, w = width, h = height;
@@ -931,13 +962,21 @@ static int texture_expected_levels(int width, int height) {
 //
 // Returns false only on allocation failure, where the caller still has a
 // usable level 0 -- restored below by a direct upload when even the stack's
-// level-0 copy could not be made.
+// level-0 copy could not be made. out_distribute_level, when non-NULL, gets
+// the binary-alpha scan of whichever stack was uploaded (-1 on the early-out
+// paths and wherever the scan does not apply).
 static bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
                           int channels, TextureDesc desc, const unsigned char* pixels,
-                          GLenum* out_internal_format) {
+                          GLenum* out_internal_format, int* out_distribute_level) {
     TextureBlockFormat block = texture_block_format_for(desc.use, channels);
     const TextureBlockFormat keyed_block = block; // what the key promises the payload is
     GLenum gl_block = texture_block_gl_format(block, desc.is_srgb);
+    if (out_distribute_level)
+        *out_distribute_level = -1;
+    // The scan only means something where the stack holds the raw lattice the
+    // shader will sample: an alpha-tested coverage chain, stored uncompressed.
+    const bool scannable =
+        channels == 4 && texture_wants_coverage(channels, desc) && block == TEXTURE_BLOCK_NONE;
 
     CookKey tk = cook_key("texture-mips/4");
     cook_key_i32(&tk, width);
@@ -976,6 +1015,8 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
         if (sane) {
             if (out_internal_format)
                 *out_internal_format = gl_block != 0 ? gl_block : internal_format;
+            if (out_distribute_level && scannable)
+                *out_distribute_level = texture_scan_binary_alpha_from(&stack, channels);
             texture_upload_levels(&stack, gl_block, internal_format, data_format);
             texture_level_stack_free(&stack);
             return true;
@@ -1008,6 +1049,9 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
                   height);
         return false;
     }
+
+    if (out_distribute_level && scannable)
+        *out_distribute_level = texture_scan_binary_alpha_from(&stack, channels);
 
     // No storing a DEMOTED chain: the key promised keyed_block's payload, and
     // an uncompressed stack under that key would validate as garbage on every
@@ -1115,6 +1159,10 @@ int texture_normal_gate(const Texture* texture) {
     return texture->internal_format == GL_COMPRESSED_RG_RGTC2 ? 2 : 1;
 }
 
+int texture_distribute_from_level(const Texture* texture) {
+    return texture ? texture->distribute_from_level : -1;
+}
+
 void texture_pool_probe(const TexturePool* pool, const char* label) {
     const char* tag = label ? label : "";
     if (!pool) {
@@ -1139,9 +1187,10 @@ void texture_pool_probe(const TexturePool* pool, const char* label) {
         // `name` LAST, and that is the one ordering decision here: a texture is
         // keyed by its path, a path may contain a space, and a k=v reader splits
         // on whitespace. Last means a spacey name can only corrupt itself.
-        printf("texture-probe tex label=%s size=%dx%d format=%s mb=%.3f name=%s\n", tag, t->width,
-               t->height, name, (double)bytes / (1024.0 * 1024.0),
-               t->filepath ? t->filepath : "?");
+        printf("texture-probe tex label=%s size=%dx%d format=%s mb=%.3f dither_from=%d "
+               "name=%s\n",
+               tag, t->width, t->height, name, (double)bytes / (1024.0 * 1024.0),
+               t->distribute_from_level, t->filepath ? t->filepath : "?");
     }
     printf("texture-probe total label=%s count=%zu bytes=%zu mb=%.3f compressed_count=%zu "
            "compressed_mb=%.3f\n",
@@ -1167,6 +1216,12 @@ Texture* create_texture() {
     // for the sites that never ask for anything else.
     texture->wrap_s = GL_REPEAT;
     texture->wrap_t = GL_REPEAT;
+    texture->mean_rgb[0] = texture->mean_rgb[1] = texture->mean_rgb[2] = 0.0f;
+    // False EXPLICITLY: this and mean_rgb rode malloc garbage until 11.101,
+    // so texture_mean_color could hand back uninitialized bytes as a memoized
+    // mean whenever the allocation landed on a stale truthy byte.
+    texture->mean_valid = false;
+    texture->distribute_from_level = -1;
     texture->ref_count = 1;
 
     return texture;
@@ -1443,8 +1498,9 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
     // whenever a block format was chosen. Storing the requested one instead
     // makes texture_gpu_bytes and texture_mean_rgb's sRGB test both wrong.
     GLenum stored = internal_format;
+    int distribute_level = -1;
     texture_upload_image(internal_format, data_format, width, height, channels, desc, pixels,
-                         &stored);
+                         &stored, &distribute_level);
     check_gl_error("texture upload");
 
     texture->id = id;
@@ -1453,6 +1509,7 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
     texture->height = height;
     texture->internal_format = stored;
     texture->data_format = data_format;
+    texture->distribute_from_level = distribute_level;
 
     // The locking variant on every path, not only the streamed one. Worker
     // threads share this pool for the whole session, so the mutex is what makes

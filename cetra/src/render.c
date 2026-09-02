@@ -366,6 +366,11 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     }
 
     uniform_set_int(u, "albedoTexExists", material->albedo_tex ? 1 : 0);
+    // Where the albedo's alpha becomes a binary dither (11.100), or -1: the
+    // jittered-sampling gate reads it against the sampled lod. Unconditional,
+    // per the reset-or-it-leaks rule above.
+    uniform_set_float(u, "distributeFromLod",
+                      (float)texture_distribute_from_level(material->albedo_tex));
     // 0 none, 1 stored with a Z, 2 two-channel. The shader cannot see a storage
     // format and has to rebuild Z for BC5, which is NOT free on a map that has
     // one: the mip filter does not renormalise, so a rebuilt Z runs larger than
@@ -500,6 +505,19 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // specular must stay inline or it is silently discarded.
             uniform_set_int(u, "splitAmbientSpec",
                             engine->spec_this_frame && !alpha_pass && !engine->capturing ? 1 : 0);
+            // The jittered alpha lookup (spec 11.101) is live only while TAA
+            // accumulates -- the history is what averages its noise into
+            // fractional coverage -- and never in a capture, where a probe
+            // would bake one frame of noise and idle on it.
+            {
+                const bool alpha_jitter = engine->taa_jitter_this_frame &&
+                                          engine->alpha_jitter_enabled && !engine->capturing;
+                uniform_set_int(u, "alphaJitter", alpha_jitter ? 1 : 0);
+                // Frozen at 0 when off, the pcssFrameIndex idiom: a stale
+                // index must not keep a phase alive.
+                uniform_set_int(u, "alphaJitterFrame",
+                                alpha_jitter ? (int)(engine->total_frames % 4096) : 0);
+            }
             // Unit 6 has two disjoint tenants. The moment-weighted accumulate
             // binds the moment atlas there; every other pass binds the
             // refraction source, which is valid only in the late pass after the
@@ -1371,6 +1389,10 @@ void render_current_scene(Engine* engine) {
     glm_mat4_copy(*projection, draw_projection);
     bool taa_jitter_live = render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) &&
                            (!engine->headless || engine->headless_jitter);
+    // One predicate, three consumers -- the projection jitter, the pcss stash
+    // below, and the jittered alpha lookup's per-program upload -- so none of
+    // them can drift onto its own idea of "TAA is accumulating".
+    engine->taa_jitter_this_frame = taa_jitter_live;
     if (taa_jitter_live) {
         // 16 Halton phases when TAAU upscales: each display pixel is visited by
         // fewer render samples per cycle, so the sequence needs more phases to

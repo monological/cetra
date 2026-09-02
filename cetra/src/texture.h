@@ -38,6 +38,12 @@ typedef struct Texture {
     float mean_rgb[3];
     bool mean_valid;
 
+    // First mip level whose alpha is a binary {0,255} lattice with both codes
+    // present, or -1: where 11.100's distribution (or anything shaped like it)
+    // begins, scanned from the level stack at publish. Set once at upload,
+    // never stale for the same reason mean_rgb is not.
+    int distribute_from_level;
+
     size_t ref_count; // Reference count for shared ownership
 
     UT_hash_handle hh; // Makes this structure hashable
@@ -249,6 +255,11 @@ size_t texture_gpu_bytes(const Texture* texture);
 // and left the coat path reading a blue channel BC5 does not store, which is a
 // normal pointing into the surface.
 int texture_normal_gate(const Texture* texture);
+
+// The `distributeFromLod` gate: the texture's first binary-dithered mip level,
+// or -1 for none / NULL. One function for the same reason as the one above --
+// the NULL answer lives here, not at each call site.
+int texture_distribute_from_level(const Texture* texture);
 
 /*
  * THE path from decoded pixels to a pooled Texture: pick the GL formats, create

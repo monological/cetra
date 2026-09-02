@@ -131,6 +131,8 @@ static void print_usage(const char* prog) {
                     "(default: origin)\n");
     fprintf(stderr, "      --csm-debug        Tint fragments by selected shadow cascade\n");
     fprintf(stderr, "      --no-springs       Disable spring-bone secondary motion\n");
+    fprintf(stderr, "      --no-alpha-jitter  Disable the jittered alpha lookup (11.101), the\n");
+    fprintf(stderr, "                         diagnostic that re-measures the dither flicker\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr,
@@ -1778,6 +1780,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->motion_blur_scale = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--no-springs") == 0) {
             args->no_springs = 1;
+        } else if (strcmp(argv[i], "--no-alpha-jitter") == 0) {
+            args->no_alpha_jitter = 1;
         } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--distance") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2753,6 +2757,8 @@ int main(int argc, char** argv) {
     if (args.lod_bias > 0.0f)
         engine->lod_bias = args.lod_bias;
     engine->headless_jitter = args.headless_jitter != 0;
+    if (args.no_alpha_jitter)
+        engine->alpha_jitter_enabled = false;
     set_engine_screenshot_path(engine, args.screenshot_path);
     set_engine_screenshot_every(engine, args.screenshot_every);
     if (args.ssaa > 0)
