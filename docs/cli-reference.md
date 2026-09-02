@@ -318,7 +318,8 @@ diagnostic lever for the jittered alpha lookup, which is live only while TAA acc
 sample and is gated off under alpha-to-coverage. With it the dot lattice's deep mips churn 358
 pixels a frame on `assets/alpha_ladder_fixture`; without it 2,917, and the Moire returns. It
 recovers none of the coverage the one-sample path loses -- MSAA 4 is the path that keeps it --
-and it is not snapshotted, being a diagnostic rather than configuration),
+and it rides the config snapshot as `engine.alpha_jitter`, because the GUI has the same switch
+and `config-coverage` refuses a control with no row),
 `--clearcoat-debug` (spec 11.86 — the coat normal as bytes, `Nc * 0.5 + 0.5` where there is a
 coat and EXACT black where there is not. A named spelling of `--render-mode 13`, and a render
 MODE rather than a late flag because the quantity is written in `pbr_frag`: any non-PBR mode

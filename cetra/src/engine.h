@@ -226,9 +226,10 @@ typedef struct Engine {
                              // transmittance rather than the depth curve (changes the composite)
     bool taa_jitter_this_frame; // The TAA accumulator is live and the projection is jittered
     // false = the jittered alpha lookup (spec 11.101) stays on the plain fetch
-    // even while TAA accumulates. A diagnostic lever, not configuration: it
-    // exists so the crawling Moire the jitter dissolves -- and the grain it
-    // trades the band-crawl for -- can be re-measured on demand.
+    // even while TAA accumulates. It exists so the crawling Moire the jitter
+    // dissolves -- and the churn it cuts -- can be re-measured on demand; a
+    // GUI control and a snapshot row like any other, since a session that
+    // turned it off is a session the snapshot claims to reproduce.
     bool alpha_jitter_enabled;
 
     // The scene is being rendered into an offscreen capture target (a probe face,

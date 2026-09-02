@@ -419,6 +419,10 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW_ENUM(CFG_ENGINE, "engine", "render_mode", current_render_mode, CFG_RENDER_MODES),
     CFG_ROW_ENUM(CFG_ENGINE, "engine", "camera_mode", camera_mode, CFG_CAMERA_MODES),
     CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", msaa_samples, _apply_msaa),
+    // A bool that changes frames only on the live TAA path at one sample, but
+    // it is a GUI control, and a session that turned it off is a session this
+    // snapshot claims to reproduce.
+    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine", "alpha_jitter", alpha_jitter_enabled),
     CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "render_scale", render_scale, _apply_render_scale),
     CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "ss_scale", ss_scale, _apply_ss_scale),
 
