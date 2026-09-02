@@ -249,7 +249,22 @@ args.force_taa)`). So interactive runs have TAA **on**, headless runs have it
 **off** unless `--taa` / `--headless-jitter`. Check that call site before
 reasoning about temporal behaviour from the struct default: anything gated on
 `taa_resolving` is live in the window and dead in a golden, so an artifact can
-be invisible in one and obvious in the other. TAAU (`--render-scale <f>`,
+be invisible in one and obvious in the other.
+**The same policy drops the SAMPLE COUNT to 1, and its two halves straddle
+`init_engine` because they must** (spec 11.102): the count has to precede it,
+which builds the scene target, and `set_engine_taa_enabled` has to follow it and
+is a SILENT no-op before postfx exists — join them in either direction and the
+app either allocates the whole G-buffer twice or renders with no temporal filter
+at all, neither of which announces itself. `apps/forest` and `apps/tree` run one
+sample too (tree unconditionally, since 11.88); the five apps that set neither
+inherit the engine's headless default of 4x with no TAA, which is roadmap row 65.
+**One sample is the only path an alpha-tested material gets**, and that is a
+measured choice rather than an oversight: four samples arm alpha-to-coverage,
+which holds a cutout's fractional coverage where a binary test under a clamped
+history cannot — and costs +108% of forest's opaque row and +296% of a dense
+cutout scene's frame to recover nothing the eye finds (spec 11.102, which
+refused the promotion; 11.101's jitter is what the one-sample path carries
+instead). TAAU (`--render-scale <f>`,
 0.5-1, spec 11.7) rides on TAA but never rides the auto-enable. Three ways in:
 the flag, the GUI "Render Scale" slider, and the `--render-scale-at` diagnostic
 schedule; headless requires `--taa --headless-jitter` for any of them or the

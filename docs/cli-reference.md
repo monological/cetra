@@ -317,7 +317,9 @@ this corpus is everything but a regular lattice), `--no-alpha-jitter` (spec 11.1
 diagnostic lever for the jittered alpha lookup, which is live only while TAA accumulates at one
 sample and is gated off under alpha-to-coverage. With it the dot lattice's deep mips churn 358
 pixels a frame on `assets/alpha_ladder_fixture`; without it 2,917, and the Moire returns. It
-recovers none of the coverage the one-sample path loses -- MSAA 4 is the path that keeps it --
+recovers none of the coverage the one-sample path loses -- MSAA 4 is the path that keeps it, and
+spec 11.102 priced that path at +296% of frame on a dense cutout scene and found it recovers
+nothing the eye can see, so this is the shipped answer and not a stopgap for one --
 and it rides the config snapshot as `engine.alpha_jitter`, because the GUI has the same switch
 and `config-coverage` refuses a control with no row),
 `--clearcoat-debug` (spec 11.86 — the coat normal as bytes, `Nc * 0.5 + 0.5` where there is a
@@ -343,7 +345,11 @@ flag, but only barely and no longer for the reason 11.30 gave: masked materials 
 equal depth wins. Raiden moves 31 px, `cornell_box` 1),
 `--depth-prepass` (depth before shading, OFF by default and measured to LOSE everywhere in this
 corpus — spec 11.31. Masked geometry IS prepassed since 11.31, through its own program in a
-depth-only mode, and reaches a better depth complexity than the sort while still being slower),
+depth-only mode, and reaches a better depth complexity than the sort while still being slower.
+**It reverses sign under alpha-to-coverage** (spec 11.102): at `--msaa 4` on a dense cutout scene
+it halves the opaque row, 105.6 → 47.9 ms, because A2C is what stops the alpha test discarding and
+leaves the overdraw for a prepass to remove. At one sample on the same scene it moves 17.3 → 15.6
+and does not separate from the floor, so the standing verdict holds on the path this engine ships),
 `--profiler` (per-pass GPU time, CPU time and submission
 counts; HUD tables under "Profiler" and three on stdout at exit, specs 11.27 and 11.28.
 **It cannot price a sub-millisecond scope inside a heavy frame, and it reports that as 0.000 ms
@@ -371,9 +377,11 @@ a default that a `.cscn` or another flag turned off.
 `-f/--frames`,
 `-S/--screenshot`, `--screenshot-every`, `-W`/`-H`. Scene: `--seed`, `--no-shadows`, `--no-fog`,
 `--no-falling-leaves`. Debug: `--render-mode N` (10 = HDR hotspots, 12 = extrapolation),
-`--msaa N` -- **this app runs 4x MSAA *and* TAA**, unlike `render` which drops to 1 sample
-interactively, which is why the MSAA-only grass specks surfaced here first (spec 11.38);
-`--msaa 1` is the immune path. Sun: `--sun-elevation` (**default 0.8 degrees, not 14**),
+`--msaa N` -- **this app ran 4x MSAA *and* TAA until 11.88 and now runs ONE sample in every mode**,
+interactive and headless alike, which is how the MSAA-only grass specks came to surface here first
+(spec 11.38); `--msaa 4` is how to reach them now. The second reason for one sample is a look
+rather than a cost: above one sample masked geometry takes the alpha-to-coverage path, and against
+near-black leaves on a sunset that traces a bright fringe round the whole canopy. Sun: `--sun-elevation` (**default 0.8 degrees, not 14**),
 `--sun-azimuth` (**193, not 235**). Water: `--no-water` (drops the sea AND the seabed together),
 `--water-level`, `--gerstner-waves` (the sea is FFT by default), `--no-water-surf` (no incident
 wave at the shore — removes the bore from the GEOMETRY too, since depth-limited breaking is gated
