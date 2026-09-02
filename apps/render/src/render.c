@@ -2791,10 +2791,38 @@ int main(int argc, char** argv) {
     set_engine_exit_after_frames(engine, args.max_frames);
     check_stretch = args.check_stretch;
 
+    // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
+    // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
+    // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
+    // deterministic (jitter + history accumulation would vary run to run).
+    // --taa additionally exercises the temporal passes (TAA/AO/GI
+    // accumulation) headless as a diagnostic: jitter + history make output
+    // run-to-run sensitive to async load timing, so it is not for
+    // byte-compared screenshots.
+    //
+    // THE TWO HALVES STRADDLE init_engine AND CANNOT BE JOINED. The count has
+    // to precede it, which builds the scene target -- set afterwards it
+    // allocates all six G-buffer attachments plus depth at 4x and immediately
+    // destroys them to rebuild at 1x. The TAA switch has to follow it, which is
+    // where postfx is built, and set_engine_taa_enabled is a SILENT no-op
+    // before that: the app renders its interactive session with no temporal
+    // filter and nothing says so.
+    const bool taa_policy = !args.headless || args.force_taa;
+    if (taa_policy)
+        set_engine_msaa_samples(engine, 1);
+    // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
+    // else can vary the sample count independently of TAA, and pricing a sample
+    // (spec 11.34) needs exactly that.
+    if (args.msaa > 0)
+        set_engine_msaa_samples(engine, args.msaa);
+
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
     }
+    // The second half of the AA policy above, here because postfx exists now.
+    if (taa_policy)
+        set_engine_taa_enabled(engine, true);
 
     {
         Exposure* ex = &engine->exposure;
@@ -4179,24 +4207,6 @@ int main(int argc, char** argv) {
             }
         }
     }
-
-    // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
-    // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
-    // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
-    // deterministic (jitter + history accumulation would vary run to run).
-    // --taa additionally exercises the temporal passes (TAA/AO/GI
-    // accumulation) headless as a diagnostic: jitter + history make output
-    // run-to-run sensitive to async load timing, so it is not for
-    // byte-compared screenshots.
-    if (!args.headless || args.force_taa) {
-        set_engine_msaa_samples(engine, 1);
-        set_engine_taa_enabled(engine, true);
-    }
-    // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
-    // else can vary the sample count independently of TAA, and pricing a sample
-    // (spec 11.34) needs exactly that.
-    if (args.msaa > 0)
-        set_engine_msaa_samples(engine, args.msaa);
 
     /*
      * What was loaded, for anything that writes a snapshot (spec 11.71). The GUI

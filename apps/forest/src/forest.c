@@ -3198,6 +3198,25 @@ int main(int argc, char** argv) {
     config.cook_dir = g_args.cook_dir;
     config.no_cook = g_args.no_cook != 0;
 
+    // TAA replaces MSAA rather than joining it: this app shipped 4x MSAA with no
+    // temporal filter at all, so masked foliage got raw coverage dither and the
+    // dark A2C fringe spec 11.19 measured, with nothing to resolve either. One
+    // sample is also the affordable count here and not only the tidy one --
+    // spec 11.102 measured the opaque row at 26.6 ms against 55.3 at four, on a
+    // canopy dense enough that alpha-to-coverage doubles the whole frame.
+    //
+    // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
+    // history makes the frame sensitive to async load timing -- the same
+    // diagnostic-only escape the render app carries.
+    if (!g_args.headless || g_args.force_taa) {
+        config.msaa_samples = 1;
+        config.taa_enabled = true;
+    }
+    // After the policy, so --taa --msaa 4 is expressible -- the lever that
+    // prices a sample (spec 11.34); nothing else varies the count with TAA held.
+    if (g_args.msaa > 0)
+        config.msaa_samples = g_args.msaa;
+
     Game* game = create_game(&config);
     if (!game) {
         fprintf(stderr, "forest: failed to create game\n");
@@ -3211,22 +3230,6 @@ int main(int argc, char** argv) {
     game_set_shutdown(game, on_shutdown);
 
     game->engine->headless_jitter = g_args.headless_jitter != 0;
-    // TAA replaces MSAA rather than joining it, which is what the render app has
-    // always done and what this app was missing: it shipped 4x MSAA with no
-    // temporal filter at all, so masked foliage got raw coverage dither and the
-    // dark A2C fringe spec 11.19 measured, with nothing to resolve either.
-    //
-    // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
-    // history makes the frame sensitive to async load timing -- the same
-    // diagnostic-only escape the render app carries.
-    if (!g_args.headless || g_args.force_taa) {
-        set_engine_msaa_samples(game->engine, 1);
-        set_engine_taa_enabled(game->engine, true);
-    }
-    // After the policy, so --taa --msaa 4 is expressible -- the lever that
-    // prices a sample (spec 11.34); nothing else varies the count with TAA held.
-    if (g_args.msaa > 0)
-        set_engine_msaa_samples(game->engine, g_args.msaa);
 
     run_game(game);
     free_game(game);

@@ -39,6 +39,10 @@ Game* create_game(const GameConfig* config) {
     set_engine_headless(game->engine, config->headless);
     // Same reason: init_engine is where the profiler is built.
     set_engine_profiler(game->engine, config->profiler);
+    // And again: init_engine builds the scene target, so a count applied after
+    // it allocates the whole G-buffer twice.
+    if (config->msaa_samples > 0)
+        set_engine_msaa_samples(game->engine, config->msaa_samples);
     // And before on_init, whose bakes are the fetch sites.
     cook_init(config->cook_dir, !config->no_cook);
 
@@ -58,6 +62,8 @@ Game* create_game(const GameConfig* config) {
     set_engine_screenshot_every(game->engine, config->screenshot_every);
     set_engine_exit_after_frames(game->engine, config->exit_after_frames);
     set_engine_show_gui(game->engine, config->show_debug_gui);
+    if (config->taa_enabled)
+        set_engine_taa_enabled(game->engine, true);
 
     // Initialize input
     input_init(&game->input, game->engine->window);

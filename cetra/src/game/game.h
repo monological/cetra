@@ -61,6 +61,12 @@ typedef struct GameConfig {
     // owns both calls.
     const char* cook_dir; // NULL = CETRA_COOK_DIR, then the repo default
     bool no_cook;         // true = every fetch misses and nothing is stored
+    // The app's anti-aliasing choice, for the profiler's reason again: the scene
+    // target is built during init_engine, so a count set afterwards allocates
+    // every G-buffer attachment plus depth at the default and immediately
+    // destroys them to rebuild at the one the app wanted.
+    int msaa_samples; // 0 = leave the engine's own default
+    bool taa_enabled; // applied after init, where postfx exists
 } GameConfig;
 
 // Main game structure
