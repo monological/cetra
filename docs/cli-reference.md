@@ -15,6 +15,8 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
 - [apps/forest](#appsforest) — instancing, LOD, culling, the island, erosion, streaming, origin
   shifting
+- [The other four apps](#the-other-four-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
+  shapes, pcb, and why splash is not in any of this
 
 ---
 
@@ -343,6 +345,12 @@ of the two overdraw levers by a wide margin — `apps/forest` opaque 306 → 169
 flag, but only barely and no longer for the reason 11.30 gave: masked materials stopped blending in
 11.31, and what is left is coplanar ties, where draw order decides which of two surfaces at exactly
 equal depth wins. Raiden moves 31 px, `cornell_box` 1),
+`--ortho <height>` (orthographic camera, view volume height in world units; spec 11.103. The
+engine has always had this camera mode and until 11.103 nothing that could CAPTURE a frame could
+ask for it, which is how the TAA jitter came to be wrong there for the whole life of the feature
+— derived for perspective, it shifted the raster by ~150 px a frame under an orthographic camera.
+Applied AFTER the auto-framing, because `set_camera_perspective` clears the flag and an earlier
+request is silently undone),
 `--depth-prepass` (depth before shading, OFF by default and measured to LOSE everywhere in this
 corpus — spec 11.31. Masked geometry IS prepassed since 11.31, through its own program in a
 depth-only mode, and reaches a better depth complexity than the sort while still being slower.
@@ -704,3 +712,42 @@ a border uncollapsible. The distinction matters the moment anything tiles
 T-junction, so a crack is a possibility the code does not currently exclude. The `triangles` column in the
 SUBMISSION table is the only counter a level change moves -- `draws` and
 `instances` are blind to it.
+
+---
+
+## The other four apps, and the AA mode each one chose
+
+Spec 11.103 asked what anti-aliasing every app should run and got a different answer four times,
+which is why this section exists rather than one line saying "they inherit the default".
+
+**`apps/gametest`** gained a CLI in 11.103 and had none before it: `-x/--headless`, `-f/--frames`,
+`-S/--screenshot`, `--screenshot-every`, `--taa`, `--msaa <n>`. The HDR environment stays
+POSITIONAL — an unrecognised token is still taken as the path, which is the whole interface the app
+had. It runs **one sample plus TAA windowed**, the render-app policy, because every surface in it is
+a rigid mesh on the `pbr` program and so writes a motion vector. **Two identical runs differ by
+48 px; two runs at DIFFERENT sample counts are not comparable at all**, and not because of the
+renderer — the fixed-timestep accumulator is fed by wall-clock frame time, so a cheaper frame takes
+more physics steps and the boxes have settled further by the frame you captured.
+
+**`apps/spores`** gained `--taa`, `--headless-jitter` and `--msaa <n>` in 11.103 and **kept its four
+samples**, which is the one refusal in that spec. `particle_frag` declares a single output, so a
+mote writes no motion vector and reprojects through whatever geometry sits behind it — zero on a
+static camera. Under TAA its 32,000 motes stop being dots and become dashes. The flags are the
+instrument that measured that and stay for whoever gives the particle pass a motion vector.
+
+**`apps/shapes`** keeps 4x MSAA with no temporal filter, and since 11.103 says so in a comment rather
+than leaving it to look like an omission. Multisampling is the natural AA for 2D line art; nothing in
+the scene moves, so an accumulator would integrate only its own jitter while switching on the aux
+G-buffer, the resolve and the eight passes that key off `taa_resolving`.
+
+**`apps/pcb` is gitignored** (`apps/.gitignore`) and so is not part of this repository at all, which
+is worth knowing before looking for it — the example-apps table in `AGENTS.md` still lists it. The
+same reasoning applies where it exists locally, plus one more: most of it draws through the `shape`
+program, which writes no motion vector, while its filled primitives draw through `pbr`, which does,
+so a dragged shape would reproject two halves of one frame differently.
+
+**`apps/splash` takes no part in any of this**, and it is worth knowing before reaching for a flag.
+It never calls `engine_run` — it clears and swaps the DEFAULT framebuffer in its own loop and draws
+SDF text straight to it, so `engine->framebuffer` is built and never bound. Its anti-aliasing is the
+GLFW window hint, no app-side sample count reaches it, and the engine's screenshot path lives inside
+the loop it does not use.

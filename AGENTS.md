@@ -255,9 +255,19 @@ be invisible in one and obvious in the other.
 which builds the scene target, and `set_engine_taa_enabled` has to follow it and
 is a SILENT no-op before postfx exists — join them in either direction and the
 app either allocates the whole G-buffer twice or renders with no temporal filter
-at all, neither of which announces itself. `apps/forest` and `apps/tree` run one
-sample too (tree unconditionally, since 11.88); the five apps that set neither
-inherit the engine's headless default of 4x with no TAA, which is roadmap row 65.
+at all, neither of which announces itself. `apps/forest`, `apps/tree` and (since
+11.103) `apps/gametest` run one sample too, tree unconditionally since 11.88.
+**The apps that do NOT are each a decision now, not an omission** (spec 11.103):
+`apps/spores` keeps four samples because its particles write no motion vector and
+TAA turns 32,000 motes into dashes; `apps/shapes` keeps them because
+multisampling is what 2D line art wants and nothing in that scene moves;
+`apps/splash` is outside the question entirely, drawing to the default framebuffer
+without ever binding the engine's. (`apps/pcb` is gitignored and not in this
+repository, which the example-apps table above does not say.)
+**And the jitter is projection-dependent**: it rides the translation element under
+an orthographic camera and the z element under a perspective one, because only the
+second is divided back out. `--ortho` on the render app is the only way to reach
+that path headless, and `taa-ortho` is what guards it.
 **One sample is the only path an alpha-tested material gets**, and that is a
 measured choice rather than an oversight: four samples arm alpha-to-coverage,
 which holds a cutout's fractional coverage where a binary test under a clamped
