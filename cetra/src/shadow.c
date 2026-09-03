@@ -338,13 +338,25 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
     // radius-minimizing depth, radius from the far corners. Depends only on
     // fov/aspect and the split depths, never on camera pose -> the box size
     // is constant per cascade and cannot breathe as the camera moves.
-    float k = tanf(cam->fov_radians * 0.5f);
-    float k2 = k * k * (1.0f + cam->aspect_ratio * cam->aspect_ratio);
-    float zc = 0.5f * (slice_near + slice_far) * (1.0f + k2);
-    if (zc > slice_far)
-        zc = slice_far;
-    float dz = slice_far - zc;
-    float radius = sqrtf(dz * dz + slice_far * slice_far * k2);
+    float zc, radius;
+    if (cam->ortho_height > 0.0f) {
+        // A parallel slice is a box: centre at its depth midpoint, radius its
+        // half-diagonal. No field of view enters, and none could make a
+        // frustum sphere fit a box.
+        float hy = 0.5f * cam->ortho_height;
+        float hx = hy * cam->aspect_ratio;
+        float hz = 0.5f * (slice_far - slice_near);
+        zc = 0.5f * (slice_near + slice_far);
+        radius = sqrtf(hx * hx + hy * hy + hz * hz);
+    } else {
+        float k = tanf(cam->fov_radians * 0.5f);
+        float k2 = k * k * (1.0f + cam->aspect_ratio * cam->aspect_ratio);
+        zc = 0.5f * (slice_near + slice_far) * (1.0f + k2);
+        if (zc > slice_far)
+            zc = slice_far;
+        float dz = slice_far - zc;
+        radius = sqrtf(dz * dz + slice_far * slice_far * k2);
+    }
 
     vec3 center;
     glm_vec3_scale((float*)cam->forward, zc, center);
@@ -1570,6 +1582,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         glm_vec3_normalize(cam.forward);
         cam.fov_radians = camera->fov_radians;
         cam.aspect_ratio = camera->aspect_ratio;
+        cam.ortho_height = camera->is_orthographic ? camera->ortho_height : 0.0f;
 
         float cam_near = camera->near_clip;
         // Unset DERIVES NOTHING, and that is a measurement rather than caution.

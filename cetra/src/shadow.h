@@ -353,6 +353,8 @@ typedef struct CascadeCamera {
     vec3 forward;
     float fov_radians;
     float aspect_ratio;
+    float ortho_height; // > 0 = a parallel projection this tall: the slice is a box
+                        //       (width by aspect_ratio) and fov_radians is not read
 } CascadeCamera;
 
 // Fit one cascade: ortho box sized from the [slice_near, slice_far] view
