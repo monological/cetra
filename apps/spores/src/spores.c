@@ -369,6 +369,10 @@ int main(int argc, char** argv) {
     config.width = 1280;
     config.height = 720;
 
+    bool force_taa = false;
+    bool headless_jitter = false;
+    int msaa = 0;
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-x") == 0) {
             config.headless = true;
@@ -384,14 +388,41 @@ int main(int argc, char** argv) {
             g_transform_probe = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cpu") == 0) {
             g_use_cpu = true;
+        } else if (strcmp(argv[i], "--taa") == 0) {
+            force_taa = true;
+        } else if (strcmp(argv[i], "--headless-jitter") == 0) {
+            headless_jitter = true;
+        } else if (strcmp(argv[i], "--msaa") == 0 && i + 1 < argc) {
+            msaa = atoi(argv[++i]);
         }
     }
+
+    // THIS APP KEEPS FOUR SAMPLES AND NO TEMPORAL FILTER, and unlike its
+    // neighbours that is a measured refusal rather than an omission (spec
+    // 11.103). It is 32,000 particles over five static meshes, and
+    // particle_frag declares ONE output -- a mote writes no motion vector. So
+    // under TAA every mote reprojects through whatever the geometry behind it
+    // wrote, which on a static camera is zero: the history comes from the wrong
+    // place, the neighbourhood clamp is all that bounds it, and the motes stop
+    // being dots and become dashes. Switching the AA mode here cannot fix that;
+    // giving the particle pass a motion vector could, and that is a question
+    // about the pass rather than about a default.
+    //
+    // The flags below are what measured it and stay for the next attempt. --taa
+    // is an explicit opt-in with no policy behind it, so a windowed session is
+    // unchanged unless it asks.
+    if (force_taa)
+        config.taa_enabled = true;
+    if (msaa > 0)
+        config.msaa_samples = msaa;
 
     Game* game = create_game(&config);
     if (!game) {
         fprintf(stderr, "Failed to create game\n");
         return 1;
     }
+
+    game->engine->headless_jitter = headless_jitter;
 
     set_engine_mouse_button_callback(game->engine, mouse_button_callback);
     set_engine_key_callback(game->engine, key_callback);
