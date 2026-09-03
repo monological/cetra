@@ -17,6 +17,11 @@
 typedef struct ClusterFrame {
     float slice_scale, slice_bias;
     float inv_p00, inv_p11;              // reciprocals of the projection's x/y scales
+    // clip.w as a function of view depth d: w_per_depth * d + w_const. Perspective
+    // is (1, 0), so a cluster's world width grows with depth; orthographic is
+    // (0, 1), so it does not. Read off the matrix rather than a camera flag,
+    // because a probe capture re-enters with its own 90-degree projection.
+    float w_per_depth, w_const;
     float slice_depths[LC_CLUSTER_Z + 1]; // view depth at each slice boundary
     float near_clip, far_clip;
 } ClusterFrame;
@@ -75,6 +80,8 @@ static void _cluster_frame_init(ClusterFrame* cf, mat4 projection, float near_cl
     cf->slice_bias = -(float)LC_CLUSTER_Z * log2f(near_clip) / log_ratio;
     cf->inv_p00 = 1.0f / projection[0][0];
     cf->inv_p11 = 1.0f / projection[1][1];
+    cf->w_per_depth = -projection[2][3];
+    cf->w_const = projection[3][3];
     cf->near_clip = near_clip;
     cf->far_clip = far_clip;
     // Inverse of the slice mapping: slice s spans [slice_depths[s], [s+1]]
@@ -87,18 +94,22 @@ static void _cluster_frame_init(ClusterFrame* cf, mat4 projection, float near_cl
 // for near-camera lights (a sphere whose screen rect spans the frame still
 // only intersects a curved shell of that box's clusters), so this is the test
 // that actually decides membership. The cluster wedge's AABB comes from its 8
-// corners: x = ndc_x * depth / P00 (symmetric projection), z = -depth.
+// corners: x = ndc_x * w / P00 (symmetric projection), z = -depth, where w is
+// the clip w at that depth -- the depth itself under perspective, 1 under an
+// orthographic projection, whose wedge is a box.
 static bool _sphere_touches_cluster(const float* sphere, float radius_sq, int x, int y, int z,
                                     const ClusterFrame* cf) {
     float d0 = cf->slice_depths[z], d1 = cf->slice_depths[z + 1];
+    float w0 = cf->w_per_depth * d0 + cf->w_const;
+    float w1 = cf->w_per_depth * d1 + cf->w_const;
     float nx0 = (float)x * (2.0f / (float)LC_CLUSTER_X) - 1.0f;
     float nx1 = nx0 + 2.0f / (float)LC_CLUSTER_X;
     float ny0 = (float)y * (2.0f / (float)LC_CLUSTER_Y) - 1.0f;
     float ny1 = ny0 + 2.0f / (float)LC_CLUSTER_Y;
-    float xa = nx0 * d0 * cf->inv_p00, xb = nx0 * d1 * cf->inv_p00;
-    float xc = nx1 * d0 * cf->inv_p00, xd = nx1 * d1 * cf->inv_p00;
-    float ya = ny0 * d0 * cf->inv_p11, yb = ny0 * d1 * cf->inv_p11;
-    float yc = ny1 * d0 * cf->inv_p11, yd = ny1 * d1 * cf->inv_p11;
+    float xa = nx0 * w0 * cf->inv_p00, xb = nx0 * w1 * cf->inv_p00;
+    float xc = nx1 * w0 * cf->inv_p00, xd = nx1 * w1 * cf->inv_p00;
+    float ya = ny0 * w0 * cf->inv_p11, yb = ny0 * w1 * cf->inv_p11;
+    float yc = ny1 * w0 * cf->inv_p11, yd = ny1 * w1 * cf->inv_p11;
     float min_x = fminf(fminf(xa, xb), fminf(xc, xd));
     float max_x = fmaxf(fmaxf(xa, xb), fmaxf(xc, xd));
     float min_y = fminf(fminf(ya, yb), fminf(yc, yd));
