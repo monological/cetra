@@ -592,10 +592,33 @@ static void mouse_button_callback(Engine* engine, int button, int action, int mo
 int main(int argc, const char* argv[]) {
     printf("=== Physics Test ===\n\n");
 
-    // Parse command line arguments
-    if (argc > 1) {
-        hdr_path = argv[1];
-        printf("Using HDR environment: %s\n\n", hdr_path);
+    // Parse command line arguments. The HDR path stays POSITIONAL, which is the
+    // whole interface this app had before it grew flags -- anything not
+    // recognised below is still taken as the environment.
+    bool headless = false;
+    bool force_taa = false;
+    int msaa = 0;
+    int frames = 0;
+    int screenshot_every = 0;
+    const char* screenshot = NULL;
+    for (int i = 1; i < argc; i++) {
+        const char* a = argv[i];
+        if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
+            headless = true;
+        } else if (!strcmp(a, "--taa")) {
+            force_taa = true;
+        } else if ((!strcmp(a, "-f") || !strcmp(a, "--frames")) && i + 1 < argc) {
+            frames = atoi(argv[++i]);
+        } else if ((!strcmp(a, "-S") || !strcmp(a, "--screenshot")) && i + 1 < argc) {
+            screenshot = argv[++i];
+        } else if (!strcmp(a, "--screenshot-every") && i + 1 < argc) {
+            screenshot_every = atoi(argv[++i]);
+        } else if (!strcmp(a, "--msaa") && i + 1 < argc) {
+            msaa = atoi(argv[++i]);
+        } else {
+            hdr_path = a;
+            printf("Using HDR environment: %s\n\n", hdr_path);
+        }
     }
 
     printf("Controls:\n");
@@ -615,6 +638,25 @@ int main(int argc, const char* argv[]) {
     config.title = "Physics Test - JoltC Integration";
     config.width = 1280;
     config.height = 720;
+    config.headless = headless;
+    config.exit_after_frames = frames;
+    config.screenshot_path = screenshot;
+    config.screenshot_every = screenshot_every;
+
+    // TAA replaces MSAA rather than joining it. This app is rigid meshes on the
+    // pbr program, so every surface writes a motion vector and the accumulator
+    // has something honest to reproject -- which is what separates it from the
+    // particle demo next door (spec 11.103).
+    //
+    // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
+    // history makes the frame sensitive to async load timing.
+    if (!headless || force_taa) {
+        config.msaa_samples = 1;
+        config.taa_enabled = true;
+    }
+    // After the policy, so --taa --msaa 4 is expressible.
+    if (msaa > 0)
+        config.msaa_samples = msaa;
 
     Game* game = create_game(&config);
     if (!game) {
