@@ -210,8 +210,6 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
 #include "view.glsl"
-// The projection-aware reconstruction and direction helpers (spec 11.104):
-// clipWAt for the skin pre-integration, worldDirToCamera for V.
 #include "depth.glsl"
 #include "velocity.glsl"
 #include "fresnel.glsl"
@@ -1025,6 +1023,11 @@ void main() {
         FragColor = vec4(clamp(excursion * EXTRAP_GAIN, 0.0, 1.0), 1.0);
         return;
     }
+    // Surface-to-camera, once for the parallax march below and the shading
+    // after it: one direction for every fragment under an orthographic camera,
+    // fanning from the eye under perspective.
+    vec3 V = worldDirToCamera(WorldPos, camPos, view);
+
     // Apply UV transform for KHR_texture_transform
     vec2 uv = transformUV(TexCoords);
 
@@ -1041,7 +1044,7 @@ void main() {
 #if CETRA_HAS(PBR_FEAT_PARALLAX)
     bool pom = parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
     if (pom) {
-        vec3 Vts = normalize(transpose(TBN) * worldDirToCamera(WorldPos, camPos, view));
+        vec3 Vts = normalize(transpose(TBN) * V);
         vec2 uv0 = uv;
         uv = parallaxOcclusion(uv, Vts);
         // Silhouette clipping: when the march pushed the UV past the [0,1] relief
@@ -1601,13 +1604,6 @@ void main() {
     // there for what moving them up to it measured.
     vec3 ddxWorld = dFdx(WorldPos);
     vec3 ddyWorld = dFdy(WorldPos);
-
-    // Calculate view direction (WorldPos -- world space, as the maths needs)
-    // Surface-to-camera. Fans from the eye under perspective; under an
-    // orthographic camera it is one direction for every fragment, and a V that
-    // fanned anyway put a false Fresnel rim and a drifting highlight on every
-    // flat-on surface apps/shapes ever drew (spec 11.104).
-    vec3 V = worldDirToCamera(WorldPos, camPos, view);
 
     // Render modes that need texture data
     if (renderMode == 7) {

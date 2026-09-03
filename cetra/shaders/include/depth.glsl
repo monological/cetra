@@ -16,10 +16,10 @@
 // measurement: the shader compiler lowers a DIVIDE differently in some programs
 // once the source around it changes at all -- if, ternary, or a select-free
 // form alike -- so the unchanged expression came back a last bit different in
-// three programs (water, DoF, subsurface) and identical in the rest. Three
-// goldens were re-baked for 9, 12 and 130 pixels of last-bit rounding, all on
-// scattered single pixels, none visible at 800%. Read that as a property of the
-// compiler, not of the arithmetic, before spending a spec cycle chasing it.
+// some programs and identical in the rest. The depth inverse below is one
+// coefficient form for that reason, and two goldens moved by last-bit rounding
+// on scattered single pixels under it. Read that as a property of the compiler,
+// not of the arithmetic, before spending a spec cycle chasing it.
 //
 // Requires a `projection` uniform in the including shader -- every current
 // caller already has one, and passing matrix elements instead would be more
@@ -30,9 +30,6 @@ bool projectionIsOrtho()
     return projection[2][3] == 0.0;
 }
 
-// View Z from an NDC depth. Perspective inverts a rational depth mapping;
-// orthographic depth is affine, so its inverse is a different formula
-// entirely, not a special case of the first.
 // View Z from an NDC depth, as ONE formula read off the matrix. Solving
 // ndcZ = clip.z / clip.w for Z gives (P33*ndcZ - P32) / (P22 - P23*ndcZ),
 // which is the perspective rational when P23 = -1, P33 = 0 and the
@@ -57,9 +54,10 @@ float nearPlaneDist()
 
 // View-space position from screen UV plus the aux G-buffer's stored LINEAR
 // view Z. Under perspective Xv = ndc.x * (-z) / focalX; under orthographic the
-// depth term is gone and the translation column is subtracted -- which is
-// where render.c puts the TAA jitter for this projection, so the reconstruction
-// lands on the raster that was actually drawn.
+// depth term is gone and the translation column is subtracted, because an
+// off-centre glm_ortho volume carries a real offset there and the TAA jitter
+// for this projection lands there too. The perspective arm ignores its own
+// jitter element, as it always has: that asymmetry is deliberate.
 vec3 viewPosFromLinZ(vec2 uv, float linZ)
 {
     vec2 ndc = uv * 2.0 - 1.0;
@@ -101,8 +99,7 @@ vec3 viewRayVecAt(vec2 ndc)
     if (projectionIsOrtho())
         return vec3(0.0, 0.0, -1.0);
     // Reciprocal THEN multiply, not a divide: the callers this replaced took an
-    // uploaded 1/focal and multiplied, and a single division rounds differently
-    // -- measured as 9 to 130 px across three goldens before this was matched.
+    // uploaded 1/focal and multiplied, and a single division rounds differently.
     vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
     return vec3(ndc * invFocal, -1.0);
 }
@@ -128,6 +125,46 @@ vec3 worldDirToCamera(vec3 worldPos, vec3 camPos, mat4 viewM)
     if (projectionIsOrtho())
         return vec3(viewM[0][2], viewM[1][2], viewM[2][2]);
     return normalize(camPos - worldPos);
+}
+
+// The same test for a matrix that is not the bound `projection`, such as the
+// previous frame's.
+bool projectionIsOrthoM(mat4 P)
+{
+    return P[2][3] == 0.0;
+}
+
+// The length of the view ray from the eye plane to a view-space point: the
+// sight line under perspective, the planar depth under orthographic, where
+// every ray runs along -Z and a line from the eye POINT measures nothing.
+float viewPathLength(vec3 viewPos)
+{
+    if (projectionIsOrtho())
+        return -viewPos.z;
+    return length(viewPos);
+}
+
+// Direction from the eye toward a world-space point, given the vector to it
+// and the inverse view matrix: fans from the eye under perspective, and is the
+// camera's forward for every point under orthographic. invView's third column
+// is the backward axis, hence the negation.
+vec3 worldRayDirFromEye(vec3 toPoint, mat4 invViewM)
+{
+    if (projectionIsOrtho())
+        return -invViewM[2].xyz;
+    return normalize(toPoint);
+}
+
+// Screen UV from a view-space XY and its positive depth under a given
+// projection: the inverse of viewPosFromLinZ, for reprojecting through a
+// previous frame's matrix. Orthographic adds the translation column the
+// forward reconstruction subtracts.
+vec2 uvFromViewXY(vec2 viewXY, float depth, mat4 P)
+{
+    vec2 focal = vec2(P[0][0], P[1][1]);
+    if (projectionIsOrthoM(P))
+        return (viewXY * focal + vec2(P[3][0], P[3][1])) * 0.5 + 0.5;
+    return (viewXY * focal / depth) * 0.5 + 0.5;
 }
 
 // Define DOF_COC before including for the circle-of-confusion helper. It is

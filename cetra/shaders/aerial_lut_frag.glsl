@@ -20,7 +20,7 @@ uniform sampler2D transmittanceLut;
 uniform sampler2D multiscatterLut;
 uniform vec3 sunDir;     // world space, unit vector TOWARD the sun
 uniform mat4 invView;    // view -> world
-uniform mat4 projection; // supplies the near plane and the focal lengths
+uniform mat4 projection; // read by depth.glsl
 uniform float aerialFar; // far depth of the volume, WORLD units
 uniform float unitsPerKm;
 uniform int aerialDepth; // slice count; mirrors SKY_AERIAL_Z

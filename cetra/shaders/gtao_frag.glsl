@@ -33,7 +33,7 @@ uniform sampler2D linDepthTex; // Aux G-buffer; .z = linear view-space Z (<0), 0
 uniform sampler2D noiseTex;    // 4x4 random rotation vectors, tiled (spatial)
 uniform sampler2D normalsTex;  // View-space normals (xyz); .a is the SSR marker
 uniform int useNormalsTex;
-uniform mat4 projection; // Only [0][0]/[1][1] focal terms are used, for XY reconstruction
+uniform mat4 projection; // read by depth.glsl
 uniform vec2 noiseScale; // ao resolution / 4
 uniform float radius;    // Occlusion reach in view-space units
 uniform int temporal;    // 1 when the AO accumulation pass is active
@@ -170,7 +170,7 @@ void main()
     }
 
     vec3 P = viewPosFromLinZ(TexCoords, linZ);
-    vec3 V = viewDirToCamera(P); // -P under perspective; +Z everywhere under ortho
+    vec3 V = viewDirToCamera(P);
 
     vec3 gbufferN = texture(normalsTex, TexCoords).xyz;
     if (useNormalsTex == 1 && dot(gbufferN, gbufferN) <= 0.01) {

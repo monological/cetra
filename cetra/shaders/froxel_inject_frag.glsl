@@ -26,7 +26,7 @@ out vec4 FragColor; // rgb = in-scattered radiance, a = extinction sigma
 
 uniform int sliceIndex;  // Which volume layer this draw is writing
 uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
-uniform mat4 projection; // Focal terms reconstruct the froxel's view position
+uniform mat4 projection; // read by depth.glsl
 uniform mat4 invView;    // view -> world (camera pose)
 uniform float fogNear;   // Near end of the volume's exponential depth range
 uniform float fogFar;    // Far end of the volume's exponential depth range

@@ -1556,6 +1556,7 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
     draw_fullscreen_quad(fx->quad_vao);
 
     glUseProgram(fx->sss_pyr_down_program->id);
+    uniform_set_mat4(fx->sss_pyr_down_program->uniforms, "projection", (const float*)projection);
     float sigma_z = fx->sss_profiles[profile_tag - 1][3];
     for (int mip = 1; mip < fx->sss_pyr_mips; mip++) {
         int lw, lh, sw, sh;
@@ -1582,15 +1583,12 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
 
         uniform_set_vec2(fx->sss_pyr_down_program->uniforms, "texelSize",
                          (const float[]){1.0f / (float)sw, 1.0f / (float)sh});
-        // World units one SOURCE texel spans per unit of clip w -- the depth
-        // under perspective, 1 under orthographic, which the shader resolves
-        // from the projection. A source texel is 2^(mip-1) render texels, and a
-        // render texel subtends 1/proj_scale at clip w = 1.
+        // World units one SOURCE texel spans per unit of clip w. A source texel
+        // is 2^(mip-1) render texels, and a render texel subtends 1/proj_scale
+        // at clip w = 1.
         uniform_set_float(fx->sss_pyr_down_program->uniforms, "srcFootprint",
                           proj_scale > 0.0f ? (float)(1 << (mip - 1)) / proj_scale : 0.0f);
         uniform_set_float(fx->sss_pyr_down_program->uniforms, "sigmaZFloor", sigma_z);
-        uniform_set_mat4(fx->sss_pyr_down_program->uniforms, "projection",
-                         (const float*)projection);
         draw_fullscreen_quad(fx->quad_vao);
     }
 
@@ -2506,12 +2504,11 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 float postfx_fog_near(const PostFX* fx, mat4 projection) {
     if (fx->fog_near > 0.0f)
         return fx->fog_near;
-    // The C twin of depth.glsl's nearPlaneDist(): [2][3] is 0 under glm_ortho
-    // and -1 under glm_perspective, and the two projections invert to
-    // different formulas rather than one with a special case.
-    float cam_near = projection[2][3] == 0.0f
-                         ? (projection[3][2] + 1.0f) / projection[2][2]
-                         : projection[3][2] / (projection[2][2] - 1.0f);
+    // The C twin of depth.glsl's nearPlaneDist(): the same one coefficient
+    // form at ndcZ = -1, which reads P32 / (P22 - 1) under glm_perspective
+    // ([2][3] = -1, [3][3] = 0) and (P32 + 1) / P22 under glm_ortho with no
+    // branch, and with the perspective operands exactly the old ones.
+    float cam_near = (projection[3][3] + projection[3][2]) / (projection[2][2] + projection[2][3]);
     return cam_near > 0.0f ? cam_near : 0.1f;
 }
 

@@ -23,7 +23,7 @@ uniform sampler2D pyrColor; // rgb = coverage-premultiplied diffuse, a = coverag
 uniform sampler2D origTex;  // resolved attachment 4: the sharp diffuse D
 uniform sampler2D auxTex;   // .z = linear view Z, negative in front
 uniform sampler2D depthTex; // resolved scene depth, NDC
-uniform mat4 projection;    // viewZFromNdcZ reads this by name
+uniform mat4 projection;    // read by depth.glsl
 
 #include "depth.glsl"
 
@@ -119,9 +119,7 @@ void main()
     vec3 masses = sssProfileMasses();
     // Base width in render pixels, from the authored world radius. The pixel
     // count is free to grow with resolution now; only the world width is fixed.
-    // projScale is pixels per world unit at clip w = 1, so the divisor is the
-    // clip w this depth projects to -- the depth itself under perspective, and
-    // exactly 1 under an orthographic camera.
+    // projScale is pixels per world unit at clip w = 1.
     float basePx = sssProfile.w * projScale / clipWAt(-depth);
 
     // Apply the ceiling to the BASE radius, not to each channel's sigma.

@@ -189,9 +189,6 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
     float radius = 0.0f;
     item_world_bounds(mesh, node, world_centre, &radius);
 
-    // Under a parallel projection the sphere's size on screen is its radius
-    // against the view volume's height, the same at every distance; under
-    // perspective it is the radius over the distance from the eye.
     float projected;
     if (lod->ortho_height > 0.0f) {
         projected = radius / (0.5f * lod->ortho_height);

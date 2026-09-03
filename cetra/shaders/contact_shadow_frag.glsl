@@ -43,7 +43,7 @@ out vec4 FragColor; // .r visibility toward the scene's lights (1 = lit, 0 = occ
 uniform sampler2D linDepthTex; // aux G-buffer; .z = linear view-space Z (<0), 0 = sky
 uniform sampler2D normalsTex;  // view-space normals (xyz); opportunistic N.L cull
 uniform int useNormalsTex;     // 1 = normals resolved this frame, safe to sample
-uniform mat4 projection;       // full matrix: focal terms reconstruct P, near plane clamps the ray
+uniform mat4 projection;       // read by depth.glsl
 uniform mat4 view;             // world -> view; the cluster list stores world positions
 uniform vec3 lightDirVS;       // unit vector, view space, pointing TOWARD the key light
 uniform vec3 keyRadiance;      // key light colour * intensity, in the same lux the

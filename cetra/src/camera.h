@@ -47,12 +47,20 @@ void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, 
 // Project orthographically over a view volume ortho_height tall (width follows aspect_ratio).
 // A 2D view needs this: under perspective, any camera rotation shears flat geometry.
 //
-// Scope: the projection matrix and ray picking honour this. The post-processing stack
-// (GTAO, SSR, DoF, fog), clustered light culling, cascaded shadows and the PBR view vector
-// all still derive from a perspective frustum -- they reconstruct view space from a
-// hyperbolic depth and assume the eye is a single point -- so a scene that needs them wants
-// a perspective camera. See specs/dnd-fix.md.
+// Scope: the projection matrix, ray picking, the post-processing stack (GTAO, SSR, DoF,
+// fog, SSS), clustered light culling, LOD selection, occlusion culling, the cascade fit and
+// the PBR view vector all honour this (spec 11.104). What still assumes a perspective
+// frustum: the skybox cube and sky background, the ocean's projected grid, the cloud march,
+// the depth-sort key and the gizmo's world-per-pixel. fov_radians is left in place for the
+// switch back to perspective.
 void set_camera_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip);
+
+// The view volume's height when the camera is orthographic, else 0. The perspective
+// setter leaves ortho_height in place for the switch back, so "0 unless orthographic"
+// is read through this rather than off the field.
+static inline float camera_ortho_height(const Camera* camera) {
+    return camera->is_orthographic ? camera->ortho_height : 0.0f;
+}
 
 // Camera movement helpers
 void orbit_camera(Camera* camera, float delta_theta, float delta_phi);

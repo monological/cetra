@@ -24,6 +24,11 @@
 // better than 24 over the whole frustum, and the cluster lookup takes a raw
 // view Z anyway.
 
+// Requires `projection` declared before this include: depth.glsl reads it by
+// name for the one screen-to-view reconstruction, which is what makes a froxel
+// a box under an orthographic camera and a wedge under a perspective one.
+#include "depth.glsl"
+
 // A degenerate range (fogFar at or inside the near plane, which a small enough
 // scene can produce since apps scale fogFar off scene radius) would divide by
 // zero here and invert the slice order below it.
@@ -38,11 +43,6 @@ float froxelFarZ(float nearZ, float farZ) {
 // curve shape, and the depth a scene actually needs resolved is rarely the one
 // a pure exponential spends its budget on (UE carries the same knob as
 // r.VolumetricFog.DepthDistributionScale).
-
-// For viewPosFromLinZ: the one screen-to-view reconstruction, which is what
-// makes a froxel a box under an orthographic camera and a wedge under a
-// perspective one without this file knowing which (spec 11.104).
-#include "depth.glsl"
 
 // Slice index (0 .. slices, continuous) -> positive view depth.
 float froxelSliceToViewZ(float slice, float nearZ, float farZ, float slices, float dist) {
@@ -78,9 +78,8 @@ vec4 froxelSampleMedium(sampler3D vol, vec2 uv, float viewZ, float nearZ, float 
 
 // The view-space position at the CENTRE of the froxel addressed by (uv, slice),
 // where uv is the froxel's screen-space [0,1] coordinate and jitter offsets the
-// sample within the slice (0.5 = centre). The XY comes from depth.glsl's one
-// reconstruction rather than a copy of it: the copy was the perspective wedge
-// and nothing here knew that an orthographic camera sees a box (spec 11.104).
+// sample within the slice (0.5 = centre). The XY goes through depth.glsl rather
+// than a copy of its perspective form, which is what a froxel used to be.
 vec3 froxelViewPos(vec2 uv, float slice, float jitter, float nearZ, float farZ, float slices,
                    float dist) {
     float viewZ = froxelSliceToViewZ(slice + jitter, nearZ, farZ, slices, dist);

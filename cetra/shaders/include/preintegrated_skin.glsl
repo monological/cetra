@@ -184,9 +184,7 @@ vec3 skinSigma(vec3 scatterColor, float scatterRadius, float curvature,
     float peakColor = max(max(scatterColor.r, scatterColor.g), scatterColor.b);
     float reachToBase = 1.0 / max(SSS_PROFILE_MULT.z * peakColor, 1e-3);
     float want = scatterRadius;
-    // maxScatterPerDepth is per unit of CLIP W, which is the depth under a
-    // perspective camera and exactly 1 under an orthographic one -- the caller
-    // passes clipWAt(viewZ) rather than -viewZ so this chunk need not know which.
+    // maxScatterPerDepth is per unit of clip w.
     float got = min(want, maxScatterPerDepth * reachToBase * clipW);
     float k = got / max(want, 1e-6);
     // The shortfall SQUARED, not sqrt(1 - k^2).

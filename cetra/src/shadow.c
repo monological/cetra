@@ -336,8 +336,9 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
 
     // Bounding sphere of the view slice: center on the view axis at the
     // radius-minimizing depth, radius from the far corners. Depends only on
-    // fov/aspect and the split depths, never on camera pose -> the box size
-    // is constant per cascade and cannot breathe as the camera moves.
+    // fov/aspect (or the ortho height) and the split depths, never on camera
+    // pose -> the box size is constant per cascade and cannot breathe as the
+    // camera moves.
     float zc, radius;
     if (cam->ortho_height > 0.0f) {
         // A parallel slice is a box: centre at its depth midpoint, radius its
@@ -1582,7 +1583,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         glm_vec3_normalize(cam.forward);
         cam.fov_radians = camera->fov_radians;
         cam.aspect_ratio = camera->aspect_ratio;
-        cam.ortho_height = camera->is_orthographic ? camera->ortho_height : 0.0f;
+        cam.ortho_height = camera_ortho_height(camera);
 
         float cam_near = camera->near_clip;
         // Unset DERIVES NOTHING, and that is a measurement rather than caution.

@@ -97,11 +97,9 @@ static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) 
     if (scene->occluder_count == 0 && list->occluder_flag_count == 0)
         return;
 
-    // The viewer as a homogeneous point: a perspective camera's position, or
-    // an orthographic camera's backward direction with w = 0 -- the view
-    // matrix's third rotation row, the axis every fragment's V takes.
     vec4 eye;
     if (engine->camera->is_orthographic) {
+        // An eye at infinity: w = 0, along the view matrix's third rotation row.
         eye[0] = engine->view_matrix[0][2];
         eye[1] = engine->view_matrix[1][2];
         eye[2] = engine->view_matrix[2][2];
@@ -866,8 +864,7 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
     lod.ortho_height = 0.0f;
     if (engine->camera) {
         glm_vec3_copy(engine->camera->position, lod.eye);
-        if (engine->camera->is_orthographic)
-            lod.ortho_height = engine->camera->ortho_height;
+        lod.ortho_height = camera_ortho_height(engine->camera);
     } else {
         glm_vec3_zero(lod.eye);
     }

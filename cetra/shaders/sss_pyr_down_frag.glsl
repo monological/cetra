@@ -21,7 +21,7 @@ uniform sampler2D srcDepth;
 uniform vec2 texelSize;    // one SOURCE-level texel
 uniform float srcFootprint; // world units per source texel per unit of clip w
 uniform float sigmaZFloor;  // authored scatter radius, in world units
-uniform mat4 projection;    // for clipWAt: the footprint scales by depth only under perspective
+uniform mat4 projection;    // read by depth.glsl
 #include "depth.glsl"
 
 const vec2 OFF[13] = vec2[13](

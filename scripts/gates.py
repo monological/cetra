@@ -221,7 +221,7 @@ def scaled_copy(src, dst, factor):
     cscn_copy(src, dst, scale)
 
 
-def render(scene, out, extra, frames=30, size=("400", "300")):
+def render(scene, out, extra, frames=30):
     """One headless frame capture at the suite's shared size.
 
     THIRTY FRAMES IS INHERITED, NOT DERIVED, and since it is the most repeated
@@ -254,7 +254,7 @@ def render(scene, out, extra, frames=30, size=("400", "300")):
     froxel and cloud accumulators, 150 for auto-exposure and foam history,
     240 and 400 for trace cadence and walk geometry.
     """
-    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", size[0], "-H", size[1], "-S", out]
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out]
     r = _run(cmd + extra, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return r.stdout + r.stderr
@@ -419,13 +419,21 @@ def _projector(cam, w, h):
     fwd = norm(sub(target, eye))
     right = norm(cross(fwd, (0.0, 1.0, 0.0)))
     up = cross(right, fwd)
-    ty = 1.0 / math.tan(math.radians(cam["fovy_deg"]) * 0.5)
+    # An orthographic camera carries its view height instead of a fov: the NDC
+    # scale is then 2/height and no depth enters -- the Python twin of the
+    # shader's clip w, 1 under ortho and the depth under perspective.
+    ortho_h = cam.get("ortho_height", 0.0)
+    if ortho_h > 0.0:
+        ty = 2.0 / ortho_h
+    else:
+        ty = 1.0 / math.tan(math.radians(cam["fovy_deg"]) * 0.5)
     tx = ty / (w / h)
 
     def project(p):
         d = sub(p, eye)
         vx, vy, vz = dot(d, right), dot(d, up), -dot(d, fwd)
-        return (((vx * tx) / -vz * 0.5 + 0.5) * w, (0.5 - (vy * ty) / -vz * 0.5) * h)
+        cw = 1.0 if ortho_h > 0.0 else -vz
+        return (((vx * tx) / cw * 0.5 + 0.5) * w, (0.5 - (vy * ty) / cw * 0.5) * h)
 
     return project
 
@@ -11720,6 +11728,11 @@ TAA_ORTHO_SCALE = "0.67"
 # share a load order, which is the residue of the problem the frame pair below
 # solves. Bar 1.7: 1.23x the worst correct reading, and the nearest mutation is
 # 1.39x the bar the other way.
+# Re-derived after spec 11.104, which made GTAO, the view vector and the
+# cluster wedge orthographic on this leg for the first time: the ortho leg
+# reads 531,282 in both of two runs, the ratio 1.28 to 1.41 over the
+# perspective leg's same spread, and the bar stays at 1.21x the worst correct
+# reading rather than moving.
 TAA_ORTHO_RATIO_MAX = 1.7
 
 
@@ -11788,10 +11801,10 @@ def run_taa_ortho_gate(workdir):
 # the eye point differs by tens of degrees between these two eyes on every lit
 # pixel. The height reproduces the authored 45-degree framing at z = 0, where
 # the quads are, so MASK_REF_BOX lands on the same surface it always did.
-ORTHO_VIEW_TARGET = (0.0, 0.62, 0.0)
-ORTHO_VIEW_EYE_FAR = (0.0, 0.62, 5.4)
-ORTHO_VIEW_EYE_NEAR = (0.0, 0.62, 0.6)
-ORTHO_VIEW_HEIGHT = 2.0 * 5.4 * math.tan(math.radians(22.5))
+ORTHO_VIEW_CAM = _cscn_camera(MASK_FIXTURE)
+# The second eye sits this far from the target along the authored axis; the
+# first is the authored eye itself.
+ORTHO_VIEW_NEAR_DIST = 0.6
 # Vignette is on by default and is a radial gradient that would sit in the
 # flat-quad spread either way; dither would add a code of its own.
 ORTHO_VIEW_FLAGS = ["--no-ssao", "--no-ssr", "--no-bloom", "--no-vignette", "--no-dither",
@@ -11813,9 +11826,7 @@ ORTHO_VIEW_EYE_MAX = 0
 # window there. Both legs then put GTAO's reach at the same screen size:
 # 0.5*P00*r/L for perspective and 0.5*P00*r for ortho, equal at the target plane.
 ORTHO_AO_FIXTURE = "dir_shadow_fixture.cscn"
-ORTHO_AO_EYE_AUTH = (6.5, 8.0, 2.5)
-ORTHO_AO_TARGET = (0.8, 0.0, -1.0)
-ORTHO_AO_FOV_AUTH = 55.0
+ORTHO_AO_CAM = _cscn_camera(ORTHO_AO_FIXTURE)
 ORTHO_AO_DIST = 150.0
 # The resting sphere's contact point, and the half-width of the ground box read
 # around it; the ring the sphere throws is where the two legs must agree.
@@ -11847,8 +11858,10 @@ ORTHO_AO_RING_MAX_RATIO = 2.0
 # w = -z under glm_ortho returns a distance of about 1 for the panel, so the
 # in-focus render is fully blurred and the two DoF renders agree.
 ORTHO_DOF_FIXTURE = "dof_fixture.cscn"
-ORTHO_DOF_HEIGHT = 2.0 * 6.0 * math.tan(math.radians(20.0))
-ORTHO_DOF_SIZE = ("800", "600")
+ORTHO_DOF_CAM = _cscn_camera(ORTHO_DOF_FIXTURE)
+# Last-wins over render()'s shared size, the way every larger capture in this
+# file asks for one.
+ORTHO_DOF_SIZE = ["-W", "800", "-H", "600"]
 # Panel interior at the ortho framing: x +-0.6 of a 5.83 half-width, y 0.55..1.45
 # about the target's 1.0 over a 4.37 height, inset a third to stay clear of
 # the blur bleeding in from the edge.
@@ -11893,32 +11906,9 @@ def _vec_str(v):
     return ",".join(f"{c:g}" for c in v)
 
 
-def _ortho_projector(eye, target, height, w, h):
-    """World -> pixel for an orthographic camera: _projector's basis, no depth divide."""
-    def sub(a, b):
-        return tuple(x - y for x, y in zip(a, b))
-
-    def norm(v):
-        m = math.sqrt(sum(c * c for c in v))
-        return tuple(c / m for c in v)
-
-    def cross(a, b):
-        return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
-
-    def dot(a, b):
-        return sum(x * y for x, y in zip(a, b))
-
-    fwd = norm(sub(target, eye))
-    right = norm(cross(fwd, (0.0, 1.0, 0.0)))
-    up = cross(right, fwd)
-    half_h = height * 0.5
-    half_w = half_h * (w / h)
-
-    def project(p):
-        d = sub(p, eye)
-        return ((dot(d, right) / half_w * 0.5 + 0.5) * w, (0.5 - dot(d, up) / half_h * 0.5) * h)
-
-    return project
+def _ortho_height_matching(fovy_deg, dist):
+    """The orthographic view height that frames what a fovy camera frames at dist."""
+    return 2.0 * dist * math.tan(math.radians(fovy_deg) * 0.5)
 
 
 def _box_absdiff(pa, pb, w, h, box):
@@ -11937,15 +11927,6 @@ def _box_absdiff(pa, pb, w, h, box):
 def _dark_fraction(pix, w, h, below):
     n = w * h
     return sum(1 for i in range(n) if pix[i * 3] < below) / n if n else 0.0
-
-
-def _ortho_log(scene, out, extra):
-    """One capture whose LOG is the reading; None on failure."""
-    cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "400", "-H", "300", "-S", out] + extra
-    r = _run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        return None
-    return r.stdout + r.stderr
 
 
 def run_ortho_gate(workdir):
@@ -11976,20 +11957,22 @@ def run_ortho_gate(workdir):
     telephoto/ortho box mean-absolute-difference (broken reads 2.4 codes, mostly
     open floor); both are recorded beside the constants they would have used.
     """
-    arms = ("ortho-view-eye", "ortho-ao", "ortho-dof", "ortho-cluster", "ortho-lod",
-            "ortho-lod-height")
     failures = []
 
-    # --- ortho-view-eye / ortho-view-flat -----------------------------------
+    # --- ortho-view-eye -------------------------------------------------------
     scene = os.path.join(ROOT, "assets", MASK_FIXTURE)
-    common = ORTHO_VIEW_FLAGS + ["--ortho", f"{ORTHO_VIEW_HEIGHT:.4f}",
-                                 "--cam-target", _vec_str(ORTHO_VIEW_TARGET)]
+    eye_far, target = ORTHO_VIEW_CAM["eye"], ORTHO_VIEW_CAM["target"]
+    axis = [e - t for e, t in zip(eye_far, target)]
+    view_dist = math.sqrt(sum(c * c for c in axis))
+    eye_near = tuple(t + a / view_dist * ORTHO_VIEW_NEAR_DIST for t, a in zip(target, axis))
+    height = _ortho_height_matching(ORTHO_VIEW_CAM["fovy_deg"], view_dist)
+    common = ORTHO_VIEW_FLAGS + ["--ortho", f"{height:.4f}", "--cam-target", _vec_str(target)]
     far = os.path.join(workdir, "ortho_view_far.ppm")
     near = os.path.join(workdir, "ortho_view_near.ppm")
     near2 = os.path.join(workdir, "ortho_view_near2.ppm")
-    err = (render(scene, far, common + ["--cam-eye", _vec_str(ORTHO_VIEW_EYE_FAR)]) or
-           render(scene, near, common + ["--cam-eye", _vec_str(ORTHO_VIEW_EYE_NEAR)]) or
-           render(scene, near2, common + ["--cam-eye", _vec_str(ORTHO_VIEW_EYE_NEAR)]))
+    err = (render(scene, far, common + ["--cam-eye", _vec_str(eye_far)]) or
+           render(scene, near, common + ["--cam-eye", _vec_str(eye_near)]) or
+           render(scene, near2, common + ["--cam-eye", _vec_str(eye_near)]))
     if err:
         print(f"  ortho-view-eye ERROR render failed: {err.strip()[-200:]}")
         failures.append("ortho-view-eye")
@@ -11999,8 +11982,9 @@ def run_ortho_gate(workdir):
         w, h, pix = _read_ppm(near)
         lit = _box_luma(pix, w, h, MASK_REF_BOX) >= MASK_LIT_FLOOR
         ok = moved <= ORTHO_VIEW_EYE_MAX and floor == 0 and lit
-        print(f"  ortho-view-eye {'PASS' if ok else 'FAIL'}  {moved} px between an eye at 5.4 "
-              f"and one at 0.6 along the same axis (want <= {ORTHO_VIEW_EYE_MAX}, floor "
+        print(f"  ortho-view-eye {'PASS' if ok else 'FAIL'}  {moved} px between an eye at "
+              f"{view_dist:.1f} and one at {ORTHO_VIEW_NEAR_DIST} along the same axis (want <= "
+              f"{ORTHO_VIEW_EYE_MAX}, floor "
               f"{floor}, the quads lit: {lit}; under a parallel projection V is one direction "
               f"everywhere, so the eye's position along it cannot reach a pixel)")
         if not ok:
@@ -12012,15 +11996,15 @@ def run_ortho_gate(workdir):
     # back along it: target MINUS the unit vector. Added instead, the eye lands
     # under the ground on the far side, both legs render the underside of the
     # floor, and every reading below is a flat 255 that agrees with itself.
-    axis = [t - e for t, e in zip(ORTHO_AO_TARGET, ORTHO_AO_EYE_AUTH)]
+    ao_target, ao_eye = ORTHO_AO_CAM["target"], ORTHO_AO_CAM["eye"]
+    axis = [t - e for t, e in zip(ao_target, ao_eye)]
     auth_dist = math.sqrt(sum(c * c for c in axis))
     unit = [c / auth_dist for c in axis]
-    eye_far = tuple(t - u * ORTHO_AO_DIST for t, u in zip(ORTHO_AO_TARGET, unit))
-    half_h = auth_dist * math.tan(math.radians(ORTHO_AO_FOV_AUTH * 0.5))
-    fov_far = math.degrees(2.0 * math.atan(half_h / ORTHO_AO_DIST))
-    height = 2.0 * half_h
+    eye_far = tuple(t - u * ORTHO_AO_DIST for t, u in zip(ao_target, unit))
+    height = _ortho_height_matching(ORTHO_AO_CAM["fovy_deg"], auth_dist)
+    fov_far = math.degrees(2.0 * math.atan(0.5 * height / ORTHO_AO_DIST))
     common = ORTHO_AO_FLAGS + ["--cam-eye", _vec_str(eye_far), "--cam-target",
-                               _vec_str(ORTHO_AO_TARGET)]
+                               _vec_str(ao_target)]
     persp = os.path.join(workdir, "ortho_ao_persp.ppm")
     orth = os.path.join(workdir, "ortho_ao_ortho.ppm")
     orth2 = os.path.join(workdir, "ortho_ao_ortho2.ppm")
@@ -12034,7 +12018,7 @@ def run_ortho_gate(workdir):
         floor = compare(orth, orth2)[0]
         w, h, ppx = _read_ppm(persp)
         _, _, opx = _read_ppm(orth)
-        project = _ortho_projector(eye_far, ORTHO_AO_TARGET, height, w, h)
+        project = _projector({"eye": eye_far, "target": ao_target, "ortho_height": height}, w, h)
         rx, ry, rz = ORTHO_AO_REST
         corners = [project((rx + sx * ORTHO_AO_HALF, ry, rz + sz * ORTHO_AO_HALF))
                    for sx in (-1, 1) for sz in (-1, 1)]
@@ -12061,15 +12045,17 @@ def run_ortho_gate(workdir):
 
     # --- ortho-dof ------------------------------------------------------------
     scene = os.path.join(ROOT, "assets", ORTHO_DOF_FIXTURE)
-    common = ORTHO_DOF_FLAGS + ["--ortho", f"{ORTHO_DOF_HEIGHT:.4f}"]
+    dof_dist = math.sqrt(sum((e - t) ** 2 for e, t in zip(ORTHO_DOF_CAM["eye"],
+                                                            ORTHO_DOF_CAM["target"])))
+    dof_height = _ortho_height_matching(ORTHO_DOF_CAM["fovy_deg"], dof_dist)
+    common = ORTHO_DOF_FLAGS + ORTHO_DOF_SIZE + ["--ortho", f"{dof_height:.4f}"]
     base = os.path.join(workdir, "ortho_dof_off.ppm")
     focus = os.path.join(workdir, "ortho_dof_focus.ppm")
     blur = os.path.join(workdir, "ortho_dof_blur.ppm")
-    err = (render(scene, base, common, size=ORTHO_DOF_SIZE) or
-           render(scene, focus, common + ORTHO_DOF_ON, size=ORTHO_DOF_SIZE) or
-           render(scene, blur, common + ORTHO_DOF_ON[:-4] + ["--dof-focus", "30", "--dof-range",
-                                                              "1.5", "--dof-max-coc", "8"],
-                  size=ORTHO_DOF_SIZE))
+    # --dof-focus appears twice on the blur leg; the app's parser is last-wins.
+    err = (render(scene, base, common) or
+           render(scene, focus, common + ORTHO_DOF_ON) or
+           render(scene, blur, common + ORTHO_DOF_ON + ["--dof-focus", "30"]))
     if err:
         print(f"  ortho-dof    ERROR render failed: {err.strip()[-200:]}")
         failures.append("ortho-dof")
@@ -12089,13 +12075,15 @@ def run_ortho_gate(workdir):
 
     # --- ortho-cluster --------------------------------------------------------
     scene = os.path.join(ROOT, "assets", LOD_FIXTURE)
+    # The reading is one log line, printed on the first cluster build, so the
+    # two-frame log render serves; the size rides along because the count was
+    # calibrated at this aspect.
     logs = {}
     for tag, extra in (("persp", ["--fov", ORTHO_CLUSTER_FOV]),
                        ("ortho", ["--ortho", ORTHO_CLUSTER_HEIGHT])):
-        text = _ortho_log(scene, os.path.join(workdir, f"ortho_cluster_{tag}.ppm"),
-                          ORTHO_CLUSTER_FLAGS + extra)
-        m = _CLUSTERED_LINE.search(text or "")
-        logs[tag] = (m, "overflowed" in (text or ""))
+        text = _import_log(scene, ORTHO_CLUSTER_FLAGS + extra + ["-W", "400", "-H", "300"])
+        m = _CLUSTERED_LINE.search(text)
+        logs[tag] = (m, "overflowed" in text)
     if not (logs["persp"][0] and logs["ortho"][0]):
         print("  ortho-cluster ERROR the clustered: line did not print on both legs")
         failures.append("ortho-cluster")

@@ -86,8 +86,7 @@ void free_occlusion_context(OcclusionContext* context);
 // `eye` is the viewer as a homogeneous point, which face classification needs:
 // only faces whose outward side holds the eye rasterise, and from inside a box
 // that is none of them -- the inside case costs nothing to state and nothing to
-// check. (position, 1) for a perspective camera; (backward direction, 0) for an
-// orthographic one, an eye at infinity that every face sees along one axis.
+// check.
 void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec4 eye);
 // transform may be NULL for a box already in world space (the authored kind).
 void occlusion_add_box(OcclusionContext* context, const vec3 box_min, const vec3 box_max,
