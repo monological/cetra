@@ -119,7 +119,10 @@ void main()
     vec3 masses = sssProfileMasses();
     // Base width in render pixels, from the authored world radius. The pixel
     // count is free to grow with resolution now; only the world width is fixed.
-    float basePx = sssProfile.w * projScale / depth;
+    // projScale is pixels per world unit at clip w = 1, so the divisor is the
+    // clip w this depth projects to -- the depth itself under perspective, and
+    // exactly 1 under an orthographic camera.
+    float basePx = sssProfile.w * projScale / clipWAt(-depth);
 
     // Apply the ceiling to the BASE radius, not to each channel's sigma.
     //

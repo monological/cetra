@@ -169,10 +169,7 @@ void main()
         return;
     }
 
-    // Focal reciprocal, hoisted once so view-XY reconstruction is a per-sample
-    // multiply instead of a divide.
-    vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
-    vec3 P = viewPosFromLinZ(TexCoords, linZ, invFocal);
+    vec3 P = viewPosFromLinZ(TexCoords, linZ);
     vec3 V = normalize(-P); // View space: eye at origin, so -P points at the camera
 
     vec3 gbufferN = texture(normalsTex, TexCoords).xyz;
@@ -207,9 +204,7 @@ void main()
     }
 
     // View-space radius -> UV radius at this depth (world-constant reach), clamped.
-    // Closed form: only the +radius offset in X matters and clip w = -P.z, so the
-    // UV delta reduces to 0.5 * focalX * radius / (-linZ).
-    float screenRadius = min(0.5 * projection[0][0] * radius / (-linZ), MAX_SCREEN_RADIUS);
+    float screenRadius = min(screenLengthAt(radius, linZ), MAX_SCREEN_RADIUS);
 
     // Below sampling resolution the occlusion is unmeasurable: when the whole
     // reach fits inside one depth texel, every NEAREST tap returns the center's
@@ -276,7 +271,7 @@ void main()
                 if (sZ >= -1e-4)
                     continue; // sky / background sample
 
-                vec3 sVec = viewPosFromLinZ(sUV, sZ, invFocal) - P;
+                vec3 sVec = viewPosFromLinZ(sUV, sZ) - P;
                 float len = length(sVec);
                 if (len < 1e-4 || len > radius)
                     continue;

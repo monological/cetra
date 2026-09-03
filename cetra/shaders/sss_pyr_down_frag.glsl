@@ -19,8 +19,10 @@ layout(location = 1) out float DepthOut;
 uniform sampler2D srcColor;
 uniform sampler2D srcDepth;
 uniform vec2 texelSize;    // one SOURCE-level texel
-uniform float srcFootprint; // world units per source texel per unit of view depth
+uniform float srcFootprint; // world units per source texel per unit of clip w
 uniform float sigmaZFloor;  // authored scatter radius, in world units
+uniform mat4 projection;    // for clipWAt: the footprint scales by depth only under perspective
+#include "depth.glsl"
 
 const vec2 OFF[13] = vec2[13](
     vec2(-2.0, 2.0), vec2(0.0, 2.0), vec2(2.0, 2.0),
@@ -47,7 +49,7 @@ void main()
     // face-on. Floored at the authored radius so level 0 degrades to the guard
     // the separable blur used. A tolerance that did NOT grow would reject the
     // wide terms on any curved surface, which is exactly where they are wanted.
-    float tol = max(sigmaZFloor, 3.0 * srcFootprint * max(zRef, 0.0));
+    float tol = max(sigmaZFloor, 3.0 * srcFootprint * clipWAt(-max(zRef, 0.0)));
 
     vec4 color = vec4(0.0);
     float depth = 0.0;

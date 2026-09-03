@@ -11855,7 +11855,12 @@ ORTHO_DOF_SIZE = ("800", "600")
 ORTHO_DOF_BOX = (0.38, 0.38, 0.62, 0.62)
 ORTHO_DOF_FLAGS = ["--no-bloom", "--no-ssao", "--no-ssr", "--no-auto-exposure", "-E", "1.0"]
 ORTHO_DOF_ON = ["--dof", "--dof-focus", "6", "--dof-range", "1.5", "--dof-max-coc", "8"]
-ORTHO_DOF_SHARP_MAX = 2.0
+# A focused panel is not byte-identical to the no-DoF frame even when the CoC is
+# 0: the pass gathers at half resolution and resamples back, which the
+# PERSPECTIVE control on the same fixture measures at 6.1 codes. The fixed
+# orthographic build reads 6.7, the broken one 31.4 -- the same as its refocused
+# leg, which is the signature. Bar 12: 1.8x the fixed reading, 0.38x the broken.
+ORTHO_DOF_SHARP_MAX = 12.0
 ORTHO_DOF_BLUR_MIN = 20.0
 
 # ortho-cluster: the froxel wedge. Under ortho a cluster is a box of constant

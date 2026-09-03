@@ -1582,12 +1582,15 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
 
         uniform_set_vec2(fx->sss_pyr_down_program->uniforms, "texelSize",
                          (const float[]){1.0f / (float)sw, 1.0f / (float)sh});
-        // World units one SOURCE texel spans per unit of view depth. A source
-        // texel is 2^(mip-1) render texels, and a render texel subtends
-        // 1/proj_scale per unit depth.
+        // World units one SOURCE texel spans per unit of clip w -- the depth
+        // under perspective, 1 under orthographic, which the shader resolves
+        // from the projection. A source texel is 2^(mip-1) render texels, and a
+        // render texel subtends 1/proj_scale at clip w = 1.
         uniform_set_float(fx->sss_pyr_down_program->uniforms, "srcFootprint",
                           proj_scale > 0.0f ? (float)(1 << (mip - 1)) / proj_scale : 0.0f);
         uniform_set_float(fx->sss_pyr_down_program->uniforms, "sigmaZFloor", sigma_z);
+        uniform_set_mat4(fx->sss_pyr_down_program->uniforms, "projection",
+                         (const float*)projection);
         draw_fullscreen_quad(fx->quad_vao);
     }
 
@@ -2503,7 +2506,12 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 float postfx_fog_near(const PostFX* fx, mat4 projection) {
     if (fx->fog_near > 0.0f)
         return fx->fog_near;
-    float cam_near = projection[3][2] / (projection[2][2] - 1.0f);
+    // The C twin of depth.glsl's nearPlaneDist(): [2][3] is 0 under glm_ortho
+    // and -1 under glm_perspective, and the two projections invert to
+    // different formulas rather than one with a special case.
+    float cam_near = projection[2][3] == 0.0f
+                         ? (projection[3][2] + 1.0f) / projection[2][2]
+                         : projection[3][2] / (projection[2][2] - 1.0f);
     return cam_near > 0.0f ? cam_near : 0.1f;
 }
 
@@ -3824,8 +3832,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                      aux_written && have_normals;
         uniform_set_int(tm, "specOccMode", spec_occ_active ? fx->spec_occlusion_mode : 0);
         uniform_set_int(tm, "specOccHasMetallic", albedo_written ? 1 : 0);
-        const float inv_focal[2] = {1.0f / projection[0][0], 1.0f / projection[1][1]};
-        uniform_set_vec2(tm, "invFocal", inv_focal);
+        // The matrix rather than its two focal reciprocals: the shader's view
+        // ray reads the projection kind off it (spec 11.104).
+        uniform_set_mat4(tm, "projection", (const float*)projection);
         // See the composite's copy: uploaded per draw because the two consumers
         // magnify this buffer by different factors.
         const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};

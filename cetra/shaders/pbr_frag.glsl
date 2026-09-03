@@ -210,6 +210,9 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
 #include "view.glsl"
+// The projection-aware reconstruction and direction helpers (spec 11.104):
+// clipWAt for the skin pre-integration, worldDirToCamera for V.
+#include "depth.glsl"
 #include "velocity.glsl"
 #include "fresnel.glsl"
 #include "alpha_coverage.glsl"
@@ -1827,7 +1830,7 @@ void main() {
         // its derivative is a texture-detail metric -- see preintegrated_skin.
         float curv = skinCurvature(normalize(Normal), ddxWorld, ddyWorld);
         skinShapeF = skinShape(skinSigma(prof.rgb, prof.w, curv, curvatureScale,
-                                         sssMaxScatterPerDepth, -ViewPos.z));
+                                         sssMaxScatterPerDepth, clipWAt(ViewPos.z)));
     }
 
     // Get tangent and bitangent for anisotropy

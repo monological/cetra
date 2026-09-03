@@ -39,6 +39,11 @@ float froxelFarZ(float nearZ, float farZ) {
 // a pure exponential spends its budget on (UE carries the same knob as
 // r.VolumetricFog.DepthDistributionScale).
 
+// For viewPosFromLinZ: the one screen-to-view reconstruction, which is what
+// makes a froxel a box under an orthographic camera and a wedge under a
+// perspective one without this file knowing which (spec 11.104).
+#include "depth.glsl"
+
 // Slice index (0 .. slices, continuous) -> positive view depth.
 float froxelSliceToViewZ(float slice, float nearZ, float farZ, float slices, float dist) {
     float t = clamp(slice / slices, 0.0, 1.0);
@@ -73,12 +78,11 @@ vec4 froxelSampleMedium(sampler3D vol, vec2 uv, float viewZ, float nearZ, float 
 
 // The view-space position at the CENTRE of the froxel addressed by (uv, slice),
 // where uv is the froxel's screen-space [0,1] coordinate and jitter offsets the
-// sample within the slice (0.5 = centre). invFocal is 1/(P[0][0], P[1][1]).
-// View space is right-handed with z negative in front of the camera, matching
-// include/depth.glsl.
+// sample within the slice (0.5 = centre). The XY comes from depth.glsl's one
+// reconstruction rather than a copy of it: the copy was the perspective wedge
+// and nothing here knew that an orthographic camera sees a box (spec 11.104).
 vec3 froxelViewPos(vec2 uv, float slice, float jitter, float nearZ, float farZ, float slices,
-                   vec2 invFocal, float dist) {
+                   float dist) {
     float viewZ = froxelSliceToViewZ(slice + jitter, nearZ, farZ, slices, dist);
-    vec2 ndc = uv * 2.0 - 1.0;
-    return vec3(ndc * viewZ * invFocal, -viewZ);
+    return viewPosFromLinZ(uv, -viewZ);
 }

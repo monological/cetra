@@ -192,7 +192,7 @@ void main()
 
     // Near plane recovered from the projection (the app's near clip varies),
     // so the camera-facing-ray clamp below tracks the real frustum
-    float nearV = projection[3][2] / (projection[2][2] - 1.0);
+    float nearV = nearPlaneDist();
 
     vec3 fragPos = viewPosFromDepth(TexCoords, depth);
     vec3 viewDir = normalize(fragPos); // camera at the view-space origin

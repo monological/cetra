@@ -112,7 +112,7 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
 
     // Clamp a camera-facing ray so its far end stays in front of the near
     // plane (recovered from the projection: the app's near clip varies).
-    float nearV = projection[3][2] / (projection[2][2] - 1.0);
+    float nearV = nearPlaneDist();
     float tMax = reach;
     if (dirVS.z > 0.0)
         tMax = min(tMax, (-nearV - startV.z) / dirVS.z);
@@ -197,8 +197,7 @@ void main() {
         return;
     }
 
-    vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
-    vec3 P = viewPosFromLinZ(TexCoords, linZ, invFocal);
+    vec3 P = viewPosFromLinZ(TexCoords, linZ);
 
     // Read the surface normal once; every light's back-face cull, ray-start
     // offset and fold weight uses it. The zero-normal hair/A2C marker leaves

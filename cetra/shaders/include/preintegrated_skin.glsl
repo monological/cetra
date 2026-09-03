@@ -174,7 +174,7 @@ vec3 skinDiffuse(SkinShape s, float ndotl) {
 // delivers the authored width the deficit is 0 and pre-integration contributes
 // NOTHING.
 vec3 skinSigma(vec3 scatterColor, float scatterRadius, float curvature,
-               float curvatureScale, float maxScatterPerDepth, float viewDepth) {
+               float curvatureScale, float maxScatterPerDepth, float clipW) {
     // maxScatterPerDepth is the widest SIGMA the screen-space pass can deliver,
     // so convert it back to the base radius that sigma came from before
     // comparing: the widest term is the tail multiplier times the reddest
@@ -184,7 +184,10 @@ vec3 skinSigma(vec3 scatterColor, float scatterRadius, float curvature,
     float peakColor = max(max(scatterColor.r, scatterColor.g), scatterColor.b);
     float reachToBase = 1.0 / max(SSS_PROFILE_MULT.z * peakColor, 1e-3);
     float want = scatterRadius;
-    float got = min(want, maxScatterPerDepth * reachToBase * viewDepth);
+    // maxScatterPerDepth is per unit of CLIP W, which is the depth under a
+    // perspective camera and exactly 1 under an orthographic one -- the caller
+    // passes clipWAt(viewZ) rather than -viewZ so this chunk need not know which.
+    float got = min(want, maxScatterPerDepth * reachToBase * clipW);
     float k = got / max(want, 1e-6);
     // The shortfall SQUARED, not sqrt(1 - k^2).
     //

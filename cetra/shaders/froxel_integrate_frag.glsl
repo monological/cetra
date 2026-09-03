@@ -21,6 +21,8 @@ out vec4 FragColor; // rgb = accumulated in-scatter, a = transmittance to this s
 // The gather ships because it is the simplest correct form, not because it is
 // the cheapest; no frame timing has been measured either way.
 
+// Before the froxel include, which reaches depth.glsl and its reads of this.
+uniform mat4 projection;
 #include "froxel.glsl"
 // scatterVolume was pre-exposed at inject, so the accumulated L below is
 // already working space and WS_MEDIA_MAX means what it says here.
@@ -28,7 +30,6 @@ out vec4 FragColor; // rgb = accumulated in-scatter, a = transmittance to this s
 
 uniform sampler3D scatterVolume;
 uniform int sliceIndex;
-uniform mat4 projection;
 uniform float fogNear;
 uniform float fogFar;
 uniform float fogDepthDist;
@@ -42,10 +43,11 @@ void main() {
     // Slices are constant-DEPTH planes, but extinction integrates along the
     // ray, which is longer than the depth step by 1/cos of the ray's angle off
     // the optical axis -- 1.38x at the corner of a 50-degree 16:9 frame. Without
-    // this the frame edges under-extinguish.
-    vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
+    // this the frame edges under-extinguish. Under an orthographic camera every
+    // ray IS the optical axis and the scale is exactly 1, which the shared ray
+    // helper returns without this pass knowing the projection.
     vec2 ndc = (gl_FragCoord.xy / vec2(textureSize(scatterVolume, 0).xy)) * 2.0 - 1.0;
-    float rayScale = length(vec3(ndc * invFocal, 1.0));
+    float rayScale = length(viewRayVecAt(ndc));
 
     // Slice depths came from a constant ratio while the mapping was a pure
     // exponential; a depth-distribution bias breaks that, so the walk asks the

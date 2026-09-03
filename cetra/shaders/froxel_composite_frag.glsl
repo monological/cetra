@@ -87,7 +87,7 @@ void main() {
     // (postfx.c owns it); the aerial LUT is built by aerial_lut_frag from the
     // camera's, so sampling it against fog's would index the wrong slices --
     // silently, as haze at the wrong distance rather than as an error.
-    float camNearZ = projection[3][2] / (projection[2][2] - 1.0);
+    float camNearZ = nearPlaneDist();
     float linZ = texture(linDepthTex, TexCoords).z;
 
     // Sky/background: the aux buffer's sentinel is 0, there is no surface.

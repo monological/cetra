@@ -34,7 +34,7 @@ uniform sampler2D giTex;      // Half-res gathered GI radiance (SSGI)
 // shimmers) a bright grazing specular. These recover the reflection: aux .z/.w
 // give view-Z + roughness, normalsTex the view normal, for a Lagarde term.
 uniform sampler2D auxTex;       // Aux G-buffer: linear view-Z (.z) + roughness (.w)
-uniform vec2 invFocal;          // 1/projection focal terms, for view-pos reconstruction
+uniform mat4 projection;        // the draw projection, for the view ray (depth.glsl)
 uniform vec2 aoRes;             // aoTex's own size, which is HALF the render res
 uniform int specOccMode;        // 0 off, 1 legacy smoothness blend, 2 split (applied in the composite)
 uniform int specOccHasMetallic; // albedoTex.a carries metallic this frame (SSGI wrote it)
@@ -331,6 +331,8 @@ vec3 toneSelect(vec3 c)
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
 #include "ao_upsample.glsl"
 #include "spec_occ.glsl"
+// After the `projection` uniform it reads; for the view ray under either projection.
+#include "depth.glsl"
 
 // The AO buffer at this pixel, reconstructed rather than merely filtered.
 //
@@ -373,9 +375,11 @@ float aoVisibility()
     vec4 aux = texture(auxTex, TexCoords); // .w = effective roughness
     // View direction from screen UV. normalize(-viewPos) is independent of depth
     // (same direction everywhere along a camera ray), so linZ cancels -- no need
-    // to reconstruct the view position, just the ray direction from NDC + focal.
+    // to reconstruct the view position, just the ray through the pixel, negated
+    // to point at the camera. Under an orthographic camera that is +Z for every
+    // pixel, which the shared ray helper returns.
     vec2 ndc = TexCoords * 2.0 - 1.0;
-    vec3 V = normalize(vec3(-ndc * invFocal, 1.0));
+    vec3 V = normalize(-viewRayVecAt(ndc));
     vec3 N = normalize(nrm.xyz);
     float NdotV = clamp(dot(N, V), 0.0, 1.0);
     float metallic = specOccHasMetallic == 1 ? texture(albedoTex, TexCoords).a : 0.0;

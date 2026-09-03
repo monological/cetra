@@ -171,7 +171,6 @@ float fogVisibility(int layer0, vec3 P) {
 void main() {
     // The VOLUME's near, not the camera's: see fogNear's owner in postfx.c.
     float nearZ = fogNear;
-    vec2 invFocal = 1.0 / vec2(projection[0][0], projection[1][1]);
 
     // Sub-cell sample offset. The offset is the SAME for every cell -- a
     // low-discrepancy shift of the whole grid -- so averaging successive frames
@@ -189,7 +188,7 @@ void main() {
     }
     vec2 cellUv = TexCoords + (jitter.xy - 0.5) / vec2(textureSize(historyVolume, 0).xy);
     vec3 viewPos = froxelViewPos(cellUv, float(sliceIndex), jitter.z, nearZ, fogFar,
-                                 float(froxelDepth), invFocal, fogDepthDist);
+                                 float(froxelDepth), fogDepthDist);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
     // The cell's UNJITTERED centre, kept for reprojection only. Reprojecting the
@@ -200,7 +199,7 @@ void main() {
     // exactly this cell's own history, which is what turns the blend into a
     // running average of the jittered samples.
     vec3 centreView = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar,
-                                    float(froxelDepth), invFocal, fogDepthDist);
+                                    float(froxelDepth), fogDepthDist);
     vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second
     // argument, and the froxel equivalent of the march's per-pixel rayDir.

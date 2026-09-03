@@ -35,8 +35,7 @@ uniform int sliceIndex;
 const int AERIAL_STEPS = 16;
 
 void main() {
-    float nearZ = projection[3][2] / (projection[2][2] - 1.0);
-    vec2 invFocal = vec2(1.0 / projection[0][0], 1.0 / projection[1][1]);
+    float nearZ = nearPlaneDist();
 
     // Depth mapping is shared with the fog volume (include/froxel.glsl), in
     // WORLD units. The jitter of 1.0 is load-bearing: it integrates to the FAR
@@ -44,7 +43,7 @@ void main() {
     // composite indexes both volumes with the same expression instead of
     // carrying two off-by-half-a-slice rules.
     vec3 viewPos = froxelViewPos(TexCoords, float(sliceIndex), 1.0, nearZ, aerialFar,
-                                 float(aerialDepth), invFocal, 1.0);
+                                 float(aerialDepth), 1.0);
     vec3 camPos = invView[3].xyz;
     vec3 toCell = (invView * vec4(viewPos, 1.0)).xyz - camPos;
     float distKm = length(toCell) / unitsPerKm;
