@@ -50,9 +50,12 @@ enum {
 
 // How a view picks a level out of a mesh's LOD chain.
 typedef struct LodSelect {
-    vec3 eye;     // where projected size is measured from
-    float bias;   // > 1 holds detail longer, < 1 drops it sooner
-    bool enabled; // false pins every item to level 0
+    vec3 eye;           // where projected size is measured from
+    float ortho_height; // > 0 = a parallel projection this tall in world units, under
+                        //       which projected size is radius against that height and
+                        //       the eye's distance does not enter; 0 = perspective
+    float bias;         // > 1 holds detail longer, < 1 drops it sooner
+    bool enabled;       // false pins every item to level 0
 } LodSelect;
 
 typedef struct DrawItem {

@@ -214,7 +214,7 @@ static void transform_point(mat4 view_proj, mat4 transform, const float* p, floa
     memcpy(out, clip, sizeof(float) * 4);
 }
 
-void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec3 eye,
+void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec4 eye,
                                   const vec3 box_min, const vec3 box_max, mat4 transform) {
     if (!depth || w <= 0 || h <= 0)
         return;
@@ -251,7 +251,10 @@ void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj,
         glm_vec3_sub(world[fc[4]], world[fc[0]], to_opp);
         if (glm_vec3_dot(n, to_opp) > 0.0f)
             glm_vec3_negate(n);
-        glm_vec3_sub((float*)eye, world[fc[0]], to_eye);
+        // to_eye = eye.xyz - eye.w * p: the vector to a finite eye, or the
+        // one direction every face sees an eye at infinity along.
+        glm_vec3_scale(world[fc[0]], eye[3], to_eye);
+        glm_vec3_sub((float*)eye, to_eye, to_eye);
         // <= skips edge-on and degenerate faces too: both cover nothing,
         // which is the conservative side.
         if (glm_vec3_dot(n, to_eye) <= 0.0f)
@@ -280,11 +283,11 @@ void occlusion_rasterize_mesh_into(uint16_t* depth, int w, int h, mat4 view_proj
     }
 }
 
-void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec3 eye) {
+void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec4 eye) {
     if (!context)
         return;
     glm_mat4_copy(view_proj, context->view_proj);
-    glm_vec3_copy((float*)eye, context->eye);
+    glm_vec4_copy((float*)eye, context->eye);
     // Every byte 0xFF is every pixel OCCLUSION_DEPTH_EMPTY.
     memset(context->depth, 0xFF, sizeof(context->depth));
     context->occluder_count = 0;
@@ -662,7 +665,11 @@ void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene,
         vec3 b = {b4[0] / b4[3], b4[1] / b4[3], b4[2] / b4[3]};
         vec3 centre;
         glm_vec3_lerp(a, b, t, centre);
-        float dist = glm_vec3_distance((float*)context->eye, centre);
+        // Box size grows with distance from the viewer: from the eye under
+        // perspective, from the ray's own near anchor under an orthographic
+        // camera, whose eye is a direction with no position to measure from.
+        float dist = context->eye[3] > 0.0f ? glm_vec3_distance((float*)context->eye, centre)
+                                            : glm_vec3_distance(a, centre);
         float half = (0.01f + 0.15f * u) * dist;
         vec3 wmin = {centre[0] - half, centre[1] - half, centre[2] - half};
         vec3 wmax = {centre[0] + half, centre[1] + half, centre[2] + half};

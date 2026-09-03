@@ -60,7 +60,9 @@ typedef struct OcclusionBoxRec {
 // struct; it is declared here so the engine can own one by pointer.
 typedef struct OcclusionContext {
     mat4 view_proj; // latched at begin(); the UNJITTERED camera matrix
-    vec3 eye;       // the camera's world position, for the inside-a-box skip
+    vec4 eye;       // the viewer as a homogeneous point: (position, 1) for a perspective
+                    // camera, (backward direction, 0) for an orthographic one -- an eye
+                    // at infinity, so one face test serves both
 
     // Nearest occluder front-face depth per pixel (GL_LESS semantics), EMPTY
     // where nothing landed. Overlapping occluders merge by min for free.
@@ -81,11 +83,12 @@ void free_occlusion_context(OcclusionContext* context);
 // the buffer to EMPTY and latches the matrix; finish folds pixels into
 // tile_zmax and decides `active` -- a frame whose occluders all clipped away or
 // sat behind the camera covers no tile and the per-item walk is skipped.
-// `eye` is the camera's world position, which face classification needs: only
-// faces whose outward side holds the eye rasterise, and from inside a box that
-// is none of them -- the inside case costs nothing to state and nothing to
-// check.
-void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec3 eye);
+// `eye` is the viewer as a homogeneous point, which face classification needs:
+// only faces whose outward side holds the eye rasterise, and from inside a box
+// that is none of them -- the inside case costs nothing to state and nothing to
+// check. (position, 1) for a perspective camera; (backward direction, 0) for an
+// orthographic one, an eye at infinity that every face sees along one axis.
+void occlusion_begin(OcclusionContext* context, mat4 view_proj, const vec4 eye);
 // transform may be NULL for a box already in world space (the authored kind).
 void occlusion_add_box(OcclusionContext* context, const vec3 box_min, const vec3 box_max,
                        mat4 transform);
@@ -111,7 +114,7 @@ void occlusion_cull_list(const OcclusionContext* context, struct DrawList* list,
 // the probe's reference twin rasterises through THIS at full resolution, so
 // the hierarchy is the only thing it does not share. Face classification is
 // part of the path, which is why `eye` is here too.
-void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec3 eye,
+void occlusion_rasterize_box_into(uint16_t* depth, int w, int h, mat4 view_proj, const vec4 eye,
                                   const vec3 box_min, const vec3 box_max, mat4 transform);
 // Triangle-exact raster of a mesh's CPU arrays (they survive upload) under the
 // same rounding. Validation only: the probe compares a flagged mesh's box

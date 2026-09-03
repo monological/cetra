@@ -97,7 +97,19 @@ static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) 
     if (scene->occluder_count == 0 && list->occluder_flag_count == 0)
         return;
 
-    occlusion_begin(engine->occlusion, engine->view_proj, engine->camera->position);
+    // The viewer as a homogeneous point: a perspective camera's position, or
+    // an orthographic camera's backward direction with w = 0 -- the view
+    // matrix's third rotation row, the axis every fragment's V takes.
+    vec4 eye;
+    if (engine->camera->is_orthographic) {
+        eye[0] = engine->view_matrix[0][2];
+        eye[1] = engine->view_matrix[1][2];
+        eye[2] = engine->view_matrix[2][2];
+        eye[3] = 0.0f;
+    } else {
+        glm_vec4(engine->camera->position, 1.0f, eye);
+    }
+    occlusion_begin(engine->occlusion, engine->view_proj, eye);
     for (int i = 0; i < scene->occluder_count; ++i)
         occlusion_add_box(engine->occlusion, scene->occluders[i].box_min,
                           scene->occluders[i].box_max, NULL);
@@ -851,10 +863,14 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
     LodSelect lod;
     lod.enabled = engine->lod_enabled;
     lod.bias = engine->lod_bias;
-    if (engine->camera)
+    lod.ortho_height = 0.0f;
+    if (engine->camera) {
         glm_vec3_copy(engine->camera->position, lod.eye);
-    else
+        if (engine->camera->is_orthographic)
+            lod.ortho_height = engine->camera->ortho_height;
+    } else {
         glm_vec3_zero(lod.eye);
+    }
     draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
                     &lod);
     profiler_cpu_scope_end(engine->profiler);

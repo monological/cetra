@@ -189,11 +189,19 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
     float radius = 0.0f;
     item_world_bounds(mesh, node, world_centre, &radius);
 
-    float distance = glm_vec3_distance((float*)lod->eye, world_centre);
-    if (distance < 1e-4f)
-        return 0;
-
-    float projected = (radius / distance) * (lod->bias > 0.0f ? lod->bias : 1.0f);
+    // Under a parallel projection the sphere's size on screen is its radius
+    // against the view volume's height, the same at every distance; under
+    // perspective it is the radius over the distance from the eye.
+    float projected;
+    if (lod->ortho_height > 0.0f) {
+        projected = radius / (0.5f * lod->ortho_height);
+    } else {
+        float distance = glm_vec3_distance((float*)lod->eye, world_centre);
+        if (distance < 1e-4f)
+            return 0;
+        projected = radius / distance;
+    }
+    projected *= lod->bias > 0.0f ? lod->bias : 1.0f;
     int level = 0;
     while (level < CETRA_LOD_MAX - 1 && projected < LOD_SWITCH[level])
         level++;
