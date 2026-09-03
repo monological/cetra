@@ -35,7 +35,12 @@ typedef struct {
     // this can be the ONLY argument; everything else in it is applied after the
     // model loads, where it wins over both the scene file and the flags.
     const char* config_path;
-    float fov_deg;  // Camera FOV in degrees (0 = default 50)
+    float fov_deg; // Camera FOV in degrees (0 = default 50)
+    // Orthographic view volume height in world units (0 = perspective). The
+    // engine has supported an orthographic camera since it had one, and until
+    // spec 11.103 nothing that could capture a frame could ask for one -- so
+    // the TAA jitter, derived for perspective, was wrong there and unreachable.
+    float ortho_height;
     float exposure; // Tonemap exposure override; see has_exposure
     // Presence flag rather than testing `exposure > 0`, which six sites did.
     // Under a physical camera the value is an EV BIAS, where negative is a legal

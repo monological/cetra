@@ -68,6 +68,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  -t, --textures <dir>   Texture directory\n");
     fprintf(stderr, "  -e, --env <path>       HDR environment map for IBL\n");
     fprintf(stderr, "  -F, --fov <degrees>    Camera field of view (default: 50)\n");
+    fprintf(stderr, "      --ortho <height>   Orthographic camera, view volume height in world\n"
+                    "                         units (default: perspective)\n");
     fprintf(
         stderr,
         "      --cam-eye x,y,z    Explicit camera position (exact-repro; needs --cam-target)\n");
@@ -615,6 +617,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->fov_deg = (float)atof(argv[i]);
             if (args->fov_deg <= 0.0f || args->fov_deg >= 180.0f) {
                 fprintf(stderr, "Error: invalid fov '%s' (use 1-179 degrees)\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--ortho") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->ortho_height = (float)atof(argv[i]);
+            if (args->ortho_height <= 0.0f) {
+                fprintf(stderr, "Error: invalid ortho height '%s' (want > 0)\n", argv[i]);
                 return -1;
             }
         } else if (strcmp(argv[i], "--render-mode") == 0) {
@@ -3831,6 +3843,13 @@ int main(int argc, char** argv) {
     float auto_near = fmaxf(scene_radius * 0.05f, 0.05f);
     float auto_far = scene_radius * 40.0f;
     set_camera_perspective(camera, fov_radians, auto_near, auto_far);
+    // AFTER the auto-framing, which is the whole reason this is not up beside
+    // the other camera setup: set_camera_perspective clears is_orthographic, so
+    // an earlier request is silently undone here and --ortho renders a
+    // perspective frame with no warning. The auto-framed near/far are the ones
+    // to keep -- only the projection shape changes.
+    if (args.ortho_height > 0.0f)
+        set_camera_orthographic(camera, args.ortho_height, auto_near, auto_far);
     update_engine_camera_perspective(engine);
     printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
 

@@ -1398,11 +1398,37 @@ void render_current_scene(Engine* engine) {
         engine_render_size(engine, &rw, &rh);
         float jx = _halton(j, 2) - 0.5f;
         float jy = _halton(j, 3) - 0.5f;
-        draw_projection[2][0] += jx * 2.0f / (float)rw;
-        draw_projection[2][1] += jy * 2.0f / (float)rh;
+        // WHICH ELEMENT CARRIES THE OFFSET DEPENDS ON THE PROJECTION, because
+        // the perspective form relies on a divide the orthographic form does
+        // not have. [2][0] multiplies view-space z into clip x; under
+        // perspective clip.w is -z_eye, so the term divides back out to a
+        // constant NDC shift. Under glm_ortho clip.w is 1, so it survives
+        // SCALED BY DEPTH -- about 150 px at a 300-unit camera distance on a
+        // 1600-wide target, re-rolled every frame. That is not a degraded
+        // frame, it is a destroyed one, and no fixture could reach it: the
+        // only orthographic cameras in the tree are two apps with no headless
+        // capture, and an imported camera is always perspective.
+        //
+        // The sign flips with the element, and that is the half that hides.
+        // Perspective's term arrives as jx*z_eye / -z_eye, so the raster moves
+        // -jx pixels; the translation term arrives undivided and would move
+        // +jx. Both are sub-pixel and both average to a stable image, so at
+        // render scale 1 the wrong one is not merely hard to see -- it reads
+        // no worse than the right one. It separates only where something
+        // UN-APPLIES the offset, which is taau_jitter_px below and the
+        // upscaling resolve that consumes it.
+        if (engine->camera && engine->camera->is_orthographic) {
+            draw_projection[3][0] -= jx * 2.0f / (float)rw;
+            draw_projection[3][1] -= jy * 2.0f / (float)rh;
+        } else {
+            draw_projection[2][0] += jx * 2.0f / (float)rw;
+            draw_projection[2][1] += jy * 2.0f / (float)rh;
+        }
         // Published in render pixels: a [2][0] offset of 2*jx/rw shifts the
         // raster exactly jx pixels, and the TAAU resolve un-applies that to
-        // place this frame's samples on the display grid.
+        // place this frame's samples on the display grid. The published value
+        // is the same either way, which is what makes the branch above a
+        // change of ELEMENT rather than of contract.
         engine->postfx->taau_jitter_px[0] = jx;
         engine->postfx->taau_jitter_px[1] = jy;
     } else if (engine->postfx) {

@@ -1642,24 +1642,38 @@ def run_grazing_gate(workdir):
     return [] if ok else ["grazing"]
 
 
-def _taa_churn(workdir, fixture, tag, extra):
-    """AE between frames 90 and 120 of one static-camera TAA run (None on error)."""
+def _taa_churn(workdir, fixture, tag, extra, frames=120, every=30, first=90):
+    """AE between frame `first` and the final frame of one static-camera TAA run.
+
+    The defaults are the original pair, 90 against 120 -- two fully CONVERGED
+    frames, which is what a caller asking "does this feature keep churning after
+    the history fills" wants.
+
+    ADJACENT FRAMES ARE A DIFFERENT QUESTION and the parameters exist for it: two
+    converged frames differ by whatever the accumulator has failed to settle,
+    while consecutive ones also carry the per-frame jitter error. Spec 11.103
+    needed the second -- a TAA jitter with the right magnitude and the wrong SIGN
+    settles to a stable image and is invisible at 90-vs-120, reading 0.86 of the
+    perspective leg where the correct sign reads 0.88.
+
+    The second frame is always the one `-S` writes, so a caller changes the pair
+    by moving `first` and `frames` together. None on error.
+    """
     base = os.path.join(workdir, f"churn_{tag}.ppm")
-    cmd = [RENDER, "-m", fixture, "-x", "-f", "120", "--no-auto-exposure", "-E", "1.0",
-           "--taa", "--headless-jitter", "--screenshot-every", "30",
+    cmd = [RENDER, "-m", fixture, "-x", "-f", str(frames), "--no-auto-exposure", "-E", "1.0",
+           "--taa", "--headless-jitter", "--screenshot-every", str(every),
            "-W", "800", "-H", "600", "-S", base] + extra
     r = _run(cmd, capture_output=True, text=True)
-    f90 = base[:-4] + "_000090.ppm"
-    f120 = base[:-4] + "_000120.ppm"
+    f_first = base[:-4] + f"_{first:06d}.ppm"
     # Both frames can exist and still be wrong if the run died between them, so
     # the exit code is checked as well as the files.
     if r.returncode != 0:
         print(f"  churn        ERROR {tag} exited {r.returncode}: "
               f"{(r.stdout + r.stderr).strip()[-300:]}")
         return None
-    if not (os.path.exists(f90) and os.path.exists(f120)):
+    if not (os.path.exists(f_first) and os.path.exists(base)):
         return None
-    return compare(f90, f120)[0]
+    return compare(f_first, base)[0]
 
 
 # The shadow catcher's virtual floor is auto-enabled by every sky-lit scene and
@@ -11667,6 +11681,87 @@ def run_ladder_gate(workdir):
     return failures
 
 
+# The TAA jitter under an orthographic camera (spec 11.103).
+#
+# texcomp_fixture because the defect SCALES WITH VIEW DEPTH and this is the
+# corpus's only fixture that spans one: a plane running 1 to 400 units out. On a
+# shallow scene the same bug is three pixels and no statistic separates it -- the
+# alpha ladder, tried first, reads 52,637 broken against 48,404 fixed and decides
+# nothing.
+TAA_ORTHO_FIXTURE = "texcomp_fixture.cscn"
+# Chosen to frame that plane at roughly the perspective run's coverage, so the
+# two legs compare pictures of the same thing.
+TAA_ORTHO_HEIGHT = "60"
+# THE ARM MUST RUN UPSCALED OR IT CANNOT SEE HALF THE DEFECT, and this is the
+# reason the scale is here rather than left at 1. The jitter is published in
+# PIXELS for the TAAU resolve to un-apply, so the offset's SIGN only matters
+# once something un-applies it: at full scale the wrong sign measured 192,630
+# against the right sign's 210,974 -- it reads BETTER, and an arm there would
+# have preferred the bug.
+TAA_ORTHO_SCALE = "0.67"
+# Ortho churn as a multiple of the same fixture's perspective churn. A ratio
+# rather than an absolute because the fixture is inherently churny under TAA
+# (a minifying plane of high-frequency maps); what is under test is whether the
+# orthographic path behaves like the perspective one, not how noisy the picture
+# is. A CORRECT ortho leg still churns more -- 1.25 to 1.38 over repeat runs --
+# because the uniform projection holds the far end of that plane at a spatial
+# frequency perspective would have shrunk away, so the bar is calibrated on the
+# measured value and not on 1.0. The spread is the perspective leg's, which
+# moved 376k to 415k while the ortho leg repeated exactly; two processes cannot
+# share a load order, which is the residue of the problem the frame pair below
+# solves. Bar 1.7: 1.23x the worst correct reading, and the nearest mutation is
+# 1.39x the bar the other way.
+TAA_ORTHO_RATIO_MAX = 1.7
+
+
+def run_taa_ortho_gate(workdir):
+    """The TAA jitter is a sub-pixel offset under BOTH projections (spec 11.103).
+
+      taa-ortho  an orthographic camera's jitter is a sub-pixel offset too, so its
+                 TAA churn stays near the same fixture's perspective churn
+
+    WHAT WENT WRONG. The jitter was added to draw_projection[2][0], the element
+    that multiplies view-space z into clip x. Perspective divides that back out
+    (clip.w is -z_eye) and lands a constant sub-pixel shift; glm_ortho's clip.w
+    is 1, so it survives SCALED BY DEPTH -- about 150 px at a 300-unit camera
+    distance. Nothing could reach it: the only orthographic cameras in the tree
+    were two apps with no headless capture, and an imported camera is always
+    perspective, which is why --ortho exists on the render app at all.
+
+    FALSIFIED THREE WAYS, all measured at these parameters, as a ratio against
+    the perspective leg: the shipped fix reads 1.38; putting the offset back on
+    [2][0] reads 3.09; keeping the translation element but not negating it reads
+    2.36. The last is the one this arm's scale and frame pair exist for -- at
+    full scale, or at two converged frames, an un-negated offset is invisible.
+    """
+    arms = ("taa-ortho",)
+    scene = os.path.join(ROOT, "assets", TAA_ORTHO_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  taa-ortho    SKIP  ({TAA_ORTHO_FIXTURE} not present)")
+        return []
+    scaled = ["--render-scale", TAA_ORTHO_SCALE]
+    # ADJACENT, so the sign is visible, and LATE, so the two processes are
+    # comparable. At 61/62 the perspective leg alternated between 381,755 and
+    # 626,734 across runs of one build -- bimodal rather than noisy, which is the
+    # async texture-load timing this fixture streams through, and the reason the
+    # ladder group takes both its frames from ONE process. A ratio across two
+    # processes cannot do that, so it waits for loading to settle instead.
+    pair = {"frames": 120, "every": 119, "first": 119}
+    persp = _taa_churn(workdir, scene, "ortho_persp", scaled, **pair)
+    orth = _taa_churn(workdir, scene, "ortho_ortho", scaled + ["--ortho", TAA_ORTHO_HEIGHT],
+                      **pair)
+    if persp is None or orth is None or persp <= 0:
+        print("  taa-ortho    ERROR churn run failed or read zero")
+        return list(arms)
+    ratio = orth / persp
+    ok = ratio <= TAA_ORTHO_RATIO_MAX
+    print(f"  taa-ortho    {'PASS' if ok else 'FAIL'}  orthographic TAA churns {orth} px against "
+          f"the same fixture's perspective {persp}, ratio {ratio:.2f} (want <= "
+          f"{TAA_ORTHO_RATIO_MAX}: the jitter on the perspective element reads 3.09 and an "
+          f"un-negated translation reads 2.36)")
+    return [] if ok else list(arms)
+
+
 OVERDRAW_LAYERS = "overdraw_layers.cscn"
 OVERDRAW_TILES = "overdraw_tiles.cscn"
 # Depth complexity here is an integer by construction, so this absorbs only the
@@ -21084,6 +21179,8 @@ GATE_GROUPS = [
      run_alphacov_gate),
     ("ladder", "the alpha mip ladder (the dither on the live path, spec 11.101):",
      run_ladder_gate),
+    ("taa-ortho", "the TAA jitter under an orthographic camera (spec 11.103):",
+     run_taa_ortho_gate),
     ("wind-uv", "UV1 carries wind data through import (spec 11.51):", run_wind_uv_gate),
     ("varying", "varyings under partial coverage (spec 11.38):", run_varying_gate),
     ("sss-tag", "subsurface profile tag through the MSAA resolve (spec 11.37):",
