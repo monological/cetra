@@ -170,7 +170,7 @@ void main()
     }
 
     vec3 P = viewPosFromLinZ(TexCoords, linZ);
-    vec3 V = normalize(-P); // View space: eye at origin, so -P points at the camera
+    vec3 V = viewDirToCamera(P); // -P under perspective; +Z everywhere under ortho
 
     vec3 gbufferN = texture(normalsTex, TexCoords).xyz;
     if (useNormalsTex == 1 && dot(gbufferN, gbufferN) <= 0.01) {

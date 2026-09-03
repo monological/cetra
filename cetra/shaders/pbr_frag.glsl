@@ -1041,7 +1041,7 @@ void main() {
 #if CETRA_HAS(PBR_FEAT_PARALLAX)
     bool pom = parallaxEnabled > 0 && heightTexExists > 0 && parallaxScale > 0.0;
     if (pom) {
-        vec3 Vts = normalize(transpose(TBN) * normalize(camPos - WorldPos));
+        vec3 Vts = normalize(transpose(TBN) * worldDirToCamera(WorldPos, camPos, view));
         vec2 uv0 = uv;
         uv = parallaxOcclusion(uv, Vts);
         // Silhouette clipping: when the march pushed the UV past the [0,1] relief
@@ -1603,7 +1603,11 @@ void main() {
     vec3 ddyWorld = dFdy(WorldPos);
 
     // Calculate view direction (WorldPos -- world space, as the maths needs)
-    vec3 V = normalize(camPos - WorldPos);
+    // Surface-to-camera. Fans from the eye under perspective; under an
+    // orthographic camera it is one direction for every fragment, and a V that
+    // fanned anyway put a false Fresnel rim and a drifting highlight on every
+    // flat-on surface apps/shapes ever drew (spec 11.104).
+    vec3 V = worldDirToCamera(WorldPos, camPos, view);
 
     // Render modes that need texture data
     if (renderMode == 7) {

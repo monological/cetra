@@ -195,7 +195,7 @@ void main()
     float nearV = nearPlaneDist();
 
     vec3 fragPos = viewPosFromDepth(TexCoords, depth);
-    vec3 viewDir = normalize(fragPos); // camera at the view-space origin
+    vec3 viewDir = -viewDirToCamera(fragPos); // from the camera; -Z everywhere under ortho
     vec3 R = normalize(reflect(viewDir, n));
 
     if (ssrStochastic == 1) {

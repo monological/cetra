@@ -853,7 +853,7 @@ void main() {
     float alpha = sqrt(alphaAuthored * alphaAuthored + max(removedMss, 0.0));
     float roughness = clamp(sqrt(alpha), waterRoughness, 1.0);
 
-    vec3 V = normalize(-ViewPos);
+    vec3 V = viewDirToCamera(ViewPos); // +Z for every fragment under an orthographic camera
     // The interface is shaded in view space, so the normal has to arrive there
     // too -- the surface normal is authored in world space by ocean.glsl.
     vec3 Nv = normalize(mat3(view) * N);
