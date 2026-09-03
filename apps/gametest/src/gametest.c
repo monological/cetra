@@ -615,6 +615,13 @@ int main(int argc, const char* argv[]) {
             screenshot_every = atoi(argv[++i]);
         } else if (!strcmp(a, "--msaa") && i + 1 < argc) {
             msaa = atoi(argv[++i]);
+        } else if (a[0] == '-') {
+            // A dash-led token is never a path. Without this a typo'd flag,
+            // or a value flag in final position whose guard above just
+            // failed, becomes the environment path and the run reports
+            // "Using HDR environment: --msaa".
+            fprintf(stderr, "gametest: unknown or incomplete option '%s'\n", a);
+            return -1;
         } else {
             hdr_path = a;
             printf("Using HDR environment: %s\n\n", hdr_path);

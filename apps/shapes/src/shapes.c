@@ -189,6 +189,16 @@ int main() {
 
     Engine* engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
+    // NO AA POLICY HERE, DELIBERATELY, and this is where one would go -- the
+    // sample count has to precede init_engine, which builds the scene target.
+    // This app keeps the engine's 4x MSAA and no temporal filter where the 3D
+    // apps drop to one sample plus TAA (spec 11.103). Multisampling is what 2D
+    // line art wants, and nothing in this scene moves, so a temporal
+    // accumulator would have only its own jitter to integrate while switching
+    // on the aux G-buffer, the resolve, and the eight passes keyed off
+    // taa_resolving. The camera here is ORTHOGRAPHIC, which is a second
+    // reason to leave the post chain alone: the engine's depth reconstruction
+    // and view vector are perspective-only.
     if (init_engine(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
@@ -485,13 +495,6 @@ int main() {
 
     print_scene(scene);
 
-    // NO AA POLICY HERE, DELIBERATELY: this app keeps the engine's 4x MSAA and
-    // no temporal filter, where render, forest and tree all drop to one sample
-    // plus TAA (spec 11.103). Two reasons, and the second is the load-bearing
-    // one. Multisampling is the natural anti-aliasing for 2D line art. And
-    // nothing in this scene moves, so a temporal accumulator would have only
-    // its own jitter to integrate while switching on the aux G-buffer, the
-    // resolve, and the eight passes that key off taa_resolving.
     set_engine_show_gui(engine, false);
     set_engine_show_wireframe(engine, false);
     set_engine_show_xyz(engine, false);

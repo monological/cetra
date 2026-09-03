@@ -1405,9 +1405,17 @@ void render_current_scene(Engine* engine) {
         // constant NDC shift. Under glm_ortho clip.w is 1, so it survives
         // SCALED BY DEPTH -- about 150 px at a 300-unit camera distance on a
         // 1600-wide target, re-rolled every frame. That is not a degraded
-        // frame, it is a destroyed one, and no fixture could reach it: the
-        // only orthographic cameras in the tree are two apps with no headless
-        // capture, and an imported camera is always perspective.
+        // frame, it is a destroyed one.
+        //
+        // THE TEST IS ON THE MATRIX, NOT THE CAMERA, and that is not a
+        // stylistic choice: [2][3] is 0 under glm_ortho and -1 under
+        // glm_perspective, which is precisely the "does clip.w depend on
+        // z_eye" question this branch is asking. The camera flag answers it
+        // only while the two agree, and they do not always -- a cube capture
+        // substitutes a 90-degree perspective into projection_matrix without
+        // touching the camera's flag. That path is safe today because it
+        // clears taa_enabled first, but reading the matrix costs nothing and
+        // does not depend on it staying that way.
         //
         // The sign flips with the element, and that is the half that hides.
         // Perspective's term arrives as jx*z_eye / -z_eye, so the raster moves
@@ -1417,7 +1425,7 @@ void render_current_scene(Engine* engine) {
         // no worse than the right one. It separates only where something
         // UN-APPLIES the offset, which is taau_jitter_px below and the
         // upscaling resolve that consumes it.
-        if (engine->camera && engine->camera->is_orthographic) {
+        if (draw_projection[2][3] == 0.0f) {
             draw_projection[3][0] -= jx * 2.0f / (float)rw;
             draw_projection[3][1] -= jy * 2.0f / (float)rh;
         } else {

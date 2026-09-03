@@ -64,6 +64,7 @@ Game* create_game(const GameConfig* config) {
     set_engine_show_gui(game->engine, config->show_debug_gui);
     if (config->taa_enabled)
         set_engine_taa_enabled(game->engine, true);
+    game->engine->headless_jitter = config->headless_jitter;
 
     // Initialize input
     input_init(&game->input, game->engine->window);

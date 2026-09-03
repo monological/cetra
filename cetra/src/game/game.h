@@ -65,8 +65,9 @@ typedef struct GameConfig {
     // target is built during init_engine, so a count set afterwards allocates
     // every G-buffer attachment plus depth at the default and immediately
     // destroys them to rebuild at the one the app wanted.
-    int msaa_samples; // 0 = leave the engine's own default
-    bool taa_enabled; // applied after init, where postfx exists
+    int msaa_samples;     // 0 = leave the engine's own default
+    bool taa_enabled;     // applied after init, where postfx exists
+    bool headless_jitter; // keep the TAA jitter under --headless (TAA is inert without it)
 } GameConfig;
 
 // Main game structure

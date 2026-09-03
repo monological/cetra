@@ -3216,6 +3216,7 @@ int main(int argc, char** argv) {
     // prices a sample (spec 11.34); nothing else varies the count with TAA held.
     if (g_args.msaa > 0)
         config.msaa_samples = g_args.msaa;
+    config.headless_jitter = g_args.headless_jitter != 0;
 
     Game* game = create_game(&config);
     if (!game) {
@@ -3228,8 +3229,6 @@ int main(int argc, char** argv) {
     game_set_pre_render(game, on_pre_render);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
-
-    game->engine->headless_jitter = g_args.headless_jitter != 0;
 
     run_game(game);
     free_game(game);

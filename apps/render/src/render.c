@@ -625,7 +625,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->ortho_height = (float)atof(argv[i]);
-            if (args->ortho_height <= 0.0f) {
+            // Negated rather than `<= 0`, because NaN fails every comparison:
+            // `nan <= 0` is false, so the value would be accepted here and
+            // then fail the `> 0` test at the camera, rendering perspective
+            // with nothing said.
+            if (!(args->ortho_height > 0.0f)) {
                 fprintf(stderr, "Error: invalid ortho height '%s' (want > 0)\n", argv[i]);
                 return -1;
             }

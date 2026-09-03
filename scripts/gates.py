@@ -1642,7 +1642,7 @@ def run_grazing_gate(workdir):
     return [] if ok else ["grazing"]
 
 
-def _taa_churn(workdir, fixture, tag, extra, frames=120, every=30, first=90):
+def _taa_churn(workdir, fixture, tag, extra, frames=120, first=90):
     """AE between frame `first` and the final frame of one static-camera TAA run.
 
     The defaults are the original pair, 90 against 120 -- two fully CONVERGED
@@ -1657,11 +1657,20 @@ def _taa_churn(workdir, fixture, tag, extra, frames=120, every=30, first=90):
     perspective leg where the correct sign reads 0.88.
 
     The second frame is always the one `-S` writes, so a caller changes the pair
-    by moving `first` and `frames` together. None on error.
+    by moving `first` and `frames` together. The screenshot INTERVAL is derived
+    rather than passed: it has to divide `first` or that file is never written
+    and the run reports an error instead of a reading, and a caller with two
+    numbers to keep consistent is a caller that will one day not. `first` must
+    also be below `frames` -- equal, the two operands are the same frame and the
+    AE is 0, which is a silently passing arm rather than a failure. None on
+    error.
     """
+    if first >= frames or first < 1:
+        print(f"  churn        ERROR {tag} wants 1 <= first < frames, got {first}/{frames}")
+        return None
     base = os.path.join(workdir, f"churn_{tag}.ppm")
     cmd = [RENDER, "-m", fixture, "-x", "-f", str(frames), "--no-auto-exposure", "-E", "1.0",
-           "--taa", "--headless-jitter", "--screenshot-every", str(every),
+           "--taa", "--headless-jitter", "--screenshot-every", str(first),
            "-W", "800", "-H", "600", "-S", base] + extra
     r = _run(cmd, capture_output=True, text=True)
     f_first = base[:-4] + f"_{first:06d}.ppm"
@@ -11746,7 +11755,7 @@ def run_taa_ortho_gate(workdir):
     # async texture-load timing this fixture streams through, and the reason the
     # ladder group takes both its frames from ONE process. A ratio across two
     # processes cannot do that, so it waits for loading to settle instead.
-    pair = {"frames": 120, "every": 119, "first": 119}
+    pair = {"frames": 120, "first": 119}
     persp = _taa_churn(workdir, scene, "ortho_persp", scaled, **pair)
     orth = _taa_churn(workdir, scene, "ortho_ortho", scaled + ["--ortho", TAA_ORTHO_HEIGHT],
                       **pair)

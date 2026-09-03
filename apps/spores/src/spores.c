@@ -370,7 +370,6 @@ int main(int argc, char** argv) {
     config.height = 720;
 
     bool force_taa = false;
-    bool headless_jitter = false;
     int msaa = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -391,7 +390,7 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--taa") == 0) {
             force_taa = true;
         } else if (strcmp(argv[i], "--headless-jitter") == 0) {
-            headless_jitter = true;
+            config.headless_jitter = true;
         } else if (strcmp(argv[i], "--msaa") == 0 && i + 1 < argc) {
             msaa = atoi(argv[++i]);
         }
@@ -421,8 +420,6 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to create game\n");
         return 1;
     }
-
-    game->engine->headless_jitter = headless_jitter;
 
     set_engine_mouse_button_callback(game->engine, mouse_button_callback);
     set_engine_key_callback(game->engine, key_callback);

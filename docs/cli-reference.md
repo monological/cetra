@@ -15,7 +15,7 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
 - [apps/forest](#appsforest) — instancing, LOD, culling, the island, erosion, streaming, origin
   shifting
-- [The other four apps](#the-other-four-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
+- [The other apps](#the-other-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
   shapes, pcb, and why splash is not in any of this
 
 ---
@@ -350,7 +350,19 @@ engine has always had this camera mode and until 11.103 nothing that could CAPTU
 ask for it, which is how the TAA jitter came to be wrong there for the whole life of the feature
 — derived for perspective, it shifted the raster by ~150 px a frame under an orthographic camera.
 Applied AFTER the auto-framing, because `set_camera_perspective` clears the flag and an earlier
-request is silently undone),
+request is silently undone.
+**DIAGNOSTIC ONLY, and the reason is a list rather than a caveat**: the jitter is the one part of
+the frame this fixed, and several others are still perspective-only maths that an orthographic
+camera reaches and quietly gets wrong. `viewPosFromLinZ` reconstructs `Xv` as `ndc.x * -z /
+focalX`, where the orthographic answer is depth-INDEPENDENT, so GTAO and contact shadows (the
+first on by default) march a world-space radius scaled by view depth; `viewZFromNdcZ` is the
+perspective rational where orthographic depth is affine, so DoF's circle of confusion is nonsense;
+`pbr_frag`'s `V = normalize(camPos - WorldPos)` is per-fragment where orthographic wants the camera
+forward, so specular, Fresnel and the parallax march are wrong across the frame; and the light
+cluster's wedge AABB over-covers by roughly the depth, which costs index-pool pressure rather than
+pixels. `taa-ortho` compares an orthographic leg against an orthographic leg, so none of that is
+visible to it. Use the flag to exercise the jitter and the projection plumbing, not to render a
+picture),
 `--depth-prepass` (depth before shading, OFF by default and measured to LOSE everywhere in this
 corpus — spec 11.31. Masked geometry IS prepassed since 11.31, through its own program in a
 depth-only mode, and reaches a better depth complexity than the sort while still being slower.
@@ -715,7 +727,7 @@ SUBMISSION table is the only counter a level change moves -- `draws` and
 
 ---
 
-## The other four apps, and the AA mode each one chose
+## The other apps, and the AA mode each one chose
 
 Spec 11.103 asked what anti-aliasing every app should run and got a different answer four times,
 which is why this section exists rather than one line saying "they inherit the default".
