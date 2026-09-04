@@ -112,6 +112,32 @@ void generate_point_to_mesh(Mesh* mesh, const Point* point) {
     calculate_aabb(mesh);
 }
 
+// The attribute streams a flat primitive owes the lit path: it lies in its own
+// XY plane, so every vertex shares one normal (+Z) and one tangent (+X, right
+// handed). Without them the upload leaves both attributes disabled, the vertex
+// stage normalises a zero, and no light can reach the surface at all.
+static void _flat_plane_attributes(Mesh* mesh) {
+    float* normals =
+        (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
+    float* tangents =
+        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 4 * sizeof(float));
+    if (normals)
+        mesh->normals = normals;
+    if (tangents)
+        mesh->tangents = tangents;
+    if (!normals || !tangents)
+        return;
+    for (size_t i = 0; i < mesh->vertex_count; ++i) {
+        normals[i * 3 + 0] = 0.0f;
+        normals[i * 3 + 1] = 0.0f;
+        normals[i * 3 + 2] = 1.0f;
+        tangents[i * 4 + 0] = 1.0f;
+        tangents[i * 4 + 1] = 0.0f;
+        tangents[i * 4 + 2] = 0.0f;
+        tangents[i * 4 + 3] = 1.0f;
+    }
+}
+
 void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
     const int segments = NUM_CIRCLE_SEGMENTS; // Number of segments for approximation
 
@@ -190,6 +216,7 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
         mesh->line_width = circle->line_width;
     }
     mesh->draw_mode = draw_mode;
+    _flat_plane_attributes(mesh);
     calculate_aabb(mesh);
 }
 
@@ -378,6 +405,7 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
             mesh->line_width = rect->line_width;
         }
     }
+    _flat_plane_attributes(mesh);
     calculate_aabb(mesh);
 }
 
