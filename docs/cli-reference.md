@@ -351,18 +351,25 @@ ask for it, which is how the TAA jitter came to be wrong there for the whole lif
 — derived for perspective, it shifted the raster by ~150 px a frame under an orthographic camera.
 Applied AFTER the auto-framing, because `set_camera_perspective` clears the flag and an earlier
 request is silently undone.
-**DIAGNOSTIC ONLY, and the reason is a list rather than a caveat**: the jitter is the one part of
-the frame this fixed, and several others are still perspective-only maths that an orthographic
-camera reaches and quietly gets wrong. `viewPosFromLinZ` reconstructs `Xv` as `ndc.x * -z /
-focalX`, where the orthographic answer is depth-INDEPENDENT, so GTAO and contact shadows (the
-first on by default) march a world-space radius scaled by view depth; `viewZFromNdcZ` is the
-perspective rational where orthographic depth is affine, so DoF's circle of confusion is nonsense;
-`pbr_frag`'s `V = normalize(camPos - WorldPos)` is per-fragment where orthographic wants the camera
-forward, so specular, Fresnel and the parallax march are wrong across the frame; and the light
-cluster's wedge AABB over-covers by roughly the depth, which costs index-pool pressure rather than
-pixels. `taa-ortho` compares an orthographic leg against an orthographic leg, so none of that is
-visible to it. Use the flag to exercise the jitter and the projection plumbing, not to render a
-picture),
+**A real camera since spec 11.104**, which took the perspective-only maths out of everything an
+orthographic frame reaches: the depth inverse, the view-position reconstruction (GTAO, contact
+shadows, fog), the five near-plane recoveries, the world-to-screen lengths (GTAO's radius, the SSS
+footprint), the view ray (fog integration, spec-occ), the per-fragment view vector (specular,
+Fresnel, the parallax march, water, SSR), the light cluster wedge, LOD selection, the occluder
+backface test and the cascade fit. Every site branches on `projection[2][3]`, the element
+`glm_ortho` zeroes and `glm_perspective` sets to −1, and the perspective side of each branch is
+the previous expression. The `ortho` gate group carries the proof; `taa-ortho` still compares an
+orthographic leg against an orthographic leg and cannot see any of it.
+**Deferred, recorded rather than fixed**: the skybox cube (a ±1 cube covers about 1% of an
+orthographic frame) and the sky background, the ocean's projected grid, the cloud march, the
+depth-sort key (perf only) and the gizmo's world-per-pixel. An orthographic camera looking at a
+sky is a design question, and none of these is a wrong pixel on the content the fix is for. The
+grid is deferred for cause and not for want of a branch: one was tried, and under a parallel
+view its far-capped rows spike (fp32 at a million units lands them pixels off) while its uniform
+lattice moires against the wave field, which the perspective grid's near-dense rows never
+showed; and the water plane crosses the near plane under any tilted parallel view, so where the
+eye sits along the axis decides how much of the plane is clipped. Water's own shading is
+orthographic since 11.104; the placement of its mesh is not),
 `--depth-prepass` (depth before shading, OFF by default and measured to LOSE everywhere in this
 corpus — spec 11.31. Masked geometry IS prepassed since 11.31, through its own program in a
 depth-only mode, and reaches a better depth complexity than the sort while still being slower.

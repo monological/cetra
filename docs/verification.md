@@ -8,7 +8,7 @@ Three instruments, answering different questions:
 | instrument | asserts | blind to |
 |---|---|---|
 | `scripts/gates.py` | analytic properties — a ratio, a count, a penumbra width, whether two runs agree | anything nobody wrote an arm for; a bar too slack to fail |
-| `scripts/goldens.py` | 29 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
+| `scripts/goldens.py` | 30 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
 | a hand A/B | everything else | nothing, and that is the problem: it has no bar unless you measure one |
 
 **The one rule that governs all three: a pixel count quoted without its noise floor is not a

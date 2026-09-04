@@ -162,7 +162,7 @@ functions. `apply_transform_to_nodes` used to fuse `prev := global` into the
 traversal, so a second walk in one frame made every node's previous pose its
 current one, zeroed every motion vector and stopped TAA reprojecting. The engine
 owns the latch and calls it once; anyone may call the walk again after a late
-graph change. **No golden can see that failure** -- all 29 are static scenes under
+graph change. **No golden can see that failure** -- all 30 are static scenes under
 a static camera, measured -- which is what the `transform` and `shadow-lag` gate
 groups exist for.
 
@@ -268,6 +268,23 @@ repository, which the example-apps table above does not say.)
 an orthographic camera and the z element under a perspective one, because only the
 second is divided back out. `--ortho` on the render app is the only way to reach
 that path headless, and `taa-ortho` is what guards it.
+**And so is everything downstream of it, which is the rule since spec 11.104: never
+assume `clip.w = -z`.** Six shader formulas and four CPU sites did, and every one is now
+a branch on `projection[2][3]` -- 0 under `glm_ortho`, -1 under `glm_perspective`, an
+element the jitter never touches -- with the perspective side the previous expression.
+The helpers live in `include/depth.glsl`: `viewZFromNdcZ`, `viewPosFromLinZ`,
+`screenLengthAt`, `viewRayVecAt`, `clipWAt`, and `viewDirToCamera` /
+`worldDirToCamera` for the view vector, which under a parallel projection is ONE
+direction for the whole frame (the view matrix's third rotation row, not negated).
+**`nearPlaneDist()` is the one near-plane recovery**; it replaced five hand-rolled copies
+of `P32/(P22-1)`, wrong under ortho and written out in four shaders and `postfx.c`.
+Anything that measures from the eye POINT on the CPU takes the same branch: LOD by view
+height, the occluder eye as a homogeneous point, the cascade fit as a box. **A branch
+around an unchanged GLSL divide is not byte-identical on this driver** (measured: 130 px
+on water from an `if` whose new arm was never taken), so the depth inverse is one
+coefficient form and two goldens were re-baked rather than the arithmetic wrapped. The
+`ortho` gate group and the `ortho_shadow` golden are what see the orthographic path;
+every other golden is perspective and proves only that it did not move.
 **One sample is the only path an alpha-tested material gets**, and that is a
 measured choice rather than an oversight: four samples arm alpha-to-coverage,
 which holds a cutout's fractional coverage where a binary test under a clamped
@@ -1137,7 +1154,7 @@ on the `Scene`.
 **`docs/verification.md` owns this** — how to run the two suites, what a release run moves, the
 determinism-by-source table, the per-asset ledger of what is safe to compare, and the cross-build
 recipe with the six times it has moved. `scripts/gates.py` asserts analytic properties;
-`scripts/goldens.py` compares 29 committed PNGs.
+`scripts/goldens.py` compares 30 committed PNGs.
 
 Four rules belong here rather than in a file you have to open first:
 

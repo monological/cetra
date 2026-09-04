@@ -306,6 +306,15 @@ RECIPES = [
     {"name": "purkinje_night", "scene": "assets/purkinje_fixture.cscn", "size": (1040, 800),
      "flags": ["-f", "30", "-W", "520", "-H", "400", "--no-auto-exposure", "--no-dither",
                "--no-vignette", "--no-bloom", "--no-ssao", "--purkinje"]},
+    # The one orthographic reference (spec 11.104). Every other golden is a
+    # perspective frame, so all of them together prove the perspective path
+    # untouched and none can see the orthographic one; the ortho gate group
+    # proves each formula and this is the standing picture. GTAO, the
+    # cascades, the catcher and the view vector are all live in it, which is
+    # why nothing is switched off beyond the corpus's exposure pin.
+    {"name": "ortho_shadow", "scene": "assets/dir_shadow_fixture.cscn", "size": (800, 600),
+     "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0",
+               "--ortho", "12"]},
 ]
 
 
