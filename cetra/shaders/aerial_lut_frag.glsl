@@ -46,8 +46,11 @@ void main() {
                                  float(aerialDepth), 1.0);
     vec3 camPos = invView[3].xyz;
     vec3 toCell = (invView * vec4(viewPos, 1.0)).xyz - camPos;
-    float distKm = length(toCell) / unitsPerKm;
-    vec3 rd = normalize(toCell);
+    // The path from the eye plane to the cell and the ray's direction: the
+    // sight line under perspective; under orthographic the planar depth along
+    // the camera's forward, since every ray is parallel to it.
+    float distKm = (projectionIsOrtho() ? -viewPos.z : length(toCell)) / unitsPerKm;
+    vec3 rd = worldRayDirFromEye(toCell, invView);
 
     // Planet-centred frame: world +Y is up, matching the sky's own convention.
     vec3 ro = vec3(0.0, Rg + VIEW_ALTITUDE, 0.0);

@@ -203,7 +203,7 @@ void main() {
     vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second
     // argument, and the froxel equivalent of the march's per-pixel rayDir.
-    vec3 rayDir = normalize(P - camPos);
+    vec3 rayDir = worldRayDirFromEye(P - camPos, invView);
 
     // Exponential height falloff above the floor. Below it the medium does not
     // exist at all: the screen-space march expressed that by clamping downward
@@ -391,8 +391,7 @@ void main() {
         vec4 prevViewPos = prevView * vec4(centreP, 1.0);
         float prevZ = -prevViewPos.z;
         if (prevZ > nearZ) {
-            vec2 prevFocal = vec2(prevProjection[0][0], prevProjection[1][1]);
-            vec2 prevUv = (prevViewPos.xy * prevFocal / prevZ) * 0.5 + 0.5;
+            vec2 prevUv = uvFromViewXY(prevViewPos.xy, prevZ, prevProjection);
             float prevSlice =
                 froxelViewZToSlice(prevZ, nearZ, fogFar, float(froxelDepth), fogDepthDist);
             // Scatter cells sit at their slice centre (slice s spans continuous

@@ -581,9 +581,13 @@ void main() {
         // short band's displacement, and the short band no longer selects foam.
         vec2 shortUv = oceanCascadeUv(WorldPos.xz, 2);
         vec4 short1 = oceanCascadeAt(2, 1, shortUv, 0.0);
+        // The distance the band fades over: from the eye under perspective. An
+        // orthographic camera has no eye distance and its minification is set
+        // by the view height alone, so that height stands in -- what a
+        // perspective camera frames from about that far with a natural lens.
+        float fadeDist = projectionIsOrtho() ? 2.0 / projection[1][1] : length(ViewPos);
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
-                                      WATER_SHORT_FAR_M * waterUnitsPerMetre,
-                                      length(ViewPos));
+                                      WATER_SHORT_FAR_M * waterUnitsPerMetre, fadeDist);
         vec2 shortSlope = short1.rg * fade;
         N = normalize(N + vec3(-shortSlope.x, 0.0, -shortSlope.y) * WATER_SHORT_SLOPE_GAIN);
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a
@@ -927,7 +931,7 @@ void main() {
         // From below, the body is between the EYE and the surface rather than
         // beyond it, so the optical path is the sight line itself. The depth buffer
         // behind the surface describes air and has nothing to say about it.
-        path = length(ViewPos);
+        path = viewPathLength(ViewPos);
     } else if (sceneDepthAvailable == 1 && texture(sceneDepthTex, uv).r < WATER_DEPTH_EMPTY) {
         /*
          * There is geometry behind this fragment, so the column can be measured.
@@ -946,7 +950,7 @@ void main() {
          */
         float bedNdc = texture(sceneDepthTex, uv).r * 2.0 - 1.0;
         float bedDist = -viewZFromNdcZ(bedNdc);
-        float rayScale = length(ViewPos) / surfaceDist;
+        float rayScale = viewPathLength(ViewPos) / surfaceDist;
         // Signed, and kept signed until coverage has been taken from it: clamping
         // to zero first flattens the derivative on the dry side of the edge, which
         // halves the width the transition is measured over.
