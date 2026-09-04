@@ -487,6 +487,16 @@ void engine_recentre_on_camera(const Engine* engine, float lattice);
 void set_engine_msaa_samples(Engine* engine, int samples);
 // Enable/disable temporal anti-aliasing. Call after init_engine (needs postfx).
 void set_engine_taa_enabled(Engine* engine, bool enabled);
+// The flat-colour preset for a 2D scene. Everything that describes a lens or
+// an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
+// exposure pins at unity with adaptation off, the tone curve is the identity,
+// and the scene's ambient radiance becomes white, under which a material's
+// albedo reaches the display as authored with no light in the scene at all.
+// Left alone on purpose: the sample count, since multisampling is the
+// anti-aliasing 2D line art wants, and any light the app adds on top, which
+// then adds to the flat colour rather than replacing it. Call after
+// init_engine; the scene half is skipped when `scene` is NULL.
+void engine_set_2d_defaults(Engine* engine, Scene* scene);
 void set_engine_screenshot_path(Engine* engine, const char* path);
 void set_engine_screenshot_every(Engine* engine, int every);
 // Exit the main loop after `frames` rendered frames (0 = run until the window

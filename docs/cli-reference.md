@@ -45,8 +45,10 @@ megapixel per light), but cost tracks COVERAGE rather than count -- sixteen ligh
 scene cost +0.77 ms against the +38 ms sixteen coincident ones would, because a pixel marches only
 the lights whose cluster entry reaches it. There is deliberately no per-pixel light cap),
 `--motion-blur`, `--dof`,
-`-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--tonemap <neutral|aces|agx>`
-(**not** `passthrough`: `render_args.h` notes the "unset" sentinel deliberately coincides
+`-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--tonemap <neutral|aces|agx|linear>`
+(`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
+colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_defaults`
+selects for a flat-colour scene; **not** `passthrough`: `render_args.h` notes the "unset" sentinel deliberately coincides
 with `POSTFX_TONEMAP_PASSTHROUGH = 0`, so it is unreachable from the CLI by design — any
 gate needing a linear read has to be written as a ratio instead, spec 11.32),
 `--water` (`--water-level <f>`, `--water-extent <f>`, `--water-waves <gerstner|fft>`,
@@ -758,6 +760,12 @@ instrument that measured that and stay for whoever gives the particle pass a mot
 than leaving it to look like an omission. Multisampling is the natural AA for 2D line art; nothing in
 the scene moves, so an accumulator would integrate only its own jitter while switching on the aux
 G-buffer, the resolve and the eight passes that key off `taa_resolving`.
+The rest of its look is `engine_set_2d_defaults`: bloom, GTAO, SSR, vignette, dither and shadows
+off, exposure pinned at unity, the `linear` tone curve, and a white ambient radiance on a scene
+with no light in it -- under which a material's albedo is the colour on screen. Its filled
+primitives carry a +Z normal since the flat generators started writing one; before that they had
+none, no light could reach them, and what read as red for years was the 3% ambient floor that
+spec 10.1 removed.
 
 **`apps/pcb` is gitignored** (`apps/.gitignore`) and so is not part of this repository at all, which
 is worth knowing before looking for it — the example-apps table in `AGENTS.md` still lists it. The

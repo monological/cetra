@@ -19,7 +19,6 @@
 #include "cetra/import.h"
 #include "cetra/render.h"
 #include "cetra/geometry.h"
-#include "cetra/light.h"
 
 #define FBX_MODEL_PATH  "./models/room.fbx"
 #define FBX_TEXTURE_DIR "./textures/room.fbm"
@@ -138,30 +137,6 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
         default:
             break;
     }
-}
-
-void create_scene_light(Scene* scene) {
-    Light* light = create_light();
-    if (!light) {
-        fprintf(stderr, "Failed to create light.\n");
-        return;
-    }
-    set_light_name(light, "main_light");
-    set_light_type(light, LIGHT_POINT);
-    vec3 light_pos = {0.0f, 50.0f, 200.0f};
-    set_light_original_position(light, light_pos);
-    set_light_global_position(light, light_pos);
-    // 206u from a layout that spans ~120u: inverse-square across that distance
-    // is what makes the candela figure this large, not a unit error.
-    set_light_intensity(light, 17800000.0f);
-    set_light_color(light, (vec3){1.0f, 1.0f, 1.0f});
-    set_light_range(light, 400.0f);
-    add_light_to_scene(scene, light);
-
-    SceneNode* light_node = create_node();
-    set_node_light(light_node, light);
-    set_node_name(light_node, "light_node");
-    add_child_node(scene->root_node, light_node);
 }
 
 // The camera this frame's geometry is read against. The engine propagates the
@@ -289,7 +264,8 @@ int main() {
 
     set_scene_root_node(scene, root_node);
 
-    create_scene_light(scene);
+    // No light: under the 2D preset a material's albedo is the colour on screen.
+    engine_set_2d_defaults(engine, scene);
 
     if (set_scene_xyz_shader_program(scene, xyz_shader_program) == GL_FALSE) {
         fprintf(stderr, "Failed to set scene xyz shader program\n");

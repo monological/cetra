@@ -307,7 +307,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --no-unit-scale    Skip unit normalization (raw file units; FBX is cm)\n");
     fprintf(stderr,
-            "      --tonemap <m>      Tonemap mode: aces, neutral, agx (default: neutral)\n");
+            "      --tonemap <m>      Tonemap mode: aces, neutral, agx, linear (default: neutral)\n");
     fprintf(stderr,
             "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
@@ -1564,6 +1564,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 args->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
             } else if (strcmp(argv[i], "agx") == 0) {
                 args->tonemap_mode = POSTFX_TONEMAP_AGX;
+            } else if (strcmp(argv[i], "linear") == 0) {
+                args->tonemap_mode = POSTFX_TONEMAP_LINEAR;
             } else {
                 fprintf(stderr, "Error: unknown tonemap mode '%s'\n", argv[i]);
                 return -1;

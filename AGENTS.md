@@ -264,6 +264,15 @@ multisampling is what 2D line art wants and nothing in that scene moves;
 `apps/splash` is outside the question entirely, drawing to the default framebuffer
 without ever binding the engine's. (`apps/pcb` is gitignored and not in this
 repository, which the example-apps table above does not say.)
+**A 2D app's other defaults are one call**, `engine_set_2d_defaults`: bloom, GTAO,
+SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linear`
+tone curve (the identity WITH the display encode, which passthrough is not), and a
+white ambient radiance on the scene, under which an albedo is the colour on screen
+with no light at all. It runs after `init_engine`, since the post chain has to
+exist, and takes the scene for the ambient half. Everything it switches off is ON
+by default, which is why a flat red square through the plain defaults came out pink
+with a halo: the light needed to reach albedo through the PBR path pushes red past
+white, the neutral curve desaturates it, and bloom draws the glow.
 **And the jitter is projection-dependent**: it rides the translation element under
 an orthographic camera and the z element under a perspective one, because only the
 second is divided back out. `--ortho` on the render app is the only way to reach

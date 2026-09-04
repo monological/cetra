@@ -175,7 +175,7 @@ static const char* const CFG_RENDER_MODES[] = {
     "flat",         "albedo",       "simple_lighting", "metallic_rough", "velocity",
     "hdr_hotspots", "sss_hotspots", "extrapolation"};
 static const char* const CFG_CAMERA_MODES[] = {"free", "orbit"};
-static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "agx"};
+static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "agx", "linear"};
 // 6 is a hole: the half-res fog buffer retired with the screen-space march,
 // and the values are the shader's own debugView dispatch, so it cannot be closed.
 static const char* const CFG_DEBUG_VIEWS[] = {"none",    "ao",   "normals",  "ssr",
@@ -203,7 +203,7 @@ _Static_assert(sizeof(CFG_RENDER_MODES) / sizeof(*CFG_RENDER_MODES) ==
                "CFG_RENDER_MODES must name every RenderMode");
 _Static_assert(sizeof(CFG_CAMERA_MODES) / sizeof(*CFG_CAMERA_MODES) == CAMERA_MODE_ORBIT + 1,
                "CFG_CAMERA_MODES must name every CameraMode");
-_Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_AGX + 1,
+_Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_LINEAR + 1,
                "CFG_TONEMAPS must name every PostFXTonemapMode");
 _Static_assert(sizeof(CFG_DEBUG_VIEWS) / sizeof(*CFG_DEBUG_VIEWS) == POSTFX_DEBUG_COUNT,
                "CFG_DEBUG_VIEWS must name every PostFXDebugView");

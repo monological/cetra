@@ -45,8 +45,8 @@ uniform float csStrength;       // Contact-shadow darkening weight
 // Debug view dispatch (PostFXDebugView): 0=none, 1=AO, 2=normals, 3=SSR,
 // 4=albedo, 5=GI, 6=fog, 7=spec-occ AO, 8=contact shadows, 9=bent normal
 uniform int debugView;
-// 1 = ACES, 2 = PBR Neutral, 3 = AgX (passthrough frames are blitted by
-// postfx_run and never reach this pass)
+// 1 = ACES, 2 = PBR Neutral, 3 = AgX, 4 = linear (passthrough frames are
+// blitted by postfx_run and never reach this pass)
 uniform int tonemapMode;
 uniform vec2 texelSize; // Display-pixel size, for the sharpen taps
 
@@ -300,6 +300,10 @@ vec3 toneSelect(vec3 c)
         return acesTonemap(c);
     if (tonemapMode == 3)
         return agxTonemap(c);
+    // Linear: no curve at all, only the clamp the LDR target imposes, so an
+    // authored colour under unit exposure reaches the display as authored.
+    if (tonemapMode == 4)
+        return clamp(c, 0.0, 1.0);
     return pbrNeutralTonemap(c);
 }
 

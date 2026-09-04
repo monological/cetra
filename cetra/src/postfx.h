@@ -35,6 +35,9 @@ typedef enum PostFXTonemapMode {
     POSTFX_TONEMAP_NEUTRAL = 2,     // Khronos PBR Neutral: faithful shadows/colors
     POSTFX_TONEMAP_AGX = 3,         // AgX: desaturates toward white as radiance
                                     // climbs; no hue skew on saturated highlights
+    POSTFX_TONEMAP_LINEAR = 4,      // No curve, only the LDR clamp, still display-encoded:
+                                    // an authored colour at unit exposure shows as authored.
+                                    // For 2D and flat-colour scenes, where a curve is a lie
 } PostFXTonemapMode;
 
 // How a 3D colour-grading LUT interpolates between its lattice points

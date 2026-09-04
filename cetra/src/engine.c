@@ -1632,6 +1632,31 @@ void set_engine_taa_enabled(Engine* engine, bool enabled) {
         engine->postfx->taa_enabled = enabled;
 }
 
+void engine_set_2d_defaults(Engine* engine, Scene* scene) {
+    if (!engine || !engine->postfx) {
+        log_error("engine_set_2d_defaults: call after init_engine, the post chain is not up");
+        return;
+    }
+    PostFX* fx = engine->postfx;
+    fx->bloom_enabled = false;
+    fx->ssao_enabled = false;
+    fx->ssr_enabled = false;
+    fx->vignette_enabled = false;
+    fx->dither_enabled = false;
+    fx->taa_enabled = false;
+    fx->tonemap_mode = POSTFX_TONEMAP_LINEAR;
+    engine->exposure.physical = false;
+    engine->exposure.automatic = false;
+    engine->exposure.multiplier = 1.0f;
+    if (!scene)
+        return;
+    // White ambient radiance: the no-environment ambient is radiance times
+    // albedo, so unity here is what makes an authored colour come out exactly.
+    glm_vec3_one(scene->ambient_radiance);
+    if (scene->shadow_system)
+        scene->shadow_system->enabled = false;
+}
+
 void set_engine_ss_scale(Engine* engine, int ss_scale) {
     if (!engine)
         return;
