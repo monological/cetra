@@ -11901,6 +11901,35 @@ _CLUSTERED_LINE = re.compile(r"clustered: (\d+) directional \+ (\d+) clusterable
 ORTHO_LOD_HEIGHT = "8"
 ORTHO_LOD_HEIGHT_FAR = "800"
 
+# ortho-fog-volume and ortho-water-eye: sites the code phases missed and a
+# review found afterwards (spec 11.104 as-built), each with its own instrument.
+#
+# The froxel fog's history reprojection mapped a cell into the previous volume
+# by xy * focal / depth, the perspective form, so under ortho every cell read
+# its history from near the centre column, and over sixty frames the two boxes
+# on the fog volume fixture blend toward the gap between them. The statistic is
+# fogvol-density's own, box over gap, read under an orthographic camera at the
+# authored framing with the bar the perspective arm holds. No eye-invariance
+# arm can see this, or the fog's phase direction, or the aerial LUT's path
+# length: each is a function of a froxel's VIEW-space position, which does not
+# move with the eye under a parallel projection.
+ORTHO_FOG_CAM = _cscn_camera(FOGVOL_FIXTURE)
+ORTHO_FOG_FLAGS = ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-ssao"]
+# Ortho's box/gap against perspective's from the same eye. The phase direction
+# fans from the eye on the broken build, so the two boxes, off-axis where the
+# fan is largest, weight the sun's in-scatter differently from the gap.
+ORTHO_FOG_PARITY_MIN = 0.8
+ORTHO_FOG_PARITY_MAX = 1.25
+
+# Water's optical path took length(ViewPos), the sight line from the eye
+# point, for the ray scale and the from-below path, and its short-band fade
+# took the same length as a distance. All three move with the eye under a
+# parallel projection, so this is the view-eye design on the water fixture:
+# two eyes along the authored axis at the same height, 0 px apart.
+ORTHO_WATER_CAM = _cscn_camera(WATER_FIXTURE)
+ORTHO_WATER_FAR_EXTRA = 4.0
+ORTHO_WATER_EYE_MAX = 0
+
 
 def _vec_str(v):
     return ",".join(f"{c:g}" for c in v)
@@ -11945,6 +11974,11 @@ def run_ortho_gate(workdir):
                        sweep, equal to --no-lod
       ortho-lod-height a larger view volume selects a coarser level, so the arm
                        above cannot pass on a selection that ignores everything
+      ortho-fog-volume the froxel history reprojects a cell onto itself under
+                       ortho: the fog volume fixture's boxes keep their contrast
+                       against the gap, near perspective's from the same eye
+      ortho-water-eye  water's optical path is one length for every eye along
+                       the axis: two eyes, 0 px apart
 
     WHAT THE BROKEN BUILD READS, measured before the fix and kept here so every
     bar has a before-number. ortho-view-eye: 107,665 px between the two eyes.
@@ -11956,6 +11990,10 @@ def run_ortho_gate(workdir):
     survive this measurement: a flat-quad code spread (broken reads 1) and a
     telephoto/ortho box mean-absolute-difference (broken reads 2.4 codes, mostly
     open floor); both are recorded beside the constants they would have used.
+    Two sites were found by review after the code phases and measured the same
+    way before their fix: ortho-fog-volume reads box/gap 0.9567 under ortho
+    against 0.5904 under perspective, ratio 1.62, the boxes all but gone;
+    ortho-water-eye reads 246,444 px between its two eyes.
     """
     failures = []
 
@@ -12132,6 +12170,72 @@ def run_ortho_gate(workdir):
               f"sphere; a selection reading distance alone gives the same count for both)")
         if not ok:
             failures.append("ortho-lod-height")
+
+    # --- ortho-fog-volume -----------------------------------------------------
+    scene = os.path.join(ROOT, "assets", FOGVOL_FIXTURE)
+    fog_eye, fog_target = ORTHO_FOG_CAM["eye"], ORTHO_FOG_CAM["target"]
+    fog_dist = math.sqrt(sum((e - t) ** 2 for e, t in zip(fog_eye, fog_target)))
+    fog_height = _ortho_height_matching(ORTHO_FOG_CAM["fovy_deg"], fog_dist)
+    ortho_flags = ORTHO_FOG_FLAGS + ["--ortho", f"{fog_height:.4f}"]
+    persp = os.path.join(workdir, "ortho_fog_persp.ppm")
+    orth = os.path.join(workdir, "ortho_fog_ortho.ppm")
+    orth2 = os.path.join(workdir, "ortho_fog_ortho2.ppm")
+    err = (render(scene, persp, ORTHO_FOG_FLAGS, frames=FOGVOL_FRAMES) or
+           render(scene, orth, ortho_flags, frames=FOGVOL_FRAMES) or
+           render(scene, orth2, ortho_flags, frames=FOGVOL_FRAMES))
+    if err:
+        print(f"  ortho-fog-volume ERROR render failed: {err.strip()[-200:]}")
+        failures.append("ortho-fog-volume")
+    else:
+        floor = compare(orth, orth2)[0]
+
+        def box_over_gap(path):
+            w, h, pix = _read_ppm(path)
+            luma = {k: sum(_absorb_box_rgb(pix, w, h, b)) / 3.0
+                    for k, b in FOGVOL_BOXES.items()}
+            return max(luma["left"], luma["right"]) / max(luma["gap"], 1e-6)
+
+        darken_p, darken_o = box_over_gap(persp), box_over_gap(orth)
+        parity = darken_o / darken_p if darken_p > 0 else 0.0
+        ok = (floor == 0 and darken_o <= FOGVOL_DARKEN_MAX
+              and ORTHO_FOG_PARITY_MIN <= parity <= ORTHO_FOG_PARITY_MAX)
+        print(f"  ortho-fog-volume {'PASS' if ok else 'FAIL'}  box/gap {darken_o:.4f} under "
+              f"ortho against {darken_p:.4f} under perspective from the same eye (want <= "
+              f"{FOGVOL_DARKEN_MAX} and the ratio {parity:.3f} within "
+              f"{ORTHO_FOG_PARITY_MIN}..{ORTHO_FOG_PARITY_MAX}); floor {floor}. A history "
+              f"reprojected by the perspective form reads every cell's past from the centre "
+              f"column, and the boxes blend into the gap")
+        if not ok:
+            failures.append("ortho-fog-volume")
+
+    # --- ortho-water-eye ------------------------------------------------------
+    scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
+    w_eye, w_target = ORTHO_WATER_CAM["eye"], ORTHO_WATER_CAM["target"]
+    w_axis = [e - t for e, t in zip(w_eye, w_target)]
+    w_dist = math.sqrt(sum(c * c for c in w_axis))
+    w_far = tuple(t + a / w_dist * (w_dist + ORTHO_WATER_FAR_EXTRA)
+                  for t, a in zip(w_target, w_axis))
+    w_height = _ortho_height_matching(ORTHO_WATER_CAM["fovy_deg"], w_dist)
+    common = WATER_FLAGS + ["--ortho", f"{w_height:.4f}", "--cam-target", _vec_str(w_target)]
+    near = os.path.join(workdir, "ortho_water_near.ppm")
+    far = os.path.join(workdir, "ortho_water_far.ppm")
+    near2 = os.path.join(workdir, "ortho_water_near2.ppm")
+    err = (render(scene, near, common + ["--cam-eye", _vec_str(w_eye)]) or
+           render(scene, far, common + ["--cam-eye", _vec_str(w_far)]) or
+           render(scene, near2, common + ["--cam-eye", _vec_str(w_eye)]))
+    if err:
+        print(f"  ortho-water-eye ERROR render failed: {err.strip()[-200:]}")
+        failures.append("ortho-water-eye")
+    else:
+        floor = compare(near, near2)[0]
+        moved = compare(near, far)[0]
+        ok = moved <= ORTHO_WATER_EYE_MAX and floor == 0
+        print(f"  ortho-water-eye {'PASS' if ok else 'FAIL'}  {moved} px between the authored "
+              f"eye at {w_dist:.1f} and one {ORTHO_WATER_FAR_EXTRA:g} farther along the same "
+              f"axis (want <= {ORTHO_WATER_EYE_MAX}, floor {floor}); an optical path measured "
+              f"from the eye point stretches with every unit the eye moves back")
+        if not ok:
+            failures.append("ortho-water-eye")
 
     return failures
 
