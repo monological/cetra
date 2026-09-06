@@ -41,8 +41,6 @@
 #include "cetra/procedural/water_waves.h"
 #include "cetra/app.h"
 
-#include "cetra/shader_strings.h"
-
 #include "cscene_apply.h"
 #include "render_args.h"
 

@@ -5,12 +5,11 @@ function(add_cetra_app APP_NAME)
     file(GLOB APP_SOURCES src/*.c)
     add_executable(${APP_NAME} ${APP_SOURCES})
 
+    # The cetra/ include tree and GL_SILENCE_DEPRECATION both arrive
+    # transitively from cetra. The generated shader header does not: only
+    # program.c reads it, so no app object has to wait for the generator.
     target_link_libraries(${APP_NAME} PRIVATE cetra)
     target_link_libraries(${APP_NAME} PRIVATE cetra_warnings)
-    # The cetra/ include tree (forwarders + shader_strings.h) and
-    # GL_SILENCE_DEPRECATION both arrive transitively from cetra. An app source
-    # includes "cetra/shader_strings.h" directly, so depend on its generation.
-    add_dependencies(${APP_NAME} cetra_shaders)
 endfunction()
 
 # Every subdirectory holding a CMakeLists.txt is an app. DISCOVERED rather than

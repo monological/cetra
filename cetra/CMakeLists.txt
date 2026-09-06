@@ -84,10 +84,12 @@ target_include_directories(cetra
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/game>
         # Forwarding-header tree, for apps' #include "cetra/foo.h".
         $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}>
-        # Generated shader_strings.h lives at include/cetra/, so shader.h's bare
-        # #include "shader_strings.h" resolves here (for the library and apps).
-        $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}/cetra>
         $<INSTALL_INTERFACE:include/cetra>
+    PRIVATE
+        # The generated shader_strings.h lives at include/cetra/, and program.c
+        # is the one file that includes it, bare. Private so no app or consumer
+        # object can come to depend on a file nothing orders before it.
+        $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}/cetra>
 )
 
 # PUBLIC: engine.h and other public headers include <GL/glew.h>,
