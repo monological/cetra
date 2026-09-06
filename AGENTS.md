@@ -274,9 +274,9 @@ at all, neither of which announces itself. `apps/forest`, `apps/tree` and (since
 TAA turns 32,000 motes into dashes; `apps/shapes` keeps them because
 multisampling is what 2D line art wants and nothing in that scene moves;
 `apps/splash` is outside the question entirely, drawing to the default framebuffer
-without ever binding the engine's. (`apps/pcb` is gitignored and not in this
-repository. It is moving to its own repository with cetra as a submodule, per spec
-11.105.)
+without ever binding the engine's. (`apps/pcb` was a gitignored local app; it is now a
+repository of its own with cetra as a submodule, per spec 11.105, and keeps the same
+choice.)
 **A 2D app's other defaults are one call**, `engine_set_2d_defaults`: bloom, GTAO,
 SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linear`
 tone curve (the identity WITH the display encode, which passthrough is not), and a
