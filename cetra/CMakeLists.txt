@@ -11,11 +11,9 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/shader_strings.h)
         "Delete it and re-configure.")
 endif()
 
-# Public include tree at <cetra build dir>/include so apps can #include
-# "cetra/foo.h". Holds a forwarding header per real header, plus the generated
-# shader_strings.h (below). PROJECT_BINARY_DIR is out/ when cetra builds on its
-# own and cetra's own subdirectory of a parent project's build otherwise; the
-# tree must not land in a consumer's build root.
+# Public include tree so apps can #include "cetra/foo.h": one forwarding header
+# per real header. Under PROJECT_BINARY_DIR for the reason the output
+# directories in the root CMakeLists give.
 set(CETRA_PUBLIC_INCLUDE_DIR ${PROJECT_BINARY_DIR}/include)
 
 # Forwarding headers replace a CREATE_LINK symlink (which needs Developer Mode
@@ -36,13 +34,17 @@ foreach(_rel IN LISTS _cetra_public_headers)
         CONTENT "#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/${_rel}\"\n")
 endforeach()
 
-# Shader header generation. Generated into the include tree, not the source
-# tree, so a read-only checkout builds and two build dirs never fight over one
-# file. gen_shader_header.py is stdlib-only and emits its own MSVC pragmas.
+# Shader header generation. Generated into the build tree, not the source tree,
+# so a read-only checkout builds and two build dirs never fight over one file;
+# and into a directory of its own that only this library searches, so no app
+# or consumer object can include it. gen_shader_header.py is stdlib-only and
+# emits its own MSVC pragmas.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
-set(SHADER_HEADER ${CETRA_PUBLIC_INCLUDE_DIR}/cetra/shader_strings.h)
+set(SHADER_GEN_DIR ${PROJECT_BINARY_DIR}/generated)
+set(SHADER_HEADER ${SHADER_GEN_DIR}/shader_strings.h)
+file(MAKE_DIRECTORY ${SHADER_GEN_DIR})
 
 # Recursive so an edit to a shared chunk under shaders/include/ retriggers
 # generation, not just top-level shaders. CONFIGURE_DEPENDS re-globs at build
@@ -59,8 +61,6 @@ add_custom_command(
     VERBATIM
 )
 
-add_custom_target(cetra_shaders DEPENDS ${SHADER_HEADER})
-
 # Collect source files
 file(GLOB CETRA_SOURCES
     src/*.c
@@ -73,24 +73,20 @@ file(GLOB CETRA_SOURCES
     src/procedural/*.c
 )
 
-# Create the static library
-add_library(cetra STATIC ${CETRA_SOURCES})
-
-# Ensure shaders are generated before building
-add_dependencies(cetra cetra_shaders)
+# The static library. Listing the generated header as a source is what orders
+# its generation before the objects that include it.
+add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER})
 
 target_include_directories(cetra
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/ext>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/game>
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ext
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/game
         # Forwarding-header tree, for apps' #include "cetra/foo.h".
-        $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}>
+        ${CETRA_PUBLIC_INCLUDE_DIR}
     PRIVATE
-        # The generated shader_strings.h lives at include/cetra/, and program.c
-        # is the one file that includes it, bare. Private so no app or consumer
-        # object can come to depend on a file nothing orders before it.
-        $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}/cetra>
+        # program.c's #include "shader_strings.h".
+        ${SHADER_GEN_DIR}
 )
 
 # PUBLIC: engine.h and other public headers include <GL/glew.h>,
@@ -131,13 +127,12 @@ target_include_directories(cetra PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/cimgui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/cimgui/imgui/backends)
 
-# No install. The engine is consumed with add_subdirectory, as a git submodule
-# or through FetchContent (README, "Using cetra in your project"). An install
-# rule used to sit here and was removed rather than finished: it had no export
-# set, so nothing could find_package the result, and it installed none of the
-# seven static libraries cetra links, so a program built against its prefix
-# failed at the link -- while five of those libraries (GLFW, GLEW, cglm, cimgui,
-# JoltC) still carry live install rules of their own that would fire under a
-# consumer's cmake --install. A real install means exporting every one of those
-# targets with their headers and a config file that describes them. That is its
-# own spec, and the step before a Homebrew formula.
+# No install rule. The engine is built as a subdirectory of the project that
+# uses it (README, "Using cetra in your project"). The install rule that was
+# here was deleted: it had no export set, so find_package could not find the
+# result, and it installed none of the vendored static libraries cetra links,
+# so nothing built against its prefix could link. GLEW, cglm, cimgui and JoltC
+# still have unconditional install rules of their own that run under a
+# consumer's cmake --install; GLFW's and Jolt's are switched off in the root
+# CMakeLists. A working install has to export all of those targets with their
+# headers and ship a config file, which is separate work.

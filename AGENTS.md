@@ -51,19 +51,17 @@ steps in order:
 The build script runs CMake to configure and Ninja to build. Output goes to `out/`
 (`out/bin/<app>`).
 
-**A project of its own consumes the engine with `add_subdirectory`** (spec 11.105) -- a git
-submodule or FetchContent, the eight-line CMakeLists in `README.md` under "Using cetra in your
-project". There is no install and no `find_package`; `cetra/CMakeLists.txt` says why the
-half-built install rule was removed rather than finished. Three things hold the consumer path
-up, and each is a line that looks interchangeable with its neighbour and is not: the output
-directories are `PROJECT_BINARY_DIR` (the same as `CMAKE_BINARY_DIR` in this tree, and cetra's
-own subdirectory rather than the consumer's build root under a parent -- except the draco
-include path, which must stay `CMAKE_BINARY_DIR` because draco writes there); `CETRA_BUILD_APPS`
-defaults to `PROJECT_IS_TOP_LEVEL`; and the generated `shader_strings.h` is included by
-`program.c` alone, never by a public header. Check with a throwaway consumer in a scratch
-directory: the eight lines plus a `main.c`, `-DCETRA_DIR` on the configure, then whether
-`build/bin` or `build/lib` appeared and whether `ninja -t deps` lists the generated header
-against the consumer's object. Measured on the branch: 578 build steps, 30 s cold, on this Mac.
+**Using the engine from another project** (spec 11.105): `add_subdirectory` on a git submodule,
+or FetchContent. `README.md`, "Using cetra in your project", has the CMakeLists. There is no
+install; the comment at the end of `cetra/CMakeLists.txt` says why the old install rule was
+deleted. Three lines make the out-of-tree build work, and each could be mistaken for its
+neighbour: the output directories use `PROJECT_BINARY_DIR`, which is `out/` in this tree and the
+engine's own subdirectory of a parent's build (the draco include path stays `CMAKE_BINARY_DIR`,
+because draco writes there); `CETRA_BUILD_APPS` defaults to `PROJECT_IS_TOP_LEVEL`; and
+`shader_strings.h` is included only from `program.c`. To check the path, build a throwaway
+consumer in a scratch directory: the README's CMakeLists with `add_subdirectory` pointed at the
+checkout, plus a `main.c`. Then look for `build/bin` or `build/lib` appearing, and for the
+generated header in `ninja -t deps` for the consumer's object. On this Mac: 669 steps, 36 s cold.
 
 **clangd / editor diagnostics:** the compilation database lands in `out/`, which is
 neither place clangd looks (beside the file, its ancestors, or a `build/` child), so a
@@ -277,8 +275,8 @@ TAA turns 32,000 motes into dashes; `apps/shapes` keeps them because
 multisampling is what 2D line art wants and nothing in that scene moves;
 `apps/splash` is outside the question entirely, drawing to the default framebuffer
 without ever binding the engine's. (`apps/pcb` is gitignored and not in this
-repository; it is the first app to move to a repository of its own with cetra as a
-submodule, the path spec 11.105 documents.)
+repository. It is moving to its own repository with cetra as a submodule, per spec
+11.105.)
 **A 2D app's other defaults are one call**, `engine_set_2d_defaults`: bloom, GTAO,
 SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linear`
 tone curve (the identity WITH the display encode, which passthrough is not), and a
@@ -439,7 +437,7 @@ component slot.
 ## Shaders
 
 GLSL sources live in `cetra/shaders/`. During build, `gen_shader_header.py` converts
-every `.glsl` into a C string literal in **`out/include/cetra/shader_strings.h`** --
+every `.glsl` into a C string literal in **`out/generated/shader_strings.h`** --
 the BUILD tree, not the source tree, so a read-only checkout builds and two build dirs
 never fight over one file. Edit the `.glsl` sources, never the header.
 `post_vert.glsl` is the shared fullscreen-triangle vertex shader for all post passes.
@@ -529,9 +527,9 @@ says. `cetra/CMakeLists.txt:8-12` refuses to configure while one exists; if you 
 error, delete `cetra/src/shader_strings.h`. The build regenerates on any `.glsl` edit
 (`GLOB_RECURSE ... CONFIGURE_DEPENDS`, so shared chunks under `shaders/include/` retrigger
 it too) -- there is no manual step, and `./build.sh` is the whole answer.
-**Only `program.c` includes it** (spec 11.105). It used to ride `shader.h`, which `engine.h`
-reaches, so every TU that touched the engine compiled 2 MB of string literals and a `.glsl` edit
-rebuilt 66 objects; now it rebuilds one, and the header never reaches an app or a consumer.
+**Only `program.c` includes it** (spec 11.105). It used to be included from `shader.h`, which
+`engine.h` pulls in, so every file that used the engine compiled 2 MB of string literals and a
+`.glsl` edit rebuilt 66 objects. Now it rebuilds one.
 
 Inventory by subsystem. **`docs/shader-subsystems.md` carries the per-subsystem detail** — how
 each one works, what was rejected, and the failure modes that render a plausible frame. Read the

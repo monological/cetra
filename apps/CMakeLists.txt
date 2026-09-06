@@ -5,9 +5,8 @@ function(add_cetra_app APP_NAME)
     file(GLOB APP_SOURCES src/*.c)
     add_executable(${APP_NAME} ${APP_SOURCES})
 
-    # The cetra/ include tree and GL_SILENCE_DEPRECATION both arrive
-    # transitively from cetra. The generated shader header does not: only
-    # program.c reads it, so no app object has to wait for the generator.
+    # The cetra/ include tree and GL_SILENCE_DEPRECATION both come
+    # transitively from cetra.
     target_link_libraries(${APP_NAME} PRIVATE cetra)
     target_link_libraries(${APP_NAME} PRIVATE cetra_warnings)
 endfunction()

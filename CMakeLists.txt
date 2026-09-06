@@ -89,16 +89,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Build options. The apps default to ON only when cetra is the top-level
-# project: a project that add_subdirectory's the engine wants the library, not
-# seven example binaries in its own tree.
+# Build options. The example apps build by default only when cetra is the
+# top-level project; a project that adds the engine as a subdirectory gets the
+# library alone.
 option(CETRA_BUILD_APPS "Build example applications" ${PROJECT_IS_TOP_LEVEL})
 option(CETRA_BUILD_JOLTC "Build JoltC physics library" ON)
 
-# Output directories. PROJECT_BINARY_DIR, not CMAKE_BINARY_DIR: the two are the
-# same directory when cetra is built on its own (out/), and differ when a parent
-# project adds it, where CMAKE_BINARY_DIR is the consumer's build root and these
-# would drop every archive and app into the consumer's own lib/ and bin/.
+# Output directories. PROJECT_BINARY_DIR is out/ when cetra is built on its own
+# and cetra's own subdirectory of the build when a parent project adds it. With
+# CMAKE_BINARY_DIR every archive and app landed in the parent's lib/ and bin/.
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
@@ -162,6 +161,9 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+# No install rule: cetra has none (see the end of cetra/CMakeLists.txt), so a
+# consumer's cmake --install must not install GLFW on its own.
+set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 add_subdirectory(cetra/src/ext/glfw)
 
 # GLEW (Perlmint/glew-cmake fork ships pre-generated sources + CMake).
@@ -214,10 +216,10 @@ set(ASSIMP_BUILD_DRACO_STATIC ON  CACHE BOOL "" FORCE)
 # glTF2 importer fails to compile on `#include "draco/draco_features.h"`.
 # Handing it the binary dir here rather than patching vendored assimp:
 # include_directories() is inherited by subdirectories added after it.
-# CMAKE_BINARY_DIR deliberately, unlike the output directories above: draco
-# writes the file to CMAKE_BINARY_DIR (contrib/draco/CMakeLists.txt sets
-# draco_build to it), so under a parent project it lands in the consumer's
-# build root and this path has to follow it there.
+# This one stays CMAKE_BINARY_DIR where the output directories above use
+# PROJECT_BINARY_DIR: draco writes the file there (contrib/draco/CMakeLists.txt
+# sets draco_build to CMAKE_BINARY_DIR), so under a parent project it lands in
+# the parent's build root and the include path has to match.
 include_directories(${CMAKE_BINARY_DIR})
 add_subdirectory(cetra/src/ext/assimp)
 
@@ -305,6 +307,8 @@ endforeach()
 if(CETRA_BUILD_JOLTC)
     # Enable debug renderer for JoltC (needed for DrawSettings, etc.)
     set(DEBUG_RENDERER_IN_DISTRIBUTION ON CACHE BOOL "" FORCE)
+    # Jolt's install switch, off for the same reason as GLFW_INSTALL above.
+    set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
     add_subdirectory(cetra/src/ext/JoltC)
 endif()
 

@@ -372,6 +372,6 @@ real change reads 0 px. The inverted-confidence failure this file exists to prev
 newest form.
 
 For a pure refactor there is a stronger check than pixels: diff the generated
-GLSL. `out/include/cetra/shader_strings.h` is reproducible (sorted), so unescaping
+GLSL. `out/generated/shader_strings.h` is reproducible (sorted), so unescaping
 both versions and diffing comment-stripped proves "no shader code changed" directly,
 without going through a renderer at all.

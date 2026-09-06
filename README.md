@@ -218,8 +218,8 @@ switches.
 
 ## Using cetra in your project
 
-The engine is built into your project as a subdirectory, from source. There is
-no install step and no `find_package`. Add it as a submodule:
+Build the engine as a subdirectory of your own CMake project. There is no
+install step. Add it as a submodule:
 
 ```
 git submodule add https://github.com/monological/cetra extern/cetra
@@ -230,7 +230,7 @@ Your `CMakeLists.txt`:
 
 ```cmake
 cmake_minimum_required(VERSION 3.25)
-project(myapp LANGUAGES C CXX)   # CXX too: Jolt and ImGui are C++, and so is the final link
+project(myapp LANGUAGES C CXX)   # CXX: Jolt, ImGui and draco are C++
 set(CMAKE_C_STANDARD 11)
 add_subdirectory(extern/cetra)
 add_executable(myapp src/main.c)
@@ -245,10 +245,10 @@ cmake --build build
 ./build/myapp
 ```
 
-Sources `#include "cetra/engine.h"`. The `cetra` target carries the include
-paths, the vendored libraries and the platform frameworks; the example apps
-stay off under a parent project. The first build compiles the engine and its
-dependencies, about half a minute; after that a rebuild is seconds.
+Sources include `"cetra/engine.h"`. Linking `cetra` brings the include paths,
+the vendored libraries and the platform frameworks with it. The example apps
+are not built. The first build compiles the engine and its dependencies and
+takes about half a minute; rebuilds take seconds.
 
 Or let CMake fetch it:
 
@@ -260,23 +260,21 @@ FetchContent_Declare(cetra
 FetchContent_MakeAvailable(cetra)
 ```
 
-`GIT_REPOSITORY`, not `URL`: a source tarball has neither the vendored
-submodules nor the git history the version is derived from, so it cannot
-configure. `GIT_SHALLOW` builds but drops the tags, and the version reports as
-a sha.
+Use `GIT_REPOSITORY` rather than `URL`. A source tarball has no submodules and
+no git history, and the version is derived from the history. `GIT_SHALLOW`
+works but loses the tags, so the version is reported as a sha.
 
-What a consumer inherits:
+Notes:
 
-- The toolchain under Setup, with clang on Linux (gcc rejects JoltC), and
-  Python 3 at build time for the shader header. Nothing at runtime: shaders are
-  compiled into the library, and the only file the engine opens on its own is
-  the cook cache, and only if the app calls `cook_init`.
-- `BUILD_SHARED_LIBS` is forced off in the cache for the vendored
-  dependencies, so a library of yours declared without a type builds static.
-  Write `SHARED` if you want one.
-- Headless mode is a hidden window, not an offscreen context. It needs a
-  display and a GPU.
-- Add cetra once, at the top of the project. Two `add_subdirectory` calls
-  collide on target names.
-- `cetra_warnings` is the engine's own `-Wall` / `/W4` set; link it for the same
-  flags.
+- Same toolchain as under Setup. Use clang on Linux (gcc rejects JoltC).
+  Python 3 is needed at build time to generate the shader header. Nothing is
+  needed at runtime: shaders are compiled into the library. The engine writes
+  `imgui.ini` in the working directory, and a `cooked/` cache if the app calls
+  `cook_init`.
+- The build forces `BUILD_SHARED_LIBS` off for the vendored dependencies. A
+  library of yours declared without `STATIC` or `SHARED` will build static.
+- `-x` still creates a GLFW window (hidden), so a headless run needs a display
+  and a GPU.
+- Add cetra once, at the top level. A second `add_subdirectory` fails on
+  duplicate target names.
+- Link `cetra_warnings` as well to get the engine's `-Wall` / `/W4` flags.

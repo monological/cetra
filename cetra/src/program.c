@@ -8,10 +8,9 @@
 #include "ubo.h"
 #include "util.h"
 
-// The generated shader sources, and this is the one translation unit that reads
-// them. They are static string literals, 2 MB of them, so an include from a
-// public header put a copy into every TU that reached engine.h and made a .glsl
-// edit rebuild all of them.
+// The generated shader sources. This is the only file that reads them. They are
+// static string literals, and including them from a public header copied them
+// into every file that reached engine.h and rebuilt all of those on a .glsl edit.
 #include "shader_strings.h"
 
 // Fullscreen post-pass program helper (defined with the postfx constructors)
