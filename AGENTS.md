@@ -51,6 +51,20 @@ steps in order:
 The build script runs CMake to configure and Ninja to build. Output goes to `out/`
 (`out/bin/<app>`).
 
+**A project of its own consumes the engine with `add_subdirectory`** (spec 11.105) -- a git
+submodule or FetchContent, the eight-line CMakeLists in `README.md` under "Using cetra in your
+project". There is no install and no `find_package`; `cetra/CMakeLists.txt` says why the
+half-built install rule was removed rather than finished. Three things hold the consumer path
+up, and each is a line that looks interchangeable with its neighbour and is not: the output
+directories are `PROJECT_BINARY_DIR` (the same as `CMAKE_BINARY_DIR` in this tree, and cetra's
+own subdirectory rather than the consumer's build root under a parent -- except the draco
+include path, which must stay `CMAKE_BINARY_DIR` because draco writes there); `CETRA_BUILD_APPS`
+defaults to `PROJECT_IS_TOP_LEVEL`; and the generated `shader_strings.h` is included by
+`program.c` alone, never by a public header. Check with a throwaway consumer in a scratch
+directory: the eight lines plus a `main.c`, `-DCETRA_DIR` on the configure, then whether
+`build/bin` or `build/lib` appeared and whether `ninja -t deps` lists the generated header
+against the consumer's object. Measured on the branch: 578 build steps, 30 s cold, on this Mac.
+
 **clangd / editor diagnostics:** the compilation database lands in `out/`, which is
 neither place clangd looks (beside the file, its ancestors, or a `build/` child), so a
 committed `.clangd` at the repo root points it there. Without it clangd guesses flags,
@@ -263,7 +277,8 @@ TAA turns 32,000 motes into dashes; `apps/shapes` keeps them because
 multisampling is what 2D line art wants and nothing in that scene moves;
 `apps/splash` is outside the question entirely, drawing to the default framebuffer
 without ever binding the engine's. (`apps/pcb` is gitignored and not in this
-repository, which the example-apps table above does not say.)
+repository; it is the first app to move to a repository of its own with cetra as a
+submodule, the path spec 11.105 documents.)
 **A 2D app's other defaults are one call**, `engine_set_2d_defaults`: bloom, GTAO,
 SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linear`
 tone curve (the identity WITH the display encode, which passthrough is not), and a
@@ -514,6 +529,9 @@ says. `cetra/CMakeLists.txt:8-12` refuses to configure while one exists; if you 
 error, delete `cetra/src/shader_strings.h`. The build regenerates on any `.glsl` edit
 (`GLOB_RECURSE ... CONFIGURE_DEPENDS`, so shared chunks under `shaders/include/` retrigger
 it too) -- there is no manual step, and `./build.sh` is the whole answer.
+**Only `program.c` includes it** (spec 11.105). It used to ride `shader.h`, which `engine.h`
+reaches, so every TU that touched the engine compiled 2 MB of string literals and a `.glsl` edit
+rebuilt 66 objects; now it rebuilds one, and the header never reaches an app or a consumer.
 
 Inventory by subsystem. **`docs/shader-subsystems.md` carries the per-subsystem detail** — how
 each one works, what was rejected, and the failure modes that render a plausible frame. Read the
@@ -1155,7 +1173,6 @@ on the `Scene`.
 | gametest | `apps/gametest/` | Physics/character/entity demo (WASD, jump, boxes, hinge door) | no |
 | tree | `apps/tree/` | Procedural recursive tree generator with ImGui sliders, on a domed island in a sea with a seabed under it, at sunset, walkable in first person (`--player`); `--no-water` for dry land. Specs 11.32, 11.35, 11.36 | yes (but NOT frame-deterministic on the orbit path: floor is 9k-31k px depending on framing, see `docs/verification.md`) |
 | shapes | `apps/shapes/` | Procedural geometry demo (rect/circle/bezier) | no |
-| pcb | `apps/pcb/` | PCB/EDA-style 2D primitive layout | no |
 | splash | `apps/splash/` | SDF text-rendering test ("CETRA") | no |
 
 ## Verification

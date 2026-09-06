@@ -215,3 +215,68 @@ Example apps are built in the `out/bin` directory.
 
 `render --help` lists the full set of rendering, lighting and post-processing
 switches.
+
+## Using cetra in your project
+
+The engine is built into your project as a subdirectory, from source. There is
+no install step and no `find_package`. Add it as a submodule:
+
+```
+git submodule add https://github.com/monological/cetra extern/cetra
+git submodule update --init --recursive
+```
+
+Your `CMakeLists.txt`:
+
+```cmake
+cmake_minimum_required(VERSION 3.25)
+project(myapp LANGUAGES C CXX)   # CXX too: Jolt and ImGui are C++, and so is the final link
+set(CMAKE_C_STANDARD 11)
+add_subdirectory(extern/cetra)
+add_executable(myapp src/main.c)
+target_link_libraries(myapp PRIVATE cetra)
+```
+
+Then:
+
+```
+cmake -S . -B build -G Ninja
+cmake --build build
+./build/myapp
+```
+
+Sources `#include "cetra/engine.h"`. The `cetra` target carries the include
+paths, the vendored libraries and the platform frameworks; the example apps
+stay off under a parent project. The first build compiles the engine and its
+dependencies, about half a minute; after that a rebuild is seconds.
+
+Or let CMake fetch it:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(cetra
+    GIT_REPOSITORY https://github.com/monological/cetra
+    GIT_TAG        v0.16.0)
+FetchContent_MakeAvailable(cetra)
+```
+
+`GIT_REPOSITORY`, not `URL`: a source tarball has neither the vendored
+submodules nor the git history the version is derived from, so it cannot
+configure. `GIT_SHALLOW` builds but drops the tags, and the version reports as
+a sha.
+
+What a consumer inherits:
+
+- The toolchain under Setup, with clang on Linux (gcc rejects JoltC), and
+  Python 3 at build time for the shader header. Nothing at runtime: shaders are
+  compiled into the library, and the only file the engine opens on its own is
+  the cook cache, and only if the app calls `cook_init`.
+- `BUILD_SHARED_LIBS` is forced off in the cache for the vendored
+  dependencies, so a library of yours declared without a type builds static.
+  Write `SHARED` if you want one.
+- Headless mode is a hidden window, not an offscreen context. It needs a
+  display and a GPU.
+- Add cetra once, at the top of the project. Two `add_subdirectory` calls
+  collide on target names.
+- `cetra_warnings` is the engine's own `-Wall` / `/W4` set; link it for the same
+  flags.
