@@ -89,14 +89,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Build options
-option(CETRA_BUILD_APPS "Build example applications" ON)
+# Build options. The apps default to ON only when cetra is the top-level
+# project: a project that add_subdirectory's the engine wants the library, not
+# seven example binaries in its own tree.
+option(CETRA_BUILD_APPS "Build example applications" ${PROJECT_IS_TOP_LEVEL})
 option(CETRA_BUILD_JOLTC "Build JoltC physics library" ON)
 
-# Output directories
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+# Output directories. PROJECT_BINARY_DIR, not CMAKE_BINARY_DIR: the two are the
+# same directory when cetra is built on its own (out/), and differ when a parent
+# project adds it, where CMAKE_BINARY_DIR is the consumer's build root and these
+# would drop every archive and app into the consumer's own lib/ and bin/.
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 
 # Platform-specific settings
 if(APPLE)
@@ -209,6 +214,10 @@ set(ASSIMP_BUILD_DRACO_STATIC ON  CACHE BOOL "" FORCE)
 # glTF2 importer fails to compile on `#include "draco/draco_features.h"`.
 # Handing it the binary dir here rather than patching vendored assimp:
 # include_directories() is inherited by subdirectories added after it.
+# CMAKE_BINARY_DIR deliberately, unlike the output directories above: draco
+# writes the file to CMAKE_BINARY_DIR (contrib/draco/CMakeLists.txt sets
+# draco_build to it), so under a parent project it lands in the consumer's
+# build root and this path has to follow it there.
 include_directories(${CMAKE_BINARY_DIR})
 add_subdirectory(cetra/src/ext/assimp)
 

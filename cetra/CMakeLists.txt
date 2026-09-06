@@ -11,10 +11,12 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/shader_strings.h)
         "Delete it and re-configure.")
 endif()
 
-# Public include tree at ${CMAKE_BINARY_DIR}/include so apps can #include
+# Public include tree at <cetra build dir>/include so apps can #include
 # "cetra/foo.h". Holds a forwarding header per real header, plus the generated
-# shader_strings.h (below).
-set(CETRA_PUBLIC_INCLUDE_DIR ${CMAKE_BINARY_DIR}/include)
+# shader_strings.h (below). PROJECT_BINARY_DIR is out/ when cetra builds on its
+# own and cetra's own subdirectory of a parent project's build otherwise; the
+# tree must not land in a consumer's build root.
+set(CETRA_PUBLIC_INCLUDE_DIR ${PROJECT_BINARY_DIR}/include)
 
 # Forwarding headers replace a CREATE_LINK symlink (which needs Developer Mode
 # on Windows). Each include/cetra/<rel> just #includes the real header by
@@ -84,7 +86,6 @@ target_include_directories(cetra
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/game>
         # Forwarding-header tree, for apps' #include "cetra/foo.h".
         $<BUILD_INTERFACE:${CETRA_PUBLIC_INCLUDE_DIR}>
-        $<INSTALL_INTERFACE:include/cetra>
     PRIVATE
         # The generated shader_strings.h lives at include/cetra/, and program.c
         # is the one file that includes it, bare. Private so no app or consumer
@@ -130,14 +131,13 @@ target_include_directories(cetra PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/cimgui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/cimgui/imgui/backends)
 
-# Install targets
-install(TARGETS cetra
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-)
-
-# Install headers
-install(DIRECTORY src/
-    DESTINATION include/cetra
-    FILES_MATCHING PATTERN "*.h"
-)
+# No install. The engine is consumed with add_subdirectory, as a git submodule
+# or through FetchContent (README, "Using cetra in your project"). An install
+# rule used to sit here and was removed rather than finished: it had no export
+# set, so nothing could find_package the result, and it installed none of the
+# seven static libraries cetra links, so a program built against its prefix
+# failed at the link -- while five of those libraries (GLFW, GLEW, cglm, cimgui,
+# JoltC) still carry live install rules of their own that would fire under a
+# consumer's cmake --install. A real install means exporting every one of those
+# targets with their headers and a config file that describes them. That is its
+# own spec, and the step before a Homebrew formula.
