@@ -274,7 +274,9 @@ at all, neither of which announces itself. `apps/forest`, `apps/tree` and (since
 TAA turns 32,000 motes into dashes; `apps/shapes` keeps them because
 multisampling is what 2D line art wants and nothing in that scene moves;
 `apps/splash` is outside the question entirely, drawing to the default framebuffer
-without ever binding the engine's. (`apps/pcb` was a gitignored local app; it is now a
+without ever binding the engine's. `apps/sprites` and `apps/network` (11.105) keep four
+samples for the same two reasons in turn, particles and line art, and run under the 2D
+preset, which has TAA off regardless. (`apps/pcb` was a gitignored local app; it is now a
 repository of its own with cetra as a submodule, per spec 11.105, and keeps the same
 choice.)
 **A 2D app's other defaults are one call**, `engine_set_2d_defaults`: bloom, GTAO,
@@ -1171,6 +1173,8 @@ on the `Scene`.
 | gametest | `apps/gametest/` | Physics/character/entity demo (WASD, jump, boxes, hinge door) | no |
 | tree | `apps/tree/` | Procedural recursive tree generator with ImGui sliders, on a domed island in a sea with a seabed under it, at sunset, walkable in first person (`--player`); `--no-water` for dry land. Specs 11.32, 11.35, 11.36 | yes (but NOT frame-deterministic on the orbit path: floor is 9k-31k px depending on framing, see `docs/verification.md`) |
 | shapes | `apps/shapes/` | Procedural geometry demo (rect/circle/bezier) | no |
+| sprites | `apps/sprites/` | The 2023 particle-globe sketch, behaving as it did: 540 hard-square points on a jittering sphere that spins up over time, raw colours through the passthrough tonemap (spec 11.105) | yes |
+| network | `apps/network/` | The 2024 wireframe-sphere sketch: its own two shaders on a material, the sphere's triangles reduced to lines, `time` set each frame from the app (spec 11.105) | yes |
 | splash | `apps/splash/` | SDF text-rendering test ("CETRA") | no |
 
 ## Verification
@@ -1202,7 +1206,8 @@ arms pass everywhere; timing arms and goldens are the two things that do not tra
 
 **render**, **spores**, **forest** and **tree** support headless capture (this line said three
 apps for several specs while the table above already said tree was "yes" -- it takes `-x`, `-f`,
-`-S` and `--screenshot-every` like the others). **`--screenshot-every` was the half of that claim
+`-S` and `--screenshot-every` like the others), and since 11.105 **sprites** and **network** take
+`-x`, `-f` and `-S`. **`--screenshot-every` was the half of that claim
 that was not true until 11.62**: forest and spores parsed `-S` but not it, so capturing a
 TRANSITION cost one full process per frame -- which on forest is a terrain bake and a 5,000-prop
 scatter per sample. It is a `GameConfig` field now, so every game-framework app has it. The render
