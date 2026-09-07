@@ -175,18 +175,6 @@ static void update_globe(ParticleModule* m, ParticleEmitter* e, size_t begin, si
     }
 }
 
-static ParticleModule* module(const char* name, ParticleModulePhase phase, ParticleModuleFn run) {
-    ParticleModule* m = calloc(1, sizeof(ParticleModule));
-    if (!m) {
-        fprintf(stderr, "out of memory for module %s\n", name);
-        exit(1);
-    }
-    m->name = name;
-    m->phase = phase;
-    m->run = run;
-    return m;
-}
-
 static void pre_render(Engine* engine, Scene* scene) {
     (void)scene;
     update_engine_camera_lookat(engine);
@@ -306,9 +294,13 @@ int main(int argc, char** argv) {
     ParticleRenderer* renderer = create_billboard_particle_renderer(particle_program);
     billboard_renderer_set_sprite(renderer, square, 1.0f);
     particle_emitter_set_renderer(em, renderer);
-    particle_emitter_add_module(em, module("spawn_once", PARTICLE_PHASE_SPAWN, spawn_once));
-    particle_emitter_add_module(em, module("init_sphere", PARTICLE_PHASE_INIT, init_sphere));
-    particle_emitter_add_module(em, module("update_globe", PARTICLE_PHASE_UPDATE, update_globe));
+    // The state is the file static above, so the modules carry no params.
+    particle_emitter_add_module(
+        em, create_particle_module("spawn_once", PARTICLE_PHASE_SPAWN, spawn_once, NULL));
+    particle_emitter_add_module(
+        em, create_particle_module("init_sphere", PARTICLE_PHASE_INIT, init_sphere, NULL));
+    particle_emitter_add_module(
+        em, create_particle_module("update_globe", PARTICLE_PHASE_UPDATE, update_globe, NULL));
     particle_system_add_emitter(sys, em);
     add_particle_system_to_scene(scene, sys); // the scene owns it, ticks it and draws it
 

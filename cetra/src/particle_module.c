@@ -13,8 +13,8 @@ static void module_default_free(ParticleModule* m) {
     free(m);
 }
 
-static ParticleModule* module_new(const char* name, ParticleModulePhase phase, ParticleModuleFn run,
-                                  void* params) {
+ParticleModule* create_particle_module(const char* name, ParticleModulePhase phase,
+                                       ParticleModuleFn run, void* params) {
     ParticleModule* m = calloc(1, sizeof(ParticleModule));
     if (!m) {
         free(params);
@@ -61,7 +61,7 @@ ParticleModule* particle_module_spawn_rate(float rate) {
     if (!p)
         return NULL;
     p->rate = rate;
-    return module_new("spawn_rate", PARTICLE_PHASE_SPAWN, spawn_rate_run, p);
+    return create_particle_module("spawn_rate", PARTICLE_PHASE_SPAWN, spawn_rate_run, p);
 }
 
 void particle_module_spawn_rate_set(ParticleModule* m, float rate) {
@@ -100,7 +100,7 @@ ParticleModule* particle_module_init_box_location(vec3 min, vec3 max) {
         return NULL;
     glm_vec3_copy(min, p->min);
     glm_vec3_copy(max, p->max);
-    return module_new("init_box_location", PARTICLE_PHASE_INIT, init_box_run, p);
+    return create_particle_module("init_box_location", PARTICLE_PHASE_INIT, init_box_run, p);
 }
 
 // --- INIT: scalar range (shared by lifetime and size) ---
@@ -124,7 +124,7 @@ ParticleModule* particle_module_init_lifetime(float min_seconds, float max_secon
         return NULL;
     p->min = min_seconds;
     p->max = max_seconds;
-    return module_new("init_lifetime", PARTICLE_PHASE_INIT, init_lifetime_run, p);
+    return create_particle_module("init_lifetime", PARTICLE_PHASE_INIT, init_lifetime_run, p);
 }
 
 static void init_size_run(ParticleModule* m, ParticleEmitter* e, size_t begin, size_t end, float dt,
@@ -142,7 +142,7 @@ ParticleModule* particle_module_init_size(float min_size, float max_size) {
         return NULL;
     p->min = min_size;
     p->max = max_size;
-    return module_new("init_size", PARTICLE_PHASE_INIT, init_size_run, p);
+    return create_particle_module("init_size", PARTICLE_PHASE_INIT, init_size_run, p);
 }
 
 // --- INIT: color ---
@@ -171,7 +171,7 @@ ParticleModule* particle_module_init_color(vec4 base_rgba, float rgb_jitter) {
         return NULL;
     glm_vec4_copy(base_rgba, p->base);
     p->jitter = rgb_jitter;
-    return module_new("init_color", PARTICLE_PHASE_INIT, init_color_run, p);
+    return create_particle_module("init_color", PARTICLE_PHASE_INIT, init_color_run, p);
 }
 
 // --- UPDATE: curl-noise turbulence ---
@@ -200,7 +200,7 @@ ParticleModule* particle_module_update_curl_noise(float scale, float strength, f
     p->scale = scale;
     p->strength = strength;
     p->timescale = timescale;
-    return module_new("update_curl_noise", PARTICLE_PHASE_UPDATE, update_curl_run, p);
+    return create_particle_module("update_curl_noise", PARTICLE_PHASE_UPDATE, update_curl_run, p);
 }
 
 // --- UPDATE: drift (constant acceleration) ---
@@ -224,7 +224,7 @@ ParticleModule* particle_module_update_drift(vec3 accel) {
     if (!p)
         return NULL;
     glm_vec3_copy(accel, p->accel);
-    return module_new("update_drift", PARTICLE_PHASE_UPDATE, update_drift_run, p);
+    return create_particle_module("update_drift", PARTICLE_PHASE_UPDATE, update_drift_run, p);
 }
 
 // --- UPDATE: rotation (billboard roll) ---
@@ -256,7 +256,7 @@ ParticleModule* particle_module_update_rotation(float min_rate, float max_rate) 
         return NULL;
     p->min_rate = min_rate;
     p->max_rate = max_rate;
-    return module_new("update_rotation", PARTICLE_PHASE_UPDATE, update_rotation_run, p);
+    return create_particle_module("update_rotation", PARTICLE_PHASE_UPDATE, update_rotation_run, p);
 }
 
 // --- UPDATE: integrate + damping ---
@@ -280,7 +280,7 @@ ParticleModule* particle_module_update_integrate(float drag) {
     if (!p)
         return NULL;
     p->drag = drag;
-    return module_new("update_integrate", PARTICLE_PHASE_UPDATE, update_integrate_run, p);
+    return create_particle_module("update_integrate", PARTICLE_PHASE_UPDATE, update_integrate_run, p);
 }
 
 // --- UPDATE: analytic collider (one primitive; shape + mode are data) ---
@@ -511,7 +511,7 @@ static ParticleModule* collider_new(const ColliderParams* init) {
         return NULL;
     *p = *init;
     glm_vec3_copy((float*)init->a, p->prev_a);
-    return module_new("collider", PARTICLE_PHASE_UPDATE, collider_run, p);
+    return create_particle_module("collider", PARTICLE_PHASE_UPDATE, collider_run, p);
 }
 
 ParticleModule* particle_module_collider_sphere(vec3 center, float radius, ColliderMode mode,

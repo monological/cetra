@@ -38,6 +38,13 @@ typedef struct ParticleModule {
 
 void free_particle_module(ParticleModule* m);
 
+// A module from a kernel and its params. `params` is owned: freed with the
+// module, and freed here too when the allocation fails (NULL is returned).
+// `name` is not copied, so it is a literal or outlives the module. Every
+// module in this file is built with it, and so is one an app writes.
+ParticleModule* create_particle_module(const char* name, ParticleModulePhase phase,
+                                       ParticleModuleFn run, void* params);
+
 // --- Concrete v1 modules (spore demo needs these) ---
 
 // SPAWN: emit `rate` particles per second (fractional remainder accumulated so
