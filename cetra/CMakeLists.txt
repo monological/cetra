@@ -11,27 +11,63 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/shader_strings.h)
         "Delete it and re-configure.")
 endif()
 
-# Public include tree so apps can #include "cetra/foo.h": one forwarding header
-# per real header. Under PROJECT_BINARY_DIR for the reason the output
-# directories in the root CMakeLists give.
+# Two include trees, both of forwarding headers, under PROJECT_BINARY_DIR for
+# the reason the output directories in the root CMakeLists give:
+#
+#   include/cetra/<name>.h            the public surface, what an app may NAME
+#   include-internal/cetra/internal/  everything else
+#
+# The first is what a project that adds this directory sees. The second is
+# private to the library and reachable only by the in-tree apps (add_cetra_app
+# puts it on their path), so an app that includes cetra/internal/ is saying it
+# is a debug harness for the engine rather than a user of it.
+#
+# The allowlist governs what may be NAMED in an include, not what a public
+# header's closure reaches: material.h includes roads.h and texture.h includes
+# thread.h, and both stay internal. A header listed here is a promise that its
+# contents are meant for an app; one missing from it is a statement that they
+# are not, and adding one is a one-line change that the list makes visible.
 set(CETRA_PUBLIC_INCLUDE_DIR ${PROJECT_BINARY_DIR}/include)
+set(CETRA_INTERNAL_INCLUDE_DIR ${PROJECT_BINARY_DIR}/include-internal)
+
+set(CETRA_PUBLIC_HEADERS
+    animation.h app.h camera.h common.h compat.h config_snapshot.h cook.h
+    cscene.h decal.h engine.h exposure.h geometry.h gi_volume.h ibl.h ies.h
+    import.h input.h light.h material.h mesh.h mesh_builder.h noise.h
+    particle_emitter.h particle_module.h particle_renderer.h particle_sim.h
+    particle_system.h postfx.h probe.h probe_set.h program.h scene.h shader.h
+    shadow.h sky.h springbone.h text.h texture.h transform.h uniform.h util.h
+    water.h wind.h
+    ext/log.h ext/cwalk.h)
 
 # Forwarding headers replace a CREATE_LINK symlink (which needs Developer Mode
-# on Windows). Each include/cetra/<rel> just #includes the real header by
-# absolute path; a quoted include inside that header still resolves against its
-# own directory, so nested includes need no extra -I, and editing a real header
-# needs no reconfigure since the forwarder never changes. A NEW header does need
-# a reconfigure -- same as the source glob below. src/ext is shallow on purpose:
-# the JoltC/cimgui subtrees come through their own targets.
-file(GLOB _cetra_public_headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/src
+# on Windows). Each forwarder just #includes the real header by absolute path;
+# a quoted include inside that header still resolves against its own directory,
+# so nested includes need no extra -I, and editing a real header needs no
+# reconfigure since the forwarder never changes. A NEW header does need a
+# reconfigure -- same as the source glob below. src/ext is shallow on purpose:
+# the JoltC/cimgui subtrees come through their own targets. Everything under
+# game/ and procedural/ is public: the game framework and the terrain stack are
+# app-facing throughout.
+file(GLOB _cetra_all_headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/procedural/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/*.h)
-foreach(_rel IN LISTS _cetra_public_headers)
+foreach(_rel IN LISTS _cetra_all_headers)
+    if(_rel IN_LIST CETRA_PUBLIC_HEADERS OR _rel MATCHES "^(game|procedural)/")
+        set(_dest "${CETRA_PUBLIC_INCLUDE_DIR}/cetra/${_rel}")
+    else()
+        set(_dest "${CETRA_INTERNAL_INCLUDE_DIR}/cetra/internal/${_rel}")
+    endif()
     file(CONFIGURE
-        OUTPUT  "${CETRA_PUBLIC_INCLUDE_DIR}/cetra/${_rel}"
+        OUTPUT  "${_dest}"
         CONTENT "#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/${_rel}\"\n")
+endforeach()
+foreach(_rel IN LISTS CETRA_PUBLIC_HEADERS)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/${_rel}")
+        message(FATAL_ERROR "CETRA_PUBLIC_HEADERS names src/${_rel}, which does not exist")
+    endif()
 endforeach()
 
 # Shader header generation. Generated into the build tree, not the source tree,
@@ -77,14 +113,20 @@ file(GLOB CETRA_SOURCES
 # its generation before the objects that include it.
 add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER})
 
+# Where the in-tree apps find the internal tree (apps/CMakeLists.txt reads it
+# off the target, since a directory variable set here is not visible there).
+set_target_properties(cetra PROPERTIES CETRA_INTERNAL_INCLUDE_DIR "${CETRA_INTERNAL_INCLUDE_DIR}")
+
 target_include_directories(cetra
     PUBLIC
+        # The public forwarders, for #include "cetra/foo.h".
+        ${CETRA_PUBLIC_INCLUDE_DIR}
+    PRIVATE
+        # The library's own bare includes. Private, so an app cannot name an
+        # internal header by its bare spelling and skip the boundary above.
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ext
         ${CMAKE_CURRENT_SOURCE_DIR}/src/game
-        # Forwarding-header tree, for apps' #include "cetra/foo.h".
-        ${CETRA_PUBLIC_INCLUDE_DIR}
-    PRIVATE
         # program.c's #include "shader_strings.h".
         ${SHADER_GEN_DIR}
 )

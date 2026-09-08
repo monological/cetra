@@ -6,6 +6,7 @@
 #include "material.h"
 #include "texture.h"
 #include "engine.h"
+#include "async_loader.h"
 #include "program.h"
 #include "uniform.h"
 #include "util.h"

@@ -26,13 +26,12 @@
 #include "cetra/mesh.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
-#include "cetra/particle_pool.h"
+#include "cetra/internal/particle_pool.h"
 #include "cetra/particle_renderer.h"
 #include "cetra/particle_sim.h"
 #include "cetra/particle_system.h"
 #include "cetra/postfx.h"
 #include "cetra/program.h"
-#include "cetra/render.h"
 #include "cetra/scene.h"
 #include "cetra/texture.h"
 
@@ -182,8 +181,7 @@ static void pre_render(Engine* engine, Scene* scene) {
 }
 
 static void render(Engine* engine, Scene* scene) {
-    (void)scene;
-    render_current_scene(engine);
+    engine_render_scene(engine, scene);
 }
 
 int main(int argc, char** argv) {

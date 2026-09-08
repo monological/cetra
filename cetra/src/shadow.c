@@ -12,6 +12,8 @@
 #include "light.h"
 #include "mesh.h"
 #include "engine.h"
+#include "engine_internal.h"
+#include "draw_list.h"
 #include "intersect.h"
 #include "shadow.h"
 #include "ies.h"
@@ -1317,7 +1319,7 @@ static bool shadow_tsm_prepare(ShadowSystem* ss, Engine* engine) {
 
 // Draw the transmittance layers. Callable only when shadow_tsm_prepare returned
 // true, so every resource here is known to exist.
-static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scene) {
+static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, const Scene* scene) {
     const int size = ss->default_map_size;
     const int cc = ss->cascade_count;
     bool ok = true;
@@ -1367,7 +1369,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         uniform_set_mat4(au, "lightSpaceMatrix", matrix);
         uniform_set_int(au, "albedoTex", 0);
         engine_upload_displacement_uniforms(engine, scene, au);
-        _draw_shadow_items(ss, &scene->draw_list, ss->tsm_absorb_program, &state,
+        _draw_shadow_items(ss, scene->draw_list, ss->tsm_absorb_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine);
         glDisable(GL_BLEND);
 
@@ -1406,7 +1408,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, Scene* scen
         submit_state_reset(&state);
         submit_use_program(&state, ss->depth_program->id);
         uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-        _draw_shadow_items(ss, &scene->draw_list, ss->depth_program, &state,
+        _draw_shadow_items(ss, scene->draw_list, ss->depth_program, &state,
                            SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine);
     }
 
@@ -1740,7 +1742,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
-            draw_shadow_layer(ss, scene, &scene->draw_list, ss->cascade_matrices[layer], &state,
+            draw_shadow_layer(ss, scene, scene->draw_list, ss->cascade_matrices[layer], &state,
                               set, engine);
         }
     }
@@ -1770,7 +1772,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // the directional cascades only (unit 15 has no room for a
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
-                draw_shadow_layer(ss, scene, &scene->draw_list, ss->punctual_matrices[layer],
+                draw_shadow_layer(ss, scene, scene->draw_list, ss->punctual_matrices[layer],
                                   &state, SHADOW_CASTERS_OPAQUE, engine);
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs

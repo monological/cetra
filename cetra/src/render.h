@@ -17,10 +17,9 @@
 #include "engine.h"
 #include "animation.h"
 
-// Draws the engine's current scene. Animation time comes from
-// engine->render_time, latched once per frame before any pass, so this and the
-// shadow depth pass cannot disagree about where wind-displaced geometry is.
-void render_current_scene(Engine* engine);
+// The scene draw itself is engine_render_scene, declared in engine.h: the one
+// function in this file an app calls, so it lives on the public surface while
+// the pass machinery below stays internal.
 
 struct IBLResources;
 struct Scene;

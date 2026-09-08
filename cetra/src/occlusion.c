@@ -600,7 +600,7 @@ void occlusion_probe_print(const OcclusionContext* context, struct Scene* scene,
                                      rec->transformed ? rec->transform : NULL);
     }
 
-    DrawList* list = &scene->draw_list;
+    DrawList* list = scene->draw_list;
     printf("occlusion-probe header available=1 w=%d h=%d ref_w=%d ref_h=%d occluders=%d "
            "items=%zu sweep=%d seed=%u\n",
            OCCLUSION_W, OCCLUSION_H, OCC_REF_W, OCC_REF_H, context->occluder_count, list->count,

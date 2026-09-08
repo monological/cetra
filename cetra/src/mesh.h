@@ -250,14 +250,6 @@ typedef struct Mesh {
     size_t lod_count[CETRA_LOD_MAX];  // indices at this level
     float lod_error[CETRA_LOD_MAX];   // meshopt's deviation estimate, mesh units
     int lod_levels;                   // <= 1 means no chain
-
-    // What built those levels (spec 11.63). Zero for a chain or for no chain at
-    // all; non-zero when they are cuts across a cluster DAG, where a "level" is
-    // a distance BAND rather than a whole-mesh simplification.
-    //
-    // Reporting only -- nothing in the draw path branches on it, which is the
-    // point: a cut is a concatenated index range like any other, so selection,
-
 } Mesh;
 
 // The index range to draw for `level`, clamped to what this mesh actually has.

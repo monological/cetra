@@ -5,25 +5,11 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-#include <GL/glew.h>
-#include <assimp/scene.h>
-
-#include "mesh.h"
-#include "light.h"
-#include "camera.h"
 #include "scene.h"
-#include "texture.h"
 #include "animation.h"
 
 // Forward declaration
 struct AsyncLoader;
-
-void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh);
-
-void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights,
-                       bool photometric_units);
-
-void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* num_cameras);
 
 // Import setting: override the UV V-flip. The default is per-format AUTO
 // (glTF flips, FBX does not — each format's spec convention relative to this

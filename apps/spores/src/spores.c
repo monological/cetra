@@ -22,7 +22,6 @@
 #include "cetra/material.h"
 #include "cetra/scene.h"
 #include "cetra/engine.h"
-#include "cetra/render.h"
 #include "cetra/geometry.h"
 #include "cetra/light.h"
 #include "cetra/camera.h"
@@ -318,7 +317,7 @@ static void on_render(Game* game, double alpha) {
 
     // The scene's particle systems are ticked + drawn by the engine; nothing to
     // do here but render the scene.
-    render_current_scene(engine);
+    engine_render_scene(engine, scene);
 }
 
 static void on_shutdown(Game* game) {

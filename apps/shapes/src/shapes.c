@@ -11,13 +11,11 @@
 
 #include "cetra/common.h"
 #include "cetra/mesh.h"
-#include "cetra/shader.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
 #include "cetra/engine.h"
 #include "cetra/import.h"
-#include "cetra/render.h"
 #include "cetra/geometry.h"
 
 #define FBX_MODEL_PATH  "./models/room.fbx"
@@ -154,7 +152,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     if (!engine || !current_scene->root_node)
         return;
 
-    render_current_scene(engine);
+    engine_render_scene(engine, current_scene);
 }
 
 /*

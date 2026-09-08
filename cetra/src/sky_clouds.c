@@ -7,6 +7,7 @@
 
 #include "cook.h"
 #include "engine.h"
+#include "engine_internal.h"
 #include "noise.h"
 #include "texture.h"
 #include "thread.h"

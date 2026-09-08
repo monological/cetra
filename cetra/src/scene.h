@@ -2,21 +2,16 @@
 #ifndef _SCENE_H_
 #define _SCENE_H_
 
+#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
-#include <GL/glew.h>
 
 #include "common.h"
 #include "mesh.h"
 #include "program.h"
-#include "shader.h"
 #include "light.h"
 #include "camera.h"
 #include "shadow.h"
-#include "ibl.h"
-#include "probe_set.h"
-#include "animation.h"
-#include "draw_list.h"
 #include "decal.h"
 
 // Forward-declared so scene.h and particle_system.h never include each other
@@ -26,6 +21,13 @@ struct ParticleSystem;
 struct Wind;
 struct PostFX;
 struct EmissivePanels;
+// Held by pointer and named only here, so their headers stay out of every
+// file that includes this one. An app that reaches into one includes it.
+typedef struct IBLResources IBLResources;
+typedef struct ReflectionProbeSet ReflectionProbeSet;
+typedef struct Skeleton Skeleton;
+typedef struct Animation Animation;
+typedef struct DrawList DrawList;
 
 /*
  * SceneNode
@@ -196,8 +198,8 @@ typedef struct Scene {
     // where they are. Moving a node does not invalidate it -- the transform is
     // read through the node at submit. Only adding or removing geometry, or
     // changing a material's alpha mode, does, and both are seen at the next
-    // frame's rebuild.
-    DrawList draw_list;
+    // frame's rebuild. Owned; the list's type is internal.
+    DrawList* draw_list;
     // What the walk seeds the root with -- where the whole scene sits. Identity
     // for most apps; apps/render puts its model-recentre offset here and
     // apps/pcb its board offset.

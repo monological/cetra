@@ -4,7 +4,7 @@
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
-#include <uthash.h>
+#include "ext/uthash.h"
 
 // Forward declarations
 struct ShaderProgram;

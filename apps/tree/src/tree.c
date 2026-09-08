@@ -10,12 +10,10 @@
 
 #include "cetra/common.h"
 #include "cetra/mesh.h"
-#include "cetra/shader.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
 #include "cetra/engine.h"
-#include "cetra/render.h"
 #include "cetra/geometry.h"
 #include "cetra/light.h"
 #include "cetra/texture.h"
@@ -786,7 +784,7 @@ void render_scene_callback(Engine* engine, Scene* scene) {
         return;
     }
 
-    render_current_scene(engine);
+    engine_render_scene(engine, scene);
 }
 
 /*

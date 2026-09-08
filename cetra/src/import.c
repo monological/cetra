@@ -836,7 +836,7 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     return material;
 }
 
-void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
+static void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     size_t vert_count = ai_mesh->mNumVertices;
     size_t idx_count = ai_mesh->mNumFaces * 3; // Assuming the mesh is triangulated
 
@@ -1437,7 +1437,7 @@ static bool find_gltf_light_range(const struct aiNode* node, const char* light_n
     return false;
 }
 
-void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights,
+static void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights,
                        bool photometric_units) {
     *num_lights = scene->mNumLights;
     *lights = malloc(sizeof(Light*) * (*num_lights));
@@ -1599,7 +1599,7 @@ void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num
     }
 }
 
-void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* num_cameras) {
+static void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* num_cameras) {
     *num_cameras = scene->mNumCameras;
     *cameras = malloc(sizeof(Camera*) * (*num_cameras));
 

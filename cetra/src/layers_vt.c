@@ -5,6 +5,7 @@
 #include "layers_vt.h"
 #include "scene.h"
 #include "engine.h"
+#include "engine_internal.h"
 #include "draw_list.h"
 #include "intersect.h"
 #include "mesh.h"
@@ -857,7 +858,7 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     // bound even where the main pass would need the expanded one.
     Frustum fr;
     frustum_extract_from_vp(engine->view_proj, &fr);
-    const DrawList* list = &scene->draw_list;
+    const DrawList* list = scene->draw_list;
     for (size_t i = 0; i < list->count; i++) {
         const DrawItem* item = &list->items[i];
         Mesh* mesh = item->mesh;

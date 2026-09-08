@@ -22,7 +22,6 @@
 #include "cetra/material.h"
 #include "cetra/mesh.h"
 #include "cetra/program.h"
-#include "cetra/render.h"
 #include "cetra/scene.h"
 #include "cetra/uniform.h"
 
@@ -120,8 +119,7 @@ static void pre_render(Engine* engine, Scene* scene) {
 }
 
 static void render(Engine* engine, Scene* scene) {
-    (void)scene;
-    render_current_scene(engine);
+    engine_render_scene(engine, scene);
 }
 
 int main(int argc, char** argv) {

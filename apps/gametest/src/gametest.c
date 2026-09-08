@@ -20,7 +20,6 @@
 #include "cetra/mesh.h"
 #include "cetra/scene.h"
 #include "cetra/engine.h"
-#include "cetra/render.h"
 #include "cetra/geometry.h"
 #include "cetra/light.h"
 #include "cetra/app.h"
@@ -563,7 +562,7 @@ static void on_render(Game* game, double alpha) {
     glDisable(GL_CULL_FACE);
 
     // Render the scene
-    render_current_scene(engine);
+    engine_render_scene(engine, game->scene);
 
     // Re-enable culling
     glEnable(GL_CULL_FACE);

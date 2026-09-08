@@ -33,17 +33,16 @@
 #include "cetra/camera.h"
 #include "cetra/cook.h"
 #include "cetra/engine.h"
-#include "cetra/physics_cook.h"
+#include "cetra/internal/physics_cook.h"
 #include "cetra/ibl.h"
 #include "cetra/light.h"
-#include "cetra/lod.h"
-#include "cetra/cluster.h"
+#include "cetra/internal/lod.h"
+#include "cetra/internal/cluster.h"
 #include "cetra/material.h"
 #include "cetra/mesh.h"
 #include "cetra/noise.h"
-#include "cetra/profiler.h"
+#include "cetra/internal/profiler.h"
 #include "cetra/program.h"
-#include "cetra/render.h"
 #include "cetra/scene.h"
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
@@ -2881,7 +2880,7 @@ static void on_render(Game* game, double alpha) {
     if (!g_scene || !g_scene->root_node)
         return;
 
-    render_current_scene(game->engine);
+    engine_render_scene(game->engine, game->scene);
 }
 
 static void on_shutdown(Game* game) {

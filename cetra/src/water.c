@@ -6,6 +6,7 @@
 #include "water.h"
 
 #include "engine.h"
+#include "engine_internal.h"
 #include "procedural/foam_pattern.h"
 #include "shore_chain.h"
 #include "ubo.h"

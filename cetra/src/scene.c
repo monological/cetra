@@ -9,6 +9,9 @@
 
 #include "ext/log.h"
 #include "scene.h"
+#include "draw_list.h"
+#include "ibl.h"
+#include "animation.h"
 #include "particle_system.h"
 #include "sky.h"
 #include "wind.h"
@@ -56,6 +59,16 @@ Scene* create_scene() {
     scene->camera_count = 0;
 
     scene->tex_pool = create_texture_pool();
+
+    // Owned by pointer so the list's type stays out of this header (draw_list.h
+    // is internal). A zeroed list is the empty one, so calloc is the whole init.
+    scene->draw_list = calloc(1, sizeof(DrawList));
+    if (!scene->draw_list) {
+        log_error("Failed to allocate the scene's draw list");
+        free_texture_pool(scene->tex_pool);
+        free(scene);
+        return NULL;
+    }
 
     scene->xyz_shader_program = NULL;
 
@@ -170,7 +183,8 @@ void free_scene(Scene* scene) {
         free_node(scene->root_node);
     }
 
-    draw_list_free(&scene->draw_list);
+    draw_list_free(scene->draw_list);
+    free(scene->draw_list);
 
     // Free shadow system
     if (scene->shadow_system) {

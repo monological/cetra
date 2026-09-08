@@ -12,32 +12,31 @@
 #include "cetra/compat.h" // strcasecmp
 #include "cetra/common.h"
 #include "cetra/mesh.h"
-#include "cetra/shader.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/util.h"
-#include "cetra/async_loader.h"
+#include "cetra/internal/async_loader.h"
+#include "cetra/internal/render.h"
 #include "cetra/cook.h"
 #include "cetra/engine.h"
-#include "cetra/profiler.h"
-#include "cetra/light_cluster.h"
-#include "cetra/occlusion.h"
+#include "cetra/internal/profiler.h"
+#include "cetra/internal/light_cluster.h"
+#include "cetra/internal/occlusion.h"
 #include "cetra/import.h"
-#include "cetra/render.h"
 #include "cetra/transform.h"
 #include "cetra/animation.h"
 #include "cetra/springbone.h"
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
 #include "cetra/gi_volume.h"
-#include "cetra/emissive_light.h"
+#include "cetra/internal/emissive_light.h"
 #include "cetra/water.h"
 #include "cetra/ies.h"
 #include "cetra/wind.h"
 #include "cetra/config_snapshot.h"
 // For SHORE_CHAIN_HISTORY and SHORE_TAP_PERIODS, which --shore-probe reports the film's
 // history window against.
-#include "cetra/shore_chain.h"
+#include "cetra/internal/shore_chain.h"
 #include "cetra/procedural/water_waves.h"
 #include "cetra/app.h"
 
@@ -2372,7 +2371,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     if (!engine || !current_scene->root_node)
         return;
 
-    render_current_scene(engine);
+    engine_render_scene(engine, current_scene);
 
     // Render skeleton bones if enabled
     if (engine->show_bones) {

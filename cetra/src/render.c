@@ -24,6 +24,8 @@
 #include "camera.h"
 #include "common.h"
 #include "engine.h"
+#include "engine_internal.h"
+#include "ltc.h"
 #include "render.h"
 #include "profiler.h"
 #include "emissive_light.h"
@@ -92,7 +94,7 @@ CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustu
 static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) {
     if (!engine->occlusion_cull_enabled || !engine->occlusion || !engine->camera)
         return;
-    DrawList* list = &scene->draw_list;
+    DrawList* list = scene->draw_list;
     // The whole off state for an unoccluded scene: two integer compares.
     if (scene->occluder_count == 0 && list->occluder_flag_count == 0)
         return;
@@ -868,7 +870,7 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
     } else {
         glm_vec3_zero(lod.eye);
     }
-    draw_list_build(&scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
+    draw_list_build(scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
                     &lod);
     profiler_cpu_scope_end(engine->profiler);
 }
@@ -1244,13 +1246,12 @@ static float _halton(int index, int base) {
     return r;
 }
 
-void render_current_scene(Engine* engine) {
+void engine_render_scene(Engine* engine, Scene* scene) {
     if (!engine) {
         log_error("error: render called with NULL engine");
         return;
     }
 
-    Scene* scene = get_current_scene(engine);
     if (!scene) {
         log_error("error: render called with NULL scene");
         return;
@@ -1489,7 +1490,7 @@ void render_current_scene(Engine* engine) {
     // Bound state the draw loop skips re-setting; see render.h
     SubmitState submit_state = {0};
 
-    _count_late_meshes(scene, &scene->draw_list, &cull);
+    _count_late_meshes(scene, scene->draw_list, &cull);
 
     // Pass 1: opaque and alpha-masked meshes. The only pass that publishes the
     // normals G-buffer; every later pass (skybox, translucents, catcher,
@@ -1514,11 +1515,11 @@ void render_current_scene(Engine* engine) {
     // This does NOT fix cornell_box's 1 px (spec 11.30): that survives the
     // exclusion and comes from the camera pass, where two coplanar quads tie on
     // depth and GL_LESS breaks the tie by whichever drew first.
-    const DrawList* opaque_list = &scene->draw_list;
+    const DrawList* opaque_list = scene->draw_list;
     if (engine->opaque_sort_enabled && !engine->capturing &&
-        draw_list_sort_lane(&engine->sorted_opaque, &scene->draw_list, DRAW_LANE_OPAQUE,
+        draw_list_sort_lane(engine->sorted_opaque, scene->draw_list, DRAW_LANE_OPAQUE,
                             camera->position))
-        opaque_list = &engine->sorted_opaque;
+        opaque_list = engine->sorted_opaque;
     // Prepass first, inside the opaque scope so its cost lands on the row it is
     // spent to shrink rather than looking free in a row of its own. Skipped
     // during captures for the same reason the sort is -- and that exclusion is
@@ -1584,7 +1585,7 @@ void render_current_scene(Engine* engine) {
     profiler_samples_end(engine->profiler);
     if (prepassed)
         glDepthFunc(GL_LESS);
-    _submit_gizmos(&scene->draw_list, *view, draw_projection, &submit_state);
+    _submit_gizmos(scene->draw_list, *view, draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);
     // Restored only once the G-buffer scope is closed. glEnable(GL_BLEND) is
@@ -1789,7 +1790,7 @@ void render_current_scene(Engine* engine) {
             bool moments_ready = false;
             if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
                 profiler_scope_begin(engine->profiler, "oit moments");
-                _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
+                _submit_lanes(engine, scene, scene->draw_list, camera, *view, draw_projection,
                               render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
                               SUBMIT_PASS_OIT_MOMENTS);
                 profiler_scope_end(engine->profiler);
@@ -1805,7 +1806,7 @@ void render_current_scene(Engine* engine) {
                 // mis-composite the whole frame.
                 engine->moments_this_frame = moments_ready;
                 profiler_scope_begin(engine->profiler, "oit accumulate");
-                _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection,
+                _submit_lanes(engine, scene, scene->draw_list, camera, *view, draw_projection,
                               render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
                               SUBMIT_PASS_OIT_ACCUMULATE);
                 profiler_scope_end(engine->profiler);
@@ -1819,7 +1820,7 @@ void render_current_scene(Engine* engine) {
                                   ? (1u << DRAW_LANE_TRANSMISSIVE)
                                   : ((1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE));
         profiler_scope_begin(engine->profiler, "transparent");
-        _submit_lanes(engine, scene, &scene->draw_list, camera, *view, draw_projection, render_mode,
+        _submit_lanes(engine, scene, scene->draw_list, camera, *view, draw_projection, render_mode,
                       &submit_state, &cull, late_lanes, SUBMIT_PASS_SHADE);
         profiler_scope_end(engine->profiler);
         glDepthMask(GL_TRUE);
@@ -2092,7 +2093,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
-        render_current_scene(engine);
+        engine_render_scene(engine, get_current_scene(engine));
 
         if (keep_depth)
             continue; // already in the destination faces

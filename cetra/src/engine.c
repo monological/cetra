@@ -15,6 +15,8 @@
 #include "util.h"
 #include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see init_engine)
 #include "engine.h"
+#include "engine_internal.h"
+#include "draw_list.h"
 #include "gui.h"
 #include "light_cluster.h"
 #include "occlusion.h"
@@ -29,6 +31,9 @@
 #include "material_texture_array.h"
 #include "texture.h"
 #include "import.h" // resolve_height_maps (POM height convention)
+#include "async_loader.h"
+#include "text.h"
+#include "ltc.h"
 #include "render.h"
 #include "springbone.h"
 #include "wind.h"
@@ -136,6 +141,13 @@ Engine* create_engine(const char* window_title, int width, int height) {
     Engine* engine = calloc(1, sizeof(Engine));
     if (!engine) {
         log_error("Failed to allocate memory for engine");
+        return NULL;
+    }
+    // A zeroed list is the empty one, so calloc is the whole init.
+    engine->sorted_opaque = calloc(1, sizeof(DrawList));
+    if (!engine->sorted_opaque) {
+        log_error("Failed to allocate the engine's sort scratch");
+        free(engine);
         return NULL;
     }
 
@@ -330,7 +342,8 @@ void free_engine(Engine* engine) {
 
     // Borrows nothing: it holds copies of DrawItems, and a DrawItem borrows its
     // mesh and node. So this is safe before or after the scenes go.
-    draw_list_free(&engine->sorted_opaque);
+    draw_list_free(engine->sorted_opaque);
+    free(engine->sorted_opaque);
 
     // Free text renderer
     if (engine->text_renderer) {
