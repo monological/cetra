@@ -2452,8 +2452,7 @@ static void spawn_area_light(Scene* scene, const RenderArgs* args) {
     LightDesc desc = {.name = "area_light",
                       .type = LIGHT_AREA,
                       .intensity = args->area_light_intensity,
-                      .width = args->area_light_size[0],
-                      .height = args->area_light_size[1]};
+                      .size = {args->area_light_size[0], args->area_light_size[1]}};
     glm_vec3_copy((float*)args->area_light_pos, desc.position);
     glm_vec3_copy((float*)args->area_light_dir, desc.direction);
     glm_vec3_copy((float*)args->area_light_color, desc.color);
@@ -3136,7 +3135,6 @@ int main(int argc, char** argv) {
      */
     ShaderProgram* pbr_shader_program = engine_get_program(engine, CETRA_PROGRAM_PBR);
     if (!pbr_shader_program) {
-        fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
     }
 
@@ -3150,7 +3148,6 @@ int main(int argc, char** argv) {
 
     ShaderProgram* xyz_shader_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
     if (!xyz_shader_program) {
-        fprintf(stderr, "Failed to get xyz shader program\n");
         return -1;
     }
 
@@ -3164,13 +3161,8 @@ int main(int argc, char** argv) {
                               .near = 7.0f,
                               .far = 10000.0f};
     Camera* camera = create_camera(&camera_desc);
-
-    engine_update_view(engine);
-    engine_update_projection(engine);
-
     camera->theta = 0.60f;
     camera->height = 600.0f;
-
     engine_set_camera(engine, camera);
 
     // Create drag controller with auto-orbit (fixed camera in headless mode for

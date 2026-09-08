@@ -13,7 +13,7 @@
 #include "shader.h"
 #include "program.h"
 #include "util.h"
-#include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see engine_init)
+#include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see _engine_init)
 #include "engine.h"
 #include "engine_internal.h"
 #include "draw_list.h"
@@ -52,9 +52,9 @@
  * Private functions
  */
 static int _create_default_shaders_for_engine(Engine* engine);
-static Engine* _engine_alloc(const char* window_title, int width, int height);
-static int _engine_init(Engine* engine);
-static int _setup_engine_glfw(Engine* engine);
+static Engine* _engine_alloc(const EngineConfig* cfg);
+static int _engine_init(Engine* engine, const EngineConfig* cfg);
+static int _setup_engine_glfw(Engine* engine, bool vsync);
 static int _setup_engine_msaa(Engine* engine);
 static int _setup_engine_gui(Engine* engine);
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
@@ -137,7 +137,9 @@ static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_A
 /*
  * Engine
  */
-static Engine* _engine_alloc(const char* window_title, int width, int height) {
+// The Engine with every default in place and nothing made: no window, no GL
+// object, no post chain. free_engine takes one in this state.
+static Engine* _engine_alloc(const EngineConfig* cfg) {
     // Zeroed, not malloc'd: every field below is still set explicitly, but a
     // struct this wide cannot rely on each new field being remembered here --
     // and a field only ever written conditionally, like render_suspended, has
@@ -147,34 +149,21 @@ static Engine* _engine_alloc(const char* window_title, int width, int height) {
         log_error("Failed to allocate memory for engine");
         return NULL;
     }
-    // A zeroed list is the empty one, so calloc is the whole init.
-    engine->sorted_opaque = calloc(1, sizeof(DrawList));
-    if (!engine->sorted_opaque) {
-        log_error("Failed to allocate the engine's sort scratch");
-        free(engine);
+    engine->sorted_opaque = create_draw_list();
+    engine->window_title = safe_strdup(cfg->title ? cfg->title : "Cetra");
+    if (!engine->sorted_opaque || !engine->window_title) {
+        log_error("Failed to allocate memory for engine");
+        free_engine(engine);
         return NULL;
     }
 
     engine->window = NULL;
-    // Before anything can read it: apps set exposure fields between
-    // create_engine and engine_init, so the defaults have to be in place here
-    // rather than alongside the GL resources.
     exposure_init(&engine->exposure);
 
-    if (window_title != NULL) {
-        engine->window_title = safe_strdup(window_title);
-    } else {
-        engine->window_title = NULL;
-    }
-
-    if (window_title && !engine->window_title) {
-        log_error("Failed to allocate memory for window title");
-        free(engine);
-        return NULL;
-    }
-
-    engine->win_width = width;
-    engine->win_height = height;
+    engine->win_width = cfg->width > 0 ? cfg->width : 1280;
+    engine->win_height = cfg->height > 0 ? cfg->height : 720;
+    engine->headless = cfg->headless;
+    engine->headless_jitter = cfg->headless_jitter;
     engine->fb_width = 0;
     engine->fb_height = 0;
     engine->ss_scale = 1;             // Supersampling off by default (4x fragment cost);
@@ -296,8 +285,6 @@ static Engine* _engine_alloc(const char* window_title, int width, int height) {
     engine->show_camera_hud = false;
     engine->show_bones = false;
     engine->show_lights = false;
-    engine->headless = false;
-    engine->headless_jitter = false;
     engine->gui_frame_active = false;
     engine->screenshot_path = NULL;
     engine->screenshot_every = 0;
@@ -320,7 +307,6 @@ static Engine* _engine_alloc(const char* window_title, int width, int height) {
 
     engine->postfx = NULL;
     engine->profiler = NULL;
-    engine->profiler_enabled = false;
 
     init_input_state(&engine->input);
 
@@ -344,22 +330,15 @@ void free_engine(Engine* engine) {
     if (!engine)
         return;
 
-    // An engine whose window never came up owns no GL object and no ImGui
-    // context, so everything below that talks to either is skipped: this is
-    // what create_engine calls on a failed init.
-    if (!engine->window) {
-        draw_list_free(engine->sorted_opaque);
-        free(engine->sorted_opaque);
-        free(engine->window_title);
-        free(engine->screenshot_path);
-        free(engine);
-        return;
-    }
+    // One order for a whole engine and for one that failed part-way through
+    // creation: every owner below tolerates NULL, and the two things that need
+    // a live context -- the GL deletes and the ImGui shutdown -- are guarded
+    // on the window and the ImGui context respectively.
 
     // Borrows nothing: it holds copies of DrawItems, and a DrawItem borrows its
     // mesh and node. So this is safe before or after the scenes go.
-    draw_list_free(engine->sorted_opaque);
-    free(engine->sorted_opaque);
+    free_draw_list(engine->sorted_opaque);
+    free(engine->window_title);
 
     // Free text renderer
     if (engine->text_renderer) {
@@ -399,52 +378,57 @@ void free_engine(Engine* engine) {
         free(engine->screenshot_path);
     }
 
-    // GL objects must be released while the context still exists,
-    // i.e. before the window is destroyed
-    if (engine->postfx) {
-        free_postfx(engine->postfx);
-    }
-
-    free_light_cluster_context(engine->light_cluster);
-    free_occlusion_context(engine->occlusion);
-    free_ubo(engine->view_ubo);
-    free_ubo(engine->instance_ubo);
-    free_ubo(engine->vt_pages_ubo);
-    free_ubo(engine->roads_ubo);
-    free_layers_vt_feedback(engine->vt_feedback);
-
-    glDeleteFramebuffers(1, &engine->framebuffer);
-    _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
-    glDeleteFramebuffers(1, &engine->opaque_color_fbo);
-    glDeleteTextures(1, &engine->opaque_color_texture);
-    glDeleteFramebuffers(1, &engine->scene_depth_fbo);
-    glDeleteTextures(1, &engine->scene_depth_texture);
-
-    if (engine->catcher_vao)
-        glDeleteVertexArrays(1, &engine->catcher_vao);
-    if (engine->catcher_vbo)
-        glDeleteBuffers(1, &engine->catcher_vbo);
-
-    free_ltc_tables(engine->ltc);
-    engine->ltc = NULL;
-
-    // Its query objects belong to the context, so this has to happen above
-    // glfwDestroyWindow like every other GL teardown in this function.
-    free_profiler(engine->profiler);
-    engine->profiler = NULL;
-
-    gl_delete_texture(&engine->brdf_lut);
-
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    igDestroyContext(NULL);
-
-    // Destroy GLFW window
+    // GL objects must be released while the context still exists, i.e. before
+    // the window is destroyed; and there is a context to release them into
+    // only if the window came up.
     if (engine->window) {
+        if (engine->postfx) {
+            free_postfx(engine->postfx);
+        }
+
+        free_light_cluster_context(engine->light_cluster);
+        free_occlusion_context(engine->occlusion);
+        free_ubo(engine->view_ubo);
+        free_ubo(engine->instance_ubo);
+        free_ubo(engine->vt_pages_ubo);
+        free_ubo(engine->roads_ubo);
+        free_layers_vt_feedback(engine->vt_feedback);
+
+        glDeleteFramebuffers(1, &engine->framebuffer);
+        _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
+        glDeleteFramebuffers(1, &engine->opaque_color_fbo);
+        glDeleteTextures(1, &engine->opaque_color_texture);
+        glDeleteFramebuffers(1, &engine->scene_depth_fbo);
+        glDeleteTextures(1, &engine->scene_depth_texture);
+
+        if (engine->catcher_vao)
+            glDeleteVertexArrays(1, &engine->catcher_vao);
+        if (engine->catcher_vbo)
+            glDeleteBuffers(1, &engine->catcher_vbo);
+
+        free_ltc_tables(engine->ltc);
+        engine->ltc = NULL;
+
+        // Its query objects belong to the context, so this has to happen above
+        // glfwDestroyWindow like every other GL teardown in this function.
+        free_profiler(engine->profiler);
+        engine->profiler = NULL;
+
+        gl_delete_texture(&engine->brdf_lut);
+
+        // The backends assert on a missing context, so the ImGui teardown is
+        // gated on the context and not on the window: creation can fail after
+        // the window and before the GUI.
+        if (igGetCurrentContext()) {
+            ImGui_ImplOpenGL3_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+            igDestroyContext(NULL);
+        }
+
         glfwDestroyWindow(engine->window);
     }
 
-    // Terminate GLFW
+    // Safe when GLFW never initialised, which is the window-less case.
     glfwTerminate();
 
     free(engine);
@@ -453,13 +437,9 @@ void free_engine(Engine* engine) {
 /*
  * Setup GLFW
  */
-static int _setup_engine_glfw(Engine* engine) {
+static int _setup_engine_glfw(Engine* engine, bool vsync) {
     if (!engine) {
         return -1;
-    }
-
-    if (engine->error_callback) {
-        glfwSetErrorCallback(engine->error_callback);
     }
 
     if (!glfwInit()) {
@@ -491,14 +471,17 @@ static int _setup_engine_glfw(Engine* engine) {
 
     glfwMakeContextCurrent(engine->window);
 
-    // V-Sync on for normal runs, off for headless so frames run at full speed
-    glfwSwapInterval((engine->headless || engine->no_vsync) ? 0 : 1);
+    // Off for headless whatever was asked, so frames run at full speed
+    glfwSwapInterval((vsync && !engine->headless) ? 1 : 0);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     if (glewInit() != GLEW_OK) {
         log_error("Failed to initialize GLEW");
+        // No window left behind: free_engine reads it as "there is a context".
+        glfwDestroyWindow(engine->window);
+        engine->window = NULL;
         glfwTerminate();
         return -1;
     }
@@ -816,8 +799,9 @@ static void _engine_sync_render_targets(Engine* engine) {
     _engine_rebuild_render_targets(engine);
 }
 
-// Change the MSAA sample count. Before engine_init this just stores the request;
-// at runtime it rebuilds the multisample attachments in place (the single-sample
+// Change the MSAA sample count. While the scene target does not exist yet
+// (creation, from the config) this stores the count the first build uses; at
+// runtime it rebuilds the multisample attachments in place (the single-sample
 // post-process resolve targets are unaffected by the sample count).
 void engine_set_msaa_samples(Engine* engine, int samples) {
     if (!engine)
@@ -826,7 +810,7 @@ void engine_set_msaa_samples(Engine* engine, int samples) {
         samples = 1;
 
     if (!engine->framebuffer) {
-        engine->msaa_samples = samples; // pre-init: _setup_engine_msaa clamps
+        engine->msaa_samples = samples; // _setup_engine_msaa clamps
         return;
     }
 
@@ -872,7 +856,7 @@ static int _setup_engine_gui(Engine* engine) {
  * Initialize the Engine
  *
  */
-static int _engine_init(Engine* engine) {
+static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     printf("┏┓┏┓┏┳┓┳┓┏┓\n");
     printf("┃ ┣  ┃ ┣┫┣┫\n");
     printf("┗┛┗┛ ┻ ┛┗┛┗\n");
@@ -887,7 +871,7 @@ static int _engine_init(Engine* engine) {
     // macOS/Linux, which already default to UNIX.
     cwk_path_set_style(CWK_STYLE_UNIX);
 
-    if (_setup_engine_glfw(engine) != 0) {
+    if (_setup_engine_glfw(engine, !cfg->no_vsync) != 0) {
         log_error("Failed to initialize engine GLFW");
         return -1;
     }
@@ -946,7 +930,7 @@ static int _engine_init(Engine* engine) {
 
     // Only when asked for (spec 11.27). Not fatal if it fails: losing the
     // instrument should not cost the frame it was meant to measure.
-    if (engine->profiler_enabled) {
+    if (cfg->profiler) {
         engine->profiler = create_profiler();
     }
 
@@ -994,17 +978,8 @@ static int _engine_init(Engine* engine) {
 
     // HDR post-processing (resolve + bloom + tone map). Sized at the display
     // resolution; the supersample factor enlarges the internal chain to match
-    // the enlarged MSAA scene target.
-    // TAAU reconstructs from the jitter, and headless suppresses the jitter
-    // unless headless_jitter is set -- without it the resolve would integrate
-    // one repeated sample position forever and just look permanently soft.
-    // Enforced here rather than in an app because this is where all three
-    // facts are known, and every headless app would otherwise have to
-    // rediscover the rule.
-    if (engine->headless && !engine->headless_jitter && engine->render_scale < 1.0f) {
-        log_warn("render scale needs jitter under headless; rendering at full resolution");
-        engine->render_scale = 1.0f;
-    }
+    // the enlarged MSAA scene target. The render scale arrives already clamped
+    // for headless by its setter.
     engine->postfx =
         create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale, engine->render_scale);
     if (!engine->postfx) {
@@ -1014,6 +989,7 @@ static int _engine_init(Engine* engine) {
 
     postfx_set_exposure(engine->postfx, &engine->exposure);
     postfx_set_profiler(engine->postfx, engine->profiler);
+    engine->postfx->taa_enabled = cfg->taa;
 
     // Record what init just built at, or the first frame-top sync would see
     // zeroes, decide the sizes had changed, and rebuild everything once for
@@ -1651,20 +1627,13 @@ Engine* create_engine(const EngineConfig* cfg) {
     if (!cfg)
         cfg = &none;
 
-    Engine* engine =
-        _engine_alloc(cfg->title ? cfg->title : "Cetra", cfg->width > 0 ? cfg->width : 1280,
-                      cfg->height > 0 ? cfg->height : 720);
+    Engine* engine = _engine_alloc(cfg);
     if (!engine)
         return NULL;
 
-    // Everything init reads, in place before it runs. The sample count and the
-    // two scales go through their setters for the clamps, which store when the
-    // targets do not exist yet and rebuild when they do.
-    engine->headless = cfg->headless;
-    engine->headless_jitter = cfg->headless_jitter;
-    engine->no_vsync = cfg->no_vsync;
-    engine->profiler_enabled = cfg->profiler;
-    engine->taa_requested = cfg->taa;
+    // The sample count and the two scales go through their setters for the
+    // clamps, which store while the targets do not exist and rebuild once they
+    // do; the rest of the config is read where it is consumed, inside init.
     if (cfg->msaa_samples > 0)
         engine_set_msaa_samples(engine, cfg->msaa_samples);
     if (cfg->ss_scale > 0)
@@ -1672,30 +1641,22 @@ Engine* create_engine(const EngineConfig* cfg) {
     if (cfg->render_scale > 0.0f)
         engine_set_render_scale(engine, cfg->render_scale);
 
-    if (_engine_init(engine) != 0) {
+    if (_engine_init(engine, cfg) != 0) {
         log_error("create_engine: the window or the GL context could not be made");
         free_engine(engine);
         return NULL;
     }
-    engine_set_taa(engine, engine->taa_requested);
     return engine;
 }
 
-// Store-and-apply: the request lands on the engine, and on the post chain
-// too once it exists. Nothing is silently dropped for being asked too early.
 void engine_set_taa(Engine* engine, bool enabled) {
-    if (!engine)
-        return;
-    engine->taa_requested = enabled;
-    if (engine->postfx)
+    if (engine)
         engine->postfx->taa_enabled = enabled;
 }
 
 void engine_set_2d_preset(Engine* engine, Scene* scene) {
-    if (!engine || !engine->postfx) {
-        log_error("engine_set_2d_preset: call after engine_init, the post chain is not up");
+    if (!engine)
         return;
-    }
     PostFX* fx = engine->postfx;
     fx->bloom_enabled = false;
     fx->ssao_enabled = false;
@@ -1743,8 +1704,9 @@ void engine_set_render_scale(Engine* engine, float render_scale) {
     // TAAU reconstructs from the jitter, and headless suppresses the jitter
     // unless headless_jitter is set -- without it the resolve integrates one
     // repeated sample position forever, which does not fail, it just looks
-    // permanently soft. The same rule engine_init applies, re-applied because
-    // this is now reachable at runtime.
+    // permanently soft. Enforced here, the one path a scale arrives by, rather
+    // than in an app, because this is where all three facts are known and
+    // every headless app would otherwise have to rediscover the rule.
     if (engine->headless && !engine->headless_jitter && render_scale < 1.0f) {
         log_warn("render scale needs jitter under headless; staying at full resolution");
         render_scale = 1.0f;

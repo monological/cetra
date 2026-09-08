@@ -9,10 +9,6 @@
 #include "light.h"
 #include "ext/log.h"
 
-static bool _is_zero3(const vec3 v) {
-    return v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f;
-}
-
 Light* create_light(const LightDesc* desc) {
     static const LightDesc none = {0};
     if (!desc)
@@ -24,7 +20,7 @@ Light* create_light(const LightDesc* desc) {
         return NULL;
     }
 
-    light->name = desc->name ? safe_strdup(desc->name) : NULL;
+    light->name = safe_strdup(desc->name);
     light->type = desc->type;
 
     glm_vec3_copy((float*)desc->position, light->original_position);
@@ -33,28 +29,22 @@ Light* create_light(const LightDesc* desc) {
     // The authored direction and up, and the world copies a node transform
     // rotates from them. With the default downward direction the default up
     // makes width = cross(up, dir) = +X: a ceiling panel spanning X by Z.
-    vec3 direction = {0.0f, -1.0f, 0.0f};
-    if (!_is_zero3(desc->direction))
-        glm_vec3_copy((float*)desc->direction, direction);
-    vec3 up = {0.0f, 0.0f, 1.0f};
-    if (!_is_zero3(desc->up))
-        glm_vec3_copy((float*)desc->up, up);
+    vec3 direction = {0}, up = {0};
+    vec3_or_default(desc->direction, (vec3){0.0f, -1.0f, 0.0f}, direction);
+    vec3_or_default(desc->up, (vec3){0.0f, 0.0f, 1.0f}, up);
     light_set_direction(light, direction);
     light_set_up(light, up);
 
-    if (_is_zero3(desc->color))
-        glm_vec3_one(light->color);
-    else
-        glm_vec3_copy((float*)desc->color, light->color);
+    vec3_or_default(desc->color, (vec3){1.0f, 1.0f, 1.0f}, light->color);
     glm_vec3_one(light->specular);
     glm_vec3_one(light->ambient);
 
-    light_set_intensity_units(light, desc->intensity > 0.0f ? desc->intensity : 1.0f, desc->units);
+    light_set_intensity_units(light, desc->intensity, desc->units);
     light->range = desc->range; // 0 = derive from attenuation (light_cull_radius)
     light->cutOff = cosf(desc->inner_cutoff > 0.0f ? desc->inner_cutoff : glm_rad(12.5f));
     light->outerCutOff = cosf(desc->outer_cutoff > 0.0f ? desc->outer_cutoff : glm_rad(15.0f));
-    glm_vec2_copy((vec2){desc->width > 0.0f ? desc->width : 50.0f,
-                         desc->height > 0.0f ? desc->height : 50.0f},
+    glm_vec2_copy((vec2){desc->size[0] > 0.0f ? desc->size[0] : 50.0f,
+                         desc->size[1] > 0.0f ? desc->size[1] : 50.0f},
                   light->size);
 
     light->cast_shadows = desc->cast_shadows;
@@ -209,19 +199,6 @@ void light_emission_frame(const struct Light* light, vec3 axis, vec3 up) {
     orientation_frame(light->direction, light->up, axis, up);
 }
 
-/**
- * Sets the cutoff angles for a spotlight.
- *
- * Both are COSINES of the half-angles, never the angles themselves. Every
- * consumer compares them against dot(L, -axis) directly, so an angle passed here
- * is not merely mis-scaled -- it is monotonically backwards, and a wide cone
- * arrives narrow.
- *
- * @param light A pointer to the Light structure.
- * @param cutOff Cosine of the inner half-angle, inside which the light is at
- *               full intensity.
- * @param outerCutOff Cosine of the outer half-angle, beyond which it is zero.
- */
 void free_light(Light* light) {
     if (!light)
         return;

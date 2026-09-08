@@ -250,6 +250,73 @@ the vendored libraries and the platform frameworks with it. The example apps
 are not built. The first build compiles the engine and its dependencies and
 takes about half a minute; rebuilds take seconds.
 
+A minimal `src/main.c`, a lit box under an orbit camera:
+
+```c
+#include <cglm/cglm.h>
+#include "cetra/engine.h"
+#include "cetra/geometry.h"
+#include "cetra/scene.h"
+
+static void pre_render(Engine* engine, Scene* scene) {
+    (void)scene;
+    engine_update_view(engine);
+    engine_update_projection(engine);
+}
+
+static void render(Engine* engine, Scene* scene) {
+    engine_render_scene(engine, scene);
+}
+
+int main(void) {
+    EngineConfig cfg = {.title = "hello", .width = 1280, .height = 720};
+    Engine* engine = create_engine(&cfg);
+    if (!engine)
+        return 1;
+
+    Scene* scene = create_scene();
+    engine_add_scene(engine, scene);
+    scene_set_root(scene, create_node());
+
+    CameraDesc cam = {.position = {0, 2, 5}, .fov = glm_rad(45.0f)};
+    engine_set_camera(engine, create_camera(&cam));
+
+    LightDesc key = {.type = LIGHT_DIRECTIONAL, .direction = {-0.3f, -1, -0.5f}, .intensity = 3};
+    scene_add_light(scene, create_light(&key));
+
+    Material* mat = create_material();
+    material_set_program(mat, engine_get_program(engine, CETRA_PROGRAM_PBR));
+    mat->albedo[0] = 1.0f;
+
+    Mesh* mesh = create_mesh();
+    mesh_generate_box(mesh, &(Box){.size = {1, 1, 1}});
+    mesh->material = mat;
+    mesh_compute_aabb(mesh);
+    mesh_upload(mesh);
+
+    SceneNode* node = create_node();
+    node_add_mesh(node, mesh);
+    node_add_child(scene->root_node, node);
+
+    engine_run(engine, NULL, pre_render, render);
+    free_engine(engine);
+    return 0;
+}
+```
+
+An object is created from a description struct: fill the fields you mean and
+leave the rest zero, which is the default named beside each field in the
+header. `create_engine` makes the window, the GL context, the render targets
+and the post chain in one call; everything those read (`headless`, `profiler`,
+`msaa_samples`, `taa`, ...) is a config field, so there is no init call and no
+before/after ordering to get wrong. Functions are named subject first
+(`engine_`, `scene_`, `node_`, `mesh_`, `camera_`, `light_`), and the built-in
+program names are the `CETRA_PROGRAM_*` constants.
+
+The public headers are the ones an app may name; the rest of the engine's
+headers are internal and not on your include path. A header that a public one
+includes still resolves, so a consumer never has to know the split.
+
 Or let CMake fetch it:
 
 ```cmake

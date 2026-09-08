@@ -345,7 +345,7 @@ static bool vt_bake_pages(Material* m, struct Scene* scene, struct Engine* engin
                           const int* vpages, const int* slots, int count) {
     MaterialLayersVt* vt = m->layers_vt;
     MaterialTextureArray* arr = scene->material_textures;
-    ShaderProgram* prog = engine_get_program(engine, "layers_vt_bake");
+    ShaderProgram* prog = engine_find_program(engine, "layers_vt_bake");
     if (!prog || count <= 0)
         return false;
 
@@ -598,7 +598,6 @@ static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int
     MaterialTextureArray* arr = scene->material_textures;
     ShaderProgram* prog = engine_get_program(engine, "layers_vt_bake");
     if (!prog) {
-        log_error("layers_vt: bake program missing");
         return false;
     }
 
@@ -804,7 +803,7 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     }
     if (!paged)
         return;
-    ShaderProgram* prog = engine_get_program(engine, "layers_vt_feedback");
+    ShaderProgram* prog = engine_find_program(engine, "layers_vt_feedback");
     if (!prog)
         return;
 

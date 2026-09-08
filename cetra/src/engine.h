@@ -159,7 +159,7 @@ typedef struct Engine {
     GLuint moment_atlas_texture;
     int moment_w, moment_h;
     // Clustered-forward lighting (spec 9.1). The module owns its own GPU
-    // buffers and scratch; rebuilt per render_current_scene invocation.
+    // buffers and scratch; rebuilt per engine_render_scene invocation.
     struct LightClusterContext* light_cluster;
     // CPU masked occlusion culling (spec 11.98). Fixed working set, no GL;
     // rebuilt per camera frame, skipped under captures.
@@ -303,7 +303,7 @@ typedef struct Engine {
     mat4 view_matrix;
     mat4 projection_matrix; // Un-jittered truth: frustum culling, motion vectors
     mat4 view_proj;         // Un-jittered projection*view for the current frame, computed once in
-                            // render_current_scene (frustum + motion vectors); the scene draws with
+                            // engine_render_scene (frustum + motion vectors); the scene draws with
     // a locally sub-pixel-jittered projection derived from projection_matrix
     mat4 draw_projection; // The projection this frame actually rasterized with (jittered under
                           // TAA, == projection_matrix otherwise). Postfx passes reconstructing
@@ -331,11 +331,9 @@ typedef struct Engine {
     bool show_camera_hud; // Live camera pose overlay next to the FPS readout
     bool show_bones;      // X-ray bone visualization
     bool show_lights;     // Light overlay: position cross + cull-radius wireframe
-    bool headless;        // Hidden window, no vsync; from the config, read at creation
+    bool headless;        // Hidden window, no vsync, fixed frame clock
     bool headless_jitter; // Apply the TAA sub-pixel jitter even in headless (non-deterministic
                           // screenshots, but lets temporal accumulation converge for verification)
-    bool no_vsync;        // From the config, read when the window is made
-    bool taa_requested;   // The config's taa, held until the post chain exists to take it
 
     // Latched at NewFrame time: an ImGui frame is open this iteration and must
     // be closed with a matching igRender. Pairs the begin/end across the loop.
@@ -402,11 +400,9 @@ typedef struct Engine {
     PostFX* postfx;
 
     // Per-pass GPU time, CPU time and submission counts (specs 11.27, 11.28).
-    // NULL unless profiler_enabled asked for it before engine_init, and every
-    // entry point no-ops on NULL, so an ordinary run issues no query calls and
-    // keeps no counts at all.
+    // NULL unless the config asked for it, and every entry point no-ops on
+    // NULL, so an ordinary run issues no query calls and keeps no counts at all.
     struct Profiler* profiler;
-    bool profiler_enabled; // true = build the profiler (set before engine_init)
 
     // The camera's exposure -- read by render.c when it publishes ViewParams,
     // and by PostFX, which runs the metering that feeds it. On the Engine rather
@@ -504,8 +500,8 @@ void engine_recentre_on_camera(const Engine* engine, float lattice);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
 // 1 disables MSAA. Rebuilds the multisample attachments.
 void engine_set_msaa_samples(Engine* engine, int samples);
-// Temporal anti-aliasing on or off. A function because the post chain, the
-// jitter and the velocity buffer all read one flag and must agree.
+// Temporal anti-aliasing on or off; the config's `taa` is the same switch at
+// creation.
 void engine_set_taa(Engine* engine, bool enabled);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
@@ -514,8 +510,8 @@ void engine_set_taa(Engine* engine, bool enabled);
 // albedo reaches the display as authored with no light in the scene at all.
 // Left alone on purpose: the sample count, since multisampling is the
 // anti-aliasing 2D line art wants, and any light the app adds on top, which
-// then adds to the flat colour rather than replacing it. Call after
-// engine_init; the scene half is skipped when `scene` is NULL.
+// then adds to the flat colour rather than replacing it. The scene half is
+// skipped when `scene` is NULL.
 void engine_set_2d_preset(Engine* engine, Scene* scene);
 void engine_set_screenshot_path(Engine* engine, const char* path);
 void engine_set_screenshot_every(Engine* engine, int every);
@@ -550,7 +546,7 @@ void engine_set_scene_by_name(Engine* engine, const char* scene_name);
 Scene* engine_get_scene(const Engine* engine);
 
 // Shader Programs. The engine takes ownership of an added program. The
-// names engine_init registers for apps are the CETRA_PROGRAM_* constants in
+// names create_engine registers for apps are the CETRA_PROGRAM_* constants in
 // program.h; a program an app builds is registered under whatever name it
 // was created with.
 void engine_add_program(Engine* engine, ShaderProgram* program);
@@ -598,7 +594,7 @@ void engine_render_scene(Engine* engine, Scene* scene);
 void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock);
 
 // Set the frame's animation clock directly, for callers that do not go through
-// engine_run: an app driving render_current_scene from its own loop, or a
+// engine_run: an app driving engine_render_scene from its own loop, or a
 // capture that pins the clock. `delta` is how far `time` advanced since the last
 // render -- 0 for a frozen or first frame, so the wind's previous position
 // equals its current one and motion vectors come out zero.

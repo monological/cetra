@@ -51,6 +51,12 @@ GLenum gl_transfer_format(GLenum internal_format);
 void print_indentation(int depth);
 char* safe_strdup(const char* s);
 
+// The description-struct convention for a vec3 (CameraDesc, LightDesc): left
+// zero, it takes the default named beside it in the header.
+static inline void vec3_or_default(const vec3 v, const vec3 fallback, vec3 out) {
+    glm_vec3_copy(glm_vec3_eq((float*)v, 0.0f) ? (float*)fallback : (float*)v, out);
+}
+
 // FNV-1a over a byte range.
 //
 // Here because two diagnostics hash the SAME kind of thing -- a froxel mask

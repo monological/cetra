@@ -89,7 +89,7 @@ CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustu
 
 // The occlusion pass (spec 11.98): rasterise this frame's occluders, settle
 // every item's bit once, and arm the camera view. Static because the frame
-// site in render_current_scene is its only legal caller -- anywhere else is
+// site in engine_render_scene is its only legal caller -- anywhere else is
 // either before the transforms are final or inside a capture.
 static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) {
     if (!engine->occlusion_cull_enabled || !engine->occlusion || !engine->camera)
@@ -478,7 +478,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // Set view/projection/camera uniforms once per program switch.
             // projection is the jittered matrix (rasterization); the motion-vector
             // matrices are the engine's real un-jittered ones, computed once per
-            // frame in render_current_scene.
+            // frame in engine_render_scene.
             uniform_set_mat4(u, "view", (const float*)view);
             uniform_set_mat4(u, "projection", (const float*)projection);
             uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
@@ -579,7 +579,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             _update_camera_uniforms(program, camera);
 
             // Light data arrives via the clustered UBOs (uploaded once per
-            // frame in render_current_scene) -- no per-node upload.
+            // frame in engine_render_scene) -- no per-node upload.
 
             // Unconditional: every per-light-type gate lives inside, so this
             // file does not model which types can cast.
@@ -1386,7 +1386,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // Draw projection: the un-jittered projection, sub-pixel-jittered when TAA
     // runs so the temporal resolve accumulates coverage. Recomputed here every
     // call so every render loop — including apps that call
-    // render_current_scene from their own loop — gets a correct projection.
+    // engine_render_scene from their own loop — gets a correct projection.
     // Off in headless (jitter would break deterministic screenshots).
     mat4 draw_projection;
     glm_mat4_copy(*projection, draw_projection);
@@ -1905,7 +1905,7 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // Flatten from the CAMERA before the capture substitutes camera->position
     // with its own. The list is stamped per frame, so whoever builds it first
     // fixes the LOD levels every pass will draw at -- and the six faces about to
-    // re-enter render_current_scene would otherwise be that first builder, in
+    // re-enter engine_render_scene would otherwise be that first builder, in
     // which case the whole frame, main camera included, draws at levels measured
     // from a probe. Only reachable with shadows off, since the depth pass below
     // builds it otherwise, which is exactly why it cannot live inside that guard.
@@ -1943,10 +1943,10 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
     }
 }
 
-void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,
-                         GLuint dst_cubemap, GLuint dst_depth_cubemap, int face_size,
-                         float near_clip, float far_clip) {
-    if (!engine || !engine->camera || !dst_cubemap || face_size <= 0)
+void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
+                         const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
+                         int face_size, float near_clip, float far_clip) {
+    if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0)
         return;
     // Keeping the depth means rendering straight into the destination faces:
     // a blit would have to carry depth between two differently-sized targets.
@@ -1964,7 +1964,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
 
     // Below every early return, because a suspend that leaks is a profiler that
     // silently times nothing for the rest of the run. Six re-entries into
-    // render_current_scene follow, each opening the same scope names the frame
+    // engine_render_scene follow, each opening the same scope names the frame
     // itself uses; timing them would file a 256-pixel cube face under the row
     // that means the main pass. This is the one place the renderer re-renders
     // the world, so it is the one place that has to say so.
@@ -1981,7 +1981,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     vec3 saved_cam_pos, saved_prev_cam_pos;
     glm_vec3_copy(camera->position, saved_cam_pos);
     // The morph's previous eye, restored for the same reason prev_view_proj is:
-    // render_current_scene republishes it at the end of every face, so without
+    // engine_render_scene republishes it at the end of every face, so without
     // this the frame after a capture measures its terrain motion vectors from
     // wherever the last cube face was. Its validity flag goes with it, or a
     // capture taken before the first frame seeds it from a probe.
@@ -1991,7 +1991,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
     float saved_far = camera->far_clip;
 
     bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
-    // Each capture face re-enters render_current_scene with TAA off, which
+    // Each capture face re-enters engine_render_scene with TAA off, which
     // republishes a zero jitter. Restoring it keeps a capture taken AFTER the
     // main raster (this API is public) from handing the TAAU resolve a zero
     // offset to un-apply against a raster that was jittered.
@@ -2087,7 +2087,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
-        engine_render_scene(engine, engine_get_scene(engine));
+        engine_render_scene(engine, scene);
 
         if (keep_depth)
             continue; // already in the destination faces

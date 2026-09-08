@@ -2222,8 +2222,7 @@ static void build_fallback_sun(void) {
                           .direction = {-0.45f, -0.78f, -0.44f},
                           .color = {1.0f, 0.96f, 0.88f},
                           .intensity = 3.2f,
-                          .width = 4.0f,
-                          .height = 4.0f,
+                          .size = {4.0f, 4.0f},
                           .cast_shadows = true};
     Light* sun = create_light(&sun_desc);
     scene_add_light(g_scene, sun);
@@ -2268,11 +2267,8 @@ static void build_sky_and_sun(Engine* engine) {
     g_scene->skybox_brightness = 1.0f;
     g_scene->skybox_ground_projection = false;
 
-    LightDesc sun_desc = {.name = "sun",
-                          .type = LIGHT_DIRECTIONAL,
-                          .width = 4.0f,
-                          .height = 4.0f,
-                          .cast_shadows = true};
+    LightDesc sun_desc = {
+        .name = "sun", .type = LIGHT_DIRECTIONAL, .size = {4.0f, 4.0f}, .cast_shadows = true};
     Light* sun = create_light(&sun_desc);
     sky->sun_light = sun;
     // Lower than the tree app's 10: that app frames one subject against a
@@ -3187,15 +3183,14 @@ int main(int argc, char** argv) {
             g_args.frames = 1;
     }
 
-    GameConfig config = game_default_config();
-    config.engine.title = "Cetra Forest";
-    config.engine.width = g_args.width > 0 ? g_args.width : 1600;
-    config.engine.height = g_args.height > 0 ? g_args.height : 900;
-    config.engine.headless = g_args.headless != 0;
-    config.engine.headless_jitter = g_args.headless_jitter != 0;
-    config.engine.profiler = g_args.profiler != 0;
-    config.cook_dir = g_args.cook_dir;
-    config.no_cook = g_args.no_cook != 0;
+    GameConfig config = {.engine = {.title = "Cetra Forest",
+                                    .width = g_args.width > 0 ? g_args.width : 1600,
+                                    .height = g_args.height > 0 ? g_args.height : 900,
+                                    .headless = g_args.headless != 0,
+                                    .headless_jitter = g_args.headless_jitter != 0,
+                                    .profiler = g_args.profiler != 0},
+                         .cook_dir = g_args.cook_dir,
+                         .no_cook = g_args.no_cook != 0};
 
     // TAA replaces MSAA rather than joining it: this app shipped 4x MSAA with no
     // temporal filter at all, so masked foliage got raw coverage dither and the
@@ -3222,8 +3217,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     engine_set_exit_after_frames(game->engine, g_args.frames);
-    if (g_args.screenshot)
-        engine_set_screenshot_path(game->engine, g_args.screenshot);
+    engine_set_screenshot_path(game->engine, g_args.screenshot);
     engine_set_screenshot_every(game->engine, g_args.screenshot_every);
 
     game_set_init(game, on_init);

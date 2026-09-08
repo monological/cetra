@@ -588,16 +588,13 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
 
     sky->transmittance_program = engine_get_program(engine, "sky_transmittance");
     sky->multiscatter_program = engine_get_program(engine, "sky_multiscatter");
-    sky->aerial_program = engine_get_program(engine, "sky_aerial");
     sky->debug_program = engine_get_program(engine, "sky_debug");
-    sky->cloud_noise_debug_program = engine_get_program(engine, "cloud_noise_debug");
-    if (!sky->transmittance_program || !sky->multiscatter_program || !sky->debug_program) {
-        log_error("Failed to get sky LUT shader programs");
+    if (!sky->transmittance_program || !sky->multiscatter_program || !sky->debug_program)
         return -1;
-    }
-    // Not fatal, unlike the three above: without it the sky still bakes and
-    // draws, only aerial perspective is unavailable. Logged so that "aerial
-    // perspective does nothing" has a diagnostic rather than being silent.
+    // Optional, unlike the three above: without them the sky still bakes and
+    // draws, only aerial perspective (or the noise overlay) is unavailable.
+    sky->aerial_program = engine_find_program(engine, "sky_aerial");
+    sky->cloud_noise_debug_program = engine_find_program(engine, "cloud_noise_debug");
     if (!sky->aerial_program)
         log_error("No sky_aerial program; aerial perspective disabled");
 
@@ -798,15 +795,13 @@ int sky_bake_ex(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* eng
     }
     sky->view_program = engine_get_program(engine, "sky_view");
     sky->env_program = engine_get_program(engine, "sky_env");
-    sky->env_clouds_program = engine_get_program(engine, "sky_env_clouds");
     sky->background_program = engine_get_program(engine, "sky_background");
-    sky->background_clouds_program = engine_get_program(engine, "sky_background_clouds");
-    if (!sky->view_program || !sky->env_program || !sky->background_program) {
-        log_error("Failed to get sky render programs");
+    if (!sky->view_program || !sky->env_program || !sky->background_program)
         return -1;
-    }
-    // Non-fatal like the aerial program: without it the sky renders, only
+    // Optional like the aerial program: without them the sky renders, only
     // the cloud composite is unavailable.
+    sky->env_clouds_program = engine_find_program(engine, "sky_env_clouds");
+    sky->background_clouds_program = engine_find_program(engine, "sky_background_clouds");
     if (sky->clouds.enabled && !sky->background_clouds_program)
         log_error("No sky_background_clouds program; cloud composite disabled");
 

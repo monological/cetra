@@ -366,10 +366,7 @@ static void key_callback(Engine* engine, int key, int scancode, int action, int 
 }
 
 int main(int argc, char** argv) {
-    GameConfig config = game_default_config();
-    config.engine.title = "Cetra Spores";
-    config.engine.width = 1280;
-    config.engine.height = 720;
+    GameConfig config = {.engine = {.title = "Cetra Spores", .width = 1280, .height = 720}};
 
     bool force_taa = false;
     int msaa = 0;
@@ -424,8 +421,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     engine_set_exit_after_frames(game->engine, frames);
-    if (screenshot)
-        engine_set_screenshot_path(game->engine, screenshot);
+    engine_set_screenshot_path(game->engine, screenshot);
     engine_set_screenshot_every(game->engine, screenshot_every);
 
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);

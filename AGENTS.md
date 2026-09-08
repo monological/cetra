@@ -148,7 +148,7 @@ Each G-buffer target is only written when a post pass that consumes it is active
    `scene->shadow_system->enabled`; runs before the scene FBO is bound.
 7. Bind scene MSAA FBO, set supersampled viewport + draw buffers, clear.
 8. Async texture uploads (<=5/frame), mask-array build, POM height resolve.
-9. App render callback -> `render_current_scene`.
+9. App render callback -> `engine_render_scene`.
 10. `engine_present_frame` -> PostFX chain + GUI.
 11. Screenshot capture (headless/CI), swap buffers.
 
@@ -178,7 +178,7 @@ graph change. **No golden can see that failure** -- all 30 are static scenes und
 a static camera, measured -- which is what the `transform` and `shadow-lag` gate
 groups exist for.
 
-**Scene passes** (`render_current_scene`, in order). Before any of them, right after the draw-list
+**Scene passes** (`engine_render_scene`, in order). Before any of them, right after the draw-list
 build, the **occlusion pass** (spec 11.98) rasterises this frame's authored occluders into a CPU
 masked depth buffer and settles every item's `occluded` bit once — camera-pass-only (the one
 `CullView` constructor initialises the switch false and one site sets it), skipped under captures,
@@ -262,13 +262,17 @@ args.force_taa)`). So interactive runs have TAA **on**, headless runs have it
 reasoning about temporal behaviour from the struct default: anything gated on
 `taa_resolving` is live in the window and dead in a golden, so an artifact can
 be invisible in one and obvious in the other.
-**The same policy drops the SAMPLE COUNT to 1, and its two halves straddle
-`engine_init` because they must** (spec 11.102): the count has to precede it,
-which builds the scene target, and `engine_set_taa` has to follow it and
-is a SILENT no-op before postfx exists — join them in either direction and the
-app either allocates the whole G-buffer twice or renders with no temporal filter
-at all, neither of which announces itself. `apps/forest`, `apps/tree` and (since
-11.103) `apps/gametest` run one sample too, tree unconditionally since 11.88.
+**The same policy drops the SAMPLE COUNT to 1, and both halves are
+`EngineConfig` fields** (`msaa_samples` and `taa`, spec 11.106). Until 11.106
+they straddled the init call because they had to: the count preceded it, which
+builds the scene target, and the TAA switch followed it and was a SILENT no-op
+before postfx existed — joined in either direction the app either allocated the
+whole G-buffer twice or rendered with no temporal filter at all, neither of which
+announced itself. `create_engine` reads the config in the right order and
+`engine_set_taa` stores the request until the post chain can take it, so that
+ordering is no longer the app's to get wrong. `apps/forest`, `apps/tree` and
+(since 11.103) `apps/gametest` run one sample too, tree unconditionally since
+11.88.
 **The apps that do NOT are each a decision now, not an omission** (spec 11.103):
 `apps/spores` keeps four samples because its particles write no motion vector and
 TAA turns 32,000 motes into dashes; `apps/shapes` keeps them because
@@ -283,7 +287,7 @@ choice.)
 SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linear`
 tone curve (the identity WITH the display encode, which passthrough is not), and a
 white ambient radiance on the scene, under which an albedo is the colour on screen
-with no light at all. It runs after `engine_init`, since the post chain has to
+with no light at all. It runs after `create_engine`, since the post chain has to
 exist, and takes the scene for the ambient half. Everything it switches off is ON
 by default, which is why a flat red square through the plain defaults came out pink
 with a halo: the light needed to reach albedo through the PBR path pushes red past
@@ -1056,8 +1060,9 @@ costs more than it buys, and a gate arm bounds it instead.
 optional Jolt physics world and an ECS-lite entity system.
 
 ```c
-GameConfig config = game_default_config();
-Game* game = create_game(&config);
+GameConfig config = {.engine = {.title = "My Game", .headless = headless}}; // zero = default
+Game* game = create_game(&config); // creates and initialises the engine
+engine_set_exit_after_frames(game->engine, frames); // the run's settings go on the engine
 game_set_scene(game, scene);
 game_set_init(game, on_init);      // + on_update / on_render / on_shutdown
 game_run(game);                    // fixed-timestep loop
@@ -1210,8 +1215,9 @@ apps for several specs while the table above already said tree was "yes" -- it t
 `-x`, `-f` and `-S`. **`--screenshot-every` was the half of that claim
 that was not true until 11.62**: forest and spores parsed `-S` but not it, so capturing a
 TRANSITION cost one full process per frame -- which on forest is a terrain bake and a 5,000-prop
-scatter per sample. It is a `GameConfig` field now, so every game-framework app has it. The render
-app:
+scatter per sample. It is `engine_set_screenshot_every` on the engine, which every game-framework
+app reaches through `game->engine` (it rode `GameConfig` from 11.62 until 11.106 folded that struct
+down to what the game layer owns). The render app:
 
 ```bash
 ./out/bin/render -m model.glb -a anim.fbx --headless --frames 2000 \
@@ -1246,7 +1252,7 @@ their defaults are surprising on purpose (tree's sun sits at 0.8 degrees, forest
 output (asset imports, skeleton extraction, bone mapping, the first-frame animation
 dump, GL errors) or visually checking rendered output. It is also the right mode for CI.
 A headless run takes a few seconds and produces the same diagnostics as an interactive
-session. From code, call `engine_set_headless(engine, true)` before `engine_init()`.
+session. From code, set `.headless = true` in the `EngineConfig` handed to `create_engine`.
 
 ## Reproducing a session: the config snapshot (spec 11.71)
 
@@ -1323,7 +1329,7 @@ engine_add_scene(engine, scene);
 ```c
 Mesh* mesh = create_mesh();
 mesh->material = create_material();
-material_set_program(mesh->material, engine_get_program(engine, "pbr"));
+material_set_program(mesh->material, engine_get_program(engine, CETRA_PROGRAM_PBR));
 mesh_upload(mesh);
 ```
 
@@ -1335,18 +1341,51 @@ node_add_mesh(node, mesh);
 node_add_child(scene->root_node, node);
 ```
 
+**A camera and a light**, each from a description struct -- fill the fields you mean,
+zero is the default named in the header (spec 11.106):
+```c
+CameraDesc cam = {.position = {0, 2, 5}, .fov = glm_rad(45.0f)};
+engine_set_camera(engine, create_camera(&cam));
+
+LightDesc key = {.type = LIGHT_DIRECTIONAL, .direction = {-0.3f, -1, -0.5f}, .intensity = 3};
+scene_add_light(scene, create_light(&key));
+```
+After creation a Camera's pose goes through `camera_set_position` / `camera_set_look_at`
+and a Light's frame through `light_set_direction` / `light_set_up` (the authored copy the
+node transform rotates); every other field on either is a plain write. A light's
+intensity is the one desc field whose zero is a value: zero emits nothing, which is how a
+scene file declines the default rig, so a lit light says how bright.
+
 **Run the low-level engine loop:**
 ```c
-Engine* engine = create_engine("Title", 1920, 1080);
-engine_init(engine);
+EngineConfig cfg = {.title = "Title", .width = 1920, .height = 1080};
+Engine* engine = create_engine(&cfg); // window, GL context, targets, post chain, programs
 // Three hooks, in frame order; any may be NULL. pre_render is where the camera
 // and any graph change go -- the engine propagates the graph right after it.
 engine_run(engine, update_callback, pre_render_callback, render_callback);
 free_engine(engine);
 ```
 
-For game-style apps (fixed timestep, physics, particles) use the game framework instead
--- see the Game Framework section.
+Everything the window or the first render-target build reads is an `EngineConfig` field
+(`headless`, `profiler`, `msaa_samples`, `taa`, ...), which is what makes the old
+"before init / after init" ordering rules unwritable. For game-style apps (fixed timestep,
+physics, particles) use the game framework instead -- see the Game Framework section.
+
+**Naming** (spec 11.106): subject first -- the first word is the type of the first parameter
+(`engine_`, `scene_`, `node_`, `mesh_`, `material_`, `camera_`, `light_`, `game_`), then the
+verb, then the object; `create_X` / `free_X` are the one exception. An `x_get_y` that returns
+NULL logs; an `x_find_y` is silent and for the optional case (`engine_get_program` versus
+`engine_find_program`). A mutator returns void and logs on a NULL argument or OOM; a request
+that can be refused for a reason the caller can act on (a bounded array, `node_remove_child`)
+returns bool; factories and lookups return NULL on failure. Built-in program names are the
+`CETRA_PROGRAM_*` constants in `program.h`.
+
+**Includes**: an app names only `cetra/<header>.h`. `cetra/CMakeLists.txt` allowlists which
+headers are public; every other header forwards to `cetra/internal/<header>.h`, which only
+in-tree apps can see (`add_cetra_app` adds that tree; a consumer through `add_subdirectory` or
+`FetchContent` cannot name it). An app that must include an internal header is a debug harness
+and says so in its header comment. The allowlist governs what an app may NAME in an include,
+not what a public header's closure reaches.
 
 ## Conventions
 

@@ -23,7 +23,7 @@
  * CADENCE. Probes are re-captured only while the volume is dirty, and a converged
  * volume costs nothing per frame. The roadmap sketch specified a fixed budget
  * every frame forever, which would mean 12 full scene renders per frame -- and
- * each render_current_scene rebuilds the whole clustered light grid regardless of
+ * each engine_render_scene rebuilds the whole clustered light grid regardless of
  * the 16^2 viewport. Every scene this engine renders is static, so it converges
  * once and then idles, exactly as the sky's LUTs do (sky.h: luts_baked plus
  * rebake-on-sun-move). gi_volume_mark_dirty re-arms it.

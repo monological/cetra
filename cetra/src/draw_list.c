@@ -22,12 +22,17 @@ void scene_graph_touched(void) {
     g_graph_epoch++;
 }
 
-void draw_list_free(DrawList* list) {
+DrawList* create_draw_list(void) {
+    // A zeroed list is the empty one, so calloc is the whole init.
+    return calloc(1, sizeof(DrawList));
+}
+
+void free_draw_list(DrawList* list) {
     if (!list)
         return;
     free(list->items);
     free(list->gizmos);
-    memset(list, 0, sizeof(*list));
+    free(list);
 }
 
 static bool reserve(DrawList* list, size_t needed) {
@@ -91,9 +96,9 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
     // predicate it cannot be skipped by a caller, and it picks up an opacity map
     // that arrives late from the async loader for free, since the list is
     // rebuilt when the graph changes.
-    bool blend = mat->alpha_mode == ALPHA_BLEND ||
-                 (mat->alpha_mode == ALPHA_OPAQUE &&
-                  (mat->opacity < 1.0f || mat->opacity_tex != NULL));
+    bool blend =
+        mat->alpha_mode == ALPHA_BLEND ||
+        (mat->alpha_mode == ALPHA_OPAQUE && (mat->opacity < 1.0f || mat->opacity_tex != NULL));
     bool masked = mat->alpha_mode == ALPHA_MASK;
     // Foliage opts alpha-masked geometry back into casting: leaf cards are
     // centimetres across, so an alpha test resolves them, where hair strands at
@@ -111,9 +116,8 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
     // shape is just "off"). doubleSided is deliberately allowed: a closed
     // double-sided crate occludes fine, and openness is the author's contract,
     // checked by the probe rather than guessed at here.
-    bool occluder = mat->occluder && !transmissive && !blend && !masked &&
-                    !mesh->is_skinned && mesh->morph_max_offset == 0.0f &&
-                    mat->wind_response == 0.0f;
+    bool occluder = mat->occluder && !transmissive && !blend && !masked && !mesh->is_skinned &&
+                    mesh->morph_max_offset == 0.0f && mat->wind_response == 0.0f;
 
     *flags = 0;
     if (masked)
@@ -166,8 +170,8 @@ _Static_assert(sizeof(LOD_SWITCH) / sizeof(LOD_SWITCH[0]) == CETRA_LOD_MAX - 1,
 static void item_world_bounds(const Mesh* mesh, const SceneNode* node, vec3 out_centre,
                               float* out_radius) {
     vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
-    aabb_transform((float*)mesh->aabb.min, (float*)mesh->aabb.max,
-                   (vec4*)node->global_transform, world_min, world_max);
+    aabb_transform((float*)mesh->aabb.min, (float*)mesh->aabb.max, (vec4*)node->global_transform,
+                   world_min, world_max);
     glm_vec3_add(world_min, world_max, out_centre);
     glm_vec3_scale(out_centre, 0.5f, out_centre);
     if (out_radius) {
@@ -282,8 +286,8 @@ static void _posed_bounds(const Mesh* mesh, const AnimationState* pose, AABB* ou
         // Zeroed for the same reason item_world_bounds zeroes its out-params:
         // a write through a pointer reads as a use before write.
         AABB posed = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-        aabb_transform((float*)box->min, (float*)box->max, (vec4*)pose->bone_matrices[b],
-                       posed.min, posed.max);
+        aabb_transform((float*)box->min, (float*)box->max, (vec4*)pose->bone_matrices[b], posed.min,
+                       posed.max);
         aabb_union(out, &posed);
     }
     // Already in this space, so no transform -- and an empty one unions to a
@@ -323,9 +327,9 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
     //
     // That the margin really is one is checked by --wind-bound-probe, which
     // drives windOffset itself and compares what it measures against this.
-    float margin = wind_max_offset(view->wind, mesh->material->wind_response,
-                                   mesh->material->wind_mode, mesh->wind_flex_max,
-                                   mesh->wind_leaf_max);
+    float margin =
+        wind_max_offset(view->wind, mesh->material->wind_response, mesh->material->wind_mode,
+                        mesh->wind_flex_max, mesh->wind_leaf_max);
     // The CDLOD morph is the second displacer in object_position.glsl and needs
     // the same treatment. Its bound is a measurement rather than an envelope --
     // the morph is a lerp between two stored positions, so the largest

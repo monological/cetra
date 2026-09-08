@@ -19,8 +19,8 @@ endif()
 #
 # The first is what a project that adds this directory sees. The second is
 # private to the library and reachable only by the in-tree apps (add_cetra_app
-# puts it on their path), so an app that includes cetra/internal/ is saying it
-# is a debug harness for the engine rather than a user of it.
+# links the cetra_internal target), so an app that includes cetra/internal/ is
+# saying it is a debug harness for the engine rather than a user of it.
 #
 # The allowlist governs what may be NAMED in an include, not what a public
 # header's closure reaches: material.h includes roads.h and texture.h includes
@@ -113,9 +113,11 @@ file(GLOB CETRA_SOURCES
 # its generation before the objects that include it.
 add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER})
 
-# Where the in-tree apps find the internal tree (apps/CMakeLists.txt reads it
-# off the target, since a directory variable set here is not visible there).
-set_target_properties(cetra PROPERTIES CETRA_INTERNAL_INCLUDE_DIR "${CETRA_INTERNAL_INCLUDE_DIR}")
+# The internal tree as a target, for an in-tree app to link: what makes
+# #include "cetra/internal/foo.h" resolve. Nothing links it but add_cetra_app,
+# so a consumer cannot name an internal header.
+add_library(cetra_internal INTERFACE)
+target_include_directories(cetra_internal INTERFACE ${CETRA_INTERNAL_INCLUDE_DIR})
 
 target_include_directories(cetra
     PUBLIC

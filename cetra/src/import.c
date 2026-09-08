@@ -1449,8 +1449,9 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
 
     for (unsigned int i = 0; i < scene->mNumLights; i++) {
         const struct aiLight* ai_light = scene->mLights[i];
-        Light* light = create_light(NULL);
-        light->name = safe_strdup(ai_light->mName.data);
+        // Unit intensity, which the colour's peak then scales below: the file's
+        // brightness arrives in the colour.
+        Light* light = create_light(&(LightDesc){.name = ai_light->mName.data, .intensity = 1.0f});
 
         // ScaleProcess never touches aiLight fields; this node-space offset is
         // zero from every current importer, but scale it so the invariant is
@@ -1482,7 +1483,6 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
         switch (ai_light->mType) {
             case aiLightSource_DIRECTIONAL:
                 light->type = LIGHT_DIRECTIONAL;
-                light->intensity = 1.0f;
                 break;
             case aiLightSource_POINT:
                 light->type = LIGHT_POINT;
@@ -1615,7 +1615,10 @@ static void process_ai_cameras(const struct aiScene* scene, Camera*** cameras,
 
     for (unsigned int i = 0; i < *num_cameras; i++) {
         const struct aiCamera* ai_camera = scene->mCameras[i];
-        Camera* camera = malloc(sizeof(Camera));
+        // Filled field by field rather than through a CameraDesc: an imported
+        // camera usually sits at its node's origin, which the desc reads as
+        // "no position" and replaces with the default eye.
+        Camera* camera = calloc(1, sizeof(Camera));
         if (!camera) {
             log_error("Failed to allocate memory for camera\n");
             continue;

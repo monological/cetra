@@ -82,18 +82,14 @@ void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureSt
 //            targets). `ibl` is unused, which is what lets a GI capture run in a
 //            scene with no HDR environment at all.
 //
-// Renders the ENGINE'S CURRENT SCENE, deliberately with no scene parameter:
-// render_current_scene resolves the scene itself through engine_get_scene, so a
-// scene argument here could not be honoured and would only read as if it were.
-//
 // Saves and restores every piece of engine and camera state it substitutes, so a
 // capture leaves the next real frame bit-identical, and raises engine->capturing
 // for the duration so passes that reach outside the bound target sit out.
 //
 // Pair with scene_capture_begin/end, which own the policy this does not.
-void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 position,
-                         GLuint dst_cubemap, GLuint dst_depth_cubemap, int face_size,
-                         float near_clip, float far_clip);
+void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
+                         const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
+                         int face_size, float near_clip, float far_clip);
 
 // Flatten the scene for this frame, if it has not been flattened already.
 //

@@ -239,7 +239,7 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
     normals-resolve blit (`postfx.c`, `resolve_color_attachment`). *(Still `RGBA16F`, not the
     planned `RG16F`; velocity only uses `.xy`, so a narrower format is a pending perf nit.)*
   - **Sub-pixel jitter**: Halton(2,3) indexed by `total_frames`, applied to a **local** draw
-    projection in `render_current_scene`; `engine->view_proj` stays un-jittered for frustum
+    projection in `engine_render_scene`; `engine->view_proj` stays un-jittered for frustum
     culling and motion vectors (computed once/frame). No jitter in headless.
   - **Previous-frame data**: `engine->prev_view_proj` (snapshotted at frame end), per-node
     `prev_global_transform` (`scene.c`), and skinned **previous bone matrices** packed as **3
@@ -311,7 +311,7 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
 
 #### 4.4 Reflection probes (SSR fallback)  — **M** — ✅ DONE
 - **Shipped.** One probe, captured once at load by rendering the scene six times through the
-  full pipeline (`render_current_scene` with substituted matrices; shadows + IBL + skybox
+  full pipeline (`engine_render_scene` with substituted matrices; shadows + IBL + skybox
   included) into an RGB16F cubemap, GGX-prefiltered with the shared ibl toolkit (promoted from
   `ibl.c` statics). Consumed at both ends: parallax-corrected local specular in `pbr_frag`
   (Lagarde AABB proxy; the probe rebinds the prefilter unit — the fragment stage is at the

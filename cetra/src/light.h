@@ -116,7 +116,10 @@ typedef struct Light {
 // What a light is created from. Fill the fields you mean with designated
 // initialisers and leave the rest zero: zero is the default, named beside each
 // field. A zero vec3 is the default too, so a colour left out is white, not
-// black, and a direction left out points down.
+// black, and a direction left out points down. Intensity is the one field
+// whose zero is a value and not a default -- a light that emits nothing is
+// how a scene declines a light it cannot delete -- so a lit light says how
+// bright.
 //
 // intensity is read in `units`, so a lumen figure converts to candela at
 // creation the way light_set_intensity_units does; LIGHT_UNITS_DEFAULT (zero)
@@ -128,16 +131,18 @@ typedef struct LightDesc {
     vec3 direction;     // the authored direction; 0 = straight down
     vec3 up;            // an area panel's height axis; 0 = +Z
     vec3 color;         // 0 = white
-    float intensity;    // in `units`; 0 = 1
+    float intensity;    // in `units`; 0 emits nothing
     LightUnits units;   // zero = the type's own unit
     float range;        // where the falloff is windowed to zero; 0 = derived
     float inner_cutoff; // spot cone half-angles, RADIANS; 0 = 12.5 and 15 degrees
     float outer_cutoff;
-    float width, height; // area panel extent; 0 = 50 by 50
+    // An area panel's extent, or a directional's emitter size for the PCSS
+    // penumbra; 0 = 50 by 50
+    vec2 size;
     bool cast_shadows;
 } LightDesc;
 
-// NULL means every default: a white directional pointing down.
+// NULL means every default: a white directional pointing down, emitting nothing.
 Light* create_light(const LightDesc* desc);
 
 // The direction and up axis carry an authored copy and a world copy the node

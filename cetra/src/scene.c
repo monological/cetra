@@ -61,12 +61,11 @@ Scene* create_scene() {
     scene->tex_pool = create_texture_pool();
 
     // Owned by pointer so the list's type stays out of this header (draw_list.h
-    // is internal). A zeroed list is the empty one, so calloc is the whole init.
-    scene->draw_list = calloc(1, sizeof(DrawList));
+    // is internal).
+    scene->draw_list = create_draw_list();
     if (!scene->draw_list) {
         log_error("Failed to allocate the scene's draw list");
-        free_texture_pool(scene->tex_pool);
-        free(scene);
+        free_scene(scene);
         return NULL;
     }
 
@@ -183,8 +182,7 @@ void free_scene(Scene* scene) {
         free_node(scene->root_node);
     }
 
-    draw_list_free(scene->draw_list);
-    free(scene->draw_list);
+    free_draw_list(scene->draw_list);
 
     // Free shadow system
     if (scene->shadow_system) {

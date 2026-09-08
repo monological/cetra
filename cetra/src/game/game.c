@@ -8,13 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-GameConfig game_default_config(void) {
-    GameConfig config = {.engine = {.title = "Game"},
-                         .fixed_timestep = ENGINE_FIXED_FRAME_DT,
-                         .max_frame_time = 0.25};
-    return config;
-}
-
 Game* create_game(const GameConfig* config) {
     if (!config) {
         return NULL;

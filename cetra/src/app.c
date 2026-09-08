@@ -327,7 +327,7 @@ void scene_add_three_point_lights(Scene* scene, float intensity_scale) {
 
     // Key from front-right above, fill softer from front-left, rim from behind
     // and above for edge definition.
-    const LightDesc rig[3] = {
+    const LightDesc rig[] = {
         {.name = "key_light",
          .direction = {-0.4f, -0.7f, -0.6f},
          .color = {1.0f, 0.95f, 0.9f},
@@ -338,19 +338,20 @@ void scene_add_three_point_lights(Scene* scene, float intensity_scale) {
          .intensity = 1.5f * intensity_scale},
         {.name = "rim_light",
          .direction = {0.0f, -0.6f, 0.8f},
-         .color = {1.0f, 1.0f, 1.0f},
          .intensity = 2.0f * intensity_scale},
     };
-    for (int i = 0; i < 3; i++) {
+    for (size_t i = 0; i < sizeof(rig) / sizeof(rig[0]); i++) {
         Light* light = create_light(&rig[i]);
         if (!light) {
             fprintf(stderr, "Failed to create %s.\n", rig[i].name);
             return;
         }
         scene_add_light(scene, light);
+        char node_name[32];
+        snprintf(node_name, sizeof(node_name), "%s_node", rig[i].name);
         SceneNode* node = create_node();
         node_set_light(node, light);
-        node_set_name(node, rig[i].name);
+        node_set_name(node, node_name);
         node_add_child(scene->root_node, node);
     }
 }

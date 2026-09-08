@@ -19,7 +19,7 @@ struct Light;
 // CPU side of clustered forward lighting (spec 9.1): frustum-cull the scene's
 // punctual lights, pack them into the std140 LightsBlock, assign each to the
 // screen-tile x exponential-Z cluster grid, and upload the three UBOs. Runs
-// once per render_current_scene invocation -- including each reflection-probe
+// once per engine_render_scene invocation -- including each reflection-probe
 // capture face, whose view/projection differ (the grid is view-dependent).
 //
 // Grid dimensions and the slice mapping must match lights_ubo.glsl:

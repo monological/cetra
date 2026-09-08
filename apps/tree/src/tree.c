@@ -1155,12 +1155,15 @@ int main(int argc, char** argv) {
 
     // TAAU: render the scene at 70% and reconstruct temporally. Headless drops
     // back to full resolution unless --headless-jitter, since the resolve
-    // reconstructs from the jitter and headless suppresses it.
+    // reconstructs from the jitter and headless suppresses it. TAAU is a
+    // temporal reconstruction, so the render scale does nothing without TAA:
+    // the seam only dispatches when the resolve runs, and unset it would render
+    // at 70% and simply magnify.
     //
     // TAA-only, at ONE sample, which is the policy apps/render already runs and the one this app
-    // had never actually chosen -- it turned TAA on (in the post block below) and inherited the
-    // engine's 4x default, so it paid for both. TAA carries the edges here, and it is on
-    // unconditionally because TAAU needs its jitter.
+    // had never actually chosen -- it turned TAA on and inherited the engine's 4x default, so it
+    // paid for both. TAA carries the edges here, and it is on unconditionally because TAAU needs
+    // its jitter.
     //
     // The sample count is not just a cost: above one sample masked geometry takes the
     // alpha-to-coverage path, so every leaf edge becomes partially covered and mixes the sky or
@@ -1172,6 +1175,7 @@ int main(int argc, char** argv) {
                         .height = args.height,
                         .headless = args.headless != 0,
                         .headless_jitter = args.headless_jitter != 0,
+                        .taa = true,
                         .msaa_samples = args.msaa > 0 ? args.msaa : 1,
                         .render_scale = 0.70f};
     Engine* engine = create_engine(&cfg);
@@ -1188,7 +1192,6 @@ int main(int argc, char** argv) {
 
     ShaderProgram* pbr_program = engine_get_program(engine, CETRA_PROGRAM_PBR);
     if (!pbr_program) {
-        fprintf(stderr, "Failed to get PBR shader\n");
         return -1;
     }
     ShaderProgram* xyz_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
@@ -1348,8 +1351,7 @@ int main(int argc, char** argv) {
             // crisp under the canopy and soften further from the caster.
             LightDesc sun_desc = {.name = "sun",
                                   .type = LIGHT_DIRECTIONAL,
-                                  .width = 6.0f,
-                                  .height = 6.0f,
+                                  .size = {6.0f, 6.0f},
                                   .cast_shadows = true};
             sun_light = create_light(&sun_desc);
             sky->sun_light = sun_light;
@@ -1366,8 +1368,7 @@ int main(int argc, char** argv) {
             // reason render.c states at length: a config restore cannot make a
             // Light, and a disabled moon costs nothing because it neither
             // casts nor emits.
-            LightDesc moon_desc = {
-                .name = "moon", .type = LIGHT_DIRECTIONAL, .width = 6.0f, .height = 6.0f};
+            LightDesc moon_desc = {.name = "moon", .type = LIGHT_DIRECTIONAL, .size = {6.0f, 6.0f}};
             Light* moon_light = create_light(&moon_desc);
             sky->moon_light = moon_light;
             sky_update_moon(sky); // owns direction, tint, intensity and cast_shadows
@@ -1731,11 +1732,6 @@ int main(int argc, char** argv) {
         fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
         postfx_apply_film_look(fx);
         fx->grain_strength = 0.015f;
-
-        // TAAU is a temporal reconstruction, so the render scale above does
-        // nothing without this: the seam only dispatches when the resolve runs,
-        // and unset it would render at 70% and simply magnify.
-        fx->taa_enabled = true;
 
         // Off unless asked for: the haze flattens this scene, and without it the
         // dusk sky reads as a gradient and the ground has depth. The parameters

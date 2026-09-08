@@ -145,8 +145,7 @@ int main(int argc, char** argv) {
     if (!engine)
         return 1;
     engine_set_exit_after_frames(engine, frames);
-    if (screenshot)
-        engine_set_screenshot_path(engine, screenshot);
+    engine_set_screenshot_path(engine, screenshot);
     engine_set_show_gui(engine, false);
     engine_set_show_fps(engine, !headless);
 

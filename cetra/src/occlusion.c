@@ -65,7 +65,7 @@
 // edge functions below would cancel catastrophically at pixel scale. Clipping
 // to ~1.05 bounds every coordinate the fill ever sees while cutting nothing
 // inside the visible frame.
-#define OCC_W_EPS 1e-6f
+#define OCC_W_EPS      1e-6f
 #define OCC_SIDE_SLACK 1.05f
 // Pixel-space slack the fill's edge test must clear -- see the float caveat in
 // the header. Edge-function magnitudes are bounded by the outset clip
@@ -300,8 +300,7 @@ void occlusion_add_box(OcclusionContext* context, const vec3 box_min, const vec3
         return;
     if (context->occluder_count >= OCCLUSION_MAX_OCCLUDERS) {
         if (!context->warned_overflow) {
-            log_warn("occlusion: more than %d occluders; extras dropped",
-                     OCCLUSION_MAX_OCCLUDERS);
+            log_warn("occlusion: more than %d occluders; extras dropped", OCCLUSION_MAX_OCCLUDERS);
             context->warned_overflow = true;
         }
         return;
@@ -327,7 +326,8 @@ void occlusion_finish(OcclusionContext* context) {
         for (int tx = 0; tx < OCCLUSION_TILES_X; ++tx) {
             uint16_t zmax = 0;
             for (int y = 0; y < OCCLUSION_TILE_H; ++y) {
-                const uint16_t* row = &context->depth[ty * OCCLUSION_TILE_H + y][tx * OCCLUSION_TILE_W];
+                const uint16_t* row =
+                    &context->depth[ty * OCCLUSION_TILE_H + y][tx * OCCLUSION_TILE_W];
                 for (int x = 0; x < OCCLUSION_TILE_W; ++x)
                     if (row[x] > zmax)
                         zmax = row[x];
@@ -434,7 +434,7 @@ void occlusion_cull_list(const OcclusionContext* context, struct DrawList* list,
     for (size_t i = 0; i < list->count; ++i) {
         DrawItem* item = &list->items[i];
         // WRITTEN both ways, not only set: the pass is then idempotent, so an
-        // embedder driving render_current_scene twice in one frame (same stamp,
+        // embedder driving engine_render_scene twice in one frame (same stamp,
         // no rebuild) gets each camera's own answer instead of the OR of both.
         item->occluded = 0;
         // The same box the frustum test uses, margins and pose included.
@@ -445,8 +445,7 @@ void occlusion_cull_list(const OcclusionContext* context, struct DrawList* list,
         // Zeroed because they are out-params of a call in another translation
         // unit, which static analysis reads as a use before write.
         vec3 world_min = {0.0f, 0.0f, 0.0f}, world_max = {0.0f, 0.0f, 0.0f};
-        aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, world_min,
-                       world_max);
+        aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, world_min, world_max);
         if (occlusion_test_aabb(context, world_min, world_max))
             item->occluded = 1;
     }
@@ -457,10 +456,10 @@ void occlusion_cull_list(const OcclusionContext* context, struct DrawList* list,
 // Reference resolution: 4x the mask in each axis. Finer only sharpens the
 // reference; the property being checked (hierarchical-hidden implies
 // reference-hidden) is one-directional, so the exact factor is not load-bearing.
-#define OCC_REF_W (OCCLUSION_W * 4)
-#define OCC_REF_H (OCCLUSION_H * 4)
-#define OCC_SWEEP_COUNT 2048
-#define OCC_SWEEP_SEED 1226u
+#define OCC_REF_W               (OCCLUSION_W * 4)
+#define OCC_REF_H               (OCCLUSION_H * 4)
+#define OCC_SWEEP_COUNT         2048
+#define OCC_SWEEP_SEED          1226u
 #define OCC_PROBE_VIOLATION_CAP 8
 
 // Per-pixel exact test against the reference buffer: the shared occludee

@@ -278,6 +278,8 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         // area lights maps).
         LightDesc desc = {.name = sl->name[0] ? sl->name : "cscn_light",
                           .type = cscene_light_type(sl->type),
+                          .intensity = sl->intensity,
+                          .units = sl->units,
                           .range = sl->has_range ? sl->range : 0.0f,
                           .cast_shadows = sl->cast_shadows};
         glm_vec3_copy((float*)sl->position, desc.position);
@@ -290,46 +292,33 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
             glm_vec3_copy((float*)sl->direction, desc.direction);
         if (sl->has_up)
             glm_vec3_copy((float*)sl->up, desc.up);
+        const char* shadows = sl->cast_shadows ? ", shadows" : "";
         switch (sl->type) {
             case CSCENE_LIGHT_AREA:
-                desc.width = sl->size[0];
-                desc.height = sl->size[1];
+                glm_vec2_copy((float*)sl->size, desc.size);
+                printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f%s)\n", desc.name,
+                       sl->size[0], sl->size[1], sl->intensity, shadows);
+                break;
+            case CSCENE_LIGHT_DIRECTIONAL:
+                printf("Scene file light '%s' (directional, intensity %.2f%s)\n", desc.name,
+                       sl->intensity, shadows);
                 break;
             case CSCENE_LIGHT_SPOT:
                 // Authors write the half-angles in degrees (see spec 6.2).
                 desc.inner_cutoff = glm_rad(sl->cone[0]);
                 desc.outer_cutoff = glm_rad(sl->cone[1]);
+                printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s%s)\n", desc.name,
+                       sl->cone[0], sl->cone[1], shadows,
+                       sl->ies_path[0] ? ", cone superseded by its profile" : "");
                 break;
-            default:
+            default: // CSCENE_LIGHT_POINT
+                printf("Scene file light '%s' (point, intensity %.2f%s)\n", desc.name,
+                       sl->intensity, shadows);
                 break;
         }
         Light* light = create_light(&desc);
         if (!light)
             continue;
-        // Through the setter rather than the desc so an authored 0 mutes the
-        // light instead of reading as "the default".
-        light_set_intensity_units(light, sl->intensity, sl->units);
-
-        switch (sl->type) {
-            case CSCENE_LIGHT_AREA:
-                printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f%s)\n", light->name,
-                       sl->size[0], sl->size[1], sl->intensity,
-                       sl->cast_shadows ? ", shadows" : "");
-                break;
-            case CSCENE_LIGHT_DIRECTIONAL:
-                printf("Scene file light '%s' (directional, intensity %.2f%s)\n", light->name,
-                       sl->intensity, sl->cast_shadows ? ", shadows" : "");
-                break;
-            case CSCENE_LIGHT_SPOT:
-                printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s%s)\n", light->name,
-                       sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "",
-                       sl->ies_path[0] ? ", cone superseded by its profile" : "");
-                break;
-            default: // CSCENE_LIGHT_POINT
-                printf("Scene file light '%s' (point, intensity %.2f%s)\n", light->name,
-                       sl->intensity, sl->cast_shadows ? ", shadows" : "");
-                break;
-        }
 
         // A profile is a POINT-LIKE emitter's angular distribution. A panel is
         // shaded by an LTC integral over its rectangle and a directional has no

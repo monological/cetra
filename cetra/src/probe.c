@@ -42,7 +42,7 @@ void free_reflection_probe(ReflectionProbe* probe) {
 // for environment_only, prefilter the global environment straight into the
 // probe (see probe.h).
 //
-// The scene path reuses the full pipeline (render_current_scene) with
+// The scene path reuses the full pipeline (engine_render_scene) with
 // substituted per-face view/projection and the camera moved to the probe
 // position, into the shared ibl capture FBO. Everything touched is saved
 // and restored so a capture at load leaves the first real frame
@@ -110,7 +110,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // Supersampled 2x: the capture has no MSAA, and single-sample grazing-angle
     // aliasing at its horizon bakes in as stripe moire that mirror reflections
     // then magnify into banded streaks.
-    scene_capture_faces(engine, ibl, probe->position, probe->cubemap, 0, PROBE_CUBEMAP_SIZE,
+    scene_capture_faces(engine, scene, ibl, probe->position, probe->cubemap, 0, PROBE_CUBEMAP_SIZE,
                         near_clip, far_clip);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);

@@ -108,7 +108,9 @@ typedef struct DrawList {
     bool valid;
 } DrawList;
 
-void draw_list_free(DrawList* list);
+// An empty list; NULL on OOM. free takes NULL.
+DrawList* create_draw_list(void);
+void free_draw_list(DrawList* list);
 
 // Bumped by every mutation the list would have to see: a node or mesh added or
 // freed, a mesh uploaded (the list refuses vao == 0), a material's alpha mode or

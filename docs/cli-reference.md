@@ -351,8 +351,7 @@ equal depth wins. Raiden moves 31 px, `cornell_box` 1),
 engine has always had this camera mode and until 11.103 nothing that could CAPTURE a frame could
 ask for it, which is how the TAA jitter came to be wrong there for the whole life of the feature
 — derived for perspective, it shifted the raster by ~150 px a frame under an orthographic camera.
-Applied AFTER the auto-framing, because `camera_set_perspective` clears the flag and an earlier
-request is silently undone.
+Applied AFTER the auto-framing, which decides the projection shape along with the clip planes.
 **A real camera since spec 11.104**, which took the perspective-only maths out of everything an
 orthographic frame reaches: the depth inverse, the view-position reconstruction (GTAO, contact
 shadows, fog), the five near-plane recoveries, the world-to-screen lengths (GTAO's radius, the SSS

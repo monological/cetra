@@ -150,8 +150,8 @@ void setup_program_uniforms(ShaderProgram* program);
 // and the resulting `instanced` answer all follow from it together: a skinned
 // program links without an InstanceBlock, which is what keeps 11.28's rule that
 // such a program may never carry more than one instance.
-//
-// The names engine_init registers for apps, for engine_get_program. A literal
+
+// The names create_engine registers for apps, for engine_get_program. A literal
 // at a call site is a typo waiting; these are the four an app has reason to
 // ask for, plus the particle program an app creates and registers itself.
 // pbr_variant_name builds on the first two, so the cache key and the lookup

@@ -187,7 +187,6 @@ typedef struct Scene {
 
     // used by all nodes
     ShaderProgram* xyz_shader_program;
-    ShaderProgram* outlines_shader_program;
 
     // The graph flattened for drawing, rebuilt once a frame. Every pass reads
     // it; nothing walks the graph to draw any more.
@@ -342,7 +341,7 @@ void scene_propagate_transforms(Scene* scene);
 // it is not folded into the walk that is.
 //
 // The same split prev_view_proj already has, and for the same reason -- see the
-// stash at the end of render_current_scene.
+// stash at the end of engine_render_scene.
 void scene_latch_prev_transforms(Scene* scene);
 
 // camera
@@ -352,6 +351,8 @@ Camera* scene_find_camera(Scene* scene, const char* name);
 
 // light
 void scene_set_lights(Scene* scene, Light** lights, size_t light_count);
+// Whether the scene took ownership; a refused light is still the caller's to
+// free, which is why this one add answers where its siblings do not.
 bool scene_add_light(Scene* scene, Light* light);
 
 // Unlink and FREE. The Scene owns its lights, so an unlink-only form would leak
@@ -398,7 +399,7 @@ const Light* scene_key_directional(const Scene* scene, const float* surface_norm
 void scene_add_particle_system(Scene* scene, struct ParticleSystem* sys);
 // Advance every particle system's sim. Call from a fixed-timestep update (game_run
 // does; an engine_run host may call it too). Rendering is automatic in
-// render_current_scene.
+// engine_render_scene.
 void scene_update_particle_systems(Scene* scene, float dt, float t);
 
 // material

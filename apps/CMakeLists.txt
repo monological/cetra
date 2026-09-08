@@ -7,14 +7,11 @@ function(add_cetra_app APP_NAME)
 
     # The cetra/ include tree and GL_SILENCE_DEPRECATION both come
     # transitively from cetra. The internal tree does not: it is private to
-    # the library, and an in-tree app reaches it only through this line, so
-    # #include "cetra/internal/x.h" in an app is a declaration that the app
+    # the library, and an in-tree app reaches it only through cetra_internal,
+    # so #include "cetra/internal/x.h" in an app is a declaration that the app
     # is a debug harness for the engine. A project outside the tree cannot
     # write that line at all.
-    target_link_libraries(${APP_NAME} PRIVATE cetra)
-    target_link_libraries(${APP_NAME} PRIVATE cetra_warnings)
-    get_target_property(_internal_dir cetra CETRA_INTERNAL_INCLUDE_DIR)
-    target_include_directories(${APP_NAME} PRIVATE ${_internal_dir})
+    target_link_libraries(${APP_NAME} PRIVATE cetra cetra_internal cetra_warnings)
 endfunction()
 
 # Every subdirectory holding a CMakeLists.txt is an app. DISCOVERED rather than

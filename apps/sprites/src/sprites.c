@@ -207,8 +207,7 @@ int main(int argc, char** argv) {
     if (!engine)
         return 1;
     engine_set_exit_after_frames(engine, frames);
-    if (screenshot)
-        engine_set_screenshot_path(engine, screenshot);
+    engine_set_screenshot_path(engine, screenshot);
     engine_set_show_gui(engine, false);
     engine_set_show_fps(engine, !headless);
 
@@ -239,7 +238,7 @@ int main(int argc, char** argv) {
     // The mote shader tints by the scene's key light and reads black without
     // one, which would dim every colour to 0.6. A white key makes that tint
     // the identity. Nothing else here is lit by it.
-    LightDesc key_desc = {.name = "key", .direction = {0.0f, 0.0f, -1.0f}};
+    LightDesc key_desc = {.name = "key", .direction = {0.0f, 0.0f, -1.0f}, .intensity = 1.0f};
     Light* key = create_light(&key_desc);
     scene_add_light(scene, key);
     SceneNode* key_node = create_node();

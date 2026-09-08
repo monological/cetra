@@ -5,12 +5,6 @@
 #include "util.h"
 #include "camera.h"
 
-// A zero vec3 in the desc means "the default"; the eye's default is not the
-// origin, which is why position is tested and look_at is not.
-static bool _is_zero3(const vec3 v) {
-    return v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f;
-}
-
 Camera* create_camera(const CameraDesc* desc) {
     static const CameraDesc none = {0};
     if (!desc)
@@ -20,17 +14,13 @@ Camera* create_camera(const CameraDesc* desc) {
     if (!camera)
         return NULL;
 
-    camera->name = desc->name ? safe_strdup(desc->name) : NULL;
+    camera->name = safe_strdup(desc->name);
 
-    if (_is_zero3(desc->position))
-        glm_vec3_copy((vec3){0.0f, 2.0f, 5.0f}, camera->position);
-    else
-        glm_vec3_copy((float*)desc->position, camera->position);
+    // The eye's default is not the origin, which is why position takes a
+    // fallback and look_at does not.
+    vec3_or_default(desc->position, (vec3){0.0f, 2.0f, 5.0f}, camera->position);
     glm_vec3_copy((float*)desc->look_at, camera->look_at);
-    if (_is_zero3(desc->up))
-        glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, camera->up_vector);
-    else
-        glm_vec3_copy((float*)desc->up, camera->up_vector);
+    vec3_or_default(desc->up, (vec3){0.0f, 1.0f, 0.0f}, camera->up_vector);
 
     camera->aspect_ratio = 16.0f / 9.0f; // re-derived from the framebuffer each frame
     camera->fov_radians = desc->fov > 0.0f ? desc->fov : glm_rad(60.0f);
@@ -39,9 +29,8 @@ Camera* create_camera(const CameraDesc* desc) {
     camera->is_orthographic = desc->ortho_height > 0.0f;
     camera->ortho_height = desc->ortho_height;
 
-    camera->max_distance = desc->max_distance;
-    camera->zoom_speed = desc->zoom_speed > 0.0f ? desc->zoom_speed : 0.005f;
-    camera->orbit_speed = desc->orbit_speed > 0.0f ? desc->orbit_speed : 0.001f;
+    camera->zoom_speed = 0.005f;
+    camera->orbit_speed = 0.001f;
     camera->amplitude = 0.001f;
 
     // The orbit parameters describe the pose just set, not a fixed 2000 units

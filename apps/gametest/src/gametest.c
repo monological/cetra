@@ -635,11 +635,10 @@ int main(int argc, const char* argv[]) {
     srand(42); // Deterministic random for testing
 
     // Create game
-    GameConfig config = game_default_config();
-    config.engine.title = "Physics Test - JoltC Integration";
-    config.engine.width = 1280;
-    config.engine.height = 720;
-    config.engine.headless = headless;
+    GameConfig config = {.engine = {.title = "Physics Test - JoltC Integration",
+                                    .width = 1280,
+                                    .height = 720,
+                                    .headless = headless}};
 
     // TAA replaces MSAA rather than joining it. This app is rigid meshes on the
     // pbr program, so every surface writes a motion vector and the accumulator
@@ -662,8 +661,7 @@ int main(int argc, const char* argv[]) {
         return -1;
     }
     engine_set_exit_after_frames(game->engine, frames);
-    if (screenshot)
-        engine_set_screenshot_path(game->engine, screenshot);
+    engine_set_screenshot_path(game->engine, screenshot);
     engine_set_screenshot_every(game->engine, screenshot_every);
 
     // Set mouse callback

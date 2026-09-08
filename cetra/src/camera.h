@@ -56,18 +56,17 @@ typedef struct CameraDesc {
     float near;         // 0 = 0.1
     float far;          // 0 = 1000
     float ortho_height; // 0 = perspective
-    float max_distance; // orbit distance cap; 0 = unlimited
-    float zoom_speed;   // 0 = 0.005
-    float orbit_speed;  // 0 = 0.001
 } CameraDesc;
 
 // NULL means every default. The orbit parameters (distance, theta, phi) are
-// derived from the pose at creation and kept in step by the two setters below.
+// derived from the pose once, here; the orbit tuning (max_distance, the two
+// speeds) and everything else on a Camera is a plain field.
 Camera* create_camera(const CameraDesc* desc);
 void free_camera(Camera* camera);
 
-// The pose. Functions rather than fields because the orbit parameters follow
-// from them; everything else on a Camera is a plain field (see the struct).
+// The pose. Functions so that the orbit parameters can follow a pose change;
+// today they store, and a caller that moves the camera by pose and then
+// orbits it re-derives distance, theta and phi itself.
 void camera_set_position(Camera* camera, vec3 position);
 void camera_set_look_at(Camera* camera, vec3 look_at);
 

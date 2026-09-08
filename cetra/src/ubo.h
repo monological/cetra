@@ -103,7 +103,7 @@ _Static_assert((UBO_SHORE_FILM_COLS * UBO_SHORE_FILM_SLOTS) % 4 == 0,
  * orphans the whole allocation and light_cluster.c rewrites only the live prefix
  * (offsetof(cluster_lights) + N * sizeof(GpuPackedLight)), so a table appended after the
  * lights would be undefined every frame; one placed before them would be re-sent on every
- * render_current_scene invocation, which a probe-capture frame enters seven times. Uploaded
+ * engine_render_scene invocation, which a probe-capture frame enters seven times. Uploaded
  * once at load, here, it is touched by neither.
  *
  * TWO INDEPENDENT LIMITS, because one would have to be sized for the worst case and waste the

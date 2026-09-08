@@ -31,10 +31,9 @@ typedef void (*GameShutdownFunc)(struct Game* game);
 
 // What a game is created from: the engine's own config, plus the loop and the
 // cook, which are the two things this layer owns that the engine does not.
-// Everything a game app used to route through here to reach the engine before
-// init -- headless, the profiler, the sample count -- is in `engine` now, and
-// what it set afterwards (the screenshot path, the frame limit, the debug GUI)
-// is set on game->engine after create_game, where it always could be.
+// Zero is the default throughout, so a designated initialiser naming only the
+// title is a complete config. Anything about the RUN rather than the creation
+// -- the frame limit, the screenshot path -- is set on game->engine afterwards.
 typedef struct GameConfig {
     EngineConfig engine;
     double fixed_timestep; // Physics/logic update rate (0 = 1/60)
@@ -93,10 +92,7 @@ typedef struct Game {
     struct EntityManager* entity_manager;
 } Game;
 
-// Default configuration
-GameConfig game_default_config(void);
-
-// Create game with configuration
+// Creates and initialises the engine from config->engine; NULL when that fails.
 Game* create_game(const GameConfig* config);
 
 // Free game resources

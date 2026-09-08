@@ -185,19 +185,16 @@ int main() {
      */
     ShaderProgram* pbr_shader_program = engine_get_program(engine, CETRA_PROGRAM_PBR);
     if (!pbr_shader_program) {
-        fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
     }
 
     ShaderProgram* shape_shader_program = engine_get_program(engine, CETRA_PROGRAM_SHAPE);
     if (!shape_shader_program) {
-        fprintf(stderr, "Failed to get shape shader program\n");
         return -1;
     }
 
     ShaderProgram* xyz_shader_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
     if (!xyz_shader_program) {
-        fprintf(stderr, "Failed to get xyz shader program\n");
         return -1;
     }
 
