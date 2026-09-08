@@ -617,9 +617,7 @@ static const ConfigField CFG_FIELDS[] = {
     // Which PROJECTION, and the one field the other kind needs. Both rows or
     // neither: restoring the height onto a perspective camera changes nothing,
     // and restoring the flag without it gives an orthographic camera whatever
-    // height it happened to have. The pair reaches the camera as plain fields
-    // rather than through camera_set_orthographic, which is what keeps this
-    // from clobbering the near/far the rows above just restored.
+    // height it happened to have.
     CFG_ROW(CFG_CAMERA, CFG_BOOL, "camera", "orthographic", is_orthographic),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "ortho_height", ortho_height),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "distance", distance),

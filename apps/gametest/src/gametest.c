@@ -395,14 +395,9 @@ static void on_init(Game* game) {
     physics_world_optimize(physics);
 
     // Setup camera
-    Camera* camera = create_camera();
-    vec3 cam_pos = {0.0f, 20.0f, 35.0f};
-    vec3 look_at = {0.0f, 0.0f, 0.0f};
-    vec3 up = {0.0f, 1.0f, 0.0f};
-    camera_set_position(camera, cam_pos);
-    camera_set_look_at(camera, look_at);
-    camera_set_up(camera, up);
-    camera_set_perspective(camera, 0.8f, 0.1f, 1000.0f);
+    CameraDesc camera_desc = {
+        .position = {0.0f, 20.0f, 35.0f}, .fov = 0.8f, .near = 0.1f, .far = 1000.0f};
+    Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
     engine_set_camera_mode(engine, CAMERA_MODE_ORBIT);
     camera->distance = 40.0f;
@@ -641,13 +636,10 @@ int main(int argc, const char* argv[]) {
 
     // Create game
     GameConfig config = game_default_config();
-    config.title = "Physics Test - JoltC Integration";
-    config.width = 1280;
-    config.height = 720;
-    config.headless = headless;
-    config.exit_after_frames = frames;
-    config.screenshot_path = screenshot;
-    config.screenshot_every = screenshot_every;
+    config.engine.title = "Physics Test - JoltC Integration";
+    config.engine.width = 1280;
+    config.engine.height = 720;
+    config.engine.headless = headless;
 
     // TAA replaces MSAA rather than joining it. This app is rigid meshes on the
     // pbr program, so every surface writes a motion vector and the accumulator
@@ -657,18 +649,22 @@ int main(int argc, const char* argv[]) {
     // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
     // history makes the frame sensitive to async load timing.
     if (!headless || force_taa) {
-        config.msaa_samples = 1;
-        config.taa_enabled = true;
+        config.engine.msaa_samples = 1;
+        config.engine.taa = true;
     }
     // After the policy, so --taa --msaa 4 is expressible.
     if (msaa > 0)
-        config.msaa_samples = msaa;
+        config.engine.msaa_samples = msaa;
 
     Game* game = create_game(&config);
     if (!game) {
         fprintf(stderr, "Failed to create game\n");
         return -1;
     }
+    engine_set_exit_after_frames(game->engine, frames);
+    if (screenshot)
+        engine_set_screenshot_path(game->engine, screenshot);
+    engine_set_screenshot_every(game->engine, screenshot_every);
 
     // Set mouse callback
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);

@@ -270,26 +270,48 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         return;
     for (int i = 0; i < cscn->light_count; i++) {
         const CSceneLight* sl = &cscn->lights[i];
-        Light* light = create_light();
-        if (!light)
-            continue;
-        light_set_name(light, sl->name[0] ? sl->name : "cscn_light");
-        light_set_original_position(light, (float*)sl->position);
-        light_set_color(light, (float*)sl->color);
-        light_set_intensity_units(light, sl->intensity, sl->units);
-        light_set_type(light, cscene_light_type(sl->type));
+        // Range bounds the punctual falloff; absent means the default. The old
+        // attenuation triple is parsed and warned about in cscene.c but
+        // deliberately not applied here -- storing a value the shaders no longer
+        // read is how a dead knob keeps looking live. cast_shadows is
+        // type-independent: every light type honours it (spec 9.8 gave point and
+        // area lights maps).
+        LightDesc desc = {.name = sl->name[0] ? sl->name : "cscn_light",
+                          .type = cscene_light_type(sl->type),
+                          .range = sl->has_range ? sl->range : 0.0f,
+                          .cast_shadows = sl->cast_shadows};
+        glm_vec3_copy((float*)sl->position, desc.position);
+        glm_vec3_copy((float*)sl->color, desc.color);
         // The emission frame, type-independent since 11.57: a point light aims
         // nothing analytically but does carry an IES profile's measurement axis
         // and roll, so both keys mean something on every type. Only what
         // genuinely varies by type stays in the switch.
         if (sl->has_direction)
-            light_set_direction(light, (float*)sl->direction);
+            glm_vec3_copy((float*)sl->direction, desc.direction);
         if (sl->has_up)
-            light_set_up(light, (float*)sl->up);
+            glm_vec3_copy((float*)sl->up, desc.up);
+        switch (sl->type) {
+            case CSCENE_LIGHT_AREA:
+                desc.width = sl->size[0];
+                desc.height = sl->size[1];
+                break;
+            case CSCENE_LIGHT_SPOT:
+                // Authors write the half-angles in degrees (see spec 6.2).
+                desc.inner_cutoff = glm_rad(sl->cone[0]);
+                desc.outer_cutoff = glm_rad(sl->cone[1]);
+                break;
+            default:
+                break;
+        }
+        Light* light = create_light(&desc);
+        if (!light)
+            continue;
+        // Through the setter rather than the desc so an authored 0 mutes the
+        // light instead of reading as "the default".
+        light_set_intensity_units(light, sl->intensity, sl->units);
 
         switch (sl->type) {
             case CSCENE_LIGHT_AREA:
-                light_set_size(light, sl->size[0], sl->size[1]);
                 printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f%s)\n", light->name,
                        sl->size[0], sl->size[1], sl->intensity,
                        sl->cast_shadows ? ", shadows" : "");
@@ -299,9 +321,6 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                        sl->intensity, sl->cast_shadows ? ", shadows" : "");
                 break;
             case CSCENE_LIGHT_SPOT:
-                // The engine stores cutoffs as cosines of the half-angles; authors
-                // write degrees (see spec 6.2).
-                light_set_cutoff(light, cosf(glm_rad(sl->cone[0])), cosf(glm_rad(sl->cone[1])));
                 printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s%s)\n", light->name,
                        sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "",
                        sl->ies_path[0] ? ", cone superseded by its profile" : "");
@@ -311,17 +330,6 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                        sl->intensity, sl->cast_shadows ? ", shadows" : "");
                 break;
         }
-        // Range bounds the punctual falloff; absent means keep create_light()'s
-        // default. The old attenuation triple is parsed and warned about in
-        // cscene.c but deliberately not applied here -- storing a value the
-        // shaders no longer read is how a dead knob keeps looking live.
-        if (sl->has_range)
-            light_set_range(light, sl->range);
-        // Type-independent: every light type now honours cast_shadows (spec 9.8
-        // gave point and area lights maps), so it is set once rather than per
-        // branch. The switch above only carries what genuinely varies by type.
-        if (sl->cast_shadows)
-            light_set_cast_shadows(light, true);
 
         // A profile is a POINT-LIKE emitter's angular distribution. A panel is
         // shaded by an LTC integral over its rectangle and a directional has no
@@ -375,7 +383,8 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
         }
         if (ov->has_size_from_angle) {
             float s = tanf(ov->size_from_angle) * scene_radius;
-            light_set_size(light, s, s);
+            light->size[0] = s;
+            light->size[1] = s;
             printf("Scene file: light '%s' penumbra size %.3f (angle %.3f rad)\n", ov->name, s,
                    ov->size_from_angle);
         }
@@ -387,7 +396,7 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
             light_set_intensity_units(light, ov->intensity, light_display_units(light));
         }
         if (ov->has_cast_shadows) {
-            light_set_cast_shadows(light, ov->cast_shadows);
+            light->cast_shadows = ov->cast_shadows;
             printf("Scene file: light '%s' cast_shadows %s\n", ov->name,
                    ov->cast_shadows ? "on" : "off");
         }

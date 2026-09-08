@@ -2217,14 +2217,15 @@ static void regions_free_all(void) {
 // thing on purpose; the flag exists to take the atmosphere's cost out of a
 // measurement, not to offer a second look.
 static void build_fallback_sun(void) {
-    Light* sun = create_light();
-    light_set_name(sun, "sun");
-    light_set_type(sun, LIGHT_DIRECTIONAL);
-    light_set_direction(sun, (vec3){-0.45f, -0.78f, -0.44f});
-    light_set_color(sun, (vec3){1.0f, 0.96f, 0.88f});
-    light_set_intensity(sun, 3.2f);
-    light_set_cast_shadows(sun, true);
-    light_set_size(sun, 4.0f, 4.0f);
+    LightDesc sun_desc = {.name = "sun",
+                          .type = LIGHT_DIRECTIONAL,
+                          .direction = {-0.45f, -0.78f, -0.44f},
+                          .color = {1.0f, 0.96f, 0.88f},
+                          .intensity = 3.2f,
+                          .width = 4.0f,
+                          .height = 4.0f,
+                          .cast_shadows = true};
+    Light* sun = create_light(&sun_desc);
     scene_add_light(g_scene, sun);
 
     SceneNode* node = create_node();
@@ -2267,11 +2268,12 @@ static void build_sky_and_sun(Engine* engine) {
     g_scene->skybox_brightness = 1.0f;
     g_scene->skybox_ground_projection = false;
 
-    Light* sun = create_light();
-    light_set_name(sun, "sun");
-    light_set_type(sun, LIGHT_DIRECTIONAL);
-    light_set_cast_shadows(sun, true);
-    light_set_size(sun, 4.0f, 4.0f);
+    LightDesc sun_desc = {.name = "sun",
+                          .type = LIGHT_DIRECTIONAL,
+                          .width = 4.0f,
+                          .height = 4.0f,
+                          .cast_shadows = true};
+    Light* sun = create_light(&sun_desc);
     sky->sun_light = sun;
     // Lower than the tree app's 10: that app frames one subject against a
     // backdrop and can afford to blow its highlights, where a whole terrain of
@@ -2605,14 +2607,15 @@ static void on_init(Game* game) {
         ss->pcss_softness = 1.2f;
     }
 
-    Camera* camera = create_camera();
     // 0.5 / 2000 rather than the 0.1 / 1000 default: a kilometre of terrain
     // needs the far plane, and 0.1 near against it is a 20000:1 depth ratio that
     // z-fights across the whole distance.
-    camera_set_perspective(camera, glm_rad(58.0f), 0.5f, 2000.0f);
-    camera_set_position(camera, (vec3){spawn_x, spawn_y + 6.0f, spawn_z + 16.0f});
-    camera_set_look_at(camera, (vec3){spawn_x, spawn_y, spawn_z});
-    camera_set_up(camera, (vec3){0.0f, 1.0f, 0.0f});
+    CameraDesc camera_desc = {.position = {spawn_x, spawn_y + 6.0f, spawn_z + 16.0f},
+                              .look_at = {spawn_x, spawn_y, spawn_z},
+                              .fov = glm_rad(58.0f),
+                              .near = 0.5f,
+                              .far = 2000.0f};
+    Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
     engine_set_camera_mode(engine, CAMERA_MODE_FREE);
 
@@ -3185,14 +3188,12 @@ int main(int argc, char** argv) {
     }
 
     GameConfig config = game_default_config();
-    config.title = "Cetra Forest";
-    config.width = g_args.width > 0 ? g_args.width : 1600;
-    config.height = g_args.height > 0 ? g_args.height : 900;
-    config.headless = g_args.headless != 0;
-    config.exit_after_frames = g_args.frames;
-    config.screenshot_path = g_args.screenshot;
-    config.screenshot_every = g_args.screenshot_every;
-    config.profiler = g_args.profiler != 0;
+    config.engine.title = "Cetra Forest";
+    config.engine.width = g_args.width > 0 ? g_args.width : 1600;
+    config.engine.height = g_args.height > 0 ? g_args.height : 900;
+    config.engine.headless = g_args.headless != 0;
+    config.engine.headless_jitter = g_args.headless_jitter != 0;
+    config.engine.profiler = g_args.profiler != 0;
     config.cook_dir = g_args.cook_dir;
     config.no_cook = g_args.no_cook != 0;
 
@@ -3207,20 +3208,23 @@ int main(int argc, char** argv) {
     // history makes the frame sensitive to async load timing -- the same
     // diagnostic-only escape the render app carries.
     if (!g_args.headless || g_args.force_taa) {
-        config.msaa_samples = 1;
-        config.taa_enabled = true;
+        config.engine.msaa_samples = 1;
+        config.engine.taa = true;
     }
     // After the policy, so --taa --msaa 4 is expressible -- the lever that
     // prices a sample (spec 11.34); nothing else varies the count with TAA held.
     if (g_args.msaa > 0)
-        config.msaa_samples = g_args.msaa;
-    config.headless_jitter = g_args.headless_jitter != 0;
+        config.engine.msaa_samples = g_args.msaa;
 
     Game* game = create_game(&config);
     if (!game) {
         fprintf(stderr, "forest: failed to create game\n");
         return 1;
     }
+    engine_set_exit_after_frames(game->engine, g_args.frames);
+    if (g_args.screenshot)
+        engine_set_screenshot_path(game->engine, g_args.screenshot);
+    engine_set_screenshot_every(game->engine, g_args.screenshot_every);
 
     game_set_init(game, on_init);
     game_set_update(game, on_update);

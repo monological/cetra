@@ -201,25 +201,23 @@ int main(int argc, char** argv) {
         }
     }
 
-    Engine* engine = create_engine("sprites", WINDOW_W, WINDOW_H);
-    engine_set_headless(engine, headless);
+    EngineConfig cfg = {
+        .title = "sprites", .width = WINDOW_W, .height = WINDOW_H, .headless = headless};
+    Engine* engine = create_engine(&cfg);
+    if (!engine)
+        return 1;
     engine_set_exit_after_frames(engine, frames);
     if (screenshot)
         engine_set_screenshot_path(engine, screenshot);
-    if (engine_init(engine) != 0) {
-        fprintf(stderr, "engine_init failed\n");
-        return 1;
-    }
     engine_set_show_gui(engine, false);
     engine_set_show_fps(engine, !headless);
 
     // The sketch's camera: 45 degrees, five units back along Z.
-    Camera* camera = create_camera();
-    camera_set_position(camera, (vec3){0.0f, 0.0f, CAMERA_DISTANCE});
-    camera_set_look_at(camera, (vec3){0.0f, 0.0f, 0.0f});
-    camera_set_up(camera, (vec3){0.0f, 1.0f, 0.0f});
-    camera_set_perspective(camera, glm_rad(FOV_DEG), 0.1f, 100.0f);
-    engine_set_camera(engine, camera);
+    CameraDesc camera = {.position = {0.0f, 0.0f, CAMERA_DISTANCE},
+                         .fov = glm_rad(FOV_DEG),
+                         .near = 0.1f,
+                         .far = 100.0f};
+    engine_set_camera(engine, create_camera(&camera));
 
     // The sketch's point sizes are pixels across, and glPointSize counts
     // FRAMEBUFFER pixels, which on a Retina display are half a window pixel.
@@ -241,12 +239,8 @@ int main(int argc, char** argv) {
     // The mote shader tints by the scene's key light and reads black without
     // one, which would dim every colour to 0.6. A white key makes that tint
     // the identity. Nothing else here is lit by it.
-    Light* key = create_light();
-    light_set_name(key, "key");
-    light_set_type(key, LIGHT_DIRECTIONAL);
-    light_set_direction(key, (vec3){0.0f, 0.0f, -1.0f});
-    light_set_color(key, (vec3){1.0f, 1.0f, 1.0f});
-    light_set_intensity(key, 1.0f);
+    LightDesc key_desc = {.name = "key", .direction = {0.0f, 0.0f, -1.0f}};
+    Light* key = create_light(&key_desc);
     scene_add_light(scene, key);
     SceneNode* key_node = create_node();
     node_set_name(key_node, "key");

@@ -325,62 +325,34 @@ void scene_add_three_point_lights(Scene* scene, float intensity_scale) {
         return;
     }
 
-    // Key light - main light, front-right, above
-    Light* key = create_light();
-    if (!key) {
-        fprintf(stderr, "Failed to create key light.\n");
-        return;
+    // Key from front-right above, fill softer from front-left, rim from behind
+    // and above for edge definition.
+    const LightDesc rig[3] = {
+        {.name = "key_light",
+         .direction = {-0.4f, -0.7f, -0.6f},
+         .color = {1.0f, 0.95f, 0.9f},
+         .intensity = 3.0f * intensity_scale},
+        {.name = "fill_light",
+         .direction = {0.5f, -0.4f, -0.5f},
+         .color = {0.8f, 0.85f, 1.0f},
+         .intensity = 1.5f * intensity_scale},
+        {.name = "rim_light",
+         .direction = {0.0f, -0.6f, 0.8f},
+         .color = {1.0f, 1.0f, 1.0f},
+         .intensity = 2.0f * intensity_scale},
+    };
+    for (int i = 0; i < 3; i++) {
+        Light* light = create_light(&rig[i]);
+        if (!light) {
+            fprintf(stderr, "Failed to create %s.\n", rig[i].name);
+            return;
+        }
+        scene_add_light(scene, light);
+        SceneNode* node = create_node();
+        node_set_light(node, light);
+        node_set_name(node, rig[i].name);
+        node_add_child(scene->root_node, node);
     }
-    light_set_name(key, "key_light");
-    light_set_type(key, LIGHT_DIRECTIONAL);
-    vec3 key_dir = {-0.4f, -0.7f, -0.6f};
-    light_set_direction(key, key_dir);
-    light_set_intensity(key, 3.0f * intensity_scale);
-    light_set_color(key, (vec3){1.0f, 0.95f, 0.9f});
-    scene_add_light(scene, key);
-
-    SceneNode* key_node = create_node();
-    node_set_light(key_node, key);
-    node_set_name(key_node, "key_light_node");
-    node_add_child(scene->root_node, key_node);
-
-    // Fill light - softer, front-left
-    Light* fill = create_light();
-    if (!fill) {
-        fprintf(stderr, "Failed to create fill light.\n");
-        return;
-    }
-    light_set_name(fill, "fill_light");
-    light_set_type(fill, LIGHT_DIRECTIONAL);
-    vec3 fill_dir = {0.5f, -0.4f, -0.5f};
-    light_set_direction(fill, fill_dir);
-    light_set_intensity(fill, 1.5f * intensity_scale);
-    light_set_color(fill, (vec3){0.8f, 0.85f, 1.0f});
-    scene_add_light(scene, fill);
-
-    SceneNode* fill_node = create_node();
-    node_set_light(fill_node, fill);
-    node_set_name(fill_node, "fill_light_node");
-    node_add_child(scene->root_node, fill_node);
-
-    // Rim light - behind and above for edge definition
-    Light* rim = create_light();
-    if (!rim) {
-        fprintf(stderr, "Failed to create rim light.\n");
-        return;
-    }
-    light_set_name(rim, "rim_light");
-    light_set_type(rim, LIGHT_DIRECTIONAL);
-    vec3 rim_dir = {0.0f, -0.6f, 0.8f};
-    light_set_direction(rim, rim_dir);
-    light_set_intensity(rim, 2.0f * intensity_scale);
-    light_set_color(rim, (vec3){1.0f, 1.0f, 1.0f});
-    scene_add_light(scene, rim);
-
-    SceneNode* rim_node = create_node();
-    node_set_light(rim_node, rim);
-    node_set_name(rim_node, "rim_light_node");
-    node_add_child(scene->root_node, rim_node);
 }
 
 /*

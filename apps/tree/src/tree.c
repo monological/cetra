@@ -1153,35 +1153,35 @@ int main(int argc, char** argv) {
     sun_elevation = args.sun_elevation;
     sun_azimuth = args.sun_azimuth;
 
-    Engine* engine = create_engine("Procedural Tree", args.width, args.height);
-    engine_set_headless(engine, args.headless != 0);
-    engine->headless_jitter = args.headless_jitter != 0;
-    engine_set_screenshot_path(engine, args.screenshot);
-    engine_set_screenshot_every(engine, args.screenshot_every);
-    engine_set_exit_after_frames(engine, args.frames);
-    // TAAU: render the scene at 70% and reconstruct temporally. Set before
-    // engine_init, because create_postfx sizes every target from it. Headless
-    // drops back to full resolution unless --headless-jitter, since the resolve
+    // TAAU: render the scene at 70% and reconstruct temporally. Headless drops
+    // back to full resolution unless --headless-jitter, since the resolve
     // reconstructs from the jitter and headless suppresses it.
-    engine_set_render_scale(engine, 0.70f);
+    //
     // TAA-only, at ONE sample, which is the policy apps/render already runs and the one this app
-    // had never actually chosen -- it set TAA above and inherited the engine's 4x default, so it
-    // paid for both. TAA carries the edges here, and it is on unconditionally because TAAU needs
-    // its jitter.
+    // had never actually chosen -- it turned TAA on (in the post block below) and inherited the
+    // engine's 4x default, so it paid for both. TAA carries the edges here, and it is on
+    // unconditionally because TAAU needs its jitter.
     //
     // The sample count is not just a cost: above one sample masked geometry takes the
     // alpha-to-coverage path, so every leaf edge becomes partially covered and mixes the sky or
     // sea behind it into a bright fringe. Against this app's near-black leaves and a sunset that
-    // reads as an orange outline traced round the whole canopy.
-    //
-    // Before engine_init so the count is the one the scene target is first built at, rather than
-    // a rebuild on the frame after. The engine clamps it to what the driver offers.
-    engine_set_msaa_samples(engine, args.msaa > 0 ? args.msaa : 1);
-
-    if (engine_init(engine) != 0) {
+    // reads as an orange outline traced round the whole canopy. The engine clamps the count to
+    // what the driver offers.
+    EngineConfig cfg = {.title = "Procedural Tree",
+                        .width = args.width,
+                        .height = args.height,
+                        .headless = args.headless != 0,
+                        .headless_jitter = args.headless_jitter != 0,
+                        .msaa_samples = args.msaa > 0 ? args.msaa : 1,
+                        .render_scale = 0.70f};
+    Engine* engine = create_engine(&cfg);
+    if (!engine) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
     }
+    engine_set_screenshot_path(engine, args.screenshot);
+    engine_set_screenshot_every(engine, args.screenshot_every);
+    engine_set_exit_after_frames(engine, args.frames);
 
     engine_set_mouse_button_callback(engine, mouse_button_callback);
     engine_set_key_callback(engine, key_callback);
@@ -1199,34 +1199,31 @@ int main(int argc, char** argv) {
     // Overridable, because a look bug in a scene this size is reported as a viewpoint and
     // there was previously no way to hand one over -- the orbit controller's state is not
     // expressible on a command line. Same flags render and forest already carry.
-    Camera* camera = create_camera();
-    vec3 cam_pos = {140.0f, 95.0f, 600.0f};
-    vec3 look_at = {0.0f, 145.0f, 0.0f};
-    vec3 up = {0.0f, 1.0f, 0.0f};
+    CameraDesc camera_desc = {.position = {140.0f, 95.0f, 600.0f},
+                              .look_at = {0.0f, 145.0f, 0.0f},
+                              .fov = args.fov > 0.0f ? args.fov : 0.55f,
+                              .near = 2.0f,
+                              .far = 3000.0f};
     if (args.cam_eye_set)
-        glm_vec3_copy(args.cam_eye, cam_pos);
+        glm_vec3_copy(args.cam_eye, camera_desc.position);
     if (args.cam_target_set)
-        glm_vec3_copy(args.cam_target, look_at);
+        glm_vec3_copy(args.cam_target, camera_desc.look_at);
     if (args.cam_up_set)
-        glm_vec3_copy(args.cam_up, up);
-    camera_set_position(camera, cam_pos);
-    camera_set_look_at(camera, look_at);
-    camera_set_up(camera, up);
-    camera_set_perspective(camera, args.fov > 0.0f ? args.fov : 0.55f, 2.0f, 3000.0f);
+        glm_vec3_copy(args.cam_up, camera_desc.up);
+    Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
-    camera->distance = glm_vec3_distance(cam_pos, look_at);
 
     if (args.player) {
         /*
          * Stand where the default camera stands, facing what it faces.
          *
-         * Taken from cam_pos rather than authored, so the walker inherits the framing this app
-         * was composed around -- tree ahead, sun behind, sea past it -- and keeps inheriting it
-         * if that camera moves. Only the BEARING is reused, at 65% of the waterline radius: the
-         * camera itself is 616 units out and over open water, and a walker has to start on the
-         * island.
+         * Taken from the camera rather than authored, so the walker inherits the framing this
+         * app was composed around -- tree ahead, sun behind, sea past it -- and keeps inheriting
+         * it if that camera moves. Only the BEARING is reused, at 65% of the waterline radius:
+         * the camera itself is 616 units out and over open water, and a walker has to start on
+         * the island.
          */
-        const float bearing = atan2f(cam_pos[0], cam_pos[2]);
+        const float bearing = atan2f(camera->position[0], camera->position[2]);
         const float spawn_r = GROUND_SHORE_T * GROUND_RADIUS * 0.65f;
         float spawn_x = sinf(bearing) * spawn_r;
         float spawn_z = cosf(bearing) * spawn_r;
@@ -1347,13 +1344,14 @@ int main(int argc, char** argv) {
             scene->skybox_brightness = 1.0f;
             scene->skybox_ground_projection = false;
 
-            sun_light = create_light();
-            light_set_name(sun_light, "sun");
-            light_set_type(sun_light, LIGHT_DIRECTIONAL);
-            light_set_cast_shadows(sun_light, true);
             // Emitter size drives the PCSS penumbra: contact shadows stay
             // crisp under the canopy and soften further from the caster.
-            light_set_size(sun_light, 6.0f, 6.0f);
+            LightDesc sun_desc = {.name = "sun",
+                                  .type = LIGHT_DIRECTIONAL,
+                                  .width = 6.0f,
+                                  .height = 6.0f,
+                                  .cast_shadows = true};
+            sun_light = create_light(&sun_desc);
             sky->sun_light = sun_light;
             sky->sun_base_intensity = 10.0f;
             sky_apply_sun_to_light(sky);
@@ -1368,10 +1366,9 @@ int main(int argc, char** argv) {
             // reason render.c states at length: a config restore cannot make a
             // Light, and a disabled moon costs nothing because it neither
             // casts nor emits.
-            Light* moon_light = create_light();
-            light_set_name(moon_light, "moon");
-            light_set_type(moon_light, LIGHT_DIRECTIONAL);
-            light_set_size(moon_light, 6.0f, 6.0f);
+            LightDesc moon_desc = {
+                .name = "moon", .type = LIGHT_DIRECTIONAL, .width = 6.0f, .height = 6.0f};
+            Light* moon_light = create_light(&moon_desc);
             sky->moon_light = moon_light;
             sky_update_moon(sky); // owns direction, tint, intensity and cast_shadows
             scene_add_light(scene, moon_light);

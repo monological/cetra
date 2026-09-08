@@ -140,15 +140,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    Engine* engine = create_engine("network", 800, 600);
-    engine_set_headless(engine, headless);
+    EngineConfig cfg = {.title = "network", .width = 800, .height = 600, .headless = headless};
+    Engine* engine = create_engine(&cfg);
+    if (!engine)
+        return 1;
     engine_set_exit_after_frames(engine, frames);
     if (screenshot)
         engine_set_screenshot_path(engine, screenshot);
-    if (engine_init(engine) != 0) {
-        fprintf(stderr, "engine_init failed\n");
-        return 1;
-    }
     engine_set_show_gui(engine, false);
     engine_set_show_fps(engine, !headless);
 
@@ -160,12 +158,9 @@ int main(int argc, char** argv) {
     engine_add_program(engine, network_program); // the engine owns it now
 
     // The sketch's camera.
-    Camera* camera = create_camera();
-    camera_set_position(camera, (vec3){0.0f, 3.0f, 2.0f});
-    camera_set_look_at(camera, (vec3){0.0f, 0.0f, 0.0f});
-    camera_set_up(camera, (vec3){0.0f, 1.0f, 0.0f});
-    camera_set_perspective(camera, glm_rad(45.0f), 0.1f, 100.0f);
-    engine_set_camera(engine, camera);
+    CameraDesc camera = {
+        .position = {0.0f, 3.0f, 2.0f}, .fov = glm_rad(45.0f), .near = 0.1f, .far = 100.0f};
+    engine_set_camera(engine, create_camera(&camera));
 
     Scene* scene = create_scene();
     engine_add_scene(engine, scene);

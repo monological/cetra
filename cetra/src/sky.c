@@ -903,11 +903,11 @@ static void sky_apply_body_to_light(struct Light* light, const vec3 dir, float e
 
     vec3 color = {0};
     sky_transmittance_at(dir[1], color);
-    light_set_color(light, color);
+    glm_vec3_copy(color, light->color);
 
     const float intensity = base * sky_horizon_fade(elevation_deg) * scale;
-    light_set_intensity(light, intensity);
-    light_set_cast_shadows(light, intensity > base * SKY_LIGHT_CAST_FLOOR);
+    light->intensity = intensity;
+    light->cast_shadows = intensity > base * SKY_LIGHT_CAST_FLOOR;
 }
 
 void sky_apply_sun_to_light(SkyAtmosphere* sky) {

@@ -331,9 +331,11 @@ typedef struct Engine {
     bool show_camera_hud; // Live camera pose overlay next to the FPS readout
     bool show_bones;      // X-ray bone visualization
     bool show_lights;     // Light overlay: position cross + cull-radius wireframe
-    bool headless;        // Hidden window, no vsync (set before engine_init)
+    bool headless;        // Hidden window, no vsync; from the config, read at creation
     bool headless_jitter; // Apply the TAA sub-pixel jitter even in headless (non-deterministic
                           // screenshots, but lets temporal accumulation converge for verification)
+    bool no_vsync;        // From the config, read when the window is made
+    bool taa_requested;   // The config's taa, held until the post chain exists to take it
 
     // Latched at NewFrame time: an ImGui frame is open this iteration and must
     // be closed with a matching igRender. Pairs the begin/end across the loop.
@@ -459,21 +461,38 @@ typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
 
-Engine* create_engine(const char* window_title, int width, int height);
+// What an engine is created from: the window, and every setting that the
+// window or the first render-target build reads. Fill the fields you mean with
+// designated initialisers and leave the rest zero; zero is the default, named
+// beside each field. The config exists because these settings have an ORDER --
+// a hidden window is decided when the window is made, the profiler is built
+// during init, the sample count sizes the first target -- and a struct that
+// init reads is an order nothing can violate from outside.
+typedef struct EngineConfig {
+    const char* title;    // window title; NULL = "Cetra"
+    int width, height;    // window size; 0 = 1280 x 720
+    bool headless;        // hidden window, vsync off, fixed frame clock
+    bool headless_jitter; // keep the TAA jitter under headless (non-deterministic frames)
+    bool no_vsync;        // swap without waiting for the display; headless implies it
+    bool profiler;        // build the per-pass profiler
+    bool taa;             // temporal anti-aliasing, applied once the post chain is up
+    int msaa_samples;     // scene target sample count; 0 = 4; 1 = off
+    int ss_scale;         // supersampling factor, clamped to [1, 2]; 0 = 1
+    float render_scale;   // render-resolution scale in [0.5, 1]; 0 = 1
+} EngineConfig;
+
+// Creates the window, the GL context, the scene target and the post chain, and
+// registers the built-in programs, all in one call. NULL means every default.
+// Returns NULL with the reason logged when any of that fails.
+Engine* create_engine(const EngineConfig* cfg);
 void free_engine(Engine* engine);
 
-int engine_init(Engine* engine);
-void engine_set_headless(Engine* engine, bool headless);
-// Build the per-pass profiler. Must be called before engine_init, which is
-// where the profiler is created; setting it afterwards does nothing.
-void engine_set_profiler(Engine* engine, bool enabled);
-// Supersampling factor (clamped to [1, 2]). Safe before engine_init (stored)
-// or at runtime, where the render targets are rebuilt at the next frame top.
+// Supersampling factor (clamped to [1, 2]). The render targets are rebuilt at
+// the next frame top.
 void engine_set_ss_scale(Engine* engine, int ss_scale);
-// Render-resolution scale (clamped to [0.5, 1]). Safe before engine_init
-// (stored) or at runtime, where the render targets are rebuilt at the next
-// frame top. Forced to 1 in headless without headless_jitter, which TAAU
-// needs to reconstruct from.
+// Render-resolution scale (clamped to [0.5, 1]). The render targets are rebuilt
+// at the next frame top. Forced to 1 in headless without headless_jitter,
+// which TAAU needs to reconstruct from.
 void engine_set_render_scale(Engine* engine, float render_scale);
 // Re-centre the world on the camera, snapped to `lattice` (spec 11.62). Applies
 // at the next frame top like the render-scale switch above, and only on X and Z.
@@ -483,10 +502,10 @@ void engine_set_render_scale(Engine* engine, float render_scale);
 // and the hand-driven copy was the one missing the current origin.
 void engine_recentre_on_camera(const Engine* engine, float lattice);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
-// 1 disables MSAA. Safe to call before engine_init (stored) or at runtime
-// (rebuilds the multisample attachments).
+// 1 disables MSAA. Rebuilds the multisample attachments.
 void engine_set_msaa_samples(Engine* engine, int samples);
-// Enable/disable temporal anti-aliasing. Call after engine_init (needs postfx).
+// Temporal anti-aliasing on or off. A function because the post chain, the
+// jitter and the velocity buffer all read one flag and must agree.
 void engine_set_taa(Engine* engine, bool enabled);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --

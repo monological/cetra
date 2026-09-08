@@ -29,45 +29,21 @@ typedef void (*GamePreRenderFunc)(struct Game* game, double alpha);
 typedef void (*GameRenderFunc)(struct Game* game, double alpha);
 typedef void (*GameShutdownFunc)(struct Game* game);
 
-// Game configuration
+// What a game is created from: the engine's own config, plus the loop and the
+// cook, which are the two things this layer owns that the engine does not.
+// Everything a game app used to route through here to reach the engine before
+// init -- headless, the profiler, the sample count -- is in `engine` now, and
+// what it set afterwards (the screenshot path, the frame limit, the debug GUI)
+// is set on game->engine after create_game, where it always could be.
 typedef struct GameConfig {
-    const char* title;
-    int width;
-    int height;
-    double fixed_timestep; // Physics/logic update rate (default: 1/60)
-    double max_frame_time; // Max frame time before clamping (default: 0.25)
-    bool vsync;            // Enable vsync (default: true)
-    bool show_debug_gui;   // Show debug GUI (default: false)
-    // Headless / CI verification (routed onto the engine, which owns the loop):
-    // hidden window + no vsync, deterministic frame-count exit, and a final-frame
-    // PPM screenshot.
-    bool headless;               // Hidden window, no vsync (set before engine_init)
-    int exit_after_frames;       // Exit cleanly after N rendered frames (0 = run forever)
-    const char* screenshot_path; // Save the final frame here as PPM (NULL = off)
-    // Also save numbered frames every N (0 = only the final one), as
-    // <screenshot_path minus .ppm>_000060.ppm. Inert without screenshot_path.
-    //
-    // What it buys is a TRANSITION: comparing a run against itself at two frame
-    // counts costs two full startups, and for an app that bakes terrain and
-    // scatters thousands of props that dominates the measurement.
-    int screenshot_every;
-    // Per-pass GPU/CPU timing and the submission counters. A config field rather
-    // than something an app sets afterwards, because the profiler is built
-    // during engine_init and create_game owns that call -- so a game-framework
-    // app had no way to enable it at all.
-    bool profiler;
-    // The derived-data cook (spec 11.99). Config fields for the profiler's
-    // reason: cook_init must precede engine_init and on_init, and create_game
-    // owns both calls.
+    EngineConfig engine;
+    double fixed_timestep; // Physics/logic update rate (0 = 1/60)
+    double max_frame_time; // Max frame time before clamping (0 = 0.25)
+    // The derived-data cook (spec 11.99). Config fields because cook_init must
+    // precede on_init, whose bakes are the fetch sites, and create_game owns
+    // that call.
     const char* cook_dir; // NULL = CETRA_COOK_DIR, then the repo default
     bool no_cook;         // true = every fetch misses and nothing is stored
-    // The app's anti-aliasing choice, for the profiler's reason again: the scene
-    // target is built during engine_init, so a count set afterwards allocates
-    // every G-buffer attachment plus depth at the default and immediately
-    // destroys them to rebuild at the one the app wanted.
-    int msaa_samples;     // 0 = leave the engine's own default
-    bool taa_enabled;     // applied after init, where postfx exists
-    bool headless_jitter; // keep the TAA jitter under --headless (TAA is inert without it)
 } GameConfig;
 
 // Main game structure

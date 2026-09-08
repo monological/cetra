@@ -52,6 +52,8 @@
  * Private functions
  */
 static int _create_default_shaders_for_engine(Engine* engine);
+static Engine* _engine_alloc(const char* window_title, int width, int height);
+static int _engine_init(Engine* engine);
 static int _setup_engine_glfw(Engine* engine);
 static int _setup_engine_msaa(Engine* engine);
 static int _setup_engine_gui(Engine* engine);
@@ -135,7 +137,7 @@ static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_A
 /*
  * Engine
  */
-Engine* create_engine(const char* window_title, int width, int height) {
+static Engine* _engine_alloc(const char* window_title, int width, int height) {
     // Zeroed, not malloc'd: every field below is still set explicitly, but a
     // struct this wide cannot rely on each new field being remembered here --
     // and a field only ever written conditionally, like render_suspended, has
@@ -342,6 +344,18 @@ void free_engine(Engine* engine) {
     if (!engine)
         return;
 
+    // An engine whose window never came up owns no GL object and no ImGui
+    // context, so everything below that talks to either is skipped: this is
+    // what create_engine calls on a failed init.
+    if (!engine->window) {
+        draw_list_free(engine->sorted_opaque);
+        free(engine->sorted_opaque);
+        free(engine->window_title);
+        free(engine->screenshot_path);
+        free(engine);
+        return;
+    }
+
     // Borrows nothing: it holds copies of DrawItems, and a DrawItem borrows its
     // mesh and node. So this is safe before or after the scenes go.
     draw_list_free(engine->sorted_opaque);
@@ -478,7 +492,7 @@ static int _setup_engine_glfw(Engine* engine) {
     glfwMakeContextCurrent(engine->window);
 
     // V-Sync on for normal runs, off for headless so frames run at full speed
-    glfwSwapInterval(engine->headless ? 0 : 1);
+    glfwSwapInterval((engine->headless || engine->no_vsync) ? 0 : 1);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -858,7 +872,7 @@ static int _setup_engine_gui(Engine* engine) {
  * Initialize the Engine
  *
  */
-int engine_init(Engine* engine) {
+static int _engine_init(Engine* engine) {
     printf("┏┓┏┓┏┳┓┳┓┏┓\n");
     printf("┃ ┣  ┃ ┣┫┣┫\n");
     printf("┗┛┗┛ ┻ ┛┗┛┗\n");
@@ -1632,20 +1646,48 @@ void engine_set_show_fps(Engine* engine, bool show_fps) {
     engine->show_fps = show_fps;
 }
 
-void engine_set_headless(Engine* engine, bool headless) {
+Engine* create_engine(const EngineConfig* cfg) {
+    static const EngineConfig none = {0};
+    if (!cfg)
+        cfg = &none;
+
+    Engine* engine =
+        _engine_alloc(cfg->title ? cfg->title : "Cetra", cfg->width > 0 ? cfg->width : 1280,
+                      cfg->height > 0 ? cfg->height : 720);
     if (!engine)
-        return;
-    engine->headless = headless;
+        return NULL;
+
+    // Everything init reads, in place before it runs. The sample count and the
+    // two scales go through their setters for the clamps, which store when the
+    // targets do not exist yet and rebuild when they do.
+    engine->headless = cfg->headless;
+    engine->headless_jitter = cfg->headless_jitter;
+    engine->no_vsync = cfg->no_vsync;
+    engine->profiler_enabled = cfg->profiler;
+    engine->taa_requested = cfg->taa;
+    if (cfg->msaa_samples > 0)
+        engine_set_msaa_samples(engine, cfg->msaa_samples);
+    if (cfg->ss_scale > 0)
+        engine_set_ss_scale(engine, cfg->ss_scale);
+    if (cfg->render_scale > 0.0f)
+        engine_set_render_scale(engine, cfg->render_scale);
+
+    if (_engine_init(engine) != 0) {
+        log_error("create_engine: the window or the GL context could not be made");
+        free_engine(engine);
+        return NULL;
+    }
+    engine_set_taa(engine, engine->taa_requested);
+    return engine;
 }
 
-void engine_set_profiler(Engine* engine, bool enabled) {
-    if (!engine)
-        return;
-    engine->profiler_enabled = enabled;
-}
-
+// Store-and-apply: the request lands on the engine, and on the post chain
+// too once it exists. Nothing is silently dropped for being asked too early.
 void engine_set_taa(Engine* engine, bool enabled) {
-    if (engine && engine->postfx)
+    if (!engine)
+        return;
+    engine->taa_requested = enabled;
+    if (engine->postfx)
         engine->postfx->taa_enabled = enabled;
 }
 

@@ -124,7 +124,7 @@ void player_update(Player* p, struct Engine* engine, float dt) {
     vec3 look = {eye[0] + forward[0] * cp, eye[1] + sinf(p->pitch), eye[2] + forward[2] * cp};
     camera_set_position(engine->camera, eye);
     camera_set_look_at(engine->camera, look);
-    camera_set_up(engine->camera, (vec3){0.0f, 1.0f, 0.0f});
+    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, engine->camera->up_vector);
     engine->camera->distance = glm_vec3_distance(eye, look);
     // Writing the camera is not enough: the view matrix is built from it here, and nothing
     // else in the frame does it. The orbit path got this via mouse_drag_update, which this

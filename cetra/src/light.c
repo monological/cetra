@@ -9,58 +9,60 @@
 #include "light.h"
 #include "ext/log.h"
 
-Light* create_light() {
-    Light* light = malloc(sizeof(Light));
+static bool _is_zero3(const vec3 v) {
+    return v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f;
+}
 
+Light* create_light(const LightDesc* desc) {
+    static const LightDesc none = {0};
+    if (!desc)
+        desc = &none;
+
+    Light* light = calloc(1, sizeof(Light));
     if (!light) {
         log_error("Failed to allocate memory for light");
         return NULL;
     }
-    memset(light, 0, sizeof(Light));
 
-    light->name = NULL;
-    light->type = LIGHT_UNKNOWN;
+    light->name = desc->name ? safe_strdup(desc->name) : NULL;
+    light->type = desc->type;
 
-    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->original_position);
-    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, light->global_position);
+    glm_vec3_copy((float*)desc->position, light->original_position);
+    glm_vec3_copy((float*)desc->position, light->global_position);
 
-    glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->original_direction);
-    glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, light->direction);
-    // Area-panel height axis. With the default downward direction this makes
-    // width = cross(up, dir) = +X: a ceiling panel spanning X by Z.
-    glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, light->original_up);
-    glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, light->up);
-    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->color);
-    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->specular);
-    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, light->ambient);
-    light->intensity = 1.0f;
-    light->range = 0.0f; // 0 = derive from attenuation (light_cull_radius)
-    light->cutOff = cosf(glm_rad(12.5f));
-    light->outerCutOff = cosf(glm_rad(15.0f));
+    // The authored direction and up, and the world copies a node transform
+    // rotates from them. With the default downward direction the default up
+    // makes width = cross(up, dir) = +X: a ceiling panel spanning X by Z.
+    vec3 direction = {0.0f, -1.0f, 0.0f};
+    if (!_is_zero3(desc->direction))
+        glm_vec3_copy((float*)desc->direction, direction);
+    vec3 up = {0.0f, 0.0f, 1.0f};
+    if (!_is_zero3(desc->up))
+        glm_vec3_copy((float*)desc->up, up);
+    light_set_direction(light, direction);
+    light_set_up(light, up);
 
-    glm_vec2_copy((vec2){50.0f, 50.0f}, light->size);
+    if (_is_zero3(desc->color))
+        glm_vec3_one(light->color);
+    else
+        glm_vec3_copy((float*)desc->color, light->color);
+    glm_vec3_one(light->specular);
+    glm_vec3_one(light->ambient);
 
-    light->cast_shadows = false;
+    light_set_intensity_units(light, desc->intensity > 0.0f ? desc->intensity : 1.0f, desc->units);
+    light->range = desc->range; // 0 = derive from attenuation (light_cull_radius)
+    light->cutOff = cosf(desc->inner_cutoff > 0.0f ? desc->inner_cutoff : glm_rad(12.5f));
+    light->outerCutOff = cosf(desc->outer_cutoff > 0.0f ? desc->outer_cutoff : glm_rad(15.0f));
+    glm_vec2_copy((vec2){desc->width > 0.0f ? desc->width : 50.0f,
+                         desc->height > 0.0f ? desc->height : 50.0f},
+                  light->size);
+
+    light->cast_shadows = desc->cast_shadows;
     light->shadow_map_index = -1;
     light->shadow_layer = -1;
-    light->ies_profile = -1;
+    light->ies_profile = -1; // assigned by whoever loads a profile into the scene
 
     return light;
-}
-
-void light_set_name(Light* light, const char* name) {
-    if (!light || !name)
-        return;
-    if (light->name != NULL) {
-        free(light->name);
-    }
-    light->name = safe_strdup(name);
-}
-
-void light_set_type(Light* light, LightType type) {
-    if (!light)
-        return;
-    light->type = type;
 }
 
 LightUnits light_canonical_units(LightType type) {
@@ -101,8 +103,8 @@ const char* light_units_name(LightUnits units) {
 
 // Deliberately does NOT consult light->type. Lumens converts by Phi/4pi and
 // every other unit is already canonical, so the arithmetic is a function of the
-// unit alone -- which is what lets this be called in any order relative to
-// light_set_type. Whether lumens makes SENSE for the light is an authoring
+// unit alone -- which is what lets create_light run it before anything else on
+// the light is settled. Whether lumens makes SENSE for the light is an authoring
 // question, checked where a type and a unit are read together (cscene.c), not a
 // correctness one that a call order could silently get wrong.
 void light_set_intensity_units(Light* light, float intensity, LightUnits units) {
@@ -127,30 +129,6 @@ float light_intensity_in_units(const Light* light) {
                                                             : light->intensity;
 }
 
-void light_set_specular(Light* light, vec3 specular) {
-    if (!light)
-        return;
-    glm_vec3_copy(specular, light->specular);
-}
-
-void light_set_ambient(Light* light, vec3 ambient) {
-    if (!light)
-        return;
-    glm_vec3_copy(ambient, light->ambient);
-}
-
-void light_set_original_position(Light* light, vec3 original_position) {
-    if (!light)
-        return;
-    glm_vec3_copy(original_position, light->original_position);
-}
-
-void light_set_global_position(Light* light, vec3 global_position) {
-    if (!light)
-        return;
-    glm_vec3_copy(global_position, light->global_position);
-}
-
 void light_set_direction(Light* light, vec3 direction) {
     if (!light)
         return;
@@ -169,31 +147,6 @@ void light_set_up(Light* light, vec3 up) {
     // any non-parallel vector.
     glm_vec3_copy(up, light->original_up);
     glm_vec3_copy(up, light->up);
-}
-
-void light_set_color(Light* light, vec3 color) {
-    if (!light)
-        return;
-    glm_vec3_copy(color, light->color);
-}
-
-// Set intensity in the light type's own unit: candela for point and spot, lux
-// for a directional, nits for an area panel. To author in lumens, which is the
-// only other unit that converts, call light_set_intensity_units.
-//
-// Leaves `units` alone on purpose. It is a DISPLAY unit over a canonical value,
-// so it stays correct across a canonical write -- 2.39 cd and 30 lm are the same
-// light, and a lamp being shown in lumens should keep being shown in lumens.
-void light_set_intensity(Light* light, float intensity) {
-    if (!light)
-        return;
-    light->intensity = intensity;
-}
-
-void light_set_range(Light* light, float range) {
-    if (!light)
-        return;
-    light->range = range;
 }
 
 // Radiance below this reads as black at the project-standard -E 1.0 (one LDR
@@ -269,25 +222,6 @@ void light_emission_frame(const struct Light* light, vec3 axis, vec3 up) {
  *               full intensity.
  * @param outerCutOff Cosine of the outer half-angle, beyond which it is zero.
  */
-void light_set_cutoff(Light* light, float cutOff, float outerCutOff) {
-    if (!light)
-        return;
-    light->cutOff = cutOff;
-    light->outerCutOff = outerCutOff;
-}
-
-void light_set_cast_shadows(Light* light, bool cast_shadows) {
-    if (!light)
-        return;
-    light->cast_shadows = cast_shadows;
-}
-
-void light_set_size(Light* light, float width, float height) {
-    if (!light)
-        return;
-    glm_vec2_copy((vec2){width, height}, light->size);
-}
-
 void free_light(Light* light) {
     if (!light)
         return;

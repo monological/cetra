@@ -5,46 +5,49 @@
 #include "util.h"
 #include "camera.h"
 
-Camera* create_camera() {
-    Camera* camera = (Camera*)malloc(sizeof(Camera));
-    if (!camera) {
-        return NULL;
-    }
-
-    camera->name = NULL;
-
-    glm_vec3_copy((vec3){0.0f, 2.0f, 5.0f}, camera->position);  // Default position
-    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, camera->look_at);   // Looking towards the origin
-    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, camera->up_vector); // 'Up' is in the Y direction
-
-    camera->aspect_ratio = 16.0f / 9.0f;
-    camera->fov_radians = glm_rad(60.0f); // A typical field of view
-    camera->near_clip = 0.1f;             // Typical near clip plane
-    camera->far_clip = 1000.0f;           // Typical far clip plane
-
-    camera->is_orthographic = false;
-    camera->ortho_height = 0.0f;
-
-    // orbit animation variables
-    camera->theta = 0.0f;
-    camera->phi = 0.0f;
-    camera->distance = 2000.0f;
-    camera->max_distance = 0.0f;
-    camera->height = 0.0f;
-    camera->zoom_speed = 0.005f;
-    camera->orbit_speed = 0.001f;
-    camera->amplitude = 0.001f;
-
-    return camera;
+// A zero vec3 in the desc means "the default"; the eye's default is not the
+// origin, which is why position is tested and look_at is not.
+static bool _is_zero3(const vec3 v) {
+    return v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f;
 }
 
-void camera_set_name(Camera* camera, const char* name) {
+Camera* create_camera(const CameraDesc* desc) {
+    static const CameraDesc none = {0};
+    if (!desc)
+        desc = &none;
+
+    Camera* camera = calloc(1, sizeof(Camera));
     if (!camera)
-        return;
-    if (camera->name) {
-        free(camera->name);
-    }
-    camera->name = safe_strdup(name);
+        return NULL;
+
+    camera->name = desc->name ? safe_strdup(desc->name) : NULL;
+
+    if (_is_zero3(desc->position))
+        glm_vec3_copy((vec3){0.0f, 2.0f, 5.0f}, camera->position);
+    else
+        glm_vec3_copy((float*)desc->position, camera->position);
+    glm_vec3_copy((float*)desc->look_at, camera->look_at);
+    if (_is_zero3(desc->up))
+        glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, camera->up_vector);
+    else
+        glm_vec3_copy((float*)desc->up, camera->up_vector);
+
+    camera->aspect_ratio = 16.0f / 9.0f; // re-derived from the framebuffer each frame
+    camera->fov_radians = desc->fov > 0.0f ? desc->fov : glm_rad(60.0f);
+    camera->near_clip = desc->near > 0.0f ? desc->near : 0.1f;
+    camera->far_clip = desc->far > 0.0f ? desc->far : 1000.0f;
+    camera->is_orthographic = desc->ortho_height > 0.0f;
+    camera->ortho_height = desc->ortho_height;
+
+    camera->max_distance = desc->max_distance;
+    camera->zoom_speed = desc->zoom_speed > 0.0f ? desc->zoom_speed : 0.005f;
+    camera->orbit_speed = desc->orbit_speed > 0.0f ? desc->orbit_speed : 0.001f;
+    camera->amplitude = 0.001f;
+
+    // The orbit parameters describe the pose just set, not a fixed 2000 units
+    // that every orbiting app then had to overwrite by hand.
+    camera_sync_spherical_from_position(camera);
+    return camera;
 }
 
 void free_camera(Camera* camera) {
@@ -66,36 +69,6 @@ void camera_set_look_at(Camera* camera, vec3 look_at) {
     if (!camera)
         return;
     glm_vec3_copy(look_at, camera->look_at);
-}
-
-void camera_set_direction(Camera* camera, vec3 direction) {
-    if (!camera)
-        return;
-    glm_vec3_add(camera->position, direction, camera->look_at);
-}
-
-void camera_set_up(Camera* camera, vec3 up_vector) {
-    if (!camera)
-        return;
-    glm_vec3_copy(up_vector, camera->up_vector);
-}
-
-void camera_set_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip) {
-    if (!camera)
-        return;
-    camera->is_orthographic = false;
-    camera->fov_radians = fov_radians;
-    camera->near_clip = near_clip;
-    camera->far_clip = far_clip;
-}
-
-void camera_set_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip) {
-    if (!camera)
-        return;
-    camera->is_orthographic = true;
-    camera->ortho_height = ortho_height;
-    camera->near_clip = near_clip;
-    camera->far_clip = far_clip;
 }
 
 void camera_orbit(Camera* camera, float delta_theta, float delta_phi) {

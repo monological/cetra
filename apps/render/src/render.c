@@ -2449,17 +2449,17 @@ static void spawn_area_light(Scene* scene, const RenderArgs* args) {
     if (!args->area_light)
         return;
 
-    Light* al = create_light();
+    LightDesc desc = {.name = "area_light",
+                      .type = LIGHT_AREA,
+                      .intensity = args->area_light_intensity,
+                      .width = args->area_light_size[0],
+                      .height = args->area_light_size[1]};
+    glm_vec3_copy((float*)args->area_light_pos, desc.position);
+    glm_vec3_copy((float*)args->area_light_dir, desc.direction);
+    glm_vec3_copy((float*)args->area_light_color, desc.color);
+    Light* al = create_light(&desc);
     if (!al)
         return;
-
-    light_set_name(al, "area_light");
-    light_set_type(al, LIGHT_AREA);
-    light_set_original_position(al, (float*)args->area_light_pos);
-    light_set_direction(al, (float*)args->area_light_dir);
-    light_set_size(al, args->area_light_size[0], args->area_light_size[1]);
-    light_set_intensity(al, args->area_light_intensity);
-    light_set_color(al, (float*)args->area_light_color);
     scene_add_light(scene, al);
 
     SceneNode* al_node = create_node();
@@ -2490,18 +2490,8 @@ static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
 
     for (int gi = 0; gi < n; gi++) {
         for (int gj = 0; gj < n; gj++) {
-            Light* pl = create_light();
-            if (!pl)
-                continue;
-
             char plname[32];
             snprintf(plname, sizeof(plname), "grid_%d_%d", gi, gj);
-            light_set_name(pl, plname);
-            light_set_type(pl, LIGHT_POINT);
-
-            vec3 pos = {((float)gi - (float)(n - 1) * 0.5f) * radius, 0.25f * radius,
-                        ((float)gj - (float)(n - 1) * 0.5f) * radius};
-            light_set_original_position(pl, pos);
 
             // HSV(hue, 0.8, 1.0) -> RGB, hue swept across the grid so each
             // light's reach is visually distinguishable from its neighbours
@@ -2529,9 +2519,18 @@ static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
                     c[0] = 1.0f, c[1] = lo, c[2] = down;
                     break;
             }
-            light_set_color(pl, c);
-            light_set_intensity(pl, intensity);
-            light_set_range(pl, radius);
+
+            LightDesc desc = {.name = plname,
+                              .type = LIGHT_POINT,
+                              .position = {((float)gi - (float)(n - 1) * 0.5f) * radius,
+                                           0.25f * radius,
+                                           ((float)gj - (float)(n - 1) * 0.5f) * radius},
+                              .intensity = intensity,
+                              .range = radius};
+            glm_vec3_copy(c, desc.color);
+            Light* pl = create_light(&desc);
+            if (!pl)
+                continue;
             scene_add_light(scene, pl);
 
             SceneNode* pl_node = create_node();
@@ -2729,8 +2728,8 @@ int main(int argc, char** argv) {
     // what it means depends on whether a post.camera arrived -- a linear
     // multiplier, which must be positive, or an EV bias, where negative is
     // stopping down. Checked here rather than at the exposure block below, which
-    // runs after create_engine and engine_init: failing there opens a window and
-    // builds a GL context before returning, and returns without freeing either.
+    // runs after create_engine: failing there opens a window and builds a GL
+    // context before returning, and returns without freeing either.
     if (cscene_setup(&args, &cscn) != 0) {
         return -1;
     }
@@ -2752,15 +2751,68 @@ int main(int argc, char** argv) {
         // frame cap here -- an explicit -f still wins as an upper bound.
         args.headless = 1;
     }
-    // Before engine_init and before any texture loads: the publish path is a
+    // Before the engine and before any texture loads: the publish path is a
     // fetch site (spec 11.99).
     cook_init(args.cook_dir, !args.no_cook);
 
-    Engine* engine = create_engine("Cetra Engine", args.width, args.height);
+    // The schedule itself is applied from render_frame_update; only the
+    // cross-flag precondition is checked here, because --headless, --taa and
+    // --headless-jitter can appear in any argv order and so cannot be
+    // evaluated while parsing.
+    if (args.scale_at_count > 0 && args.headless && (!args.force_taa || !args.headless_jitter)) {
+        fprintf(stderr, "--render-scale-at needs --taa --headless-jitter under --headless; "
+                        "the schedule would be refused\n");
+        return -1;
+    }
 
-    engine_set_headless(engine, args.headless != 0);
-    // Before engine_init, which is where the profiler is built.
-    engine_set_profiler(engine, args.profiler_enabled != 0);
+    EngineConfig cfg = {.title = "Cetra Engine",
+                        .width = args.width,
+                        .height = args.height,
+                        .headless = args.headless != 0,
+                        .headless_jitter = args.headless_jitter != 0,
+                        .profiler = args.profiler_enabled != 0,
+                        .ss_scale = args.ssaa};
+    if (args.render_scale != 0.0f) {
+        // TAAU is a temporal reconstruction: it needs the resolve running and
+        // the jitter live. Windowed runs force TAA on below; headless must opt
+        // into both, else the scaled frame would never be rebuilt to full res.
+        if (args.render_scale >= 1.0f) {
+            // Not silently: a typo'd 1.5 would otherwise render full res and
+            // look like the flag did nothing.
+            fprintf(stderr, "--render-scale %.2f is not below 1; rendering at full resolution\n",
+                    args.render_scale);
+        } else if (args.headless && (!args.force_taa || !args.headless_jitter)) {
+            fprintf(stderr, "--render-scale needs --taa --headless-jitter under --headless; "
+                            "rendering at full resolution\n");
+        } else {
+            cfg.render_scale = args.render_scale;
+        }
+    }
+
+    // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
+    // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
+    // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
+    // deterministic (jitter + history accumulation would vary run to run).
+    // --taa additionally exercises the temporal passes (TAA/AO/GI
+    // accumulation) headless as a diagnostic: jitter + history make output
+    // run-to-run sensitive to async load timing, so it is not for
+    // byte-compared screenshots.
+    const bool taa_policy = !args.headless || args.force_taa;
+    cfg.taa = taa_policy;
+    if (taa_policy)
+        cfg.msaa_samples = 1;
+    // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
+    // else can vary the sample count independently of TAA, and pricing a sample
+    // (spec 11.34) needs exactly that.
+    if (args.msaa > 0)
+        cfg.msaa_samples = args.msaa;
+
+    Engine* engine = create_engine(&cfg);
+    if (!engine) {
+        fprintf(stderr, "Failed to initialize engine\n");
+        return -1;
+    }
+
     if (args.no_instancing)
         engine->instancing_enabled = false;
     if (args.no_frustum_cull)
@@ -2775,73 +2827,12 @@ int main(int argc, char** argv) {
         engine->lod_enabled = false;
     if (args.lod_bias > 0.0f)
         engine->lod_bias = args.lod_bias;
-    engine->headless_jitter = args.headless_jitter != 0;
     if (args.no_alpha_jitter)
         engine->alpha_jitter_enabled = false;
     engine_set_screenshot_path(engine, args.screenshot_path);
     engine_set_screenshot_every(engine, args.screenshot_every);
-    if (args.ssaa > 0)
-        engine_set_ss_scale(engine, args.ssaa);
-    if (args.render_scale != 0.0f) {
-        // TAAU is a temporal reconstruction: it needs the resolve running and
-        // the jitter live. Windowed runs force TAA on below; headless must opt
-        // into both, else the scaled frame would never be rebuilt to full res.
-        if (args.render_scale >= 1.0f) {
-            // Not silently: a typo'd 1.5 would otherwise render full res and
-            // look like the flag did nothing.
-            fprintf(stderr, "--render-scale %.2f is not below 1; rendering at full resolution\n",
-                    args.render_scale);
-        } else if (args.headless && (!args.force_taa || !args.headless_jitter)) {
-            fprintf(stderr, "--render-scale needs --taa --headless-jitter under --headless; "
-                            "rendering at full resolution\n");
-        } else {
-            engine_set_render_scale(engine, args.render_scale);
-        }
-    }
-    // The schedule itself is applied from render_frame_update; only the
-    // cross-flag precondition is checked here, because --headless, --taa and
-    // --headless-jitter can appear in any argv order and so cannot be
-    // evaluated while parsing.
-    if (args.scale_at_count > 0 && args.headless && (!args.force_taa || !args.headless_jitter)) {
-        fprintf(stderr, "--render-scale-at needs --taa --headless-jitter under --headless; "
-                        "the schedule would be refused\n");
-        return -1;
-    }
     engine_set_exit_after_frames(engine, args.max_frames);
     check_stretch = args.check_stretch;
-
-    // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
-    // it) — much cheaper than 4x MSAA on this GPU and better on shading/specular
-    // aliasing. Headless keeps 4x MSAA with TAA off so screenshots stay
-    // deterministic (jitter + history accumulation would vary run to run).
-    // --taa additionally exercises the temporal passes (TAA/AO/GI
-    // accumulation) headless as a diagnostic: jitter + history make output
-    // run-to-run sensitive to async load timing, so it is not for
-    // byte-compared screenshots.
-    //
-    // THE TWO HALVES STRADDLE engine_init AND CANNOT BE JOINED. The count has
-    // to precede it, which builds the scene target -- set afterwards it
-    // allocates all six G-buffer attachments plus depth at 4x and immediately
-    // destroys them to rebuild at 1x. The TAA switch has to follow it, which is
-    // where postfx is built, and engine_set_taa is a SILENT no-op
-    // before that: the app renders its interactive session with no temporal
-    // filter and nothing says so.
-    const bool taa_policy = !args.headless || args.force_taa;
-    if (taa_policy)
-        engine_set_msaa_samples(engine, 1);
-    // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
-    // else can vary the sample count independently of TAA, and pricing a sample
-    // (spec 11.34) needs exactly that.
-    if (args.msaa > 0)
-        engine_set_msaa_samples(engine, args.msaa);
-
-    if (engine_init(engine) != 0) {
-        fprintf(stderr, "Failed to initialize engine\n");
-        return -1;
-    }
-    // The second half of the AA policy above, here because postfx exists now.
-    if (taa_policy)
-        engine_set_taa(engine, true);
 
     {
         Exposure* ex = &engine->exposure;
@@ -3166,19 +3157,13 @@ int main(int argc, char** argv) {
     /*
      * Set up camera.
      */
-    vec3 camera_position = {0.0f, 150.0f, 100.0f};
-    vec3 look_at_point = {0.0f, 150.0f, 0.0f};
-    vec3 up_vector = {0.0f, 1.0f, 0.0f};
     float fov_radians = glm_rad(args.fov_deg > 0.0f ? args.fov_deg : 50.0f);
-    float near_clip = 7.0f;
-    float far_clip = 10000.0f;
-
-    Camera* camera = create_camera();
-
-    camera_set_position(camera, camera_position);
-    camera_set_look_at(camera, look_at_point);
-    camera_set_up(camera, up_vector);
-    camera_set_perspective(camera, fov_radians, near_clip, far_clip);
+    CameraDesc camera_desc = {.position = {0.0f, 150.0f, 100.0f},
+                              .look_at = {0.0f, 150.0f, 0.0f},
+                              .fov = fov_radians,
+                              .near = 7.0f,
+                              .far = 10000.0f};
+    Camera* camera = create_camera(&camera_desc);
 
     engine_update_view(engine);
     engine_update_projection(engine);
@@ -3362,10 +3347,9 @@ int main(int argc, char** argv) {
             // one path. --no-key-light leaves a pure-IBL sky. The IBL lobe
             // toward the sun is set inside sky_bake.
             if (!args.no_key_light) {
-                Light* sun = create_light();
+                Light* sun =
+                    create_light(&(LightDesc){.name = "sky_sun", .type = LIGHT_DIRECTIONAL});
                 if (sun) {
-                    light_set_name(sun, "sky_sun");
-                    light_set_type(sun, LIGHT_DIRECTIONAL);
                     sky->sun_light = sun;
                     sky->sun_base_intensity = KEY_LIGHT_TOTAL_INTENSITY;
                     sky_apply_sun_to_light(sky);
@@ -3393,10 +3377,9 @@ int main(int argc, char** argv) {
                  * Inside the --no-key-light guard because that flag means "no
                  * analytic lights", and the moon is one.
                  */
-                Light* moon = create_light();
+                Light* moon =
+                    create_light(&(LightDesc){.name = "sky_moon", .type = LIGHT_DIRECTIONAL});
                 if (moon) {
-                    light_set_name(moon, "sky_moon");
-                    light_set_type(moon, LIGHT_DIRECTIONAL);
                     sky->moon_light = moon;
                     sky_update_moon(sky);
                     scene_add_light(scene, moon);
@@ -3494,29 +3477,25 @@ int main(int argc, char** argv) {
         } else if (!args.no_key_light) {
             int lobes = (scene->ibl && scene->ibl->light_count > 0) ? scene->ibl->light_count : 1;
             for (int i = 0; i < lobes; i++) {
-                Light* key = create_light();
-                if (!key)
-                    continue;
-
                 char light_name[32];
                 snprintf(light_name, sizeof(light_name), "key_light_%d", i);
-                light_set_name(key, light_name);
-                light_set_type(key, LIGHT_DIRECTIONAL);
 
-                vec3 key_dir = {-0.4f, -0.7f, -0.6f}; // Fallback if no lobes
-                float intensity = KEY_LIGHT_TOTAL_INTENSITY;
+                LightDesc desc = {.name = light_name,
+                                  .type = LIGHT_DIRECTIONAL,
+                                  .direction = {-0.4f, -0.7f, -0.6f}, // Fallback if no lobes
+                                  .intensity = KEY_LIGHT_TOTAL_INTENSITY,
+                                  .cast_shadows = true};
                 if (scene->ibl && scene->ibl->light_count > 0) {
-                    glm_vec3_negate_to(scene->ibl->light_dirs[i], key_dir);
+                    glm_vec3_negate_to(scene->ibl->light_dirs[i], desc.direction);
                     // Blend the HDR energy split toward an even split so weak
                     // fill lobes still light their side (photographic fill
                     // ratio) instead of leaving it to the rim light alone
                     float share = 0.5f * scene->ibl->light_energies[i] + 0.5f / (float)lobes;
-                    intensity = share * KEY_LIGHT_TOTAL_INTENSITY;
+                    desc.intensity = share * KEY_LIGHT_TOTAL_INTENSITY;
                 }
-                light_set_direction(key, key_dir);
-                light_set_intensity(key, intensity);
-                light_set_color(key, (vec3){1.0f, 1.0f, 1.0f});
-                light_set_cast_shadows(key, true);
+                Light* key = create_light(&desc);
+                if (!key)
+                    continue;
                 scene_add_light(scene, key);
 
                 SceneNode* key_node = create_node();
@@ -3750,7 +3729,8 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < scene->light_count; i++) {
             Light* light = scene->lights[i];
             if (light && light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
-                light_set_size(light, light_size, light_size);
+                light->size[0] = light_size;
+                light->size[1] = light_size;
             }
         }
 
@@ -3846,14 +3826,14 @@ int main(int argc, char** argv) {
     // models). near is the dominant precision term, so lift it off zero.
     float auto_near = fmaxf(scene_radius * 0.05f, 0.05f);
     float auto_far = scene_radius * 40.0f;
-    camera_set_perspective(camera, fov_radians, auto_near, auto_far);
-    // AFTER the auto-framing, which is the whole reason this is not up beside
-    // the other camera setup: camera_set_perspective clears is_orthographic, so
-    // an earlier request is silently undone here and --ortho renders a
-    // perspective frame with no warning. The auto-framed near/far are the ones
-    // to keep -- only the projection shape changes.
-    if (args.ortho_height > 0.0f)
-        camera_set_orthographic(camera, args.ortho_height, auto_near, auto_far);
+    camera->near_clip = auto_near;
+    camera->far_clip = auto_far;
+    // The projection shape is decided here, after the auto-framing, rather than
+    // up beside the other camera setup: the auto-framed near/far are the ones
+    // to keep, and --ortho only changes the shape.
+    camera->is_orthographic = args.ortho_height > 0.0f;
+    if (camera->is_orthographic)
+        camera->ortho_height = args.ortho_height;
     engine_update_projection(engine);
     printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
 
@@ -3944,7 +3924,7 @@ int main(int argc, char** argv) {
         vec3 up = {0.0f, 1.0f, 0.0f};
         if (args.cam_up_set)
             glm_vec3_copy(args.cam_up, up);
-        camera_set_up(camera, up);
+        glm_vec3_copy(up, camera->up_vector);
         apply_explicit_pose(engine, args.cam_eye, args.cam_target);
     } else if (args.cam_eye_set || args.cam_target_set) {
         fprintf(stderr,

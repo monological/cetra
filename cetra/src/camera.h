@@ -34,30 +34,46 @@ typedef struct Camera {
     float amplitude;
 } Camera;
 
-Camera* create_camera();
+// What a camera is created from. Fill the fields you mean with designated
+// initialisers and leave the rest zero: zero is the default, named beside each
+// field. A vec3 left zero is the default too, which is why look_at defaults to
+// the origin and position does not (zero would put the eye at its target).
+//
+// ortho_height above zero makes the camera orthographic over a view volume that
+// tall (width follows the aspect); fov is then unused but kept for a switch
+// back. A 2D view needs ortho: under perspective, any camera rotation shears
+// flat geometry. Scope: the projection, ray picking, the post stack, clustered
+// light culling, LOD, occlusion culling, the cascade fit and the PBR view
+// vector all honour it (spec 11.104). What still assumes a perspective
+// frustum: the skybox cube and sky background, the ocean's projected grid, the
+// cloud march, the depth-sort key and the gizmo's world-per-pixel.
+typedef struct CameraDesc {
+    const char* name;   // copied; NULL = unnamed
+    vec3 position;      // 0 = (0, 2, 5)
+    vec3 look_at;       // the origin
+    vec3 up;            // 0 = +Y
+    float fov;          // radians; 0 = 60 degrees
+    float near;         // 0 = 0.1
+    float far;          // 0 = 1000
+    float ortho_height; // 0 = perspective
+    float max_distance; // orbit distance cap; 0 = unlimited
+    float zoom_speed;   // 0 = 0.005
+    float orbit_speed;  // 0 = 0.001
+} CameraDesc;
+
+// NULL means every default. The orbit parameters (distance, theta, phi) are
+// derived from the pose at creation and kept in step by the two setters below.
+Camera* create_camera(const CameraDesc* desc);
 void free_camera(Camera* camera);
 
-void camera_set_name(Camera* camera, const char* name);
+// The pose. Functions rather than fields because the orbit parameters follow
+// from them; everything else on a Camera is a plain field (see the struct).
 void camera_set_position(Camera* camera, vec3 position);
 void camera_set_look_at(Camera* camera, vec3 look_at);
-void camera_set_direction(Camera* camera, vec3 direction);
-void camera_set_up(Camera* camera, vec3 up_vector);
-void camera_set_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip);
 
-// Project orthographically over a view volume ortho_height tall (width follows aspect_ratio).
-// A 2D view needs this: under perspective, any camera rotation shears flat geometry.
-//
-// Scope: the projection matrix, ray picking, the post-processing stack (GTAO, SSR, DoF,
-// fog, SSS), clustered light culling, LOD selection, occlusion culling, the cascade fit and
-// the PBR view vector all honour this (spec 11.104). What still assumes a perspective
-// frustum: the skybox cube and sky background, the ocean's projected grid, the cloud march,
-// the depth-sort key and the gizmo's world-per-pixel. fov_radians is left in place for the
-// switch back to perspective.
-void camera_set_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip);
-
-// The view volume's height when the camera is orthographic, else 0. The perspective
-// setter leaves ortho_height in place for the switch back, so "0 unless orthographic"
-// is read through this rather than off the field.
+// The view volume's height when the camera is orthographic, else 0. A camera switched
+// back to perspective keeps its ortho_height for the switch back, so "0 unless
+// orthographic" is read through this rather than off the field.
 static inline float camera_ortho_height(const Camera* camera) {
     return camera->is_orthographic ? camera->ortho_height : 0.0f;
 }

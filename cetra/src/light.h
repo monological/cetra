@@ -113,18 +113,38 @@ typedef struct Light {
     unsigned emissive_source_id;
 } Light;
 
-Light* create_light();
-void light_set_name(Light* light, const char* name);
-void light_set_type(Light* light, LightType type);
-void light_set_specular(Light* light, vec3 specular);
-void light_set_ambient(Light* light, vec3 ambient);
-void light_set_original_position(Light* light, vec3 original_position);
-void light_set_global_position(Light* light, vec3 global_position);
+// What a light is created from. Fill the fields you mean with designated
+// initialisers and leave the rest zero: zero is the default, named beside each
+// field. A zero vec3 is the default too, so a colour left out is white, not
+// black, and a direction left out points down.
+//
+// intensity is read in `units`, so a lumen figure converts to candela at
+// creation the way light_set_intensity_units does; LIGHT_UNITS_DEFAULT (zero)
+// takes the number as the type's own unit.
+typedef struct LightDesc {
+    const char* name;   // copied; NULL = unnamed
+    LightType type;     // zero is LIGHT_DIRECTIONAL
+    vec3 position;      // the authored position; the origin
+    vec3 direction;     // the authored direction; 0 = straight down
+    vec3 up;            // an area panel's height axis; 0 = +Z
+    vec3 color;         // 0 = white
+    float intensity;    // in `units`; 0 = 1
+    LightUnits units;   // zero = the type's own unit
+    float range;        // where the falloff is windowed to zero; 0 = derived
+    float inner_cutoff; // spot cone half-angles, RADIANS; 0 = 12.5 and 15 degrees
+    float outer_cutoff;
+    float width, height; // area panel extent; 0 = 50 by 50
+    bool cast_shadows;
+} LightDesc;
+
+// NULL means every default: a white directional pointing down.
+Light* create_light(const LightDesc* desc);
+
+// The direction and up axis carry an authored copy and a world copy the node
+// transform rotates, and the intensity a unit, so these three stay functions.
+// Everything else on a Light is a plain field.
 void light_set_direction(Light* light, vec3 direction);
 void light_set_up(Light* light, vec3 up);
-void light_set_color(Light* light, vec3 color);
-void light_set_intensity(Light* light, float intensity);
-void light_set_range(Light* light, float range);
 
 // Cull radius for a light: the authored range if set, else the distance where
 // the light falls under ~1/256 (LDR LSB at the project-standard -E 1.0).
@@ -168,15 +188,12 @@ void orientation_frame(const float dir[3], const float ref[3], vec3 axis, vec3 u
 // construction to an asymmetric profile's azimuth zero.
 void light_emission_frame(const struct Light* light, vec3 axis, vec3 up);
 
-void light_set_cutoff(Light* light, float cutOff, float outerCutOff);
-void light_set_cast_shadows(Light* light, bool cast_shadows);
-void light_set_size(Light* light, float width, float height);
 void free_light(Light* light);
 void light_print(const Light* light);
 
 // Set an intensity authored in `units`, converting to the canonical unit. The
 // conversion reads ONLY the unit -- lumens is Phi/4pi whatever the light is --
-// so this may be called before or after light_set_type with the same result.
+// so it does not depend on the light's type being settled first.
 void light_set_intensity_units(Light* light, float intensity, LightUnits units);
 
 // `light->intensity` expressed back in the light's display unit -- the inverse

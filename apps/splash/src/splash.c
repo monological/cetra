@@ -21,15 +21,10 @@ int main(int argc, const char* argv[]) {
     const char* font_path = "apps/splash/assets/Silkscreen-Regular.ttf";
 
     // Create engine
-    Engine* engine = create_engine("CETRA", 1280, 720);
+    EngineConfig cfg = {.title = "CETRA", .width = 1280, .height = 720};
+    Engine* engine = create_engine(&cfg);
     if (!engine) {
         fprintf(stderr, "Failed to create engine\n");
-        return -1;
-    }
-
-    if (engine_init(engine) != 0) {
-        fprintf(stderr, "Failed to initialize engine\n");
-        free_engine(engine);
         return -1;
     }
 

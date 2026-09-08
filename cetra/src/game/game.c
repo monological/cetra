@@ -9,12 +9,9 @@
 #include <string.h>
 
 GameConfig game_default_config(void) {
-    GameConfig config = {.title = "Game",
-                         .width = 1280,
-                         .height = 720,
+    GameConfig config = {.engine = {.title = "Game"},
                          .fixed_timestep = ENGINE_FIXED_FRAME_DT,
-                         .max_frame_time = 0.25,
-                         .vsync = true};
+                         .max_frame_time = 0.25};
     return config;
 }
 
@@ -28,50 +25,22 @@ Game* create_game(const GameConfig* config) {
         return NULL;
     }
 
-    // Create engine
-    game->engine = create_engine(config->title, config->width, config->height);
+    // Before the engine, and so before on_init, whose bakes are the fetch sites.
+    cook_init(config->cook_dir, !config->no_cook);
+
+    game->engine = create_engine(&config->engine);
     if (!game->engine) {
         free(game);
         return NULL;
     }
 
-    // Headless must be set before engine_init (read during GLFW window setup)
-    engine_set_headless(game->engine, config->headless);
-    // Same reason: engine_init is where the profiler is built.
-    engine_set_profiler(game->engine, config->profiler);
-    // And again: engine_init builds the scene target, so a count applied after
-    // it allocates the whole G-buffer twice.
-    if (config->msaa_samples > 0)
-        engine_set_msaa_samples(game->engine, config->msaa_samples);
-    // And before on_init, whose bakes are the fetch sites.
-    cook_init(config->cook_dir, !config->no_cook);
-
-    // Initialize engine
-    if (engine_init(game->engine) != 0) {
-        free_engine(game->engine);
-        free(game);
-        return NULL;
-    }
-
-    // Set vsync (always off in headless so frame-count runs don't block on refresh)
-    glfwSwapInterval((config->vsync && !config->headless) ? 1 : 0);
-
-    // The engine now owns the frame loop, so route the game's CI/headless + GUI
-    // config onto it (screenshot capture, frame-limit exit, debug panel).
-    engine_set_screenshot_path(game->engine, config->screenshot_path);
-    engine_set_screenshot_every(game->engine, config->screenshot_every);
-    engine_set_exit_after_frames(game->engine, config->exit_after_frames);
-    engine_set_show_gui(game->engine, config->show_debug_gui);
-    if (config->taa_enabled)
-        engine_set_taa(game->engine, true);
-    game->engine->headless_jitter = config->headless_jitter;
-
     // Initialize input
     input_init(&game->input, game->engine->window);
 
     // Timing (fixed-timestep sim; accumulator/time are calloc-zeroed)
-    game->fixed_timestep = config->fixed_timestep;
-    game->max_frame_time = config->max_frame_time;
+    game->fixed_timestep =
+        config->fixed_timestep > 0.0 ? config->fixed_timestep : ENGINE_FIXED_FRAME_DT;
+    game->max_frame_time = config->max_frame_time > 0.0 ? config->max_frame_time : 0.25;
     game->paused = false;
 
     return game;

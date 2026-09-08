@@ -160,19 +160,16 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
  */
 int main() {
 
-    Engine* engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
-
-    // NO AA POLICY HERE, DELIBERATELY, and this is where one would go -- the
-    // sample count has to precede engine_init, which builds the scene target.
-    // This app keeps the engine's 4x MSAA and no temporal filter where the 3D
-    // apps drop to one sample plus TAA (spec 11.103). Multisampling is what 2D
-    // line art wants, and nothing in this scene moves, so a temporal
-    // accumulator would have only its own jitter to integrate while switching
-    // on the aux G-buffer, the resolve, and the eight passes keyed off
-    // taa_resolving. The camera here is ORTHOGRAPHIC, which is a second
-    // reason to leave the post chain alone: the engine's depth reconstruction
-    // and view vector are perspective-only.
-    if (engine_init(engine) != 0) {
+    // NO AA POLICY HERE, DELIBERATELY: the config's msaa_samples and taa are
+    // left at their defaults. This app keeps the engine's 4x MSAA and no
+    // temporal filter where the 3D apps drop to one sample plus TAA (spec
+    // 11.103). Multisampling is what 2D line art wants, and nothing in this
+    // scene moves, so a temporal accumulator would have only its own jitter to
+    // integrate while switching on the aux G-buffer, the resolve, and the
+    // eight passes keyed off taa_resolving.
+    EngineConfig cfg = {.title = "Cetra Engine", .width = WIDTH, .height = HEIGHT};
+    Engine* engine = create_engine(&cfg);
+    if (!engine) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
     }
@@ -225,19 +222,11 @@ int main() {
      * Set up camera.
      */
     // Square-on to the z=0 shape plane, so panning along world XY stays in that plane
-    vec3 camera_position = {0.0f, 0.0f, 300.0f};
-    vec3 look_at_point = {0.0f, 0.0f, 0.0f};
-    vec3 up_vector = {0.0f, 1.0f, 0.0f};
-    float near_clip = 7.0f;
-    float far_clip = 10000.0f;
-
-    Camera* camera = create_camera();
-
-    camera_set_position(camera, camera_position);
-    camera_set_look_at(camera, look_at_point);
-    camera_set_up(camera, up_vector);
-    camera_set_orthographic(camera, ORTHO_HEIGHT, near_clip, far_clip);
-
+    CameraDesc camera_desc = {.position = {0.0f, 0.0f, 300.0f},
+                              .ortho_height = ORTHO_HEIGHT,
+                              .near = 7.0f,
+                              .far = 10000.0f};
+    Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
 
     engine_update_view(engine);

@@ -169,13 +169,13 @@ static void on_init(Game* game) {
     add_box(root, (vec3){12, 5, 0}, (vec3){0.5f, 10, 24}, wall_albedo);  // right
 
     // One warm directional key spilling in from front-top, casting shadows.
-    Light* key = create_light();
-    light_set_name(key, "key");
-    light_set_type(key, LIGHT_DIRECTIONAL);
-    light_set_direction(key, (vec3){-0.25f, -0.75f, -0.6f});
-    light_set_color(key, (vec3){1.0f, 0.86f, 0.62f});
-    light_set_intensity(key, 3.0f);
-    light_set_cast_shadows(key, true);
+    LightDesc key_desc = {.name = "key",
+                          .type = LIGHT_DIRECTIONAL,
+                          .direction = {-0.25f, -0.75f, -0.6f},
+                          .color = {1.0f, 0.86f, 0.62f},
+                          .intensity = 3.0f,
+                          .cast_shadows = true};
+    Light* key = create_light(&key_desc);
     scene_add_light(scene, key);
     SceneNode* key_node = create_node();
     node_set_name(key_node, "key_light");
@@ -185,17 +185,19 @@ static void on_init(Game* game) {
     // A flashlight: a crisp white spot cone from the left of the camera aimed at
     // the scene center, raking across the room. Spot lights now shade their cone
     // (pbr_frag spotConeFactor); the tight inner->outer band gives a sharp edge.
-    Light* flash = create_light();
-    light_set_name(flash, "flashlight");
-    light_set_type(flash, LIGHT_SPOT);
-    light_set_original_position(flash, (vec3){-14.0f, 7.0f, 19.0f}); // left of the camera
-    light_set_direction(flash, (vec3){14.0f, -7.0f, -21.0f}); // toward the scene center (floor)
-    light_set_color(flash, (vec3){1.0f, 0.97f, 0.90f});
-    light_set_intensity(flash, 20000.0f); // candela, a torch-scale hot spot
-    light_set_range(flash, 40.0f);        // carries across the ~24u room and dies past it
-    light_set_cutoff(flash, cosf(glm_rad(18.0f)), cosf(glm_rad(20.0f))); // sharp 18->20 deg edge
-    light_set_cast_shadows(flash,
-                           true); // renders the perspective spot shadow map (occludes the beam)
+    LightDesc flash_desc = {
+        .name = "flashlight",
+        .type = LIGHT_SPOT,
+        .position = {-14.0f, 7.0f, 19.0f},   // left of the camera
+        .direction = {14.0f, -7.0f, -21.0f}, // toward the scene center (floor)
+        .color = {1.0f, 0.97f, 0.90f},
+        .intensity = 20000.0f,          // candela, a torch-scale hot spot
+        .range = 40.0f,                 // carries across the ~24u room and dies past it
+        .inner_cutoff = glm_rad(18.0f), // sharp 18->20 deg edge
+        .outer_cutoff = glm_rad(20.0f),
+        .cast_shadows = true, // renders the perspective spot shadow map (occludes the beam)
+    };
+    Light* flash = create_light(&flash_desc);
     scene_add_light(scene, flash);
     SceneNode* flash_node = create_node();
     node_set_name(flash_node, "flashlight");
@@ -212,11 +214,12 @@ static void on_init(Game* game) {
     }
 
     // Orbit camera looking into the room.
-    Camera* cam = create_camera();
-    camera_set_position(cam, (vec3){0.0f, 6.0f, 22.0f});
-    camera_set_look_at(cam, (vec3){0.0f, 4.0f, 0.0f});
-    camera_set_up(cam, (vec3){0.0f, 1.0f, 0.0f});
-    camera_set_perspective(cam, 0.9f, 0.1f, 200.0f);
+    CameraDesc cam_desc = {.position = {0.0f, 6.0f, 22.0f},
+                           .look_at = {0.0f, 4.0f, 0.0f},
+                           .fov = 0.9f,
+                           .near = 0.1f,
+                           .far = 200.0f};
+    Camera* cam = create_camera(&cam_desc);
     engine_set_camera(engine, cam);
     engine_set_camera_mode(engine, CAMERA_MODE_ORBIT);
     cam->distance = 24.0f;
@@ -364,24 +367,27 @@ static void key_callback(Engine* engine, int key, int scancode, int action, int 
 
 int main(int argc, char** argv) {
     GameConfig config = game_default_config();
-    config.title = "Cetra Spores";
-    config.width = 1280;
-    config.height = 720;
+    config.engine.title = "Cetra Spores";
+    config.engine.width = 1280;
+    config.engine.height = 720;
 
     bool force_taa = false;
     int msaa = 0;
+    int frames = 0;
+    const char* screenshot = NULL;
+    int screenshot_every = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "-x") == 0) {
-            config.headless = true;
+            config.engine.headless = true;
         } else if ((strcmp(argv[i], "--frames") == 0 || strcmp(argv[i], "-f") == 0) &&
                    i + 1 < argc) {
-            config.exit_after_frames = atoi(argv[++i]);
+            frames = atoi(argv[++i]);
         } else if ((strcmp(argv[i], "--screenshot") == 0 || strcmp(argv[i], "-S") == 0) &&
                    i + 1 < argc) {
-            config.screenshot_path = argv[++i];
+            screenshot = argv[++i];
         } else if (strcmp(argv[i], "--screenshot-every") == 0 && i + 1 < argc) {
-            config.screenshot_every = atoi(argv[++i]);
+            screenshot_every = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--transform-probe") == 0 && i + 1 < argc) {
             g_transform_probe = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cpu") == 0) {
@@ -389,7 +395,7 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--taa") == 0) {
             force_taa = true;
         } else if (strcmp(argv[i], "--headless-jitter") == 0) {
-            config.headless_jitter = true;
+            config.engine.headless_jitter = true;
         } else if (strcmp(argv[i], "--msaa") == 0 && i + 1 < argc) {
             msaa = atoi(argv[++i]);
         }
@@ -409,16 +415,18 @@ int main(int argc, char** argv) {
     // The flags below are what measured it and stay for the next attempt. --taa
     // is an explicit opt-in with no policy behind it, so a windowed session is
     // unchanged unless it asks.
-    if (force_taa)
-        config.taa_enabled = true;
-    if (msaa > 0)
-        config.msaa_samples = msaa;
+    config.engine.taa = force_taa;
+    config.engine.msaa_samples = msaa;
 
     Game* game = create_game(&config);
     if (!game) {
         fprintf(stderr, "Failed to create game\n");
         return 1;
     }
+    engine_set_exit_after_frames(game->engine, frames);
+    if (screenshot)
+        engine_set_screenshot_path(game->engine, screenshot);
+    engine_set_screenshot_every(game->engine, screenshot_every);
 
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);
     engine_set_key_callback(game->engine, key_callback);

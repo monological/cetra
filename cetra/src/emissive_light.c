@@ -516,7 +516,8 @@ static void _place(Light* light, const SceneNode* node, const EmissivePanelFit* 
     glm_mat4_mulv3(*xf, (float*)fit->center, 1.0f, world_c);
 
     glm_vec3_copy(world_c, light->global_position);
-    light_set_size(light, glm_vec3_norm(world_u), glm_vec3_norm(world_v));
+    light->size[0] = glm_vec3_norm(world_u);
+    light->size[1] = glm_vec3_norm(world_v);
 
     vec3 world_n;
     glm_mat3_mulv((float (*)[3])node->normal_matrix, (float*)fit->normal, world_n);
@@ -581,18 +582,17 @@ static void _walk(Scene* scene, SceneNode* node, bool enabled, uint64_t epoch, i
         panel->seen = scene->emissive_panels->pass;
 
         if (!panel->light) {
-            Light* light = create_light();
+            // Named for the NODE, not the material: a name has to identify one
+            // lamp for light_overrides to address it, and a material is shared by
+            // every mesh that uses it.
+            LightDesc desc = {.name = node->name ? node->name : "emissive", .type = LIGHT_AREA};
+            Light* light = create_light(&desc);
             if (!light) {
                 _panel_drop(scene->emissive_panels, panel);
                 mesh->emissive_derived = false;
                 continue;
             }
-            light_set_type(light, LIGHT_AREA);
             light->emissive_source_id = mesh->id;
-            // Named for the NODE, not the material: a name has to identify one
-            // lamp for light_overrides to address it, and a material is shared by
-            // every mesh that uses it.
-            light_set_name(light, node->name ? node->name : "emissive");
             if (!scene_add_light(scene, light)) {
                 free_light(light);
                 _panel_drop(scene->emissive_panels, panel);

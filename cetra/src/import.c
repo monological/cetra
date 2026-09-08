@@ -1449,7 +1449,7 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
 
     for (unsigned int i = 0; i < scene->mNumLights; i++) {
         const struct aiLight* ai_light = scene->mLights[i];
-        Light* light = create_light();
+        Light* light = create_light(NULL);
         light->name = safe_strdup(ai_light->mName.data);
 
         // ScaleProcess never touches aiLight fields; this node-space offset is
@@ -1505,13 +1505,13 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
             case aiLightSource_AREA:
                 light->type = LIGHT_AREA;
                 // Authored panel extent; without one, a 1 m panel -- NEVER the
-                // 50x50 create_light() default, which LTC turns into a wall of
+                // 50x50 default a light is created with, which LTC turns into a wall of
                 // light (spec 9.2)
                 if (ai_light->mSize.x > 0.0f && ai_light->mSize.y > 0.0f) {
-                    light_set_size(light, ai_light->mSize.x * unit_scale,
-                                   ai_light->mSize.y * unit_scale);
+                    light->size[0] = ai_light->mSize.x * unit_scale;
+                    light->size[1] = ai_light->mSize.y * unit_scale;
                 } else {
-                    light_set_size(light, 1.0f, 1.0f);
+                    light->size[0] = light->size[1] = 1.0f;
                     log_info("Area light '%s' imported without a size; defaulting to 1x1 m",
                              light->name ? light->name : "unnamed");
                 }
@@ -1556,7 +1556,7 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
         float khr_range = 0.0f;
         if (light->type != LIGHT_DIRECTIONAL && scene->mRootNode &&
             find_gltf_light_range(scene->mRootNode, ai_light->mName.data, &khr_range)) {
-            light_set_range(light, khr_range * unit_scale);
+            light->range = khr_range * unit_scale;
         }
 
         // Blender also bakes the light's power into the color (e.g. an 800W
