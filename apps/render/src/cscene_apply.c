@@ -528,7 +528,7 @@ void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn) {
         glm_vec3_copy((float*)v->center, out.center);
         glm_vec3_copy((float*)v->extent, out.half_extent);
         glm_vec3_copy((float*)v->tint, out.tint);
-        if (scene_add_fog_volume(scene, &out) < 0)
+        if (!scene_add_fog_volume(scene, &out))
             break;
         printf("Scene file: fog volume at (%.2f %.2f %.2f) half-extent (%.2f %.2f %.2f) "
                "density %.3f feather %.2f\n",
@@ -554,7 +554,7 @@ void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn) {
         Occluder out;
         glm_vec3_copy((float*)o->box_min, out.box_min);
         glm_vec3_copy((float*)o->box_max, out.box_max);
-        if (scene_add_occluder(scene, &out) < 0)
+        if (!scene_add_occluder(scene, &out))
             continue; // an inverted box is dropped, not a reason to stop the rest
         printf("Scene file: occluder box (%.2f %.2f %.2f)..(%.2f %.2f %.2f)\n",
                (double)out.box_min[0], (double)out.box_min[1], (double)out.box_min[2],
@@ -621,7 +621,7 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
         if (d->has_up)
             glm_vec3_copy((float*)d->up, out.up);
 
-        if (scene_add_decal(scene, &out) < 0)
+        if (!scene_add_decal(scene, &out))
             break;
         printf("Scene file: decal at (%.2f %.2f %.2f) half-extent (%.2f %.2f %.2f) "
                "facing (%.2f %.2f %.2f) image '%s'%s\n",

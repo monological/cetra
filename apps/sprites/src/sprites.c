@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
     // The sketch cleared to black. The engine clears to grey and has no
     // setter, so a black square far behind the globe stands in for it.
     Material* black = create_material();
-    material_set_program(black, engine_get_program(engine, "pbr"));
+    material_set_program(black, engine_get_program(engine, CETRA_PROGRAM_PBR));
     glm_vec3_zero(black->albedo);
     Mesh* backdrop = create_mesh();
     backdrop->material = black;

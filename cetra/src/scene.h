@@ -83,17 +83,17 @@ void free_node(SceneNode* node);
 // build graph. Detaches `child` from any previous parent first, so a node is
 // never in two children arrays -- which would be a double free, each array
 // freeing what it holds.
-int node_add_child(SceneNode* node, SceneNode* child);
+void node_add_child(SceneNode* node, SceneNode* child);
 
-// Detach `child` without freeing it, leaving the caller owning it. Returns -1 if
+// Detach `child` without freeing it, leaving the caller owning it. False if
 // `child` is not a child of `node`.
 //
 // The only way out of the array, so the order of the remaining children stays
 // what the caller built: sibling order is what the draw list walks.
-int node_remove_child(SceneNode* node, SceneNode* child);
+bool node_remove_child(SceneNode* node, SceneNode* child);
 
 // meshes
-int node_add_mesh(SceneNode* node, Mesh* mesh);
+void node_add_mesh(SceneNode* node, Mesh* mesh);
 
 // setters
 void node_set_name(SceneNode* node, const char* name);
@@ -347,12 +347,12 @@ void scene_latch_prev_transforms(Scene* scene);
 
 // camera
 void scene_set_cameras(Scene* scene, Camera** cameras, size_t camera_count);
-int scene_add_camera(Scene* scene, Camera* camera);
+void scene_add_camera(Scene* scene, Camera* camera);
 Camera* scene_find_camera(Scene* scene, const char* name);
 
 // light
 void scene_set_lights(Scene* scene, Light** lights, size_t light_count);
-int scene_add_light(Scene* scene, Light* light);
+bool scene_add_light(Scene* scene, Light* light);
 
 // Unlink and FREE. The Scene owns its lights, so an unlink-only form would leak
 // by default.
@@ -368,7 +368,7 @@ int scene_add_light(Scene* scene, Light* light);
 // the graph to clear it, which would be O(nodes) per removal against a caller
 // this codebase does not have -- the one caller that removes anything, the
 // emissive reconcile, only ever removes lights it created, and those have no node.
-int scene_remove_light(Scene* scene, Light* light);
+bool scene_remove_light(Scene* scene, Light* light);
 
 Light* scene_find_light(Scene* scene, const char* name);
 
@@ -395,14 +395,14 @@ Light* scene_find_light(Scene* scene, const char* name);
 const Light* scene_key_directional(const Scene* scene, const float* surface_normal);
 
 // particle systems (scene-owned; ticked + rendered automatically by the engine)
-int scene_add_particle_system(Scene* scene, struct ParticleSystem* sys);
+void scene_add_particle_system(Scene* scene, struct ParticleSystem* sys);
 // Advance every particle system's sim. Call from a fixed-timestep update (game_run
 // does; an engine_run host may call it too). Rendering is automatic in
 // render_current_scene.
 void scene_update_particle_systems(Scene* scene, float dt, float t);
 
 // material
-int scene_add_material(Scene* scene, Material* material);
+void scene_add_material(Scene* scene, Material* material);
 // Register every material reachable from the graph, if it is marked dirty.
 // Idempotent and free when clean, so the engine calls it every frame.
 void scene_sync_materials(Scene* scene);
@@ -448,13 +448,13 @@ void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, 
  */
 void scene_environment_changed(Scene* scene, struct Engine* engine);
 
-// fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
-int scene_add_fog_volume(Scene* scene, const FogVolume* volume);
+// fog volumes. False when the array is full.
+bool scene_add_fog_volume(Scene* scene, const FogVolume* volume);
 
 // occluders. Same contract. Refuses an inverted box (min >= max on any axis)
 // rather than storing it: a degenerate occluder rasterises nothing, so keeping
 // it would be a silent hole in what the author believes is covered.
-int scene_add_occluder(Scene* scene, const Occluder* occluder);
+bool scene_add_occluder(Scene* scene, const Occluder* occluder);
 
 // decals. Same contract; the caller owns resolving the textures and orienting
 // the frame, so this bounds-checks, copies, and RETAINS the two images.
@@ -466,7 +466,7 @@ int scene_add_occluder(Scene* scene, const Occluder* occluder);
 // texture retains it (material.c's sixteen setters); a decal holding a raw
 // pointer was the one deviation, and a deviation nothing states is
 // indistinguishable from an oversight.
-int scene_add_decal(Scene* scene, const Decal* decal);
+bool scene_add_decal(Scene* scene, const Decal* decal);
 // Release every decal's images and empty the array. The counterpart above, and
 // the only correct way to drop decals -- zeroing decal_count leaks the retains.
 void scene_clear_decals(Scene* scene);
@@ -475,16 +475,15 @@ void scene_clear_decals(Scene* scene);
 void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx);
 
 // skeleton
-int scene_add_skeleton(Scene* scene, Skeleton* skeleton);
+void scene_add_skeleton(Scene* scene, Skeleton* skeleton);
 Skeleton* scene_find_skeleton(Scene* scene, const char* name);
 
 // animation
-int scene_add_animation(Scene* scene, Animation* animation);
+void scene_add_animation(Scene* scene, Animation* animation);
 Animation* scene_find_animation(Scene* scene, const char* name);
 
 // viz
-GLboolean scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program);
-GLboolean scene_set_outlines_program(Scene* scene, ShaderProgram* outlines_shader_program);
+void scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program);
 
 // print
 // One `transform-probe node` line per NAMED node, plus a `total` row: whether

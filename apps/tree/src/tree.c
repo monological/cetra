@@ -1186,12 +1186,12 @@ int main(int argc, char** argv) {
     engine_set_mouse_button_callback(engine, mouse_button_callback);
     engine_set_key_callback(engine, key_callback);
 
-    ShaderProgram* pbr_program = engine_get_program(engine, "pbr");
+    ShaderProgram* pbr_program = engine_get_program(engine, CETRA_PROGRAM_PBR);
     if (!pbr_program) {
         fprintf(stderr, "Failed to get PBR shader\n");
         return -1;
     }
-    ShaderProgram* xyz_program = engine_get_program(engine, "xyz");
+    ShaderProgram* xyz_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
 
     // Camera: low and off-axis so the canopy tops the frame and the low sun
     // rakes its shadows toward the viewer.

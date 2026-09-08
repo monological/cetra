@@ -151,6 +151,17 @@ void setup_program_uniforms(ShaderProgram* program);
 // program links without an InstanceBlock, which is what keeps 11.28's rule that
 // such a program may never carry more than one instance.
 //
+// The names engine_init registers for apps, for engine_get_program. A literal
+// at a call site is a typo waiting; these are the four an app has reason to
+// ask for, plus the particle program an app creates and registers itself.
+// pbr_variant_name builds on the first two, so the cache key and the lookup
+// cannot drift apart.
+#define CETRA_PROGRAM_PBR         "pbr"
+#define CETRA_PROGRAM_PBR_SKINNED "pbr_skinned"
+#define CETRA_PROGRAM_SHAPE       "shape"
+#define CETRA_PROGRAM_XYZ         "xyz"
+#define CETRA_PROGRAM_PARTICLE    "particle"
+
 // Longest "pbr_skinned-<mask>" plus its terminator, with room to spare.
 #define PBR_VARIANT_NAME_MAX 32
 

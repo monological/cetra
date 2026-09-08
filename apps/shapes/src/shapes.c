@@ -186,19 +186,19 @@ int main() {
      * Set up shaders.
      *
      */
-    ShaderProgram* pbr_shader_program = engine_get_program(engine, "pbr");
+    ShaderProgram* pbr_shader_program = engine_get_program(engine, CETRA_PROGRAM_PBR);
     if (!pbr_shader_program) {
         fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
     }
 
-    ShaderProgram* shape_shader_program = engine_get_program(engine, "shape");
+    ShaderProgram* shape_shader_program = engine_get_program(engine, CETRA_PROGRAM_SHAPE);
     if (!shape_shader_program) {
         fprintf(stderr, "Failed to get shape shader program\n");
         return -1;
     }
 
-    ShaderProgram* xyz_shader_program = engine_get_program(engine, "xyz");
+    ShaderProgram* xyz_shader_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
     if (!xyz_shader_program) {
         fprintf(stderr, "Failed to get xyz shader program\n");
         return -1;
@@ -265,10 +265,7 @@ int main() {
     // No light: under the 2D preset a material's albedo is the colour on screen.
     engine_set_2d_preset(engine, scene);
 
-    if (scene_set_xyz_program(scene, xyz_shader_program) == GL_FALSE) {
-        fprintf(stderr, "Failed to set scene xyz shader program\n");
-        return -1;
-    }
+    scene_set_xyz_program(scene, xyz_shader_program);
 
     /*
      * mesh1: Rectangle with no corner radius and no fill

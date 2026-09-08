@@ -292,21 +292,20 @@ void scene_set_lights(Scene* scene, Light** lights, size_t light_count) {
     scene->light_count = light_count;
 }
 
-int scene_add_camera(Scene* scene, Camera* camera) {
+void scene_add_camera(Scene* scene, Camera* camera) {
     if (!scene || !camera)
-        return -1;
+        return;
 
     size_t new_count = scene->camera_count + 1;
     Camera** new_cameras = realloc(scene->cameras, new_count * sizeof(Camera*));
     if (!new_cameras) {
         log_error("Failed to reallocate memory for new camera");
-        return -1;
+        return;
     }
 
     scene->cameras = new_cameras;
     scene->cameras[scene->camera_count] = camera;
     scene->camera_count = new_count;
-    return 0;
 }
 
 Camera* scene_find_camera(Scene* scene, const char* name) {
@@ -325,26 +324,26 @@ Camera* scene_find_camera(Scene* scene, const char* name) {
 /*
  * Lights
  */
-int scene_add_light(Scene* scene, Light* light) {
+bool scene_add_light(Scene* scene, Light* light) {
     if (!scene || !light)
-        return -1;
+        return false;
 
     size_t new_count = scene->light_count + 1;
     Light** new_lights = realloc(scene->lights, new_count * sizeof(Light*));
     if (!new_lights) {
         log_error("Failed to reallocate memory for new light");
-        return -1;
+        return false;
     }
 
     scene->lights = new_lights;
     scene->lights[scene->light_count] = light;
     scene->light_count = new_count;
-    return 0;
+    return true;
 }
 
-int scene_remove_light(Scene* scene, Light* light) {
+bool scene_remove_light(Scene* scene, Light* light) {
     if (!scene || !light)
-        return -1;
+        return false;
 
     for (size_t i = 0; i < scene->light_count; ++i) {
         if (scene->lights[i] != light)
@@ -354,9 +353,9 @@ int scene_remove_light(Scene* scene, Light* light) {
                 (scene->light_count - i - 1) * sizeof(Light*));
         scene->light_count--;
         free_light(light);
-        return 0;
+        return true;
     }
-    return -1;
+    return false;
 }
 
 const Light* scene_key_directional(const Scene* scene, const float* surface_normal) {
@@ -398,22 +397,21 @@ Light* scene_find_light(Scene* scene, const char* name) {
     return NULL;
 }
 
-int scene_add_particle_system(Scene* scene, struct ParticleSystem* sys) {
+void scene_add_particle_system(Scene* scene, struct ParticleSystem* sys) {
     if (!scene || !sys)
-        return -1;
+        return;
 
     size_t new_count = scene->particle_system_count + 1;
     struct ParticleSystem** new_particle_systems =
         realloc(scene->particle_systems, new_count * sizeof(struct ParticleSystem*));
     if (!new_particle_systems) {
         log_error("Failed to reallocate memory for new particle system");
-        return -1;
+        return;
     }
 
     scene->particle_systems = new_particle_systems;
     scene->particle_systems[scene->particle_system_count] = sys;
     scene->particle_system_count = new_count;
-    return 0;
 }
 
 void scene_update_particle_systems(Scene* scene, float dt, float t) {
@@ -423,27 +421,26 @@ void scene_update_particle_systems(Scene* scene, float dt, float t) {
         particle_system_update(scene->particle_systems[i], dt, t);
 }
 
-int scene_add_material(Scene* scene, Material* material) {
+void scene_add_material(Scene* scene, Material* material) {
     if (!scene || !material)
-        return -1;
+        return;
 
     for (size_t i = 0; i < scene->material_count; ++i) {
         if (scene->materials[i] == material)
-            return 0;
+            return; // already registered
     }
 
     size_t new_count = scene->material_count + 1;
     Material** new_materials = realloc(scene->materials, new_count * sizeof(Material*));
     if (!new_materials) {
         log_error("Failed to allocate memory for new material");
-        return -1;
+        return;
     }
 
     scene->materials = new_materials;
     scene->materials[scene->material_count] = material;
     scene->material_count = new_count;
     scene->material_textures_dirty = true; // a new material's textures must be (re)packed
-    return 0;
 }
 
 static void _register_node_materials(Scene* scene, SceneNode* node) {
@@ -588,47 +585,47 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
     glm_vec3_add(scene->world_origin, (float*)delta, scene->world_origin);
 }
 
-int scene_add_fog_volume(Scene* scene, const FogVolume* volume) {
+bool scene_add_fog_volume(Scene* scene, const FogVolume* volume) {
     if (!scene || !volume)
-        return -1;
+        return false;
     if (scene->fog_volume_count >= SCENE_MAX_FOG_VOLUMES) {
         log_warn("scene: more than %d fog volumes; extra ignored", SCENE_MAX_FOG_VOLUMES);
-        return -1;
+        return false;
     }
     scene->fog_volumes[scene->fog_volume_count++] = *volume;
-    return 0;
+    return true;
 }
 
-int scene_add_occluder(Scene* scene, const Occluder* occluder) {
+bool scene_add_occluder(Scene* scene, const Occluder* occluder) {
     if (!scene || !occluder)
-        return -1;
+        return false;
     for (int axis = 0; axis < 3; ++axis) {
         if (occluder->box_min[axis] >= occluder->box_max[axis]) {
             log_warn("scene: occluder box inverted on axis %d (%.3f >= %.3f); dropped", axis,
                      occluder->box_min[axis], occluder->box_max[axis]);
-            return -1;
+            return false;
         }
     }
     if (scene->occluder_count >= SCENE_MAX_OCCLUDERS) {
         log_warn("scene: more than %d occluders; extra ignored", SCENE_MAX_OCCLUDERS);
-        return -1;
+        return false;
     }
     scene->occluders[scene->occluder_count++] = *occluder;
-    return 0;
+    return true;
 }
 
-int scene_add_decal(Scene* scene, const Decal* decal) {
+bool scene_add_decal(Scene* scene, const Decal* decal) {
     if (!scene || !decal)
-        return -1;
+        return false;
     if (scene->decal_count >= DECAL_MAX) {
         log_warn("scene: more than %d decals; extra ignored", DECAL_MAX);
-        return -1;
+        return false;
     }
     Decal* slot = &scene->decals[scene->decal_count++];
     *slot = *decal;
     texture_retain(slot->albedo_tex);
     texture_retain(slot->surface_tex);
-    return 0;
+    return true;
 }
 
 void scene_clear_decals(Scene* scene) {
@@ -709,27 +706,26 @@ void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx) 
     fx->local_fog_count = live;
 }
 
-int scene_add_skeleton(Scene* scene, Skeleton* skeleton) {
+void scene_add_skeleton(Scene* scene, Skeleton* skeleton) {
     if (!scene || !skeleton)
-        return -1;
+        return;
 
     // Check if already added
     for (size_t i = 0; i < scene->skeleton_count; i++) {
         if (scene->skeletons[i] == skeleton)
-            return 0;
+            return; // already added
     }
 
     size_t new_count = scene->skeleton_count + 1;
     Skeleton** new_skeletons = realloc(scene->skeletons, new_count * sizeof(Skeleton*));
     if (!new_skeletons) {
         log_error("Failed to allocate memory for new skeleton");
-        return -1;
+        return;
     }
 
     scene->skeletons = new_skeletons;
     scene->skeletons[scene->skeleton_count] = skeleton;
     scene->skeleton_count = new_count;
-    return 0;
 }
 
 Skeleton* scene_find_skeleton(Scene* scene, const char* name) {
@@ -745,27 +741,26 @@ Skeleton* scene_find_skeleton(Scene* scene, const char* name) {
     return NULL;
 }
 
-int scene_add_animation(Scene* scene, Animation* animation) {
+void scene_add_animation(Scene* scene, Animation* animation) {
     if (!scene || !animation)
-        return -1;
+        return;
 
     // Check if already added
     for (size_t i = 0; i < scene->animation_count; i++) {
         if (scene->animations[i] == animation)
-            return 0;
+            return; // already added
     }
 
     size_t new_count = scene->animation_count + 1;
     Animation** new_animations = realloc(scene->animations, new_count * sizeof(Animation*));
     if (!new_animations) {
         log_error("Failed to allocate memory for new animation");
-        return -1;
+        return;
     }
 
     scene->animations = new_animations;
     scene->animations[scene->animation_count] = animation;
     scene->animation_count = new_count;
-    return 0;
 }
 
 Animation* scene_find_animation(Scene* scene, const char* name) {
@@ -781,13 +776,13 @@ Animation* scene_find_animation(Scene* scene, const char* name) {
     return NULL;
 }
 
-GLboolean scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program) {
+void scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program) {
     if (!scene || !xyz_shader_program) {
-        return GL_FALSE;
+        log_error("scene_set_xyz_program: NULL scene or program");
+        return;
     }
     scene->xyz_shader_program = xyz_shader_program;
     _set_xyz_program_for_nodes(scene->root_node, scene->xyz_shader_program);
-    return GL_TRUE;
 }
 
 /*
@@ -876,10 +871,10 @@ void free_node(SceneNode* node) {
     free_subtree(node);
 }
 
-int node_add_child(SceneNode* node, SceneNode* child) {
+void node_add_child(SceneNode* node, SceneNode* child) {
     scene_graph_touched();
     if (!node || !child)
-        return -1;
+        return;
 
     // Detached from wherever it was, so a node cannot be in two children arrays
     // at once -- which is a double free, since each array frees what it holds.
@@ -893,17 +888,16 @@ int node_add_child(SceneNode* node, SceneNode* child) {
     // already exactly full.
     if (!grow_array((void**)&node->children, &node->children_cap, node->children_count + 1,
                     sizeof(SceneNode*), 4))
-        return -1;
+        return;
 
     node->children[node->children_count] = child;
     child->parent = node;
     node->children_count++;
-    return 0;
 }
 
-int node_remove_child(SceneNode* node, SceneNode* child) {
+bool node_remove_child(SceneNode* node, SceneNode* child) {
     if (!node || !child)
-        return -1;
+        return false;
     for (size_t i = 0; i < node->children_count; i++) {
         if (node->children[i] != child)
             continue;
@@ -916,29 +910,28 @@ int node_remove_child(SceneNode* node, SceneNode* child) {
         node->children_count--;
         child->parent = NULL;
         scene_graph_touched();
-        return 0;
+        return true;
     }
-    return -1;
+    return false;
 }
 
-int node_add_mesh(SceneNode* node, Mesh* mesh) {
+void node_add_mesh(SceneNode* node, Mesh* mesh) {
     // Also covers apps that then write node->mesh_count directly: the epoch has
     // already moved by the time the next build asks.
     scene_graph_touched();
     if (!node || !mesh)
-        return -1;
+        return;
 
     size_t new_count = node->mesh_count + 1;
     Mesh** new_meshes = realloc(node->meshes, new_count * sizeof(Mesh*));
     if (!new_meshes) {
         log_error("Failed to reallocate memory for new mesh");
-        return -1;
+        return;
     }
 
     node->meshes = new_meshes;
     node->meshes[node->mesh_count] = mesh;
     node->mesh_count = new_count;
-    return 0;
 }
 
 void node_set_name(SceneNode* node, const char* name) {

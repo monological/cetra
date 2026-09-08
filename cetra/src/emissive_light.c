@@ -593,7 +593,7 @@ static void _walk(Scene* scene, SceneNode* node, bool enabled, uint64_t epoch, i
             // lamp for light_overrides to address it, and a material is shared by
             // every mesh that uses it.
             light_set_name(light, node->name ? node->name : "emissive");
-            if (scene_add_light(scene, light) != 0) {
+            if (!scene_add_light(scene, light)) {
                 free_light(light);
                 _panel_drop(scene->emissive_panels, panel);
                 mesh->emissive_derived = false;

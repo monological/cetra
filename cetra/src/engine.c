@@ -1267,14 +1267,14 @@ void engine_update_projection(Engine* engine) {
  * Scene
  *
  */
-int engine_add_scene(Engine* engine, Scene* scene) {
+void engine_add_scene(Engine* engine, Scene* scene) {
     if (!engine || !scene)
-        return -1;
+        return;
 
     // check if scene already added to engine and return if so
     for (size_t i = 0; i < engine->scene_count; ++i) {
         if (engine->scenes[i] == scene) {
-            return 0; // already added, success
+            return; // already added
         }
     }
 
@@ -1283,15 +1283,13 @@ int engine_add_scene(Engine* engine, Scene* scene) {
     Scene** new_scenes = realloc(engine->scenes, new_count * sizeof(Scene*));
     if (!new_scenes) {
         log_error("Failed to reallocate memory for new scene");
-        return -1;
+        return;
     }
 
     // Add the new scene to the array and update the scene count
     engine->scenes = new_scenes;
     engine->scenes[engine->scene_count] = scene;
     engine->scene_count = new_count;
-
-    return 0;
 }
 
 void engine_set_scene_by_index(Engine* engine, size_t scene_index) {
@@ -1547,16 +1545,16 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     return 0;
 }
 
-int engine_add_program(Engine* engine, ShaderProgram* program) {
+void engine_add_program(Engine* engine, ShaderProgram* program) {
     if (!engine || !program) {
         log_error("Invalid input to engine_add_program");
-        return -1;
+        return;
     }
 
     // check if program already added to engine and return if so
     for (size_t i = 0; i < engine->program_count; ++i) {
         if (engine->programs[i] == program) {
-            return 0; // already added, success
+            return; // already added
         }
     }
 
@@ -1566,7 +1564,7 @@ int engine_add_program(Engine* engine, ShaderProgram* program) {
 
     if (!new_programs) {
         log_error("Failed to allocate memory for new program");
-        return -1;
+        return;
     }
 
     // Add the new program to the array and update the program count
@@ -1579,19 +1577,25 @@ int engine_add_program(Engine* engine, ShaderProgram* program) {
     if (!existing) {
         HASH_ADD_KEYPTR(hh, engine->program_map, program->name, strlen(program->name), program);
     }
+}
 
-    return 0;
+ShaderProgram* engine_find_program(Engine* engine, const char* program_name) {
+    if (!engine || !program_name)
+        return NULL;
+    ShaderProgram* existing;
+    HASH_FIND_STR(engine->program_map, program_name, existing);
+    return existing;
 }
 
 ShaderProgram* engine_get_program(Engine* engine, const char* program_name) {
     if (!engine || !program_name) {
-        log_error("Invalid input to get_program_from_engine");
+        log_error("engine_get_program: NULL engine or name");
         return NULL;
     }
-
-    ShaderProgram* existing;
-    HASH_FIND_STR(engine->program_map, program_name, existing);
-    return existing;
+    ShaderProgram* program = engine_find_program(engine, program_name);
+    if (!program)
+        log_error("no program '%s' (%zu registered)", program_name, engine->program_count);
+    return program;
 }
 
 ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned features) {
@@ -1601,7 +1605,7 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
     char name[PBR_VARIANT_NAME_MAX];
     pbr_variant_name(family, features, name, sizeof(name));
 
-    ShaderProgram* program = engine_get_program(engine, name);
+    ShaderProgram* program = engine_find_program(engine, name);
     if (program)
         return program;
 

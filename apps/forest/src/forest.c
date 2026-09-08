@@ -2324,7 +2324,7 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
 static void on_init(Game* game) {
     Engine* engine = game->engine;
     double startup_t0 = glfwGetTime();
-    g_pbr = engine_get_program(engine, "pbr");
+    g_pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
 
     g_scene = create_scene();
     g_root = create_node();

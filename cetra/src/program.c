@@ -420,45 +420,45 @@ GLboolean validate_program(ShaderProgram* program) {
 // a unit that was never freed.
 static bool _is_sampler_type(GLenum type) {
     switch (type) {
-    case GL_SAMPLER_1D:
-    case GL_SAMPLER_2D:
-    case GL_SAMPLER_3D:
-    case GL_SAMPLER_CUBE:
-    case GL_SAMPLER_1D_SHADOW:
-    case GL_SAMPLER_2D_SHADOW:
-    case GL_SAMPLER_CUBE_SHADOW:
-    case GL_SAMPLER_1D_ARRAY:
-    case GL_SAMPLER_2D_ARRAY:
-    case GL_SAMPLER_1D_ARRAY_SHADOW:
-    case GL_SAMPLER_2D_ARRAY_SHADOW:
-    case GL_SAMPLER_2D_MULTISAMPLE:
-    case GL_SAMPLER_2D_MULTISAMPLE_ARRAY:
-    case GL_SAMPLER_BUFFER:
-    case GL_SAMPLER_2D_RECT:
-    case GL_SAMPLER_2D_RECT_SHADOW:
-    case GL_INT_SAMPLER_1D:
-    case GL_INT_SAMPLER_2D:
-    case GL_INT_SAMPLER_3D:
-    case GL_INT_SAMPLER_CUBE:
-    case GL_INT_SAMPLER_1D_ARRAY:
-    case GL_INT_SAMPLER_2D_ARRAY:
-    case GL_INT_SAMPLER_2D_MULTISAMPLE:
-    case GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
-    case GL_INT_SAMPLER_BUFFER:
-    case GL_INT_SAMPLER_2D_RECT:
-    case GL_UNSIGNED_INT_SAMPLER_1D:
-    case GL_UNSIGNED_INT_SAMPLER_2D:
-    case GL_UNSIGNED_INT_SAMPLER_3D:
-    case GL_UNSIGNED_INT_SAMPLER_CUBE:
-    case GL_UNSIGNED_INT_SAMPLER_1D_ARRAY:
-    case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
-    case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
-    case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
-    case GL_UNSIGNED_INT_SAMPLER_BUFFER:
-    case GL_UNSIGNED_INT_SAMPLER_2D_RECT:
-        return true;
-    default:
-        return false;
+        case GL_SAMPLER_1D:
+        case GL_SAMPLER_2D:
+        case GL_SAMPLER_3D:
+        case GL_SAMPLER_CUBE:
+        case GL_SAMPLER_1D_SHADOW:
+        case GL_SAMPLER_2D_SHADOW:
+        case GL_SAMPLER_CUBE_SHADOW:
+        case GL_SAMPLER_1D_ARRAY:
+        case GL_SAMPLER_2D_ARRAY:
+        case GL_SAMPLER_1D_ARRAY_SHADOW:
+        case GL_SAMPLER_2D_ARRAY_SHADOW:
+        case GL_SAMPLER_2D_MULTISAMPLE:
+        case GL_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_SAMPLER_BUFFER:
+        case GL_SAMPLER_2D_RECT:
+        case GL_SAMPLER_2D_RECT_SHADOW:
+        case GL_INT_SAMPLER_1D:
+        case GL_INT_SAMPLER_2D:
+        case GL_INT_SAMPLER_3D:
+        case GL_INT_SAMPLER_CUBE:
+        case GL_INT_SAMPLER_1D_ARRAY:
+        case GL_INT_SAMPLER_2D_ARRAY:
+        case GL_INT_SAMPLER_2D_MULTISAMPLE:
+        case GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_INT_SAMPLER_BUFFER:
+        case GL_INT_SAMPLER_2D_RECT:
+        case GL_UNSIGNED_INT_SAMPLER_1D:
+        case GL_UNSIGNED_INT_SAMPLER_2D:
+        case GL_UNSIGNED_INT_SAMPLER_3D:
+        case GL_UNSIGNED_INT_SAMPLER_CUBE:
+        case GL_UNSIGNED_INT_SAMPLER_1D_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
+        case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_BUFFER:
+        case GL_UNSIGNED_INT_SAMPLER_2D_RECT:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -585,7 +585,8 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
 // leak a fresh 2,500-line program every frame, rendering correctly the whole
 // time.
 void pbr_variant_name(PbrFamily family, unsigned features, char* out, size_t n) {
-    const char* prefix = family == PBR_FAMILY_SKINNED ? "pbr_skinned" : "pbr";
+    const char* prefix =
+        family == PBR_FAMILY_SKINNED ? CETRA_PROGRAM_PBR_SKINNED : CETRA_PROGRAM_PBR;
     if (features == PBR_FEAT_ALL)
         snprintf(out, n, "%s", prefix);
     else
@@ -605,7 +606,7 @@ ShaderProgram* create_pbr_program() {
 ShaderProgram* create_particle_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("particle", particle_vert_shader_str,
+    if ((program = create_program_from_source(CETRA_PROGRAM_PARTICLE, particle_vert_shader_str,
                                               particle_frag_shader_str, NULL)) == NULL) {
         log_error("Failed to initialize particle shader program");
         return NULL;
@@ -691,8 +692,9 @@ ShaderProgram* create_pbr_skinned_program() {
 ShaderProgram* create_shape_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("shape", shape_vert_shader_str, shape_frag_shader_str,
-                                              shape_geo_shader_str)) == NULL) {
+    if ((program = create_program_from_source(CETRA_PROGRAM_SHAPE, shape_vert_shader_str,
+                                              shape_frag_shader_str, shape_geo_shader_str)) ==
+        NULL) {
         log_error("Failed to initialize shape shader program");
         return NULL;
     }
@@ -703,8 +705,8 @@ ShaderProgram* create_shape_program() {
 ShaderProgram* create_xyz_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("xyz", xyz_vert_shader_str, xyz_frag_shader_str,
-                                              NULL)) == NULL) {
+    if ((program = create_program_from_source(CETRA_PROGRAM_XYZ, xyz_vert_shader_str,
+                                              xyz_frag_shader_str, NULL)) == NULL) {
         log_error("Failed to initialize xyz shader program");
         return NULL;
     }
@@ -739,8 +741,8 @@ ShaderProgram* create_depth_prepass_program() {
 ShaderProgram* create_water_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("water", water_vert_shader_str,
-                                              water_frag_shader_str, NULL)) == NULL) {
+    if ((program = create_program_from_source("water", water_vert_shader_str, water_frag_shader_str,
+                                              NULL)) == NULL) {
         log_error("Failed to initialize water shader program");
         return NULL;
     }
@@ -914,9 +916,9 @@ ShaderProgram* create_layers_vt_bake_program() {
 ShaderProgram* create_layers_vt_feedback_program() {
     ShaderProgram* program = NULL;
 
-    if ((program = create_program_from_source("layers_vt_feedback",
-                                              layers_vt_feedback_vert_shader_str,
-                                              layers_vt_feedback_frag_shader_str, NULL)) == NULL) {
+    if ((program =
+             create_program_from_source("layers_vt_feedback", layers_vt_feedback_vert_shader_str,
+                                        layers_vt_feedback_frag_shader_str, NULL)) == NULL) {
         log_error("Failed to initialize layers VT feedback shader program");
         return NULL;
     }

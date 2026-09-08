@@ -272,8 +272,8 @@ static void on_init(Game* game) {
     Engine* engine = game->engine;
 
     // Get shaders
-    pbr_shader = engine_get_program(engine, "pbr");
-    ShaderProgram* xyz = engine_get_program(engine, "xyz");
+    pbr_shader = engine_get_program(engine, CETRA_PROGRAM_PBR);
+    ShaderProgram* xyz = engine_get_program(engine, CETRA_PROGRAM_XYZ);
 
     // Create scene
     Scene* scene = create_scene();

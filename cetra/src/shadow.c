@@ -1108,7 +1108,7 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
     }
 
     if (!ss->msm_program)
-        ss->msm_program = engine_get_program(engine, "msm_resolve");
+        ss->msm_program = engine_find_program(engine, "msm_resolve");
     if (!ss->msm_program || !ss->msm_program->uniforms)
         return false;
 
@@ -1270,9 +1270,9 @@ static bool shadow_tsm_prepare(ShadowSystem* ss, Engine* engine) {
         return false;
 
     if (!ss->tsm_absorb_program)
-        ss->tsm_absorb_program = engine_get_program(engine, "shadow_absorb");
+        ss->tsm_absorb_program = engine_find_program(engine, "shadow_absorb");
     if (!ss->tsm_resolve_program)
-        ss->tsm_resolve_program = engine_get_program(engine, "tsm_resolve");
+        ss->tsm_resolve_program = engine_find_program(engine, "tsm_resolve");
     if (!ss->tsm_absorb_program || !ss->tsm_resolve_program)
         return false;
 

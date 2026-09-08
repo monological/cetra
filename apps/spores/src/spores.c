@@ -122,7 +122,7 @@ static SceneNode* add_glass_sphere(SceneNode* root, float radius) {
 
 static void on_init(Game* game) {
     Engine* engine = game->engine;
-    g_pbr = engine_get_program(engine, "pbr");
+    g_pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
 
     // FPS readout pinned top-right (like the render app). Skipped in headless: the
     // digits change per run and would break screenshot determinism.

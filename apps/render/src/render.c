@@ -3143,7 +3143,7 @@ int main(int argc, char** argv) {
      * Set up shaders.
      *
      */
-    ShaderProgram* pbr_shader_program = engine_get_program(engine, "pbr");
+    ShaderProgram* pbr_shader_program = engine_get_program(engine, CETRA_PROGRAM_PBR);
     if (!pbr_shader_program) {
         fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
@@ -3157,7 +3157,7 @@ int main(int argc, char** argv) {
     }
     engine_add_program(engine, pbr_skinned_program);
 
-    ShaderProgram* xyz_shader_program = engine_get_program(engine, "xyz");
+    ShaderProgram* xyz_shader_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
     if (!xyz_shader_program) {
         fprintf(stderr, "Failed to get xyz shader program\n");
         return -1;
@@ -3215,10 +3215,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    if (scene_set_xyz_program(scene, xyz_shader_program) == GL_FALSE) {
-        fprintf(stderr, "Failed to set scene xyz shader program\n");
-        return -1;
-    }
+    scene_set_xyz_program(scene, xyz_shader_program);
 
     configure_visor_materials(scene);
     // Plain PBR overrides first: configure_sss_materials reads a material's

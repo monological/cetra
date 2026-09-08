@@ -525,14 +525,20 @@ void engine_update_view(Engine* engine);
 void engine_update_projection(Engine* engine);
 
 // Scene
-int engine_add_scene(Engine* engine, Scene* scene);
+void engine_add_scene(Engine* engine, Scene* scene);
 void engine_set_scene_by_index(Engine* engine, size_t scene_index);
 void engine_set_scene_by_name(Engine* engine, const char* scene_name);
 Scene* engine_get_scene(const Engine* engine);
 
-// Shader Programs
-int engine_add_program(Engine* engine, ShaderProgram* program);
+// Shader Programs. The engine takes ownership of an added program. The
+// names engine_init registers for apps are the CETRA_PROGRAM_* constants in
+// program.h; a program an app builds is registered under whatever name it
+// was created with.
+void engine_add_program(Engine* engine, ShaderProgram* program);
+// NULL and a log line when no program has that name: the answer to a typo.
 ShaderProgram* engine_get_program(Engine* engine, const char* program_name);
+// NULL and silence: for asking whether an optional program exists.
+ShaderProgram* engine_find_program(Engine* engine, const char* program_name);
 
 // GUI
 void engine_set_show_gui(Engine* engine, bool show_gui);
