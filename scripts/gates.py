@@ -15325,7 +15325,7 @@ def _fbx_light_line(output):
     return None
 
 
-# The print_light format is the assertion surface, so a shifted format must
+# The light_print format is the assertion surface, so a shifted format must
 # report as a named FAIL, not a parser traceback: both extractors return None
 # on any mismatch.
 def _light_field_vec3(line, key):
@@ -15819,7 +15819,7 @@ def _config_run(workdir, name, extra, model=CONFIG_FIXTURE, frames=2):
 # The list is the whole point of config-perturb: it inverts the default from
 # "uncovered unless an arm names it" to "covered unless this names it".
 CONFIG_PERTURB_EXCEPTIONS = {
-    "engine.msaa_samples": "set_engine_msaa_samples validates; 5 is not a sample count",
+    "engine.msaa_samples": "engine_set_msaa_samples validates; 5 is not a sample count",
     "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
     "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
     # This fixture runs without --clouds, so flipping the switch asks for a layer
@@ -16067,7 +16067,7 @@ def run_config_gate(workdir):
 
     THREE KNOWN GAPS, said out loud rather than left to look like coverage.
 
-    Nothing here can see the deferred update_engine_camera_lookat, because the
+    Nothing here can see the deferred engine_update_view, because the
     render app's own frame loop rebuilds the view matrix through mouse_drag_update
     every frame -- deleting the call is 0 px on every arm. It is kept because the
     apply must not assume its caller has a drag controller.

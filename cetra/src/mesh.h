@@ -345,12 +345,12 @@ Mesh* mesh_ref(Mesh* mesh);
 // lets go, so freeing one node of a shared mesh leaves the others intact.
 void free_mesh(Mesh* mesh);
 
-void set_mesh_draw_mode(Mesh* mesh, MeshDrawMode draw_mode);
-void calculate_aabb(Mesh* mesh);
+void mesh_set_draw_mode(Mesh* mesh, MeshDrawMode draw_mode);
+void mesh_compute_aabb(Mesh* mesh);
 
 /*
  * Mesh buffers
  */
-void upload_mesh_buffers_to_gpu(Mesh* mesh);
+void mesh_upload(Mesh* mesh);
 
 #endif // _MESH_H_

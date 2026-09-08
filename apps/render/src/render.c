@@ -109,7 +109,8 @@ static void print_usage(const char* prog) {
                     "HUD tables, and stdout at exit\n");
     fprintf(stderr, "      --cook             Warm the derived-data cache and exit (headless)\n");
     fprintf(stderr, "      --no-cook          Bake everything live; touch no cache\n");
-    fprintf(stderr, "      --cook-dir <p>     Cache directory (default cooked/, or CETRA_COOK_DIR)\n");
+    fprintf(stderr,
+            "      --cook-dir <p>     Cache directory (default cooked/, or CETRA_COOK_DIR)\n");
     fprintf(stderr, "      --no-instancing    One draw per mesh, no batching\n");
     fprintf(stderr, "      --no-frustum-cull  Submit every item, culled or not\n");
     fprintf(stderr, "      --no-occlusion-cull  Occlusion rejection off (spec 11.98)\n");
@@ -303,8 +304,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --import-scale <f> Extra uniform scale on the imported model\n");
     fprintf(stderr,
             "      --no-unit-scale    Skip unit normalization (raw file units; FBX is cm)\n");
-    fprintf(stderr,
-            "      --tonemap <m>      Tonemap mode: aces, neutral, agx, linear (default: neutral)\n");
+    fprintf(
+        stderr,
+        "      --tonemap <m>      Tonemap mode: aces, neutral, agx, linear (default: neutral)\n");
     fprintf(stderr,
             "      --ssaa <int>       Supersampling factor (default: 1 = off; 2 = 2x SSAA)\n");
     fprintf(stderr, "      --no-ssaa          Disable supersampling (render at 1x)\n");
@@ -370,8 +372,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "                         non-deterministic, but converges temporal SSR/AA)\n");
     fprintf(stderr, "  -b, --show-bones       Enable bone X-ray overlay\n");
     fprintf(stderr, "      --check-stretch    Report triangle edges stretched by skinning\n");
-    fprintf(stderr, "      --anim-debug       Dump the first animated pose: per bone, whether the\n");
-    fprintf(stderr, "                         clip drives it, its bind vs animated position, the\n");
+    fprintf(stderr,
+            "      --anim-debug       Dump the first animated pose: per bone, whether the\n");
+    fprintf(stderr,
+            "                         clip drives it, its bind vs animated position, the\n");
     fprintf(stderr, "                         drift between them, and its matrix scale\n");
     fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
     fprintf(stderr, "  -S, --screenshot <path> Save final frame as PPM on exit\n");
@@ -1899,8 +1903,8 @@ static MouseDragController* drag_controller = NULL;
  */
 static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
     Camera* camera = engine->camera;
-    set_camera_position(camera, eye);
-    set_camera_look_at(camera, target);
+    camera_set_position(camera, eye);
+    camera_set_look_at(camera, target);
     vec3 offset;
     glm_vec3_sub(eye, target, offset);
     camera->distance = glm_vec3_norm(offset);
@@ -1909,11 +1913,11 @@ static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
         camera->phi = atan2f(offset[2], offset[0]);
     }
     if (drag_controller)
-        set_mouse_drag_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
+        mouse_drag_set_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
                                   drag_controller->auto_orbit_min_dist,
                                   drag_controller->auto_orbit_max_dist);
-    set_engine_camera_mode(engine, CAMERA_MODE_FREE);
-    update_engine_camera_lookat(engine);
+    engine_set_camera_mode(engine, CAMERA_MODE_FREE);
+    engine_update_view(engine);
 }
 
 /*
@@ -1961,7 +1965,7 @@ static void apply_model_recenter(Scene* scene) {
         .position = {model_recenter_offset[0], model_recenter_offset[1], model_recenter_offset[2]},
         .rotation = {0.0f, 0.0f, 0.0f},
         .scale = {1.0f, 1.0f, 1.0f}};
-    reset_and_apply_transform(&scene->root_transform, &transform);
+    transform_apply(&scene->root_transform, &transform);
     scene_propagate_transforms(scene);
 }
 
@@ -2124,7 +2128,7 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     (void)scancode;
 
     // Camera movement (WASD, arrows, etc.)
-    if (drag_controller && camera_controller_on_key(drag_controller, key, action, mods)) {
+    if (drag_controller && mouse_drag_on_key(drag_controller, key, action, mods)) {
         return;
     }
 
@@ -2138,13 +2142,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
             break;
         case GLFW_KEY_G:
-            set_engine_show_gui(engine, !engine->show_gui);
+            engine_set_show_gui(engine, !engine->show_gui);
             break;
         case GLFW_KEY_X:
-            set_engine_show_xyz(engine, !engine->show_xyz);
+            engine_set_show_xyz(engine, !engine->show_xyz);
             break;
         case GLFW_KEY_T:
-            set_engine_show_wireframe(engine, !engine->show_wireframe);
+            engine_set_show_wireframe(engine, !engine->show_wireframe);
             break;
         case GLFW_KEY_1:
             engine->current_render_mode = RENDER_MODE_PBR;
@@ -2203,7 +2207,7 @@ static void render_frame_update(Engine* engine, float dt) {
     // nothing draws, which is the state the GUI checkbox produces and the state
     // anything reading Light.shadow_layer has to survive.
     if (frame_schedule->shadows_off_at == (int)engine->total_frames) {
-        Scene* scene = get_current_scene(engine);
+        Scene* scene = engine_get_scene(engine);
         if (scene && scene->shadow_system) {
             scene->shadow_system->enabled = false;
             fprintf(stderr, "frame %d: shadow system disabled\n", frame_schedule->shadows_off_at);
@@ -2214,7 +2218,7 @@ static void render_frame_update(Engine* engine, float dt) {
     // output must equal the startup atomic bake byte for byte, and nothing
     // about the hour arithmetic is in the picture.
     if (frame_schedule->cycle_rebake_at == (int)engine->total_frames) {
-        Scene* scene = get_current_scene(engine);
+        Scene* scene = engine_get_scene(engine);
         if (scene && scene->sky) {
             sky_cycle_request_rebake(scene->sky);
             fprintf(stderr, "frame %d: sliced sky rebake requested\n",
@@ -2238,7 +2242,7 @@ static void render_frame_update(Engine* engine, float dt) {
     // process -- the first bake always reads the final authored values -- so
     // this transition is the only headless way to make the key go stale.
     if (frame_schedule->layer_blend_at_frame == (int)engine->total_frames) {
-        Scene* scene = get_current_scene(engine);
+        Scene* scene = engine_get_scene(engine);
         if (scene) {
             for (size_t i = 0; i < scene->material_count; i++) {
                 Material* m = scene->materials[i];
@@ -2253,7 +2257,7 @@ static void render_frame_update(Engine* engine, float dt) {
     // composite cache's key stale, which is the pair of mechanisms no fresh
     // process can exercise.
     if (frame_schedule->road_width_at_frame == (int)engine->total_frames) {
-        Scene* scene = get_current_scene(engine);
+        Scene* scene = engine_get_scene(engine);
         if (scene) {
             for (size_t i = 0; i < scene->material_count; i++) {
                 Material* m = scene->materials[i];
@@ -2269,7 +2273,7 @@ static void render_frame_update(Engine* engine, float dt) {
     for (int i = 0; i < frame_schedule->scale_at_count; i++) {
         if (frame_schedule->scale_at_frame[i] != (int)engine->total_frames)
             continue;
-        set_engine_render_scale(engine, frame_schedule->scale_at_value[i]);
+        engine_set_render_scale(engine, frame_schedule->scale_at_value[i]);
         // stderr, not stdout: this line is the record of how far a stress run
         // got, and stdout is block-buffered when redirected, so a crash would
         // take it with it. It also keeps the switch ordered against the
@@ -2281,13 +2285,13 @@ static void render_frame_update(Engine* engine, float dt) {
     }
     if (frame_schedule->probe_set_probe > 0 &&
         (int)engine->total_frames % frame_schedule->probe_set_probe == 0) {
-        Scene* scene = get_current_scene(engine);
+        Scene* scene = engine_get_scene(engine);
         if (scene)
             probe_set_probe_print(scene->probe_set, (int)engine->total_frames, false);
     }
     if (frame_schedule->decal_probe > 0 &&
         (int)engine->total_frames % frame_schedule->decal_probe == 0) {
-        Scene* scene = get_current_scene(engine);
+        Scene* scene = engine_get_scene(engine);
         if (scene)
             decal_probe_print(scene, (int)engine->total_frames, false,
                               light_cluster_decal_mask_digest(engine->light_cluster),
@@ -2362,7 +2366,7 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
         float near_clip = fmaxf(fminf(0.02f * cam_dist, clip_near_max), clip_near_floor);
         if (near_clip != engine->camera->near_clip) {
             engine->camera->near_clip = near_clip;
-            update_engine_camera_perspective(engine);
+            engine_update_projection(engine);
         }
     }
 }
@@ -2417,7 +2421,7 @@ void configure_visor_materials(Scene* scene) {
     const char* visor_names[] = {"VISIERE_A", "VISIERE_B", "GLASSE", "visor", "Visor", NULL};
 
     for (int i = 0; visor_names[i] != NULL; i++) {
-        SceneNode* node = find_node_by_name(scene->root_node, visor_names[i]);
+        SceneNode* node = node_find(scene->root_node, visor_names[i]);
         if (node) {
             printf("Configuring iridescent visor for: %s\n", visor_names[i]);
             // Refractive visor: high transmission, very glossy, 520nm iridescence
@@ -2449,19 +2453,19 @@ static void spawn_area_light(Scene* scene, const RenderArgs* args) {
     if (!al)
         return;
 
-    set_light_name(al, "area_light");
-    set_light_type(al, LIGHT_AREA);
-    set_light_original_position(al, (float*)args->area_light_pos);
-    set_light_direction(al, (float*)args->area_light_dir);
-    set_light_size(al, args->area_light_size[0], args->area_light_size[1]);
-    set_light_intensity(al, args->area_light_intensity);
-    set_light_color(al, (float*)args->area_light_color);
-    add_light_to_scene(scene, al);
+    light_set_name(al, "area_light");
+    light_set_type(al, LIGHT_AREA);
+    light_set_original_position(al, (float*)args->area_light_pos);
+    light_set_direction(al, (float*)args->area_light_dir);
+    light_set_size(al, args->area_light_size[0], args->area_light_size[1]);
+    light_set_intensity(al, args->area_light_intensity);
+    light_set_color(al, (float*)args->area_light_color);
+    scene_add_light(scene, al);
 
     SceneNode* al_node = create_node();
-    set_node_light(al_node, al);
-    set_node_name(al_node, "area_light");
-    add_child_node(scene->root_node, al_node);
+    node_set_light(al_node, al);
+    node_set_name(al_node, "area_light");
+    node_add_child(scene->root_node, al_node);
 
     printf("Area light: %.2fx%.2f at (%.2f, %.2f, %.2f), radiance %.2f\n", args->area_light_size[0],
            args->area_light_size[1], args->area_light_pos[0], args->area_light_pos[1],
@@ -2492,12 +2496,12 @@ static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
 
             char plname[32];
             snprintf(plname, sizeof(plname), "grid_%d_%d", gi, gj);
-            set_light_name(pl, plname);
-            set_light_type(pl, LIGHT_POINT);
+            light_set_name(pl, plname);
+            light_set_type(pl, LIGHT_POINT);
 
             vec3 pos = {((float)gi - (float)(n - 1) * 0.5f) * radius, 0.25f * radius,
                         ((float)gj - (float)(n - 1) * 0.5f) * radius};
-            set_light_original_position(pl, pos);
+            light_set_original_position(pl, pos);
 
             // HSV(hue, 0.8, 1.0) -> RGB, hue swept across the grid so each
             // light's reach is visually distinguishable from its neighbours
@@ -2525,15 +2529,15 @@ static void spawn_point_light_grid(Scene* scene, const RenderArgs* args) {
                     c[0] = 1.0f, c[1] = lo, c[2] = down;
                     break;
             }
-            set_light_color(pl, c);
-            set_light_intensity(pl, intensity);
-            set_light_range(pl, radius);
-            add_light_to_scene(scene, pl);
+            light_set_color(pl, c);
+            light_set_intensity(pl, intensity);
+            light_set_range(pl, radius);
+            scene_add_light(scene, pl);
 
             SceneNode* pl_node = create_node();
-            set_node_light(pl_node, pl);
-            set_node_name(pl_node, plname);
-            add_child_node(scene->root_node, pl_node);
+            node_set_light(pl_node, pl);
+            node_set_name(pl_node, plname);
+            node_add_child(scene->root_node, pl_node);
         }
     }
     printf("Point-light grid: %dx%d, radius %.1f, intensity %.1f\n", n, n, radius, intensity);
@@ -2555,7 +2559,7 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
 
     // Scene file (.cscn) material overrides take priority: profiles are keyed
     // by authored material name, matched against the scene's flat material
-    // registry (every imported material lands there via add_material_to_scene).
+    // registry (every imported material lands there via scene_add_material).
     // --sss-radius/--sss-color still override.
     if (cscn && cscn->material_count > 0) {
         int sss_index = 0; // counts SSS entries only; the table also holds plain material params
@@ -2602,7 +2606,7 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
         {"sss_skin_b", {0.4f, 0.75f, 0.55f}, 0.15f}, // cool wax, tight scatter
     };
     for (size_t k = 0; k < sizeof(skins) / sizeof(skins[0]); k++) {
-        SceneNode* node = find_node_by_name(scene->root_node, skins[k].node);
+        SceneNode* node = node_find(scene->root_node, skins[k].node);
         if (!node)
             continue;
         vec3 prof_color;
@@ -2705,11 +2709,11 @@ int main(int argc, char** argv) {
 
     // Import knobs are process-wide state; set them before anything loads
     if (args.no_flip_uv)
-        set_import_flip_uvs(false);
+        import_set_flip_uvs(false);
     if (args.flip_uv)
-        set_import_flip_uvs(true);
-    set_import_unit_scale(!args.no_unit_scale);
-    set_import_scale_multiplier(args.import_scale);
+        import_set_flip_uvs(true);
+    import_set_unit_scale(!args.no_unit_scale);
+    import_set_scale_multiplier(args.import_scale);
 
     // Cetra scene file (.cscn): resolve the input (the .cscn itself or one
     // sitting next to a bare model) and merge its look into args, leaving
@@ -2725,7 +2729,7 @@ int main(int argc, char** argv) {
     // what it means depends on whether a post.camera arrived -- a linear
     // multiplier, which must be positive, or an EV bias, where negative is
     // stopping down. Checked here rather than at the exposure block below, which
-    // runs after create_engine and init_engine: failing there opens a window and
+    // runs after create_engine and engine_init: failing there opens a window and
     // builds a GL context before returning, and returns without freeing either.
     if (cscene_setup(&args, &cscn) != 0) {
         return -1;
@@ -2748,15 +2752,15 @@ int main(int argc, char** argv) {
         // frame cap here -- an explicit -f still wins as an upper bound.
         args.headless = 1;
     }
-    // Before init_engine and before any texture loads: the publish path is a
+    // Before engine_init and before any texture loads: the publish path is a
     // fetch site (spec 11.99).
     cook_init(args.cook_dir, !args.no_cook);
 
     Engine* engine = create_engine("Cetra Engine", args.width, args.height);
 
-    set_engine_headless(engine, args.headless != 0);
-    // Before init_engine, which is where the profiler is built.
-    set_engine_profiler(engine, args.profiler_enabled != 0);
+    engine_set_headless(engine, args.headless != 0);
+    // Before engine_init, which is where the profiler is built.
+    engine_set_profiler(engine, args.profiler_enabled != 0);
     if (args.no_instancing)
         engine->instancing_enabled = false;
     if (args.no_frustum_cull)
@@ -2774,10 +2778,10 @@ int main(int argc, char** argv) {
     engine->headless_jitter = args.headless_jitter != 0;
     if (args.no_alpha_jitter)
         engine->alpha_jitter_enabled = false;
-    set_engine_screenshot_path(engine, args.screenshot_path);
-    set_engine_screenshot_every(engine, args.screenshot_every);
+    engine_set_screenshot_path(engine, args.screenshot_path);
+    engine_set_screenshot_every(engine, args.screenshot_every);
     if (args.ssaa > 0)
-        set_engine_ss_scale(engine, args.ssaa);
+        engine_set_ss_scale(engine, args.ssaa);
     if (args.render_scale != 0.0f) {
         // TAAU is a temporal reconstruction: it needs the resolve running and
         // the jitter live. Windowed runs force TAA on below; headless must opt
@@ -2791,7 +2795,7 @@ int main(int argc, char** argv) {
             fprintf(stderr, "--render-scale needs --taa --headless-jitter under --headless; "
                             "rendering at full resolution\n");
         } else {
-            set_engine_render_scale(engine, args.render_scale);
+            engine_set_render_scale(engine, args.render_scale);
         }
     }
     // The schedule itself is applied from render_frame_update; only the
@@ -2803,7 +2807,7 @@ int main(int argc, char** argv) {
                         "the schedule would be refused\n");
         return -1;
     }
-    set_engine_exit_after_frames(engine, args.max_frames);
+    engine_set_exit_after_frames(engine, args.max_frames);
     check_stretch = args.check_stretch;
 
     // Interactive default: TAA-only (drop to 1x MSAA and let temporal AA carry
@@ -2815,29 +2819,29 @@ int main(int argc, char** argv) {
     // run-to-run sensitive to async load timing, so it is not for
     // byte-compared screenshots.
     //
-    // THE TWO HALVES STRADDLE init_engine AND CANNOT BE JOINED. The count has
+    // THE TWO HALVES STRADDLE engine_init AND CANNOT BE JOINED. The count has
     // to precede it, which builds the scene target -- set afterwards it
     // allocates all six G-buffer attachments plus depth at 4x and immediately
     // destroys them to rebuild at 1x. The TAA switch has to follow it, which is
-    // where postfx is built, and set_engine_taa_enabled is a SILENT no-op
+    // where postfx is built, and engine_set_taa is a SILENT no-op
     // before that: the app renders its interactive session with no temporal
     // filter and nothing says so.
     const bool taa_policy = !args.headless || args.force_taa;
     if (taa_policy)
-        set_engine_msaa_samples(engine, 1);
+        engine_set_msaa_samples(engine, 1);
     // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
     // else can vary the sample count independently of TAA, and pricing a sample
     // (spec 11.34) needs exactly that.
     if (args.msaa > 0)
-        set_engine_msaa_samples(engine, args.msaa);
+        engine_set_msaa_samples(engine, args.msaa);
 
-    if (init_engine(engine) != 0) {
+    if (engine_init(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
     }
     // The second half of the AA policy above, here because postfx exists now.
     if (taa_policy)
-        set_engine_taa_enabled(engine, true);
+        engine_set_taa(engine, true);
 
     {
         Exposure* ex = &engine->exposure;
@@ -3024,7 +3028,7 @@ int main(int argc, char** argv) {
     // Set the POM default depth before the model loads (the height convention
     // loader stamps it onto materials as it resolves their height maps).
     if (args.parallax_scale >= 0.0f) {
-        set_parallax_default_scale(args.parallax_scale);
+        import_set_parallax_default_scale(args.parallax_scale);
     }
     if (engine->postfx) {
         PostFX* fx = engine->postfx;
@@ -3131,15 +3135,15 @@ int main(int argc, char** argv) {
         engine->current_render_mode = (RenderMode)args.render_mode;
     }
 
-    set_engine_error_callback(engine, app_error_callback);
-    set_engine_mouse_button_callback(engine, mouse_button_callback);
-    set_engine_key_callback(engine, key_callback);
+    engine_set_error_callback(engine, app_error_callback);
+    engine_set_mouse_button_callback(engine, mouse_button_callback);
+    engine_set_key_callback(engine, key_callback);
 
     /*
      * Set up shaders.
      *
      */
-    ShaderProgram* pbr_shader_program = get_engine_shader_program_by_name(engine, "pbr");
+    ShaderProgram* pbr_shader_program = engine_get_program(engine, "pbr");
     if (!pbr_shader_program) {
         fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
@@ -3151,9 +3155,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to create PBR skinned shader program\n");
         return -1;
     }
-    add_shader_program_to_engine(engine, pbr_skinned_program);
+    engine_add_program(engine, pbr_skinned_program);
 
-    ShaderProgram* xyz_shader_program = get_engine_shader_program_by_name(engine, "xyz");
+    ShaderProgram* xyz_shader_program = engine_get_program(engine, "xyz");
     if (!xyz_shader_program) {
         fprintf(stderr, "Failed to get xyz shader program\n");
         return -1;
@@ -3171,23 +3175,23 @@ int main(int argc, char** argv) {
 
     Camera* camera = create_camera();
 
-    set_camera_position(camera, camera_position);
-    set_camera_look_at(camera, look_at_point);
-    set_camera_up_vector(camera, up_vector);
-    set_camera_perspective(camera, fov_radians, near_clip, far_clip);
+    camera_set_position(camera, camera_position);
+    camera_set_look_at(camera, look_at_point);
+    camera_set_up(camera, up_vector);
+    camera_set_perspective(camera, fov_radians, near_clip, far_clip);
 
-    update_engine_camera_lookat(engine);
-    update_engine_camera_perspective(engine);
+    engine_update_view(engine);
+    engine_update_projection(engine);
 
     camera->theta = 0.60f;
     camera->height = 600.0f;
 
-    set_engine_camera(engine, camera);
+    engine_set_camera(engine, camera);
 
     // Create drag controller with auto-orbit (fixed camera in headless mode for
     // deterministic, comparable screenshots)
     drag_controller = create_mouse_drag_controller(engine);
-    set_mouse_drag_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED, MIN_DIST,
+    mouse_drag_set_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED, MIN_DIST,
                               MAX_DIST);
 
     /*
@@ -3204,14 +3208,14 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    add_scene_to_engine(engine, scene);
+    engine_add_scene(engine, scene);
 
     if (!scene || !scene->root_node) {
         fprintf(stderr, "Failed to import scene\n");
         return -1;
     }
 
-    if (set_scene_xyz_shader_program(scene, xyz_shader_program) == GL_FALSE) {
+    if (scene_set_xyz_program(scene, xyz_shader_program) == GL_FALSE) {
         fprintf(stderr, "Failed to set scene xyz shader program\n");
         return -1;
     }
@@ -3363,16 +3367,16 @@ int main(int argc, char** argv) {
             if (!args.no_key_light) {
                 Light* sun = create_light();
                 if (sun) {
-                    set_light_name(sun, "sky_sun");
-                    set_light_type(sun, LIGHT_DIRECTIONAL);
+                    light_set_name(sun, "sky_sun");
+                    light_set_type(sun, LIGHT_DIRECTIONAL);
                     sky->sun_light = sun;
                     sky->sun_base_intensity = KEY_LIGHT_TOTAL_INTENSITY;
                     sky_apply_sun_to_light(sky);
-                    add_light_to_scene(scene, sun);
+                    scene_add_light(scene, sun);
                     SceneNode* sun_node = create_node();
-                    set_node_light(sun_node, sun);
-                    set_node_name(sun_node, "sky_sun");
-                    add_child_node(scene->root_node, sun_node);
+                    node_set_light(sun_node, sun);
+                    node_set_name(sun_node, "sky_sun");
+                    node_add_child(scene->root_node, sun_node);
                 }
                 /*
                  * The moon's second directional, created UNCONDITIONALLY --
@@ -3394,15 +3398,15 @@ int main(int argc, char** argv) {
                  */
                 Light* moon = create_light();
                 if (moon) {
-                    set_light_name(moon, "sky_moon");
-                    set_light_type(moon, LIGHT_DIRECTIONAL);
+                    light_set_name(moon, "sky_moon");
+                    light_set_type(moon, LIGHT_DIRECTIONAL);
                     sky->moon_light = moon;
                     sky_update_moon(sky);
-                    add_light_to_scene(scene, moon);
+                    scene_add_light(scene, moon);
                     SceneNode* moon_node = create_node();
-                    set_node_light(moon_node, moon);
-                    set_node_name(moon_node, "sky_moon");
-                    add_child_node(scene->root_node, moon_node);
+                    node_set_light(moon_node, moon);
+                    node_set_name(moon_node, "sky_moon");
+                    node_add_child(scene->root_node, moon_node);
                 }
                 // Ground the model on the virtual floor
                 scene->shadow_catcher = true;
@@ -3499,8 +3503,8 @@ int main(int argc, char** argv) {
 
                 char light_name[32];
                 snprintf(light_name, sizeof(light_name), "key_light_%d", i);
-                set_light_name(key, light_name);
-                set_light_type(key, LIGHT_DIRECTIONAL);
+                light_set_name(key, light_name);
+                light_set_type(key, LIGHT_DIRECTIONAL);
 
                 vec3 key_dir = {-0.4f, -0.7f, -0.6f}; // Fallback if no lobes
                 float intensity = KEY_LIGHT_TOTAL_INTENSITY;
@@ -3512,16 +3516,16 @@ int main(int argc, char** argv) {
                     float share = 0.5f * scene->ibl->light_energies[i] + 0.5f / (float)lobes;
                     intensity = share * KEY_LIGHT_TOTAL_INTENSITY;
                 }
-                set_light_direction(key, key_dir);
-                set_light_intensity(key, intensity);
-                set_light_color(key, (vec3){1.0f, 1.0f, 1.0f});
-                set_light_cast_shadows(key, true);
-                add_light_to_scene(scene, key);
+                light_set_direction(key, key_dir);
+                light_set_intensity(key, intensity);
+                light_set_color(key, (vec3){1.0f, 1.0f, 1.0f});
+                light_set_cast_shadows(key, true);
+                scene_add_light(scene, key);
 
                 SceneNode* key_node = create_node();
-                set_node_light(key_node, key);
-                set_node_name(key_node, light_name);
-                add_child_node(scene->root_node, key_node);
+                node_set_light(key_node, key);
+                node_set_name(key_node, light_name);
+                node_add_child(scene->root_node, key_node);
             }
 
             // Ground the model: catch the key light shadows on the
@@ -3533,7 +3537,7 @@ int main(int argc, char** argv) {
         // three-point rig so a bare model is visible. Scenes that ship their
         // own lighting design (embedded lights, emissive surfaces) keep it --
         // flooding them with a default rig erases the authored mood.
-        create_three_point_lights(scene, 3.0f);
+        scene_add_three_point_lights(scene, 3.0f);
     }
 
     // Environment light strength: authored (scene file world strength) or
@@ -3606,9 +3610,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    upload_buffers_to_gpu_for_nodes(scene->root_node);
+    node_upload_meshes(scene->root_node);
 
-    set_shader_programs_for_nodes(scene->root_node, pbr_shader_program, pbr_skinned_program);
+    node_set_programs(scene->root_node, pbr_shader_program, pbr_skinned_program);
 
     // Propagate transforms before computing bounds (needed for correct global_transform values).
     // The scene's root transform is still identity here -- the recentre offset
@@ -3618,7 +3622,7 @@ int main(int argc, char** argv) {
     // Compute scene bounds; center/radius drive every scene-scaled policy below
     vec3 scene_center;
     float scene_radius;
-    compute_scene_center_and_radius(scene, scene_center, &scene_radius);
+    scene_bounding_sphere(scene, scene_center, &scene_radius);
 
     // Recenter the model: translate so the bounding-box base sits on the origin
     // (y=0, centered in x/z). Everything anchored at the origin -- the
@@ -3629,7 +3633,7 @@ int main(int argc, char** argv) {
     // transforms compose under it untouched; a pure translation leaves the
     // radius unchanged, so the cached center just shifts by the offset.
     vec3 bb_min, bb_max;
-    compute_scene_bounds(scene, bb_min, bb_max);
+    scene_bounds(scene, bb_min, bb_max);
     if (!args.no_recenter) {
         model_recenter_offset[0] = -scene_center[0];
         model_recenter_offset[1] = -bb_min[1];
@@ -3749,7 +3753,7 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < scene->light_count; i++) {
             Light* light = scene->lights[i];
             if (light && light->type == LIGHT_DIRECTIONAL && light->cast_shadows) {
-                set_light_size(light, light_size, light_size);
+                light_set_size(light, light_size, light_size);
             }
         }
 
@@ -3778,7 +3782,7 @@ int main(int argc, char** argv) {
             // absolute, so a light left at the fallback 1 cd would otherwise
             // render the right SHAPE at an unusable brightness.
             if (light->intensity <= 1.0f)
-                set_light_intensity_units(light, profile->peak_cd, LIGHT_UNITS_CANDELA);
+                light_set_intensity_units(light, profile->peak_cd, LIGHT_UNITS_CANDELA);
             applied++;
         }
         if (profile)
@@ -3799,8 +3803,8 @@ int main(int argc, char** argv) {
     vec3 auto_cam_pos = {scene_center[0] + camera_distance * cosf(pitch) * sinf(yaw),
                          scene_center[1] + scene_radius * 0.3f + camera_distance * sinf(pitch),
                          scene_center[2] + camera_distance * cosf(pitch) * cosf(yaw)};
-    set_camera_position(camera, auto_cam_pos);
-    set_camera_look_at(camera, scene_center);
+    camera_set_position(camera, auto_cam_pos);
+    camera_set_look_at(camera, scene_center);
 
     // Depth of field focuses on the subject (camera-to-model distance) unless
     // overridden. --film turns it on too; --no-dof forces it off. Range scales
@@ -3845,15 +3849,15 @@ int main(int argc, char** argv) {
     // models). near is the dominant precision term, so lift it off zero.
     float auto_near = fmaxf(scene_radius * 0.05f, 0.05f);
     float auto_far = scene_radius * 40.0f;
-    set_camera_perspective(camera, fov_radians, auto_near, auto_far);
+    camera_set_perspective(camera, fov_radians, auto_near, auto_far);
     // AFTER the auto-framing, which is the whole reason this is not up beside
-    // the other camera setup: set_camera_perspective clears is_orthographic, so
+    // the other camera setup: camera_set_perspective clears is_orthographic, so
     // an earlier request is silently undone here and --ortho renders a
     // perspective frame with no warning. The auto-framed near/far are the ones
     // to keep -- only the projection shape changes.
     if (args.ortho_height > 0.0f)
-        set_camera_orthographic(camera, args.ortho_height, auto_near, auto_far);
-    update_engine_camera_perspective(engine);
+        camera_set_orthographic(camera, args.ortho_height, auto_near, auto_far);
+    engine_update_projection(engine);
     printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
 
     // Arm the per-frame distance-adaptive near (see the render callback). The
@@ -3929,10 +3933,10 @@ int main(int argc, char** argv) {
         camera->max_distance = SKYBOX_GP_FADE_START * scene->skybox_gp_radius;
         orbit_max = fminf(orbit_max, camera->max_distance);
     }
-    set_mouse_drag_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
+    mouse_drag_set_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
                               fminf(camera_distance * 0.5f, orbit_max), orbit_max);
 
-    update_engine_camera_lookat(engine);
+    engine_update_view(engine);
 
     // Explicit camera pose override (--cam-eye/--cam-target): reproduce any
     // interactive view exactly, bypassing the yaw/pitch/distance orbit framing
@@ -3943,21 +3947,21 @@ int main(int argc, char** argv) {
         vec3 up = {0.0f, 1.0f, 0.0f};
         if (args.cam_up_set)
             glm_vec3_copy(args.cam_up, up);
-        set_camera_up_vector(camera, up);
+        camera_set_up(camera, up);
         apply_explicit_pose(engine, args.cam_eye, args.cam_target);
     } else if (args.cam_eye_set || args.cam_target_set) {
         fprintf(stderr,
                 "Warning: --cam-eye and --cam-target must both be given; ignoring camera pose.\n");
     }
 
-    print_scene(scene);
+    scene_print(scene);
 
     // No GUI/FPS overlay in headless runs: the FPS digits change per run and
     // land in screenshots, which breaks byte-comparability
-    set_engine_show_gui(engine, !args.headless);
-    set_engine_show_fps(engine, !args.headless);
-    set_engine_show_wireframe(engine, false);
-    set_engine_show_xyz(engine, false);
+    engine_set_show_gui(engine, !args.headless);
+    engine_set_show_fps(engine, !args.headless);
+    engine_set_show_wireframe(engine, false);
+    engine_set_show_xyz(engine, false);
     engine->show_bones = args.show_bones != 0;
 
     // Capture the local reflection probe: the scene rendered once into a
@@ -3969,7 +3973,7 @@ int main(int argc, char** argv) {
     // recenter transform the per-frame callback applies before every draw has to
     // be baked in first (the callback re-applies the same transform; no
     // residue). Hoisted out of the probe block: the GI volume fits its grid to
-    // compute_scene_bounds, which reads those same globals, so leaving the
+    // scene_bounds, which reads those same globals, so leaving the
     // recenter inside --probe silently fitted the grid to pre-recenter bounds
     // whenever --gi-volume ran without it -- which is exactly how the golden is
     // generated.
@@ -3996,7 +4000,7 @@ int main(int argc, char** argv) {
             // Bounds AFTER the recenter above: the pre-recenter ones no longer
             // say where the scene is.
             vec3 gi_min, gi_max;
-            compute_scene_bounds(scene, gi_min, gi_max);
+            scene_bounds(scene, gi_min, gi_max);
             gi_volume_fit(gi, gi_min, gi_max);
             scene->gi_volume = gi;
         }
@@ -4040,7 +4044,7 @@ int main(int argc, char** argv) {
             // Fresh bounds: the pre-recenter ones above no longer describe
             // where the model sits
             vec3 probe_bb_min, probe_bb_max;
-            compute_scene_bounds(scene, probe_bb_min, probe_bb_max);
+            scene_bounds(scene, probe_bb_min, probe_bb_max);
 
             if (args.probe_pos_set) {
                 glm_vec3_copy(args.probe_pos, probe->position);
@@ -4264,7 +4268,7 @@ int main(int argc, char** argv) {
         if (config_snapshot_apply_file(engine, scene, args.config_path) < 0)
             return -1;
         if (drag_controller)
-            set_mouse_drag_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
+            mouse_drag_set_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
                                       drag_controller->auto_orbit_min_dist,
                                       drag_controller->auto_orbit_max_dist);
     }

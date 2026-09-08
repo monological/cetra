@@ -34,8 +34,7 @@ static int atlas_column_h(int row0) {
 }
 
 // Lower-left texel of one (probe, row) tile INCLUDING its gutter.
-static void atlas_tile_origin(const ProbeAtlas* atlas, int index, int row, int* out_x,
-                              int* out_y) {
+static void atlas_tile_origin(const ProbeAtlas* atlas, int index, int row, int* out_x, int* out_y) {
     int y = 0;
     for (int r = 0; r < row; ++r)
         y += atlas_row_pitch(atlas->row0, r);
@@ -111,7 +110,7 @@ ProbeAtlas* create_probe_atlas(struct Engine* engine, struct Scene* scene, int c
         return NULL;
     }
 
-    atlas->project_program = get_engine_shader_program_by_name(engine, "probe_project");
+    atlas->project_program = engine_get_program(engine, "probe_project");
     if (!atlas->project_program) {
         log_error("Probe projection program missing; the probe set stays unpublished");
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -225,8 +224,7 @@ float probe_atlas_column_x(const ProbeAtlas* atlas, int index) {
     return (float)(atlas->spec_x + index * atlas_column_w(atlas->row0));
 }
 
-void probe_atlas_fill_column(const ProbeAtlas* atlas, float out_column[4],
-                             float out_rows[][4]) {
+void probe_atlas_fill_column(const ProbeAtlas* atlas, float out_column[4], float out_rows[][4]) {
     if (!atlas || !out_column || !out_rows)
         return;
 
@@ -273,7 +271,7 @@ void probe_atlas_debug_blit(const ProbeAtlas* atlas, struct Engine* engine, int 
     // The same shared textured-quad overlay the sky LUTs and the GI atlas draw
     // through (a DRAW, not a blit: the default framebuffer is multisample and a
     // single-sample blit into it is illegal on core profile).
-    ShaderProgram* prog = get_engine_shader_program_by_name(engine, "sky_debug");
+    ShaderProgram* prog = engine_get_program(engine, "sky_debug");
     if (!prog)
         return;
 

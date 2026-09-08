@@ -166,7 +166,7 @@ void pbr_variant_name(PbrFamily family, unsigned features, char* out, size_t n);
 ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features);
 
 // The full variant of each family, which is the uber-shader and what an app
-// hands to set_shader_programs_for_nodes before the resolver narrows it.
+// hands to node_set_programs before the resolver narrows it.
 ShaderProgram* create_pbr_program();
 ShaderProgram* create_pbr_skinned_program();
 

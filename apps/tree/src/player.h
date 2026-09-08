@@ -21,7 +21,7 @@ struct Engine;
  * uses it -- a Jolt CharacterVirtual on a triangle-mesh collider. It is the wrong trade here:
  * this island's surface is `ground_height_at`, a closed form, so a mesh collider would be a
  * strictly WORSE approximation of a surface we can evaluate exactly, and buying it would mean
- * restructuring an engine-loop app with ImGui sliders onto run_game. Standing on the analytic
+ * restructuring an engine-loop app with ImGui sliders onto game_run. Standing on the analytic
  * surface is both simpler and more accurate. forest remains the physics-character demo.
  *
  * What that costs, stated rather than discovered later: no collision with the trunk, so you

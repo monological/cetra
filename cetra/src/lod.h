@@ -10,7 +10,7 @@
 // every level (see the chain fields on Mesh).
 //
 // Call after the index and vertex arrays are final and before
-// upload_mesh_buffers_to_gpu -- it rewrites mesh->indices, so an upload before
+// mesh_upload -- it rewrites mesh->indices, so an upload before
 // it would send only level 0 and the offsets would point past the buffer.
 //
 // Returns the number of levels the mesh ended up with, 1 meaning none was built.

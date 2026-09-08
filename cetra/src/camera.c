@@ -38,7 +38,7 @@ Camera* create_camera() {
     return camera;
 }
 
-void set_camera_name(Camera* camera, const char* name) {
+void camera_set_name(Camera* camera, const char* name) {
     if (!camera)
         return;
     if (camera->name) {
@@ -56,31 +56,31 @@ void free_camera(Camera* camera) {
     free(camera);
 }
 
-void set_camera_position(Camera* camera, vec3 position) {
+void camera_set_position(Camera* camera, vec3 position) {
     if (!camera)
         return;
     glm_vec3_copy(position, camera->position);
 }
 
-void set_camera_look_at(Camera* camera, vec3 look_at) {
+void camera_set_look_at(Camera* camera, vec3 look_at) {
     if (!camera)
         return;
     glm_vec3_copy(look_at, camera->look_at);
 }
 
-void set_camera_direction(Camera* camera, vec3 direction) {
+void camera_set_direction(Camera* camera, vec3 direction) {
     if (!camera)
         return;
     glm_vec3_add(camera->position, direction, camera->look_at);
 }
 
-void set_camera_up_vector(Camera* camera, vec3 up_vector) {
+void camera_set_up(Camera* camera, vec3 up_vector) {
     if (!camera)
         return;
     glm_vec3_copy(up_vector, camera->up_vector);
 }
 
-void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip) {
+void camera_set_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip) {
     if (!camera)
         return;
     camera->is_orthographic = false;
@@ -89,7 +89,7 @@ void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, 
     camera->far_clip = far_clip;
 }
 
-void set_camera_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip) {
+void camera_set_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip) {
     if (!camera)
         return;
     camera->is_orthographic = true;
@@ -98,7 +98,7 @@ void set_camera_orthographic(Camera* camera, float ortho_height, float near_clip
     camera->far_clip = far_clip;
 }
 
-void orbit_camera(Camera* camera, float delta_theta, float delta_phi) {
+void camera_orbit(Camera* camera, float delta_theta, float delta_phi) {
     if (!camera)
         return;
 
@@ -124,7 +124,7 @@ void orbit_camera(Camera* camera, float delta_theta, float delta_phi) {
     camera->position[2] = camera->look_at[2] + camera->distance * cos_theta * sinf(camera->phi);
 }
 
-void pan_camera(Camera* camera, float delta_x, float delta_y) {
+void camera_pan(Camera* camera, float delta_x, float delta_y) {
     if (!camera)
         return;
 
@@ -150,7 +150,7 @@ void pan_camera(Camera* camera, float delta_x, float delta_y) {
     glm_vec3_add(camera->look_at, offset, camera->look_at);
 }
 
-void zoom_camera(Camera* camera, float delta) {
+void camera_zoom(Camera* camera, float delta) {
     if (!camera)
         return;
 
@@ -159,7 +159,7 @@ void zoom_camera(Camera* camera, float delta) {
         camera->distance = 0.1f;
 
     // Recompute position from orbit parameters
-    orbit_camera(camera, 0.0f, 0.0f);
+    camera_orbit(camera, 0.0f, 0.0f);
 }
 
 void camera_move_forward(Camera* camera, float distance) {
@@ -263,13 +263,13 @@ void camera_sync_spherical_from_position(Camera* camera) {
     camera->phi = atan2f(to_camera[2], to_camera[0]);
 }
 
-void compute_view_matrix(Camera* camera, mat4 view) {
+void camera_view_matrix(Camera* camera, mat4 view) {
     if (!camera)
         return;
     glm_lookat(camera->position, camera->look_at, camera->up_vector, view);
 }
 
-void compute_projection_matrix(const Camera* camera, mat4 projection) {
+void camera_projection_matrix(const Camera* camera, mat4 projection) {
     if (!camera)
         return;
 

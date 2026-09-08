@@ -35,19 +35,19 @@ Game* create_game(const GameConfig* config) {
         return NULL;
     }
 
-    // Headless must be set before init_engine (read during GLFW window setup)
-    set_engine_headless(game->engine, config->headless);
-    // Same reason: init_engine is where the profiler is built.
-    set_engine_profiler(game->engine, config->profiler);
-    // And again: init_engine builds the scene target, so a count applied after
+    // Headless must be set before engine_init (read during GLFW window setup)
+    engine_set_headless(game->engine, config->headless);
+    // Same reason: engine_init is where the profiler is built.
+    engine_set_profiler(game->engine, config->profiler);
+    // And again: engine_init builds the scene target, so a count applied after
     // it allocates the whole G-buffer twice.
     if (config->msaa_samples > 0)
-        set_engine_msaa_samples(game->engine, config->msaa_samples);
+        engine_set_msaa_samples(game->engine, config->msaa_samples);
     // And before on_init, whose bakes are the fetch sites.
     cook_init(config->cook_dir, !config->no_cook);
 
     // Initialize engine
-    if (init_engine(game->engine) != 0) {
+    if (engine_init(game->engine) != 0) {
         free_engine(game->engine);
         free(game);
         return NULL;
@@ -58,12 +58,12 @@ Game* create_game(const GameConfig* config) {
 
     // The engine now owns the frame loop, so route the game's CI/headless + GUI
     // config onto it (screenshot capture, frame-limit exit, debug panel).
-    set_engine_screenshot_path(game->engine, config->screenshot_path);
-    set_engine_screenshot_every(game->engine, config->screenshot_every);
-    set_engine_exit_after_frames(game->engine, config->exit_after_frames);
-    set_engine_show_gui(game->engine, config->show_debug_gui);
+    engine_set_screenshot_path(game->engine, config->screenshot_path);
+    engine_set_screenshot_every(game->engine, config->screenshot_every);
+    engine_set_exit_after_frames(game->engine, config->exit_after_frames);
+    engine_set_show_gui(game->engine, config->show_debug_gui);
     if (config->taa_enabled)
-        set_engine_taa_enabled(game->engine, true);
+        engine_set_taa(game->engine, true);
     game->engine->headless_jitter = config->headless_jitter;
 
     // Initialize input
@@ -183,7 +183,7 @@ void game_set_scene(Game* game, Scene* scene) {
 
     game->scene = scene;
     if (scene) {
-        add_scene_to_engine(game->engine, scene);
+        engine_add_scene(game->engine, scene);
         // An app that needs more than this replaces it and calls back here; the
         // hook is a single slot, and the framework's own state is what an app
         // has no business remembering.
@@ -315,7 +315,7 @@ static void game_scene_render(Engine* engine, Scene* scene) {
     }
 }
 
-void run_game(Game* game) {
+void game_run(Game* game) {
     if (!game || !game->engine) {
         return;
     }

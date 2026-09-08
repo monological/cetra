@@ -7,7 +7,7 @@
 
 #include "transform.h"
 
-void reset_and_apply_transform(mat4* matrix, Transform* transform) {
+void transform_apply(mat4* matrix, Transform* transform) {
     if (!matrix) {
         return;
     }
@@ -24,7 +24,7 @@ void reset_and_apply_transform(mat4* matrix, Transform* transform) {
     glm_scale(*matrix, transform->scale);
 }
 
-void set_transform_position(Transform* transform, vec3 position) {
+void transform_set_position(Transform* transform, vec3 position) {
     if (!transform) {
         return;
     }
@@ -32,7 +32,7 @@ void set_transform_position(Transform* transform, vec3 position) {
     glm_vec3_copy(position, transform->position);
 }
 
-void set_transform_rotation(Transform* transform, vec3 rotation) {
+void transform_set_rotation(Transform* transform, vec3 rotation) {
     if (!transform) {
         return;
     }
@@ -40,7 +40,7 @@ void set_transform_rotation(Transform* transform, vec3 rotation) {
     glm_vec3_copy(rotation, transform->rotation);
 }
 
-void set_transform_scale(Transform* transform, vec3 scale) {
+void transform_set_scale(Transform* transform, vec3 scale) {
     if (!transform) {
         return;
     }
@@ -48,7 +48,7 @@ void set_transform_scale(Transform* transform, vec3 scale) {
     glm_vec3_copy(scale, transform->scale);
 }
 
-void update_transform_position(Transform* transform, vec3 position) {
+void transform_add_position(Transform* transform, vec3 position) {
     if (!transform) {
         return;
     }
@@ -56,7 +56,7 @@ void update_transform_position(Transform* transform, vec3 position) {
     glm_vec3_add(transform->position, position, transform->position);
 }
 
-void update_transform_rotation(Transform* transform, vec3 rotation) {
+void transform_add_rotation(Transform* transform, vec3 rotation) {
     if (!transform) {
         return;
     }
@@ -64,7 +64,7 @@ void update_transform_rotation(Transform* transform, vec3 rotation) {
     glm_vec3_add(transform->rotation, rotation, transform->rotation);
 }
 
-void update_transform_scale(Transform* transform, vec3 scale) {
+void transform_add_scale(Transform* transform, vec3 scale) {
     if (!transform) {
         return;
     }

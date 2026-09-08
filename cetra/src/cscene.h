@@ -61,7 +61,7 @@ typedef struct CSceneLight {
     float position[3];
     float color[3];
     // As authored, in `units` -- NOT converted here. The conversion lives on
-    // Light (set_light_intensity_units), so a .cscn and a glTF import cannot
+    // Light (light_set_intensity_units), so a .cscn and a glTF import cannot
     // disagree about what a lumen is.
     //
     // has_intensity distinguishes "authored 1.0" from "said nothing", which an

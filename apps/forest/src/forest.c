@@ -78,8 +78,8 @@
 // forest is the thing it exists to draw, and thinning it by half because the
 // world grew a coastline would make every batching and LOD reading here a
 // measurement of a sparser scene.
-#define TREE_COUNT      3900
-#define ROCK_COUNT      5900
+#define TREE_COUNT 3900
+#define ROCK_COUNT 5900
 
 // Collider resolution. Higher than it needs to be for Jolt and lower than the
 // visual tiles, which is the trade: the character stands on this while the eye
@@ -154,25 +154,25 @@ typedef struct ForestArgs {
     // props off its course. --no-trail is the ground before it.
     int no_trail;
     int no_instancing;
-    int no_layers_vt;     // per-texel layered blend instead of the composite cache
-    int layers_vt_res;    // composite-cache resolution override; 0 = derived
+    int no_layers_vt;          // per-texel layered blend instead of the composite cache
+    int layers_vt_res;         // composite-cache resolution override; 0 = derived
     int no_layers_vt_pages;    // fallback atlas alone -- stage 1 exactly
     int no_layers_vt_feedback; // residency on prediction alone (no vote pass)
     int layers_vt_page_slots;  // physical page slots in use; 0 = all
     int layers_vt_page_budget; // page bakes per frame; 0 = default
     int layers_vt_probe;       // print page residency every N frames; 0 = off
-    int no_sort_opaque;   // opaque front-to-back ordering is on by default
-    int depth_prepass;    // position-only depth before shading; off by default
-    int force_taa;        // TAA headless too; diagnostic, costs determinism
-    int msaa;             // requested sample count; 0 = the TAA/headless policy decides
-    int headless_jitter;  // sub-pixel jitter headless; TAA is inert without it
-    int render_mode;     // RenderMode override; 0 = PBR
-    int no_spatial_sort; // scatter in draw order rather than Morton order
-    int width, height;   // 0 = the default window size
-    int no_sky;          // swap the atmosphere for a plain directional rig
-    float sun_elevation; // degrees; < -900 keeps the app default
+    int no_sort_opaque;        // opaque front-to-back ordering is on by default
+    int depth_prepass;         // position-only depth before shading; off by default
+    int force_taa;             // TAA headless too; diagnostic, costs determinism
+    int msaa;                  // requested sample count; 0 = the TAA/headless policy decides
+    int headless_jitter;       // sub-pixel jitter headless; TAA is inert without it
+    int render_mode;           // RenderMode override; 0 = PBR
+    int no_spatial_sort;       // scatter in draw order rather than Morton order
+    int width, height;         // 0 = the default window size
+    int no_sky;                // swap the atmosphere for a plain directional rig
+    float sun_elevation;       // degrees; < -900 keeps the app default
     float sun_azimuth;
-    int no_aerial; // keep the sky, drop aerial perspective
+    int no_aerial;    // keep the sky, drop aerial perspective
     int no_fog;       // volumetric fog is on by default
     int trace_player; // log position, ground state and velocity each second
     float lod_bias;
@@ -185,12 +185,12 @@ typedef struct ForestArgs {
     int erode;         // bake a heightfield and run erosion over it (spec 11.59)
     int erode_res;     // field resolution; 0 = EROSION_DEFAULT_RES
     int erode_iterations;
-    int erode_workers; // 0 = size from the machine
-    int erode_probe;   // print the bake's own numbers; implies --erode
-    const char* erode_save;  // write the baked field here as .r16
-    const char* heightmap;   // load a field from here instead of baking
-    float heightmap_min;     // world Y the file's 0 maps to
-    float heightmap_max;     // world Y the file's 65535 maps to
+    int erode_workers;      // 0 = size from the machine
+    int erode_probe;        // print the bake's own numbers; implies --erode
+    const char* erode_save; // write the baked field here as .r16
+    const char* heightmap;  // load a field from here instead of baking
+    float heightmap_min;    // world Y the file's 0 maps to
+    float heightmap_max;    // world Y the file's 65535 maps to
     // Stream a tiled field rather than holding one (spec 11.69). Opt-in by
     // naming a file, so the OFF leg is the whole-file load every terrain arm
     // already covers rather than a negative flag with nothing behind it.
@@ -203,8 +203,8 @@ typedef struct ForestArgs {
     // field is resident and there is nothing to measure.
     int terrain_stream_resident_res;
     int terrain_stream_probe; // print residency every N frames; 0 = off
-    int height_probe;        // print sampled heights, normals and masks
-    int scatter_probe;       // print where the scatter put things, against the drainage
+    int height_probe;         // print sampled heights, normals and masks
+    int scatter_probe;        // print where the scatter put things, against the drainage
     // Print each clustered prototype's DAG (spec 11.63). The instrument exists
     // because the guarantee is STRUCTURAL: "no cluster index leaves the original
     // vertex buffer" is what makes a crack impossible, and no frame can show it.
@@ -395,8 +395,9 @@ static bool cooked_cluster_lod(Mesh* mesh, MeshClusterStats* st) {
                 return true;
             }
             free(sections[1].data);
-            fprintf(stderr, "forest: cooked cluster-dag %s payload disagrees with its meta; "
-                            "building live\n",
+            fprintf(stderr,
+                    "forest: cooked cluster-dag %s payload disagrees with its meta; "
+                    "building live\n",
                     label);
         } else {
             // A meta of the wrong shape is a recipe drift the version bump
@@ -440,10 +441,10 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
     // builds rather than cooked once per build type.
     uint64_t input_digest = 0;
     if (g_args.cluster_probe && cluster && !g_args.no_clusters) {
-        input_digest = fnv1a64(FNV1A64_BASIS, mesh->vertices,
-                               mesh->vertex_count * 3u * sizeof(float));
-        input_digest = fnv1a64(input_digest, mesh->indices,
-                               mesh->index_count * sizeof(unsigned int));
+        input_digest =
+            fnv1a64(FNV1A64_BASIS, mesh->vertices, mesh->vertex_count * 3u * sizeof(float));
+        input_digest =
+            fnv1a64(input_digest, mesh->indices, mesh->index_count * sizeof(unsigned int));
     }
     double cluster_t0 = glfwGetTime();
     if (cluster && !g_args.no_clusters && cooked_cluster_lod(mesh, &st)) {
@@ -487,7 +488,8 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
                 // change", and a collision here is a gate that misses a defect,
                 // never a frame that renders wrong.
                 uint32_t h = 2166136261u;
-                const unsigned int* idx = mesh->indices + mesh->lod_offset[b] / sizeof(unsigned int);
+                const unsigned int* idx =
+                    mesh->indices + mesh->lod_offset[b] / sizeof(unsigned int);
                 for (size_t i = 0; i < mesh->lod_count[b]; ++i) {
                     h ^= idx[i];
                     h *= 16777619u;
@@ -509,7 +511,7 @@ static void finalize_mesh(Mesh* mesh, Material* material, bool cluster) {
         g_chains_built++;
     else
         g_chains_refused++;
-    upload_mesh_buffers_to_gpu(mesh);
+    mesh_upload(mesh);
 
     g_distinct_meshes++;
     g_prototype_tris += mesh->index_count / 3u;
@@ -526,8 +528,8 @@ static void set_node_trs(SceneNode* node, const vec3 pos, float yaw, const vec3 
 
 static SceneNode* make_group(const char* name) {
     SceneNode* g = create_node();
-    set_node_name(g, name);
-    add_child_node(g_root, g);
+    node_set_name(g, name);
+    node_add_child(g_root, g);
     return g;
 }
 
@@ -592,7 +594,6 @@ static int placement_cmp(const void* a, const void* b) {
     return 0;
 }
 
-
 // Its own table, not the global one: the texture bake reseeds the shared
 // srand-backed generator, and a scatter that shifted depending on whether
 // textures were baked first would not be reproducible.
@@ -633,10 +634,10 @@ static float clump_density(float x, float z, float freq) {
  * origin shift. The scatter tests in local, so both sides move together and a
  * region rebuilt after a shift rejects the same ground.
  */
-#define TRAIL_POINTS      12
-#define TRAIL_WIDTH       3.0f
-#define TRAIL_FEATHER     1.5f
-#define TRAIL_LAYER       3 // gravel, the layer set's own worn surface
+#define TRAIL_POINTS  12
+#define TRAIL_WIDTH   3.0f
+#define TRAIL_FEATHER 1.5f
+#define TRAIL_LAYER   3 // gravel, the layer set's own worn surface
 // The trail is handed to the material as ONE road, so it has to fit one road's
 // point array -- nothing else connects the two, and overrunning it writes into
 // point_count, width, feather and layer in turn.
@@ -811,14 +812,13 @@ static void scatter_probe(const Placement* items, int count) {
     int on = 0;
     for (size_t i = 0; i < g_probe_count; i++) {
         if (g_trail_points >= 2 &&
-            roads_polyline_distance_xz(g_trail_local, g_trail_points,
-                                       g_probe_items[i].pos[0] - g_terrain.center[0],
-                                       g_probe_items[i].pos[2] - g_terrain.center[1]) <
-                TRAIL_WIDTH * 0.5f)
+            roads_polyline_distance_xz(
+                g_trail_local, g_trail_points, g_probe_items[i].pos[0] - g_terrain.center[0],
+                g_probe_items[i].pos[2] - g_terrain.center[1]) < TRAIL_WIDTH * 0.5f)
             on++;
     }
-    printf("scatter-probe road points=%d trees_on=%d rejected=%llu width=%.2f\n",
-           g_trail_points, on, g_trail_rejected, (double)TRAIL_WIDTH);
+    printf("scatter-probe road points=%d trees_on=%d rejected=%llu width=%.2f\n", g_trail_points,
+           on, g_trail_rejected, (double)TRAIL_WIDTH);
 }
 
 // Rejection sampling against slope, against drainage, and against that density.
@@ -926,7 +926,7 @@ static bool sample_ground(float max_slope, float max_flow, float clump_freq, flo
 
 // --- scene construction ----------------------------------------------------
 
-#define BARK_TEX_SIZE 1024
+#define BARK_TEX_SIZE  1024
 #define LEAF_CELL_SIZE 256
 // The leaf cutout's alpha threshold, shared by the material that TESTS against
 // it and the atlas bake that has to hold its coverage down the mip chain. The
@@ -1065,11 +1065,11 @@ static void bake_terrain_layers(Scene* scene) {
         }
         char key[64];
         snprintf(key, sizeof(key), "forest_layer_%s_a", TERRAIN_LAYERS[i].name);
-        set_material_layer_albedo_tex(
+        material_set_layer_albedo_tex(
             g_mat_terrain, i,
             texture_load_memory_owned(scene->tex_pool, key, albedo, T, T, 4, texture_desc(false)));
         snprintf(key, sizeof(key), "forest_layer_%s_s", TERRAIN_LAYERS[i].name);
-        set_material_layer_surface_tex(
+        material_set_layer_surface_tex(
             g_mat_terrain, i,
             texture_load_memory_owned(scene->tex_pool, key, surface, T, T, 4, texture_desc(false)));
         g_mat_terrain->layers[i].uv_scale = TERRAIN_LAYERS[i].uv_scale;
@@ -1102,7 +1102,7 @@ static void bake_terrain_layers(Scene* scene) {
         }
     }
     if (splat_ok) {
-        set_material_splat_tex(g_mat_terrain,
+        material_set_splat_tex(g_mat_terrain,
                                texture_load_memory_owned(scene->tex_pool, "forest_terrain_splat",
                                                          splat, res, res, 3, texture_desc(false)));
     } else {
@@ -1176,26 +1176,24 @@ static void bake_vegetation_textures(Scene* scene) {
             free(field);
         }
         if (ba && bn && br) {
-            CookBlob out[3] = {{ba, (size_t)B * B * 3u},
-                               {bn, (size_t)B * B * 3u},
-                               {br, (size_t)B * B * 3u}};
+            CookBlob out[3] = {
+                {ba, (size_t)B * B * 3u}, {bn, (size_t)B * B * 3u}, {br, (size_t)B * B * 3u}};
             cook_store(&bk, out, 3);
         }
     }
     if (ba && bn && br) {
-        set_material_albedo_tex(g_mat_bark,
-                                texture_load_memory_owned(scene->tex_pool, "forest_bark_albedo",
-                                                          ba, B, B, 3, texture_desc(true)));
+        material_set_albedo_tex(g_mat_bark,
+                                texture_load_memory_owned(scene->tex_pool, "forest_bark_albedo", ba,
+                                                          B, B, 3, texture_desc(true)));
         // Stated as a NORMAL so it takes BC5. Procedural maps reach the GPU
         // through this path rather than through an importer, so nothing else can
         // know what they are.
-        set_material_normal_tex(g_mat_bark,
-                                texture_load_memory_owned(scene->tex_pool, "forest_bark_normal",
-                                                          bn, B, B, 3,
-                                                          (TextureDesc){.is_srgb = false,
-                                                                        .alpha = TEXTURE_ALPHA_DATA,
-                                                                        .use = TEXTURE_USE_NORMAL}));
-        set_material_roughness_tex(g_mat_bark,
+        material_set_normal_tex(g_mat_bark, texture_load_memory_owned(
+                                                scene->tex_pool, "forest_bark_normal", bn, B, B, 3,
+                                                (TextureDesc){.is_srgb = false,
+                                                              .alpha = TEXTURE_ALPHA_DATA,
+                                                              .use = TEXTURE_USE_NORMAL}));
+        material_set_roughness_tex(g_mat_bark,
                                    texture_load_memory_owned(scene->tex_pool, "forest_bark_rough",
                                                              br, B, B, 3, texture_desc(false)));
     }
@@ -1214,9 +1212,8 @@ static void bake_vegetation_textures(Scene* scene) {
     } else {
         veg_leaf_cluster_maps(LW, LH, &la, &ln, &lr);
         if (la && ln && lr) {
-            CookBlob out[3] = {{la, (size_t)LW * LH * 4u},
-                               {ln, (size_t)LW * LH * 3u},
-                               {lr, (size_t)LW * LH * 3u}};
+            CookBlob out[3] = {
+                {la, (size_t)LW * LH * 4u}, {ln, (size_t)LW * LH * 3u}, {lr, (size_t)LW * LH * 3u}};
             cook_store(&lk, out, 3);
         }
     }
@@ -1224,16 +1221,15 @@ static void bake_vegetation_textures(Scene* scene) {
     // against the cutoff the material below states.
     TextureDesc leaf_desc = texture_desc(true);
     leaf_desc.coverage_cutoff = LEAF_ALPHA_CUTOFF;
-    set_material_albedo_tex(g_mat_leaf,
-                            texture_load_memory_owned(scene->tex_pool, "forest_leaf_albedo", la, LW,
-                                                      LH, 4, leaf_desc));
-    set_material_normal_tex(g_mat_leaf,
-                            texture_load_memory_owned(scene->tex_pool, "forest_leaf_normal", ln, LW,
-                                                      LH, 3,
-                                                      (TextureDesc){.is_srgb = false,
-                                                                    .alpha = TEXTURE_ALPHA_DATA,
-                                                                    .use = TEXTURE_USE_NORMAL}));
-    set_material_roughness_tex(g_mat_leaf,
+    material_set_albedo_tex(
+        g_mat_leaf,
+        texture_load_memory_owned(scene->tex_pool, "forest_leaf_albedo", la, LW, LH, 4, leaf_desc));
+    material_set_normal_tex(
+        g_mat_leaf, texture_load_memory_owned(scene->tex_pool, "forest_leaf_normal", ln, LW, LH, 3,
+                                              (TextureDesc){.is_srgb = false,
+                                                            .alpha = TEXTURE_ALPHA_DATA,
+                                                            .use = TEXTURE_USE_NORMAL}));
+    material_set_roughness_tex(g_mat_leaf,
                                texture_load_memory_owned(scene->tex_pool, "forest_leaf_rough", lr,
                                                          LW, LH, 3, texture_desc(false)));
 }
@@ -1244,8 +1240,8 @@ static Material* make_material(const char* name, vec3 albedo, float roughness, f
     glm_vec3_copy(albedo, m->albedo);
     m->roughness = roughness;
     m->metallic = metallic;
-    set_material_shader_program(m, g_pbr);
-    add_material_to_scene(g_scene, m);
+    material_set_program(m, g_pbr);
+    scene_add_material(g_scene, m);
     return m;
 }
 
@@ -1445,8 +1441,8 @@ static void load_heightfield(void) {
 static void load_stream(float l0_coverage) {
     double t0 = glfwGetTime();
     g_stream = terrain_stream_open(g_args.terrain_stream, g_terrain.extent, l0_coverage,
-                                   g_args.terrain_stream_resident_res,
-                                   g_args.terrain_stream_window, g_args.terrain_stream_budget);
+                                   g_args.terrain_stream_resident_res, g_args.terrain_stream_window,
+                                   g_args.terrain_stream_budget);
     double ms = (glfwGetTime() - t0) * 1000.0;
     if (!g_stream) {
         fprintf(stderr, "forest: terrain stream %s refused; keeping the analytic terrain\n",
@@ -1466,8 +1462,8 @@ static void save_stream(void) {
         return;
     }
     printf("terrain-stream-probe saved path=%s res=%d levels=%d tile=%d min=%.9g max=%.9g\n",
-           g_args.terrain_stream_save, g_field.res, g_field.level_count,
-           TERRAIN_STREAM_TILE_NODES, (double)g_field.min_y, (double)g_field.max_y);
+           g_args.terrain_stream_save, g_field.res, g_field.level_count, TERRAIN_STREAM_TILE_NODES,
+           (double)g_field.min_y, (double)g_field.max_y);
 }
 
 // Patch edge the quadtree aims its finest level at, in world units.
@@ -1511,8 +1507,8 @@ static void build_terrain(void) {
                 finalize_mesh(mesh, g_mat_terrain, false);
 
                 SceneNode* node = create_node();
-                add_mesh_to_node(node, mesh);
-                add_child_node(group, node);
+                node_add_mesh(node, mesh);
+                node_add_child(group, node);
                 g_node_count++;
             }
         }
@@ -1520,9 +1516,9 @@ static void build_terrain(void) {
         // Nothing is built here. The first descent -- which needs a camera, and
         // so cannot happen before the first frame -- builds what it selects.
         g_terrain_group = group;
-        g_terrain_qt = create_terrain_quadtree(&g_terrain, group,
-                                               forest_quadtree_levels(g_terrain.extent),
-                                               TERRAIN_PATCH_SEGMENTS, g_mat_terrain);
+        g_terrain_qt =
+            create_terrain_quadtree(&g_terrain, group, forest_quadtree_levels(g_terrain.extent),
+                                    TERRAIN_PATCH_SEGMENTS, g_mat_terrain);
         if (!g_terrain_qt)
             fprintf(stderr, "forest: terrain quadtree refused\n");
     }
@@ -1806,14 +1802,14 @@ static void region_emit(Region* r, const Placement* items, int count, Mesh* cons
                 groups[i] = make_group(name);
             }
             SceneNode* node = create_node();
-            add_mesh_to_node(node, mesh_ref(protos[i]));
+            node_add_mesh(node, mesh_ref(protos[i]));
             set_node_trs(node, items[k].pos, items[k].yaw, items[k].scale);
-            add_child_node(groups[i], node);
+            node_add_child(groups[i], node);
             if (!region_track(r, node)) {
-                remove_child_node(groups[i], node);
+                node_remove_child(groups[i], node);
                 free_node(node);
-                fprintf(stderr, "forest: region %d,%d out of memory at %zu nodes\n", r->rx,
-                        r->rz, r->node_count);
+                fprintf(stderr, "forest: region %d,%d out of memory at %zu nodes\n", r->rx, r->rz,
+                        r->node_count);
                 return;
             }
             g_node_count++;
@@ -2129,8 +2125,8 @@ static void region_probe(void) {
             // bytes and the other three snapped floats.
             printf("region-probe cell rx=%d rz=%d trees=%d rocks=%d nodes=%zu collider=%d "
                    "digest=%08x authored=%08x\n",
-                   rx, rz, r->trees, r->rocks, r->node_count, r->collider ? 1 : 0,
-                   region_digest(r), region_digest_authored(r));
+                   rx, rz, r->trees, r->rocks, r->node_count, r->collider ? 1 : 0, region_digest(r),
+                   region_digest_authored(r));
         }
     }
 }
@@ -2158,8 +2154,8 @@ static void regions_create_sized(PhysicsWorld* physics, EntityManager* em, float
 }
 
 static void regions_create(PhysicsWorld* physics, EntityManager* em) {
-    regions_create_sized(physics, em, g_args.region_span > 0.0f ? g_args.region_span
-                                                                : REGION_SPAN_DEFAULT);
+    regions_create_sized(physics, em,
+                         g_args.region_span > 0.0f ? g_args.region_span : REGION_SPAN_DEFAULT);
 }
 
 static void regions_create_single(PhysicsWorld* physics, EntityManager* em) {
@@ -2222,19 +2218,19 @@ static void regions_free_all(void) {
 // measurement, not to offer a second look.
 static void build_fallback_sun(void) {
     Light* sun = create_light();
-    set_light_name(sun, "sun");
-    set_light_type(sun, LIGHT_DIRECTIONAL);
-    set_light_direction(sun, (vec3){-0.45f, -0.78f, -0.44f});
-    set_light_color(sun, (vec3){1.0f, 0.96f, 0.88f});
-    set_light_intensity(sun, 3.2f);
-    set_light_cast_shadows(sun, true);
-    set_light_size(sun, 4.0f, 4.0f);
-    add_light_to_scene(g_scene, sun);
+    light_set_name(sun, "sun");
+    light_set_type(sun, LIGHT_DIRECTIONAL);
+    light_set_direction(sun, (vec3){-0.45f, -0.78f, -0.44f});
+    light_set_color(sun, (vec3){1.0f, 0.96f, 0.88f});
+    light_set_intensity(sun, 3.2f);
+    light_set_cast_shadows(sun, true);
+    light_set_size(sun, 4.0f, 4.0f);
+    scene_add_light(g_scene, sun);
 
     SceneNode* node = create_node();
-    set_node_name(node, "sun");
-    set_node_light(node, sun);
-    add_child_node(g_root, node);
+    node_set_name(node, "sun");
+    node_set_light(node, sun);
+    node_add_child(g_root, node);
 
     // No IBL without the sky, so this uniform term is the whole of the fill.
     // It defaults to zero, which would leave every shadowed surface black.
@@ -2272,22 +2268,22 @@ static void build_sky_and_sun(Engine* engine) {
     g_scene->skybox_ground_projection = false;
 
     Light* sun = create_light();
-    set_light_name(sun, "sun");
-    set_light_type(sun, LIGHT_DIRECTIONAL);
-    set_light_cast_shadows(sun, true);
-    set_light_size(sun, 4.0f, 4.0f);
+    light_set_name(sun, "sun");
+    light_set_type(sun, LIGHT_DIRECTIONAL);
+    light_set_cast_shadows(sun, true);
+    light_set_size(sun, 4.0f, 4.0f);
     sky->sun_light = sun;
     // Lower than the tree app's 10: that app frames one subject against a
     // backdrop and can afford to blow its highlights, where a whole terrain of
     // mid-albedo surfaces facing the sun clips instead.
     sky->sun_base_intensity = 6.0f;
     sky_apply_sun_to_light(sky);
-    add_light_to_scene(g_scene, sun);
+    scene_add_light(g_scene, sun);
 
     SceneNode* node = create_node();
-    set_node_name(node, "sun");
-    set_node_light(node, sun);
-    add_child_node(g_root, node);
+    node_set_name(node, "sun");
+    node_set_light(node, sun);
+    node_add_child(g_root, node);
 }
 
 // --- callbacks -------------------------------------------------------------
@@ -2328,12 +2324,12 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
 static void on_init(Game* game) {
     Engine* engine = game->engine;
     double startup_t0 = glfwGetTime();
-    g_pbr = get_engine_shader_program_by_name(engine, "pbr");
+    g_pbr = engine_get_program(engine, "pbr");
 
     g_scene = create_scene();
     g_root = create_node();
-    set_node_name(g_root, "root");
-    set_scene_root_node(g_scene, g_root);
+    node_set_name(g_root, "root");
+    scene_set_root(g_scene, g_root);
     game_set_scene(game, g_scene);
 
     g_terrain = terrain_default_params();
@@ -2475,7 +2471,7 @@ static void on_init(Game* game) {
         wind->gust_amount = 0.5f;
         wind->turbulence = 0.35f;
         wind->phase_variation = 1.0f;
-        set_scene_wind(g_scene, wind);
+        scene_set_wind(g_scene, wind);
     }
 
     PhysicsConfig pc = physics_default_config();
@@ -2515,8 +2511,7 @@ static void on_init(Game* game) {
     if (g_args.scatter_probe && g_probe_items)
         scatter_probe(g_probe_items, (int)g_probe_count);
     printf("Trees and rocks: %d prototypes, %d region(s) of %d resident\n",
-           TREE_PROTOTYPES + ROCK_PROTOTYPES, (int)g_regions_loaded,
-           g_region_side * g_region_side);
+           TREE_PROTOTYPES + ROCK_PROTOTYPES, (int)g_regions_loaded, g_region_side * g_region_side);
     // The creation reference is NOT released here, unlike the one-shot scatter
     // this replaced. A region that loads three seconds from now takes its own
     // ref from these pointers, so dropping the last one when the near regions
@@ -2614,12 +2609,12 @@ static void on_init(Game* game) {
     // 0.5 / 2000 rather than the 0.1 / 1000 default: a kilometre of terrain
     // needs the far plane, and 0.1 near against it is a 20000:1 depth ratio that
     // z-fights across the whole distance.
-    set_camera_perspective(camera, glm_rad(58.0f), 0.5f, 2000.0f);
-    set_camera_position(camera, (vec3){spawn_x, spawn_y + 6.0f, spawn_z + 16.0f});
-    set_camera_look_at(camera, (vec3){spawn_x, spawn_y, spawn_z});
-    set_camera_up_vector(camera, (vec3){0.0f, 1.0f, 0.0f});
-    set_engine_camera(engine, camera);
-    set_engine_camera_mode(engine, CAMERA_MODE_FREE);
+    camera_set_perspective(camera, glm_rad(58.0f), 0.5f, 2000.0f);
+    camera_set_position(camera, (vec3){spawn_x, spawn_y + 6.0f, spawn_z + 16.0f});
+    camera_set_look_at(camera, (vec3){spawn_x, spawn_y, spawn_z});
+    camera_set_up(camera, (vec3){0.0f, 1.0f, 0.0f});
+    engine_set_camera(engine, camera);
+    engine_set_camera_mode(engine, CAMERA_MODE_FREE);
 
     // Pinned rather than adaptive: auto-exposure is the top determinism hazard
     // for anything compared across builds, and every arm here reads a frame or a
@@ -2679,8 +2674,8 @@ static void on_init(Game* game) {
         glm_vec3_copy((vec3){0.030f, 0.038f, 0.055f}, fx->fog_ambient);
     }
 
-    set_engine_show_gui(engine, !engine->headless);
-    set_engine_show_fps(engine, !engine->headless);
+    engine_set_show_gui(engine, !engine->headless);
+    engine_set_show_fps(engine, !engine->headless);
 
     startup_ms("on-init-total", startup_t0);
     printf("Forest: %zu distinct meshes, %zu prototype triangles, %zu nodes\n", g_distinct_meshes,
@@ -2808,8 +2803,8 @@ static void on_pre_render(Game* game, double alpha) {
             vec3 eye, target;
             glm_vec3_sub(g_args.cam_eye, g_scene->world_origin, eye);
             glm_vec3_sub(g_args.cam_target, g_scene->world_origin, target);
-            set_camera_position(camera, eye);
-            set_camera_look_at(camera, target);
+            camera_set_position(camera, eye);
+            camera_set_look_at(camera, target);
         } else if (g_player) {
             if (input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_LEFT) ||
                 input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_RIGHT)) {
@@ -2839,13 +2834,13 @@ static void on_pre_render(Game* game, double alpha) {
             float floor_y = terrain_height_at(&g_terrain, eye[0], eye[2]) + 1.0f;
             if (eye[1] < floor_y)
                 eye[1] = floor_y;
-            set_camera_position(camera, eye);
-            set_camera_look_at(camera, target);
+            camera_set_position(camera, eye);
+            camera_set_look_at(camera, target);
         }
         // Without both of these the view matrix keeps whatever it had; nothing
         // else in a game-framework app writes it.
-        update_engine_camera_lookat(engine);
-        update_engine_camera_perspective(engine);
+        engine_update_view(engine);
+        engine_update_projection(engine);
     }
 
     // The descent, before the engine's transform walk gives a newly attached
@@ -2884,7 +2879,7 @@ static void on_render(Game* game, double alpha) {
 }
 
 static void on_shutdown(Game* game) {
-    // run_game does not report; the render app does this at its own exit. Here
+    // game_run does not report; the render app does this at its own exit. Here
     // because the whole app exists to be read off these tables.
     if (game && game->engine)
         profiler_report(game->engine->profiler);
@@ -2952,7 +2947,8 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --depth-prepass     Depth-only pass before shading\n");
     fprintf(stderr, "      --cook              Warm the derived-data cache and exit (headless)\n");
     fprintf(stderr, "      --no-cook           Bake everything live; touch no cache\n");
-    fprintf(stderr, "      --cook-dir <p>      Cache directory (default cooked/, or CETRA_COOK_DIR)\n");
+    fprintf(stderr,
+            "      --cook-dir <p>      Cache directory (default cooked/, or CETRA_COOK_DIR)\n");
     fprintf(stderr, "      --taa               TAA headless too (diagnostic)\n");
     fprintf(stderr, "      --msaa <n>          Sample count, overriding the TAA/headless policy\n");
     fprintf(stderr, "      --headless-jitter   Sub-pixel jitter headless\n");
@@ -2984,13 +2980,16 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "      --terrain-height-probe   Print sampled heights, normals and masks\n");
     fprintf(stderr, "      --scatter-probe          Print the drainage the scatter placed into\n");
     fprintf(stderr, "      --cluster-probe          Print each clustered prototype's DAG\n");
-    fprintf(stderr, "      --no-morph               CDLOD morph off, in all five geometry programs\n");
+    fprintf(stderr,
+            "      --no-morph               CDLOD morph off, in all five geometry programs\n");
     fprintf(stderr, "      --terrain-quadtree-probe Print the patch selection and morph windows\n");
     fprintf(stderr, "      --terrain-extent <f>     Domain half-width; the world grows with it\n");
     fprintf(stderr, "      --no-regions             One resident region over the whole domain\n");
-    fprintf(stderr, "      --region-radius <f>      Load radius; --region-span <f> the cell side\n");
+    fprintf(stderr,
+            "      --region-radius <f>      Load radius; --region-span <f> the cell side\n");
     fprintf(stderr, "      --region-probe           Print residency and each region's scatter\n");
-    fprintf(stderr, "      --walk <speed>           Walk the character forward, about-face at half\n");
+    fprintf(stderr,
+            "      --walk <speed>           Walk the character forward, about-face at half\n");
     fprintf(stderr, "      --no-island              Flat domain and no sea, as before 11.63\n");
     fprintf(stderr, "      --no-trail               No gravel path, and no props kept off it\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
@@ -3229,7 +3228,7 @@ int main(int argc, char** argv) {
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 
-    run_game(game);
+    game_run(game);
     free_game(game);
     return 0;
 }

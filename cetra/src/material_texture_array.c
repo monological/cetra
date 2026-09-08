@@ -105,7 +105,8 @@ static void _clear_decal_layers(struct Scene* scene) {
     }
 }
 
-int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene, struct Engine* engine) {
+int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
+                                 struct Engine* engine) {
     if (!arr || !scene || !engine)
         return -1;
 
@@ -132,7 +133,8 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
         mat->metallic_layer = material_texture_layer_for(ids, texs, &count, mat->metalness_tex);
         mat->ao_layer = material_texture_layer_for(ids, texs, &count, mat->ambient_occlusion_tex);
         mat->opacity_layer = material_texture_layer_for(ids, texs, &count, mat->opacity_tex);
-        mat->microsurface_layer = material_texture_layer_for(ids, texs, &count, mat->microsurface_tex);
+        mat->microsurface_layer =
+            material_texture_layer_for(ids, texs, &count, mat->microsurface_tex);
         mat->anisotropy_layer = material_texture_layer_for(ids, texs, &count, mat->anisotropy_tex);
 
         // The layered-surface tenants. Every slot is cleared before the live
@@ -172,7 +174,8 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
     }
 
     if (count > engine->max_array_texture_layers) {
-        log_error("material_texture_array_build: %d unique textures exceeds GL_MAX_ARRAY_TEXTURE_LAYERS (%d)",
+        log_error("material_texture_array_build: %d unique textures exceeds "
+                  "GL_MAX_ARRAY_TEXTURE_LAYERS (%d)",
                   count, engine->max_array_texture_layers);
         free(ids);
         free(texs);
@@ -239,7 +242,7 @@ int material_texture_array_build(MaterialTextureArray* arr, struct Scene* scene,
     // 4. Draw each source mask into its layer through the mask_copy program;
     //    the source sampler's linear filter does the resample. A source already
     //    at the canonical size copies 1:1 (byte-exact).
-    ShaderProgram* copy = get_engine_shader_program_by_name(engine, "mask_copy");
+    ShaderProgram* copy = engine_get_program(engine, "mask_copy");
     if (!copy) {
         log_error("material_texture_array_build: mask_copy program missing");
         free(ids);
@@ -323,6 +326,7 @@ void material_texture_array_ensure_built(struct Scene* scene, struct Engine* eng
         return;
     if (!scene->material_textures)
         scene->material_textures = create_material_texture_array();
-    if (scene->material_textures && material_texture_array_build(scene->material_textures, scene, engine) == 0)
+    if (scene->material_textures &&
+        material_texture_array_build(scene->material_textures, scene, engine) == 0)
         scene->material_textures_dirty = false;
 }

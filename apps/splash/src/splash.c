@@ -27,7 +27,7 @@ int main(int argc, const char* argv[]) {
         return -1;
     }
 
-    if (init_engine(engine) != 0) {
+    if (engine_init(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
         free_engine(engine);
         return -1;

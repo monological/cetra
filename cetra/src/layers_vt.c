@@ -22,8 +22,8 @@
 // per texel, so half a unit resolves it four times over. Grain never lives
 // here at any resolution; that is the runtime detail term's job.
 #define LAYERS_VT_TARGET_UNITS_PER_TEXEL 0.5f
-#define LAYERS_VT_RES_MIN 256
-#define LAYERS_VT_RES_MAX 2048
+#define LAYERS_VT_RES_MIN                256
+#define LAYERS_VT_RES_MAX                2048
 
 void material_upload_layer_uniforms(const Material* material, struct UniformManager* u) {
     if (!material || !u)
@@ -324,14 +324,13 @@ static void vt_gen_mips(GLuint albedo_tex, GLuint surface_tex) {
 
 // The world rect one page TILE covers, gutter included -- the rect the bake
 // draws and the inset the shader's read undoes.
-static void vt_page_rect(const MaterialLayersVt* vt, const Material* m, int vpage,
-                         float rect[4]) {
+static void vt_page_rect(const MaterialLayersVt* vt, const Material* m, int vpage, float rect[4]) {
     int vx = vpage % vt->page_grid;
     int vz = vpage / vt->page_grid;
-    rect[0] = m->splat_origin[0] + (float)vx * vt->page_span
-              - (float)VT_PAGE_GUTTER * vt->page_texel;
-    rect[1] = m->splat_origin[1] + (float)vz * vt->page_span
-              - (float)VT_PAGE_GUTTER * vt->page_texel;
+    rect[0] =
+        m->splat_origin[0] + (float)vx * vt->page_span - (float)VT_PAGE_GUTTER * vt->page_texel;
+    rect[1] =
+        m->splat_origin[1] + (float)vz * vt->page_span - (float)VT_PAGE_GUTTER * vt->page_texel;
     rect[2] = (float)VT_PAGE_TEXELS * vt->page_texel;
     rect[3] = rect[2];
 }
@@ -346,7 +345,7 @@ static bool vt_bake_pages(Material* m, struct Scene* scene, struct Engine* engin
                           const int* vpages, const int* slots, int count) {
     MaterialLayersVt* vt = m->layers_vt;
     MaterialTextureArray* arr = scene->material_textures;
-    ShaderProgram* prog = get_engine_shader_program_by_name(engine, "layers_vt_bake");
+    ShaderProgram* prog = engine_get_program(engine, "layers_vt_bake");
     if (!prog || count <= 0)
         return false;
 
@@ -392,8 +391,8 @@ static void vt_pages_upload(const MaterialLayersVt* vt, struct Engine* engine);
 // idiom's 1.2, applied where the capacity clamp bites).
 #define VT_PAGE_EVICT_HYST_SQ 1.44f
 
-static float vt_page_dist2(const MaterialLayersVt* vt, const Material* m,
-                           const struct Scene* scene, int vpage, const float* cam) {
+static float vt_page_dist2(const MaterialLayersVt* vt, const Material* m, const struct Scene* scene,
+                           int vpage, const float* cam) {
     float rect[4];
     vt_page_rect(vt, m, vpage, rect);
     float cx = rect[0] - scene->world_origin[0] + 0.5f * rect[2];
@@ -597,7 +596,7 @@ static void vt_pages_upload(const MaterialLayersVt* vt, struct Engine* engine) {
 static bool vt_bake(Material* m, struct Scene* scene, struct Engine* engine, int res) {
     MaterialLayersVt* vt = m->layers_vt;
     MaterialTextureArray* arr = scene->material_textures;
-    ShaderProgram* prog = get_engine_shader_program_by_name(engine, "layers_vt_bake");
+    ShaderProgram* prog = engine_get_program(engine, "layers_vt_bake");
     if (!prog) {
         log_error("layers_vt: bake program missing");
         return false;
@@ -750,10 +749,8 @@ static void vt_feedback_alloc(LayersVtFeedback* fb, int w, int h) {
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
     glGenFramebuffers(1, &fb->fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fb->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->color_tex,
-                           0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
-                              fb->depth_rb);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->color_tex, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fb->depth_rb);
     for (int i = 0; i < VT_FEEDBACK_RING; i++) {
         glGenBuffers(1, &fb->pbo[i]);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, fb->pbo[i]);
@@ -807,7 +804,7 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     }
     if (!paged)
         return;
-    ShaderProgram* prog = get_engine_shader_program_by_name(engine, "layers_vt_feedback");
+    ShaderProgram* prog = engine_get_program(engine, "layers_vt_feedback");
     if (!prog)
         return;
 
@@ -843,8 +840,8 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(prog->id);
     uniform_set_mat4(prog->uniforms, "viewProj", (const float*)engine->view_proj);
-    const float domain[4] = {paged->splat_origin[0], paged->splat_origin[1],
-                             paged->splat_size[0], paged->splat_size[1]};
+    const float domain[4] = {paged->splat_origin[0], paged->splat_origin[1], paged->splat_size[0],
+                             paged->splat_size[1]};
     uniform_set_vec4(prog->uniforms, "splatDomain", domain);
 
     // Only the paged surfaces vote, depth-tested against EACH OTHER: terrain
@@ -867,8 +864,7 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
         if (!frustum_test_aabb_transformed(&fr, mesh->aabb.min, mesh->aabb.max,
                                            item->node->global_transform))
             continue;
-        uniform_set_mat4(prog->uniforms, "model",
-                         (const float*)item->node->global_transform);
+        uniform_set_mat4(prog->uniforms, "model", (const float*)item->node->global_transform);
         GLsizei count = 0;
         const void* offset = NULL;
         mesh_lod_range(mesh, 0, &count, &offset);

@@ -83,35 +83,34 @@ void free_node(SceneNode* node);
 // build graph. Detaches `child` from any previous parent first, so a node is
 // never in two children arrays -- which would be a double free, each array
 // freeing what it holds.
-int add_child_node(SceneNode* node, SceneNode* child);
+int node_add_child(SceneNode* node, SceneNode* child);
 
 // Detach `child` without freeing it, leaving the caller owning it. Returns -1 if
 // `child` is not a child of `node`.
 //
 // The only way out of the array, so the order of the remaining children stays
 // what the caller built: sibling order is what the draw list walks.
-int remove_child_node(SceneNode* node, SceneNode* child);
+int node_remove_child(SceneNode* node, SceneNode* child);
 
 // meshes
-int add_mesh_to_node(SceneNode* node, Mesh* mesh);
+int node_add_mesh(SceneNode* node, Mesh* mesh);
 
 // setters
-void set_node_name(SceneNode* node, const char* name);
-void set_node_light(SceneNode* node, Light* light);
-void set_node_camera(SceneNode* node, Camera* camera);
+void node_set_name(SceneNode* node, const char* name);
+void node_set_light(SceneNode* node, Light* light);
+void node_set_camera(SceneNode* node, Camera* camera);
 // Attach a particle system (borrowed) whose world transform is this node's.
-void set_node_particle_system(SceneNode* node, struct ParticleSystem* sys);
+void node_set_particle_system(SceneNode* node, struct ParticleSystem* sys);
 
 // find
-SceneNode* find_node_by_name(SceneNode* root, const char* name);
+SceneNode* node_find(SceneNode* root, const char* name);
 
 // xyz
-void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz);
+void node_set_show_xyz(SceneNode* node, bool show_xyz);
 
 // shaders
-void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program);
-void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
-                                   ShaderProgram* skinned);
+void node_set_program(SceneNode* node, ShaderProgram* program);
+void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* skinned);
 
 // move
 
@@ -325,7 +324,7 @@ Scene* create_scene();
 void free_scene(Scene* scene);
 
 // root
-void set_scene_root_node(Scene* scene, SceneNode* root_node);
+void scene_set_root(Scene* scene, SceneNode* root_node);
 
 // Recompute every node's global transform from the root down. IDEMPOTENT --
 // running it twice in a frame recomputes the same values, so an app that adds or
@@ -347,13 +346,13 @@ void scene_propagate_transforms(Scene* scene);
 void scene_latch_prev_transforms(Scene* scene);
 
 // camera
-void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count);
-int add_camera_to_scene(Scene* scene, Camera* camera);
-Camera* find_camera_by_name(Scene* scene, const char* name);
+void scene_set_cameras(Scene* scene, Camera** cameras, size_t camera_count);
+int scene_add_camera(Scene* scene, Camera* camera);
+Camera* scene_find_camera(Scene* scene, const char* name);
 
 // light
-void set_scene_lights(Scene* scene, Light** lights, size_t light_count);
-int add_light_to_scene(Scene* scene, Light* light);
+void scene_set_lights(Scene* scene, Light** lights, size_t light_count);
+int scene_add_light(Scene* scene, Light* light);
 
 // Unlink and FREE. The Scene owns its lights, so an unlink-only form would leak
 // by default.
@@ -369,9 +368,9 @@ int add_light_to_scene(Scene* scene, Light* light);
 // the graph to clear it, which would be O(nodes) per removal against a caller
 // this codebase does not have -- the one caller that removes anything, the
 // emissive reconcile, only ever removes lights it created, and those have no node.
-int remove_light_from_scene(Scene* scene, Light* light);
+int scene_remove_light(Scene* scene, Light* light);
 
-Light* find_light_by_name(Scene* scene, const char* name);
+Light* scene_find_light(Scene* scene, const char* name);
 
 /*
  * The directional DELIVERING most light here, ranked by light_effective_intensity.
@@ -396,27 +395,27 @@ Light* find_light_by_name(Scene* scene, const char* name);
 const Light* scene_key_directional(const Scene* scene, const float* surface_normal);
 
 // particle systems (scene-owned; ticked + rendered automatically by the engine)
-int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys);
-// Advance every particle system's sim. Call from a fixed-timestep update (run_game
+int scene_add_particle_system(Scene* scene, struct ParticleSystem* sys);
+// Advance every particle system's sim. Call from a fixed-timestep update (game_run
 // does; an engine_run host may call it too). Rendering is automatic in
 // render_current_scene.
 void scene_update_particle_systems(Scene* scene, float dt, float t);
 
 // material
-int add_material_to_scene(Scene* scene, Material* material);
+int scene_add_material(Scene* scene, Material* material);
 // Register every material reachable from the graph, if it is marked dirty.
 // Idempotent and free when clean, so the engine calls it every frame.
 void scene_sync_materials(Scene* scene);
 // Mark the graph as having gained materials the registry has not seen.
 //
-// Needed because a SceneNode has no way back to its Scene, so add_mesh_to_node
+// Needed because a SceneNode has no way back to its Scene, so node_add_mesh
 // cannot mark this itself. Creating a scene and setting its root both mark it,
 // which covers building a graph before the first frame -- an app that attaches
 // meshes carrying NEW materials mid-run has to say so.
 void scene_mark_materials_dirty(Scene* scene);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
-void set_scene_wind(Scene* scene, struct Wind* wind);
+void scene_set_wind(Scene* scene, struct Wind* wind);
 
 // Ask for the world to be re-centred so `new_origin` becomes storage (0,0,0).
 //
@@ -450,12 +449,12 @@ void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, 
 void scene_environment_changed(Scene* scene, struct Engine* engine);
 
 // fog volumes. 0 on success, -1 when the array is full, as every add_*_to_scene above.
-int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume);
+int scene_add_fog_volume(Scene* scene, const FogVolume* volume);
 
 // occluders. Same contract. Refuses an inverted box (min >= max on any axis)
 // rather than storing it: a degenerate occluder rasterises nothing, so keeping
 // it would be a silent hole in what the author believes is covered.
-int add_occluder_to_scene(Scene* scene, const Occluder* occluder);
+int scene_add_occluder(Scene* scene, const Occluder* occluder);
 
 // decals. Same contract; the caller owns resolving the textures and orienting
 // the frame, so this bounds-checks, copies, and RETAINS the two images.
@@ -467,7 +466,7 @@ int add_occluder_to_scene(Scene* scene, const Occluder* occluder);
 // texture retains it (material.c's sixteen setters); a decal holding a raw
 // pointer was the one deviation, and a deviation nothing states is
 // indistinguishable from an oversight.
-int add_decal_to_scene(Scene* scene, const Decal* decal);
+int scene_add_decal(Scene* scene, const Decal* decal);
 // Release every decal's images and empty the array. The counterpart above, and
 // the only correct way to drop decals -- zeroing decal_count leaks the retains.
 void scene_clear_decals(Scene* scene);
@@ -476,16 +475,16 @@ void scene_clear_decals(Scene* scene);
 void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx);
 
 // skeleton
-int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton);
-Skeleton* find_skeleton_by_name(Scene* scene, const char* name);
+int scene_add_skeleton(Scene* scene, Skeleton* skeleton);
+Skeleton* scene_find_skeleton(Scene* scene, const char* name);
 
 // animation
-int add_animation_to_scene(Scene* scene, Animation* animation);
-Animation* find_animation_by_name(Scene* scene, const char* name);
+int scene_add_animation(Scene* scene, Animation* animation);
+Animation* scene_find_animation(Scene* scene, const char* name);
 
 // viz
-GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program);
-GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outlines_shader_program);
+GLboolean scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program);
+GLboolean scene_set_outlines_program(Scene* scene, ShaderProgram* outlines_shader_program);
 
 // print
 // One `transform-probe node` line per NAMED node, plus a `total` row: whether
@@ -493,14 +492,14 @@ GLboolean set_scene_outlines_shader_program(Scene* scene, ShaderProgram* outline
 // how far apart they are. Call AFTER the walk.
 void scene_transform_probe(const Scene* scene, size_t frame);
 
-void print_scene_node(const SceneNode* node, int depth);
-void print_scene(const Scene* scene);
+void node_print(const SceneNode* node, int depth);
+void scene_print(const Scene* scene);
 
 // bounds
-void compute_scene_bounds(Scene* scene, vec3 out_min, vec3 out_max);
-void compute_scene_center_and_radius(Scene* scene, vec3 out_center, float* out_radius);
+void scene_bounds(Scene* scene, vec3 out_min, vec3 out_max);
+void scene_bounding_sphere(Scene* scene, vec3 out_center, float* out_radius);
 
 // render
-void upload_buffers_to_gpu_for_nodes(SceneNode* node);
+void node_upload_meshes(SceneNode* node);
 
 #endif // _SCENE_H_

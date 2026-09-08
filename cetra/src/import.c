@@ -41,7 +41,7 @@ static void copy_aiMatrix_to_mat4(const struct aiMatrix4x4* from, mat4 to);
 // works" model; --parallax-scale overrides the default, --no-parallax disables
 // the whole path. 0 leaves POM off even with a height map.
 static float g_parallax_default_scale = 0.05f;
-void set_parallax_default_scale(float scale) {
+void import_set_parallax_default_scale(float scale) {
     g_parallax_default_scale = scale;
 }
 
@@ -77,7 +77,7 @@ static const char* effective_texture_dir(const char* path, const char* texture_d
 typedef enum UVFlipMode { UV_FLIP_AUTO = -1, UV_FLIP_OFF = 0, UV_FLIP_ON = 1 } UVFlipMode;
 static int import_flip_uvs = UV_FLIP_AUTO;
 
-void set_import_flip_uvs(bool flip) {
+void import_set_flip_uvs(bool flip) {
     import_flip_uvs = flip ? UV_FLIP_ON : UV_FLIP_OFF;
 }
 
@@ -101,11 +101,11 @@ static unsigned int uv_flip_flag(void) {
 static bool import_unit_scale = true;
 static float import_scale_multiplier = 1.0f;
 
-void set_import_unit_scale(bool enabled) {
+void import_set_unit_scale(bool enabled) {
     import_unit_scale = enabled;
 }
 
-void set_import_scale_multiplier(float multiplier) {
+void import_set_scale_multiplier(float multiplier) {
     import_scale_multiplier = multiplier;
 }
 
@@ -227,21 +227,21 @@ typedef struct TextureMapping {
  */
 static const TextureMapping texture_mappings[] = {
     // Legacy/FBX texture types
-    {aiTextureType_DIFFUSE, set_material_albedo_tex, "Diffuse", true},
-    {aiTextureType_NORMALS, set_material_normal_tex, "Normal", false},
-    {aiTextureType_METALNESS, set_material_metalness_tex, "Metalness", false},
-    {aiTextureType_DIFFUSE_ROUGHNESS, set_material_roughness_tex, "Roughness", false},
-    {aiTextureType_AMBIENT_OCCLUSION, set_material_ambient_occlusion_tex, "AO", false},
-    {aiTextureType_EMISSIVE, set_material_emissive_tex, "Emissive", true},
-    {aiTextureType_HEIGHT, set_material_height_tex, "Height", false},
-    {aiTextureType_OPACITY, set_material_opacity_tex, "Opacity", false},
+    {aiTextureType_DIFFUSE, material_set_albedo_tex, "Diffuse", true},
+    {aiTextureType_NORMALS, material_set_normal_tex, "Normal", false},
+    {aiTextureType_METALNESS, material_set_metalness_tex, "Metalness", false},
+    {aiTextureType_DIFFUSE_ROUGHNESS, material_set_roughness_tex, "Roughness", false},
+    {aiTextureType_AMBIENT_OCCLUSION, material_set_ambient_occlusion_tex, "AO", false},
+    {aiTextureType_EMISSIVE, material_set_emissive_tex, "Emissive", true},
+    {aiTextureType_HEIGHT, material_set_height_tex, "Height", false},
+    {aiTextureType_OPACITY, material_set_opacity_tex, "Opacity", false},
     // KHR sheen color (sRGB)
-    {aiTextureType_SHEEN, set_material_sheen_tex, "Sheen", true},
-    {aiTextureType_REFLECTION, set_material_reflectance_tex, "Reflectance", false},
+    {aiTextureType_SHEEN, material_set_sheen_tex, "Sheen", true},
+    {aiTextureType_REFLECTION, material_set_reflectance_tex, "Reflectance", false},
     // glTF/GLB-specific texture types
-    {aiTextureType_BASE_COLOR, set_material_albedo_tex, "BaseColor", true},
-    {aiTextureType_NORMAL_CAMERA, set_material_normal_tex, "NormalCamera", false},
-    {aiTextureType_EMISSION_COLOR, set_material_emissive_tex, "EmissionColor", true},
+    {aiTextureType_BASE_COLOR, material_set_albedo_tex, "BaseColor", true},
+    {aiTextureType_NORMAL_CAMERA, material_set_normal_tex, "NormalCamera", false},
+    {aiTextureType_EMISSION_COLOR, material_set_emissive_tex, "EmissionColor", true},
 };
 static const size_t texture_mapping_count = sizeof(texture_mappings) / sizeof(texture_mappings[0]);
 
@@ -258,8 +258,8 @@ static void ai_material_alpha(const struct aiMaterial* m, bool* mask, bool* blen
     } else if (strcmp(mode.data, "MASK") == 0) {
         *mask = true;
         ai_real c;
-        *cutoff = (AI_SUCCESS == aiGetMaterialFloat(m, AI_MATKEY_GLTF_ALPHACUTOFF, &c)) ? (float)c
-                                                                                        : 0.5f;
+        *cutoff =
+            (AI_SUCCESS == aiGetMaterialFloat(m, AI_MATKEY_GLTF_ALPHACUTOFF, &c)) ? (float)c : 0.5f;
     }
 }
 
@@ -311,7 +311,7 @@ static float coverage_cutoff_for(const struct aiScene* ai_scene, const char* tex
         // would otherwise leave this silently blind to it.
         bool uses = false;
         for (size_t r = 0; r < texture_mapping_count && !uses; r++) {
-            if (texture_mappings[r].setter != set_material_albedo_tex)
+            if (texture_mappings[r].setter != material_set_albedo_tex)
                 continue;
             struct aiString path;
             if (AI_SUCCESS == aiGetMaterialTexture(m, texture_mappings[r].ai_type, 0, &path, NULL,
@@ -358,14 +358,13 @@ static float coverage_cutoff_for(const struct aiScene* ai_scene, const char* tex
 // The rule stated once. A new texture slot is wrong here only if it is also
 // wrong about which setter it calls, which is not a mistake that hides.
 static TextureUse texture_use_for_setter(void (*setter)(Material*, Texture*)) {
-    if (setter == set_material_normal_tex || setter == set_material_clearcoat_normal_tex)
+    if (setter == material_set_normal_tex || setter == material_set_clearcoat_normal_tex)
         return TEXTURE_USE_NORMAL;
-    if (setter == set_material_albedo_tex || setter == set_material_emissive_tex ||
-        setter == set_material_sheen_tex || setter == set_material_reflectance_tex)
+    if (setter == material_set_albedo_tex || setter == material_set_emissive_tex ||
+        setter == material_set_sheen_tex || setter == material_set_reflectance_tex)
         return TEXTURE_USE_COLOUR;
     return TEXTURE_USE_DATA;
 }
-
 
 /*
  * Extract material properties from assimp material
@@ -721,7 +720,7 @@ static void load_material_texture(Material* material, TexturePool* tex_pool,
     // chain may have to hold a coverage. WHICH cutoff is not this material's to
     // answer -- the chain is shared by every material reaching the same image,
     // and they can disagree. See coverage_cutoff_for.
-    if (setter == set_material_albedo_tex)
+    if (setter == material_set_albedo_tex)
         desc.coverage_cutoff = coverage_cutoff_for(ai_scene, tex_path);
 
     if (tex_path[0] == '*' && ai_scene) {
@@ -799,7 +798,7 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
         AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_LIGHTMAP, 0, &str, NULL, NULL,
                                            NULL, NULL, mapmode, NULL)) {
         load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                              set_material_ambient_occlusion_tex, "Occlusion(lightmap)",
+                              material_set_ambient_occlusion_tex, "Occlusion(lightmap)",
                               gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
     }
 
@@ -811,12 +810,12 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
         // Only use if we don't already have metalness/roughness textures
         if (!material->metalness_tex) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                                  set_material_metalness_tex, "MetallicRoughness(metalness)",
+                                  material_set_metalness_tex, "MetallicRoughness(metalness)",
                                   gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
         }
         if (!material->roughness_tex) {
             load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                                  set_material_roughness_tex, "MetallicRoughness(roughness)",
+                                  material_set_roughness_tex, "MetallicRoughness(roughness)",
                                   gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
         }
     }
@@ -827,7 +826,7 @@ static Material* process_ai_material(struct aiMaterial* ai_mat, TexturePool* tex
     if (AI_SUCCESS == aiGetMaterialTexture(ai_mat, aiTextureType_CLEARCOAT, 2, &str, NULL, NULL,
                                            NULL, NULL, mapmode, NULL)) {
         load_material_texture(material, tex_pool, ai_scene, loader, str.data, false,
-                              set_material_clearcoat_normal_tex, "ClearcoatNormal",
+                              material_set_clearcoat_normal_tex, "ClearcoatNormal",
                               gl_wrap_from_assimp(mapmode[0]), gl_wrap_from_assimp(mapmode[1]));
     }
 
@@ -1313,7 +1312,7 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
             }
         }
 
-        add_animation_to_scene(scene, animation);
+        scene_add_animation(scene, animation);
         if (retargeted_channels > 0) {
             log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched, "
                      "%d retargeted)",
@@ -1438,7 +1437,7 @@ static bool find_gltf_light_range(const struct aiNode* node, const char* light_n
 }
 
 static void process_ai_lights(const struct aiScene* scene, Light*** lights, size_t* num_lights,
-                       bool photometric_units) {
+                              bool photometric_units) {
     *num_lights = scene->mNumLights;
     *lights = malloc(sizeof(Light*) * (*num_lights));
 
@@ -1509,10 +1508,10 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
                 // 50x50 create_light() default, which LTC turns into a wall of
                 // light (spec 9.2)
                 if (ai_light->mSize.x > 0.0f && ai_light->mSize.y > 0.0f) {
-                    set_light_size(light, ai_light->mSize.x * unit_scale,
+                    light_set_size(light, ai_light->mSize.x * unit_scale,
                                    ai_light->mSize.y * unit_scale);
                 } else {
-                    set_light_size(light, 1.0f, 1.0f);
+                    light_set_size(light, 1.0f, 1.0f);
                     log_info("Area light '%s' imported without a size; defaulting to 1x1 m",
                              light->name ? light->name : "unnamed");
                 }
@@ -1523,7 +1522,7 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
                 // packing orthonormalizes whatever arrives.
                 if (fabsf(ai_light->mUp.x) + fabsf(ai_light->mUp.y) + fabsf(ai_light->mUp.z) >
                     1e-6f) {
-                    set_light_up(light, (vec3){ai_light->mUp.x, ai_light->mUp.y, ai_light->mUp.z});
+                    light_set_up(light, (vec3){ai_light->mUp.x, ai_light->mUp.y, ai_light->mUp.z});
                 }
                 break;
             default:
@@ -1557,7 +1556,7 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
         float khr_range = 0.0f;
         if (light->type != LIGHT_DIRECTIONAL && scene->mRootNode &&
             find_gltf_light_range(scene->mRootNode, ai_light->mName.data, &khr_range)) {
-            set_light_range(light, khr_range * unit_scale);
+            light_set_range(light, khr_range * unit_scale);
         }
 
         // Blender also bakes the light's power into the color (e.g. an 800W
@@ -1599,7 +1598,8 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
     }
 }
 
-static void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, size_t* num_cameras) {
+static void process_ai_cameras(const struct aiScene* scene, Camera*** cameras,
+                               size_t* num_cameras) {
     *num_cameras = scene->mNumCameras;
     *cameras = malloc(sizeof(Camera*) * (*num_cameras));
 
@@ -1647,8 +1647,8 @@ static void process_ai_cameras(const struct aiScene* scene, Camera*** cameras, s
 
 void associate_cameras_and_lights_with_nodes(SceneNode* node, Scene* scene) {
     if (node->name) {
-        node->camera = find_camera_by_name(scene, node->name);
-        node->light = find_light_by_name(scene, node->name);
+        node->camera = scene_find_camera(scene, node->name);
+        node->light = scene_find_light(scene, node->name);
     }
     for (size_t i = 0; i < node->children_count; ++i) {
         associate_cameras_and_lights_with_nodes(node->children[i], scene);
@@ -1728,7 +1728,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
                     process_ai_material(ai_scene->mMaterials[matIndex], tex_pool, ai_scene, loader);
                 if (mat) {
                     mat_cache[matIndex] = mat;
-                    add_material_to_scene(scene, mat);
+                    scene_add_material(scene, mat);
                 }
             }
             mesh->material = mat;
@@ -1743,7 +1743,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
             } else {
                 skeleton = process_ai_skeleton(ai_scene, ai_mesh);
                 if (skeleton) {
-                    add_skeleton_to_scene(scene, skeleton);
+                    scene_add_skeleton(scene, skeleton);
                 }
             }
 
@@ -1752,7 +1752,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
             }
         }
 
-        calculate_aabb(mesh);
+        mesh_compute_aabb(mesh);
         // After the AABB (which describes the vertices, and those do not change)
         // and before any upload, since this rewrites the index array.
         if (mesh_build_lod_chain(mesh) > 1)
@@ -1846,7 +1846,7 @@ void resolve_height_maps(Scene* scene) {
             // change nothing. A saving left, in the shape 11.85 left several.
             Texture* h = texture_load_file(scene->tex_pool, cand, texture_desc(false));
             if (h) {
-                set_material_height_tex(mat, h);
+                material_set_height_tex(mat, h);
                 // Auto-enable POM with the default depth (glTF/FBX carry no POM
                 // scale); an author who set one keeps it.
                 if (mat->parallax_scale == 0.0f)

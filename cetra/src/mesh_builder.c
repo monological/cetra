@@ -54,9 +54,8 @@ static bool mb_grow_one(float** arr, size_t cap, int comps) {
 static bool mb_grow_verts(MeshBuilder* mb) {
     size_t cap = mb->vcap * 2;
     if (!(mb_grow_one(&mb->pos, cap, 3) && mb_grow_one(&mb->nrm, cap, 3) &&
-          mb_grow_one(&mb->tan, cap, 4) &&
-          mb_grow_one(&mb->uv0, cap, 2) && mb_grow_one(&mb->uv1, cap, 2) &&
-          mb_grow_one(&mb->col, cap, 4))) {
+          mb_grow_one(&mb->tan, cap, 4) && mb_grow_one(&mb->uv0, cap, 2) &&
+          mb_grow_one(&mb->uv1, cap, 2) && mb_grow_one(&mb->col, cap, 4))) {
         mb->ok = false;
         return false;
     }
@@ -118,6 +117,6 @@ bool mb_transfer(MeshBuilder* mb, Mesh* mesh) {
     mesh->index_count = mb->icount;
     mesh->draw_mode = MESH_TRIANGLES;
     memset(mb, 0, sizeof(*mb));
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
     return true;
 }

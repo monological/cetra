@@ -88,11 +88,10 @@ static void generate_procedural_textures(Scene* scene) {
         bark_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_albedo",
                                                     veg_bark_albedo(B, B, bark_field), B, B, 3,
                                                     texture_desc(true));
-        bark_normal_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_normal",
-                                                    veg_bark_normal(B, B, bark_field), B, B, 3,
-                                                    (TextureDesc){.is_srgb = false,
-                                                                  .alpha = TEXTURE_ALPHA_DATA,
-                                                                  .use = TEXTURE_USE_NORMAL});
+        bark_normal_tex = texture_load_memory_owned(
+            scene->tex_pool, "proc_bark_normal", veg_bark_normal(B, B, bark_field), B, B, 3,
+            (TextureDesc){
+                .is_srgb = false, .alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_NORMAL});
         bark_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_bark_roughness",
                                                        veg_bark_roughness(B, B, bark_field), B, B,
                                                        3, texture_desc(false));
@@ -114,11 +113,9 @@ static void generate_procedural_textures(Scene* scene) {
     leaf_desc.coverage_cutoff = LEAF_ALPHA_CUTOFF;
     leaf_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_albedo", leaf_a, LW, LH,
                                                 4, leaf_desc);
-    leaf_normal_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_normal", leaf_n, LW, LH,
-                                                3,
-                                                (TextureDesc){.is_srgb = false,
-                                                              .alpha = TEXTURE_ALPHA_DATA,
-                                                              .use = TEXTURE_USE_NORMAL});
+    leaf_normal_tex = texture_load_memory_owned(
+        scene->tex_pool, "proc_leaf_normal", leaf_n, LW, LH, 3,
+        (TextureDesc){.is_srgb = false, .alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_NORMAL});
     leaf_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_roughness", leaf_r,
                                                    LW, LH, 3, texture_desc(false));
     leaf_sprite_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_sprite",
@@ -156,12 +153,10 @@ static void generate_procedural_textures(Scene* scene) {
         sand_stochastic_ready = sand_alb != NULL;
         island_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_sand_albedo", sand_alb,
                                                       T, T, 3, texture_desc(false));
-        island_normal_tex =
-            texture_load_memory_owned(scene->tex_pool, "proc_sand_normal",
-                                      sand_normal(T, T, sand_field), T, T, 3,
-                                      (TextureDesc){.is_srgb = false,
-                                                    .alpha = TEXTURE_ALPHA_DATA,
-                                                    .use = TEXTURE_USE_NORMAL});
+        island_normal_tex = texture_load_memory_owned(
+            scene->tex_pool, "proc_sand_normal", sand_normal(T, T, sand_field), T, T, 3,
+            (TextureDesc){
+                .is_srgb = false, .alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_NORMAL});
         island_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_sand_roughness",
                                                          sand_roughness(T, T, sand_field), T, T, 3,
                                                          texture_desc(false));
@@ -291,7 +286,7 @@ static float tree_bed_height(void* ctx, float x, float z) {
  */
 static void create_island(SceneNode* parent) {
     island_node = create_node();
-    set_node_name(island_node, "ground");
+    node_set_name(island_node, "ground");
 
     Mesh* mesh = create_mesh();
     // 128 rings, not the 24 this had: the beach's colour bands are VERTEX colour, and the
@@ -307,11 +302,11 @@ static void create_island(SceneNode* parent) {
     glm_mat4_identity(island_node->original_transform);
     glm_translate(island_node->original_transform, (vec3){0.0f, -GROUND_HEIGHT, 0.0f});
 
-    add_mesh_to_node(island_node, mesh);
-    add_child_node(parent, island_node);
+    node_add_mesh(island_node, mesh);
+    node_add_child(parent, island_node);
     // Static for the program's lifetime, so it uploads once here rather than
     // riding along with every tree rebuild.
-    upload_buffers_to_gpu_for_nodes(island_node);
+    node_upload_meshes(island_node);
 }
 
 /*
@@ -333,10 +328,10 @@ static void create_seabed(SceneNode* parent) {
     mesh->material = seabed_material;
 
     seabed_node = create_node();
-    set_node_name(seabed_node, "seabed");
-    add_mesh_to_node(seabed_node, mesh);
-    add_child_node(parent, seabed_node);
-    upload_buffers_to_gpu_for_nodes(seabed_node);
+    node_set_name(seabed_node, "seabed");
+    node_add_mesh(seabed_node, mesh);
+    node_add_child(parent, seabed_node);
+    node_upload_meshes(seabed_node);
 }
 
 /*
@@ -360,7 +355,7 @@ static void create_seabed(SceneNode* parent) {
 // Depths the scatter spans, in metres of water: above the line is a dry boulder on the
 // beach, below it one standing in the shallows.
 #define TREE_ROCK_HIGH_M (-0.45f)
-#define TREE_ROCK_LOW_M 1.30f
+#define TREE_ROCK_LOW_M  1.30f
 
 static SceneNode* rock_nodes[TREE_ROCK_COUNT];
 
@@ -390,8 +385,8 @@ static void create_shore_rocks(SceneNode* parent) {
          * The profile is monotonic outward over the beach, so a bisection is exact and needs
          * no inverse -- the same reasoning that let the water level stop being closed-form.
          */
-        const float want = shore - veg_rand_range(TREE_ROCK_HIGH_M, TREE_ROCK_LOW_M) *
-                                       GROUND_UNITS_PER_METRE;
+        const float want =
+            shore - veg_rand_range(TREE_ROCK_HIGH_M, TREE_ROCK_LOW_M) * GROUND_UNITS_PER_METRE;
         float lo = 0.0f, hi = GROUND_RADIUS;
         for (int it = 0; it < 40; it++) {
             const float mid = 0.5f * (lo + hi);
@@ -406,8 +401,8 @@ static void create_shore_rocks(SceneNode* parent) {
         const float z = r * sinf(angle);
 
         SceneNode* node = create_node();
-        set_node_name(node, "shore_rock");
-        add_mesh_to_node(node, mesh);
+        node_set_name(node, "shore_rock");
+        node_add_mesh(node, mesh);
         glm_mat4_identity(node->original_transform);
         glm_translate(node->original_transform,
                       (vec3){x, ground_height_at(x, z) - rp.radius * 0.34f, z});
@@ -416,8 +411,8 @@ static void create_shore_rocks(SceneNode* parent) {
         // Squashed a little, because a displaced icosphere is round and a boulder that has
         // been sitting in surf is not.
         glm_scale(node->original_transform, (vec3){1.0f, veg_rand_range(0.62f, 0.88f), 1.0f});
-        add_child_node(parent, node);
-        upload_buffers_to_gpu_for_nodes(node);
+        node_add_child(parent, node);
+        node_upload_meshes(node);
         rock_nodes[i] = node;
     }
 }
@@ -449,7 +444,7 @@ static void regenerate_tree(const TreeParams* p) {
     Mesh* bark = create_mesh();
     if (tree_mesh_bark(&skel, p, bark)) {
         bark->material = bark_material;
-        add_mesh_to_node(tree_root, bark);
+        node_add_mesh(tree_root, bark);
     } else {
         free_mesh(bark);
     }
@@ -457,7 +452,7 @@ static void regenerate_tree(const TreeParams* p) {
     Mesh* leaves = create_mesh();
     if (tree_mesh_leaves(&skel, p, leaves)) {
         leaves->material = leaf_material;
-        add_mesh_to_node(tree_root, leaves);
+        node_add_mesh(tree_root, leaves);
     } else {
         free_mesh(leaves);
     }
@@ -469,7 +464,7 @@ static void regenerate_tree(const TreeParams* p) {
     tree_skeleton_free(&skel);
 
     // Only the tree's own meshes: the ground is static and uploaded once.
-    upload_buffers_to_gpu_for_nodes(tree_root);
+    node_upload_meshes(tree_root);
 }
 
 /*
@@ -489,13 +484,13 @@ static void regenerate_grass(const GrassParams* p) {
     Mesh* grass = create_mesh();
     if (grass_build_mesh(p, grass)) {
         grass->material = grass_material;
-        add_mesh_to_node(grass_node, grass);
+        node_add_mesh(grass_node, grass);
         printf("Grass: %zu verts\n", grass->vertex_count);
     } else {
         free_mesh(grass);
     }
 
-    upload_buffers_to_gpu_for_nodes(grass_node);
+    node_upload_meshes(grass_node);
 }
 
 // Leaf color across the season slider. The albedo factor multiplies the leaf
@@ -709,7 +704,7 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     // of events is not a velocity. It polls in player_update instead.
 
     // Camera movement
-    if (drag_controller && camera_controller_on_key(drag_controller, key, action, mods)) {
+    if (drag_controller && mouse_drag_on_key(drag_controller, key, action, mods)) {
         return;
     }
 
@@ -722,13 +717,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
             break;
         case GLFW_KEY_G:
-            set_engine_show_gui(engine, !engine->show_gui);
+            engine_set_show_gui(engine, !engine->show_gui);
             break;
         case GLFW_KEY_X:
-            set_engine_show_xyz(engine, !engine->show_xyz);
+            engine_set_show_xyz(engine, !engine->show_xyz);
             break;
         case GLFW_KEY_T:
-            set_engine_show_wireframe(engine, !engine->show_wireframe);
+            engine_set_show_wireframe(engine, !engine->show_wireframe);
             break;
         default:
             break;
@@ -804,7 +799,7 @@ typedef struct {
     // loaded, so it is the only place the memory cost of a procedural map can be
     // read at all -- and a saving is a numeric claim no frame can make.
     int texture_probe;
-    int no_stars; // stars are ON here: this app is the night sky's home
+    int no_stars;       // stars are ON here: this app is the night sky's home
     int no_night_floor; // the floor is ON here too, for the same reason
     int no_moon;        // and the moon: this app is where a night sky is looked at
     float moon_size;    // times life size the disc is drawn (<0 = this app's 6.0;
@@ -812,10 +807,10 @@ typedef struct {
     // The ONE look scale, driving the disc AND the light it casts -- so this is the knob
     // that lights the sea, where moon_size only makes the disc easier to see. Separate
     // because a life-size moon is a dozen pixels and the two wants are independent.
-    float moon_brightness; // <0 = this app's 2.0
-    float day_cycle;    // real seconds per 24h day; 0 = frozen clock, <0 = cycle off
-    float time_of_day;  // hours 0-24, solar noon at 12 (-1 = unset)
-    float star_hour; // Milky Way rotation about the pole, degrees
+    float moon_brightness;   // <0 = this app's 2.0
+    float day_cycle;         // real seconds per 24h day; 0 = frozen clock, <0 = cycle off
+    float time_of_day;       // hours 0-24, solar noon at 12 (-1 = unset)
+    float star_hour;         // Milky Way rotation about the pole, degrees
     const char* config_path; // restore a config snapshot (GUI Dump Config writes one)
     int seed;
     float sun_elevation;
@@ -827,7 +822,7 @@ typedef struct {
     int gerstner_waves;
     int no_water_wetness;
     int no_water_film;
-    int water_foam_debug; // WaterFoamDebug (water.h): 0 off, 1 eroded, 2 pre-erosion
+    int water_foam_debug;      // WaterFoamDebug (water.h): 0 off, 1 eroded, 2 pre-erosion
     int no_water_foam_history; // Bisect lever: foam from this frame's fold only
     // Bisect lever: no incident wave at the shore. Removes the bore from the GEOMETRY as
     // well as the whitewater, since depth-limited breaking is gated on the surf existing.
@@ -1027,14 +1022,14 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->arrows_upright = 1;
             a->player = 1;
         } else if (!strcmp(s, "--cam-eye") && has_next) {
-            a->cam_eye_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_eye[0], &a->cam_eye[1],
-                                    &a->cam_eye[2]) == 3;
+            a->cam_eye_set =
+                sscanf(argv[++i], "%f,%f,%f", &a->cam_eye[0], &a->cam_eye[1], &a->cam_eye[2]) == 3;
         } else if (!strcmp(s, "--cam-target") && has_next) {
-            a->cam_target_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_target[0],
-                                       &a->cam_target[1], &a->cam_target[2]) == 3;
+            a->cam_target_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_target[0], &a->cam_target[1],
+                                       &a->cam_target[2]) == 3;
         } else if (!strcmp(s, "--cam-up") && has_next) {
-            a->cam_up_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_up[0], &a->cam_up[1],
-                                   &a->cam_up[2]) == 3;
+            a->cam_up_set =
+                sscanf(argv[++i], "%f,%f,%f", &a->cam_up[0], &a->cam_up[1], &a->cam_up[2]) == 3;
         } else if (!strcmp(s, "--fov") && has_next) {
             // Degrees in, radians out: every other angle this app takes on the command line
             // is in degrees, and a lone radian argument is the kind of inconsistency that
@@ -1090,7 +1085,7 @@ static void create_falling_leaves(Engine* engine, Scene* scene, float canopy_rad
     ShaderProgram* particle_prog = create_particle_program();
     if (!particle_prog)
         return;
-    add_shader_program_to_engine(engine, particle_prog);
+    engine_add_program(engine, particle_prog);
 
     ParticleSystem* sys = create_particle_system("falling_leaves");
     if (!sys)
@@ -1135,17 +1130,16 @@ static void create_falling_leaves(Engine* engine, Scene* scene, float canopy_rad
     // and 2 units at the rim -- and is an analytic collider the particle system already has.
     vec3 fit_center = GLM_VEC3_ZERO_INIT;
     float fit_radius = ground_sphere_fit(fit_center);
-    particle_emitter_add_module(em,
-                                particle_module_collider_sphere(fit_center, fit_radius,
-                                                                COLLIDER_KEEP_OUT, 0.0f, 0.0f));
+    particle_emitter_add_module(
+        em, particle_module_collider_sphere(fit_center, fit_radius, COLLIDER_KEEP_OUT, 0.0f, 0.0f));
 
     particle_system_add_emitter(sys, em);
-    add_particle_system_to_scene(scene, sys);
+    scene_add_particle_system(scene, sys);
 
     SceneNode* node = create_node();
-    set_node_name(node, "falling_leaves");
-    set_node_particle_system(node, sys);
-    add_child_node(scene->root_node, node);
+    node_set_name(node, "falling_leaves");
+    node_set_particle_system(node, sys);
+    node_add_child(scene->root_node, node);
 }
 
 /*
@@ -1160,16 +1154,16 @@ int main(int argc, char** argv) {
     sun_azimuth = args.sun_azimuth;
 
     Engine* engine = create_engine("Procedural Tree", args.width, args.height);
-    set_engine_headless(engine, args.headless != 0);
+    engine_set_headless(engine, args.headless != 0);
     engine->headless_jitter = args.headless_jitter != 0;
-    set_engine_screenshot_path(engine, args.screenshot);
-    set_engine_screenshot_every(engine, args.screenshot_every);
-    set_engine_exit_after_frames(engine, args.frames);
+    engine_set_screenshot_path(engine, args.screenshot);
+    engine_set_screenshot_every(engine, args.screenshot_every);
+    engine_set_exit_after_frames(engine, args.frames);
     // TAAU: render the scene at 70% and reconstruct temporally. Set before
-    // init_engine, because create_postfx sizes every target from it. Headless
+    // engine_init, because create_postfx sizes every target from it. Headless
     // drops back to full resolution unless --headless-jitter, since the resolve
     // reconstructs from the jitter and headless suppresses it.
-    set_engine_render_scale(engine, 0.70f);
+    engine_set_render_scale(engine, 0.70f);
     // TAA-only, at ONE sample, which is the policy apps/render already runs and the one this app
     // had never actually chosen -- it set TAA above and inherited the engine's 4x default, so it
     // paid for both. TAA carries the edges here, and it is on unconditionally because TAAU needs
@@ -1180,24 +1174,24 @@ int main(int argc, char** argv) {
     // sea behind it into a bright fringe. Against this app's near-black leaves and a sunset that
     // reads as an orange outline traced round the whole canopy.
     //
-    // Before init_engine so the count is the one the scene target is first built at, rather than
+    // Before engine_init so the count is the one the scene target is first built at, rather than
     // a rebuild on the frame after. The engine clamps it to what the driver offers.
-    set_engine_msaa_samples(engine, args.msaa > 0 ? args.msaa : 1);
+    engine_set_msaa_samples(engine, args.msaa > 0 ? args.msaa : 1);
 
-    if (init_engine(engine) != 0) {
+    if (engine_init(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
     }
 
-    set_engine_mouse_button_callback(engine, mouse_button_callback);
-    set_engine_key_callback(engine, key_callback);
+    engine_set_mouse_button_callback(engine, mouse_button_callback);
+    engine_set_key_callback(engine, key_callback);
 
-    ShaderProgram* pbr_program = get_engine_shader_program_by_name(engine, "pbr");
+    ShaderProgram* pbr_program = engine_get_program(engine, "pbr");
     if (!pbr_program) {
         fprintf(stderr, "Failed to get PBR shader\n");
         return -1;
     }
-    ShaderProgram* xyz_program = get_engine_shader_program_by_name(engine, "xyz");
+    ShaderProgram* xyz_program = engine_get_program(engine, "xyz");
 
     // Camera: low and off-axis so the canopy tops the frame and the low sun
     // rakes its shadows toward the viewer.
@@ -1215,11 +1209,11 @@ int main(int argc, char** argv) {
         glm_vec3_copy(args.cam_target, look_at);
     if (args.cam_up_set)
         glm_vec3_copy(args.cam_up, up);
-    set_camera_position(camera, cam_pos);
-    set_camera_look_at(camera, look_at);
-    set_camera_up_vector(camera, up);
-    set_camera_perspective(camera, args.fov > 0.0f ? args.fov : 0.55f, 2.0f, 3000.0f);
-    set_engine_camera(engine, camera);
+    camera_set_position(camera, cam_pos);
+    camera_set_look_at(camera, look_at);
+    camera_set_up(camera, up);
+    camera_set_perspective(camera, args.fov > 0.0f ? args.fov : 0.55f, 2.0f, 3000.0f);
+    engine_set_camera(engine, camera);
     camera->distance = glm_vec3_distance(cam_pos, look_at);
 
     if (args.player) {
@@ -1261,12 +1255,12 @@ int main(int argc, char** argv) {
 
     Scene* scene = create_scene();
     SceneNode* root = create_node();
-    set_node_name(root, "root");
-    set_scene_root_node(scene, root);
-    add_scene_to_engine(engine, scene);
+    node_set_name(root, "root");
+    scene_set_root(scene, root);
+    engine_add_scene(engine, scene);
 
     if (xyz_program) {
-        set_scene_xyz_shader_program(scene, xyz_program);
+        scene_set_xyz_program(scene, xyz_program);
     }
 
     // Textures go through the scene's pool, so the scene must exist first.
@@ -1326,8 +1320,8 @@ int main(int argc, char** argv) {
         // default hour and teleport the sun off this app's authored 0.8
         // degrees. The hour wins over --sun-elevation/--sun-azimuth.
         if (sky->cycle_enabled || args.time_of_day >= 0.0f) {
-            sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour,
-                         &sky->sun_elevation_deg, &sky->sun_azimuth_deg);
+            sky_sun_path((double)sky->stars_latitude_deg, sky->cycle_hour, &sky->sun_elevation_deg,
+                         &sky->sun_azimuth_deg);
             sun_elevation = sky->sun_elevation_deg; // the GUI mirrors these
             sun_azimuth = sky->sun_azimuth_deg;
             sky_place_moon_from_clock(sky);
@@ -1354,38 +1348,38 @@ int main(int argc, char** argv) {
             scene->skybox_ground_projection = false;
 
             sun_light = create_light();
-            set_light_name(sun_light, "sun");
-            set_light_type(sun_light, LIGHT_DIRECTIONAL);
-            set_light_cast_shadows(sun_light, true);
+            light_set_name(sun_light, "sun");
+            light_set_type(sun_light, LIGHT_DIRECTIONAL);
+            light_set_cast_shadows(sun_light, true);
             // Emitter size drives the PCSS penumbra: contact shadows stay
             // crisp under the canopy and soften further from the caster.
-            set_light_size(sun_light, 6.0f, 6.0f);
+            light_set_size(sun_light, 6.0f, 6.0f);
             sky->sun_light = sun_light;
             sky->sun_base_intensity = 10.0f;
             sky_apply_sun_to_light(sky);
-            add_light_to_scene(scene, sun_light);
+            scene_add_light(scene, sun_light);
 
             SceneNode* sun_node = create_node();
-            set_node_name(sun_node, "sun");
-            set_node_light(sun_node, sun_light);
-            add_child_node(root, sun_node);
+            node_set_name(sun_node, "sun");
+            node_set_light(sun_node, sun_light);
+            node_add_child(root, sun_node);
 
             // The moon's own directional, created unconditionally for the
             // reason render.c states at length: a config restore cannot make a
             // Light, and a disabled moon costs nothing because it neither
             // casts nor emits.
             Light* moon_light = create_light();
-            set_light_name(moon_light, "moon");
-            set_light_type(moon_light, LIGHT_DIRECTIONAL);
-            set_light_size(moon_light, 6.0f, 6.0f);
+            light_set_name(moon_light, "moon");
+            light_set_type(moon_light, LIGHT_DIRECTIONAL);
+            light_set_size(moon_light, 6.0f, 6.0f);
             sky->moon_light = moon_light;
             sky_update_moon(sky); // owns direction, tint, intensity and cast_shadows
-            add_light_to_scene(scene, moon_light);
+            scene_add_light(scene, moon_light);
 
             SceneNode* moon_node = create_node();
-            set_node_name(moon_node, "moon");
-            set_node_light(moon_node, moon_light);
-            add_child_node(root, moon_node);
+            node_set_name(moon_node, "moon");
+            node_set_light(moon_node, moon_light);
+            node_add_child(root, moon_node);
 
             printf("Sky: sun at elevation %.1f azimuth %.1f\n", sky->sun_elevation_deg,
                    sky->sun_azimuth_deg);
@@ -1433,7 +1427,7 @@ int main(int argc, char** argv) {
     scene_wind->gust_frequency = 0.35f;
     scene_wind->gust_amount = 0.55f;
     scene_wind->turbulence = 0.5f;
-    set_scene_wind(scene, scene_wind);
+    scene_set_wind(scene, scene_wind);
 
     /*
      * Materials
@@ -1452,11 +1446,11 @@ int main(int argc, char** argv) {
     bark_material->wind_response = 1.0f;
     bark_material->wind_mode = 1; // vegetation branch
     bark_material->parallax_scale = 0.03f;
-    set_material_shader_program(bark_material, pbr_program);
-    set_material_albedo_tex(bark_material, bark_albedo_tex);
-    set_material_normal_tex(bark_material, bark_normal_tex);
-    set_material_roughness_tex(bark_material, bark_roughness_tex);
-    set_material_height_tex(bark_material, bark_height_tex);
+    material_set_program(bark_material, pbr_program);
+    material_set_albedo_tex(bark_material, bark_albedo_tex);
+    material_set_normal_tex(bark_material, bark_normal_tex);
+    material_set_roughness_tex(bark_material, bark_roughness_tex);
+    material_set_height_tex(bark_material, bark_height_tex);
 
     leaf_material = create_material();
     leaf_material->name = safe_strdup("leaf");
@@ -1478,10 +1472,10 @@ int main(int argc, char** argv) {
     // Thin leaves transmit light: without this the canopy reads as opaque
     // plastic whenever the sun is behind it.
     leaf_material->subsurface = 0.6f;
-    set_material_shader_program(leaf_material, pbr_program);
-    set_material_albedo_tex(leaf_material, leaf_albedo_tex);
-    set_material_normal_tex(leaf_material, leaf_normal_tex);
-    set_material_roughness_tex(leaf_material, leaf_roughness_tex);
+    material_set_program(leaf_material, pbr_program);
+    material_set_albedo_tex(leaf_material, leaf_albedo_tex);
+    material_set_normal_tex(leaf_material, leaf_normal_tex);
+    material_set_roughness_tex(leaf_material, leaf_roughness_tex);
 
     if (engine->postfx) {
         postfx_reset_sss_profiles(engine->postfx);
@@ -1497,10 +1491,10 @@ int main(int argc, char** argv) {
     island_material->roughness = 0.9f;
     island_material->metallic = 0.0f;
     island_material->ao = 1.0f;
-    set_material_shader_program(island_material, pbr_program);
-    set_material_albedo_tex(island_material, island_albedo_tex);
-    set_material_normal_tex(island_material, island_normal_tex);
-    set_material_roughness_tex(island_material, island_roughness_tex);
+    material_set_program(island_material, pbr_program);
+    material_set_albedo_tex(island_material, island_albedo_tex);
+    material_set_normal_tex(island_material, island_normal_tex);
+    material_set_roughness_tex(island_material, island_roughness_tex);
     // The beach remembers the swash. Full response: this IS the sand the waves run over, and
     // the run-up bounds itself, so there is nothing here to scale down.
     island_material->shore_wetness = 1.0f;
@@ -1514,8 +1508,7 @@ int main(int argc, char** argv) {
      */
     if (sand_stochastic_ready) {
         island_material->stochastic_scale = 1.0f;
-        memcpy(island_material->stochastic_lut, sand_stochastic_lut,
-               sizeof(sand_stochastic_lut));
+        memcpy(island_material->stochastic_lut, sand_stochastic_lut, sizeof(sand_stochastic_lut));
     }
 
     /*
@@ -1532,10 +1525,10 @@ int main(int argc, char** argv) {
     seabed_material->roughness = 0.95f;
     seabed_material->metallic = 0.0f;
     seabed_material->ao = 1.0f;
-    set_material_shader_program(seabed_material, pbr_program);
-    set_material_albedo_tex(seabed_material, island_albedo_tex);
-    set_material_normal_tex(seabed_material, island_normal_tex);
-    set_material_roughness_tex(seabed_material, island_roughness_tex);
+    material_set_program(seabed_material, pbr_program);
+    material_set_albedo_tex(seabed_material, island_albedo_tex);
+    material_set_normal_tex(seabed_material, island_normal_tex);
+    material_set_roughness_tex(seabed_material, island_roughness_tex);
     // Wetted too, and not optionally: the two meshes share the rim, so a wet island against a
     // dry seabed would seam exactly where they are meant to be one surface.
     seabed_material->shore_wetness = 1.0f;
@@ -1548,7 +1541,7 @@ int main(int argc, char** argv) {
     rock_material->roughness = 0.86f;
     rock_material->metallic = 0.0f;
     rock_material->ao = 1.0f;
-    set_material_shader_program(rock_material, pbr_program);
+    material_set_program(rock_material, pbr_program);
 
     // Grass. Opaque, so it casts and receives shadows with no special handling
     // -- the canopy dapple landing on it is the point of having it. Colour is
@@ -1592,7 +1585,7 @@ int main(int argc, char** argv) {
      * and this goes back to two profiles once that lands.
      */
     grass_material->subsurface_profile = leaf_material->subsurface_profile;
-    set_material_shader_program(grass_material, pbr_program);
+    material_set_program(grass_material, pbr_program);
 
     // Clamped rather than trusted: an out-of-range mode reaches the shader as an integer that
     // matches no branch, which shades nothing and reads as a black frame rather than as a bad
@@ -1623,8 +1616,7 @@ int main(int argc, char** argv) {
             // sit at whatever the shore happened to be doing along +x, and the beach banding
             // -- which reads the unwobbled level -- would band against a different waterline
             // than the one drawn.
-            water->level =
-                args.water_level > -9000.0f ? args.water_level : ground_shore_height();
+            water->level = args.water_level > -9000.0f ? args.water_level : ground_shore_height();
             water->extent = TREE_WATER_EXTENT;
             water->height_at = tree_bed_height;
             /*
@@ -1811,12 +1803,12 @@ int main(int argc, char** argv) {
     // The tree node is created once and outlives every rebuild; regeneration
     // only swaps its meshes, so nothing else parented to the root is at risk.
     tree_root = create_node();
-    set_node_name(tree_root, "tree");
-    add_child_node(root, tree_root);
+    node_set_name(tree_root, "tree");
+    node_add_child(root, tree_root);
 
     grass_node = create_node();
-    set_node_name(grass_node, "grass");
-    add_child_node(root, grass_node);
+    node_set_name(grass_node, "grass");
+    node_add_child(root, grass_node);
     regenerate_grass(&grass_params);
     memcpy(&prev_grass_params, &grass_params, sizeof(GrassParams));
 
@@ -1839,10 +1831,10 @@ int main(int argc, char** argv) {
         create_falling_leaves(engine, scene, canopy_radius, canopy_top);
     }
 
-    set_engine_show_gui(engine, !args.headless);
-    set_engine_show_fps(engine, !args.headless);
-    set_engine_show_wireframe(engine, false);
-    set_engine_show_xyz(engine, false);
+    engine_set_show_gui(engine, !args.headless);
+    engine_set_show_fps(engine, !args.headless);
+    engine_set_show_wireframe(engine, false);
+    engine_set_show_xyz(engine, false);
 
     // Last before the loop, so the snapshot lands on top of everything this
     // app just configured -- the render app's ordering, for the same reason.

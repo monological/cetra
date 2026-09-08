@@ -13,7 +13,7 @@
 #include "shader.h"
 #include "program.h"
 #include "util.h"
-#include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see init_engine)
+#include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see engine_init)
 #include "engine.h"
 #include "engine_internal.h"
 #include "draw_list.h"
@@ -100,9 +100,11 @@ typedef struct GBufferAttachment {
 // positive HDR only (WS_SCENE_MAX sits under the format's ~65024 ceiling), no
 // alpha needed, half the bandwidth of RGBA16F.
 static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_ATTACHMENT_COUNT]) {
-    out[0] = (GBufferAttachment){
-        &engine->multisample_texture, NULL, GL_RGBA16F, GL_COLOR_ATTACHMENT0,
-        {0.1f, 0.1f, 0.1f, 1.0f}};
+    out[0] = (GBufferAttachment){&engine->multisample_texture,
+                                 NULL,
+                                 GL_RGBA16F,
+                                 GL_COLOR_ATTACHMENT0,
+                                 {0.1f, 0.1f, 0.1f, 1.0f}};
     out[1] = (GBufferAttachment){&engine->normal_multisample_texture,
                                  &engine->normals_this_frame,
                                  GL_RGBA16F,
@@ -153,7 +155,7 @@ Engine* create_engine(const char* window_title, int width, int height) {
 
     engine->window = NULL;
     // Before anything can read it: apps set exposure fields between
-    // create_engine and init_engine, so the defaults have to be in place here
+    // create_engine and engine_init, so the defaults have to be in place here
     // rather than alongside the GL resources.
     exposure_init(&engine->exposure);
 
@@ -173,18 +175,18 @@ Engine* create_engine(const char* window_title, int width, int height) {
     engine->win_height = height;
     engine->fb_width = 0;
     engine->fb_height = 0;
-    engine->ss_scale = 1;     // Supersampling off by default (4x fragment cost);
-                              // opt in with --ssaa 2 for beauty shots
-    engine->render_scale = 1.0f; // Full render resolution by default; opt in
-                                 // with --render-scale for the TAAU upscale
-    engine->msaa_samples = 4; // 4x MSAA by default (runtime-toggleable)
+    engine->ss_scale = 1;             // Supersampling off by default (4x fragment cost);
+                                      // opt in with --ssaa 2 for beauty shots
+    engine->render_scale = 1.0f;      // Full render resolution by default; opt in
+                                      // with --render-scale for the TAAU upscale
+    engine->msaa_samples = 4;         // 4x MSAA by default (runtime-toggleable)
     engine->layers_vt_enabled = true; // composite cache on; --no-layers-vt is the bisect lever
     engine->layers_vt_res = 0;        // derived from the splat domain unless overridden
-    engine->layers_vt_pages_enabled = true; // pages on; --no-layers-vt-pages is stage 1 exactly
+    engine->layers_vt_pages_enabled = true;    // pages on; --no-layers-vt-pages is stage 1 exactly
     engine->layers_vt_feedback_enabled = true; // the vote pass; off = prediction alone
-    engine->layers_vt_page_slots = 0;       // 0 = the full physical atlas
-    engine->layers_vt_page_budget = 0;      // 0 = the default bakes-per-frame
-    engine->layers_vt_probe_interval = 0;   // diagnostic; off unless a probe asks
+    engine->layers_vt_page_slots = 0;          // 0 = the full physical atlas
+    engine->layers_vt_page_budget = 0;         // 0 = the default bakes-per-frame
+    engine->layers_vt_probe_interval = 0;      // diagnostic; off unless a probe asks
 
     engine->error_callback = NULL;
     engine->mouse_button_callback = NULL;
@@ -607,8 +609,7 @@ static void _add_scene_color_attachment(GLuint* out_tex, GLenum internal_format,
         glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, *out_tex);
         glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, internal_format, rw, rh,
                                 GL_TRUE);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D_MULTISAMPLE, *out_tex,
-                               0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D_MULTISAMPLE, *out_tex, 0);
         return;
     }
     glBindTexture(GL_TEXTURE_2D, *out_tex);
@@ -644,8 +645,8 @@ static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples)
     // (re)build for a stable FBO layout, but written only when its consumer is
     // active (see engine_set_scene_draw_buffers).
     for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        _add_scene_color_attachment(gb[i].tex, gb[i].internal_format, gb[i].attachment, rw,
-                                    rh, samples);
+        _add_scene_color_attachment(gb[i].tex, gb[i].internal_format, gb[i].attachment, rw, rh,
+                                    samples);
     }
 
     glGenRenderbuffers(1, &engine->depth_renderbuffer);
@@ -801,10 +802,10 @@ static void _engine_sync_render_targets(Engine* engine) {
     _engine_rebuild_render_targets(engine);
 }
 
-// Change the MSAA sample count. Before init_engine this just stores the request;
+// Change the MSAA sample count. Before engine_init this just stores the request;
 // at runtime it rebuilds the multisample attachments in place (the single-sample
 // post-process resolve targets are unaffected by the sample count).
-void set_engine_msaa_samples(Engine* engine, int samples) {
+void engine_set_msaa_samples(Engine* engine, int samples) {
     if (!engine)
         return;
     if (samples < 1)
@@ -825,7 +826,6 @@ void set_engine_msaa_samples(Engine* engine, int samples) {
     if (!_engine_rebuild_msaa_target(engine))
         engine->render_suspended = true;
 }
-
 
 static int _setup_engine_gui(Engine* engine) {
     if (!engine || !engine->window)
@@ -858,7 +858,7 @@ static int _setup_engine_gui(Engine* engine) {
  * Initialize the Engine
  *
  */
-int init_engine(Engine* engine) {
+int engine_init(Engine* engine) {
     printf("┏┓┏┓┏┳┓┳┓┏┓\n");
     printf("┃ ┣  ┃ ┣┫┣┫\n");
     printf("┗┛┗┛ ┻ ┛┗┛┗\n");
@@ -920,7 +920,7 @@ int init_engine(Engine* engine) {
         // Create and cache text shader program
         ShaderProgram* text_prog = create_text_program();
         if (text_prog) {
-            add_shader_program_to_engine(engine, text_prog);
+            engine_add_program(engine, text_prog);
             engine->text_renderer->text_program = text_prog;
         }
     }
@@ -955,13 +955,13 @@ int init_engine(Engine* engine) {
 
     engine->bone_program = create_bone_program();
     if (engine->bone_program) {
-        add_shader_program_to_engine(engine, engine->bone_program);
+        engine_add_program(engine, engine->bone_program);
     }
 
     // Shadow catcher: unit quad at y=0 (scaled by planeRadius in the shader)
     engine->shadow_catcher_program = create_shadow_catcher_program();
     if (engine->shadow_catcher_program) {
-        add_shader_program_to_engine(engine, engine->shadow_catcher_program);
+        engine_add_program(engine, engine->shadow_catcher_program);
 
         // CCW as seen from above (+y) so the upward face is the front face
         const float catcher_quad[] = {
@@ -991,8 +991,8 @@ int init_engine(Engine* engine) {
         log_warn("render scale needs jitter under headless; rendering at full resolution");
         engine->render_scale = 1.0f;
     }
-    engine->postfx = create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale,
-                                   engine->render_scale);
+    engine->postfx =
+        create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale, engine->render_scale);
     if (!engine->postfx) {
         log_error("Failed to initialize engine post-processing");
         return -1;
@@ -1013,7 +1013,7 @@ int init_engine(Engine* engine) {
 /*
  * Callbacks
  */
-void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback) {
+void engine_set_error_callback(Engine* engine, GLFWerrorfun error_callback) {
     if (!engine)
         return;
     engine->error_callback = error_callback;
@@ -1022,26 +1022,26 @@ void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback) {
     }
 }
 
-void set_engine_cursor_position_callback(Engine* engine,
+void engine_set_cursor_position_callback(Engine* engine,
                                          CursorPositionCallback cursor_position_callback) {
     if (!engine)
         return;
     engine->cursor_position_callback = cursor_position_callback;
 }
 
-void set_engine_mouse_button_callback(Engine* engine, MouseButtonCallback mouse_button_callback) {
+void engine_set_mouse_button_callback(Engine* engine, MouseButtonCallback mouse_button_callback) {
     if (!engine)
         return;
     engine->mouse_button_callback = mouse_button_callback;
 }
 
-void set_engine_key_callback(Engine* engine, KeyCallback key_callback) {
+void engine_set_key_callback(Engine* engine, KeyCallback key_callback) {
     if (!engine)
         return;
     engine->key_callback = key_callback;
 }
 
-void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback) {
+void engine_set_scroll_callback(Engine* engine, ScrollCallback scroll_callback) {
     if (!engine)
         return;
     engine->scroll_callback = scroll_callback;
@@ -1088,7 +1088,7 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
     if (fb_width <= 0 || fb_height <= 0)
         return;
 
-    update_engine_camera_perspective(engine);
+    engine_update_projection(engine);
     // Window points, matching init_text_renderer -- text is authored in points
     // and the ortho must stay in the space it was set up in. Handing it
     // framebuffer pixels here would halve every string on a Retina display the
@@ -1222,20 +1222,20 @@ static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double y
 /*
  * Camera
  */
-void set_engine_camera(Engine* engine, Camera* camera) {
+void engine_set_camera(Engine* engine, Camera* camera) {
     if (!engine || !camera)
         return;
 
     engine->camera = camera;
 }
 
-void set_engine_camera_mode(Engine* engine, CameraMode mode) {
+void engine_set_camera_mode(Engine* engine, CameraMode mode) {
     if (engine) {
         engine->camera_mode = mode;
     }
 }
 
-void update_engine_camera_lookat(Engine* engine) {
+void engine_update_view(Engine* engine) {
     if (!engine)
         return;
 
@@ -1246,7 +1246,7 @@ void update_engine_camera_lookat(Engine* engine) {
     glm_lookat(camera->position, camera->look_at, camera->up_vector, engine->view_matrix);
 }
 
-void update_engine_camera_perspective(Engine* engine) {
+void engine_update_projection(Engine* engine) {
     if (!engine)
         return;
 
@@ -1260,14 +1260,14 @@ void update_engine_camera_perspective(Engine* engine) {
         return;
 
     camera->aspect_ratio = (float)engine->fb_width / (float)engine->fb_height;
-    compute_projection_matrix(camera, engine->projection_matrix);
+    camera_projection_matrix(camera, engine->projection_matrix);
 }
 
 /*
  * Scene
  *
  */
-int add_scene_to_engine(Engine* engine, Scene* scene) {
+int engine_add_scene(Engine* engine, Scene* scene) {
     if (!engine || !scene)
         return -1;
 
@@ -1294,7 +1294,7 @@ int add_scene_to_engine(Engine* engine, Scene* scene) {
     return 0;
 }
 
-void set_active_scene_by_index(Engine* engine, size_t scene_index) {
+void engine_set_scene_by_index(Engine* engine, size_t scene_index) {
     if (!engine)
         return;
 
@@ -1306,7 +1306,7 @@ void set_active_scene_by_index(Engine* engine, size_t scene_index) {
     }
 }
 
-void set_active_scene_by_name(Engine* engine, const char* scene_name) {
+void engine_set_scene_by_name(Engine* engine, const char* scene_name) {
     if (!engine || !scene_name)
         return;
 
@@ -1320,7 +1320,7 @@ void set_active_scene_by_name(Engine* engine, const char* scene_name) {
     log_error("Scene named '%s' not found.", scene_name);
 }
 
-Scene* get_current_scene(const Engine* engine) {
+Scene* engine_get_scene(const Engine* engine) {
     // Validate the engine pointer and scenes array
     if (!engine || !engine->scenes) {
         log_error("Engine or scenes array is NULL.");
@@ -1354,7 +1354,7 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         return -1;
     }
 
-    add_shader_program_to_engine(engine, pbr_shader_program);
+    engine_add_program(engine, pbr_shader_program);
 
     ShaderProgram* shape_shader_program = NULL;
 
@@ -1363,7 +1363,7 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         return -1;
     }
 
-    add_shader_program_to_engine(engine, shape_shader_program);
+    engine_add_program(engine, shape_shader_program);
 
     ShaderProgram* xyz_shader_program = NULL;
 
@@ -1372,7 +1372,7 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         return -1;
     }
 
-    add_shader_program_to_engine(engine, xyz_shader_program);
+    engine_add_program(engine, xyz_shader_program);
 
     ShaderProgram* shadow_depth_program = NULL;
 
@@ -1381,13 +1381,13 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         return -1;
     }
 
-    add_shader_program_to_engine(engine, shadow_depth_program);
+    engine_add_program(engine, shadow_depth_program);
 
     // Not fatal if it fails: --msm falls back to the depth cascades, which are
     // rendered either way.
     ShaderProgram* msm_resolve_program = create_msm_resolve_program();
     if (msm_resolve_program) {
-        add_shader_program_to_engine(engine, msm_resolve_program);
+        engine_add_program(engine, msm_resolve_program);
     }
 
     // Same contract as the moment resolve above: if either fails to compile,
@@ -1395,138 +1395,138 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     // the feature off rather than a broken frame.
     ShaderProgram* shadow_absorb_program = create_shadow_absorb_program();
     if (shadow_absorb_program) {
-        add_shader_program_to_engine(engine, shadow_absorb_program);
+        engine_add_program(engine, shadow_absorb_program);
     }
     ShaderProgram* tsm_resolve_program = create_tsm_resolve_program();
     if (tsm_resolve_program) {
-        add_shader_program_to_engine(engine, tsm_resolve_program);
+        engine_add_program(engine, tsm_resolve_program);
     }
 
     // IBL Programs
     ShaderProgram* skybox_program = create_skybox_program();
     if (skybox_program) {
-        add_shader_program_to_engine(engine, skybox_program);
+        engine_add_program(engine, skybox_program);
     }
 
     ShaderProgram* ibl_equirect_program = create_ibl_equirect_to_cube_program();
     if (ibl_equirect_program) {
-        add_shader_program_to_engine(engine, ibl_equirect_program);
+        engine_add_program(engine, ibl_equirect_program);
     }
 
     ShaderProgram* ibl_irradiance_program = create_ibl_irradiance_program();
     if (ibl_irradiance_program) {
-        add_shader_program_to_engine(engine, ibl_irradiance_program);
+        engine_add_program(engine, ibl_irradiance_program);
     }
 
     ShaderProgram* ibl_prefilter_program = create_ibl_prefilter_program();
     if (ibl_prefilter_program) {
-        add_shader_program_to_engine(engine, ibl_prefilter_program);
+        engine_add_program(engine, ibl_prefilter_program);
     }
 
     ShaderProgram* ibl_charlie_prefilter_program = create_ibl_charlie_prefilter_program();
     if (ibl_charlie_prefilter_program) {
-        add_shader_program_to_engine(engine, ibl_charlie_prefilter_program);
+        engine_add_program(engine, ibl_charlie_prefilter_program);
     }
 
     ShaderProgram* ibl_brdf_program = create_ibl_brdf_program();
     if (ibl_brdf_program) {
-        add_shader_program_to_engine(engine, ibl_brdf_program);
+        engine_add_program(engine, ibl_brdf_program);
     }
 
     // Sky atmosphere LUT programs
     ShaderProgram* sky_transmittance_program = create_sky_transmittance_program();
     if (sky_transmittance_program) {
-        add_shader_program_to_engine(engine, sky_transmittance_program);
+        engine_add_program(engine, sky_transmittance_program);
     }
 
     ShaderProgram* sky_multiscatter_program = create_sky_multiscatter_program();
     if (sky_multiscatter_program) {
-        add_shader_program_to_engine(engine, sky_multiscatter_program);
+        engine_add_program(engine, sky_multiscatter_program);
     }
 
     ShaderProgram* sky_debug_program = create_sky_debug_program();
     if (sky_debug_program) {
-        add_shader_program_to_engine(engine, sky_debug_program);
+        engine_add_program(engine, sky_debug_program);
     }
 
     ShaderProgram* sky_view_program = create_sky_view_program();
     if (sky_view_program) {
-        add_shader_program_to_engine(engine, sky_view_program);
+        engine_add_program(engine, sky_view_program);
     }
 
     ShaderProgram* sky_env_program = create_sky_env_program();
     if (sky_env_program) {
-        add_shader_program_to_engine(engine, sky_env_program);
+        engine_add_program(engine, sky_env_program);
     }
 
     ShaderProgram* sky_background_program = create_sky_background_program();
     if (sky_background_program) {
-        add_shader_program_to_engine(engine, sky_background_program);
+        engine_add_program(engine, sky_background_program);
     }
 
     ShaderProgram* sky_aerial_program = create_sky_aerial_program();
     if (sky_aerial_program) {
-        add_shader_program_to_engine(engine, sky_aerial_program);
+        engine_add_program(engine, sky_aerial_program);
     }
 
     ShaderProgram* cloud_noise_debug_program = create_cloud_noise_debug_program();
     if (cloud_noise_debug_program) {
-        add_shader_program_to_engine(engine, cloud_noise_debug_program);
+        engine_add_program(engine, cloud_noise_debug_program);
     }
 
     ShaderProgram* cloud_march_program = create_cloud_march_program();
     if (cloud_march_program) {
-        add_shader_program_to_engine(engine, cloud_march_program);
+        engine_add_program(engine, cloud_march_program);
     }
 
     ShaderProgram* cloud_shadow_program = create_cloud_shadow_program();
     if (cloud_shadow_program) {
-        add_shader_program_to_engine(engine, cloud_shadow_program);
+        engine_add_program(engine, cloud_shadow_program);
     }
 
     ShaderProgram* sky_background_clouds_program = create_sky_background_clouds_program();
     if (sky_background_clouds_program) {
-        add_shader_program_to_engine(engine, sky_background_clouds_program);
+        engine_add_program(engine, sky_background_clouds_program);
     }
 
     ShaderProgram* sky_env_clouds_program = create_sky_env_clouds_program();
     if (sky_env_clouds_program) {
-        add_shader_program_to_engine(engine, sky_env_clouds_program);
+        engine_add_program(engine, sky_env_clouds_program);
     }
 
     ShaderProgram* mask_copy_program = create_mask_copy_program();
     if (mask_copy_program) {
-        add_shader_program_to_engine(engine, mask_copy_program);
+        engine_add_program(engine, mask_copy_program);
     }
 
     ShaderProgram* layers_vt_bake_program = create_layers_vt_bake_program();
     if (layers_vt_bake_program) {
-        add_shader_program_to_engine(engine, layers_vt_bake_program);
+        engine_add_program(engine, layers_vt_bake_program);
     }
 
     ShaderProgram* layers_vt_feedback_program = create_layers_vt_feedback_program();
     if (layers_vt_feedback_program) {
-        add_shader_program_to_engine(engine, layers_vt_feedback_program);
+        engine_add_program(engine, layers_vt_feedback_program);
     }
 
     ShaderProgram* water_program = create_water_program();
     if (water_program) {
-        add_shader_program_to_engine(engine, water_program);
+        engine_add_program(engine, water_program);
     }
 
     ShaderProgram* water_spectrum_program = create_water_spectrum_program();
     if (water_spectrum_program) {
-        add_shader_program_to_engine(engine, water_spectrum_program);
+        engine_add_program(engine, water_spectrum_program);
     }
 
     ShaderProgram* water_fft_program = create_water_fft_program();
     if (water_fft_program) {
-        add_shader_program_to_engine(engine, water_fft_program);
+        engine_add_program(engine, water_fft_program);
     }
 
     ShaderProgram* water_foam_program = create_water_foam_program();
     if (water_foam_program) {
-        add_shader_program_to_engine(engine, water_foam_program);
+        engine_add_program(engine, water_foam_program);
     }
 
     // GI probe volume. Lives on the engine rather than on PostFX -- despite
@@ -1534,22 +1534,22 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     // atlas is consumed by the scene pass, not by post.
     ShaderProgram* gi_project_program = create_gi_project_program();
     if (gi_project_program) {
-        add_shader_program_to_engine(engine, gi_project_program);
+        engine_add_program(engine, gi_project_program);
     }
 
     // Specular probe projection (spec 11.70), here for the same reason: the
     // atlas it writes is read by the scene pass.
     ShaderProgram* probe_project_program = create_probe_project_program();
     if (probe_project_program) {
-        add_shader_program_to_engine(engine, probe_project_program);
+        engine_add_program(engine, probe_project_program);
     }
 
     return 0;
 }
 
-int add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
+int engine_add_program(Engine* engine, ShaderProgram* program) {
     if (!engine || !program) {
-        log_error("Invalid input to add_shader_program_to_engine");
+        log_error("Invalid input to engine_add_program");
         return -1;
     }
 
@@ -1583,7 +1583,7 @@ int add_shader_program_to_engine(Engine* engine, ShaderProgram* program) {
     return 0;
 }
 
-ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* program_name) {
+ShaderProgram* engine_get_program(Engine* engine, const char* program_name) {
     if (!engine || !program_name) {
         log_error("Invalid input to get_program_from_engine");
         return NULL;
@@ -1601,14 +1601,14 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
     char name[PBR_VARIANT_NAME_MAX];
     pbr_variant_name(family, features, name, sizeof(name));
 
-    ShaderProgram* program = get_engine_shader_program_by_name(engine, name);
+    ShaderProgram* program = engine_get_program(engine, name);
     if (program)
         return program;
 
     program = create_pbr_program_variant(family, features);
     if (!program)
         return NULL;
-    add_shader_program_to_engine(engine, program);
+    engine_add_program(engine, program);
     return program;
 }
 
@@ -1616,38 +1616,38 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
  * GUI
  *
  */
-void set_engine_show_gui(Engine* engine, bool show_gui) {
+void engine_set_show_gui(Engine* engine, bool show_gui) {
     if (!engine)
         return;
     engine->show_gui = show_gui;
 }
 
-void set_engine_show_fps(Engine* engine, bool show_fps) {
+void engine_set_show_fps(Engine* engine, bool show_fps) {
     if (!engine)
         return;
     engine->show_fps = show_fps;
 }
 
-void set_engine_headless(Engine* engine, bool headless) {
+void engine_set_headless(Engine* engine, bool headless) {
     if (!engine)
         return;
     engine->headless = headless;
 }
 
-void set_engine_profiler(Engine* engine, bool enabled) {
+void engine_set_profiler(Engine* engine, bool enabled) {
     if (!engine)
         return;
     engine->profiler_enabled = enabled;
 }
 
-void set_engine_taa_enabled(Engine* engine, bool enabled) {
+void engine_set_taa(Engine* engine, bool enabled) {
     if (engine && engine->postfx)
         engine->postfx->taa_enabled = enabled;
 }
 
-void engine_set_2d_defaults(Engine* engine, Scene* scene) {
+void engine_set_2d_preset(Engine* engine, Scene* scene) {
     if (!engine || !engine->postfx) {
-        log_error("engine_set_2d_defaults: call after init_engine, the post chain is not up");
+        log_error("engine_set_2d_preset: call after engine_init, the post chain is not up");
         return;
     }
     PostFX* fx = engine->postfx;
@@ -1670,7 +1670,7 @@ void engine_set_2d_defaults(Engine* engine, Scene* scene) {
         scene->shadow_system->enabled = false;
 }
 
-void set_engine_ss_scale(Engine* engine, int ss_scale) {
+void engine_set_ss_scale(Engine* engine, int ss_scale) {
     if (!engine)
         return;
     if (ss_scale < 1)
@@ -1686,7 +1686,7 @@ void set_engine_ss_scale(Engine* engine, int ss_scale) {
     engine->ss_scale = ss_scale;
 }
 
-void set_engine_render_scale(Engine* engine, float render_scale) {
+void engine_set_render_scale(Engine* engine, float render_scale) {
     if (!engine)
         return;
     float clamped = postfx_clamp_render_scale(render_scale);
@@ -1697,7 +1697,7 @@ void set_engine_render_scale(Engine* engine, float render_scale) {
     // TAAU reconstructs from the jitter, and headless suppresses the jitter
     // unless headless_jitter is set -- without it the resolve integrates one
     // repeated sample position forever, which does not fail, it just looks
-    // permanently soft. The same rule init_engine applies, re-applied because
+    // permanently soft. The same rule engine_init applies, re-applied because
     // this is now reachable at runtime.
     if (engine->headless && !engine->headless_jitter && render_scale < 1.0f) {
         log_warn("render scale needs jitter under headless; staying at full resolution");
@@ -1711,7 +1711,7 @@ void set_engine_render_scale(Engine* engine, float render_scale) {
     // panel, which draws mid-frame after the post chain has already run.
 }
 
-void set_engine_screenshot_path(Engine* engine, const char* path) {
+void engine_set_screenshot_path(Engine* engine, const char* path) {
     if (!engine)
         return;
     if (engine->screenshot_path) {
@@ -1723,13 +1723,13 @@ void set_engine_screenshot_path(Engine* engine, const char* path) {
     }
 }
 
-void set_engine_screenshot_every(Engine* engine, int every) {
+void engine_set_screenshot_every(Engine* engine, int every) {
     if (!engine)
         return;
     engine->screenshot_every = every > 0 ? every : 0;
 }
 
-void set_engine_exit_after_frames(Engine* engine, int frames) {
+void engine_set_exit_after_frames(Engine* engine, int frames) {
     if (!engine)
         return;
     engine->exit_after_frames = frames > 0 ? frames : 0;
@@ -1806,11 +1806,10 @@ void engine_set_render_time(Engine* engine, double time, double delta) {
     engine->render_delta = delta;
 }
 
-
 /*
  * Render
  */
-void set_engine_show_wireframe(Engine* engine, bool show_wireframe) {
+void engine_set_show_wireframe(Engine* engine, bool show_wireframe) {
     if (!engine)
         return;
 
@@ -1823,7 +1822,7 @@ void set_engine_show_wireframe(Engine* engine, bool show_wireframe) {
     }
 }
 
-void set_engine_show_xyz(Engine* engine, bool show_xyz) {
+void engine_set_show_xyz(Engine* engine, bool show_xyz) {
     if (!engine)
         return;
 
@@ -1835,7 +1834,7 @@ void set_engine_show_xyz(Engine* engine, bool show_xyz) {
             SceneNode* root_node = scene->root_node;
             if (!root_node)
                 continue;
-            set_show_xyz_for_nodes(root_node, show_xyz);
+            node_set_show_xyz(root_node, show_xyz);
         }
     }
 }
@@ -1859,7 +1858,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     }
     // Hand the current scene's reflection probes and shadow casters to postfx
     // (SSR miss fallback / fog march) without postfx learning about Scene
-    const Scene* fx_scene = get_current_scene(engine);
+    const Scene* fx_scene = engine_get_scene(engine);
     probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
@@ -1880,19 +1879,16 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     // Unconditional, including with no scene: count 0 is the off state, and only a
     // publish every frame can reach it after a scene that had volumes goes away.
     scene_publish_fog_volumes_to_postfx(fx_scene, engine->postfx);
-    const PostFXGBufferWrites writes = {.normals = engine->normals_this_frame,
-                                        .aux = engine->aux_this_frame,
-                                        .albedo = engine->albedo_this_frame,
-                                        .sss = engine->sss_this_frame,
-                                        .spec = engine->spec_this_frame,
-                                        .oit_fbo =
-                                            engine->oit_this_frame ? engine->oit_fbo : 0,
-                                        .oit_moment_atlas = engine->moments_this_frame
-                                                                ? engine->moment_atlas_texture
-                                                                : 0,
-                                        .oit_near_far = {
-                                            engine->camera ? engine->camera->near_clip : 1.0f,
-                                            engine->camera ? engine->camera->far_clip : 2.0f}};
+    const PostFXGBufferWrites writes = {
+        .normals = engine->normals_this_frame,
+        .aux = engine->aux_this_frame,
+        .albedo = engine->albedo_this_frame,
+        .sss = engine->sss_this_frame,
+        .spec = engine->spec_this_frame,
+        .oit_fbo = engine->oit_this_frame ? engine->oit_fbo : 0,
+        .oit_moment_atlas = engine->moments_this_frame ? engine->moment_atlas_texture : 0,
+        .oit_near_far = {engine->camera ? engine->camera->near_clip : 1.0f,
+                         engine->camera ? engine->camera->far_clip : 2.0f}};
     postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR, &writes,
                engine->draw_projection, engine->view_matrix);
 
@@ -2390,7 +2386,7 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
 void engine_recentre_on_camera(const Engine* engine, float lattice) {
     if (!engine || !engine->camera)
         return;
-    Scene* scene = get_current_scene(engine);
+    Scene* scene = engine_get_scene(engine);
     if (!scene || !(lattice > 0.0f))
         return;
     // The camera is in STORAGE space and the origin is authored, so the current
@@ -2413,8 +2409,7 @@ void engine_recentre_on_camera(const Engine* engine, float lattice) {
 static void engine_schedule_origin_shift(const Engine* engine, const Scene* scene) {
     if (!scene || scene->origin_shift_distance <= 0.0f || !engine->camera)
         return;
-    if (glm_vec3_distance(engine->camera->position, GLM_VEC3_ZERO) <=
-        scene->origin_shift_distance)
+    if (glm_vec3_distance(engine->camera->position, GLM_VEC3_ZERO) <= scene->origin_shift_distance)
         return;
     engine_recentre_on_camera(engine, engine_origin_lattice(scene->origin_shift_distance));
 }
@@ -2478,9 +2473,8 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
     // and an arm asserting that one changed nothing is satisfied perfectly by a
     // shift that never happened.
     log_info("origin shift: delta (%.1f, %.1f, %.1f), world origin now (%.1f, %.1f, %.1f)",
-             (double)delta[0], (double)delta[1], (double)delta[2],
-             (double)scene->world_origin[0], (double)scene->world_origin[1],
-             (double)scene->world_origin[2]);
+             (double)delta[0], (double)delta[1], (double)delta[2], (double)scene->world_origin[0],
+             (double)scene->world_origin[1], (double)scene->world_origin[2]);
 }
 
 void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre_render,
@@ -2572,7 +2566,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                                     ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT
                                     : current_time;
             engine_set_render_time(engine, frame_time, frame_dt);
-            Scene* tick_scene = get_current_scene(engine);
+            Scene* tick_scene = engine_get_scene(engine);
             if (tick_scene)
                 scene_update_particle_systems(tick_scene, (float)engine->render_delta,
                                               (float)engine->render_time);
@@ -2583,7 +2577,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // late pass, so it has to advance before EITHER of them. Outside the clock branch,
         // because a substituted clock still leaves render_time and render_delta valid, and a
         // film that stops stepping under one is the frozen-swash case this placement fixes.
-        Scene* water_scene = get_current_scene(engine);
+        Scene* water_scene = engine_get_scene(engine);
         if (water_scene)
             water_update(water_scene->water, water_scene, (float)engine->render_time,
                          (float)engine->render_delta);
@@ -2613,7 +2607,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // the shadow pass, which are the first things to read world positions.
         // Anywhere later and the first shifted frame fits its shadows and its
         // probes around an origin the rest of the frame no longer uses.
-        engine_apply_origin_shift(engine, get_current_scene(engine));
+        engine_apply_origin_shift(engine, engine_get_scene(engine));
 
         // Wireframe mode: use albedo-only rendering for performance
         RenderMode saved_render_mode = engine->current_render_mode;
@@ -2627,7 +2621,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // ALBEDO), used by the present pass after the mode is restored
         RenderMode frame_mode = engine->current_render_mode;
 
-        Scene* shadow_scene = get_current_scene(engine);
+        Scene* shadow_scene = engine_get_scene(engine);
 
         // The day/night cycle's tick (spec 11.81), BEFORE the GI sweep and
         // the shadow pass: the key light it rewrites is what the cascades
@@ -2635,12 +2629,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // frame's first bind_ibl_textures. A structural no-op when the cycle
         // is off.
         if (shadow_scene && shadow_scene->sky && shadow_scene->ibl) {
-            profiler_scope_begin_if(engine->profiler,
-                                    shadow_scene->sky->slicer.item >= 0 ||
-                                        shadow_scene->sky->cycle_dirty,
-                                    "sky cycle");
-            bool env_swapped = sky_cycle_tick(shadow_scene->sky, shadow_scene->ibl,
-                                              (float)engine->render_delta);
+            profiler_scope_begin_if(
+                engine->profiler,
+                shadow_scene->sky->slicer.item >= 0 || shadow_scene->sky->cycle_dirty, "sky cycle");
+            bool env_swapped =
+                sky_cycle_tick(shadow_scene->sky, shadow_scene->ibl, (float)engine->render_delta);
             profiler_scope_end(engine->profiler);
             // The scene owns what re-derives from its environment; the sky
             // only reports that its chain moved.
@@ -2687,8 +2680,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // Timed only while probes remain to bake. A converged volume is the
             // steady state, so an unconditional scope would file a 0.000 ms row
             // on nearly every frame of a run.
-            profiler_scope_begin_if(engine->profiler,
-                                        shadow_scene->gi_volume->dirty_count > 0, "gi capture");
+            profiler_scope_begin_if(engine->profiler, shadow_scene->gi_volume->dirty_count > 0,
+                                    "gi capture");
             gi_volume_update(shadow_scene->gi_volume, engine, shadow_scene);
             profiler_scope_end(engine->profiler);
         }
@@ -2719,13 +2712,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // depth-complexity reading on the TAA path came out at exactly twice
         // the truth until this read the count back (spec 11.31; the request is
         // honoured at 1 since 11.34).
-        profiler_set_sample_budget(engine->profiler, (size_t)rw * (size_t)rh *
-                                                         (size_t)engine->msaa_samples_actual);
+        profiler_set_sample_budget(engine->profiler,
+                                   (size_t)rw * (size_t)rh * (size_t)engine->msaa_samples_actual);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
         // Make the material registry describe what the graph actually draws
         // before anything reads it. An app that builds materials in code never
-        // called add_material_to_scene, so its registry was empty and every
+        // called scene_add_material, so its registry was empty and every
         // consumer of it -- the subsurface gate below included -- silently saw a
         // scene with no materials at all.
         scene_sync_materials(shadow_scene);
@@ -2833,14 +2826,14 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
     }
 }
 
-void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
-                                            vec3 out_world_pos) {
+void engine_mouse_to_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
+                                vec3 out_world_pos) {
     if (!engine || !engine->camera)
         return;
 
     // Build projection and view matrices
     mat4 projection = {0}, view;
-    compute_projection_matrix(engine->camera, projection);
+    camera_projection_matrix(engine->camera, projection);
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
     // Compute ray from screen coordinates. Under ortho the ray starts at the pixel rather
@@ -2867,7 +2860,7 @@ static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
 
     // Build projection and view matrices
     mat4 projection = {0}, view;
-    compute_projection_matrix(engine->camera, projection);
+    camera_projection_matrix(engine->camera, projection);
     glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
 
     // Compute ray from screen coordinates
@@ -2882,7 +2875,7 @@ static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
     }
 
     // Perform scene graph picking
-    Scene* current_scene = get_current_scene(engine);
+    Scene* current_scene = engine_get_scene(engine);
     if (!current_scene || !current_scene->root_node)
         return NULL;
 

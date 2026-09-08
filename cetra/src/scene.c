@@ -114,7 +114,7 @@ void free_scene(Scene* scene) {
         return; // Nothing to free
     }
 
-    // Releases the reference add_decal_to_scene took. The pool below holds its
+    // Releases the reference scene_add_decal took. The pool below holds its
     // own, so either order is safe -- materials release AFTER it for exactly
     // that reason.
     scene_clear_decals(scene);
@@ -262,7 +262,7 @@ void free_scene(Scene* scene) {
     return;
 }
 
-void set_scene_root_node(Scene* scene, SceneNode* root_node) {
+void scene_set_root(Scene* scene, SceneNode* root_node) {
     if (!scene)
         return;
     scene->root_node = root_node;
@@ -278,21 +278,21 @@ void scene_mark_materials_dirty(Scene* scene) {
  * Cameras
  */
 
-void set_scene_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
+void scene_set_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
     if (!scene)
         return;
     scene->cameras = cameras;
     scene->camera_count = camera_count;
 }
 
-void set_scene_lights(Scene* scene, Light** lights, size_t light_count) {
+void scene_set_lights(Scene* scene, Light** lights, size_t light_count) {
     if (!scene)
         return;
     scene->lights = lights;
     scene->light_count = light_count;
 }
 
-int add_camera_to_scene(Scene* scene, Camera* camera) {
+int scene_add_camera(Scene* scene, Camera* camera) {
     if (!scene || !camera)
         return -1;
 
@@ -309,7 +309,7 @@ int add_camera_to_scene(Scene* scene, Camera* camera) {
     return 0;
 }
 
-Camera* find_camera_by_name(Scene* scene, const char* name) {
+Camera* scene_find_camera(Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;
 
@@ -325,7 +325,7 @@ Camera* find_camera_by_name(Scene* scene, const char* name) {
 /*
  * Lights
  */
-int add_light_to_scene(Scene* scene, Light* light) {
+int scene_add_light(Scene* scene, Light* light) {
     if (!scene || !light)
         return -1;
 
@@ -342,7 +342,7 @@ int add_light_to_scene(Scene* scene, Light* light) {
     return 0;
 }
 
-int remove_light_from_scene(Scene* scene, Light* light) {
+int scene_remove_light(Scene* scene, Light* light) {
     if (!scene || !light)
         return -1;
 
@@ -385,7 +385,7 @@ const Light* scene_key_directional(const Scene* scene, const float* surface_norm
     return best;
 }
 
-Light* find_light_by_name(Scene* scene, const char* name) {
+Light* scene_find_light(Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;
 
@@ -398,7 +398,7 @@ Light* find_light_by_name(Scene* scene, const char* name) {
     return NULL;
 }
 
-int add_particle_system_to_scene(Scene* scene, struct ParticleSystem* sys) {
+int scene_add_particle_system(Scene* scene, struct ParticleSystem* sys) {
     if (!scene || !sys)
         return -1;
 
@@ -423,8 +423,7 @@ void scene_update_particle_systems(Scene* scene, float dt, float t) {
         particle_system_update(scene->particle_systems[i], dt, t);
 }
 
-
-int add_material_to_scene(Scene* scene, Material* material) {
+int scene_add_material(Scene* scene, Material* material) {
     if (!scene || !material)
         return -1;
 
@@ -452,7 +451,7 @@ static void _register_node_materials(Scene* scene, SceneNode* node) {
         return;
     for (size_t i = 0; i < node->mesh_count; i++) {
         if (node->meshes[i] && node->meshes[i]->material)
-            add_material_to_scene(scene, node->meshes[i]->material);
+            scene_add_material(scene, node->meshes[i]->material);
     }
     for (size_t i = 0; i < node->children_count; i++)
         _register_node_materials(scene, node->children[i]);
@@ -461,7 +460,7 @@ static void _register_node_materials(Scene* scene, SceneNode* node) {
 // Register every material reachable from the graph, so the registry describes
 // what the scene actually draws rather than only what an importer put there.
 //
-// Until this existed, `add_material_to_scene` was called from exactly one place
+// Until this existed, `scene_add_material` was called from exactly one place
 // -- the Assimp import path -- so a scene that built its materials in code had
 // an EMPTY registry no matter how many meshes it drew. Four things read that
 // registry and all four were silently wrong for such a scene: subsurface
@@ -472,7 +471,7 @@ static void _register_node_materials(Scene* scene, SceneNode* node) {
 //
 // Gated on the graph having changed, because it is otherwise a reconciliation
 // loop whose only job is to discover nothing happened: the walk is recursive and
-// add_material_to_scene linear-scans per mesh, so an unguarded per-frame call is
+// scene_add_material linear-scans per mesh, so an unguarded per-frame call is
 // O(meshes x materials) forever to maintain state that moves only when the graph
 // does.
 void scene_sync_materials(Scene* scene) {
@@ -482,7 +481,7 @@ void scene_sync_materials(Scene* scene) {
     scene->materials_dirty = false;
 }
 
-void set_scene_wind(Scene* scene, struct Wind* wind) {
+void scene_set_wind(Scene* scene, struct Wind* wind) {
     if (!scene)
         return;
     if (scene->wind && scene->wind != wind)
@@ -564,8 +563,7 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
             SceneNode* child = scene->root_node->children[i];
             if (!child)
                 continue;
-            glm_vec3_sub(child->original_transform[3], (float*)delta,
-                         child->original_transform[3]);
+            glm_vec3_sub(child->original_transform[3], (float*)delta, child->original_transform[3]);
             shift_node_tree(child, delta);
         }
     }
@@ -590,7 +588,7 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
     glm_vec3_add(scene->world_origin, (float*)delta, scene->world_origin);
 }
 
-int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
+int scene_add_fog_volume(Scene* scene, const FogVolume* volume) {
     if (!scene || !volume)
         return -1;
     if (scene->fog_volume_count >= SCENE_MAX_FOG_VOLUMES) {
@@ -601,13 +599,13 @@ int add_fog_volume_to_scene(Scene* scene, const FogVolume* volume) {
     return 0;
 }
 
-int add_occluder_to_scene(Scene* scene, const Occluder* occluder) {
+int scene_add_occluder(Scene* scene, const Occluder* occluder) {
     if (!scene || !occluder)
         return -1;
     for (int axis = 0; axis < 3; ++axis) {
         if (occluder->box_min[axis] >= occluder->box_max[axis]) {
-            log_warn("scene: occluder box inverted on axis %d (%.3f >= %.3f); dropped",
-                     axis, occluder->box_min[axis], occluder->box_max[axis]);
+            log_warn("scene: occluder box inverted on axis %d (%.3f >= %.3f); dropped", axis,
+                     occluder->box_min[axis], occluder->box_max[axis]);
             return -1;
         }
     }
@@ -619,7 +617,7 @@ int add_occluder_to_scene(Scene* scene, const Occluder* occluder) {
     return 0;
 }
 
-int add_decal_to_scene(Scene* scene, const Decal* decal) {
+int scene_add_decal(Scene* scene, const Decal* decal) {
     if (!scene || !decal)
         return -1;
     if (scene->decal_count >= DECAL_MAX) {
@@ -711,7 +709,7 @@ void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx) 
     fx->local_fog_count = live;
 }
 
-int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton) {
+int scene_add_skeleton(Scene* scene, Skeleton* skeleton) {
     if (!scene || !skeleton)
         return -1;
 
@@ -734,7 +732,7 @@ int add_skeleton_to_scene(Scene* scene, Skeleton* skeleton) {
     return 0;
 }
 
-Skeleton* find_skeleton_by_name(Scene* scene, const char* name) {
+Skeleton* scene_find_skeleton(Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;
 
@@ -747,7 +745,7 @@ Skeleton* find_skeleton_by_name(Scene* scene, const char* name) {
     return NULL;
 }
 
-int add_animation_to_scene(Scene* scene, Animation* animation) {
+int scene_add_animation(Scene* scene, Animation* animation) {
     if (!scene || !animation)
         return -1;
 
@@ -770,7 +768,7 @@ int add_animation_to_scene(Scene* scene, Animation* animation) {
     return 0;
 }
 
-Animation* find_animation_by_name(Scene* scene, const char* name) {
+Animation* scene_find_animation(Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;
 
@@ -783,7 +781,7 @@ Animation* find_animation_by_name(Scene* scene, const char* name) {
     return NULL;
 }
 
-GLboolean set_scene_xyz_shader_program(Scene* scene, ShaderProgram* xyz_shader_program) {
+GLboolean scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program) {
     if (!scene || !xyz_shader_program) {
         return GL_FALSE;
     }
@@ -874,11 +872,11 @@ void free_node(SceneNode* node) {
     // dangling pointer in the parent's array rather than a documented contract,
     // and the one place that can honour it is this one.
     if (node->parent)
-        remove_child_node(node->parent, node);
+        node_remove_child(node->parent, node);
     free_subtree(node);
 }
 
-int add_child_node(SceneNode* node, SceneNode* child) {
+int node_add_child(SceneNode* node, SceneNode* child) {
     scene_graph_touched();
     if (!node || !child)
         return -1;
@@ -887,7 +885,7 @@ int add_child_node(SceneNode* node, SceneNode* child) {
     // at once -- which is a double free, since each array frees what it holds.
     // Re-parenting used to be a load-time-only operation; it is now per frame.
     if (child->parent && child->parent != node)
-        remove_child_node(child->parent, child);
+        node_remove_child(child->parent, child);
 
     // Doubling rather than growing by one, because a quadtree re-parents its whole
     // selection when the camera crosses a band. import.c fills the array outright
@@ -903,7 +901,7 @@ int add_child_node(SceneNode* node, SceneNode* child) {
     return 0;
 }
 
-int remove_child_node(SceneNode* node, SceneNode* child) {
+int node_remove_child(SceneNode* node, SceneNode* child) {
     if (!node || !child)
         return -1;
     for (size_t i = 0; i < node->children_count; i++) {
@@ -923,7 +921,7 @@ int remove_child_node(SceneNode* node, SceneNode* child) {
     return -1;
 }
 
-int add_mesh_to_node(SceneNode* node, Mesh* mesh) {
+int node_add_mesh(SceneNode* node, Mesh* mesh) {
     // Also covers apps that then write node->mesh_count directly: the epoch has
     // already moved by the time the next build asks.
     scene_graph_touched();
@@ -943,25 +941,25 @@ int add_mesh_to_node(SceneNode* node, Mesh* mesh) {
     return 0;
 }
 
-void set_node_name(SceneNode* node, const char* name) {
+void node_set_name(SceneNode* node, const char* name) {
     if (!node || !name)
         return;
     node->name = safe_strdup(name);
 }
 
-void set_node_light(SceneNode* node, Light* light) {
+void node_set_light(SceneNode* node, Light* light) {
     if (!node)
         return;
     node->light = light;
 }
 
-void set_node_camera(SceneNode* node, Camera* camera) {
+void node_set_camera(SceneNode* node, Camera* camera) {
     if (!node)
         return;
     node->camera = camera;
 }
 
-void set_node_particle_system(SceneNode* node, struct ParticleSystem* sys) {
+void node_set_particle_system(SceneNode* node, struct ParticleSystem* sys) {
     if (!node)
         return;
     node->particle_system = sys;
@@ -969,7 +967,7 @@ void set_node_particle_system(SceneNode* node, struct ParticleSystem* sys) {
         sys->node = node; // back-ref: the system's world transform is this node's
 }
 
-SceneNode* find_node_by_name(SceneNode* root, const char* name) {
+SceneNode* node_find(SceneNode* root, const char* name) {
     if (!root || !name)
         return NULL;
 
@@ -977,7 +975,7 @@ SceneNode* find_node_by_name(SceneNode* root, const char* name) {
         return root;
 
     for (size_t i = 0; i < root->children_count; i++) {
-        SceneNode* found = find_node_by_name(root->children[i], name);
+        SceneNode* found = node_find(root->children[i], name);
         if (found)
             return found;
     }
@@ -985,7 +983,7 @@ SceneNode* find_node_by_name(SceneNode* root, const char* name) {
     return NULL;
 }
 
-void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program) {
+void node_set_program(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;
     }
@@ -999,12 +997,11 @@ void set_shader_program_for_nodes(SceneNode* node, ShaderProgram* program) {
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        set_shader_program_for_nodes(node->children[i], program);
+        node_set_program(node->children[i], program);
     }
 }
 
-void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
-                                   ShaderProgram* skinned) {
+void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* skinned) {
     if (!node) {
         return;
     }
@@ -1023,7 +1020,7 @@ void set_shader_programs_for_nodes(SceneNode* node, ShaderProgram* standard,
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        set_shader_programs_for_nodes(node->children[i], standard, skinned);
+        node_set_programs(node->children[i], standard, skinned);
     }
 }
 
@@ -1039,14 +1036,14 @@ static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program) 
     }
 }
 
-void set_show_xyz_for_nodes(SceneNode* node, bool show_xyz) {
+void node_set_show_xyz(SceneNode* node, bool show_xyz) {
     if (!node)
         return;
 
     node->show_xyz = show_xyz;
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        set_show_xyz_for_nodes(node->children[i], show_xyz);
+        node_set_show_xyz(node->children[i], show_xyz);
     }
 }
 
@@ -1078,7 +1075,7 @@ static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node) {
     glBindVertexArray(0);
 }
 
-void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
+void node_upload_meshes(SceneNode* node) {
     if (!node)
         return;
 
@@ -1087,14 +1084,14 @@ void upload_buffers_to_gpu_for_nodes(SceneNode* node) {
      */
     for (size_t i = 0; i < node->mesh_count; i++) {
         if (node->meshes[i]) {
-            upload_mesh_buffers_to_gpu(node->meshes[i]);
+            mesh_upload(node->meshes[i]);
         }
     }
 
     _upload_xyz_buffers_to_gpu_for_node(node);
 
     for (size_t i = 0; i < node->children_count; i++) {
-        upload_buffers_to_gpu_for_nodes(node->children[i]);
+        node_upload_meshes(node->children[i]);
     }
 }
 
@@ -1193,8 +1190,7 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
             // node spins the panel with it (spec 9.2).
             _rotate_light_axis(node->global_transform, node->light->original_direction,
                                node->light->direction);
-            _rotate_light_axis(node->global_transform, node->light->original_up,
-                               node->light->up);
+            _rotate_light_axis(node->global_transform, node->light->original_up, node->light->up);
         }
 
         // Push children (in reverse order to maintain left-to-right traversal)
@@ -1259,8 +1255,8 @@ static void _transform_probe_node(const SceneNode* node, size_t frame, int* node
         // node's normal matrix needs rebuilding. Not a tolerance: the question
         // is whether the two matrices are the same object, and a node that
         // genuinely did not move answers exactly.
-        bool has_moved = memcmp(node->global_transform, node->prev_global_transform,
-                                sizeof(mat4)) != 0;
+        bool has_moved =
+            memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) != 0;
         float step = glm_vec3_distance((float*)node->global_transform[3],
                                        (float*)node->prev_global_transform[3]);
         printf("transform-probe node frame=%zu moved=%d valid=%d step=%.6f pos=%.6f,%.6f,%.6f "
@@ -1307,7 +1303,7 @@ void scene_transform_probe(const Scene* scene, size_t frame) {
            movers);
 }
 
-void print_scene_node(const SceneNode* node, int depth) {
+void node_print(const SceneNode* node, int depth) {
     if (!node)
         return;
 
@@ -1318,19 +1314,19 @@ void print_scene_node(const SceneNode* node, int depth) {
            node->camera ? (node->camera->name ? node->camera->name : "Unnamed Camera") : "None");
 
     for (size_t i = 0; i < node->children_count; i++) {
-        print_scene_node(node->children[i], depth + 1);
+        node_print(node->children[i], depth + 1);
     }
 }
 
-void print_scene_lights(const Scene* scene) {
+static void scene_print_lights(const Scene* scene) {
     if (!scene)
         return;
     for (size_t i = 0; i < scene->light_count; i++) {
-        print_light(scene->lights[i]);
+        light_print(scene->lights[i]);
     }
 }
 
-void print_scene(const Scene* scene) {
+void scene_print(const Scene* scene) {
     if (!scene)
         return;
 
@@ -1339,10 +1335,9 @@ void print_scene(const Scene* scene) {
            scene->tex_pool ? (scene->tex_pool->directory ? scene->tex_pool->directory : "None")
                            : "None");
 
-    print_scene_lights(scene);
-    print_scene_node(scene->root_node, 0);
+    scene_print_lights(scene);
+    node_print(scene->root_node, 0);
 }
-
 
 // The scene's world bound, accumulated over every mesh's eight transformed
 // corners.
@@ -1409,7 +1404,7 @@ static void _compute_node_bounds(SceneNode* node, AABB* bounds) {
     }
 }
 
-void compute_scene_bounds(Scene* scene, vec3 out_min, vec3 out_max) {
+void scene_bounds(Scene* scene, vec3 out_min, vec3 out_max) {
     if (!scene || !scene->root_node) {
         glm_vec3_zero(out_min);
         glm_vec3_zero(out_max);
@@ -1432,9 +1427,9 @@ void compute_scene_bounds(Scene* scene, vec3 out_min, vec3 out_max) {
     glm_vec3_copy(bounds.max, out_max);
 }
 
-void compute_scene_center_and_radius(Scene* scene, vec3 out_center, float* out_radius) {
+void scene_bounding_sphere(Scene* scene, vec3 out_center, float* out_radius) {
     vec3 scene_min = {0}, scene_max = {0};
-    compute_scene_bounds(scene, scene_min, scene_max);
+    scene_bounds(scene, scene_min, scene_max);
 
     // Center is midpoint of min and max
     glm_vec3_add(scene_min, scene_max, out_center);

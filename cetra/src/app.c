@@ -89,13 +89,13 @@ void mouse_drag_on_cursor(MouseDragController* ctrl, double x, double y) {
     // Currently unused - drag movement is handled in update via engine->input.drag_fb_x/y
 }
 
-void set_mouse_drag_sensitivity(MouseDragController* ctrl, float sensitivity) {
+void mouse_drag_set_sensitivity(MouseDragController* ctrl, float sensitivity) {
     if (ctrl) {
         ctrl->sensitivity = sensitivity;
     }
 }
 
-void set_mouse_drag_auto_orbit(MouseDragController* ctrl, bool enabled, float speed, float min_dist,
+void mouse_drag_set_auto_orbit(MouseDragController* ctrl, bool enabled, float speed, float min_dist,
                                float max_dist) {
     if (ctrl) {
         ctrl->auto_orbit_enabled = enabled;
@@ -129,7 +129,7 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
 
                 vec3 new_camera_position;
                 glm_vec3_add(camera->look_at, offset, new_camera_position);
-                set_camera_position(camera, new_camera_position);
+                camera_set_position(camera, new_camera_position);
             }
         } else {
             if (engine->input.shift_held) {
@@ -152,8 +152,8 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
                 vec3 new_pos, new_look;
                 glm_vec3_add(ctrl->free_start_cam_pos, pan_offset, new_pos);
                 glm_vec3_add(ctrl->free_start_look_at, pan_offset, new_look);
-                set_camera_position(camera, new_pos);
-                set_camera_look_at(camera, new_look);
+                camera_set_position(camera, new_pos);
+                camera_set_look_at(camera, new_look);
             } else {
                 // Manual orbit - spherical coordinates around look_at point
                 camera->phi = ctrl->orbit_start_phi - engine->input.drag_fb_x * ctrl->sensitivity;
@@ -175,7 +175,7 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
 
                 vec3 new_camera_position;
                 glm_vec3_add(camera->look_at, offset, new_camera_position);
-                set_camera_position(camera, new_camera_position);
+                camera_set_position(camera, new_camera_position);
             }
         }
     } else if (engine->camera_mode == CAMERA_MODE_FREE) {
@@ -200,8 +200,8 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
                 vec3 new_pos, new_look;
                 glm_vec3_add(ctrl->free_start_cam_pos, pan_offset, new_pos);
                 glm_vec3_add(ctrl->free_start_look_at, pan_offset, new_look);
-                set_camera_position(camera, new_pos);
-                set_camera_look_at(camera, new_look);
+                camera_set_position(camera, new_pos);
+                camera_set_look_at(camera, new_look);
             } else {
                 // Regular drag: Orbit around look_at point
                 float yaw = ctrl->free_start_yaw - engine->input.drag_fb_x * ctrl->sensitivity;
@@ -222,18 +222,18 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
 
                 vec3 new_camera_position;
                 glm_vec3_add(camera->look_at, offset, new_camera_position);
-                set_camera_position(camera, new_camera_position);
+                camera_set_position(camera, new_camera_position);
             }
         }
     }
 
     camera_enforce_max_distance(camera);
 
-    update_engine_camera_lookat(engine);
-    update_engine_camera_perspective(engine);
+    engine_update_view(engine);
+    engine_update_projection(engine);
 }
 
-bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, int mods) {
+bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods) {
     if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
         return false;
     }
@@ -274,39 +274,39 @@ bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, in
 
         case GLFW_KEY_UP:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, 0.0f, pan_speed);
+                camera_pan(camera, 0.0f, pan_speed);
             } else if (engine->camera_mode == CAMERA_MODE_FREE) {
                 camera_zoom_toward_target(camera, ZOOM_FACTOR, min_zoom);
             } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                orbit_camera(camera, ORBIT_STEP, 0.0f);
+                camera_orbit(camera, ORBIT_STEP, 0.0f);
             }
             return true;
 
         case GLFW_KEY_DOWN:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, 0.0f, -pan_speed);
+                camera_pan(camera, 0.0f, -pan_speed);
             } else if (engine->camera_mode == CAMERA_MODE_FREE) {
                 camera_zoom_toward_target(camera, 1.0f / ZOOM_FACTOR, min_zoom);
             } else if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                orbit_camera(camera, -ORBIT_STEP, 0.0f);
+                camera_orbit(camera, -ORBIT_STEP, 0.0f);
             }
             return true;
 
         case GLFW_KEY_LEFT:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, -pan_speed, 0.0f);
+                camera_pan(camera, -pan_speed, 0.0f);
             } else {
                 camera_sync_spherical_from_position(camera);
-                orbit_camera(camera, 0.0f, ORBIT_STEP);
+                camera_orbit(camera, 0.0f, ORBIT_STEP);
             }
             return true;
 
         case GLFW_KEY_RIGHT:
             if (mods & GLFW_MOD_SHIFT) {
-                pan_camera(camera, pan_speed, 0.0f);
+                camera_pan(camera, pan_speed, 0.0f);
             } else {
                 camera_sync_spherical_from_position(camera);
-                orbit_camera(camera, 0.0f, -ORBIT_STEP);
+                camera_orbit(camera, 0.0f, -ORBIT_STEP);
             }
             return true;
 
@@ -319,9 +319,9 @@ bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, in
  * Light Rigs
  */
 
-void create_three_point_lights(Scene* scene, float intensity_scale) {
+void scene_add_three_point_lights(Scene* scene, float intensity_scale) {
     if (!scene || !scene->root_node) {
-        fprintf(stderr, "create_three_point_lights: invalid scene\n");
+        fprintf(stderr, "scene_add_three_point_lights: invalid scene\n");
         return;
     }
 
@@ -331,18 +331,18 @@ void create_three_point_lights(Scene* scene, float intensity_scale) {
         fprintf(stderr, "Failed to create key light.\n");
         return;
     }
-    set_light_name(key, "key_light");
-    set_light_type(key, LIGHT_DIRECTIONAL);
+    light_set_name(key, "key_light");
+    light_set_type(key, LIGHT_DIRECTIONAL);
     vec3 key_dir = {-0.4f, -0.7f, -0.6f};
-    set_light_direction(key, key_dir);
-    set_light_intensity(key, 3.0f * intensity_scale);
-    set_light_color(key, (vec3){1.0f, 0.95f, 0.9f});
-    add_light_to_scene(scene, key);
+    light_set_direction(key, key_dir);
+    light_set_intensity(key, 3.0f * intensity_scale);
+    light_set_color(key, (vec3){1.0f, 0.95f, 0.9f});
+    scene_add_light(scene, key);
 
     SceneNode* key_node = create_node();
-    set_node_light(key_node, key);
-    set_node_name(key_node, "key_light_node");
-    add_child_node(scene->root_node, key_node);
+    node_set_light(key_node, key);
+    node_set_name(key_node, "key_light_node");
+    node_add_child(scene->root_node, key_node);
 
     // Fill light - softer, front-left
     Light* fill = create_light();
@@ -350,18 +350,18 @@ void create_three_point_lights(Scene* scene, float intensity_scale) {
         fprintf(stderr, "Failed to create fill light.\n");
         return;
     }
-    set_light_name(fill, "fill_light");
-    set_light_type(fill, LIGHT_DIRECTIONAL);
+    light_set_name(fill, "fill_light");
+    light_set_type(fill, LIGHT_DIRECTIONAL);
     vec3 fill_dir = {0.5f, -0.4f, -0.5f};
-    set_light_direction(fill, fill_dir);
-    set_light_intensity(fill, 1.5f * intensity_scale);
-    set_light_color(fill, (vec3){0.8f, 0.85f, 1.0f});
-    add_light_to_scene(scene, fill);
+    light_set_direction(fill, fill_dir);
+    light_set_intensity(fill, 1.5f * intensity_scale);
+    light_set_color(fill, (vec3){0.8f, 0.85f, 1.0f});
+    scene_add_light(scene, fill);
 
     SceneNode* fill_node = create_node();
-    set_node_light(fill_node, fill);
-    set_node_name(fill_node, "fill_light_node");
-    add_child_node(scene->root_node, fill_node);
+    node_set_light(fill_node, fill);
+    node_set_name(fill_node, "fill_light_node");
+    node_add_child(scene->root_node, fill_node);
 
     // Rim light - behind and above for edge definition
     Light* rim = create_light();
@@ -369,18 +369,18 @@ void create_three_point_lights(Scene* scene, float intensity_scale) {
         fprintf(stderr, "Failed to create rim light.\n");
         return;
     }
-    set_light_name(rim, "rim_light");
-    set_light_type(rim, LIGHT_DIRECTIONAL);
+    light_set_name(rim, "rim_light");
+    light_set_type(rim, LIGHT_DIRECTIONAL);
     vec3 rim_dir = {0.0f, -0.6f, 0.8f};
-    set_light_direction(rim, rim_dir);
-    set_light_intensity(rim, 2.0f * intensity_scale);
-    set_light_color(rim, (vec3){1.0f, 1.0f, 1.0f});
-    add_light_to_scene(scene, rim);
+    light_set_direction(rim, rim_dir);
+    light_set_intensity(rim, 2.0f * intensity_scale);
+    light_set_color(rim, (vec3){1.0f, 1.0f, 1.0f});
+    scene_add_light(scene, rim);
 
     SceneNode* rim_node = create_node();
-    set_node_light(rim_node, rim);
-    set_node_name(rim_node, "rim_light_node");
-    add_child_node(scene->root_node, rim_node);
+    node_set_light(rim_node, rim);
+    node_set_name(rim_node, "rim_light_node");
+    node_add_child(scene->root_node, rim_node);
 }
 
 /*

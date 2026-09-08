@@ -18,18 +18,18 @@ struct AsyncLoader;
 // pin the flip on or off before create_scene_from_model_path*. Note: pinning
 // is one-way for the process — there is no API back to AUTO — so set it per
 // run, not per asset.
-void set_import_flip_uvs(bool flip);
+void import_set_flip_uvs(bool flip);
 
 // Import setting: normalize the file's declared length unit to metres
 // (default on; off = raw file units). Formats that declare no unit
 // (glTF/GLB, metres by spec) are untouched either way. Process-wide, like
 // every import setting: the policy must hold across model, animation-clip,
 // and source-skeleton imports or retargeting would mix units.
-void set_import_unit_scale(bool enabled);
+void import_set_unit_scale(bool enabled);
 
 // Import setting: extra uniform scale on top of the unit normalization
 // (default 1; inert when unit scaling is off). Process-wide.
-void set_import_scale_multiplier(float multiplier);
+void import_set_scale_multiplier(float multiplier);
 
 // Load a model file into a Scene. Textures stream on the loader's worker pool
 // and may still be decoding on return -- file paths and compressed embedded
@@ -48,7 +48,7 @@ void resolve_height_maps(Scene* scene);
 // POM (§4.11): default depth auto-applied to a material whose height map is
 // resolved by convention (glTF/FBX have no POM scale). --parallax-scale sets it;
 // 0 leaves POM off even where a height map exists. Set before loading a model.
-void set_parallax_default_scale(float scale);
+void import_set_parallax_default_scale(float scale);
 
 // Load animations from a separate file (e.g., Mixamo "Without Skin" FBX)
 // Maps animation channels to the provided skeleton by bone name

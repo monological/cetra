@@ -47,7 +47,7 @@ the lights whose cluster entry reaches it. There is deliberately no per-pixel li
 `--motion-blur`, `--dof`,
 `-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--tonemap <neutral|aces|agx|linear>`
 (`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
-colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_defaults`
+colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
 selects for a flat-colour scene; **not** `passthrough`: `render_args.h` notes the "unset" sentinel deliberately coincides
 with `POSTFX_TONEMAP_PASSTHROUGH = 0`, so it is unreachable from the CLI by design — any
 gate needing a linear read has to be written as a ratio instead, spec 11.32),
@@ -351,7 +351,7 @@ equal depth wins. Raiden moves 31 px, `cornell_box` 1),
 engine has always had this camera mode and until 11.103 nothing that could CAPTURE a frame could
 ask for it, which is how the TAA jitter came to be wrong there for the whole life of the feature
 — derived for perspective, it shifted the raster by ~150 px a frame under an orthographic camera.
-Applied AFTER the auto-framing, because `set_camera_perspective` clears the flag and an earlier
+Applied AFTER the auto-framing, because `camera_set_perspective` clears the flag and an earlier
 request is silently undone.
 **A real camera since spec 11.104**, which took the perspective-only maths out of everything an
 orthographic frame reaches: the depth inverse, the view-position reconstruction (GTAO, contact
@@ -760,7 +760,7 @@ instrument that measured that and stay for whoever gives the particle pass a mot
 than leaving it to look like an omission. Multisampling is the natural AA for 2D line art; nothing in
 the scene moves, so an accumulator would integrate only its own jitter while switching on the aux
 G-buffer, the resolve and the eight passes that key off `taa_resolving`.
-The rest of its look is `engine_set_2d_defaults`: bloom, GTAO, SSR, vignette, dither and shadows
+The rest of its look is `engine_set_2d_preset`: bloom, GTAO, SSR, vignette, dither and shadows
 off, exposure pinned at unity, the `linear` tone curve, and a white ambient radiance on a scene
 with no light in it -- under which a material's albedo is the colour on screen. Its filled
 primitives carry a +Z normal since the flat generators started writing one; before that they had

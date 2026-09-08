@@ -132,7 +132,7 @@ screen-space post chain. GL 4.1 means every pass is a fullscreen raster pass
 
 Each G-buffer target is only written when a post pass that consumes it is active.
 
-**Per-frame loop** (`engine_run`, or `run_game` in the game framework):
+**Per-frame loop** (`engine_run`, or `game_run` in the game framework):
 1. **Resolution sync** -- apply any scheduled render-scale switch, then rebuild
    the scene target + post chain if the derived sizes disagree with what they
    were last built at. Skips the frame entirely (keeping the frame clock and
@@ -263,8 +263,8 @@ reasoning about temporal behaviour from the struct default: anything gated on
 `taa_resolving` is live in the window and dead in a golden, so an artifact can
 be invisible in one and obvious in the other.
 **The same policy drops the SAMPLE COUNT to 1, and its two halves straddle
-`init_engine` because they must** (spec 11.102): the count has to precede it,
-which builds the scene target, and `set_engine_taa_enabled` has to follow it and
+`engine_init` because they must** (spec 11.102): the count has to precede it,
+which builds the scene target, and `engine_set_taa` has to follow it and
 is a SILENT no-op before postfx exists — join them in either direction and the
 app either allocates the whole G-buffer twice or renders with no temporal filter
 at all, neither of which announces itself. `apps/forest`, `apps/tree` and (since
@@ -279,11 +279,11 @@ samples for the same two reasons in turn, particles and line art, and run under 
 preset, which has TAA off regardless. (`apps/pcb` was a gitignored local app; it is now a
 repository of its own with cetra as a submodule, per spec 11.105, and keeps the same
 choice.)
-**A 2D app's other defaults are one call**, `engine_set_2d_defaults`: bloom, GTAO,
+**A 2D app's other defaults are one call**, `engine_set_2d_preset`: bloom, GTAO,
 SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linear`
 tone curve (the identity WITH the display encode, which passthrough is not), and a
 white ambient radiance on the scene, under which an albedo is the colour on screen
-with no light at all. It runs after `init_engine`, since the post chain has to
+with no light at all. It runs after `engine_init`, since the post chain has to
 exist, and takes the scene for the ambient half. Everything it switches off is ON
 by default, which is why a flat red square through the plain defaults came out pink
 with a halo: the light needed to reach albedo through the PBR path pushes red past
@@ -1060,7 +1060,7 @@ GameConfig config = game_default_config();
 Game* game = create_game(&config);
 game_set_scene(game, scene);
 game_set_init(game, on_init);      // + on_update / on_render / on_shutdown
-run_game(game);                    // fixed-timestep loop
+game_run(game);                    // fixed-timestep loop
 free_game(game);
 ```
 
@@ -1085,7 +1085,7 @@ systems are **scene citizens**: a `SceneNode` borrows a `ParticleSystem*`, the `
 owns it, and it is auto-ticked and auto-rendered (`render.c`) -- the app just builds and
 attaches. **The tick has TWO homes, not one**: `game.c`'s fixed step when the app uses the Game
 framework, and the Engine's own per-frame hook (`engine.c:2507-2516`) when it does not, since
-with no framework there is nobody else to own the sim. `apps/render` never calls `run_game` and
+with no framework there is nobody else to own the sim. `apps/render` never calls `game_run` and
 its window dust still ticks.
 
 ```c
@@ -1099,10 +1099,10 @@ particle_emitter_add_module(em, particle_module_init_box_location(min, max));
 // ... init_lifetime / init_size / init_color, update_curl_noise / drift / integrate
 particle_system_add_emitter(sys, em);
 
-add_particle_system_to_scene(scene, sys);        // scene owns it (ticked + drawn)
+scene_add_particle_system(scene, sys);        // scene owns it (ticked + drawn)
 SceneNode* node = create_node();
-set_node_particle_system(node, sys);             // node transform = emitter spawn frame
-add_child_node(scene->root_node, node);
+node_set_particle_system(node, sys);             // node transform = emitter spawn frame
+node_add_child(scene->root_node, node);
 ```
 
 The emitter spawns in the node's world frame (transform-at-spawn, then world-space sim).
@@ -1149,10 +1149,10 @@ on the `Scene`.
 - SceneNode owns children (recursive) and meshes; **borrows** light / camera /
   particle_system (freed by the Scene, not the node).
 - **`free_node` UNLINKS from its parent first**, then frees the subtree, so any node may be freed
-  and not only a root — a caller does not need `remove_child_node` beforehand. It did not always:
+  and not only a root — a caller does not need `node_remove_child` beforehand. It did not always:
   the old contract was "free_node does not unlink", which held while every caller freed whole trees
   from the root and became a dangling pointer in the parent's array the moment a quadtree started
-  detaching and re-attaching patches every frame. `add_child_node` doubles its capacity rather than
+  detaching and re-attaching patches every frame. `node_add_child` doubles its capacity rather than
   growing by one, for the same reason: a quadtree re-parents its whole selection when the camera
   crosses a band.
 - **A node created mid-run has no previous frame**, and the identity `prev_global_transform` it was
@@ -1246,7 +1246,7 @@ their defaults are surprising on purpose (tree's sun sits at 0.8 degrees, forest
 output (asset imports, skeleton extraction, bone mapping, the first-frame animation
 dump, GL errors) or visually checking rendered output. It is also the right mode for CI.
 A headless run takes a few seconds and produces the same diagnostics as an interactive
-session. From code, call `set_engine_headless(engine, true)` before `init_engine()`.
+session. From code, call `engine_set_headless(engine, true)` before `engine_init()`.
 
 ## Reproducing a session: the config snapshot (spec 11.71)
 
@@ -1316,29 +1316,29 @@ explicitly, or the rotations cannot be mapped correctly.
 ```c
 // The loader is REQUIRED -- passing NULL returns NULL rather than loading synchronously.
 Scene* scene = create_scene_from_model_path("model.fbx", "textures/", engine->async_loader);
-add_scene_to_engine(engine, scene);
+engine_add_scene(engine, scene);
 ```
 
 **Create a mesh with a material:**
 ```c
 Mesh* mesh = create_mesh();
 mesh->material = create_material();
-set_material_shader_program(mesh->material, get_engine_shader_program_by_name(engine, "pbr"));
-upload_mesh_buffers_to_gpu(mesh);
+material_set_program(mesh->material, engine_get_program(engine, "pbr"));
+mesh_upload(mesh);
 ```
 
 **Add to the scene graph:**
 ```c
 SceneNode* node = create_node();
-set_node_name(node, "my_node");
-add_mesh_to_node(node, mesh);
-add_child_node(scene->root_node, node);
+node_set_name(node, "my_node");
+node_add_mesh(node, mesh);
+node_add_child(scene->root_node, node);
 ```
 
 **Run the low-level engine loop:**
 ```c
 Engine* engine = create_engine("Title", 1920, 1080);
-init_engine(engine);
+engine_init(engine);
 // Three hooks, in frame order; any may be NULL. pre_render is where the camera
 // and any graph change go -- the engine propagates the graph right after it.
 engine_run(engine, update_callback, pre_render_callback, render_callback);

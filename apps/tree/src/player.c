@@ -122,13 +122,13 @@ void player_update(Player* p, struct Engine* engine, float dt) {
     vec3 eye = {p->feet[0], p->feet[1] + PLAYER_EYE_HEIGHT, p->feet[2]};
     const float cp = cosf(p->pitch);
     vec3 look = {eye[0] + forward[0] * cp, eye[1] + sinf(p->pitch), eye[2] + forward[2] * cp};
-    set_camera_position(engine->camera, eye);
-    set_camera_look_at(engine->camera, look);
-    set_camera_up_vector(engine->camera, (vec3){0.0f, 1.0f, 0.0f});
+    camera_set_position(engine->camera, eye);
+    camera_set_look_at(engine->camera, look);
+    camera_set_up(engine->camera, (vec3){0.0f, 1.0f, 0.0f});
     engine->camera->distance = glm_vec3_distance(eye, look);
     // Writing the camera is not enough: the view matrix is built from it here, and nothing
     // else in the frame does it. The orbit path got this via mouse_drag_update, which this
     // walker replaces -- so without these two the camera moved and the picture did not.
-    update_engine_camera_lookat(engine);
-    update_engine_camera_perspective(engine);
+    engine_update_view(engine);
+    engine_update_projection(engine);
 }

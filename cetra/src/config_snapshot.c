@@ -266,7 +266,7 @@ static void _apply_render_scale(ConfigApplyCtx* ctx, void* base, const ConfigFie
     (void)base;
     (void)f;
     (void)n;
-    set_engine_render_scale(ctx->engine, (float)v[0]);
+    engine_set_render_scale(ctx->engine, (float)v[0]);
 }
 
 static void _apply_msaa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
@@ -274,7 +274,7 @@ static void _apply_msaa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, c
     (void)base;
     (void)f;
     (void)n;
-    set_engine_msaa_samples(ctx->engine, (int)v[0]);
+    engine_set_msaa_samples(ctx->engine, (int)v[0]);
 }
 
 static void _apply_ss_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
@@ -282,7 +282,7 @@ static void _apply_ss_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* 
     (void)base;
     (void)f;
     (void)n;
-    set_engine_ss_scale(ctx->engine, (int)v[0]);
+    engine_set_ss_scale(ctx->engine, (int)v[0]);
 }
 
 static void _apply_taa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
@@ -290,7 +290,7 @@ static void _apply_taa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, co
     (void)base;
     (void)f;
     (void)n;
-    set_engine_taa_enabled(ctx->engine, v[0] != 0.0);
+    engine_set_taa(ctx->engine, v[0] != 0.0);
 }
 
 static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
@@ -618,7 +618,7 @@ static const ConfigField CFG_FIELDS[] = {
     // neither: restoring the height onto a perspective camera changes nothing,
     // and restoring the flag without it gives an orthographic camera whatever
     // height it happened to have. The pair reaches the camera as plain fields
-    // rather than through set_camera_orthographic, which is what keeps this
+    // rather than through camera_set_orthographic, which is what keeps this
     // from clobbering the near/far the rows above just restored.
     CFG_ROW(CFG_CAMERA, CFG_BOOL, "camera", "orthographic", is_orthographic),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "ortho_height", ortho_height),
@@ -798,7 +798,7 @@ static const ConfigField CFG_FIELDS[] = {
      * The STORED canonical intensity beside the authored unit, NOT the value the
      * GUI displays.
      *
-     * Deliberately not through set_light_intensity_units, and the reason is the
+     * Deliberately not through light_set_intensity_units, and the reason is the
      * opposite of what it looks like: that setter CONVERTS, dividing by
      * LUMENS_PER_CANDELA when the unit is lumens. Handing it a value already in
      * canonical form would divide a lumens-authored lamp by 683 on every
@@ -1682,7 +1682,7 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
      * rows unreachable from outside the process.
      */
     if (ctx.camera_moved && engine->camera)
-        update_engine_camera_lookat(engine);
+        engine_update_view(engine);
 
     printf("config snapshot applied: %s (%d fields)\n", path, written);
     fflush(stdout);

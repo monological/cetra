@@ -115,7 +115,7 @@ void draw_list_free(DrawList* list);
 // caster-relevant textures changed.
 //
 // Global rather than a Scene field because the mutators that matter have no way
-// back to a Scene -- free_mesh and add_mesh_to_node take a Mesh and a SceneNode.
+// back to a Scene -- free_mesh and node_add_mesh take a Mesh and a SceneNode.
 // That is the same reason materials_dirty needs an explicit marker, and the
 // reason this one is bumped by the mutators themselves rather than by callers:
 // a rule an app has to remember is a rule an app forgets, and forgetting here

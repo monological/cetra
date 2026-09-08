@@ -36,17 +36,17 @@
 #include "cetra/texture.h"
 
 // The sketch's constants.
-#define NUM_PARTICLES 540
-#define GLOBE_RADIUS 0.2f
-#define SPIN_SPEED 0.001f
-#define JITTER_AMOUNT 0.9f
+#define NUM_PARTICLES    540
+#define GLOBE_RADIUS     0.2f
+#define SPIN_SPEED       0.001f
+#define JITTER_AMOUNT    0.9f
 #define DEAD_ZONE_HEIGHT 0.01f
-#define CAMERA_DISTANCE 5.0f
-#define FOV_DEG 45.0f
-#define MIN_SIZE_PX 1.0f
-#define MAX_SIZE_PX 7.0f
-#define WINDOW_W 640
-#define WINDOW_H 480
+#define CAMERA_DISTANCE  5.0f
+#define FOV_DEG          45.0f
+#define MIN_SIZE_PX      1.0f
+#define MAX_SIZE_PX      7.0f
+#define WINDOW_W         640
+#define WINDOW_H         480
 
 // Per-particle state the pool does not carry. Nothing ever dies, so a pool
 // slot keeps its index and these arrays can be indexed by it.
@@ -176,8 +176,8 @@ static void update_globe(ParticleModule* m, ParticleEmitter* e, size_t begin, si
 
 static void pre_render(Engine* engine, Scene* scene) {
     (void)scene;
-    update_engine_camera_lookat(engine);
-    update_engine_camera_perspective(engine);
+    engine_update_view(engine);
+    engine_update_projection(engine);
 }
 
 static void render(Engine* engine, Scene* scene) {
@@ -202,24 +202,24 @@ int main(int argc, char** argv) {
     }
 
     Engine* engine = create_engine("sprites", WINDOW_W, WINDOW_H);
-    set_engine_headless(engine, headless);
-    set_engine_exit_after_frames(engine, frames);
+    engine_set_headless(engine, headless);
+    engine_set_exit_after_frames(engine, frames);
     if (screenshot)
-        set_engine_screenshot_path(engine, screenshot);
-    if (init_engine(engine) != 0) {
-        fprintf(stderr, "init_engine failed\n");
+        engine_set_screenshot_path(engine, screenshot);
+    if (engine_init(engine) != 0) {
+        fprintf(stderr, "engine_init failed\n");
         return 1;
     }
-    set_engine_show_gui(engine, false);
-    set_engine_show_fps(engine, !headless);
+    engine_set_show_gui(engine, false);
+    engine_set_show_fps(engine, !headless);
 
     // The sketch's camera: 45 degrees, five units back along Z.
     Camera* camera = create_camera();
-    set_camera_position(camera, (vec3){0.0f, 0.0f, CAMERA_DISTANCE});
-    set_camera_look_at(camera, (vec3){0.0f, 0.0f, 0.0f});
-    set_camera_up_vector(camera, (vec3){0.0f, 1.0f, 0.0f});
-    set_camera_perspective(camera, glm_rad(FOV_DEG), 0.1f, 100.0f);
-    set_engine_camera(engine, camera);
+    camera_set_position(camera, (vec3){0.0f, 0.0f, CAMERA_DISTANCE});
+    camera_set_look_at(camera, (vec3){0.0f, 0.0f, 0.0f});
+    camera_set_up(camera, (vec3){0.0f, 1.0f, 0.0f});
+    camera_set_perspective(camera, glm_rad(FOV_DEG), 0.1f, 100.0f);
+    engine_set_camera(engine, camera);
 
     // The sketch's point sizes are pixels across, and glPointSize counts
     // FRAMEBUFFER pixels, which on a Retina display are half a window pixel.
@@ -229,34 +229,34 @@ int main(int argc, char** argv) {
     globe.unit_per_px = 0.5f * view_height / (float)engine->fb_height;
 
     Scene* scene = create_scene();
-    add_scene_to_engine(engine, scene);
+    engine_add_scene(engine, scene);
     SceneNode* root = create_node();
-    set_scene_root_node(scene, root);
+    scene_set_root(scene, root);
     // No post effects, and the raw values out: the sketch drew its colours
     // straight into the framebuffer with no display encode, so passthrough
     // rather than the preset's linear curve, which encodes.
-    engine_set_2d_defaults(engine, scene);
+    engine_set_2d_preset(engine, scene);
     engine->postfx->tonemap_mode = POSTFX_TONEMAP_PASSTHROUGH;
 
     // The mote shader tints by the scene's key light and reads black without
     // one, which would dim every colour to 0.6. A white key makes that tint
     // the identity. Nothing else here is lit by it.
     Light* key = create_light();
-    set_light_name(key, "key");
-    set_light_type(key, LIGHT_DIRECTIONAL);
-    set_light_direction(key, (vec3){0.0f, 0.0f, -1.0f});
-    set_light_color(key, (vec3){1.0f, 1.0f, 1.0f});
-    set_light_intensity(key, 1.0f);
-    add_light_to_scene(scene, key);
+    light_set_name(key, "key");
+    light_set_type(key, LIGHT_DIRECTIONAL);
+    light_set_direction(key, (vec3){0.0f, 0.0f, -1.0f});
+    light_set_color(key, (vec3){1.0f, 1.0f, 1.0f});
+    light_set_intensity(key, 1.0f);
+    scene_add_light(scene, key);
     SceneNode* key_node = create_node();
-    set_node_name(key_node, "key");
-    set_node_light(key_node, key);
-    add_child_node(root, key_node);
+    node_set_name(key_node, "key");
+    node_set_light(key_node, key);
+    node_add_child(root, key_node);
 
     // The sketch cleared to black. The engine clears to grey and has no
     // setter, so a black square far behind the globe stands in for it.
     Material* black = create_material();
-    set_material_shader_program(black, get_engine_shader_program_by_name(engine, "pbr"));
+    material_set_program(black, engine_get_program(engine, "pbr"));
     glm_vec3_zero(black->albedo);
     Mesh* backdrop = create_mesh();
     backdrop->material = black;
@@ -265,17 +265,17 @@ int main(int argc, char** argv) {
                  .corner_radius = 0.0f,
                  .filled = true,
                  .line_width = 1.0f};
-    generate_rect_to_mesh(backdrop, &rect);
-    calculate_aabb(backdrop);
+    mesh_generate_rect(backdrop, &rect);
+    mesh_compute_aabb(backdrop);
     SceneNode* backdrop_node = create_node();
-    set_node_name(backdrop_node, "backdrop");
-    add_mesh_to_node(backdrop_node, backdrop);
-    add_child_node(root, backdrop_node);
-    upload_buffers_to_gpu_for_nodes(root);
+    node_set_name(backdrop_node, "backdrop");
+    node_add_mesh(backdrop_node, backdrop);
+    node_add_child(root, backdrop_node);
+    node_upload_meshes(root);
 
     // The engine registers no particle program of its own.
     ShaderProgram* particle_program = create_particle_program();
-    add_shader_program_to_engine(engine, particle_program);
+    engine_add_program(engine, particle_program);
 
     // The CPU backend, because modules written here run only there.
     ParticleSystem* sys = create_particle_system("sprites");
@@ -285,8 +285,8 @@ int main(int argc, char** argv) {
     // sprite replaces that with the texture's own shape, so a single white
     // pixel makes each point the square it was. Gain 1: the colour as picked.
     static const unsigned char white[4] = {255, 255, 255, 255};
-    Texture* square = texture_load_memory(scene->tex_pool, "point", white, 1, 1, 4,
-                                          texture_desc(false));
+    Texture* square =
+        texture_load_memory(scene->tex_pool, "point", white, 1, 1, 4, texture_desc(false));
 
     ParticleEmitter* em = create_particle_emitter("points", NUM_PARTICLES);
     ParticleRenderer* renderer = create_billboard_particle_renderer(particle_program);
@@ -300,12 +300,12 @@ int main(int argc, char** argv) {
     particle_emitter_add_module(
         em, create_particle_module("update_globe", PARTICLE_PHASE_UPDATE, update_globe, NULL));
     particle_system_add_emitter(sys, em);
-    add_particle_system_to_scene(scene, sys); // the scene owns it, ticks it and draws it
+    scene_add_particle_system(scene, sys); // the scene owns it, ticks it and draws it
 
     SceneNode* node = create_node();
-    set_node_name(node, "sprites");
-    set_node_particle_system(node, sys);
-    add_child_node(root, node);
+    node_set_name(node, "sprites");
+    node_set_particle_system(node, sys);
+    node_add_child(root, node);
 
     engine_run(engine, NULL, pre_render, render);
     free_engine(engine);

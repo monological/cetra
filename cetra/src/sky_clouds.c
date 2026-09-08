@@ -210,8 +210,8 @@ static bool ensure_march_targets(CloudLayer* c, int w, int h) {
         glGenFramebuffers(1, &c->march_fbo[i]);
         c->march_tex[i] = create_texture_2d_float(w, h, GL_RGBA16F, GL_RGBA, NULL);
         glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo[i]);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               c->march_tex[i], 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c->march_tex[i],
+                               0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Cloud march FBO incomplete; clouds disabled");
             for (int j = 0; j <= i; j++) {
@@ -239,7 +239,7 @@ static bool ensure_march_targets(CloudLayer* c, int w, int h) {
 // shadow in the wrong place rather than a compile error -- hence named here rather than
 // spelled twice.
 #define CLOUD_SHADOW_SHELL_KM 1.5f
-#define CLOUD_SHADOW_TILE_KM 8.0f
+#define CLOUD_SHADOW_TILE_KM  8.0f
 
 static bool ensure_shadow_target(CloudLayer* c) {
     if (c->shadow_tex)
@@ -278,7 +278,7 @@ static void build_cloud_shadow(SkyAtmosphere* sky, struct Engine* engine, CloudL
         return;
     // Before the target, so a missing program cannot orphan a texture and an FBO.
     if (!c->shadow_program) {
-        c->shadow_program = get_engine_shader_program_by_name(engine, "cloud_shadow");
+        c->shadow_program = engine_get_program(engine, "cloud_shadow");
         if (!c->shadow_program) {
             log_error("No cloud_shadow program; cloud shadows disabled");
             c->shadows_enabled = false;
@@ -298,7 +298,7 @@ static void build_cloud_shadow(SkyAtmosphere* sky, struct Engine* engine, CloudL
     // bit-identical texture and the whole pass can be skipped -- which is the DEFAULT case,
     // since wind is still unless an app asks for it. 1.57M density taps either way.
     const float inputs[8] = {sky->sun_dir[0], sky->sun_dir[1], sky->sun_dir[2], c->coverage,
-                             c->cloud_type,   c->density,      wind_off[0],    wind_off[2]};
+                             c->cloud_type,   c->density,      wind_off[0],     wind_off[2]};
     if (c->shadow_built && memcmp(inputs, c->shadow_inputs, sizeof(inputs)) == 0)
         return;
     memcpy(c->shadow_inputs, inputs, sizeof(inputs));
@@ -333,7 +333,7 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     CloudLayer* c = &sky->clouds;
 
     if (!c->march_program) {
-        c->march_program = get_engine_shader_program_by_name(engine, "cloud_march");
+        c->march_program = engine_get_program(engine, "cloud_march");
         if (!c->march_program) {
             log_error("No cloud_march program; clouds disabled");
             c->enabled = false;

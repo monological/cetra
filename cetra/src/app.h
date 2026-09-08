@@ -59,11 +59,11 @@ void mouse_drag_update(MouseDragController* ctrl, float time);
 
 // Keyboard input for camera control (WASD movement, arrows for orbit/pan/zoom)
 // Returns true if the key was handled
-bool camera_controller_on_key(MouseDragController* ctrl, int key, int action, int mods);
+bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods);
 
 // Configuration
-void set_mouse_drag_sensitivity(MouseDragController* ctrl, float sensitivity);
-void set_mouse_drag_auto_orbit(MouseDragController* ctrl, bool enabled, float speed, float min_dist,
+void mouse_drag_set_sensitivity(MouseDragController* ctrl, float sensitivity);
+void mouse_drag_set_auto_orbit(MouseDragController* ctrl, bool enabled, float speed, float min_dist,
                                float max_dist);
 
 /*
@@ -71,7 +71,7 @@ void set_mouse_drag_auto_orbit(MouseDragController* ctrl, bool enabled, float sp
  */
 
 // Create standard 3-point studio lighting (key, fill, rim)
-void create_three_point_lights(Scene* scene, float intensity_scale);
+void scene_add_three_point_lights(Scene* scene, float intensity_scale);
 
 /*
  * GUI Helpers

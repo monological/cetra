@@ -63,7 +63,7 @@ typedef struct MeshClusterStats {
 // untouched when the DAG cannot be built (too few triangles, allocation failure),
 // so a caller may attempt this on anything and fall back to the chain.
 //
-// Call BEFORE upload_mesh_buffers_to_gpu, like mesh_build_lod_chain: it rewrites
+// Call BEFORE mesh_upload, like mesh_build_lod_chain: it rewrites
 // mesh->indices.
 //
 // `out` is optional and is filled ONLY on success -- what the build produced,

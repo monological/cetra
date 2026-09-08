@@ -60,8 +60,8 @@ static void pan_canvas(Engine* engine) {
     glm_vec3_add(pan_start_look_at, offset, new_look_at);
     glm_vec3_add(pan_start_cam_pos, offset, new_position);
 
-    set_camera_look_at(camera, new_look_at);
-    set_camera_position(camera, new_position);
+    camera_set_look_at(camera, new_look_at);
+    camera_set_position(camera, new_position);
 }
 
 void cursor_position_callback(Engine* engine, double xpos, double ypos) {
@@ -72,7 +72,7 @@ void cursor_position_callback(Engine* engine, double xpos, double ypos) {
     if (engine->input.selected_node) {
         // Get current mouse position in world space on the drag plane
         vec3 current_world_pos;
-        get_mouse_world_position_on_drag_plane(engine, xpos, ypos, current_world_pos);
+        engine_mouse_to_drag_plane(engine, xpos, ypos, current_world_pos);
 
         // Calculate world-space delta from drag start
         vec3 world_delta;
@@ -124,13 +124,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
             break;
         case GLFW_KEY_G:
-            set_engine_show_gui(engine, !engine->show_gui);
+            engine_set_show_gui(engine, !engine->show_gui);
             break;
         case GLFW_KEY_X:
-            set_engine_show_xyz(engine, !engine->show_xyz);
+            engine_set_show_xyz(engine, !engine->show_xyz);
             break;
         case GLFW_KEY_T:
-            set_engine_show_wireframe(engine, !engine->show_wireframe);
+            engine_set_show_wireframe(engine, !engine->show_wireframe);
             break;
         default:
             break;
@@ -144,8 +144,8 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     if (!engine || !current_scene->root_node || !engine->camera)
         return;
 
-    update_engine_camera_lookat(engine);
-    update_engine_camera_perspective(engine);
+    engine_update_view(engine);
+    engine_update_projection(engine);
 }
 
 void render_scene_callback(Engine* engine, Scene* current_scene) {
@@ -163,7 +163,7 @@ int main() {
     Engine* engine = create_engine("Cetra Engine", WIDTH, HEIGHT);
 
     // NO AA POLICY HERE, DELIBERATELY, and this is where one would go -- the
-    // sample count has to precede init_engine, which builds the scene target.
+    // sample count has to precede engine_init, which builds the scene target.
     // This app keeps the engine's 4x MSAA and no temporal filter where the 3D
     // apps drop to one sample plus TAA (spec 11.103). Multisampling is what 2D
     // line art wants, and nothing in this scene moves, so a temporal
@@ -172,33 +172,33 @@ int main() {
     // taa_resolving. The camera here is ORTHOGRAPHIC, which is a second
     // reason to leave the post chain alone: the engine's depth reconstruction
     // and view vector are perspective-only.
-    if (init_engine(engine) != 0) {
+    if (engine_init(engine) != 0) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
     }
 
-    set_engine_error_callback(engine, error_callback);
-    set_engine_mouse_button_callback(engine, mouse_button_callback);
-    set_engine_cursor_position_callback(engine, cursor_position_callback);
-    set_engine_key_callback(engine, key_callback);
+    engine_set_error_callback(engine, error_callback);
+    engine_set_mouse_button_callback(engine, mouse_button_callback);
+    engine_set_cursor_position_callback(engine, cursor_position_callback);
+    engine_set_key_callback(engine, key_callback);
 
     /*
      * Set up shaders.
      *
      */
-    ShaderProgram* pbr_shader_program = get_engine_shader_program_by_name(engine, "pbr");
+    ShaderProgram* pbr_shader_program = engine_get_program(engine, "pbr");
     if (!pbr_shader_program) {
         fprintf(stderr, "Failed to get PBR shader program\n");
         return -1;
     }
 
-    ShaderProgram* shape_shader_program = get_engine_shader_program_by_name(engine, "shape");
+    ShaderProgram* shape_shader_program = engine_get_program(engine, "shape");
     if (!shape_shader_program) {
         fprintf(stderr, "Failed to get shape shader program\n");
         return -1;
     }
 
-    ShaderProgram* xyz_shader_program = get_engine_shader_program_by_name(engine, "xyz");
+    ShaderProgram* xyz_shader_program = engine_get_program(engine, "xyz");
     if (!xyz_shader_program) {
         fprintf(stderr, "Failed to get xyz shader program\n");
         return -1;
@@ -208,14 +208,14 @@ int main() {
      * Set up materials.
      */
     Material* pbr_material = create_material();
-    set_material_shader_program(pbr_material, pbr_shader_program);
+    material_set_program(pbr_material, pbr_shader_program);
 
     pbr_material->albedo[0] = 1.0f; // Red
     pbr_material->albedo[1] = 0.0f; // Green
     pbr_material->albedo[2] = 0.0f; // Blue
 
     Material* shape_material = create_material();
-    set_material_shader_program(shape_material, shape_shader_program);
+    material_set_program(shape_material, shape_shader_program);
 
     shape_material->albedo[0] = 0.0f; // Red
     shape_material->albedo[1] = 1.0f; // Green
@@ -233,15 +233,15 @@ int main() {
 
     Camera* camera = create_camera();
 
-    set_camera_position(camera, camera_position);
-    set_camera_look_at(camera, look_at_point);
-    set_camera_up_vector(camera, up_vector);
-    set_camera_orthographic(camera, ORTHO_HEIGHT, near_clip, far_clip);
+    camera_set_position(camera, camera_position);
+    camera_set_look_at(camera, look_at_point);
+    camera_set_up(camera, up_vector);
+    camera_set_orthographic(camera, ORTHO_HEIGHT, near_clip, far_clip);
 
-    set_engine_camera(engine, camera);
+    engine_set_camera(engine, camera);
 
-    update_engine_camera_lookat(engine);
-    update_engine_camera_perspective(engine);
+    engine_update_view(engine);
+    engine_update_projection(engine);
 
     /*
      * Import fbx model.
@@ -252,7 +252,7 @@ int main() {
         fprintf(stderr, "Failed to create scene\n");
         return -1;
     }
-    add_scene_to_engine(engine, scene);
+    engine_add_scene(engine, scene);
 
     SceneNode* root_node = create_node();
     if (!root_node) {
@@ -260,12 +260,12 @@ int main() {
         return -1;
     }
 
-    set_scene_root_node(scene, root_node);
+    scene_set_root(scene, root_node);
 
     // No light: under the 2D preset a material's albedo is the colour on screen.
-    engine_set_2d_defaults(engine, scene);
+    engine_set_2d_preset(engine, scene);
 
-    if (set_scene_xyz_shader_program(scene, xyz_shader_program) == GL_FALSE) {
+    if (scene_set_xyz_program(scene, xyz_shader_program) == GL_FALSE) {
         fprintf(stderr, "Failed to set scene xyz shader program\n");
         return -1;
     }
@@ -283,13 +283,13 @@ int main() {
         .line_width = 0.2f,
         .filled = false
     };
-    generate_rect_to_mesh(mesh1, &rectangle1);
-    calculate_aabb(mesh1);
+    mesh_generate_rect(mesh1, &rectangle1);
+    mesh_compute_aabb(mesh1);
 
     SceneNode* node1 = create_node();
-    set_node_name(node1, "Rectangle 1");
+    node_set_name(node1, "Rectangle 1");
 
-    add_mesh_to_node(node1, mesh1);*/
+    node_add_mesh(node1, mesh1);*/
 
     /*
      * mesh2: Rectangle with no corner radius and fill
@@ -302,12 +302,12 @@ int main() {
                        .corner_radius = 0.0f,
                        .line_width = 2.0f,
                        .filled = true};
-    generate_rect_to_mesh(mesh2, &rectangle2);
-    calculate_aabb(mesh2);
+    mesh_generate_rect(mesh2, &rectangle2);
+    mesh_compute_aabb(mesh2);
 
     SceneNode* node2 = create_node();
-    set_node_name(node2, "Rectangle 2");
-    add_mesh_to_node(node2, mesh2);
+    node_set_name(node2, "Rectangle 2");
+    node_add_mesh(node2, mesh2);
 
     /*
      * mesh3: Rectangle with corner radius and no fill
@@ -322,12 +322,12 @@ int main() {
         .line_width = 2.0f,
         .filled = false
     };
-    generate_rect_to_mesh(mesh3, &rectangle3);
-    calculate_aabb(mesh3);
+    mesh_generate_rect(mesh3, &rectangle3);
+    mesh_compute_aabb(mesh3);
 
     SceneNode* node3 = create_node();
-    set_node_name(node3, "Rectangle 3");
-    add_mesh_to_node(node3, mesh3);*/
+    node_set_name(node3, "Rectangle 3");
+    node_add_mesh(node3, mesh3);*/
 
     /*
      * mesh4: Rectangle with corner radius and fill
@@ -340,12 +340,12 @@ int main() {
                        .corner_radius = 2.0f,
                        .line_width = 2.0f,
                        .filled = true};
-    generate_rect_to_mesh(mesh4, &rectangle4);
-    calculate_aabb(mesh4);
+    mesh_generate_rect(mesh4, &rectangle4);
+    mesh_compute_aabb(mesh4);
 
     SceneNode* node4 = create_node();
-    set_node_name(node4, "Rectangle 4");
-    add_mesh_to_node(node4, mesh4);
+    node_set_name(node4, "Rectangle 4");
+    node_add_mesh(node4, mesh4);
 
     /*
      * mesh5: Circle with no fill
@@ -360,12 +360,12 @@ int main() {
         .filled = false
     };
 
-    generate_circle_to_mesh(mesh5, &circle1);
-    calculate_aabb(mesh5);
+    mesh_generate_circle(mesh5, &circle1);
+    mesh_compute_aabb(mesh5);
 
     SceneNode* node5 = create_node();
-    set_node_name(node5, "Circle 1");
-    add_mesh_to_node(node5, mesh5);
+    node_set_name(node5, "Circle 1");
+    node_add_mesh(node5, mesh5);
     */
 
     /*
@@ -381,12 +381,12 @@ int main() {
         .filled = true
     };
 
-    generate_circle_to_mesh(mesh6, &circle2);
-    calculate_aabb(mesh6);
+    mesh_generate_circle(mesh6, &circle2);
+    mesh_compute_aabb(mesh6);
 
     SceneNode* node6 = create_node();
-    set_node_name(node6, "Circle 2");
-    add_mesh_to_node(node6, mesh6);
+    node_set_name(node6, "Circle 2");
+    node_add_mesh(node6, mesh6);
 
     // Top-Left Quadrant (Start on left, End on right, Y-Start < Y-End)
     vec3 start7 = {-35.0f, 75.0f, 0.0f}; // Starting from left, higher up
@@ -411,67 +411,67 @@ int main() {
     /*Mesh* mesh7 = create_mesh();
     mesh7->material = shape_material;
 
-    Curve *bez7 = generate_s_shaped_bezier_curve(start7, end7, 5.0f, 2.0f);
-    generate_curve_to_mesh(mesh7, bez7);
-    calculate_aabb(mesh7);
+    Curve *bez7 = create_s_bezier_curve(start7, end7, 5.0f, 2.0f);
+    mesh_generate_curve(mesh7, bez7);
+    mesh_compute_aabb(mesh7);
     SceneNode* node7 = create_node();
-    set_node_name(node7, "Bezier Curve 1");
-    add_mesh_to_node(node7, mesh7);
+    node_set_name(node7, "Bezier Curve 1");
+    node_add_mesh(node7, mesh7);
     free(bez7);
 
     Mesh* mesh8 = create_mesh();
     mesh8->material = shape_material;
 
-    Curve *bez8 = generate_s_shaped_bezier_curve(start8, end8, 5.0f, 2.0f);
-    generate_curve_to_mesh(mesh8, bez8);
-    calculate_aabb(mesh8);
+    Curve *bez8 = create_s_bezier_curve(start8, end8, 5.0f, 2.0f);
+    mesh_generate_curve(mesh8, bez8);
+    mesh_compute_aabb(mesh8);
     SceneNode* node8 = create_node();
-    set_node_name(node8, "Bezier Curve 2");
-    add_mesh_to_node(node8, mesh8);
+    node_set_name(node8, "Bezier Curve 2");
+    node_add_mesh(node8, mesh8);
     free(bez8);
 
     Mesh* mesh9 = create_mesh();
     mesh9->material = shape_material;
 
-    Curve *bez9 = generate_s_shaped_bezier_curve(start9, end9, 5.0f, 2.0f);
-    generate_curve_to_mesh(mesh9, bez9);
-    calculate_aabb(mesh9);
+    Curve *bez9 = create_s_bezier_curve(start9, end9, 5.0f, 2.0f);
+    mesh_generate_curve(mesh9, bez9);
+    mesh_compute_aabb(mesh9);
     SceneNode* node9 = create_node();
-    set_node_name(node9, "Bezier Curve 3");
-    add_mesh_to_node(node9, mesh9);
+    node_set_name(node9, "Bezier Curve 3");
+    node_add_mesh(node9, mesh9);
     free(bez9);
 
     Mesh* mesh10 = create_mesh();
     mesh10->material = shape_material;
 
-    Curve *bez10 = generate_s_shaped_bezier_curve(start10, end10, 5.0f, 2.0f);
-    generate_curve_to_mesh(mesh10, bez10);
-    calculate_aabb(mesh10);
+    Curve *bez10 = create_s_bezier_curve(start10, end10, 5.0f, 2.0f);
+    mesh_generate_curve(mesh10, bez10);
+    mesh_compute_aabb(mesh10);
     SceneNode* node10 = create_node();
-    set_node_name(node10, "Bezier Curve 4");
-    add_mesh_to_node(node10, mesh10);
+    node_set_name(node10, "Bezier Curve 4");
+    node_add_mesh(node10, mesh10);
     free(bez10);*/
 
-    // add_child_node(root_node, node1);
-    add_child_node(root_node, node2);
-    // add_child_node(root_node, node3);
-    add_child_node(root_node, node4);
-    /*add_child_node(root_node, node5);
-    add_child_node(root_node, node6);
-    add_child_node(root_node, node7);
-    add_child_node(root_node, node8);
-    add_child_node(root_node, node9);
-    add_child_node(root_node, node10);*/
+    // node_add_child(root_node, node1);
+    node_add_child(root_node, node2);
+    // node_add_child(root_node, node3);
+    node_add_child(root_node, node4);
+    /*node_add_child(root_node, node5);
+    node_add_child(root_node, node6);
+    node_add_child(root_node, node7);
+    node_add_child(root_node, node8);
+    node_add_child(root_node, node9);
+    node_add_child(root_node, node10);*/
 
     assert(root_node != NULL);
 
-    upload_buffers_to_gpu_for_nodes(root_node);
+    node_upload_meshes(root_node);
 
-    print_scene(scene);
+    scene_print(scene);
 
-    set_engine_show_gui(engine, false);
-    set_engine_show_wireframe(engine, false);
-    set_engine_show_xyz(engine, false);
+    engine_set_show_gui(engine, false);
+    engine_set_show_wireframe(engine, false);
+    engine_set_show_xyz(engine, false);
 
     engine_run(engine, NULL, pre_render_callback, render_scene_callback);
 

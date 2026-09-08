@@ -41,7 +41,7 @@ typedef struct GameConfig {
     // Headless / CI verification (routed onto the engine, which owns the loop):
     // hidden window + no vsync, deterministic frame-count exit, and a final-frame
     // PPM screenshot.
-    bool headless;               // Hidden window, no vsync (set before init_engine)
+    bool headless;               // Hidden window, no vsync (set before engine_init)
     int exit_after_frames;       // Exit cleanly after N rendered frames (0 = run forever)
     const char* screenshot_path; // Save the final frame here as PPM (NULL = off)
     // Also save numbered frames every N (0 = only the final one), as
@@ -53,16 +53,16 @@ typedef struct GameConfig {
     int screenshot_every;
     // Per-pass GPU/CPU timing and the submission counters. A config field rather
     // than something an app sets afterwards, because the profiler is built
-    // during init_engine and create_game owns that call -- so a game-framework
+    // during engine_init and create_game owns that call -- so a game-framework
     // app had no way to enable it at all.
     bool profiler;
     // The derived-data cook (spec 11.99). Config fields for the profiler's
-    // reason: cook_init must precede init_engine and on_init, and create_game
+    // reason: cook_init must precede engine_init and on_init, and create_game
     // owns both calls.
     const char* cook_dir; // NULL = CETRA_COOK_DIR, then the repo default
     bool no_cook;         // true = every fetch misses and nothing is stored
     // The app's anti-aliasing choice, for the profiler's reason again: the scene
-    // target is built during init_engine, so a count set afterwards allocates
+    // target is built during engine_init, so a count set afterwards allocates
     // every G-buffer attachment plus depth at the default and immediately
     // destroys them to rebuild at the one the app wanted.
     int msaa_samples;     // 0 = leave the engine's own default
@@ -89,7 +89,7 @@ typedef struct Game {
     double max_frame_time; // Frame-time clamp (spiral-of-death guard)
 
     // The sim clock, published for the engine to sample as the frame's animation
-    // clock (engine_set_render_clock, wired once in run_game). `.time` mirrors
+    // clock (engine_set_render_clock, wired once in game_run). `.time` mirrors
     // `time` above; `.delta` is how far the sim actually advanced this frame --
     // a whole number of fixed steps, so 0 on a frame that did not step and 0
     // while paused. Wind then holds still when the sim does, and its motion
@@ -138,7 +138,7 @@ void game_set_user_data(Game* game, void* data);
 void* game_get_user_data(const Game* game);
 
 // Run the game loop (blocking)
-void run_game(Game* game);
+void game_run(Game* game);
 
 // Request game exit
 void game_quit(Game* game);

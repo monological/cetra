@@ -19,7 +19,7 @@ Wind* create_wind(const char* name) {
     if (!wind)
         return NULL;
     wind->name = NULL;
-    set_wind_name(wind, name ? name : "wind");
+    wind_set_name(wind, name ? name : "wind");
     wind->type = WIND_DIRECTIONAL;
     glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, wind->direction);
     wind->strength = 0.02f;
@@ -39,7 +39,7 @@ void free_wind(Wind* wind) {
     free(wind);
 }
 
-void set_wind_name(Wind* wind, const char* name) {
+void wind_set_name(Wind* wind, const char* name) {
     if (!wind)
         return;
     free(wind->name);
@@ -82,8 +82,8 @@ void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformMa
 // |vec3(1, WIND_LEAF_FLUTTER_Y, -WIND_LEAF_FLUTTER_Z)|, the fixed direction the
 // leaf flutter rides along. Constant-folded, and out here rather than inside
 // the branch that uses it because it is a property of the model, not of a call.
-#define WIND_LEAF_DIR_MAX                                                                      \
-    sqrtf(1.0f + WIND_LEAF_FLUTTER_Y * WIND_LEAF_FLUTTER_Y +                                   \
+#define WIND_LEAF_DIR_MAX                                    \
+    sqrtf(1.0f + WIND_LEAF_FLUTTER_Y * WIND_LEAF_FLUTTER_Y + \
           WIND_LEAF_FLUTTER_Z * WIND_LEAF_FLUTTER_Z)
 
 float wind_max_offset(const Wind* wind, float response, int mode, float flex_max, float leaf_max) {
@@ -113,9 +113,8 @@ float wind_max_offset(const Wind* wind, float response, int mode, float flex_max
     // flutter that both scale with the vertex flex weight. flex and the leaf
     // term's uv0.y are raw unclamped attributes, so they arrive measured from
     // the mesh rather than assumed to be within [0,1].
-    float bound =
-        amp * (WIND_VEG_LEAN +
-               flex_max * (WIND_VEG_SWAY + WIND_LATERAL_MAX * WIND_VEG_TURB * turb));
+    float bound = amp * (WIND_VEG_LEAN +
+                         flex_max * (WIND_VEG_SWAY + WIND_LATERAL_MAX * WIND_VEG_TURB * turb));
 
     if (mode == 2) {
         // Leaf flutter rides on top of that.
@@ -142,10 +141,10 @@ float wind_max_offset(const Wind* wind, float response, int mode, float flex_max
 // The step matters more than the span. The fastest term advances 6*speed per
 // unit t, so at speed pi and this step it moves about 0.06 rad a sample, fine
 // enough that the peak of a sine is not stepped over.
-#define WIND_PROBE_TIME_SPAN 40.0f
+#define WIND_PROBE_TIME_SPAN  40.0f
 #define WIND_PROBE_TIME_STEPS 4000
-#define WIND_PROBE_UV_STEPS 5
-#define WIND_PROBE_POS_STEPS 5
+#define WIND_PROBE_UV_STEPS   5
+#define WIND_PROBE_POS_STEPS  5
 // Distinct object origins, hashed by the shader into distinct phases. More than
 // one only matters where phase_variation is non-zero, but costing four vertices
 // is cheaper than a branch that would make the grid depend on the scene.
@@ -334,8 +333,8 @@ static void _wind_probe_sweep(WindProbeRig* rig, const Mesh* mesh, int origins) 
     }
 }
 
-static void _wind_probe_row(WindProbeRig* rig, const char* kind, const Wind* wind,
-                            const Mesh* mesh, const char* name, int origins) {
+static void _wind_probe_row(WindProbeRig* rig, const char* kind, const Wind* wind, const Mesh* mesh,
+                            const char* name, int origins) {
     const Material* mat = mesh->material;
     UniformManager* u = rig->program->uniforms;
 
@@ -365,8 +364,8 @@ static void _wind_probe_row(WindProbeRig* rig, const char* kind, const Wind* win
     float max_abs = fmaxf(rig->best_abs[0], fmaxf(rig->best_abs[1], rig->best_abs[2]));
     printf("wind-bound-probe %s mesh=%s mode=%d response=%.4f flex_max=%.4f leaf_max=%.4f "
            "max_abs=%.6f max_l2=%.6f bound=%.6f abs_ratio=%.4f l2_ratio=%.4f\n",
-           kind, name, mat->wind_mode, mat->wind_response, mesh->wind_flex_max,
-           mesh->wind_leaf_max, max_abs, rig->best_l2, bound, max_abs / fmaxf(bound, 1e-12f),
+           kind, name, mat->wind_mode, mat->wind_response, mesh->wind_flex_max, mesh->wind_leaf_max,
+           max_abs, rig->best_l2, bound, max_abs / fmaxf(bound, 1e-12f),
            rig->best_l2 / fmaxf(bound, 1e-12f));
 }
 

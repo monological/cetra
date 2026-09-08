@@ -112,8 +112,7 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     // CLI-wins order is what these sentinels exist for.
     if (!args->no_day_cycle) {
         if (cscn->has_env_cycle && cscn->env_cycle_enabled && args->day_cycle < 0.0f)
-            args->day_cycle =
-                cscn->has_env_cycle_day_seconds ? cscn->env_cycle_day_seconds : 0.0f;
+            args->day_cycle = cscn->has_env_cycle_day_seconds ? cscn->env_cycle_day_seconds : 0.0f;
         if (cscn->has_env_cycle_hour && args->time_of_day < 0.0f)
             args->time_of_day = cscn->env_cycle_hour;
     }
@@ -274,54 +273,55 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         Light* light = create_light();
         if (!light)
             continue;
-        set_light_name(light, sl->name[0] ? sl->name : "cscn_light");
-        set_light_original_position(light, (float*)sl->position);
-        set_light_color(light, (float*)sl->color);
-        set_light_intensity_units(light, sl->intensity, sl->units);
-        set_light_type(light, cscene_light_type(sl->type));
+        light_set_name(light, sl->name[0] ? sl->name : "cscn_light");
+        light_set_original_position(light, (float*)sl->position);
+        light_set_color(light, (float*)sl->color);
+        light_set_intensity_units(light, sl->intensity, sl->units);
+        light_set_type(light, cscene_light_type(sl->type));
         // The emission frame, type-independent since 11.57: a point light aims
         // nothing analytically but does carry an IES profile's measurement axis
         // and roll, so both keys mean something on every type. Only what
         // genuinely varies by type stays in the switch.
         if (sl->has_direction)
-            set_light_direction(light, (float*)sl->direction);
+            light_set_direction(light, (float*)sl->direction);
         if (sl->has_up)
-            set_light_up(light, (float*)sl->up);
+            light_set_up(light, (float*)sl->up);
 
         switch (sl->type) {
-        case CSCENE_LIGHT_AREA:
-            set_light_size(light, sl->size[0], sl->size[1]);
-            printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f%s)\n", light->name,
-                   sl->size[0], sl->size[1], sl->intensity, sl->cast_shadows ? ", shadows" : "");
-            break;
-        case CSCENE_LIGHT_DIRECTIONAL:
-            printf("Scene file light '%s' (directional, intensity %.2f%s)\n", light->name,
-                   sl->intensity, sl->cast_shadows ? ", shadows" : "");
-            break;
-        case CSCENE_LIGHT_SPOT:
-            // The engine stores cutoffs as cosines of the half-angles; authors
-            // write degrees (see spec 6.2).
-            set_light_cutoff(light, cosf(glm_rad(sl->cone[0])), cosf(glm_rad(sl->cone[1])));
-            printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s%s)\n", light->name,
-                   sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "",
-                   sl->ies_path[0] ? ", cone superseded by its profile" : "");
-            break;
-        default: // CSCENE_LIGHT_POINT
-            printf("Scene file light '%s' (point, intensity %.2f%s)\n", light->name, sl->intensity,
-                   sl->cast_shadows ? ", shadows" : "");
-            break;
+            case CSCENE_LIGHT_AREA:
+                light_set_size(light, sl->size[0], sl->size[1]);
+                printf("Scene file light '%s' (area %.2fx%.2f, radiance %.2f%s)\n", light->name,
+                       sl->size[0], sl->size[1], sl->intensity,
+                       sl->cast_shadows ? ", shadows" : "");
+                break;
+            case CSCENE_LIGHT_DIRECTIONAL:
+                printf("Scene file light '%s' (directional, intensity %.2f%s)\n", light->name,
+                       sl->intensity, sl->cast_shadows ? ", shadows" : "");
+                break;
+            case CSCENE_LIGHT_SPOT:
+                // The engine stores cutoffs as cosines of the half-angles; authors
+                // write degrees (see spec 6.2).
+                light_set_cutoff(light, cosf(glm_rad(sl->cone[0])), cosf(glm_rad(sl->cone[1])));
+                printf("Scene file light '%s' (spot, cone %.1f/%.1f deg%s%s)\n", light->name,
+                       sl->cone[0], sl->cone[1], sl->cast_shadows ? ", shadows" : "",
+                       sl->ies_path[0] ? ", cone superseded by its profile" : "");
+                break;
+            default: // CSCENE_LIGHT_POINT
+                printf("Scene file light '%s' (point, intensity %.2f%s)\n", light->name,
+                       sl->intensity, sl->cast_shadows ? ", shadows" : "");
+                break;
         }
         // Range bounds the punctual falloff; absent means keep create_light()'s
         // default. The old attenuation triple is parsed and warned about in
         // cscene.c but deliberately not applied here -- storing a value the
         // shaders no longer read is how a dead knob keeps looking live.
         if (sl->has_range)
-            set_light_range(light, sl->range);
+            light_set_range(light, sl->range);
         // Type-independent: every light type now honours cast_shadows (spec 9.8
         // gave point and area lights maps), so it is set once rather than per
         // branch. The switch above only carries what genuinely varies by type.
         if (sl->cast_shadows)
-            set_light_cast_shadows(light, true);
+            light_set_cast_shadows(light, true);
 
         // A profile is a POINT-LIKE emitter's angular distribution. A panel is
         // shaded by an LTC integral over its rectangle and a directional has no
@@ -332,8 +332,7 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
             (sl->type == CSCENE_LIGHT_AREA || sl->type == CSCENE_LIGHT_DIRECTIONAL)) {
             log_warn("cscene: light '%s' is %s and authors a profile; an IES file measures a "
                      "point-like emitter and is ignored here",
-                     light->name,
-                     sl->type == CSCENE_LIGHT_AREA ? "an area panel" : "directional");
+                     light->name, sl->type == CSCENE_LIGHT_AREA ? "an area panel" : "directional");
         } else if (sl->ies_path[0]) {
             if (!scene->ies_library)
                 scene->ies_library = create_ies_library();
@@ -347,19 +346,19 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                 // and an authored intensity still wins, which is what keeps
                 // intensity the one brightness control (spec 11.57).
                 if (!sl->has_intensity) {
-                    set_light_intensity_units(light, p->peak_cd, LIGHT_UNITS_CANDELA);
+                    light_set_intensity_units(light, p->peak_cd, LIGHT_UNITS_CANDELA);
                     printf("Scene file: light '%s' takes its %.1f cd from '%s'\n", light->name,
                            (double)p->peak_cd, sl->ies_path);
                 }
             }
         }
 
-        add_light_to_scene(scene, light);
+        scene_add_light(scene, light);
 
         SceneNode* light_node = create_node();
-        set_node_light(light_node, light);
-        set_node_name(light_node, light->name);
-        add_child_node(scene->root_node, light_node);
+        node_set_light(light_node, light);
+        node_set_name(light_node, light->name);
+        node_add_child(scene->root_node, light_node);
     }
 }
 
@@ -369,14 +368,14 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
     // Names are unique in authored scenes, so first match is the match.
     for (int k = 0; k < cscn->light_override_count; k++) {
         const CSceneLightOverride* ov = &cscn->light_overrides[k];
-        Light* light = find_light_by_name(scene, ov->name);
+        Light* light = scene_find_light(scene, ov->name);
         if (!light) {
             fprintf(stderr, "Warning: scene-file light override '%s' matches no light\n", ov->name);
             continue;
         }
         if (ov->has_size_from_angle) {
             float s = tanf(ov->size_from_angle) * scene_radius;
-            set_light_size(light, s, s);
+            light_set_size(light, s, s);
             printf("Scene file: light '%s' penumbra size %.3f (angle %.3f rad)\n", ov->name, s,
                    ov->size_from_angle);
         }
@@ -385,10 +384,10 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
             // override on a lumens lamp reads as lumens too. An override block
             // carries no intensity_unit of its own; inheriting is the only
             // reading that does not silently change what the number means.
-            set_light_intensity_units(light, ov->intensity, light_display_units(light));
+            light_set_intensity_units(light, ov->intensity, light_display_units(light));
         }
         if (ov->has_cast_shadows) {
-            set_light_cast_shadows(light, ov->cast_shadows);
+            light_set_cast_shadows(light, ov->cast_shadows);
             printf("Scene file: light '%s' cast_shadows %s\n", ov->name,
                    ov->cast_shadows ? "on" : "off");
         }
@@ -418,7 +417,7 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn) {
                 wind->turbulence = cscn->wind_turbulence;
             if (cscn->has_wind_phase_variation)
                 wind->phase_variation = cscn->wind_phase_variation;
-            set_scene_wind(scene, wind);
+            scene_set_wind(scene, wind);
             printf("Scene file: wind dir=(%.2f, %.2f, %.2f), strength %.3f\n", wind->direction[0],
                    wind->direction[1], wind->direction[2], wind->strength);
         }
@@ -508,8 +507,7 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
         water->far_lod = w->far_lod;
     scene->water = water;
     printf("Scene file: water level %.2f, extent %.1f, %s waves\n", (double)water->level,
-           (double)water->extent,
-           water->wave_model == WATER_WAVES_FFT ? "spectral" : "gerstner");
+           (double)water->extent, water->wave_model == WATER_WAVES_FFT ? "spectral" : "gerstner");
 }
 
 /*
@@ -530,13 +528,13 @@ void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn) {
         glm_vec3_copy((float*)v->center, out.center);
         glm_vec3_copy((float*)v->extent, out.half_extent);
         glm_vec3_copy((float*)v->tint, out.tint);
-        if (add_fog_volume_to_scene(scene, &out) < 0)
+        if (scene_add_fog_volume(scene, &out) < 0)
             break;
         printf("Scene file: fog volume at (%.2f %.2f %.2f) half-extent (%.2f %.2f %.2f) "
                "density %.3f feather %.2f\n",
                (double)out.center[0], (double)out.center[1], (double)out.center[2],
-               (double)out.half_extent[0], (double)out.half_extent[1],
-               (double)out.half_extent[2], (double)out.density, (double)out.feather);
+               (double)out.half_extent[0], (double)out.half_extent[1], (double)out.half_extent[2],
+               (double)out.density, (double)out.feather);
     }
 }
 
@@ -546,7 +544,7 @@ _Static_assert(CSCENE_MAX_OCCLUDERS <= SCENE_MAX_OCCLUDERS,
 /*
  * The scene file's occluders (spec 11.98). Printed for the fog-volume reason: a box
  * placed where nothing stands behind it culls nothing and is indistinguishable from
- * one that failed to parse. Inverted boxes are refused by add_occluder_to_scene.
+ * one that failed to parse. Inverted boxes are refused by scene_add_occluder.
  */
 void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn) {
     if (!scene || !cscn)
@@ -556,7 +554,7 @@ void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn) {
         Occluder out;
         glm_vec3_copy((float*)o->box_min, out.box_min);
         glm_vec3_copy((float*)o->box_max, out.box_max);
-        if (add_occluder_to_scene(scene, &out) < 0)
+        if (scene_add_occluder(scene, &out) < 0)
             continue; // an inverted box is dropped, not a reason to stop the rest
         printf("Scene file: occluder box (%.2f %.2f %.2f)..(%.2f %.2f %.2f)\n",
                (double)out.box_min[0], (double)out.box_min[1], (double)out.box_min[2],
@@ -623,14 +621,14 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
         if (d->has_up)
             glm_vec3_copy((float*)d->up, out.up);
 
-        if (add_decal_to_scene(scene, &out) < 0)
+        if (scene_add_decal(scene, &out) < 0)
             break;
         printf("Scene file: decal at (%.2f %.2f %.2f) half-extent (%.2f %.2f %.2f) "
                "facing (%.2f %.2f %.2f) image '%s'%s\n",
                (double)out.position[0], (double)out.position[1], (double)out.position[2],
-               (double)out.half_extent[0], (double)out.half_extent[1],
-               (double)out.half_extent[2], (double)out.direction[0], (double)out.direction[1],
-               (double)out.direction[2], d->image, surface ? " (+surface)" : "");
+               (double)out.half_extent[0], (double)out.half_extent[1], (double)out.half_extent[2],
+               (double)out.direction[0], (double)out.direction[1], (double)out.direction[2],
+               d->image, surface ? " (+surface)" : "");
     }
 
     // A decal image is a layer of the array, so authoring one is a reason to rebuild it.
@@ -752,8 +750,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
                 slot = NULL;
             } else if ((slot->type == MATERIAL_PARAM_COLOR) != (prm->components == 3)) {
                 fprintf(stderr, "Warning: material '%s': key '%s' wants %s\n", mo->material,
-                        prm->key,
-                        slot->type == MATERIAL_PARAM_COLOR ? "3 numbers" : "one number");
+                        prm->key, slot->type == MATERIAL_PARAM_COLOR ? "3 numbers" : "one number");
                 slot = NULL;
             }
             slots[p] = slot;
@@ -807,8 +804,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             }
             if (!slot || slot->type != MATERIAL_PARAM_TEXTURE) {
                 fprintf(stderr, "Warning: material '%s': %s '%s'\n", mo->material,
-                        slot ? "not a texture key:" : "unknown texture key",
-                        mo->textures[t].key);
+                        slot ? "not a texture key:" : "unknown texture key", mo->textures[t].key);
                 continue;
             }
             // Linear, and unstated for both other axes. Both texture-typed rows
@@ -903,8 +899,8 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             for (int e = 0; e < enum_count; e++)
                 material_param_set(m, enums[e].slot, &enums[e].value);
             for (int l = 0; l < layer_count; l++) {
-                set_material_layer_albedo_tex(m, l, layers[l].albedo);
-                set_material_layer_surface_tex(m, l, layers[l].surface);
+                material_set_layer_albedo_tex(m, l, layers[l].albedo);
+                material_set_layer_surface_tex(m, l, layers[l].surface);
                 m->layers[l].uv_scale = layers[l].uv_scale;
             }
             // Assigned last, since it is what arms the shader: a count raised
@@ -1023,7 +1019,7 @@ void apply_cscene_dust(Engine* engine, Scene* scene, const CetraSceneDesc* cscn,
 
     noise_seed(20240720u);
     ShaderProgram* prog = create_particle_program();
-    add_shader_program_to_engine(engine, prog);
+    engine_add_program(engine, prog);
 
     ParticleSystem* sys = create_particle_system("window_dust");
     particle_system_set_backend(sys, create_tf_particle_sim_backend());
@@ -1047,12 +1043,12 @@ void apply_cscene_dust(Engine* engine, Scene* scene, const CetraSceneDesc* cscn,
     particle_emitter_add_module(em, particle_module_update_drift(drift));
     particle_emitter_add_module(em, particle_module_update_integrate(damping));
     particle_system_add_emitter(sys, em);
-    add_particle_system_to_scene(scene, sys); // scene owns it (freed in free_scene)
+    scene_add_particle_system(scene, sys); // scene owns it (freed in free_scene)
 
     SceneNode* node = create_node();
-    set_node_name(node, "window_dust");
-    set_node_particle_system(node, sys);
-    add_child_node(scene->root_node, node);
+    node_set_name(node, "window_dust");
+    node_set_particle_system(node, sys);
+    node_add_child(scene->root_node, node);
     printf("Scene file: dust spawnRate=%.0f, curl.strength=%.3f (capacity %zu)\n", spawn_rate,
            curl_strength, capacity);
 }

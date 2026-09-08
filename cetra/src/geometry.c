@@ -11,7 +11,7 @@
 /*
  * Bezier curve functions
  */
-void cubic_bezier_curve_point(const Curve* curve, float t, vec3 result) {
+void curve_point_at(const Curve* curve, float t, vec3 result) {
     // t is the parameter of the curve, ranging from 0 to 1.
     // one_minus_t is the complementary parameter to t.
     float one_minus_t = 1.0f - t;
@@ -41,7 +41,7 @@ void cubic_bezier_curve_point(const Curve* curve, float t, vec3 result) {
     }
 }
 
-Curve* generate_s_shaped_bezier_curve(vec3 start, vec3 end, float intensity, float line_width) {
+Curve* create_s_bezier_curve(vec3 start, vec3 end, float intensity, float line_width) {
     Curve* curve = malloc(sizeof(Curve));
     if (!curve) {
         log_error("Failed to allocate memory for Curve");
@@ -93,7 +93,7 @@ void free_curve(Curve* curve) {
 // of forgetting is no longer a popped object at the screen edge: the shadow
 // depth pass culls on these bounds too, and a degenerate AABB there is a
 // missing shadow in the middle of a lit scene.
-void generate_point_to_mesh(Mesh* mesh, const Point* point) {
+void mesh_generate_point(Mesh* mesh, const Point* point) {
     mesh->vertex_count = 1;
     float* new_vertices = (float*)safe_realloc(mesh->vertices, 3 * sizeof(float));
     if (!new_vertices) {
@@ -109,7 +109,7 @@ void generate_point_to_mesh(Mesh* mesh, const Point* point) {
     mesh->index_count = 0;
     free(mesh->indices);
     mesh->indices = NULL;
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
 // The attribute streams a flat primitive owes the lit path: it lies in its own
@@ -117,10 +117,8 @@ void generate_point_to_mesh(Mesh* mesh, const Point* point) {
 // handed). Without them the upload leaves both attributes disabled, the vertex
 // stage normalises a zero, and no light can reach the surface at all.
 static void _flat_plane_attributes(Mesh* mesh) {
-    float* normals =
-        (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
-    float* tangents =
-        (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 4 * sizeof(float));
+    float* normals = (float*)safe_realloc(mesh->normals, mesh->vertex_count * 3 * sizeof(float));
+    float* tangents = (float*)safe_realloc(mesh->tangents, mesh->vertex_count * 4 * sizeof(float));
     if (normals)
         mesh->normals = normals;
     if (tangents)
@@ -138,7 +136,7 @@ static void _flat_plane_attributes(Mesh* mesh) {
     }
 }
 
-void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
+void mesh_generate_circle(Mesh* mesh, const Circle* circle) {
     const int segments = NUM_CIRCLE_SEGMENTS; // Number of segments for approximation
 
     MeshDrawMode draw_mode = circle->filled ? MESH_TRIANGLES : MESH_LINE_STRIP;
@@ -217,10 +215,10 @@ void generate_circle_to_mesh(Mesh* mesh, const Circle* circle) {
     }
     mesh->draw_mode = draw_mode;
     _flat_plane_attributes(mesh);
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
-void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
+void mesh_generate_rect(Mesh* mesh, const Rect* rect) {
     if (!mesh || !rect) {
         return;
     }
@@ -406,10 +404,10 @@ void generate_rect_to_mesh(Mesh* mesh, const Rect* rect) {
         }
     }
     _flat_plane_attributes(mesh);
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
-void generate_curve_to_mesh(Mesh* mesh, const Curve* curve) {
+void mesh_generate_curve(Mesh* mesh, const Curve* curve) {
     if (!mesh || !curve) {
         return;
     }
@@ -437,7 +435,7 @@ void generate_curve_to_mesh(Mesh* mesh, const Curve* curve) {
     for (int j = 0; j < resolution; ++j) {
         float t = (float)j / (float)(resolution - 1);
         vec3 point = {0};
-        cubic_bezier_curve_point(curve, t, point);
+        curve_point_at(curve, t, point);
 
         mesh->vertices[vertex_index * 3] = point[0];
         mesh->vertices[vertex_index * 3 + 1] = point[1];
@@ -453,10 +451,10 @@ void generate_curve_to_mesh(Mesh* mesh, const Curve* curve) {
 
     mesh->line_width = curve->line_width;
     mesh->draw_mode = MESH_LINE_STRIP;
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
-void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
+void mesh_generate_cylinder(Mesh* mesh, const Cylinder* cylinder) {
     if (!mesh || !cylinder || cylinder->segments < 3) {
         return;
     }
@@ -582,10 +580,10 @@ void generate_cylinder_to_mesh(Mesh* mesh, const Cylinder* cylinder) {
     }
 
     mesh->draw_mode = MESH_TRIANGLES;
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
-void generate_box_to_mesh(Mesh* mesh, const Box* box) {
+void mesh_generate_box(Mesh* mesh, const Box* box) {
     if (!mesh || !box) {
         return;
     }
@@ -759,10 +757,10 @@ void generate_box_to_mesh(Mesh* mesh, const Box* box) {
     memcpy(mesh->indices, inds, sizeof(inds));
 
     mesh->draw_mode = MESH_TRIANGLES;
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
-void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
+void mesh_generate_plane(Mesh* mesh, const Plane* plane) {
     if (!mesh || !plane) {
         return;
     }
@@ -860,10 +858,10 @@ void generate_plane_to_mesh(Mesh* mesh, const Plane* plane) {
     }
 
     mesh->draw_mode = MESH_TRIANGLES;
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
-void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
+void mesh_generate_sphere(Mesh* mesh, const Sphere* sphere) {
     if (!mesh || !sphere) {
         return;
     }
@@ -972,5 +970,5 @@ void generate_sphere_to_mesh(Mesh* mesh, const Sphere* sphere) {
     }
 
     mesh->draw_mode = MESH_TRIANGLES;
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }

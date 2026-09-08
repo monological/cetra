@@ -184,13 +184,13 @@ void free_mesh(Mesh* mesh) {
     free(mesh);
 }
 
-void set_mesh_draw_mode(Mesh* mesh, MeshDrawMode draw_mode) {
+void mesh_set_draw_mode(Mesh* mesh, MeshDrawMode draw_mode) {
     if (!mesh)
         return;
     mesh->draw_mode = draw_mode;
 }
 
-void calculate_aabb(Mesh* mesh) {
+void mesh_compute_aabb(Mesh* mesh) {
     AABB* aabb = &mesh->aabb;
 
     if (mesh->vertex_count == 0) {
@@ -213,7 +213,7 @@ void calculate_aabb(Mesh* mesh) {
 }
 
 // The vertex maxima the wind bound needs (see mesh.h). Here rather than beside
-// calculate_aabb because this runs once per mesh with every attribute final,
+// mesh_compute_aabb because this runs once per mesh with every attribute final,
 // which is what makes the answer a description of what the shader will read.
 static void measure_wind_extremes(Mesh* mesh) {
     mesh->wind_flex_max = 0.0f;
@@ -304,8 +304,7 @@ static void _upload_float_stream(const Mesh* mesh, const float* data, GLuint* vb
         glGenBuffers(1, vbo);
     const size_t stride = (size_t)components * sizeof(float);
     glBindBuffer(GL_ARRAY_BUFFER, *vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * stride), data,
-                 GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * stride), data, GL_STATIC_DRAW);
     glVertexAttribPointer(attr, components, GL_FLOAT, GL_FALSE, (GLsizei)stride, (void*)0);
     glEnableVertexAttribArray(attr);
 }
@@ -318,13 +317,12 @@ static void _upload_int_stream(const Mesh* mesh, const int* data, GLuint* vbo, G
         glGenBuffers(1, vbo);
     const size_t stride = (size_t)components * sizeof(int);
     glBindBuffer(GL_ARRAY_BUFFER, *vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * stride), data,
-                 GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * stride), data, GL_STATIC_DRAW);
     glVertexAttribIPointer(attr, components, GL_INT, (GLsizei)stride, (void*)0);
     glEnableVertexAttribArray(attr);
 }
 
-void upload_mesh_buffers_to_gpu(Mesh* mesh) {
+void mesh_upload(Mesh* mesh) {
     if (!mesh)
         return;
     // A mesh with no VAO is not drawable and the list refuses it, so the upload
@@ -363,8 +361,8 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     _upload_float_stream(mesh, mesh->colors, &mesh->color_vbo, GL_ATTR_COLOR, 4);
 
     _upload_float_stream(mesh, mesh->morph, &mesh->morph_vbo, GL_ATTR_MORPH, 3);
-    _upload_float_stream(mesh, mesh->morph_normals, &mesh->morph_normal_vbo,
-                         GL_ATTR_MORPH_NORMAL, 3);
+    _upload_float_stream(mesh, mesh->morph_normals, &mesh->morph_normal_vbo, GL_ATTR_MORPH_NORMAL,
+                         3);
 
     // The skinning pair is gated on is_skinned as well as on the array, because a
     // mesh can carry weights it does not use and binding them would put a
@@ -372,8 +370,8 @@ void upload_mesh_buffers_to_gpu(Mesh* mesh) {
     if (mesh->is_skinned) {
         _upload_int_stream(mesh, mesh->bone_ids, &mesh->bone_id_vbo, GL_ATTR_BONE_IDS,
                            BONES_PER_VERTEX);
-        _upload_float_stream(mesh, mesh->bone_weights, &mesh->bone_weight_vbo,
-                             GL_ATTR_BONE_WEIGHTS, BONES_PER_VERTEX);
+        _upload_float_stream(mesh, mesh->bone_weights, &mesh->bone_weight_vbo, GL_ATTR_BONE_WEIGHTS,
+                             BONES_PER_VERTEX);
     }
 
     check_gl_error("mesh buffer upload");

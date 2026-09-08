@@ -83,7 +83,7 @@ void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureSt
 //            scene with no HDR environment at all.
 //
 // Renders the ENGINE'S CURRENT SCENE, deliberately with no scene parameter:
-// render_current_scene resolves the scene itself through get_current_scene, so a
+// render_current_scene resolves the scene itself through engine_get_scene, so a
 // scene argument here could not be honoured and would only read as if it were.
 //
 // Saves and restores every piece of engine and camera state it substitutes, so a

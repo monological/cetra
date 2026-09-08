@@ -48,7 +48,7 @@ Light* create_light() {
     return light;
 }
 
-void set_light_name(Light* light, const char* name) {
+void light_set_name(Light* light, const char* name) {
     if (!light || !name)
         return;
     if (light->name != NULL) {
@@ -57,7 +57,7 @@ void set_light_name(Light* light, const char* name) {
     light->name = safe_strdup(name);
 }
 
-void set_light_type(Light* light, LightType type) {
+void light_set_type(Light* light, LightType type) {
     if (!light)
         return;
     light->type = type;
@@ -102,10 +102,10 @@ const char* light_units_name(LightUnits units) {
 // Deliberately does NOT consult light->type. Lumens converts by Phi/4pi and
 // every other unit is already canonical, so the arithmetic is a function of the
 // unit alone -- which is what lets this be called in any order relative to
-// set_light_type. Whether lumens makes SENSE for the light is an authoring
+// light_set_type. Whether lumens makes SENSE for the light is an authoring
 // question, checked where a type and a unit are read together (cscene.c), not a
 // correctness one that a call order could silently get wrong.
-void set_light_intensity_units(Light* light, float intensity, LightUnits units) {
+void light_set_intensity_units(Light* light, float intensity, LightUnits units) {
     if (!light)
         return;
     light->units = units;
@@ -127,31 +127,31 @@ float light_intensity_in_units(const Light* light) {
                                                             : light->intensity;
 }
 
-void set_light_specular(Light* light, vec3 specular) {
+void light_set_specular(Light* light, vec3 specular) {
     if (!light)
         return;
     glm_vec3_copy(specular, light->specular);
 }
 
-void set_light_ambient(Light* light, vec3 ambient) {
+void light_set_ambient(Light* light, vec3 ambient) {
     if (!light)
         return;
     glm_vec3_copy(ambient, light->ambient);
 }
 
-void set_light_original_position(Light* light, vec3 original_position) {
+void light_set_original_position(Light* light, vec3 original_position) {
     if (!light)
         return;
     glm_vec3_copy(original_position, light->original_position);
 }
 
-void set_light_global_position(Light* light, vec3 global_position) {
+void light_set_global_position(Light* light, vec3 global_position) {
     if (!light)
         return;
     glm_vec3_copy(global_position, light->global_position);
 }
 
-void set_light_direction(Light* light, vec3 direction) {
+void light_set_direction(Light* light, vec3 direction) {
     if (!light)
         return;
     // Authored direction: both the immutable local copy and the world-space
@@ -161,17 +161,17 @@ void set_light_direction(Light* light, vec3 direction) {
     glm_vec3_copy(direction, light->direction);
 }
 
-void set_light_up(Light* light, vec3 up) {
+void light_set_up(Light* light, vec3 up) {
     if (!light)
         return;
-    // Same authored/world split as set_light_direction. Only area lights read
+    // Same authored/world split as light_set_direction. Only area lights read
     // it, and pack time orthonormalizes against direction, so callers may pass
     // any non-parallel vector.
     glm_vec3_copy(up, light->original_up);
     glm_vec3_copy(up, light->up);
 }
 
-void set_light_color(Light* light, vec3 color) {
+void light_set_color(Light* light, vec3 color) {
     if (!light)
         return;
     glm_vec3_copy(color, light->color);
@@ -179,18 +179,18 @@ void set_light_color(Light* light, vec3 color) {
 
 // Set intensity in the light type's own unit: candela for point and spot, lux
 // for a directional, nits for an area panel. To author in lumens, which is the
-// only other unit that converts, call set_light_intensity_units.
+// only other unit that converts, call light_set_intensity_units.
 //
 // Leaves `units` alone on purpose. It is a DISPLAY unit over a canonical value,
 // so it stays correct across a canonical write -- 2.39 cd and 30 lm are the same
 // light, and a lamp being shown in lumens should keep being shown in lumens.
-void set_light_intensity(Light* light, float intensity) {
+void light_set_intensity(Light* light, float intensity) {
     if (!light)
         return;
     light->intensity = intensity;
 }
 
-void set_light_range(Light* light, float range) {
+void light_set_range(Light* light, float range) {
     if (!light)
         return;
     light->range = range;
@@ -269,20 +269,20 @@ void light_emission_frame(const struct Light* light, vec3 axis, vec3 up) {
  *               full intensity.
  * @param outerCutOff Cosine of the outer half-angle, beyond which it is zero.
  */
-void set_light_cutoff(Light* light, float cutOff, float outerCutOff) {
+void light_set_cutoff(Light* light, float cutOff, float outerCutOff) {
     if (!light)
         return;
     light->cutOff = cutOff;
     light->outerCutOff = outerCutOff;
 }
 
-void set_light_cast_shadows(Light* light, bool cast_shadows) {
+void light_set_cast_shadows(Light* light, bool cast_shadows) {
     if (!light)
         return;
     light->cast_shadows = cast_shadows;
 }
 
-void set_light_size(Light* light, float width, float height) {
+void light_set_size(Light* light, float width, float height) {
     if (!light)
         return;
     glm_vec2_copy((vec2){width, height}, light->size);
@@ -313,7 +313,7 @@ const char* light_type_name(LightType type) {
     }
 }
 
-void print_light(const Light* light) {
+void light_print(const Light* light) {
     if (!light) {
         printf("<Invalid light pointer>\n");
         return;
@@ -324,12 +324,11 @@ void print_light(const Light* light) {
            "color=(%f, %f, %f), specular=(%f, %f, %f), ambient=(%f, %f, %f), "
            "intensity=%f %s, range=%f, cutOff=%f, outerCutOff=%f>\n",
            light->name, light_type_name(light->type), light->original_position[0],
-           light->original_position[1],
-           light->original_position[2], light->global_position[0], light->global_position[1],
-           light->global_position[2], light->direction[0], light->direction[1], light->direction[2],
-           light->color[0], light->color[1], light->color[2], light->specular[0],
-           light->specular[1], light->specular[2], light->ambient[0], light->ambient[1],
-           light->ambient[2], light_intensity_in_units(light),
+           light->original_position[1], light->original_position[2], light->global_position[0],
+           light->global_position[1], light->global_position[2], light->direction[0],
+           light->direction[1], light->direction[2], light->color[0], light->color[1],
+           light->color[2], light->specular[0], light->specular[1], light->specular[2],
+           light->ambient[0], light->ambient[1], light->ambient[2], light_intensity_in_units(light),
            light_units_name(light_display_units(light)), light->range, light->cutOff,
            light->outerCutOff);
 }

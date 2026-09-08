@@ -192,8 +192,8 @@ int init_shadow_map_array(ShadowSystem* system) {
     int layers = MAX_SHADOW_LIGHTS * system->cascade_count;
     if (system->tsm_enabled)
         layers += TSM_SLOTS * system->cascade_count * TSM_PARTS;
-    init_depth_array(&system->shadow_map_array, &system->cascade_fbo,
-                     system->default_map_size, layers);
+    init_depth_array(&system->shadow_map_array, &system->cascade_fbo, system->default_map_size,
+                     layers);
 
     system->allocated_cascades = system->cascade_count;
     system->tsm_allocated = system->tsm_enabled;
@@ -223,8 +223,7 @@ int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* l
 // too coarse to resolve a silhouette is not worth rendering at all.
 static int punctual_size_for(int layers) {
     for (int size = PUNCTUAL_SHADOW_MAX_SIZE; size > PUNCTUAL_SHADOW_MIN_SIZE; size >>= 1) {
-        if ((unsigned)layers * (unsigned)size * (unsigned)size * 4u <=
-            PUNCTUAL_SHADOW_VRAM_BUDGET)
+        if ((unsigned)layers * (unsigned)size * (unsigned)size * 4u <= PUNCTUAL_SHADOW_VRAM_BUDGET)
             return size;
     }
     return PUNCTUAL_SHADOW_MIN_SIZE;
@@ -724,8 +723,7 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
             // Returning 0 alone would draw an empty map into a layer that was
             // just cleared to "nothing occludes" -- a fully lit cascade, which
             // renders as a plausible frame. Say so instead.
-            log_error("Shadow: could not size the caster order to %zu; layer unshadowed",
-                      want);
+            log_error("Shadow: could not size the caster order to %zu; layer unshadowed", want);
             return 0;
         }
         ss->caster_order = grown;
@@ -781,8 +779,7 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
         // submit-exact compares two runs of one build so it cannot see it.
         const DrawItem* first = &list->items[ss->caster_order[span_start]];
         size_t span_end = span_start + 1;
-        while (span_end < n &&
-               _caster_span_member(first, &list->items[ss->caster_order[span_end]]))
+        while (span_end < n && _caster_span_member(first, &list->items[ss->caster_order[span_end]]))
             span_end++;
 
         size_t span = span_end - span_start;
@@ -842,8 +839,7 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
 
     // Loop-invariant, so it is settled once rather than re-asked per draw -- and
     // it is what decides whether the order is worth grouping at all.
-    const bool batching = engine->instancing_enabled && engine->instance_ubo &&
-                          program->instanced;
+    const bool batching = engine->instancing_enabled && engine->instance_ubo && program->instanced;
 
     size_t count = _build_caster_order(ss, list, set, batching, cull, stats);
     const size_t* order = ss->caster_order;
@@ -868,8 +864,8 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             // No shading transforms: this stage reads uInstModel and nothing
             // else, so the rest of the block is bytes it cannot look at.
             if (run > 1)
-                instance_chunk_upload_ordered(engine->instance_ubo, &chunk, list, order, count,
-                                              pos, run, false);
+                instance_chunk_upload_ordered(engine->instance_ubo, &chunk, list, order, count, pos,
+                                              run, false);
 
             // Only for a draw carrying one object, for the reason
             // _submit_item's own guard records. Note the grouped order is not
@@ -911,8 +907,7 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             // mesh drawn after the first two-sided one -- transmittance would
             // come out as its square root, and which meshes were affected
             // would depend on scene-graph order.
-            bool two_sided =
-                (item->flags & DRAW_DOUBLE_SIDED) && set != SHADOW_CASTERS_TRANSLUCENT;
+            bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && set != SHADOW_CASTERS_TRANSLUCENT;
             // The camera's level, not one chosen for this light: see DrawItem.
             submit_draw_run(state, u, item, run, two_sided, stats);
             pos += run - 1;
@@ -954,9 +949,9 @@ static void compute_perspective_light_space(const vec3 pos, const vec3 dir_in, f
 // A point light's six faces, in the +X -X +Y -Y +Z -Z order that
 // include/punctual_shadow.glsl selects by dominant axis. That order is the whole
 // contract between the two files; everything else about a face is in its matrix.
-static const vec3 PUNCTUAL_CUBE_DIR[6] = {{1.0f, 0.0f, 0.0f},  {-1.0f, 0.0f, 0.0f},
-                                          {0.0f, 1.0f, 0.0f},  {0.0f, -1.0f, 0.0f},
-                                          {0.0f, 0.0f, 1.0f},  {0.0f, 0.0f, -1.0f}};
+static const vec3 PUNCTUAL_CUBE_DIR[6] = {{1.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f},
+                                          {0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f},
+                                          {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}};
 
 // A panel emits into a full hemisphere and one perspective map cannot cover
 // 180 degrees, so an area light's shadow is an approximation with a chosen
@@ -987,44 +982,44 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
     const float near_p = ss->near_plane, far_p = ss->far_plane;
 
     switch (light->type) {
-    case LIGHT_POINT:
-        for (int f = 0; f < 6; f++) {
-            compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f],
-                                            glm_rad(90.0f), near_p, far_p, dest[f]);
+        case LIGHT_POINT:
+            for (int f = 0; f < 6; f++) {
+                compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f],
+                                                glm_rad(90.0f), near_p, far_p, dest[f]);
+            }
+            break;
+        case LIGHT_AREA: {
+            // Down the panel normal. A degenerate authored direction falls back to
+            // -Y, matching what light_cluster.c builds the panel's own frame from,
+            // so the shadow and the lit rectangle can never disagree about which
+            // way the panel faces.
+            vec3 dir;
+            glm_vec3_copy((float*)light->direction, dir);
+            if (glm_vec3_norm(dir) < 1e-6f)
+                glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, dir);
+            compute_perspective_light_space(light->global_position, dir, AREA_SHADOW_FOV, near_p,
+                                            far_p, dest[0]);
+            break;
         }
-        break;
-    case LIGHT_AREA: {
-        // Down the panel normal. A degenerate authored direction falls back to
-        // -Y, matching what light_cluster.c builds the panel's own frame from,
-        // so the shadow and the lit rectangle can never disagree about which
-        // way the panel faces.
-        vec3 dir;
-        glm_vec3_copy((float*)light->direction, dir);
-        if (glm_vec3_norm(dir) < 1e-6f)
-            glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, dir);
-        compute_perspective_light_space(light->global_position, dir, AREA_SHADOW_FOV, near_p, far_p,
-                                        dest[0]);
-        break;
-    }
-    default: {
-        // A spot's fov is its own cone, plus a margin so the outer edge is not
-        // clipped by the frustum it is supposed to fill.
-        //
-        // A PROFILED spot's cone is dead -- the profile replaced it -- so the
-        // frustum is fitted to the profile's angular support instead. Real IES
-        // skirts routinely reach past the authored cone, and fitting the cone
-        // anyway would leave that skirt lit and unshadowed, which reads as a
-        // light passing through walls.
-        float half_angle = acosf(light->outerCutOff); // outerCutOff = cos(half-angle)
-        if (profile)
-            half_angle = glm_rad(profile->support_deg);
-        float fov = 2.0f * half_angle * 1.15f;
-        if (fov > glm_rad(175.0f))
-            fov = glm_rad(175.0f);
-        compute_perspective_light_space(light->global_position, light->direction, fov, near_p, far_p,
-                                        dest[0]);
-        break;
-    }
+        default: {
+            // A spot's fov is its own cone, plus a margin so the outer edge is not
+            // clipped by the frustum it is supposed to fill.
+            //
+            // A PROFILED spot's cone is dead -- the profile replaced it -- so the
+            // frustum is fitted to the profile's angular support instead. Real IES
+            // skirts routinely reach past the authored cone, and fitting the cone
+            // anyway would leave that skirt lit and unshadowed, which reads as a
+            // light passing through walls.
+            float half_angle = acosf(light->outerCutOff); // outerCutOff = cos(half-angle)
+            if (profile)
+                half_angle = glm_rad(profile->support_deg);
+            float fov = 2.0f * half_angle * 1.15f;
+            if (fov > glm_rad(175.0f))
+                fov = glm_rad(175.0f);
+            compute_perspective_light_space(light->global_position, light->direction, fov, near_p,
+                                            far_p, dest[0]);
+            break;
+        }
     }
 
     return punctual_layers_for(light);
@@ -1113,7 +1108,7 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
     }
 
     if (!ss->msm_program)
-        ss->msm_program = get_engine_shader_program_by_name(engine, "msm_resolve");
+        ss->msm_program = engine_get_program(engine, "msm_resolve");
     if (!ss->msm_program || !ss->msm_program->uniforms)
         return false;
 
@@ -1275,9 +1270,9 @@ static bool shadow_tsm_prepare(ShadowSystem* ss, Engine* engine) {
         return false;
 
     if (!ss->tsm_absorb_program)
-        ss->tsm_absorb_program = get_engine_shader_program_by_name(engine, "shadow_absorb");
+        ss->tsm_absorb_program = engine_get_program(engine, "shadow_absorb");
     if (!ss->tsm_resolve_program)
-        ss->tsm_resolve_program = get_engine_shader_program_by_name(engine, "tsm_resolve");
+        ss->tsm_resolve_program = engine_get_program(engine, "tsm_resolve");
     if (!ss->tsm_absorb_program || !ss->tsm_resolve_program)
         return false;
 
@@ -1294,8 +1289,8 @@ static bool shadow_tsm_prepare(ShadowSystem* ss, Engine* engine) {
             return false;
         glGenFramebuffers(1, &ss->tsm_scratch_fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, ss->tsm_scratch_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               ss->tsm_scratch, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ss->tsm_scratch,
+                               0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Translucent shadow scratch framebuffer incomplete");
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1304,13 +1299,13 @@ static bool shadow_tsm_prepare(ShadowSystem* ss, Engine* engine) {
             return false;
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        log_info("Translucent shadows: %d layer(s) at %d^2 appended to the depth array "
-                 "(%.0f MB incl. a %.0f MB accumulation scratch)",
-                 TSM_SLOTS * cc * TSM_PARTS, size,
-                 (TSM_SLOTS * cc * TSM_PARTS * (double)size * size * 4.0 +
-                  size * (double)size * 4.0) /
-                     (1024.0 * 1024.0),
-                 size * (double)size * 4.0 / (1024.0 * 1024.0));
+        log_info(
+            "Translucent shadows: %d layer(s) at %d^2 appended to the depth array "
+            "(%.0f MB incl. a %.0f MB accumulation scratch)",
+            TSM_SLOTS * cc * TSM_PARTS, size,
+            (TSM_SLOTS * cc * TSM_PARTS * (double)size * size * 4.0 + size * (double)size * 4.0) /
+                (1024.0 * 1024.0),
+            size * (double)size * 4.0 / (1024.0 * 1024.0));
     }
     if (ss->tsm_quad_vao == 0)
         create_fullscreen_quad_vao(&ss->tsm_quad_vao, &ss->tsm_quad_vbo);
@@ -1483,8 +1478,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 dir_overflow = light;
             continue;
         }
-        if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT &&
-            light->type != LIGHT_AREA)
+        if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT && light->type != LIGHT_AREA)
             continue;
 
         // A point light takes its six faces or none: five faces is a light with
@@ -1516,9 +1510,9 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // this it is indistinguishable from one that never asked to cast. Which
     // light loses is scene->lights order, so the name is the whole point.
     if (dir_overflow && !ss->dir_slot_warned) {
-        log_warn("Directional shadow slots full (%d casters): '%s' and any further caster will not cast",
-                 MAX_SHADOW_LIGHTS,
-                 dir_overflow->name ? dir_overflow->name : "unnamed light");
+        log_warn(
+            "Directional shadow slots full (%d casters): '%s' and any further caster will not cast",
+            MAX_SHADOW_LIGHTS, dir_overflow->name ? dir_overflow->name : "unnamed light");
     }
     ss->dir_slot_warned = dir_overflow != NULL;
 
@@ -1564,7 +1558,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     // Now get the depth program for shadow rendering
     if (!ss->depth_program) {
-        ss->depth_program = get_engine_shader_program_by_name(engine, "shadow_depth");
+        ss->depth_program = engine_get_program(engine, "shadow_depth");
         if (!ss->depth_program) {
             return;
         }
@@ -1663,10 +1657,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 for (int c = 0; c < cc - 1; c++) {
                     int layer = (int)slot * cc + c;
                     vec4* params = &ss->cascade_params[layer];
-                    compute_cascade_light_space_matrix(
-                        light->direction, &cam, slice_near, ss->cascade_splits[c], scene_pad,
-                        ss->default_map_size, ss->scene_center, ss->cascade_matrices[layer],
-                        *params);
+                    compute_cascade_light_space_matrix(light->direction, &cam, slice_near,
+                                                       ss->cascade_splits[c], scene_pad,
+                                                       ss->default_map_size, ss->scene_center,
+                                                       ss->cascade_matrices[layer], *params);
                     slice_near = ss->cascade_splits[c];
                 }
                 int last = (int)slot * cc + (cc - 1);
@@ -1733,17 +1727,15 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     SubmitState state = {0};
     submit_use_program(&state, ss->depth_program->id);
 
-
     profiler_scope_begin_if(engine->profiler, ss->directional_count > 0, "shadow cascades");
     for (size_t i = 0; i < ss->directional_count; ++i) {
-        const ShadowCasterSet set = (ss->tsm_live && i < TSM_SLOTS)
-                                        ? SHADOW_CASTERS_OPAQUE_TSM
-                                        : SHADOW_CASTERS_OPAQUE;
+        const ShadowCasterSet set =
+            (ss->tsm_live && i < TSM_SLOTS) ? SHADOW_CASTERS_OPAQUE_TSM : SHADOW_CASTERS_OPAQUE;
         for (int c = 0; c < cc; ++c) {
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
-            draw_shadow_layer(ss, scene, scene->draw_list, ss->cascade_matrices[layer], &state,
-                              set, engine);
+            draw_shadow_layer(ss, scene, scene->draw_list, ss->cascade_matrices[layer], &state, set,
+                              engine);
         }
     }
     profiler_scope_end(engine->profiler);
@@ -1772,8 +1764,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 // the directional cascades only (unit 15 has no room for a
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
-                draw_shadow_layer(ss, scene, scene->draw_list, ss->punctual_matrices[layer],
-                                  &state, SHADOW_CASTERS_OPAQUE, engine);
+                draw_shadow_layer(ss, scene, scene->draw_list, ss->punctual_matrices[layer], &state,
+                                  SHADOW_CASTERS_OPAQUE, engine);
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;
@@ -1887,7 +1879,8 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     // Publishing count 0 with a zero array handle is the single "no
     // shadowed in-scatter" state consumers rely on: a nonzero count
     // guarantees the map array and every slot below it are valid.
-    if (!ss || !ss->enabled || ss->directional_count == 0 || !ss->shadow_map_array || !scene->lights) {
+    if (!ss || !ss->enabled || ss->directional_count == 0 || !ss->shadow_map_array ||
+        !scene->lights) {
         fx->fog_light_count = 0;
         fx->fog_cascade_count = 1;
         fx->fog_shadow_map_array = 0;

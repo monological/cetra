@@ -259,8 +259,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // skip it would need per-program state this call deliberately does not keep.
     uniform_set_float(u, "stochasticScale", material->stochastic_scale);
     if (material->stochastic_scale > 0.0f)
-        uniform_set_vec3_array(u, "stochasticLut", material->stochastic_lut,
-                               STOCHASTIC_LUT_SIZE);
+        uniform_set_vec3_array(u, "stochasticLut", material->stochastic_lut, STOCHASTIC_LUT_SIZE);
 
     // Dedicated (native-resolution) sampler units. The scalar masks
     // (roughness/metallic/ao/opacity/microsurface/anisotropy) are no
@@ -320,8 +319,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
         // terrain material with props, so an uncached array upload here would
         // repeat exactly the way the 11.60 comment above warns about.
         static const char* const MEAN_NAMES[MATERIAL_MAX_LAYERS] = {
-            "layerMeanAlbedo[0]", "layerMeanAlbedo[1]", "layerMeanAlbedo[2]",
-            "layerMeanAlbedo[3]"};
+            "layerMeanAlbedo[0]", "layerMeanAlbedo[1]", "layerMeanAlbedo[2]", "layerMeanAlbedo[3]"};
         for (int i = 0; i < MATERIAL_MAX_LAYERS; i++)
             uniform_set_vec3(u, MEAN_NAMES[i], vt->mean_albedo[i]);
         uniform_set_vec4(u, "layerMeanRough", vt->mean_rough);
@@ -394,8 +392,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // The Exists gates follow the refusal, not the pointers: leaving them at 1
     // with nothing (or a page) bound on units 3/4 would read foreign data as a
     // height or a coat normal.
-    uniform_set_int(u, "heightTexExists",
-                    material->height_tex && !refuse_maps_34 ? 1 : 0);
+    uniform_set_int(u, "heightTexExists", material->height_tex && !refuse_maps_34 ? 1 : 0);
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
     uniform_set_int(u, "clearcoatNormalExists",
                     refuse_maps_34 ? 0 : texture_normal_gate(material->clearcoat_normal_tex));
@@ -521,8 +518,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // accumulates -- with no accumulator its per-frame noise arrives
             // raw -- and never in a capture, where a probe would bake one
             // frame of noise and idle on it.
-            const bool alpha_jitter = engine->taa_jitter_this_frame &&
-                                      engine->alpha_jitter_enabled && !engine->capturing;
+            const bool alpha_jitter =
+                engine->taa_jitter_this_frame && engine->alpha_jitter_enabled && !engine->capturing;
             uniform_set_int(u, "alphaJitter", alpha_jitter ? 1 : 0);
             // Unit 6 has two disjoint tenants. The moment-weighted accumulate
             // binds the moment atlas there; every other pass binds the
@@ -533,8 +530,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // They cannot collide, and not by convention: the accumulate draws
             // only non-transmissive meshes, and that is the same routing that
             // makes sceneColorTex unreadable there.
-            bool moments_bound = pass == SUBMIT_PASS_OIT_ACCUMULATE &&
-                                 engine->moments_this_frame && engine->moment_atlas_texture != 0;
+            bool moments_bound = pass == SUBMIT_PASS_OIT_ACCUMULATE && engine->moments_this_frame &&
+                                 engine->moment_atlas_texture != 0;
             uniform_set_int(u, "sceneColorAvailable",
                             engine->scene_color_this_frame && !moments_bound ? 1 : 0);
             if (moments_bound || engine->scene_color_this_frame) {
@@ -838,8 +835,7 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
 
         // Within the material's OWN family: a skinned mesh must stay on a
         // skinned vertex stage, and the mask means the same thing in both.
-        ShaderProgram* variant =
-            engine_pbr_variant(engine, mat->shader_program->pbr_family, want);
+        ShaderProgram* variant = engine_pbr_variant(engine, mat->shader_program->pbr_family, want);
         // Keep the material where it is on failure. The full variant always
         // exists, so the surface stays lit rather than turning black -- the
         // subtractive polarity paying off at the one place it matters.
@@ -1269,7 +1265,6 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         return;
     }
 
-
     mat4* view = &engine->view_matrix;
     mat4* projection = &engine->projection_matrix; // un-jittered
 
@@ -1481,8 +1476,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     if (scene->sky && !engine->capturing && render_mode == RENDER_MODE_PBR) {
         // Clouds are off by default, and the callee self-gates on that, so an
         // unconditional scope files a phantom row on every --sky run.
-        profiler_scope_begin_if(engine->profiler, scene->sky->clouds.enabled,
-                                    "cloud march");
+        profiler_scope_begin_if(engine->profiler, scene->sky->clouds.enabled, "cloud march");
         sky_clouds_march(scene->sky, engine, *view, *projection);
         profiler_scope_end(engine->profiler);
     }
@@ -1564,7 +1558,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
             // program; built here rather than at init so a run that never turns
             // the pass on compiles nothing.
             if (engine->depth_prepass_program)
-                add_shader_program_to_engine(engine, engine->depth_prepass_program);
+                engine_add_program(engine, engine->depth_prepass_program);
         }
         prepassed = _submit_depth_prepass(engine, scene, opaque_list, camera, *view,
                                           draw_projection, &cull);
@@ -2093,7 +2087,7 @@ void scene_capture_faces(Engine* engine, struct IBLResources* ibl, const vec3 po
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
-        engine_render_scene(engine, get_current_scene(engine));
+        engine_render_scene(engine, engine_get_scene(engine));
 
         if (keep_depth)
             continue; // already in the destination faces
@@ -2166,7 +2160,7 @@ static void _overlay_line(float* v, size_t* n, const vec3 a, const vec3 b, const
 
 // One great circle of the radius sphere, in the plane spanned by axis_u/axis_v
 static void _overlay_ring(float* v, size_t* n, const vec3 center, float radius, const vec3 axis_u,
-                        const vec3 axis_v, const vec3 color) {
+                          const vec3 axis_v, const vec3 color) {
     vec3 prev;
     for (int i = 0; i <= LIGHT_OVERLAY_RING_SEGMENTS; i++) {
         float t = (float)i / (float)LIGHT_OVERLAY_RING_SEGMENTS * 2.0f * GLM_PIf;
@@ -2195,9 +2189,8 @@ void render_light_overlay(Engine* engine, Scene* scene) {
     int render_w, render_h;
     engine_render_size(engine, &render_w, &render_h);
     Camera* cam = engine->camera;
-    float world_per_px = (render_h > 0 && cam)
-                             ? (2.0f * tanf(cam->fov_radians * 0.5f) / (float)render_h)
-                             : 0.002f;
+    float world_per_px =
+        (render_h > 0 && cam) ? (2.0f * tanf(cam->fov_radians * 0.5f) / (float)render_h) : 0.002f;
     vec3 cam_pos;
     glm_vec3_copy(cam ? cam->position : (vec3){0.0f, 0.0f, 0.0f}, cam_pos);
 
@@ -2248,11 +2241,11 @@ void render_light_overlay(Engine* engine, Scene* scene) {
         } else if (radius > 0.0f) {
             // Wireframe sphere at the clustered-lighting cull radius
             _overlay_ring(vertices, &vertex_floats, pos, radius, (vec3){1, 0, 0}, (vec3){0, 1, 0},
-                        color);
+                          color);
             _overlay_ring(vertices, &vertex_floats, pos, radius, (vec3){1, 0, 0}, (vec3){0, 0, 1},
-                        color);
+                          color);
             _overlay_ring(vertices, &vertex_floats, pos, radius, (vec3){0, 1, 0}, (vec3){0, 0, 1},
-                        color);
+                          color);
         }
     }
 

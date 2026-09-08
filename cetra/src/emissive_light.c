@@ -23,23 +23,23 @@
 
 const char* emissive_fit_reject_name(EmissiveFitReject reject) {
     switch (reject) {
-    case EMISSIVE_FIT_OK:
-        return "ok";
-    // One token, no spaces: these are values in a key=value line, and a reader
-    // that splits on whitespace -- which is every reader of this format -- turns
-    // "not planar" into a truncated reason and a bare word it cannot place.
-    case EMISSIVE_FIT_NO_GEOMETRY:
-        return "no-indexed-triangles";
-    case EMISSIVE_FIT_DEGENERATE:
-        return "zero-area";
-    case EMISSIVE_FIT_NOT_PLANAR:
-        return "not-planar";
-    case EMISSIVE_FIT_NOT_FILLED:
-        return "not-filled";
-    case EMISSIVE_FIT_TOO_DIM:
-        return "too-dim";
-    case EMISSIVE_FIT_OPTED_OUT:
-        return "opted-out";
+        case EMISSIVE_FIT_OK:
+            return "ok";
+        // One token, no spaces: these are values in a key=value line, and a reader
+        // that splits on whitespace -- which is every reader of this format -- turns
+        // "not planar" into a truncated reason and a bare word it cannot place.
+        case EMISSIVE_FIT_NO_GEOMETRY:
+            return "no-indexed-triangles";
+        case EMISSIVE_FIT_DEGENERATE:
+            return "zero-area";
+        case EMISSIVE_FIT_NOT_PLANAR:
+            return "not-planar";
+        case EMISSIVE_FIT_NOT_FILLED:
+            return "not-filled";
+        case EMISSIVE_FIT_TOO_DIM:
+            return "too-dim";
+        case EMISSIVE_FIT_OPTED_OUT:
+            return "opted-out";
     }
     return "unknown";
 }
@@ -444,9 +444,9 @@ void emissive_lights_probe(const Scene* scene) {
  * re-runnable -- which the six cube-capture re-entries per face already assumed.
  */
 typedef struct EmissivePanel {
-    unsigned mesh_id; // stable across frames; 0 is never a real mesh
-    SceneNode* node;  // borrowed; re-resolved on every rebuild
-    Light* light;     // borrowed; the Scene owns it
+    unsigned mesh_id;     // stable across frames; 0 is never a real mesh
+    SceneNode* node;      // borrowed; re-resolved on every rebuild
+    Light* light;         // borrowed; the Scene owns it
     EmissivePanelFit fit; // LOCAL to the mesh, and it stays local
     uint64_t fit_epoch;   // graph epoch `fit` was solved at; 0 = never
     uint64_t seen;        // reconcile pass that last touched this panel
@@ -516,10 +516,10 @@ static void _place(Light* light, const SceneNode* node, const EmissivePanelFit* 
     glm_mat4_mulv3(*xf, (float*)fit->center, 1.0f, world_c);
 
     glm_vec3_copy(world_c, light->global_position);
-    set_light_size(light, glm_vec3_norm(world_u), glm_vec3_norm(world_v));
+    light_set_size(light, glm_vec3_norm(world_u), glm_vec3_norm(world_v));
 
     vec3 world_n;
-    glm_mat3_mulv((float(*)[3])node->normal_matrix, (float*)fit->normal, world_n);
+    glm_mat3_mulv((float (*)[3])node->normal_matrix, (float*)fit->normal, world_n);
     if (glm_vec3_norm(world_n) < 1e-8f)
         glm_vec3_copy((float*)fit->normal, world_n);
     glm_vec3_normalize(world_n);
@@ -547,8 +547,7 @@ static void _walk(Scene* scene, SceneNode* node, bool enabled, uint64_t epoch, i
             continue;
 
         vec3 nits = {0.0f, 0.0f, 0.0f};
-        bool candidate =
-            enabled && _mesh_candidacy(mesh, nits, NULL) == EMISSIVE_FIT_OK;
+        bool candidate = enabled && _mesh_candidacy(mesh, nits, NULL) == EMISSIVE_FIT_OK;
 
         EmissivePanel* panel = candidate ? _panel_for(scene->emissive_panels, mesh->id) : NULL;
         if (candidate && !panel) {
@@ -568,7 +567,7 @@ static void _walk(Scene* scene, SceneNode* node, bool enabled, uint64_t epoch, i
                 // The fit refused the shape. Drop the panel AND its light: a
                 // mesh that stopped being a rectangle is no longer a lamp.
                 if (panel->light)
-                    remove_light_from_scene(scene, panel->light);
+                    scene_remove_light(scene, panel->light);
                 _panel_drop(scene->emissive_panels, panel);
                 candidate = false;
             }
@@ -588,13 +587,13 @@ static void _walk(Scene* scene, SceneNode* node, bool enabled, uint64_t epoch, i
                 mesh->emissive_derived = false;
                 continue;
             }
-            set_light_type(light, LIGHT_AREA);
+            light_set_type(light, LIGHT_AREA);
             light->emissive_source_id = mesh->id;
             // Named for the NODE, not the material: a name has to identify one
             // lamp for light_overrides to address it, and a material is shared by
             // every mesh that uses it.
-            set_light_name(light, node->name ? node->name : "emissive");
-            if (add_light_to_scene(scene, light) != 0) {
+            light_set_name(light, node->name ? node->name : "emissive");
+            if (scene_add_light(scene, light) != 0) {
                 free_light(light);
                 _panel_drop(scene->emissive_panels, panel);
                 mesh->emissive_derived = false;
@@ -644,7 +643,7 @@ int scene_build_emissive_lights(Scene* scene, bool enabled) {
         if (panels->items[i].seen == panels->pass)
             continue;
         if (panels->items[i].light)
-            remove_light_from_scene(scene, panels->items[i].light);
+            scene_remove_light(scene, panels->items[i].light);
         panels->items[i] = panels->items[panels->count - 1];
         panels->count--;
     }

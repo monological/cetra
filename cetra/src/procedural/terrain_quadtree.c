@@ -45,8 +45,8 @@ typedef struct TerrainPatch {
     int ix, iz;
     Mesh* mesh;
     SceneNode* node;
-    unsigned seen;  // the update tick that last selected this patch
-    bool attached;  // currently a child of the root
+    unsigned seen; // the update tick that last selected this patch
+    bool attached; // currently a child of the root
     UT_hash_handle hh;
 } TerrainPatch;
 
@@ -157,7 +157,7 @@ static TerrainPatch* patch_get(TerrainQuadtree* qt, int level, int ix, int iz) {
         return NULL;
     }
     mesh->material = qt->material;
-    upload_mesh_buffers_to_gpu(mesh);
+    mesh_upload(mesh);
 
     patch = calloc(1, sizeof(TerrainPatch));
     if (!patch) {
@@ -175,7 +175,7 @@ static TerrainPatch* patch_get(TerrainQuadtree* qt, int level, int ix, int iz) {
         free(patch);
         return NULL;
     }
-    add_mesh_to_node(patch->node, mesh);
+    node_add_mesh(patch->node, mesh);
     HASH_ADD(hh, qt->cache, key, sizeof(key), patch);
     qt->built++;
     return patch;
@@ -189,8 +189,7 @@ static void select_patch(TerrainQuadtree* qt, int level, int ix, int iz) {
                     sizeof(TerrainPatch*), 64)) {
         // Dropping a patch here is a hole in the ground, so it is said out loud
         // rather than returned into silence.
-        log_error("terrain quadtree: could not hold %zu selected patches",
-                  qt->selected_count + 1);
+        log_error("terrain quadtree: could not hold %zu selected patches", qt->selected_count + 1);
         return;
     }
     patch->seen = qt->tick;
@@ -316,7 +315,7 @@ int terrain_quadtree_update(TerrainQuadtree* qt, const vec3 eye) {
     TerrainPatch *patch, *tmp;
     HASH_ITER(hh, qt->cache, patch, tmp) {
         if (patch->attached && patch->seen != qt->tick) {
-            remove_child_node(qt->root, patch->node);
+            node_remove_child(qt->root, patch->node);
             patch->attached = false;
         }
         if (!patch->attached && qt->tick - patch->seen > TERRAIN_PATCH_GRACE) {
@@ -327,7 +326,7 @@ int terrain_quadtree_update(TerrainQuadtree* qt, const vec3 eye) {
     for (size_t i = 0; i < qt->selected_count; ++i) {
         if (qt->selected[i]->attached)
             continue;
-        add_child_node(qt->root, qt->selected[i]->node);
+        node_add_child(qt->root, qt->selected[i]->node);
         qt->selected[i]->attached = true;
     }
     return (int)qt->selected_count;
@@ -372,11 +371,11 @@ void terrain_quadtree_stats(const TerrainQuadtree* qt, TerrainQuadtreeStats* out
  * height function, because what has to agree is what gets rasterized.
  */
 typedef struct SeamStat {
-    int seams;       // fine-against-coarse adjacencies examined
-    int unbalanced;  // adjacencies more than one level apart -- must be 0
-    float fine_min;  // smallest morph factor on a fine side at a seam; want 1
+    int seams;        // fine-against-coarse adjacencies examined
+    int unbalanced;   // adjacencies more than one level apart -- must be 0
+    float fine_min;   // smallest morph factor on a fine side at a seam; want 1
     float coarse_max; // largest morph factor on a coarse side at a seam; want 0
-    float gap;       // largest |fine morphed Y - coarse drawn Y|, world units
+    float gap;        // largest |fine morphed Y - coarse drawn Y|, world units
 } SeamStat;
 
 static const TerrainPatch* patch_selected(const TerrainQuadtree* qt, int level, int ix, int iz) {
@@ -492,8 +491,7 @@ static void seam_measure(const TerrainQuadtree* qt, SeamStat* st) {
                 }
                 st->seams++;
                 for (int t = 0; t < side; ++t) {
-                    float k = vertex_morph_factor(qt, fine,
-                                                  seam_vertex(DX[d], DZ[d], segments, t));
+                    float k = vertex_morph_factor(qt, fine, seam_vertex(DX[d], DZ[d], segments, t));
                     if (k > st->coarse_max)
                         st->coarse_max = k;
                 }

@@ -66,7 +66,7 @@ typedef struct Decal {
     float feather;    // local units the edge ramps over, inward from the box faces
     float normal_strength;
     bool enabled;
-    // Both RETAINED from the scene's texture pool by add_decal_to_scene, and
+    // Both RETAINED from the scene's texture pool by scene_add_decal, and
     // released by scene_clear_decals. Not borrowed: a decal is the one consumer
     // that would otherwise hold a raw pointer through an eviction.
     struct Texture* albedo_tex;

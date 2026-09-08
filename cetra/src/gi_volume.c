@@ -25,8 +25,7 @@ static int gi_probe_count(const GIVolume* gi) {
 // a row of the grid -- which is the axis the 8-probe gather steps along fastest.
 // The irradiance block sits above the visibility block; the two have different
 // tile pitches, so they cannot share rows.
-static void gi_tile_origin(const GIVolume* gi, int probe, bool visibility, int* out_x,
-                           int* out_y) {
+static void gi_tile_origin(const GIVolume* gi, int probe, bool visibility, int* out_x, int* out_y) {
     const int col = probe % gi->counts[0];
     const int row = probe / gi->counts[0];
     if (visibility) {
@@ -218,7 +217,7 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
 
     create_fullscreen_quad_vao(&gi->quad_vao, &gi->quad_vbo);
 
-    gi->project_program = get_engine_shader_program_by_name(engine, "gi_project");
+    gi->project_program = engine_get_program(engine, "gi_project");
     if (!gi->project_program) {
         log_error("GI volume projection program missing; disabling irradiance probes");
         gi->failed = true;
@@ -239,8 +238,8 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
     }
 
     gi->targets_ready = true;
-    log_info("GI volume: %dx%dx%d probes, %dx%d atlas", gi->counts[0], gi->counts[1],
-             gi->counts[2], gi->atlas_w, gi->atlas_h);
+    log_info("GI volume: %dx%dx%d probes, %dx%d atlas", gi->counts[0], gi->counts[1], gi->counts[2],
+             gi->atlas_w, gi->atlas_h);
     return true;
 }
 
@@ -407,8 +406,9 @@ void gi_volume_bind(const GIVolume* gi, ShaderProgram* program) {
     uniform_set_int(u, "giEnabled", 1);
     uniform_set_vec3(u, "giGridMin", (const float*)gi->grid_min);
     uniform_set_vec3(u, "giSpacing", (const float*)gi->spacing);
-    uniform_set_vec3(u, "giCounts", (const float[]){(float)gi->counts[0], (float)gi->counts[1],
-                                                    (float)gi->counts[2]});
+    uniform_set_vec3(
+        u, "giCounts",
+        (const float[]){(float)gi->counts[0], (float)gi->counts[1], (float)gi->counts[2]});
     uniform_set_vec2(u, "giAtlasSize", (const float[]){(float)gi->atlas_w, (float)gi->atlas_h});
     uniform_set_float(u, "giIrradianceRows", (float)gi->irradiance_rows);
     uniform_set_float(u, "giFarClip", gi->far_clip);
@@ -423,7 +423,7 @@ void gi_volume_debug_blit(const GIVolume* gi, struct Engine* engine, int screen_
     // Reuses the shared 2D-texture debug overlay (sky_debug_frag), which is a
     // scaled textured-quad DRAW rather than a blit -- the default framebuffer is
     // multisample and a single-sample blit into it is illegal on core profile.
-    ShaderProgram* prog = get_engine_shader_program_by_name(engine, "sky_debug");
+    ShaderProgram* prog = engine_get_program(engine, "sky_debug");
     if (!prog)
         return;
 

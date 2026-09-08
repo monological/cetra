@@ -458,26 +458,26 @@ void material_param_set(Material* material, const MaterialParam* param, const fl
 Material* create_material();
 void free_material(Material* material);
 
-void set_material_shader_program(Material* material, ShaderProgram* shader_program);
+void material_set_program(Material* material, ShaderProgram* shader_program);
 
-void set_material_albedo_tex(Material* material, Texture* texture);
-void set_material_normal_tex(Material* material, Texture* texture);
-void set_material_roughness_tex(Material* material, Texture* texture);
-void set_material_metalness_tex(Material* material, Texture* texture);
-void set_material_ambient_occlusion_tex(Material* material, Texture* texture);
-void set_material_emissive_tex(Material* material, Texture* texture);
-void set_material_height_tex(Material* material, Texture* texture);
-void set_material_opacity_tex(Material* material, Texture* texture);
-void set_material_sheen_tex(Material* material, Texture* texture);
-void set_material_reflectance_tex(Material* material, Texture* texture);
-void set_material_clearcoat_normal_tex(Material* material, Texture* texture);
-void set_material_microsurface_tex(Material* material, Texture* texture);
-void set_material_anisotropy_tex(Material* material, Texture* texture);
+void material_set_albedo_tex(Material* material, Texture* texture);
+void material_set_normal_tex(Material* material, Texture* texture);
+void material_set_roughness_tex(Material* material, Texture* texture);
+void material_set_metalness_tex(Material* material, Texture* texture);
+void material_set_ambient_occlusion_tex(Material* material, Texture* texture);
+void material_set_emissive_tex(Material* material, Texture* texture);
+void material_set_height_tex(Material* material, Texture* texture);
+void material_set_opacity_tex(Material* material, Texture* texture);
+void material_set_sheen_tex(Material* material, Texture* texture);
+void material_set_reflectance_tex(Material* material, Texture* texture);
+void material_set_clearcoat_normal_tex(Material* material, Texture* texture);
+void material_set_microsurface_tex(Material* material, Texture* texture);
+void material_set_anisotropy_tex(Material* material, Texture* texture);
 
-void set_material_splat_tex(Material* material, Texture* texture);
+void material_set_splat_tex(Material* material, Texture* texture);
 // `index` outside [0, MATERIAL_MAX_LAYERS) is dropped with a warning, not
 // clamped -- a clamp would silently write one layer's map over another's.
-void set_material_layer_albedo_tex(Material* material, int index, Texture* texture);
-void set_material_layer_surface_tex(Material* material, int index, Texture* texture);
+void material_set_layer_albedo_tex(Material* material, int index, Texture* texture);
+void material_set_layer_surface_tex(Material* material, int index, Texture* texture);
 
 #endif // _MATERIAL_H_

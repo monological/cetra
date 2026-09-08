@@ -38,7 +38,7 @@ typedef struct Wind {
 // Created with gentle-draft defaults; adjust fields directly to tune.
 Wind* create_wind(const char* name);
 void free_wind(Wind* wind);
-void set_wind_name(Wind* wind, const char* name);
+void wind_set_name(Wind* wind, const char* name);
 
 // Location-guarded upload of the global wind uniforms to a program (mirrors
 // shadow_upload_cascade_uniforms). A NULL wind uploads uWindStrength = 0, so

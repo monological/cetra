@@ -34,7 +34,6 @@
 #include "cimgui.h"
 #include "cimgui_impl.h"
 
-
 // Dark panel with an indigo (#5f5fff) accent: the accent drives every
 // interactive element (title bar, buttons, collapsing headers, checkmarks,
 // sliders) while the surface stays a near-black blue-tinted charcoal.
@@ -180,24 +179,24 @@ static void _material_param_control(Material* material, const MaterialParam* p) 
     material_param_get(material, p, v);
     bool changed = false;
     switch (p->type) {
-    case MATERIAL_PARAM_COLOR:
-        changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
-        break;
-    case MATERIAL_PARAM_FLOAT:
-        changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
-        break;
-    case MATERIAL_PARAM_INT: {
-        // Named where the table names them: dragging an integer to reach "leaf"
-        // asks the reader to know a numbering nothing shows them.
-        int iv = (int)v[0];
-        changed = p->enum_labels
-                      ? igCombo_Str_arr(p->key, &iv, p->enum_labels, p->enum_count, -1)
-                      : igSliderInt(p->key, &iv, (int)p->min, (int)p->max, "%d", 0);
-        v[0] = (float)iv;
-        break;
-    }
-    case MATERIAL_PARAM_TEXTURE:
-        break; // handled above
+        case MATERIAL_PARAM_COLOR:
+            changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
+            break;
+        case MATERIAL_PARAM_FLOAT:
+            changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
+            break;
+        case MATERIAL_PARAM_INT: {
+            // Named where the table names them: dragging an integer to reach "leaf"
+            // asks the reader to know a numbering nothing shows them.
+            int iv = (int)v[0];
+            changed = p->enum_labels
+                          ? igCombo_Str_arr(p->key, &iv, p->enum_labels, p->enum_count, -1)
+                          : igSliderInt(p->key, &iv, (int)p->min, (int)p->max, "%d", 0);
+            v[0] = (float)iv;
+            break;
+        }
+        case MATERIAL_PARAM_TEXTURE:
+            break; // handled above
     }
     if (changed)
         material_param_set(material, p, v);
@@ -240,8 +239,8 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
     // to the row body.
     for (size_t i = 0; i < MATERIAL_PARAM_COUNT;) {
         const char* group = MATERIAL_PARAMS[i].group;
-        bool group_open = igCollapsingHeader_TreeNodeFlags(
-            group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+        bool group_open =
+            igCollapsingHeader_TreeNodeFlags(group, i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
         if (group_open)
             igIndent(0.0f);
         for (; i < MATERIAL_PARAM_COUNT && strcmp(MATERIAL_PARAMS[i].group, group) == 0; i++) {
@@ -272,8 +271,8 @@ static void _engine_gui_panel(Engine* engine) {
     // overlays on one row (checkboxes so their on/off state is visible) and the
     // camera mode. Global viewport controls, so they lead the panel.
     static const char* const render_modes[] = {
-        "PBR",        "Normals", "World Pos",       "Tex Coords",         "Tangent Space",
-        "Flat Color", "Albedo",  "Simple Lighting", "Metallic/Roughness", "Velocity",
+        "PBR",          "Normals",      "World Pos",       "Tex Coords",         "Tangent Space",
+        "Flat Color",   "Albedo",       "Simple Lighting", "Metallic/Roughness", "Velocity",
         "HDR Hotspots", "SSS Hotspots", "Extrapolation"};
     int rm = engine->current_render_mode;
     int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
@@ -282,11 +281,11 @@ static void _engine_gui_panel(Engine* engine) {
 
     bool show_xyz = engine->show_xyz;
     if (igCheckbox("XYZ", &show_xyz))
-        set_engine_show_xyz(engine, show_xyz);
+        engine_set_show_xyz(engine, show_xyz);
     igSameLine(0, -1);
     bool wireframe = engine->show_wireframe;
     if (igCheckbox("Wireframe", &wireframe))
-        set_engine_show_wireframe(engine, wireframe);
+        engine_set_show_wireframe(engine, wireframe);
     igSameLine(0, -1);
     igCheckbox("Bones", &engine->show_bones);
     igSameLine(0, -1);
@@ -324,7 +323,7 @@ static void _engine_gui_panel(Engine* engine) {
 
     static int mat_sel = 0;
     static bool mat_editor_open = false;
-    Scene* scene = get_current_scene(engine);
+    Scene* scene = engine_get_scene(engine);
     // Clamped here rather than at each reader: a scene swap can leave the index
     // past the new count, and the section below only runs when its header is
     // expanded while the editor window reads it either way.
@@ -373,7 +372,7 @@ static void _engine_gui_panel(Engine* engine) {
             float intensity = light_intensity_in_units(light);
             if (igSliderFloat("Intensity", &intensity, 0.0f, UNIT_MAX[units], fmt,
                               ImGuiSliderFlags_Logarithmic))
-                set_light_intensity_units(light, intensity, units);
+                light_set_intensity_units(light, intensity, units);
             if (igIsItemHovered(0))
                 igSetTooltip("Photometric, in the unit the light was authored in. Point/spot "
                              "shade in candela (lumens / 4pi), sun in lux, panel in nits. "
@@ -429,8 +428,7 @@ static void _engine_gui_panel(Engine* engine) {
     // long panel pushes everything after them off the bottom, and a material is
     // the one thing here you tune while watching the frame rather than glance
     // at -- so it gets a window that can be moved, resized and closed.
-    if (scene && scene->material_count > 0 &&
-        igCollapsingHeader_TreeNodeFlags("Materials", 0)) {
+    if (scene && scene->material_count > 0 && igCollapsingHeader_TreeNodeFlags("Materials", 0)) {
         igIndent(0.0f);
 
         // Like the light section above, this addresses ONE material: a scene
@@ -539,9 +537,8 @@ static void _engine_gui_panel(Engine* engine) {
             // rather than replaced by text, so they stay a readout of where
             // the clock has put the sun.
             igBeginDisabled(sky->cycle_enabled);
-            sun_moved |=
-                igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -18.0f, 89.0f, "%.1f deg",
-                              0);
+            sun_moved |= igSliderFloat("Sun Elevation", &sky->sun_elevation_deg, -18.0f, 89.0f,
+                                       "%.1f deg", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
             sun_moved |=
                 igSliderFloat("Sun Azimuth", &sky->sun_azimuth_deg, 0.0f, 360.0f, "%.1f deg", 0);
@@ -569,8 +566,7 @@ static void _engine_gui_panel(Engine* engine) {
             // the disc and its halo only, never the light.
             igSliderFloat("Moon Size", &sky->moon_size, 0.5f, 12.0f, "%.1fx", 0);
             igBeginDisabled(sky->cycle_enabled);
-            igSliderFloat("Moon Elevation", &sky->moon_elevation_deg, -18.0f, 89.0f, "%.1f deg",
-                          0);
+            igSliderFloat("Moon Elevation", &sky->moon_elevation_deg, -18.0f, 89.0f, "%.1f deg", 0);
             igSliderFloat("Moon Azimuth", &sky->moon_azimuth_deg, 0.0f, 360.0f, "%.1f deg", 0);
             igEndDisabled();
             // The phase as a READOUT, in the one place a user would look for a
@@ -584,8 +580,8 @@ static void _engine_gui_panel(Engine* engine) {
             bool floor_toggled = igCheckbox("Night Floor", &sky->night_floor_enabled);
             sun_moved |= floor_toggled;
             sun_released |= floor_toggled;
-            sun_moved |= igSliderFloat("Floor Brightness", &sky->night_floor_brightness,
-                                       0.0f, 4.0f, "%.2f", 0);
+            sun_moved |= igSliderFloat("Floor Brightness", &sky->night_floor_brightness, 0.0f, 4.0f,
+                                       "%.2f", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
@@ -761,11 +757,11 @@ static void _engine_gui_panel(Engine* engine) {
         igSeparatorText("Anti-aliasing");
         bool msaa = engine->msaa_samples > 1;
         if (igCheckbox("MSAA 4x", &msaa))
-            set_engine_msaa_samples(engine, msaa ? 4 : 1);
+            engine_set_msaa_samples(engine, msaa ? 4 : 1);
         igSameLine(0, -1);
         bool taa = fx->taa_enabled;
         if (igCheckbox("TAA", &taa))
-            set_engine_taa_enabled(engine, taa);
+            engine_set_taa(engine, taa);
         igSameLine(0, -1);
         // The jittered alpha lookup (spec 11.101) only does anything while TAA
         // accumulates, which is why it sits on this row: flip it beside TAA
@@ -779,7 +775,7 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Render Scale", &pending_scale, 0.5f, 1.0f, "%.2f",
                       ImGuiSliderFlags_AlwaysClamp);
         if (igIsItemDeactivatedAfterEdit())
-            set_engine_render_scale(engine, pending_scale);
+            engine_set_render_scale(engine, pending_scale);
         else if (!igIsItemActive())
             // Not being dragged: track the live value, so a scale the setter
             // clamped or refused shows here rather than the stale request.
@@ -827,9 +823,8 @@ static void _engine_gui_panel(Engine* engine) {
             // about not emitting 0 for an empty histogram, and the state it is
             // describing is exactly that one.
             if (ex->adapted_valid)
-                igText("Metered %.4g cd/m2   gain %.4f   EV100 %.2f",
-                       (double)ex->adapted_luminance, (double)gain,
-                       (double)exposure_ev100(ex));
+                igText("Metered %.4g cd/m2   gain %.4f   EV100 %.2f", (double)ex->adapted_luminance,
+                       (double)gain, (double)exposure_ev100(ex));
             else
                 igText("Metered --   gain %.4f   EV100 %.2f", (double)gain,
                        (double)exposure_ev100(ex));
@@ -1195,8 +1190,8 @@ static void _engine_gui_panel(Engine* engine) {
 
         int submit_cols = profiler_submit_row_count();
         if (igBeginTable("submission", submit_cols + 1,
-                         ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp,
-                         (ImVec2){0, 0}, 0.0f)) {
+                         ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, (ImVec2){0, 0},
+                         0.0f)) {
             igTableNextColumn();
             igText("pass");
             for (int col = 0; col < submit_cols; col++) {

@@ -177,8 +177,8 @@ static float _water_jonswap(float omega, float peak_omega, float alpha, float tm
     float peak_distance = (omega - peak_omega) / fmaxf(sigma * peak_omega, 1e-5f);
     float peak_shape = expf(-0.5f * peak_distance * peak_distance);
     float peak_ratio = peak_omega / omega;
-    return tma * alpha * g * g / powf(omega, 5.0f) *
-           expf(-1.25f * powf(peak_ratio, 4.0f)) * powf(enhancement, peak_shape);
+    return tma * alpha * g * g / powf(omega, 5.0f) * expf(-1.25f * powf(peak_ratio, 4.0f)) *
+           powf(enhancement, peak_shape);
 }
 
 /*
@@ -235,8 +235,8 @@ static float _water_train_density(WaterTrainSpectrum s, float omega, float mode_
                                : 6.97f * powf(omega_ratio, 5.0f)) +
          16.0f * tanhf(fminf(omega_ratio, 20.0f)) * train->focus * train->focus) *
         train->spread_gain;
-    const float focused = _water_spread_norm(spread_power) *
-                          powf(fabsf(cosf(theta * 0.5f)), 2.0f * spread_power);
+    const float focused =
+        _water_spread_norm(spread_power) * powf(fabsf(cosf(theta * 0.5f)), 2.0f * spread_power);
     // cosf then a multiply, not powf(x, 2.0f): the build everyone runs is -O0, where that
     // literal exponent is a libm call on every one of the 7.4k in-band modes.
     const float broad_cos = fmaxf(cosf(theta), 0.0f);
@@ -318,7 +318,7 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             const float domega =
                 g * (sea_depth * k_len * sech2 + tanh_kh) / fmaxf(omega * 2.0f, 1e-5f);
             const float omega_h = omega * sqrtf(sea_depth / g);
-            const float tma = omega_h <= 1.0f ? 0.5f * omega_h * omega_h
+            const float tma = omega_h <= 1.0f  ? 0.5f * omega_h * omega_h
                               : omega_h < 2.0f ? 1.0f - 0.5f * (2.0f - omega_h) * (2.0f - omega_h)
                                                : 1.0f;
 
@@ -327,8 +327,8 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             // does not end in a hard spectral cliff that rings after transform. A
             // property of the BAND rather than of a train, so both are faded by it.
             const float short_fade = expf(-0.00016f * k_len * k_len);
-            float density = _water_train_density(wind_sea, omega, mode_angle, tma, wind_angle) *
-                            short_fade;
+            float density =
+                _water_train_density(wind_sea, omega, mode_angle, tma, wind_angle) * short_fade;
             // The second train, older and crossing the wind: one direction of travel,
             // however well spread, reads as corduroy. Its own size is inside the density,
             // via `scale`; secondary_scale is the band's weighting on top of it.
@@ -511,8 +511,7 @@ void free_water(Water* water) {
     free(water);
 }
 
-void water_publish_to_postfx(const Water* water, const struct Scene* scene,
-                             struct Engine* engine) {
+void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine) {
     if (!engine || !engine->postfx)
         return;
     PostFX* fx = engine->postfx;
@@ -558,8 +557,7 @@ void water_publish_to_postfx(const Water* water, const struct Scene* scene,
     vec3 incident = {0.0f, 0.0f, 0.0f};
     water_incident_light(scene, incident);
     for (int c = 0; c < 3; c++)
-        fx->water_inscatter[c] = water->scatter_albedo[c] * incident[c] +
-                                 water->scatter_glow[c];
+        fx->water_inscatter[c] = water->scatter_albedo[c] * incident[c] + water->scatter_glow[c];
 }
 
 /*
@@ -637,10 +635,26 @@ static void _water_trace_shoreline(Water* water, const float* heights, int res, 
             const int uses_r = b1 != b2;
             const int uses_t = b3 != b2;
             const int uses_l = b0 != b3;
-            if (uses_b) { pts[np][0] = bx; pts[np][1] = bz; np++; }
-            if (uses_r) { pts[np][0] = rx; pts[np][1] = rz; np++; }
-            if (uses_t) { pts[np][0] = tx; pts[np][1] = tz; np++; }
-            if (uses_l) { pts[np][0] = lx; pts[np][1] = lz; np++; }
+            if (uses_b) {
+                pts[np][0] = bx;
+                pts[np][1] = bz;
+                np++;
+            }
+            if (uses_r) {
+                pts[np][0] = rx;
+                pts[np][1] = rz;
+                np++;
+            }
+            if (uses_t) {
+                pts[np][0] = tx;
+                pts[np][1] = tz;
+                np++;
+            }
+            if (uses_l) {
+                pts[np][0] = lx;
+                pts[np][1] = lz;
+                np++;
+            }
             for (int i = 0; i + 1 < np && nseg < max_seg; i += 2) {
                 seg[nseg * 4 + 0] = pts[i][0];
                 seg[nseg * 4 + 1] = pts[i][1];
@@ -667,7 +681,10 @@ static void _water_trace_shoreline(Water* water, const float* heights, int res, 
     float* chain = malloc((size_t)(nseg + 1) * 2 * sizeof(float));
     float* best = malloc((size_t)(nseg + 1) * 2 * sizeof(float));
     if (!used || !chain || !best) {
-        free(seg); free(used); free(chain); free(best);
+        free(seg);
+        free(used);
+        free(chain);
+        free(best);
         return;
     }
     const float tol2 = (0.34f) * (0.34f);
@@ -690,9 +707,17 @@ static void _water_trace_shoreline(Water* water, const float* heights, int res, 
                 if (used[t])
                     continue;
                 const float ax = seg[t * 4 + 0] - ex, az = seg[t * 4 + 1] - ez;
-                if (ax * ax + az * az <= tol2) { found = t; flip = 0; break; }
+                if (ax * ax + az * az <= tol2) {
+                    found = t;
+                    flip = 0;
+                    break;
+                }
                 const float bx2 = seg[t * 4 + 2] - ex, bz2 = seg[t * 4 + 3] - ez;
-                if (bx2 * bx2 + bz2 * bz2 <= tol2) { found = t; flip = 1; break; }
+                if (bx2 * bx2 + bz2 * bz2 <= tol2) {
+                    found = t;
+                    flip = 1;
+                    break;
+                }
             }
             if (found < 0)
                 break;
@@ -718,8 +743,12 @@ static void _water_trace_shoreline(Water* water, const float* heights, int res, 
                 // Landward normal from the bed's own gradient, sampled at the nearest node --
                 // uphill is inland by construction, which is what makes this independent of
                 // the chain's winding direction.
-                const int nx = (int)(gx + 0.5f) < 0 ? 0 : ((int)(gx + 0.5f) > res - 1 ? res - 1 : (int)(gx + 0.5f));
-                const int nz = (int)(gz + 0.5f) < 0 ? 0 : ((int)(gz + 0.5f) > res - 1 ? res - 1 : (int)(gz + 0.5f));
+                const int nx = (int)(gx + 0.5f) < 0
+                                   ? 0
+                                   : ((int)(gx + 0.5f) > res - 1 ? res - 1 : (int)(gx + 0.5f));
+                const int nz = (int)(gz + 0.5f) < 0
+                                   ? 0
+                                   : ((int)(gz + 0.5f) > res - 1 ? res - 1 : (int)(gz + 0.5f));
                 const float gxv = heights[(nz * res + nx) * 4 + 1];
                 const float gzv = heights[(nz * res + nx) * 4 + 2];
                 const float gl = sqrtf(gxv * gxv + gzv * gzv);
@@ -865,8 +894,7 @@ bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode
     // must not run the depth resolve, which blits at the main render size and re-binds
     // the scene framebuffer. Both were previously terms at the DRAW site only, so the
     // catcher and the fog medium disagreed with the draw about whether water existed.
-    return water_active(water) && engine && render_mode == RENDER_MODE_PBR &&
-           !engine->capturing;
+    return water_active(water) && engine && render_mode == RENDER_MODE_PBR && !engine->capturing;
 }
 
 // One indexed lattice over [-0.5, 0.5]^2, positions only. The vertex stage reads it as
@@ -891,8 +919,8 @@ static GLuint _water_make_foam_pattern(void) {
     glActiveTexture(GL_TEXTURE0);
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, FOAM_PATTERN_RES, FOAM_PATTERN_RES, 0, GL_RED,
-                 GL_FLOAT, pattern);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, FOAM_PATTERN_RES, FOAM_PATTERN_RES, 0, GL_RED, GL_FLOAT,
+                 pattern);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -977,15 +1005,15 @@ static bool water_ensure_grid(Water* water) {
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
     glGenBuffers(1, &water->grid_ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, water->grid_ebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)index_count * sizeof(unsigned),
-                 indices, GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)index_count * sizeof(unsigned), indices,
+                 GL_STATIC_DRAW);
     glBindVertexArray(0);
 
     free(verts);
     free(indices);
     water->grid_index_count = index_count;
-    log_info("Water: projected grid %dx%d, %d triangles, level %.2f, bed extent %.1f", res,
-             res, index_count / 3, (double)water->level, (double)water->extent);
+    log_info("Water: projected grid %dx%d, %d triangles, level %.2f, bed extent %.1f", res, res,
+             index_count / 3, (double)water->level, (double)water->extent);
     return true;
 }
 
@@ -1005,8 +1033,8 @@ static GLuint _water_make_field_array(int size, int layers, GLenum internal_form
     glActiveTexture(GL_TEXTURE0);
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, internal_format, size, size, layers, 0, GL_RGBA,
-                 GL_FLOAT, NULL);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, internal_format, size, size, layers, 0, GL_RGBA, GL_FLOAT,
+                 NULL);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -1095,10 +1123,10 @@ static float _water_wind_angle(const Water* water) {
 // Every field of a train, so the two trains cannot drift apart in what counts as a change
 // -- adding a field to one and forgetting it here is a knob that silently never re-seeds.
 static bool _water_train_is_current(const WaterWaveTrain* a, const WaterWaveTrain* b) {
-    return a->wind_speed == b->wind_speed && a->fetch == b->fetch &&
-           a->direction == b->direction && a->scale == b->scale &&
-           a->peak_enhancement == b->peak_enhancement && a->focus == b->focus &&
-           a->spread_gain == b->spread_gain && a->spread_blend == b->spread_blend;
+    return a->wind_speed == b->wind_speed && a->fetch == b->fetch && a->direction == b->direction &&
+           a->scale == b->scale && a->peak_enhancement == b->peak_enhancement &&
+           a->focus == b->focus && a->spread_gain == b->spread_gain &&
+           a->spread_blend == b->spread_blend;
 }
 
 // Everything the seeding reads, and nothing else. Compared by value rather than by a
@@ -1233,7 +1261,8 @@ static bool _water_ensure_spectra(Water* water) {
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
 
     for (int b = 0; b < 2; b++)
-        water->cascade_array[b] = _water_make_field_array(size, WATER_CASCADE_COUNT * 2, GL_RGBA16F);
+        water->cascade_array[b] =
+            _water_make_field_array(size, WATER_CASCADE_COUNT * 2, GL_RGBA16F);
 
     // One framebuffer per (cascade, buffer) still, attaching that cascade's two LAYERS as the
     // MRT pair. glFramebufferTextureLayer is the only line that differs from attaching two
@@ -1242,10 +1271,10 @@ static bool _water_ensure_spectra(Water* water) {
         for (int b = 0; b < 2; b++) {
             glGenFramebuffers(1, &water->cascade_fbo[c][b]);
             glBindFramebuffer(GL_FRAMEBUFFER, water->cascade_fbo[c][b]);
-            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                      water->cascade_array[b], 0, c * 2 + 0);
-            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
-                                      water->cascade_array[b], 0, c * 2 + 1);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, water->cascade_array[b],
+                                      0, c * 2 + 0);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, water->cascade_array[b],
+                                      0, c * 2 + 1);
             const GLenum targets[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
             glDrawBuffers(2, targets);
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -1367,10 +1396,9 @@ static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuin
  * shoal window divides by this.
  */
 static float _water_units_per_metre(const struct Scene* scene) {
-    const float per_km =
-        (scene && scene->sky && scene->sky->world_units_per_km > 0.0f)
-            ? scene->sky->world_units_per_km
-            : 1000.0f;
+    const float per_km = (scene && scene->sky && scene->sky->world_units_per_km > 0.0f)
+                             ? scene->sky->world_units_per_km
+                             : 1000.0f;
     return per_km / 1000.0f;
 }
 
@@ -1475,7 +1503,7 @@ static void _water_step_film(Water* water, const struct Scene* scene, float t, f
     // past the first clamp to the oldest slot. Read through the same function the chain steps
     // by, so the shader's divisor and the ring's stride cannot disagree.
     block[1] = shore_runup_slot_interval(&params);
-    block[2] = (float)water->chain->head;              // newest slot
+    block[2] = (float)water->chain->head; // newest slot
     block[3] = slope;
     for (int j = 0; j < UBO_SHORE_FILM_COLS; j++) {
         float* c = &block[4 + j * 4];
@@ -1605,8 +1633,8 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene,
  * `gate_wetness` is the only thing that differed and is now the parameter it always was: a lit
  * surface reads the surf height through the global wetness switch, and the sea never does.
  */
-static void _water_publish_shore(const Water* water, const struct Scene* scene,
-                                 UniformManager* u, bool gate_wetness) {
+static void _water_publish_shore(const Water* water, const struct Scene* scene, UniformManager* u,
+                                 bool gate_wetness) {
     const float upm = _water_units_per_metre(scene);
     const bool fft = water->wave_model == WATER_WAVES_FFT;
     float hs, omega;
@@ -1690,8 +1718,8 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
 
 static void _water_run_spectral(Water* water, const struct Scene* scene, struct Engine* engine,
                                 float time) {
-    ShaderProgram* evolve = get_engine_shader_program_by_name(engine, "water_spectrum");
-    ShaderProgram* fft = get_engine_shader_program_by_name(engine, "water_fft");
+    ShaderProgram* evolve = engine_get_program(engine, "water_spectrum");
+    ShaderProgram* fft = engine_get_program(engine, "water_fft");
     if (!evolve || !fft) {
         log_error("Water spectral programs missing; disabling water");
         water->failed = true;
@@ -1747,8 +1775,8 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         uniform_set_float(evolve->uniforms, "time", time);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        _water_fft_transform(fft, water->twiddle_tex, water->cascade_fbo[c],
-                             water->cascade_array, c);
+        _water_fft_transform(fft, water->twiddle_tex, water->cascade_fbo[c], water->cascade_array,
+                             c);
     }
 
     glBindVertexArray(0);
@@ -1773,8 +1801,7 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
      * chain (spec 11.32 measured +0.24 ms GPU against +1.19 ms CPU for the 45), which is
      * why the three bands share one target instead of taking one pass each.
      */
-    ShaderProgram* foam =
-        water->foam_history ? get_engine_shader_program_by_name(engine, "water_foam") : NULL;
+    ShaderProgram* foam = water->foam_history ? engine_get_program(engine, "water_foam") : NULL;
     // A missing program is reported and the feature switched off, not shrugged through a
     // truthiness test every frame: this file's policy is stated at the evolve/fft lookups
     // above, and the failure it guards against is the same one -- a sea that renders
@@ -1888,7 +1915,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         _water_run_spectral(water, scene, engine, (float)engine->render_time);
     }
 
-    ShaderProgram* program = get_engine_shader_program_by_name(engine, "water");
+    ShaderProgram* program = engine_get_program(engine, "water");
     if (!program) {
         log_error("Water program missing; disabling water");
         water->failed = true;
@@ -1986,9 +2013,9 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
      * gated on `enabled` -- took the lookup against an unbound array and a never-uploaded
      * cascadeCount, read full occlusion, and the glitter vanished from the whole sea.
      */
-    const bool shadows = bind_outermost_cascades_to_program(scene->shadow_system, program,
-                                                            WATER_SHADOW_UNIT) &&
-                         sun && sun->cast_shadows && sun->shadow_map_index >= 0;
+    const bool shadows =
+        bind_outermost_cascades_to_program(scene->shadow_system, program, WATER_SHADOW_UNIT) &&
+        sun && sun->cast_shadows && sun->shadow_map_index >= 0;
     uniform_set_int(u, "sunShadowSlot", shadows ? sun->shadow_map_index : -1);
     uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
     uniform_set_int(u, "glitterEnabled", water->glitter ? 1 : 0);
@@ -2163,7 +2190,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
  */
 static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx, int fy,
                                double* out_max_err) {
-    ShaderProgram* fft = get_engine_shader_program_by_name(engine, "water_fft");
+    ShaderProgram* fft = engine_get_program(engine, "water_fft");
     if (!fft || !water->twiddle_tex || !water->fft_vao)
         return false;
 

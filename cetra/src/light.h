@@ -114,17 +114,17 @@ typedef struct Light {
 } Light;
 
 Light* create_light();
-void set_light_name(Light* light, const char* name);
-void set_light_type(Light* light, LightType type);
-void set_light_specular(Light* light, vec3 specular);
-void set_light_ambient(Light* light, vec3 ambient);
-void set_light_original_position(Light* light, vec3 original_position);
-void set_light_global_position(Light* light, vec3 global_position);
-void set_light_direction(Light* light, vec3 direction);
-void set_light_up(Light* light, vec3 up);
-void set_light_color(Light* light, vec3 color);
-void set_light_intensity(Light* light, float intensity);
-void set_light_range(Light* light, float range);
+void light_set_name(Light* light, const char* name);
+void light_set_type(Light* light, LightType type);
+void light_set_specular(Light* light, vec3 specular);
+void light_set_ambient(Light* light, vec3 ambient);
+void light_set_original_position(Light* light, vec3 original_position);
+void light_set_global_position(Light* light, vec3 global_position);
+void light_set_direction(Light* light, vec3 direction);
+void light_set_up(Light* light, vec3 up);
+void light_set_color(Light* light, vec3 color);
+void light_set_intensity(Light* light, float intensity);
+void light_set_range(Light* light, float range);
 
 // Cull radius for a light: the authored range if set, else the distance where
 // the light falls under ~1/256 (LDR LSB at the project-standard -E 1.0).
@@ -168,16 +168,16 @@ void orientation_frame(const float dir[3], const float ref[3], vec3 axis, vec3 u
 // construction to an asymmetric profile's azimuth zero.
 void light_emission_frame(const struct Light* light, vec3 axis, vec3 up);
 
-void set_light_cutoff(Light* light, float cutOff, float outerCutOff);
-void set_light_cast_shadows(Light* light, bool cast_shadows);
-void set_light_size(Light* light, float width, float height);
+void light_set_cutoff(Light* light, float cutOff, float outerCutOff);
+void light_set_cast_shadows(Light* light, bool cast_shadows);
+void light_set_size(Light* light, float width, float height);
 void free_light(Light* light);
-void print_light(const Light* light);
+void light_print(const Light* light);
 
 // Set an intensity authored in `units`, converting to the canonical unit. The
 // conversion reads ONLY the unit -- lumens is Phi/4pi whatever the light is --
-// so this may be called before or after set_light_type with the same result.
-void set_light_intensity_units(Light* light, float intensity, LightUnits units);
+// so this may be called before or after light_set_type with the same result.
+void light_set_intensity_units(Light* light, float intensity, LightUnits units);
 
 // `light->intensity` expressed back in the light's display unit -- the inverse
 // of the conversion above, for showing an author the number they wrote.

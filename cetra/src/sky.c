@@ -199,9 +199,9 @@ static const float SKY_NIGHT_FLOOR_COLOR[3] = {0.55f, 0.72f, 1.0f};
 // blank cream oval and the channels saturated unevenly, which is where the
 // orange cast came from. The detail only appeared at -E 0.22, and that ratio is
 // what set this.
-#define SKY_MOON_DISC_RADIANCE  0.80f
+#define SKY_MOON_DISC_RADIANCE 0.80f
 // The aureole reaches this many DISC RADII at life size (~2 degrees).
-#define SKY_MOON_GLOW_RADII     8.0f
+#define SKY_MOON_GLOW_RADII 8.0f
 
 // The one definition of "night": the civil-twilight fade the stars, the
 // floor and the zenith ambient all share. 0 at +3 degrees and above -- an
@@ -343,8 +343,7 @@ static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
             float step_t = expf(-e[c] * dt);
             // Binds only in the topmost slices, where extinction falls to ~1e-7.
             float ext = fmaxf(e[c], 1e-7f);
-            out[c] += trans[c] *
-                      (s[c] * sun_t[c] * SKY_SUN_ILLUMINANCE * isotropic_phase / ext) *
+            out[c] += trans[c] * (s[c] * sun_t[c] * SKY_SUN_ILLUMINANCE * isotropic_phase / ext) *
                       (1.0f - step_t);
             trans[c] *= step_t;
         }
@@ -587,11 +586,11 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
         return -1;
     }
 
-    sky->transmittance_program = get_engine_shader_program_by_name(engine, "sky_transmittance");
-    sky->multiscatter_program = get_engine_shader_program_by_name(engine, "sky_multiscatter");
-    sky->aerial_program = get_engine_shader_program_by_name(engine, "sky_aerial");
-    sky->debug_program = get_engine_shader_program_by_name(engine, "sky_debug");
-    sky->cloud_noise_debug_program = get_engine_shader_program_by_name(engine, "cloud_noise_debug");
+    sky->transmittance_program = engine_get_program(engine, "sky_transmittance");
+    sky->multiscatter_program = engine_get_program(engine, "sky_multiscatter");
+    sky->aerial_program = engine_get_program(engine, "sky_aerial");
+    sky->debug_program = engine_get_program(engine, "sky_debug");
+    sky->cloud_noise_debug_program = engine_get_program(engine, "cloud_noise_debug");
     if (!sky->transmittance_program || !sky->multiscatter_program || !sky->debug_program) {
         log_error("Failed to get sky LUT shader programs");
         return -1;
@@ -647,8 +646,8 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine) {
 // program (a textured-quad DRAW, not a blit: the default framebuffer is
 // multisample and single-sample blits into it are illegal on core profile)
 // mono: the source has one channel, so replicate red rather than drawing it as a red tile.
-static void sky_debug_draw(SkyAtmosphere* sky, GLuint lut, int x, int y, int w, int h,
-                           float scale, bool mono) {
+static void sky_debug_draw(SkyAtmosphere* sky, GLuint lut, int x, int y, int w, int h, float scale,
+                           bool mono) {
     glViewport(x, y, w, h);
     glUseProgram(sky->debug_program->id);
     glActiveTexture(GL_TEXTURE0);
@@ -797,12 +796,11 @@ int sky_bake_ex(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* eng
         log_error("Invalid state for sky bake");
         return -1;
     }
-    sky->view_program = get_engine_shader_program_by_name(engine, "sky_view");
-    sky->env_program = get_engine_shader_program_by_name(engine, "sky_env");
-    sky->env_clouds_program = get_engine_shader_program_by_name(engine, "sky_env_clouds");
-    sky->background_program = get_engine_shader_program_by_name(engine, "sky_background");
-    sky->background_clouds_program =
-        get_engine_shader_program_by_name(engine, "sky_background_clouds");
+    sky->view_program = engine_get_program(engine, "sky_view");
+    sky->env_program = engine_get_program(engine, "sky_env");
+    sky->env_clouds_program = engine_get_program(engine, "sky_env_clouds");
+    sky->background_program = engine_get_program(engine, "sky_background");
+    sky->background_clouds_program = engine_get_program(engine, "sky_background_clouds");
     if (!sky->view_program || !sky->env_program || !sky->background_program) {
         log_error("Failed to get sky render programs");
         return -1;
@@ -901,15 +899,15 @@ static void sky_apply_body_to_light(struct Light* light, const vec3 dir, float e
 
     vec3 travel;
     glm_vec3_negate_to((float*)dir, travel);
-    set_light_direction(light, travel);
+    light_set_direction(light, travel);
 
     vec3 color = {0};
     sky_transmittance_at(dir[1], color);
-    set_light_color(light, color);
+    light_set_color(light, color);
 
     const float intensity = base * sky_horizon_fade(elevation_deg) * scale;
-    set_light_intensity(light, intensity);
-    set_light_cast_shadows(light, intensity > base * SKY_LIGHT_CAST_FLOOR);
+    light_set_intensity(light, intensity);
+    light_set_cast_shadows(light, intensity > base * SKY_LIGHT_CAST_FLOOR);
 }
 
 void sky_apply_sun_to_light(SkyAtmosphere* sky) {
@@ -1121,8 +1119,7 @@ static void sky_slice_build_schedule(void) {
     // kernel, not the resolution.
     sky_slice_add(SKY_SLICE_IRRADIANCE, 0, 0, 6, 120000);
     sky_slice_add_chain(SKY_SLICE_GGX, SKY_PREFILTER_SIZE, SKY_PREFILTER_MIPS);
-    sky_slice_add_chain(SKY_SLICE_CHARLIE, IBL_CHARLIE_PREFILTER_SIZE,
-                        IBL_CHARLIE_PREFILTER_MIPS);
+    sky_slice_add_chain(SKY_SLICE_CHARLIE, IBL_CHARLIE_PREFILTER_SIZE, IBL_CHARLIE_PREFILTER_MIPS);
     sky_slice_add(SKY_SLICE_SWAP, 0, 0, 0, 0);
 }
 
@@ -1187,8 +1184,7 @@ static bool sky_slicer_run_item(SkyAtmosphere* sky, struct IBLResources* ibl,
             sky_env_mipgen(sky->slicer.shadow_env);
             break;
         case SKY_SLICE_IRRADIANCE:
-            ibl_irradiance_slice(ibl, sky->slicer.shadow_env, sky->slicer.shadow_irr,
-                                 SKY_ENV_SIZE);
+            ibl_irradiance_slice(ibl, sky->slicer.shadow_env, sky->slicer.shadow_irr, SKY_ENV_SIZE);
             break;
         case SKY_SLICE_GGX:
             ibl_prefilter_slice(ibl, ibl->prefilter_program, sky->slicer.shadow_env,
@@ -1369,8 +1365,8 @@ bool sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, float dt) {
     return swapped;
 }
 
-void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view,
-                           mat4 projection, bool main_camera) {
+void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view, mat4 projection,
+                           bool main_camera) {
     if (!sky || !ibl || !sky->background_program || !sky->sky_view_lut)
         return;
 
@@ -1462,8 +1458,7 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
         } else {
             surface = moon_surface_bake(MOON_SURFACE_W, MOON_SURFACE_H, 0);
             if (surface) {
-                CookBlob out = {surface,
-                                (size_t)MOON_SURFACE_W * (size_t)MOON_SURFACE_H * 4u};
+                CookBlob out = {surface, (size_t)MOON_SURFACE_W * (size_t)MOON_SURFACE_H * 4u};
                 cook_store(&mk, &out, 1);
             }
         }
@@ -1563,8 +1558,7 @@ void sky_debug_blit_luts(SkyAtmosphere* sky, int screen_w, int screen_h) {
     int tw = SKY_TRANSMITTANCE_W * 2, th = SKY_TRANSMITTANCE_H * 2;
     sky_debug_draw(sky, sky->transmittance_lut, 10, screen_h - 10 - th, tw, th, 1.0f, false);
     int mw = SKY_MULTISCATTER_SIZE * 4;
-    sky_debug_draw(sky, sky->multiscatter_lut, 10, screen_h - 20 - th - mw, mw, mw, 200.0f,
-                   false);
+    sky_debug_draw(sky, sky->multiscatter_lut, 10, screen_h - 20 - th - mw, mw, mw, 200.0f, false);
     // Sky-view LUT below (mild boost to reveal the HDR horizon/zenith range)
     if (sky->sky_view_lut) {
         int sw = SKY_VIEW_W * 2, sh = SKY_VIEW_H * 2;

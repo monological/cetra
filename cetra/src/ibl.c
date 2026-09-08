@@ -376,8 +376,7 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap) {
         // texture.c targets GL_TEXTURE_2D, so the cube sets its own.
         float max_aniso = 1.0f;
         glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
-        glTexParameterf(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                        fminf(8.0f, max_aniso));
+        glTexParameterf(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_ANISOTROPY_EXT, fminf(8.0f, max_aniso));
     } else {
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     }
@@ -581,7 +580,7 @@ void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src
 // and an undefined source alpha feeding the blend equation makes the LUT
 // differ run to run -- and is re-enabled to the engine default after.
 GLuint ibl_bake_brdf_lut(Engine* engine) {
-    ShaderProgram* program = get_engine_shader_program_by_name(engine, "ibl_brdf");
+    ShaderProgram* program = engine_get_program(engine, "ibl_brdf");
     if (!program) {
         log_error("BRDF LUT bake: ibl_brdf program missing");
         return 0;
@@ -589,8 +588,8 @@ GLuint ibl_bake_brdf_lut(Engine* engine) {
 
     glDisable(GL_BLEND);
 
-    GLuint lut = create_texture_2d_float(IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE, GL_RGBA16F, GL_RGBA,
-                                         NULL);
+    GLuint lut =
+        create_texture_2d_float(IBL_BRDF_LUT_SIZE, IBL_BRDF_LUT_SIZE, GL_RGBA16F, GL_RGBA, NULL);
 
     GLuint quad_vao = 0;
     GLuint quad_vbo = 0;
@@ -631,10 +630,10 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
         return -1;
     }
 
-    ibl->irradiance_program = get_engine_shader_program_by_name(engine, "ibl_irradiance");
-    ibl->prefilter_program = get_engine_shader_program_by_name(engine, "ibl_prefilter");
-    ibl->charlie_prefilter_program = get_engine_shader_program_by_name(engine, "ibl_charlie_prefilter");
-    ibl->skybox_program = get_engine_shader_program_by_name(engine, "skybox");
+    ibl->irradiance_program = engine_get_program(engine, "ibl_irradiance");
+    ibl->prefilter_program = engine_get_program(engine, "ibl_prefilter");
+    ibl->charlie_prefilter_program = engine_get_program(engine, "ibl_charlie_prefilter");
+    ibl->skybox_program = engine_get_program(engine, "skybox");
     if (!ibl->irradiance_program || !ibl->prefilter_program || !ibl->charlie_prefilter_program ||
         !ibl->skybox_program) {
         log_error("Failed to get IBL shader programs");
@@ -705,8 +704,7 @@ int precompute_ibl(IBLResources* ibl, Engine* engine) {
 
     log_info("Starting IBL precomputation...");
 
-    ibl->equirect_to_cubemap_program =
-        get_engine_shader_program_by_name(engine, "ibl_equirect_to_cube");
+    ibl->equirect_to_cubemap_program = engine_get_program(engine, "ibl_equirect_to_cube");
     if (!ibl->equirect_to_cubemap_program) {
         log_error("Failed to get IBL shader programs");
         return -1;

@@ -55,7 +55,7 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 
     Mesh* mesh = create_mesh();
     Box box = {.position = {0, 0, 0}, .size = {size[0] * 2, size[1] * 2, size[2] * 2}};
-    generate_box_to_mesh(mesh, &box);
+    mesh_generate_box(mesh, &box);
 
     Material* mat = create_material();
     glm_vec3_copy(color, mat->albedo);
@@ -68,12 +68,12 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
         mat->roughness = 0.4f;
         mat->metallic = 0.3f;
     }
-    set_material_shader_program(mat, pbr_shader);
+    material_set_program(mat, pbr_shader);
     mesh->material = mat;
 
-    add_mesh_to_node(node, mesh);
-    add_child_node(scene->root_node, node);
-    upload_mesh_buffers_to_gpu(mesh);
+    node_add_mesh(node, mesh);
+    node_add_child(scene->root_node, node);
+    mesh_upload(mesh);
 
     return node;
 }
@@ -103,7 +103,7 @@ static void create_door(Game* game, vec3 position) {
     vec3 frame_size = {0.2f, door_height / 2.0f, 0.2f};
     vec3 frame_color = {0.4f, 0.3f, 0.2f};
     SceneNode* frame_node = create_box_node(scene, frame_size, frame_color, false);
-    set_node_name(frame_node, "door_frame");
+    node_set_name(frame_node, "door_frame");
     frame->node = frame_node;
 
     // Frame physics (static)
@@ -126,7 +126,7 @@ static void create_door(Game* game, vec3 position) {
     vec3 door_size = {door_width / 2.0f, door_height / 2.0f, door_thickness / 2.0f};
     vec3 door_color = {0.6f, 0.4f, 0.2f}; // Wood brown
     SceneNode* door_node = create_box_node(scene, door_size, door_color, false);
-    set_node_name(door_node, "door");
+    node_set_name(door_node, "door");
     door_entity->node = door_node;
 
     // Door physics (dynamic) - wooden door ~20-30kg
@@ -189,7 +189,7 @@ static void spawn_falling_box(Game* game) {
 
     // Create visual
     SceneNode* node = create_box_node(scene, half_extents, color, false);
-    set_node_name(node, name);
+    node_set_name(node, name);
     box->node = node;
 
     // Add physics body (density ~50 kg/m³, like a light wooden crate)
@@ -272,18 +272,18 @@ static void on_init(Game* game) {
     Engine* engine = game->engine;
 
     // Get shaders
-    pbr_shader = get_engine_shader_program_by_name(engine, "pbr");
-    ShaderProgram* xyz = get_engine_shader_program_by_name(engine, "xyz");
+    pbr_shader = engine_get_program(engine, "pbr");
+    ShaderProgram* xyz = engine_get_program(engine, "xyz");
 
     // Create scene
     Scene* scene = create_scene();
     SceneNode* root = create_node();
-    set_node_name(root, "root");
-    set_scene_root_node(scene, root);
+    node_set_name(root, "root");
+    scene_set_root(scene, root);
     game_set_scene(game, scene);
 
     if (xyz) {
-        set_scene_xyz_shader_program(scene, xyz);
+        scene_set_xyz_program(scene, xyz);
     }
 
     // Load IBL environment if HDR path provided
@@ -307,7 +307,7 @@ static void on_init(Game* game) {
     }
 
     // Add lights
-    create_three_point_lights(scene, 1.0f);
+    scene_add_three_point_lights(scene, 1.0f);
 
     // Create physics world
     PhysicsConfig physics_config = physics_default_config();
@@ -332,11 +332,11 @@ static void on_init(Game* game) {
 
     // Floor visual
     SceneNode* floor_node = create_node();
-    set_node_name(floor_node, "floor");
+    node_set_name(floor_node, "floor");
     Mesh* floor_mesh = create_mesh();
     Plane floor_plane = {
         .position = {0, 0, 0}, .width = 50.0f, .depth = 50.0f, .segments_w = 10, .segments_d = 10};
-    generate_plane_to_mesh(floor_mesh, &floor_plane);
+    mesh_generate_plane(floor_mesh, &floor_plane);
 
     Material* floor_mat = create_material();
     floor_mat->albedo[0] = 0.3f;
@@ -344,11 +344,11 @@ static void on_init(Game* game) {
     floor_mat->albedo[2] = 0.35f;
     floor_mat->roughness = 0.8f;
     floor_mat->metallic = 0.0f;
-    set_material_shader_program(floor_mat, pbr_shader);
+    material_set_program(floor_mat, pbr_shader);
     floor_mesh->material = floor_mat;
 
-    add_mesh_to_node(floor_node, floor_mesh);
-    add_child_node(root, floor_node);
+    node_add_mesh(floor_node, floor_mesh);
+    node_add_child(root, floor_node);
     floor->node = floor_node;
 
     // Floor physics (static box)
@@ -368,7 +368,7 @@ static void on_init(Game* game) {
     vec3 player_size = {0.5f, 1.0f, 0.5f};
     vec3 player_color = {0.8f, 0.2f, 0.2f};
     SceneNode* player_node = create_box_node(scene, player_size, player_color, false);
-    set_node_name(player_node, "player");
+    node_set_name(player_node, "player");
     player_entity->node = player_node;
 
     // Player character controller
@@ -389,7 +389,7 @@ static void on_init(Game* game) {
     create_door(game, (vec3){5.0f, 0.0f, 0.0f});
 
     // Upload all GPU buffers
-    upload_buffers_to_gpu_for_nodes(root);
+    node_upload_meshes(root);
 
     // Optimize broad phase after adding initial bodies
     physics_world_optimize(physics);
@@ -399,20 +399,20 @@ static void on_init(Game* game) {
     vec3 cam_pos = {0.0f, 20.0f, 35.0f};
     vec3 look_at = {0.0f, 0.0f, 0.0f};
     vec3 up = {0.0f, 1.0f, 0.0f};
-    set_camera_position(camera, cam_pos);
-    set_camera_look_at(camera, look_at);
-    set_camera_up_vector(camera, up);
-    set_camera_perspective(camera, 0.8f, 0.1f, 1000.0f);
-    set_engine_camera(engine, camera);
-    set_engine_camera_mode(engine, CAMERA_MODE_ORBIT);
+    camera_set_position(camera, cam_pos);
+    camera_set_look_at(camera, look_at);
+    camera_set_up(camera, up);
+    camera_set_perspective(camera, 0.8f, 0.1f, 1000.0f);
+    engine_set_camera(engine, camera);
+    engine_set_camera_mode(engine, CAMERA_MODE_ORBIT);
     camera->distance = 40.0f;
 
     // Create drag controller
     drag_controller = create_mouse_drag_controller(engine);
 
-    set_engine_show_gui(engine, true);
-    set_engine_show_fps(engine, true);
-    set_engine_show_xyz(engine, true);
+    engine_set_show_gui(engine, true);
+    engine_set_show_fps(engine, true);
+    engine_set_show_xyz(engine, true);
 
     // Spawn a few initial boxes
     for (int i = 0; i < 5; i++) {
@@ -671,7 +671,7 @@ int main(int argc, const char* argv[]) {
     }
 
     // Set mouse callback
-    set_engine_mouse_button_callback(game->engine, mouse_button_callback);
+    engine_set_mouse_button_callback(game->engine, mouse_button_callback);
 
     // Set game callbacks
     game_set_init(game, on_init);
@@ -681,7 +681,7 @@ int main(int argc, const char* argv[]) {
     game_set_shutdown(game, on_shutdown);
 
     // Run the game
-    run_game(game);
+    game_run(game);
 
     // Cleanup
     free_game(game);

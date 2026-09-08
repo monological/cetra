@@ -12,8 +12,7 @@
 #include "material.h"
 #include "program.h"
 
-#define MP(field, ty, lo, hi)                                                                      \
-    .offset = offsetof(Material, field), .type = ty, .min = lo, .max = hi
+#define MP(field, ty, lo, hi) .offset = offsetof(Material, field), .type = ty, .min = lo, .max = hi
 
 // Names, not indices: the vegetation modes also redefine what UV1 MEANS on a
 // material, which is not a thing to discover by dragging an integer.
@@ -51,7 +50,7 @@ const MaterialParam MATERIAL_PARAMS[] = {
     // which a strength of 1 drives to zero.
     {"anisotropy", "Anisotropy", MP(anisotropy, MATERIAL_PARAM_FLOAT, 0.0f, 0.95f)},
     {"anisotropyMap", "Anisotropy", .type = MATERIAL_PARAM_TEXTURE,
-     .offset = offsetof(Material, anisotropy_tex), .set_tex = set_material_anisotropy_tex},
+     .offset = offsetof(Material, anisotropy_tex), .set_tex = material_set_anisotropy_tex},
 
     {"emissive", "Emissive", MP(emissive, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     {"emissiveStrength", "Emissive", MP(emissive_strength, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
@@ -82,8 +81,7 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"ior", "Transmission", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
     {"transmission", "Transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"thickness", "Transmission", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f)},
-    {"attenuationColor", "Transmission",
-     MP(attenuation_color, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
+    {"attenuationColor", "Transmission", MP(attenuation_color, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     // Reaches 0 because that is how this field spells glTF's default of infinity;
     // an editor dragging to the bottom of the range turns absorption off rather
     // than driving the extinction to a divide by zero.
@@ -106,15 +104,14 @@ const MaterialParam MATERIAL_PARAMS[] = {
     // file parses it directly. What is here is the rest of a layered material:
     // the weights that select between the layers, and the two knobs that decide
     // how the blend and the projection behave.
-    {"splat", "Layers", .type = MATERIAL_PARAM_TEXTURE,
-     .offset = offsetof(Material, splat_tex), .set_tex = set_material_splat_tex},
+    {"splat", "Layers", .type = MATERIAL_PARAM_TEXTURE, .offset = offsetof(Material, splat_tex),
+     .set_tex = material_set_splat_tex},
     // 0 is a plain weighted average and reachable on purpose: it is what the
     // height blend has to be measured against.
     {"layerBlend", "Layers", MP(layer_blend_sharpness, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
     // Below 1 the projections smear into each other over most of the surface;
     // the useful range starts where one axis begins to dominate.
-    {"layerTriplanar", "Layers",
-     MP(layer_triplanar_sharpness, MATERIAL_PARAM_FLOAT, 1.0f, 16.0f)},
+    {"layerTriplanar", "Layers", MP(layer_triplanar_sharpness, MATERIAL_PARAM_FLOAT, 1.0f, 16.0f)},
 
     // Its own group rather than "Base": this says nothing about how the surface
     // shades, only whether the shadow map may see it. Inert unless the material
@@ -128,8 +125,8 @@ const MaterialParam MATERIAL_PARAMS[] = {
     // surface shades. The guards that make a false claim inert live at
     // classification, where they are derived; the admission argument is
     // material.h's charter.
-    {"occluder", "Occlusion", .offset = offsetof(Material, occluder),
-     .type = MATERIAL_PARAM_INT, .enum_labels = OCCLUDER_NAMES,
+    {"occluder", "Occlusion", .offset = offsetof(Material, occluder), .type = MATERIAL_PARAM_INT,
+     .enum_labels = OCCLUDER_NAMES,
      .enum_count = (int)(sizeof(OCCLUDER_NAMES) / sizeof(OCCLUDER_NAMES[0]))},
 };
 
@@ -178,17 +175,17 @@ void material_param_get(const Material* material, const MaterialParam* param, fl
         return;
     const void* field = material_param_field_const(material, param);
     switch (param->type) {
-    case MATERIAL_PARAM_COLOR:
-        memcpy(values, field, sizeof(vec3));
-        break;
-    case MATERIAL_PARAM_FLOAT:
-        values[0] = *(const float*)field;
-        break;
-    case MATERIAL_PARAM_INT:
-        values[0] = (float)*(const int*)field;
-        break;
-    case MATERIAL_PARAM_TEXTURE:
-        break; // unreachable; guarded above
+        case MATERIAL_PARAM_COLOR:
+            memcpy(values, field, sizeof(vec3));
+            break;
+        case MATERIAL_PARAM_FLOAT:
+            values[0] = *(const float*)field;
+            break;
+        case MATERIAL_PARAM_INT:
+            values[0] = (float)*(const int*)field;
+            break;
+        case MATERIAL_PARAM_TEXTURE:
+            break; // unreachable; guarded above
     }
 }
 
@@ -204,17 +201,17 @@ void material_param_set(Material* material, const MaterialParam* param, const fl
         return;
     void* field = material_param_field(material, param);
     switch (param->type) {
-    case MATERIAL_PARAM_COLOR:
-        memcpy(field, values, sizeof(vec3));
-        break;
-    case MATERIAL_PARAM_FLOAT:
-        *(float*)field = values[0];
-        break;
-    case MATERIAL_PARAM_INT:
-        *(int*)field = (int)values[0];
-        break;
-    case MATERIAL_PARAM_TEXTURE:
-        break; // unreachable; guarded above
+        case MATERIAL_PARAM_COLOR:
+            memcpy(field, values, sizeof(vec3));
+            break;
+        case MATERIAL_PARAM_FLOAT:
+            *(float*)field = values[0];
+            break;
+        case MATERIAL_PARAM_INT:
+            *(int*)field = (int)values[0];
+            break;
+        case MATERIAL_PARAM_TEXTURE:
+            break; // unreachable; guarded above
     }
 }
 
@@ -366,7 +363,7 @@ void free_material(Material* material) {
     }
 }
 
-void set_material_shader_program(Material* material, ShaderProgram* shader_program) {
+void material_set_program(Material* material, ShaderProgram* shader_program) {
     if (!material) {
         log_error("Cannot set shader program for NULL material");
         return;
@@ -379,7 +376,7 @@ void set_material_shader_program(Material* material, ShaderProgram* shader_progr
     material->shader_program = shader_program;
 }
 
-void set_material_albedo_tex(Material* material, Texture* texture) {
+void material_set_albedo_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->albedo_tex)
@@ -387,7 +384,7 @@ void set_material_albedo_tex(Material* material, Texture* texture) {
     material->albedo_tex = texture_retain(texture);
 }
 
-void set_material_normal_tex(Material* material, Texture* texture) {
+void material_set_normal_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->normal_tex)
@@ -395,7 +392,7 @@ void set_material_normal_tex(Material* material, Texture* texture) {
     material->normal_tex = texture_retain(texture);
 }
 
-void set_material_roughness_tex(Material* material, Texture* texture) {
+void material_set_roughness_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->roughness_tex)
@@ -403,7 +400,7 @@ void set_material_roughness_tex(Material* material, Texture* texture) {
     material->roughness_tex = texture_retain(texture);
 }
 
-void set_material_metalness_tex(Material* material, Texture* texture) {
+void material_set_metalness_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->metalness_tex)
@@ -411,7 +408,7 @@ void set_material_metalness_tex(Material* material, Texture* texture) {
     material->metalness_tex = texture_retain(texture);
 }
 
-void set_material_ambient_occlusion_tex(Material* material, Texture* texture) {
+void material_set_ambient_occlusion_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->ambient_occlusion_tex)
@@ -419,7 +416,7 @@ void set_material_ambient_occlusion_tex(Material* material, Texture* texture) {
     material->ambient_occlusion_tex = texture_retain(texture);
 }
 
-void set_material_emissive_tex(Material* material, Texture* texture) {
+void material_set_emissive_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->emissive_tex)
@@ -427,7 +424,7 @@ void set_material_emissive_tex(Material* material, Texture* texture) {
     material->emissive_tex = texture_retain(texture);
 }
 
-void set_material_height_tex(Material* material, Texture* texture) {
+void material_set_height_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->height_tex)
@@ -435,7 +432,7 @@ void set_material_height_tex(Material* material, Texture* texture) {
     material->height_tex = texture_retain(texture);
 }
 
-void set_material_opacity_tex(Material* material, Texture* texture) {
+void material_set_opacity_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->opacity_tex)
@@ -443,7 +440,7 @@ void set_material_opacity_tex(Material* material, Texture* texture) {
     material->opacity_tex = texture_retain(texture);
 }
 
-void set_material_sheen_tex(Material* material, Texture* texture) {
+void material_set_sheen_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->sheen_tex)
@@ -451,7 +448,7 @@ void set_material_sheen_tex(Material* material, Texture* texture) {
     material->sheen_tex = texture_retain(texture);
 }
 
-void set_material_reflectance_tex(Material* material, Texture* texture) {
+void material_set_reflectance_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->reflectance_tex)
@@ -459,7 +456,7 @@ void set_material_reflectance_tex(Material* material, Texture* texture) {
     material->reflectance_tex = texture_retain(texture);
 }
 
-void set_material_clearcoat_normal_tex(Material* material, Texture* texture) {
+void material_set_clearcoat_normal_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->clearcoat_normal_tex)
@@ -467,7 +464,7 @@ void set_material_clearcoat_normal_tex(Material* material, Texture* texture) {
     material->clearcoat_normal_tex = texture_retain(texture);
 }
 
-void set_material_microsurface_tex(Material* material, Texture* texture) {
+void material_set_microsurface_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->microsurface_tex)
@@ -475,7 +472,7 @@ void set_material_microsurface_tex(Material* material, Texture* texture) {
     material->microsurface_tex = texture_retain(texture);
 }
 
-void set_material_anisotropy_tex(Material* material, Texture* texture) {
+void material_set_anisotropy_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->anisotropy_tex)
@@ -483,7 +480,7 @@ void set_material_anisotropy_tex(Material* material, Texture* texture) {
     material->anisotropy_tex = texture_retain(texture);
 }
 
-void set_material_splat_tex(Material* material, Texture* texture) {
+void material_set_splat_tex(Material* material, Texture* texture) {
     if (!material)
         return;
     if (material->splat_tex)
@@ -506,7 +503,7 @@ static bool layer_slot_ok(const Material* material, int index, const char* what)
     return true;
 }
 
-void set_material_layer_albedo_tex(Material* material, int index, Texture* texture) {
+void material_set_layer_albedo_tex(Material* material, int index, Texture* texture) {
     if (!layer_slot_ok(material, index, "albedo"))
         return;
     if (material->layers[index].albedo_tex)
@@ -514,11 +511,10 @@ void set_material_layer_albedo_tex(Material* material, int index, Texture* textu
     material->layers[index].albedo_tex = texture_retain(texture);
 }
 
-void set_material_layer_surface_tex(Material* material, int index, Texture* texture) {
+void material_set_layer_surface_tex(Material* material, int index, Texture* texture) {
     if (!layer_slot_ok(material, index, "surface map"))
         return;
     if (material->layers[index].surface_tex)
         texture_release(material->layers[index].surface_tex);
     material->layers[index].surface_tex = texture_retain(texture);
 }
-

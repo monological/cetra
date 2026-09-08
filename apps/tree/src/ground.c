@@ -53,11 +53,9 @@ static float ground_wobble(float x, float z, float d) {
      * this function does not have. It also makes the rim row a circle at ONE height, which is
      * what lets the island and the seabed meet there whatever ring counts they were built with.
      */
-    const float o =
-        fminf(2.0f * (GROUND_RADIUS - d) / (GROUND_RADIUS - GROUND_SHORE_R), 1.0f);
+    const float o = fminf(2.0f * (GROUND_RADIUS - d) / (GROUND_RADIUS - GROUND_SHORE_R), 1.0f);
     const float oc = fmaxf(o, 0.0f);
-    return (n * 2.0f - 1.0f) * amp * (t * t * (3.0f - 2.0f * t)) *
-           (oc * oc * (3.0f - 2.0f * oc));
+    return (n * 2.0f - 1.0f) * amp * (t * t * (3.0f - 2.0f * t)) * (oc * oc * (3.0f - 2.0f * oc));
 }
 
 float ground_height_at(float x, float z) {
@@ -339,7 +337,7 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
     // Required: the renderer frustum-culls on this. Left at the zero AABB
     // create_mesh starts with, the ground collapses to a point at the origin
     // and gets culled the moment that point leaves the view.
-    calculate_aabb(mesh);
+    mesh_compute_aabb(mesh);
 }
 
 bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles) {
@@ -358,8 +356,7 @@ bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles) {
     for (int r = 0; r <= rings; r++) {
         // Geometric in the RADIUS, so the ring spacing grows with distance -- see the header.
         const float u = (float)r / (float)rings;
-        const float radius =
-            GROUND_RADIUS * powf(GROUND_SEABED_RADIUS / GROUND_RADIUS, u);
+        const float radius = GROUND_RADIUS * powf(GROUND_SEABED_RADIUS / GROUND_RADIUS, u);
         for (int s = 0; s < segments; s++) {
             const float angle = 2.0f * (float)M_PI * (float)s / (float)segments;
             const float ca = cosf(angle), sa = sinf(angle);

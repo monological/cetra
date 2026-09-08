@@ -50,7 +50,7 @@ static int g_transform_probe = 0;
 
 // Visual glass radius; the collision radius is a touch larger so the dust keeps a
 // clean shell around the glass instead of clipping into it.
-#define SPHERE_RADIUS 2.5f
+#define SPHERE_RADIUS  2.5f
 #define COLLIDE_RADIUS 3.1f
 
 // A static, unlit-until-the-key-hits-it surface. Geometry is generated at
@@ -61,17 +61,17 @@ static void add_box(SceneNode* root, vec3 pos, vec3 size, vec3 albedo) {
     Box box;
     glm_vec3_copy(pos, box.position);
     glm_vec3_copy(size, box.size);
-    generate_box_to_mesh(mesh, &box);
+    mesh_generate_box(mesh, &box);
 
     Material* mat = create_material();
     glm_vec3_copy(albedo, mat->albedo);
     mat->roughness = 0.9f;
     mat->metallic = 0.0f;
-    set_material_shader_program(mat, g_pbr);
+    material_set_program(mat, g_pbr);
     mesh->material = mat;
 
-    add_mesh_to_node(node, mesh);
-    add_child_node(root, node);
+    node_add_mesh(node, mesh);
+    node_add_child(root, node);
 }
 
 static void add_floor(SceneNode* root, float extent, vec3 albedo) {
@@ -79,17 +79,17 @@ static void add_floor(SceneNode* root, float extent, vec3 albedo) {
     Mesh* mesh = create_mesh();
     Plane p = {
         .position = {0, 0, 0}, .width = extent, .depth = extent, .segments_w = 1, .segments_d = 1};
-    generate_plane_to_mesh(mesh, &p);
+    mesh_generate_plane(mesh, &p);
 
     Material* mat = create_material();
     glm_vec3_copy(albedo, mat->albedo);
     mat->roughness = 0.95f;
     mat->metallic = 0.0f;
-    set_material_shader_program(mat, g_pbr);
+    material_set_program(mat, g_pbr);
     mesh->material = mat;
 
-    add_mesh_to_node(node, mesh);
-    add_child_node(root, node);
+    node_add_mesh(node, mesh);
+    node_add_child(root, node);
 }
 
 // A procedural glass sphere at the origin (the node transform moves it). Glass is
@@ -97,10 +97,11 @@ static void add_floor(SceneNode* root, float extent, vec3 albedo) {
 // engine setup is needed -- just the material fields.
 static SceneNode* add_glass_sphere(SceneNode* root, float radius) {
     SceneNode* node = create_node();
-    set_node_name(node, "glass_sphere");
+    node_set_name(node, "glass_sphere");
     Mesh* mesh = create_mesh();
-    Sphere s = {.position = {0, 0, 0}, .radius = radius, .segments_lon = 48*3, .segments_lat = 24*3};
-    generate_sphere_to_mesh(mesh, &s);
+    Sphere s = {
+        .position = {0, 0, 0}, .radius = radius, .segments_lon = 48 * 3, .segments_lat = 24 * 3};
+    mesh_generate_sphere(mesh, &s);
 
     Material* mat = create_material();
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, mat->albedo);
@@ -111,26 +112,26 @@ static SceneNode* add_glass_sphere(SceneNode* root, float radius) {
     mat->thickness = 1.0f;
     mat->opacity = 1.0f;
     mat->doubleSided = false;
-    set_material_shader_program(mat, g_pbr);
+    material_set_program(mat, g_pbr);
     mesh->material = mat;
 
-    add_mesh_to_node(node, mesh);
-    add_child_node(root, node);
+    node_add_mesh(node, mesh);
+    node_add_child(root, node);
     return node;
 }
 
 static void on_init(Game* game) {
     Engine* engine = game->engine;
-    g_pbr = get_engine_shader_program_by_name(engine, "pbr");
+    g_pbr = engine_get_program(engine, "pbr");
 
     // FPS readout pinned top-right (like the render app). Skipped in headless: the
     // digits change per run and would break screenshot determinism.
-    set_engine_show_fps(engine, !engine->headless);
+    engine_set_show_fps(engine, !engine->headless);
 
     // The engine's own tuning panel: light intensity/range, the fog block below,
     // the post chain, and a live camera pose. Off in headless -- it draws after
     // tone mapping and would land in the screenshot.
-    set_engine_show_gui(engine, !engine->headless);
+    engine_set_show_gui(engine, !engine->headless);
 
     // Low-key mood: a deliberate EV bias under auto-exposure. Auto-exposure
     // normalizes the metered mean toward middle gray, which for this lit room
@@ -155,8 +156,8 @@ static void on_init(Game* game) {
 
     Scene* scene = create_scene();
     SceneNode* root = create_node();
-    set_node_name(root, "root");
-    set_scene_root_node(scene, root);
+    node_set_name(root, "root");
+    scene_set_root(scene, root);
     game_set_scene(game, scene);
 
     // Dark infected interior: floor + three walls (front open toward camera).
@@ -169,36 +170,37 @@ static void on_init(Game* game) {
 
     // One warm directional key spilling in from front-top, casting shadows.
     Light* key = create_light();
-    set_light_name(key, "key");
-    set_light_type(key, LIGHT_DIRECTIONAL);
-    set_light_direction(key, (vec3){-0.25f, -0.75f, -0.6f});
-    set_light_color(key, (vec3){1.0f, 0.86f, 0.62f});
-    set_light_intensity(key, 3.0f);
-    set_light_cast_shadows(key, true);
-    add_light_to_scene(scene, key);
+    light_set_name(key, "key");
+    light_set_type(key, LIGHT_DIRECTIONAL);
+    light_set_direction(key, (vec3){-0.25f, -0.75f, -0.6f});
+    light_set_color(key, (vec3){1.0f, 0.86f, 0.62f});
+    light_set_intensity(key, 3.0f);
+    light_set_cast_shadows(key, true);
+    scene_add_light(scene, key);
     SceneNode* key_node = create_node();
-    set_node_name(key_node, "key_light");
-    set_node_light(key_node, key);
-    add_child_node(root, key_node);
+    node_set_name(key_node, "key_light");
+    node_set_light(key_node, key);
+    node_add_child(root, key_node);
 
     // A flashlight: a crisp white spot cone from the left of the camera aimed at
     // the scene center, raking across the room. Spot lights now shade their cone
     // (pbr_frag spotConeFactor); the tight inner->outer band gives a sharp edge.
     Light* flash = create_light();
-    set_light_name(flash, "flashlight");
-    set_light_type(flash, LIGHT_SPOT);
-    set_light_original_position(flash, (vec3){-14.0f, 7.0f, 19.0f}); // left of the camera
-    set_light_direction(flash, (vec3){14.0f, -7.0f, -21.0f});        // toward the scene center (floor)
-    set_light_color(flash, (vec3){1.0f, 0.97f, 0.90f});
-    set_light_intensity(flash, 20000.0f); // candela, a torch-scale hot spot
-    set_light_range(flash, 40.0f);     // carries across the ~24u room and dies past it
-    set_light_cutoff(flash, cosf(glm_rad(18.0f)), cosf(glm_rad(20.0f))); // sharp 18->20 deg edge
-    set_light_cast_shadows(flash, true); // renders the perspective spot shadow map (occludes the beam)
-    add_light_to_scene(scene, flash);
+    light_set_name(flash, "flashlight");
+    light_set_type(flash, LIGHT_SPOT);
+    light_set_original_position(flash, (vec3){-14.0f, 7.0f, 19.0f}); // left of the camera
+    light_set_direction(flash, (vec3){14.0f, -7.0f, -21.0f}); // toward the scene center (floor)
+    light_set_color(flash, (vec3){1.0f, 0.97f, 0.90f});
+    light_set_intensity(flash, 20000.0f); // candela, a torch-scale hot spot
+    light_set_range(flash, 40.0f);        // carries across the ~24u room and dies past it
+    light_set_cutoff(flash, cosf(glm_rad(18.0f)), cosf(glm_rad(20.0f))); // sharp 18->20 deg edge
+    light_set_cast_shadows(flash,
+                           true); // renders the perspective spot shadow map (occludes the beam)
+    scene_add_light(scene, flash);
     SceneNode* flash_node = create_node();
-    set_node_name(flash_node, "flashlight");
-    set_node_light(flash_node, flash);
-    add_child_node(root, flash_node);
+    node_set_name(flash_node, "flashlight");
+    node_set_light(flash_node, flash);
+    node_add_child(root, flash_node);
 
     // Room-scale shadows.
     if (scene->shadow_system) {
@@ -211,12 +213,12 @@ static void on_init(Game* game) {
 
     // Orbit camera looking into the room.
     Camera* cam = create_camera();
-    set_camera_position(cam, (vec3){0.0f, 6.0f, 22.0f});
-    set_camera_look_at(cam, (vec3){0.0f, 4.0f, 0.0f});
-    set_camera_up_vector(cam, (vec3){0.0f, 1.0f, 0.0f});
-    set_camera_perspective(cam, 0.9f, 0.1f, 200.0f);
-    set_engine_camera(engine, cam);
-    set_engine_camera_mode(engine, CAMERA_MODE_ORBIT);
+    camera_set_position(cam, (vec3){0.0f, 6.0f, 22.0f});
+    camera_set_look_at(cam, (vec3){0.0f, 4.0f, 0.0f});
+    camera_set_up(cam, (vec3){0.0f, 1.0f, 0.0f});
+    camera_set_perspective(cam, 0.9f, 0.1f, 200.0f);
+    engine_set_camera(engine, cam);
+    engine_set_camera_mode(engine, CAMERA_MODE_ORBIT);
     cam->distance = 24.0f;
 
     g_drag = create_mouse_drag_controller(engine);
@@ -224,7 +226,7 @@ static void on_init(Game* game) {
     // The wandering glass sphere (moved each fixed step in on_update).
     g_sphere_node = add_glass_sphere(root, SPHERE_RADIUS);
 
-    upload_buffers_to_gpu_for_nodes(root);
+    node_upload_meshes(root);
 
     // Cordyceps-spore particle system: fine pale-green motes on curl-noise
     // turbulence. Attached to a scene node -- the engine ticks + renders it, the
@@ -233,7 +235,7 @@ static void on_init(Game* game) {
     noise_seed(1337u);
 
     ShaderProgram* particle_prog = create_particle_program();
-    add_shader_program_to_engine(engine, particle_prog);
+    engine_add_program(engine, particle_prog);
 
     // GPU transform-feedback backend by default (spec 5.2); --cpu selects the CPU
     // backend for A/B comparison. Capacity must satisfy the ring invariant
@@ -264,17 +266,16 @@ static void on_init(Game* game) {
     g_sphere_collider = particle_module_collider_sphere((vec3){0.0f, 3.5f, 0.0f}, COLLIDE_RADIUS,
                                                         COLLIDER_KEEP_OUT, 0.2f, 0.8f);
     particle_emitter_add_module(em, g_sphere_collider);
-    particle_emitter_add_module(em,
-                                particle_module_collider_box((vec3){-11.6f, 0.05f, -11.6f},
-                                                             (vec3){11.6f, 10.0f, 11.6f},
-                                                             COLLIDER_KEEP_IN, 0.3f));
+    particle_emitter_add_module(em, particle_module_collider_box((vec3){-11.6f, 0.05f, -11.6f},
+                                                                 (vec3){11.6f, 10.0f, 11.6f},
+                                                                 COLLIDER_KEEP_IN, 0.3f));
     particle_system_add_emitter(sys, em);
-    add_particle_system_to_scene(scene, sys); // scene owns it (ticked + drawn automatically)
+    scene_add_particle_system(scene, sys); // scene owns it (ticked + drawn automatically)
 
     SceneNode* spore_node = create_node();
-    set_node_name(spore_node, "spore_emitter");
-    set_node_particle_system(spore_node, sys); // node transform = emitter spawn frame
-    add_child_node(root, spore_node);
+    node_set_name(spore_node, "spore_emitter");
+    node_set_particle_system(spore_node, sys); // node transform = emitter spawn frame
+    node_add_child(root, spore_node);
 }
 
 // Runs each fixed step BEFORE the particle tick. Move the glass sphere along a
@@ -284,8 +285,7 @@ static void on_init(Game* game) {
 static void on_update(Game* game, double dt) {
     (void)dt;
     float t = (float)game->time;
-    vec3 p = {6.0f * sinf(0.50f * t), 3.5f + 1.5f * sinf(0.90f * t + 1.0f),
-              5.0f * cosf(0.37f * t)};
+    vec3 p = {6.0f * sinf(0.50f * t), 3.5f + 1.5f * sinf(0.90f * t + 1.0f), 5.0f * cosf(0.37f * t)};
     if (g_sphere_collider)
         particle_module_collider_set(g_sphere_collider, p, p, COLLIDE_RADIUS);
     if (g_sphere_node) {
@@ -345,20 +345,20 @@ static void key_callback(Engine* engine, int key, int scancode, int action, int 
         return;
     }
     switch (key) {
-    case GLFW_KEY_ESCAPE:
-        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
-        break;
-    case GLFW_KEY_G:
-        set_engine_show_gui(engine, !engine->show_gui);
-        break;
-    case GLFW_KEY_C:
-        engine->show_camera_hud = !engine->show_camera_hud;
-        break;
-    case GLFW_KEY_L:
-        engine->show_lights = !engine->show_lights;
-        break;
-    default:
-        break;
+        case GLFW_KEY_ESCAPE:
+            glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+            break;
+        case GLFW_KEY_G:
+            engine_set_show_gui(engine, !engine->show_gui);
+            break;
+        case GLFW_KEY_C:
+            engine->show_camera_hud = !engine->show_camera_hud;
+            break;
+        case GLFW_KEY_L:
+            engine->show_lights = !engine->show_lights;
+            break;
+        default:
+            break;
     }
 }
 
@@ -420,15 +420,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    set_engine_mouse_button_callback(game->engine, mouse_button_callback);
-    set_engine_key_callback(game->engine, key_callback);
+    engine_set_mouse_button_callback(game->engine, mouse_button_callback);
+    engine_set_key_callback(game->engine, key_callback);
     game_set_init(game, on_init);
     game_set_update(game, on_update);
     game_set_pre_render(game, on_pre_render);
     game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 
-    run_game(game);
+    game_run(game);
     free_game(game);
     return 0;
 }

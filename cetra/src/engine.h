@@ -81,7 +81,7 @@ typedef struct Engine {
     int target_render_w, target_render_h;
     int target_post_w, target_post_h;
     // MSAA sample count REQUESTED for the scene framebuffer (1 = off, 4 = 4x).
-    // Runtime-changeable via set_engine_msaa_samples.
+    // Runtime-changeable via engine_set_msaa_samples.
     //
     // A request the allocator honours at 1: a single-sample request gets a
     // plain GL_TEXTURE_2D target (spec 11.34), where it used to get a
@@ -331,7 +331,7 @@ typedef struct Engine {
     bool show_camera_hud; // Live camera pose overlay next to the FPS readout
     bool show_bones;      // X-ray bone visualization
     bool show_lights;     // Light overlay: position cross + cull-radius wireframe
-    bool headless;        // Hidden window, no vsync (set before init_engine)
+    bool headless;        // Hidden window, no vsync (set before engine_init)
     bool headless_jitter; // Apply the TAA sub-pixel jitter even in headless (non-deterministic
                           // screenshots, but lets temporal accumulation converge for verification)
 
@@ -400,11 +400,11 @@ typedef struct Engine {
     PostFX* postfx;
 
     // Per-pass GPU time, CPU time and submission counts (specs 11.27, 11.28).
-    // NULL unless profiler_enabled asked for it before init_engine, and every
+    // NULL unless profiler_enabled asked for it before engine_init, and every
     // entry point no-ops on NULL, so an ordinary run issues no query calls and
     // keeps no counts at all.
     struct Profiler* profiler;
-    bool profiler_enabled; // true = build the profiler (set before init_engine)
+    bool profiler_enabled; // true = build the profiler (set before engine_init)
 
     // The camera's exposure -- read by render.c when it publishes ViewParams,
     // and by PostFX, which runs the metering that feeds it. On the Engine rather
@@ -462,19 +462,19 @@ typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
 Engine* create_engine(const char* window_title, int width, int height);
 void free_engine(Engine* engine);
 
-int init_engine(Engine* engine);
-void set_engine_headless(Engine* engine, bool headless);
-// Build the per-pass profiler. Must be called before init_engine, which is
+int engine_init(Engine* engine);
+void engine_set_headless(Engine* engine, bool headless);
+// Build the per-pass profiler. Must be called before engine_init, which is
 // where the profiler is created; setting it afterwards does nothing.
-void set_engine_profiler(Engine* engine, bool enabled);
-// Supersampling factor (clamped to [1, 2]). Safe before init_engine (stored)
+void engine_set_profiler(Engine* engine, bool enabled);
+// Supersampling factor (clamped to [1, 2]). Safe before engine_init (stored)
 // or at runtime, where the render targets are rebuilt at the next frame top.
-void set_engine_ss_scale(Engine* engine, int ss_scale);
-// Render-resolution scale (clamped to [0.5, 1]). Safe before init_engine
+void engine_set_ss_scale(Engine* engine, int ss_scale);
+// Render-resolution scale (clamped to [0.5, 1]). Safe before engine_init
 // (stored) or at runtime, where the render targets are rebuilt at the next
 // frame top. Forced to 1 in headless without headless_jitter, which TAAU
 // needs to reconstruct from.
-void set_engine_render_scale(Engine* engine, float render_scale);
+void engine_set_render_scale(Engine* engine, float render_scale);
 // Re-centre the world on the camera, snapped to `lattice` (spec 11.62). Applies
 // at the next frame top like the render-scale switch above, and only on X and Z.
 //
@@ -483,11 +483,11 @@ void set_engine_render_scale(Engine* engine, float render_scale);
 // and the hand-driven copy was the one missing the current origin.
 void engine_recentre_on_camera(const Engine* engine, float lattice);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
-// 1 disables MSAA. Safe to call before init_engine (stored) or at runtime
+// 1 disables MSAA. Safe to call before engine_init (stored) or at runtime
 // (rebuilds the multisample attachments).
-void set_engine_msaa_samples(Engine* engine, int samples);
-// Enable/disable temporal anti-aliasing. Call after init_engine (needs postfx).
-void set_engine_taa_enabled(Engine* engine, bool enabled);
+void engine_set_msaa_samples(Engine* engine, int samples);
+// Enable/disable temporal anti-aliasing. Call after engine_init (needs postfx).
+void engine_set_taa(Engine* engine, bool enabled);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
 // exposure pins at unity with adaptation off, the tone curve is the identity,
@@ -496,21 +496,21 @@ void set_engine_taa_enabled(Engine* engine, bool enabled);
 // Left alone on purpose: the sample count, since multisampling is the
 // anti-aliasing 2D line art wants, and any light the app adds on top, which
 // then adds to the flat colour rather than replacing it. Call after
-// init_engine; the scene half is skipped when `scene` is NULL.
-void engine_set_2d_defaults(Engine* engine, Scene* scene);
-void set_engine_screenshot_path(Engine* engine, const char* path);
-void set_engine_screenshot_every(Engine* engine, int every);
+// engine_init; the scene half is skipped when `scene` is NULL.
+void engine_set_2d_preset(Engine* engine, Scene* scene);
+void engine_set_screenshot_path(Engine* engine, const char* path);
+void engine_set_screenshot_every(Engine* engine, int every);
 // Exit the main loop after `frames` rendered frames (0 = run until the window
 // closes). Fires the same final-frame screenshot path as a normal quit.
-void set_engine_exit_after_frames(Engine* engine, int frames);
+void engine_set_exit_after_frames(Engine* engine, int frames);
 
 // GLFW callbacks
-void set_engine_error_callback(Engine* engine, GLFWerrorfun error_callback);
-void set_engine_mouse_button_callback(Engine* engine, MouseButtonCallback mouse_button_callback);
-void set_engine_cursor_position_callback(Engine* engine,
+void engine_set_error_callback(Engine* engine, GLFWerrorfun error_callback);
+void engine_set_mouse_button_callback(Engine* engine, MouseButtonCallback mouse_button_callback);
+void engine_set_cursor_position_callback(Engine* engine,
                                          CursorPositionCallback cursor_position_callback);
-void set_engine_key_callback(Engine* engine, KeyCallback key_callback);
-void set_engine_scroll_callback(Engine* engine, ScrollCallback scroll_callback);
+void engine_set_key_callback(Engine* engine, KeyCallback key_callback);
+void engine_set_scroll_callback(Engine* engine, ScrollCallback scroll_callback);
 // True when the GUI is capturing the pointer this frame; apps gate 3D input on it.
 bool engine_gui_wants_mouse(void);
 // The keyboard equivalent. The engine already applies this to the app's key CALLBACK, but an
@@ -519,33 +519,33 @@ bool engine_gui_wants_mouse(void);
 bool engine_gui_wants_keyboard(void);
 
 // Camera
-void set_engine_camera(Engine* engine, Camera* camera);
-void set_engine_camera_mode(Engine* engine, CameraMode mode);
-void update_engine_camera_lookat(Engine* engine);
-void update_engine_camera_perspective(Engine* engine);
+void engine_set_camera(Engine* engine, Camera* camera);
+void engine_set_camera_mode(Engine* engine, CameraMode mode);
+void engine_update_view(Engine* engine);
+void engine_update_projection(Engine* engine);
 
 // Scene
-int add_scene_to_engine(Engine* engine, Scene* scene);
-void set_active_scene_by_index(Engine* engine, size_t scene_index);
-void set_active_scene_by_name(Engine* engine, const char* scene_name);
-Scene* get_current_scene(const Engine* engine);
+int engine_add_scene(Engine* engine, Scene* scene);
+void engine_set_scene_by_index(Engine* engine, size_t scene_index);
+void engine_set_scene_by_name(Engine* engine, const char* scene_name);
+Scene* engine_get_scene(const Engine* engine);
 
 // Shader Programs
-int add_shader_program_to_engine(Engine* engine, ShaderProgram* program);
-ShaderProgram* get_engine_shader_program_by_name(Engine* engine, const char* program_name);
+int engine_add_program(Engine* engine, ShaderProgram* program);
+ShaderProgram* engine_get_program(Engine* engine, const char* program_name);
 
 // GUI
-void set_engine_show_gui(Engine* engine, bool show_gui);
-void set_engine_show_fps(Engine* engine, bool show_fps);
+void engine_set_show_gui(Engine* engine, bool show_gui);
+void engine_set_show_fps(Engine* engine, bool show_fps);
 
 // Render
-void set_engine_show_wireframe(Engine* engine, bool show_wireframe);
-void set_engine_show_xyz(Engine* engine, bool show_xyz);
+void engine_set_show_wireframe(Engine* engine, bool show_wireframe);
+void engine_set_show_xyz(Engine* engine, bool show_xyz);
 
 // Opaque context for engine_run's callbacks (like glfwSetWindowUserPointer): the
 // render callbacks stay untyped (Engine*, Scene*); a caller that needs its own
 // state (e.g. the game framework) stashes it here and reads it back in the callback.
-// NOTE: run_game reserves this slot for its Game* -- a game app must NOT set it
+// NOTE: game_run reserves this slot for its Game* -- a game app must NOT set it
 // (use game_set_user_data / game->user_data for app state instead).
 void engine_set_user_data(Engine* engine, void* user_data);
 void* engine_get_user_data(const Engine* engine);
@@ -555,7 +555,7 @@ void* engine_get_user_data(const Engine* engine);
 // three hooks run in the order they are declared -- `update` once per frame
 // before anything reads the scene, `pre_render` after the sky and origin shift
 // and immediately before the graph is propagated, `render` to draw. Any of them
-// may be NULL. The render apps and the game framework's run_game all drive the
+// may be NULL. The render apps and the game framework's game_run all drive the
 // engine through it.
 void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre_render,
                 EngineRenderFunc render);
@@ -584,7 +584,7 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock);
 void engine_set_render_time(Engine* engine, double time, double delta);
 
 // Drag/pick helpers
-void get_mouse_world_position_on_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
-                                            vec3 out_world_pos);
+void engine_mouse_to_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
+                                vec3 out_world_pos);
 
 #endif // _ENGINE_H_

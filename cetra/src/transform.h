@@ -9,14 +9,14 @@ typedef struct {
     vec3 scale;
 } Transform;
 
-void reset_and_apply_transform(mat4* matrix, Transform* transform);
+void transform_apply(mat4* matrix, Transform* transform);
 
-void set_transform_position(Transform* transform, vec3 position);
-void set_transform_rotation(Transform* transform, vec3 rotation);
-void set_transform_scale(Transform* transform, vec3 scale);
+void transform_set_position(Transform* transform, vec3 position);
+void transform_set_rotation(Transform* transform, vec3 rotation);
+void transform_set_scale(Transform* transform, vec3 scale);
 
-void update_transform_position(Transform* transform, vec3 position);
-void update_transform_rotation(Transform* transform, vec3 rotation);
-void update_transform_scale(Transform* transform, vec3 scale);
+void transform_add_position(Transform* transform, vec3 position);
+void transform_add_rotation(Transform* transform, vec3 rotation);
+void transform_add_scale(Transform* transform, vec3 scale);
 
 #endif // TRANSFORM_H

@@ -37,12 +37,12 @@ typedef struct Camera {
 Camera* create_camera();
 void free_camera(Camera* camera);
 
-void set_camera_name(Camera* camera, const char* name);
-void set_camera_position(Camera* camera, vec3 position);
-void set_camera_look_at(Camera* camera, vec3 look_at);
-void set_camera_direction(Camera* camera, vec3 direction);
-void set_camera_up_vector(Camera* camera, vec3 up_vector);
-void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip);
+void camera_set_name(Camera* camera, const char* name);
+void camera_set_position(Camera* camera, vec3 position);
+void camera_set_look_at(Camera* camera, vec3 look_at);
+void camera_set_direction(Camera* camera, vec3 direction);
+void camera_set_up(Camera* camera, vec3 up_vector);
+void camera_set_perspective(Camera* camera, float fov_radians, float near_clip, float far_clip);
 
 // Project orthographically over a view volume ortho_height tall (width follows aspect_ratio).
 // A 2D view needs this: under perspective, any camera rotation shears flat geometry.
@@ -53,7 +53,7 @@ void set_camera_perspective(Camera* camera, float fov_radians, float near_clip, 
 // frustum: the skybox cube and sky background, the ocean's projected grid, the cloud march,
 // the depth-sort key and the gizmo's world-per-pixel. fov_radians is left in place for the
 // switch back to perspective.
-void set_camera_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip);
+void camera_set_orthographic(Camera* camera, float ortho_height, float near_clip, float far_clip);
 
 // The view volume's height when the camera is orthographic, else 0. The perspective
 // setter leaves ortho_height in place for the switch back, so "0 unless orthographic"
@@ -63,9 +63,9 @@ static inline float camera_ortho_height(const Camera* camera) {
 }
 
 // Camera movement helpers
-void orbit_camera(Camera* camera, float delta_theta, float delta_phi);
-void pan_camera(Camera* camera, float delta_x, float delta_y);
-void zoom_camera(Camera* camera, float delta);
+void camera_orbit(Camera* camera, float delta_theta, float delta_phi);
+void camera_pan(Camera* camera, float delta_x, float delta_y);
+void camera_zoom(Camera* camera, float delta);
 void camera_move_forward(Camera* camera, float distance);
 void camera_strafe(Camera* camera, float distance);
 void camera_move_up(Camera* camera, float distance);
@@ -80,7 +80,7 @@ void camera_enforce_max_distance(Camera* camera);
 void camera_sync_spherical_from_position(Camera* camera);
 
 // Matrix computation
-void compute_view_matrix(Camera* camera, mat4 view);
-void compute_projection_matrix(const Camera* camera, mat4 projection);
+void camera_view_matrix(Camera* camera, mat4 view);
+void camera_projection_matrix(const Camera* camera, mat4 projection);
 
 #endif // _CAMERA_H_
