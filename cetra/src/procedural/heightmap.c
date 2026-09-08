@@ -22,12 +22,12 @@ static const char* const MASK_SUFFIX[3] = {"_flow.r8", "_deposit.r8", "_wear.r8"
 
 static float* mask_plane(const TerrainField* field, int which) {
     switch (which) {
-    case 0:
-        return field->flow;
-    case 1:
-        return field->deposit;
-    default:
-        return field->wear;
+        case 0:
+            return field->flow;
+        case 1:
+            return field->deposit;
+        default:
+            return field->wear;
     }
 }
 

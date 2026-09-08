@@ -179,8 +179,9 @@ static void warn_if_array_shorter(UniformManager* mgr, const char* array, size_t
         return; // absent entirely -> not this shader's contract
     snprintf(name, sizeof(name), "%s[%zu]", array, count - 1);
     if (uniform_location(mgr, name) < 0)
-        log_warn("Shader %s[] smaller than %zu elements -- GLSL constants drifted from the C mirror",
-                 array, count);
+        log_warn(
+            "Shader %s[] smaller than %zu elements -- GLSL constants drifted from the C mirror",
+            array, count);
 }
 
 // max_shadow_lights is the caster slot count; the per-layer arrays
@@ -238,8 +239,7 @@ void uniform_set_vec3(UniformManager* mgr, const char* name, const float* value)
         glUniform3fv(loc, 1, value);
 }
 
-void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* values,
-                            int count) {
+void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* values, int count) {
     if (!mgr || !values || count <= 0)
         return;
     // Straight to GL: see the header for why this one cannot use the value cache.
@@ -251,8 +251,7 @@ void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* 
 void uniform_set_ivec4(UniformManager* mgr, const char* name, const int* value) {
     // Compared as floats for the same reason uniform_set_int is: these carry
     // small indices and a -1 sentinel, all exact far inside the mantissa.
-    const float as_float[4] = {(float)value[0], (float)value[1], (float)value[2],
-                               (float)value[3]};
+    const float as_float[4] = {(float)value[0], (float)value[1], (float)value[2], (float)value[3]};
     GLint loc;
     if (uniform_write_wanted(mgr, name, as_float, 4, &loc))
         glUniform4iv(loc, 1, value);

@@ -650,13 +650,14 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->ssao_enabled = true;
     fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
-    fx->spec_occlusion_mode = POSTFX_SPEC_OCC_SPLIT; // Ambient spec on its own target, occluded in post
-    fx->ao_edge_filter_enabled = true; // Depth-aware AO blur (no silhouette bleed)
+    fx->spec_occlusion_mode =
+        POSTFX_SPEC_OCC_SPLIT;           // Ambient spec on its own target, occluded in post
+    fx->ao_edge_filter_enabled = true;   // Depth-aware AO blur (no silhouette bleed)
     fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
     fx->cs_strength = 0.23f;             // Subtle: it stacks on CSM + AO in the same crevices, so a
                                          // higher weight crushes near-contacts to hard black
     fx->cs_distance = 0.3f;              // View-space reach; apps scene-scale this
-    fx->ssgi_enabled = false;          // experimental; off by default
+    fx->ssgi_enabled = false;            // experimental; off by default
     fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
     fx->ssr_enabled = true;
@@ -803,8 +804,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // tonemap's Purkinje stage (spec 11.83), so it outlives a pinned exposure.
     if (!create_color_fbo(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
                           &fx->lum_texture) ||
-        !create_color_fbo(LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS, GL_RG32F,
-                          &fx->lum_hist_fbo, &fx->lum_hist_texture) ||
+        !create_color_fbo(LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS, GL_RG32F, &fx->lum_hist_fbo,
+                          &fx->lum_hist_texture) ||
         !create_color_fbo(1, 1, GL_R32F, &fx->lum_reduce_fbo, &fx->lum_reduce_texture)) {
         free_postfx(fx);
         return NULL;
@@ -867,20 +868,17 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->sss_pyr_down_program = create_sss_pyr_down_program();
     fx->contact_shadow_program = create_contact_shadow_program();
     fx->oit_resolve_program = create_oit_resolve_program();
-    if (!fx->sss_pyr_seed_program || !fx->sss_pyr_down_program ||
-        !fx->contact_shadow_program || !fx->oit_resolve_program || !fx->sss_gather_program ||
-        !fx->motion_blur_program ||
+    if (!fx->sss_pyr_seed_program || !fx->sss_pyr_down_program || !fx->contact_shadow_program ||
+        !fx->oit_resolve_program || !fx->sss_gather_program || !fx->motion_blur_program ||
         !fx->motion_blur_tilemax_program || !fx->motion_blur_neighbormax_program ||
         !fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
         !fx->tonemap_program || !fx->gtao_program || !fx->ssao_blur_program ||
         !fx->temporal_accum_program || !fx->ssgi_composite_program || !fx->ssgi_accum_program ||
         !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->ssr_accum_program ||
         !fx->lum_measure_program || !fx->lum_histogram_program || !fx->lum_reduce_program ||
-        !fx->ssr_program || !fx->upsample_tent_program ||
-        !fx->taa_resolve_program || !fx->dof_coc_program ||
-        !fx->froxel_inject_program || !fx->froxel_integrate_program ||
-        !fx->froxel_composite_program ||
-        !fx->dof_tile_program || !fx->dof_dilate_program ||
+        !fx->ssr_program || !fx->upsample_tent_program || !fx->taa_resolve_program ||
+        !fx->dof_coc_program || !fx->froxel_inject_program || !fx->froxel_integrate_program ||
+        !fx->froxel_composite_program || !fx->dof_tile_program || !fx->dof_dilate_program ||
         !fx->dof_gather_program || !fx->dof_composite_program) {
         free_postfx(fx);
         return NULL;
@@ -1222,13 +1220,11 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
     // completeness is only meaningful once a layer is attached (checked there).
     glGenFramebuffers(1, &fx->froxel_fbo);
     for (int i = 0; i < 2; i++) {
-        fx->froxel_scatter[i] =
-            create_texture_3d_float(fx->froxel_built_x, fx->froxel_built_y, fx->froxel_built_z,
-                                    GL_RGBA16F, GL_RGBA, NULL);
+        fx->froxel_scatter[i] = create_texture_3d_float(
+            fx->froxel_built_x, fx->froxel_built_y, fx->froxel_built_z, GL_RGBA16F, GL_RGBA, NULL);
     }
-    fx->froxel_integrated =
-        create_texture_3d_float(fx->froxel_built_x, fx->froxel_built_y, fx->froxel_built_z,
-                                GL_RGBA16F, GL_RGBA, NULL);
+    fx->froxel_integrated = create_texture_3d_float(fx->froxel_built_x, fx->froxel_built_y,
+                                                    fx->froxel_built_z, GL_RGBA16F, GL_RGBA, NULL);
     if (!fx->froxel_scatter[0] || !fx->froxel_scatter[1] || !fx->froxel_integrated) {
         log_error("Failed to allocate froxel fog volumes");
         return false;
@@ -1403,8 +1399,7 @@ static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, GLui
     // The term needs the AO chain to have run, the normals for its guard, and
     // the aux depth for both magnifications. Missing any of them, fold the
     // specular back unoccluded rather than read an unbound unit.
-    uniform_set_int(sc, "aoActive",
-                    fx->ssao_enabled && have_normals && aux_written ? 1 : 0);
+    uniform_set_int(sc, "aoActive", fx->ssao_enabled && have_normals && aux_written ? 1 : 0);
     uniform_set_float(sc, "aoStrength", fx->ssao_strength);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
@@ -1794,8 +1789,7 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
     glUseProgram(fx->upsample_tent_program->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, delta);
-    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize",
-                     (const float[]){0.0f, 0.0f});
+    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", (const float[]){0.0f, 0.0f});
     _sss_fold_into_canvas(fx, canvas_fbo);
 }
 
@@ -2017,7 +2011,6 @@ static bool postfx_run_flare(PostFX* fx) {
     profiler_scope_end(fx->profiler);
     return true;
 }
-
 
 // Unit-radius aperture points: a Vogel spiral (uniform disk coverage),
 // optionally warped so each angular wedge maps onto a regular N-gon's wedge
@@ -2329,9 +2322,9 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // Aerial perspective indexes its volume by the same linear Z, so it forces
     // the buffer for the same reason fog does. Keyed on the published volume
     // rather than a toggle: with no sky there is nothing to composite.
-    return fx && (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled ||
-                  postfx_has_medium(fx) || fx->motion_blur_enabled ||
-                  fx->contact_shadows_enabled || fx->aerial_volume != 0);
+    return fx &&
+           (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || postfx_has_medium(fx) ||
+            fx->motion_blur_enabled || fx->contact_shadows_enabled || fx->aerial_volume != 0);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
@@ -2863,9 +2856,9 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
         // history would survive an arbitrary gap and then be reprojected by an
         // unrelated frame's velocity.
         fx->fog_layer_history.valid = (fx->fog_layer_frame == fx->frame_index - 1);
-        GLuint stable = run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_layer_history,
-                                           fx->width, fx->height, fx->fog_layer_texture,
-                                           TEMPORAL_FEEDBACK_DEFAULT);
+        GLuint stable =
+            run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_layer_history, fx->width,
+                               fx->height, fx->fog_layer_texture, TEMPORAL_FEEDBACK_DEFAULT);
         fx->fog_layer_frame = fx->frame_index;
 
         glUseProgram(fx->froxel_composite_program->id);
@@ -3042,8 +3035,8 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // jitter + motion); off/no-TAA leaves the raw march.
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
-        ssr_result = run_temporal_accum(fx, fx->ssr_accum_program, &fx->ssr_history, ssr_w,
-                                        ssr_h, fx->ssr_texture, TEMPORAL_FEEDBACK_SSR);
+        ssr_result = run_temporal_accum(fx, fx->ssr_accum_program, &fx->ssr_history, ssr_w, ssr_h,
+                                        fx->ssr_texture, TEMPORAL_FEEDBACK_SSR);
     } else {
         fx->ssr_history.valid = false;
     }
@@ -3355,9 +3348,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             cs_result_tex = fx->cs_texture[1];
 
             if (taa_resolving) {
-                cs_result_tex = run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history,
-                                                   fx->width, fx->height, fx->cs_texture[1],
-                                                   TEMPORAL_FEEDBACK_DEFAULT);
+                cs_result_tex =
+                    run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history, fx->width,
+                                       fx->height, fx->cs_texture[1], TEMPORAL_FEEDBACK_DEFAULT);
                 cs_accum_ran = true;
             }
             check_gl_error("postfx contact shadows");
@@ -3452,8 +3445,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index % 4096);
             uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
             uniform_set_int(fx->gtao_program->uniforms, "gatherSpec", gather_spec ? 1 : 0);
-            uniform_set_int(fx->gtao_program->uniforms, "specOcclusion",
-                            spec_occ_swept ? 1 : 0);
+            uniform_set_int(fx->gtao_program->uniforms, "specOcclusion", spec_occ_swept ? 1 : 0);
             draw_fullscreen_quad(fx->quad_vao);
             profiler_scope_end(fx->profiler);
 
@@ -3476,10 +3468,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 profiler_scope_begin(fx->profiler, "ao denoise");
                 GLuint ao_denoise_src = fx->ssao_texture[0];
                 if (taa_resolving) {
-                    ao_denoise_src =
-                        run_temporal_accum(fx, fx->temporal_accum_program, &fx->ao_history,
-                                           fx->half_width, fx->half_height, fx->ssao_texture[0],
-                                           TEMPORAL_FEEDBACK_AO);
+                    ao_denoise_src = run_temporal_accum(
+                        fx, fx->temporal_accum_program, &fx->ao_history, fx->half_width,
+                        fx->half_height, fx->ssao_texture[0], TEMPORAL_FEEDBACK_AO);
                     ao_accum_ran = true;
                 }
 
@@ -3608,10 +3599,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (ssgi_active) {
             profiler_scope_begin(fx->profiler, "ssgi denoise");
             if (taa_resolving) {
-                gi_result_tex =
-                    run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
-                                       fx->half_width, fx->half_height, fx->ssgi_gi_texture,
-                                       TEMPORAL_FEEDBACK_DEFAULT);
+                gi_result_tex = run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
+                                                   fx->half_width, fx->half_height,
+                                                   fx->ssgi_gi_texture, TEMPORAL_FEEDBACK_DEFAULT);
                 gi_accum_ran = true;
             }
 
@@ -3655,8 +3645,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             profiler_scope_end(fx->profiler);
         }
 
-        postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view,
-                              writes);
+        postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view, writes);
 
         // Separable SSS: blur the resolved skin-diffuse buffer and fold
         // blur - diffuse into the canvas, softening diffuse while specular
@@ -3825,8 +3814,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // Specular occlusion keeps GTAO off reflections. Needs the aux buffer
         // (linZ + roughness) and the normals; both ride the same AO-on gating,
         // so require them here too. Metallic is opportunistic (SSGI's albedo).
-        const bool spec_occ_active = fx->spec_occlusion_mode != POSTFX_SPEC_OCC_OFF &&
-                                     aux_written && have_normals;
+        const bool spec_occ_active =
+            fx->spec_occlusion_mode != POSTFX_SPEC_OCC_OFF && aux_written && have_normals;
         uniform_set_int(tm, "specOccMode", spec_occ_active ? fx->spec_occlusion_mode : 0);
         uniform_set_int(tm, "specOccHasMetallic", albedo_written ? 1 : 0);
         // The matrix rather than its two focal reciprocals: the shader's view

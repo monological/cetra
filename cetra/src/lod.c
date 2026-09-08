@@ -71,8 +71,8 @@ int mesh_build_lod_chain(Mesh* mesh) {
     }
     memcpy(chain, mesh->indices, mesh->index_count * sizeof(unsigned int));
 
-    size_t total = mesh->index_count;      // indices written into the chain so far
-    size_t previous = mesh->lod_count[0];  // the level this one has to beat
+    size_t total = mesh->index_count;     // indices written into the chain so far
+    size_t previous = mesh->lod_count[0]; // the level this one has to beat
     for (int level = 1; level < CETRA_LOD_MAX; ++level) {
         size_t target = (size_t)((float)previous * LOD_DECIMATION);
         target -= target % 3;

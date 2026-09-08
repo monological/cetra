@@ -467,15 +467,15 @@ float terrain_mask_at(const TerrainParams* p, TerrainMask mask, float x, float z
     }
     const float* plane = NULL;
     switch (mask) {
-    case TERRAIN_MASK_FLOW:
-        plane = p->field->flow;
-        break;
-    case TERRAIN_MASK_DEPOSIT:
-        plane = p->field->deposit;
-        break;
-    case TERRAIN_MASK_WEAR:
-        plane = p->field->wear;
-        break;
+        case TERRAIN_MASK_FLOW:
+            plane = p->field->flow;
+            break;
+        case TERRAIN_MASK_DEPOSIT:
+            plane = p->field->deposit;
+            break;
+        case TERRAIN_MASK_WEAR:
+            plane = p->field->wear;
+            break;
     }
     // Clamped because the sampler is a CUBIC: Catmull-Rom overshoots either side
     // of a sharp step, so a mask that is 0 across a whole neighbourhood still
@@ -787,10 +787,10 @@ void terrain_normal_at_level(const TerrainParams* p, float x, float z, int level
         if (half > h)
             h = half;
     }
-    float dx = terrain_height_at_level(p, x + h, z, level) -
-               terrain_height_at_level(p, x - h, z, level);
-    float dz = terrain_height_at_level(p, x, z + h, level) -
-               terrain_height_at_level(p, x, z - h, level);
+    float dx =
+        terrain_height_at_level(p, x + h, z, level) - terrain_height_at_level(p, x - h, z, level);
+    float dz =
+        terrain_height_at_level(p, x, z + h, level) - terrain_height_at_level(p, x, z - h, level);
     vec3 n = {-dx, 2.0f * h, -dz};
     glm_vec3_normalize_to(n, out);
 }
@@ -945,10 +945,10 @@ void terrain_height_probe(const TerrainParams* p) {
                 float snap = terrain_field_cell(extent, f->res);
                 float dx, dz;
                 terrain_to_domain(p, x, z, &dx, &dz);
-                x = terrain_world_x(p, terrain_field_node(extent, f->res,
-                                                          (int)floorf(dx / snap + 0.5f)));
-                z = terrain_world_z(p, terrain_field_node(extent, f->res,
-                                                          (int)floorf(dz / snap + 0.5f)));
+                x = terrain_world_x(
+                    p, terrain_field_node(extent, f->res, (int)floorf(dx / snap + 0.5f)));
+                z = terrain_world_z(
+                    p, terrain_field_node(extent, f->res, (int)floorf(dz / snap + 0.5f)));
             }
             // These rows measure the stored DATA, so they ensure: a probe that
             // read whatever happened to be resident would be reporting on the
@@ -1029,7 +1029,7 @@ void terrain_height_probe(const TerrainParams* p) {
     // cell beyond the boundary, where the taps still differ.
     float step = f ? terrain_field_cell(extent, f->res) : 1.0f;
     float near_u = (extent + 0.4f * step) / extent;
-    const float out[8][2] = {{-1.35f, 0.20f},   {1.35f, -0.40f}, {0.10f, 1.60f},
+    const float out[8][2] = {{-1.35f, 0.20f},  {1.35f, -0.40f},  {0.10f, 1.60f},
                              {-0.70f, -1.90f}, {-near_u, 0.15f}, {near_u, -0.55f},
                              {0.35f, near_u},  {-0.25f, -near_u}};
     for (int k = 0; k < 8; ++k) {
@@ -1045,8 +1045,8 @@ void terrain_height_probe(const TerrainParams* p) {
             terrain_stream_ensure_rect(f->stream, p, cx - step, cz - step, 2.0f * step, 0);
         printf("terrain-height-probe clamp x=%.4f z=%.4f h=%.6f edge_x=%.4f edge_z=%.4f "
                "edge_h=%.6f\n",
-               (double)x, (double)z, (double)terrain_height_at(p, x, z), (double)cx,
-               (double)cz, (double)terrain_height_at(p, cx, cz));
+               (double)x, (double)z, (double)terrain_height_at(p, x, z), (double)cx, (double)cz,
+               (double)terrain_height_at(p, cx, cz));
     }
 
     // CELL MIDPOINTS, which is where the filter is decided and the only place it
@@ -1072,7 +1072,6 @@ void terrain_height_probe(const TerrainParams* p) {
         printf("terrain-height-probe mid x=%.6f z=%.6f h=%.6f\n", (double)x, (double)z,
                (double)terrain_height_at(p, x, z));
     }
-
 }
 
 // The shared grid builder. Both the visual tiles and the collider are a regular
@@ -1191,8 +1190,7 @@ bool terrain_build_tile(const TerrainParams* p, int tx, int tz, Mesh* mesh) {
 // never becomes its parent's surface. That is a fine patch abutting a coarse one
 // with a permanently open seam -- a crack, reported as a successful build.
 static bool fill_morph_targets(const TerrainParams* p, Mesh* mesh, float x0, float z0, float span,
-                               int segments, int parent_level, float morph_start,
-                               float morph_end) {
+                               int segments, int parent_level, float morph_start, float morph_end) {
     // The PARENT's level, which build_grid's ensure did not cover: a morph
     // target read coarse is a vertex blending toward a surface its parent patch
     // will not draw, which is the open seam the whole morph exists to close.
@@ -1298,8 +1296,8 @@ bool terrain_build_collider(const TerrainParams* p, int segments, Mesh* mesh) {
     if (!p || !mesh)
         return false;
     return terrain_build_collider_region(p, terrain_world_x(p, -p->extent),
-                                         terrain_world_z(p, -p->extent), 2.0f * p->extent,
-                                         segments, mesh);
+                                         terrain_world_z(p, -p->extent), 2.0f * p->extent, segments,
+                                         mesh);
 }
 
 bool terrain_build_collider_region(const TerrainParams* p, float x0, float z0, float span,

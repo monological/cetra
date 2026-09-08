@@ -139,10 +139,8 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* stars = cJSON_GetObjectItemCaseSensitive(env, "stars");
     if (cJSON_IsObject(stars)) {
         d->has_env_stars = get_bool(stars, "enabled", &d->env_stars_enabled);
-        d->has_env_stars_brightness =
-            get_float(stars, "brightness", &d->env_stars_brightness);
-        d->has_env_stars_latitude =
-            get_float(stars, "latitude", &d->env_stars_latitude_deg);
+        d->has_env_stars_brightness = get_float(stars, "brightness", &d->env_stars_brightness);
+        d->has_env_stars_latitude = get_float(stars, "latitude", &d->env_stars_latitude_deg);
         d->has_env_stars_hour = get_float(stars, "hour_angle", &d->env_stars_hour_deg);
         // The nested `sun` object above has no such call and that is how
         // water_fixture ran at the wrong sun for four specs; a new nested
@@ -174,8 +172,7 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* cycle = cJSON_GetObjectItemCaseSensitive(env, "cycle");
     if (cJSON_IsObject(cycle)) {
         d->has_env_cycle = get_bool(cycle, "enabled", &d->env_cycle_enabled);
-        d->has_env_cycle_day_seconds =
-            get_float(cycle, "day_seconds", &d->env_cycle_day_seconds);
+        d->has_env_cycle_day_seconds = get_float(cycle, "day_seconds", &d->env_cycle_day_seconds);
         d->has_env_cycle_hour = get_float(cycle, "hour", &d->env_cycle_hour);
         static const char* const cycle_known[] = {"enabled", "day_seconds", "hour"};
         warn_unknown_keys(cycle, cycle_known, sizeof(cycle_known) / sizeof(cycle_known[0]),
@@ -207,9 +204,8 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      * arm was calibrated against the frame rather than the authoring, and nothing could
      * say so -- a --sun-elevation 26 render moves 85% of that frame.
      */
-    static const char* const known[] = {"mode",        "hdr",   "probe_scene", "intensity",
-                                        "ambient",     "sun",   "stars",       "night_floor",
-                                        "cycle",       "moon"};
+    static const char* const known[] = {"mode", "hdr",   "probe_scene", "intensity", "ambient",
+                                        "sun",  "stars", "night_floor", "cycle",     "moon"};
     warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 
@@ -272,8 +268,7 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         out->has_intensity = get_float(l, "intensity", &out->intensity);
         if (!out->has_intensity)
             out->intensity = 1.0f;
-        copy_string(out->ies_path, CSCENE_MAX_PATH,
-                    cJSON_GetObjectItemCaseSensitive(l, "profile"));
+        copy_string(out->ies_path, CSCENE_MAX_PATH, cJSON_GetObjectItemCaseSensitive(l, "profile"));
         // Authored unit only -- the conversion is Light's job, so this parser and
         // the glTF importer cannot drift apart on what a lumen is. Absent leaves
         // DEFAULT, which resolves against the type when something displays it.
@@ -372,9 +367,9 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         // has already been reported by name, and warning twice about the same
         // entry reads as two problems.
         static const char* const known[] = {
-            "name",   "type", "position", "color",     "intensity", "intensity_unit", "direction",
-            "cast_shadows", "attenuation", "range",    "size",      "up",             "cone",
-            "profile"};
+            "name",           "type",      "position",     "color",       "intensity",
+            "intensity_unit", "direction", "cast_shadows", "attenuation", "range",
+            "size",           "up",        "cone",         "profile"};
         warn_unknown_keys(l, known, sizeof(known) / sizeof(known[0]), "light");
         d->light_count++;
     }
@@ -413,8 +408,8 @@ static bool _ranged_float(const cJSON* obj, const char* block, const char* key, 
     if (!get_float(obj, key, &v))
         return false;
     if (!(v >= lo && v <= hi)) {
-        log_warn("cscene: %s.%s %g is outside [%g, %g]; ignored", block, key, (double)v,
-                 (double)lo, (double)hi);
+        log_warn("cscene: %s.%s %g is outside [%g, %g]; ignored", block, key, (double)v, (double)lo,
+                 (double)hi);
         return false;
     }
     *out = v;
@@ -455,8 +450,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
             log_warn("cscene: post.camera needs aperture, shutter and iso together; ignored");
         }
         static const char* const cam_known[] = {"aperture", "shutter", "iso"};
-        warn_unknown_keys(cam, cam_known, sizeof(cam_known) / sizeof(cam_known[0]),
-                          "post.camera");
+        warn_unknown_keys(cam, cam_known, sizeof(cam_known) / sizeof(cam_known[0]), "post.camera");
     }
 
     const cJSON* meter = cJSON_GetObjectItemCaseSensitive(post, "metering");
@@ -491,7 +485,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         d->has_meter_high = _ranged_float(meter, blk, "high", 0.0f, 1.0f, &d->meter_high);
         d->has_adapt_up = _ranged_float(meter, blk, "adapt_up", 0.0f, 1.0f, &d->adapt_up);
         d->has_adapt_down = _ranged_float(meter, blk, "adapt_down", 0.0f, 1.0f, &d->adapt_down);
-        static const char* const meter_known[] = {"mode", "radius",    "low",
+        static const char* const meter_known[] = {"mode", "radius",   "low",
                                                   "high", "adapt_up", "adapt_down"};
         warn_unknown_keys(meter, meter_known, sizeof(meter_known) / sizeof(meter_known[0]), blk);
     }
@@ -508,7 +502,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         const cJSON* interp = cJSON_GetObjectItemCaseSensitive(lut, "interp");
         if (cJSON_IsString(interp)) {
             const char* m = interp->valuestring;
-            int v = strcasecmp(m, "trilinear") == 0      ? CSCENE_LUT_TRILINEAR
+            int v = strcasecmp(m, "trilinear") == 0     ? CSCENE_LUT_TRILINEAR
                     : strcasecmp(m, "tetrahedral") == 0 ? CSCENE_LUT_TETRAHEDRAL
                                                         : -1;
             if (v < 0)
@@ -538,8 +532,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
             _ranged_float(pk, "post.purkinje", "noise", 0.0f, 4.0f, &d->purkinje_noise);
         // Its own closed list. A nested block without one is how water_fixture
         // ran at the wrong sun for four specs.
-        static const char* const pk_known[] = {"enabled", "strength", "bias_ev", "acuity",
-                                               "noise"};
+        static const char* const pk_known[] = {"enabled", "strength", "bias_ev", "acuity", "noise"};
         warn_unknown_keys(pk, pk_known, sizeof(pk_known) / sizeof(pk_known[0]), "post.purkinje");
     }
 
@@ -555,8 +548,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     }
 
     d->has_flare = get_float(post, "flare", &d->flare);
-    d->has_chromatic_aberration =
-        get_float(post, "chromatic_aberration", &d->chromatic_aberration);
+    d->has_chromatic_aberration = get_float(post, "chromatic_aberration", &d->chromatic_aberration);
 
     const cJSON* bloom = cJSON_GetObjectItemCaseSensitive(post, "bloom");
     if (cJSON_IsObject(bloom)) {
@@ -586,9 +578,9 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     }
 
     static const char* const known[] = {
-        "tonemap", "exposure", "auto_exposure",        "camera", "render_scale",
-        "flare",   "bloom",    "chromatic_aberration", "fog",     "metering",
-        "lut",     "purkinje",
+        "tonemap",      "exposure", "auto_exposure", "camera",
+        "render_scale", "flare",    "bloom",         "chromatic_aberration",
+        "fog",          "metering", "lut",           "purkinje",
     };
     warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }
@@ -605,12 +597,11 @@ static void parse_wind(CetraSceneDesc* d, const cJSON* root) {
     d->has_wind_gust_frequency = get_float(wind, "gustFrequency", &d->wind_gust_frequency);
     d->has_wind_gust_amount = get_float(wind, "gustAmount", &d->wind_gust_amount);
     d->has_wind_turbulence = get_float(wind, "turbulence", &d->wind_turbulence);
-    d->has_wind_phase_variation =
-        get_float(wind, "phaseVariation", &d->wind_phase_variation);
+    d->has_wind_phase_variation = get_float(wind, "phaseVariation", &d->wind_phase_variation);
 
     static const char* const known[] = {
-        "enabled", "direction", "strength", "speed",      "gustFrequency",
-        "gustAmount", "turbulence", "phaseVariation",
+        "enabled",       "direction",  "strength",   "speed",
+        "gustFrequency", "gustAmount", "turbulence", "phaseVariation",
     };
     warn_unknown_keys(wind, known, sizeof(known) / sizeof(known[0]), "wind");
 }
@@ -641,8 +632,8 @@ static void parse_dust(CetraSceneDesc* d, const cJSON* root) {
     out->has_damping = get_float(dust, "damping", &out->damping);
 
     static const char* const known[] = {
-        "enabled", "spawnRate", "lifetime", "size",  "color",
-        "colorJitter", "curl",   "drift",    "damping",
+        "enabled",     "spawnRate", "lifetime", "size",    "color",
+        "colorJitter", "curl",      "drift",    "damping",
     };
     warn_unknown_keys(dust, known, sizeof(known) / sizeof(known[0]), "dust");
 }
@@ -668,14 +659,12 @@ static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* v = NULL;
     cJSON_ArrayForEach(v, volumes) {
         if (d->fog_volume_count >= CSCENE_MAX_FOG_VOLUMES) {
-            log_warn("cscene: more than %d fog volumes; extras ignored",
-                     CSCENE_MAX_FOG_VOLUMES);
+            log_warn("cscene: more than %d fog volumes; extras ignored", CSCENE_MAX_FOG_VOLUMES);
             break;
         }
         CSceneFogVolume* out = &d->fog_volumes[d->fog_volume_count];
         memset(out, 0, sizeof(*out));
-        if (!get_floats(v, "center", out->center, 3) ||
-            !get_floats(v, "extent", out->extent, 3)) {
+        if (!get_floats(v, "center", out->center, 3) || !get_floats(v, "extent", out->extent, 3)) {
             log_warn("cscene: fog volume needs both center and extent; skipped");
             continue;
         }
@@ -700,7 +689,7 @@ static void parse_fog_volumes(CetraSceneDesc* d, const cJSON* root) {
  * and a typo'd `boxmin` is exactly the silent failure the required-key check cannot catch.
  */
 static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
-    static const char* known[] = {"position", "boxMin",   "boxMax",
+    static const char* known[] = {"position",  "boxMin",  "boxMax",
                                   "intensity", "boxFade", "envOnly"};
 
     const cJSON* probes = cJSON_GetObjectItemCaseSensitive(root, "probes");
@@ -709,8 +698,7 @@ static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* p = NULL;
     cJSON_ArrayForEach(p, probes) {
         if (d->probe_count >= CSCENE_MAX_PROBES) {
-            log_warn("cscene: more than %d reflection probes; extras ignored",
-                     CSCENE_MAX_PROBES);
+            log_warn("cscene: more than %d reflection probes; extras ignored", CSCENE_MAX_PROBES);
             break;
         }
         if (!cJSON_IsObject(p)) {
@@ -785,9 +773,8 @@ static void parse_occluders(CetraSceneDesc* d, const cJSON* root) {
  * silently dropping it looks exactly like the feature not working.
  */
 static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
-    static const char* known[] = {"position", "size",    "direction",      "up",     "image",
-                                  "surface",  "opacity", "angleFade",      "feather",
-                                  "normalStrength"};
+    static const char* known[] = {"position", "size",    "direction", "up",      "image",
+                                  "surface",  "opacity", "angleFade", "feather", "normalStrength"};
 
     const cJSON* decals = cJSON_GetObjectItemCaseSensitive(root, "decals");
     if (!cJSON_IsArray(decals))
@@ -806,8 +793,7 @@ static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
 
         CSceneDecal* out = &d->decals[d->decal_count];
         memset(out, 0, sizeof(*out));
-        if (!get_floats(p, "position", out->position, 3) ||
-            !get_floats(p, "size", out->size, 3) ||
+        if (!get_floats(p, "position", out->position, 3) || !get_floats(p, "size", out->size, 3) ||
             !get_floats(p, "direction", out->direction, 3)) {
             log_warn("cscene: decal needs position, size and direction; skipped");
             continue;
@@ -841,8 +827,7 @@ static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
         get_float(p, "angleFade", &out->angle_fade);
         get_float(p, "feather", &out->feather);
         get_float(p, "normalStrength", &out->normal_strength);
-        copy_string(out->surface, CSCENE_MAX_PATH,
-                    cJSON_GetObjectItemCaseSensitive(p, "surface"));
+        copy_string(out->surface, CSCENE_MAX_PATH, cJSON_GetObjectItemCaseSensitive(p, "surface"));
         d->decal_count++;
     }
 }
@@ -869,7 +854,7 @@ static void parse_wave_train(const cJSON* water, const char* name, CSceneWaveTra
     out->has_spread_blend = get_float(train, "spreadBlend", &out->spread_blend);
 
     static const char* const known[] = {
-        "windSpeed", "fetch", "direction",  "scale",
+        "windSpeed",       "fetch", "direction",  "scale",
         "peakEnhancement", "focus", "spreadGain", "spreadBlend",
     };
     // Named with the block so a warning says WHICH train, since the two accept the same keys.
@@ -906,8 +891,8 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
      * an absolute radiance and the field that replaces it is a fraction of the incident
      * light, so an old value still parses, still renders, and means something several
      * times too large -- on water_fixture, 5.3x in red through 3.7x in blue, since the
-     * factor IS that scene's own incident and the incident is not white. Silence would hand the author a sea that
-     * is merely wrong rather than a message saying what to do about it.
+     * factor IS that scene's own incident and the incident is not white. Silence would hand the
+     * author a sea that is merely wrong rather than a message saying what to do about it.
      */
     if (cJSON_GetObjectItemCaseSensitive(water, "scatter"))
         log_warn("cscene: water.scatter is gone (spec 11.84). It was an absolute "
@@ -956,9 +941,9 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
      * authors all agree, rather than trusting anyone to keep them so.
      */
     static const char* const known[] = {
-        "enabled",       "level",       "extent",        "wavelength", "amplitude",
-        "steepness",     "spread",      "windDirection", "waves",      "seaDepth",
-        "windSea",       "swell",       "roughness",     "ior",        "absorption",
+        "enabled",       "level",       "extent",        "wavelength",    "amplitude",
+        "steepness",     "spread",      "windDirection", "waves",         "seaDepth",
+        "windSea",       "swell",       "roughness",     "ior",           "absorption",
         "scatterAlbedo", "scatterGlow", "caustics",      "shoreCoverage", "farLod",
     };
     warn_unknown_keys(water, known, sizeof(known) / sizeof(known[0]), "water");
@@ -989,8 +974,8 @@ static void parse_material_layers(CSceneMaterialOverride* out, const cJSON* m) {
     const cJSON* l = NULL;
     cJSON_ArrayForEach(l, layers) {
         if (out->layer_count >= CSCENE_MAX_MATERIAL_LAYERS) {
-            log_warn("cscene: material '%s' has more than %d layers; extras ignored",
-                     out->material, CSCENE_MAX_MATERIAL_LAYERS);
+            log_warn("cscene: material '%s' has more than %d layers; extras ignored", out->material,
+                     CSCENE_MAX_MATERIAL_LAYERS);
             break;
         }
         if (!cJSON_IsObject(l)) {
@@ -1051,8 +1036,8 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
     cJSON_ArrayForEach(r, roads) {
         idx++;
         if (out->road_count >= MATERIAL_MAX_ROADS) {
-            log_warn("cscene: material '%s' has more than %d roads; extras ignored",
-                     out->material, MATERIAL_MAX_ROADS);
+            log_warn("cscene: material '%s' has more than %d roads; extras ignored", out->material,
+                     MATERIAL_MAX_ROADS);
             break;
         }
         if (!cJSON_IsObject(r)) {
@@ -1103,8 +1088,8 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
             continue;
         }
         if (!get_float(road, "width", &out_road->width) || out_road->width <= 0.0f) {
-            log_warn("cscene: material '%s' road %d needs a positive width; skipped",
-                     out->material, idx);
+            log_warn("cscene: material '%s' road %d needs a positive width; skipped", out->material,
+                     idx);
             continue;
         }
         // The memset above supplies the feather default. A negative one is
@@ -1113,8 +1098,8 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
         // one while refusing the other is an asymmetry with no argument behind
         // it.
         if (get_float(road, "feather", &out_road->feather) && out_road->feather < 0.0f) {
-            log_warn("cscene: material '%s' road %d has a negative feather; skipped",
-                     out->material, idx);
+            log_warn("cscene: material '%s' road %d has a negative feather; skipped", out->material,
+                     idx);
             continue;
         }
         // Read as a float because the format has no integer reader, and a

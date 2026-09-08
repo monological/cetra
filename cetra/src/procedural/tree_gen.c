@@ -236,7 +236,8 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
         if (cr > tip_r * 0.95f)
             cr = tip_r * 0.95f;
 
-        float az = twist_rad + 2.0f * (float)M_PI * (float)i / (float)k + tg_randf(rng, -0.2f, 0.2f);
+        float az =
+            twist_rad + 2.0f * (float)M_PI * (float)i / (float)k + tg_randf(rng, -0.2f, 0.2f);
         float tilt = angle_rad + tg_randf(rng, -var_rad, var_rad);
         // One child continues the parent's line. Without a leader every split
         // is a symmetric fork and the tree reads as a shrub, not a tree.
@@ -274,8 +275,8 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
             n_lat = 4;
 
         for (int j = 0; j < n_lat; j++) {
-            float t = 0.35f + 0.55f * ((float)j + 0.5f) / (float)n_lat +
-                      tg_randf(rng, -0.04f, 0.04f);
+            float t =
+                0.35f + 0.55f * ((float)j + 0.5f) / (float)n_lat + tg_randf(rng, -0.04f, 0.04f);
             if (t < 0.3f)
                 t = 0.3f;
             if (t > 0.92f)
@@ -513,10 +514,9 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
     perp_to(an, at);
 
     float t_arc_tip = 1.0f;
-    unsigned int apex_i =
-        mb_vertex(mb, apex, an, at, 0.5f * (float)b->uv_tiles_u,
-                  b->uv_v0 + last->arc / TG_BARK_TILE, branch_phase_at(b, t_arc_tip),
-                  powf(last->root_dist / s->max_root_dist, 1.2f), NULL);
+    unsigned int apex_i = mb_vertex(
+        mb, apex, an, at, 0.5f * (float)b->uv_tiles_u, b->uv_v0 + last->arc / TG_BARK_TILE,
+        branch_phase_at(b, t_arc_tip), powf(last->root_dist / s->max_root_dist, 1.2f), NULL);
 
     unsigned int last_ring = first_ring + (unsigned int)((b->num_points - 1) * ring_verts);
     for (int j = 0; j < segs; j++) {
@@ -556,8 +556,7 @@ bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
 // tip row can droop. Flat cards read as stickers from every angle but head-on.
 static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, const vec3 Nl,
                            const vec3 S, float len, float width, float phase, float flex,
-                           const float* rgba, int variant, bool mirror,
-                           const vec3 canopy_center) {
+                           const float* rgba, int variant, bool mirror, const vec3 canopy_center) {
     unsigned int base = mb->vcount;
     vec3 down = {0.0f, -1.0f, 0.0f};
     const float inv_variants = 1.0f / (float)TG_LEAF_VARIANTS;
@@ -753,7 +752,7 @@ bool tree_mesh_leaves(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh)
             float warm = tg_randf(&rng, -0.14f, 0.14f);
             float bright = tg_randf(&rng, 0.82f, 1.18f);
             const float tint[4] = {ao * bright * (1.0f + warm), ao * bright * (1.0f - warm * 0.35f),
-                             ao * bright * (1.0f - warm), 1.0f};
+                                   ao * bright * (1.0f - warm), 1.0f};
 
             int variant = (int)(tg_randf(&rng, 0.0f, (float)TG_LEAF_VARIANTS));
             if (variant >= TG_LEAF_VARIANTS)

@@ -105,8 +105,8 @@ void material_roads_ensure(struct Scene* scene, struct Engine* engine) {
         // is placed in the world, and a UV1 splat has no world frame to place
         // it in. The authoring path warns by name; this is what makes that
         // warning true rather than advisory.
-        bool want = m->road_count > 0 && m->layer_count > 0 &&
-                    m->splat_space == SPLAT_SPACE_WORLD_XZ;
+        bool want =
+            m->road_count > 0 && m->layer_count > 0 && m->splat_space == SPLAT_SPACE_WORLD_XZ;
         if (want && !owner) {
             owner = m;
             m->roads_armed = true;

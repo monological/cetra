@@ -280,7 +280,8 @@ ParticleModule* particle_module_update_integrate(float drag) {
     if (!p)
         return NULL;
     p->drag = drag;
-    return create_particle_module("update_integrate", PARTICLE_PHASE_UPDATE, update_integrate_run, p);
+    return create_particle_module("update_integrate", PARTICLE_PHASE_UPDATE, update_integrate_run,
+                                  p);
 }
 
 // --- UPDATE: analytic collider (one primitive; shape + mode are data) ---
@@ -291,10 +292,10 @@ ParticleModule* particle_module_update_integrate(float drag) {
 // a ColliderShape case + a resolve branch here (and the matching shader branch).
 
 typedef struct {
-    int shape; // ColliderShape
-    int mode;  // ColliderMode
-    vec3 a;    // sphere: center;  box: min
-    vec3 b;    // sphere: unused;  box: max
+    int shape;   // ColliderShape
+    int mode;    // ColliderMode
+    vec3 a;      // sphere: center;  box: min
+    vec3 b;      // sphere: unused;  box: max
     vec3 prev_a; // last step's `a`; (a - prev_a)/dt is the shape velocity (wake)
     float radius;
     float restitution;
@@ -483,24 +484,24 @@ static void collider_run(ParticleModule* m, ParticleEmitter* e, size_t begin, si
         float* pos = e->pool->position[i];
         float* vel = e->pool->velocity[i];
         switch (p->shape) {
-        case COLLIDER_SPHERE:
-            resolve_radial(p, p->a, svel, pos, vel);
-            break;
-        case COLLIDER_BOX:
-            collider_resolve_box(p, pos, vel);
-            break;
-        case COLLIDER_PLANE:
-            collider_resolve_plane(p, svel, pos, vel);
-            break;
-        case COLLIDER_CAPSULE: {
-            vec3 c = {0.0f, 0.0f, 0.0f}; // out-param of closest_on_segment
-            closest_on_segment(p->a, p->b, pos, c);
-            resolve_radial(p, c, svel, pos, vel);
-            break;
-        }
-        case COLLIDER_CYLINDER:
-            collider_resolve_cylinder(p, svel, pos, vel);
-            break;
+            case COLLIDER_SPHERE:
+                resolve_radial(p, p->a, svel, pos, vel);
+                break;
+            case COLLIDER_BOX:
+                collider_resolve_box(p, pos, vel);
+                break;
+            case COLLIDER_PLANE:
+                collider_resolve_plane(p, svel, pos, vel);
+                break;
+            case COLLIDER_CAPSULE: {
+                vec3 c = {0.0f, 0.0f, 0.0f}; // out-param of closest_on_segment
+                closest_on_segment(p->a, p->b, pos, c);
+                resolve_radial(p, c, svel, pos, vel);
+                break;
+            }
+            case COLLIDER_CYLINDER:
+                collider_resolve_cylinder(p, svel, pos, vel);
+                break;
         }
     }
 }

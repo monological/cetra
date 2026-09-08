@@ -317,9 +317,9 @@ static void tf_shift_origin(ParticleSimBackend* b, ParticleEmitter* e, const vec
     if (!s || !s->emitted || !s->vbo[s->parity])
         return;
     glBindBuffer(GL_ARRAY_BUFFER, s->vbo[s->parity]);
-    ParticleGpuState* gpu = glMapBufferRange(
-        GL_ARRAY_BUFFER, 0, (GLsizeiptr)(s->emitted * sizeof(ParticleGpuState)),
-        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+    ParticleGpuState* gpu =
+        glMapBufferRange(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(s->emitted * sizeof(ParticleGpuState)),
+                         GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
     if (gpu) {
         for (size_t i = 0; i < s->emitted; ++i)
             glm_vec3_sub(gpu[i].center, (float*)delta, gpu[i].center);

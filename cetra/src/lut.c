@@ -146,8 +146,7 @@ static const char* _parse_header(const char* text, size_t len, const char* path,
             memcpy(title, rest, n);
             title[n] = '\0';
             consumed = true;
-        } else if (_keyword(s, eol, "DOMAIN_MIN", &rest) ||
-                   _keyword(s, eol, "DOMAIN_MAX", &rest)) {
+        } else if (_keyword(s, eol, "DOMAIN_MIN", &rest) || _keyword(s, eol, "DOMAIN_MAX", &rest)) {
             bool is_min = (strncasecmp(s, "DOMAIN_MIN", 10) == 0);
             float v[3];
             float want = is_min ? 0.0f : 1.0f;
@@ -305,8 +304,7 @@ bool lut_load_cube(const char* path, ColorLut* out) {
     memcpy(out->title, title, sizeof(out->title));
 
     _warn_if_not_display_referred(out, path);
-    log_info("LUT '%s': %d^3%s%s", path, out->size, out->title[0] ? ", " : "",
-             out->title);
+    log_info("LUT '%s': %d^3%s%s", path, out->size, out->title[0] ? ", " : "", out->title);
     return true;
 }
 

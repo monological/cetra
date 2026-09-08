@@ -54,6 +54,7 @@ file(GLOB _cetra_all_headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/procedural/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext/*.h)
+set(_cetra_forwarders "")
 foreach(_rel IN LISTS _cetra_all_headers)
     if(_rel IN_LIST CETRA_PUBLIC_HEADERS OR _rel MATCHES "^(game|procedural)/")
         set(_dest "${CETRA_PUBLIC_INCLUDE_DIR}/cetra/${_rel}")
@@ -63,7 +64,20 @@ foreach(_rel IN LISTS _cetra_all_headers)
     file(CONFIGURE
         OUTPUT  "${_dest}"
         CONTENT "#include \"${CMAKE_CURRENT_SOURCE_DIR}/src/${_rel}\"\n")
+    list(APPEND _cetra_forwarders "${_dest}")
 endforeach()
+# A header that left the allowlist, or the tree, leaves its old forwarder
+# behind in an existing build directory, where an include the boundary now
+# refuses keeps resolving until someone wipes the build -- which is how a
+# consumer compiled against an internal header for a whole spec. Anything in
+# either tree that this configure did not just write goes.
+file(GLOB_RECURSE _cetra_stale
+    ${CETRA_PUBLIC_INCLUDE_DIR}/cetra/*.h
+    ${CETRA_INTERNAL_INCLUDE_DIR}/cetra/*.h)
+list(REMOVE_ITEM _cetra_stale ${_cetra_forwarders})
+if(_cetra_stale)
+    file(REMOVE ${_cetra_stale})
+endif()
 foreach(_rel IN LISTS CETRA_PUBLIC_HEADERS)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/${_rel}")
         message(FATAL_ERROR "CETRA_PUBLIC_HEADERS names src/${_rel}, which does not exist")

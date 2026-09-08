@@ -164,8 +164,8 @@ typedef struct {
 } Lexer;
 
 static bool _next_float(Lexer* lx, float* out) {
-    while (lx->p < lx->end && (*lx->p == ' ' || *lx->p == '\t' || *lx->p == '\r' ||
-                               *lx->p == '\n' || *lx->p == ','))
+    while (lx->p < lx->end &&
+           (*lx->p == ' ' || *lx->p == '\t' || *lx->p == '\r' || *lx->p == '\n' || *lx->p == ','))
         lx->p++;
     if (lx->p >= lx->end)
         return false;
@@ -225,7 +225,7 @@ static float _sample_irregular(const float* angles, const float* values, int n, 
     return values[lo] * (1.0f - t) + values[hi] * t;
 }
 
-#define IES_MAX_FILE_VERT 256
+#define IES_MAX_FILE_VERT  256
 #define IES_MAX_FILE_HORIZ 256
 
 // The TILT line, and the start of the numeric stream after it.
@@ -287,8 +287,8 @@ static bool _parse_and_resample(const char* text, size_t len, const char* path, 
     int n_horiz = (int)head[4];
     float ballast = head[10];
     if (n_vert < 2 || n_horiz < 1 || n_vert > IES_MAX_FILE_VERT || n_horiz > IES_MAX_FILE_HORIZ) {
-        log_warn("ies: '%s' has an unusable angle grid (%d vertical x %d horizontal)", path,
-                 n_vert, n_horiz);
+        log_warn("ies: '%s' has an unusable angle grid (%d vertical x %d horizontal)", path, n_vert,
+                 n_horiz);
         return false;
     }
 
@@ -457,8 +457,8 @@ void ies_library_probe(const IesLibrary* lib) {
         const IesProfile* p = ies_library_at(lib, i);
         printf("ies-probe profile index=%d path=%s v_taps=%d h_taps=%d span=%.1f "
                "v_lo=%.3f v_hi=%.3f support=%.3f peak_cd=%.4f symmetric=%d\n",
-               i, p->path, p->v_taps, p->h_taps, (double)p->span, (double)p->v_lo,
-               (double)p->v_hi, (double)p->support_deg, (double)p->peak_cd, p->h_taps == 1 ? 1 : 0);
+               i, p->path, p->v_taps, p->h_taps, (double)p->span, (double)p->v_lo, (double)p->v_hi,
+               (double)p->support_deg, (double)p->peak_cd, p->h_taps == 1 ? 1 : 0);
 
         // A sweep in ABSOLUTE candela, which is what the file states and so what
         // a gate can check against a generator's own arithmetic. Normalised
@@ -472,11 +472,10 @@ void ies_library_probe(const IesLibrary* lib) {
         for (int iv = 0; iv < p->v_taps; iv++) {
             float v = p->v_lo + (p->v_hi - p->v_lo) * (float)iv / (float)(p->v_taps - 1);
             for (int ih = 0; ih < p->h_taps; ih++) {
-                float h = p->h_taps == 1 ? 0.0f
-                                         : p->span * (float)ih / (float)(p->h_taps - 1);
+                float h = p->h_taps == 1 ? 0.0f : p->span * (float)ih / (float)(p->h_taps - 1);
                 float rel = ies_profile_sample(p, v, h);
-                printf("ies-probe sample index=%d v=%.4f h=%.4f rel=%.6f cd=%.6f\n", i,
-                       (double)v, (double)h, (double)rel, (double)(rel * p->peak_cd));
+                printf("ies-probe sample index=%d v=%.4f h=%.4f rel=%.6f cd=%.6f\n", i, (double)v,
+                       (double)h, (double)rel, (double)(rel * p->peak_cd));
             }
         }
 

@@ -40,8 +40,8 @@ typedef struct ProfilerScope {
     const char* name; // borrowed literal, never freed
     GLuint query[PROFILER_RING];
     unsigned char issued[PROFILER_RING]; // this slot holds a real query
-    double accum_ms; // summed over the latch window
-    float shown_ms;  // latched, what the HUD reads
+    double accum_ms;                     // summed over the latch window
+    float shown_ms;                      // latched, what the HUD reads
 
     // CPU wall-clock over the same bracket.
     double cpu_t0;
@@ -170,8 +170,7 @@ static int scope_index(Profiler* profiler, const char* name) {
             return i;
     }
     if (profiler->scope_count >= PROFILER_MAX_SCOPES) {
-        log_error("Profiler: more than %d scopes; '%s' is not timed", PROFILER_MAX_SCOPES,
-                  name);
+        log_error("Profiler: more than %d scopes; '%s' is not timed", PROFILER_MAX_SCOPES, name);
         return -1;
     }
     int index = profiler->scope_count++;
@@ -311,8 +310,7 @@ static void bank_frame(Profiler* profiler, double closed_at) {
     // stretch the window it lands in -- and with every row now divided by the
     // window's frame count, that clamp is also what stops a single expensive
     // frame becoming a window that is nothing but itself.
-    profiler->latch_timer +=
-        period > PROFILER_LATCH_STEP_MAX ? PROFILER_LATCH_STEP_MAX : period;
+    profiler->latch_timer += period > PROFILER_LATCH_STEP_MAX ? PROFILER_LATCH_STEP_MAX : period;
 }
 
 void profiler_begin_frame(Profiler* profiler) {
@@ -448,8 +446,7 @@ void profiler_end_frame(Profiler* profiler) {
     if (!profiler)
         return;
     if (profiler->active >= 0) {
-        log_error("Profiler: scope '%s' was never closed",
-                  profiler->scopes[profiler->active].name);
+        log_error("Profiler: scope '%s' was never closed", profiler->scopes[profiler->active].name);
         // Closing it matters as much as reporting it, and this is the recovery
         // the samples query below already had. A query left active fails the
         // next frame's glBeginQuery with INVALID_OPERATION while `issued` and

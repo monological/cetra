@@ -24,10 +24,10 @@ LTCTables* create_ltc_tables(void) {
     glBindTexture(GL_TEXTURE_2D_ARRAY, ltc->tex);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA32F, LTC_LUT_DIM, LTC_LUT_DIM, 2, 0, GL_RGBA,
                  GL_FLOAT, NULL);
-    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, LTC_LUT_DIM, LTC_LUT_DIM, 1, GL_RGBA,
-                    GL_FLOAT, LTC_MAT_TABLE);
-    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, LTC_LUT_DIM, LTC_LUT_DIM, 1, GL_RGBA,
-                    GL_FLOAT, LTC_AMP_TABLE);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, LTC_LUT_DIM, LTC_LUT_DIM, 1, GL_RGBA, GL_FLOAT,
+                    LTC_MAT_TABLE);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, LTC_LUT_DIM, LTC_LUT_DIM, 1, GL_RGBA, GL_FLOAT,
+                    LTC_AMP_TABLE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

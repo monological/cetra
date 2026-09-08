@@ -139,8 +139,7 @@ static void emit_flower(MeshBuilder* mb, const vec3 at, float size, float phase,
                 glm_vec3_copy((float*)at, pv);
                 glm_vec3_muladds(side, (s == 0 ? -0.5f : 0.5f) * size, pv);
                 glm_vec3_muladds(up, (float)row * size, pv);
-                mb_vertex(mb, pv, nrm, side, s == 0 ? 0.0f : 1.0f, (float)row, phase, flex,
-                          col);
+                mb_vertex(mb, pv, nrm, side, s == 0 ? 0.0f : 1.0f, (float)row, phase, flex, col);
             }
         }
         mb_tri(mb, base, base + 1, base + 3);
@@ -236,12 +235,12 @@ bool grass_build_mesh(const GrassParams* p, Mesh* mesh) {
                 // Fresh green through olive to straw, per blade and per patch.
                 float tint = gr_randf(&rng, 0.0f, 1.0f) * 0.6f + dry * 0.4f;
                 const float col_root[3] = {0.045f + 0.05f * tint, 0.085f + 0.05f * tint,
-                                     0.030f + 0.02f * tint};
+                                           0.030f + 0.02f * tint};
                 const float col_tip[3] = {0.20f + 0.32f * tint, 0.36f + 0.20f * tint,
-                                    0.10f + 0.10f * tint};
+                                          0.10f + 0.10f * tint};
 
-                emit_blade(&mb, root, lean, height, width, bend, gr_randf(&rng, -0.5f, 0.5f),
-                           phase, col_root, col_tip);
+                emit_blade(&mb, root, lean, height, width, bend, gr_randf(&rng, -0.5f, 0.5f), phase,
+                           col_root, col_tip);
 
                 if (gr_randf(&rng, 0.0f, 1.0f) < p->flower_amount) {
                     // Sit the bloom where this blade's tip ended up, so it

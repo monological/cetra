@@ -16,7 +16,7 @@
 // View-dependent constants shared by the assignment and fill phases.
 typedef struct ClusterFrame {
     float slice_scale, slice_bias;
-    float inv_p00, inv_p11;              // reciprocals of the projection's x/y scales
+    float inv_p00, inv_p11; // reciprocals of the projection's x/y scales
     // clip.w as a function of view depth d: w_per_depth * d + w_const. Perspective
     // is (1, 0), so a cluster's world width grows with depth; orthographic is
     // (0, 1), so it does not. Read off the matrix rather than a camera flag,
@@ -86,7 +86,8 @@ static void _cluster_frame_init(ClusterFrame* cf, mat4 projection, float near_cl
     cf->far_clip = far_clip;
     // Inverse of the slice mapping: slice s spans [slice_depths[s], [s+1]]
     for (int s = 0; s <= LC_CLUSTER_Z; s++)
-        cf->slice_depths[s] = near_clip * powf(far_clip / near_clip, (float)s / (float)LC_CLUSTER_Z);
+        cf->slice_depths[s] =
+            near_clip * powf(far_clip / near_clip, (float)s / (float)LC_CLUSTER_Z);
 }
 
 // Does the light's view-space bounding sphere touch this cluster's view-space
@@ -195,7 +196,7 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
                                 int live_layer) {
     glm_vec3_copy((float*)light->global_position, dst->pos_range);
     dst->pos_range[3] = radius > 0.0f ? radius : 0.0f; // 0 = unbounded
-    dst->dir_type[3] = (float)light->type; // 1 point / 2 spot / 3 area
+    dst->dir_type[3] = (float)light->type;             // 1 point / 2 spot / 3 area
     glm_vec3_scale((float*)light->color, light->intensity, dst->color_intensity);
     dst->atten_cutoff[0] = light->range > 0.0f ? 1.0f / (light->range * light->range) : 0.0f;
     // The IES profile index, -1 for none -- the same "a float carrying an index

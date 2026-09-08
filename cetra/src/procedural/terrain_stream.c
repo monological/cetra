@@ -101,14 +101,14 @@ static uint64_t stream_layout(int res, int level_count, int tile, int mask_res, 
 
 static const float* field_plane(const TerrainField* field, int plane) {
     switch (plane) {
-    case 0:
-        return field->height;
-    case 1:
-        return field->flow;
-    case 2:
-        return field->deposit;
-    default:
-        return field->wear;
+        case 0:
+            return field->height;
+        case 1:
+            return field->flow;
+        case 2:
+            return field->deposit;
+        default:
+            return field->wear;
     }
 }
 
@@ -183,7 +183,8 @@ static void gather_tile(const float* plane, int res, int tile, int tx, int tz, f
             int si = tx * tile + i;
             if (si >= res)
                 si = res - 1;
-            out[(size_t)j * (size_t)tile + (size_t)i] = plane[(size_t)sj * (size_t)res + (size_t)si];
+            out[(size_t)j * (size_t)tile + (size_t)i] =
+                plane[(size_t)sj * (size_t)res + (size_t)si];
         }
     }
 }
@@ -330,7 +331,8 @@ static bool read_tile_plane(TerrainStream* s, int level, int plane, int tx, int 
     TerrainStreamLevel* L = &s->lv[level];
     int tile = s->tile_nodes;
     size_t tn = (size_t)tile * (size_t)tile;
-    uint64_t index = ((uint64_t)tz * (uint64_t)L->tiles + (uint64_t)tx) * (uint64_t)planes_at(level);
+    uint64_t index =
+        ((uint64_t)tz * (uint64_t)L->tiles + (uint64_t)tx) * (uint64_t)planes_at(level);
     uint64_t at = L->offset + (index + (uint64_t)plane) * tile_bytes_of(tile);
     if (!read_at(s->f, at, bytes, tn * sizeof(float)))
         return false;
@@ -687,12 +689,14 @@ static void window_shift(TerrainStreamLevel* L, int planes, int nx0, int nz0, in
             if (delta < 0) {
                 for (int j = lo_z; j < hi_z; ++j) {
                     size_t dst = (size_t)(j - nz0) * (size_t)W + (size_t)(lo_x - nx0);
-                    memmove(m + dst, m + (size_t)((long)dst - delta), (size_t)width * sizeof(float));
+                    memmove(m + dst, m + (size_t)((long)dst - delta),
+                            (size_t)width * sizeof(float));
                 }
             } else {
                 for (int j = hi_z - 1; j >= lo_z; --j) {
                     size_t dst = (size_t)(j - nz0) * (size_t)W + (size_t)(lo_x - nx0);
-                    memmove(m + dst, m + (size_t)((long)dst - delta), (size_t)width * sizeof(float));
+                    memmove(m + dst, m + (size_t)((long)dst - delta),
+                            (size_t)width * sizeof(float));
                 }
             }
         }
@@ -718,7 +722,8 @@ static void window_shift(TerrainStreamLevel* L, int planes, int nx0, int nz0, in
         for (int tz = 0; tz < T; ++tz) {
             for (int tx = 0; tx < T; ++tx) {
                 int stx = tx + dtx, stz = tz + dtz;
-                bool complete = (stx + 1) * tile <= L->win_nodes && (stz + 1) * tile <= L->win_nodes;
+                bool complete =
+                    (stx + 1) * tile <= L->win_nodes && (stz + 1) * tile <= L->win_nodes;
                 if (stx >= 0 && stz >= 0 && stx < T && stz < T && complete)
                     keep[tz * T + tx] = L->resident[stz * T + stx];
             }

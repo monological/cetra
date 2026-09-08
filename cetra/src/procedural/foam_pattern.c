@@ -18,12 +18,12 @@
  * coarsest and is the only one folded into ridges -- it carries the filaments. The other two
  * are added flat, and their job is to stop the web reading as a regular mesh.
  */
-#define FOAM_WEB_SMALL   2.0f
-#define FOAM_WEB_LARGE   6.0f
-#define FOAM_MID_SMALL   3.0f
-#define FOAM_MID_LARGE   9.0f
-#define FOAM_FINE_SMALL  1.0f
-#define FOAM_FINE_LARGE  2.5f
+#define FOAM_WEB_SMALL  2.0f
+#define FOAM_WEB_LARGE  6.0f
+#define FOAM_MID_SMALL  3.0f
+#define FOAM_MID_LARGE  9.0f
+#define FOAM_FINE_SMALL 1.0f
+#define FOAM_FINE_LARGE 2.5f
 /*
  * Taps in the widest kernel any radius above needs, which is what lets the blur keep its kernel
  * on the stack instead of allocating one it could fail to get.

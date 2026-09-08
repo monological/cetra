@@ -22,8 +22,8 @@ static double _probit(double p) {
     static const double c[6] = {-7.784894002430293e-03, -3.223964580411365e-01,
                                 -2.400758277161838e+00, -2.549732539343734e+00,
                                 4.374664141464968e+00,  2.938163982698783e+00};
-    static const double d[4] = {7.784695709041462e-03, 3.224671290700398e-01,
-                                2.445134137142996e+00, 3.754408661907416e+00};
+    static const double d[4] = {7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+                                3.754408661907416e+00};
     const double p_low = 0.02425;
 
     if (p <= 0.0)
@@ -53,8 +53,7 @@ void stochastic_gaussianize(unsigned char* rgb, int width, int height, float* in
     // value to itself rather than to zero.
     for (int c = 0; c < 3; c++) {
         for (int i = 0; i < STOCHASTIC_LUT_SIZE; i++)
-            inv_lut[i * 3 + c] =
-                ((float)i + 0.5f) / (float)STOCHASTIC_LUT_SIZE;
+            inv_lut[i * 3 + c] = ((float)i + 0.5f) / (float)STOCHASTIC_LUT_SIZE;
     }
     if (!rgb || width <= 0 || height <= 0)
         return;

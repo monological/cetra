@@ -270,10 +270,10 @@ static void* worker_thread_func(void* arg) {
         if (req->embedded_data) {
             result->pool_key = safe_strdup(result->submit_key);
             int ew, eh, ec;
-            unsigned char* edata =
-                result->pool_key ? stbi_load_from_memory(req->embedded_data, req->embedded_size,
-                                                         &ew, &eh, &ec, 0)
-                                 : NULL;
+            unsigned char* edata = result->pool_key
+                                       ? stbi_load_from_memory(req->embedded_data,
+                                                               req->embedded_size, &ew, &eh, &ec, 0)
+                                       : NULL;
             if (edata) {
                 finalize_decoded_result(result, edata, ew, eh, ec, req->desc);
             } else {
@@ -694,9 +694,9 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
                 //
                 // The dilate already ran, on the worker thread, which is the one
                 // step this path deliberately does not share.
-                texture = texture_pool_publish(pool, result->pool_key, result->pixel_data,
-                                               result->width, result->height, result->channels,
-                                               result->desc);
+                texture =
+                    texture_pool_publish(pool, result->pool_key, result->pixel_data, result->width,
+                                         result->height, result->channels, result->desc);
             }
 
             // Free pixel data now that it's on GPU

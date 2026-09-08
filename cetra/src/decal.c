@@ -114,9 +114,7 @@ void decal_probe_print(const struct Scene* scene, int frame, bool final, uint32_
         // Says WHY a decal is not live rather than omitting it: an authored
         // decal missing from this list and an authored decal that never loaded
         // its image look the same from outside, and the second is the failure.
-        const char* state = !d->enabled          ? "disabled"
-                            : d->albedo_layer < 0 ? "no-layer"
-                                                  : "live";
+        const char* state = !d->enabled ? "disabled" : d->albedo_layer < 0 ? "no-layer" : "live";
         printf("decal-probe decal idx=%d state=%s pos=%.3f,%.3f,%.3f half=%.3f,%.3f,%.3f "
                "dir=%.3f,%.3f,%.3f albedo_layer=%d surface_layer=%d opacity=%.3f "
                "angle_fade=%.1f feather=%.3f\n",

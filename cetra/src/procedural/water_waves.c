@@ -8,12 +8,12 @@
 // falloff would agree with the shader at the origin and drift everywhere else, which is
 // the worst failure shape available: plausible, and wrong by an amount that grows with
 // distance from wherever it was checked.
-#define WAVES_OCTAVES 4
-#define WAVES_LENGTH_FALLOFF 0.42f
+#define WAVES_OCTAVES           4
+#define WAVES_LENGTH_FALLOFF    0.42f
 #define WAVES_AMPLITUDE_FALLOFF 0.44f
-#define WAVES_GRAVITY 9.81f
-#define WAVES_SHOAL_MIN 0.14f
-#define WAVES_SHOAL_FULL 2.7f
+#define WAVES_GRAVITY           9.81f
+#define WAVES_SHOAL_MIN         0.14f
+#define WAVES_SHOAL_FULL        2.7f
 
 /*
  * Fixed-point iterations that invert the horizontal map.
@@ -160,13 +160,13 @@ bool water_waves_available(const Water* water) {
 // residual cannot come from separate solves -- which would let them describe different
 // instants of the same sea, the failure water_waves.h warns about.
 typedef struct WavesSolution {
-    float px, pz;    // the recovered wave parameter
-    float shoal;     // and the shoal factor there
-    float grad[2];   // its gradient; zero unless asked for
-    float disp[3];   // unshoaled displacement at the parameter
-    float ddx[3];    // and its two derivative rows; zero unless asked for
+    float px, pz;  // the recovered wave parameter
+    float shoal;   // and the shoal factor there
+    float grad[2]; // its gradient; zero unless asked for
+    float disp[3]; // unshoaled displacement at the parameter
+    float ddx[3];  // and its two derivative rows; zero unless asked for
     float ddz[3];
-    float residual;  // how far the parameter lands from the query, world units
+    float residual; // how far the parameter lands from the query, world units
 } WavesSolution;
 
 /*

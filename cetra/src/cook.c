@@ -38,10 +38,9 @@
 //             whose own offsets disagree with its own sizes is the failure
 //             that renders)
 //   64+16N    payload, sections tightly packed in table order
-#define COOK_MAGIC 0x31414343u // "CCA1" little-endian
+#define COOK_MAGIC             0x31414343u // "CCA1" little-endian
 #define COOK_CONTAINER_VERSION 1u
-#define COOK_HEADER_BYTES 64u
-
+#define COOK_HEADER_BYTES      64u
 
 static struct {
     char dir[512];
@@ -69,8 +68,7 @@ static void put_u64(unsigned char* p, uint64_t v) {
 }
 
 static uint32_t get_u32(const unsigned char* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-           ((uint32_t)p[3] << 24);
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 static uint64_t get_u64(const unsigned char* p) {
@@ -357,11 +355,12 @@ bool cook_store(const CookKey* key, const CookBlob* sections, int section_count)
 
     ensure_dir();
     char temp[600], path[600], suffix[32];
-    snprintf(suffix, sizeof(suffix), ".tmp.%d", (int)
+    snprintf(suffix, sizeof(suffix), ".tmp.%d",
+             (int)
 #ifdef _WIN32
-                                                    _getpid()
+                 _getpid()
 #else
-                                                    getpid()
+                 getpid()
 #endif
     );
     artefact_path(temp, sizeof(temp), key, suffix);

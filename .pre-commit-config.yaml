@@ -5,7 +5,14 @@ repos:
         name: clang-format
         entry: bash -c 'clang-format -i "$@" && git add "$@"' --
         language: system
-        types: [c, c++]
+        # types_or, not types: pre-commit's `types` is a conjunction, and only
+        # a header carries both tags, so `types: [c, c++]` formatted .h files
+        # and silently skipped every .c and .cpp from 2025-12-25 to 2026-09-08.
+        types_or: [c, c++]
+        # One process: pre-commit otherwise splits a long file list across
+        # parallel invocations, and their git adds race each other for the
+        # index lock and fail the commit.
+        require_serial: true
         # ltc_lut.h is generated and checked in; reformatting it here would make
         # `python3 tools/gen_ltc_lut.py && git diff --exit-code` impossible to
         # pass, which is the only thing that keeps it honest about its source.

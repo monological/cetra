@@ -113,18 +113,17 @@ float noise_perlin3_tiled(const NoisePerm* t, float x, float y, float z, int per
     int y1 = (y0 + 1) % period;
     int z1 = (z0 + 1) % period;
 
-    return lerp_f(
-        lerp_f(lerp_f(grad3(tiled_hash(t, x0, y0, z0), xf, yf, zf),
-                      grad3(tiled_hash(t, x1, y0, z0), xf - 1, yf, zf), u),
-               lerp_f(grad3(tiled_hash(t, x0, y1, z0), xf, yf - 1, zf),
-                      grad3(tiled_hash(t, x1, y1, z0), xf - 1, yf - 1, zf), u),
-               v),
-        lerp_f(lerp_f(grad3(tiled_hash(t, x0, y0, z1), xf, yf, zf - 1),
-                      grad3(tiled_hash(t, x1, y0, z1), xf - 1, yf, zf - 1), u),
-               lerp_f(grad3(tiled_hash(t, x0, y1, z1), xf, yf - 1, zf - 1),
-                      grad3(tiled_hash(t, x1, y1, z1), xf - 1, yf - 1, zf - 1), u),
-               v),
-        w);
+    return lerp_f(lerp_f(lerp_f(grad3(tiled_hash(t, x0, y0, z0), xf, yf, zf),
+                                grad3(tiled_hash(t, x1, y0, z0), xf - 1, yf, zf), u),
+                         lerp_f(grad3(tiled_hash(t, x0, y1, z0), xf, yf - 1, zf),
+                                grad3(tiled_hash(t, x1, y1, z0), xf - 1, yf - 1, zf), u),
+                         v),
+                  lerp_f(lerp_f(grad3(tiled_hash(t, x0, y0, z1), xf, yf, zf - 1),
+                                grad3(tiled_hash(t, x1, y0, z1), xf - 1, yf, zf - 1), u),
+                         lerp_f(grad3(tiled_hash(t, x0, y1, z1), xf, yf - 1, zf - 1),
+                                grad3(tiled_hash(t, x1, y1, z1), xf - 1, yf - 1, zf - 1), u),
+                         v),
+                  w);
 }
 
 float noise_worley3(float x, float y, float z, int period, unsigned int seed) {

@@ -25,10 +25,12 @@ namespace {
 // in-library precedent and are not used: they would buy a second copy and an
 // iostream dependency for two fifteen-line classes.
 class ByteStreamOut final : public JPH::StreamOut {
-public:
+  public:
     unsigned char* data = nullptr;
     size_t size = 0;
-    ~ByteStreamOut() override { free(data); } // callers steal via take()
+    ~ByteStreamOut() override {
+        free(data);
+    } // callers steal via take()
     void WriteBytes(const void* in, size_t n) override {
         if (failed_)
             return;
@@ -47,21 +49,24 @@ public:
         memcpy(data + size, in, n);
         size += n;
     }
-    bool IsFailed() const override { return failed_; }
+    bool IsFailed() const override {
+        return failed_;
+    }
     unsigned char* take() {
         unsigned char* out = data;
         data = nullptr;
         return out;
     }
 
-private:
+  private:
     size_t cap_ = 0;
     bool failed_ = false;
 };
 
 class ByteStreamIn final : public JPH::StreamIn {
-public:
-    ByteStreamIn(const unsigned char* data, size_t size) : data_(data), size_(size) {}
+  public:
+    ByteStreamIn(const unsigned char* data, size_t size) : data_(data), size_(size) {
+    }
     void ReadBytes(void* out, size_t n) override {
         if (failed_ || cursor_ + n > size_) {
             failed_ = true;
@@ -76,10 +81,14 @@ public:
     // sRestoreWithChildren), so a positional cursor >= size here refused every
     // well-formed stream ever written -- measured as all 16 region shapes,
     // "Failed to read stream", at every size.
-    bool IsEOF() const override { return failed_; }
-    bool IsFailed() const override { return failed_; }
+    bool IsEOF() const override {
+        return failed_;
+    }
+    bool IsFailed() const override {
+        return failed_;
+    }
 
-private:
+  private:
     const unsigned char* data_;
     size_t size_;
     size_t cursor_ = 0;

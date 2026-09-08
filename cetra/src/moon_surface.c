@@ -22,20 +22,20 @@
  * craters per pixel -- not a tuning failure, a population one.
  */
 #define MS_TIER1_COUNT 110
-#define MS_TIER1_MIN 0.040f
-#define MS_TIER1_MAX 0.150f
+#define MS_TIER1_MIN   0.040f
+#define MS_TIER1_MAX   0.150f
 #define MS_TIER2_COUNT 1100
-#define MS_TIER2_MIN 0.014f
-#define MS_TIER2_MAX 0.045f
+#define MS_TIER2_MIN   0.014f
+#define MS_TIER2_MAX   0.045f
 #define MS_TIER3_COUNT 42000
-#define MS_TIER3_MIN 0.0052f
-#define MS_TIER3_MAX 0.016f
+#define MS_TIER3_MIN   0.0052f
+#define MS_TIER3_MAX   0.016f
 
 // Ray systems belong to the few youngest large craters and to nothing else, so
 // they are a separate pass over a handful rather than a property every crater
 // carries.
 #define MS_RAY_CRATERS 7
-#define MS_RAY_REACH 9.0f
+#define MS_RAY_REACH   9.0f
 
 /*
  * Relief, in units of the moon's own radius, so a slope is dh over d(arc) with
@@ -54,15 +54,15 @@
  */
 #define MS_DEPTH_SMALL 0.20f
 #define MS_DEPTH_LARGE 0.055f
-#define MS_RIM_RATIO 0.075f
+#define MS_RIM_RATIO   0.075f
 
 // Albedo levels, in the shader's own normalisation where the highlands sit near
 // 1. Real lunar highland albedo is ~0.13 and mare ~0.07, and it is that RATIO
 // that is preserved here, not the absolute value.
 #define MS_ALBEDO_HIGHLAND 0.82f
-#define MS_ALBEDO_MARE 0.44f
-#define MS_ALBEDO_FLOOR 0.30f
-#define MS_ALBEDO_CEIL 1.00f
+#define MS_ALBEDO_MARE     0.44f
+#define MS_ALBEDO_FLOOR    0.30f
+#define MS_ALBEDO_CEIL     1.00f
 
 // How much a mare floods the relief under it. Not 1: the flood is thin over the
 // bigger structures and their ghosts still show through, which is a real and
@@ -90,7 +90,9 @@ static uint32_t ms_hash3(int x, int y, int z) {
                    (uint32_t)z * 0xcb1ab31fu);
 }
 
-static float ms_unit(uint32_t h) { return (float)(h >> 8) * (1.0f / 16777216.0f); }
+static float ms_unit(uint32_t h) {
+    return (float)(h >> 8) * (1.0f / 16777216.0f);
+}
 
 static float ms_rand(uint32_t* state) {
     *state = *state * 1664525u + 1013904223u;
@@ -151,12 +153,12 @@ static float ms_clampf(float v, float lo, float hi) {
 // ---------------------------------------------------------------------------
 
 typedef struct {
-    float cx, cy, cz;  // unit centre in the body frame
-    float radius;      // angular radius, radians
-    float depth;       // bowl depth, radius units
-    float rim;         // rim crest above the plain, radius units
-    float fresh;       // 0 ancient and invisible in albedo, 1 bright ejecta
-    float lat;         // centre latitude, radians -- the row-range test
+    float cx, cy, cz; // unit centre in the body frame
+    float radius;     // angular radius, radians
+    float depth;      // bowl depth, radius units
+    float rim;        // rim crest above the plain, radius units
+    float fresh;      // 0 ancient and invisible in albedo, 1 bright ejecta
+    float lat;        // centre latitude, radians -- the row-range test
 } MoonCrater;
 
 /*
@@ -266,7 +268,8 @@ static void ms_pass_base(void* ctx, int begin, int end) {
             // maria drown it, which is what makes their shores read as
             // coastlines rather than as a change of paint.
             const float land = 1.0f - cover;
-            float hgt = land * 0.0055f * (ms_fbm3(p[0] * 7.0f, p[1] * 7.0f, p[2] * 7.0f, 4) - 0.45f);
+            float hgt =
+                land * 0.0055f * (ms_fbm3(p[0] * 7.0f, p[1] * 7.0f, p[2] * 7.0f, 4) - 0.45f);
             hgt += land * 0.0030f * ms_ridge3(p[0] * 17.0f, p[1] * 17.0f, p[2] * 17.0f);
             // Wrinkle ridges: low sinuous welts on the mare floors, and one of
             // the few things visible INSIDE a sea at all.
@@ -316,8 +319,10 @@ static void ms_pass_craters(void* ctx, int begin, int end) {
         // Row range, clipped to the band. Row index rises as latitude falls.
         int j0 = (int)floorf((0.5f - (cr->lat + reach) / 3.14159265359f) * (float)bk->h);
         int j1 = (int)ceilf((0.5f - (cr->lat - reach) / 3.14159265359f) * (float)bk->h);
-        if (j0 < begin) j0 = begin;
-        if (j1 > end) j1 = end;
+        if (j0 < begin)
+            j0 = begin;
+        if (j1 > end)
+            j1 = end;
 
         const float inv_r = 1.0f / cr->radius;
         for (int j = j0; j < j1; j++) {
@@ -452,10 +457,11 @@ static void ms_pass_rays(void* ctx, int begin, int end) {
                 streak = ms_smoothstep(0.54f, 0.78f, streak);
                 // Fade with distance, and hold off inside the ejecta blanket
                 // the crater stamp already drew.
-                const float fade = (1.0f - ang / reach) * ms_smoothstep(1.1f, 2.4f, ang / cr->radius);
+                const float fade =
+                    (1.0f - ang / reach) * ms_smoothstep(1.1f, 2.4f, ang / cr->radius);
                 const int idx = j * bk->w + i;
-                const float gain = cr->fresh * 0.42f * streak * fade * fade *
-                                   (1.0f - 0.55f * bk->cover[idx]);
+                const float gain =
+                    cr->fresh * 0.42f * streak * fade * fade * (1.0f - 0.55f * bk->cover[idx]);
                 // Additive, and so independent of the order the ray craters are
                 // visited in -- two systems really do overlap near Tycho.
                 bk->albedo[idx] += gain;
@@ -533,8 +539,7 @@ unsigned char* moon_surface_bake(int w, int h, int workers) {
     // Oldest first: the tiers ARE the stratigraphy, so a small crater cuts a
     // clean notch through a basin rim and never the reverse.
     ms_fill_tier(craters, MS_TIER1_COUNT, MS_TIER1_MIN, MS_TIER1_MAX, 0x9e3779b9u);
-    ms_fill_tier(craters + MS_TIER1_COUNT, MS_TIER2_COUNT, MS_TIER2_MIN, MS_TIER2_MAX,
-                 0x85ebca6bu);
+    ms_fill_tier(craters + MS_TIER1_COUNT, MS_TIER2_COUNT, MS_TIER2_MIN, MS_TIER2_MAX, 0x85ebca6bu);
     ms_fill_tier(craters + MS_TIER1_COUNT + MS_TIER2_COUNT, MS_TIER3_COUNT, MS_TIER3_MIN,
                  MS_TIER3_MAX, 0xc2b2ae35u);
 

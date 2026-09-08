@@ -178,8 +178,7 @@ void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final)
 
     printf("probe-set frame=%d count=%d mode=%s atlas=%dx%d captures=%d mask_bits=%d "
            "digest=%08x\n",
-           frame, set->count, mode, aw, ah, set->captures_total, set->mask_bits,
-           set->mask_digest);
+           frame, set->count, mode, aw, ah, set->captures_total, set->mask_bits, set->mask_digest);
 
     if (!final)
         return;

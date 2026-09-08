@@ -39,11 +39,11 @@ ErosionParams erosion_default_params(void) {
 // growing argument list.
 typedef struct Planes {
     int res;
-    float cell;    // world units between adjacent cells
+    float cell; // world units between adjacent cells
     float inv_cell;
 
-    float* h; // ground height, the thing being eroded
-    float* w; // standing water depth
+    float* h;      // ground height, the thing being eroded
+    float* w;      // standing water depth
     float* w_prev; // depth the fluxes were computed against, for transport
     float* s;      // suspended sediment
     float* s_next;

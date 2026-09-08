@@ -37,22 +37,26 @@ typedef struct LayerRecipe {
 // through four near-identical functions.
 static const LayerRecipe RECIPES[] = {
     // grass: fine and busy, matte everywhere, shallow relief
-    [TERRAIN_LAYER_GRASS] = {5, 0.55f, 16, 24, 0.35f, {0.17f, 0.21f, 0.11f}, 0.45f, 0.80f,
-                             0.97f, 0.010f},
+    [TERRAIN_LAYER_GRASS] =
+        {5, 0.55f, 16, 24, 0.35f, {0.17f, 0.21f, 0.11f}, 0.45f, 0.80f, 0.97f, 0.010f},
     // rock: fractured, so the cellular term dominates and the fbm only roughens it
-    [TERRAIN_LAYER_ROCK] = {4, 0.50f, 8, 6, 0.75f, {0.31f, 0.30f, 0.28f}, 0.55f, 0.45f, 0.82f,
-                            0.030f},
+    [TERRAIN_LAYER_ROCK] =
+        {4, 0.50f, 8, 6, 0.75f, {0.31f, 0.30f, 0.28f}, 0.55f, 0.45f, 0.82f, 0.030f},
     // silt: smooth and pale, faint bedding from a low-octave fbm alone
-    [TERRAIN_LAYER_SILT] = {3, 0.45f, 6, 0, 0.0f, {0.36f, 0.32f, 0.25f}, 0.30f, 0.58f, 0.84f,
-                            0.006f},
+    [TERRAIN_LAYER_SILT] =
+        {3, 0.45f, 6, 0, 0.0f, {0.36f, 0.32f, 0.25f}, 0.30f, 0.58f, 0.84f, 0.006f},
     // gravel: coarse cells with real depth between them
-    [TERRAIN_LAYER_GRAVEL] = {3, 0.60f, 12, 10, 0.85f, {0.26f, 0.25f, 0.23f}, 0.60f, 0.50f,
-                              0.90f, 0.045f},
+    [TERRAIN_LAYER_GRAVEL] =
+        {3, 0.60f, 12, 10, 0.85f, {0.26f, 0.25f, 0.23f}, 0.60f, 0.50f, 0.90f, 0.045f},
 };
 
-static float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+static float clamp01(float v) {
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
 
-static unsigned char to_code(float v) { return (unsigned char)(clamp01(v) * 255.0f + 0.5f); }
+static unsigned char to_code(float v) {
+    return (unsigned char)(clamp01(v) * 255.0f + 0.5f);
+}
 
 // The rows of one bake, handed to each worker. `seed` is read-only here: the
 // permutation table veg_noise_seed builds is a file static, seeded once BEFORE

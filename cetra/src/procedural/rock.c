@@ -10,9 +10,9 @@
 #include "../noise.h"
 #include "../util.h"
 
-#define ROCK_MAX_SUBDIV     5
-#define ROCK_NOISE_PERIOD   256
-#define ROCK_NOISE_OCTAVES  4
+#define ROCK_MAX_SUBDIV    5
+#define ROCK_NOISE_PERIOD  256
+#define ROCK_NOISE_OCTAVES 4
 
 RockParams rock_default_params(void) {
     RockParams p;
@@ -107,14 +107,13 @@ bool rock_build_mesh(const RockParams* p, Mesh* mesh) {
     // face is congruent, and there is no pole and no seam.
     const float t = 1.61803398875f;
     static const int BASE_FACES[20][3] = {
-        {0, 11, 5}, {0, 5, 1},   {0, 1, 7},   {0, 7, 10}, {0, 10, 11},
-        {1, 5, 9},  {5, 11, 4},  {11, 10, 2}, {10, 7, 6}, {7, 1, 8},
-        {3, 9, 4},  {3, 4, 2},   {3, 2, 6},   {3, 6, 8},  {3, 8, 9},
-        {4, 9, 5},  {2, 4, 11},  {6, 2, 10},  {8, 6, 7},  {9, 8, 1},
+        {0, 11, 5},  {0, 5, 1},  {0, 1, 7},  {0, 7, 10}, {0, 10, 11}, {1, 5, 9}, {5, 11, 4},
+        {11, 10, 2}, {10, 7, 6}, {7, 1, 8},  {3, 9, 4},  {3, 4, 2},   {3, 2, 6}, {3, 6, 8},
+        {3, 8, 9},   {4, 9, 5},  {2, 4, 11}, {6, 2, 10}, {8, 6, 7},   {9, 8, 1},
     };
     const float BASE_POS[12][3] = {
-        {-1, t, 0}, {1, t, 0},  {-1, -t, 0}, {1, -t, 0}, {0, -1, t},  {0, 1, t},
-        {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1},  {-t, 0, -1}, {-t, 0, 1},
+        {-1, t, 0},  {1, t, 0},  {-1, -t, 0}, {1, -t, 0}, {0, -1, t},  {0, 1, t},
+        {0, -1, -t}, {0, 1, -t}, {t, 0, -1},  {t, 0, 1},  {-t, 0, -1}, {-t, 0, 1},
     };
 
     // Euler exactly, not an estimate: F = 20*4^n and V = 2 + 10*4^n for a
@@ -178,7 +177,10 @@ bool rock_build_mesh(const RockParams* p, Mesh* mesh) {
                 mid[e] = found;
             }
             unsigned int tri[4][3] = {
-                {a, mid[0], mid[2]}, {b, mid[1], mid[0]}, {c, mid[2], mid[1]}, {mid[0], mid[1], mid[2]},
+                {a, mid[0], mid[2]},
+                {b, mid[1], mid[0]},
+                {c, mid[2], mid[1]},
+                {mid[0], mid[1], mid[2]},
             };
             for (int k = 0; k < 4; ++k) {
                 next[w * 3u + 0u] = tri[k][0];

@@ -100,17 +100,17 @@ void gl_delete_texture(GLuint* tex) {
 
 GLenum gl_transfer_format(GLenum internal_format) {
     switch (internal_format) {
-    case GL_R8:
-    case GL_R16F:
-    case GL_R32F:
-        return GL_RED;
-    case GL_RG16F:
-    case GL_RG32F:
-        return GL_RG;
-    case GL_R11F_G11F_B10F:
-        return GL_RGB;
-    default:
-        return GL_RGBA;
+        case GL_R8:
+        case GL_R16F:
+        case GL_R32F:
+            return GL_RED;
+        case GL_RG16F:
+        case GL_RG32F:
+            return GL_RG;
+        case GL_R11F_G11F_B10F:
+            return GL_RGB;
+        default:
+            return GL_RGBA;
     }
 }
 

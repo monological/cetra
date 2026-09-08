@@ -155,9 +155,8 @@ extern "C" bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out) {
     // reporting a healthy cluster count over an empty sink is what a by-value
     // CAPTURE would do, and this is not one.
     size_t produced = clodBuild(config, input,
-                                [&sink](const clodGroup& group, const clodCluster* items, size_t count) {
-                                    return sink.take(group, items, count);
-                                });
+                                [&sink](const clodGroup& group, const clodCluster* items,
+                                        size_t count) { return sink.take(group, items, count); });
     if (produced == 0 || sink.clusters.empty() || sink.groups.empty())
         return false;
 
@@ -258,8 +257,7 @@ extern "C" bool mesh_build_cluster_lod(Mesh* mesh, MeshClusterStats* out) {
     if (mesh->lod_levels <= 1 || packed.empty())
         return false;
 
-    unsigned int* buffer =
-        static_cast<unsigned int*>(malloc(packed.size() * sizeof(unsigned int)));
+    unsigned int* buffer = static_cast<unsigned int*>(malloc(packed.size() * sizeof(unsigned int)));
     if (!buffer) {
         log_error("cluster: could not allocate %zu indices", packed.size());
         mesh->lod_levels = 1;
@@ -309,9 +307,8 @@ static void cluster_seal_stats(const Mesh* mesh, MeshClusterStats* out) {
     if (mesh->lod_levels < 2 || !mesh->vertices)
         return;
     std::vector<unsigned char> seen(mesh->vertex_count, 0);
-    for (size_t i = mesh->lod_offset[0] / sizeof(unsigned int),
-                e = i + mesh->lod_count[0];
-         i < e; ++i)
+    for (size_t i = mesh->lod_offset[0] / sizeof(unsigned int), e = i + mesh->lod_count[0]; i < e;
+         ++i)
         seen[mesh->indices[i]] = 1;
     for (int band = 1; band < mesh->lod_levels; ++band) {
         size_t first = mesh->lod_offset[band] / sizeof(unsigned int);

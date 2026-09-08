@@ -11,7 +11,6 @@
 // the atlas follows the header that defines it rather than restating the number.
 #include "tree_gen.h"
 
-
 /*
  * Perlin Noise Implementation
  */
@@ -282,8 +281,8 @@ void veg_bark_height_field(float* out, int width, int height) {
 
             // A second, slower field decides where breaks are allowed at all,
             // so most of the trunk carries none and a few stretches carry one.
-            float gate = smoothstep(0.56f, 0.78f,
-                                    veg_fbm2(u * 1.3f + 31.0f, v * 1.1f + 17.0f, 3, 0.5f));
+            float gate =
+                smoothstep(0.56f, 0.78f, veg_fbm2(u * 1.3f + 31.0f, v * 1.1f + 17.0f, 3, 0.5f));
             split = 1.0f - (1.0f - split) * gate;
 
             // Shallower than the vertical fissures: a cross-break interrupts a
@@ -552,9 +551,12 @@ static void draw_leaf(unsigned char* albedo, unsigned char* normal, unsigned cha
             // Painted in order, later leaves over earlier ones.
             float out_a = alpha + dst_a * (1.0f - alpha);
             float wsrc = out_a > 1e-4f ? alpha / out_a : 0.0f;
-            albedo[ia + 0] = (unsigned char)(fminf(1.0f, r) * 255 * wsrc + albedo[ia + 0] * (1.0f - wsrc));
-            albedo[ia + 1] = (unsigned char)(fminf(1.0f, g) * 255 * wsrc + albedo[ia + 1] * (1.0f - wsrc));
-            albedo[ia + 2] = (unsigned char)(fminf(1.0f, b) * 255 * wsrc + albedo[ia + 2] * (1.0f - wsrc));
+            albedo[ia + 0] =
+                (unsigned char)(fminf(1.0f, r) * 255 * wsrc + albedo[ia + 0] * (1.0f - wsrc));
+            albedo[ia + 1] =
+                (unsigned char)(fminf(1.0f, g) * 255 * wsrc + albedo[ia + 1] * (1.0f - wsrc));
+            albedo[ia + 2] =
+                (unsigned char)(fminf(1.0f, b) * 255 * wsrc + albedo[ia + 2] * (1.0f - wsrc));
             albedo[ia + 3] = (unsigned char)(out_a * 255);
 
             if (wsrc > 0.5f) {
@@ -605,7 +607,7 @@ unsigned char* veg_leaf_sprite(int size) {
 
 // Rasterize the whole atlas: LEAF_VARIANTS clusters side by side.
 void veg_leaf_cluster_maps(int width, int height, unsigned char** out_albedo,
-                                       unsigned char** out_normal, unsigned char** out_rough) {
+                           unsigned char** out_normal, unsigned char** out_rough) {
     unsigned char* albedo = calloc((size_t)width * height * 4, 1);
     unsigned char* normal = malloc((size_t)width * height * 3);
     unsigned char* rough = malloc((size_t)width * height * 3);
@@ -647,8 +649,8 @@ void veg_leaf_cluster_maps(int width, int height, unsigned char** out_albedo,
             float rot = spread * 1.5f + veg_rand_range(-0.35f, 0.35f);
             float len = (float)height * (0.30f - along * 0.09f) * veg_rand_range(0.8f, 1.15f);
             draw_leaf(albedo, normal, rough, width, height, cx, cy, rot, len,
-                      veg_rand_range(0.0f, 1.0f), veg_rand_range(0.82f, 1.18f), veg_rand_range(0.55f, 0.78f),
-                      veg_rand_range(-0.12f, 0.12f));
+                      veg_rand_range(0.0f, 1.0f), veg_rand_range(0.82f, 1.18f),
+                      veg_rand_range(0.55f, 0.78f), veg_rand_range(-0.12f, 0.12f));
         }
     }
 

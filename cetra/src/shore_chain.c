@@ -28,7 +28,7 @@
 #define SHORE_CHAIN_GRAVITY_M 9.81f
 // Bed friction at the seaward end, and how much more of it at the tip. A swash thins as it
 // climbs and a thin sheet is nearly all boundary layer, so the drag it feels is not constant.
-#define SHORE_CHAIN_FRICTION 0.3f
+#define SHORE_CHAIN_FRICTION     0.3f
 #define SHORE_CHAIN_FRICTION_TIP 3.0f
 /*
  * Artificial viscosity on COMPRESSION only, which is what stops a bore front from going
@@ -70,8 +70,7 @@ static float _clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-void shore_chain_rebuild(ShoreChain* chain, const Water* water,
-                         const ShoreRunupParams* params) {
+void shore_chain_rebuild(ShoreChain* chain, const Water* water, const ShoreRunupParams* params) {
     if (!chain || !water || !water->shore_pts || water->shore_count < 3) {
         if (chain)
             chain->ready = false;
@@ -162,8 +161,7 @@ static void _step_column(ShoreChain* chain, int j, float slope, float upm, float
         const float len = fmaxf(x[i + 1] - x[i], floor_len);
         const float du = u[i + 1] - u[i];
         // Compression only. An expanding segment is a sheet draining, not a shock.
-        const float q =
-            du < 0.0f ? fminf(SHORE_CHAIN_VISC * du * du / gravity, visc_cap) : 0.0f;
+        const float q = du < 0.0f ? fminf(SHORE_CHAIN_VISC * du * du / gravity, visc_cap) : 0.0f;
         eta[i] = slope * 0.5f * (x[i] + x[i + 1]) + chain->vol[i] / len + q;
     }
 
@@ -172,14 +170,12 @@ static void _step_column(ShoreChain* chain, int j, float slope, float upm, float
         // terrain stands in -- and the spacing is the half-segment to it rather than a whole
         // one, or the tip feels half the gravity it should and lags the chain behind it.
         const float eta_r = i < SHORE_CHAIN_NODES - 1 ? eta[i] : slope * x[SHORE_CHAIN_NODES - 1];
-        const float dx =
-            fmaxf((i < SHORE_CHAIN_NODES - 1 ? x[i + 1] - x[i - 1] : x[i] - x[i - 1]) * 0.5f,
-                  rest_seg);
+        const float dx = fmaxf(
+            (i < SHORE_CHAIN_NODES - 1 ? x[i + 1] - x[i - 1] : x[i] - x[i - 1]) * 0.5f, rest_seg);
         float a = -gravity * (eta_r - eta[i - 1]) / dx;
         a = _clampf(a, -accel_cap, accel_cap);
-        const float fr = SHORE_CHAIN_FRICTION *
-                         (1.0f + SHORE_CHAIN_FRICTION_TIP * (float)i /
-                                     (float)(SHORE_CHAIN_NODES - 1));
+        const float fr = SHORE_CHAIN_FRICTION * (1.0f + SHORE_CHAIN_FRICTION_TIP * (float)i /
+                                                            (float)(SHORE_CHAIN_NODES - 1));
         u[i] += (a - fr * u[i]) * sub;
         u[i] = _clampf(u[i], -speed_cap, speed_cap);
     }

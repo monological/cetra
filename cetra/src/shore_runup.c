@@ -21,8 +21,8 @@ static float shore_r2(const ShoreRunupParams* p) {
     const float slope = shore_runup_slope(p);
     const float l0 = TWO_PI * OCEAN_GRAVITY / (p->surf_omega * p->surf_omega);
     const float hl = p->surf_height * l0;
-    return 1.1f * (0.35f * slope * sqrtf(hl) +
-                   0.5f * sqrtf(hl * (0.563f * slope * slope + 0.004f)));
+    return 1.1f *
+           (0.35f * slope * sqrtf(hl) + 0.5f * sqrtf(hl * (0.563f * slope * slope + 0.004f)));
 }
 
 float shore_runup_slot_interval(const ShoreRunupParams* p) {
@@ -47,8 +47,8 @@ static float bore_wave(float phase, float skew) {
 }
 
 // oceanSurfTrains's value half.
-static float surf_trains(const ShoreRunupParams* p, float x, float z, float t, float tau,
-                         float lag, float skew) {
+static float surf_trains(const ShoreRunupParams* p, float x, float z, float t, float tau, float lag,
+                         float skew) {
     float sum = 0.0f;
     for (int i = 0; i < 3; i++) {
         const float om = p->surf_omega * OCEAN_TRAIN_FREQ[i];
@@ -75,8 +75,7 @@ float shore_runup_edge(const ShoreRunupParams* p, float x, float z, float t) {
 
     const float omega_g = omega / OCEAN_SURF_GROUP_WAVES;
     const float k_g = omega_g * 2.0f * omega / g / upm;
-    const float group_phase =
-        omega_g * t - k_g * (p->wind_dir[0] * x + p->wind_dir[1] * z);
+    const float group_phase = omega_g * t - k_g * (p->wind_dir[0] * x + p->wind_dir[1] * z);
     const float env = 1.0f + OCEAN_SURF_GROUP_MOD * sinf(group_phase);
 
     const float runup = shore_r2(p) / (1.0f + OCEAN_SURF_GROUP_MOD) * upm;

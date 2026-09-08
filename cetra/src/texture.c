@@ -244,7 +244,8 @@ static void texture_srgb_decode_lut(float lut[256]) {
 
 // Built beside the decode table, from it, so the two cannot describe different
 // curves. Not memoized in a file static, for the reason the decode table is not.
-static void texture_srgb_encode_lut(const float lut[256], unsigned char rev[TEXTURE_SRGB_REV_SIZE]) {
+static void texture_srgb_encode_lut(const float lut[256],
+                                    unsigned char rev[TEXTURE_SRGB_REV_SIZE]) {
     // The midpoints between adjacent decoded codes are where the nearest-code
     // answer changes, so one merge walk fills every bucket.
     int code = 0;
@@ -290,9 +291,8 @@ static unsigned char texture_srgb_encode_byte(const float lut[256],
 //
 // Alpha is never in that space. It carries a coverage or, since 11.60, a HEIGHT,
 // and is averaged as stored in every format.
-static void texture_box_halve(const unsigned char* src, int sw, int sh, int channels,
-                              bool is_srgb, const float lut[256],
-                              const unsigned char rev[TEXTURE_SRGB_REV_SIZE],
+static void texture_box_halve(const unsigned char* src, int sw, int sh, int channels, bool is_srgb,
+                              const float lut[256], const unsigned char rev[TEXTURE_SRGB_REV_SIZE],
                               unsigned char* dst) {
     const int dw = sw > 1 ? sw / 2 : 1;
     const int dh = sh > 1 ? sh / 2 : 1;
@@ -456,7 +456,6 @@ static GLenum texture_block_gl_format(TextureBlockFormat format, bool is_srgb) {
             return 0;
     }
 }
-
 
 // The NxN grid of bilinear taps each 2x2 neighbourhood is sampled on. NVTT's
 // value; DirectXTex uses 8 for a smoother estimate at four times the cost.
@@ -631,8 +630,8 @@ static float texture_preserve_alpha_coverage(unsigned char* pixels, int width, i
  *
  * Returns false only when the two error rows cannot be allocated.
  */
-static bool texture_distribute_alpha(const unsigned char* pristine, unsigned char* out,
-                                     int width, int height, float target) {
+static bool texture_distribute_alpha(const unsigned char* pristine, unsigned char* out, int width,
+                                     int height, float target) {
     const size_t count = (size_t)width * (size_t)height;
     uint64_t sum = 0;
     for (size_t i = 0; i < count; i++)
@@ -646,8 +645,7 @@ static bool texture_distribute_alpha(const unsigned char* pristine, unsigned cha
     const size_t rw = (size_t)width + 2;
     float* err = calloc(2 * rw, sizeof(float));
     if (!err) {
-        log_warn("alpha distribution: out of memory at %dx%d, keeping the rescale", width,
-                 height);
+        log_warn("alpha distribution: out of memory at %dx%d, keeping the rescale", width, height);
         return false;
     }
     float* cur = err + 1;
@@ -724,8 +722,7 @@ static bool texture_level_push(TextureLevelStack* stack, int w, int h, const uns
 // One level into the stack, encoded when a block format is live -- the pair
 // that is easy to get subtly wrong twice, kept in one place for that reason.
 static bool texture_encode_push(TextureLevelStack* stack, TextureBlockFormat block, int w, int h,
-                                int channels, const unsigned char* pixels,
-                                unsigned char* scratch) {
+                                int channels, const unsigned char* pixels, unsigned char* scratch) {
     if (block != TEXTURE_BLOCK_NONE) {
         texture_block_encode(block, pixels, w, h, channels, scratch);
         return texture_level_push(stack, w, h, scratch, texture_block_image_bytes(block, w, h));
@@ -754,8 +751,8 @@ static void texture_derive_levels(TextureBlockFormat* block, GLenum internal_for
     if (*block != TEXTURE_BLOCK_NONE) {
         scratch = malloc(texture_block_image_bytes(*block, width, height));
         if (!scratch) {
-            log_error("texture compression: out of memory at %dx%d, storing uncompressed",
-                      width, height);
+            log_error("texture compression: out of memory at %dx%d, storing uncompressed", width,
+                      height);
             *block = TEXTURE_BLOCK_NONE;
         }
     }
@@ -887,13 +884,11 @@ static void texture_upload_levels(const TextureLevelStack* stack, GLenum gl_bloc
                                   GLenum internal_format, GLenum data_format) {
     for (int i = 0; i < stack->count; ++i) {
         if (gl_block != 0)
-            glCompressedTexImage2D(GL_TEXTURE_2D, i, gl_block, stack->level[i].w,
-                                   stack->level[i].h, 0, (GLsizei)stack->level[i].size,
-                                   stack->level[i].data);
+            glCompressedTexImage2D(GL_TEXTURE_2D, i, gl_block, stack->level[i].w, stack->level[i].h,
+                                   0, (GLsizei)stack->level[i].size, stack->level[i].data);
         else
             glTexImage2D(GL_TEXTURE_2D, i, (GLint)internal_format, stack->level[i].w,
-                         stack->level[i].h, 0, data_format, GL_UNSIGNED_BYTE,
-                         stack->level[i].data);
+                         stack->level[i].h, 0, data_format, GL_UNSIGNED_BYTE, stack->level[i].data);
     }
     if (!stack->complete) {
         // Clamp rather than report. The sampler state is LINEAR_MIPMAP_LINEAR
@@ -966,8 +961,8 @@ static int texture_expected_levels(int width, int height) {
 // the binary-alpha scan of whichever stack was uploaded (-1 on the early-out
 // paths and wherever the scan does not apply).
 static bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
-                          int channels, TextureDesc desc, const unsigned char* pixels,
-                          GLenum* out_internal_format, int* out_distribute_level) {
+                                 int channels, TextureDesc desc, const unsigned char* pixels,
+                                 GLenum* out_internal_format, int* out_distribute_level) {
     TextureBlockFormat block = texture_block_format_for(desc.use, channels);
     const TextureBlockFormat keyed_block = block; // what the key promises the payload is
     GLenum gl_block = texture_block_gl_format(block, desc.is_srgb);
@@ -1001,9 +996,8 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
         bool sane = true;
         int w = width, h = height;
         for (int i = 0; i < expected; ++i) {
-            size_t want = block != TEXTURE_BLOCK_NONE
-                              ? texture_block_image_bytes(block, w, h)
-                              : (size_t)w * (size_t)h * (size_t)channels;
+            size_t want = block != TEXTURE_BLOCK_NONE ? texture_block_image_bytes(block, w, h)
+                                                      : (size_t)w * (size_t)h * (size_t)channels;
             sane = sane && sections[i].size == want;
             stack.level[i].w = w;
             stack.level[i].h = h;
@@ -1045,8 +1039,7 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
         if (out_internal_format)
             *out_internal_format = internal_format;
-        log_error("texture mip chain: out of memory at %dx%d, storing level 0 only", width,
-                  height);
+        log_error("texture mip chain: out of memory at %dx%d, storing level 0 only", width, height);
         return false;
     }
 
@@ -1575,8 +1568,7 @@ Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc 
         if (cached_srgb != desc.is_srgb)
             log_warn("texture '%s' is already loaded as %s and is now wanted as %s; "
                      "the pool keys on path, so the first load wins",
-                     subpath, cached_srgb ? "sRGB" : "linear",
-                     desc.is_srgb ? "sRGB" : "linear");
+                     subpath, cached_srgb ? "sRGB" : "linear", desc.is_srgb ? "sRGB" : "linear");
         free(normalized_path);
         free(subpath);
         return cached_texture;
@@ -1638,8 +1630,8 @@ Texture* texture_load_memory(TexturePool* pool, const char* key, const unsigned 
         }
     }
 
-    Texture* new_texture = texture_pool_publish(pool, key, dilated ? dilated : pixels, width,
-                                                height, channels, desc);
+    Texture* new_texture =
+        texture_pool_publish(pool, key, dilated ? dilated : pixels, width, height, channels, desc);
     free(dilated);
 
     if (new_texture)

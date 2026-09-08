@@ -32,7 +32,7 @@
  * what actually reads as raked sand.
  */
 #define SAND_RIPPLE_CYCLES 7.0f
-#define SAND_RIPPLE_WARP 1.8f
+#define SAND_RIPPLE_WARP   1.8f
 #define SAND_RIPPLE_WEIGHT 0.16f
 /*
  * The drift is the tile's LOW frequency, and low frequency is what makes a repeat legible.
@@ -186,8 +186,7 @@ unsigned char* sand_albedo(int width, int height, const float* field) {
             const float warm = (0.5f - detail) * 0.05f;
             const int idx = (y * width + x) * 3;
             data[idx + 0] = (unsigned char)(fminf(fmaxf(shade + warm, 0.0f), 1.0f) * 255.0f);
-            data[idx + 1] =
-                (unsigned char)(fminf(fmaxf(shade + warm * 0.6f, 0.0f), 1.0f) * 255.0f);
+            data[idx + 1] = (unsigned char)(fminf(fmaxf(shade + warm * 0.6f, 0.0f), 1.0f) * 255.0f);
             data[idx + 2] = (unsigned char)(fminf(fmaxf(shade, 0.0f), 1.0f) * 255.0f);
         }
     }
