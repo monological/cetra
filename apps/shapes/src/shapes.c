@@ -136,13 +136,6 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
-void render_scene_callback(Engine* engine, Scene* current_scene) {
-    if (!engine || !current_scene->root_node)
-        return;
-
-    engine_render_scene(engine, current_scene);
-}
-
 /*
  * CETRA MAIN
  */
@@ -212,14 +205,7 @@ int main() {
         return -1;
     }
     engine_add_scene(engine, scene);
-
-    SceneNode* root_node = create_node();
-    if (!root_node) {
-        fprintf(stderr, "Failed to create root node\n");
-        return -1;
-    }
-
-    scene_set_root(scene, root_node);
+    SceneNode* root_node = scene->root_node;
 
     // No light: under the 2D preset a material's albedo is the colour on screen.
     engine_set_2d_preset(engine, scene);
@@ -269,7 +255,7 @@ int main() {
     engine_set_show_wireframe(engine, false);
     engine_set_show_xyz(engine, false);
 
-    engine_run(engine, NULL, NULL, render_scene_callback);
+    engine_run(engine, NULL, NULL, NULL);
 
     printf("Cleaning up...\n");
     free_engine(engine);

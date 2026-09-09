@@ -1330,6 +1330,17 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
     profiler_scope_end(engine->profiler);
 
+    // After the emissive build, so a scene lit only by derived panels is not
+    // warned. The COUNT and not the emitted intensity: a zero-intensity light is
+    // how a scene file declines the default rig, and a scene that authored a
+    // light has answered the question.
+    if (!scene->lightless_warned && scene->light_count == 0 && !scene->ibl && !scene->sky &&
+        glm_vec3_norm2(scene->ambient_radiance) == 0.0f) {
+        log_warn("scene has no light, no environment and no ambient radiance: unlit surfaces "
+                 "render black (emissive still shows)");
+        scene->lightless_warned = true;
+    }
+
     // AFTER the emissive build and before the passes, and BOTH halves are the
     // invariant (spec 11.93). A resolver placed only "before the readers" reads
     // scene->lights one call before the frame's only writer of it, so on the

@@ -764,14 +764,6 @@ void pre_render_callback(Engine* engine, Scene* scene) {
     }
 }
 
-void render_scene_callback(Engine* engine, Scene* scene) {
-    if (!engine || !scene || !scene->root_node) {
-        return;
-    }
-
-    engine_render_scene(engine, scene);
-}
-
 /*
  * Command line
  */
@@ -1244,9 +1236,7 @@ int main(int argc, char** argv) {
     }
 
     Scene* scene = create_scene();
-    SceneNode* root = create_node();
-    node_set_name(root, "root");
-    scene_set_root(scene, root);
+    SceneNode* root = scene->root_node;
     engine_add_scene(engine, scene);
 
     if (xyz_program) {
@@ -1826,7 +1816,7 @@ int main(int argc, char** argv) {
             return -1;
     }
 
-    engine_run(engine, NULL, pre_render_callback, render_scene_callback);
+    engine_run(engine, NULL, pre_render_callback, NULL);
 
     printf("Cleaning up...\n");
     free_mouse_drag_controller(drag_controller);

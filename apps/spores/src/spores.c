@@ -155,9 +155,7 @@ static void on_init(Game* game) {
     }
 
     Scene* scene = create_scene();
-    SceneNode* root = create_node();
-    node_set_name(root, "root");
-    scene_set_root(scene, root);
+    SceneNode* root = scene->root_node;
     game_set_scene(game, scene);
 
     // Dark infected interior: floor + three walls (front open toward camera).

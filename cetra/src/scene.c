@@ -50,7 +50,6 @@ Scene* create_scene() {
     glm_mat4_identity(scene->root_transform);
 
     // Initialize the Scene structure
-    scene->root_node = NULL;
     scene->lights = NULL;
     scene->light_count = 0;
     scene->particle_systems = NULL;
@@ -68,6 +67,17 @@ Scene* create_scene() {
         free_scene(scene);
         return NULL;
     }
+
+    // A scene has a root from the start; an app attaches under it. This is
+    // where creating a scene came to need a live GL context: the node carries
+    // the gizmo's buffers, where nothing else here touches GL.
+    scene->root_node = create_node();
+    if (!scene->root_node) {
+        log_error("Failed to allocate the scene's root node");
+        free_scene(scene);
+        return NULL;
+    }
+    node_set_name(scene->root_node, "root");
 
     scene->xyz_shader_program = NULL;
 
@@ -261,8 +271,13 @@ void free_scene(Scene* scene) {
 }
 
 void scene_set_root(Scene* scene, SceneNode* root_node) {
-    if (!scene)
+    if (!scene || scene->root_node == root_node)
         return;
+    // The scene owns its root, so the one being replaced goes with its subtree
+    // -- the root create_scene made, or a whole graph an importer is swapping
+    // out. Nothing keeps a pointer into a root it then replaces.
+    if (scene->root_node)
+        free_node(scene->root_node);
     scene->root_node = root_node;
     scene->materials_dirty = true;
 }

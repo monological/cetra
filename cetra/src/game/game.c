@@ -266,14 +266,16 @@ static void game_pre_render(Engine* engine, Scene* scene) {
 }
 
 // engine_run's render hook: hand the app its on_render with the interpolation
-// alpha. The engine owns the framebuffer / G-buffer / present around it.
+// alpha, or draw the scene itself when the app set none. The engine owns the
+// framebuffer / G-buffer / present around it.
 static void game_scene_render(Engine* engine, Scene* scene) {
-    (void)scene;
     Game* game = engine_get_user_data(engine);
     if (game->on_render) {
         // Interpolation alpha, derived (not stored) so an escape-key early-return
         // in game_frame_update can't leave it stale.
         game->on_render(game, game->accumulator / game->fixed_timestep);
+    } else {
+        engine_render_scene(engine, scene);
     }
 }
 

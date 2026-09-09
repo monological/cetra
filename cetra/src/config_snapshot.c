@@ -416,6 +416,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine", "alpha_jitter", alpha_jitter_enabled),
     CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "render_scale", render_scale, _apply_render_scale),
     CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "ss_scale", ss_scale, _apply_ss_scale),
+    CFG_ROW(CFG_ENGINE, CFG_VEC3, "engine", "clear_color", clear_color),
 
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "gui", show_gui),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "wireframe", show_wireframe),

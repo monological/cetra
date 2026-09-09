@@ -2325,9 +2325,7 @@ static void on_init(Game* game) {
     g_pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
 
     g_scene = create_scene();
-    g_root = create_node();
-    node_set_name(g_root, "root");
-    scene_set_root(g_scene, g_root);
+    g_root = g_scene->root_node;
     game_set_scene(game, g_scene);
 
     g_terrain = terrain_default_params();
@@ -2865,14 +2863,6 @@ static void on_pre_render(Game* game, double alpha) {
     }
 }
 
-static void on_render(Game* game, double alpha) {
-    (void)alpha;
-    if (!g_scene || !g_scene->root_node)
-        return;
-
-    engine_render_scene(game->engine, game->scene);
-}
-
 static void on_shutdown(Game* game) {
     // game_run does not report; the render app does this at its own exit. Here
     // because the whole app exists to be read off these tables.
@@ -3219,7 +3209,6 @@ int main(int argc, char** argv) {
     game_set_init(game, on_init);
     game_set_update(game, on_update);
     game_set_pre_render(game, on_pre_render);
-    game_set_render(game, on_render);
     game_set_shutdown(game, on_shutdown);
 
     game_run(game);

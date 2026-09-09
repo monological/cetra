@@ -116,10 +116,6 @@ static void pre_render(Engine* engine, Scene* scene) {
     uniform_set_float(network_program->uniforms, "time", t);
 }
 
-static void render(Engine* engine, Scene* scene) {
-    engine_render_scene(engine, scene);
-}
-
 int main(int argc, char** argv) {
     bool headless = false;
     int frames = 0;
@@ -160,8 +156,7 @@ int main(int argc, char** argv) {
 
     Scene* scene = create_scene();
     engine_add_scene(engine, scene);
-    SceneNode* root = create_node();
-    scene_set_root(scene, root);
+    SceneNode* root = scene->root_node;
     // No post effects and a linear curve, so the sine colours land as computed;
     // negative values clamp to black, as they did in the sketch.
     engine_set_2d_preset(engine, scene);
@@ -183,7 +178,7 @@ int main(int argc, char** argv) {
     node_add_mesh(sphere_node, mesh);
     node_add_child(root, sphere_node);
 
-    engine_run(engine, NULL, pre_render, render);
+    engine_run(engine, NULL, pre_render, NULL);
     free_engine(engine);
     return 0;
 }

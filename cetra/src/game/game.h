@@ -26,6 +26,8 @@ typedef void (*GameUpdateFunc)(struct Game* game, double dt);
 // before the walk. What this hook is FOR is the work that needs the frame's
 // final camera, which the fixed step does not have.
 typedef void (*GamePreRenderFunc)(struct Game* game, double alpha);
+// Draws the scene. Unset, the loop draws it itself (engine_render_scene on
+// game->scene); set one for what an app does around that draw.
 typedef void (*GameRenderFunc)(struct Game* game, double alpha);
 typedef void (*GameShutdownFunc)(struct Game* game);
 

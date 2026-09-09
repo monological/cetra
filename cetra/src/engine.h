@@ -324,6 +324,11 @@ typedef struct Engine {
     // another way here.
     bool prev_camera_valid;
 
+    // What the scene target is cleared to each frame, linear, where nothing
+    // draws: the backdrop of a scene with no sky. 0.1 grey by default; write
+    // it any time.
+    vec3 clear_color;
+
     bool show_gui;
     bool show_wireframe;
     bool show_xyz;
@@ -578,8 +583,9 @@ void* engine_get_user_data(const Engine* engine);
 // three hooks run in the order they are declared -- `update` once per frame
 // before anything reads the scene, `pre_render` after the sky and origin shift
 // and immediately before the graph is propagated, `render` to draw. Any of them
-// may be NULL. The render apps and the game framework's game_run all drive the
-// engine through it.
+// may be NULL, and a NULL `render` draws the scene itself (engine_render_scene);
+// a hook there is for what an app does around that draw. The render apps and
+// the game framework's game_run all drive the engine through it.
 void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre_render,
                 EngineRenderFunc render);
 

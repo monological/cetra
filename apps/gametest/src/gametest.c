@@ -276,9 +276,7 @@ static void on_init(Game* game) {
 
     // Create scene
     Scene* scene = create_scene();
-    SceneNode* root = create_node();
-    node_set_name(root, "root");
-    scene_set_root(scene, root);
+    SceneNode* root = scene->root_node;
     game_set_scene(game, scene);
 
     if (xyz) {

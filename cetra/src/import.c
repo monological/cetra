@@ -1940,8 +1940,10 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
         return NULL;
     }
     size_t built = 0, shared_refs = 0, lod_chains = 0;
-    scene->root_node = process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader,
-                                       mat_cache, mesh_cache, &built, &shared_refs, &lod_chains);
+    // The file's own root replaces the one create_scene made.
+    scene_set_root(scene,
+                   process_ai_node(scene, ai_scene->mRootNode, ai_scene, tex_pool, loader,
+                                   mat_cache, mesh_cache, &built, &shared_refs, &lod_chains));
 
     // What the dedup DID, not what the file contains: mNumMeshes reads the same
     // whether or not the cache ever hit, and a count of shared meshes says one

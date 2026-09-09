@@ -103,11 +103,12 @@ typedef struct GBufferAttachment {
 // positive HDR only (WS_SCENE_MAX sits under the format's ~65024 ceiling), no
 // alpha needed, half the bandwidth of RGBA16F.
 static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_ATTACHMENT_COUNT]) {
-    out[0] = (GBufferAttachment){&engine->multisample_texture,
-                                 NULL,
-                                 GL_RGBA16F,
-                                 GL_COLOR_ATTACHMENT0,
-                                 {0.1f, 0.1f, 0.1f, 1.0f}};
+    out[0] = (GBufferAttachment){
+        &engine->multisample_texture,
+        NULL,
+        GL_RGBA16F,
+        GL_COLOR_ATTACHMENT0,
+        {engine->clear_color[0], engine->clear_color[1], engine->clear_color[2], 1.0f}};
     out[1] = (GBufferAttachment){&engine->normal_multisample_texture,
                                  &engine->normals_this_frame,
                                  GL_RGBA16F,
@@ -279,6 +280,7 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     glm_mat4_identity(engine->draw_projection);
     glm_mat4_identity(engine->prev_view_proj);
 
+    glm_vec3_copy((vec3){0.1f, 0.1f, 0.1f}, engine->clear_color);
     engine->show_gui = false;
     engine->show_wireframe = false;
     engine->show_xyz = false;
@@ -2797,8 +2799,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // POM (§4.11): resolve height maps once the async texture loader drains.
         heights_ensure_resolved(current_scene, engine);
 
-        if (render != NULL && current_scene != NULL) {
-            render(engine, current_scene);
+        // No hook means the scene draws itself; a hook is for what an app does
+        // around that draw.
+        if (current_scene != NULL) {
+            if (render != NULL)
+                render(engine, current_scene);
+            else
+                engine_render_scene(engine, current_scene);
         }
 
         // The feedback vote pass (spec 11.67), after the scene so the draw

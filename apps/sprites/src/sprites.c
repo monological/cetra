@@ -20,10 +20,7 @@
 #include <cglm/cglm.h>
 
 #include "cetra/engine.h"
-#include "cetra/geometry.h"
 #include "cetra/light.h"
-#include "cetra/material.h"
-#include "cetra/mesh.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
 #include "cetra/internal/particle_pool.h"
@@ -174,10 +171,6 @@ static void update_globe(ParticleModule* m, ParticleEmitter* e, size_t begin, si
     }
 }
 
-static void render(Engine* engine, Scene* scene) {
-    engine_render_scene(engine, scene);
-}
-
 int main(int argc, char** argv) {
     bool headless = false;
     int frames = 0;
@@ -221,8 +214,7 @@ int main(int argc, char** argv) {
 
     Scene* scene = create_scene();
     engine_add_scene(engine, scene);
-    SceneNode* root = create_node();
-    scene_set_root(scene, root);
+    SceneNode* root = scene->root_node;
     // No post effects, and the raw values out: the sketch drew its colours
     // straight into the framebuffer with no display encode, so passthrough
     // rather than the preset's linear curve, which encodes.
@@ -240,23 +232,8 @@ int main(int argc, char** argv) {
     node_set_light(key_node, key);
     node_add_child(root, key_node);
 
-    // The sketch cleared to black. The engine clears to grey and has no
-    // setter, so a black square far behind the globe stands in for it.
-    Material* black = create_material();
-    material_set_program(black, engine_get_program(engine, CETRA_PROGRAM_PBR));
-    glm_vec3_zero(black->albedo);
-    Mesh* backdrop = create_mesh();
-    backdrop->material = black;
-    Rect rect = {.position = {0.0f, 0.0f, -40.0f},
-                 .size = {80.0f, 80.0f, 0.0f},
-                 .corner_radius = 0.0f,
-                 .filled = true,
-                 .line_width = 1.0f};
-    mesh_generate_rect(backdrop, &rect);
-    SceneNode* backdrop_node = create_node();
-    node_set_name(backdrop_node, "backdrop");
-    node_add_mesh(backdrop_node, backdrop);
-    node_add_child(root, backdrop_node);
+    // The sketch cleared to black.
+    glm_vec3_zero(engine->clear_color);
 
     // The engine registers no particle program of its own.
     ShaderProgram* particle_program = create_particle_program();
@@ -292,7 +269,7 @@ int main(int argc, char** argv) {
     node_set_particle_system(node, sys);
     node_add_child(root, node);
 
-    engine_run(engine, NULL, NULL, render);
+    engine_run(engine, NULL, NULL, NULL);
     free_engine(engine);
     return 0;
 }

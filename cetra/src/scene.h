@@ -262,6 +262,9 @@ typedef struct Scene {
     // hardcoded 3%-of-white floor that could not be expressed correctly in
     // either space -- see spec 10.1 phase 5.
     vec3 ambient_radiance;
+    // The renderer has said once that this scene has no light, no environment
+    // and no ambient, which is a black frame nobody asked for.
+    bool lightless_warned;
 
     /*
      * Large-world origin shifting (spec 11.62).
@@ -318,11 +321,13 @@ typedef struct Scene {
     size_t animation_count;
 } Scene;
 
-// malloc
+// A scene with a root node ("root") to attach under; needs a live GL context,
+// like a Mesh or a SceneNode, since the root carries gizmo buffers.
 Scene* create_scene();
 void free_scene(Scene* scene);
 
-// root
+// Replace the root. The previous root and its whole subtree are freed, so a
+// pointer into the old graph is dangling afterwards.
 void scene_set_root(Scene* scene, SceneNode* root_node);
 
 // Recompute every node's global transform from the root down. IDEMPOTENT --
