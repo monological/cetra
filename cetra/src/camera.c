@@ -105,6 +105,15 @@ void camera_orbit(Camera* camera, float delta_theta, float delta_phi) {
     camera->position[2] = camera->look_at[2] + camera->distance * cos_theta * sinf(camera->phi);
 }
 
+void camera_translate(Camera* camera, const vec3 offset) {
+    if (!camera)
+        return;
+    // Eye and target by one vector: the view direction, the distance and the
+    // two angles are unchanged, so nothing here needs re-deriving.
+    glm_vec3_add(camera->position, (float*)offset, camera->position);
+    glm_vec3_add(camera->look_at, (float*)offset, camera->look_at);
+}
+
 void camera_pan(Camera* camera, float delta_x, float delta_y) {
     if (!camera)
         return;
@@ -119,16 +128,12 @@ void camera_pan(Camera* camera, float delta_x, float delta_y) {
     glm_vec3_cross(camera->up_vector, forward, right);
     glm_vec3_normalize(right);
 
-    // Move camera and target together along right axis
+    // Along the right axis, then along the world up axis
     vec3 offset;
     glm_vec3_scale(right, delta_x, offset);
-    glm_vec3_add(camera->position, offset, camera->position);
-    glm_vec3_add(camera->look_at, offset, camera->look_at);
-
-    // Move camera and target together along world up axis (matches original)
+    camera_translate(camera, offset);
     glm_vec3_scale(camera->up_vector, delta_y, offset);
-    glm_vec3_add(camera->position, offset, camera->position);
-    glm_vec3_add(camera->look_at, offset, camera->look_at);
+    camera_translate(camera, offset);
 }
 
 void camera_zoom(Camera* camera, float delta) {
@@ -153,9 +158,7 @@ void camera_move_forward(Camera* camera, float distance) {
 
     vec3 movement;
     glm_vec3_scale(forward, distance, movement);
-
-    glm_vec3_add(camera->position, movement, camera->position);
-    glm_vec3_add(camera->look_at, movement, camera->look_at);
+    camera_translate(camera, movement);
 }
 
 void camera_strafe(Camera* camera, float distance) {
@@ -171,9 +174,7 @@ void camera_strafe(Camera* camera, float distance) {
 
     vec3 movement;
     glm_vec3_scale(right, distance, movement);
-
-    glm_vec3_add(camera->position, movement, camera->position);
-    glm_vec3_add(camera->look_at, movement, camera->look_at);
+    camera_translate(camera, movement);
 }
 
 void camera_move_up(Camera* camera, float distance) {
@@ -182,9 +183,7 @@ void camera_move_up(Camera* camera, float distance) {
 
     vec3 movement;
     glm_vec3_scale(camera->up_vector, distance, movement);
-
-    glm_vec3_add(camera->position, movement, camera->position);
-    glm_vec3_add(camera->look_at, movement, camera->look_at);
+    camera_translate(camera, movement);
 }
 
 void camera_zoom_toward_target(Camera* camera, float factor, float min_distance) {

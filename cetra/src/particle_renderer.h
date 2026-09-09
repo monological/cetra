@@ -50,12 +50,6 @@ ParticleRenderer* create_billboard_particle_renderer(ShaderProgram* program);
 // restores the disc. No-op on a renderer that is not a billboard.
 void billboard_renderer_set_sprite(ParticleRenderer* r, Texture* tex, float hdr_gain);
 
-// The floor a mote falls to in full shadow (0..1, default 0.18) and the
-// world-space band over which it fades into the surface behind it (default
-// 0.5). No-op on a renderer that is not a billboard.
-void billboard_renderer_set_lighting(ParticleRenderer* r, float ambient_floor,
-                                     float soft_fade_dist);
-
 // false = the authored colour times hdr_gain reaches the framebuffer untinted:
 // no key-light lookup and no ambient floor. Default true. No-op on a renderer
 // that is not a billboard.

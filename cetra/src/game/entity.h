@@ -67,14 +67,9 @@ void entity_remove_component(Entity* entity, ComponentType type);
 // Set custom destructor for component data
 void entity_set_component_free(Entity* entity, ComponentType type, void (*free_func)(void*));
 
-// Transform helpers
-void entity_set_position(Entity* entity, vec3 pos);
-void entity_set_rotation(Entity* entity, versor rot);
+// The pose (position, rotation, scale) is plain fields; these two compose a
+// rotation into it rather than store one.
 void entity_set_rotation_euler(Entity* entity, vec3 euler); // pitch, yaw, roll in radians
-void entity_set_scale(Entity* entity, vec3 scale);
-void entity_set_scale_uniform(Entity* entity, float scale);
-
-void entity_translate(Entity* entity, vec3 delta);
 void entity_rotate(Entity* entity, float angle, vec3 axis);
 
 // Get transform matrix

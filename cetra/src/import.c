@@ -1462,14 +1462,11 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
         // ScaleProcess never touches aiLight fields; this node-space offset is
         // zero from every current importer, but scale it so the invariant is
         // closed rather than assumed.
-        vec3 light_pos = {ai_light->mPosition.x * unit_scale, ai_light->mPosition.y * unit_scale,
-                          ai_light->mPosition.z * unit_scale};
-        glm_vec3_copy(light_pos, light->original_position);
-        glm_vec3_copy(light_pos, light->global_position);
-        glm_vec3_copy(
-            (vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z},
-            light->original_direction);
-        glm_vec3_copy(light->original_direction, light->direction);
+        light_set_position(light, (vec3){ai_light->mPosition.x * unit_scale,
+                                         ai_light->mPosition.y * unit_scale,
+                                         ai_light->mPosition.z * unit_scale});
+        light_set_direction(
+            light, (vec3){ai_light->mDirection.x, ai_light->mDirection.y, ai_light->mDirection.z});
         glm_vec3_copy(
             (vec3){ai_light->mColorAmbient.r, ai_light->mColorAmbient.g, ai_light->mColorAmbient.b},
             light->ambient);

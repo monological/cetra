@@ -1006,8 +1006,8 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
         return -1;
     }
 
-    postfx_set_exposure(engine->postfx, &engine->exposure);
-    postfx_set_profiler(engine->postfx, engine->profiler);
+    engine->postfx->exposure = &engine->exposure;
+    engine->postfx->profiler = engine->profiler;
     engine->postfx->taa_enabled = cfg->taa;
 
     // Record what init just built at, or the first frame-top sync would see
@@ -1109,21 +1109,26 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
                                          engine->win_height);
 }
 
-bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
-    if (!engine || !engine->window || !fb_x || !fb_y)
-        return false;
-    // The STORED sizes, not a fresh query. Re-querying GLFW here would make
-    // the size fields change mid-frame, between the frame-top resize check and
-    // the scene pass -- and a scene target that disagrees with the post chain
-    // by even a frame is an invalid multisample blit. The framebuffer-size
-    // callback owns them.
+// Window coordinates to framebuffer pixels with +Y up, from the STORED sizes.
+// Re-querying GLFW for them here would make the size fields change mid-frame,
+// between the frame-top resize check and the scene pass -- and a scene target
+// that disagrees with the post chain by even a frame is an invalid multisample
+// blit. The framebuffer-size callback owns them. False while the window has no
+// area.
+static bool _window_to_fb(const Engine* engine, double wx, double wy, double* fb_x, double* fb_y) {
     if (engine->win_width <= 0 || engine->win_height <= 0)
         return false;
-    double wx = 0.0, wy = 0.0;
-    glfwGetCursorPos(engine->window, &wx, &wy);
     *fb_x = (wx / engine->win_width) * engine->fb_width;
     *fb_y = (1.0 - wy / engine->win_height) * engine->fb_height;
     return true;
+}
+
+bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
+    if (!engine || !engine->window || !fb_x || !fb_y)
+        return false;
+    double wx = 0.0, wy = 0.0;
+    glfwGetCursorPos(engine->window, &wx, &wy);
+    return _window_to_fb(engine, wx, wy, fb_x, fb_y);
 }
 
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
@@ -1140,9 +1145,7 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
         return;
     }
 
-    // GLFW's arguments are the position it would answer a query with, so the
-    // one conversion serves here too.
-    if (!engine_cursor_fb(engine, &xpos, &ypos))
+    if (!_window_to_fb(engine, xpos, ypos, &xpos, &ypos))
         return;
 
     if (engine->input.is_dragging) {
@@ -1652,10 +1655,6 @@ void engine_set_2d_preset(Engine* engine, Scene* scene) {
     engine->exposure.physical = false;
     engine->exposure.automatic = false;
     engine->exposure.multiplier = 1.0f;
-    // The GUI panel is the 3D engine's controls and the FPS counter a
-    // developer's readout; neither belongs on a sketch by default.
-    engine->show_gui = false;
-    engine->show_fps = false;
     if (!scene)
         return;
     // White ambient radiance: the no-environment ambient is radiance times

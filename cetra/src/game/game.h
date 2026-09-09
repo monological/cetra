@@ -1,6 +1,15 @@
 #ifndef _GAME_H_
 #define _GAME_H_
 
+/*
+ * The game framework: a fixed-timestep loop over the Engine, with an optional
+ * Jolt physics world, an entity manager and character controllers, and the
+ * particle tick. An app that wants a simulation step rather than a frame
+ * hook builds on this; a viewer or a sketch uses engine_run directly. The
+ * physics world and the entity manager are installed by the app, owned here
+ * and freed before the engine.
+ */
+
 #include <stdbool.h>
 #include <cglm/types.h>
 
@@ -144,11 +153,10 @@ double game_get_time(const Game* game);
 // Get FPS
 double game_get_fps(const Game* game);
 
-// Physics management
+// The two owned subsystems. Each install takes ownership and frees the one it
+// replaces; free_game frees both, the entity manager first.
 void game_set_physics_world(Game* game, struct PhysicsWorld* world);
 struct PhysicsWorld* game_get_physics_world(const Game* game);
-
-// Entity management
 void game_set_entity_manager(Game* game, struct EntityManager* em);
 struct EntityManager* game_get_entity_manager(const Game* game);
 

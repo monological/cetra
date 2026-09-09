@@ -291,17 +291,6 @@ static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigFie
     postfx_set_ssr_full_res(ctx->engine->postfx, v[0] != 0.0);
 }
 
-// Through the setter for the ownership half: a plain store here would be
-// stamped over by the sky at the next publish, and the sun is about to move
-// if the snapshot carried one.
-static void _apply_fog_ambient(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
-                               const double* v, int n) {
-    (void)base;
-    (void)f;
-    (void)n;
-    postfx_set_fog_ambient(ctx->engine->postfx, (vec3){(float)v[0], (float)v[1], (float)v[2]});
-}
-
 /*
  * Two angles are ONE sun move, deferred so the re-bake runs once and never
  * against a half-restored sun.
@@ -501,7 +490,11 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "temporal_blend", fog_temporal_blend),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "anisotropy", fog_anisotropy),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "sun_boost", fog_sun_boost),
-    CFG_ROW_FN(CFG_POSTFX, CFG_VEC3, "postfx.fog", "ambient", fog_ambient, _apply_fog_ambient),
+    // Both halves of the fog ambient's ownership, so a sky-driven session
+    // restores sky-driven and a pinned one pinned; the value alone would come
+    // back pinned, or be stamped over, depending on which row was missing.
+    CFG_ROW(CFG_POSTFX, CFG_VEC3, "postfx.fog", "ambient", fog_ambient),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "ambient_from_sky", fog_ambient_from_sky),
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "esm", fog_esm_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "esm_sharpness", fog_esm_k),
     CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "grid_x", froxel_grid_x),

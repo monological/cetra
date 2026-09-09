@@ -454,12 +454,6 @@ void text_mesh_set_position(TextMesh* mesh, vec3 position) {
     glm_translate(mesh->transform, position);
 }
 
-void text_mesh_set_transform(TextMesh* mesh, mat4 transform) {
-    if (!mesh)
-        return;
-    glm_mat4_copy(transform, mesh->transform);
-}
-
 void text_mesh_rebuild(TextMesh* mesh) {
     if (!mesh || !mesh->font || !mesh->text)
         return;

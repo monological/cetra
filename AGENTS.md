@@ -295,7 +295,9 @@ SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linea
 tone curve (the identity WITH the display encode, which passthrough is not), and a
 white ambient radiance on the scene, under which an albedo is the colour on screen
 with no light at all. It runs after `create_engine`, since the post chain has to
-exist, and takes the scene for the ambient half. Everything it switches off is ON
+exist, and takes the scene for the ambient half. The overlays it leaves alone: both
+default off, and a 2D app that wants the FPS counter writes `show_fps` like any other
+(spec 11.108). Everything it switches off is ON
 by default, which is why a flat red square through the plain defaults came out pink
 with a halo: the light needed to reach albedo through the PBR path pushes red past
 white, the neutral curve desaturates it, and bloom draws the glow.
@@ -421,7 +423,7 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | Module | Purpose |
 |--------|---------|
 | `text.c/h` | SDF text rendering (stb_truetype) with glow |
-| `app.c/h` | App helpers (mouse-drag orbit controller, input gating) |
+| `app.c/h` | App helpers: the mouse-drag orbit controller for a 3D viewer and its 2D twin, the canvas controller (pan, drag a picked node in the plane, zoom about the cursor; spec 11.108), a three-point light rig, input gating |
 | `cook.c/h` | The derived-data cook (spec 11.99): a transparent content-addressed cache over the deterministic startup bakes it wraps — the UE DDC model — plus the `--cook` pre-warm verb on forest and render. THE KEY IS THE IDENTITY (input bytes + recipe version + library version where a library owns the byte format), so a stale artefact is unfindable rather than detected; a miss always bakes live; a corrupt `.cca` is refused by name against a payload hash and treated as a miss. Process-global behind `cook_init`, main-thread-only, `cooked/` gitignored at the repo root, `CETRA_COOK_DIR`/`CETRA_NO_COOK` the env levers. **Never fold a worker count into a key, and never measure a bake without `--no-cook`** — gates and goldens isolate onto per-run cache dirs automatically. What may NOT be cooked is stated in the header charter (GPU resamples, GL handles, the scatter) |
 | `physics_cook.h/.cpp` | Jolt shape serialize/restore behind a C header — the one-C++-TU escape (`cluster_build.cpp`'s precedent), because JoltC binds none of Jolt's serialization. Exports `JPH_VERSION_ID` as the mandatory cook-key axis. The stream classes carry istream EOF semantics, and that is load-bearing: Jolt checks `IsEOF()` after a stream's LAST field, so a positional implementation refused every restore ever written (the 11.99 ledger's caught-live row) |
 | `config_snapshot.c/h` | The live session as JSON (spec 11.71): ~230 settings dumped and restored. **ONE descriptor table, walked in both directions** — the writer and the reader cannot list different fields because there is only one list, which is the drift `render.c`'s `frame_schedule` comment records having lived with. Materials ride `MATERIAL_PARAMS` rather than rows of their own, so a property added there is carried for free. What it OMITS is as load-bearing as what it carries: GPU handles, the lazy-alloc guards, the seven per-frame PUBLISHED blocks and the nine temporal histories are not configuration, and restoring one corrupts the frame rather than reproducing it |
@@ -959,29 +961,58 @@ CAMERA_MODE_ORBIT  // Mouse drag to orbit target
 
 ## Key Data Structures
 
+**Every public struct's fields play one of three roles, and the header says which** (spec
+11.108). Under **ENGINE-OWNED** sit derived state, GL names and resources: read them, never
+write; what an app may change among them has a function. Under **BY FUNCTION** sit the fields
+the engine must react to -- validate, order, propagate, re-derive -- each naming its function
+beside it. Under **SETTINGS** sits everything else: plain stores, written directly at any time,
+which is how the GUI and the config snapshot already reach them. The test is whether the LIBRARY
+has to react, not who writes: a setter that only stored a value was ceremony and was deleted, and
+no plain-store setter survives on any struct. The small structs (Camera, Light, Mesh, SceneNode,
+Scene, Exposure, Wind, InputState, the two controllers) are laid out in that order under the three
+banners; the feature-organised ones (Engine, PostFX, ShadowSystem, Water, Material, the sky's two)
+keep their feature order under one banner at the top that states the rule by kind and lists the
+by-function fields. **Two things make a plain write safe where a setter used to react**: the frame
+re-applies its GL state from the fields at the frame top (wireframe's polygon mode and cull
+switch), and a consumer notices its own inputs changing (the shadow pass rebuilds on a new
+cascade count, the water bakes compare against what they last used). Where neither holds, the
+field is a function.
+
 **Engine:** window; SSAA scale + MSAA sample count; scene MSAA HDR FBO with the
 multi-target G-buffer (see Render Pipeline); lazy resolve targets (mip'd opaque color
 for refraction, single-sample scene depth for soft particles); camera + mode; scenes
 array; program cache (uthash name->program); material-feature toggles
 (energy comp / refraction / clearcoat / specular / sheen / parallax / SSS / OIT);
 matrices (`view_matrix`, `projection_matrix` un-jittered, `draw_projection` TAA-jittered,
-`prev_view_proj` for motion vectors); GUI/debug flags; headless flag; embedded
-`PostFX* postfx`; bone-overlay + shadow-catcher programs; async loader; text renderer.
+`prev_view_proj` for motion vectors); the overlays and the run's counts (plain fields since
+11.108: `show_gui`, `show_fps`, `show_wireframe`, `show_xyz`, `exit_after_frames`,
+`screenshot_every`, `camera_mode`) and `clear_color` (11.107); headless flag; embedded
+`PostFX* postfx`; bone-overlay + shadow-catcher programs; async loader; text renderer. By
+function: the sample count and the two scales (clamp + rebuild), the screenshot path (owned),
+the callbacks and the clock (installs).
 
-**Scene:** root SceneNode; lights; **particle_systems (owned)**; cameras; materials;
-texture pool; `shadow_system`; IBL + sky + reflection probe; `material_textures`
-(the `MaterialTextureArray` — NOT a mask array, see the rename above);
-late-pass counters (transparent/transmissive/OIT); skeletons + animations; skybox /
-ground-projection / shadow-catcher fields.
+**Scene:** root SceneNode (`scene_set_root`); lights; **particle_systems (owned)**; cameras;
+materials; skeletons + animations -- the registries, each an `scene_add_*`; texture pool;
+`shadow_system`; IBL + sky + reflection probe + GI + water, installed by a plain pointer write and
+owned from then on; `material_textures` (the `MaterialTextureArray` — NOT a mask array, see the
+rename above); late-pass counters (transparent/transmissive/OIT); the xyz program
+(`scene_set_xyz_program`, the ONE program the gizmo overlay draws every node with -- nothing is
+propagated into nodes since 11.108, so a node created after the overlay was switched on is drawn
+like any other); the origin-shift callback (`scene_set_origin_callback`); settings:
+`root_transform`, `ambient_radiance`, the skybox / ground-projection / shadow-catcher fields, the
+origin-shift threshold.
 
-**SceneNode:** parent/children; `original_transform` (local); `global_transform`
-(computed); `prev_global_transform` (motion vectors); meshes; optional `light` /
-`camera` / **`particle_system`** (all borrowed); XYZ-axis debug gizmo.
+**SceneNode:** parent/children; `original_transform` (local, a plain field; `node_set_position`
+for its translation column); `global_transform` (computed); `prev_global_transform` (motion
+vectors); meshes (`node_add_mesh`, which uploads); optional `light` / `camera` /
+**`particle_system`** (all borrowed, each a `node_set_*`). Nothing per node says whether the
+gizmo overlay draws it: the switch is `engine->show_xyz` and the program the scene's.
 
-**Mesh:** draw mode; positions/normals/tangents (vec4, w = handedness — there is NO bitangent
-stream)/UV0/UV1/colors(RGBA)/indices;
-Material; VAO + per-attribute VBOs + EBO; AABB; skinning (`bone_ids`, `bone_weights`,
-`is_skinned`, `skeleton`); per-bone bind-space boxes and the wind vertex maxima (spec 11.53).
+**Mesh:** the content under SETTINGS -- draw mode, positions/normals/tangents (vec4, w = handedness — there is NO bitangent stream)/UV0/UV1/
+colors(RGBA)/indices, Material, the skinning input (`bone_ids`, `bone_weights`, `skeleton`);
+the upload's output under ENGINE-OWNED -- VAO + per-attribute VBOs + EBO; AABB; `is_skinned`;
+per-bone bind-space boxes and the wind vertex maxima (spec 11.53); `gpu_vertex_count` and
+`draw_refusal` (spec 11.107).
 
 **`AABB` has five operations since 11.54** — `aabb_empty` / `aabb_is_empty` / `aabb_add_point` /
 `aabb_union` / `aabb_expand`, `static inline` in `mesh.h` beside the typedef. Before them every
@@ -997,21 +1028,27 @@ frustum test are different arithmetic at exactly the edge `wind_cull_fixture` pa
 **Material:** scalar PBR (albedo, emissive + strength, metallic, roughness, AO,
 opacity); `alpha_mode` (OPAQUE/MASK/BLEND) + cutoff; glTF-extension params (IOR,
 transmission, thickness, film thickness, clearcoat, specular, sheen, parallax scale,
-subsurface + profile, KHR_texture_transform, doubleSided); 13 texture pointers;
-mask-array layer indices; ShaderProgram pointer; `emissive_light` (spec 11.49 — whether
+subsurface + profile, KHR_texture_transform, doubleSided); 13 texture pointers (each a
+`material_set_<x>_tex`, retain/release); mask-array layer indices (engine-owned); ShaderProgram
+pointer (`material_set_program`); `emissive_light` (spec 11.49 — whether
 this material's emissive is a LAMP or decoration, authored in a `.cscn` as
 `emissiveLight: "light"` / `"off"`. Per-MATERIAL and not per-mesh, because it is a
-statement about what the surface IS).
+statement about what the surface IS). The scalars are the `MATERIAL_PARAMS` table's rows,
+written directly or by name; there is no per-field setter.
 
-**Light:** type (directional/point/spot/area); position; direction; color; specular;
-ambient; intensity + `units`; **`range`** — where the inverse-square falloff is windowed to zero
-and the cull radius, 0 = unbounded. **There is no constant/linear/quadratic attenuation triple**
-and never has been in the photometric era; spot cutoffs (stored as COSINES of the half-angles,
-not radians); area size;
-shadow flags (`cast_shadows`, `shadow_map_index`).
+**Light:** type (directional/point/spot/area); position, direction and up (`light_set_position`
+/ `light_set_direction` / `light_set_up`: an authored copy the walk carries into a world copy, and
+the setter writes both for a light on no node); color; specular;
+ambient; intensity + `units` (`light_set_intensity_units` converts); **`range`** — where the
+inverse-square falloff is windowed to zero and the cull radius, 0 = unbounded. **There is no
+constant/linear/quadratic attenuation triple** and never has been in the photometric era; spot
+cutoffs (stored as COSINES of the half-angles, not radians); area size; `cast_shadows`; the
+shadow indices and the emissive source id are the engine's.
 
-**Camera:** position, up, look-at, FOV, aspect, near/far; orbit params
-(theta/phi/distance/height/zoom + orbit speed).
+**Camera:** position and look-at (`camera_set_position` / `camera_set_look_at`, which re-derive
+the orbit); the orbit (theta/phi/distance) and the aspect, DERIVED, written by the orbit moves
+and the frame; settings: up, FOV, near/far, the ortho height and switch, `max_distance`, the two
+speeds.
 
 ## Lighting Environment
 
@@ -1373,12 +1410,24 @@ scene_add_light(scene, create_light(&key));
 ```
 After creation a Camera's pose goes through `camera_set_position` / `camera_set_look_at`
 (each re-derives the orbit parameters, so a camera moved by pose and then orbited continues
-from where it is) and a Light's frame through `light_set_direction` / `light_set_up` (the
-authored copy the node transform rotates); every other field on either is a plain write. A
+from where it is) and a Light's frame through `light_set_position` / `light_set_direction` /
+`light_set_up` (the authored copy the node transform carries); every other field on either is a
+plain write. A
 light's intensity is the one desc field whose zero is a value: zero emits nothing, which is
 how a scene file declines the default rig, so a lit light says how bright. A scene with no
 light at all, no environment and zero ambient is warned once as it renders; the zero light
 counts as an answer and is not (spec 11.107).
+
+**Everything else on a live object is a field, and the header says which** (spec 11.108; the
+three roles are stated once, at the top of "Key Data Structures"). Under a struct's SETTINGS
+banner the fields are plain writes at any time:
+```c
+engine->show_fps = true;
+engine->exit_after_frames = 30;
+engine->postfx->fog_density = 0.002f;
+mesh->draw_mode = MESH_LINES;
+node_set_position(node, (vec3){0, 1, 0}); // the translation column of original_transform
+```
 
 **Run the low-level engine loop:**
 ```c

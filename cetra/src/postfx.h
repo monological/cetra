@@ -168,8 +168,7 @@ typedef struct PostFX {
     // the reflection buffers), fog_ambient (postfx_set_fog_ambient, which also
     // takes it away from the sky), the SSS profile table (postfx_add /
     // postfx_reset_sss_profile) and the LUT's texture, size and name
-    // (postfx_load_lut / postfx_clear_lut). lut_strength, lut_interp and
-    // taa_enabled are settings.
+    // (postfx_load_lut / postfx_clear_lut).
     int width, height;             // Render size: what the scene and the pre-TAA
                                    // chain rasterize at (post size x render_scale)
     int post_width, post_height;   // Post size (display x ss_scale): the TAAU
@@ -270,10 +269,11 @@ typedef struct PostFX {
     GLuint quad_vao;
     GLuint quad_vbo;
 
-    // Borrowed, never owned -- the Engine holds it. The post chain runs the
-    // metering passes that FEED exposure but does not decide what it is; see
-    // exposure.h for why that split exists. Non-const because the metering pass
-    // hands each frame's measured luminance back.
+    // Borrowed, never owned -- the Engine holds it and installs it before the
+    // first run. The post chain runs the metering passes that FEED exposure but
+    // does not decide what it is; see exposure.h for why that split exists.
+    // Non-const because the metering pass hands each frame's measured
+    // luminance back.
     Exposure* exposure;
 
     float bloom_threshold;      // Linear luminance where bloom starts
@@ -379,12 +379,10 @@ typedef struct PostFX {
     int froxel_built_z;
     float fog_anisotropy; // Henyey-Greenstein g (forward scattering)
     float fog_sun_boost;  // Artistic multiplier on the shaft in-scatter
-    // Isotropic ambient in-scatter radiance. Owned by the sky while
-    // fog_ambient_from_sky is set: its zenith radiance is copied here every
-    // frame, so the fog's ambient follows the sun. postfx_set_fog_ambient
-    // stores a value AND clears the flag; a direct write is stamped over.
+    // Isotropic ambient in-scatter radiance. The sky's while
+    // fog_ambient_from_sky is set; postfx_set_fog_ambient to take it.
     vec3 fog_ambient;
-    bool fog_ambient_from_sky; // Default true; clear it to own fog_ambient
+    bool fog_ambient_from_sky; // Default true: the sky's zenith radiance, every frame
     bool froxel_ready;         // Lazy-alloc guard for the volumes below
     GLuint froxel_fbo;         // Attachment-less; a layer is bound per slice draw
     GLuint froxel_scatter[2];  // RGBA16F volumes: in-scatter radiance + extinction, indexed by
@@ -735,14 +733,6 @@ int postfx_scaled_dim(int post_dim, float render_scale);
 // leaves no targets behind: the chain is unusable until a later size succeeds.
 bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render_scale);
 void free_postfx(PostFX* fx);
-
-// Borrow the Engine's exposure. Must be called before the first postfx_run; the
-// chain reads camera settings and the adaptation key from it, and writes each
-// frame's metered luminance back through exposure_set_adapted_luminance.
-void postfx_set_exposure(PostFX* fx, Exposure* exposure);
-// Borrowed, same shape as the exposure above: Engine-owned, PostFX-reads. NULL
-// leaves every pass here untimed.
-void postfx_set_profiler(PostFX* fx, struct Profiler* profiler);
 
 // Per-material SSS scatter profiles. The app resets the table when it configures
 // a scene's skin materials, then adds one profile per distinct skin material

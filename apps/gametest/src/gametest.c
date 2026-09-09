@@ -96,7 +96,7 @@ static void create_door(Game* game, vec3 position) {
     vec3 frame_pos;
     glm_vec3_copy(position, frame_pos);
     frame_pos[1] = door_height / 2.0f; // Center vertically
-    entity_set_position(frame, frame_pos);
+    glm_vec3_copy(frame_pos, frame->position);
 
     // Frame visual (post at hinge edge)
     vec3 frame_size = {0.2f, door_height / 2.0f, 0.2f};
@@ -119,7 +119,7 @@ static void create_door(Game* game, vec3 position) {
     float frame_half_width = 0.2f;
     door_pos[0] += frame_half_width + door_width / 2.0f;
     door_pos[1] = door_height / 2.0f;
-    entity_set_position(door_entity, door_pos);
+    glm_vec3_copy(door_pos, door_entity->position);
 
     // Door visual
     vec3 door_size = {door_width / 2.0f, door_height / 2.0f, door_thickness / 2.0f};
@@ -177,7 +177,7 @@ static void spawn_falling_box(Game* game) {
     float x = (rand01() - 0.5f) * 20.0f;
     float z = (rand01() - 0.5f) * 20.0f;
     vec3 pos = {x, 15.0f + rand01() * 5.0f, z};
-    entity_set_position(box, pos);
+    glm_vec3_copy(pos, box->position);
 
     // Random color
     vec3 color = {0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f};
@@ -325,7 +325,7 @@ static void on_init(Game* game) {
 
     // Create floor entity (static physics body)
     Entity* floor = create_entity(em, "floor");
-    entity_set_position(floor, (vec3){0, -0.5f, 0});
+    glm_vec3_copy((vec3){0, -0.5f, 0}, floor->position);
 
     // Floor visual
     SceneNode* floor_node = create_node();
@@ -359,7 +359,7 @@ static void on_init(Game* game) {
 
     // Create player entity with CharacterController
     player_entity = create_entity(em, "player");
-    entity_set_position(player_entity, (vec3){0, 2.0f, 0});
+    glm_vec3_copy((vec3){0, 2.0f, 0}, player_entity->position);
 
     // Player visual (capsule approximated as box for now)
     vec3 player_size = {0.5f, 1.0f, 0.5f};
@@ -569,10 +569,9 @@ static void on_shutdown(Game* game) {
 
 // Mouse callback for camera control
 static void mouse_button_callback(Engine* engine, int button, int action, int mods) {
+    (void)engine;
     if (drag_controller) {
-        double x, y;
-        glfwGetCursorPos(engine->window, &x, &y);
-        mouse_drag_on_button(drag_controller, button, action, mods, x, y);
+        mouse_drag_on_button(drag_controller, button, action, mods);
     }
 }
 

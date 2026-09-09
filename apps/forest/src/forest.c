@@ -1821,7 +1821,7 @@ static void region_emit(Region* r, const Placement* items, int count, Mesh* cons
 // The desc is the only thing the cook's two paths disagree about.
 static RigidBody* region_add_body(Region* r, const char* name, const PhysicsShapeDesc* desc) {
     Entity* e = create_entity(g_entities, name);
-    entity_set_position(e, (vec3){0.0f, 0.0f, 0.0f});
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, e->position);
     RigidBody* rb = entity_add_rigid_body(e, g_physics, desc, MOTION_STATIC, OBJ_LAYER_STATIC);
     if (rb)
         r->collider = e;
@@ -2555,7 +2555,7 @@ static void on_init(Game* game) {
     float spawn_x = g_terrain.center[0], spawn_z = g_terrain.center[1];
     float spawn_y = terrain_height_at(&g_terrain, spawn_x, spawn_z) + capsule_rest + 0.02f;
     g_player = create_entity(em, "player");
-    entity_set_position(g_player, (vec3){spawn_x, spawn_y, spawn_z});
+    glm_vec3_copy((vec3){spawn_x, spawn_y, spawn_z}, g_player->position);
     CharacterControllerConfig cc = character_controller_default_config();
     cc.capsule_radius = 0.4f;
     cc.capsule_half_height = 0.9f;

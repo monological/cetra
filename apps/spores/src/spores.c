@@ -325,10 +325,9 @@ static void on_shutdown(Game* game) {
 }
 
 static void mouse_button_callback(Engine* engine, int button, int action, int mods) {
+    (void)engine;
     if (g_drag) {
-        double x, y;
-        glfwGetCursorPos(engine->window, &x, &y);
-        mouse_drag_on_button(g_drag, button, action, mods, x, y);
+        mouse_drag_on_button(g_drag, button, action, mods);
     }
 }
 

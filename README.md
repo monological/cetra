@@ -304,6 +304,14 @@ bound, the engine derives the camera's matrices each frame and draws the scene
 when handed no render hook, and a mesh it will not draw, or a scene with no
 light at all, is said once in the log rather than rendered as a plausible frame.
 
+After creation, a live object's fields play one of three roles and its header
+says which: the ones under SETTINGS are plain writes at any time
+(`engine->show_fps = true`, `engine->exit_after_frames = 30`,
+`mesh->draw_mode = MESH_LINES`, `postfx->fog_density = 0.002f`), the ones
+under BY FUNCTION name the function that reacts for them
+(`engine_set_msaa_samples`, `material_set_albedo_tex`), and the ones under
+ENGINE-OWNED are read and never written. There is no plain-store setter.
+
 The public headers are the ones an app may name; the rest of the engine's
 headers are internal and not on your include path. A header that a public one
 includes still resolves, so a consumer never has to know the split.

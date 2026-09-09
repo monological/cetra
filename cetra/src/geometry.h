@@ -1,6 +1,15 @@
 #ifndef GEOMETRY_H
 #define GEOMETRY_H
 
+/*
+ * Procedural primitives: a point, circle, rectangle, bezier curve, cylinder,
+ * box, plane or sphere, each described by a small struct filled with
+ * designated initialisers and generated into a Mesh's arrays by its
+ * mesh_generate_<shape>. A generator fills the arrays and the draw mode and
+ * nothing else; a circle or rectangle that is not filled comes out as lines
+ * with a width, which the shape program draws and the PBR program cannot.
+ */
+
 #include <cglm/cglm.h>
 
 #include "mesh.h"

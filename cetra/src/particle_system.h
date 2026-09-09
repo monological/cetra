@@ -1,6 +1,21 @@
 #ifndef _PARTICLE_SYSTEM_H_
 #define _PARTICLE_SYSTEM_H_
 
+/*
+ * A particle system: emitters, each a pool with composable spawn, init and
+ * update modules and a pluggable renderer, driven by one sim backend (CPU, or
+ * transform feedback on the GPU). A scene citizen: the scene owns it, a node
+ * borrows it and lends its world transform as the spawn frame, and the frame
+ * ticks and draws it with nothing further from the app (specs 5.0, 5.1).
+ *
+ * The path from nothing to motes on screen: create the system, set a
+ * backend, build an emitter with a renderer and its modules, add the emitter,
+ * scene_add_particle_system, then node_set_particle_system on a node under
+ * the root. The tick has two homes and only one runs: the game framework's
+ * fixed step when the app uses it, the engine's own per-frame hook when it
+ * does not.
+ */
+
 #include <stddef.h>
 
 #include "particle_emitter.h"

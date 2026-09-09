@@ -2,6 +2,20 @@
 #ifndef _SCENE_H_
 #define _SCENE_H_
 
+/*
+ * The scene graph and what a scene owns: a tree of SceneNodes under a root the
+ * scene makes for itself, and the registries -- lights, cameras, materials,
+ * particle systems, skeletons, animations -- plus the environment subsystems
+ * that hang off it (shadows, IBL, sky, probes, GI, water, wind).
+ *
+ * A node is a local pose with meshes and an optional light, camera or particle
+ * system attached. The engine walks the tree once a frame after the app's
+ * pre_render hook, deriving every global transform, so a node moved or added
+ * there is drawn where it stands; a node moved from the render hook is a
+ * frame late. Attaching a mesh uploads it, and a material belongs to the
+ * first scene whose draw list walks past it.
+ */
+
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
@@ -34,10 +48,10 @@ typedef struct DrawList DrawList;
  */
 typedef struct SceneNode {
     // ENGINE-OWNED: the graph's links and what the transform walk derives.
-    // Read freely, never write.
-    char* name; // node_set_name; freed with the node
+    // Read freely, never write; node_add_child and node_remove_child are the
+    // links' functions.
     struct SceneNode* parent;
-    struct SceneNode** children; // node_add_child, node_remove_child; owned
+    struct SceneNode** children; // owned
     size_t children_count;
     // Allocated slots in `children`. Doubling rather than one realloc per add,
     // because a quadtree re-parents its whole selection when the camera crosses a
@@ -58,9 +72,10 @@ typedef struct SceneNode {
     // them arriving at once is the whole frame.
     bool prev_valid;
 
-    // BY FUNCTION: node_add_mesh (uploads what it attaches), node_set_light,
-    // node_set_camera, node_set_particle_system. The three installs are
-    // borrowed; the Scene frees them.
+    // BY FUNCTION: node_set_name (owned string), node_add_mesh (uploads what
+    // it attaches), node_set_light, node_set_camera, node_set_particle_system.
+    // The three installs are borrowed; the Scene frees them.
+    char* name;
     Mesh** meshes;
     size_t mesh_count;
     Light* light;
@@ -69,9 +84,6 @@ typedef struct SceneNode {
 
     // SETTINGS: plain stores. Write them directly, at any time.
     mat4 original_transform; // The local pose; node_set_position writes its column
-    // This node's opt-out from the XYZ gizmo overlay (default on); the engine's
-    // show_xyz is the switch, and the scene's xyz program draws it.
-    bool show_xyz;
 } SceneNode;
 
 // malloc
@@ -260,15 +272,23 @@ typedef struct Scene {
     // never entered.
     Decal decals[DECAL_MAX]; // scene_add_decal, scene_clear_decals
     int decal_count;
-    // The program the XYZ gizmo overlay draws every node with; NULL and nothing
-    // draws one. Borrowed from the engine's registry.
+    // The program the XYZ gizmo overlay draws every node with; NULL until
+    // installed, and nothing draws one. Borrowed from the engine's registry.
     ShaderProgram* xyz_shader_program; // scene_set_xyz_program
     struct Wind* wind;                 // scene_set_wind; owned
+    // Called after an origin shift has been applied, with the delta that was
+    // subtracted. The honest admission that "hold nothing in world space" is
+    // not a contract this engine can impose on an app: physics bodies, cached
+    // scatter positions and a player's own idea of where it is are all outside
+    // the graph, and the engine cannot enumerate them.
+    void (*on_origin_shift)(const vec3 delta, void* ctx); // scene_set_origin_callback
+    void* origin_shift_ctx;
 
     // SETTINGS: plain stores. Write them directly, at any time.
 
-    // The environment subsystems, installed by a plain write and owned from
-    // then on: the scene frees them. Each carries its own settings.
+    // The environment subsystems, installed ONCE by a plain pointer write and
+    // owned from then on: the scene frees them at its end, and nothing frees
+    // one that is replaced. Each carries its own settings.
     IBLResources* ibl;             // image-based lighting (optional)
     ReflectionProbeSet* probe_set; // local reflection probes (optional)
     struct SkyAtmosphere* sky;     // procedural sky feeding ibl (optional)
@@ -304,13 +324,6 @@ typedef struct Scene {
     bool shadow_catcher;           // Ground plane receiving shadows over the skybox
     float shadow_catcher_strength; // Shadow darkness 0..1
 
-    // Called after an origin shift has been applied, with the delta that was
-    // subtracted. The honest admission that "hold nothing in world space" is
-    // not a contract this engine can impose on an app: physics bodies, cached
-    // scatter positions and a player's own idea of where it is are all outside
-    // the graph, and the engine cannot enumerate them.
-    void (*on_origin_shift)(const vec3 delta, void* ctx);
-    void* origin_shift_ctx;
     // How far the camera may drift from the storage origin before the engine
     // re-centres on it, in world units. 0 (the default) never shifts, so this is
     // opt-in and every existing app is unaffected.
@@ -351,12 +364,10 @@ void scene_propagate_transforms(Scene* scene);
 void scene_latch_prev_transforms(Scene* scene);
 
 // camera
-void scene_set_cameras(Scene* scene, Camera** cameras, size_t camera_count);
 void scene_add_camera(Scene* scene, Camera* camera);
 Camera* scene_find_camera(Scene* scene, const char* name);
 
 // light
-void scene_set_lights(Scene* scene, Light** lights, size_t light_count);
 // Whether the scene took ownership; a refused light is still the caller's to
 // free, which is why this one add answers where its siblings do not.
 bool scene_add_light(Scene* scene, Light* light);

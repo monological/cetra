@@ -234,41 +234,9 @@ void entity_set_component_free(Entity* entity, ComponentType type, void (*free_f
     }
 }
 
-void entity_set_position(Entity* entity, vec3 pos) {
-    if (entity) {
-        glm_vec3_copy(pos, entity->position);
-    }
-}
-
-void entity_set_rotation(Entity* entity, versor rot) {
-    if (entity) {
-        glm_quat_copy(rot, entity->rotation);
-    }
-}
-
 void entity_set_rotation_euler(Entity* entity, vec3 euler) {
     if (entity) {
         glm_euler_xyz_quat(euler, entity->rotation);
-    }
-}
-
-void entity_set_scale(Entity* entity, vec3 scale) {
-    if (entity) {
-        glm_vec3_copy(scale, entity->scale);
-    }
-}
-
-void entity_set_scale_uniform(Entity* entity, float scale) {
-    if (entity) {
-        entity->scale[0] = scale;
-        entity->scale[1] = scale;
-        entity->scale[2] = scale;
-    }
-}
-
-void entity_translate(Entity* entity, vec3 delta) {
-    if (entity) {
-        glm_vec3_add(entity->position, delta, entity->position);
     }
 }
 

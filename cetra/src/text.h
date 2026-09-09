@@ -165,9 +165,8 @@ void text_mesh_set_max_width(TextMesh* mesh, float width);
 void text_mesh_set_char_color(TextMesh* mesh, size_t index, vec4 color);
 void text_mesh_set_char_offset(TextMesh* mesh, size_t index, vec3 offset);
 
-// Transform
+// The transform is a plain field; this composes a translation into it.
 void text_mesh_set_position(TextMesh* mesh, vec3 position);
-void text_mesh_set_transform(TextMesh* mesh, mat4 transform);
 
 // Build and upload
 void text_mesh_rebuild(TextMesh* mesh);

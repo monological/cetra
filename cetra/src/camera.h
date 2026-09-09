@@ -2,6 +2,19 @@
 #ifndef _CAMERA_H_
 #define _CAMERA_H_
 
+/*
+ * A camera: a pose (eye and target), a projection (perspective by field of
+ * view, or orthographic by view-volume height), and the same pose expressed
+ * as an orbit about the target (distance, theta, phi) for the controllers
+ * that move it that way (specs 11.106, 11.107).
+ *
+ * Created from a CameraDesc; NULL means every default. The engine derives
+ * the view and projection matrices itself, right after the app's pre_render
+ * hook, so an app writes the pose and nothing else, and the aspect follows
+ * the framebuffer every frame. The pose and the orbit describe each other,
+ * and the two pose setters below say how that is kept.
+ */
+
 #include <cglm/cglm.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -10,18 +23,15 @@ typedef struct Camera {
     // ENGINE-OWNED: derived state. Read freely, never write.
     char* name;         // Copied at creation; freed with the camera
     float aspect_ratio; // Re-derived from the framebuffer every frame
-    // The pose as an orbit: re-derived from position and look_at by the two
-    // pose setters, written by the orbit moves, which then place the eye from
-    // them. A direct write to these three is followed by camera_orbit(c, 0, 0).
+
+    // BY FUNCTION: through, or followed by, the function named.
+    vec3 position; // camera_set_position
+    vec3 look_at;  // camera_set_look_at
+    // The pose as an orbit about look_at. Written directly, then
+    // camera_orbit(c, 0, 0) places the eye from them; the orbit moves do both.
     float theta;
     float phi;
     float distance;
-
-    // BY FUNCTION: camera_set_position, camera_set_look_at. Each re-derives the
-    // orbit above, so a camera moved by pose and then orbited continues from
-    // where it is.
-    vec3 position;
-    vec3 look_at;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     vec3 up_vector;       // The view's up; +Y by default
@@ -60,17 +70,16 @@ typedef struct CameraDesc {
     float ortho_height; // 0 = perspective
 } CameraDesc;
 
-// NULL means every default. The orbit parameters (distance, theta, phi) are
-// derived from the pose here and by the two pose setters below; the orbit
-// tuning (max_distance, the two speeds) and everything else on a Camera is a
-// plain field.
+// NULL means every default. The orbit parameters are derived from the pose.
 Camera* create_camera(const CameraDesc* desc);
 void free_camera(Camera* camera);
 
 // The pose. Functions because the orbit parameters follow it: each re-derives
 // distance, theta and phi, so a camera moved by pose and then orbited continues
 // from where it is. The converse holds too: a write to the three directly is
-// followed by camera_orbit(camera, 0, 0), which moves the eye onto them.
+// followed by camera_orbit(camera, 0, 0), which moves the eye onto them. A
+// direct write to the pose alone leaves the orbit stale, which is the whole
+// reason these two are not fields.
 void camera_set_position(Camera* camera, vec3 position);
 void camera_set_look_at(Camera* camera, vec3 look_at);
 
@@ -81,7 +90,9 @@ static inline float camera_ortho_height(const Camera* camera) {
     return camera->is_orthographic ? camera->ortho_height : 0.0f;
 }
 
-// Camera movement helpers
+// The moves. camera_translate slides eye and target by one world vector, which
+// leaves the orbit as it is; the others are built on it or on camera_orbit.
+void camera_translate(Camera* camera, const vec3 offset);
 void camera_orbit(Camera* camera, float delta_theta, float delta_phi);
 void camera_pan(Camera* camera, float delta_x, float delta_y);
 void camera_zoom(Camera* camera, float delta);

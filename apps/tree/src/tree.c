@@ -680,10 +680,9 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
  * Callbacks
  */
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
+    (void)engine;
     if (drag_controller) {
-        double x, y;
-        glfwGetCursorPos(engine->window, &x, &y);
-        mouse_drag_on_button(drag_controller, button, action, mods, x, y);
+        mouse_drag_on_button(drag_controller, button, action, mods);
     }
 }
 
@@ -1806,8 +1805,6 @@ int main(int argc, char** argv) {
 
     engine->show_gui = !args.headless;
     engine->show_fps = !args.headless;
-    engine->show_wireframe = false;
-    engine->show_xyz = false;
 
     // Last before the loop, so the snapshot lands on top of everything this
     // app just configured -- the render app's ordering, for the same reason.

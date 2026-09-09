@@ -1,6 +1,20 @@
 #ifndef _ENGINE_H_
 #define _ENGINE_H_
 
+/*
+ * The engine: one window with its GL context, the HDR multisampled G-buffer
+ * the scene renders into, the post chain that turns it into a frame, the
+ * program cache, the camera, and the frame loop that runs an app's three
+ * hooks around all of it (specs 11.106-11.108).
+ *
+ * Created from an EngineConfig, which carries what the window and the first
+ * render-target build read; NULL means every default. After that the loop
+ * is engine_run, and everything the frame consults it reads at the frame top
+ * from the Engine's own fields -- so an app that wants the wireframe, the FPS
+ * counter, a frame limit or a clear colour writes the field and nothing else;
+ * the struct's banner says which few fields are not like that.
+ */
+
 #include <stdint.h>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -59,12 +73,15 @@ typedef struct Engine {
     //
     // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
     // rebuilds the targets at the next frame top), screenshot_path (owned
-    // string), the five callbacks, user_data, and the render clock and time
-    // (installs of borrowed state, engine_set_render_clock / _render_time).
+    // string), the five callbacks and user_data (installs), and the animation
+    // clock (engine_set_render_clock samples a borrowed one each frame,
+    // engine_set_render_time sets a frame's directly for a loop that is not
+    // engine_run).
     //
     // Everything else -- the feature toggles, the draw levers, the overlays,
-    // the run's counts, clear_color, camera_mode, current_render_mode, the
-    // exposure block -- is written directly and read at the frame top.
+    // the run's counts, clear_color, camera_mode, current_render_mode -- is
+    // written directly and read at the frame top. The exposure block has
+    // banners of its own.
     GLFWwindow* window;
     char* window_title; // Title of the GLFW window
 
@@ -273,7 +290,7 @@ typedef struct Engine {
     bool capturing_irradiance;
 
     Camera* camera;         // The camera the frame renders (engine_set_camera); borrowed
-    CameraMode camera_mode; // Free or orbit; a plain write
+    CameraMode camera_mode; // Free or orbit
 
     Scene** scenes;             // Array of scenes managed by the engine
     size_t scene_count;         // Number of scenes
@@ -351,7 +368,7 @@ typedef struct Engine {
     // the frame top, so nothing has to run when one changes.
     bool show_gui;
     bool show_wireframe; // Every edge of every face, albedo-only, no culling
-    bool show_xyz;       // The XYZ gizmo on every node whose own show_xyz is set
+    bool show_xyz;       // The XYZ gizmo on every node, drawn with the scene's xyz program
     bool show_fps;
     bool show_camera_hud; // Live camera pose overlay next to the FPS readout
     bool show_bones;      // X-ray bone visualization
@@ -538,14 +555,13 @@ void engine_set_msaa_samples(Engine* engine, int samples);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
 // exposure pins at unity with adaptation off, the tone curve is the identity,
-// the GUI panel and the FPS counter are hidden, and the scene's ambient
-// radiance becomes white, under which a material's albedo reaches the display
-// as authored with no light in the scene at all. Left alone on purpose: the
-// sample count, since multisampling is the anti-aliasing 2D line art wants,
-// the clear colour, and any light the app adds on top, which then adds to the
-// flat colour rather than replacing it. All of it is plain fields, so an app
-// that wants one back writes it after the call. The scene half is skipped
-// when `scene` is NULL.
+// and the scene's ambient radiance becomes white, under which a material's
+// albedo reaches the display as authored with no light in the scene at all.
+// Left alone on purpose: the sample count, since multisampling is the
+// anti-aliasing 2D line art wants, the clear colour, the overlays, and any
+// light the app adds on top, which then adds to the flat colour rather than
+// replacing it. All of it is plain fields, so an app that wants one back
+// writes it after the call. The scene half is skipped when `scene` is NULL.
 void engine_set_2d_preset(Engine* engine, Scene* scene);
 // Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);

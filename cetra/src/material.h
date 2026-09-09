@@ -1,6 +1,19 @@
 #ifndef _MATERIAL_H_
 #define _MATERIAL_H_
 
+/*
+ * A material: the PBR parameters a surface is shaded with, up to thirteen
+ * textures, the glTF extension parameters (transmission, clearcoat, sheen,
+ * subsurface, anisotropy, and the rest), an alpha mode, and the program that
+ * draws it. There is no description struct: a material is seventy-odd tuning
+ * fields a GUI edits live, so it is created with defaults and then written.
+ *
+ * Ownership is the thing to know. A material belongs to the first scene that
+ * registers it, which the draw-list build does for any material it walks
+ * past; a mesh in a second scene carrying it is refused by name. The per-texel
+ * masks, layer maps and splat live in the scene's material texture array.
+ */
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <cglm/cglm.h>

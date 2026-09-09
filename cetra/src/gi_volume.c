@@ -353,7 +353,9 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
                             GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip);
 
         // Projection is a fullscreen-quad pass; depth and culling would only get
-        // in its way, and the capture left both enabled.
+        // in its way. Both go back as found: this runs inside the frame, after
+        // the frame top has set the culling the rest of the frame draws with.
+        GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
         glBindVertexArray(gi->quad_vao);
@@ -361,7 +363,8 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
         gi_project_tile(gi, probe, true, hysteresis);
         glBindVertexArray(0);
         glEnable(GL_DEPTH_TEST);
-        glEnable(GL_CULL_FACE);
+        if (cull_was)
+            glEnable(GL_CULL_FACE);
     }
 
     gi->captures_total += budget;

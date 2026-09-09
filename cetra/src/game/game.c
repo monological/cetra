@@ -294,9 +294,15 @@ void game_run(Game* game) {
                game->on_render ? game_scene_render : NULL);
 }
 
+// Both installs take ownership, so the one being replaced is freed here; the
+// entity manager first when both go, since character controllers reach into
+// the physics world to release their inner bodies.
 void game_set_physics_world(Game* game, PhysicsWorld* world) {
-    if (game)
-        game->physics_world = world;
+    if (!game || game->physics_world == world)
+        return;
+    if (game->physics_world)
+        free_physics_world(game->physics_world);
+    game->physics_world = world;
 }
 
 PhysicsWorld* game_get_physics_world(const Game* game) {
@@ -304,8 +310,11 @@ PhysicsWorld* game_get_physics_world(const Game* game) {
 }
 
 void game_set_entity_manager(Game* game, EntityManager* em) {
-    if (game)
-        game->entity_manager = em;
+    if (!game || game->entity_manager == em)
+        return;
+    if (game->entity_manager)
+        free_entity_manager(game->entity_manager);
+    game->entity_manager = em;
 }
 
 EntityManager* game_get_entity_manager(const Game* game) {

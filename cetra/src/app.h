@@ -2,6 +2,14 @@
 #ifndef _APP_H_
 #define _APP_H_
 
+/*
+ * App helpers: the two input controllers an app forwards its callbacks to,
+ * one for a 3D viewer and one for a 2D canvas, a three-point light rig, and
+ * the input gate. Neither controller owns the drag; the engine's input state
+ * does, and both read it from there. Each is created with defaults and tuned
+ * by writing its fields.
+ */
+
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
@@ -13,8 +21,10 @@ typedef struct Camera Camera;
 /*
  * Mouse Drag Camera Controller
  *
- * Handles mouse drag for orbit and pan camera movement.
- * Supports both ORBIT and FREE camera modes.
+ * For a 3D viewer: a drag orbits the camera about its target, a shift-drag
+ * pans, the keys walk and zoom, and an auto-orbit spins the view until the
+ * user takes it. The two camera modes drag the same way and differ in what
+ * happens when nothing is dragged.
  */
 typedef struct MouseDragController {
     // ENGINE-OWNED (by the controller): the camera as the drag started; a
@@ -39,10 +49,8 @@ MouseDragController* create_mouse_drag_controller(Engine* engine);
 void free_mouse_drag_controller(MouseDragController* ctrl);
 
 // Forwarded from the app's mouse-button callback: latches the camera pose a drag
-// starts from. The position arguments are unused; the engine's input state
-// carries the drag.
-void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int mods, double x,
-                          double y);
+// starts from.
+void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int mods);
 
 // Once a frame: the auto-orbit, then the drag in flight as a delta from the
 // latched pose (orbit, or pan with shift), then the max-distance clamp.
@@ -64,12 +72,11 @@ bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods)
 typedef struct CanvasController {
     // ENGINE-OWNED (by the controller): the pan in flight.
     Engine* engine;
-    bool panning; // A drag that started on empty space
-    vec3 pan_start_look_at;
-    vec3 pan_start_position;
+    bool panning;           // A drag that started on empty space
+    vec3 pan_start_look_at; // The target as the drag began
 
     // SETTINGS: plain stores. Write them directly, at any time.
-    float zoom_min; // ortho_height range; both 0 = unclamped
+    float zoom_min; // ortho_height range; a bound left 0 is unclamped
     float zoom_max;
     float zoom_step; // ortho_height factor per wheel notch, default 0.9
 } CanvasController;
@@ -83,8 +90,8 @@ void canvas_world_under_cursor(const Engine* engine, double fb_x, double fb_y, v
 
 // Forwarded from the app's mouse-button callback, after any picking of its
 // own. A left press pans when the engine's pick found nothing; a release
-// stops. Returns whether a pan is in flight.
-bool canvas_on_button(CanvasController* ctrl, int button, int action, int mods);
+// stops.
+void canvas_on_button(CanvasController* ctrl, int button, int action, int mods);
 
 // Forwarded from the app's cursor callback, in framebuffer pixels. Moves the
 // picked node on the drag plane (x and y; z untouched), else pans.

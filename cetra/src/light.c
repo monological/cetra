@@ -119,6 +119,17 @@ float light_intensity_in_units(const Light* light) {
                                                             : light->intensity;
 }
 
+void light_set_position(Light* light, vec3 position) {
+    if (!light)
+        return;
+    // Authored position: both the local copy and the world-space one the
+    // renderer reads. A light on a node has the world copy re-derived by the
+    // transform walk; a light on no node keeps this one, which is why a
+    // direct write to the authored copy alone would never reach a pixel.
+    glm_vec3_copy(position, light->original_position);
+    glm_vec3_copy(position, light->global_position);
+}
+
 void light_set_direction(Light* light, vec3 direction) {
     if (!light)
         return;

@@ -2,6 +2,20 @@
 #ifndef _LIGHT_H_
 #define _LIGHT_H_
 
+/*
+ * A light: directional, point, spot or area panel, in photometric units
+ * (candela, lux, nits), with an authored frame the owning node's transform
+ * carries into the world each frame (specs 9.9, 11.57, 11.106).
+ *
+ * Created from a LightDesc; NULL means every default, which is a white
+ * directional pointing down that emits NOTHING -- intensity is the one desc
+ * field whose zero is a value, because a scene file declines the default rig
+ * that way, so a lit light says how bright. A light reaches a fragment
+ * through the scene's registry (scene_add_light) and a node
+ * (node_set_light); local lights go through the clustered grid, directionals
+ * reach everything.
+ */
+
 #include <cglm/cglm.h>
 #include <stdbool.h>
 
@@ -57,9 +71,11 @@ typedef struct Light {
     // guarantees an id is "assigned once and never reused".
     unsigned emissive_source_id;
 
-    // BY FUNCTION: light_set_direction, light_set_up, light_set_intensity_units.
-    // Authored light-local direction; the walk rotates it into `direction`.
-    vec3 original_direction;
+    // BY FUNCTION: each through the function named. The frame's three
+    // authored copies: the walk carries them into the world copies above for
+    // a light on a node, and the setters write both for a light on none.
+    vec3 original_position;  // light_set_position
+    vec3 original_direction; // light_set_direction
     // The luminaire's roll about `direction`. On a panel it spans the height
     // axis, with the normal along `direction` and width from cross(up,
     // direction); on a point or spot it is an asymmetric IES profile's azimuth
@@ -67,16 +83,15 @@ typedef struct Light {
     // Orthonormalized against the direction (light_emission_frame), so a sloppy
     // authored up is fine. Read only by those two -- a symmetric profile and a
     // bare cone never ask.
-    vec3 original_up;
+    vec3 original_up; // light_set_up
     // Always in the canonical unit for `type` (candela / lux / nits), whatever
-    // `units` says was authored -- shading reads this directly, and the setter
-    // is what converts.
+    // `units` says was authored -- shading reads this directly, and
+    // light_set_intensity_units is what converts.
     float intensity;
     LightUnits units;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     LightType type;
-    vec3 original_position; // Light-local; the walk moves it into global_position
     vec3 color;
     vec3 specular;
     vec3 ambient;
@@ -145,9 +160,9 @@ typedef struct LightDesc {
 // NULL means every default: a white directional pointing down, emitting nothing.
 Light* create_light(const LightDesc* desc);
 
-// The direction and up axis carry an authored copy and a world copy the node
-// transform rotates, and the intensity a unit, so these three stay functions.
-// Everything else on a Light is a plain field.
+// The frame: each writes the authored copy and the world copy together, so a
+// light on no node (which the walk never re-derives) is placed too.
+void light_set_position(Light* light, vec3 position);
 void light_set_direction(Light* light, vec3 direction);
 void light_set_up(Light* light, vec3 up);
 

@@ -1,6 +1,14 @@
 #ifndef _MESH_H_
 #define _MESH_H_
 
+/*
+ * A mesh: vertex arrays a generator or an importer fills, the GL buffers they
+ * are uploaded into, and what the upload measured about them (specs 11.107,
+ * 11.108). The content is plain fields; attaching the mesh to a node uploads
+ * it, and a LOD chain is built before attaching, since it rewrites the
+ * indices. A mesh may be shared between nodes through mesh_ref.
+ */
+
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
@@ -157,7 +165,6 @@ typedef struct Mesh {
 
     GLuint bone_id_vbo;     // VBO for bone IDs
     GLuint bone_weight_vbo; // VBO for bone weights
-    bool is_skinned;        // Set at import when the bone arrays are
 
     // Where each bone's own vertices sit in BIND space, so a posed mesh can be
     // bounded and therefore culled. NULL until the upload measures them, and
@@ -259,13 +266,14 @@ typedef struct Mesh {
     size_t vertex_count; // Number of vertices
     size_t index_count;  // Number of indices
 
-    // Skinning input (NULL if not skinned)
+    // Skinning input (NULL if not skinned). is_skinned is what the upload and
+    // the program choice read, so an author of the two arrays sets it too.
     int* bone_ids;             // BONES_PER_VERTEX ints per vertex (ivec4)
     float* bone_weights;       // BONES_PER_VERTEX floats per vertex (vec4)
     struct Skeleton* skeleton; // Shared skeleton pointer (not owned)
+    bool is_skinned;
 
-    // Borrowed. The first scene whose draw list walks past it registers it.
-    Material* material;
+    Material* material; // Borrowed; see scene_add_material
 } Mesh;
 
 // The index range to draw for `level`, clamped to what this mesh actually has.

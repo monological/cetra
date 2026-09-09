@@ -149,9 +149,8 @@ typedef struct SkyAtmosphere {
     // night_floor_brightness are written directly and then re-derived through
     // scene_environment_changed(scene, engine): the sky-view LUT, the env cube,
     // the sky-mirroring probes and the GI sweep all descend from them, and a
-    // write without the call reaches the background alone. The same four for
-    // the cloud layer, below. Everything else the sky draws from is read live
-    // each frame, the moon included.
+    // write without the call reaches the background alone. Everything else the
+    // sky draws from is read live each frame, the moon included.
     bool enabled;
     bool debug_luts; // blit the LUTs onto the composited frame
 

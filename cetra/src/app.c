@@ -39,13 +39,10 @@ void free_mouse_drag_controller(MouseDragController* ctrl) {
     }
 }
 
-void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int mods, double x,
-                          double y) {
+void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int mods) {
     (void)button;
     (void)action;
     (void)mods;
-    (void)x;
-    (void)y;
 
     if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
         return;
@@ -103,11 +100,11 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
         glm_vec3_scale(up_vec, -engine->input.drag_fb_y * pan_speed, up_offset);
         glm_vec3_add(pan_offset, up_offset, pan_offset);
 
-        vec3 new_pos, new_look;
-        glm_vec3_add(ctrl->start_position, pan_offset, new_pos);
-        glm_vec3_add(ctrl->start_look_at, pan_offset, new_look);
-        camera_set_position(camera, new_pos);
-        camera_set_look_at(camera, new_look);
+        // As a delta from the latched target, so the events do not accumulate
+        vec3 delta;
+        glm_vec3_add(ctrl->start_look_at, pan_offset, delta);
+        glm_vec3_sub(delta, camera->look_at, delta);
+        camera_translate(camera, delta);
     } else {
         // Orbit the target from the captured angles; camera_orbit clamps the
         // elevation away from the poles.
@@ -232,41 +229,42 @@ void canvas_world_under_cursor(const Engine* engine, double fb_x, double fb_y, v
     out[2] = camera->look_at[2];
 }
 
-bool canvas_on_button(CanvasController* ctrl, int button, int action, int mods) {
+void canvas_on_button(CanvasController* ctrl, int button, int action, int mods) {
     (void)mods;
     if (!ctrl || !ctrl->engine || button != GLFW_MOUSE_BUTTON_LEFT) {
-        return ctrl ? ctrl->panning : false;
+        return;
     }
     Engine* engine = ctrl->engine;
     if (action == GLFW_RELEASE) {
         ctrl->panning = false;
-        return false;
+        return;
     }
     // The engine has already picked the node under the press, if any.
     ctrl->panning = engine->input.selected_node == NULL && engine->camera != NULL;
     if (ctrl->panning) {
         glm_vec3_copy(engine->camera->look_at, ctrl->pan_start_look_at);
-        glm_vec3_copy(engine->camera->position, ctrl->pan_start_position);
     }
-    return ctrl->panning;
 }
 
-// Slide the whole view with the cursor. Camera and look_at move by the same
-// vector, so the view direction never changes.
+// Slide the whole view with the cursor: the world point that was under the
+// press stays under it. The eye and the target move together, so the view
+// direction never changes.
 static void _canvas_pan(CanvasController* ctrl) {
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
-    if (!camera || engine->fb_height <= 0) {
+    if (!camera) {
         return;
     }
-    float units_per_pixel = camera->ortho_height / (float)engine->fb_height;
-    vec3 offset = {-engine->input.drag_fb_x * units_per_pixel,
-                   -engine->input.drag_fb_y * units_per_pixel, 0.0f};
-    vec3 look_at, position;
-    glm_vec3_add(ctrl->pan_start_look_at, offset, look_at);
-    glm_vec3_add(ctrl->pan_start_position, offset, position);
-    camera_set_look_at(camera, look_at);
-    camera_set_position(camera, position);
+    vec3 press = GLM_VEC3_ZERO_INIT, now = GLM_VEC3_ZERO_INIT, offset, delta;
+    canvas_world_under_cursor(engine, engine->input.center_fb_x, engine->input.center_fb_y, press);
+    canvas_world_under_cursor(engine, engine->input.center_fb_x + engine->input.drag_fb_x,
+                              engine->input.center_fb_y + engine->input.drag_fb_y, now);
+    glm_vec3_sub(press, now, offset);
+    // As a delta from the latched target rather than from the current one,
+    // so a sequence of motion events does not accumulate rounding.
+    glm_vec3_add(ctrl->pan_start_look_at, offset, delta);
+    glm_vec3_sub(delta, camera->look_at, delta);
+    camera_translate(camera, delta);
 }
 
 void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y) {
@@ -281,9 +279,9 @@ void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y) {
     if (node) {
         // Where the cursor is on the drag plane, as a delta from where the
         // press was, applied to where the node was: x and y only, since the
-        // plane is the board and the node's depth is its own.
-        // Zeroed: a write through a pointer reads as a use before write.
-        vec3 on_plane = {0.0f, 0.0f, 0.0f}, delta, target;
+        // plane is the board and the node's depth is its own. on_plane is
+        // seeded because the unproject leaves it alone with no camera.
+        vec3 on_plane = GLM_VEC3_ZERO_INIT, delta, target;
         engine_mouse_to_drag_plane(engine, fb_x, fb_y, on_plane);
         glm_vec3_sub(on_plane, engine->input.drag_start_world_pos, delta);
         glm_vec3_add(engine->input.drag_object_start_pos, delta, target);
@@ -302,29 +300,26 @@ void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset) {
     }
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
+    float h = camera->ortho_height;
     double fb_x = 0.0, fb_y = 0.0;
-    if (!engine_cursor_fb(engine, &fb_x, &fb_y)) {
+    if (h <= 0.0f || !engine_cursor_fb(engine, &fb_x, &fb_y)) {
         return;
     }
-    vec3 anchor = {0.0f, 0.0f, 0.0f};
+    vec3 anchor = GLM_VEC3_ZERO_INIT;
     canvas_world_under_cursor(engine, fb_x, fb_y, anchor);
 
-    float h = camera->ortho_height;
+    // Each bound applies on its own, so a range with one end set is one-sided.
     float h_new = h * powf(ctrl->zoom_step, (float)yoffset);
-    if (ctrl->zoom_min > 0.0f || ctrl->zoom_max > 0.0f) {
-        h_new = glm_clamp(h_new, ctrl->zoom_min, ctrl->zoom_max);
+    if (ctrl->zoom_min > 0.0f) {
+        h_new = fmaxf(h_new, ctrl->zoom_min);
     }
-    if (h <= 0.0f) {
-        return;
+    if (ctrl->zoom_max > 0.0f) {
+        h_new = fminf(h_new, ctrl->zoom_max);
     }
     float k = 1.0f - h_new / h;
 
     vec3 shift = {(anchor[0] - camera->look_at[0]) * k, (anchor[1] - camera->look_at[1]) * k, 0.0f};
-    vec3 look_at, position;
-    glm_vec3_add(camera->look_at, shift, look_at);
-    glm_vec3_add(camera->position, shift, position);
-    camera_set_look_at(camera, look_at);
-    camera_set_position(camera, position);
+    camera_translate(camera, shift);
     camera->ortho_height = h_new;
 }
 

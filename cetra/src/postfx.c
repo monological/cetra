@@ -624,7 +624,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // the final tonemap pass box-downsamples that to the display size.
     postfx_derive_sizes(fx, width, height, ss_scale, render_scale);
 
-    fx->exposure = NULL; // borrowed at postfx_set_exposure; see exposure.h
+    fx->exposure = NULL; // borrowed; the engine installs its own, see exposure.h
     // Working space (shaders/include/view.glsl), so these read as stops over
     // diffuse white rather than as absolute radiance: bloom starts exactly at
     // white, fades in over the half stop below it, and ignores anything past
@@ -1682,18 +1682,6 @@ int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
     int slot = fx->sss_profile_count++;
     glm_vec4_copy((vec4){color[0], color[1], color[2], radius}, fx->sss_profiles[slot]);
     return slot;
-}
-
-void postfx_set_exposure(PostFX* fx, Exposure* exposure) {
-    if (!fx)
-        return;
-    fx->exposure = exposure;
-}
-
-void postfx_set_profiler(PostFX* fx, struct Profiler* profiler) {
-    if (!fx)
-        return;
-    fx->profiler = profiler;
 }
 
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,

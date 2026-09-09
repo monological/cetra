@@ -49,8 +49,6 @@
 #define DEFAULT_WIDTH  1920
 #define DEFAULT_HEIGHT 1080
 
-const float MIN_DIST = 2000.0f;
-const float MAX_DIST = 3000.0f;
 const float CAM_ANGULAR_SPEED = 0.5f;
 
 // Total analytic key-light intensity split across the HDR's light lobes.
@@ -2104,10 +2102,9 @@ static void report_skinning_stretch(SceneNode* node, const AnimationState* state
  * Callbacks
  */
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
+    (void)engine;
     if (drag_controller) {
-        double x, y;
-        glfwGetCursorPos(engine->window, &x, &y);
-        mouse_drag_on_button(drag_controller, button, action, mods, x, y);
+        mouse_drag_on_button(drag_controller, button, action, mods);
     }
 }
 
@@ -3146,13 +3143,9 @@ int main(int argc, char** argv) {
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
 
-    // Create drag controller with auto-orbit (fixed camera in headless mode for
-    // deterministic, comparable screenshots)
+    // The drag controller; its auto-orbit is tuned once the model's framing is
+    // known, below.
     drag_controller = create_mouse_drag_controller(engine);
-    drag_controller->auto_orbit_enabled = !args.headless;
-    drag_controller->auto_orbit_speed = CAM_ANGULAR_SPEED;
-    drag_controller->auto_orbit_min_dist = MIN_DIST;
-    drag_controller->auto_orbit_max_dist = MAX_DIST;
 
     /*
      * Import model with async texture loading.
@@ -3908,8 +3901,6 @@ int main(int argc, char** argv) {
     // land in screenshots, which breaks byte-comparability
     engine->show_gui = !args.headless;
     engine->show_fps = !args.headless;
-    engine->show_wireframe = false;
-    engine->show_xyz = false;
     engine->show_bones = args.show_bones != 0;
 
     // Capture the local reflection probe: the scene rendered once into a

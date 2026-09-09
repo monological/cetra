@@ -281,20 +281,6 @@ void scene_set_root(Scene* scene, SceneNode* root_node) {
  * Cameras
  */
 
-void scene_set_cameras(Scene* scene, Camera** cameras, size_t camera_count) {
-    if (!scene)
-        return;
-    scene->cameras = cameras;
-    scene->camera_count = camera_count;
-}
-
-void scene_set_lights(Scene* scene, Light** lights, size_t light_count) {
-    if (!scene)
-        return;
-    scene->lights = lights;
-    scene->light_count = light_count;
-}
-
 void scene_add_camera(Scene* scene, Camera* camera) {
     if (!scene || !camera)
         return;
@@ -781,8 +767,6 @@ SceneNode* create_node() {
     node->camera = NULL;
     node->particle_system = NULL;
 
-    node->show_xyz = true;
-
     return node;
 }
 
@@ -992,9 +976,7 @@ void node_set_position(SceneNode* node, const vec3 position) {
         log_error("node_set_position: NULL node");
         return;
     }
-    node->original_transform[3][0] = position[0];
-    node->original_transform[3][1] = position[1];
-    node->original_transform[3][2] = position[2];
+    glm_vec3_copy((float*)position, node->original_transform[3]);
 }
 
 typedef struct {

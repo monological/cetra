@@ -726,7 +726,10 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
         }
 
-        submit_draw_run(state, u, item, instances, (item->flags & DRAW_DOUBLE_SIDED) != 0, stats);
+        // Resolved here, as render.h asks: under wireframe the whole pass runs
+        // with culling off, so no item may toggle it.
+        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !engine->show_wireframe;
+        submit_draw_run(state, u, item, instances, two_sided, stats);
 
         if (use_a2c) {
             glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
@@ -942,7 +945,7 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
         stats->triangles += (size_t)(index_count / 3) * instances;
     }
 
-    if (two_sided && !state->no_cull)
+    if (two_sided)
         glEnable(GL_CULL_FACE);
 }
 
@@ -1001,7 +1004,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     SubmitStats* stats = profiler_submit(engine->profiler);
     ShaderProgram* program = engine->depth_prepass_program;
     UniformManager* u = program->uniforms;
-    SubmitState state = {.no_cull = engine->show_wireframe};
+    SubmitState state = {0};
     InstanceChunk chunk;
 
     // Depth only: colour writes off rather than the draw buffers detached, so
@@ -1071,7 +1074,8 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         }
         render_update_skinning_uniforms(program, mesh);
 
-        submit_draw_run(&state, u, item, run, (item->flags & DRAW_DOUBLE_SIDED) != 0, stats);
+        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !engine->show_wireframe;
+        submit_draw_run(&state, u, item, run, two_sided, stats);
         drew = true;
         i += run - 1;
     }
@@ -1491,7 +1495,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     }
 
     // Bound state the draw loop skips re-setting; see render.h
-    SubmitState submit_state = {.no_cull = engine->show_wireframe};
+    SubmitState submit_state = {0};
 
     _count_late_meshes(scene, scene->draw_list, &cull);
 
@@ -2034,7 +2038,10 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
         engine->postfx->taa_enabled = false;
 
     // Scene GL state: capture may run before the render loop's per-frame
-    // preamble has ever executed, so establish it explicitly
+    // preamble has ever executed, so establish it explicitly. Culling is put
+    // back the way it was found: a GI capture runs inside the frame, after
+    // the frame top has set the state the rest of the frame draws with.
+    GLboolean saved_cull = glIsEnabled(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
@@ -2136,6 +2143,8 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+    if (!saved_cull)
+        glDisable(GL_CULL_FACE);
 }
 
 /*

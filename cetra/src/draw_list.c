@@ -278,9 +278,10 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
             return false;
     }
 
-    // Only while the overlay is on: with it off this would append every node
-    // in the scene, every frame, for a submit that draws none of them.
-    if (gizmos && node->show_xyz) {
+    // Only while the overlay is on and the scene can draw it: otherwise this
+    // would append every node in the scene, every frame, for a submit that
+    // draws none of them.
+    if (gizmos && scene->xyz_shader_program) {
         if (!push_gizmo(list, node))
             return false;
     }
