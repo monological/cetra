@@ -12,6 +12,8 @@
 // For MaterialRoad and the road caps, which a layered material carries inline.
 #include "roads.h"
 
+struct Scene;
+
 // How a material's alpha is rendered (glTF alphaMode semantics).
 //
 // The normals G-buffer's alpha channel (color attachment 1) is a shared
@@ -95,9 +97,9 @@ typedef struct Material {
     // by allocator address.
     unsigned id;
     char* name; // authored material name (glTF/FBX); scene files match on it
-    // In a scene's material registry, which owns it from then on. A material
-    // belongs to the first scene that registers it.
-    bool registered;
+    // The scene whose registry holds this material and frees it, NULL until the
+    // first one registers it. A second scene's mesh carrying it is refused.
+    struct Scene* owner;
     vec3 albedo;
     vec3 emissive;           // Emissive color factor (multiplied with emissive texture)
     float emissive_strength; // HDR multiplier (KHR_materials_emissive_strength), feeds bloom

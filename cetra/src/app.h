@@ -24,16 +24,12 @@ typedef struct MouseDragController {
     double start_x;
     double start_y;
 
-    // Orbit mode start state
-    float orbit_start_phi;
-    float orbit_start_theta;
-
-    // Free mode start state
-    float free_start_yaw;
-    float free_start_pitch;
-    float free_look_distance;
-    vec3 free_start_look_at;
-    vec3 free_start_cam_pos;
+    // The camera as the drag started; a drag is a delta from here
+    float start_theta;
+    float start_phi;
+    float start_distance;
+    vec3 start_look_at;
+    vec3 start_position;
 
     // Configuration
     float sensitivity;

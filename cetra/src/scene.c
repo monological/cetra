@@ -68,9 +68,7 @@ Scene* create_scene() {
         return NULL;
     }
 
-    // A scene has a root from the start; an app attaches under it. This is
-    // where creating a scene came to need a live GL context: the node carries
-    // the gizmo's buffers, where nothing else here touches GL.
+    // A scene has a root from the start; an app attaches under it.
     scene->root_node = create_node();
     if (!scene->root_node) {
         log_error("Failed to allocate the scene's root node");
@@ -83,7 +81,6 @@ Scene* create_scene() {
 
     scene->transparent_mesh_count = 0;
     scene->transmissive_mesh_count = 0;
-    scene->materials_dirty = true;
 
     // Initialize shadow system
     scene->shadow_system = create_shadow_system(DEFAULT_SHADOW_MAP_SIZE);
@@ -279,7 +276,6 @@ void scene_set_root(Scene* scene, SceneNode* root_node) {
     if (scene->root_node)
         free_node(scene->root_node);
     scene->root_node = root_node;
-    scene->materials_dirty = true;
 }
 
 /*
@@ -430,8 +426,12 @@ void scene_update_particle_systems(Scene* scene, float dt, float t) {
 }
 
 void scene_add_material(Scene* scene, Material* material) {
-    if (!scene || !material || material->registered)
+    if (!scene || !material || material->owner == scene)
         return;
+    if (material->owner) {
+        log_error("material '%s' belongs to another scene", material->name ? material->name : "");
+        return;
+    }
 
     size_t new_count = scene->material_count + 1;
     Material** new_materials = realloc(scene->materials, new_count * sizeof(Material*));
@@ -443,43 +443,8 @@ void scene_add_material(Scene* scene, Material* material) {
     scene->materials = new_materials;
     scene->materials[scene->material_count] = material;
     scene->material_count = new_count;
-    material->registered = true;
+    material->owner = scene;
     scene->material_textures_dirty = true; // a new material's textures must be (re)packed
-}
-
-static void _register_node_materials(Scene* scene, SceneNode* node) {
-    if (!node)
-        return;
-    for (size_t i = 0; i < node->mesh_count; i++) {
-        if (node->meshes[i] && node->meshes[i]->material)
-            scene_add_material(scene, node->meshes[i]->material);
-    }
-    for (size_t i = 0; i < node->children_count; i++)
-        _register_node_materials(scene, node->children[i]);
-}
-
-// Register every material reachable from the graph, so the registry describes
-// what the scene actually draws rather than only what an importer put there.
-//
-// Until this existed, `scene_add_material` was called from exactly one place
-// -- the Assimp import path -- so a scene that built its materials in code had
-// an EMPTY registry no matter how many meshes it drew. Four things read that
-// registry and all four were silently wrong for such a scene: subsurface
-// detection (so `apps/tree` authored subsurface on leaves and grass and never
-// once ran the SSS pass), material-texture-array packing, lookup by name, and
-// free_scene -- which meant those materials were also leaked, since nothing else
-// in the tree calls free_material.
-//
-// Gated on the graph having changed, because it is otherwise a reconciliation
-// loop whose only job is to discover nothing happened: the walk is recursive and
-// scene_add_material linear-scans per mesh, so an unguarded per-frame call is
-// O(meshes x materials) forever to maintain state that moves only when the graph
-// does.
-void scene_sync_materials(Scene* scene) {
-    if (!scene || !scene->materials_dirty)
-        return;
-    _register_node_materials(scene, scene->root_node);
-    scene->materials_dirty = false;
 }
 
 void scene_set_wind(Scene* scene, struct Wind* wind) {
@@ -818,19 +783,8 @@ SceneNode* create_node() {
     node->camera = NULL;
     node->particle_system = NULL;
 
-    // The XYZ gizmo: the same three axes in every node's own buffer, filled
-    // here since the geometry is constant and the context is live.
+    // xyz
     node->show_xyz = true;
-    glGenVertexArrays(1, &node->xyz_vao);
-    glGenBuffers(1, &node->xyz_vbo);
-    glBindVertexArray(node->xyz_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, node->xyz_vbo);
-    glBufferData(GL_ARRAY_BUFFER, xyz_vertices_size, xyz_vertices, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
     node->xyz_shader_program = NULL;
 
     return node;

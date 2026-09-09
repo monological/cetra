@@ -69,8 +69,6 @@ typedef struct SceneNode {
     struct ParticleSystem* particle_system; // borrowed; owned by the Scene
 
     bool show_xyz;
-    GLuint xyz_vao;
-    GLuint xyz_vbo;
     ShaderProgram* xyz_shader_program;
 } SceneNode;
 
@@ -166,7 +164,6 @@ typedef struct Scene {
 
     Material** materials;
     size_t material_count;
-    bool materials_dirty; // graph may hold materials the registry has not seen
 
     // Derived emissive area panels (spec 11.49), owned. Opaque: the registry and
     // the local fit it holds are emissive_light.c's business, and putting the fit
@@ -321,8 +318,7 @@ typedef struct Scene {
     size_t animation_count;
 } Scene;
 
-// A scene with a root node ("root") to attach under; needs a live GL context,
-// like a Mesh or a SceneNode, since the root carries gizmo buffers.
+// A scene with a root node ("root") to attach under.
 Scene* create_scene();
 void free_scene(Scene* scene);
 
@@ -408,17 +404,13 @@ void scene_add_particle_system(Scene* scene, struct ParticleSystem* sys);
 void scene_update_particle_systems(Scene* scene, float dt, float t);
 
 // material. The registry is what the scene owns and frees, what the variant
-// resolver and the mask array walk, and what the config snapshot carries. A
-// material reaches it three ways, and an app need not call this at all: the
-// importer registers what it builds; a graph built before the first frame is
-// walked once (scene_sync_materials, when creating a scene or setting its root
-// marked it dirty); and a mesh attached mid-run has its material registered
-// by the draw list at the frame's first build, since a SceneNode has no way
-// back to its Scene and the list is the walk that has both in hand.
+// resolver and the mask array walk, and what the config snapshot carries. An
+// app need not call this: the frame's draw-list build registers every material
+// it walks past, before anything reads the registry, and the importer registers
+// what it builds before any frame. A material belongs to the first scene that
+// registers it, and a mesh carrying another scene's material is refused, by
+// name, rather than drawn from a registry that will free it.
 void scene_add_material(Scene* scene, Material* material);
-// Register every material reachable from the graph, if it is marked dirty.
-// Idempotent and free when clean, so the engine calls it every frame.
-void scene_sync_materials(Scene* scene);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void scene_set_wind(Scene* scene, struct Wind* wind);

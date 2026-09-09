@@ -408,6 +408,10 @@ void free_engine(Engine* engine) {
             glDeleteVertexArrays(1, &engine->catcher_vao);
         if (engine->catcher_vbo)
             glDeleteBuffers(1, &engine->catcher_vbo);
+        if (engine->xyz_vao)
+            glDeleteVertexArrays(1, &engine->xyz_vao);
+        if (engine->xyz_vbo)
+            glDeleteBuffers(1, &engine->xyz_vbo);
 
         free_ltc_tables(engine->ltc);
         engine->ltc = NULL;
@@ -954,6 +958,18 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
+    // The axis gizmo, the same layout with its constant geometry uploaded once.
+    glGenVertexArrays(1, &engine->xyz_vao);
+    glGenBuffers(1, &engine->xyz_vbo);
+    glBindVertexArray(engine->xyz_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, engine->xyz_vbo);
+    glBufferData(GL_ARRAY_BUFFER, xyz_vertices_size, xyz_vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
     engine->bone_program = create_bone_program();
     if (engine->bone_program) {
         engine_add_program(engine, engine->bone_program);
@@ -1230,16 +1246,14 @@ void engine_set_camera_mode(Engine* engine, CameraMode mode) {
     }
 }
 
-// The view and projection matrices from the camera as it stands. The frame
-// loop calls this once, after the pre-render hook and before the shadow pass
-// (which reads the view matrix and the aspect for its cascade fit), so a pose
-// an app writes in that hook is the one the whole frame renders.
+// The view and projection matrices, and the camera's aspect, from the camera
+// and the framebuffer as they stand.
 static void _engine_derive_camera(Engine* engine) {
     Camera* camera = engine->camera;
     if (!camera)
         return;
 
-    glm_lookat(camera->position, camera->look_at, camera->up_vector, engine->view_matrix);
+    camera_view_matrix(camera, engine->view_matrix);
 
     // A minimized window is 0x0, and 0/0 is a NaN that would propagate through
     // the projection into the view-proj, the frustum, and next frame's
@@ -2493,6 +2507,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
     glCullFace(GL_BACK); // Cull back faces
     glFrontFace(GL_CCW); // Front faces are defined in counter-clockwise order
 
+    // No hook means the scene draws itself; a hook is for what an app does
+    // around that draw.
+    EngineRenderFunc draw = render ? render : engine_render_scene;
+
     engine->last_frame_time = glfwGetTime();
 
     while (!glfwWindowShouldClose(engine->window)) {
@@ -2728,12 +2746,15 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                                    (size_t)rw * (size_t)rh * (size_t)engine->msaa_samples_actual);
         engine->normals_this_frame =
             frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
-        // Make the material registry describe what the graph actually draws
-        // before anything reads it. An app that builds materials in code never
-        // called scene_add_material, so its registry was empty and every
-        // consumer of it -- the subsurface gate below included -- silently saw a
-        // scene with no materials at all.
-        scene_sync_materials(shadow_scene);
+        // The frame's draw list, built here so the material registry describes
+        // what the graph draws before anything reads it: the build registers
+        // every material it walks past, and the subsurface gate below and the
+        // mask-array build read the registry. A stamp compare when the shadow
+        // pass or a capture already built it this frame, and the frame's one
+        // build otherwise. An app that builds materials in code never called
+        // scene_add_material, so its registry was empty and every consumer
+        // silently saw a scene with no materials at all.
+        engine_build_draw_list(engine, shadow_scene);
         // SSS writes attachment 4 (skin diffuse) only when it has real work: the
         // feature is on AND the scene carries a subsurface material. This keeps a
         // non-skin scene byte-identical to master (the blur/composite would add 0)
@@ -2799,14 +2820,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // POM (§4.11): resolve height maps once the async texture loader drains.
         heights_ensure_resolved(current_scene, engine);
 
-        // No hook means the scene draws itself; a hook is for what an app does
-        // around that draw.
-        if (current_scene != NULL) {
-            if (render != NULL)
-                render(engine, current_scene);
-            else
-                engine_render_scene(engine, current_scene);
-        }
+        if (current_scene != NULL)
+            draw(engine, current_scene);
 
         // The feedback vote pass (spec 11.67), after the scene so the draw
         // list is this frame's; its readback retires at fixed latency into the

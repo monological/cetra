@@ -1112,12 +1112,19 @@ static void _engine_gui_panel(Engine* engine) {
     }
 
     if (camera && igCollapsingHeader_TreeNodeFlags("Camera Transform", 0)) {
-        igDragFloat3("Look At", camera->look_at, 0.1f, -100.0f, 100.0f, "%.2f", 0);
+        // Through the setter and the orbit move, so the pose and the orbit
+        // parameters keep describing each other whichever side is dragged.
+        vec3 look_at;
+        glm_vec3_copy(camera->look_at, look_at);
+        if (igDragFloat3("Look At", look_at, 0.1f, -100.0f, 100.0f, "%.2f", 0))
+            camera_set_look_at(camera, look_at);
         igDragFloat3("Up", camera->up_vector, 0.1f, -25.0f, 25.0f, "%.2f", 0);
-        igSliderFloat("Distance", &camera->distance, 0.0f, 3000.0f, "%.2f", 0);
+        bool orbit_moved = igSliderFloat("Distance", &camera->distance, 0.0f, 3000.0f, "%.2f", 0);
         igSliderFloat("Height", &camera->height, -2000.0f, 2000.0f, "%.1f", 0);
-        igSliderFloat("Theta", &camera->theta, 0.0f, GLM_PI_2, "%.3f", 0);
-        igSliderFloat("Phi", &camera->phi, 0.0f, GLM_PI_2, "%.3f", 0);
+        orbit_moved |= igSliderFloat("Theta", &camera->theta, 0.0f, GLM_PI_2, "%.3f", 0);
+        orbit_moved |= igSliderFloat("Phi", &camera->phi, 0.0f, GLM_PI_2, "%.3f", 0);
+        if (orbit_moved)
+            camera_orbit(camera, 0.0f, 0.0f);
         igSliderFloat("FOV", &camera->fov_radians, 0.1f, GLM_PI, "%.3f", 0);
         igSliderFloat("Zoom Speed", &camera->zoom_speed, 0.0f, 2.0f, "%.3f", 0);
         igSliderFloat("Orbit Speed", &camera->orbit_speed, 0.0f, 0.1f, "%.4f", 0);

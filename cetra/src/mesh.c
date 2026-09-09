@@ -214,21 +214,23 @@ void mesh_compute_aabb(Mesh* mesh) {
     }
 }
 
-void mesh_compute_normals(Mesh* mesh) {
+bool mesh_compute_normals(Mesh* mesh) {
     if (!mesh || mesh->vertex_count == 0 || !mesh->vertices)
-        return;
+        return false;
     if (mesh->draw_mode != MESH_TRIANGLES)
-        return;
+        return false;
 
     float* normals = calloc(mesh->vertex_count * 3, sizeof(float));
     if (!normals) {
         log_error("Failed to allocate normals for %zu vertices", mesh->vertex_count);
-        return;
+        return false;
     }
 
     // Unnormalised face normals summed per vertex: the cross product's length
-    // is twice the face area, which is the weighting.
-    size_t corner_count = mesh->indices ? mesh_index_total(mesh) : mesh->vertex_count;
+    // is twice the face area, which is the weighting. Level 0 only
+    // (index_count, not the whole EBO): a LOD chain's coarser levels re-cover
+    // the same surface and would weight every vertex toward their facets.
+    size_t corner_count = mesh->indices ? mesh->index_count : mesh->vertex_count;
     for (size_t c = 0; c + 2 < corner_count; c += 3) {
         size_t ia = mesh->indices ? mesh->indices[c] : c;
         size_t ib = mesh->indices ? mesh->indices[c + 1] : c + 1;
@@ -254,6 +256,7 @@ void mesh_compute_normals(Mesh* mesh) {
 
     free(mesh->normals);
     mesh->normals = normals;
+    return true;
 }
 
 // The vertex maxima the wind bound needs (see mesh.h). Taken at upload, with
@@ -375,10 +378,8 @@ void mesh_upload(Mesh* mesh) {
 
     // Every measurement of the final arrays, in one place, before they go.
     mesh_compute_aabb(mesh);
-    if (mesh->draw_mode == MESH_TRIANGLES && !mesh->normals && mesh->vertex_count > 0) {
+    if (!mesh->normals && mesh_compute_normals(mesh))
         log_info("mesh %u: no normals; computed from its faces", mesh->id);
-        mesh_compute_normals(mesh);
-    }
     measure_wind_extremes(mesh);
     measure_bone_bounds(mesh);
 

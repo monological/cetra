@@ -140,15 +140,17 @@ Each G-buffer target is only written when a post pass that consumes it is active
 2. **App update callback** -- input, physics, the game framework's fixed step.
 3. **Origin shift**, then the **sky cycle tick**.
 4. **App PRE-RENDER callback, then the engine's transform walk**
-   (`scene_latch_prev_transforms` + `scene_propagate_transforms`). See below --
-   this is a one-statement-wide window and all three of its edges are
-   load-bearing.
+   (`scene_latch_prev_transforms` + `scene_propagate_transforms`), **then the
+   camera's view and projection matrices**, derived by the engine from the pose
+   the hook left (spec 11.107). See below -- this is a one-statement-wide window
+   and all three of its edges are load-bearing.
 5. **GI probe captures**, while the volume is dirty.
 6. **Shadow depth pass** (`render_shadow_depth_pass`) -- gated on
    `scene->shadow_system->enabled`; runs before the scene FBO is bound.
 7. Bind scene MSAA FBO, set supersampled viewport + draw buffers, clear.
 8. Async texture uploads (<=5/frame), mask-array build, POM height resolve.
-9. App render callback -> `engine_render_scene`.
+9. App render callback -> `engine_render_scene`, or `engine_render_scene` itself
+   when the app passed no callback (spec 11.107).
 10. `engine_present_frame` -> PostFX chain + GUI.
 11. Screenshot capture (headless/CI), swap buffers.
 
@@ -158,7 +160,12 @@ the walk used to be each app's own call in its RENDER callback, i.e. after the
 shadow pass -- so every shadow in every app was drawn from LAST frame's
 transforms and every LOD level chosen from stale positions. `apps/render` also
 stepped its skeletal pose there, so a rig's shadow lagged its body for the same
-reason; both halves moved together.
+reason; both halves moved together. **The camera is read right after the hook
+returns**: the engine derives the view and projection matrices there (spec
+11.107), so an app writes a pose and nothing else. Every app used to rebuild
+both matrices at the end of its own hook, and the three that did so only
+through the drag controller skipped it whenever the GUI held the pointer. A
+pose written from `render` is a frame late.
 
 **The window is one statement wide and its edges are not stylistic.** It has to
 land AFTER the origin shift, which rewrites root-child locals and the whole
@@ -1064,7 +1071,9 @@ GameConfig config = {.engine = {.title = "My Game", .headless = headless}}; // z
 Game* game = create_game(&config); // creates and initialises the engine
 engine_set_exit_after_frames(game->engine, frames); // the run's settings go on the engine
 game_set_scene(game, scene);
-game_set_init(game, on_init);      // + on_update / on_render / on_shutdown
+game_set_init(game, on_init);      // + on_update / on_pre_render / on_shutdown; on_render
+                                   // only for what the app does AROUND the draw, since the
+                                   // loop draws the scene itself when none is set
 game_run(game);                    // fixed-timestep loop
 free_game(game);
 ```
@@ -1150,7 +1159,14 @@ on the `Scene`.
 
 - Engine owns scenes, shader programs, PostFX.
 - Scene owns root node, materials (shared), texture pool, particle systems, shadow /
-  IBL / sky / probe.
+  IBL / sky / probe. **`create_scene` makes the root** (named "root"; spec 11.107), so an
+  app attaches under `scene->root_node` and never builds one; `scene_set_root` frees the root
+  it replaces with its whole subtree, which is how the importer swaps in a file's own.
+- **A material belongs to the first scene that registers it**, and it need not be registered
+  by hand: the frame's draw-list build registers every material it walks past, before anything
+  reads the registry (the build is the walk with the scene in hand, which a SceneNode is not),
+  and the importer registers what it builds before any frame. A mesh carrying another scene's
+  material is refused by name rather than drawn from a registry that will free it.
 - SceneNode owns children (recursive) and meshes; **borrows** light / camera /
   particle_system (freed by the Scene, not the node).
 - **`free_node` UNLINKS from its parent first**, then frees the subtree, so any node may be freed
@@ -1325,21 +1341,25 @@ Scene* scene = create_scene_from_model_path("model.fbx", "textures/", engine->as
 engine_add_scene(engine, scene);
 ```
 
-**Create a mesh with a material:**
+**Create a mesh with a material, and add it to the scene graph:**
 ```c
 Mesh* mesh = create_mesh();
+mesh_generate_box(mesh, &(Box){.size = {1, 1, 1}});
 mesh->material = create_material();
 material_set_program(mesh->material, engine_get_program(engine, CETRA_PROGRAM_PBR));
-mesh_upload(mesh);
-```
 
-**Add to the scene graph:**
-```c
 SceneNode* node = create_node();
 node_set_name(node, "my_node");
-node_add_mesh(node, mesh);
+node_add_mesh(node, mesh); // uploads it, and the upload measures the AABB
 node_add_child(scene->root_node, node);
 ```
+Attaching uploads a mesh that has vertices and nothing on the GPU, and `mesh_upload`
+takes the AABB, the wind and bone extents, and normals if a triangle mesh has none (spec
+11.107). Call `mesh_upload` yourself only after editing the arrays in place, and build a
+LOD chain before attaching, since it rewrites the index array. What the draw list will
+not draw it says once, naming the node and the reason (nothing uploaded, no material, no
+program, a program whose setup failed, a draw mode the program's geometry stage cannot
+take); nothing is dropped in silence and nothing reaches a GL error at the draw.
 
 **A camera and a light**, each from a description struct -- fill the fields you mean,
 zero is the default named in the header (spec 11.106):
@@ -1351,20 +1371,25 @@ LightDesc key = {.type = LIGHT_DIRECTIONAL, .direction = {-0.3f, -1, -0.5f}, .in
 scene_add_light(scene, create_light(&key));
 ```
 After creation a Camera's pose goes through `camera_set_position` / `camera_set_look_at`
-and a Light's frame through `light_set_direction` / `light_set_up` (the authored copy the
-node transform rotates); every other field on either is a plain write. A light's
-intensity is the one desc field whose zero is a value: zero emits nothing, which is how a
-scene file declines the default rig, so a lit light says how bright.
+(each re-derives the orbit parameters, so a camera moved by pose and then orbited continues
+from where it is) and a Light's frame through `light_set_direction` / `light_set_up` (the
+authored copy the node transform rotates); every other field on either is a plain write. A
+light's intensity is the one desc field whose zero is a value: zero emits nothing, which is
+how a scene file declines the default rig, so a lit light says how bright. A scene with no
+light at all, no environment and zero ambient is warned once as it renders; the zero light
+counts as an answer and is not (spec 11.107).
 
 **Run the low-level engine loop:**
 ```c
 EngineConfig cfg = {.title = "Title", .width = 1920, .height = 1080};
 Engine* engine = create_engine(&cfg); // window, GL context, targets, post chain, programs
 // Three hooks, in frame order; any may be NULL. pre_render is where the camera
-// and any graph change go -- the engine propagates the graph right after it.
-engine_run(engine, update_callback, pre_render_callback, render_callback);
+// and any graph change go -- the engine propagates the graph and derives the
+// camera's matrices right after it. A NULL render draws the scene itself.
+engine_run(engine, update_callback, pre_render_callback, NULL);
 free_engine(engine);
 ```
+The frame clears to `engine->clear_color` (0.1 grey by default) where nothing draws.
 
 Everything the window or the first render-target build reads is an `EngineConfig` field
 (`headless`, `profiler`, `msaa_samples`, `taa`, ...), which is what makes the old

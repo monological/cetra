@@ -382,6 +382,10 @@ typedef struct Engine {
     ShaderProgram* bone_program;
     GLuint bone_line_vao;
     GLuint bone_line_vbo;
+    // The XYZ axis gizmo: one buffer of three lines, drawn under each node's
+    // own transform for every node that shows it.
+    GLuint xyz_vao;
+    GLuint xyz_vbo;
 
     // LTC area-light lookup tables (spec 9.2). Static fitted data, independent
     // of scene or environment.

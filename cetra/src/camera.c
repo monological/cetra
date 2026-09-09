@@ -5,6 +5,24 @@
 #include "util.h"
 #include "camera.h"
 
+// distance, theta and phi from the pose. Every write to the pose ends here and
+// every orbit move writes the pose from these, so the two never disagree; a
+// caller that writes the three directly follows with camera_orbit(camera, 0, 0)
+// to move the eye onto them.
+static void _camera_sync_orbit(Camera* camera) {
+    vec3 to_camera;
+    glm_vec3_sub(camera->position, camera->look_at, to_camera);
+    float dist = glm_vec3_norm(to_camera);
+
+    if (dist < 0.001f)
+        dist = 1000.0f;
+
+    camera->distance = dist;
+    // Clamped: rounding can put |y| a ulp past the norm, and asinf of that is NaN.
+    camera->theta = asinf(glm_clamp(to_camera[1] / dist, -1.0f, 1.0f));
+    camera->phi = atan2f(to_camera[2], to_camera[0]);
+}
+
 Camera* create_camera(const CameraDesc* desc) {
     static const CameraDesc none = {0};
     if (!desc)
@@ -35,7 +53,7 @@ Camera* create_camera(const CameraDesc* desc) {
 
     // The orbit parameters describe the pose just set, not a fixed 2000 units
     // that every orbiting app then had to overwrite by hand.
-    camera_sync_spherical_from_position(camera);
+    _camera_sync_orbit(camera);
     return camera;
 }
 
@@ -52,14 +70,14 @@ void camera_set_position(Camera* camera, vec3 position) {
     if (!camera)
         return;
     glm_vec3_copy(position, camera->position);
-    camera_sync_spherical_from_position(camera);
+    _camera_sync_orbit(camera);
 }
 
 void camera_set_look_at(Camera* camera, vec3 look_at) {
     if (!camera)
         return;
     glm_vec3_copy(look_at, camera->look_at);
-    camera_sync_spherical_from_position(camera);
+    _camera_sync_orbit(camera);
 }
 
 void camera_orbit(Camera* camera, float delta_theta, float delta_phi) {
@@ -209,23 +227,6 @@ void camera_enforce_max_distance(Camera* camera) {
         glm_vec3_scale(offset, camera->max_distance / dist, offset);
         glm_vec3_add(camera->look_at, offset, camera->position);
     }
-}
-
-void camera_sync_spherical_from_position(Camera* camera) {
-    if (!camera)
-        return;
-
-    vec3 to_camera;
-    glm_vec3_sub(camera->position, camera->look_at, to_camera);
-    float dist = glm_vec3_norm(to_camera);
-
-    if (dist < 0.001f)
-        dist = 1000.0f;
-
-    camera->distance = dist;
-    // Clamped: rounding can put |y| a ulp past the norm, and asinf of that is NaN.
-    camera->theta = asinf(glm_clamp(to_camera[1] / dist, -1.0f, 1.0f));
-    camera->phi = atan2f(to_camera[2], to_camera[0]);
 }
 
 void camera_view_matrix(Camera* camera, mat4 view) {

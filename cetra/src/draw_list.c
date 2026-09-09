@@ -217,15 +217,19 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
     return (uint8_t)mesh_lod_canonical(mesh, level);
 }
 
-// Why a mesh cannot be drawn, or NULL when it can. The one place that decides
-// it, so a consumer can assume every item is drawable, and the one place that
-// says so: each of these used to be a silent skip, and the last a GL error at
-// the draw that nothing read.
-static const char* _refusal(const Mesh* mesh) {
+// Why a mesh cannot be drawn in this scene, or NULL when it can. The one place
+// that decides it, so a consumer can assume every item is drawable, and the one
+// place that says so: each of these used to be a silent skip, and the draw-mode
+// one a GL error at the draw that nothing read. Every reason is a distinct
+// literal, so the stored pointer compares by identity.
+static const char* _refusal(const Mesh* mesh, const Scene* scene) {
     if (mesh->gpu_vertex_count == 0)
         return "nothing uploaded";
     if (!mesh->material)
         return "no material";
+    if (mesh->material->owner != scene)
+        return "material is not in this scene's registry (another scene's, or its registration "
+               "failed)";
     const ShaderProgram* program = mesh->material->shader_program;
     if (!program)
         return "material has no program";
@@ -246,19 +250,26 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
         Mesh* mesh = node->meshes ? node->meshes[i] : NULL;
         if (!mesh)
             continue;
-        // A material that arrived after the first frame's sync joins the
-        // registry here, the scene in hand; see scene_add_material.
-        if (mesh->material && !mesh->material->registered)
+        // A material nobody registered joins this scene's registry here, the
+        // scene in hand; a SceneNode has no way back to it.
+        if (mesh->material && !mesh->material->owner)
             scene_add_material(scene, mesh->material);
-        const char* refusal = _refusal(mesh);
-        if (refusal) {
-            if (!mesh->draw_refusal_logged) {
-                log_warn("node '%s' mesh %u not drawn: %s", node->name ? node->name : "unnamed",
-                         mesh->id, refusal);
-                mesh->draw_refusal_logged = true;
+        const char* refusal = _refusal(mesh, scene);
+        if (refusal != mesh->draw_refusal) {
+            // Said when the reason changes, so a mesh refused for one reason,
+            // then another, is told both, and a mesh that became drawable and
+            // was refused again is told again.
+            mesh->draw_refusal = refusal;
+            if (refusal) {
+                const ShaderProgram* program =
+                    mesh->material ? mesh->material->shader_program : NULL;
+                log_warn("node '%s' mesh %u (program %s) not drawn: %s",
+                         node->name ? node->name : "unnamed", mesh->id,
+                         program && program->name ? program->name : "none", refusal);
             }
-            continue;
         }
+        if (refusal)
+            continue;
 
         DrawItem item = {.mesh = mesh, .node = node, .lod = select_lod(mesh, node, lod)};
         classify(mesh, &item.lane, &item.flags);

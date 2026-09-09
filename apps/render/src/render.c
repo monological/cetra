@@ -3755,10 +3755,6 @@ int main(int argc, char** argv) {
                          scene_center[2] + camera_distance * cosf(pitch) * cosf(yaw)};
     camera_set_position(camera, auto_cam_pos);
     camera_set_look_at(camera, scene_center);
-    // The interactive auto-orbit's elevation, which it reads and never writes.
-    // After the pose, because the setters derive theta from it, and the framed
-    // pitch is not the orbit this app has always run at.
-    camera->theta = 0.60f;
 
     // Depth of field focuses on the subject (camera-to-model distance) unless
     // overridden. --film turns it on too; --no-dof forces it off. Range scales
@@ -3885,6 +3881,13 @@ int main(int argc, char** argv) {
     }
     mouse_drag_set_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
                               fminf(camera_distance * 0.5f, orbit_max), orbit_max);
+    // The auto-orbit runs at an elevation of its own, not the framed pitch, and
+    // it reads theta without ever writing it: move the eye there under the same
+    // gate that arms it, so headless keeps the framed pose.
+    if (!args.headless) {
+        camera->theta = 0.60f;
+        camera_orbit(camera, 0.0f, 0.0f);
+    }
 
     // Explicit camera pose override (--cam-eye/--cam-target): reproduce any
     // interactive view exactly, bypassing the yaw/pitch/distance orbit framing

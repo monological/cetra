@@ -143,9 +143,9 @@ typedef struct Mesh {
     size_t vertex_count; // Number of vertices
     size_t index_count;  // Number of indices
 
-    // Vertices resident on the GPU, set by mesh_upload; 0 = never uploaded.
-    // The draw list refuses on this, not on the VAO, which create_mesh
-    // generates before any data exists.
+    // Vertices resident on the GPU, set by mesh_upload; 0 = never uploaded,
+    // which is what makes a mesh undrawable. The VAO cannot say so: create_mesh
+    // generates it before any data exists.
     size_t gpu_vertex_count;
 
     Material* material;
@@ -242,9 +242,10 @@ typedef struct Mesh {
     // makes that sort a total order is its source index, not this.
     unsigned id;
 
-    // The draw list said why it is not drawing this mesh, once. It refuses on
-    // every build, and an app needs to hear the reason one time, not per frame.
-    bool draw_refusal_logged;
+    // Why this mesh is not being drawn, or NULL while it is: the reason the
+    // last draw-list build settled on, logged when it changes rather than per
+    // frame, and readable by an app that wants to know why its mesh is missing.
+    const char* draw_refusal;
 
     // LOD chain: simplified INDEX RANGES over the same vertices, concatenated
     // into the one EBO. No extra buffers, no extra VAO, and the offset works
@@ -360,10 +361,12 @@ void mesh_set_draw_mode(Mesh* mesh, MeshDrawMode draw_mode);
 // only for a mesh that is measured without being drawn.
 void mesh_compute_aabb(Mesh* mesh);
 
-// Area-weighted vertex normals from a MESH_TRIANGLES mesh's faces, indexed or
-// not, replacing whatever `normals` held. A vertex no non-degenerate face
-// touches gets +Y. mesh_upload calls it for a triangle mesh with no normals.
-void mesh_compute_normals(Mesh* mesh);
+// Area-weighted vertex normals from a MESH_TRIANGLES mesh's level-0 faces,
+// indexed or not, replacing whatever `normals` held. A vertex no non-degenerate
+// face touches gets +Y. False, and nothing written, for a mesh that is not
+// triangles or has no vertices. mesh_upload calls it for a triangle mesh with no
+// normals.
+bool mesh_compute_normals(Mesh* mesh);
 
 /*
  * Mesh buffers

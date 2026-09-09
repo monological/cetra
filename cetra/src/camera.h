@@ -67,8 +67,8 @@ void free_camera(Camera* camera);
 
 // The pose. Functions because the orbit parameters follow it: each re-derives
 // distance, theta and phi, so a camera moved by pose and then orbited continues
-// from where it is. Set the eye and then the target; between the two calls the
-// parameters describe a pose that was never shown.
+// from where it is. The converse holds too: a write to the three directly is
+// followed by camera_orbit(camera, 0, 0), which moves the eye onto them.
 void camera_set_position(Camera* camera, vec3 position);
 void camera_set_look_at(Camera* camera, vec3 look_at);
 
@@ -92,11 +92,6 @@ void camera_zoom_toward_target(Camera* camera, float factor, float min_distance)
 // max_distance is 0). Clamping toward the origin instead would make the
 // camera slide around the boundary sphere.
 void camera_enforce_max_distance(Camera* camera);
-
-// distance, theta and phi from the pose. The setters and create_camera call
-// it; a caller needs it only after writing the three directly (the GUI's
-// orbit sliders) to continue from the pose on screen rather than the fields.
-void camera_sync_spherical_from_position(Camera* camera);
 
 // Matrix computation
 void camera_view_matrix(Camera* camera, mat4 view);

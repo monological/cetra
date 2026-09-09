@@ -9,10 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#ifndef M_PI_2
-#define M_PI_2 1.57079632679489661923
-#endif
-
 /*
  * Mouse Drag Controller Implementation
  */
@@ -58,27 +54,15 @@ void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
 
-    // When dragging starts, capture current camera state. The orbit parameters
-    // are re-derived from the pose on screen rather than trusted: the GUI's
-    // orbit sliders write them directly, and a drag continues from what is
-    // shown, not from a slider.
+    // When dragging starts, capture the camera as it stands: a drag is a delta
+    // from here, and the orbit parameters describe the pose by the camera's
+    // own invariant.
     if (engine->input.is_dragging) {
-        float dist = glm_vec3_distance(camera->position, camera->look_at);
-
-        if (dist > 0.001f) {
-            camera_sync_spherical_from_position(camera);
-            if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                ctrl->orbit_start_theta = camera->theta;
-                ctrl->orbit_start_phi = camera->phi;
-            } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                ctrl->free_start_pitch = camera->theta;
-                ctrl->free_start_yaw = camera->phi;
-            }
-        }
-        // Save starting positions for Shift+drag pan
-        glm_vec3_copy(camera->look_at, ctrl->free_start_look_at);
-        glm_vec3_copy(camera->position, ctrl->free_start_cam_pos);
-        ctrl->free_look_distance = dist;
+        ctrl->start_theta = camera->theta;
+        ctrl->start_phi = camera->phi;
+        ctrl->start_distance = camera->distance;
+        glm_vec3_copy(camera->look_at, ctrl->start_look_at);
+        glm_vec3_copy(camera->position, ctrl->start_position);
     }
 }
 
@@ -113,118 +97,46 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
 
-    if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-        if (!engine->input.is_dragging) {
-            if (ctrl->auto_orbit_enabled) {
-                // Auto-orbit animation
-                float amplitude = (ctrl->auto_orbit_max_dist - ctrl->auto_orbit_min_dist) / 2.0f;
-                float midPoint = ctrl->auto_orbit_min_dist + amplitude;
-                camera->distance = midPoint + amplitude * sinf(time * ctrl->auto_orbit_speed);
-                camera->phi += camera->orbit_speed;
-
-                float cos_theta = cosf(camera->theta);
-                vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
-                               camera->distance * sinf(camera->theta),
-                               camera->distance * cos_theta * sinf(camera->phi)};
-
-                vec3 new_camera_position;
-                glm_vec3_add(camera->look_at, offset, new_camera_position);
-                camera_set_position(camera, new_camera_position);
-            }
-        } else {
-            if (engine->input.shift_held) {
-                // Shift+drag: Pan camera (move both camera and look_at)
-                vec3 forward, right_vec, up_vec;
-                glm_vec3_sub(ctrl->free_start_look_at, ctrl->free_start_cam_pos, forward);
-                glm_vec3_crossn(camera->up_vector, forward, right_vec);
-                glm_vec3_normalize(right_vec);
-                glm_vec3_cross(forward, right_vec, up_vec);
-                glm_vec3_normalize(up_vec);
-
-                float pan_speed = ctrl->free_look_distance * 0.0005f;
-                vec3 pan_offset;
-                glm_vec3_scale(right_vec, -engine->input.drag_fb_x * pan_speed, pan_offset);
-                vec3 up_offset;
-                glm_vec3_scale(up_vec, -engine->input.drag_fb_y * pan_speed, up_offset);
-                glm_vec3_add(pan_offset, up_offset, pan_offset);
-
-                // Move both camera and look_at from starting positions
-                vec3 new_pos, new_look;
-                glm_vec3_add(ctrl->free_start_cam_pos, pan_offset, new_pos);
-                glm_vec3_add(ctrl->free_start_look_at, pan_offset, new_look);
-                camera_set_position(camera, new_pos);
-                camera_set_look_at(camera, new_look);
-            } else {
-                // Manual orbit - spherical coordinates around look_at point
-                camera->phi = ctrl->orbit_start_phi - engine->input.drag_fb_x * ctrl->sensitivity;
-                camera->theta =
-                    ctrl->orbit_start_theta + engine->input.drag_fb_y * ctrl->sensitivity;
-
-                // Clamp theta to avoid gimbal lock
-                float max_theta = (float)M_PI_2 - 0.1f;
-                if (camera->theta > max_theta)
-                    camera->theta = max_theta;
-                if (camera->theta < -max_theta)
-                    camera->theta = -max_theta;
-
-                // Calculate camera position on sphere around look_at point
-                float cos_theta = cosf(camera->theta);
-                vec3 offset = {camera->distance * cos_theta * cosf(camera->phi),
-                               camera->distance * sinf(camera->theta),
-                               camera->distance * cos_theta * sinf(camera->phi)};
-
-                vec3 new_camera_position;
-                glm_vec3_add(camera->look_at, offset, new_camera_position);
-                camera_set_position(camera, new_camera_position);
-            }
+    // The two camera modes drag the same way: a shift-drag pans from the
+    // captured pose, a plain drag orbits the target from the captured angles.
+    // They differ only in what happens when nothing is dragged, which for the
+    // orbit mode is the auto-orbit. Every move writes the orbit parameters and
+    // lets camera_orbit place the eye, which is the one copy of that arithmetic.
+    if (!engine->input.is_dragging) {
+        if (engine->camera_mode == CAMERA_MODE_ORBIT && ctrl->auto_orbit_enabled) {
+            float amplitude = (ctrl->auto_orbit_max_dist - ctrl->auto_orbit_min_dist) / 2.0f;
+            float midPoint = ctrl->auto_orbit_min_dist + amplitude;
+            camera->distance = midPoint + amplitude * sinf(time * ctrl->auto_orbit_speed);
+            camera->phi += camera->orbit_speed;
+            camera_orbit(camera, 0.0f, 0.0f);
         }
-    } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-        if (engine->input.is_dragging) {
-            if (engine->input.shift_held) {
-                // Shift+drag: Pan camera (move both camera and look_at)
-                vec3 forward, right_vec, up_vec;
-                glm_vec3_sub(ctrl->free_start_look_at, ctrl->free_start_cam_pos, forward);
-                glm_vec3_crossn(camera->up_vector, forward, right_vec);
-                glm_vec3_normalize(right_vec);
-                glm_vec3_cross(forward, right_vec, up_vec);
-                glm_vec3_normalize(up_vec);
+    } else if (engine->input.shift_held) {
+        // Pan: move both camera and look_at from the captured positions
+        vec3 forward, right_vec, up_vec;
+        glm_vec3_sub(ctrl->start_look_at, ctrl->start_position, forward);
+        glm_vec3_crossn(camera->up_vector, forward, right_vec);
+        glm_vec3_normalize(right_vec);
+        glm_vec3_cross(forward, right_vec, up_vec);
+        glm_vec3_normalize(up_vec);
 
-                float pan_speed = ctrl->free_look_distance * 0.0005f;
-                vec3 pan_offset;
-                glm_vec3_scale(right_vec, -engine->input.drag_fb_x * pan_speed, pan_offset);
-                vec3 up_offset;
-                glm_vec3_scale(up_vec, -engine->input.drag_fb_y * pan_speed, up_offset);
-                glm_vec3_add(pan_offset, up_offset, pan_offset);
+        float pan_speed = ctrl->start_distance * 0.0005f;
+        vec3 pan_offset;
+        glm_vec3_scale(right_vec, -engine->input.drag_fb_x * pan_speed, pan_offset);
+        vec3 up_offset;
+        glm_vec3_scale(up_vec, -engine->input.drag_fb_y * pan_speed, up_offset);
+        glm_vec3_add(pan_offset, up_offset, pan_offset);
 
-                // Move both camera and look_at from starting positions
-                vec3 new_pos, new_look;
-                glm_vec3_add(ctrl->free_start_cam_pos, pan_offset, new_pos);
-                glm_vec3_add(ctrl->free_start_look_at, pan_offset, new_look);
-                camera_set_position(camera, new_pos);
-                camera_set_look_at(camera, new_look);
-            } else {
-                // Regular drag: Orbit around look_at point
-                float yaw = ctrl->free_start_yaw - engine->input.drag_fb_x * ctrl->sensitivity;
-                float pitch = ctrl->free_start_pitch + engine->input.drag_fb_y * ctrl->sensitivity;
-
-                // Clamp pitch to avoid gimbal lock
-                float max_pitch = (float)M_PI_2 - 0.1f;
-                if (pitch > max_pitch)
-                    pitch = max_pitch;
-                if (pitch < -max_pitch)
-                    pitch = -max_pitch;
-
-                // Calculate camera position on sphere around look_at point
-                float cos_pitch = cosf(pitch);
-                vec3 offset = {ctrl->free_look_distance * cos_pitch * cosf(yaw),
-                               ctrl->free_look_distance * sinf(pitch),
-                               ctrl->free_look_distance * cos_pitch * sinf(yaw)};
-
-                vec3 new_camera_position;
-                glm_vec3_add(camera->look_at, offset, new_camera_position);
-                camera_set_position(camera, new_camera_position);
-            }
-        }
+        vec3 new_pos, new_look;
+        glm_vec3_add(ctrl->start_position, pan_offset, new_pos);
+        glm_vec3_add(ctrl->start_look_at, pan_offset, new_look);
+        camera_set_position(camera, new_pos);
+        camera_set_look_at(camera, new_look);
+    } else {
+        // Orbit the target from the captured angles; camera_orbit clamps the
+        // elevation away from the poles.
+        camera->phi = ctrl->start_phi - engine->input.drag_fb_x * ctrl->sensitivity;
+        camera->theta = ctrl->start_theta + engine->input.drag_fb_y * ctrl->sensitivity;
+        camera_orbit(camera, 0.0f, 0.0f);
     }
 
     camera_enforce_max_distance(camera);

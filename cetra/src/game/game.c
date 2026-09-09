@@ -266,17 +266,13 @@ static void game_pre_render(Engine* engine, Scene* scene) {
 }
 
 // engine_run's render hook: hand the app its on_render with the interpolation
-// alpha, or draw the scene itself when the app set none. The engine owns the
-// framebuffer / G-buffer / present around it.
+// alpha. The engine owns the framebuffer / G-buffer / present around it.
 static void game_scene_render(Engine* engine, Scene* scene) {
+    (void)scene;
     Game* game = engine_get_user_data(engine);
-    if (game->on_render) {
-        // Interpolation alpha, derived (not stored) so an escape-key early-return
-        // in game_frame_update can't leave it stale.
-        game->on_render(game, game->accumulator / game->fixed_timestep);
-    } else {
-        engine_render_scene(engine, scene);
-    }
+    // Interpolation alpha, derived (not stored) so an escape-key early-return
+    // in game_frame_update can't leave it stale.
+    game->on_render(game, game->accumulator / game->fixed_timestep);
 }
 
 void game_run(Game* game) {
@@ -292,7 +288,10 @@ void game_run(Game* game) {
     engine_set_user_data(game->engine, game);
     // Animate from the sim clock, not the wall clock, for the whole loop.
     engine_set_render_clock(game->engine, &game->sim_clock);
-    engine_run(game->engine, game_frame_update, game_pre_render, game_scene_render);
+    // on_init has run, so on_render is settled: with none set, the engine's own
+    // default draws the scene.
+    engine_run(game->engine, game_frame_update, game_pre_render,
+               game->on_render ? game_scene_render : NULL);
 }
 
 void game_set_physics_world(Game* game, PhysicsWorld* world) {

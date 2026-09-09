@@ -157,7 +157,6 @@ static TerrainPatch* patch_get(TerrainQuadtree* qt, int level, int ix, int iz) {
         return NULL;
     }
     mesh->material = qt->material;
-    mesh_upload(mesh);
 
     patch = calloc(1, sizeof(TerrainPatch));
     if (!patch) {

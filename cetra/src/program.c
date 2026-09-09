@@ -15,7 +15,6 @@
 
 // Fullscreen post-pass program helper (defined with the postfx constructors)
 static ShaderProgram* create_post_program(const char* name, const char* frag_src);
-static GLint _program_geometry_input(const ShaderProgram* program);
 
 ShaderProgram* create_program(const char* name) {
     ShaderProgram* program = calloc(1, sizeof(ShaderProgram));
@@ -309,18 +308,13 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
         program->shaders[2] = new_geo;
     program->shader_count = new_count;
 
-    // Re-cache uniforms
+    // Everything derived from the linked program -- the uniform cache, the
+    // block bindings re-linking reset, the counts -- comes from the one setup.
     if (program->uniforms) {
         free_uniform_manager(program->uniforms);
+        program->uniforms = NULL;
     }
-    program->uniforms = create_uniform_manager(program->id);
-    if (program->uniforms) {
-        uniform_cache_standard(program->uniforms);
-    }
-
-    // Block bindings are program state reset by re-linking; re-wire them
-    program->instanced = ubo_wire_blocks(program->id);
-    program->geometry_input = _program_geometry_input(program);
+    setup_program_uniforms(program);
 
     log_info("Reloaded shader program: %s", program->name);
     return GL_TRUE;

@@ -734,7 +734,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     }
 }
 
-static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, SubmitState* state) {
+static void _render_xyz(GLuint xyz_vao, SceneNode* node, mat4 view, mat4 projection,
+                        SubmitState* state) {
     if (!node || !node->xyz_shader_program || !node->xyz_shader_program->uniforms)
         return;
 
@@ -747,7 +748,7 @@ static void _render_xyz(SceneNode* node, mat4 view, mat4 projection, SubmitState
     uniform_set_mat4(u, "view", (const float*)view);
     uniform_set_mat4(u, "projection", (const float*)projection);
 
-    submit_bind_vao(state, node->xyz_vao);
+    submit_bind_vao(state, xyz_vao);
     glDrawArrays(GL_LINES, 0, xyz_vertices_size / (6 * sizeof(float)));
 }
 
@@ -965,9 +966,8 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
 // the mesh -- `shape` meshes are ALPHA_OPAQUE and would otherwise be prepassed
 // with a program whose position they do not use. See ShaderProgram.
 static bool item_is_prepassable(const DrawItem* item) {
-    const Material* mat = item->mesh->material;
-    return item->lane == DRAW_LANE_OPAQUE && mat->shader_program &&
-           mat->shader_program->depth_prepass_safe;
+    return item->lane == DRAW_LANE_OPAQUE &&
+           item->mesh->material->shader_program->depth_prepass_safe;
 }
 
 // Depth for the whole opaque lane, so the shading pass rejects hidden fragments
@@ -1188,11 +1188,12 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
 // interleaved per node; nothing sorts against them (they are unlit lines drawn
 // with depth test on) and no fixture enables them, so the move is recorded here
 // rather than claimed as verified.
-static void _submit_gizmos(const DrawList* list, mat4 view, mat4 projection, SubmitState* state) {
+static void _submit_gizmos(GLuint xyz_vao, const DrawList* list, mat4 view, mat4 projection,
+                           SubmitState* state) {
     if (!list)
         return;
     for (size_t i = 0; i < list->gizmo_count; ++i)
-        _render_xyz(list->gizmos[i], view, projection, state);
+        _render_xyz(xyz_vao, list->gizmos[i], view, projection, state);
 }
 
 // The three counts that gate the late passes, taken from the list rather than
@@ -1335,7 +1336,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // how a scene file declines the default rig, and a scene that authored a
     // light has answered the question.
     if (!scene->lightless_warned && scene->light_count == 0 && !scene->ibl && !scene->sky &&
-        glm_vec3_norm2(scene->ambient_radiance) == 0.0f) {
+        glm_vec3_eq(scene->ambient_radiance, 0.0f)) {
         log_warn("scene has no light, no environment and no ambient radiance: unlit surfaces "
                  "render black (emissive still shows)");
         scene->lightless_warned = true;
@@ -1347,10 +1348,11 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // frame a derived panel first appears every material is already on a
     // CETRA_NO_AREA_LIGHTS variant while the cluster list has a panel in it.
     //
-    // The draw list above is not a reader in the sense that matters: it null-
-    // tests shader_program and keys on mesh and level, so a program swapped
-    // after it changes nothing it built. The submit-time reads -- prepass
-    // safety, the instanced test -- are live and see this.
+    // The draw list above is not a reader in the sense that matters: it tests
+    // the program for existence, uniforms and geometry input, which every
+    // variant of a family shares, and keys on mesh and level, so a program
+    // swapped after it changes nothing it built. The submit-time reads --
+    // prepass safety, the instanced test -- are live and see this.
     engine_resolve_material_variants(engine, scene);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
@@ -1590,7 +1592,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     profiler_samples_end(engine->profiler);
     if (prepassed)
         glDepthFunc(GL_LESS);
-    _submit_gizmos(scene->draw_list, *view, draw_projection, &submit_state);
+    _submit_gizmos(engine->xyz_vao, scene->draw_list, *view, draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);
     // Restored only once the G-buffer scope is closed. glEnable(GL_BLEND) is

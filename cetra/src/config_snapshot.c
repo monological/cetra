@@ -91,9 +91,7 @@ struct ConfigField;
 
 // What a restore is allowed to touch beyond the field itself, and the one thing
 // it must defer. The deferral exists because the work is triggered by a MOVE
-// rather than by a value: two sun angles are one sun move. (The camera pose
-// used to be deferred the same way, until the frame loop took over deriving
-// the view matrix from whatever pose it finds.)
+// rather than by a value: two sun angles are one sun move.
 typedef struct ConfigApplyCtx {
     struct Engine* engine;
     struct Scene* scene;

@@ -258,10 +258,6 @@ A minimal `src/main.c`, a lit box under an orbit camera:
 #include "cetra/geometry.h"
 #include "cetra/scene.h"
 
-static void render(Engine* engine, Scene* scene) {
-    engine_render_scene(engine, scene);
-}
-
 int main(void) {
     EngineConfig cfg = {.title = "hello", .width = 1280, .height = 720};
     Engine* engine = create_engine(&cfg);
@@ -270,7 +266,6 @@ int main(void) {
 
     Scene* scene = create_scene();
     engine_add_scene(engine, scene);
-    scene_set_root(scene, create_node());
 
     CameraDesc cam = {.position = {0, 2, 5}, .fov = glm_rad(45.0f)};
     engine_set_camera(engine, create_camera(&cam));
@@ -285,14 +280,12 @@ int main(void) {
     Mesh* mesh = create_mesh();
     mesh_generate_box(mesh, &(Box){.size = {1, 1, 1}});
     mesh->material = mat;
-    mesh_compute_aabb(mesh);
-    mesh_upload(mesh);
 
     SceneNode* node = create_node();
     node_add_mesh(node, mesh);
     node_add_child(scene->root_node, node);
 
-    engine_run(engine, NULL, NULL, render);
+    engine_run(engine, NULL, NULL, NULL);
     free_engine(engine);
     return 0;
 }
@@ -305,7 +298,11 @@ and the post chain in one call; everything those read (`headless`, `profiler`,
 `msaa_samples`, `taa`, ...) is a config field, so there is no init call and no
 before/after ordering to get wrong. Functions are named subject first
 (`engine_`, `scene_`, `node_`, `mesh_`, `camera_`, `light_`), and the built-in
-program names are the `CETRA_PROGRAM_*` constants.
+program names are the `CETRA_PROGRAM_*` constants. There is nothing else to
+call: a scene comes with a root, attaching a mesh uploads it and measures its
+bound, the engine derives the camera's matrices each frame and draws the scene
+when handed no render hook, and a mesh it will not draw, or a scene with no
+light at all, is said once in the log rather than rendered as a plausible frame.
 
 The public headers are the ones an app may name; the rest of the engine's
 headers are internal and not on your include path. A header that a public one

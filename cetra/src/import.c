@@ -1698,10 +1698,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
     }
 
     // Process meshes for this node
-    node->mesh_count = ai_node->mNumMeshes;
-    node->meshes = malloc(sizeof(Mesh*) * node->mesh_count);
-
-    for (unsigned int i = 0; i < node->mesh_count; i++) {
+    for (unsigned int i = 0; i < ai_node->mNumMeshes; i++) {
         unsigned int meshIndex = ai_node->mMeshes[i];
         struct aiMesh* ai_mesh = ai_scene->mMeshes[meshIndex];
 
@@ -1715,7 +1712,7 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
         // Only the geometry is shared. The node's transform still varies, and
         // so does everything derived from it.
         if (mesh_cache[meshIndex]) {
-            node->meshes[i] = mesh_ref(mesh_cache[meshIndex]);
+            node_add_mesh(node, mesh_ref(mesh_cache[meshIndex]));
             (*shared_refs)++;
             continue;
         }
@@ -1761,15 +1758,13 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
             }
         }
 
-        // The chain before the upload, since it rewrites the index array. The
-        // meshes are written into the node's array directly rather than through
-        // node_add_mesh, so the upload that attach would have done is here.
+        // The chain before the attach, which uploads and the chain rewrites the
+        // index array.
         if (mesh_build_lod_chain(mesh) > 1)
             (*lod_chains)++;
-        mesh_upload(mesh);
         mesh_cache[meshIndex] = mesh;
         (*built)++;
-        node->meshes[i] = mesh;
+        node_add_mesh(node, mesh);
     }
 
     // Recursively process children nodes
