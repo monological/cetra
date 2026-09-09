@@ -184,12 +184,6 @@ void free_mesh(Mesh* mesh) {
     free(mesh);
 }
 
-void mesh_set_draw_mode(Mesh* mesh, MeshDrawMode draw_mode) {
-    if (!mesh)
-        return;
-    mesh->draw_mode = draw_mode;
-}
-
 void mesh_compute_aabb(Mesh* mesh) {
     if (!mesh)
         return;

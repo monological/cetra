@@ -254,8 +254,8 @@ typedef struct Engine {
     // records what happened the last time a caller wrote its own.
     bool capturing_irradiance;
 
-    Camera* camera;         // main camera
-    CameraMode camera_mode; // Current camera mode
+    Camera* camera;         // The camera the frame renders (engine_set_camera); borrowed
+    CameraMode camera_mode; // Free or orbit; a plain write
 
     Scene** scenes;             // Array of scenes managed by the engine
     size_t scene_count;         // Number of scenes
@@ -329,9 +329,11 @@ typedef struct Engine {
     // it any time.
     vec3 clear_color;
 
+    // The overlays, plain writes: the engine re-applies each from its field at
+    // the frame top, so nothing has to run when one changes.
     bool show_gui;
-    bool show_wireframe;
-    bool show_xyz;
+    bool show_wireframe; // Every edge of every face, albedo-only, no culling
+    bool show_xyz;       // The XYZ gizmo on every node whose own show_xyz is set
     bool show_fps;
     bool show_camera_hud; // Live camera pose overlay next to the FPS readout
     bool show_bones;      // X-ray bone visualization
@@ -372,9 +374,11 @@ typedef struct Engine {
     // has an early return (escape key) that a store would silently skip.
     const EngineFrameClock* render_clock;
 
+    // The run's settings. The path is owned (engine_set_screenshot_path); the
+    // two counts are plain writes, and anything not above zero is off.
     char* screenshot_path; // If set, save final frame here on exit (PPM)
-    int screenshot_every;  // Also save numbered frames every N frames (0 = off)
-    int exit_after_frames; // Close the loop after N frames (0 = off); CI/headless
+    int screenshot_every;  // Also save numbered frames every N frames
+    int exit_after_frames; // Close the loop after N frames, with the final screenshot
     size_t total_frames;   // Monotonic frame counter for the render loop
     void* user_data;       // Opaque context for engine_run's callbacks (GLFW-style)
 
@@ -513,9 +517,6 @@ void engine_recentre_on_camera(const Engine* engine, float lattice);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
 // 1 disables MSAA. Rebuilds the multisample attachments.
 void engine_set_msaa_samples(Engine* engine, int samples);
-// Temporal anti-aliasing on or off; the config's `taa` is the same switch at
-// creation.
-void engine_set_taa(Engine* engine, bool enabled);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
 // exposure pins at unity with adaptation off, the tone curve is the identity,
@@ -526,11 +527,8 @@ void engine_set_taa(Engine* engine, bool enabled);
 // then adds to the flat colour rather than replacing it. The scene half is
 // skipped when `scene` is NULL.
 void engine_set_2d_preset(Engine* engine, Scene* scene);
+// Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);
-void engine_set_screenshot_every(Engine* engine, int every);
-// Exit the main loop after `frames` rendered frames (0 = run until the window
-// closes). Fires the same final-frame screenshot path as a normal quit.
-void engine_set_exit_after_frames(Engine* engine, int frames);
 
 // GLFW callbacks
 void engine_set_error_callback(Engine* engine, GLFWerrorfun error_callback);
@@ -546,9 +544,8 @@ bool engine_gui_wants_mouse(void);
 // ask the same question itself, or typing in a slider also walks.
 bool engine_gui_wants_keyboard(void);
 
-// Camera
+// The camera the frame renders; refuses NULL.
 void engine_set_camera(Engine* engine, Camera* camera);
-void engine_set_camera_mode(Engine* engine, CameraMode mode);
 
 // Scene
 void engine_add_scene(Engine* engine, Scene* scene);
@@ -565,14 +562,6 @@ void engine_add_program(Engine* engine, ShaderProgram* program);
 ShaderProgram* engine_get_program(Engine* engine, const char* program_name);
 // NULL and silence: for asking whether an optional program exists.
 ShaderProgram* engine_find_program(Engine* engine, const char* program_name);
-
-// GUI
-void engine_set_show_gui(Engine* engine, bool show_gui);
-void engine_set_show_fps(Engine* engine, bool show_fps);
-
-// Render
-void engine_set_show_wireframe(Engine* engine, bool show_wireframe);
-void engine_set_show_xyz(Engine* engine, bool show_xyz);
 
 // Opaque context for engine_run's callbacks (like glfwSetWindowUserPointer): the
 // render callbacks stay untyped (Engine*, Scene*); a caller that needs its own

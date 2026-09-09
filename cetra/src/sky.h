@@ -288,10 +288,6 @@ typedef struct SkyAtmosphere {
     // sit under 0.1% extinction, and should look like it.
     float world_units_per_km;
 
-    // Drive the fog's ambient in-scatter from the sky instead of leaving it at
-    // the app-set default. Cleared once anyone else takes ownership of the
-    // value (the GUI colour picker does, on edit).
-    bool publish_fog_ambient;
     vec3 zenith_radiance; // Cached sky ambient; recomputed on sun move only
 
     GLuint transmittance_lut; // 256x64  RGBA16F, baked once

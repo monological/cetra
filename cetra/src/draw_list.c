@@ -242,7 +242,8 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene) {
 
 // Depth-first, children left to right, a node's meshes before its gizmo --
 // the order the two recursive walks produced between them.
-static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod) {
+static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod,
+                        bool gizmos) {
     if (!node)
         return true;
 
@@ -277,19 +278,22 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
             return false;
     }
 
-    if (node->show_xyz && node->xyz_shader_program) {
+    // Only while the overlay is on: with it off this would append every node
+    // in the scene, every frame, for a submit that draws none of them.
+    if (gizmos && node->show_xyz) {
         if (!push_gizmo(list, node))
             return false;
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, scene, node->children[i], lod))
+        if (!append_node(list, scene, node->children[i], lod, gizmos))
             return false;
     }
     return true;
 }
 
-bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSelect* lod) {
+bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSelect* lod,
+                     bool gizmos) {
     if (!list || !scene)
         return false;
     if (list->valid && list->stamp == stamp)
@@ -300,7 +304,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene, scene->root_node, lod))
+    if (!append_node(list, scene, scene->root_node, lod, gizmos))
         return false;
 
     list->stamp = stamp;

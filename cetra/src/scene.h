@@ -68,8 +68,9 @@ typedef struct SceneNode {
 
     struct ParticleSystem* particle_system; // borrowed; owned by the Scene
 
+    // This node's opt-out from the XYZ gizmo overlay (default on); the engine's
+    // show_xyz is the switch, and the scene's xyz program draws it.
     bool show_xyz;
-    ShaderProgram* xyz_shader_program;
 } SceneNode;
 
 // malloc
@@ -102,9 +103,6 @@ void node_set_particle_system(SceneNode* node, struct ParticleSystem* sys);
 
 // find
 SceneNode* node_find(SceneNode* root, const char* name);
-
-// xyz
-void node_set_show_xyz(SceneNode* node, bool show_xyz);
 
 // shaders
 void node_set_program(SceneNode* node, ShaderProgram* program);
@@ -182,7 +180,8 @@ typedef struct Scene {
     // branch and no allocation.
     struct IesLibrary* ies_library;
 
-    // used by all nodes
+    // The program the XYZ gizmo overlay draws every node with (scene_set_xyz_program);
+    // NULL and nothing draws one. Borrowed from the engine's registry.
     ShaderProgram* xyz_shader_program;
 
     // The graph flattened for drawing, rebuilt once a frame. Every pass reads

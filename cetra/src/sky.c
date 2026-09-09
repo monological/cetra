@@ -68,7 +68,6 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     // month runs from there.
     sky->cycle_moon_offset = 12.0;
     sky->world_units_per_km = 1000.0f; // 1 unit = 1 metre (the glTF convention)
-    sky->publish_fog_ambient = true;
     sky->aerial_enabled = true;
     // Coverage is a GAP fraction as far as the GROUND is concerned, which is worth knowing before
     // changing it (spec 11.41). Extinction is 25/km over a 2.5 km deck, so tau is 62.5 x density
@@ -554,10 +553,10 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
     // sky path, since its sun term already arrives via the light publish. A copy,
     // not a computation: the march behind it runs once per sun move.
     //
-    // publish_fog_ambient is what stops this from silently overwriting a value
-    // someone else owns. The GUI colour picker clears it on edit, because a
-    // control that snaps back every frame is worse than no control.
-    if (sky && sky->enabled && sky->publish_fog_ambient)
+    // fog_ambient_from_sky is what stops this from silently overwriting a value
+    // someone else owns; postfx_set_fog_ambient clears it, because a control
+    // that snaps back every frame is worse than no control.
+    if (sky && sky->enabled && fx->fog_ambient_from_sky)
         glm_vec3_copy((float*)sky->zenith_radiance, fx->fog_ambient);
 
     if (sky && sky->enabled && sky->aerial_lut) {

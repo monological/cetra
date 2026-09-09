@@ -211,6 +211,13 @@ void postfx_set_ssr_full_res(PostFX* fx, bool full_res) {
     create_ssr_buffers(fx);
 }
 
+void postfx_set_fog_ambient(PostFX* fx, const vec3 rgb) {
+    if (!fx)
+        return;
+    glm_vec3_copy((float*)rgb, fx->fog_ambient);
+    fx->fog_ambient_from_sky = false;
+}
+
 // Depth-only FBO used as the blit target when resolving the MSAA depth
 // buffer. The format must match the engine's GL_DEPTH24_STENCIL8 exactly
 // (multisample blits require identical formats), and a color-less FBO is
@@ -747,6 +754,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->fog_anisotropy = 0.45f;
     fx->fog_sun_boost = 1.0f;
     glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
+    fx->fog_ambient_from_sky = true;
     fx->froxel_ready = false;
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history

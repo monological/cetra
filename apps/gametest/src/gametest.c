@@ -393,14 +393,14 @@ static void on_init(Game* game) {
         .position = {0.0f, 20.0f, 35.0f}, .fov = 0.8f, .near = 0.1f, .far = 1000.0f};
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
-    engine_set_camera_mode(engine, CAMERA_MODE_ORBIT);
+    engine->camera_mode = CAMERA_MODE_ORBIT;
 
     // Create drag controller
     drag_controller = create_mouse_drag_controller(engine);
 
-    engine_set_show_gui(engine, true);
-    engine_set_show_fps(engine, true);
-    engine_set_show_xyz(engine, true);
+    engine->show_gui = true;
+    engine->show_fps = true;
+    engine->show_xyz = true;
 
     // Spawn a few initial boxes
     for (int i = 0; i < 5; i++) {
@@ -653,9 +653,9 @@ int main(int argc, const char* argv[]) {
         fprintf(stderr, "Failed to create game\n");
         return -1;
     }
-    engine_set_exit_after_frames(game->engine, frames);
+    game->engine->exit_after_frames = frames;
     engine_set_screenshot_path(game->engine, screenshot);
-    engine_set_screenshot_every(game->engine, screenshot_every);
+    game->engine->screenshot_every = screenshot_every;
 
     // Set mouse callback
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);

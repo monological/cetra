@@ -251,7 +251,7 @@ static void _store_value(const ConfigField* f, void* base, const double* v, int 
  * THE FIELD HAS AN ENTRY POINT THAT VALIDATES OR ALLOCATES, AND THE TABLE MUST
  * NOT GO ROUND IT.
  *
- * Stating it as "needs a target rebuild" would be wrong for two of the five
+ * Stating it as "needs a target rebuild" would be wrong for two of the four
  * below and would mislead the next person adding a row. `render_scale` and
  * `ss_scale` do NOT need one -- `_engine_sync_render_targets` runs at every
  * frame top and rebuilds whenever the derived size disagrees, so a plain store
@@ -283,14 +283,6 @@ static void _apply_ss_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* 
     engine_set_ss_scale(ctx->engine, (int)v[0]);
 }
 
-static void _apply_taa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
-                       int n) {
-    (void)base;
-    (void)f;
-    (void)n;
-    engine_set_taa(ctx->engine, v[0] != 0.0);
-}
-
 static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                                 const double* v, int n) {
     (void)base;
@@ -299,14 +291,15 @@ static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigFie
     postfx_set_ssr_full_res(ctx->engine->postfx, v[0] != 0.0);
 }
 
-// The store is the easy half. Clearing publish_fog_ambient is what makes it
-// stick: the sky stamps its zenith radiance over this every time the sun moves,
-// and the sun is about to move if the snapshot carried one.
+// Through the setter for the ownership half: a plain store here would be
+// stamped over by the sky at the next publish, and the sun is about to move
+// if the snapshot carried one.
 static void _apply_fog_ambient(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                                const double* v, int n) {
-    _store_value(f, base, v, n);
-    if (ctx->scene && ctx->scene->sky)
-        ctx->scene->sky->publish_fog_ambient = false;
+    (void)base;
+    (void)f;
+    (void)n;
+    postfx_set_fog_ambient(ctx->engine->postfx, (vec3){(float)v[0], (float)v[1], (float)v[2]});
 }
 
 /*
@@ -457,7 +450,7 @@ static const ConfigField CFG_FIELDS[] = {
     // --- postfx
     CFG_ROW_ENUM(CFG_POSTFX, "postfx", "tonemap", tonemap_mode, CFG_TONEMAPS),
     CFG_ROW_ENUM(CFG_POSTFX, "postfx", "debug_view", debug_view, CFG_DEBUG_VIEWS),
-    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx", "taa", taa_enabled, _apply_taa),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx", "taa", taa_enabled),
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx", "normals_gbuffer", normals_enabled),
 
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.bloom", "enabled", bloom_enabled),

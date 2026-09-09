@@ -130,8 +130,10 @@ void scene_graph_touched(void);
 // it. Returns false only if it could not grow.
 //
 // `lod` may be NULL, which selects level 0 throughout -- what a caller that has
-// no camera to measure against should pass rather than inventing one.
-bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod);
+// no camera to measure against should pass rather than inventing one. `gizmos`
+// is the engine's overlay switch: off, the gizmo output stays empty.
+bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod,
+                     bool gizmos);
 
 // What a pass culls against: its frustum, plus the two things that move
 // geometry off the import bounds a frustum test would otherwise use.

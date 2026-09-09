@@ -734,12 +734,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     }
 }
 
-static void _render_xyz(GLuint xyz_vao, SceneNode* node, mat4 view, mat4 projection,
-                        SubmitState* state) {
-    if (!node || !node->xyz_shader_program || !node->xyz_shader_program->uniforms)
-        return;
-
-    ShaderProgram* program = node->xyz_shader_program;
+static void _render_xyz(GLuint xyz_vao, ShaderProgram* program, const SceneNode* node, mat4 view,
+                        mat4 projection, SubmitState* state) {
     UniformManager* u = program->uniforms;
 
     submit_use_program(state, program->id);
@@ -868,7 +864,7 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
         glm_vec3_zero(lod.eye);
     }
     draw_list_build(scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
-                    &lod);
+                    &lod, engine->show_xyz);
     profiler_cpu_scope_end(engine->profiler);
 }
 
@@ -946,7 +942,7 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
         stats->triangles += (size_t)(index_count / 3) * instances;
     }
 
-    if (two_sided)
+    if (two_sided && !state->no_cull)
         glEnable(GL_CULL_FACE);
 }
 
@@ -1005,7 +1001,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     SubmitStats* stats = profiler_submit(engine->profiler);
     ShaderProgram* program = engine->depth_prepass_program;
     UniformManager* u = program->uniforms;
-    SubmitState state = {0};
+    SubmitState state = {.no_cull = engine->show_wireframe};
     InstanceChunk chunk;
 
     // Depth only: colour writes off rather than the draw buffers detached, so
@@ -1188,12 +1184,12 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
 // interleaved per node; nothing sorts against them (they are unlit lines drawn
 // with depth test on) and no fixture enables them, so the move is recorded here
 // rather than claimed as verified.
-static void _submit_gizmos(GLuint xyz_vao, const DrawList* list, mat4 view, mat4 projection,
-                           SubmitState* state) {
-    if (!list)
+static void _submit_gizmos(GLuint xyz_vao, ShaderProgram* program, const DrawList* list, mat4 view,
+                           mat4 projection, SubmitState* state) {
+    if (!list || !program || !program->uniforms)
         return;
     for (size_t i = 0; i < list->gizmo_count; ++i)
-        _render_xyz(xyz_vao, list->gizmos[i], view, projection, state);
+        _render_xyz(xyz_vao, program, list->gizmos[i], view, projection, state);
 }
 
 // The three counts that gate the late passes, taken from the list rather than
@@ -1495,7 +1491,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     }
 
     // Bound state the draw loop skips re-setting; see render.h
-    SubmitState submit_state = {0};
+    SubmitState submit_state = {.no_cull = engine->show_wireframe};
 
     _count_late_meshes(scene, scene->draw_list, &cull);
 
@@ -1592,7 +1588,8 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     profiler_samples_end(engine->profiler);
     if (prepassed)
         glDepthFunc(GL_LESS);
-    _submit_gizmos(engine->xyz_vao, scene->draw_list, *view, draw_projection, &submit_state);
+    _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view,
+                   draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
     engine_set_scene_draw_buffers(engine, false);
     // Restored only once the G-buffer scope is closed. glEnable(GL_BLEND) is

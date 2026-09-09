@@ -362,15 +362,20 @@ typedef struct PostFX {
     int froxel_built_x; // Dimensions the live volumes were allocated at
     int froxel_built_y;
     int froxel_built_z;
-    float fog_anisotropy;     // Henyey-Greenstein g (forward scattering)
-    float fog_sun_boost;      // Artistic multiplier on the shaft in-scatter
-    vec3 fog_ambient;         // Isotropic ambient in-scatter radiance
-    bool froxel_ready;        // Lazy-alloc guard for the volumes below
-    GLuint froxel_fbo;        // Attachment-less; a layer is bound per slice draw
-    GLuint froxel_scatter[2]; // RGBA16F volumes: in-scatter radiance + extinction, indexed by
-                              // frame parity so a frame reprojects against the previous one
-                              // without copying a whole volume
-    GLuint froxel_integrated; // RGBA16F volume: front-to-back inscatter + transmittance
+    float fog_anisotropy; // Henyey-Greenstein g (forward scattering)
+    float fog_sun_boost;  // Artistic multiplier on the shaft in-scatter
+    // Isotropic ambient in-scatter radiance. Owned by the sky while
+    // fog_ambient_from_sky is set: its zenith radiance is copied here every
+    // frame, so the fog's ambient follows the sun. postfx_set_fog_ambient
+    // stores a value AND clears the flag; a direct write is stamped over.
+    vec3 fog_ambient;
+    bool fog_ambient_from_sky; // Default true; clear it to own fog_ambient
+    bool froxel_ready;         // Lazy-alloc guard for the volumes below
+    GLuint froxel_fbo;         // Attachment-less; a layer is bound per slice draw
+    GLuint froxel_scatter[2];  // RGBA16F volumes: in-scatter radiance + extinction, indexed by
+                               // frame parity so a frame reprojects against the previous one
+                               // without copying a whole volume
+    GLuint froxel_integrated;  // RGBA16F volume: front-to-back inscatter + transmittance
     // The camera the previous froxel frame was built with. PostFX keeps its own
     // copy because engine->prev_view_proj already holds THIS frame's matrix by
     // the time postfx runs (the scene pass stashes it at its end).
@@ -860,5 +865,11 @@ bool postfx_contact_shadows_have_light(const PostFX* fx);
 // Switch SSR tracing between full-res (sharp) and half-res, reallocating the
 // reflection buffer + Hi-Z pyramid at the new resolution. Safe to call at runtime.
 void postfx_set_ssr_full_res(PostFX* fx, bool full_res);
+
+// Stores the fog's ambient in-scatter and takes ownership of it: clears
+// fog_ambient_from_sky, so the sky stops stamping its zenith radiance over the
+// value every frame. The pair in one call, because a store without the clear
+// is silently undone at the next publish.
+void postfx_set_fog_ambient(PostFX* fx, const vec3 rgb);
 
 #endif // _POSTFX_H_

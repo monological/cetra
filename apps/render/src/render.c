@@ -1903,10 +1903,8 @@ static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
     camera_set_position(camera, eye);
     camera_set_look_at(camera, target);
     if (drag_controller)
-        mouse_drag_set_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
-                                  drag_controller->auto_orbit_min_dist,
-                                  drag_controller->auto_orbit_max_dist);
-    engine_set_camera_mode(engine, CAMERA_MODE_FREE);
+        drag_controller->auto_orbit_enabled = false;
+    engine->camera_mode = CAMERA_MODE_FREE;
 }
 
 /*
@@ -2131,13 +2129,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
             break;
         case GLFW_KEY_G:
-            engine_set_show_gui(engine, !engine->show_gui);
+            engine->show_gui = !engine->show_gui;
             break;
         case GLFW_KEY_X:
-            engine_set_show_xyz(engine, !engine->show_xyz);
+            engine->show_xyz = !engine->show_xyz;
             break;
         case GLFW_KEY_T:
-            engine_set_show_wireframe(engine, !engine->show_wireframe);
+            engine->show_wireframe = !engine->show_wireframe;
             break;
         case GLFW_KEY_1:
             engine->current_render_mode = RENDER_MODE_PBR;
@@ -2814,8 +2812,8 @@ int main(int argc, char** argv) {
     if (args.no_alpha_jitter)
         engine->alpha_jitter_enabled = false;
     engine_set_screenshot_path(engine, args.screenshot_path);
-    engine_set_screenshot_every(engine, args.screenshot_every);
-    engine_set_exit_after_frames(engine, args.max_frames);
+    engine->screenshot_every = args.screenshot_every;
+    engine->exit_after_frames = args.max_frames;
     check_stretch = args.check_stretch;
 
     {
@@ -3151,8 +3149,10 @@ int main(int argc, char** argv) {
     // Create drag controller with auto-orbit (fixed camera in headless mode for
     // deterministic, comparable screenshots)
     drag_controller = create_mouse_drag_controller(engine);
-    mouse_drag_set_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED, MIN_DIST,
-                              MAX_DIST);
+    drag_controller->auto_orbit_enabled = !args.headless;
+    drag_controller->auto_orbit_speed = CAM_ANGULAR_SPEED;
+    drag_controller->auto_orbit_min_dist = MIN_DIST;
+    drag_controller->auto_orbit_max_dist = MAX_DIST;
 
     /*
      * Import model with async texture loading.
@@ -3859,13 +3859,8 @@ int main(int argc, char** argv) {
             engine->postfx->fog_floor_y = scene_floor_y;
         }
         // Authored fog in-scatter, after the density block so it survives it.
-        // Clearing publish_fog_ambient is the load-bearing half: the sky
-        // otherwise stamps its zenith radiance over this every time the sun
-        // moves, the same way it would over a GUI edit.
         if (cscn && cscn->has_fog_ambient) {
-            glm_vec3_copy((float*)cscn->fog_ambient, engine->postfx->fog_ambient);
-            if (scene->sky)
-                scene->sky->publish_fog_ambient = false;
+            postfx_set_fog_ambient(engine->postfx, cscn->fog_ambient);
             printf("Scene file: fog ambient %.3f %.3f %.3f cd/m2\n", cscn->fog_ambient[0],
                    cscn->fog_ambient[1], cscn->fog_ambient[2]);
         }
@@ -3879,8 +3874,10 @@ int main(int argc, char** argv) {
         camera->max_distance = SKYBOX_GP_FADE_START * scene->skybox_gp_radius;
         orbit_max = fminf(orbit_max, camera->max_distance);
     }
-    mouse_drag_set_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
-                              fminf(camera_distance * 0.5f, orbit_max), orbit_max);
+    drag_controller->auto_orbit_enabled = !args.headless;
+    drag_controller->auto_orbit_speed = CAM_ANGULAR_SPEED;
+    drag_controller->auto_orbit_min_dist = fminf(camera_distance * 0.5f, orbit_max);
+    drag_controller->auto_orbit_max_dist = orbit_max;
     // The auto-orbit runs at an elevation of its own, not the framed pitch, and
     // it reads theta without ever writing it: move the eye there under the same
     // gate that arms it, so headless keeps the framed pose.
@@ -3909,10 +3906,10 @@ int main(int argc, char** argv) {
 
     // No GUI/FPS overlay in headless runs: the FPS digits change per run and
     // land in screenshots, which breaks byte-comparability
-    engine_set_show_gui(engine, !args.headless);
-    engine_set_show_fps(engine, !args.headless);
-    engine_set_show_wireframe(engine, false);
-    engine_set_show_xyz(engine, false);
+    engine->show_gui = !args.headless;
+    engine->show_fps = !args.headless;
+    engine->show_wireframe = false;
+    engine->show_xyz = false;
     engine->show_bones = args.show_bones != 0;
 
     // Capture the local reflection probe: the scene rendered once into a
@@ -4219,9 +4216,7 @@ int main(int argc, char** argv) {
         if (config_snapshot_apply_file(engine, scene, args.config_path) < 0)
             return -1;
         if (drag_controller)
-            mouse_drag_set_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
-                                      drag_controller->auto_orbit_min_dist,
-                                      drag_controller->auto_orbit_max_dist);
+            drag_controller->auto_orbit_enabled = false;
     }
 
     frame_schedule = &args;

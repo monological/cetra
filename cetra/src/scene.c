@@ -35,7 +35,6 @@
 /*
  * prototypes
  */
-static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program);
 
 Scene* create_scene() {
     Scene* scene = malloc(sizeof(Scene));
@@ -751,7 +750,6 @@ void scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program) {
         return;
     }
     scene->xyz_shader_program = xyz_shader_program;
-    _set_xyz_program_for_nodes(scene->root_node, scene->xyz_shader_program);
 }
 
 /*
@@ -783,9 +781,7 @@ SceneNode* create_node() {
     node->camera = NULL;
     node->particle_system = NULL;
 
-    // xyz
     node->show_xyz = true;
-    node->xyz_shader_program = NULL;
 
     return node;
 }
@@ -988,29 +984,6 @@ void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* 
 
     for (size_t i = 0; i < node->children_count; ++i) {
         node_set_programs(node->children[i], standard, skinned);
-    }
-}
-
-static void _set_xyz_program_for_nodes(SceneNode* node, ShaderProgram* program) {
-    if (!node) {
-        return;
-    }
-
-    node->xyz_shader_program = program;
-
-    for (size_t i = 0; i < node->children_count; ++i) {
-        _set_xyz_program_for_nodes(node->children[i], program);
-    }
-}
-
-void node_set_show_xyz(SceneNode* node, bool show_xyz) {
-    if (!node)
-        return;
-
-    node->show_xyz = show_xyz;
-
-    for (size_t i = 0; i < node->children_count; ++i) {
-        node_set_show_xyz(node->children[i], show_xyz);
     }
 }
 

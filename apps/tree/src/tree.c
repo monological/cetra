@@ -659,7 +659,8 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
             igSliderFloat("Units per km", &sky->world_units_per_km, 1.0f, 100000.0f, "%.0f",
                           ImGuiSliderFlags_Logarithmic);
             igCheckbox("Aerial Perspective", &sky->aerial_enabled);
-            igCheckbox("Sky drives Fog Ambient", &sky->publish_fog_ambient);
+            if (engine->postfx)
+                igCheckbox("Sky drives Fog Ambient", &engine->postfx->fog_ambient_from_sky);
             igCheckbox("Debug: LUTs", &sky->debug_luts);
         }
         if (scene) {
@@ -707,13 +708,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
             break;
         case GLFW_KEY_G:
-            engine_set_show_gui(engine, !engine->show_gui);
+            engine->show_gui = !engine->show_gui;
             break;
         case GLFW_KEY_X:
-            engine_set_show_xyz(engine, !engine->show_xyz);
+            engine->show_xyz = !engine->show_xyz;
             break;
         case GLFW_KEY_T:
-            engine_set_show_wireframe(engine, !engine->show_wireframe);
+            engine->show_wireframe = !engine->show_wireframe;
             break;
         default:
             break;
@@ -1166,8 +1167,8 @@ int main(int argc, char** argv) {
         return -1;
     }
     engine_set_screenshot_path(engine, args.screenshot);
-    engine_set_screenshot_every(engine, args.screenshot_every);
-    engine_set_exit_after_frames(engine, args.frames);
+    engine->screenshot_every = args.screenshot_every;
+    engine->exit_after_frames = args.frames;
 
     engine_set_mouse_button_callback(engine, mouse_button_callback);
     engine_set_key_callback(engine, key_callback);
@@ -1804,10 +1805,10 @@ int main(int argc, char** argv) {
         create_falling_leaves(engine, scene, canopy_radius, canopy_top);
     }
 
-    engine_set_show_gui(engine, !args.headless);
-    engine_set_show_fps(engine, !args.headless);
-    engine_set_show_wireframe(engine, false);
-    engine_set_show_xyz(engine, false);
+    engine->show_gui = !args.headless;
+    engine->show_fps = !args.headless;
+    engine->show_wireframe = false;
+    engine->show_xyz = false;
 
     // Last before the loop, so the snapshot lands on top of everything this
     // app just configured -- the render app's ordering, for the same reason.

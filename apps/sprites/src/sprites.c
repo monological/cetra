@@ -193,10 +193,10 @@ int main(int argc, char** argv) {
     Engine* engine = create_engine(&cfg);
     if (!engine)
         return 1;
-    engine_set_exit_after_frames(engine, frames);
+    engine->exit_after_frames = frames;
     engine_set_screenshot_path(engine, screenshot);
-    engine_set_show_gui(engine, false);
-    engine_set_show_fps(engine, !headless);
+    engine->show_gui = false;
+    engine->show_fps = !headless;
 
     // The sketch's camera: 45 degrees, five units back along Z.
     CameraDesc camera = {.position = {0.0f, 0.0f, CAMERA_DISTANCE},

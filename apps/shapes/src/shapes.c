@@ -123,13 +123,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
             break;
         case GLFW_KEY_G:
-            engine_set_show_gui(engine, !engine->show_gui);
+            engine->show_gui = !engine->show_gui;
             break;
         case GLFW_KEY_X:
-            engine_set_show_xyz(engine, !engine->show_xyz);
+            engine->show_xyz = !engine->show_xyz;
             break;
         case GLFW_KEY_T:
-            engine_set_show_wireframe(engine, !engine->show_wireframe);
+            engine->show_wireframe = !engine->show_wireframe;
             break;
         default:
             break;
@@ -251,9 +251,9 @@ int main() {
 
     scene_print(scene);
 
-    engine_set_show_gui(engine, false);
-    engine_set_show_wireframe(engine, false);
-    engine_set_show_xyz(engine, false);
+    engine->show_gui = false;
+    engine->show_wireframe = false;
+    engine->show_xyz = false;
 
     engine_run(engine, NULL, NULL, NULL);
 

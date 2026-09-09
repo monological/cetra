@@ -2611,7 +2611,7 @@ static void on_init(Game* game) {
                               .far = 2000.0f};
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
-    engine_set_camera_mode(engine, CAMERA_MODE_FREE);
+    engine->camera_mode = CAMERA_MODE_FREE;
 
     // Pinned rather than adaptive: auto-exposure is the top determinism hazard
     // for anything compared across builds, and every arm here reads a frame or a
@@ -2668,11 +2668,14 @@ static void on_init(Game* game) {
         // looking away leaves it flat -- most of what reads as "moody".
         fx->fog_anisotropy = 0.72f;
         fx->fog_sun_boost = 2.2f;
-        glm_vec3_copy((vec3){0.030f, 0.038f, 0.055f}, fx->fog_ambient);
+        // With the sky, the fog's ambient follows the sun; this dusk blue is
+        // the fallback sun's, which has no zenith radiance to publish.
+        if (g_args.no_sky)
+            postfx_set_fog_ambient(fx, (vec3){0.030f, 0.038f, 0.055f});
     }
 
-    engine_set_show_gui(engine, !engine->headless);
-    engine_set_show_fps(engine, !engine->headless);
+    engine->show_gui = !engine->headless;
+    engine->show_fps = !engine->headless;
 
     startup_ms("on-init-total", startup_t0);
     printf("Forest: %zu distinct meshes, %zu prototype triangles, %zu nodes\n", g_distinct_meshes,
@@ -3202,9 +3205,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "forest: failed to create game\n");
         return 1;
     }
-    engine_set_exit_after_frames(game->engine, g_args.frames);
+    game->engine->exit_after_frames = g_args.frames;
     engine_set_screenshot_path(game->engine, g_args.screenshot);
-    engine_set_screenshot_every(game->engine, g_args.screenshot_every);
+    game->engine->screenshot_every = g_args.screenshot_every;
 
     game_set_init(game, on_init);
     game_set_update(game, on_update);

@@ -66,29 +66,6 @@ void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int
     }
 }
 
-void mouse_drag_on_cursor(MouseDragController* ctrl, double x, double y) {
-    (void)ctrl;
-    (void)x;
-    (void)y;
-    // Currently unused - drag movement is handled in update via engine->input.drag_fb_x/y
-}
-
-void mouse_drag_set_sensitivity(MouseDragController* ctrl, float sensitivity) {
-    if (ctrl) {
-        ctrl->sensitivity = sensitivity;
-    }
-}
-
-void mouse_drag_set_auto_orbit(MouseDragController* ctrl, bool enabled, float speed, float min_dist,
-                               float max_dist) {
-    if (ctrl) {
-        ctrl->auto_orbit_enabled = enabled;
-        ctrl->auto_orbit_speed = speed;
-        ctrl->auto_orbit_min_dist = min_dist;
-        ctrl->auto_orbit_max_dist = max_dist;
-    }
-}
-
 void mouse_drag_update(MouseDragController* ctrl, float time) {
     if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
         return;

@@ -15784,9 +15784,7 @@ CONFIG_GUI_LOCALS = {
     "pending_scale": "render_scale",
     "rm": "current_render_mode",
     "so": "spec_occlusion_mode",
-    "taa": "taa_enabled",
     "tm": "tonemap_mode",
-    "wireframe": "show_wireframe",
 }
 
 # Controls a snapshot deliberately cannot carry, with the reason. Not an escape hatch:

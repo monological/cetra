@@ -164,6 +164,10 @@ typedef struct SubmitState {
     GLuint program;
     Material* material;
     GLuint vao;
+    // The pass draws with back-face culling off (wireframe), so a two-sided
+    // draw's restore must not switch it back on. A pass fact set once at its
+    // start, not tracked GL state, which is why the reset leaves it alone.
+    bool no_cull;
 } SubmitState;
 
 // Forget everything tracked, without touching GL. Pessimistic by construction:

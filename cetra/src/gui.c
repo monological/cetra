@@ -279,13 +279,9 @@ static void _engine_gui_panel(Engine* engine) {
     if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
         engine->current_render_mode = (RenderMode)rm;
 
-    bool show_xyz = engine->show_xyz;
-    if (igCheckbox("XYZ", &show_xyz))
-        engine_set_show_xyz(engine, show_xyz);
+    igCheckbox("XYZ", &engine->show_xyz);
     igSameLine(0, -1);
-    bool wireframe = engine->show_wireframe;
-    if (igCheckbox("Wireframe", &wireframe))
-        engine_set_show_wireframe(engine, wireframe);
+    igCheckbox("Wireframe", &engine->show_wireframe);
     igSameLine(0, -1);
     igCheckbox("Bones", &engine->show_bones);
     igSameLine(0, -1);
@@ -759,9 +755,7 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCheckbox("MSAA 4x", &msaa))
             engine_set_msaa_samples(engine, msaa ? 4 : 1);
         igSameLine(0, -1);
-        bool taa = fx->taa_enabled;
-        if (igCheckbox("TAA", &taa))
-            engine_set_taa(engine, taa);
+        igCheckbox("TAA", &fx->taa_enabled);
         igSameLine(0, -1);
         // The jittered alpha lookup (spec 11.101) only does anything while TAA
         // accumulates, which is why it sits on this row: flip it beside TAA
@@ -978,8 +972,8 @@ static void _engine_gui_panel(Engine* engine) {
                       ImGuiSliderFlags_Logarithmic);
         // Editing takes ownership away from the sky, which otherwise republishes
         // its own zenith radiance every frame and the picker would snap back.
-        if (igColorEdit3("Fog Ambient", fx->fog_ambient, 0) && scene && scene->sky)
-            scene->sky->publish_fog_ambient = false;
+        if (igColorEdit3("Fog Ambient", fx->fog_ambient, 0))
+            fx->fog_ambient_from_sky = false;
         _end_effect_group();
 
         igCheckbox("Normals G-buffer", &fx->normals_enabled);

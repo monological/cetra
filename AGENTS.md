@@ -275,9 +275,9 @@ they straddled the init call because they had to: the count preceded it, which
 builds the scene target, and the TAA switch followed it and was a SILENT no-op
 before postfx existed — joined in either direction the app either allocated the
 whole G-buffer twice or rendered with no temporal filter at all, neither of which
-announced itself. `create_engine` reads the config in the right order and
-`engine_set_taa` stores the request until the post chain can take it, so that
-ordering is no longer the app's to get wrong. `apps/forest`, `apps/tree` and
+announced itself. `create_engine` reads the config in the right order, so that
+ordering is no longer the app's to get wrong; after creation the switch is the
+plain field `postfx->taa_enabled` (spec 11.108). `apps/forest`, `apps/tree` and
 (since 11.103) `apps/gametest` run one sample too, tree unconditionally since
 11.88.
 **The apps that do NOT are each a decision now, not an omission** (spec 11.103):
@@ -1069,7 +1069,7 @@ optional Jolt physics world and an ECS-lite entity system.
 ```c
 GameConfig config = {.engine = {.title = "My Game", .headless = headless}}; // zero = default
 Game* game = create_game(&config); // creates and initialises the engine
-engine_set_exit_after_frames(game->engine, frames); // the run's settings go on the engine
+game->engine->exit_after_frames = frames; // the run's settings go on the engine
 game_set_scene(game, scene);
 game_set_init(game, on_init);      // + on_update / on_pre_render / on_shutdown; on_render
                                    // only for what the app does AROUND the draw, since the
@@ -1231,9 +1231,10 @@ apps for several specs while the table above already said tree was "yes" -- it t
 `-x`, `-f` and `-S`. **`--screenshot-every` was the half of that claim
 that was not true until 11.62**: forest and spores parsed `-S` but not it, so capturing a
 TRANSITION cost one full process per frame -- which on forest is a terrain bake and a 5,000-prop
-scatter per sample. It is `engine_set_screenshot_every` on the engine, which every game-framework
-app reaches through `game->engine` (it rode `GameConfig` from 11.62 until 11.106 folded that struct
-down to what the game layer owns). The render app:
+scatter per sample. It is the plain field `screenshot_every` on the engine, which every
+game-framework app reaches through `game->engine` (it rode `GameConfig` from 11.62 until 11.106
+folded that struct down to what the game layer owns, and had a setter until 11.108). The render
+app:
 
 ```bash
 ./out/bin/render -m model.glb -a anim.fbx --headless --frames 2000 \

@@ -355,8 +355,6 @@ Mesh* mesh_ref(Mesh* mesh);
 // lets go, so freeing one node of a shared mesh leaves the others intact.
 void free_mesh(Mesh* mesh);
 
-void mesh_set_draw_mode(Mesh* mesh, MeshDrawMode draw_mode);
-
 // The bound of the vertex array. mesh_upload takes it, so a caller needs it
 // only for a mesh that is measured without being drawn.
 void mesh_compute_aabb(Mesh* mesh);

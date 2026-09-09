@@ -126,12 +126,12 @@ static void on_init(Game* game) {
 
     // FPS readout pinned top-right (like the render app). Skipped in headless: the
     // digits change per run and would break screenshot determinism.
-    engine_set_show_fps(engine, !engine->headless);
+    engine->show_fps = !engine->headless;
 
     // The engine's own tuning panel: light intensity/range, the fog block below,
     // the post chain, and a live camera pose. Off in headless -- it draws after
     // tone mapping and would land in the screenshot.
-    engine_set_show_gui(engine, !engine->headless);
+    engine->show_gui = !engine->headless;
 
     // Low-key mood: a deliberate EV bias under auto-exposure. Auto-exposure
     // normalizes the metered mean toward middle gray, which for this lit room
@@ -151,7 +151,7 @@ static void on_init(Game* game) {
         engine->postfx->fog_far = 40.0f;
         engine->postfx->fog_anisotropy = 0.82f; // strong forward scatter -> punchy beam
         engine->postfx->fog_sun_boost = 3.5f;
-        glm_vec3_copy((vec3){0.004f, 0.004f, 0.004f}, engine->postfx->fog_ambient);
+        postfx_set_fog_ambient(engine->postfx, (vec3){0.004f, 0.004f, 0.004f});
     }
 
     Scene* scene = create_scene();
@@ -219,7 +219,7 @@ static void on_init(Game* game) {
                            .far = 200.0f};
     Camera* cam = create_camera(&cam_desc);
     engine_set_camera(engine, cam);
-    engine_set_camera_mode(engine, CAMERA_MODE_ORBIT);
+    engine->camera_mode = CAMERA_MODE_ORBIT;
 
     g_drag = create_mouse_drag_controller(engine);
 
@@ -347,7 +347,7 @@ static void key_callback(Engine* engine, int key, int scancode, int action, int 
             glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
             break;
         case GLFW_KEY_G:
-            engine_set_show_gui(engine, !engine->show_gui);
+            engine->show_gui = !engine->show_gui;
             break;
         case GLFW_KEY_C:
             engine->show_camera_hud = !engine->show_camera_hud;
@@ -415,9 +415,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to create game\n");
         return 1;
     }
-    engine_set_exit_after_frames(game->engine, frames);
+    game->engine->exit_after_frames = frames;
     engine_set_screenshot_path(game->engine, screenshot);
-    engine_set_screenshot_every(game->engine, screenshot_every);
+    game->engine->screenshot_every = screenshot_every;
 
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);
     engine_set_key_callback(game->engine, key_callback);

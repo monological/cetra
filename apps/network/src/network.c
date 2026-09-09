@@ -97,7 +97,7 @@ static void triangles_to_edges(Mesh* mesh) {
     free(keys);
     mesh->indices = indices;
     mesh->index_count = edges * 2;
-    mesh_set_draw_mode(mesh, MESH_LINES);
+    mesh->draw_mode = MESH_LINES;
 }
 
 static void pre_render(Engine* engine, Scene* scene) {
@@ -137,10 +137,10 @@ int main(int argc, char** argv) {
     Engine* engine = create_engine(&cfg);
     if (!engine)
         return 1;
-    engine_set_exit_after_frames(engine, frames);
+    engine->exit_after_frames = frames;
     engine_set_screenshot_path(engine, screenshot);
-    engine_set_show_gui(engine, false);
-    engine_set_show_fps(engine, !headless);
+    engine->show_gui = false;
+    engine->show_fps = !headless;
 
     network_program = create_program_from_source("network", vertex_source, fragment_source, NULL);
     if (!network_program) {

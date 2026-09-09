@@ -1240,12 +1240,6 @@ void engine_set_camera(Engine* engine, Camera* camera) {
     engine->camera = camera;
 }
 
-void engine_set_camera_mode(Engine* engine, CameraMode mode) {
-    if (engine) {
-        engine->camera_mode = mode;
-    }
-}
-
 // The view and projection matrices, and the camera's aspect, from the camera
 // and the framebuffer as they stand.
 static void _engine_derive_camera(Engine* engine) {
@@ -1618,22 +1612,6 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
     return program;
 }
 
-/*
- * GUI
- *
- */
-void engine_set_show_gui(Engine* engine, bool show_gui) {
-    if (!engine)
-        return;
-    engine->show_gui = show_gui;
-}
-
-void engine_set_show_fps(Engine* engine, bool show_fps) {
-    if (!engine)
-        return;
-    engine->show_fps = show_fps;
-}
-
 Engine* create_engine(const EngineConfig* cfg) {
     static const EngineConfig none = {0};
     if (!cfg)
@@ -1659,11 +1637,6 @@ Engine* create_engine(const EngineConfig* cfg) {
         return NULL;
     }
     return engine;
-}
-
-void engine_set_taa(Engine* engine, bool enabled) {
-    if (engine)
-        engine->postfx->taa_enabled = enabled;
 }
 
 void engine_set_2d_preset(Engine* engine, Scene* scene) {
@@ -1743,18 +1716,6 @@ void engine_set_screenshot_path(Engine* engine, const char* path) {
     }
 }
 
-void engine_set_screenshot_every(Engine* engine, int every) {
-    if (!engine)
-        return;
-    engine->screenshot_every = every > 0 ? every : 0;
-}
-
-void engine_set_exit_after_frames(Engine* engine, int frames) {
-    if (!engine)
-        return;
-    engine->exit_after_frames = frames > 0 ? frames : 0;
-}
-
 /*
  * Build a numbered variant of a screenshot path: /tmp/shot.ppm -> /tmp/shot_000042.ppm
  */
@@ -1824,39 +1785,6 @@ void engine_set_render_time(Engine* engine, double time, double delta) {
         return;
     engine->render_time = time;
     engine->render_delta = delta;
-}
-
-/*
- * Render
- */
-void engine_set_show_wireframe(Engine* engine, bool show_wireframe) {
-    if (!engine)
-        return;
-
-    engine->show_wireframe = show_wireframe;
-
-    if (show_wireframe) {
-        glDisable(GL_CULL_FACE);
-    } else {
-        glEnable(GL_CULL_FACE);
-    }
-}
-
-void engine_set_show_xyz(Engine* engine, bool show_xyz) {
-    if (!engine)
-        return;
-
-    engine->show_xyz = show_xyz;
-
-    for (size_t i = 0; i < engine->scene_count; ++i) {
-        Scene* scene = engine->scenes[i];
-        if (scene) {
-            SceneNode* root_node = scene->root_node;
-            if (!root_node)
-                continue;
-            node_set_show_xyz(root_node, show_xyz);
-        }
-    }
 }
 
 void engine_present_frame(Engine* engine, RenderMode frame_mode) {
@@ -2633,13 +2561,18 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // probes around an origin the rest of the frame no longer uses.
         engine_apply_origin_shift(engine, engine_get_scene(engine));
 
-        // Wireframe mode: use albedo-only rendering for performance
+        // Wireframe mode: albedo-only for speed, and every edge of every face,
+        // so culling goes off with it. Both GL states are re-applied from the
+        // field here, once a frame, which is what lets show_wireframe be a plain
+        // write: nothing has to run at the moment it changes.
         RenderMode saved_render_mode = engine->current_render_mode;
         if (engine->show_wireframe) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glDisable(GL_CULL_FACE);
             engine->current_render_mode = RENDER_MODE_ALBEDO;
         } else {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glEnable(GL_CULL_FACE);
         }
         // The mode this frame actually renders with (wireframe substitutes
         // ALBEDO), used by the present pass after the mode is restored

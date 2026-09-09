@@ -17,50 +17,40 @@ typedef struct Camera Camera;
  * Supports both ORBIT and FREE camera modes.
  */
 typedef struct MouseDragController {
+    // ENGINE-OWNED (by the controller): the camera as the drag started; a
+    // drag is a delta from here. The drag itself lives in engine->input.
     Engine* engine;
-
-    // Drag state
-    bool is_dragging;
-    double start_x;
-    double start_y;
-
-    // The camera as the drag started; a drag is a delta from here
     float start_theta;
     float start_phi;
     float start_distance;
     vec3 start_look_at;
     vec3 start_position;
 
-    // Configuration
-    float sensitivity;
-
-    // Auto-orbit configuration
-    bool auto_orbit_enabled;
-    float auto_orbit_speed;
-    float auto_orbit_min_dist;
+    // SETTINGS: plain stores. Write them directly, at any time.
+    float sensitivity;         // Radians of orbit per framebuffer pixel of drag
+    bool auto_orbit_enabled;   // Spin the camera on its own until the user takes it
+    float auto_orbit_speed;    // Radians per second
+    float auto_orbit_min_dist; // The distance breathes between these two
     float auto_orbit_max_dist;
 } MouseDragController;
 
-// Lifecycle
+// Created with a windowed viewer's defaults: sensitivity 0.002, auto-orbit off.
 MouseDragController* create_mouse_drag_controller(Engine* engine);
 void free_mouse_drag_controller(MouseDragController* ctrl);
 
-// Input handlers (apps forward from their callbacks)
+// Forwarded from the app's mouse-button callback: latches the camera pose a drag
+// starts from. The position arguments are unused; the engine's input state
+// carries the drag.
 void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int mods, double x,
                           double y);
-void mouse_drag_on_cursor(MouseDragController* ctrl, double x, double y);
 
-// Update (call each frame - handles auto-orbit animation and camera updates)
+// Once a frame: the auto-orbit, then the drag in flight as a delta from the
+// latched pose (orbit, or pan with shift), then the max-distance clamp.
 void mouse_drag_update(MouseDragController* ctrl, float time);
 
 // Keyboard input for camera control (WASD movement, arrows for orbit/pan/zoom)
 // Returns true if the key was handled
 bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods);
-
-// Configuration
-void mouse_drag_set_sensitivity(MouseDragController* ctrl, float sensitivity);
-void mouse_drag_set_auto_orbit(MouseDragController* ctrl, bool enabled, float speed, float min_dist,
-                               float max_dist);
 
 /*
  * Light Rigs
