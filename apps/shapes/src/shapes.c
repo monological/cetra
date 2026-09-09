@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <assert.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -177,11 +176,6 @@ int main() {
         return -1;
     }
 
-    ShaderProgram* shape_shader_program = engine_get_program(engine, CETRA_PROGRAM_SHAPE);
-    if (!shape_shader_program) {
-        return -1;
-    }
-
     ShaderProgram* xyz_shader_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
     if (!xyz_shader_program) {
         return -1;
@@ -196,13 +190,6 @@ int main() {
     pbr_material->albedo[0] = 1.0f; // Red
     pbr_material->albedo[1] = 0.0f; // Green
     pbr_material->albedo[2] = 0.0f; // Blue
-
-    Material* shape_material = create_material();
-    material_set_program(shape_material, shape_shader_program);
-
-    shape_material->albedo[0] = 0.0f; // Red
-    shape_material->albedo[1] = 1.0f; // Green
-    shape_material->albedo[2] = 0.0f; // Blue
 
     /*
      * Set up camera.
@@ -240,27 +227,6 @@ int main() {
     scene_set_xyz_program(scene, xyz_shader_program);
 
     /*
-     * mesh1: Rectangle with no corner radius and no fill
-     */
-    /*Mesh* mesh1 = create_mesh();
-    mesh1->material = shape_material;
-
-    Rect rectangle1 = {
-        .position = {-20.0f, -20.0f, 0.0f},
-        .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 0.0f,
-        .line_width = 0.2f,
-        .filled = false
-    };
-    mesh_generate_rect(mesh1, &rectangle1);
-    mesh_compute_aabb(mesh1);
-
-    SceneNode* node1 = create_node();
-    node_set_name(node1, "Rectangle 1");
-
-    node_add_mesh(node1, mesh1);*/
-
-    /*
      * mesh2: Rectangle with no corner radius and fill
      */
     Mesh* mesh2 = create_mesh();
@@ -272,31 +238,10 @@ int main() {
                        .line_width = 2.0f,
                        .filled = true};
     mesh_generate_rect(mesh2, &rectangle2);
-    mesh_compute_aabb(mesh2);
 
     SceneNode* node2 = create_node();
     node_set_name(node2, "Rectangle 2");
     node_add_mesh(node2, mesh2);
-
-    /*
-     * mesh3: Rectangle with corner radius and no fill
-     */
-    /*Mesh* mesh3 = create_mesh();
-    mesh3->material = shape_material;
-
-    Rect rectangle3 = {
-        .position = {-20.0f, 20.0f, 0.0f},
-        .size = {20.0f, 20.0f, 0.0f},
-        .corner_radius = 2.0f,
-        .line_width = 2.0f,
-        .filled = false
-    };
-    mesh_generate_rect(mesh3, &rectangle3);
-    mesh_compute_aabb(mesh3);
-
-    SceneNode* node3 = create_node();
-    node_set_name(node3, "Rectangle 3");
-    node_add_mesh(node3, mesh3);*/
 
     /*
      * mesh4: Rectangle with corner radius and fill
@@ -310,131 +255,13 @@ int main() {
                        .line_width = 2.0f,
                        .filled = true};
     mesh_generate_rect(mesh4, &rectangle4);
-    mesh_compute_aabb(mesh4);
 
     SceneNode* node4 = create_node();
     node_set_name(node4, "Rectangle 4");
     node_add_mesh(node4, mesh4);
 
-    /*
-     * mesh5: Circle with no fill
-     */
-    /*Mesh* mesh5 = create_mesh();
-    mesh5->material = shape_material;
-
-    Circle circle1 = {
-        .position = {-20.0f, -60.0f, 0.0f},
-        .radius = 10.0f,
-        .line_width = 10.0f,
-        .filled = false
-    };
-
-    mesh_generate_circle(mesh5, &circle1);
-    mesh_compute_aabb(mesh5);
-
-    SceneNode* node5 = create_node();
-    node_set_name(node5, "Circle 1");
-    node_add_mesh(node5, mesh5);
-    */
-
-    /*
-     * mesh6: Circle with fill
-     */
-    /*Mesh* mesh6 = create_mesh();
-    mesh6->material = pbr_material;
-
-    Circle circle2 = {
-        .position = {20.0f, -60.0f, 0.0f},
-        .radius = 10.0f,
-        .line_width = 2.0f,
-        .filled = true
-    };
-
-    mesh_generate_circle(mesh6, &circle2);
-    mesh_compute_aabb(mesh6);
-
-    SceneNode* node6 = create_node();
-    node_set_name(node6, "Circle 2");
-    node_add_mesh(node6, mesh6);
-
-    // Top-Left Quadrant (Start on left, End on right, Y-Start < Y-End)
-    vec3 start7 = {-35.0f, 75.0f, 0.0f}; // Starting from left, higher up
-    vec3 end7 = {-25.0f, 65.0f, 0.0f};   // Ending towards right, slightly lower
-
-    // Top-Right Quadrant (Start on right, End on left, Y-Start < Y-End)
-    vec3 start8 = {35.0f, 75.0f, 0.0f};  // Starting from right, higher up
-    vec3 end8 = {25.0f, 65.0f, 0.0f};    // Ending towards left, slightly lower
-
-    // Bottom-Left Quadrant (Start on left, End on right, Y-Start > Y-End)
-    vec3 start9 = {-35.0f, 45.0f, 0.0f}; // Starting from left, lower down
-    vec3 end9 = {-25.0f, 55.0f, 0.0f};   // Ending towards right, slightly higher
-
-    // Bottom-Right Quadrant (Start on right, End on left, Y-Start > Y-End)
-    vec3 start10 = {35.0f, 45.0f, 0.0f}; // Starting from right, lower down
-    vec3 end10 = {25.0f, 55.0f, 0.0f};   // Ending towards left, slightly higher
-    */
-
-    /*
-     * mesh7: S-Shaped Bezier Curve
-     */
-    /*Mesh* mesh7 = create_mesh();
-    mesh7->material = shape_material;
-
-    Curve *bez7 = create_s_bezier_curve(start7, end7, 5.0f, 2.0f);
-    mesh_generate_curve(mesh7, bez7);
-    mesh_compute_aabb(mesh7);
-    SceneNode* node7 = create_node();
-    node_set_name(node7, "Bezier Curve 1");
-    node_add_mesh(node7, mesh7);
-    free(bez7);
-
-    Mesh* mesh8 = create_mesh();
-    mesh8->material = shape_material;
-
-    Curve *bez8 = create_s_bezier_curve(start8, end8, 5.0f, 2.0f);
-    mesh_generate_curve(mesh8, bez8);
-    mesh_compute_aabb(mesh8);
-    SceneNode* node8 = create_node();
-    node_set_name(node8, "Bezier Curve 2");
-    node_add_mesh(node8, mesh8);
-    free(bez8);
-
-    Mesh* mesh9 = create_mesh();
-    mesh9->material = shape_material;
-
-    Curve *bez9 = create_s_bezier_curve(start9, end9, 5.0f, 2.0f);
-    mesh_generate_curve(mesh9, bez9);
-    mesh_compute_aabb(mesh9);
-    SceneNode* node9 = create_node();
-    node_set_name(node9, "Bezier Curve 3");
-    node_add_mesh(node9, mesh9);
-    free(bez9);
-
-    Mesh* mesh10 = create_mesh();
-    mesh10->material = shape_material;
-
-    Curve *bez10 = create_s_bezier_curve(start10, end10, 5.0f, 2.0f);
-    mesh_generate_curve(mesh10, bez10);
-    mesh_compute_aabb(mesh10);
-    SceneNode* node10 = create_node();
-    node_set_name(node10, "Bezier Curve 4");
-    node_add_mesh(node10, mesh10);
-    free(bez10);*/
-
-    // node_add_child(root_node, node1);
     node_add_child(root_node, node2);
-    // node_add_child(root_node, node3);
     node_add_child(root_node, node4);
-    /*node_add_child(root_node, node5);
-    node_add_child(root_node, node6);
-    node_add_child(root_node, node7);
-    node_add_child(root_node, node8);
-    node_add_child(root_node, node9);
-    node_add_child(root_node, node10);*/
-
-    assert(root_node != NULL);
-
-    node_upload_meshes(root_node);
 
     scene_print(scene);
 

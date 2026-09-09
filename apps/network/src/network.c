@@ -177,13 +177,11 @@ int main(int argc, char** argv) {
                      .segments_lat = RINGS};
     mesh_generate_sphere(mesh, &sphere);
     triangles_to_edges(mesh);
-    mesh_compute_aabb(mesh);
 
     sphere_node = create_node();
     node_set_name(sphere_node, "sphere");
     node_add_mesh(sphere_node, mesh);
     node_add_child(root, sphere_node);
-    node_upload_meshes(root);
 
     engine_run(engine, NULL, pre_render, render);
     free_engine(engine);

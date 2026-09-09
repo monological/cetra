@@ -191,9 +191,11 @@ void mesh_set_draw_mode(Mesh* mesh, MeshDrawMode draw_mode) {
 }
 
 void mesh_compute_aabb(Mesh* mesh) {
+    if (!mesh)
+        return;
     AABB* aabb = &mesh->aabb;
 
-    if (mesh->vertex_count == 0) {
+    if (mesh->vertex_count == 0 || !mesh->vertices) {
         glm_vec3_zero(aabb->min);
         glm_vec3_zero(aabb->max);
         return;
@@ -212,9 +214,51 @@ void mesh_compute_aabb(Mesh* mesh) {
     }
 }
 
-// The vertex maxima the wind bound needs (see mesh.h). Here rather than beside
-// mesh_compute_aabb because this runs once per mesh with every attribute final,
-// which is what makes the answer a description of what the shader will read.
+void mesh_compute_normals(Mesh* mesh) {
+    if (!mesh || mesh->vertex_count == 0 || !mesh->vertices)
+        return;
+    if (mesh->draw_mode != MESH_TRIANGLES)
+        return;
+
+    float* normals = calloc(mesh->vertex_count * 3, sizeof(float));
+    if (!normals) {
+        log_error("Failed to allocate normals for %zu vertices", mesh->vertex_count);
+        return;
+    }
+
+    // Unnormalised face normals summed per vertex: the cross product's length
+    // is twice the face area, which is the weighting.
+    size_t corner_count = mesh->indices ? mesh_index_total(mesh) : mesh->vertex_count;
+    for (size_t c = 0; c + 2 < corner_count; c += 3) {
+        size_t ia = mesh->indices ? mesh->indices[c] : c;
+        size_t ib = mesh->indices ? mesh->indices[c + 1] : c + 1;
+        size_t ic = mesh->indices ? mesh->indices[c + 2] : c + 2;
+        if (ia >= mesh->vertex_count || ib >= mesh->vertex_count || ic >= mesh->vertex_count)
+            continue;
+        vec3 e1, e2, fn;
+        glm_vec3_sub(&mesh->vertices[ib * 3], &mesh->vertices[ia * 3], e1);
+        glm_vec3_sub(&mesh->vertices[ic * 3], &mesh->vertices[ia * 3], e2);
+        glm_vec3_cross(e1, e2, fn);
+        glm_vec3_add(&normals[ia * 3], fn, &normals[ia * 3]);
+        glm_vec3_add(&normals[ib * 3], fn, &normals[ib * 3]);
+        glm_vec3_add(&normals[ic * 3], fn, &normals[ic * 3]);
+    }
+
+    for (size_t i = 0; i < mesh->vertex_count; ++i) {
+        float* n = &normals[i * 3];
+        if (glm_vec3_norm2(n) > 1e-20f)
+            glm_vec3_normalize(n);
+        else
+            glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, n);
+    }
+
+    free(mesh->normals);
+    mesh->normals = normals;
+}
+
+// The vertex maxima the wind bound needs (see mesh.h). Taken at upload, with
+// every attribute final, which is what makes the answer a description of what
+// the shader will read.
 static void measure_wind_extremes(Mesh* mesh) {
     mesh->wind_flex_max = 0.0f;
     mesh->wind_leaf_max = 0.0f;
@@ -325,10 +369,16 @@ static void _upload_int_stream(const Mesh* mesh, const int* data, GLuint* vbo, G
 void mesh_upload(Mesh* mesh) {
     if (!mesh)
         return;
-    // A mesh with no VAO is not drawable and the list refuses it, so the upload
-    // that makes it drawable has to invalidate.
+    // A mesh nothing was uploaded for is not drawable and the list refuses it,
+    // so the upload that makes it drawable has to invalidate.
     scene_graph_touched();
 
+    // Every measurement of the final arrays, in one place, before they go.
+    mesh_compute_aabb(mesh);
+    if (mesh->draw_mode == MESH_TRIANGLES && !mesh->normals && mesh->vertex_count > 0) {
+        log_info("mesh %u: no normals; computed from its faces", mesh->id);
+        mesh_compute_normals(mesh);
+    }
     measure_wind_extremes(mesh);
     measure_bone_bounds(mesh);
 
@@ -378,4 +428,6 @@ void mesh_upload(Mesh* mesh) {
 
     // Unbind vao
     glBindVertexArray(0);
+
+    mesh->gpu_vertex_count = mesh->vertex_count;
 }

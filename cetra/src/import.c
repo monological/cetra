@@ -839,12 +839,15 @@ static void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     size_t vert_count = ai_mesh->mNumVertices;
     size_t idx_count = ai_mesh->mNumFaces * 3; // Assuming the mesh is triangulated
 
-    // Allocate memory for vertices and normals
+    // Normals are optional like every other stream below: a model without
+    // them leaves `normals` NULL and the upload computes them from the faces.
+    // aiProcess_GenSmoothNormals makes that rare rather than impossible.
+    const bool has_normals = ai_mesh->mNormals != NULL;
     mesh->vertices = malloc(vert_count * 3 * sizeof(float));
-    mesh->normals = malloc(vert_count * 3 * sizeof(float));
+    mesh->normals = has_normals ? malloc(vert_count * 3 * sizeof(float)) : NULL;
 
     // Validate critical allocations
-    if (!mesh->vertices || !mesh->normals) {
+    if (!mesh->vertices || (has_normals && !mesh->normals)) {
         log_error("Failed to allocate mesh vertex/normal buffers");
         free(mesh->vertices);
         free(mesh->normals);
@@ -858,8 +861,9 @@ static void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
     mesh->vertex_count = vert_count;
     mesh->index_count = idx_count;
 
-    // vec4: xyz tangent, w handedness derived from Assimp's bitangent below.
-    if (ai_mesh->mTangents && ai_mesh->mBitangents) {
+    // vec4: xyz tangent, w handedness derived from Assimp's bitangent below,
+    // which needs the normal too.
+    if (has_normals && ai_mesh->mTangents && ai_mesh->mBitangents) {
         mesh->tangents = malloc(mesh->vertex_count * 4 * sizeof(float));
     } else {
         mesh->tangents = NULL;
@@ -895,9 +899,11 @@ static void process_ai_mesh(Mesh* mesh, struct aiMesh* ai_mesh) {
         mesh->vertices[i * 3 + 1] = ai_mesh->mVertices[i].y;
         mesh->vertices[i * 3 + 2] = ai_mesh->mVertices[i].z;
 
-        mesh->normals[i * 3] = ai_mesh->mNormals[i].x;
-        mesh->normals[i * 3 + 1] = ai_mesh->mNormals[i].y;
-        mesh->normals[i * 3 + 2] = ai_mesh->mNormals[i].z;
+        if (mesh->normals) {
+            mesh->normals[i * 3] = ai_mesh->mNormals[i].x;
+            mesh->normals[i * 3 + 1] = ai_mesh->mNormals[i].y;
+            mesh->normals[i * 3 + 2] = ai_mesh->mNormals[i].z;
+        }
 
         if (mesh->tangents) {
             mesh->tangents[i * 4] = ai_mesh->mTangents[i].x;
@@ -1755,11 +1761,12 @@ static SceneNode* process_ai_node(Scene* scene, struct aiNode* ai_node,
             }
         }
 
-        mesh_compute_aabb(mesh);
-        // After the AABB (which describes the vertices, and those do not change)
-        // and before any upload, since this rewrites the index array.
+        // The chain before the upload, since it rewrites the index array. The
+        // meshes are written into the node's array directly rather than through
+        // node_add_mesh, so the upload that attach would have done is here.
         if (mesh_build_lod_chain(mesh) > 1)
             (*lod_chains)++;
+        mesh_upload(mesh);
         mesh_cache[meshIndex] = mesh;
         (*built)++;
         node->meshes[i] = mesh;
@@ -1883,8 +1890,11 @@ Scene* create_scene_from_model_path(const char* path, const char* texture_direct
         return NULL;
     }
 
+    // GenSmoothNormals touches only a mesh that arrives without normals, and
+    // runs before CalcTangentSpace, which needs them.
     const struct aiScene* ai_scene =
-        import_ai_scene(path, aiProcess_Triangulate | aiProcess_CalcTangentSpace | uv_flip_flag());
+        import_ai_scene(path, aiProcess_Triangulate | aiProcess_GenSmoothNormals |
+                                  aiProcess_CalcTangentSpace | uv_flip_flag());
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         log_error("Error importing FBX file: %s\n", path);
         return NULL;

@@ -227,7 +227,7 @@ static bool append_node(DrawList* list, SceneNode* node, const LodSelect* lod) {
         // The same three the draw path refused: no geometry to bind, or no
         // program to bind it with. Refused here so a consumer can assume every
         // item is drawable.
-        if (!mesh || !mesh->material || mesh->vao == 0)
+        if (!mesh || !mesh->material || mesh->gpu_vertex_count == 0)
             continue;
         if (!mesh->material->shader_program || !mesh->material->shader_program->uniforms)
             continue;

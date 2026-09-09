@@ -812,10 +812,19 @@ SceneNode* create_node() {
     node->camera = NULL;
     node->particle_system = NULL;
 
-    // xyz
+    // The XYZ gizmo: the same three axes in every node's own buffer, filled
+    // here since the geometry is constant and the context is live.
     node->show_xyz = true;
     glGenVertexArrays(1, &node->xyz_vao);
     glGenBuffers(1, &node->xyz_vbo);
+    glBindVertexArray(node->xyz_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, node->xyz_vbo);
+    glBufferData(GL_ARRAY_BUFFER, xyz_vertices_size, xyz_vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
     node->xyz_shader_program = NULL;
 
     return node;
@@ -930,6 +939,13 @@ void node_add_mesh(SceneNode* node, Mesh* mesh) {
     node->meshes = new_meshes;
     node->meshes[node->mesh_count] = mesh;
     node->mesh_count = new_count;
+
+    // Attaching is the moment a mesh becomes drawable, so a mesh with vertices
+    // and nothing on the GPU goes up here. The context is live by construction:
+    // create_mesh already generated its VAO. A mesh uploaded before attach (a
+    // shared prototype, a terrain patch) is not uploaded twice.
+    if (mesh->vertex_count > 0 && mesh->gpu_vertex_count == 0)
+        mesh_upload(mesh);
 }
 
 void node_set_name(SceneNode* node, const char* name) {
@@ -1035,54 +1051,6 @@ void node_set_show_xyz(SceneNode* node, bool show_xyz) {
 
     for (size_t i = 0; i < node->children_count; ++i) {
         node_set_show_xyz(node->children[i], show_xyz);
-    }
-}
-
-static void _upload_xyz_buffers_to_gpu_for_node(SceneNode* node) {
-    // Bind the Vertex Array Object (VAO)
-    glBindVertexArray(node->xyz_vao);
-
-    // Bind and set up the Vertex Buffer Object (VBO)
-    glBindBuffer(GL_ARRAY_BUFFER, node->xyz_vbo);
-    glBufferData(GL_ARRAY_BUFFER, xyz_vertices_size, xyz_vertices, GL_STATIC_DRAW);
-
-    // Position attribute
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-
-    // Color attribute
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    // Clear any stale GL errors before validation
-    while (glGetError() != GL_NO_ERROR) {
-    }
-
-    // only validate if VAO is bound
-    if (node->xyz_shader_program && !validate_program(node->xyz_shader_program)) {
-        log_error("xyz shader program validation failed");
-    }
-
-    glBindVertexArray(0);
-}
-
-void node_upload_meshes(SceneNode* node) {
-    if (!node)
-        return;
-
-    /*
-     * Setup and upload mesh buffers.
-     */
-    for (size_t i = 0; i < node->mesh_count; i++) {
-        if (node->meshes[i]) {
-            mesh_upload(node->meshes[i]);
-        }
-    }
-
-    _upload_xyz_buffers_to_gpu_for_node(node);
-
-    for (size_t i = 0; i < node->children_count; i++) {
-        node_upload_meshes(node->children[i]);
     }
 }
 

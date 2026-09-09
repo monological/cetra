@@ -228,8 +228,6 @@ static void on_init(Game* game) {
     // The wandering glass sphere (moved each fixed step in on_update).
     g_sphere_node = add_glass_sphere(root, SPHERE_RADIUS);
 
-    node_upload_meshes(root);
-
     // Cordyceps-spore particle system: fine pale-green motes on curl-noise
     // turbulence. Attached to a scene node -- the engine ticks + renders it, the
     // app just builds and attaches. The node sits at the origin (identity), so

@@ -3561,8 +3561,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    node_upload_meshes(scene->root_node);
-
     node_set_programs(scene->root_node, pbr_shader_program, pbr_skinned_program);
 
     // Propagate transforms before computing bounds (needed for correct global_transform values).

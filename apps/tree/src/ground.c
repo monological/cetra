@@ -334,10 +334,6 @@ void ground_build_mesh(Mesh* mesh, int rings, int segments, float uv_tiles) {
     }
 
     mesh->draw_mode = MESH_TRIANGLES;
-    // Required: the renderer frustum-culls on this. Left at the zero AABB
-    // create_mesh starts with, the ground collapses to a point at the origin
-    // and gets culled the moment that point leaves the view.
-    mesh_compute_aabb(mesh);
 }
 
 bool ground_build_seabed(Mesh* mesh, int rings, int segments, float uv_tiles) {

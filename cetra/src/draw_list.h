@@ -113,8 +113,8 @@ DrawList* create_draw_list(void);
 void free_draw_list(DrawList* list);
 
 // Bumped by every mutation the list would have to see: a node or mesh added or
-// freed, a mesh uploaded (the list refuses vao == 0), a material's alpha mode or
-// caster-relevant textures changed.
+// freed, a mesh uploaded (the list refuses gpu_vertex_count == 0), a material's
+// alpha mode or caster-relevant textures changed.
 //
 // Global rather than a Scene field because the mutators that matter have no way
 // back to a Scene -- free_mesh and node_add_mesh take a Mesh and a SceneNode.

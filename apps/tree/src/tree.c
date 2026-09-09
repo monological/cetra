@@ -304,9 +304,6 @@ static void create_island(SceneNode* parent) {
 
     node_add_mesh(island_node, mesh);
     node_add_child(parent, island_node);
-    // Static for the program's lifetime, so it uploads once here rather than
-    // riding along with every tree rebuild.
-    node_upload_meshes(island_node);
 }
 
 /*
@@ -331,7 +328,6 @@ static void create_seabed(SceneNode* parent) {
     node_set_name(seabed_node, "seabed");
     node_add_mesh(seabed_node, mesh);
     node_add_child(parent, seabed_node);
-    node_upload_meshes(seabed_node);
 }
 
 /*
@@ -412,7 +408,6 @@ static void create_shore_rocks(SceneNode* parent) {
         // been sitting in surf is not.
         glm_scale(node->original_transform, (vec3){1.0f, veg_rand_range(0.62f, 0.88f), 1.0f});
         node_add_child(parent, node);
-        node_upload_meshes(node);
         rock_nodes[i] = node;
     }
 }
@@ -462,9 +457,6 @@ static void regenerate_tree(const TreeParams* p) {
            tree_root->mesh_count > 1 ? tree_root->meshes[1]->vertex_count : (size_t)0);
 
     tree_skeleton_free(&skel);
-
-    // Only the tree's own meshes: the ground is static and uploaded once.
-    node_upload_meshes(tree_root);
 }
 
 /*
@@ -489,8 +481,6 @@ static void regenerate_grass(const GrassParams* p) {
     } else {
         free_mesh(grass);
     }
-
-    node_upload_meshes(grass_node);
 }
 
 // Leaf color across the season slider. The albedo factor multiplies the leaf

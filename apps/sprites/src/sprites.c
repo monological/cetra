@@ -253,12 +253,10 @@ int main(int argc, char** argv) {
                  .filled = true,
                  .line_width = 1.0f};
     mesh_generate_rect(backdrop, &rect);
-    mesh_compute_aabb(backdrop);
     SceneNode* backdrop_node = create_node();
     node_set_name(backdrop_node, "backdrop");
     node_add_mesh(backdrop_node, backdrop);
     node_add_child(root, backdrop_node);
-    node_upload_meshes(root);
 
     // The engine registers no particle program of its own.
     ShaderProgram* particle_program = create_particle_program();

@@ -73,7 +73,6 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 
     node_add_mesh(node, mesh);
     node_add_child(scene->root_node, node);
-    mesh_upload(mesh);
 
     return node;
 }
@@ -387,9 +386,6 @@ static void on_init(Game* game) {
 
     // Create a door with hinge constraint
     create_door(game, (vec3){5.0f, 0.0f, 0.0f});
-
-    // Upload all GPU buffers
-    node_upload_meshes(root);
 
     // Optimize broad phase after adding initial bodies
     physics_world_optimize(physics);

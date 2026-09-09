@@ -499,7 +499,4 @@ void scene_print(const Scene* scene);
 void scene_bounds(Scene* scene, vec3 out_min, vec3 out_max);
 void scene_bounding_sphere(Scene* scene, vec3 out_center, float* out_radius);
 
-// render
-void node_upload_meshes(SceneNode* node);
-
 #endif // _SCENE_H_

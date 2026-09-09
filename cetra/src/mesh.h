@@ -143,6 +143,11 @@ typedef struct Mesh {
     size_t vertex_count; // Number of vertices
     size_t index_count;  // Number of indices
 
+    // Vertices resident on the GPU, set by mesh_upload; 0 = never uploaded.
+    // The draw list refuses on this, not on the VAO, which create_mesh
+    // generates before any data exists.
+    size_t gpu_vertex_count;
+
     Material* material;
 
     GLuint vao;         // Vertex Array Object
@@ -346,11 +351,24 @@ Mesh* mesh_ref(Mesh* mesh);
 void free_mesh(Mesh* mesh);
 
 void mesh_set_draw_mode(Mesh* mesh, MeshDrawMode draw_mode);
+
+// The bound of the vertex array. mesh_upload takes it, so a caller needs it
+// only for a mesh that is measured without being drawn.
 void mesh_compute_aabb(Mesh* mesh);
+
+// Area-weighted vertex normals from a MESH_TRIANGLES mesh's faces, indexed or
+// not, replacing whatever `normals` held. A vertex no non-degenerate face
+// touches gets +Y. mesh_upload calls it for a triangle mesh with no normals.
+void mesh_compute_normals(Mesh* mesh);
 
 /*
  * Mesh buffers
  */
+// Send the vertex arrays to the GPU, measuring them on the way: the AABB, the
+// wind and per-bone extents, and normals if a triangle mesh has none.
+// node_add_mesh calls it for a mesh that has vertices and was never uploaded;
+// call it again after editing the arrays in place. Build the LOD chain before
+// attaching, since the chain rewrites the index array.
 void mesh_upload(Mesh* mesh);
 
 #endif // _MESH_H_
