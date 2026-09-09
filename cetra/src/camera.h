@@ -59,14 +59,16 @@ typedef struct CameraDesc {
 } CameraDesc;
 
 // NULL means every default. The orbit parameters (distance, theta, phi) are
-// derived from the pose once, here; the orbit tuning (max_distance, the two
-// speeds) and everything else on a Camera is a plain field.
+// derived from the pose here and by the two pose setters below; the orbit
+// tuning (max_distance, the two speeds) and everything else on a Camera is a
+// plain field.
 Camera* create_camera(const CameraDesc* desc);
 void free_camera(Camera* camera);
 
-// The pose. Functions so that the orbit parameters can follow a pose change;
-// today they store, and a caller that moves the camera by pose and then
-// orbits it re-derives distance, theta and phi itself.
+// The pose. Functions because the orbit parameters follow it: each re-derives
+// distance, theta and phi, so a camera moved by pose and then orbited continues
+// from where it is. Set the eye and then the target; between the two calls the
+// parameters describe a pose that was never shown.
 void camera_set_position(Camera* camera, vec3 position);
 void camera_set_look_at(Camera* camera, vec3 look_at);
 
@@ -91,7 +93,9 @@ void camera_zoom_toward_target(Camera* camera, float factor, float min_distance)
 // camera slide around the boundary sphere.
 void camera_enforce_max_distance(Camera* camera);
 
-// Sync spherical coordinates from current position
+// distance, theta and phi from the pose. The setters and create_camera call
+// it; a caller needs it only after writing the three directly (the GUI's
+// orbit sliders) to continue from the pose on screen rather than the fields.
 void camera_sync_spherical_from_position(Camera* camera);
 
 // Matrix computation

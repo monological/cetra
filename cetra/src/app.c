@@ -58,21 +58,21 @@ void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
 
-    // When dragging starts, capture current camera state
+    // When dragging starts, capture current camera state. The orbit parameters
+    // are re-derived from the pose on screen rather than trusted: the GUI's
+    // orbit sliders write them directly, and a drag continues from what is
+    // shown, not from a slider.
     if (engine->input.is_dragging) {
-        vec3 dir;
-        glm_vec3_sub(camera->position, camera->look_at, dir);
-        float dist = glm_vec3_norm(dir);
+        float dist = glm_vec3_distance(camera->position, camera->look_at);
 
         if (dist > 0.001f) {
+            camera_sync_spherical_from_position(camera);
             if (engine->camera_mode == CAMERA_MODE_ORBIT) {
-                ctrl->orbit_start_theta = asinf(dir[1] / dist);
-                ctrl->orbit_start_phi = atan2f(dir[2], dir[0]);
-                camera->distance = dist;
+                ctrl->orbit_start_theta = camera->theta;
+                ctrl->orbit_start_phi = camera->phi;
             } else if (engine->camera_mode == CAMERA_MODE_FREE) {
-                ctrl->free_look_distance = dist;
-                ctrl->free_start_pitch = asinf(dir[1] / dist);
-                ctrl->free_start_yaw = atan2f(dir[2], dir[0]);
+                ctrl->free_start_pitch = camera->theta;
+                ctrl->free_start_yaw = camera->phi;
             }
         }
         // Save starting positions for Shift+drag pan
@@ -228,9 +228,6 @@ void mouse_drag_update(MouseDragController* ctrl, float time) {
     }
 
     camera_enforce_max_distance(camera);
-
-    engine_update_view(engine);
-    engine_update_projection(engine);
 }
 
 bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods) {
@@ -296,7 +293,6 @@ bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods)
             if (mods & GLFW_MOD_SHIFT) {
                 camera_pan(camera, -pan_speed, 0.0f);
             } else {
-                camera_sync_spherical_from_position(camera);
                 camera_orbit(camera, 0.0f, ORBIT_STEP);
             }
             return true;
@@ -305,7 +301,6 @@ bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods)
             if (mods & GLFW_MOD_SHIFT) {
                 camera_pan(camera, pan_speed, 0.0f);
             } else {
-                camera_sync_spherical_from_position(camera);
                 camera_orbit(camera, 0.0f, -ORBIT_STEP);
             }
             return true;

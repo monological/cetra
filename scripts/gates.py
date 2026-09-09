@@ -16065,17 +16065,15 @@ def run_config_gate(workdir):
     raises anything under a derived floor, and every other arm here passed on that
     build. Anything read only as pixels is blind to a field the frame does not use.
 
-    THREE KNOWN GAPS, said out loud rather than left to look like coverage.
+    TWO KNOWN GAPS, said out loud rather than left to look like coverage. (There
+    were three: the apply used to rebuild the view matrix itself after the pose
+    rows landed, which no arm could see because the frame loop rebuilt it again
+    before rendering. Spec 11.107 made the frame loop the only builder and the
+    deferred call went.)
 
-    Nothing here can see the deferred engine_update_view, because the
-    render app's own frame loop rebuilds the view matrix through mouse_drag_update
-    every frame -- deleting the call is 0 px on every arm. It is kept because the
-    apply must not assume its caller has a drag controller.
-
-    Nothing here can see the auto-orbit kill after a restore either, for the same
-    shape of reason: render.c already passes `!args.headless` when it arms
-    auto-orbit, so it is off in every headless run and those lines are unreachable
-    from this group.
+    Nothing here can see the auto-orbit kill after a restore: render.c already
+    passes `!args.headless` when it arms auto-orbit, so it is off in every
+    headless run and those lines are unreachable from this group.
 
     And config-coverage matches a gui.c target by its TRAILING member name, so a
     control writing `sb->enabled` is satisfied by Water.enabled. The springs

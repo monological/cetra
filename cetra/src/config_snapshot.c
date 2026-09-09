@@ -89,15 +89,15 @@ typedef enum ConfigType {
 
 struct ConfigField;
 
-// What a restore is allowed to touch beyond the field itself, and the two things
-// it must defer. Both deferrals exist because the work is triggered by a MOVE
-// rather than by a value: two sun angles are one sun move, and a camera pose is
-// only coherent once eye, target and up have all arrived.
+// What a restore is allowed to touch beyond the field itself, and the one thing
+// it must defer. The deferral exists because the work is triggered by a MOVE
+// rather than by a value: two sun angles are one sun move. (The camera pose
+// used to be deferred the same way, until the frame loop took over deriving
+// the view matrix from whatever pose it finds.)
 typedef struct ConfigApplyCtx {
     struct Engine* engine;
     struct Scene* scene;
     bool sun_moved;
-    bool camera_moved;
     // Anything the env cube, the sky-mirroring probes and the GI volume are
     // derived from -- the sun and the cloud layer both. One flag because they
     // feed ONE chain (scene_environment_changed), which is the whole point.
@@ -396,15 +396,6 @@ static void _apply_cloud_enabled(ConfigApplyCtx* ctx, void* base, const ConfigFi
     ctx->env_changed = true;
 }
 
-// Eye, target and up are one POSE: the view matrix built from any one of them is
-// wrong until the other two have landed, hence the deferral rather than a
-// rebuild per component.
-static void _apply_camera_vec(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
-                              const double* v, int n) {
-    _store_value(f, base, v, n);
-    ctx->camera_moved = true;
-}
-
 /*
  * The table.
  *
@@ -608,9 +599,15 @@ static const ConfigField CFG_FIELDS[] = {
 
     // --- camera. Radians, not the degrees Print Camera emits: this file is read
     // back by the loader, and a unit conversion is a second place to disagree.
-    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "eye", position, _apply_camera_vec),
-    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "target", look_at, _apply_camera_vec),
-    CFG_ROW_FN(CFG_CAMERA, CFG_VEC3, "camera", "up", up_vector, _apply_camera_vec),
+    // The pose is stored by offset, NOT through camera_set_position and
+    // camera_set_look_at, which re-derive distance/theta/phi from it and would
+    // overwrite the three camera.orbit rows restored below. The snapshot carries
+    // those itself, written in the same breath as the pose; re-deriving them
+    // once discarded a hand-edited orbit block and made three rows unreachable
+    // from outside the process.
+    CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "eye", position),
+    CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "target", look_at),
+    CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "up", up_vector),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "fov_radians", fov_radians),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "near_clip", near_clip),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "far_clip", far_clip),
@@ -1667,20 +1664,6 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
     for (size_t a = 0; a < CFG_ARRAY_COUNT; a++)
         written += _apply_array(&ctx, root, &CFG_ARRAYS[a]);
     cJSON_Delete(root);
-
-    /*
-     * The pose last, once eye, target and up have all landed -- a view matrix
-     * built from any one of them alone is wrong.
-     *
-     * NOT paired with camera_sync_spherical_from_position, which derives
-     * distance/theta/phi FROM the pose and so overwrote the three camera.orbit
-     * rows this file had just restored. The snapshot carries them itself,
-     * written in the same breath as the pose and therefore already agreeing with
-     * it; re-deriving them discarded a hand-edited orbit block and made three
-     * rows unreachable from outside the process.
-     */
-    if (ctx.camera_moved && engine->camera)
-        engine_update_view(engine);
 
     printf("config snapshot applied: %s (%d fields)\n", path, written);
     fflush(stdout);

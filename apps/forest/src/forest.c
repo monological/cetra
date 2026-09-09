@@ -2836,10 +2836,6 @@ static void on_pre_render(Game* game, double alpha) {
             camera_set_position(camera, eye);
             camera_set_look_at(camera, target);
         }
-        // Without both of these the view matrix keeps whatever it had; nothing
-        // else in a game-framework app writes it.
-        engine_update_view(engine);
-        engine_update_projection(engine);
     }
 
     // The descent, before the engine's transform walk gives a newly attached

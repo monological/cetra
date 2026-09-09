@@ -137,17 +137,6 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 }
 
-// The camera this frame's geometry is read against. The engine propagates the
-// graph as soon as this returns, and the shadow pass fits its cascades to the
-// camera set here.
-void pre_render_callback(Engine* engine, Scene* current_scene) {
-    if (!engine || !current_scene->root_node || !engine->camera)
-        return;
-
-    engine_update_view(engine);
-    engine_update_projection(engine);
-}
-
 void render_scene_callback(Engine* engine, Scene* current_scene) {
     if (!engine || !current_scene->root_node)
         return;
@@ -225,9 +214,6 @@ int main() {
                               .far = 10000.0f};
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
-
-    engine_update_view(engine);
-    engine_update_projection(engine);
 
     /*
      * Import fbx model.
@@ -456,7 +442,7 @@ int main() {
     engine_set_show_wireframe(engine, false);
     engine_set_show_xyz(engine, false);
 
-    engine_run(engine, NULL, pre_render_callback, render_scene_callback);
+    engine_run(engine, NULL, NULL, render_scene_callback);
 
     printf("Cleaning up...\n");
     free_engine(engine);

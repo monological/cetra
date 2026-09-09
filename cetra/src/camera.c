@@ -52,12 +52,14 @@ void camera_set_position(Camera* camera, vec3 position) {
     if (!camera)
         return;
     glm_vec3_copy(position, camera->position);
+    camera_sync_spherical_from_position(camera);
 }
 
 void camera_set_look_at(Camera* camera, vec3 look_at) {
     if (!camera)
         return;
     glm_vec3_copy(look_at, camera->look_at);
+    camera_sync_spherical_from_position(camera);
 }
 
 void camera_orbit(Camera* camera, float delta_theta, float delta_phi) {
@@ -221,7 +223,8 @@ void camera_sync_spherical_from_position(Camera* camera) {
         dist = 1000.0f;
 
     camera->distance = dist;
-    camera->theta = asinf(to_camera[1] / dist);
+    // Clamped: rounding can put |y| a ulp past the norm, and asinf of that is NaN.
+    camera->theta = asinf(glm_clamp(to_camera[1] / dist, -1.0f, 1.0f));
     camera->phi = atan2f(to_camera[2], to_camera[0]);
 }
 

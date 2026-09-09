@@ -258,12 +258,6 @@ A minimal `src/main.c`, a lit box under an orbit camera:
 #include "cetra/geometry.h"
 #include "cetra/scene.h"
 
-static void pre_render(Engine* engine, Scene* scene) {
-    (void)scene;
-    engine_update_view(engine);
-    engine_update_projection(engine);
-}
-
 static void render(Engine* engine, Scene* scene) {
     engine_render_scene(engine, scene);
 }
@@ -298,7 +292,7 @@ int main(void) {
     node_add_mesh(node, mesh);
     node_add_child(scene->root_node, node);
 
-    engine_run(engine, NULL, pre_render, render);
+    engine_run(engine, NULL, NULL, render);
     free_engine(engine);
     return 0;
 }

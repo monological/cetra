@@ -400,7 +400,6 @@ static void on_init(Game* game) {
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
     engine_set_camera_mode(engine, CAMERA_MODE_ORBIT);
-    camera->distance = 40.0f;
 
     // Create drag controller
     drag_controller = create_mouse_drag_controller(engine);

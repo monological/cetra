@@ -62,6 +62,7 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
+static void _engine_derive_camera(Engine* engine);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 static void _destroy_msaa_attachments(Engine* engine);
 
@@ -1078,7 +1079,9 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
     if (fb_width <= 0 || fb_height <= 0)
         return;
 
-    engine_update_projection(engine);
+    // Events are polled at the end of the frame, so a click in the same batch
+    // as this resize would otherwise ray-pick through an aspect one frame old.
+    _engine_derive_camera(engine);
     // Window points, matching init_text_renderer -- text is authored in points
     // and the ortho must stay in the space it was set up in. Handing it
     // framebuffer pixels here would halve every string on a Retina display the
@@ -1225,24 +1228,17 @@ void engine_set_camera_mode(Engine* engine, CameraMode mode) {
     }
 }
 
-void engine_update_view(Engine* engine) {
-    if (!engine)
-        return;
-
+// The view and projection matrices from the camera as it stands. The frame
+// loop calls this once, after the pre-render hook and before the shadow pass
+// (which reads the view matrix and the aspect for its cascade fit), so a pose
+// an app writes in that hook is the one the whole frame renders.
+static void _engine_derive_camera(Engine* engine) {
     Camera* camera = engine->camera;
     if (!camera)
         return;
 
     glm_lookat(camera->position, camera->look_at, camera->up_vector, engine->view_matrix);
-}
 
-void engine_update_projection(Engine* engine) {
-    if (!engine)
-        return;
-
-    Camera* camera = engine->camera;
-    if (!camera)
-        return;
     // A minimized window is 0x0, and 0/0 is a NaN that would propagate through
     // the projection into the view-proj, the frustum, and next frame's
     // reprojection. Keep the last good aspect until the window returns.
@@ -2679,6 +2675,12 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             scene_propagate_transforms(shadow_scene);
             profiler_cpu_scope_end(engine->profiler);
         }
+
+        // The camera as the hook left it, before the shadow pass reads it. Every
+        // app used to rebuild both matrices at the end of its own hook, and the
+        // three that did so only through the drag controller skipped it whenever
+        // the GUI held the pointer.
+        _engine_derive_camera(engine);
 
         // GI probe captures, while the volume is dirty. Deliberately BEFORE the
         // shadow pass: a capture needs the camera-independent single-cascade map

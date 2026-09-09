@@ -114,9 +114,6 @@ static void pre_render(Engine* engine, Scene* scene) {
     // which is the uniform cache's only requirement.
     glUseProgram(network_program->id);
     uniform_set_float(network_program->uniforms, "time", t);
-
-    engine_update_view(engine);
-    engine_update_projection(engine);
 }
 
 static void render(Engine* engine, Scene* scene) {

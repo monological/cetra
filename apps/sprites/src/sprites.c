@@ -174,12 +174,6 @@ static void update_globe(ParticleModule* m, ParticleEmitter* e, size_t begin, si
     }
 }
 
-static void pre_render(Engine* engine, Scene* scene) {
-    (void)scene;
-    engine_update_view(engine);
-    engine_update_projection(engine);
-}
-
 static void render(Engine* engine, Scene* scene) {
     engine_render_scene(engine, scene);
 }
@@ -300,7 +294,7 @@ int main(int argc, char** argv) {
     node_set_particle_system(node, sys);
     node_add_child(root, node);
 
-    engine_run(engine, NULL, pre_render, render);
+    engine_run(engine, NULL, NULL, render);
     free_engine(engine);
     return 0;
 }

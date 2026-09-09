@@ -446,13 +446,17 @@ typedef struct Engine {
 // moves. The engine propagates the graph immediately after it returns, so a
 // patch attached here gets a global transform this frame, and the shadow pass
 // and the LOD selection below both see this frame's positions rather than last
-// frame's (spec 11.96). Nothing in it may draw -- there is no bound target yet.
+// frame's (spec 11.96). The frame renders the camera as it stands when the hook
+// returns: the engine derives the view and projection matrices right after it,
+// so a pose is written and nothing else (spec 11.107). Nothing in it may draw
+// -- there is no bound target yet.
 //
 // Mutating the graph LATER than this -- from `render` -- is recoverable rather
 // than fatal: call scene_propagate_transforms again and the new node gets its
 // global. It is still the wrong place, because everything between the two reads
 // the graph as it stood here, so the shadow pass and the LOD selection will not
-// see the change until the next frame.
+// see the change until the next frame. A camera pose written there is simply a
+// frame late.
 typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
@@ -536,8 +540,6 @@ bool engine_gui_wants_keyboard(void);
 // Camera
 void engine_set_camera(Engine* engine, Camera* camera);
 void engine_set_camera_mode(Engine* engine, CameraMode mode);
-void engine_update_view(Engine* engine);
-void engine_update_projection(Engine* engine);
 
 // Scene
 void engine_add_scene(Engine* engine, Scene* scene);

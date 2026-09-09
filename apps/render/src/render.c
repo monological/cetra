@@ -1891,33 +1891,22 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
 static MouseDragController* drag_controller = NULL;
 
 /*
- * Adopt an explicit camera pose (--cam-eye at startup, --cam-at mid-run): eye,
- * look-at, and the orbit bookkeeping -- distance and theta/phi re-seeded from
- * the pose so a mouse drag continues from this exact view instead of
- * recomputing the camera from stale spherical coordinates one frame in.
- * Auto-orbit is killed for the same reason (it rewrites the camera from
- * theta/phi every frame, clobbering the pose), keeping the controller's own
- * stored limits, and the mode goes FREE (mirrored by the GUI radio): a pinned
- * pose is a free camera, and switching the radio to Orbit picks up the seeded
- * angles.
+ * Adopt an explicit camera pose (--cam-eye at startup, --cam-at mid-run). The
+ * pose setters re-derive the orbit bookkeeping, so a mouse drag continues from
+ * this exact view. Auto-orbit is killed (it rewrites the camera from theta/phi
+ * every frame, clobbering the pose), keeping the controller's own stored
+ * limits, and the mode goes FREE (mirrored by the GUI radio): a pinned pose is
+ * a free camera, and switching the radio to Orbit picks up the derived angles.
  */
 static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
     Camera* camera = engine->camera;
     camera_set_position(camera, eye);
     camera_set_look_at(camera, target);
-    vec3 offset;
-    glm_vec3_sub(eye, target, offset);
-    camera->distance = glm_vec3_norm(offset);
-    if (camera->distance > 1e-6f) {
-        camera->theta = asinf(glm_clamp(offset[1] / camera->distance, -1.0f, 1.0f));
-        camera->phi = atan2f(offset[2], offset[0]);
-    }
     if (drag_controller)
         mouse_drag_set_auto_orbit(drag_controller, false, drag_controller->auto_orbit_speed,
                                   drag_controller->auto_orbit_min_dist,
                                   drag_controller->auto_orbit_max_dist);
     engine_set_camera_mode(engine, CAMERA_MODE_FREE);
-    engine_update_view(engine);
 }
 
 /*
@@ -2363,11 +2352,7 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // clip into the model.
     if (engine->camera && clip_near_max > 0.0f) {
         float cam_dist = glm_vec3_distance(engine->camera->position, engine->camera->look_at);
-        float near_clip = fmaxf(fminf(0.02f * cam_dist, clip_near_max), clip_near_floor);
-        if (near_clip != engine->camera->near_clip) {
-            engine->camera->near_clip = near_clip;
-            engine_update_projection(engine);
-        }
+        engine->camera->near_clip = fmaxf(fminf(0.02f * cam_dist, clip_near_max), clip_near_floor);
     }
 }
 
@@ -3161,8 +3146,6 @@ int main(int argc, char** argv) {
                               .near = 7.0f,
                               .far = 10000.0f};
     Camera* camera = create_camera(&camera_desc);
-    camera->theta = 0.60f;
-    camera->height = 600.0f;
     engine_set_camera(engine, camera);
 
     // Create drag controller with auto-orbit (fixed camera in headless mode for
@@ -3774,6 +3757,10 @@ int main(int argc, char** argv) {
                          scene_center[2] + camera_distance * cosf(pitch) * cosf(yaw)};
     camera_set_position(camera, auto_cam_pos);
     camera_set_look_at(camera, scene_center);
+    // The interactive auto-orbit's elevation, which it reads and never writes.
+    // After the pose, because the setters derive theta from it, and the framed
+    // pitch is not the orbit this app has always run at.
+    camera->theta = 0.60f;
 
     // Depth of field focuses on the subject (camera-to-model distance) unless
     // overridden. --film turns it on too; --no-dof forces it off. Range scales
@@ -3826,7 +3813,6 @@ int main(int argc, char** argv) {
     camera->is_orthographic = args.ortho_height > 0.0f;
     if (camera->is_orthographic)
         camera->ortho_height = args.ortho_height;
-    engine_update_projection(engine);
     printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
 
     // Arm the per-frame distance-adaptive near (see the render callback). The
@@ -3891,9 +3877,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Update orbit controller with appropriate distance
-    camera->distance = camera_distance;
-    camera->height = scene_center[1];
     float orbit_max = camera_distance * 2.0f;
     if (scene->skybox_ground_projection) {
         // Keep the camera where the ground projection renders at full
@@ -3904,8 +3887,6 @@ int main(int argc, char** argv) {
     }
     mouse_drag_set_auto_orbit(drag_controller, !args.headless, CAM_ANGULAR_SPEED,
                               fminf(camera_distance * 0.5f, orbit_max), orbit_max);
-
-    engine_update_view(engine);
 
     // Explicit camera pose override (--cam-eye/--cam-target): reproduce any
     // interactive view exactly, bypassing the yaw/pitch/distance orbit framing
