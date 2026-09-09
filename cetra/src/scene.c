@@ -267,11 +267,6 @@ void scene_set_root(Scene* scene, SceneNode* root_node) {
     scene->materials_dirty = true;
 }
 
-void scene_mark_materials_dirty(Scene* scene) {
-    if (scene)
-        scene->materials_dirty = true;
-}
-
 /*
  * Cameras
  */
@@ -420,13 +415,8 @@ void scene_update_particle_systems(Scene* scene, float dt, float t) {
 }
 
 void scene_add_material(Scene* scene, Material* material) {
-    if (!scene || !material)
+    if (!scene || !material || material->registered)
         return;
-
-    for (size_t i = 0; i < scene->material_count; ++i) {
-        if (scene->materials[i] == material)
-            return; // already registered
-    }
 
     size_t new_count = scene->material_count + 1;
     Material** new_materials = realloc(scene->materials, new_count * sizeof(Material*));
@@ -438,6 +428,7 @@ void scene_add_material(Scene* scene, Material* material) {
     scene->materials = new_materials;
     scene->materials[scene->material_count] = material;
     scene->material_count = new_count;
+    material->registered = true;
     scene->material_textures_dirty = true; // a new material's textures must be (re)packed
 }
 

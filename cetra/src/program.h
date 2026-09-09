@@ -72,6 +72,12 @@ typedef struct ShaderProgram {
     // -1 when the count could not be taken, so a reader cannot mistake "not
     // measured" for "declares nothing".
     int sampler_count;
+    // The primitive a geometry stage declares as its input (GL_LINES,
+    // GL_TRIANGLES, ...), or -1 for a program with no geometry stage, which
+    // takes any -- not 0, which is GL_POINTS. The one fact that decides whether
+    // a mesh's draw mode can be drawn by this program at all; a mismatch is
+    // GL_INVALID_OPERATION at the draw, which nothing reads.
+    GLint geometry_input;
     // Which vertex stage this variant was built on, so the resolver can swap a
     // material within its own family (spec 11.95).
     //
@@ -103,6 +109,11 @@ void attach_shader_to_program(ShaderProgram* program, Shader* shader);
 GLboolean link_program(ShaderProgram* program);
 GLboolean validate_program(ShaderProgram* program);
 void setup_program_uniforms(ShaderProgram* program);
+
+// Whether a mesh drawn as `draw_mode` (a GL primitive; MeshDrawMode's values)
+// can go through this program: true for a program with no geometry stage,
+// else only when the mode belongs to the family the stage declared.
+bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode);
 
 /*
  * Preset Programs

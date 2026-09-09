@@ -242,6 +242,10 @@ typedef struct Mesh {
     // makes that sort a total order is its source index, not this.
     unsigned id;
 
+    // The draw list said why it is not drawing this mesh, once. It refuses on
+    // every build, and an app needs to hear the reason one time, not per frame.
+    bool draw_refusal_logged;
+
     // LOD chain: simplified INDEX RANGES over the same vertices, concatenated
     // into the one EBO. No extra buffers, no extra VAO, and the offset works
     // just as well on glDrawElementsInstanced -- so a level composes with

@@ -118,10 +118,11 @@ void free_draw_list(DrawList* list);
 //
 // Global rather than a Scene field because the mutators that matter have no way
 // back to a Scene -- free_mesh and node_add_mesh take a Mesh and a SceneNode.
-// That is the same reason materials_dirty needs an explicit marker, and the
-// reason this one is bumped by the mutators themselves rather than by callers:
-// a rule an app has to remember is a rule an app forgets, and forgetting here
-// means drawing freed geometry.
+// That is the same reason the build registers a material it finds unregistered
+// (the list is the walk with both in hand), and the reason this one is bumped
+// by the mutators themselves rather than by callers: a rule an app has to
+// remember is a rule an app forgets, and forgetting here means drawing freed
+// geometry.
 uint64_t scene_graph_epoch(void);
 void scene_graph_touched(void);
 

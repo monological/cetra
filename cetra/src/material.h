@@ -95,6 +95,9 @@ typedef struct Material {
     // by allocator address.
     unsigned id;
     char* name; // authored material name (glTF/FBX); scene files match on it
+    // In a scene's material registry, which owns it from then on. A material
+    // belongs to the first scene that registers it.
+    bool registered;
     vec3 albedo;
     vec3 emissive;           // Emissive color factor (multiplied with emissive texture)
     float emissive_strength; // HDR multiplier (KHR_materials_emissive_strength), feeds bloom

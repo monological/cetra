@@ -15,6 +15,7 @@
 
 // Fullscreen post-pass program helper (defined with the postfx constructors)
 static ShaderProgram* create_post_program(const char* name, const char* frag_src);
+static GLint _program_geometry_input(const ShaderProgram* program);
 
 ShaderProgram* create_program(const char* name) {
     ShaderProgram* program = calloc(1, sizeof(ShaderProgram));
@@ -49,6 +50,8 @@ ShaderProgram* create_program(const char* name) {
     // Same reason, different zero: 0 samplers is a real answer a post pass could
     // give, so "never counted" needs a value of its own.
     program->sampler_count = -1;
+    // And GL_POINTS is 0, so "no geometry stage" cannot be the zero either.
+    program->geometry_input = -1;
 
     return program;
 }
@@ -317,6 +320,7 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
 
     // Block bindings are program state reset by re-linking; re-wire them
     program->instanced = ubo_wire_blocks(program->id);
+    program->geometry_input = _program_geometry_input(program);
 
     log_info("Reloaded shader program: %s", program->name);
     return GL_TRUE;
@@ -491,6 +495,20 @@ static int _count_program_samplers(GLuint program_id) {
     return samplers;
 }
 
+// The geometry stage's declared input primitive, or -1 when there is no such
+// stage. Asked of the linked program, since the declaration is in the source
+// of one of the attached shaders and the linker is what read it.
+static GLint _program_geometry_input(const ShaderProgram* program) {
+    for (size_t i = 0; i < program->shader_count; ++i) {
+        if (program->shaders[i] && program->shaders[i]->type == GEOMETRY_SHADER) {
+            GLint input = -1;
+            glGetProgramiv(program->id, GL_GEOMETRY_INPUT_TYPE, &input);
+            return input;
+        }
+    }
+    return -1;
+}
+
 void setup_program_uniforms(ShaderProgram* program) {
     if (program == NULL || program->id == 0) {
         log_error("Invalid shader program.");
@@ -516,6 +534,26 @@ void setup_program_uniforms(ShaderProgram* program) {
     // Beside it for the same reason: a fact about the linked program that every
     // reader wants the answer to rather than the derivation.
     program->sampler_count = _count_program_samplers(program->id);
+    program->geometry_input = _program_geometry_input(program);
+}
+
+bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode) {
+    if (!program)
+        return false;
+    switch (program->geometry_input) {
+        case -1:
+            return true;
+        case GL_POINTS:
+            return draw_mode == GL_POINTS;
+        case GL_LINES:
+            return draw_mode == GL_LINES || draw_mode == GL_LINE_STRIP || draw_mode == GL_LINE_LOOP;
+        case GL_TRIANGLES:
+            return draw_mode == GL_TRIANGLES || draw_mode == GL_TRIANGLE_STRIP ||
+                   draw_mode == GL_TRIANGLE_FAN;
+        default:
+            // The adjacency inputs, which no MeshDrawMode names.
+            return false;
+    }
 }
 
 // Build the variant carrying exactly `features`. Static: every caller goes

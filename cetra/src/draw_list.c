@@ -7,6 +7,7 @@
 #include "animation.h"
 #include "ext/log.h"
 #include "material.h"
+#include "program.h"
 #include "scene.h"
 #include "wind.h"
 
@@ -216,21 +217,48 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
     return (uint8_t)mesh_lod_canonical(mesh, level);
 }
 
+// Why a mesh cannot be drawn, or NULL when it can. The one place that decides
+// it, so a consumer can assume every item is drawable, and the one place that
+// says so: each of these used to be a silent skip, and the last a GL error at
+// the draw that nothing read.
+static const char* _refusal(const Mesh* mesh) {
+    if (mesh->gpu_vertex_count == 0)
+        return "nothing uploaded";
+    if (!mesh->material)
+        return "no material";
+    const ShaderProgram* program = mesh->material->shader_program;
+    if (!program)
+        return "material has no program";
+    if (!program->uniforms)
+        return "program has no uniforms (its setup failed)";
+    if (!program_accepts_draw_mode(program, mesh->draw_mode))
+        return "draw mode the program's geometry stage cannot take";
+    return NULL;
+}
+
 // Depth-first, children left to right, a node's meshes before its gizmo --
 // the order the two recursive walks produced between them.
-static bool append_node(DrawList* list, SceneNode* node, const LodSelect* lod) {
+static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod) {
     if (!node)
         return true;
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes ? node->meshes[i] : NULL;
-        // The same three the draw path refused: no geometry to bind, or no
-        // program to bind it with. Refused here so a consumer can assume every
-        // item is drawable.
-        if (!mesh || !mesh->material || mesh->gpu_vertex_count == 0)
+        if (!mesh)
             continue;
-        if (!mesh->material->shader_program || !mesh->material->shader_program->uniforms)
+        // A material that arrived after the first frame's sync joins the
+        // registry here, the scene in hand; see scene_add_material.
+        if (mesh->material && !mesh->material->registered)
+            scene_add_material(scene, mesh->material);
+        const char* refusal = _refusal(mesh);
+        if (refusal) {
+            if (!mesh->draw_refusal_logged) {
+                log_warn("node '%s' mesh %u not drawn: %s", node->name ? node->name : "unnamed",
+                         mesh->id, refusal);
+                mesh->draw_refusal_logged = true;
+            }
             continue;
+        }
 
         DrawItem item = {.mesh = mesh, .node = node, .lod = select_lod(mesh, node, lod)};
         classify(mesh, &item.lane, &item.flags);
@@ -244,7 +272,7 @@ static bool append_node(DrawList* list, SceneNode* node, const LodSelect* lod) {
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, node->children[i], lod))
+        if (!append_node(list, scene, node->children[i], lod))
             return false;
     }
     return true;
@@ -261,7 +289,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene->root_node, lod))
+    if (!append_node(list, scene, scene->root_node, lod))
         return false;
 
     list->stamp = stamp;

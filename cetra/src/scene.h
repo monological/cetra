@@ -402,18 +402,18 @@ void scene_add_particle_system(Scene* scene, struct ParticleSystem* sys);
 // engine_render_scene.
 void scene_update_particle_systems(Scene* scene, float dt, float t);
 
-// material
+// material. The registry is what the scene owns and frees, what the variant
+// resolver and the mask array walk, and what the config snapshot carries. A
+// material reaches it three ways, and an app need not call this at all: the
+// importer registers what it builds; a graph built before the first frame is
+// walked once (scene_sync_materials, when creating a scene or setting its root
+// marked it dirty); and a mesh attached mid-run has its material registered
+// by the draw list at the frame's first build, since a SceneNode has no way
+// back to its Scene and the list is the walk that has both in hand.
 void scene_add_material(Scene* scene, Material* material);
 // Register every material reachable from the graph, if it is marked dirty.
 // Idempotent and free when clean, so the engine calls it every frame.
 void scene_sync_materials(Scene* scene);
-// Mark the graph as having gained materials the registry has not seen.
-//
-// Needed because a SceneNode has no way back to its Scene, so node_add_mesh
-// cannot mark this itself. Creating a scene and setting its root both mark it,
-// which covers building a graph before the first frame -- an app that attaches
-// meshes carrying NEW materials mid-run has to say so.
-void scene_mark_materials_dirty(Scene* scene);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void scene_set_wind(Scene* scene, struct Wind* wind);
