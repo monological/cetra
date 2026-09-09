@@ -146,6 +146,18 @@ struct Scene;
 struct Engine;
 
 typedef struct ShadowSystem {
+    // SETTINGS throughout, in feature order, except:
+    //
+    // ENGINE-OWNED, read only: every GLuint and ShaderProgram*, the per-frame
+    // counts and latches (directional_count, *_warned, pcss_frame_index), the
+    // *_allocated / *_built / *_live records of what exists against what was
+    // asked for (msm_enabled is the request, msm_built the answer; tsm the
+    // same), the cascade matrices and splits, and the caster scratch. The map
+    // SIZE is the one thing set at creation and never after.
+    //
+    // No field here needs a function: the depth pass notices its own inputs
+    // changing (cascade_count, msm_size, tsm_enabled) and rebuilds, and
+    // scene_center is re-expressed for an origin shift by the shift itself.
     GLuint cascade_fbo; // Re-attached to each layer of shadow_map_array in turn
     // Flat depth bias in 0..1 map depth for the consumers whose receivers are
     // never in the map (the catcher's virtual plane, the particle motes, the

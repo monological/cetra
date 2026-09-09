@@ -33,23 +33,22 @@ typedef struct DrawList DrawList;
  * SceneNode
  */
 typedef struct SceneNode {
-    char* name;
-
+    // ENGINE-OWNED: the graph's links and what the transform walk derives.
+    // Read freely, never write.
+    char* name; // node_set_name; freed with the node
     struct SceneNode* parent;
-    struct SceneNode** children;
-
+    struct SceneNode** children; // node_add_child, node_remove_child; owned
     size_t children_count;
     // Allocated slots in `children`. Doubling rather than one realloc per add,
     // because a quadtree re-parents its whole selection when the camera crosses a
     // band and a linear grow makes that quadratic.
     size_t children_cap;
+    mat4 global_transform; // parent's global times original_transform, each walk
     // transpose(inverse(global_transform)) upper 3x3 -- what normals need under
     // non-uniform scale. Computed where global_transform is, because the draw
     // path wants it once per node and would otherwise invert a mat4 per mesh
     // per pass for a value that changed once.
     mat3 normal_matrix;
-    mat4 original_transform;
-    mat4 global_transform;
     mat4 prev_global_transform; // Last frame's global_transform, for motion vectors
     // Whether prev_global_transform describes a frame this node was actually
     // drawn in. False until the first transform walk reaches it, and what that
@@ -59,15 +58,17 @@ typedef struct SceneNode {
     // them arriving at once is the whole frame.
     bool prev_valid;
 
+    // BY FUNCTION: node_add_mesh (uploads what it attaches), node_set_light,
+    // node_set_camera, node_set_particle_system. The three installs are
+    // borrowed; the Scene frees them.
     Mesh** meshes;
     size_t mesh_count;
-
     Light* light;
-
     Camera* camera;
+    struct ParticleSystem* particle_system;
 
-    struct ParticleSystem* particle_system; // borrowed; owned by the Scene
-
+    // SETTINGS: plain stores. Write them directly, at any time.
+    mat4 original_transform; // The local pose; node_set_position writes its column
     // This node's opt-out from the XYZ gizmo overlay (default on); the engine's
     // show_xyz is the switch, and the scene's xyz program draws it.
     bool show_xyz;
@@ -108,7 +109,10 @@ SceneNode* node_find(SceneNode* root, const char* name);
 void node_set_program(SceneNode* node, ShaderProgram* program);
 void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* skinned);
 
-// move
+// Convenience over original_transform, which is a plain field: writes the
+// translation column and nothing else. A composed matrix is built with cglm
+// and copied; there is no helper for that.
+void node_set_position(SceneNode* node, const vec3 position);
 
 /*
  * A box of denser air, folded into the froxel fog volume (spec 11.39).
@@ -149,19 +153,8 @@ typedef struct Occluder {
  */
 
 typedef struct Scene {
-    SceneNode* root_node;
-
-    Light** lights;
-    size_t light_count;
-
-    struct ParticleSystem** particle_systems; // owned (freed in free_scene)
-    size_t particle_system_count;
-
-    Camera** cameras;
-    size_t camera_count;
-
-    Material** materials;
-    size_t material_count;
+    // ENGINE-OWNED: what the scene allocates and the frame derives. Read
+    // freely, never write.
 
     // Derived emissive area panels (spec 11.49), owned. Opaque: the registry and
     // the local fit it holds are emissive_light.c's business, and putting the fit
@@ -180,10 +173,6 @@ typedef struct Scene {
     // branch and no allocation.
     struct IesLibrary* ies_library;
 
-    // The program the XYZ gizmo overlay draws every node with (scene_set_xyz_program);
-    // NULL and nothing draws one. Borrowed from the engine's registry.
-    ShaderProgram* xyz_shader_program;
-
     // The graph flattened for drawing, rebuilt once a frame. Every pass reads
     // it; nothing walks the graph to draw any more.
     //
@@ -194,52 +183,14 @@ typedef struct Scene {
     // changing a material's alpha mode, does, and both are seen at the next
     // frame's rebuild. Owned; the list's type is internal.
     DrawList* draw_list;
-    // What the walk seeds the root with -- where the whole scene sits. Identity
-    // for most apps; apps/render puts its model-recentre offset here and
-    // apps/pcb its board offset.
-    //
-    // Beside the root's own local rather than folded INTO it, and that is not a
-    // preference: a scene loaded from a model may already have a non-identity
-    // root local, and overwriting it silently loses the model's own placement.
-    // guard_thin_panel is the fixture that says so -- 732,291 px.
-    //
-    // NOT shifted by scene_apply_origin_delta, which moves the root's CHILDREN.
-    // Correct while both users store a pure translation and the two features do
-    // not co-occur; a rotation or scale here would make the shift compose in the
-    // wrong frame.
-    mat4 root_transform;
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
     size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame
                                     // opaque-color resolve refraction samples from
     size_t oit_mesh_count;          // Subset that is ALPHA_BLEND && !transmissive; gates the
                                     // weighted-blended OIT accumulate sub-pass
 
-    // Shadow mapping
+    // The shadow system, created with the scene; its own fields are settings.
     ShadowSystem* shadow_system;
-
-    // Image-Based Lighting
-    IBLResources* ibl;
-    ReflectionProbeSet* probe_set; // local reflection probes (optional; owned)
-    struct SkyAtmosphere* sky;     // procedural sky feeding ibl (optional)
-    struct Wind* wind;             // dominant directional wind (optional; owned)
-    struct GIVolume* gi_volume;    // indirect-diffuse probe grid (optional; owned)
-    struct Water* water;           // ocean/lake surface (optional; owned)
-
-    // Boxes of denser air, folded into the froxel volume (spec 11.39). Count 0 = none.
-    FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES];
-    int fog_volume_count;
-
-    // Authored occlusion proxies (spec 11.98). Count 0 = none, which with no
-    // occluder-flagged material is the whole off state: the occlusion pass
-    // returns after two integer compares.
-    Occluder occluders[SCENE_MAX_OCCLUDERS];
-    int occluder_count;
-
-    // Marks projected onto the surfaces inside them (spec 11.73). Count 0 = none,
-    // which is the whole off state: nothing allocates and the shader's loop is
-    // never entered.
-    Decal decals[DECAL_MAX];
-    int decal_count;
 
     // The scene's unique per-texel material images -- masks and layer maps --
     // packed into one GL_TEXTURE_2D_ARRAY (built lazily once the source textures
@@ -252,12 +203,6 @@ typedef struct Scene {
     // the one-time resolve so the render loop does not re-scan every frame.
     bool heights_resolved;
 
-    // Uniform ambient radiance in cd/m^2, used only when no IBL is loaded. A
-    // real emitter with a real unit, so it scales with nothing and tracks
-    // nothing; zero (the default) means an unlit surface is black. Replaced a
-    // hardcoded 3%-of-white floor that could not be expressed correctly in
-    // either space -- see spec 10.1 phase 5.
-    vec3 ambient_radiance;
     // The renderer has said once that this scene has no light, no environment
     // and no ambient, which is a black frame nobody asked for.
     bool lightless_warned;
@@ -274,9 +219,10 @@ typedef struct Scene {
      * completely rather than slightly (measured at 43% of the frame, from twelve
      * units out).
      *
-     * The setter SCHEDULES and the engine applies at the frame top. A shift run
-     * from wherever an app happened to call would land after some passes had read
-     * positions and before others, which is the one state every rule here forbids.
+     * scene_set_world_origin SCHEDULES and the engine applies at the frame top. A
+     * shift run from wherever an app happened to call would land after some
+     * passes had read positions and before others, which is the one state every
+     * rule here forbids.
      */
     vec3 world_origin;
     // The origin scheduled for the next frame top. Equal to world_origin means
@@ -284,11 +230,85 @@ typedef struct Scene {
     // maintains exactly that invariant, so a boolean beside it would be a second
     // statement of one fact.
     vec3 pending_origin;
-    // Called after a shift has been applied, with the delta that was subtracted.
-    // The honest admission that "hold nothing in world space" is not a contract
-    // this engine can impose on an app: physics bodies, cached scatter positions
-    // and a player's own idea of where it is are all outside the graph, and the
-    // engine cannot enumerate them.
+
+    // BY FUNCTION: the registries. Each add takes ownership (a material joins
+    // the first scene that registers it, and the draw-list build registers what
+    // it walks past); the three bounded arrays refuse when full.
+    SceneNode* root_node; // scene_set_root, which frees the root it replaces
+    Light** lights;       // scene_add_light, scene_remove_light
+    size_t light_count;
+    struct ParticleSystem** particle_systems; // scene_add_particle_system
+    size_t particle_system_count;
+    Camera** cameras; // scene_add_camera
+    size_t camera_count;
+    Material** materials; // scene_add_material
+    size_t material_count;
+    Skeleton** skeletons; // scene_add_skeleton
+    size_t skeleton_count;
+    Animation** animations; // scene_add_animation
+    size_t animation_count;
+    // Boxes of denser air, folded into the froxel volume (spec 11.39). Count 0 = none.
+    FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES]; // scene_add_fog_volume
+    int fog_volume_count;
+    // Authored occlusion proxies (spec 11.98). Count 0 = none, which with no
+    // occluder-flagged material is the whole off state: the occlusion pass
+    // returns after two integer compares.
+    Occluder occluders[SCENE_MAX_OCCLUDERS]; // scene_add_occluder
+    int occluder_count;
+    // Marks projected onto the surfaces inside them (spec 11.73). Count 0 = none,
+    // which is the whole off state: nothing allocates and the shader's loop is
+    // never entered.
+    Decal decals[DECAL_MAX]; // scene_add_decal, scene_clear_decals
+    int decal_count;
+    // The program the XYZ gizmo overlay draws every node with; NULL and nothing
+    // draws one. Borrowed from the engine's registry.
+    ShaderProgram* xyz_shader_program; // scene_set_xyz_program
+    struct Wind* wind;                 // scene_set_wind; owned
+
+    // SETTINGS: plain stores. Write them directly, at any time.
+
+    // The environment subsystems, installed by a plain write and owned from
+    // then on: the scene frees them. Each carries its own settings.
+    IBLResources* ibl;             // image-based lighting (optional)
+    ReflectionProbeSet* probe_set; // local reflection probes (optional)
+    struct SkyAtmosphere* sky;     // procedural sky feeding ibl (optional)
+    struct GIVolume* gi_volume;    // indirect-diffuse probe grid (optional)
+    struct Water* water;           // ocean/lake surface (optional)
+
+    // What the walk seeds the root with -- where the whole scene sits. Identity
+    // for most apps; a model viewer puts its recentre offset here.
+    //
+    // Beside the root's own local rather than folded INTO it, and that is not a
+    // preference: a scene loaded from a model may already have a non-identity
+    // root local, and overwriting it silently loses the model's own placement.
+    // guard_thin_panel is the fixture that says so -- 732,291 px.
+    //
+    // NOT shifted by scene_apply_origin_delta, which moves the root's CHILDREN.
+    // Correct while both users store a pure translation and the two features do
+    // not co-occur; a rotation or scale here would make the shift compose in the
+    // wrong frame.
+    mat4 root_transform;
+
+    // Uniform ambient radiance in cd/m^2, used only when no IBL is loaded. A
+    // real emitter with a real unit, so it scales with nothing and tracks
+    // nothing; zero (the default) means an unlit surface is black. Replaced a
+    // hardcoded 3%-of-white floor that could not be expressed correctly in
+    // either space -- see spec 10.1 phase 5.
+    vec3 ambient_radiance;
+
+    bool render_skybox;
+    float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
+    bool skybox_ground_projection; // Project env onto finite dome + ground
+    float skybox_gp_radius;        // Dome radius in world units (meters)
+    float skybox_gp_height;        // HDR capture height above ground
+    bool shadow_catcher;           // Ground plane receiving shadows over the skybox
+    float shadow_catcher_strength; // Shadow darkness 0..1
+
+    // Called after an origin shift has been applied, with the delta that was
+    // subtracted. The honest admission that "hold nothing in world space" is
+    // not a contract this engine can impose on an app: physics bodies, cached
+    // scatter positions and a player's own idea of where it is are all outside
+    // the graph, and the engine cannot enumerate them.
     void (*on_origin_shift)(const vec3 delta, void* ctx);
     void* origin_shift_ctx;
     // How far the camera may drift from the storage origin before the engine
@@ -301,20 +321,6 @@ typedef struct Scene {
     // re-arm. What sets the floor is that cost, not precision -- precision
     // degrades smoothly and forgives a late shift.
     float origin_shift_distance;
-
-    bool render_skybox;
-    float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
-    bool skybox_ground_projection; // Project env onto finite dome + ground
-    float skybox_gp_radius;        // Dome radius in world units (meters)
-    float skybox_gp_height;        // HDR capture height above ground
-    bool shadow_catcher;           // Ground plane receiving shadows over the skybox
-    float shadow_catcher_strength; // Shadow darkness 0..1
-
-    // Skeletal Animation
-    Skeleton** skeletons;
-    size_t skeleton_count;
-    Animation** animations;
-    size_t animation_count;
 } Scene;
 
 // A scene with a root node ("root") to attach under.

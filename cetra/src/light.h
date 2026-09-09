@@ -31,36 +31,55 @@ typedef enum {
 } LightUnits;
 
 typedef struct Light {
-    char* name;
-
-    LightType type;
-
-    vec3 original_position;
+    // ENGINE-OWNED: derived state. Read freely, never write.
+    char* name; // Copied at creation; freed with the light
+    // The authored frame carried into world space by the owning node's global
+    // transform, each transform walk: position moved, direction and up rotated.
     vec3 global_position;
-
-    // Authored light-local direction; the scene graph rotates it by the
-    // owning node's global transform into `direction` each update (same
-    // split as original_position/global_position).
-    vec3 original_direction;
     vec3 direction;
+    vec3 up;
+    // Shadow mapping. Two indices because the two map sets are addressed
+    // differently and a light can only be in one of them: shadow_map_index is
+    // a DIRECTIONAL caster slot in the cascade array (layers stride by the
+    // runtime cascade count), shadow_layer is a base layer in the punctual
+    // array. One int meaning either would have to be read against the light's
+    // type at every use. Both are -1 for "no map", reassigned every frame by
+    // the depth pass.
+    int shadow_map_index;
+    int shadow_layer;
+    // The Mesh whose emissive surface this panel was derived from (spec 11.49),
+    // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
+    // and the emissive reconcile will not touch one, so the two populations
+    // share this array without either being able to delete the other.
+    //
+    // The id and not a Mesh*: the reconcile learns a mesh is gone from the graph
+    // epoch, by which time the pointer is already dangling, where mesh.h
+    // guarantees an id is "assigned once and never reused".
+    unsigned emissive_source_id;
 
+    // BY FUNCTION: light_set_direction, light_set_up, light_set_intensity_units.
+    // Authored light-local direction; the walk rotates it into `direction`.
+    vec3 original_direction;
     // The luminaire's roll about `direction`. On a panel it spans the height
     // axis, with the normal along `direction` and width from cross(up,
     // direction); on a point or spot it is an asymmetric IES profile's azimuth
     // zero, which is the only thing that says which way such a lamp is turned.
-    // Same authored/rotated split as direction, and orthonormalized against it
-    // (light_emission_frame), so a sloppy authored up is fine.
-    // Read only by those two -- a symmetric profile and a bare cone never ask.
+    // Orthonormalized against the direction (light_emission_frame), so a sloppy
+    // authored up is fine. Read only by those two -- a symmetric profile and a
+    // bare cone never ask.
     vec3 original_up;
-    vec3 up;
+    // Always in the canonical unit for `type` (candela / lux / nits), whatever
+    // `units` says was authored -- shading reads this directly, and the setter
+    // is what converts.
+    float intensity;
+    LightUnits units;
+
+    // SETTINGS: plain stores. Write them directly, at any time.
+    LightType type;
+    vec3 original_position; // Light-local; the walk moves it into global_position
     vec3 color;
     vec3 specular;
     vec3 ambient;
-
-    // Always in the canonical unit for `type` (candela / lux / nits), whatever
-    // `units` says was authored -- shading reads this directly.
-    float intensity;
-    LightUnits units;
 
     // Where the inverse-square falloff is windowed to zero, and the cull radius
     // (spec 9.9). 0 = unbounded, which is also KHR_lights_punctual's default;
@@ -77,19 +96,10 @@ typedef struct Light {
     float cutOff;
     float outerCutOff;
 
-    // Area
+    // A panel's extent, or a directional's PCSS emitter size
     vec2 size;
 
-    // Shadow mapping. Two indices because the two map sets are addressed
-    // differently and a light can only be in one of them: shadow_map_index is
-    // a DIRECTIONAL caster slot in the cascade array (layers stride by the
-    // runtime cascade count), shadow_layer is a base layer in the punctual
-    // array. One int meaning either would have to be read against the light's
-    // type at every use. Both are -1 for "no map", reassigned every frame by
-    // the depth pass.
     bool cast_shadows;
-    int shadow_map_index;
-    int shadow_layer;
 
     // Index into the scene's IesLibrary, or -1 for none (spec 11.57). An IES
     // profile is the measured angular distribution of a real luminaire and
@@ -97,20 +107,10 @@ typedef struct Light {
     // pair -- and so a point light finally has a use for `direction`, which it
     // has always carried and nothing has ever read.
     //
-    // An index and not an IesProfile*, for emissive_source_id's reason one field
-    // down: the library is scene-owned and a pointer would outlive it in exactly
-    // the teardown order that is easiest to get wrong.
+    // An index and not an IesProfile*, for emissive_source_id's reason above:
+    // the library is scene-owned and a pointer would outlive it in exactly the
+    // teardown order that is easiest to get wrong.
     int ies_profile;
-
-    // The Mesh whose emissive surface this panel was derived from (spec 11.49),
-    // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
-    // and the emissive reconcile will not touch one, so the two populations
-    // share this array without either being able to delete the other.
-    //
-    // The id and not a Mesh*: the reconcile learns a mesh is gone from the graph
-    // epoch, by which time the pointer is already dangling, where mesh.h
-    // guarantees an id is "assigned once and never reused".
-    unsigned emissive_source_id;
 } Light;
 
 // What a light is created from. Fill the fields you mean with designated

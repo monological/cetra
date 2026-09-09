@@ -18,7 +18,10 @@ typedef enum WindType {
 } WindType;
 
 typedef struct Wind {
+    // BY FUNCTION: wind_set_name (owned string).
     char* name;
+
+    // SETTINGS: plain stores. Write them directly, at any time.
     WindType type;
     vec3 direction;       // world-space blow direction (need not be normalized;
                           // the shader normalizes)
@@ -35,7 +38,7 @@ typedef struct Wind {
     float phase_variation;
 } Wind;
 
-// Created with gentle-draft defaults; adjust fields directly to tune.
+// Created with gentle-draft defaults.
 Wind* create_wind(const char* name);
 void free_wind(Wind* wind);
 void wind_set_name(Wind* wind, const char* name);

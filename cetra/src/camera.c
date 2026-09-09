@@ -49,7 +49,6 @@ Camera* create_camera(const CameraDesc* desc) {
 
     camera->zoom_speed = 0.005f;
     camera->orbit_speed = 0.001f;
-    camera->amplitude = 0.001f;
 
     // The orbit parameters describe the pose just set, not a fixed 2000 units
     // that every orbiting app then had to overwrite by hand.

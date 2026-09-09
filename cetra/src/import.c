@@ -1641,10 +1641,8 @@ static void process_ai_cameras(const struct aiScene* scene, Camera*** cameras,
                       camera->look_at);
 
         camera->fov_radians = ai_camera->mHorizontalFOV;
-        camera->aspect_ratio = ai_camera->mAspect; // You might need to calculate this differently
         camera->near_clip = ai_camera->mClipPlaneNear * unit_scale;
         camera->far_clip = ai_camera->mClipPlaneFar * unit_scale;
-        camera->horizontal_fov = ai_camera->mHorizontalFOV;
 
         // An imported camera is a perspective one; projection and picking both branch on this
         camera->is_orthographic = false;

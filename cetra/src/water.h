@@ -237,6 +237,17 @@ typedef struct WaterShorePoint {
 } WaterShorePoint;
 
 typedef struct Water {
+    // SETTINGS throughout, in feature order, except:
+    //
+    // ENGINE-OWNED, read only: every GLuint and ShaderProgram*, the grid and
+    // the spectral state, the *_baked / *_ready / *_failed / *_frames latches,
+    // the seeded_* and bed_* records of the inputs the last bake used, the
+    // measured cascade variances, the foam accumulator, the swash film's chain
+    // and UBO, and the traced shoreline.
+    //
+    // No field here needs a function: the bakes compare their inputs against
+    // what they last used and re-run when one moved, so a setting written
+    // directly takes effect at the next frame.
     bool enabled;
 
     float level; // still-water plane, world Y

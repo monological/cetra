@@ -7,8 +7,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-// Billboard look tunables. Fixed for the one spore emitter today; promote to
-// per-emitter renderer config if a second emitter needs a different look.
+// The look a renderer is created with: a glowing mote in a lit room.
 #define PARTICLE_HDR_GAIN       6.0f  // push color >1.0 so bloom haloes the motes
 #define PARTICLE_AMBIENT_FLOOR  0.18f // brightness of motes in full shadow
 #define PARTICLE_SOFT_FADE_DIST 0.5f  // world-space soft-particle fade band
@@ -23,9 +22,12 @@ typedef struct {
     GLuint vao;
     GLuint quad_vbo;
     GLuint instance_vbo;
-    size_t upload_count; // instances uploaded in prepare(), drawn in draw()
-    GLuint sprite_tex;   // 0 = draw the built-in procedural disc
-    float hdr_gain;      // defaults to PARTICLE_HDR_GAIN
+    size_t upload_count;  // instances uploaded in prepare(), drawn in draw()
+    GLuint sprite_tex;    // 0 = draw the built-in procedural disc
+    float hdr_gain;       // defaults to PARTICLE_HDR_GAIN
+    float ambient_floor;  // defaults to PARTICLE_AMBIENT_FLOOR
+    float soft_fade_dist; // defaults to PARTICLE_SOFT_FADE_DIST
+    bool lit;             // false = authored colour, no key and no floor
 } BillboardRenderer;
 
 // Unit quad corners in [-1,1], two triangles. The corner doubles as the radial
@@ -140,7 +142,17 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
     // fall to the ambient floor in shadow. bind_shadow_maps_to_program uploads
     // the whole cascade uniform block + binds the shadow array (unit 10); it is
     // location-guarded, so it only touches uniforms the particle shader declares.
-    uniform_set_float(u, "uAmbient", PARTICLE_AMBIENT_FLOOR);
+    //
+    // Unlit is the same shader with the floor at 1 and a white key: the
+    // shader's brightness and tint then evaluate to exactly 1 whatever the
+    // shadow term says, so the authored colour reaches the framebuffer with no
+    // branch added to the lit path. The shadow bind stays either way: it is
+    // what parks the cascade sampler on its own unit, and without it the array
+    // and the sprite would share unit 0 as two sampler types, which is an
+    // invalid draw.
+    uniform_set_float(u, "uAmbient", b->lit ? b->ambient_floor : 1.0f);
+    if (!b->lit)
+        uniform_set_vec3(u, "uSunColor", (vec3){1.0f, 1.0f, 1.0f});
     if (ctx->scene) {
         // The brightest directional, not the first in scene order. A scene lists its sun
         // before its moon, and a sun below the horizon still EXISTS with its colour faded
@@ -151,7 +163,7 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
         // NULL normal: a mote is a billboard with no preferred facing, so it wants the
         // light with the most radiance rather than the most reaching a plane. That is the
         // one thing it disagrees with water about.
-        const Light* sun = scene_key_directional(ctx->scene, NULL);
+        const Light* sun = b->lit ? scene_key_directional(ctx->scene, NULL) : NULL;
         if (sun)
             uniform_set_vec3(u, "uSunColor", sun->color);
         if (ctx->scene->shadow_system)
@@ -165,7 +177,7 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
         glBindTexture(GL_TEXTURE_2D, ctx->scene_depth_texture);
         uniform_set_int(u, "sceneDepth", PARTICLE_DEPTH_UNIT);
         uniform_set_int(u, "uSoftEnabled", 1);
-        uniform_set_float(u, "softDist", PARTICLE_SOFT_FADE_DIST);
+        uniform_set_float(u, "softDist", b->soft_fade_dist);
     } else {
         uniform_set_int(u, "uSoftEnabled", 0);
     }
@@ -203,6 +215,9 @@ ParticleRenderer* create_billboard_particle_renderer(ShaderProgram* program) {
     b->program = program;
     b->sprite_tex = 0;
     b->hdr_gain = PARTICLE_HDR_GAIN;
+    b->ambient_floor = PARTICLE_AMBIENT_FLOOR;
+    b->soft_fade_dist = PARTICLE_SOFT_FADE_DIST;
+    b->lit = true;
     billboard_setup(b);
 
     r->name = "billboard";
@@ -219,4 +234,20 @@ void billboard_renderer_set_sprite(ParticleRenderer* r, Texture* tex, float hdr_
     BillboardRenderer* b = r->impl;
     b->sprite_tex = tex ? tex->id : 0;
     b->hdr_gain = hdr_gain;
+}
+
+void billboard_renderer_set_lighting(ParticleRenderer* r, float ambient_floor,
+                                     float soft_fade_dist) {
+    if (!r || r->prepare != billboard_prepare || !r->impl)
+        return;
+    BillboardRenderer* b = r->impl;
+    b->ambient_floor = ambient_floor;
+    b->soft_fade_dist = soft_fade_dist;
+}
+
+void billboard_renderer_set_lit(ParticleRenderer* r, bool lit) {
+    if (!r || r->prepare != billboard_prepare || !r->impl)
+        return;
+    BillboardRenderer* b = r->impl;
+    b->lit = lit;
 }

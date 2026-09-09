@@ -1114,7 +1114,6 @@ static void _engine_gui_panel(Engine* engine) {
             camera_set_look_at(camera, look_at);
         igDragFloat3("Up", camera->up_vector, 0.1f, -25.0f, 25.0f, "%.2f", 0);
         bool orbit_moved = igSliderFloat("Distance", &camera->distance, 0.0f, 3000.0f, "%.2f", 0);
-        igSliderFloat("Height", &camera->height, -2000.0f, 2000.0f, "%.1f", 0);
         orbit_moved |= igSliderFloat("Theta", &camera->theta, 0.0f, GLM_PI_2, "%.3f", 0);
         orbit_moved |= igSliderFloat("Phi", &camera->phi, 0.0f, GLM_PI_2, "%.3f", 0);
         if (orbit_moved)
@@ -1122,7 +1121,6 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("FOV", &camera->fov_radians, 0.1f, GLM_PI, "%.3f", 0);
         igSliderFloat("Zoom Speed", &camera->zoom_speed, 0.0f, 2.0f, "%.3f", 0);
         igSliderFloat("Orbit Speed", &camera->orbit_speed, 0.0f, 0.1f, "%.4f", 0);
-        igSliderFloat("Amplitude", &camera->amplitude, 0.0f, 50.0f, "%.2f", 0);
         igSliderFloat("Near Clip", &camera->near_clip, 0.01f, 100.0f, "%.3f", 0);
         igSliderFloat("Far Clip", &camera->far_clip, 0.1f, 10000.0f, "%.1f", 0);
         // Camera diagnostic: overlay the live pose next to the FPS, and print an

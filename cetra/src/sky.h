@@ -58,10 +58,17 @@
 #define CLOUD_SHADOW_DEBUG_W 192
 
 typedef struct CloudLayer {
+    // BY FUNCTION: these four are baked into the env cube, so a write is
+    // followed by scene_environment_changed(scene, engine). Switching on needs
+    // the noise, which only the startup bake makes: on without noise_baked
+    // draws nothing.
     bool enabled;     // master switch; off = no bake, no GL objects, no cost
     float coverage;   // 0..1 sky fraction the remap admits
     float cloud_type; // 0 = low flat stratus .. 1 = tall cumulus
     float density;    // extinction scale on the march
+
+    // SETTINGS: wind_speed_kmh, wind_dir_deg, shadows_enabled. ENGINE-OWNED:
+    // the rest, in feature order.
 
     // Drift. The scroll accumulator advances by render_delta once per march;
     // the engine's frame clock makes that a fixed step headless (goldens stay
@@ -132,6 +139,19 @@ struct Light;
 struct PostFX;
 
 typedef struct SkyAtmosphere {
+    // SETTINGS throughout, in feature order, except:
+    //
+    // ENGINE-OWNED, read only: every GLuint and ShaderProgram*, every *_baked /
+    // *_failed / *_dirty / *_latched latch, the derived directions (sun_dir,
+    // moon_dir), zenith_radiance, the slicer, and the cycle's own clock state.
+    //
+    // BY FUNCTION: sun_elevation_deg, sun_azimuth_deg, night_floor_enabled and
+    // night_floor_brightness are written directly and then re-derived through
+    // scene_environment_changed(scene, engine): the sky-view LUT, the env cube,
+    // the sky-mirroring probes and the GI sweep all descend from them, and a
+    // write without the call reaches the background alone. The same four for
+    // the cloud layer, below. Everything else the sky draws from is read live
+    // each frame, the moon included.
     bool enabled;
     bool debug_luts; // blit the LUTs onto the composited frame
 

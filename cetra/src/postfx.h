@@ -155,6 +155,21 @@ typedef enum PostFXSpecOccMode {
 #define POSTFX_MAX_FOG_VOLUMES 8
 
 typedef struct PostFX {
+    // SETTINGS throughout, in feature order, except:
+    //
+    // ENGINE-OWNED, read only: the sizes and mip counts, every GLuint and
+    // ShaderProgram*, every PingPong history, every *_ready / *_failed
+    // lazy-alloc latch, frame_index, the borrowed exposure and profiler, and
+    // the blocks other subsystems PUBLISH here each frame (the probe set, the
+    // fog volumes, the cloud shadow, the water medium, the fog casters and
+    // spot, the aerial volume), each marked at its declaration.
+    //
+    // BY FUNCTION: ssr_full_res (postfx_set_ssr_full_res, which reallocates
+    // the reflection buffers), fog_ambient (postfx_set_fog_ambient, which also
+    // takes it away from the sky), the SSS profile table (postfx_add /
+    // postfx_reset_sss_profile) and the LUT's texture, size and name
+    // (postfx_load_lut / postfx_clear_lut). lut_strength, lut_interp and
+    // taa_enabled are settings.
     int width, height;             // Render size: what the scene and the pre-TAA
                                    // chain rasterize at (post size x render_scale)
     int post_width, post_height;   // Post size (display x ss_scale): the TAAU

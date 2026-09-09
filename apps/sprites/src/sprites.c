@@ -221,17 +221,6 @@ int main(int argc, char** argv) {
     engine_set_2d_preset(engine, scene);
     engine->postfx->tonemap_mode = POSTFX_TONEMAP_PASSTHROUGH;
 
-    // The mote shader tints by the scene's key light and reads black without
-    // one, which would dim every colour to 0.6. A white key makes that tint
-    // the identity. Nothing else here is lit by it.
-    LightDesc key_desc = {.name = "key", .direction = {0.0f, 0.0f, -1.0f}, .intensity = 1.0f};
-    Light* key = create_light(&key_desc);
-    scene_add_light(scene, key);
-    SceneNode* key_node = create_node();
-    node_set_name(key_node, "key");
-    node_set_light(key_node, key);
-    node_add_child(root, key_node);
-
     // The sketch cleared to black.
     glm_vec3_zero(engine->clear_color);
 
@@ -245,7 +234,8 @@ int main(int argc, char** argv) {
 
     // GL_POINTS are hard squares. The renderer's default is a soft disc, and a
     // sprite replaces that with the texture's own shape, so a single white
-    // pixel makes each point the square it was. Gain 1: the colour as picked.
+    // pixel makes each point the square it was. Gain 1 and unlit: the colour
+    // as picked, with no key light to tint it and none in the scene.
     static const unsigned char white[4] = {255, 255, 255, 255};
     Texture* square =
         texture_load_memory(scene->tex_pool, "point", white, 1, 1, 4, texture_desc(false));
@@ -253,6 +243,7 @@ int main(int argc, char** argv) {
     ParticleEmitter* em = create_particle_emitter("points", NUM_PARTICLES);
     ParticleRenderer* renderer = create_billboard_particle_renderer(particle_program);
     billboard_renderer_set_sprite(renderer, square, 1.0f);
+    billboard_renderer_set_lit(renderer, false);
     particle_emitter_set_renderer(em, renderer);
     // The state is the file static above, so the modules carry no params.
     particle_emitter_add_module(

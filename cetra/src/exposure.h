@@ -41,6 +41,33 @@ typedef enum MeteringMode {
 // the exposure ratcheted instead of settling. Anything added upstream of the
 // metering pass has to be a fixed multiple of RADIANCE, or that returns.
 typedef struct Exposure {
+    // ENGINE-OWNED: what the meter reported. Read freely, never write.
+
+    // Last frame's metered geometric-mean luminance, in ABSOLUTE scene radiance
+    // (the meter divides the pre-exposure back out). One frame stale by
+    // construction: this frame's value cannot exist before this frame is shaded,
+    // and shading needs the exposure. The lag is far below the adaptation time
+    // constant, so it is invisible; the alternative is a circular dependency.
+    //
+    // `adapted_valid` is false until a frame has actually been metered, which is
+    // what keeps the first frame from adapting to uninitialised memory.
+    float adapted_luminance;
+    bool adapted_valid;
+
+    // What the last submitted measurement was, and what it became after the
+    // metered bounds were applied. Diagnostic, but they are the only record:
+    // exposure_submit_measurement folds the reading into adapted_luminance and
+    // drops both, so nothing outside that call could otherwise see either.
+    //
+    // `last_target_log2` is the value the adaptation is actually converging TO.
+    // Comparing `adapted` against the RAW reading instead looks equivalent and is
+    // not -- on a frame the bounds clamp, the two never meet however long it
+    // runs, which reads as an adaptation that never settles.
+    float last_raw_log2;
+    float last_target_log2;
+
+    // SETTINGS: plain stores. Write them directly, at any time.
+
     // Selects which of the two fields below is the camera. Photometric lights
     // are the wrong magnitude for a hand-picked multiplier -- a 127 cd bulb at
     // 2 m is ~32 lux, and nothing about "0.7846" tells you whether that lands
@@ -115,29 +142,6 @@ typedef struct Exposure {
     // clock. Equal by default, so the split costs nothing until asked for.
     float adapt_rate_up;
     float adapt_rate_down;
-
-    // Last frame's metered geometric-mean luminance, in ABSOLUTE scene radiance
-    // (the meter divides the pre-exposure back out). One frame stale by
-    // construction: this frame's value cannot exist before this frame is shaded,
-    // and shading needs the exposure. The lag is far below the adaptation time
-    // constant, so it is invisible; the alternative is a circular dependency.
-    //
-    // `adapted_valid` is false until a frame has actually been metered, which is
-    // what keeps the first frame from adapting to uninitialised memory.
-    float adapted_luminance;
-    bool adapted_valid;
-
-    // What the last submitted measurement was, and what it became after the
-    // metered bounds were applied. Diagnostic, but they are the only record:
-    // exposure_submit_measurement folds the reading into adapted_luminance and
-    // drops both, so nothing outside that call could otherwise see either.
-    //
-    // `last_target_log2` is the value the adaptation is actually converging TO.
-    // Comparing `adapted` against the RAW reading instead looks equivalent and is
-    // not -- on a frame the bounds clamp, the two never meet however long it
-    // runs, which reads as an adaptation that never settles.
-    float last_raw_log2;
-    float last_target_log2;
 
     // Print what the meter decided, every frame it decides it. Diagnostic only;
     // nothing downstream reads it.

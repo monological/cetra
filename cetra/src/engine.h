@@ -47,6 +47,24 @@ typedef struct EngineFrameClock {
 #define ENGINE_FIXED_FRAME_DT (1.0 / 60.0)
 
 typedef struct Engine {
+    // SETTINGS throughout, in feature order, except:
+    //
+    // ENGINE-OWNED, read only: the window and its sizes, every GL name, every
+    // *_actual / *_ready / target_* record of what was built, the matrices,
+    // the frame clock and counters, the program cache, the async loader, the
+    // input state, and the owned subsystems (postfx, the text renderer, the
+    // profiler). What an app may change among them has a function:
+    // engine_set_camera, engine_add_scene and the scene selectors,
+    // engine_add_program.
+    //
+    // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
+    // rebuilds the targets at the next frame top), screenshot_path (owned
+    // string), the five callbacks, user_data, and the render clock and time
+    // (installs of borrowed state, engine_set_render_clock / _render_time).
+    //
+    // Everything else -- the feature toggles, the draw levers, the overlays,
+    // the run's counts, clear_color, camera_mode, current_render_mode, the
+    // exposure block -- is written directly and read at the frame top.
     GLFWwindow* window;
     char* window_title; // Title of the GLFW window
 
@@ -67,12 +85,12 @@ typedef struct Engine {
     struct LayersVtFeedback* vt_feedback; // the vote pass's targets + readback ring
     int ss_scale;                         // Supersampling factor: scene + post render at ss_scale x
                                           // display resolution, box-downsampled at tone map.
-                                          // 1 = off, 2 = 2x SSAA. Changing it at runtime rebuilds
-                                          // the render targets at the next frame top.
+                                          // 1 = off, 2 = 2x SSAA. engine_set_ss_scale clamps it
+                                          // and the targets rebuild at the next frame top.
     float render_scale;                   // Render-resolution scale in [0.5, 1]: the scene + the
                                           // pre-TAA post chain rasterize at this fraction of the
-                                          // post size. 1 = off. Changing it at runtime rebuilds
-                                          // the render targets at the next frame top.
+                                          // post size. 1 = off. engine_set_render_scale clamps it
+                                          // and the targets rebuild at the next frame top.
     bool render_suspended;                // A render-target rebuild failed; frames are skipped
                                           // until a size that allocates successfully is set
     // The size the render targets were last built AT, or last attempted at.

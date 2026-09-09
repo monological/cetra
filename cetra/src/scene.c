@@ -987,6 +987,16 @@ void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* 
     }
 }
 
+void node_set_position(SceneNode* node, const vec3 position) {
+    if (!node) {
+        log_error("node_set_position: NULL node");
+        return;
+    }
+    node->original_transform[3][0] = position[0];
+    node->original_transform[3][1] = position[1];
+    node->original_transform[3][2] = position[2];
+}
+
 typedef struct {
     SceneNode* node;
     mat4 parent_transform;

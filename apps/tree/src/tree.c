@@ -299,8 +299,7 @@ static void create_island(SceneNode* parent) {
     ground_build_mesh(mesh, 128, GROUND_MESH_SEGMENTS, 40.0f);
     mesh->material = island_material;
 
-    glm_mat4_identity(island_node->original_transform);
-    glm_translate(island_node->original_transform, (vec3){0.0f, -GROUND_HEIGHT, 0.0f});
+    node_set_position(island_node, (vec3){0.0f, -GROUND_HEIGHT, 0.0f});
 
     node_add_mesh(island_node, mesh);
     node_add_child(parent, island_node);

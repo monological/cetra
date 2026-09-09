@@ -32,6 +32,15 @@ typedef struct ParticleRenderer {
 } ParticleRenderer;
 
 // Instanced camera-facing billboards. `program` is borrowed (engine-owned).
+//
+// What a billboard is, before tuning one: a particle's size is a HALF-width
+// (the quad spans size on either side of the centre); its alpha fades in over
+// the first tenth of its life and out over the last three tenths; and its
+// colour is LIT by default -- brightened toward the scene's key directional
+// and dropped to an ambient floor in shadow, with a tint of 0.4 toward the
+// key's colour, so a scene with no key light shows every mote at 0.6 of its
+// authored colour. billboard_renderer_set_lit(r, false) is the way out of that
+// for a sketch whose colours are the picture.
 ParticleRenderer* create_billboard_particle_renderer(ShaderProgram* program);
 
 // Draw `tex` on each billboard instead of the built-in procedural soft disc,
@@ -40,5 +49,16 @@ ParticleRenderer* create_billboard_particle_renderer(ShaderProgram* program);
 // 6.0 (pass 1.0 for an albedo sprite that should not glow). Passing NULL
 // restores the disc. No-op on a renderer that is not a billboard.
 void billboard_renderer_set_sprite(ParticleRenderer* r, Texture* tex, float hdr_gain);
+
+// The floor a mote falls to in full shadow (0..1, default 0.18) and the
+// world-space band over which it fades into the surface behind it (default
+// 0.5). No-op on a renderer that is not a billboard.
+void billboard_renderer_set_lighting(ParticleRenderer* r, float ambient_floor,
+                                     float soft_fade_dist);
+
+// false = the authored colour times hdr_gain reaches the framebuffer untinted:
+// no key-light lookup and no ambient floor. Default true. No-op on a renderer
+// that is not a billboard.
+void billboard_renderer_set_lit(ParticleRenderer* r, bool lit);
 
 #endif // _PARTICLE_RENDERER_H_

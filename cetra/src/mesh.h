@@ -108,47 +108,13 @@ typedef enum {
 } MeshDrawMode;
 
 typedef struct Mesh {
-    MeshDrawMode draw_mode;
-
-    // if we are drawing lines
-    float line_width;
-
-    float* vertices; // Array of vertex positions
-    float* normals;  // Array of normals
-    // Array of tangents, 4 floats per vertex (glTF/mikktspace convention): xyz
-    // is the tangent, w is the bitangent handedness, +1 or -1. There is no
-    // bitangent stream -- the shader derives B = cross(N, T) * w, which is how
-    // the fragment stage always reconstructed it anyway. Storing a full
-    // bitangent only ever contributed that sign, and only mirrored-UV imports
-    // set it to anything but +1.
-    float* tangents;
-    float* tex_coords;  // Array of texture coordinates (UV0)
-    float* tex_coords2; // Array of texture coordinates (UV1) for lightmaps/AO
-    float* colors;      // Array of vertex colors (RGBA)
-
-    // CDLOD morph targets, 3 floats per vertex each, NULL on almost every mesh
-    // (spec 11.63). `morph` is (parent Y, window start, 1/(end - start)) and
-    // `morph_normals` the parent surface's normal; terrain_morph.glsl reads both.
-    //
-    // The window is per PATCH and stored per vertex anyway, which is eight bytes
-    // of redundancy against the alternative -- a baked level index, a uniform
-    // array of windows, and a dynamic index into it in five programs. What the
-    // redundancy buys is that a mesh without these arrays is an exact identity
-    // with nothing switched off.
-    float* morph;
-    float* morph_normals;
-
-    unsigned int* indices; // Array of indices
-
-    size_t vertex_count; // Number of vertices
-    size_t index_count;  // Number of indices
+    // ENGINE-OWNED: what the upload measured and allocated. Read freely, never
+    // write.
 
     // Vertices resident on the GPU, set by mesh_upload; 0 = never uploaded,
     // which is what makes a mesh undrawable. The VAO cannot say so: create_mesh
     // generates it before any data exists.
     size_t gpu_vertex_count;
-
-    Material* material;
 
     GLuint vao;         // Vertex Array Object
     GLuint vbo;         // Vertex Buffer Object
@@ -161,7 +127,7 @@ typedef struct Mesh {
     GLuint morph_vbo;   // CDLOD morph target; generated only when `morph` exists
     GLuint morph_normal_vbo;
 
-    AABB aabb;
+    AABB aabb; // Of the vertex array, measured by mesh_upload (a stored bound, never empty)
 
     // The vertex maxima windOffset()'s vegetation modes scale their
     // displacement by, over this mesh's own vertices. Both are RAW attribute
@@ -189,13 +155,9 @@ typedef struct Mesh {
     // straight through a term added to the GLSL. This has no equivalent.
     float morph_max_offset;
 
-    // Skinning data (NULL if not skinned)
-    int* bone_ids;             // BONES_PER_VERTEX ints per vertex (ivec4)
-    float* bone_weights;       // BONES_PER_VERTEX floats per vertex (vec4)
-    GLuint bone_id_vbo;        // VBO for bone IDs
-    GLuint bone_weight_vbo;    // VBO for bone weights
-    struct Skeleton* skeleton; // Shared skeleton pointer (not owned)
-    bool is_skinned;
+    GLuint bone_id_vbo;     // VBO for bone IDs
+    GLuint bone_weight_vbo; // VBO for bone weights
+    bool is_skinned;        // Set at import when the bone arrays are
 
     // Where each bone's own vertices sit in BIND space, so a posed mesh can be
     // bounded and therefore culled. NULL until the upload measures them, and
@@ -260,6 +222,50 @@ typedef struct Mesh {
     size_t lod_count[CETRA_LOD_MAX];  // indices at this level
     float lod_error[CETRA_LOD_MAX];   // meshopt's deviation estimate, mesh units
     int lod_levels;                   // <= 1 means no chain
+
+    // SETTINGS: the content, plain stores. The arrays are owned by the mesh and
+    // read by mesh_upload, which attaching to a node does once; an array
+    // edited in place afterwards wants mesh_upload again.
+    MeshDrawMode draw_mode;
+    float line_width; // When draw_mode is lines
+
+    float* vertices; // Array of vertex positions
+    float* normals;  // Array of normals
+    // Array of tangents, 4 floats per vertex (glTF/mikktspace convention): xyz
+    // is the tangent, w is the bitangent handedness, +1 or -1. There is no
+    // bitangent stream -- the shader derives B = cross(N, T) * w, which is how
+    // the fragment stage always reconstructed it anyway. Storing a full
+    // bitangent only ever contributed that sign, and only mirrored-UV imports
+    // set it to anything but +1.
+    float* tangents;
+    float* tex_coords;  // Array of texture coordinates (UV0)
+    float* tex_coords2; // Array of texture coordinates (UV1) for lightmaps/AO
+    float* colors;      // Array of vertex colors (RGBA)
+
+    // CDLOD morph targets, 3 floats per vertex each, NULL on almost every mesh
+    // (spec 11.63). `morph` is (parent Y, window start, 1/(end - start)) and
+    // `morph_normals` the parent surface's normal; terrain_morph.glsl reads both.
+    //
+    // The window is per PATCH and stored per vertex anyway, which is eight bytes
+    // of redundancy against the alternative -- a baked level index, a uniform
+    // array of windows, and a dynamic index into it in five programs. What the
+    // redundancy buys is that a mesh without these arrays is an exact identity
+    // with nothing switched off.
+    float* morph;
+    float* morph_normals;
+
+    unsigned int* indices; // Array of indices
+
+    size_t vertex_count; // Number of vertices
+    size_t index_count;  // Number of indices
+
+    // Skinning input (NULL if not skinned)
+    int* bone_ids;             // BONES_PER_VERTEX ints per vertex (ivec4)
+    float* bone_weights;       // BONES_PER_VERTEX floats per vertex (vec4)
+    struct Skeleton* skeleton; // Shared skeleton pointer (not owned)
+
+    // Borrowed. The first scene whose draw list walks past it registers it.
+    Material* material;
 } Mesh;
 
 // The index range to draw for `level`, clamped to what this mesh actually has.

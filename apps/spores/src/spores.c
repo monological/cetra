@@ -286,11 +286,8 @@ static void on_update(Game* game, double dt) {
     vec3 p = {6.0f * sinf(0.50f * t), 3.5f + 1.5f * sinf(0.90f * t + 1.0f), 5.0f * cosf(0.37f * t)};
     if (g_sphere_collider)
         particle_module_collider_set(g_sphere_collider, p, p, COLLIDE_RADIUS);
-    if (g_sphere_node) {
-        g_sphere_node->original_transform[3][0] = p[0];
-        g_sphere_node->original_transform[3][1] = p[1];
-        g_sphere_node->original_transform[3][2] = p[2];
-    }
+    if (g_sphere_node)
+        node_set_position(g_sphere_node, p);
 }
 
 static void on_pre_render(Game* game, double alpha) {

@@ -7,31 +7,33 @@
 #include <stdlib.h>
 
 typedef struct Camera {
-    char* name;
-
-    vec3 position;  // Camera position
-    vec3 up_vector; // up_vector vector
-    vec3 look_at;   // Look-at point
-
-    float fov_radians;    // Field of view (in radians)
-    float aspect_ratio;   // Aspect ratio
-    float near_clip;      // Near clipping plane
-    float far_clip;       // Far clipping plane
-    float horizontal_fov; // Horizontal field of view (in radians)
-
-    bool is_orthographic; // true = parallel projection; fov_radians is then unused
-    float ortho_height;   // World-space height of the ortho view volume; width is
-                          // ortho_height * aspect_ratio
-
-    // for animation
+    // ENGINE-OWNED: derived state. Read freely, never write.
+    char* name;         // Copied at creation; freed with the camera
+    float aspect_ratio; // Re-derived from the framebuffer every frame
+    // The pose as an orbit: re-derived from position and look_at by the two
+    // pose setters, written by the orbit moves, which then place the eye from
+    // them. A direct write to these three is followed by camera_orbit(c, 0, 0).
     float theta;
     float phi;
     float distance;
-    float max_distance; // Max distance from look_at (0 = unlimited)
-    float height;
-    float zoom_speed;
-    float orbit_speed;
-    float amplitude;
+
+    // BY FUNCTION: camera_set_position, camera_set_look_at. Each re-derives the
+    // orbit above, so a camera moved by pose and then orbited continues from
+    // where it is.
+    vec3 position;
+    vec3 look_at;
+
+    // SETTINGS: plain stores. Write them directly, at any time.
+    vec3 up_vector;       // The view's up; +Y by default
+    float fov_radians;    // Vertical field of view
+    float near_clip;      // Near clipping plane
+    float far_clip;       // Far clipping plane
+    bool is_orthographic; // true = parallel projection; fov_radians is then unused
+    float ortho_height;   // World-space height of the ortho view volume; width is
+                          // ortho_height * aspect_ratio
+    float max_distance;   // Max distance from look_at (0 = unlimited)
+    float zoom_speed;     // Distance per unit of camera_zoom's delta
+    float orbit_speed;    // Radians of phi per frame under an auto-orbit
 } Camera;
 
 // What a camera is created from. Fill the fields you mean with designated

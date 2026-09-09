@@ -1134,13 +1134,8 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
     ypos = (1.0 - (ypos / engine->win_height)) * engine->fb_height;
 
     if (engine->input.is_dragging) {
-        // Calculate total offset from drag start position
         engine->input.drag_fb_x = xpos - engine->input.center_fb_x;
         engine->input.drag_fb_y = ypos - engine->input.center_fb_y;
-
-        // Update previous position for next frame (for per-frame delta if needed)
-        engine->input.prev_fb_x = xpos;
-        engine->input.prev_fb_y = ypos;
     }
 
     if (engine->cursor_position_callback) {
@@ -1185,8 +1180,6 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
         engine->input.shift_held = (mods & GLFW_MOD_SHIFT) != 0;
         engine->input.center_fb_x = mouse_fb_x;
         engine->input.center_fb_y = mouse_fb_y;
-        engine->input.prev_fb_x = mouse_fb_x;
-        engine->input.prev_fb_y = mouse_fb_y;
 
         engine->input.selected_node = _perform_engine_ray_picking(engine, mouse_fb_x, mouse_fb_y);
     }

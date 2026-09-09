@@ -610,10 +610,8 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_CAMERA, CFG_BOOL, "camera", "orthographic", is_orthographic),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "ortho_height", ortho_height),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "distance", distance),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "height", height),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "theta", theta),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "phi", phi),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "amplitude", amplitude),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "zoom_speed", zoom_speed),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "orbit_speed", orbit_speed),
 

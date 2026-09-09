@@ -92,6 +92,18 @@ typedef struct MaterialLayer {
 } MaterialLayer;
 
 typedef struct Material {
+    // SETTINGS throughout, in feature order, except:
+    //
+    // ENGINE-OWNED, read only: id, owner, every *_layer index into the scene's
+    // material texture array, roads_armed, and the layers_vt cache.
+    //
+    // BY FUNCTION: every Texture* (material_set_<x>_tex, and the two indexed
+    // layer setters: each retains the new texture and releases the old), and
+    // shader_program (material_set_program, which refuses NULL). The scalar
+    // parameters are the MATERIAL_PARAMS table's rows, written directly or by
+    // name through material_param_set; there is no per-field setter, because
+    // the table forbids a second name-to-field binding.
+
     // Creation order. Same contract and same reason as Mesh.id: a stable key for
     // grouping draws that share a material, where the pointer would order them
     // by allocator address.

@@ -10,8 +10,6 @@ void init_input_state(InputState* state) {
     state->shift_held = false;
     state->center_fb_x = 0.0f;
     state->center_fb_y = 0.0f;
-    state->prev_fb_x = 0.0f;
-    state->prev_fb_y = 0.0f;
     state->drag_fb_x = 0.0f;
     state->drag_fb_y = 0.0f;
 
