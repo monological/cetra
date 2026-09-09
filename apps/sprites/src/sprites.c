@@ -195,8 +195,6 @@ int main(int argc, char** argv) {
         return 1;
     engine->exit_after_frames = frames;
     engine_set_screenshot_path(engine, screenshot);
-    engine->show_gui = false;
-    engine->show_fps = !headless;
 
     // The sketch's camera: 45 degrees, five units back along Z.
     CameraDesc camera = {.position = {0.0f, 0.0f, CAMERA_DISTANCE},
@@ -220,6 +218,7 @@ int main(int argc, char** argv) {
     // rather than the preset's linear curve, which encodes.
     engine_set_2d_preset(engine, scene);
     engine->postfx->tonemap_mode = POSTFX_TONEMAP_PASSTHROUGH;
+    engine->show_fps = !headless;
 
     // The sketch cleared to black.
     glm_vec3_zero(engine->clear_color);

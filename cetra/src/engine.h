@@ -538,12 +538,14 @@ void engine_set_msaa_samples(Engine* engine, int samples);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
 // exposure pins at unity with adaptation off, the tone curve is the identity,
-// and the scene's ambient radiance becomes white, under which a material's
-// albedo reaches the display as authored with no light in the scene at all.
-// Left alone on purpose: the sample count, since multisampling is the
-// anti-aliasing 2D line art wants, and any light the app adds on top, which
-// then adds to the flat colour rather than replacing it. The scene half is
-// skipped when `scene` is NULL.
+// the GUI panel and the FPS counter are hidden, and the scene's ambient
+// radiance becomes white, under which a material's albedo reaches the display
+// as authored with no light in the scene at all. Left alone on purpose: the
+// sample count, since multisampling is the anti-aliasing 2D line art wants,
+// the clear colour, and any light the app adds on top, which then adds to the
+// flat colour rather than replacing it. All of it is plain fields, so an app
+// that wants one back writes it after the call. The scene half is skipped
+// when `scene` is NULL.
 void engine_set_2d_preset(Engine* engine, Scene* scene);
 // Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);
@@ -623,7 +625,14 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock);
 // and shading passes displace wind from different instants.
 void engine_set_render_time(Engine* engine, double time, double delta);
 
-// Drag/pick helpers
+// The cursor in FRAMEBUFFER pixels with +Y up -- the space the input state,
+// the app callbacks and the helper below all speak -- from the window
+// position and the engine's stored sizes. False, with the outputs untouched,
+// while the window has no area.
+bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y);
+
+// The world point under a framebuffer position, on the plane through the
+// press's pick at the eye's distance from it: where a dragged node goes.
 void engine_mouse_to_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
                                 vec3 out_world_pos);
 

@@ -139,8 +139,6 @@ int main(int argc, char** argv) {
         return 1;
     engine->exit_after_frames = frames;
     engine_set_screenshot_path(engine, screenshot);
-    engine->show_gui = false;
-    engine->show_fps = !headless;
 
     network_program = create_program_from_source("network", vertex_source, fragment_source, NULL);
     if (!network_program) {
@@ -160,6 +158,7 @@ int main(int argc, char** argv) {
     // No post effects and a linear curve, so the sine colours land as computed;
     // negative values clamp to black, as they did in the sketch.
     engine_set_2d_preset(engine, scene);
+    engine->show_fps = !headless;
 
     Material* material = create_material();
     material_set_program(material, network_program);

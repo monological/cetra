@@ -200,6 +200,135 @@ bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods)
 }
 
 /*
+ * Canvas Controller Implementation
+ */
+
+CanvasController* create_canvas_controller(Engine* engine) {
+    if (!engine) {
+        return NULL;
+    }
+    CanvasController* ctrl = calloc(1, sizeof(CanvasController));
+    if (!ctrl) {
+        return NULL;
+    }
+    ctrl->engine = engine;
+    ctrl->zoom_step = 0.9f;
+    return ctrl;
+}
+
+void free_canvas_controller(CanvasController* ctrl) {
+    free(ctrl);
+}
+
+void canvas_world_under_cursor(const Engine* engine, double fb_x, double fb_y, vec3 out) {
+    glm_vec3_zero(out);
+    if (!engine || !engine->camera || engine->fb_height <= 0) {
+        return;
+    }
+    const Camera* camera = engine->camera;
+    float units_per_pixel = camera->ortho_height / (float)engine->fb_height;
+    out[0] = camera->look_at[0] + (float)(fb_x - engine->fb_width * 0.5) * units_per_pixel;
+    out[1] = camera->look_at[1] + (float)(fb_y - engine->fb_height * 0.5) * units_per_pixel;
+    out[2] = camera->look_at[2];
+}
+
+bool canvas_on_button(CanvasController* ctrl, int button, int action, int mods) {
+    (void)mods;
+    if (!ctrl || !ctrl->engine || button != GLFW_MOUSE_BUTTON_LEFT) {
+        return ctrl ? ctrl->panning : false;
+    }
+    Engine* engine = ctrl->engine;
+    if (action == GLFW_RELEASE) {
+        ctrl->panning = false;
+        return false;
+    }
+    // The engine has already picked the node under the press, if any.
+    ctrl->panning = engine->input.selected_node == NULL && engine->camera != NULL;
+    if (ctrl->panning) {
+        glm_vec3_copy(engine->camera->look_at, ctrl->pan_start_look_at);
+        glm_vec3_copy(engine->camera->position, ctrl->pan_start_position);
+    }
+    return ctrl->panning;
+}
+
+// Slide the whole view with the cursor. Camera and look_at move by the same
+// vector, so the view direction never changes.
+static void _canvas_pan(CanvasController* ctrl) {
+    Engine* engine = ctrl->engine;
+    Camera* camera = engine->camera;
+    if (!camera || engine->fb_height <= 0) {
+        return;
+    }
+    float units_per_pixel = camera->ortho_height / (float)engine->fb_height;
+    vec3 offset = {-engine->input.drag_fb_x * units_per_pixel,
+                   -engine->input.drag_fb_y * units_per_pixel, 0.0f};
+    vec3 look_at, position;
+    glm_vec3_add(ctrl->pan_start_look_at, offset, look_at);
+    glm_vec3_add(ctrl->pan_start_position, offset, position);
+    camera_set_look_at(camera, look_at);
+    camera_set_position(camera, position);
+}
+
+void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y) {
+    if (!ctrl || !ctrl->engine) {
+        return;
+    }
+    Engine* engine = ctrl->engine;
+    if (!engine->input.is_dragging) {
+        return;
+    }
+    SceneNode* node = engine->input.selected_node;
+    if (node) {
+        // Where the cursor is on the drag plane, as a delta from where the
+        // press was, applied to where the node was: x and y only, since the
+        // plane is the board and the node's depth is its own.
+        // Zeroed: a write through a pointer reads as a use before write.
+        vec3 on_plane = {0.0f, 0.0f, 0.0f}, delta, target;
+        engine_mouse_to_drag_plane(engine, fb_x, fb_y, on_plane);
+        glm_vec3_sub(on_plane, engine->input.drag_start_world_pos, delta);
+        glm_vec3_add(engine->input.drag_object_start_pos, delta, target);
+        target[2] = node->original_transform[3][2];
+        node_set_position(node, target);
+    } else if (ctrl->panning) {
+        _canvas_pan(ctrl);
+    }
+}
+
+// Zoom about the cursor: the world point under it stays under it.
+void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset) {
+    (void)xoffset;
+    if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
+        return;
+    }
+    Engine* engine = ctrl->engine;
+    Camera* camera = engine->camera;
+    double fb_x = 0.0, fb_y = 0.0;
+    if (!engine_cursor_fb(engine, &fb_x, &fb_y)) {
+        return;
+    }
+    vec3 anchor = {0.0f, 0.0f, 0.0f};
+    canvas_world_under_cursor(engine, fb_x, fb_y, anchor);
+
+    float h = camera->ortho_height;
+    float h_new = h * powf(ctrl->zoom_step, (float)yoffset);
+    if (ctrl->zoom_min > 0.0f || ctrl->zoom_max > 0.0f) {
+        h_new = glm_clamp(h_new, ctrl->zoom_min, ctrl->zoom_max);
+    }
+    if (h <= 0.0f) {
+        return;
+    }
+    float k = 1.0f - h_new / h;
+
+    vec3 shift = {(anchor[0] - camera->look_at[0]) * k, (anchor[1] - camera->look_at[1]) * k, 0.0f};
+    vec3 look_at, position;
+    glm_vec3_add(camera->look_at, shift, look_at);
+    glm_vec3_add(camera->position, shift, position);
+    camera_set_look_at(camera, look_at);
+    camera_set_position(camera, position);
+    camera->ortho_height = h_new;
+}
+
+/*
  * Light Rigs
  */
 

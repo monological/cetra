@@ -53,6 +53,48 @@ void mouse_drag_update(MouseDragController* ctrl, float time);
 bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods);
 
 /*
+ * Canvas Controller
+ *
+ * The 2D twin of the drag controller, for a square-on orthographic camera
+ * over a plane: a drag on empty space pans, a drag on a picked node moves it
+ * in the plane, and the wheel zooms about the point under the cursor. An app
+ * with gestures of its own (handles, corners) runs them first and hands the
+ * controller what is left; the drag itself lives in engine->input.
+ */
+typedef struct CanvasController {
+    // ENGINE-OWNED (by the controller): the pan in flight.
+    Engine* engine;
+    bool panning; // A drag that started on empty space
+    vec3 pan_start_look_at;
+    vec3 pan_start_position;
+
+    // SETTINGS: plain stores. Write them directly, at any time.
+    float zoom_min; // ortho_height range; both 0 = unclamped
+    float zoom_max;
+    float zoom_step; // ortho_height factor per wheel notch, default 0.9
+} CanvasController;
+
+CanvasController* create_canvas_controller(Engine* engine);
+void free_canvas_controller(CanvasController* ctrl);
+
+// The world point under a framebuffer position on a square-on orthographic
+// camera: look_at + (fb - fb_centre) * (ortho_height / fb_height), both axes.
+void canvas_world_under_cursor(const Engine* engine, double fb_x, double fb_y, vec3 out);
+
+// Forwarded from the app's mouse-button callback, after any picking of its
+// own. A left press pans when the engine's pick found nothing; a release
+// stops. Returns whether a pan is in flight.
+bool canvas_on_button(CanvasController* ctrl, int button, int action, int mods);
+
+// Forwarded from the app's cursor callback, in framebuffer pixels. Moves the
+// picked node on the drag plane (x and y; z untouched), else pans.
+void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y);
+
+// Forwarded from the app's scroll callback. Zooms ortho_height by
+// zoom_step^yoffset about the point under the cursor, within the range.
+void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset);
+
+/*
  * Light Rigs
  */
 

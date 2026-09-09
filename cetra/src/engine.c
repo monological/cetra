@@ -1109,6 +1109,23 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
                                          engine->win_height);
 }
 
+bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
+    if (!engine || !engine->window || !fb_x || !fb_y)
+        return false;
+    // The STORED sizes, not a fresh query. Re-querying GLFW here would make
+    // the size fields change mid-frame, between the frame-top resize check and
+    // the scene pass -- and a scene target that disagrees with the post chain
+    // by even a frame is an invalid multisample blit. The framebuffer-size
+    // callback owns them.
+    if (engine->win_width <= 0 || engine->win_height <= 0)
+        return false;
+    double wx = 0.0, wy = 0.0;
+    glfwGetCursorPos(engine->window, &wx, &wy);
+    *fb_x = (wx / engine->win_width) * engine->fb_width;
+    *fb_y = (1.0 - wy / engine->win_height) * engine->fb_height;
+    return true;
+}
+
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     if (!window)
         return;
@@ -1123,15 +1140,10 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
         return;
     }
 
-    // Map cursor to framebuffer pixels from the STORED sizes. Re-querying GLFW
-    // here would make these fields change mid-frame, between the frame-top
-    // resize check and the scene pass -- and a scene target that disagrees
-    // with the post chain by even a frame is an invalid multisample blit. The
-    // framebuffer-size callback owns them now.
-    if (engine->win_width <= 0 || engine->win_height <= 0)
+    // GLFW's arguments are the position it would answer a query with, so the
+    // one conversion serves here too.
+    if (!engine_cursor_fb(engine, &xpos, &ypos))
         return;
-    xpos = ((xpos / engine->win_width) * engine->fb_width);
-    ypos = (1.0 - (ypos / engine->win_height)) * engine->fb_height;
 
     if (engine->input.is_dragging) {
         engine->input.drag_fb_x = xpos - engine->input.center_fb_x;
@@ -1153,16 +1165,10 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
 
+    // Not an early return on a zero-area window: it must still be able to end
+    // a drag and reach the app's own callback below, at (0, 0).
     double mouse_fb_x = 0.0, mouse_fb_y = 0.0;
-    glfwGetCursorPos(window, &mouse_fb_x, &mouse_fb_y);
-
-    // Stored sizes, not a fresh query -- see the cursor callback. Guarded
-    // rather than returning early: a zero-area window must still be able to
-    // end a drag and reach the app's own callback below.
-    if (engine->win_width > 0 && engine->win_height > 0) {
-        mouse_fb_x = ((mouse_fb_x / engine->win_width) * engine->fb_width);
-        mouse_fb_y = ((1.0 - (mouse_fb_y / engine->win_height)) * engine->fb_height);
-    }
+    engine_cursor_fb(engine, &mouse_fb_x, &mouse_fb_y);
 
     // A LEFT release always ends the drag and is forwarded, even over the GUI —
     // otherwise a button-up that lands on a panel leaves the camera stuck
@@ -1646,6 +1652,10 @@ void engine_set_2d_preset(Engine* engine, Scene* scene) {
     engine->exposure.physical = false;
     engine->exposure.automatic = false;
     engine->exposure.multiplier = 1.0f;
+    // The GUI panel is the 3D engine's controls and the FPS counter a
+    // developer's readout; neither belongs on a sketch by default.
+    engine->show_gui = false;
+    engine->show_fps = false;
     if (!scene)
         return;
     // White ambient radiance: the no-environment ambient is radiance times
