@@ -21,6 +21,7 @@
 struct Game;
 struct PhysicsWorld;
 struct EntityManager;
+struct AudioSystem;
 
 // Game callbacks - implement these in your game
 typedef void (*GameInitFunc)(struct Game* game);
@@ -101,6 +102,10 @@ typedef struct Game {
 
     // Entity management (optional)
     struct EntityManager* entity_manager;
+
+    // Audio (optional). Freed after the entity manager, whose AUDIO_SOURCE
+    // components hold sounds that live in this engine.
+    struct AudioSystem* audio;
 } Game;
 
 // Creates and initialises the engine from config->engine; NULL when that fails.
@@ -159,5 +164,11 @@ void game_set_physics_world(Game* game, struct PhysicsWorld* world);
 struct PhysicsWorld* game_get_physics_world(const Game* game);
 void game_set_entity_manager(Game* game, struct EntityManager* em);
 struct EntityManager* game_get_entity_manager(const Game* game);
+
+// The audio subsystem (spec 12.0). Install takes ownership and frees the one it
+// replaces; free_game frees it after the entity manager. The loop points the
+// listener along the camera and syncs AUDIO_SOURCE components each frame.
+void game_set_audio_system(Game* game, struct AudioSystem* audio);
+struct AudioSystem* game_get_audio_system(const Game* game);
 
 #endif // _GAME_H_

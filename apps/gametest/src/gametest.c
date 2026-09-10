@@ -27,6 +27,7 @@
 #include "cetra/game/entity.h"
 #include "cetra/game/physics.h"
 #include "cetra/game/character.h"
+#include "cetra/game/audio.h"
 #include "cetra/ibl.h"
 
 static MouseDragController* drag_controller = NULL;
@@ -42,6 +43,14 @@ static const char* hdr_path = NULL;
 static bool trace_player = false;
 static int trace_every = 30;
 static int trace_step = 0;
+
+// Audio (spec 12.0): procedural tones, so the demo ships no audio files. A beep
+// on jump and on spawn, and a looping tone carried by the door as an
+// AUDIO_SOURCE component -- it pans and fades as the door swings and the camera
+// moves. --mute silences the master bus.
+static Sound* jump_sound = NULL;
+static Sound* spawn_sound = NULL;
+static bool audio_muted = false;
 
 // What the game reads, and which key, pad button or pad axis each one is.
 // The stick's Y is negated: GLFW reads it down-positive, and the move helper
@@ -347,6 +356,16 @@ static void on_init(Game* game) {
     EntityManager* em = create_entity_manager(game);
     game_set_entity_manager(game, em);
 
+    // Audio: one device, two SFX beeps. Headless opens no device (offline).
+    AudioSystem* audio = create_audio_system(engine);
+    if (audio) {
+        game_set_audio_system(game, audio);
+        if (audio_muted)
+            audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
+        jump_sound = audio_sound_from_tone(audio, 660.0f, AUDIO_BUS_SFX);
+        spawn_sound = audio_sound_from_tone(audio, 180.0f, AUDIO_BUS_SFX);
+    }
+
     // Create floor entity (static physics body)
     Entity* floor = create_entity(em, "floor");
     glm_vec3_copy((vec3){0, -0.5f, 0}, floor->position);
@@ -408,6 +427,19 @@ static void on_init(Game* game) {
 
     // Create a door with hinge constraint
     create_door(game, (vec3){5.0f, 0.0f, 0.0f});
+
+    // A looping tone carried by the door as an AUDIO_SOURCE component: its world
+    // position is pushed from the entity each frame, so it pans and attenuates
+    // as the door swings and as the camera orbits.
+    if (audio && door_entity) {
+        Sound* beacon = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
+        if (beacon) {
+            audio_sound_set_looping(beacon, true);
+            audio_sound_set_volume(beacon, 0.5f);
+            entity_add_audio_source(door_entity, audio, beacon);
+            audio_sound_play(beacon);
+        }
+    }
 
     // Optimize broad phase after adding initial bodies
     physics_world_optimize(physics);
@@ -498,6 +530,8 @@ static void on_update(Game* game, double dt) {
     if (jump && grounded) {
         vel[1] = 10.0f; // Jump velocity
         printf("Jump!\n");
+        if (jump_sound)
+            audio_sound_play(jump_sound);
     }
 
     // Set velocity (CharacterController will handle collision response)
@@ -520,6 +554,8 @@ static void on_update(Game* game, double dt) {
 
     if (input_action_pressed(&game->input, "spawn")) {
         spawn_falling_box(game);
+        if (spawn_sound)
+            audio_sound_play(spawn_sound);
     }
 
     if (input_action_pressed(&game->input, "raycast") && physics) {
@@ -651,6 +687,8 @@ int main(int argc, const char* argv[]) {
             pad_script = argv[++i];
         } else if (!strcmp(a, "--gamepad-db") && i + 1 < argc) {
             gamepad_db = argv[++i];
+        } else if (!strcmp(a, "--mute")) {
+            audio_muted = true;
         } else if (!strcmp(a, "--print-bindings")) {
             input_print_actions(actions, ACTION_COUNT);
             return 0;
@@ -676,6 +714,7 @@ int main(int argc, const char* argv[]) {
     printf("  P / Start - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
     printf("  Escape - Quit\n");
+    printf("Audio: a beep on jump and spawn, a looping tone at the door (--mute to silence)\n");
     printf("\nWalk into the door (right side) to push it open!\n\n");
 
     srand(42); // Deterministic random for testing

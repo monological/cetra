@@ -2,8 +2,11 @@
 #include "entity.h"
 #include "physics.h"
 #include "character.h"
+#include "audio.h"
+#include "../camera.h"
 #include "../cook.h"
 
+#include <cglm/cglm.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +61,13 @@ void free_game(Game* game) {
     if (game->physics_world) {
         free_physics_world(game->physics_world);
         game->physics_world = NULL;
+    }
+
+    // Free audio after the entity manager: its AUDIO_SOURCE components hold
+    // sounds that live in this engine and are released as those components go.
+    if (game->audio) {
+        free_audio_system(game->audio);
+        game->audio = NULL;
     }
 
     input_free(&game->input);
@@ -264,6 +274,21 @@ static void game_pre_render(Engine* engine, Scene* scene) {
         // draws there cannot see them disagree.
         game->on_pre_render(game, game->accumulator / game->fixed_timestep);
     }
+    // After the app has posed the camera (which the engine reads next), point
+    // the listener along it and push the frame's positions into the sources.
+    if (game->audio) {
+        Camera* cam = engine->camera;
+        vec3 pos = {0.0f, 0.0f, 0.0f};
+        vec3 fwd = {0.0f, 0.0f, -1.0f};
+        vec3 up = {0.0f, 1.0f, 0.0f};
+        if (cam) {
+            glm_vec3_copy(cam->position, pos);
+            glm_vec3_sub(cam->look_at, cam->position, fwd);
+            glm_vec3_normalize(fwd);
+            glm_vec3_copy(cam->up_vector, up);
+        }
+        audio_system_update(game->audio, game->entity_manager, pos, fwd, up);
+    }
 }
 
 // engine_run's render hook: hand the app its on_render with the interpolation
@@ -320,4 +345,16 @@ void game_set_entity_manager(Game* game, EntityManager* em) {
 
 EntityManager* game_get_entity_manager(const Game* game) {
     return game ? game->entity_manager : NULL;
+}
+
+void game_set_audio_system(Game* game, AudioSystem* audio) {
+    if (!game || game->audio == audio)
+        return;
+    if (game->audio)
+        free_audio_system(game->audio);
+    game->audio = audio;
+}
+
+AudioSystem* game_get_audio_system(const Game* game) {
+    return game ? game->audio : NULL;
 }

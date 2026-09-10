@@ -241,9 +241,19 @@ if(APPLE)
     target_link_libraries(cetra_deps INTERFACE
         "-framework Cocoa"
         "-framework IOKit"
-        "-framework CoreVideo")
+        "-framework CoreVideo"
+        # miniaudio's CoreAudio backend (spec 12.0)
+        "-framework AudioToolbox"
+        "-framework CoreAudio"
+        "-framework CoreFoundation")
     # Suppress duplicate library warnings from CMake's transitive linking
     target_link_options(cetra_deps INTERFACE "LINKER:-no_warn_duplicate_libraries")
+endif()
+
+# miniaudio dlopen's the ALSA/PulseAudio backends on Linux (spec 12.0); macOS
+# resolves dlopen from libSystem and has no separate libdl to link.
+if(UNIX AND NOT APPLE)
+    target_link_libraries(cetra_deps INTERFACE dl)
 endif()
 
 target_compile_definitions(cetra_deps INTERFACE
