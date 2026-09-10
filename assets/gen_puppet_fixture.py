@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""Generate assets/puppet.gltf + puppet.cscn -- the animation blending instrument (spec 12.1).
+
+A figure of twenty rigid boxes, one per bone, on the `cetra_rig:` bone names
+the committed walk cycle (assets/strut_walk.fbx) carries, so that clip binds to
+this rig by exact name. Every clip the blending gates read is authored HERE, in
+closed form, so what a gate expects is a number this file states and not a
+frame somebody looked at.
+
+THE RIG. Y up, facing +Z, a T-pose, feet at y = 0, symmetric in x and z -- so
+the render app's recentre (centre x/z to 0, min y to 0) moves it by exactly
+nothing, which the generator asserts. Every joint's bind rotation is the
+identity and its bind transform a pure translation from its parent; the skin's
+joints are listed parent-first, which is the order the engine's skeleton takes
+(import.c, process_ai_skeleton). Each box's vertices all weight their one bone
+at 1.0: a limb follows its bone exactly, and no blend softens a wrong answer.
+
+THE CLIPS, and what each is for:
+  idle    2.0 s loop   a breathing sway; what plays with no flag
+  walk    1.0 s loop   thighs +-30 deg about X in opposite phase, arms counter
+  run     0.5 s loop   the same shape at +-50 / +-35
+  jump    1.0 s once   legs tuck by 0.2 s, hold, back to bind at 1.0
+  wave    1.0 s once   the right arm raised, the forearm waving; ends on bind
+  hold90  4.0 s once   the left forearm to +90 deg about Z by 0.25 s, then HELD
+  rest    4.0 s once   the bind pose as a clip (one channel), the other
+                       endpoint of the analytic midpoint blend
+
+The loops are in COS phase: t = 0 and t = T/2 are the extremes, so frame 30 of
+the render app's fixed 1/60 clock (t = 0.5 s) reads a full stride on walk and
+run, not the crossing. hold90's last key is at 4.0 s: the render app plays
+looping, so a clip that ended at the read frame would wrap to bind in exactly
+the frame being measured -- the skinned_cull fixture's own lesson.
+
+WHY EVERY ANIMATED JOINT CARRIES A TRANSLATION TRACK. An embedded clip is
+imported without retargeting, and a channel with rotation keys but no position
+keys reads position (0, 0, 0) -- which collapses the joint onto its parent. Each
+animated joint therefore also carries a two-key translation sampler holding
+its bind offset, and the generator asserts that pairing.
+
+The bone names keep their colon through assimp's glTF path (as they do through
+FBX); the `anim-clip-loads` gate arm is what notices if that ever stops.
+
+Regenerate with: python3 assets/gen_puppet_fixture.py
+"""
+
+import base64
+import json
+import math
+import os
+import struct
+
+PREFIX = "cetra_rig:"
+
+# (name, parent name or None, bind position in the rig's space, box centre,
+# box half-extents). Left is +X, the character's own left when facing +Z.
+BONES = [
+    ("Hips", None, (0.0, 0.95, 0.0), (0.0, 0.93, 0.0), (0.14, 0.07, 0.09)),
+    ("Spine", "Hips", (0.0, 1.05, 0.0), (0.0, 1.115, 0.0), (0.12, 0.065, 0.08)),
+    ("Spine1", "Spine", (0.0, 1.18, 0.0), (0.0, 1.245, 0.0), (0.13, 0.065, 0.08)),
+    ("Spine2", "Spine1", (0.0, 1.31, 0.0), (0.0, 1.40, 0.0), (0.15, 0.09, 0.09)),
+    ("Neck", "Spine2", (0.0, 1.50, 0.0), (0.0, 1.54, 0.0), (0.04, 0.04, 0.04)),
+    ("Head", "Neck", (0.0, 1.58, 0.0), (0.0, 1.69, 0.0), (0.09, 0.11, 0.10)),
+    ("LeftShoulder", "Spine2", (0.06, 1.46, 0.0), (0.13, 1.46, 0.0), (0.07, 0.05, 0.05)),
+    ("LeftArm", "LeftShoulder", (0.20, 1.46, 0.0), (0.34, 1.46, 0.0), (0.14, 0.045, 0.045)),
+    ("LeftForeArm", "LeftArm", (0.48, 1.46, 0.0), (0.61, 1.46, 0.0), (0.13, 0.04, 0.04)),
+    ("LeftHand", "LeftForeArm", (0.74, 1.46, 0.0), (0.80, 1.46, 0.0), (0.06, 0.03, 0.04)),
+    ("RightShoulder", "Spine2", (-0.06, 1.46, 0.0), (-0.13, 1.46, 0.0), (0.07, 0.05, 0.05)),
+    ("RightArm", "RightShoulder", (-0.20, 1.46, 0.0), (-0.34, 1.46, 0.0), (0.14, 0.045, 0.045)),
+    ("RightForeArm", "RightArm", (-0.48, 1.46, 0.0), (-0.61, 1.46, 0.0), (0.13, 0.04, 0.04)),
+    ("RightHand", "RightForeArm", (-0.74, 1.46, 0.0), (-0.80, 1.46, 0.0), (0.06, 0.03, 0.04)),
+    ("LeftUpLeg", "Hips", (0.10, 0.90, 0.0), (0.10, 0.69, 0.0), (0.075, 0.21, 0.075)),
+    ("LeftLeg", "LeftUpLeg", (0.10, 0.48, 0.0), (0.10, 0.28, 0.0), (0.065, 0.20, 0.065)),
+    ("LeftFoot", "LeftLeg", (0.10, 0.08, 0.0), (0.10, 0.04, 0.0), (0.06, 0.04, 0.12)),
+    ("RightUpLeg", "Hips", (-0.10, 0.90, 0.0), (-0.10, 0.69, 0.0), (0.075, 0.21, 0.075)),
+    ("RightLeg", "RightUpLeg", (-0.10, 0.48, 0.0), (-0.10, 0.28, 0.0), (0.065, 0.20, 0.065)),
+    ("RightFoot", "RightLeg", (-0.10, 0.08, 0.0), (-0.10, 0.04, 0.0), (0.06, 0.04, 0.12)),
+]
+NAMES = [PREFIX + b[0] for b in BONES]
+INDEX = {n: i for i, n in enumerate(NAMES)}
+PARENT = [INDEX[PREFIX + b[1]] if b[1] else -1 for b in BONES]
+BIND = [b[2] for b in BONES]
+
+# Parent-first: the engine accumulates globals in array order.
+for i, p in enumerate(PARENT):
+    assert p < i, "joints must be listed parent-first"
+
+# Local bind translation = own bind position minus the parent's.
+LOCAL = [tuple(BIND[i][k] - (BIND[PARENT[i]][k] if PARENT[i] >= 0 else 0.0) for k in range(3))
+         for i in range(len(BONES))]
+
+
+def quat_axis(axis, deg):
+    """Quaternion (x, y, z, w) for `deg` degrees about a unit axis."""
+    h = math.radians(deg) * 0.5
+    s = math.sin(h)
+    return (axis[0] * s, axis[1] * s, axis[2] * s, math.cos(h))
+
+
+X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
+IDENT = (0.0, 0.0, 0.0, 1.0)
+
+# ---------------------------------------------------------------------------
+# Geometry: one box per bone, flat normals, outward winding.
+# ---------------------------------------------------------------------------
+
+FACES = [  # (normal, u, v): corners at c + n*hn +- u*hu +- v*hv, CCW seen from outside
+    ((1, 0, 0), (0, 1, 0), (0, 0, 1)),
+    ((-1, 0, 0), (0, 0, 1), (0, 1, 0)),
+    ((0, 1, 0), (0, 0, 1), (1, 0, 0)),
+    ((0, -1, 0), (1, 0, 0), (0, 0, 1)),
+    ((0, 0, 1), (1, 0, 0), (0, 1, 0)),
+    ((0, 0, -1), (0, 1, 0), (1, 0, 0)),
+]
+
+positions, normals, uvs, joints, weights, indices = [], [], [], [], [], []
+for bone_index, (_, _, _, centre, half) in enumerate(BONES):
+    for n, u, v in FACES:
+        base = len(positions)
+        hn = sum(abs(n[k]) * half[k] for k in range(3))
+        hu = sum(abs(u[k]) * half[k] for k in range(3))
+        hv = sum(abs(v[k]) * half[k] for k in range(3))
+        for su, sv in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            positions.append(tuple(centre[k] + n[k] * hn + su * u[k] * hu + sv * v[k] * hv
+                                   for k in range(3)))
+            normals.append(tuple(float(c) for c in n))
+            uvs.append(((su + 1) * 0.5, (sv + 1) * 0.5))
+            joints.append((bone_index, 0, 0, 0))
+            weights.append((1.0, 0.0, 0.0, 0.0))
+        indices += [base, base + 1, base + 2, base, base + 2, base + 3]
+        # The winding trap: every face's normal must point away from the box's
+        # centre, or the box is inside-out and casts as nothing.
+        a, b, c = positions[base], positions[base + 1], positions[base + 2]
+        e1 = tuple(b[k] - a[k] for k in range(3))
+        e2 = tuple(c[k] - a[k] for k in range(3))
+        cross = (e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                 e1[0] * e2[1] - e1[1] * e2[0])
+        assert sum(cross[k] * n[k] for k in range(3)) > 0, "face wound inside-out"
+
+# Every joint drives at least one vertex, so assimp makes a bone of each.
+assert set(j[0] for j in joints) == set(range(len(BONES)))
+
+mn = [min(p[k] for p in positions) for k in range(3)]
+mx = [max(p[k] for p in positions) for k in range(3)]
+assert abs(mn[1]) < 1e-9, "feet must stand on y = 0"
+assert abs(mn[0] + mx[0]) < 1e-9 and abs(mn[2] + mx[2]) < 1e-9, "not centred in x/z"
+
+# Inverse bind matrices: the joints are pure translations under an identity
+# root, so the inverse is a translation by -bind. Column-major.
+ibms = []
+for pos in BIND:
+    ibms.append([1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                 -pos[0], -pos[1], -pos[2], 1.0])
+
+# ---------------------------------------------------------------------------
+# Clips. A clip is {joint name: [(time, quat), ...]} plus an optional Hips
+# height curve; every animated joint gets its bind translation as a track.
+# ---------------------------------------------------------------------------
+
+KEYS_PER_LOOP = 8
+
+
+def loop_keys(period, fn):
+    """(time, quat) at KEYS_PER_LOOP + 1 points, the last equal to the first."""
+    out = []
+    for k in range(KEYS_PER_LOOP):
+        t = period * k / KEYS_PER_LOOP
+        out.append((t, fn(2.0 * math.pi * k / KEYS_PER_LOOP)))
+    # The last key IS the first, not a sin(2 pi) that is 1e-16 off it.
+    out.append((period, out[0][1]))
+    return out
+
+
+def gait(period, thigh_deg, arm_deg, bob):
+    rot = {
+        "LeftUpLeg": loop_keys(period, lambda p: quat_axis(X, thigh_deg * math.cos(p))),
+        "RightUpLeg": loop_keys(period, lambda p: quat_axis(X, -thigh_deg * math.cos(p))),
+        "LeftArm": loop_keys(period, lambda p: quat_axis(Y, -arm_deg * math.cos(p))),
+        "RightArm": loop_keys(period, lambda p: quat_axis(Y, arm_deg * math.cos(p))),
+    }
+    hips = [(period * k / KEYS_PER_LOOP,
+             BIND[0][1] + bob * math.cos(2.0 * 2.0 * math.pi * k / KEYS_PER_LOOP))
+            for k in range(KEYS_PER_LOOP + 1)]
+    return {"loop": True, "length": period, "rot": rot, "hips_y": hips}
+
+
+def idle():
+    period = 2.0
+    rot = {
+        "Spine2": loop_keys(period, lambda p: quat_axis(X, 3.0 * math.sin(p))),
+        "Head": loop_keys(period, lambda p: quat_axis(X, 2.0 * math.sin(p + math.pi * 0.5))),
+    }
+    hips = [(period * k / KEYS_PER_LOOP,
+             BIND[0][1] + 0.01 * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP))
+            for k in range(KEYS_PER_LOOP + 1)]
+    return {"loop": True, "length": period, "rot": rot, "hips_y": hips}
+
+
+def jump():
+    tuck = [(0.0, IDENT), (0.2, quat_axis(X, -60.0)), (0.7, quat_axis(X, -60.0)), (1.0, IDENT)]
+    knee = [(0.0, IDENT), (0.2, quat_axis(X, 70.0)), (0.7, quat_axis(X, 70.0)), (1.0, IDENT)]
+    rot = {
+        "LeftUpLeg": tuck, "RightUpLeg": tuck,
+        "LeftLeg": knee, "RightLeg": knee,
+        "LeftArm": [(0.0, IDENT), (0.2, quat_axis(Z, 60.0)), (0.7, quat_axis(Z, 60.0)),
+                    (1.0, IDENT)],
+        "RightArm": [(0.0, IDENT), (0.2, quat_axis(Z, -60.0)), (0.7, quat_axis(Z, -60.0)),
+                     (1.0, IDENT)],
+    }
+    return {"loop": False, "length": 1.0, "rot": rot, "hips_y": None}
+
+
+def wave():
+    arm = [(0.0, IDENT), (0.15, quat_axis(Z, -80.0)), (0.85, quat_axis(Z, -80.0)), (1.0, IDENT)]
+    fore = [(0.0, IDENT), (0.25, quat_axis(Z, 25.0))]
+    sign = -1.0
+    t = 0.375
+    while t <= 0.75 + 1e-9:
+        fore.append((t, quat_axis(Z, 25.0 * sign)))
+        sign = -sign
+        t += 0.125
+    fore.append((1.0, IDENT))
+    return {"loop": False, "length": 1.0, "rot": {"RightArm": arm, "RightForeArm": fore},
+            "hips_y": None}
+
+
+def hold90():
+    keys = [(0.0, IDENT), (0.25, quat_axis(Z, 90.0)), (4.0, quat_axis(Z, 90.0))]
+    return {"loop": False, "length": 4.0, "rot": {"LeftForeArm": keys}, "hips_y": None}
+
+
+def rest():
+    return {"loop": False, "length": 4.0, "rot": {"Hips": [(0.0, IDENT), (4.0, IDENT)]},
+            "hips_y": None}
+
+
+CLIPS = [
+    ("idle", idle()),
+    ("walk", gait(1.0, 30.0, 20.0, 0.02)),
+    ("run", gait(0.5, 50.0, 35.0, 0.04)),
+    ("jump", jump()),
+    ("wave", wave()),
+    ("hold90", hold90()),
+    ("rest", rest()),
+]
+
+READ_FRAME_T = 0.5  # frame 30 at 1/60
+for name, clip in CLIPS:
+    for joint, keys in clip["rot"].items():
+        assert keys[0][0] == 0.0 and abs(keys[-1][0] - clip["length"]) < 1e-9, (name, joint)
+        if clip["loop"]:
+            assert keys[0][1] == keys[-1][1], "a loop must end where it starts: " + name
+    if not clip["loop"]:
+        assert READ_FRAME_T < clip["length"], "a one-shot must still be going at the read frame"
+assert CLIPS[0][0] == "idle", "the render app plays index 0"
+assert abs(hold90()["rot"]["LeftForeArm"][-1][0] - 4.0) < 1e-9
+
+# ---------------------------------------------------------------------------
+# Pack.
+# ---------------------------------------------------------------------------
+
+_chunks = []  # (bytes, target or None)
+
+
+def _chunk(data, target=None):
+    _chunks.append((data, target))
+    return len(_chunks) - 1
+
+
+pos_view = _chunk(b"".join(struct.pack("<3f", *p) for p in positions), 34962)
+nrm_view = _chunk(b"".join(struct.pack("<3f", *n) for n in normals), 34962)
+uv_view = _chunk(b"".join(struct.pack("<2f", *t) for t in uvs), 34962)
+joint_view = _chunk(b"".join(struct.pack("<4H", *j) for j in joints), 34962)
+weight_view = _chunk(b"".join(struct.pack("<4f", *w) for w in weights), 34962)
+idx_view = _chunk(b"".join(struct.pack("<H", i) for i in indices), 34963)
+ibm_view = _chunk(b"".join(struct.pack("<16f", *m) for m in ibms))
+
+accessors = [
+    {"bufferView": pos_view, "componentType": 5126, "count": len(positions), "type": "VEC3",
+     "min": mn, "max": mx},
+    {"bufferView": nrm_view, "componentType": 5126, "count": len(normals), "type": "VEC3"},
+    {"bufferView": uv_view, "componentType": 5126, "count": len(uvs), "type": "VEC2"},
+    {"bufferView": joint_view, "componentType": 5123, "count": len(joints), "type": "VEC4"},
+    {"bufferView": weight_view, "componentType": 5126, "count": len(weights), "type": "VEC4"},
+    {"bufferView": idx_view, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
+    {"bufferView": ibm_view, "componentType": 5126, "count": len(ibms), "type": "MAT4"},
+]
+ACC_POS, ACC_NRM, ACC_UV, ACC_JOINT, ACC_WEIGHT, ACC_IDX, ACC_IBM = range(7)
+
+# Nodes: 0 the rig root, 1 the mesh, 2.. the joints in BONES order.
+MESH_NODE = 1
+JOINT_NODE0 = 2
+nodes = [
+    {"name": "puppet", "children": [MESH_NODE, JOINT_NODE0]},
+    {"name": "puppet_mesh", "mesh": 0, "skin": 0},
+]
+for i, name in enumerate(NAMES):
+    node = {"name": name, "translation": list(LOCAL[i])}
+    kids = [JOINT_NODE0 + j for j, p in enumerate(PARENT) if p == i]
+    if kids:
+        node["children"] = kids
+    nodes.append(node)
+
+
+def _accessor(view, count, kind, mn_=None, mx_=None):
+    acc = {"bufferView": view, "componentType": 5126, "count": count, "type": kind}
+    if mn_ is not None:
+        acc["min"] = mn_
+        acc["max"] = mx_
+    accessors.append(acc)
+    return len(accessors) - 1
+
+
+animations = []
+for name, clip in CLIPS:
+    samplers, channels = [], []
+    animated = set(clip["rot"].keys())
+    if clip["hips_y"] is not None:
+        animated.add("Hips")
+    for joint in sorted(animated, key=lambda j: INDEX[PREFIX + j]):
+        node = JOINT_NODE0 + INDEX[PREFIX + joint]
+        if joint in clip["rot"]:
+            keys = clip["rot"][joint]
+            times = [k[0] for k in keys]
+            t_acc = _accessor(_chunk(b"".join(struct.pack("<f", t) for t in times)), len(times),
+                              "SCALAR", [min(times)], [max(times)])
+            r_acc = _accessor(_chunk(b"".join(struct.pack("<4f", *k[1]) for k in keys)),
+                              len(keys), "VEC4")
+            samplers.append({"input": t_acc, "output": r_acc, "interpolation": "LINEAR"})
+            channels.append({"sampler": len(samplers) - 1,
+                             "target": {"node": node, "path": "rotation"}})
+        # The translation track: the bind offset held, or the hips' height curve.
+        if joint == "Hips" and clip["hips_y"] is not None:
+            curve = clip["hips_y"]
+            times = [k[0] for k in curve]
+            local_pos = [(LOCAL[0][0], y, LOCAL[0][2]) for _, y in curve]
+        else:
+            times = [0.0, clip["length"]]
+            local_pos = [LOCAL[INDEX[PREFIX + joint]]] * 2
+        t_acc = _accessor(_chunk(b"".join(struct.pack("<f", t) for t in times)), len(times),
+                          "SCALAR", [min(times)], [max(times)])
+        p_acc = _accessor(_chunk(b"".join(struct.pack("<3f", *p) for p in local_pos)),
+                          len(local_pos), "VEC3")
+        samplers.append({"input": t_acc, "output": p_acc, "interpolation": "LINEAR"})
+        channels.append({"sampler": len(samplers) - 1,
+                         "target": {"node": node, "path": "translation"}})
+    # Every rotation channel has a translation channel on the same node.
+    rot_nodes = {c["target"]["node"] for c in channels if c["target"]["path"] == "rotation"}
+    pos_nodes = {c["target"]["node"] for c in channels if c["target"]["path"] == "translation"}
+    assert rot_nodes <= pos_nodes, name
+    animations.append({"name": name, "samplers": samplers, "channels": channels})
+
+buffer_bytes = b"".join(c for c, _ in _chunks)
+
+
+def _views(chunks):
+    views, offset = [], 0
+    for data, target in chunks:
+        v = {"buffer": 0, "byteOffset": offset, "byteLength": len(data)}
+        if target is not None:
+            v["target"] = target
+        views.append(v)
+        offset += len(data)
+    return views
+
+
+gltf = {
+    "asset": {"version": "2.0", "generator": "gen_puppet_fixture.py"},
+    "scene": 0,
+    "scenes": [{"nodes": [0]}],
+    "nodes": nodes,
+    "skins": [{"inverseBindMatrices": ACC_IBM,
+               "joints": [JOINT_NODE0 + i for i in range(len(BONES))],
+               "skeleton": JOINT_NODE0}],
+    "meshes": [
+        {"name": "puppet_mesh",
+         "primitives": [{"attributes": {"POSITION": ACC_POS, "NORMAL": ACC_NRM,
+                                        "TEXCOORD_0": ACC_UV, "JOINTS_0": ACC_JOINT,
+                                        "WEIGHTS_0": ACC_WEIGHT},
+                         "indices": ACC_IDX, "material": 0}]},
+    ],
+    "animations": animations,
+    "materials": [
+        {"name": "puppet_wood",
+         "pbrMetallicRoughness": {"baseColorFactor": [0.75, 0.55, 0.32, 1.0],
+                                  "metallicFactor": 0.0, "roughnessFactor": 0.7}},
+    ],
+    "accessors": accessors,
+    "bufferViews": _views(_chunks),
+    "buffers": [
+        {"uri": "data:application/octet-stream;base64," +
+                base64.b64encode(buffer_bytes).decode("ascii"),
+         "byteLength": len(buffer_bytes)},
+    ],
+}
+
+# The figure is 1.8 m; at 4.2 m a 45-degree view sees 3.5 m, so it fills half
+# the frame. The light comes over the camera's shoulder onto the +Z faces.
+LIGHT = {"name": "PuppetSun", "type": "directional", "direction": [-0.35, -0.6, -0.72],
+         "color": [1.0, 1.0, 1.0], "intensity": 3.0, "cast_shadows": False}
+CAMERA = {"eye": [0.0, 0.95, 4.2], "target": [0.0, 0.95, 0.0], "fov": 45.0}
+POST = {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False,
+        "bloom": {"enabled": False}}
+
+cscn = {
+    "version": 1,
+    "models": [{"path": "puppet.gltf"}],
+    "lights": [LIGHT],
+    "camera": CAMERA,
+    "post": POST,
+}
+
+here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(here, "puppet.gltf"), "w") as f:
+    json.dump(gltf, f, indent=1)
+    f.write("\n")
+with open(os.path.join(here, "puppet.cscn"), "w") as f:
+    json.dump(cscn, f, indent=1)
+    f.write("\n")

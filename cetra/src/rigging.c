@@ -12,8 +12,10 @@ char* normalize_bone_name(const char* name) {
 
     const char* start = name;
 
-    // Strip "mixamorig:" prefix
+    // Strip a rig prefix: a name's semantic part is what follows the colon
     if (strncmp(start, "mixamorig:", 10) == 0) {
+        start += 10;
+    } else if (strncmp(start, "cetra_rig:", 10) == 0) {
         start += 10;
     }
 

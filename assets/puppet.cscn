@@ -1,0 +1,47 @@
+{
+ "version": 1,
+ "models": [
+  {
+   "path": "puppet.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "PuppetSun",
+   "type": "directional",
+   "direction": [
+    -0.35,
+    -0.6,
+    -0.72
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 3.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   0.95,
+   4.2
+  ],
+  "target": [
+   0.0,
+   0.95,
+   0.0
+  ],
+  "fov": 45.0
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0,
+  "auto_exposure": false,
+  "bloom": {
+   "enabled": false
+  }
+ }
+}
