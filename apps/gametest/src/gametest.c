@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -649,6 +650,109 @@ static void mouse_button_callback(Engine* engine, int button, int action, int mo
     }
 }
 
+// --audio-probe: a deterministic offline render that measures the mixed PCM, so
+// the `audio` gate can assert onset, panning, distance falloff, bus routing and
+// the file-decode path with no device and no committed audio. Headless only.
+#define AUDIO_PROBE_WINDOW 9600 // frames per measurement, 0.2s at the offline 48 kHz
+
+static void probe_measure(AudioSystem* audio, float* rms_l, float* rms_r) {
+    float buf[1024]; // up to 512 interleaved stereo frames
+    double sum_l = 0.0, sum_r = 0.0;
+    long total = 0;
+    int remaining = AUDIO_PROBE_WINDOW;
+    while (remaining > 0) {
+        size_t want = remaining < 512 ? (size_t)remaining : 512;
+        size_t got = audio_system_read_pcm(audio, buf, want);
+        if (got == 0)
+            break;
+        for (size_t i = 0; i < got; i++) {
+            sum_l += (double)buf[i * 2] * buf[i * 2];
+            sum_r += (double)buf[i * 2 + 1] * buf[i * 2 + 1];
+        }
+        total += (long)got;
+        remaining -= (int)got;
+    }
+    *rms_l = total ? sqrtf((float)(sum_l / total)) : 0.0f;
+    *rms_r = total ? sqrtf((float)(sum_r / total)) : 0.0f;
+}
+
+static int run_audio_probe(Game* game, const char* which, const char* file) {
+    AudioSystem* audio = create_audio_system(game->engine);
+    if (!audio) {
+        fprintf(stderr, "audio-probe: could not create audio system\n");
+        return 1;
+    }
+    game_set_audio_system(game, audio); // owned; freed by free_game
+
+    vec3 origin = {0, 0, 0}, fwd = {0, 0, -1}, up = {0, 1, 0};
+    audio_system_update(audio, NULL, origin, fwd, up); // fix the listener at the origin
+
+    float l = 0.0f, r = 0.0f;
+    int rc = 0;
+
+    if (!strcmp(which, "onset")) {
+        // A centred 2D tone: silent until played, then energetic.
+        Sound* t = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
+        audio_sound_set_looping(t, true);
+        probe_measure(audio, &l, &r);
+        printf("audio onset pre rms %.6f %.6f\n", l, r);
+        audio_sound_play(t);
+        probe_measure(audio, &l, &r);
+        printf("audio onset post rms %.6f %.6f\n", l, r);
+    } else if (!strcmp(which, "pan")) {
+        // Same distance either side, so only the pan differs.
+        Sound* t = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
+        audio_sound_set_looping(t, true);
+        audio_sound_play(t);
+        audio_sound_set_position(t, (vec3){10.0f, 0.0f, 0.0f});
+        probe_measure(audio, &l, &r);
+        printf("audio pan right rms %.6f %.6f\n", l, r);
+        audio_sound_set_position(t, (vec3){-10.0f, 0.0f, 0.0f});
+        probe_measure(audio, &l, &r);
+        printf("audio pan left rms %.6f %.6f\n", l, r);
+    } else if (!strcmp(which, "distance")) {
+        // Straight ahead, so panning is even; only the distance differs.
+        Sound* t = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
+        audio_sound_set_looping(t, true);
+        audio_sound_play(t);
+        audio_sound_set_position(t, (vec3){0.0f, 0.0f, -1.0f});
+        probe_measure(audio, &l, &r);
+        printf("audio distance near rms %.6f %.6f\n", l, r);
+        audio_sound_set_position(t, (vec3){0.0f, 0.0f, -20.0f});
+        probe_measure(audio, &l, &r);
+        printf("audio distance far rms %.6f %.6f\n", l, r);
+    } else if (!strcmp(which, "master")) {
+        Sound* t = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
+        audio_sound_set_looping(t, true);
+        audio_sound_play(t);
+        audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 1.0f);
+        probe_measure(audio, &l, &r);
+        printf("audio master on rms %.6f %.6f\n", l, r);
+        audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
+        probe_measure(audio, &l, &r);
+        printf("audio master off rms %.6f %.6f\n", l, r);
+    } else if (!strcmp(which, "decode")) {
+        if (!file) {
+            fprintf(stderr, "audio-probe decode: needs --audio-file <wav>\n");
+            rc = 1;
+        } else {
+            Sound* s = audio_sound_from_file(audio, file, AUDIO_BUS_SFX);
+            if (!s) {
+                fprintf(stderr, "audio-probe decode: could not load %s\n", file);
+                rc = 1;
+            } else {
+                audio_sound_play(s);
+                probe_measure(audio, &l, &r);
+                printf("audio decode result rms %.6f %.6f\n", l, r);
+            }
+        }
+    } else {
+        fprintf(stderr, "audio-probe: unknown case '%s'\n", which);
+        rc = 1;
+    }
+    return rc;
+}
+
 int main(int argc, const char* argv[]) {
     printf("=== Physics Test ===\n\n");
 
@@ -663,6 +767,8 @@ int main(int argc, const char* argv[]) {
     const char* screenshot = NULL;
     const char* pad_script = NULL;
     const char* gamepad_db = NULL;
+    const char* audio_probe = NULL;
+    const char* audio_file = NULL;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
@@ -689,6 +795,10 @@ int main(int argc, const char* argv[]) {
             gamepad_db = argv[++i];
         } else if (!strcmp(a, "--mute")) {
             audio_muted = true;
+        } else if (!strcmp(a, "--audio-probe") && i + 1 < argc) {
+            audio_probe = argv[++i];
+        } else if (!strcmp(a, "--audio-file") && i + 1 < argc) {
+            audio_file = argv[++i];
         } else if (!strcmp(a, "--print-bindings")) {
             input_print_actions(actions, ACTION_COUNT);
             return 0;
@@ -703,6 +813,21 @@ int main(int argc, const char* argv[]) {
             hdr_path = a;
             printf("Using HDR environment: %s\n\n", hdr_path);
         }
+    }
+
+    // A self-contained offline render: a headless game, the offline audio
+    // system, no window loop. It prints its measurements and exits, which is
+    // what the `audio` gate reads.
+    if (audio_probe) {
+        GameConfig probe_config = {.engine = {.title = "audio-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "audio-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_audio_probe(probe_game, audio_probe, audio_file);
+        free_game(probe_game);
+        return rc;
     }
 
     printf("Controls (keyboard / gamepad):\n");

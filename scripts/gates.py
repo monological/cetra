@@ -14755,6 +14755,134 @@ def run_gamepad_gate(workdir):
     return failures
 
 
+# "audio <case> <label> rms <l> <r>" from gametest --audio-probe.
+_AUDIO_PROBE = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) (-?[\d.]+)$", re.M)
+
+
+def _audio_probe_run(case, extra=None):
+    """{label: (rms_l, rms_r)} from one gametest --audio-probe run, or None if it
+    failed or measured nothing. The probe is a headless offline render (miniaudio's
+    noDevice mode), so its PCM is a pure function of the frames pulled -- no device,
+    deterministic, and asset-free but for the decode case's synthesized WAV."""
+    r = subprocess.run([GAMETEST, "--audio-probe", case] + (extra or []),
+                       capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    out = {label: (float(l), float(rr)) for c, label, l, rr in _AUDIO_PROBE.findall(text)
+           if c == case}
+    if r.returncode != 0 or not out:
+        return None
+    return out
+
+
+def _write_sine_wav(path, hz=440.0, seconds=0.5, rate=48000, amp=0.5):
+    """A mono 16-bit sine WAV, so the decode arm exercises the file path with no
+    committed binary."""
+    import wave, struct, math
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"".join(
+            struct.pack("<h", int(amp * 32767 * math.sin(2 * math.pi * hz * n / rate)))
+            for n in range(int(seconds * rate))))
+
+
+def run_audio_gate(workdir):
+    """The audio path above the device seam (spec 12.0), driven by miniaudio's
+    offline noDevice engine so the mixed PCM is deterministic and needs no device.
+    No sound is played to a speaker: the probe renders frames and measures them.
+
+      audio-onset    a tone is silent before it is played and energetic after -- an
+                     always-on or never-on bug fails.
+      audio-pan      a source to the right is louder in the right channel and to the
+                     left louder in the left -- a mono or centred mix fails. A ratio
+                     each way, so a swapped channel fails too.
+      audio-distance the same tone is louder near than far, and still audible far --
+                     no attenuation, or a mute past a cutoff, fails.
+      audio-master   the master bus at 1 passes energy and at 0 passes silence -- a
+                     volume that does not route fails.
+      audio-decode   a synthesized WAV loaded from a file decodes to energy -- the
+                     file path with no committed asset.
+    """
+    if not os.path.exists(GAMETEST):
+        print("  audio        SKIP  (gametest not built)")
+        return []
+    failures = []
+
+    def avg(t):
+        return (t[0] + t[1]) / 2.0
+
+    # --- audio-onset -----------------------------------------------------------
+    d = _audio_probe_run("onset")
+    if not d or "pre" not in d or "post" not in d:
+        print("  audio-onset  FAIL  run failed or measured nothing")
+        failures.append("audio-onset")
+    else:
+        pre, post = d["pre"], d["post"]
+        ok = max(pre) < 0.001 and min(post) > 0.05
+        print(f"  audio-onset  {'PASS' if ok else 'FAIL'}  silent before play (rms {max(pre):.4f}, "
+              f"want ~0), energetic after (rms {min(post):.4f}, want > 0.05)")
+        if not ok:
+            failures.append("audio-onset")
+
+    # --- audio-pan -------------------------------------------------------------
+    d = _audio_probe_run("pan")
+    if not d or "right" not in d or "left" not in d:
+        print("  audio-pan    FAIL  run failed or measured nothing")
+        failures.append("audio-pan")
+    else:
+        rl, rr = d["right"]
+        ll, lr = d["left"]
+        ok = rr > 3 * rl and ll > 3 * lr and rr > 0.005 and ll > 0.005
+        print(f"  audio-pan    {'PASS' if ok else 'FAIL'}  source right -> R/L {rr:.4f}/{rl:.4f}, "
+              f"source left -> L/R {ll:.4f}/{lr:.4f} (want the nearer channel dominant each way)")
+        if not ok:
+            failures.append("audio-pan")
+
+    # --- audio-distance --------------------------------------------------------
+    d = _audio_probe_run("distance")
+    if not d or "near" not in d or "far" not in d:
+        print("  audio-distance FAIL  run failed or measured nothing")
+        failures.append("audio-distance")
+    else:
+        near, far = avg(d["near"]), avg(d["far"])
+        ok = near > 3 * far and far > 0.0
+        print(f"  audio-distance {'PASS' if ok else 'FAIL'}  near rms {near:.4f} vs far {far:.4f} "
+              f"(want near > 3x far, far still audible)")
+        if not ok:
+            failures.append("audio-distance")
+
+    # --- audio-master ----------------------------------------------------------
+    d = _audio_probe_run("master")
+    if not d or "on" not in d or "off" not in d:
+        print("  audio-master FAIL  run failed or measured nothing")
+        failures.append("audio-master")
+    else:
+        on, off = avg(d["on"]), avg(d["off"])
+        ok = on > 0.05 and off < 0.001
+        print(f"  audio-master {'PASS' if ok else 'FAIL'}  master 1 rms {on:.4f} (want > 0.05), "
+              f"master 0 rms {off:.4f} (want ~0)")
+        if not ok:
+            failures.append("audio-master")
+
+    # --- audio-decode ----------------------------------------------------------
+    wav = os.path.join(workdir, "audio_probe.wav")
+    _write_sine_wav(wav)
+    d = _audio_probe_run("decode", ["--audio-file", wav])
+    if not d or "result" not in d:
+        print("  audio-decode FAIL  run failed or did not load the WAV")
+        failures.append("audio-decode")
+    else:
+        energy = avg(d["result"])
+        ok = energy > 0.05
+        print(f"  audio-decode {'PASS' if ok else 'FAIL'}  decoded WAV rms {energy:.4f} "
+              f"(want > 0.05)")
+        if not ok:
+            failures.append("audio-decode")
+
+    return failures
+
+
 LOD_FIXTURE = "lod_fixture.gltf"
 # Eye positions marching away from the same target. Not a golden's framing --
 # the arm reads triangle counts, and what matters is that the sweep crosses
@@ -21793,6 +21921,7 @@ GATE_GROUPS = [
      run_forest_gate),
     ("gamepad", "gamepad input (a scripted pad through the action layer, spec 11.109):",
      run_gamepad_gate),
+    ("audio", "audio (offline PCM through the spatializer, spec 12.0):", run_audio_gate),
     ("import", "import:", _run_import_gates),
     ("fixture-gen", "fixture generators (every gen_*.py reproduces its asset):",
      run_fixture_gen_gate),
