@@ -3,6 +3,7 @@
 #include "physics.h"
 #include "character.h"
 #include "audio.h"
+#include "animator_component.h"
 #include "../camera.h"
 #include "../cook.h"
 
@@ -274,6 +275,13 @@ static void game_pre_render(Engine* engine, Scene* scene) {
         // draws there cannot see them disagree.
         game->on_pre_render(game, game->accumulator / game->fixed_timestep);
     }
+    // After the app has decided what plays, and once per rendered frame rather
+    // than per fixed step: the tick begins with the prev-pose latch, which is
+    // the skinned analogue of scene_latch_prev_transforms and carries the same
+    // once-a-frame rule. The delta is the sim clock's -- a whole number of
+    // fixed steps, 0 on a frame that took none and 0 while paused.
+    if (game->entity_manager)
+        update_all_animators(game->entity_manager, (float)game->sim_clock.delta);
     // After the app has posed the camera (which the engine reads next), point
     // the listener along it and push the frame's positions into the sources.
     if (game->audio) {

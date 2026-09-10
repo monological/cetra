@@ -29,6 +29,9 @@
 #include "cetra/game/physics.h"
 #include "cetra/game/character.h"
 #include "cetra/game/audio.h"
+#include "cetra/game/animator_component.h"
+#include "cetra/animator.h"
+#include "cetra/import.h"
 #include "cetra/ibl.h"
 
 static MouseDragController* drag_controller = NULL;
@@ -38,6 +41,25 @@ static Constraint* door_hinge = NULL;
 static ShaderProgram* pbr_shader = NULL;
 static int box_count = 0;
 static const char* hdr_path = NULL;
+
+// Animation (spec 12.1): the player is the procedural puppet on an ANIMATOR
+// component -- idle, walk and run blended from the controller's post-solve
+// speed, a jump one-shot, a wave on the masked override layer, footsteps from
+// the clips' events. --no-puppet keeps the red box; --twin <clip> stands a
+// second rig beside the player playing its own clip, which is the per-node
+// pose seen from a game.
+#define PLAYER_SPEED 10.0f
+static bool no_puppet = false;
+static const char* puppet_path = "assets/puppet.gltf";
+static const char* twin_clip = NULL;
+static SceneNode* player_rig = NULL; // the puppet under the entity's node: drop + yaw
+static Animator* player_animator = NULL;
+static AnimatorEntry locomotion[3];
+static Animation* clip_jump = NULL;
+static Animation* clip_wave = NULL;
+static float wave_mask[MAX_BONES];
+static float player_yaw = 0.0f;
+static Sound* step_sound = NULL;
 
 // --trace-player: the player's pose and the input it acted on, printed every
 // trace_every fixed steps, which is what the gate group reads.
@@ -68,6 +90,7 @@ static const InputAction actions[] = {
     {"pause", {INPUT_KEY(P, 1), INPUT_PAD(START, 1)}},
     {"raycast", {INPUT_KEY(R, 1), INPUT_PAD(Y, 1)}},
     {"ground", {INPUT_KEY(G, 1), INPUT_PAD(B, 1)}},
+    {"wave", {INPUT_KEY(E, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
 };
 #define ACTION_COUNT (sizeof(actions) / sizeof(actions[0]))
 
@@ -298,6 +321,63 @@ static void on_collision(const CollisionEvent* event, void* user_data) {
     }
 }
 
+// The footstep events the walk and run cycles carry: one per plant, at the
+// two extremes of the cos-phased swing.
+static void add_footsteps(Animation* clip) {
+    if (!clip)
+        return;
+    animation_add_event(clip, 0.0f, "step_l");
+    animation_add_event(clip, clip->duration * 0.5f, "step_r");
+}
+
+static void on_anim_event(Animator* animator, const char* name, void* user) {
+    (void)animator;
+    (void)user;
+    if (step_sound && (!strcmp(name, "step_l") || !strcmp(name, "step_r")))
+        audio_sound_play(step_sound);
+}
+
+// Put `rig` under a holder that becomes the entity's node, and return the node
+// the app may pose.
+//
+// TWO levels, and both are load-bearing. sync_entity_transforms overwrites the
+// entity node's local every step, so the drop from capsule centre to feet and
+// the facing yaw cannot live there -- they go on the inner node. And the
+// importer's scene root IS the model's own node, so a rig found by name can be
+// the root itself: re-parenting that under a child of itself is a cycle, and
+// every recursive walk in the engine would run until the stack ran out. Its
+// children are the rig in that case, so they move instead.
+static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float drop) {
+    SceneNode* holder = create_node();
+    node_set_name(holder, entity->name);
+    SceneNode* inner = create_node();
+    node_set_name(inner, "rig");
+    node_add_child(holder, inner);
+    if (rig == scene->root_node) {
+        while (rig->children_count > 0)
+            node_add_child(inner, rig->children[0]);
+    } else {
+        node_add_child(inner, rig);
+    }
+    node_add_child(scene->root_node, holder);
+    glm_translate_make(inner->original_transform, (vec3){0.0f, drop, 0.0f});
+    entity->node = holder;
+    return inner;
+}
+
+// A second node tree over the puppet's mesh, shared by reference: two nodes on
+// one skinned mesh never batch, and each carries its own pose.
+static SceneNode* clone_rig(Scene* scene, SceneNode* puppet_root) {
+    SceneNode* mesh_node = node_find(puppet_root, "puppet_mesh");
+    if (!mesh_node || mesh_node->mesh_count == 0)
+        return NULL;
+    SceneNode* rig = create_node();
+    node_set_name(rig, "twin_rig");
+    node_add_mesh(rig, mesh_ref(mesh_node->meshes[0]));
+    (void)scene;
+    return rig;
+}
+
 // Game init callback
 static void on_init(Game* game) {
     printf("Game initialized with physics!\n");
@@ -308,10 +388,39 @@ static void on_init(Game* game) {
     pbr_shader = engine_get_program(engine, CETRA_PROGRAM_PBR);
     ShaderProgram* xyz = engine_get_program(engine, CETRA_PROGRAM_XYZ);
 
-    // Create scene
-    Scene* scene = create_scene();
+    // The scene IS the puppet's when there is one: a material belongs to the
+    // scene that registered it, so a rig imported into a second scene cannot
+    // be re-parented into this one. Without a puppet, or when it fails to
+    // load, the scene is built from nothing as it always was.
+    Scene* scene = NULL;
+    SceneNode* puppet_root = NULL;
+    if (!no_puppet) {
+        scene = create_scene_from_model_path(puppet_path, NULL, engine->async_loader);
+        if (scene) {
+            puppet_root = node_find(scene->root_node, "puppet");
+            if (!puppet_root || scene->skeleton_count == 0 || scene->animation_count == 0) {
+                fprintf(stderr, "gametest: '%s' has no rig with clips; keeping the box\n",
+                        puppet_path);
+                free_scene(scene);
+                scene = NULL;
+                puppet_root = NULL;
+            }
+        } else {
+            fprintf(stderr, "gametest: could not load '%s'; keeping the box\n", puppet_path);
+        }
+    }
+    if (!scene)
+        scene = create_scene();
     SceneNode* root = scene->root_node;
     game_set_scene(game, scene);
+
+    if (puppet_root) {
+        ShaderProgram* pbr_skinned = create_pbr_skinned_program();
+        if (pbr_skinned) {
+            engine_add_program(engine, pbr_skinned);
+            node_set_programs(puppet_root, pbr_shader, pbr_skinned);
+        }
+    }
 
     if (xyz) {
         scene_set_xyz_program(scene, xyz);
@@ -365,6 +474,9 @@ static void on_init(Game* game) {
             audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
         jump_sound = audio_sound_from_tone(audio, 660.0f, AUDIO_BUS_SFX);
         spawn_sound = audio_sound_from_tone(audio, 180.0f, AUDIO_BUS_SFX);
+        step_sound = audio_sound_from_tone(audio, 110.0f, AUDIO_BUS_SFX);
+        if (step_sound)
+            audio_sound_set_volume(step_sound, 0.4f);
     }
 
     // Create floor entity (static physics body)
@@ -405,12 +517,39 @@ static void on_init(Game* game) {
     player_entity = create_entity(em, "player");
     glm_vec3_copy((vec3){0, 2.0f, 0}, player_entity->position);
 
-    // Player visual (capsule approximated as box for now)
-    vec3 player_size = {0.5f, 1.0f, 0.5f};
-    vec3 player_color = {0.8f, 0.2f, 0.2f};
-    SceneNode* player_node = create_box_node(scene, player_size, player_color, false);
-    node_set_name(player_node, "player");
-    player_entity->node = player_node;
+    if (puppet_root) {
+        // The puppet, its feet a capsule's half-height plus radius below the
+        // entity, on the locomotion space; the box's colour and size are the
+        // capsule's, which stays the physics body either way.
+        player_rig = attach_rig(scene, player_entity, puppet_root, -1.0f);
+        Skeleton* skeleton = scene->skeletons[0];
+        Animation* idle = scene_find_animation(scene, "idle");
+        Animation* walk = scene_find_animation(scene, "walk");
+        Animation* run = scene_find_animation(scene, "run");
+        clip_jump = scene_find_animation(scene, "jump");
+        clip_wave = scene_find_animation(scene, "wave");
+        add_footsteps(walk);
+        add_footsteps(run);
+        animator_mask_subtree(skeleton, "cetra_rig:RightArm", wave_mask);
+        locomotion[0] = (AnimatorEntry){idle, 0.0f};
+        locomotion[1] = (AnimatorEntry){walk, 0.5f};
+        locomotion[2] = (AnimatorEntry){run, 1.0f};
+        player_animator = create_animator(skeleton);
+        if (player_animator && idle && walk && run) {
+            animator_play_space(player_animator, "locomotion", locomotion, 3, 0.0f, true);
+            animator_set_event_callback(player_animator, on_anim_event, game);
+            entity_add_animator(player_entity, player_animator);
+        }
+        printf("Player is the puppet: %zu bones, %zu clips\n", skeleton->bone_count,
+               scene->animation_count);
+    } else {
+        // Player visual (capsule approximated as box for now)
+        vec3 player_size = {0.5f, 1.0f, 0.5f};
+        vec3 player_color = {0.8f, 0.2f, 0.2f};
+        SceneNode* player_node = create_box_node(scene, player_size, player_color, false);
+        node_set_name(player_node, "player");
+        player_entity->node = player_node;
+    }
 
     // Player character controller
     CharacterControllerConfig player_config = character_controller_default_config();
@@ -425,6 +564,26 @@ static void on_init(Game* game) {
         character_controller_set_contact_callback(cc, on_player_contact, game);
     }
     printf("Player created with CharacterController\n");
+
+    // A second rig beside the player on its own clip: two poses in one frame.
+    if (puppet_root && twin_clip) {
+        Animation* clip = scene_find_animation(scene, twin_clip);
+        SceneNode* rig = clip ? clone_rig(scene, puppet_root) : NULL;
+        if (!clip) {
+            fprintf(stderr, "gametest: --twin names clip '%s', which the puppet lacks\n",
+                    twin_clip);
+        } else if (rig) {
+            Entity* twin = create_entity(em, "twin");
+            glm_vec3_copy((vec3){-6.0f, 0.0f, 0.0f}, twin->position);
+            attach_rig(scene, twin, rig, 0.0f);
+            Animator* a = create_animator(scene->skeletons[0]);
+            if (a) {
+                animator_play(a, clip, 0.0f, true);
+                entity_add_animator(twin, a);
+            }
+            printf("Twin rig playing '%s'\n", clip->name);
+        }
+    }
 
     // Create a door with hinge constraint
     create_door(game, (vec3){5.0f, 0.0f, 0.0f});
@@ -460,7 +619,8 @@ static void on_init(Game* game) {
     // runs differ by pixels while the sim beneath them did not.
     engine->show_gui = !engine->headless;
     engine->show_fps = !engine->headless;
-    engine->show_xyz = true;
+    // A rig brings twenty joint nodes, each of which would wear a gizmo.
+    engine->show_xyz = puppet_root == NULL;
 
     // Spawn a few initial boxes
     for (int i = 0; i < 5; i++) {
@@ -516,10 +676,33 @@ static void on_update(Game* game, double dt) {
     vec3 vel;
     character_controller_get_velocity(cc, vel);
 
+    // The locomotion knob and the facing come from this velocity -- Jolt's
+    // POST-SOLVE one, before the input below overwrites it -- so walking into
+    // a wall stops the walk rather than running on the spot.
+    float ground_speed = hypotf(vel[0], vel[2]);
+    if (player_animator) {
+        float knob = ground_speed / PLAYER_SPEED;
+        player_animator->param = knob > 1.0f ? 1.0f : knob;
+    }
+    if (player_rig && ground_speed > 0.1f) {
+        // The puppet faces +Z at yaw 0. Smoothed on sim time, so it is the
+        // same turn headless and windowed.
+        float target = atan2f(vel[0], vel[2]);
+        float delta = target - player_yaw;
+        while (delta > (float)M_PI)
+            delta -= 2.0f * (float)M_PI;
+        while (delta < -(float)M_PI)
+            delta += 2.0f * (float)M_PI;
+        float k = (float)dt * 12.0f;
+        player_yaw += delta * (k > 1.0f ? 1.0f : k);
+        glm_mat4_identity(player_rig->original_transform);
+        glm_translate(player_rig->original_transform, (vec3){0.0f, -1.0f, 0.0f});
+        glm_rotate_y(player_rig->original_transform, player_yaw, player_rig->original_transform);
+    }
+
     // Apply horizontal movement
-    float speed = 10.0f;
-    vel[0] = input_dir[0] * speed;
-    vel[2] = input_dir[2] * speed;
+    vel[0] = input_dir[0] * PLAYER_SPEED;
+    vel[2] = input_dir[2] * PLAYER_SPEED;
 
     // Apply gravity
     float gravity = 20.0f;
@@ -533,20 +716,39 @@ static void on_update(Game* game, double dt) {
         printf("Jump!\n");
         if (jump_sound)
             audio_sound_play(jump_sound);
+        // The tuck is a one-shot: the airtime is one second at this
+        // velocity under this gravity, and the clip returns to the
+        // locomotion space by itself.
+        if (player_animator && clip_jump)
+            animator_play_once(player_animator, clip_jump, 0.25f);
     }
+    if (player_animator && clip_wave && input_action_pressed(&game->input, "wave"))
+        animator_play_layer(player_animator, clip_wave, wave_mask, 0.1f, 0.1f, false);
 
     // Set velocity (CharacterController will handle collision response)
     character_controller_set_velocity(cc, vel);
 
     // The position is the one BEFORE this step; move_x and move_y are the
-    // action values the step acted on.
+    // action values the step acted on. With a rig the line continues after
+    // `jump`: the knob, the locomotion space's three weights (zeros while a
+    // one-shot has the base), the crossfade weight, the override weight and
+    // the base source's name -- all as of the last rendered frame's tick.
     if (trace_player && trace_step % trace_every == 0) {
         printf("player step %d t=%5.2f pos %8.3f %8.3f %8.3f  vel %6.2f %6.2f %6.2f  "
-               "grounded %d  move %5.2f %5.2f jump %d\n",
+               "grounded %d  move %5.2f %5.2f jump %d",
                trace_step, game->time, player_entity->position[0], player_entity->position[1],
                player_entity->position[2], vel[0], vel[1], vel[2], grounded ? 1 : 0,
                input_action_value(&game->input, "move_x"),
                input_action_value(&game->input, "move_y"), jump ? 1 : 0);
+        if (player_animator) {
+            const AnimatorSpace* base = &player_animator->base;
+            bool loco = base->count == 3;
+            printf(" anim %.3f %.3f %.3f %.3f %.3f %.3f %s", player_animator->param,
+                   loco ? base->weights[0] : 0.0f, loco ? base->weights[1] : 0.0f,
+                   loco ? base->weights[2] : 0.0f, player_animator->fade_weight,
+                   player_animator->layer.weight, animator_source_name(player_animator));
+        }
+        printf("\n");
     }
     trace_step++;
 
@@ -753,6 +955,204 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
     return rc;
 }
 
+// --anim-probe: the animator layer as a game sees it -- ANIMATOR components on
+// entities, ticked by the loop's own update_all_animators at the fixed 1/60 --
+// measured on the CPU and printed as `anim <case> <label> <key> <numbers>`,
+// which is what the `anim` gate group reads. No window, no pixels: the
+// puppet's clips are authored in closed form, so every number here has an
+// expected value the gate states.
+#define PROBE_DT (1.0f / 60.0f)
+
+// Largest element-wise difference between two states' skinning matrices, over
+// one bone or (bone < 0) all of them.
+static float pose_maxdiff(const AnimationState* a, const AnimationState* b, int bone) {
+    float worst = 0.0f;
+    size_t lo = bone < 0 ? 0 : (size_t)bone;
+    size_t hi = bone < 0 ? a->active_bone_count : (size_t)bone + 1;
+    for (size_t i = lo; i < hi; i++) {
+        const float* ma = (const float*)a->bone_matrices[i];
+        const float* mb = (const float*)b->bone_matrices[i];
+        for (int k = 0; k < 16; k++) {
+            float d = fabsf(ma[k] - mb[k]);
+            if (d > worst)
+                worst = d;
+        }
+    }
+    return worst;
+}
+
+static Animator* probe_rig(EntityManager* em, Skeleton* skeleton, const char* name) {
+    Entity* e = create_entity(em, name);
+    Animator* a = create_animator(skeleton);
+    if (a)
+        entity_add_animator(e, a);
+    return a;
+}
+
+static void probe_tick(EntityManager* em, int ticks) {
+    for (int i = 0; i < ticks; i++)
+        update_all_animators(em, PROBE_DT);
+}
+
+// The events case's recorder: names, and the tick each fired on.
+static int probe_event_count = 0;
+static int probe_tick_index = 0;
+static void probe_on_event(Animator* animator, const char* name, void* user) {
+    (void)animator;
+    printf("anim events %s fired %s %d\n", (const char*)user, name, probe_tick_index);
+    probe_event_count++;
+}
+
+static int run_anim_probe(Game* game, const char* which) {
+    Scene* scene = create_scene_from_model_path(puppet_path, NULL, game->engine->async_loader);
+    if (!scene || scene->skeleton_count == 0) {
+        fprintf(stderr, "anim-probe: could not load a rig from '%s'\n", puppet_path);
+        if (scene)
+            free_scene(scene);
+        return 1;
+    }
+    game_set_scene(game, scene);
+    EntityManager* em = create_entity_manager(game);
+    game_set_entity_manager(game, em);
+    Skeleton* skel = scene->skeletons[0];
+    Animation* idle = scene_find_animation(scene, "idle");
+    Animation* walk = scene_find_animation(scene, "walk");
+    Animation* run = scene_find_animation(scene, "run");
+    Animation* wave = scene_find_animation(scene, "wave");
+    if (!idle || !walk || !run || !wave) {
+        fprintf(stderr, "anim-probe: the rig lacks one of idle/walk/run/wave\n");
+        return 1;
+    }
+    AnimatorEntry loco[3] = {{idle, 0.0f}, {walk, 0.5f}, {run, 1.0f}};
+    int rc = 0;
+
+    if (!strcmp(which, "locomotion")) {
+        // The three weights at seven knob positions, two of them past the ends.
+        Animator* a = probe_rig(em, skel, "a");
+        animator_play_space(a, "locomotion", loco, 3, 0.0f, true);
+        const float knobs[] = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, -0.5f};
+        const char* labels[] = {"p000", "p025", "p050", "p075", "p100", "p150", "pm050"};
+        for (int i = 0; i < 7; i++) {
+            a->param = knobs[i];
+            probe_tick(em, 1);
+            printf("anim locomotion %s weights %.6f %.6f %.6f\n", labels[i], a->base.weights[0],
+                   a->base.weights[1], a->base.weights[2]);
+        }
+    } else if (!strcmp(which, "crossfade")) {
+        // A fades idle -> walk over 0.5 s; B plays walk from the switch tick
+        // with no fade. After the fade the two must be the same bits.
+        Animator* a = probe_rig(em, skel, "a");
+        animator_play(a, idle, 0.0f, true);
+        probe_tick(em, 10);
+        animator_play(a, walk, 0.5f, true);
+        Animator* b = probe_rig(em, skel, "b");
+        animator_play(b, walk, 0.0f, true);
+        printf("anim crossfade t0 fade %.6f\n", a->fade_weight);
+        probe_tick(em, 15);
+        printf("anim crossfade thalf fade %.6f\n", a->fade_weight);
+        probe_tick(em, 15);
+        printf("anim crossfade tF fade %.6f\n", a->fade_weight);
+        probe_tick(em, 1);
+        printf("anim crossfade tpost fade %.6f\n", a->fade_weight);
+        printf("anim crossfade tpost settled %d\n", a->fading ? 0 : 1);
+        printf("anim crossfade pose maxdiff %.6f\n", pose_maxdiff(a->state, b->state, -1));
+    } else if (!strcmp(which, "layer")) {
+        // A waves over idle on the right arm's subtree; B is idle alone.
+        Animator* a = probe_rig(em, skel, "a");
+        Animator* b = probe_rig(em, skel, "b");
+        animator_play(a, idle, 0.0f, true);
+        animator_play(b, idle, 0.0f, true);
+        float mask[MAX_BONES];
+        animator_mask_subtree(skel, "cetra_rig:RightArm", mask);
+        animator_play_layer(a, wave, mask, 0.1f, 0.1f, false);
+        probe_tick(em, 15);
+        printf("anim layer w15 weight %.6f\n", a->layer.weight);
+        printf("anim layer w15 finished %d\n", animator_layer_finished(a) ? 1 : 0);
+        const char* outside[] = {"cetra_rig:Hips", "cetra_rig:Spine2", "cetra_rig:LeftArm"};
+        float out_max = 0.0f;
+        for (int i = 0; i < 3; i++) {
+            float d = pose_maxdiff(a->state, b->state, get_bone_index_by_name(skel, outside[i]));
+            out_max = d > out_max ? d : out_max;
+        }
+        printf("anim layer masked_out maxdiff %.6f\n", out_max);
+        printf(
+            "anim layer masked_in maxdiff %.6f\n",
+            pose_maxdiff(a->state, b->state, get_bone_index_by_name(skel, "cetra_rig:RightArm")));
+        probe_tick(em, 78);
+        printf("anim layer after weight %.6f\n", a->layer.weight);
+        printf("anim layer after finished %d\n", animator_layer_finished(a) ? 1 : 0);
+        printf("anim layer after maxdiff %.6f\n", pose_maxdiff(a->state, b->state, -1));
+    } else if (!strcmp(which, "two-rigs")) {
+        // Three components ticked together: A idle, B run, C run. B and C
+        // must agree to the bit, and A must differ from them.
+        Animator* a = probe_rig(em, skel, "a");
+        Animator* b = probe_rig(em, skel, "b");
+        Animator* c = probe_rig(em, skel, "c");
+        animator_play(a, idle, 0.0f, true);
+        animator_play(b, run, 0.0f, true);
+        animator_play(c, run, 0.0f, true);
+        probe_tick(em, 30);
+        printf("anim two-rigs ab maxdiff %.6f\n", pose_maxdiff(a->state, b->state, -1));
+        printf("anim two-rigs bc maxdiff %.6f\n", pose_maxdiff(b->state, c->state, -1));
+    } else if (!strcmp(which, "phase")) {
+        // Walk and run at the knob's midpoint share one phase, advancing at
+        // the weighted mean of their cycle frequencies: 0.5 * 1 Hz + 0.5 *
+        // 2 Hz, so 20 ticks is half a cycle of each.
+        Animator* a = probe_rig(em, skel, "a");
+        AnimatorEntry pair[2] = {{walk, 0.0f}, {run, 1.0f}};
+        animator_play_space(a, "pair", pair, 2, 0.0f, true);
+        a->param = 0.5f;
+        probe_tick(em, 20);
+        const Animation* ref = a->base.entries[a->base.ref].clip;
+        float phase = a->base.time / ref->duration;
+        printf("anim phase walk frac %.6f\n", phase);
+        printf("anim phase run frac %.6f\n", phase);
+        float hz = 0.5f * (walk->ticks_per_second / walk->duration) +
+                   0.5f * (run->ticks_per_second / run->duration);
+        printf("anim phase expected frac %.6f\n", 20.0f * PROBE_DT * hz);
+    } else if (!strcmp(which, "events")) {
+        // Footsteps over 110 ticks (1.83 s): a walk plants four, a run
+        // eight, the midpoint mix six from the walk alone (1.5 cycles per
+        // second and only the heavier entry fires), and idle none.
+        add_footsteps(walk);
+        add_footsteps(run);
+        Animator* a = probe_rig(em, skel, "a");
+        const float knobs[] = {0.5f, 0.75f, 1.0f, 0.0f};
+        const char* labels[] = {"walk", "mixed", "run", "idle"};
+        for (int i = 0; i < 4; i++) {
+            AnimatorEntry pair[2] = {{walk, 0.5f}, {run, 1.0f}};
+            if (i == 3)
+                animator_play(a, idle, 0.0f, true);
+            else
+                animator_play_space(a, "pair", pair, 2, 0.0f, true);
+            a->param = knobs[i];
+            animator_set_event_callback(a, probe_on_event, (void*)labels[i]);
+            probe_event_count = 0;
+            for (probe_tick_index = 0; probe_tick_index < 110; probe_tick_index++)
+                update_all_animators(em, PROBE_DT);
+            printf("anim events %s count %d\n", labels[i], probe_event_count);
+        }
+    } else if (!strcmp(which, "import")) {
+        // The committed walk clip binds onto the puppet by exact name.
+        int n = load_animations_from_file(scene, skel, "assets/strut_walk.fbx", false, NULL);
+        Animation* clip = n > 0 ? scene_find_animation(scene, "strut_walk") : NULL;
+        if (!clip) {
+            fprintf(stderr, "anim-probe: assets/strut_walk.fbx did not load\n");
+            return 1;
+        }
+        int matched = 0;
+        for (size_t i = 0; i < clip->channel_count; i++)
+            matched += clip->channels[i].bone_index >= 0 ? 1 : 0;
+        printf("anim import matched %d\n", matched);
+        printf("anim import channels %zu\n", clip->channel_count);
+        printf("anim import seconds %.3f\n", clip->duration / clip->ticks_per_second);
+    } else {
+        fprintf(stderr, "anim-probe: unknown case '%s'\n", which);
+        rc = 1;
+    }
+    return rc;
+}
+
 int main(int argc, const char* argv[]) {
     printf("=== Physics Test ===\n\n");
 
@@ -769,6 +1169,7 @@ int main(int argc, const char* argv[]) {
     const char* gamepad_db = NULL;
     const char* audio_probe = NULL;
     const char* audio_file = NULL;
+    const char* anim_probe = NULL;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
@@ -799,6 +1200,14 @@ int main(int argc, const char* argv[]) {
             audio_probe = argv[++i];
         } else if (!strcmp(a, "--audio-file") && i + 1 < argc) {
             audio_file = argv[++i];
+        } else if (!strcmp(a, "--no-puppet")) {
+            no_puppet = true;
+        } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
+            puppet_path = argv[++i];
+        } else if (!strcmp(a, "--twin") && i + 1 < argc) {
+            twin_clip = argv[++i];
+        } else if (!strcmp(a, "--anim-probe") && i + 1 < argc) {
+            anim_probe = argv[++i];
         } else if (!strcmp(a, "--print-bindings")) {
             input_print_actions(actions, ACTION_COUNT);
             return 0;
@@ -830,16 +1239,32 @@ int main(int argc, const char* argv[]) {
         return rc;
     }
 
+    // The same shape for the animator: a headless game, the rig loaded, the
+    // components ticked by the loop's own function, no window.
+    if (anim_probe) {
+        GameConfig probe_config = {.engine = {.title = "anim-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "anim-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_anim_probe(probe_game, anim_probe);
+        free_game(probe_game);
+        return rc;
+    }
+
     printf("Controls (keyboard / gamepad):\n");
-    printf("  WASD / left stick, dpad - Move player cube\n");
+    printf("  WASD / left stick, dpad - Move the player (idle -> walk -> run as it speeds up)\n");
     printf("  Space / A - Jump\n");
+    printf("  E / LB - Wave (the right arm, over whatever the legs are doing)\n");
     printf("  F / X - Spawn falling box\n");
     printf("  R / Y - Raycast downward from player\n");
     printf("  G / B - Print ground state\n");
     printf("  P / Start - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
     printf("  Escape - Quit\n");
-    printf("Audio: a beep on jump and spawn, a looping tone at the door (--mute to silence)\n");
+    printf("Audio: a beep on jump and spawn, footsteps in time with the stride, a looping\n");
+    printf("       tone at the door (--mute to silence)\n");
     printf("\nWalk into the door (right side) to push it open!\n\n");
 
     srand(42); // Deterministic random for testing
