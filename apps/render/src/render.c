@@ -381,6 +381,17 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "                         clip drives it, its bind vs animated position, the\n");
     fprintf(stderr, "                         drift between them, and its matrix scale\n");
+    fprintf(stderr, "      --anim-clip <name> Play this clip (default: the first -a clip)\n");
+    fprintf(stderr, "      --anim-space <a>,<b> A blend space, a at 0 and b at 1, and\n");
+    fprintf(stderr, "      --anim-blend <t>   its knob\n");
+    fprintf(stderr, "      --anim-switch-to <name> Crossfade to this clip on the frame\n");
+    fprintf(stderr, "      --anim-switch-at <N>    given here (the frame counts from 0)\n");
+    fprintf(stderr, "      --anim-fade <sec>  Every crossfade's length (default 0.25)\n");
+    fprintf(stderr, "      --anim-layer <name> Play this clip on the override layer, over\n");
+    fprintf(stderr, "      --anim-mask <bone>  this bone's subtree; --anim-layer-once plays\n");
+    fprintf(stderr, "                         it once and lets it release itself\n");
+    fprintf(stderr, "      --anim-probe       Print the weights and every bone's pose per\n");
+    fprintf(stderr, "                         frame (the anim gate group reads it)\n");
     fprintf(stderr, "  -f, --frames <int>     Exit after N frames\n");
     fprintf(stderr, "  -S, --screenshot <path> Save final frame as PPM on exit\n");
     fprintf(stderr, "      --screenshot-every <N> Also save numbered frames every N frames\n");
@@ -543,6 +554,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->area_light_color[0] = 1.0f;
     args->area_light_color[1] = 1.0f;
     args->area_light_color[2] = 1.0f;
+    args->anim_blend = -1.0f; // -1 = no blend space
+    args->anim_switch_at = -1;
+    args->anim_fade = 0.25f;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -614,6 +628,71 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->check_stretch = 1;
         } else if (strcmp(argv[i], "--anim-debug") == 0) {
             args->anim_debug = 1;
+        } else if (strcmp(argv[i], "--anim-clip") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->anim_clip = argv[i];
+        } else if (strcmp(argv[i], "--anim-space") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            // Two clip names with a comma between; the comma becomes the
+            // terminator of the first in a copy the args own.
+            const char* comma = strchr(argv[i], ',');
+            if (!comma || comma == argv[i] || comma[1] == '\0') {
+                fprintf(stderr, "Error: --anim-space wants <clip>,<clip>, not '%s'\n", argv[i]);
+                return -1;
+            }
+            const char* first = strndup(argv[i], (size_t)(comma - argv[i]));
+            if (!first) {
+                fprintf(stderr, "Error: out of memory\n");
+                return -1;
+            }
+            args->anim_space[0] = first;
+            args->anim_space[1] = comma + 1;
+        } else if (strcmp(argv[i], "--anim-blend") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->anim_blend = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--anim-switch-to") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->anim_switch_to = argv[i];
+        } else if (strcmp(argv[i], "--anim-switch-at") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->anim_switch_at = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--anim-fade") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->anim_fade = (float)atof(argv[i]);
+        } else if (strcmp(argv[i], "--anim-layer") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->anim_layer = argv[i];
+        } else if (strcmp(argv[i], "--anim-mask") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->anim_mask = argv[i];
+        } else if (strcmp(argv[i], "--anim-layer-once") == 0) {
+            args->anim_layer_once = 1;
+        } else if (strcmp(argv[i], "--anim-probe") == 0) {
+            args->anim_probe = 1;
         } else if (strcmp(argv[i], "-F") == 0 || strcmp(argv[i], "--fov") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1917,6 +1996,89 @@ static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
  */
 static Animator* animator = NULL;
 
+// What plays at startup, from the --anim-* flags: a blend space, a named clip,
+// or the default (the first -a clip), plus the override layer. A clip name
+// nothing in the scene has is a refusal, not a silent fallback to the default.
+static bool anim_setup_from_args(const RenderArgs* args, Scene* scene, size_t play_idx) {
+    if (args->anim_space[0]) {
+        AnimatorEntry entries[2];
+        for (int i = 0; i < 2; i++) {
+            entries[i].clip = scene_find_animation(scene, args->anim_space[i]);
+            entries[i].position = (float)i;
+            if (!entries[i].clip) {
+                fprintf(stderr, "Error: --anim-space names clip '%s', which the scene lacks\n",
+                        args->anim_space[i]);
+                return false;
+            }
+        }
+        animator_play_space(animator, "space", entries, 2, 0.0f, true);
+        animator->param = args->anim_blend < 0.0f ? 0.0f : args->anim_blend;
+        printf("Playing blend space: %s at 0, %s at 1, knob %.3f\n", entries[0].clip->name,
+               entries[1].clip->name, animator->param);
+    } else {
+        Animation* clip = scene->animations[play_idx];
+        if (args->anim_clip) {
+            clip = scene_find_animation(scene, args->anim_clip);
+            if (!clip) {
+                fprintf(stderr, "Error: --anim-clip names '%s', which the scene lacks\n",
+                        args->anim_clip);
+                return false;
+            }
+        }
+        // A cut, looping: the single-clip player's own path.
+        animator_play(animator, clip, 0.0f, true);
+        printf("Playing animation: %s (of %zu)\n", clip->name, scene->animation_count);
+    }
+
+    if (args->anim_layer) {
+        if (!args->anim_mask) {
+            fprintf(stderr, "Error: --anim-layer needs --anim-mask <bone>\n");
+            return false;
+        }
+        Animation* clip = scene_find_animation(scene, args->anim_layer);
+        if (!clip) {
+            fprintf(stderr, "Error: --anim-layer names '%s', which the scene lacks\n",
+                    args->anim_layer);
+            return false;
+        }
+        float mask[MAX_BONES];
+        int masked = animator_mask_subtree(scene->skeletons[0], args->anim_mask, mask);
+        if (masked == 0)
+            return false; // the mask builder has said which bone is missing
+        animator_play_layer(animator, clip, mask, args->anim_fade, args->anim_fade,
+                            !args->anim_layer_once);
+        printf("Override layer: %s over %d bone(s) under '%s'%s\n", clip->name, masked,
+               args->anim_mask, args->anim_layer_once ? ", once" : "");
+    }
+    return true;
+}
+
+// --anim-probe: the frame's weights and every bone's global pose, one line
+// each, %.9g so a textual diff is a bit diff. What the anim gate group reads.
+static void anim_probe_print(int frame) {
+    const AnimatorSpace* s = &animator->base;
+    printf("anim-probe frame %d weights", frame);
+    for (int i = 0; i < s->count; i++)
+        printf(" %.9g", s->weights[i]);
+    printf(" fade %.9g layer %.9g src %s\n", animator->fade_weight, animator->layer.weight,
+           animator_source_name(animator));
+
+    const AnimationState* state = animator->state;
+    const Skeleton* skeleton = state->skeleton;
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        versor rot;
+        // The cast is cglm's const-incorrectness: it reads the matrix and
+        // declares it non-const.
+        glm_mat4_quat((vec4*)state->global_transforms[i], rot);
+        const float* pos = state->global_transforms[i][3];
+        // The name last: a rig may space its bone names, and everything after
+        // "name " is the name.
+        printf("anim-probe frame %d bone %zu rot %.9g %.9g %.9g %.9g pos %.9g %.9g %.9g name %s\n",
+               frame, i, rot[0], rot[1], rot[2], rot[3], pos[0], pos[1], pos[2],
+               skeleton->bones[i].name);
+    }
+}
+
 /*
  * Frame counter (for the --check-stretch gate; --frames now uses the engine's
  * own exit_after_frames)
@@ -2174,6 +2336,9 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 //   --render-scale-at   requests any scale due this frame (the engine defers
 //                       the rebuild to the next frame top, so a switch named
 //                       for frame N takes effect on N+1)
+//   --anim-switch-at    starts a crossfade to --anim-switch-to; the animator
+//                       advances in the pre-render hook after this, so frame
+//                       N is the fade's first step
 //
 // Keep this list and the body in step -- it stood at two for three specs while
 // the body ran five, which is a comment describing 40% of what it sits on.
@@ -2214,6 +2379,21 @@ static void render_frame_update(Engine* engine, float dt) {
             sky_cycle_request_rebake(scene->sky);
             fprintf(stderr, "frame %d: sliced sky rebake requested\n",
                     frame_schedule->cycle_rebake_at);
+        }
+    }
+    // A crossfade on a named frame (spec 12.1), so a switched run can be read
+    // against a straight one before, during and after the fade.
+    if (frame_schedule->anim_switch_at == (int)engine->total_frames && animator &&
+        frame_schedule->anim_switch_to) {
+        Scene* scene = engine_get_scene(engine);
+        Animation* to = scene ? scene_find_animation(scene, frame_schedule->anim_switch_to) : NULL;
+        if (to) {
+            animator_play(animator, to, frame_schedule->anim_fade, true);
+            fprintf(stderr, "frame %d: animation -> '%s' over %.2fs\n",
+                    frame_schedule->anim_switch_at, to->name, frame_schedule->anim_fade);
+        } else {
+            fprintf(stderr, "frame %d: no clip named '%s' to switch to\n",
+                    frame_schedule->anim_switch_at, frame_schedule->anim_switch_to);
         }
     }
     // A camera TELEPORT (spec 11.67): the worst case for page residency, which
@@ -2384,6 +2564,8 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     render_anim_gui(engine, current_scene);
     if (animator) {
         animator_update(animator, delta_time);
+        if (frame_schedule->anim_probe)
+            anim_probe_print((int)engine->total_frames);
 
         // One-shot stretch diagnostic once the animation is mid-pose
         if (check_stretch && frames_rendered == 60) {
@@ -3601,12 +3783,10 @@ int main(int argc, char** argv) {
         animator = create_animator(scene->skeletons[0]);
         if (animator) {
             animator->state->debug_pose_dump = args.anim_debug != 0;
-            // A cut, looping: the single-clip player's own path.
-            animator_play(animator, scene->animations[play_idx], 0.0f, true);
             // The whole model skins with this one pose: it is the only rig here.
             node_set_pose(scene->root_node, animator->state);
-            printf("Playing animation: %s (index %zu of %zu)\n", scene->animations[play_idx]->name,
-                   play_idx, scene->animation_count);
+            if (!anim_setup_from_args(&args, scene, play_idx))
+                return -1;
 
             // Spring-bone secondary motion for chains no animation drives.
             // Only hair: the "sheath root" chain is a rigid metal belt on

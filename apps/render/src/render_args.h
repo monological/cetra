@@ -380,9 +380,21 @@ typedef struct {
     int show_bones;
     int check_stretch; // One-shot CPU skinning stretch diagnostic
     int anim_debug;    // One-shot per-bone dump of the first animated pose
-    int render_mode;   // RenderMode override for debugging (-1 = PBR)
-    float orbit_yaw;   // Camera yaw around the model in degrees (0 = front)
-    float orbit_pitch; // Camera pitch in degrees (0 = level, 90 = top-down)
+    // The animator's flags (spec 12.1). Clips are named by their clip name,
+    // among the embedded ones and those loaded with -a.
+    const char* anim_clip;      // --anim-clip: play this clip (default: the first -a clip)
+    const char* anim_space[2];  // --anim-space a,b: a two-entry blend space, a at 0, b at 1
+    float anim_blend;           // --anim-blend t: the space's knob
+    const char* anim_switch_to; // --anim-switch-to: the clip a scheduled crossfade goes to
+    int anim_switch_at;         // --anim-switch-at: the frame it starts on (-1 = never)
+    float anim_fade;            // --anim-fade: every crossfade's length, seconds
+    const char* anim_layer;     // --anim-layer: a clip on the override layer
+    const char* anim_mask;      // --anim-mask: the bone whose subtree the layer covers
+    int anim_layer_once;        // --anim-layer-once: the layer clip plays once and releases
+    int anim_probe;             // --anim-probe: print weights and every bone's pose per frame
+    int render_mode;            // RenderMode override for debugging (-1 = PBR)
+    float orbit_yaw;            // Camera yaw around the model in degrees (0 = front)
+    float orbit_pitch;          // Camera pitch in degrees (0 = level, 90 = top-down)
     // Explicit camera pose (reproduces any interactive view; overrides the
     // yaw/pitch/distance orbit framing). --cam-eye and --cam-target must both
     // be given; --cam-up is optional (default 0,1,0). Print them from the GUI
