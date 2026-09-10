@@ -37,6 +37,12 @@ static ShaderProgram* pbr_shader = NULL;
 static int box_count = 0;
 static const char* hdr_path = NULL;
 
+// --trace-player: the player's pose and the input it acted on, printed every
+// trace_every fixed steps, which is what the gate group reads.
+static bool trace_player = false;
+static int trace_every = 30;
+static int trace_step = 0;
+
 // Deferred door action (set in callback, applied in update)
 static bool door_open_pending = false;
 static float door_open_velocity = 0.0f;
@@ -398,8 +404,11 @@ static void on_init(Game* game) {
     // Create drag controller
     drag_controller = create_mouse_drag_controller(engine);
 
-    engine->show_gui = true;
-    engine->show_fps = true;
+    // No GUI or FPS overlay headless, as the other apps: the FPS digits are
+    // wall clock and land in the screenshot, which is what made two identical
+    // runs differ by pixels while the sim beneath them did not.
+    engine->show_gui = !engine->headless;
+    engine->show_fps = !engine->headless;
     engine->show_xyz = true;
 
     // Spawn a few initial boxes
@@ -449,9 +458,11 @@ static void on_update(Game* game, double dt) {
     // Reset for this frame - contact callbacks will set it if touching
     player_touching_door = false;
 
-    // Get movement input
+    // Get movement input: the keys, or pad 0's left stick
     vec3 input_dir;
     input_wasd_direction(&game->input, input_dir);
+    input_dir[0] += input_pad_axis(&game->input, 0, GLFW_GAMEPAD_AXIS_LEFT_X);
+    input_dir[2] += input_pad_axis(&game->input, 0, GLFW_GAMEPAD_AXIS_LEFT_Y);
 
     // Get current velocity
     vec3 vel;
@@ -467,7 +478,10 @@ static void on_update(Game* game, double dt) {
     vel[1] -= gravity * (float)dt;
 
     // Jump when on ground
-    if (input_key_pressed(&game->input, GLFW_KEY_SPACE) && character_controller_is_grounded(cc)) {
+    bool grounded = character_controller_is_grounded(cc);
+    bool jump = input_key_pressed(&game->input, GLFW_KEY_SPACE) ||
+                input_pad_pressed(&game->input, 0, GLFW_GAMEPAD_BUTTON_A);
+    if (jump && grounded) {
         vel[1] = 10.0f; // Jump velocity
         printf("Jump!\n");
     }
@@ -475,18 +489,20 @@ static void on_update(Game* game, double dt) {
     // Set velocity (CharacterController will handle collision response)
     character_controller_set_velocity(cc, vel);
 
+    if (trace_player && trace_step++ % trace_every == 0) {
+        printf("player t=%5.2f pos %8.3f %8.3f %8.3f  vel %6.2f %6.2f %6.2f  grounded %d  "
+               "move %5.2f %5.2f jump %d\n",
+               game->time, player_entity->position[0], player_entity->position[1],
+               player_entity->position[2], vel[0], vel[1], vel[2], grounded ? 1 : 0, input_dir[0],
+               0.0f - input_dir[2], jump ? 1 : 0);
+    }
+
     // Door closing is now handled at START of next frame, after we know contact state
     // See beginning of on_update
 
     // Spawn box on F key
     if (input_key_pressed(&game->input, GLFW_KEY_F)) {
         spawn_falling_box(game);
-    }
-
-    // Toggle pause
-    if (input_key_pressed(&game->input, GLFW_KEY_P)) {
-        game_toggle_pause(game);
-        printf("Game %s\n", game_is_paused(game) ? "PAUSED" : "RESUMED");
     }
 
     // Raycast test on R key - cast ray downward from player
@@ -528,6 +544,13 @@ static void on_update(Game* game, double dt) {
 // engine propagates the graph as soon as this returns.
 static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
+
+    // Here and not in on_update: the fixed step does not run while paused, so
+    // a toggle read there could pause and never unpause.
+    if (input_key_pressed(&game->input, GLFW_KEY_P)) {
+        game_toggle_pause(game);
+        printf("Game %s\n", game_is_paused(game) ? "PAUSED" : "RESUMED");
+    }
 
     Engine* engine = game->engine;
     if (drag_controller && app_can_process_3d_input(engine)) {
@@ -587,6 +610,8 @@ int main(int argc, const char* argv[]) {
     int frames = 0;
     int screenshot_every = 0;
     const char* screenshot = NULL;
+    const char* pad_script = NULL;
+    const char* gamepad_db = NULL;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
@@ -601,6 +626,16 @@ int main(int argc, const char* argv[]) {
             screenshot_every = atoi(argv[++i]);
         } else if (!strcmp(a, "--msaa") && i + 1 < argc) {
             msaa = atoi(argv[++i]);
+        } else if (!strcmp(a, "--trace-player")) {
+            trace_player = true;
+        } else if (!strcmp(a, "--trace-every") && i + 1 < argc) {
+            trace_every = atoi(argv[++i]);
+            if (trace_every < 1)
+                trace_every = 1;
+        } else if (!strcmp(a, "--pad-script") && i + 1 < argc) {
+            pad_script = argv[++i];
+        } else if (!strcmp(a, "--gamepad-db") && i + 1 < argc) {
+            gamepad_db = argv[++i];
         } else if (a[0] == '-') {
             // A dash-led token is never a path. Without this a typo'd flag,
             // or a value flag in final position whose guard above just
@@ -616,9 +651,10 @@ int main(int argc, const char* argv[]) {
 
     printf("Controls:\n");
     printf("  WASD - Move player cube\n");
+    printf("  Space - Jump\n");
     printf("  F - Spawn falling box\n");
-    printf("  Space - Push all boxes up\n");
     printf("  R - Raycast downward from player\n");
+    printf("  G - Print ground state\n");
     printf("  P - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
     printf("  Escape - Quit\n");
@@ -655,6 +691,17 @@ int main(int argc, const char* argv[]) {
     game->engine->exit_after_frames = frames;
     engine_set_screenshot_path(game->engine, screenshot);
     game->engine->screenshot_every = screenshot_every;
+
+    // A refused script or mapping file is a failed run, not a run with an
+    // idle pad: a gate reading the trace must never mistake one for the other.
+    if (gamepad_db && !game_load_gamepad_mappings(game, gamepad_db)) {
+        free_game(game);
+        return -1;
+    }
+    if (pad_script && !input_set_pad_script(&game->input, pad_script)) {
+        free_game(game);
+        return -1;
+    }
 
     // Set mouse callback
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);
