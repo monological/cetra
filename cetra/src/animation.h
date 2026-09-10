@@ -4,6 +4,7 @@
 #include <cglm/cglm.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "ext/uthash.h"
 
@@ -106,6 +107,14 @@ int add_scale_key(AnimationChannel* channel, float time, vec3 scale);
 
 // --- Animation ---
 
+// A marker on a clip's timeline (spec 12.1): a footstep, a hit window opening,
+// a point a game wants to hear about. What fires it is the Animator; a clip
+// only carries it.
+typedef struct AnimationEvent {
+    float time_ticks;
+    char* name; // owned
+} AnimationEvent;
+
 typedef struct Animation {
     char* name;
     float duration;         // In ticks
@@ -113,6 +122,9 @@ typedef struct Animation {
 
     AnimationChannel* channels;
     size_t channel_count;
+
+    AnimationEvent* events; // animation_add_event; sorted by time
+    size_t event_count;
 
     Skeleton* skeleton; // Associated skeleton (pointer, not owned)
 
@@ -123,6 +135,10 @@ typedef struct Animation {
 Animation* create_animation(const char* name, float duration, float ticks_per_second);
 void free_animation(Animation* animation);
 int add_channel_to_animation(Animation* animation, AnimationChannel* channel);
+// Insert a timeline event, kept sorted by time so a frame's crossings dispatch
+// in clip order. A time outside [0, duration] is refused by name. Returns 0, or
+// -1 on refusal or OOM.
+int animation_add_event(Animation* animation, float time_ticks, const char* name);
 AnimationChannel* get_channel_for_bone(const Animation* animation, int bone_index);
 AnimationChannel* get_channel_for_bone_name(Animation* animation, const char* bone_name);
 
@@ -193,10 +209,58 @@ void interpolate_position(PositionKey* keys, size_t count, float time, vec3 out)
 void interpolate_rotation(RotationKey* keys, size_t count, float time, versor out);
 void interpolate_scale(ScaleKey* keys, size_t count, float time, vec3 out);
 
+// --- Pose (spec 12.1) ---
+//
+// A skeleton's local pose as VALUES: per bone a position, a rotation and a
+// scale. Matrices are not blendable and this is, which is the whole reason it
+// exists -- a clip is sampled into one, two of them are blended, and the result
+// is applied to an AnimationState, where it becomes the skinning matrices.
+
+typedef struct BoneTransform {
+    vec3 position;
+    versor rotation; // what the clip's interpolation produced, not renormalised
+    vec3 scale;
+} BoneTransform;
+
+typedef struct Pose {
+    const Skeleton* skeleton; // what bones[] indexes; set by every producer
+    size_t bone_count;
+    BoneTransform bones[MAX_BONES];
+    // 0 = no clip drove this bone. Its TRS holds the bind local DECOMPOSED so a
+    // blend against it has numbers, but applying it copies the bind MATRIX --
+    // an affine decomposed and rebuilt is not the same bits, and a bone no clip
+    // touches has to skin exactly as it did before there was a Pose.
+    uint8_t driven[MAX_BONES];
+} Pose;
+
+// Every bone at its bind local, driven = 0 throughout.
+void pose_bind(const Skeleton* skeleton, Pose* out);
+
+// ONE clip at one time, self-contained: the retargeting and the hierarchy it
+// needs are evaluated in scratch inside the call, so two clips sampled in turn
+// cannot see each other. A NULL clip is the bind pose; a clip bound to another
+// skeleton is refused by name and reads as bind.
+void animation_sample_pose(const Animation* anim, const Skeleton* skeleton, float time_ticks,
+                           Pose* out);
+
+// out = a at t = 0, b at t = 1: positions and scales lerped, rotations nlerped
+// along the shorter arc. Outside (0, 1) the nearer pose is copied, flags
+// included. A bone undriven in both stays undriven. out may alias a or b.
+void pose_blend(const Pose* a, const Pose* b, float t, Pose* out);
+
+// The same per bone with its own weight, bone_weights[bone_count]: <= 0 keeps
+// base, >= 1 takes over, between blends. out may alias either.
+void pose_blend_masked(const Pose* base, const Pose* over, const float* bone_weights, Pose* out);
+
+// The pose becomes the state's locals, globals, spring-bone result and skinning
+// matrices. delta_time drives the springs only (0 poses without advancing them).
+// A pose for another skeleton is refused by name and leaves the state alone.
+void animation_state_apply_pose(AnimationState* state, const Pose* pose, float delta_time);
+
 // --- Bone Matrix Computation ---
 
-// delta_time drives the optional spring-bone simulation (pass 0 to pose
-// without advancing springs)
+// The current clip at the current time, sampled and applied. delta_time drives
+// the optional spring-bone simulation (pass 0 to pose without advancing springs)
 void compute_bone_matrices(AnimationState* state, float delta_time);
 void compute_bind_pose_matrices(AnimationState* state);
 

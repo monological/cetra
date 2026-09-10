@@ -283,6 +283,8 @@ Animation* create_animation(const char* name, float duration, float ticks_per_se
 
     animation->channels = NULL;
     animation->channel_count = 0;
+    animation->events = NULL;
+    animation->event_count = 0;
     animation->skeleton = NULL;
 
     return animation;
@@ -308,10 +310,44 @@ void free_animation(Animation* animation) {
     if (animation->channels)
         free(animation->channels);
 
+    for (size_t i = 0; i < animation->event_count; i++)
+        free(animation->events[i].name);
+    free(animation->events);
+
     if (animation->name)
         free(animation->name);
 
     free(animation);
+}
+
+int animation_add_event(Animation* animation, float time_ticks, const char* name) {
+    if (!animation || !name)
+        return -1;
+    if (time_ticks < 0.0f || time_ticks > animation->duration) {
+        log_error("Animation '%s': event '%s' at %.2f ticks is outside the clip (0..%.2f)",
+                  animation->name, name, time_ticks, animation->duration);
+        return -1;
+    }
+
+    size_t new_count = animation->event_count + 1;
+    AnimationEvent* events = realloc(animation->events, new_count * sizeof(AnimationEvent));
+    if (!events) {
+        log_error("Failed to allocate memory for animation event");
+        return -1;
+    }
+    animation->events = events;
+
+    // Insert after every event at an earlier or equal time, so two events on
+    // one tick keep the order they were added in.
+    size_t at = animation->event_count;
+    while (at > 0 && events[at - 1].time_ticks > time_ticks) {
+        events[at] = events[at - 1];
+        at--;
+    }
+    events[at].time_ticks = time_ticks;
+    events[at].name = safe_strdup(name);
+    animation->event_count = new_count;
+    return 0;
 }
 
 int add_channel_to_animation(Animation* animation, AnimationChannel* channel) {
@@ -376,20 +412,25 @@ AnimationState* create_animation_state(Skeleton* skeleton) {
         log_error("Cannot create AnimationState without skeleton");
         return NULL;
     }
+    if (skeleton->bone_count > MAX_BONES) {
+        // bone_matrices and prev_bone_rows are MAX_BONES wide; posing more
+        // would write past them.
+        log_error("Skeleton '%s' has %zu bones; the skinning path carries at most %d",
+                  skeleton->name, skeleton->bone_count, MAX_BONES);
+        return NULL;
+    }
 
-    AnimationState* state = malloc(sizeof(AnimationState));
+    // calloc: prev_bone_rows and the debug latch are read before anything
+    // writes them (the first frame's latch, the first pose's dump).
+    AnimationState* state = calloc(1, sizeof(AnimationState));
     if (!state) {
         log_error("Failed to allocate memory for AnimationState");
         return NULL;
     }
 
-    state->current_animation = NULL;
     state->skeleton = skeleton;
-
-    state->current_time = 0.0f;
     state->speed = 1.0f;
     state->looping = true;
-    state->playing = false;
 
     // Initialize bone matrices to identity
     for (int i = 0; i < MAX_BONES; i++) {
@@ -704,20 +745,19 @@ void interpolate_scale(ScaleKey* keys, size_t count, float time, vec3 out) {
  * One-shot diagnostic: per-bone bind vs animated global positions, drift,
  * and skinning-matrix column scale (flags scale corruption)
  */
-static void print_bone_drift_debug(AnimationState* state, const Animation* anim, float time) {
+static void print_bone_drift_debug(AnimationState* state, const Pose* pose) {
     Skeleton* skeleton = state->skeleton;
 
     printf("\n========== ANIMATION DEBUG ==========\n");
-    printf("Animation: %s, Time: %.2f\n\n", anim->name, time);
-    printf("Format: [idx] name | ch=has channel | bind global pos -> animated global pos | "
-           "drift | bone matrix scale\n\n");
+    printf("Format: [idx] name | ch=a clip drives it | bind global pos -> animated global pos "
+           "| drift | bone matrix scale\n\n");
 
     mat4* bind_globals = malloc(skeleton->bone_count * sizeof(mat4));
     if (bind_globals) {
         skeleton_compute_bind_globals(skeleton, bind_globals);
 
         for (size_t i = 0; i < skeleton->bone_count; i++) {
-            const AnimationChannel* channel = get_channel_for_bone(anim, (int)i);
+            bool channel = pose->driven[i] != 0;
 
             vec3 bind_pos, anim_pos;
             glm_vec3_copy(bind_globals[i][3], bind_pos);
@@ -743,29 +783,99 @@ static void print_bone_drift_debug(AnimationState* state, const Animation* anim,
     printf("\n========== END DEBUG ==========\n\n");
 }
 
-void compute_bone_matrices(AnimationState* state, float delta_time) {
-    if (!state || !state->skeleton)
-        return;
+// ============================================================================
+// Pose: sample, blend, apply
+// ============================================================================
 
-    Skeleton* skeleton = state->skeleton;
-    const Animation* anim = state->current_animation;
-    float time = state->current_time;
+// The ONE place a local matrix is built from TRS: T * R * S in this order and
+// through these calls, so the hierarchy the sampler accumulates in scratch and
+// the one the apply writes into the state are the same bits.
+static void bone_local_from_trs(const BoneTransform* bt, mat4 out) {
+    mat4 trans, rotation, scaling;
+    glm_translate_make(trans, (float*)bt->position);
+    glm_quat_mat4((float*)bt->rotation, rotation);
+    glm_scale_make(scaling, (float*)bt->scale);
+
+    mat4 temp;
+    glm_mat4_mul(trans, rotation, temp);
+    glm_mat4_mul(temp, scaling, out);
+}
+
+// A driven bone's local from its TRS; an undriven one's bind matrix verbatim.
+static void pose_local(const Skeleton* skeleton, const Pose* pose, size_t i, mat4 out) {
+    if (pose->driven[i])
+        bone_local_from_trs(&pose->bones[i], out);
+    else
+        glm_mat4_copy((vec4*)skeleton->bones[i].local_transform, out);
+}
+
+// global[i] = global[parent] * local[i], parent-first. The bounds guard is the
+// same one the state's accumulation has always had.
+static void accumulate_global(const Bone* bone, size_t i, size_t bone_count, mat4* locals,
+                              mat4* globals) {
+    if (bone->parent_index < 0) {
+        glm_mat4_copy(locals[i], globals[i]);
+    } else if ((size_t)bone->parent_index < bone_count) {
+        glm_mat4_mul(globals[bone->parent_index], locals[i], globals[i]);
+    } else {
+        glm_mat4_copy(locals[i], globals[i]);
+    }
+}
+
+static void bind_transform(const Bone* bone, BoneTransform* out) {
+    vec4 t;
+    mat4 r;
+    glm_decompose((vec4*)bone->local_transform, t, r, out->scale);
+    glm_vec3_copy(t, out->position);
+    glm_mat4_quat(r, out->rotation);
+}
+
+void pose_bind(const Skeleton* skeleton, Pose* out) {
+    if (!skeleton || !out)
+        return;
+    out->skeleton = skeleton;
+    out->bone_count = skeleton->bone_count;
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        bind_transform(&skeleton->bones[i], &out->bones[i]);
+        out->driven[i] = 0;
+    }
+}
+
+void animation_sample_pose(const Animation* anim, const Skeleton* skeleton, float time, Pose* out) {
+    if (!skeleton || !out)
+        return;
+    if (!anim) {
+        pose_bind(skeleton, out);
+        return;
+    }
+    if (anim->skeleton && anim->skeleton != skeleton) {
+        log_error("Animation '%s' is bound to skeleton '%s', not '%s'; sampling the bind pose",
+                  anim->name, anim->skeleton->name, skeleton->name);
+        pose_bind(skeleton, out);
+        return;
+    }
+
+    out->skeleton = skeleton;
+    out->bone_count = skeleton->bone_count;
 
     // Check if any channel uses global retargeting
     bool has_global_retarget = false;
-    if (anim) {
-        for (size_t c = 0; c < anim->channel_count; c++) {
-            if (anim->channels[c].use_global_retarget) {
-                has_global_retarget = true;
-                break;
-            }
+    for (size_t c = 0; c < anim->channel_count; c++) {
+        if (anim->channels[c].use_global_retarget) {
+            has_global_retarget = true;
+            break;
         }
     }
 
-    // Scratch space for source skeleton global rotations (indexed by source_bone_index)
-    static versor source_globals_animated[MAX_BONES]; // Accumulated animated rotations
-    static versor source_globals_rest[MAX_BONES];     // Accumulated rest pose rotations
-    static bool source_global_computed[MAX_BONES];
+    // Scratch, per call: the source skeleton's global rotations (indexed by
+    // source_bone_index) and this clip's own posed hierarchy, which the global
+    // retarget derives each child's local against. A second clip sampled next
+    // starts from nothing of this one.
+    versor source_globals_animated[MAX_BONES]; // Accumulated animated rotations
+    versor source_globals_rest[MAX_BONES];     // Accumulated rest pose rotations
+    bool source_global_computed[MAX_BONES];
+    mat4 locals[MAX_BONES];
+    mat4 globals[MAX_BONES];
 
     if (has_global_retarget) {
         // PASS 0: Compute source skeleton global rotations (both animated and rest)
@@ -774,7 +884,7 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
 
         for (int src_idx = 0; src_idx < MAX_BONES; src_idx++) {
             // Find channel that has this source_bone_index
-            AnimationChannel* channel = NULL;
+            const AnimationChannel* channel = NULL;
             for (size_t c = 0; c < anim->channel_count; c++) {
                 if (anim->channels[c].use_global_retarget &&
                     anim->channels[c].source_bone_index == src_idx) {
@@ -796,12 +906,12 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
             if (src_parent < 0 || !source_global_computed[src_parent]) {
                 // Root bone or parent not animated
                 glm_quat_copy(keyframe, source_globals_animated[src_idx]);
-                glm_quat_copy(channel->source_local_rest, source_globals_rest[src_idx]);
+                glm_quat_copy((float*)channel->source_local_rest, source_globals_rest[src_idx]);
             } else {
                 // Child bone: accumulate through parent
                 glm_quat_mul(source_globals_animated[src_parent], keyframe,
                              source_globals_animated[src_idx]);
-                glm_quat_mul(source_globals_rest[src_parent], channel->source_local_rest,
+                glm_quat_mul(source_globals_rest[src_parent], (float*)channel->source_local_rest,
                              source_globals_rest[src_idx]);
             }
             glm_quat_normalize(source_globals_animated[src_idx]);
@@ -810,13 +920,15 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
         }
     }
 
-    // PASS 1: Compute local AND global transforms together (needed for global retargeting)
-    // We need parent's global to derive child's local, so we compute both in one pass
+    // PASS 1: one bone's TRS at a time. Under global retargeting the hierarchy
+    // is accumulated alongside, because deriving a child's local needs the
+    // parent's animated global from THIS clip.
     for (size_t i = 0; i < skeleton->bone_count; i++) {
-        Bone* bone = &skeleton->bones[i];
-        AnimationChannel* channel = anim ? get_channel_for_bone(anim, (int)i) : NULL;
+        const Bone* bone = &skeleton->bones[i];
+        const AnimationChannel* channel = get_channel_for_bone(anim, (int)i);
+        BoneTransform* bt = &out->bones[i];
 
-        if (channel && channel->use_global_retarget &&
+        if (channel && channel->use_global_retarget && channel->source_bone_index >= 0 &&
             source_global_computed[channel->source_bone_index]) {
             // GLOBAL-SPACE RETARGETING WITH REST POSE COMPENSATION
             int src_idx = channel->source_bone_index;
@@ -836,7 +948,7 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
             // Step 2: Get target bone's global rest rotation
             // target_global_rest = inv(inverse_bind_pose) rotation
             mat4 target_global_rest_mat;
-            glm_mat4_inv(bone->inverse_bind_pose, target_global_rest_mat);
+            glm_mat4_inv((vec4*)bone->inverse_bind_pose, target_global_rest_mat);
             versor target_global_rest;
             glm_mat4_quat(target_global_rest_mat, target_global_rest);
             glm_quat_normalize(target_global_rest);
@@ -850,86 +962,150 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
             // Step 4: Get target parent's current global rotation (from animated transform)
             versor target_parent_global_rot;
             glm_quat_identity(target_parent_global_rot);
-            if (bone->parent_index >= 0) {
-                glm_mat4_quat(state->global_transforms[bone->parent_index],
-                              target_parent_global_rot);
+            if (bone->parent_index >= 0 && (size_t)bone->parent_index < skeleton->bone_count) {
+                glm_mat4_quat(globals[bone->parent_index], target_parent_global_rot);
             }
 
             // Step 5: Derive target local rotation
             // target_local = inv(target_parent_global) * target_global_animated
             versor target_parent_inv;
             glm_quat_inv(target_parent_global_rot, target_parent_inv);
-            versor target_local_rot;
-            glm_quat_mul(target_parent_inv, target_global_animated, target_local_rot);
-            glm_quat_normalize(target_local_rot);
+            glm_quat_mul(target_parent_inv, target_global_animated, bt->rotation);
+            glm_quat_normalize(bt->rotation);
 
-            // Build local transform: T * R * S
             // Position from bind pose (retargeted animations use bind pose position)
-            vec3 pos;
-            glm_vec3_copy(bone->local_transform[3], pos);
+            glm_vec3_copy((float*)bone->local_transform[3], bt->position);
 
-            vec3 scale = {1.0f, 1.0f, 1.0f};
+            glm_vec3_one(bt->scale);
             if (channel->scale_key_count > 0) {
-                interpolate_scale(channel->scale_keys, channel->scale_key_count, time, scale);
+                interpolate_scale(channel->scale_keys, channel->scale_key_count, time, bt->scale);
             }
-
-            mat4 trans, rotation, scaling;
-            glm_translate_make(trans, pos);
-            glm_quat_mat4(target_local_rot, rotation);
-            glm_scale_make(scaling, scale);
-
-            mat4 temp;
-            glm_mat4_mul(trans, rotation, temp);
-            glm_mat4_mul(temp, scaling, state->local_transforms[i]);
+            out->driven[i] = 1;
 
         } else if (channel) {
             // ORIGINAL LOCAL-DELTA RETARGETING (fallback)
-            vec3 pos = {0.0f, 0.0f, 0.0f};
-            vec3 scale = {1.0f, 1.0f, 1.0f};
-            versor rot = {0.0f, 0.0f, 0.0f, 1.0f};
+            glm_vec3_zero(bt->position);
+            glm_vec3_one(bt->scale);
+            glm_quat_identity(bt->rotation);
 
-            interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time, rot);
-            interpolate_scale(channel->scale_keys, channel->scale_key_count, time, scale);
+            interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, time,
+                                 bt->rotation);
+            interpolate_scale(channel->scale_keys, channel->scale_key_count, time, bt->scale);
 
             // Apply retargeting correction if needed (local delta approach)
             if (channel->needs_retargeting && !channel->use_global_retarget) {
                 versor result;
-                glm_quat_mul(rot, channel->rotation_delta, result);
-                glm_quat_copy(result, rot);
+                glm_quat_mul(bt->rotation, (float*)channel->rotation_delta, result);
+                glm_quat_copy(result, bt->rotation);
             }
 
             // For retargeted animations, use bind pose position
             if (channel->needs_retargeting) {
-                glm_vec3_copy(bone->local_transform[3], pos);
+                glm_vec3_copy((float*)bone->local_transform[3], bt->position);
             } else {
                 interpolate_position(channel->position_keys, channel->position_key_count, time,
-                                     pos);
+                                     bt->position);
             }
-
-            // Build local transform: T * R * S
-            mat4 trans, rotation, scaling;
-            glm_translate_make(trans, pos);
-            glm_quat_mat4(rot, rotation);
-            glm_scale_make(scaling, scale);
-
-            mat4 temp;
-            glm_mat4_mul(trans, rotation, temp);
-            glm_mat4_mul(temp, scaling, state->local_transforms[i]);
+            out->driven[i] = 1;
 
         } else {
-            // No channel: use bind pose local transform
-            glm_mat4_copy(bone->local_transform, state->local_transforms[i]);
+            // No channel: the bind local, and the flag that makes the apply
+            // copy its matrix rather than rebuild it from these numbers.
+            bind_transform(bone, bt);
+            out->driven[i] = 0;
         }
 
-        // Compute global transform immediately (needed for next iteration's parent lookup)
-        if (bone->parent_index < 0) {
-            glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
-        } else if ((size_t)bone->parent_index < skeleton->bone_count) {
-            glm_mat4_mul(state->global_transforms[bone->parent_index], state->local_transforms[i],
-                         state->global_transforms[i]);
-        } else {
-            glm_mat4_copy(state->local_transforms[i], state->global_transforms[i]);
+        if (has_global_retarget) {
+            pose_local(skeleton, out, i, locals[i]);
+            accumulate_global(bone, i, skeleton->bone_count, locals, globals);
         }
+    }
+}
+
+static void blend_bone(const BoneTransform* a, const BoneTransform* b, float t,
+                       BoneTransform* out) {
+    glm_vec3_lerp((float*)a->position, (float*)b->position, t, out->position);
+    glm_quat_nlerp((float*)a->rotation, (float*)b->rotation, t, out->rotation);
+    glm_vec3_lerp((float*)a->scale, (float*)b->scale, t, out->scale);
+}
+
+void pose_blend(const Pose* a, const Pose* b, float t, Pose* out) {
+    if (!a || !b || !out)
+        return;
+    if (a->skeleton != b->skeleton) {
+        log_error("pose_blend: poses for different skeletons ('%s', '%s')",
+                  a->skeleton ? a->skeleton->name : "none",
+                  b->skeleton ? b->skeleton->name : "none");
+        return;
+    }
+    if (t <= 0.0f) {
+        if (out != a)
+            *out = *a;
+        return;
+    }
+    if (t >= 1.0f) {
+        if (out != b)
+            *out = *b;
+        return;
+    }
+
+    size_t n = a->bone_count;
+    for (size_t i = 0; i < n; i++) {
+        blend_bone(&a->bones[i], &b->bones[i], t, &out->bones[i]);
+        out->driven[i] = a->driven[i] || b->driven[i];
+    }
+    out->skeleton = a->skeleton;
+    out->bone_count = n;
+}
+
+void pose_blend_masked(const Pose* base, const Pose* over, const float* bone_weights, Pose* out) {
+    if (!base || !over || !bone_weights || !out)
+        return;
+    if (base->skeleton != over->skeleton) {
+        log_error("pose_blend_masked: poses for different skeletons ('%s', '%s')",
+                  base->skeleton ? base->skeleton->name : "none",
+                  over->skeleton ? over->skeleton->name : "none");
+        return;
+    }
+
+    size_t n = base->bone_count;
+    for (size_t i = 0; i < n; i++) {
+        float w = bone_weights[i];
+        if (w <= 0.0f) {
+            if (out != base) {
+                out->bones[i] = base->bones[i];
+                out->driven[i] = base->driven[i];
+            }
+        } else if (w >= 1.0f) {
+            if (out != over) {
+                out->bones[i] = over->bones[i];
+                out->driven[i] = over->driven[i];
+            }
+        } else {
+            blend_bone(&base->bones[i], &over->bones[i], w, &out->bones[i]);
+            out->driven[i] = base->driven[i] || over->driven[i];
+        }
+    }
+    out->skeleton = base->skeleton;
+    out->bone_count = n;
+}
+
+void animation_state_apply_pose(AnimationState* state, const Pose* pose, float delta_time) {
+    if (!state || !state->skeleton || !pose)
+        return;
+
+    Skeleton* skeleton = state->skeleton;
+    if (pose->skeleton != skeleton) {
+        log_error("Pose for skeleton '%s' applied to a state on '%s'; ignored",
+                  pose->skeleton ? pose->skeleton->name : "none", skeleton->name);
+        return;
+    }
+
+    // Locals from the pose, globals accumulated parent-first
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        pose_local(skeleton, pose, i, state->local_transforms[i]);
+        accumulate_global(&skeleton->bones[i], i, skeleton->bone_count, state->local_transforms,
+                          state->global_transforms);
     }
 
     // Spring-bone secondary motion: simulate un-animated chains (scabbard,
@@ -945,13 +1121,27 @@ void compute_bone_matrices(AnimationState* state, float delta_time) {
                      state->bone_matrices[i]);
     }
 
-    // One-shot diagnostic dump of the first animated pose (opt-in).
-    if (state->debug_pose_dump && !state->debug_pose_dumped && anim) {
-        print_bone_drift_debug(state, anim, time);
-        state->debug_pose_dumped = true;
+    // One-shot diagnostic dump of the first driven pose (opt-in).
+    if (state->debug_pose_dump && !state->debug_pose_dumped) {
+        bool driven = false;
+        for (size_t i = 0; i < skeleton->bone_count && !driven; i++)
+            driven = pose->driven[i] != 0;
+        if (driven) {
+            print_bone_drift_debug(state, pose);
+            state->debug_pose_dumped = true;
+        }
     }
 
     state->active_bone_count = skeleton->bone_count;
+}
+
+void compute_bone_matrices(AnimationState* state, float delta_time) {
+    if (!state || !state->skeleton)
+        return;
+
+    Pose pose;
+    animation_sample_pose(state->current_animation, state->skeleton, state->current_time, &pose);
+    animation_state_apply_pose(state, &pose, delta_time);
 }
 
 void compute_bind_pose_matrices(AnimationState* state) {
