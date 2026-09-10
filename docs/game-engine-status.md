@@ -16,7 +16,10 @@ The hard, specialized tech is done to a high standard. The renderer is
 AAA-caliber and the physics is best-in-class. What's missing is the unglamorous
 but well-understood glue: audio, save/serialization, an in-game UI/menu layer,
 animation blending, and (near ship) Steamworks. Gamepad input landed in spec
-11.109 (with the real device path still owed a check on a machine with a pad).
+11.109 (with the real device path still owed a check on a machine with a pad) --
+the pivot from the renderer era to the game-platform era, which is numbered from
+12.0 (audio first). 11.109 stays the last renderer-era spec; the major bump marks
+the change in the *kind* of work, as every prior one did.
 
 The graphics API (OpenGL 4.1, no Vulkan/Metal/DirectX, no compute shaders) is
 **not** a blocker for shipping on Steam. GL 4.1 runs on Windows/Linux/macOS and
