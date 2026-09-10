@@ -358,7 +358,7 @@ static void on_init(Game* game) {
     game_set_entity_manager(game, em);
 
     // Audio: one device, two SFX beeps. Headless opens no device (offline).
-    AudioSystem* audio = create_audio_system(engine);
+    AudioSystem* audio = create_audio_system(engine->headless);
     if (audio) {
         game_set_audio_system(game, audio);
         if (audio_muted)
@@ -437,7 +437,7 @@ static void on_init(Game* game) {
         if (beacon) {
             audio_sound_set_looping(beacon, true);
             audio_sound_set_volume(beacon, 0.5f);
-            entity_add_audio_source(door_entity, audio, beacon);
+            entity_add_audio_source(door_entity, beacon);
             audio_sound_play(beacon);
         }
     }
@@ -677,7 +677,7 @@ static void probe_measure(AudioSystem* audio, float* rms_l, float* rms_r) {
 }
 
 static int run_audio_probe(Game* game, const char* which, const char* file) {
-    AudioSystem* audio = create_audio_system(game->engine);
+    AudioSystem* audio = create_audio_system(game->engine->headless);
     if (!audio) {
         fprintf(stderr, "audio-probe: could not create audio system\n");
         return 1;

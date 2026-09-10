@@ -21,7 +21,6 @@
 #include <stddef.h>
 #include <cglm/types.h>
 
-struct Engine;
 struct EntityManager;
 struct Entity;
 
@@ -38,8 +37,8 @@ typedef enum {
     AUDIO_BUS_COUNT
 } AudioBus;
 
-// noDevice iff engine->headless; NULL on failure.
-AudioSystem* create_audio_system(const struct Engine* engine);
+// A headless game opens no device and renders offline; NULL on failure.
+AudioSystem* create_audio_system(bool headless);
 void free_audio_system(AudioSystem* audio);
 
 // Linear gain, 1 = unity. MASTER scales the whole mix; the rest scale their bus.
@@ -65,11 +64,11 @@ void audio_sound_set_looping(Sound* sound, bool loop);
 void audio_sound_set_volume(Sound* sound, float volume);
 // Places the voice in the world and enables 3D attenuation and panning.
 void audio_sound_set_position(Sound* sound, vec3 world_pos);
-void free_sound(AudioSystem* audio, Sound* sound);
+void free_sound(Sound* sound);
 
-// Once per rendered frame: point the listener along the camera pose, reap
-// finished one-shots, and push each AUDIO_SOURCE component's position from its
-// entity (em may be NULL when there are no entities).
+// Once per rendered frame: point the listener along the camera pose and push each
+// AUDIO_SOURCE component's position from its entity (em may be NULL when there are
+// no entities). One-shots reap themselves inside miniaudio.
 void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 listener_pos,
                          vec3 forward, vec3 up);
 
@@ -81,7 +80,7 @@ size_t audio_system_read_pcm(AudioSystem* audio, float* out, size_t frames);
 // a tone) to an entity, and its world position is pushed from the entity each
 // frame. Spatialization is turned on. The component takes ownership of the
 // Sound and releases it on teardown. Returns the sound, or NULL on failure.
-Sound* entity_add_audio_source(struct Entity* entity, AudioSystem* audio, Sound* sound);
+Sound* entity_add_audio_source(struct Entity* entity, Sound* sound);
 Sound* entity_get_audio_source(struct Entity* entity);
 
 #endif // _AUDIO_H_

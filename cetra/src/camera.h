@@ -83,6 +83,10 @@ void free_camera(Camera* camera);
 void camera_set_position(Camera* camera, vec3 position);
 void camera_set_look_at(Camera* camera, vec3 look_at);
 
+// The unit view direction, normalize(look_at - position). The camera stores a
+// look point, not a forward vector, so this is the one derivation of it.
+void camera_forward(const Camera* camera, vec3 out);
+
 // The view volume's height when the camera is orthographic, else 0. A camera switched
 // back to perspective keeps its ortho_height for the switch back, so "0 unless
 // orthographic" is read through this rather than off the field.

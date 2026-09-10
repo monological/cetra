@@ -283,8 +283,7 @@ static void game_pre_render(Engine* engine, Scene* scene) {
         vec3 up = {0.0f, 1.0f, 0.0f};
         if (cam) {
             glm_vec3_copy(cam->position, pos);
-            glm_vec3_sub(cam->look_at, cam->position, fwd);
-            glm_vec3_normalize(fwd);
+            camera_forward(cam, fwd);
             glm_vec3_copy(cam->up_vector, up);
         }
         audio_system_update(game->audio, game->entity_manager, pos, fwd, up);

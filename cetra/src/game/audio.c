@@ -7,7 +7,7 @@
 
 #include "audio.h"
 #include "entity.h"
-#include "../engine.h"
+#include "../util.h"
 #include "../ext/log.h"
 
 #include <stdlib.h>
@@ -23,7 +23,7 @@ struct Sound {
     bool is_tone;
     bool continuous; // tone: no auto-stop, so it plays until stopped
     ma_uint64 beep_frames;
-    AudioSystem* audio; // borrowed, for free_sound
+    AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
 };
 
 struct AudioSystem {
@@ -37,8 +37,7 @@ struct AudioSystem {
 
 // The AUDIO_SOURCE component payload: a Sound placed at its entity every frame.
 typedef struct AudioSource {
-    Sound* sound;       // owned; released with the component
-    AudioSystem* audio; // borrowed
+    Sound* sound; // owned; released with the component (the Sound knows its system)
 } AudioSource;
 
 // MASTER routes to the engine endpoint (NULL group); the rest to their group.
@@ -49,16 +48,9 @@ static ma_sound_group* group_for(AudioSystem* audio, AudioBus bus) {
 }
 
 static bool track_sound(AudioSystem* audio, Sound* s) {
-    if (audio->sound_count == audio->sound_cap) {
-        size_t cap = audio->sound_cap ? audio->sound_cap * 2 : 8;
-        Sound** grown = realloc(audio->sounds, cap * sizeof(Sound*));
-        if (!grown) {
-            log_error("audio: out of memory tracking a sound");
-            return false;
-        }
-        audio->sounds = grown;
-        audio->sound_cap = cap;
-    }
+    if (!grow_array((void**)&audio->sounds, &audio->sound_cap, audio->sound_count + 1,
+                    sizeof(Sound*), 8))
+        return false;
     audio->sounds[audio->sound_count++] = s;
     return true;
 }
@@ -72,12 +64,12 @@ static void sound_destroy(Sound* s) {
     free(s);
 }
 
-AudioSystem* create_audio_system(const struct Engine* engine) {
+AudioSystem* create_audio_system(bool headless) {
     AudioSystem* audio = calloc(1, sizeof(AudioSystem));
     if (!audio)
         return NULL;
 
-    audio->no_device = engine && engine->headless;
+    audio->no_device = headless;
 
     ma_engine_config cfg = ma_engine_config_init();
     if (audio->no_device) {
@@ -123,10 +115,13 @@ void free_audio_system(AudioSystem* audio) {
 void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume) {
     if (!audio)
         return;
-    if (bus == AUDIO_BUS_MASTER)
+    if (bus == AUDIO_BUS_MASTER) {
         ma_engine_set_volume(&audio->engine, volume);
-    else if (bus > AUDIO_BUS_MASTER && bus < AUDIO_BUS_COUNT)
-        ma_sound_group_set_volume(&audio->groups[bus], volume);
+        return;
+    }
+    ma_sound_group* group = group_for(audio, bus);
+    if (group)
+        ma_sound_group_set_volume(group, volume);
 }
 
 void audio_play_oneshot(AudioSystem* audio, const char* path, AudioBus bus) {
@@ -251,9 +246,10 @@ void audio_sound_set_position(Sound* sound, vec3 world_pos) {
     ma_sound_set_position(&sound->sound, world_pos[0], world_pos[1], world_pos[2]);
 }
 
-void free_sound(AudioSystem* audio, Sound* sound) {
-    if (!audio || !sound)
+void free_sound(Sound* sound) {
+    if (!sound)
         return;
+    AudioSystem* audio = sound->audio;
     for (size_t i = 0; i < audio->sound_count; i++) {
         if (audio->sounds[i] == sound) {
             audio->sounds[i] = audio->sounds[--audio->sound_count];
@@ -296,20 +292,19 @@ static void audio_source_free(void* data) {
     AudioSource* src = (AudioSource*)data;
     if (!src)
         return;
-    if (src->audio && src->sound)
-        free_sound(src->audio, src->sound);
+    if (src->sound)
+        free_sound(src->sound);
     free(src);
 }
 
-Sound* entity_add_audio_source(struct Entity* entity, AudioSystem* audio, Sound* sound) {
-    if (!entity || !audio || !sound)
+Sound* entity_add_audio_source(struct Entity* entity, Sound* sound) {
+    if (!entity || !sound)
         return NULL;
     audio_sound_set_position(sound, entity->position);
     AudioSource* src = calloc(1, sizeof(AudioSource));
     if (!src)
         return NULL;
     src->sound = sound;
-    src->audio = audio;
     entity_add_component(entity, COMPONENT_AUDIO_SOURCE, src);
     entity_set_component_free(entity, COMPONENT_AUDIO_SOURCE, audio_source_free);
     return sound;

@@ -79,6 +79,15 @@ void camera_set_look_at(Camera* camera, vec3 look_at) {
     _camera_sync_orbit(camera);
 }
 
+void camera_forward(const Camera* camera, vec3 out) {
+    if (!camera) {
+        glm_vec3_copy((vec3){0.0f, 0.0f, -1.0f}, out); // a sane default, and out is always written
+        return;
+    }
+    glm_vec3_sub((float*)camera->look_at, (float*)camera->position, out);
+    glm_vec3_normalize(out);
+}
+
 void camera_orbit(Camera* camera, float delta_theta, float delta_phi) {
     if (!camera)
         return;
@@ -118,10 +127,8 @@ void camera_pan(Camera* camera, float delta_x, float delta_y) {
     if (!camera)
         return;
 
-    // Compute forward direction (look_at - position)
-    vec3 forward;
-    glm_vec3_sub(camera->look_at, camera->position, forward);
-    glm_vec3_normalize(forward);
+    vec3 forward = {0.0f, 0.0f, 0.0f};
+    camera_forward(camera, forward);
 
     // Compute right vector (up x forward) - matches original engine.c convention
     vec3 right;
@@ -152,9 +159,8 @@ void camera_move_forward(Camera* camera, float distance) {
     if (!camera)
         return;
 
-    vec3 forward;
-    glm_vec3_sub(camera->look_at, camera->position, forward);
-    glm_vec3_normalize(forward);
+    vec3 forward = {0.0f, 0.0f, 0.0f};
+    camera_forward(camera, forward);
 
     vec3 movement;
     glm_vec3_scale(forward, distance, movement);
