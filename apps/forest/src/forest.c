@@ -258,6 +258,28 @@ static float g_cam_yaw = 0.6f;
 static float g_cam_pitch = 0.28f;
 static const float CAM_DISTANCE = 14.0f;
 
+// What the walk reads, and which key, pad button or pad axis each one is. The
+// left stick's Y is negated: GLFW reads it down-positive, and the move helper
+// takes +y as forward. The right stick keeps the mouse's sense, so a push
+// right or down turns the way a drag right or down does.
+#define KEY(k, s)  {INPUT_SRC_KEY, GLFW_KEY_##k, s}
+#define PAD(b, s)  {INPUT_SRC_PAD_BUTTON, GLFW_GAMEPAD_BUTTON_##b, s}
+#define AXIS(a, s) {INPUT_SRC_PAD_AXIS, GLFW_GAMEPAD_AXIS_##a, s}
+static const InputAction g_actions[] = {
+    {"move_x", {KEY(D, 1), KEY(A, -1), AXIS(LEFT_X, 1), PAD(DPAD_RIGHT, 1), PAD(DPAD_LEFT, -1)}},
+    {"move_y", {KEY(W, 1), KEY(S, -1), AXIS(LEFT_Y, -1), PAD(DPAD_UP, 1), PAD(DPAD_DOWN, -1)}},
+    {"jump", {KEY(SPACE, 1), PAD(A, 1)}},
+    {"sprint", {KEY(LEFT_SHIFT, 1), PAD(LEFT_BUMPER, 1)}},
+    {"look_x", {AXIS(RIGHT_X, 1)}},
+    {"look_y", {AXIS(RIGHT_Y, 1)}},
+};
+#undef KEY
+#undef PAD
+#undef AXIS
+// Radians per second at full deflection
+static const float LOOK_YAW_RATE = 2.5f;
+static const float LOOK_PITCH_RATE = 1.5f;
+
 // Where on_init's time goes, as startup-ms k=v rows (spec 11.99 Phase 0): the
 // attribution that decides which sites are worth a cook bracket. Wall clock,
 // the existing erosion-bracket idiom; a row is a reading, not a claim.
@@ -2708,7 +2730,7 @@ static void on_update(Game* game, double dt) {
         return;
 
     vec3 input_dir;
-    input_wasd_direction(&game->input, input_dir);
+    input_action_move(&game->input, "move_x", "move_y", input_dir);
 
     // Scripted walk (--walk), which is the only way a headless run can cross a
     // region boundary: residency follows the camera and the camera follows the
@@ -2734,7 +2756,7 @@ static void on_update(Game* game, double dt) {
 
     const float speed = g_args.walk > 0.0f
                             ? g_args.walk
-                            : (input_key_down(&game->input, GLFW_KEY_LEFT_SHIFT) ? 16.0f : 7.0f);
+                            : (input_action_down(&game->input, "sprint") ? 16.0f : 7.0f);
     vec3 move = {0.0f, 0.0f, 0.0f};
     glm_vec3_muladds(fwd, -input_dir[2] * speed, move);
     glm_vec3_muladds(right, input_dir[0] * speed, move);
@@ -2760,7 +2782,7 @@ static void on_update(Game* game, double dt) {
         vel[1] -= 22.0f * (float)dt;
     }
 
-    if (input_key_pressed(&game->input, GLFW_KEY_SPACE) && grounded)
+    if (input_action_pressed(&game->input, "jump") && grounded)
         vel[1] = 9.5f;
 
     character_controller_set_velocity(cc, vel);
@@ -2817,6 +2839,12 @@ static void on_pre_render(Game* game, double alpha) {
                 g_cam_yaw += 0.03f;
             if (input_key_down(&game->input, GLFW_KEY_E))
                 g_cam_yaw -= 0.03f;
+            // The right stick, at a rate per second over the sim's own frame
+            // delta: exact headless, where the engine's dt is wall clock and
+            // this hook is handed an interpolant rather than a dt.
+            float look_dt = (float)game->sim_clock.delta;
+            g_cam_yaw -= input_action_value(&game->input, "look_x") * LOOK_YAW_RATE * look_dt;
+            g_cam_pitch += input_action_value(&game->input, "look_y") * LOOK_PITCH_RATE * look_dt;
             if (g_cam_pitch < -0.2f)
                 g_cam_pitch = -0.2f;
             if (g_cam_pitch > 1.25f)
@@ -3208,6 +3236,7 @@ int main(int argc, char** argv) {
     game->engine->exit_after_frames = g_args.frames;
     engine_set_screenshot_path(game->engine, g_args.screenshot);
     game->engine->screenshot_every = g_args.screenshot_every;
+    input_bind(&game->input, g_actions, sizeof(g_actions) / sizeof(g_actions[0]));
 
     game_set_init(game, on_init);
     game_set_update(game, on_update);

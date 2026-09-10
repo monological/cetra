@@ -43,6 +43,42 @@ static bool trace_player = false;
 static int trace_every = 30;
 static int trace_step = 0;
 
+// What the game reads, and which key, pad button or pad axis each one is.
+// The stick's Y is negated: GLFW reads it down-positive, and the move helper
+// takes +y as forward.
+#define KEY(k, s)  {INPUT_SRC_KEY, GLFW_KEY_##k, s}
+#define PAD(b, s)  {INPUT_SRC_PAD_BUTTON, GLFW_GAMEPAD_BUTTON_##b, s}
+#define AXIS(a, s) {INPUT_SRC_PAD_AXIS, GLFW_GAMEPAD_AXIS_##a, s}
+static const InputAction actions[] = {
+    {"move_x", {KEY(D, 1), KEY(A, -1), AXIS(LEFT_X, 1), PAD(DPAD_RIGHT, 1), PAD(DPAD_LEFT, -1)}},
+    {"move_y", {KEY(W, 1), KEY(S, -1), AXIS(LEFT_Y, -1), PAD(DPAD_UP, 1), PAD(DPAD_DOWN, -1)}},
+    {"jump", {KEY(SPACE, 1), PAD(A, 1)}},
+    {"spawn", {KEY(F, 1), PAD(X, 1)}},
+    {"pause", {KEY(P, 1), PAD(START, 1)}},
+    {"raycast", {KEY(R, 1), PAD(Y, 1)}},
+    {"ground", {KEY(G, 1), PAD(B, 1)}},
+};
+#undef KEY
+#undef PAD
+#undef AXIS
+#define ACTION_COUNT (sizeof(actions) / sizeof(actions[0]))
+
+// --print-bindings: the table, one action a line, as the gate reads it.
+static void print_bindings(void) {
+    static const char* const kinds[] = {"key", "mouse", "pad", "axis"};
+    for (size_t i = 0; i < ACTION_COUNT; i++) {
+        printf("%-8s", actions[i].name);
+        for (int s = 0; s < INPUT_ACTION_SOURCES; s++) {
+            const InputSource* src = &actions[i].sources[s];
+            if (src->kind == INPUT_SRC_KEY && src->code == 0)
+                continue;
+            printf("  %s:%d*%g", kinds[src->kind], src->code,
+                   src->scale == 0.0f ? 1.0 : src->scale);
+        }
+        printf("\n");
+    }
+}
+
 // Deferred door action (set in callback, applied in update)
 static bool door_open_pending = false;
 static float door_open_velocity = 0.0f;
@@ -458,11 +494,9 @@ static void on_update(Game* game, double dt) {
     // Reset for this frame - contact callbacks will set it if touching
     player_touching_door = false;
 
-    // Get movement input: the keys, or pad 0's left stick
+    // The move, whichever device it came from
     vec3 input_dir;
-    input_wasd_direction(&game->input, input_dir);
-    input_dir[0] += input_pad_axis(&game->input, 0, GLFW_GAMEPAD_AXIS_LEFT_X);
-    input_dir[2] += input_pad_axis(&game->input, 0, GLFW_GAMEPAD_AXIS_LEFT_Y);
+    input_action_move(&game->input, "move_x", "move_y", input_dir);
 
     // Get current velocity
     vec3 vel;
@@ -479,8 +513,7 @@ static void on_update(Game* game, double dt) {
 
     // Jump when on ground
     bool grounded = character_controller_is_grounded(cc);
-    bool jump = input_key_pressed(&game->input, GLFW_KEY_SPACE) ||
-                input_pad_pressed(&game->input, 0, GLFW_GAMEPAD_BUTTON_A);
+    bool jump = input_action_pressed(&game->input, "jump");
     if (jump && grounded) {
         vel[1] = 10.0f; // Jump velocity
         printf("Jump!\n");
@@ -500,13 +533,12 @@ static void on_update(Game* game, double dt) {
     // Door closing is now handled at START of next frame, after we know contact state
     // See beginning of on_update
 
-    // Spawn box on F key
-    if (input_key_pressed(&game->input, GLFW_KEY_F)) {
+    if (input_action_pressed(&game->input, "spawn")) {
         spawn_falling_box(game);
     }
 
-    // Raycast test on R key - cast ray downward from player
-    if (input_key_pressed(&game->input, GLFW_KEY_R) && physics) {
+    // Cast a ray downward from the player
+    if (input_action_pressed(&game->input, "raycast") && physics) {
         vec3 down = {0, -1, 0};
         RaycastHit hit;
         if (physics_world_raycast(physics, player_entity->position, down, 50.0f, &hit)) {
@@ -518,8 +550,7 @@ static void on_update(Game* game, double dt) {
         }
     }
 
-    // Print ground state on G key
-    if (input_key_pressed(&game->input, GLFW_KEY_G)) {
+    if (input_action_pressed(&game->input, "ground")) {
         CharacterGroundState state = character_controller_get_ground_state(cc);
         const char* state_str = "unknown";
         switch (state) {
@@ -547,7 +578,7 @@ static void on_pre_render(Game* game, double alpha) {
 
     // Here and not in on_update: the fixed step does not run while paused, so
     // a toggle read there could pause and never unpause.
-    if (input_key_pressed(&game->input, GLFW_KEY_P)) {
+    if (input_action_pressed(&game->input, "pause")) {
         game_toggle_pause(game);
         printf("Game %s\n", game_is_paused(game) ? "PAUSED" : "RESUMED");
     }
@@ -636,6 +667,9 @@ int main(int argc, const char* argv[]) {
             pad_script = argv[++i];
         } else if (!strcmp(a, "--gamepad-db") && i + 1 < argc) {
             gamepad_db = argv[++i];
+        } else if (!strcmp(a, "--print-bindings")) {
+            print_bindings();
+            return 0;
         } else if (a[0] == '-') {
             // A dash-led token is never a path. Without this a typo'd flag,
             // or a value flag in final position whose guard above just
@@ -649,13 +683,13 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    printf("Controls:\n");
-    printf("  WASD - Move player cube\n");
-    printf("  Space - Jump\n");
-    printf("  F - Spawn falling box\n");
-    printf("  R - Raycast downward from player\n");
-    printf("  G - Print ground state\n");
-    printf("  P - Pause/unpause physics\n");
+    printf("Controls (keyboard / gamepad):\n");
+    printf("  WASD / left stick, dpad - Move player cube\n");
+    printf("  Space / A - Jump\n");
+    printf("  F / X - Spawn falling box\n");
+    printf("  R / Y - Raycast downward from player\n");
+    printf("  G / B - Print ground state\n");
+    printf("  P / Start - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
     printf("  Escape - Quit\n");
     printf("\nWalk into the door (right side) to push it open!\n\n");
@@ -702,6 +736,7 @@ int main(int argc, const char* argv[]) {
         free_game(game);
         return -1;
     }
+    input_bind(&game->input, actions, ACTION_COUNT);
 
     // Set mouse callback
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);

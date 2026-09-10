@@ -36,12 +36,45 @@ typedef struct GamePadState {
     // Sticks -1..1 after the radial dead zone, triggers 0..1 after theirs;
     // both rescaled so the edge of the zone reads 0 and full deflection 1.
     float axes[GLFW_GAMEPAD_AXIS_LAST + 1];
+    float axes_prev[GLFW_GAMEPAD_AXIS_LAST + 1];
 } GamePadState;
 
 // Fills `out` for slot `pad` (0-based) and returns whether a pad is there.
 // GLFW's trigger axes REST at -1 in this struct; a reader filling it by hand
 // writes that, or an idle pad reads as half-pressed.
 typedef bool (*GamepadReadFn)(void* ctx, int pad, GLFWgamepadstate* out);
+
+/*
+ * Actions. A game reads "jump" and "move_x", not a key code, and the table
+ * that says which key, mouse button, pad button or pad axis each one is
+ * lives in the game as data -- which is what a remapping screen would edit.
+ *
+ * Every action is ONE float in -1..1, from whichever of its sources is
+ * largest in magnitude: a key or button contributes its scale, an axis its
+ * value times its scale. Digital and analog are then one thing, and a stick
+ * and a key pair are the same action rather than two code paths; a 2D move is
+ * two actions read together.
+ */
+typedef enum InputSourceKind {
+    INPUT_SRC_KEY = 0,      // code: GLFW_KEY_*; kind KEY with code 0 is an unused entry
+    INPUT_SRC_MOUSE_BUTTON, // code: GLFW_MOUSE_BUTTON_*
+    INPUT_SRC_PAD_BUTTON,   // code: GLFW_GAMEPAD_BUTTON_*, on pad 0
+    INPUT_SRC_PAD_AXIS,     // code: GLFW_GAMEPAD_AXIS_*, on pad 0
+} InputSourceKind;
+
+typedef struct InputSource {
+    InputSourceKind kind;
+    int code;
+    float scale; // What a held key or button reads, or an axis's multiplier; 0 = +1
+} InputSource;
+
+#define INPUT_ACTION_SOURCES 6
+#define INPUT_MAX_ACTIONS    32
+
+typedef struct InputAction {
+    const char* name;
+    InputSource sources[INPUT_ACTION_SOURCES]; // Unused entries zero
+} InputAction;
 
 typedef struct GameInputState {
     // ENGINE-OWNED: what the poll writes. Read freely, never write.
@@ -61,6 +94,11 @@ typedef struct GameInputState {
     bool ctrl_held;
     bool alt_held;
     GamePadState pads[GAME_MAX_PADS];
+    // Per bound action: this frame's value, and the value the devices'
+    // PREVIOUS state gives -- so a pad's connect and disconnect rules reach an
+    // action's edges the way they reach a button's.
+    float action_values[INPUT_MAX_ACTIONS];
+    float action_values_prev[INPUT_MAX_ACTIONS];
     struct Engine* engine; // Borrowed
 
     // BY FUNCTION: input_set_pad_reader, input_set_pad_script. The reader the
@@ -69,6 +107,10 @@ typedef struct GameInputState {
     GamepadReadFn pad_read;
     void* pad_ctx;
     void (*pad_ctx_free)(void* ctx);
+    // BY FUNCTION: input_bind. The action table, borrowed for the life of the
+    // binding, and how much of it is bound.
+    const InputAction* actions;
+    size_t action_count;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     float stick_dead_zone;   // Radial, per stick; default 0.2
@@ -133,10 +175,24 @@ void input_set_pad_reader(GameInputState* input, GamepadReadFn read, void* ctx);
 // a passing one.
 bool input_set_pad_script(GameInputState* input, const char* path);
 
-// Helper for WASD movement direction (returns normalized vec3)
-void input_wasd_direction(const GameInputState* input, vec3 out_dir);
+// Bind an action table. Borrowed: the table outlives the binding. At most
+// INPUT_MAX_ACTIONS; more is refused whole, logged. The values are evaluated
+// by input_update, so a table bound mid-frame reads on the next.
+void input_bind(GameInputState* input, const InputAction* actions, size_t count);
 
-// Helper for arrow key direction
-void input_arrow_direction(const GameInputState* input, vec3 out_dir);
+// An action's value this frame, -1..1. A name the table does not have logs
+// and reads 0, so a typo says so at once rather than playing as a dead key.
+float input_action_value(const GameInputState* input, const char* name);
+// The digital view of the same value: down is |value| > 0.5, and pressed and
+// released are that threshold crossed this frame.
+bool input_action_down(const GameInputState* input, const char* name);
+bool input_action_pressed(const GameInputState* input, const char* name);
+bool input_action_released(const GameInputState* input, const char* name);
+
+// Two actions as a move direction on the ground plane, (x, 0, -y) so +y is
+// forward, clamped to length 1 -- a diagonal on keys is not faster than a
+// stick pushed straight -- with a magnitude below 1 kept, which is what a
+// stick's is.
+void input_action_move(const GameInputState* input, const char* x, const char* y, vec3 out);
 
 #endif // _GAME_INPUT_H_

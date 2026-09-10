@@ -104,6 +104,7 @@ static float _trigger(float raw, float dead) {
 static void _poll_pad(GameInputState* input, int slot) {
     GamePadState* p = &input->pads[slot];
     memcpy(p->buttons_prev, p->buttons, sizeof(p->buttons));
+    memcpy(p->axes_prev, p->axes, sizeof(p->axes));
 
     GLFWgamepadstate raw;
     memset(&raw, 0, sizeof(raw));
@@ -118,11 +119,6 @@ static void _poll_pad(GameInputState* input, int slot) {
     }
     for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; b++)
         p->buttons[b] = raw.buttons[b] == GLFW_PRESS;
-    if (!p->connected) {
-        // A button already held when the pad appears is not a press.
-        memcpy(p->buttons_prev, p->buttons, sizeof(p->buttons));
-        p->connected = true;
-    }
     _stick(&raw.axes[GLFW_GAMEPAD_AXIS_LEFT_X], input->stick_dead_zone,
            &p->axes[GLFW_GAMEPAD_AXIS_LEFT_X]);
     _stick(&raw.axes[GLFW_GAMEPAD_AXIS_RIGHT_X], input->stick_dead_zone,
@@ -131,6 +127,63 @@ static void _poll_pad(GameInputState* input, int slot) {
         _trigger(raw.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER], input->trigger_dead_zone);
     p->axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] =
         _trigger(raw.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER], input->trigger_dead_zone);
+    if (!p->connected) {
+        // A button already held, or a stick already pushed, when the pad
+        // appears is not a press.
+        memcpy(p->buttons_prev, p->buttons, sizeof(p->buttons));
+        memcpy(p->axes_prev, p->axes, sizeof(p->axes));
+        p->connected = true;
+    }
+}
+
+// A zeroed entry is the table's "unused" (kind KEY, code 0: no key has that
+// code), so a designated initialiser lists only the sources it means.
+static bool _source_unused(const InputSource* s) {
+    return s->kind == INPUT_SRC_KEY && s->code == 0;
+}
+
+// What one source contributes, from the devices' current state or their
+// previous one. The previous value comes from the previous STATE rather than
+// from last frame's answer so that a pad's connect and disconnect rules (which
+// are written into buttons_prev and axes_prev) decide an action's edges too.
+static float _source_value(const GameInputState* input, const InputSource* s, bool prev) {
+    float scale = s->scale == 0.0f ? 1.0f : s->scale;
+    const GamePadState* pad = &input->pads[0];
+    switch (s->kind) {
+        case INPUT_SRC_KEY:
+            if (s->code < 0 || s->code > GLFW_KEY_LAST)
+                return 0.0f;
+            return (prev ? input->keys_prev : input->keys)[s->code] ? scale : 0.0f;
+        case INPUT_SRC_MOUSE_BUTTON:
+            if (s->code < 0 || s->code > GLFW_MOUSE_BUTTON_LAST)
+                return 0.0f;
+            return (prev ? input->mouse_buttons_prev : input->mouse_buttons)[s->code] ? scale
+                                                                                      : 0.0f;
+        case INPUT_SRC_PAD_BUTTON:
+            if (s->code < 0 || s->code > GLFW_GAMEPAD_BUTTON_LAST)
+                return 0.0f;
+            return (prev ? pad->buttons_prev : pad->buttons)[s->code] ? scale : 0.0f;
+        case INPUT_SRC_PAD_AXIS:
+            if (s->code < 0 || s->code > GLFW_GAMEPAD_AXIS_LAST)
+                return 0.0f;
+            return (prev ? pad->axes_prev : pad->axes)[s->code] * scale;
+    }
+    return 0.0f;
+}
+
+// Whichever source is largest in magnitude; a key at -1 and a stick at 0.3
+// read -1, a stick at -0.3 alone reads -0.3.
+static float _action_value(const GameInputState* input, const InputAction* action, bool prev) {
+    float best = 0.0f;
+    for (int i = 0; i < INPUT_ACTION_SOURCES; i++) {
+        const InputSource* s = &action->sources[i];
+        if (_source_unused(s))
+            continue;
+        float v = _source_value(input, s, prev);
+        if (fabsf(v) > fabsf(best))
+            best = v;
+    }
+    return glm_clamp(best, -1.0f, 1.0f);
 }
 
 void input_update(GameInputState* input) {
@@ -143,7 +196,9 @@ void input_update(GameInputState* input) {
     input->mouse_prev_x = input->mouse_x;
     input->mouse_prev_y = input->mouse_y;
 
-    for (int key = 0; key <= GLFW_KEY_LAST; key++)
+    // From space, the first code GLFW defines: a lower one is an invalid enum
+    // it reports to the error callback, thirty-two times a frame.
+    for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++)
         input->keys[key] = glfwGetKey(window, key) == GLFW_PRESS;
     for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; button++)
         input->mouse_buttons[button] = glfwGetMouseButton(window, button) == GLFW_PRESS;
@@ -163,6 +218,12 @@ void input_update(GameInputState* input) {
 
     for (int slot = 0; slot < GAME_MAX_PADS; slot++)
         _poll_pad(input, slot);
+
+    // After every device, so an action sees this frame's state of all of them.
+    for (size_t i = 0; i < input->action_count; i++) {
+        input->action_values_prev[i] = _action_value(input, &input->actions[i], true);
+        input->action_values[i] = _action_value(input, &input->actions[i], false);
+    }
 }
 
 bool input_key_down(const GameInputState* input, int key) {
@@ -491,47 +552,71 @@ bool input_set_pad_script(GameInputState* input, const char* path) {
     return true;
 }
 
-void input_wasd_direction(const GameInputState* input, vec3 out_dir) {
-    glm_vec3_zero(out_dir);
+/*
+ * Actions.
+ */
 
-    if (input_key_down(input, GLFW_KEY_W)) {
-        out_dir[2] -= 1.0f; // Forward (-Z)
-    }
-    if (input_key_down(input, GLFW_KEY_S)) {
-        out_dir[2] += 1.0f; // Backward (+Z)
-    }
-    if (input_key_down(input, GLFW_KEY_A)) {
-        out_dir[0] -= 1.0f; // Left (-X)
-    }
-    if (input_key_down(input, GLFW_KEY_D)) {
-        out_dir[0] += 1.0f; // Right (+X)
-    }
+#define INPUT_ACTION_THRESHOLD 0.5f
 
-    // Normalize if non-zero
-    float len = glm_vec3_norm(out_dir);
-    if (len > 0.0001f) {
-        glm_vec3_scale(out_dir, 1.0f / len, out_dir);
+void input_bind(GameInputState* input, const InputAction* actions, size_t count) {
+    if (!input) {
+        log_error("input_bind: NULL input");
+        return;
     }
+    if (count > INPUT_MAX_ACTIONS) {
+        log_error("input_bind: %zu actions, at most %d", count, INPUT_MAX_ACTIONS);
+        return;
+    }
+    if (count && !actions) {
+        log_error("input_bind: NULL table with %zu actions", count);
+        return;
+    }
+    input->actions = actions;
+    input->action_count = count;
+    memset(input->action_values, 0, sizeof(input->action_values));
+    memset(input->action_values_prev, 0, sizeof(input->action_values_prev));
 }
 
-void input_arrow_direction(const GameInputState* input, vec3 out_dir) {
-    glm_vec3_zero(out_dir);
+// The table index of a name; -1, logged, for one the table does not have.
+static int _action_index(const GameInputState* input, const char* name) {
+    if (!input || !name)
+        return -1;
+    for (size_t i = 0; i < input->action_count; i++) {
+        if (input->actions[i].name && strcmp(input->actions[i].name, name) == 0)
+            return (int)i;
+    }
+    log_error("input: no action named '%s'", name);
+    return -1;
+}
 
-    if (input_key_down(input, GLFW_KEY_UP)) {
-        out_dir[2] -= 1.0f;
-    }
-    if (input_key_down(input, GLFW_KEY_DOWN)) {
-        out_dir[2] += 1.0f;
-    }
-    if (input_key_down(input, GLFW_KEY_LEFT)) {
-        out_dir[0] -= 1.0f;
-    }
-    if (input_key_down(input, GLFW_KEY_RIGHT)) {
-        out_dir[0] += 1.0f;
-    }
+float input_action_value(const GameInputState* input, const char* name) {
+    int i = _action_index(input, name);
+    return i < 0 ? 0.0f : input->action_values[i];
+}
 
-    float len = glm_vec3_norm(out_dir);
-    if (len > 0.0001f) {
-        glm_vec3_scale(out_dir, 1.0f / len, out_dir);
-    }
+bool input_action_down(const GameInputState* input, const char* name) {
+    int i = _action_index(input, name);
+    return i >= 0 && fabsf(input->action_values[i]) > INPUT_ACTION_THRESHOLD;
+}
+
+bool input_action_pressed(const GameInputState* input, const char* name) {
+    int i = _action_index(input, name);
+    return i >= 0 && fabsf(input->action_values[i]) > INPUT_ACTION_THRESHOLD &&
+           fabsf(input->action_values_prev[i]) <= INPUT_ACTION_THRESHOLD;
+}
+
+bool input_action_released(const GameInputState* input, const char* name) {
+    int i = _action_index(input, name);
+    return i >= 0 && fabsf(input->action_values[i]) <= INPUT_ACTION_THRESHOLD &&
+           fabsf(input->action_values_prev[i]) > INPUT_ACTION_THRESHOLD;
+}
+
+void input_action_move(const GameInputState* input, const char* x, const char* y, vec3 out) {
+    out[0] = input_action_value(input, x);
+    out[1] = 0.0f;
+    out[2] = 0.0f - input_action_value(input, y);
+    // Clamped, not normalised: a stick's magnitude is the walk speed.
+    float len = glm_vec3_norm(out);
+    if (len > 1.0f)
+        glm_vec3_scale(out, 1.0f / len, out);
 }
