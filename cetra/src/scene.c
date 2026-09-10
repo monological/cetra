@@ -824,6 +824,22 @@ void node_add_child(SceneNode* node, SceneNode* child) {
     if (!node || !child)
         return;
 
+    // A node may not go under itself or its own descendant. Every walk in the
+    // engine -- the transform propagation, the prev-pose latch, the draw-list
+    // build -- recurses through children, so a cycle does not draw wrongly, it
+    // runs until the stack is gone: measured at 26,129 frames of
+    // _latch_prev_transform before the guard page. Refused by name, and BEFORE
+    // the detach below, which would otherwise have already cut the child out of
+    // the graph it is still part of.
+    for (const SceneNode* a = node; a; a = a->parent) {
+        if (a == child) {
+            log_error("node '%s' cannot be added under '%s': it is that node's own %s",
+                      child->name ? child->name : "unnamed", node->name ? node->name : "unnamed",
+                      a == node ? "self" : "ancestor");
+            return;
+        }
+    }
+
     // Detached from wherever it was, so a node cannot be in two children arrays
     // at once -- which is a double free, since each array frees what it holds.
     // Re-parenting used to be a load-time-only operation; it is now per frame.
