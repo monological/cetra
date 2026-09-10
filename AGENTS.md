@@ -418,6 +418,7 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | `entity.c/h`, `component.h` | ECS-lite entities + components (mesh/rigidbody/character/animator/audio) |
 | `character.c/h` | Character controller on Jolt `CharacterVirtual` |
 | `input.c/h` | The game layer's input, polled once a frame before the fixed steps: keys, mouse, up to four gamepads in GLFW's standard layout behind a reader seam (GLFW, or a scripted pad from a text file), and the action table a game reads instead of key codes (spec 11.109). Every device's state is one struct held twice, this frame's and the previous frame's, and every edge -- a key's, a pad button's, an action's -- is the two compared; a pad that appears has its previous state set to its current one, which is the whole connect rule and reaches an action for free. An action is evaluated on read, so there is no cache, no cap and no ordering to get wrong |
+| `audio.c/h` | The game layer's audio (spec 12.0): one output device wrapping miniaudio's high-level engine, wrapped as an `AudioSystem` the `Game` owns like the physics world. 2D fire-and-forget SFX and music, held voices from a file (WAV/MP3/FLAC) or a procedural tone, mixer buses, and 3D positional sound whose listener is the camera and whose sources are `AUDIO_SOURCE` components synced from their entities. The device is the seam: a windowed run opens the OS device, a headless run opens NONE and renders offline through `audio_system_read_pcm`, so everything above the device is deterministic and the `audio` gate group asserts on it with no hardware. miniaudio (single-header, vendored) carries its own CoreAudio/ALSA/WASAPI backends |
 
 **Support**
 | Module | Purpose |
@@ -1147,6 +1148,22 @@ closing that. A controller released after the build is picked up through
 after the GUI gate and zeroes them before each end-of-frame poll, so any frame's update hook
 reads one frame's delta; the game layer's `input_scroll` is that, read at the poll.
 
+**Audio is a Game subsystem like the physics world** (`game->audio`, spec 12.0): one
+output device wrapping miniaudio's high-level engine, built with `create_audio_system`,
+installed with `game_set_audio_system`, and freed by `free_game` AFTER the entity manager --
+because `AUDIO_SOURCE` components hold sounds that live in the engine, so the components must
+tear down while it is still alive (the physics ordering). A game plays 2D one-shots and
+music, or holds a `Sound` from a file or a procedural tone and places it in the world; the
+listener is the camera, pointed each frame from `game_pre_render` (after the app has posed
+it), and a positional source is an `AUDIO_SOURCE` component synced from its entity in the
+same pass. **The device is a seam matching the gamepad reader's**: a windowed run opens the
+OS device and mixes on miniaudio's own thread; a headless run opens NONE (`noDevice`) and
+renders offline through `audio_system_read_pcm`, so the whole layer above the device is a
+deterministic function of the frames pulled -- which is what the `audio` gate group asserts
+on (onset, pan, distance falloff, bus routing, file decode) with procedural tones and no
+committed audio. GLFW's analogue here is the OS device path; nothing in the suite exercises
+it, and `docs/verification.md` says which OS it has been heard on (none, at writing).
+
 ## Particle System
 
 A general Niagara-style system: **System -> Emitter -> composable Modules
@@ -1252,7 +1269,7 @@ on the `Scene`.
 | render | `apps/render/` | FBX/GLB model viewer, orbit camera, animation retargeting, HDR/IBL | yes |
 | spores | `apps/spores/` | Cordyceps spore-room particle demo (curl-noise motes, game loop) | yes |
 | forest | `apps/forest/` | A walkable ISLAND since 11.63: ~5000 instanced trees/rocks on a CDLOD terrain quadtree, props and collision RESIDENT per region, sea past the shore, character on a Jolt mesh collider (spec 11.29), wind on the trees since 11.53. `--terrain-extent <f>` grows it past a kilometre; `--no-island` is the flat domain everything before 11.63 measured | yes |
-| gametest | `apps/gametest/` | Physics/character/entity demo on the action table: WASD or the left stick and dpad, jump on Space or A, boxes on F or X, a hinge door; `--pad-script` replays a scripted pad, `--trace-player` prints the pose and the commanded move each 30 steps (the `gamepad` gate group reads it), `--print-bindings` lists the table. Frame-deterministic headless: two runs trace identically and the frame differs by 0 px (spec 11.109) | yes |
+| gametest | `apps/gametest/` | Physics/character/entity demo on the action table: WASD or the left stick and dpad, jump on Space or A, boxes on F or X, a hinge door; `--pad-script` replays a scripted pad, `--trace-player` prints the pose and the commanded move each 30 steps (the `gamepad` gate group reads it), `--print-bindings` lists the table. Audio since 12.0: a beep on jump and spawn and a looping tone carried by the door as an `AUDIO_SOURCE` component, `--mute` to silence it, `--audio-probe <case>` for the headless offline render the `audio` gate reads. Frame-deterministic headless: two runs trace identically and the frame differs by 0 px (spec 11.109) | yes |
 | tree | `apps/tree/` | Procedural recursive tree generator with ImGui sliders, on a domed island in a sea with a seabed under it, at sunset, walkable in first person (`--player`); `--no-water` for dry land. Specs 11.32, 11.35, 11.36 | yes (but NOT frame-deterministic on the orbit path: floor is 9k-31k px depending on framing, see `docs/verification.md`) |
 | shapes | `apps/shapes/` | Procedural geometry demo (rect/circle/bezier) | no |
 | sprites | `apps/sprites/` | The 2023 particle-globe sketch, behaving as it did: 540 hard-square points on a jittering sphere that spins up over time, raw colours through the passthrough tonemap (spec 11.105) | yes |

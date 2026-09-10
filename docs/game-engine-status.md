@@ -14,12 +14,12 @@ _Last updated: 2026-07-21._
 
 The hard, specialized tech is done to a high standard. The renderer is
 AAA-caliber and the physics is best-in-class. What's missing is the unglamorous
-but well-understood glue: audio, save/serialization, an in-game UI/menu layer,
+but well-understood glue: save/serialization, an in-game UI/menu layer,
 animation blending, and (near ship) Steamworks. Gamepad input landed in spec
-11.109 (with the real device path still owed a check on a machine with a pad) --
-the pivot from the renderer era to the game-platform era, which is numbered from
-12.0 (audio first). 11.109 stays the last renderer-era spec; the major bump marks
-the change in the *kind* of work, as every prior one did.
+11.109 and audio in spec 12.0 (each with the real device path still owed a check
+on hardware). 11.109 was the pivot from the renderer era to the game-platform
+era, which is numbered from 12.0; it stays the last renderer-era spec, and the
+major bump marks the change in the *kind* of work, as every prior one did.
 
 The graphics API (OpenGL 4.1, no Vulkan/Metal/DirectX, no compute shaders) is
 **not** a blocker for shipping on Steam. GL 4.1 runs on Windows/Linux/macOS and
@@ -106,7 +106,21 @@ per-mesh height mask, and displaced at both current and previous time so motion
 vectors stay correct under TAA. Per-material `wind_response` opts geometry in.
 Authored in `.cscn`, not hardcoded. (§5.5)
 
-### Scene format (`.cscn`)
+### Audio (shipped, spec 12.0)
+
+A game-layer subsystem over **miniaudio** (vendored single-header, its own
+CoreAudio/ALSA/WASAPI backends): one output device wrapped as an `AudioSystem`,
+2D fire-and-forget SFX and music, held voices from a file (WAV/MP3/FLAC) or a
+procedural tone, 3D positional sound with the camera as listener, and mixer
+buses (master/music/sfx/ui). Owned by the `Game` like the physics world, freed
+after the entity manager; the `AUDIO_SOURCE` entity component (dormant until now)
+is implemented and synced from its entity each frame. The device is a seam: a
+windowed run opens the OS device, a headless run opens **none** and renders
+offline, so the whole layer above it is deterministic — which is what the
+`audio` gate group asserts on (onset, panning, distance falloff, bus routing,
+file decode), with procedural tones and no committed audio. _The real device
+path — actual playback on each OS — is owed a listen; see
+`docs/verification.md`._
 
 A text scene-description format (`cscene.c`) layered over imported models:
 environment, lights, post-processing, wind, dust, material overrides and camera,
@@ -161,7 +175,7 @@ are rough and assume a single experienced dev.
 
 | System | Status | Why it matters | Rough effort |
 |---|---|---|---|
-| **Audio** | Absent (only an unimplemented `AUDIO_SOURCE` enum) | No game ships silent. Needs SFX, music, 3D positional audio. | ~1 week (drop in miniaudio) |
+| **Audio** | **Done, spec 12.0** -- miniaudio wrapped as a game-layer `AudioSystem`: one device, 2D SFX and music, 3D positional sound with the camera as listener, mixer buses, and the `AUDIO_SOURCE` component implemented. The layer above the device is gate-verified off offline PCM (onset, pan, distance, bus routing, decode). Still owed: a listen on real hardware per OS (`docs/verification.md`). | No game ships silent. Steam players expect it, and the offline-render path doubles as the deterministic test seam. | done (~1 week) |
 | **Gamepad input** | **Done, spec 11.109** -- GLFW's standard layout behind a reader seam, an action table, hot-plug, a loadable mapping file; the layer above the seam gate-verified by a scripted pad. Still owed: one run with a real controller, or the Linux uinput recipe (`docs/verification.md`), since no pad was at hand. | Steam players expect controller support. Steam itself presents a virtual Xbox pad to a GLFW game, which is what shipped titles rely on; Steam Input's own API is a second reader behind the same seam, booked with Steamworks. | done (~2 days) |
 | **Save / serialization** | Partial — `.cscn` describes scenes, but nothing persists runtime state | The level/authoring half exists (§6.0). Still missing: save games, settings persistence, and any entity/physics state serializer. | ~1–2 weeks |
 | **Game UI / menus** | Absent (ImGui is dev-only; SDF text exists) | Main menu, HUD, pause, inventory, settings screens. | ~2–3 weeks |
@@ -187,8 +201,9 @@ its own branch.
 
 1. **Gamepad input** — done in spec 11.109; the remaining item is a minute with
    a real pad, per `docs/verification.md`.
-2. **Audio** (~week) — miniaudio: SFX + music + basic 3D positional via the
-   existing `AUDIO_SOURCE` component slot.
+2. **Audio** — done in spec 12.0 (miniaudio: SFX + music + 3D positional through
+   the `AUDIO_SOURCE` component); the remaining item is a listen on real hardware
+   per OS, per `docs/verification.md`.
 3. **Animation blending** (~1–2 weeks) — a small blend layer over the existing
    single-clip animator; unlocks real locomotion.
 4. **Game UI layer** (~2–3 weeks) — retained-mode menu/HUD built on the SDF text

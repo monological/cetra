@@ -34,6 +34,8 @@ up as a difference. The corpus must not be re-baked off macOS.
 - [Capturing a before](#capturing-a-before)
 - [The gamepad device path](#the-gamepad-device-path) — what the `gamepad` group does not
   cover, and the two recipes (a pad on this Mac; Linux uinput) that would
+- [The audio device path](#the-audio-device-path) — what the `audio` group does not cover,
+  and how to hear it on real hardware
 
 ---
 
@@ -432,3 +434,33 @@ scripts (`pad_edge.txt`, `pad_legs.txt`, `pad_off.txt` in the gates' temp direct
 `gamepad` group's expected values are the answers. This was written as a recipe rather than
 committed as a tool because it cannot be run here, and a tool nobody has run is the kind
 of code this repository does not keep.
+
+### The audio device path
+
+Spec 12.0 built the audio subsystem the same way, around the same kind of seam. The device
+is the seam: a windowed run opens the OS device and mixes on miniaudio's own real-time
+thread; a headless run opens NONE (`noDevice`) and renders the mix offline, which the
+caller pulls with `audio_system_read_pcm`. Everything ABOVE the device -- the buses, the
+voices, the spatialization -- is what the `audio` gate group verifies, off that offline
+PCM, so it needs no sound card and is a pure function of the frames pulled.
+
+The `audio` group runs five arms through `gametest --audio-probe`, each a headless offline
+render measured as per-channel RMS: **onset** (a tone is silent before it is played and
+energetic after), **pan** (a source to the right is louder in the right channel, and to the
+left in the left -- a ratio each way, so a swapped channel fails), **distance** (the same
+tone is louder near than far and still audible far -- attenuation, not a cutoff), **master**
+(the master bus at 1 passes energy and at 0 passes silence), and **decode** (a WAV
+synthesized by the gate, with no committed binary, loads from a file and decodes to energy).
+All five drive procedural `ma_waveform` tones through the real spatializer, so the layer is
+exercised end to end with nothing on disk but the decode arm's temporary WAV.
+
+**What no suite covers is the OS device path** -- that a real speaker produces the sound, on
+each platform's backend (CoreAudio, ALSA/PulseAudio, WASAPI). The offline render proves the
+mix; it does not prove the driver, and it says nothing about whether the result sounds
+right. Closing it is a listen, not a script: run `./out/bin/gametest` windowed on each OS,
+jump (a high beep), spawn a box (a low beep), and walk the camera around the door -- its
+looping tone should pan left and right and fade with distance. The startup log names the
+mode (`audio: device, 2 ch @ <rate> Hz` with a card, `audio: offline (no device)` headless).
+The ledger in `specs/12.0-audio.md` records which OS it has been heard on -- none, at
+writing, for the same reason the gamepad path was owed: the machine it was built on has the
+backend but no one has sat and listened on each of the three.

@@ -752,6 +752,14 @@ controller mapping file to GLFW's bundled table (same refusal), `--trace-player`
 player's pose, velocity, ground state and the move and jump the step acted on, every
 `--trace-every <steps>` (default 30), and `--print-bindings` lists the action table and exits.
 
+**Spec 12.0 added audio** — a beep on jump and spawn and a looping tone carried by the door as an
+`AUDIO_SOURCE` component, all procedural (no committed audio). `--mute` silences the master bus.
+`--audio-probe <case>` is a headless, self-contained offline render (miniaudio's `noDevice` engine)
+that plays a fixed geometry, measures the mixed PCM and prints it, then exits — the cases are
+`onset`, `pan`, `distance`, `master` and `decode`, which the `audio` gate group reads; `decode`
+takes the WAV to load from `--audio-file <path>`. Because it opens no device, it runs anywhere the
+gate suite does.
+
 **It is frame-deterministic headless, and this paragraph said otherwise for six specs.** Two runs
 of one script trace byte-identically and their frames differ by **0 px** (measured, spec 11.109),
 because headless the engine hands the loop its FIXED frame dt, the seed is `srand(42)` and Jolt
