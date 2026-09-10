@@ -3,8 +3,6 @@
 #include "physics.h"
 #include "character.h"
 #include "../cook.h"
-#include "../util.h"
-#include "../ext/log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,27 +70,6 @@ void free_game(Game* game) {
     cook_shutdown();
 
     free(game);
-}
-
-bool game_load_gamepad_mappings(const Game* game, const char* path) {
-    if (!game || !path) {
-        log_error("game_load_gamepad_mappings: NULL game or path");
-        return false;
-    }
-    char* text = read_entire_file(path, NULL);
-    if (!text) {
-        log_error("gamepad mappings '%s': cannot read", path);
-        return false;
-    }
-    // GLFW re-resolves every connected pad against the new table, so this is
-    // good at any time after the engine exists, not only before a pad appears.
-    bool ok = glfwUpdateGamepadMappings(text) == GLFW_TRUE;
-    free(text);
-    if (ok)
-        log_info("gamepad mappings loaded from '%s'", path);
-    else
-        log_error("gamepad mappings '%s': refused by GLFW", path);
-    return ok;
 }
 
 void game_set_init(Game* game, GameInitFunc func) {

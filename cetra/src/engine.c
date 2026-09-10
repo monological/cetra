@@ -1227,6 +1227,8 @@ static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double y
     if (!engine || engine_gui_wants_mouse())
         return;
 
+    engine->input.scroll_dx += xoffset;
+    engine->input.scroll_dy += yoffset;
     if (engine->scroll_callback) {
         engine->scroll_callback(engine, xoffset, yoffset);
     }
@@ -2789,6 +2791,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         }
 
         glfwSwapBuffers(engine->window);
+        // Events arrive only inside a poll, so the frame's hooks have read
+        // this frame's wheel by now and the next poll starts the next.
+        engine->input.scroll_dx = 0.0;
+        engine->input.scroll_dy = 0.0;
         glfwPollEvents();
     }
 }

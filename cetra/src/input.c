@@ -17,4 +17,6 @@ void init_input_state(InputState* state) {
     glm_vec3_zero(state->drag_start_world_pos);
     glm_vec3_zero(state->drag_object_start_pos);
     state->drag_plane_distance = 0.0f;
+    state->scroll_dx = 0.0;
+    state->scroll_dy = 0.0;
 }

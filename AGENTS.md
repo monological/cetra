@@ -417,7 +417,7 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | `physics.c/h` | Jolt Physics: rigid bodies, raycasts, sweeps, 5 constraint types + motors. **Jolt's default `Trace` is `DummyTrace`, which is `JPH_ASSERT(false)`**, so any condition Jolt merely wants to REPORT takes a breakpoint instead. The one met so far is `SHAPE_MESH` over a large run of exactly coplanar triangles — the tree builder cannot split them, falls back to a random split, and traces. Spec 11.63's island hit it with a perfectly flat sea floor and fixed it at the geometry. **Two things this entry claimed for a spec cycle and got wrong, both narrowing it.** The trace is `JPH_IF_DEBUG`-wrapped (`AABBTreeBuilder.cpp:205`), so the death is **debug-build only** — a release build indexes the same degenerate soup silently and badly, which is the worse half. And `JPH::Trace` / `JPH::AssertFailed` are **assignable `JPH_EXPORT extern` pointers**, so a handler absolutely can be installed; what JoltC lacks is a C entry point for doing it, and a C++ TU has been precedented since `cluster_build.cpp`. Nothing installs one today, so the geometry fix is what is load-bearing — but it is the right place because flat collision geometry is bad regardless, not because it was the only place reachable |
 | `entity.c/h`, `component.h` | ECS-lite entities + components (mesh/rigidbody/character/animator/audio) |
 | `character.c/h` | Character controller on Jolt `CharacterVirtual` |
-| `input.c/h` | Polling input with edge detection (game layer) |
+| `input.c/h` | The game layer's input, polled once a frame before the fixed steps: keys, mouse, up to four gamepads in GLFW's standard layout behind a reader seam (GLFW, or a scripted pad from a text file), and the action table a game reads instead of key codes (spec 11.109). Every device's state is one struct held twice, this frame's and the previous frame's, and every edge -- a key's, a pad button's, an action's -- is the two compared; a pad that appears has its previous state set to its current one, which is the whole connect rule and reaches an action for free. An action is evaluated on read, so there is no cache, no cap and no ordering to get wrong |
 
 **Support**
 | Module | Purpose |
@@ -1123,6 +1123,30 @@ particles only; `gametest` exercises the full stack). Physics is **Jolt** (rigid
 raycasts/sweeps, fixed/distance/hinge/slider/6DOF constraints with motors, and a
 `CharacterVirtual` controller).
 
+**Input is polled once a frame, BEFORE the fixed steps** (`game->input`, spec 11.109), so a
+press or release is an edge per FRAME: a frame that runs two fixed steps hands both the
+same press, and a frame that runs none drops it. A game reads ACTIONS rather than key codes
+-- a table of `InputAction` rows, each a name and up to six sources (a key, a mouse button,
+a pad button, or a pad axis, each with a scale), bound with `input_bind` and read with
+`input_action_value` / `_down` / `_pressed` / `_released`, or two at once as a ground-plane
+move with `input_action_move`. Every action is one float in -1..1 from whichever source is
+largest in magnitude, so a stick and a key pair are the same action and not two code paths.
+The keyboard, mouse and per-slot pad queries are still there for a game that wants a
+specific device. **Gamepads come through GLFW's standard layout** (any controller the
+bundled SDL database knows reads as fifteen buttons and six axes) with a radial stick dead
+zone and a trigger dead zone, both rescaled; hot-plug is logged by name; a slot that
+disconnects releases everything it held, and a button already down when a pad appears is not
+a press. **A pad is read through a seam** (`GamepadReadFn`): the default asks GLFW, and
+`input_set_pad_script` replays a text script on slot 0 instead, which is how the whole layer
+above the seam is verified with no controller present -- the `gamepad` gate group is five
+such scripts through `apps/gametest`. GLFW's real device path is what the seam sits on, and
+nothing in the suite exercises it; `docs/verification.md` carries the two recipes for
+closing that. A controller released after the build is picked up through
+`input_load_gamepad_mappings` (an SDL mapping file, any time after the engine exists).
+**The wheel is the engine's**: its scroll callback accumulates `engine->input.scroll_dx/dy`
+after the GUI gate and zeroes them before each end-of-frame poll, so any frame's update hook
+reads one frame's delta; the game layer's `input_scroll` is that, read at the poll.
+
 ## Particle System
 
 A general Niagara-style system: **System -> Emitter -> composable Modules
@@ -1228,7 +1252,7 @@ on the `Scene`.
 | render | `apps/render/` | FBX/GLB model viewer, orbit camera, animation retargeting, HDR/IBL | yes |
 | spores | `apps/spores/` | Cordyceps spore-room particle demo (curl-noise motes, game loop) | yes |
 | forest | `apps/forest/` | A walkable ISLAND since 11.63: ~5000 instanced trees/rocks on a CDLOD terrain quadtree, props and collision RESIDENT per region, sea past the shore, character on a Jolt mesh collider (spec 11.29), wind on the trees since 11.53. `--terrain-extent <f>` grows it past a kilometre; `--no-island` is the flat domain everything before 11.63 measured | yes |
-| gametest | `apps/gametest/` | Physics/character/entity demo (WASD, jump, boxes, hinge door) | no |
+| gametest | `apps/gametest/` | Physics/character/entity demo on the action table: WASD or the left stick and dpad, jump on Space or A, boxes on F or X, a hinge door; `--pad-script` replays a scripted pad, `--trace-player` prints the pose and the commanded move each 30 steps (the `gamepad` gate group reads it), `--print-bindings` lists the table. Frame-deterministic headless: two runs trace identically and the frame differs by 0 px (spec 11.109) | yes |
 | tree | `apps/tree/` | Procedural recursive tree generator with ImGui sliders, on a domed island in a sea with a seabed under it, at sunset, walkable in first person (`--player`); `--no-water` for dry land. Specs 11.32, 11.35, 11.36 | yes (but NOT frame-deterministic on the orbit path: floor is 9k-31k px depending on framing, see `docs/verification.md`) |
 | shapes | `apps/shapes/` | Procedural geometry demo (rect/circle/bezier) | no |
 | sprites | `apps/sprites/` | The 2023 particle-globe sketch, behaving as it did: 540 hard-square points on a jittering sphere that spins up over time, raw colours through the passthrough tonemap (spec 11.105) | yes |
@@ -1264,8 +1288,11 @@ arms pass everywhere; timing arms and goldens are the two things that do not tra
 
 **render**, **spores**, **forest** and **tree** support headless capture (this line said three
 apps for several specs while the table above already said tree was "yes" -- it takes `-x`, `-f`,
-`-S` and `--screenshot-every` like the others), and since 11.105 **sprites** and **network** take
-`-x`, `-f` and `-S`. **`--screenshot-every` was the half of that claim
+`-S` and `--screenshot-every` like the others), since 11.105 **sprites** and **network** take
+`-x`, `-f` and `-S`, and **gametest** has taken `-x`, `-f`, `-S` and `--screenshot-every`
+since 11.103 (this list left it out for six specs while the table said "no" for the same
+span); with `--pad-script` and `--trace-player` (spec 11.109) it is also the one app a
+headless run can PLAY. **`--screenshot-every` was the half of that claim
 that was not true until 11.62**: forest and spores parsed `-S` but not it, so capturing a
 TRANSITION cost one full process per frame -- which on forest is a terrain bake and a 5,000-prop
 scatter per sample. It is the plain field `screenshot_every` on the engine, which every

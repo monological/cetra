@@ -261,23 +261,23 @@ static const float CAM_DISTANCE = 14.0f;
 // What the walk reads, and which key, pad button or pad axis each one is. The
 // left stick's Y is negated: GLFW reads it down-positive, and the move helper
 // takes +y as forward. The right stick keeps the mouse's sense, so a push
-// right or down turns the way a drag right or down does.
-#define KEY(k, s)  {INPUT_SRC_KEY, GLFW_KEY_##k, s}
-#define PAD(b, s)  {INPUT_SRC_PAD_BUTTON, GLFW_GAMEPAD_BUTTON_##b, s}
-#define AXIS(a, s) {INPUT_SRC_PAD_AXIS, GLFW_GAMEPAD_AXIS_##a, s}
+// right or down turns the way a drag right or down does, and Q and E are a
+// full push left and right.
 static const InputAction g_actions[] = {
-    {"move_x", {KEY(D, 1), KEY(A, -1), AXIS(LEFT_X, 1), PAD(DPAD_RIGHT, 1), PAD(DPAD_LEFT, -1)}},
-    {"move_y", {KEY(W, 1), KEY(S, -1), AXIS(LEFT_Y, -1), PAD(DPAD_UP, 1), PAD(DPAD_DOWN, -1)}},
-    {"jump", {KEY(SPACE, 1), PAD(A, 1)}},
-    {"sprint", {KEY(LEFT_SHIFT, 1), PAD(LEFT_BUMPER, 1)}},
-    {"look_x", {AXIS(RIGHT_X, 1)}},
-    {"look_y", {AXIS(RIGHT_Y, 1)}},
+    {"move_x",
+     {INPUT_KEY(D, 1), INPUT_KEY(A, -1), INPUT_AXIS(LEFT_X, 1), INPUT_PAD(DPAD_RIGHT, 1),
+      INPUT_PAD(DPAD_LEFT, -1)}},
+    {"move_y",
+     {INPUT_KEY(W, 1), INPUT_KEY(S, -1), INPUT_AXIS(LEFT_Y, -1), INPUT_PAD(DPAD_UP, 1),
+      INPUT_PAD(DPAD_DOWN, -1)}},
+    {"jump", {INPUT_KEY(SPACE, 1), INPUT_PAD(A, 1)}},
+    {"sprint", {INPUT_KEY(LEFT_SHIFT, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
+    {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(Q, -1), INPUT_KEY(E, 1)}},
+    {"look_y", {INPUT_AXIS(RIGHT_Y, 1)}},
 };
-#undef KEY
-#undef PAD
-#undef AXIS
-// Radians per second at full deflection
-static const float LOOK_YAW_RATE = 2.5f;
+// Radians per second at full deflection. The yaw rate is what Q and E turned
+// at per frame at 60 Hz before they were sources.
+static const float LOOK_YAW_RATE = 1.8f;
 static const float LOOK_PITCH_RATE = 1.5f;
 
 // Where on_init's time goes, as startup-ms k=v rows (spec 11.99 Phase 0): the
@@ -2835,13 +2835,9 @@ static void on_pre_render(Game* game, double alpha) {
                 g_cam_yaw -= (float)dx * 0.005f;
                 g_cam_pitch += (float)dy * 0.005f;
             }
-            if (input_key_down(&game->input, GLFW_KEY_Q))
-                g_cam_yaw += 0.03f;
-            if (input_key_down(&game->input, GLFW_KEY_E))
-                g_cam_yaw -= 0.03f;
-            // The right stick, at a rate per second over the sim's own frame
-            // delta: exact headless, where the engine's dt is wall clock and
-            // this hook is handed an interpolant rather than a dt.
+            // The stick and the keys, at a rate per second over the sim's own
+            // frame delta: exact headless, where the engine's dt is wall clock
+            // and this hook is handed an interpolant rather than a dt.
             float look_dt = (float)game->sim_clock.delta;
             g_cam_yaw -= input_action_value(&game->input, "look_x") * LOOK_YAW_RATE * look_dt;
             g_cam_pitch += input_action_value(&game->input, "look_y") * LOOK_PITCH_RATE * look_dt;

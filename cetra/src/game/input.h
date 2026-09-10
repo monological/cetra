@@ -3,8 +3,8 @@
 
 /*
  * The game layer's input: keyboard, mouse and gamepads, polled once a frame
- * BEFORE the fixed steps, with the previous frame kept so a press and a
- * release are edges (spec 11.109).
+ * BEFORE the fixed steps, with the previous frame's devices kept so a press
+ * and a release are edges (spec 11.109).
  *
  * Because the poll is per frame and the sim step is not, an edge is per
  * FRAME: a frame that runs two fixed steps hands both the same press, and a
@@ -32,12 +32,18 @@ struct Engine;
 typedef struct GamePadState {
     bool connected;
     bool buttons[GLFW_GAMEPAD_BUTTON_LAST + 1];
-    bool buttons_prev[GLFW_GAMEPAD_BUTTON_LAST + 1];
     // Sticks -1..1 after the radial dead zone, triggers 0..1 after theirs;
     // both rescaled so the edge of the zone reads 0 and full deflection 1.
     float axes[GLFW_GAMEPAD_AXIS_LAST + 1];
-    float axes_prev[GLFW_GAMEPAD_AXIS_LAST + 1];
 } GamePadState;
+
+// Every device's state at one poll. Held twice, this frame's and the
+// previous frame's, and every edge in this layer is the two compared.
+typedef struct InputDevices {
+    bool keys[GLFW_KEY_LAST + 1];
+    bool mouse_buttons[GLFW_MOUSE_BUTTON_LAST + 1];
+    GamePadState pads[GAME_MAX_PADS];
+} InputDevices;
 
 // Fills `out` for slot `pad` (0-based) and returns whether a pad is there.
 // GLFW's trigger axes REST at -1 in this struct; a reader filling it by hand
@@ -56,7 +62,8 @@ typedef bool (*GamepadReadFn)(void* ctx, int pad, GLFWgamepadstate* out);
  * two actions read together.
  */
 typedef enum InputSourceKind {
-    INPUT_SRC_KEY = 0,      // code: GLFW_KEY_*; kind KEY with code 0 is an unused entry
+    INPUT_SRC_NONE = 0,     // An unused entry, which is what a zeroed one is
+    INPUT_SRC_KEY,          // code: GLFW_KEY_*
     INPUT_SRC_MOUSE_BUTTON, // code: GLFW_MOUSE_BUTTON_*
     INPUT_SRC_PAD_BUTTON,   // code: GLFW_GAMEPAD_BUTTON_*, on pad 0
     INPUT_SRC_PAD_AXIS,     // code: GLFW_GAMEPAD_AXIS_*, on pad 0
@@ -65,11 +72,16 @@ typedef enum InputSourceKind {
 typedef struct InputSource {
     InputSourceKind kind;
     int code;
-    float scale; // What a held key or button reads, or an axis's multiplier; 0 = +1
+    float scale; // What a held key or button reads, or an axis's multiplier
 } InputSource;
 
+// The sources of a table row, as initialisers
+#define INPUT_KEY(k, s)   {INPUT_SRC_KEY, GLFW_KEY_##k, s}
+#define INPUT_MOUSE(b, s) {INPUT_SRC_MOUSE_BUTTON, GLFW_MOUSE_BUTTON_##b, s}
+#define INPUT_PAD(b, s)   {INPUT_SRC_PAD_BUTTON, GLFW_GAMEPAD_BUTTON_##b, s}
+#define INPUT_AXIS(a, s)  {INPUT_SRC_PAD_AXIS, GLFW_GAMEPAD_AXIS_##a, s}
+
 #define INPUT_ACTION_SOURCES 6
-#define INPUT_MAX_ACTIONS    32
 
 typedef struct InputAction {
     const char* name;
@@ -78,10 +90,11 @@ typedef struct InputAction {
 
 typedef struct GameInputState {
     // ENGINE-OWNED: what the poll writes. Read freely, never write.
-    bool keys[GLFW_KEY_LAST + 1];
-    bool keys_prev[GLFW_KEY_LAST + 1];
-    bool mouse_buttons[GLFW_MOUSE_BUTTON_LAST + 1];
-    bool mouse_buttons_prev[GLFW_MOUSE_BUTTON_LAST + 1];
+    InputDevices now;
+    // Last frame's devices -- except a pad that appeared this frame, whose
+    // previous state is its current one, so what it arrived holding is not a
+    // press.
+    InputDevices prev;
     double mouse_x; // Window coordinates, as GLFW reports them
     double mouse_y;
     double mouse_prev_x;
@@ -90,20 +103,10 @@ typedef struct GameInputState {
     double mouse_delta_y;
     double scroll_x; // This frame's wheel delta
     double scroll_y;
-    bool shift_held; // Either shift, control, alt
-    bool ctrl_held;
-    bool alt_held;
-    GamePadState pads[GAME_MAX_PADS];
-    // Per bound action: this frame's value, and the value the devices'
-    // PREVIOUS state gives -- so a pad's connect and disconnect rules reach an
-    // action's edges the way they reach a button's.
-    float action_values[INPUT_MAX_ACTIONS];
-    float action_values_prev[INPUT_MAX_ACTIONS];
     struct Engine* engine; // Borrowed
 
     // BY FUNCTION: input_set_pad_reader, input_set_pad_script. The reader the
-    // poll asks for each slot, with its context; the context is freed by
-    // input_free when pad_ctx_free is set, which the script's is.
+    // poll asks for each slot, its context, and how the context is freed.
     GamepadReadFn pad_read;
     void* pad_ctx;
     void (*pad_ctx_free)(void* ctx);
@@ -117,17 +120,17 @@ typedef struct GameInputState {
     float trigger_dead_zone; // Per trigger, on its 0..1 travel; default 0.1
 } GameInputState;
 
-// Registers with the engine's scroll and GLFW's joystick callbacks (this
-// layer is the only installer of either, so a game reads scroll and pad
-// presence through it). The engine must exist; call after create_engine.
+// Registers with GLFW's joystick callback (global to GLFW; this layer is its
+// only installer, and a game reads pad presence through it). The engine must
+// exist; call after create_engine.
 void input_init(GameInputState* input, struct Engine* engine);
 // Frees what the layer owns (a scripted pad's context); the struct itself is
 // the caller's.
 void input_free(GameInputState* input);
 
 // Once a frame, before the fixed steps: polls every key, mouse button and pad
-// slot, moves the wheel accumulator into this frame's delta, and keeps the
-// previous frame for the edges.
+// slot, takes the engine's wheel delta, and keeps the previous frame for the
+// edges.
 void input_update(GameInputState* input);
 
 // Keyboard queries
@@ -160,9 +163,17 @@ float input_pad_axis(const GameInputState* input, int pad, int axis);
 // nothing is there.
 const char* input_pad_name(const GameInputState* input, int pad);
 
+// Add a controller mapping file (the SDL game controller database format) to
+// the table GLFW ships with, so a pad released after this build was made is
+// still recognised. Any time after the engine exists; every connected pad is
+// re-resolved. False, logged, when the file cannot be read or GLFW refuses it.
+bool input_load_gamepad_mappings(const char* path);
+
 // Replace the reader the poll asks. NULL restores the default, which reads
-// GLFW. `ctx` is borrowed.
-void input_set_pad_reader(GameInputState* input, GamepadReadFn read, void* ctx);
+// GLFW. `ctx` is handed over when `ctx_free` is given, which then frees it
+// with the reader's replacement or with the input; borrowed when it is NULL.
+void input_set_pad_reader(GameInputState* input, GamepadReadFn read, void* ctx,
+                          void (*ctx_free)(void* ctx));
 
 // Replay a scripted pad on slot 0 from a text file: one line per inclusive
 // frame range, `from-to` (or one frame) followed by the button names
@@ -175,13 +186,13 @@ void input_set_pad_reader(GameInputState* input, GamepadReadFn read, void* ctx);
 // a passing one.
 bool input_set_pad_script(GameInputState* input, const char* path);
 
-// Bind an action table. Borrowed: the table outlives the binding. At most
-// INPUT_MAX_ACTIONS; more is refused whole, logged. The values are evaluated
-// by input_update, so a table bound mid-frame reads on the next.
+// Bind an action table. Borrowed: the table outlives the binding. Every
+// source is checked against its kind's code range once here, and a table
+// with a bad one is refused whole, logged by action and source.
 void input_bind(GameInputState* input, const InputAction* actions, size_t count);
 
 // An action's value this frame, -1..1. A name the table does not have logs
-// and reads 0, so a typo says so at once rather than playing as a dead key.
+// once and reads 0, so a typo says so rather than playing as a dead key.
 float input_action_value(const GameInputState* input, const char* name);
 // The digital view of the same value: down is |value| > 0.5, and pressed and
 // released are that threshold crossed this frame.
@@ -194,5 +205,9 @@ bool input_action_released(const GameInputState* input, const char* name);
 // stick pushed straight -- with a magnitude below 1 kept, which is what a
 // stick's is.
 void input_action_move(const GameInputState* input, const char* x, const char* y, vec3 out);
+
+// A table as text, one action a line: the name, then each source as
+// kind:code*scale.
+void input_print_actions(const InputAction* actions, size_t count);
 
 #endif // _GAME_INPUT_H_

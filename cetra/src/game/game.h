@@ -160,10 +160,4 @@ struct PhysicsWorld* game_get_physics_world(const Game* game);
 void game_set_entity_manager(Game* game, struct EntityManager* em);
 struct EntityManager* game_get_entity_manager(const Game* game);
 
-// Add a controller mapping file (the SDL game controller database format) to
-// the table GLFW ships with, so a pad released after this build was made is
-// still recognised. Any time after the game exists; every connected pad is
-// re-resolved. False, logged, when the file cannot be read or GLFW refuses it.
-bool game_load_gamepad_mappings(const Game* game, const char* path);
-
 #endif // _GAME_H_

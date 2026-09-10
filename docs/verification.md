@@ -32,6 +32,8 @@ up as a difference. The corpus must not be re-baked off macOS.
 - [Assets, and which are safe](#assets-and-which-are-safe) — the per-asset ledger
 - [The recipe](#the-recipe) — the cross-build baseline, and the six times it has moved
 - [Capturing a before](#capturing-a-before)
+- [The gamepad device path](#the-gamepad-device-path) — what the `gamepad` group does not
+  cover, and the two recipes (a pad on this Mac; Linux uinput) that would
 
 ---
 
@@ -192,7 +194,7 @@ first.
 | `assets/room.fbx`, `assets/c64.fbx` | no | no | room's textures point at a dead path; c64 renders fully (textured, lit) since specs 11.1 |
 | `apps/tree` | **yes** + particles | no | **NOT pixel-deterministic on the orbit path** -- measured 8,925 px run-to-run at 40 frames / 2800x1800, and 31,034 at the framing recorded above, so **measure the floor at YOUR framing before comparing anything**: it moves by a factor of three with resolution and frame count. The cause is `mouse_drag_update(drag_controller, glfwGetTime())` at **`tree.c:749`** -- and that call sits in an `else if` behind `if (player)`, so **`--player` never reaches it**, never creates the drag controller (`tree.c:1200`), and takes `engine->render_delta` instead. **`--player --headless` IS 0 px** -- measured x2 at 30 frames / 400x300 (spec 11.86), which makes it tree's first pixel-comparable framing and the one to use for any A/B in this app. It is what 11.86's normal-compression numbers were taken at. Wind, grass sway and falling leaves ARE frame-index-pure (spec 11.2); the ORBIT camera is what is not. **Spec 11.32 put a sea around it, ON by default**, and 11.35 put a seabed under the sea -- both under one `--no-water` guard, because a bed with no sea over it is a plate around a dome. **Its water is SPECTRAL by default since 11.35, not Gerstner** (`tree.c:1589`; `--gerstner-waves` switches back, and the four wave params it authors are DEAD unless you pass it). So the 45-pass/24-texture FFT cost and the FFT-only crest foam and caustics all apply to this app by default, and every cascade change in 11.33 and 11.35 reaches it. No tree capture from before 11.35 compares; none from before 11.36 does either, which re-scaled the water's absorption. |
 | `apps/spores` | particles | no | deterministic headless since spec 11.2 (x3 0 px; game-loop step count is exact). Since 11.103 it also takes `--taa`, `--headless-jitter` and `--msaa`, which exist to have MEASURED a refusal rather than to be used: its particles write no motion vector, so TAA reprojects every mote through the geometry behind it and turns dots into dashes. Compare its mote field at 4x against `--taa` if you want to see it; brighten 4x, the field is dim. |
-| `apps/gametest` | physics | no | **capturable since 11.103 and unmeasured before it** — nothing in either suite has ever rendered this app. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`; the HDR path stays positional. **48 px between two identical runs**, so it is near-deterministic at a FIXED configuration and not comparable across two: the fixed-timestep accumulator is fed by wall-clock frame time, so a cheaper frame takes more physics steps and the boxes have settled further by the frame you captured. It runs one sample plus TAA windowed, which it earns by being rigid meshes on `pbr` — every surface writes a motion vector. |
+| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; the HDR path stays positional. **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by being rigid meshes on `pbr` — every surface writes a motion vector. **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
 | `apps/shapes`, `apps/splash` | no | no | **no capture path, and none is planned** (spec 11.103). shapes keeps 4x MSAA deliberately, so there is nothing to regress; adding headless is 40-60 lines for a decision that is not changing. `apps/splash` cannot be captured at all without porting it onto `engine_run` — it draws to the default framebuffer and the engine's screenshot lives in the loop it does not use. |
 | `apps/sprites`, `apps/network` | particles / no | no | **capturable since 11.105** (`-x -f -S`) and **0 px run-to-run** (measured x2 at 30 frames in spec 11.108; both are 4x MSAA, TAA off under the 2D preset). Neither has a golden, so a capture against the previous commit is their whole proof; sprites' one recorded move is 11.107's clear colour (one 8-bit code over 1,222,050 px). |
 | `apps/pcb` | no | no | **A repository of its own since 11.105** (`../apps/pcb`, cetra as a submodule) and not gitignored, though `AGENTS.md`'s app table lists it; capturable the same way and **0 px run-to-run** (spec 11.108). Built against every phase of the three API specs from its submodule, which is what makes it the one consumer that tests the public surface from outside the tree. |
@@ -377,3 +379,56 @@ For a pure refactor there is a stronger check than pixels: diff the generated
 GLSL. `out/generated/shader_strings.h` is reproducible (sorted), so unescaping
 both versions and diffing comment-stripped proves "no shader code changed" directly,
 without going through a renderer at all.
+
+### The gamepad device path
+
+Spec 11.109 built the game layer's gamepad support on a machine with no controller and
+only macOS to hand, which has no supported way to fake one (a virtual HID device there
+needs a DriverKit extension). So the layer reads a pad through a seam -- one function
+fills GLFW's standard layout for a slot -- and everything ABOVE the seam is what the
+`gamepad` gate group verifies, with a scripted reader in the seam's place. **Nothing in
+either suite has exercised GLFW's real joystick backends** (evdev, IOKit, XInput), and the
+ledger in `specs/11.109-gamepad-input.md` records that as owed. Two ways to close it, each
+about a minute once the hardware or the machine is there:
+
+**A pad on this Mac.** Pair any Xbox, PlayStation or Switch controller over Bluetooth
+(all three are in the bundled SDL database), run `./out/bin/gametest --trace-player`
+windowed, push the left stick and press A, and read the trace: the `move` column follows
+the stick through the dead zone and `Jump!` prints once per press. The startup log names
+the pad (`gamepad 0 connected: <name>`), and `(no mapping)` after it means the database
+has no row for that GUID -- pass a newer SDL `gamecontrollerdb.txt` with `--gamepad-db`.
+
+**A Linux machine with no pad.** The kernel's `uinput` lets a process create an input
+device the system serves like any other, and GLFW's Linux backend reads
+`/dev/input/event*` with an inotify hot-plug watch, so a virtual pad is indistinguishable
+from a real one -- PROVIDED it matches a database row, which GLFW does by the full GUID.
+Read `cetra/src/ext/glfw/src/linux_joystick.c` before writing the device; what it needs:
+
+- **Bus 0x03, vendor 0x045e, product 0x028e and version 0x0104**, all four non-zero.
+  GLFW builds the GUID `030000005e0400008e02000004010000` from them, which is the
+  "Microsoft X-Box 360 pad" row of `mappings.h`; a ZERO version takes the other branch of
+  that `if` and yields a name-keyed GUID that matches nothing, so the pad connects as a
+  joystick and `glfwGetGamepadState` returns false for it.
+- **Exactly eleven key bits, in ascending code**: `BTN_A`, `BTN_B`, `BTN_X`, `BTN_Y`,
+  `BTN_TL`, `BTN_TR`, `BTN_SELECT`, `BTN_START`, `BTN_MODE`, `BTN_THUMBL`, `BTN_THUMBR`.
+  GLFW numbers buttons by walking the key bits from `BTN_MISC` upward, so the row's
+  `a:b0 ... rightstick:b10` holds only if those are the bits and nothing else is set --
+  `BTN_C` or `BTN_Z` between them shifts every later index.
+- **Six absolute axes** `ABS_X`, `ABS_Y`, `ABS_Z`, `ABS_RX`, `ABS_RY`, `ABS_RZ`, each with
+  range information (the backend queries `EVIOCGABS` per axis and skips one it cannot),
+  which the row reads as `leftx:a0 lefty:a1 lefttrigger:a2 rightx:a3 righty:a4
+  righttrigger:a5`; and **the hat pair** `ABS_HAT0X` / `ABS_HAT0Y` for the dpad.
+- **A `SYN_REPORT` after every batch of events**, or nothing is delivered.
+- **Two permission grants, not one**: writing `/dev/uinput` to create the device, and
+  reading `/dev/input/event*` to let gametest see it (the `input` group, or a udev rule).
+
+The tooling is `python3-evdev` (Ubuntu's universe repository) and `modprobe uinput`; the
+script creates that device with `evdev.UInput`, then replays the scripted-pad text format
+from `cetra/src/game/input.h` at a wall-clock frame rate, writing each range's buttons and
+axes and a `SYN_REPORT`. Then `./out/bin/gametest -x --trace-player` with NO `--pad-script`
+-- the point is that the default reader, `glfwGetGamepadState`, sees it. The three gate
+scripts (`pad_edge.txt`, `pad_legs.txt`, `pad_off.txt` in the gates' temp directory under
+`--keep`, or the strings in `run_gamepad_gate`) are the inputs to replay, and the
+`gamepad` group's expected values are the answers. This was written as a recipe rather than
+committed as a tool because it cannot be run here, and a tool nobody has run is the kind
+of code this repository does not keep.

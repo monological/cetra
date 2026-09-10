@@ -14608,14 +14608,13 @@ def run_forest_gate(workdir):
 
 
 GAMETEST = _bin("gametest")
-# The pose and the input the step acted on, every --trace-every steps. The
-# position is the one BEFORE the step, so the sample at step N is what N steps
-# of input produced.
+# The step, its ground state, and the move_x the step acted on, every
+# GAMETEST_TRACE_EVERY steps.
 _GAMETEST_TRACE = re.compile(
-    r"player t=\s*([\d.]+) pos\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+"
-    r"vel\s+-?[\d.]+\s+-?[\d.]+\s+-?[\d.]+\s+grounded (\d)\s+"
-    r"move\s+(-?[\d.]+)\s+(-?[\d.]+) jump (\d)")
+    r"player step (\d+) t=\s*[\d.]+ pos(?:\s+-?[\d.]+){3}\s+vel(?:\s+-?[\d.]+){3}\s+"
+    r"grounded (\d)\s+move\s+(-?[\d.]+)\s+-?[\d.]+ jump \d")
 _GAMETEST_BINDING = re.compile(r"^([a-z_]+)\s+(.*)$", re.M)
+GAMETEST_TRACE_EVERY = 10
 
 
 def _gametest_pad_run(workdir, tag, script, frames):
@@ -14632,21 +14631,20 @@ def _gametest_pad_run(workdir, tag, script, frames):
     with open(path, "w") as f:
         f.write(script)
     r = subprocess.run(
-        [GAMETEST, "-x", "-f", str(frames), "--trace-player", "--trace-every", "10",
-         "--pad-script", path],
+        [GAMETEST, "-x", "-f", str(frames), "--trace-player", "--trace-every",
+         str(GAMETEST_TRACE_EVERY), "--pad-script", path],
         capture_output=True, text=True)
     text = r.stdout + r.stderr
     samples = _GAMETEST_TRACE.findall(text)
     if r.returncode != 0 or not samples:
         return None
-    steps = {round(float(t) * 60): (float(mx), g == "1")
-             for t, _x, _y, _z, g, mx, _my, _j in samples}
+    steps = {int(step): (float(mx), g == "1") for step, g, mx in samples}
     return {"steps": steps, "jumps": text.count("Jump!")}
 
 
 def _leg(run, first, last):
     """The move_x values a leg's samples carry, or None if one is missing."""
-    wanted = range(first, last + 1, 10)
+    wanted = range(first, last + 1, GAMETEST_TRACE_EVERY)
     if any(s not in run["steps"] for s in wanted):
         return None
     return [run["steps"][s][0] for s in wanted]

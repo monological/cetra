@@ -5,20 +5,10 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cglm/cglm.h>
-
-// The wheel accumulates between polls in file statics: the engine's scroll
-// callback carries only the Engine, whose user data is not this layer's.
-static double scroll_accum_x = 0.0;
-static double scroll_accum_y = 0.0;
-
-static void _scroll_from_engine(Engine* engine, double xoffset, double yoffset) {
-    (void)engine;
-    scroll_accum_x += xoffset;
-    scroll_accum_y += yoffset;
-}
 
 // The log for a pad arriving or leaving. Presence itself is tracked by the
 // poll, so a pad present before this was installed (GLFW does not fire it for
@@ -58,20 +48,34 @@ void input_init(GameInputState* input, Engine* engine) {
     input->mouse_prev_x = input->mouse_x;
     input->mouse_prev_y = input->mouse_y;
 
-    // Through the engine, whose own callback feeds ImGui first; installing
-    // GLFW's directly overwrote it and the GUI never scrolled.
-    engine_set_scroll_callback(engine, _scroll_from_engine);
     glfwSetJoystickCallback(_joystick_callback);
 }
 
 void input_free(GameInputState* input) {
     if (!input)
         return;
-    if (input->pad_ctx_free)
-        input->pad_ctx_free(input->pad_ctx);
-    input->pad_ctx = NULL;
-    input->pad_ctx_free = NULL;
-    input->pad_read = _pad_read_glfw;
+    input_set_pad_reader(input, NULL, NULL, NULL);
+}
+
+bool input_load_gamepad_mappings(const char* path) {
+    if (!path) {
+        log_error("input_load_gamepad_mappings: NULL path");
+        return false;
+    }
+    char* text = read_entire_file(path, NULL);
+    if (!text) {
+        log_error("gamepad mappings '%s': cannot read", path);
+        return false;
+    }
+    // GLFW re-resolves every connected pad against the new table, so this is
+    // good at any time after the engine exists, not only before a pad appears.
+    bool ok = glfwUpdateGamepadMappings(text) == GLFW_TRUE;
+    free(text);
+    if (ok)
+        log_info("gamepad mappings loaded from '%s'", path);
+    else
+        log_error("gamepad mappings '%s': refused by GLFW", path);
+    return ok;
 }
 
 // A stick's two axes through one radial dead zone, rescaled so the zone's edge
@@ -84,8 +88,7 @@ static void _stick(const float* raw, float dead, float* out) {
         out[1] = 0.0f;
         return;
     }
-    float clamped = r > 1.0f ? 1.0f : r;
-    float scale = ((clamped - dead) / (1.0f - dead)) / r;
+    float scale = ((glm_min(r, 1.0f) - dead) / (1.0f - dead)) / r;
     out[0] = raw[0] * scale;
     out[1] = raw[1] * scale;
 }
@@ -96,27 +99,20 @@ static float _trigger(float raw, float dead) {
     float t = (raw + 1.0f) * 0.5f;
     if (t <= dead || dead >= 1.0f)
         return 0.0f;
-    if (t > 1.0f)
-        t = 1.0f;
-    return (t - dead) / (1.0f - dead);
+    return (glm_min(t, 1.0f) - dead) / (1.0f - dead);
 }
 
 static void _poll_pad(GameInputState* input, int slot) {
-    GamePadState* p = &input->pads[slot];
-    memcpy(p->buttons_prev, p->buttons, sizeof(p->buttons));
-    memcpy(p->axes_prev, p->axes, sizeof(p->axes));
-
+    GamePadState* p = &input->now.pads[slot];
     GLFWgamepadstate raw;
     memset(&raw, 0, sizeof(raw));
-    bool present = input->pad_read && input->pad_read(input->pad_ctx, slot, &raw);
-    if (!present) {
+    if (!input->pad_read(input->pad_ctx, slot, &raw)) {
         // Everything it held is released, one edge each, as a real release
         // would be; every axis at rest.
-        p->connected = false;
-        memset(p->buttons, 0, sizeof(p->buttons));
-        memset(p->axes, 0, sizeof(p->axes));
+        memset(p, 0, sizeof(*p));
         return;
     }
+    p->connected = true;
     for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; b++)
         p->buttons[b] = raw.buttons[b] == GLFW_PRESS;
     _stick(&raw.axes[GLFW_GAMEPAD_AXIS_LEFT_X], input->stick_dead_zone,
@@ -127,63 +123,10 @@ static void _poll_pad(GameInputState* input, int slot) {
         _trigger(raw.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER], input->trigger_dead_zone);
     p->axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] =
         _trigger(raw.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER], input->trigger_dead_zone);
-    if (!p->connected) {
-        // A button already held, or a stick already pushed, when the pad
-        // appears is not a press.
-        memcpy(p->buttons_prev, p->buttons, sizeof(p->buttons));
-        memcpy(p->axes_prev, p->axes, sizeof(p->axes));
-        p->connected = true;
-    }
-}
-
-// A zeroed entry is the table's "unused" (kind KEY, code 0: no key has that
-// code), so a designated initialiser lists only the sources it means.
-static bool _source_unused(const InputSource* s) {
-    return s->kind == INPUT_SRC_KEY && s->code == 0;
-}
-
-// What one source contributes, from the devices' current state or their
-// previous one. The previous value comes from the previous STATE rather than
-// from last frame's answer so that a pad's connect and disconnect rules (which
-// are written into buttons_prev and axes_prev) decide an action's edges too.
-static float _source_value(const GameInputState* input, const InputSource* s, bool prev) {
-    float scale = s->scale == 0.0f ? 1.0f : s->scale;
-    const GamePadState* pad = &input->pads[0];
-    switch (s->kind) {
-        case INPUT_SRC_KEY:
-            if (s->code < 0 || s->code > GLFW_KEY_LAST)
-                return 0.0f;
-            return (prev ? input->keys_prev : input->keys)[s->code] ? scale : 0.0f;
-        case INPUT_SRC_MOUSE_BUTTON:
-            if (s->code < 0 || s->code > GLFW_MOUSE_BUTTON_LAST)
-                return 0.0f;
-            return (prev ? input->mouse_buttons_prev : input->mouse_buttons)[s->code] ? scale
-                                                                                      : 0.0f;
-        case INPUT_SRC_PAD_BUTTON:
-            if (s->code < 0 || s->code > GLFW_GAMEPAD_BUTTON_LAST)
-                return 0.0f;
-            return (prev ? pad->buttons_prev : pad->buttons)[s->code] ? scale : 0.0f;
-        case INPUT_SRC_PAD_AXIS:
-            if (s->code < 0 || s->code > GLFW_GAMEPAD_AXIS_LAST)
-                return 0.0f;
-            return (prev ? pad->axes_prev : pad->axes)[s->code] * scale;
-    }
-    return 0.0f;
-}
-
-// Whichever source is largest in magnitude; a key at -1 and a stick at 0.3
-// read -1, a stick at -0.3 alone reads -0.3.
-static float _action_value(const GameInputState* input, const InputAction* action, bool prev) {
-    float best = 0.0f;
-    for (int i = 0; i < INPUT_ACTION_SOURCES; i++) {
-        const InputSource* s = &action->sources[i];
-        if (_source_unused(s))
-            continue;
-        float v = _source_value(input, s, prev);
-        if (fabsf(v) > fabsf(best))
-            best = v;
-    }
-    return glm_clamp(best, -1.0f, 1.0f);
+    // A button already held, or a stick already pushed, when the pad appears
+    // is not a press.
+    if (!input->prev.pads[slot].connected)
+        input->prev.pads[slot] = *p;
 }
 
 void input_update(GameInputState* input) {
@@ -191,75 +134,62 @@ void input_update(GameInputState* input) {
         return;
     GLFWwindow* window = input->engine->window;
 
-    memcpy(input->keys_prev, input->keys, sizeof(input->keys));
-    memcpy(input->mouse_buttons_prev, input->mouse_buttons, sizeof(input->mouse_buttons));
+    input->prev = input->now;
     input->mouse_prev_x = input->mouse_x;
     input->mouse_prev_y = input->mouse_y;
 
     // From space, the first code GLFW defines: a lower one is an invalid enum
     // it reports to the error callback, thirty-two times a frame.
     for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++)
-        input->keys[key] = glfwGetKey(window, key) == GLFW_PRESS;
+        input->now.keys[key] = glfwGetKey(window, key) == GLFW_PRESS;
     for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; button++)
-        input->mouse_buttons[button] = glfwGetMouseButton(window, button) == GLFW_PRESS;
+        input->now.mouse_buttons[button] = glfwGetMouseButton(window, button) == GLFW_PRESS;
 
     glfwGetCursorPos(window, &input->mouse_x, &input->mouse_y);
     input->mouse_delta_x = input->mouse_x - input->mouse_prev_x;
     input->mouse_delta_y = input->mouse_y - input->mouse_prev_y;
 
-    input->scroll_x = scroll_accum_x;
-    input->scroll_y = scroll_accum_y;
-    scroll_accum_x = 0.0;
-    scroll_accum_y = 0.0;
-
-    input->shift_held = input->keys[GLFW_KEY_LEFT_SHIFT] || input->keys[GLFW_KEY_RIGHT_SHIFT];
-    input->ctrl_held = input->keys[GLFW_KEY_LEFT_CONTROL] || input->keys[GLFW_KEY_RIGHT_CONTROL];
-    input->alt_held = input->keys[GLFW_KEY_LEFT_ALT] || input->keys[GLFW_KEY_RIGHT_ALT];
+    input->scroll_x = input->engine->input.scroll_dx;
+    input->scroll_y = input->engine->input.scroll_dy;
 
     for (int slot = 0; slot < GAME_MAX_PADS; slot++)
         _poll_pad(input, slot);
-
-    // After every device, so an action sees this frame's state of all of them.
-    for (size_t i = 0; i < input->action_count; i++) {
-        input->action_values_prev[i] = _action_value(input, &input->actions[i], true);
-        input->action_values[i] = _action_value(input, &input->actions[i], false);
-    }
 }
 
 bool input_key_down(const GameInputState* input, int key) {
     if (key < 0 || key > GLFW_KEY_LAST)
         return false;
-    return input->keys[key];
+    return input->now.keys[key];
 }
 
 bool input_key_pressed(const GameInputState* input, int key) {
     if (key < 0 || key > GLFW_KEY_LAST)
         return false;
-    return input->keys[key] && !input->keys_prev[key];
+    return input->now.keys[key] && !input->prev.keys[key];
 }
 
 bool input_key_released(const GameInputState* input, int key) {
     if (key < 0 || key > GLFW_KEY_LAST)
         return false;
-    return !input->keys[key] && input->keys_prev[key];
+    return !input->now.keys[key] && input->prev.keys[key];
 }
 
 bool input_mouse_down(const GameInputState* input, int button) {
     if (button < 0 || button > GLFW_MOUSE_BUTTON_LAST)
         return false;
-    return input->mouse_buttons[button];
+    return input->now.mouse_buttons[button];
 }
 
 bool input_mouse_pressed(const GameInputState* input, int button) {
     if (button < 0 || button > GLFW_MOUSE_BUTTON_LAST)
         return false;
-    return input->mouse_buttons[button] && !input->mouse_buttons_prev[button];
+    return input->now.mouse_buttons[button] && !input->prev.mouse_buttons[button];
 }
 
 bool input_mouse_released(const GameInputState* input, int button) {
     if (button < 0 || button > GLFW_MOUSE_BUTTON_LAST)
         return false;
-    return !input->mouse_buttons[button] && input->mouse_buttons_prev[button];
+    return !input->now.mouse_buttons[button] && input->prev.mouse_buttons[button];
 }
 
 void input_mouse_pos(const GameInputState* input, double* x, double* y) {
@@ -283,62 +213,52 @@ void input_scroll(const GameInputState* input, double* x, double* y) {
         *y = input->scroll_y;
 }
 
-static const GamePadState* _pad(const GameInputState* input, int pad) {
-    if (!input || pad < 0 || pad >= GAME_MAX_PADS)
-        return NULL;
-    return &input->pads[pad];
+static bool _pad_button_ok(const GameInputState* input, int pad, int button) {
+    return input && pad >= 0 && pad < GAME_MAX_PADS && button >= 0 &&
+           button <= GLFW_GAMEPAD_BUTTON_LAST;
 }
 
 bool input_pad_connected(const GameInputState* input, int pad) {
-    const GamePadState* p = _pad(input, pad);
-    return p && p->connected;
+    return input && pad >= 0 && pad < GAME_MAX_PADS && input->now.pads[pad].connected;
 }
 
 bool input_pad_down(const GameInputState* input, int pad, int button) {
-    const GamePadState* p = _pad(input, pad);
-    if (!p || button < 0 || button > GLFW_GAMEPAD_BUTTON_LAST)
-        return false;
-    return p->buttons[button];
+    return _pad_button_ok(input, pad, button) && input->now.pads[pad].buttons[button];
 }
 
 bool input_pad_pressed(const GameInputState* input, int pad, int button) {
-    const GamePadState* p = _pad(input, pad);
-    if (!p || button < 0 || button > GLFW_GAMEPAD_BUTTON_LAST)
-        return false;
-    return p->buttons[button] && !p->buttons_prev[button];
+    return _pad_button_ok(input, pad, button) && input->now.pads[pad].buttons[button] &&
+           !input->prev.pads[pad].buttons[button];
 }
 
 bool input_pad_released(const GameInputState* input, int pad, int button) {
-    const GamePadState* p = _pad(input, pad);
-    if (!p || button < 0 || button > GLFW_GAMEPAD_BUTTON_LAST)
-        return false;
-    return !p->buttons[button] && p->buttons_prev[button];
+    return _pad_button_ok(input, pad, button) && !input->now.pads[pad].buttons[button] &&
+           input->prev.pads[pad].buttons[button];
 }
 
 float input_pad_axis(const GameInputState* input, int pad, int axis) {
-    const GamePadState* p = _pad(input, pad);
-    if (!p || axis < 0 || axis > GLFW_GAMEPAD_AXIS_LAST)
+    if (!input || pad < 0 || pad >= GAME_MAX_PADS || axis < 0 || axis > GLFW_GAMEPAD_AXIS_LAST)
         return 0.0f;
-    return p->axes[axis];
+    return input->now.pads[pad].axes[axis];
 }
 
 const char* input_pad_name(const GameInputState* input, int pad) {
-    const GamePadState* p = _pad(input, pad);
-    if (!p || !p->connected)
+    if (!input_pad_connected(input, pad))
         return NULL;
     return glfwGetJoystickName(GLFW_JOYSTICK_1 + pad);
 }
 
-void input_set_pad_reader(GameInputState* input, GamepadReadFn read, void* ctx) {
+void input_set_pad_reader(GameInputState* input, GamepadReadFn read, void* ctx,
+                          void (*ctx_free)(void* ctx)) {
     if (!input) {
         log_error("input_set_pad_reader: NULL input");
         return;
     }
     if (input->pad_ctx_free)
         input->pad_ctx_free(input->pad_ctx);
-    input->pad_ctx_free = NULL;
     input->pad_read = read ? read : _pad_read_glfw;
     input->pad_ctx = read ? ctx : NULL;
+    input->pad_ctx_free = read ? ctx_free : NULL;
 }
 
 /*
@@ -349,13 +269,13 @@ typedef struct PadScriptRange {
     int from;
     int to;
     bool off;
-    unsigned char buttons[GLFW_GAMEPAD_BUTTON_LAST + 1];
-    float axes[GLFW_GAMEPAD_AXIS_LAST + 1]; // GLFW's form: triggers rest at -1
+    GLFWgamepadstate state;
 } PadScriptRange;
 
 typedef struct PadScript {
     PadScriptRange* ranges;
     size_t count;
+    size_t cap;
     int frame; // The next input_update's frame number
 } PadScript;
 
@@ -367,13 +287,10 @@ static const char* const k_axis_names[GLFW_GAMEPAD_AXIS_LAST + 1] = {
     "lx", "ly", "rx", "ry", "lt", "rt",
 };
 
-static void _range_idle(PadScriptRange* r) {
-    memset(r->buttons, 0, sizeof(r->buttons));
-    memset(r->axes, 0, sizeof(r->axes));
-    r->axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] = -1.0f;
-    r->axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] = -1.0f;
-    r->off = false;
-}
+// Connected and idle, in GLFW's form: the triggers rest at -1
+static const PadScriptRange k_range_idle = {
+    .state.axes = {0.0f, 0.0f, 0.0f, 0.0f, -1.0f, -1.0f},
+};
 
 // One token of a script line into the range; false with the reason logged.
 static bool _range_token(PadScriptRange* r, const char* tok, const char* path, int line) {
@@ -404,7 +321,7 @@ static bool _range_token(PadScriptRange* r, const char* tok, const char* path, i
                     log_error("%s:%d: axis '%s' is -1..1", path, line, tok);
                     return false;
                 }
-                r->axes[a] = trigger ? v * 2.0f - 1.0f : v;
+                r->state.axes[a] = trigger ? v * 2.0f - 1.0f : v;
                 return true;
             }
         }
@@ -413,7 +330,7 @@ static bool _range_token(PadScriptRange* r, const char* tok, const char* path, i
     }
     for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; b++) {
         if (strcmp(tok, k_button_names[b]) == 0) {
-            r->buttons[b] = GLFW_PRESS;
+            r->state.buttons[b] = GLFW_PRESS;
             return true;
         }
     }
@@ -422,8 +339,8 @@ static bool _range_token(PadScriptRange* r, const char* tok, const char* path, i
 }
 
 // The next whitespace-delimited token of a line, NUL-terminated in place;
-// NULL at the end. Written out rather than strtok, which is not one function
-// across the three platforms.
+// NULL at the end. A hand lexer, as lut.c's is: strtok's reentrant form is
+// strtok_r on two of the three platforms and strtok_s on the third.
 static char* _next_token(char** cursor) {
     char* p = *cursor;
     while (*p == ' ' || *p == '\t' || *p == '\r')
@@ -458,8 +375,7 @@ static bool _script_parse(PadScript* script, char* text, const char* path) {
             continue;
         }
 
-        PadScriptRange r;
-        _range_idle(&r);
+        PadScriptRange r = k_range_idle;
         char* end = NULL;
         long from = strtol(p, &end, 10);
         long to = from;
@@ -484,12 +400,8 @@ static bool _script_parse(PadScript* script, char* text, const char* path) {
                 return false;
         }
 
-        PadScriptRange* grown = realloc(script->ranges, (script->count + 1) * sizeof(*grown));
-        if (!grown) {
-            log_error("%s: out of memory", path);
+        if (!grow_array((void**)&script->ranges, &script->cap, script->count + 1, sizeof(r), 8))
             return false;
-        }
-        script->ranges = grown;
         script->ranges[script->count++] = r;
         ln = next;
     }
@@ -502,17 +414,14 @@ static bool _pad_read_script(void* ctx, int pad, GLFWgamepadstate* out) {
         return false;
     int frame = script->frame++;
     // A frame no line covers is connected and idle; the last matching line wins.
-    PadScriptRange idle;
-    _range_idle(&idle);
-    const PadScriptRange* r = &idle;
+    const PadScriptRange* r = &k_range_idle;
     for (size_t i = 0; i < script->count; i++) {
         if (frame >= script->ranges[i].from && frame <= script->ranges[i].to)
             r = &script->ranges[i];
     }
     if (r->off)
         return false;
-    memcpy(out->buttons, r->buttons, sizeof(out->buttons));
-    memcpy(out->axes, r->axes, sizeof(out->axes));
+    *out = r->state;
     return true;
 }
 
@@ -546,8 +455,7 @@ bool input_set_pad_script(GameInputState* input, const char* path) {
         _script_free(script);
         return false;
     }
-    input_set_pad_reader(input, _pad_read_script, script);
-    input->pad_ctx_free = _script_free;
+    input_set_pad_reader(input, _pad_read_script, script, _script_free);
     log_info("pad script '%s': %zu ranges on slot 0", path, script->count);
     return true;
 }
@@ -558,57 +466,123 @@ bool input_set_pad_script(GameInputState* input, const char* path) {
 
 #define INPUT_ACTION_THRESHOLD 0.5f
 
+static const char* const k_kind_names[] = {"none", "key", "mouse", "pad", "axis"};
+
+// The code range of a kind; NONE has none and is skipped by every walk.
+static bool _source_valid(const InputSource* s) {
+    switch (s->kind) {
+        case INPUT_SRC_NONE:
+            return true;
+        case INPUT_SRC_KEY:
+            return s->code >= GLFW_KEY_SPACE && s->code <= GLFW_KEY_LAST && s->scale != 0.0f;
+        case INPUT_SRC_MOUSE_BUTTON:
+            return s->code >= 0 && s->code <= GLFW_MOUSE_BUTTON_LAST && s->scale != 0.0f;
+        case INPUT_SRC_PAD_BUTTON:
+            return s->code >= 0 && s->code <= GLFW_GAMEPAD_BUTTON_LAST && s->scale != 0.0f;
+        case INPUT_SRC_PAD_AXIS:
+            return s->code >= 0 && s->code <= GLFW_GAMEPAD_AXIS_LAST && s->scale != 0.0f;
+    }
+    return false;
+}
+
 void input_bind(GameInputState* input, const InputAction* actions, size_t count) {
-    if (!input) {
-        log_error("input_bind: NULL input");
+    if (!input || (count && !actions)) {
+        log_error("input_bind: NULL input or table");
         return;
     }
-    if (count > INPUT_MAX_ACTIONS) {
-        log_error("input_bind: %zu actions, at most %d", count, INPUT_MAX_ACTIONS);
-        return;
-    }
-    if (count && !actions) {
-        log_error("input_bind: NULL table with %zu actions", count);
-        return;
+    for (size_t i = 0; i < count; i++) {
+        for (int j = 0; j < INPUT_ACTION_SOURCES; j++) {
+            const InputSource* s = &actions[i].sources[j];
+            if (!_source_valid(s)) {
+                log_error("input_bind: action '%s' source %d: kind %d code %d scale %g is not a "
+                          "source; table refused",
+                          actions[i].name ? actions[i].name : "(unnamed)", j, (int)s->kind, s->code,
+                          (double)s->scale);
+                return;
+            }
+        }
     }
     input->actions = actions;
     input->action_count = count;
-    memset(input->action_values, 0, sizeof(input->action_values));
-    memset(input->action_values_prev, 0, sizeof(input->action_values_prev));
 }
 
-// The table index of a name; -1, logged, for one the table does not have.
-static int _action_index(const GameInputState* input, const char* name) {
+// What one source contributes from one poll's devices. Codes were checked at
+// the bind.
+static float _source_value(const InputDevices* d, const InputSource* s) {
+    switch (s->kind) {
+        case INPUT_SRC_NONE:
+            return 0.0f;
+        case INPUT_SRC_KEY:
+            return d->keys[s->code] ? s->scale : 0.0f;
+        case INPUT_SRC_MOUSE_BUTTON:
+            return d->mouse_buttons[s->code] ? s->scale : 0.0f;
+        case INPUT_SRC_PAD_BUTTON:
+            return d->pads[0].buttons[s->code] ? s->scale : 0.0f;
+        case INPUT_SRC_PAD_AXIS:
+            return d->pads[0].axes[s->code] * s->scale;
+    }
+    return 0.0f;
+}
+
+// Whichever source is largest in magnitude; a key at -1 and a stick at 0.3
+// read -1, a stick at -0.3 alone reads -0.3.
+static float _action_value(const InputDevices* d, const InputAction* action) {
+    float best = 0.0f;
+    for (int i = 0; i < INPUT_ACTION_SOURCES; i++) {
+        float v = _source_value(d, &action->sources[i]);
+        if (fabsf(v) > fabsf(best))
+            best = v;
+    }
+    return glm_clamp(best, -1.0f, 1.0f);
+}
+
+// Once per name: a typo is read every step, and the first line says it all.
+static void _log_unknown_action(const char* name) {
+    static char logged[8][32];
+    static int logged_count;
+    for (int i = 0; i < logged_count; i++) {
+        if (strncmp(logged[i], name, sizeof(logged[i]) - 1) == 0)
+            return;
+    }
+    if (logged_count < 8)
+        snprintf(logged[logged_count++], sizeof(logged[0]), "%s", name);
+    log_error("input: no action named '%s'", name);
+}
+
+// The table entry for a name, or NULL, logged, for one the table lacks.
+static const InputAction* _action(const GameInputState* input, const char* name) {
     if (!input || !name)
-        return -1;
+        return NULL;
     for (size_t i = 0; i < input->action_count; i++) {
         if (input->actions[i].name && strcmp(input->actions[i].name, name) == 0)
-            return (int)i;
+            return &input->actions[i];
     }
-    log_error("input: no action named '%s'", name);
-    return -1;
+    _log_unknown_action(name);
+    return NULL;
+}
+
+static bool _over(float value) {
+    return fabsf(value) > INPUT_ACTION_THRESHOLD;
 }
 
 float input_action_value(const GameInputState* input, const char* name) {
-    int i = _action_index(input, name);
-    return i < 0 ? 0.0f : input->action_values[i];
+    const InputAction* a = _action(input, name);
+    return a ? _action_value(&input->now, a) : 0.0f;
 }
 
 bool input_action_down(const GameInputState* input, const char* name) {
-    int i = _action_index(input, name);
-    return i >= 0 && fabsf(input->action_values[i]) > INPUT_ACTION_THRESHOLD;
+    const InputAction* a = _action(input, name);
+    return a && _over(_action_value(&input->now, a));
 }
 
 bool input_action_pressed(const GameInputState* input, const char* name) {
-    int i = _action_index(input, name);
-    return i >= 0 && fabsf(input->action_values[i]) > INPUT_ACTION_THRESHOLD &&
-           fabsf(input->action_values_prev[i]) <= INPUT_ACTION_THRESHOLD;
+    const InputAction* a = _action(input, name);
+    return a && _over(_action_value(&input->now, a)) && !_over(_action_value(&input->prev, a));
 }
 
 bool input_action_released(const GameInputState* input, const char* name) {
-    int i = _action_index(input, name);
-    return i >= 0 && fabsf(input->action_values[i]) <= INPUT_ACTION_THRESHOLD &&
-           fabsf(input->action_values_prev[i]) > INPUT_ACTION_THRESHOLD;
+    const InputAction* a = _action(input, name);
+    return a && !_over(_action_value(&input->now, a)) && _over(_action_value(&input->prev, a));
 }
 
 void input_action_move(const GameInputState* input, const char* x, const char* y, vec3 out) {
@@ -616,7 +590,21 @@ void input_action_move(const GameInputState* input, const char* x, const char* y
     out[1] = 0.0f;
     out[2] = 0.0f - input_action_value(input, y);
     // Clamped, not normalised: a stick's magnitude is the walk speed.
-    float len = glm_vec3_norm(out);
-    if (len > 1.0f)
-        glm_vec3_scale(out, 1.0f / len, out);
+    if (glm_vec3_norm(out) > 1.0f)
+        glm_vec3_normalize(out);
+}
+
+void input_print_actions(const InputAction* actions, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        printf("%-8s", actions[i].name ? actions[i].name : "(unnamed)");
+        for (int j = 0; j < INPUT_ACTION_SOURCES; j++) {
+            const InputSource* s = &actions[i].sources[j];
+            if (s->kind == INPUT_SRC_NONE)
+                continue;
+            const char* kind =
+                s->kind > 0 && s->kind <= INPUT_SRC_PAD_AXIS ? k_kind_names[s->kind] : "?";
+            printf("  %s:%d*%g", kind, s->code, (double)s->scale);
+        }
+        printf("\n");
+    }
 }

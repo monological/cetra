@@ -744,10 +744,22 @@ which is why this section exists rather than one line saying "they inherit the d
 `-S/--screenshot`, `--screenshot-every`, `--taa`, `--msaa <n>`. The HDR environment stays
 POSITIONAL — an unrecognised token is still taken as the path, which is the whole interface the app
 had. It runs **one sample plus TAA windowed**, the render-app policy, because every surface in it is
-a rigid mesh on the `pbr` program and so writes a motion vector. **Two identical runs differ by
-48 px; two runs at DIFFERENT sample counts are not comparable at all**, and not because of the
-renderer — the fixed-timestep accumulator is fed by wall-clock frame time, so a cheaper frame takes
-more physics steps and the boxes have settled further by the frame you captured.
+a rigid mesh on the `pbr` program and so writes a motion vector. **Spec 11.109 added five**, which
+make it the one app a headless run can play: `--pad-script <file>` replays a scripted gamepad on
+slot 0 (the format is in `cetra/src/game/input.h`; a file that is missing or will not parse exits
+1, so a gate never mistakes an idle pad for a passing layer), `--gamepad-db <file>` adds an SDL
+controller mapping file to GLFW's bundled table (same refusal), `--trace-player` prints the
+player's pose, velocity, ground state and the move and jump the step acted on, every
+`--trace-every <steps>` (default 30), and `--print-bindings` lists the action table and exits.
+
+**It is frame-deterministic headless, and this paragraph said otherwise for six specs.** Two runs
+of one script trace byte-identically and their frames differ by **0 px** (measured, spec 11.109),
+because headless the engine hands the loop its FIXED frame dt, the seed is `srand(42)` and Jolt
+steps a fixed dt. The 48 px this entry used to report between two identical runs, and its
+explanation that wall-clock frame time fed the accumulator, were the FPS overlay: drawn headless
+from the wall clock, and off since 11.109 (108 px with it on, 0 without, same build). Two runs at
+different sample counts are still not comparable, for the ordinary reason that they resolve
+differently.
 
 **`apps/spores`** gained `--taa`, `--headless-jitter` and `--msaa <n>` in 11.103 and **kept its four
 samples**, which is the one refusal in that spec. `particle_frag` declares a single output, so a

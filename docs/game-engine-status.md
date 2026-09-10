@@ -14,8 +14,9 @@ _Last updated: 2026-07-21._
 
 The hard, specialized tech is done to a high standard. The renderer is
 AAA-caliber and the physics is best-in-class. What's missing is the unglamorous
-but well-understood glue: audio, gamepad input, save/serialization, an in-game
-UI/menu layer, animation blending, and (near ship) Steamworks.
+but well-understood glue: audio, save/serialization, an in-game UI/menu layer,
+animation blending, and (near ship) Steamworks. Gamepad input landed in spec
+11.109 (with the real device path still owed a check on a machine with a pad).
 
 The graphics API (OpenGL 4.1, no Vulkan/Metal/DirectX, no compute shaders) is
 **not** a blocker for shipping on Steam. GL 4.1 runs on Windows/Linux/macOS and
@@ -120,8 +121,14 @@ authoring/description, **not** save-game state. (§6.0)
   box, cylinder, subdivided plane. _No sphere/capsule/torus generators._
 - **Text** — SDF text rendering (glow/plasma effects, 3D world-space text).
   _Word-wrapping is a TODO._
-- **Input** — keyboard + mouse only, with an edge-detecting polling layer for
-  games (`game/input.c`).
+- **Input** — keyboard, mouse and up to four gamepads through GLFW's standard
+  layout (the bundled SDL controller database, plus a mapping file loadable at
+  runtime), polled once a frame with per-frame edges, dead zones, hot-plug, and
+  an action table a game binds keys, buttons and axes to (`game/input.c`, spec
+  11.109). A reader seam lets a text script stand in for a pad, which is what
+  the `gamepad` gate group verifies with. _The real device path -- GLFW's
+  joystick backends -- has not been exercised on this machine; two recipes for
+  doing so are in `docs/verification.md`._
 
 ### Apps (working demos)
 
@@ -152,7 +159,7 @@ are rough and assume a single experienced dev.
 | System | Status | Why it matters | Rough effort |
 |---|---|---|---|
 | **Audio** | Absent (only an unimplemented `AUDIO_SOURCE` enum) | No game ships silent. Needs SFX, music, 3D positional audio. | ~1 week (drop in miniaudio) |
-| **Gamepad input** | Absent (kb/mouse only) | Steam players expect controller support. GLFW already exposes `glfwGetGamepadState`. | ~1–2 days |
+| **Gamepad input** | **Done, spec 11.109** -- GLFW's standard layout behind a reader seam, an action table, hot-plug, a loadable mapping file; the layer above the seam gate-verified by a scripted pad. Still owed: one run with a real controller, or the Linux uinput recipe (`docs/verification.md`), since no pad was at hand. | Steam players expect controller support. Steam itself presents a virtual Xbox pad to a GLFW game, which is what shipped titles rely on; Steam Input's own API is a second reader behind the same seam, booked with Steamworks. | done (~2 days) |
 | **Save / serialization** | Partial — `.cscn` describes scenes, but nothing persists runtime state | The level/authoring half exists (§6.0). Still missing: save games, settings persistence, and any entity/physics state serializer. | ~1–2 weeks |
 | **Game UI / menus** | Absent (ImGui is dev-only; SDF text exists) | Main menu, HUD, pause, inventory, settings screens. | ~2–3 weeks |
 | **Animation blending** | Absent (one clip at a time) | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | ~1–2 weeks |
@@ -175,7 +182,8 @@ Also worth noting (not "gaps" but design ceilings):
 Ordered smallest-effort-to-playable first. Each is independent enough to land on
 its own branch.
 
-1. **Gamepad input** (~days) — cheapest win, unblocks "feels like a game."
+1. **Gamepad input** — done in spec 11.109; the remaining item is a minute with
+   a real pad, per `docs/verification.md`.
 2. **Audio** (~week) — miniaudio: SFX + music + basic 3D positional via the
    existing `AUDIO_SOURCE` component slot.
 3. **Animation blending** (~1–2 weeks) — a small blend layer over the existing

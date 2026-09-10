@@ -46,38 +46,20 @@ static int trace_step = 0;
 // What the game reads, and which key, pad button or pad axis each one is.
 // The stick's Y is negated: GLFW reads it down-positive, and the move helper
 // takes +y as forward.
-#define KEY(k, s)  {INPUT_SRC_KEY, GLFW_KEY_##k, s}
-#define PAD(b, s)  {INPUT_SRC_PAD_BUTTON, GLFW_GAMEPAD_BUTTON_##b, s}
-#define AXIS(a, s) {INPUT_SRC_PAD_AXIS, GLFW_GAMEPAD_AXIS_##a, s}
 static const InputAction actions[] = {
-    {"move_x", {KEY(D, 1), KEY(A, -1), AXIS(LEFT_X, 1), PAD(DPAD_RIGHT, 1), PAD(DPAD_LEFT, -1)}},
-    {"move_y", {KEY(W, 1), KEY(S, -1), AXIS(LEFT_Y, -1), PAD(DPAD_UP, 1), PAD(DPAD_DOWN, -1)}},
-    {"jump", {KEY(SPACE, 1), PAD(A, 1)}},
-    {"spawn", {KEY(F, 1), PAD(X, 1)}},
-    {"pause", {KEY(P, 1), PAD(START, 1)}},
-    {"raycast", {KEY(R, 1), PAD(Y, 1)}},
-    {"ground", {KEY(G, 1), PAD(B, 1)}},
+    {"move_x",
+     {INPUT_KEY(D, 1), INPUT_KEY(A, -1), INPUT_AXIS(LEFT_X, 1), INPUT_PAD(DPAD_RIGHT, 1),
+      INPUT_PAD(DPAD_LEFT, -1)}},
+    {"move_y",
+     {INPUT_KEY(W, 1), INPUT_KEY(S, -1), INPUT_AXIS(LEFT_Y, -1), INPUT_PAD(DPAD_UP, 1),
+      INPUT_PAD(DPAD_DOWN, -1)}},
+    {"jump", {INPUT_KEY(SPACE, 1), INPUT_PAD(A, 1)}},
+    {"spawn", {INPUT_KEY(F, 1), INPUT_PAD(X, 1)}},
+    {"pause", {INPUT_KEY(P, 1), INPUT_PAD(START, 1)}},
+    {"raycast", {INPUT_KEY(R, 1), INPUT_PAD(Y, 1)}},
+    {"ground", {INPUT_KEY(G, 1), INPUT_PAD(B, 1)}},
 };
-#undef KEY
-#undef PAD
-#undef AXIS
 #define ACTION_COUNT (sizeof(actions) / sizeof(actions[0]))
-
-// --print-bindings: the table, one action a line, as the gate reads it.
-static void print_bindings(void) {
-    static const char* const kinds[] = {"key", "mouse", "pad", "axis"};
-    for (size_t i = 0; i < ACTION_COUNT; i++) {
-        printf("%-8s", actions[i].name);
-        for (int s = 0; s < INPUT_ACTION_SOURCES; s++) {
-            const InputSource* src = &actions[i].sources[s];
-            if (src->kind == INPUT_SRC_KEY && src->code == 0)
-                continue;
-            printf("  %s:%d*%g", kinds[src->kind], src->code,
-                   src->scale == 0.0f ? 1.0 : src->scale);
-        }
-        printf("\n");
-    }
-}
 
 // Deferred door action (set in callback, applied in update)
 static bool door_open_pending = false;
@@ -494,7 +476,6 @@ static void on_update(Game* game, double dt) {
     // Reset for this frame - contact callbacks will set it if touching
     player_touching_door = false;
 
-    // The move, whichever device it came from
     vec3 input_dir;
     input_action_move(&game->input, "move_x", "move_y", input_dir);
 
@@ -522,13 +503,17 @@ static void on_update(Game* game, double dt) {
     // Set velocity (CharacterController will handle collision response)
     character_controller_set_velocity(cc, vel);
 
-    if (trace_player && trace_step++ % trace_every == 0) {
-        printf("player t=%5.2f pos %8.3f %8.3f %8.3f  vel %6.2f %6.2f %6.2f  grounded %d  "
-               "move %5.2f %5.2f jump %d\n",
-               game->time, player_entity->position[0], player_entity->position[1],
-               player_entity->position[2], vel[0], vel[1], vel[2], grounded ? 1 : 0, input_dir[0],
-               0.0f - input_dir[2], jump ? 1 : 0);
+    // The position is the one BEFORE this step; move_x and move_y are the
+    // action values the step acted on.
+    if (trace_player && trace_step % trace_every == 0) {
+        printf("player step %d t=%5.2f pos %8.3f %8.3f %8.3f  vel %6.2f %6.2f %6.2f  "
+               "grounded %d  move %5.2f %5.2f jump %d\n",
+               trace_step, game->time, player_entity->position[0], player_entity->position[1],
+               player_entity->position[2], vel[0], vel[1], vel[2], grounded ? 1 : 0,
+               input_action_value(&game->input, "move_x"),
+               input_action_value(&game->input, "move_y"), jump ? 1 : 0);
     }
+    trace_step++;
 
     // Door closing is now handled at START of next frame, after we know contact state
     // See beginning of on_update
@@ -537,7 +522,6 @@ static void on_update(Game* game, double dt) {
         spawn_falling_box(game);
     }
 
-    // Cast a ray downward from the player
     if (input_action_pressed(&game->input, "raycast") && physics) {
         vec3 down = {0, -1, 0};
         RaycastHit hit;
@@ -668,7 +652,7 @@ int main(int argc, const char* argv[]) {
         } else if (!strcmp(a, "--gamepad-db") && i + 1 < argc) {
             gamepad_db = argv[++i];
         } else if (!strcmp(a, "--print-bindings")) {
-            print_bindings();
+            input_print_actions(actions, ACTION_COUNT);
             return 0;
         } else if (a[0] == '-') {
             // A dash-led token is never a path. Without this a typo'd flag,
@@ -728,7 +712,7 @@ int main(int argc, const char* argv[]) {
 
     // A refused script or mapping file is a failed run, not a run with an
     // idle pad: a gate reading the trace must never mistake one for the other.
-    if (gamepad_db && !game_load_gamepad_mappings(game, gamepad_db)) {
+    if (gamepad_db && !input_load_gamepad_mappings(gamepad_db)) {
         free_game(game);
         return -1;
     }

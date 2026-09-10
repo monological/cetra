@@ -25,6 +25,12 @@ typedef struct InputState {
     vec3 drag_start_world_pos;       // The pick's hit point, world space
     vec3 drag_object_start_pos;      // The picked node's world position at the press
     float drag_plane_distance;       // Eye to hit point: the plane a drag moves in
+
+    // The wheel since the previous frame ended: what the poll at a frame's end
+    // delivered, so the next frame's update hook reads one frame's delta.
+    // Scroll over a GUI panel reaches ImGui and not this.
+    double scroll_dx;
+    double scroll_dy;
 } InputState;
 
 void init_input_state(InputState* state);
