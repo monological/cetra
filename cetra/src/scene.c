@@ -766,6 +766,7 @@ SceneNode* create_node() {
     node->light = NULL;
     node->camera = NULL;
     node->particle_system = NULL;
+    node->pose = NULL;
 
     return node;
 }
@@ -912,6 +913,15 @@ void node_set_particle_system(SceneNode* node, struct ParticleSystem* sys) {
     node->particle_system = sys;
     if (sys)
         sys->node = node; // back-ref: the system's world transform is this node's
+}
+
+void node_set_pose(SceneNode* node, struct AnimationState* pose) {
+    if (!node)
+        return;
+    node->pose = pose;
+    // The draw list records the pose on its items, so this is a mutation it
+    // has to see.
+    scene_graph_touched();
 }
 
 SceneNode* node_find(SceneNode* root, const char* name) {

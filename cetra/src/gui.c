@@ -19,8 +19,6 @@
 #include "postfx.h"
 #include "probe.h"
 #include "water.h"
-#include "render.h"
-#include "springbone.h"
 #include "scene.h"
 #include "shadow.h"
 #include "sky.h"
@@ -293,29 +291,9 @@ static void _engine_gui_panel(Engine* engine) {
     if (igRadioButton_Bool("Orbit", engine->camera_mode == CAMERA_MODE_ORBIT))
         engine->camera_mode = CAMERA_MODE_ORBIT;
 
-    // --- Animation: a collapsing section like the effect stacks below, shown
-    // only when a clip is loaded.
-    AnimationState* anim = get_render_animation_state();
-    if (anim && igCollapsingHeader_TreeNodeFlags("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (igButton(anim->playing ? "Pause Animation" : "Play Animation", (ImVec2){0, 0})) {
-            if (anim->playing)
-                pause_animation(anim);
-            else
-                play_animation(anim);
-        }
-        if (anim->skeleton && igButton("Recalc Bind Pose", (ImVec2){0, 0}))
-            recalculate_inverse_bind_poses(anim->skeleton);
-
-        if (anim->springs &&
-            igCollapsingHeader_TreeNodeFlags("Spring Bones", ImGuiTreeNodeFlags_DefaultOpen)) {
-            SpringBoneSystem* sb = anim->springs;
-            if (igCheckbox("Springs Enabled", &sb->enabled) && sb->enabled)
-                spring_bone_reset(sb); // re-enable snaps instead of lurching
-            igSliderFloat("Stiffness", &sb->params.stiffness, 0.0f, 1.0f, "%.3f", 0);
-            igSliderFloat("Damping", &sb->params.damping, 0.0f, 1.0f, "%.3f", 0);
-            igSliderFloat("Gravity", &sb->params.gravity, 0.0f, 30.0f, "%.2f", 0);
-        }
-    }
+    // Animation has no section here: the pose is the app's, on the node it
+    // chose (node_set_pose), and the app that owns the clock draws its own
+    // window for it (apps/render does).
 
     static int mat_sel = 0;
     static bool mat_editor_open = false;

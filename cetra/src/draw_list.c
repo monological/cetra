@@ -222,7 +222,7 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
 // place that says so: each of these used to be a silent skip, and the draw-mode
 // one a GL error at the draw that nothing read. Every reason is a distinct
 // literal, so the stored pointer compares by identity.
-static const char* _refusal(const Mesh* mesh, const Scene* scene) {
+static const char* _refusal(const Mesh* mesh, const Scene* scene, const AnimationState* pose) {
     if (mesh->gpu_vertex_count == 0)
         return "nothing uploaded";
     if (!mesh->material)
@@ -237,15 +237,23 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene) {
         return "program has no uniforms (its setup failed)";
     if (!program_accepts_draw_mode(program, mesh->draw_mode))
         return "draw mode the program's geometry stage cannot take";
+    // Another rig's matrices would be uploaded for this mesh, which skins it
+    // into garbage that still looks like a frame.
+    if (mesh->is_skinned && pose && pose->skeleton != mesh->skeleton)
+        return "skinned to a skeleton that is not the pose it inherits (node_set_pose the right "
+               "one on this node)";
     return NULL;
 }
 
 // Depth-first, children left to right, a node's meshes before its gizmo --
-// the order the two recursive walks produced between them.
+// the order the two recursive walks produced between them. `inherited` is the
+// nearest ancestor's pose, which a node without one takes.
 static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod,
-                        bool gizmos) {
+                        bool gizmos, const AnimationState* inherited) {
     if (!node)
         return true;
+
+    const AnimationState* pose = node->pose ? node->pose : inherited;
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes ? node->meshes[i] : NULL;
@@ -255,7 +263,7 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
         // scene in hand; a SceneNode has no way back to it.
         if (mesh->material && !mesh->material->owner)
             scene_add_material(scene, mesh->material);
-        const char* refusal = _refusal(mesh, scene);
+        const char* refusal = _refusal(mesh, scene, pose);
         if (refusal != mesh->draw_refusal) {
             // Said when the reason changes, so a mesh refused for one reason,
             // then another, is told both, and a mesh that became drawable and
@@ -272,7 +280,10 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
         if (refusal)
             continue;
 
-        DrawItem item = {.mesh = mesh, .node = node, .lod = select_lod(mesh, node, lod)};
+        DrawItem item = {.mesh = mesh,
+                         .node = node,
+                         .pose = mesh->is_skinned ? pose : NULL,
+                         .lod = select_lod(mesh, node, lod)};
         classify(mesh, &item.lane, &item.flags);
         if (!push(list, item))
             return false;
@@ -287,7 +298,7 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, scene, node->children[i], lod, gizmos))
+        if (!append_node(list, scene, node->children[i], lod, gizmos, pose))
             return false;
     }
     return true;
@@ -305,7 +316,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene, scene->root_node, lod, gizmos))
+    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL))
         return false;
 
     list->stamp = stamp;
@@ -348,19 +359,17 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
 
     // A skinned mesh's import AABB describes its BIND pose, which is a
     // different shape from the one being drawn -- so it is replaced rather than
-    // widened. The three cases are the three the shader takes:
+    // widened. The two cases are the two the shader takes (a pose for some
+    // other rig never reaches an item: the build refuses the mesh):
     //
-    //   no live pose      -> render_update_skinning_uniforms sets skinned = 0
-    //                        and the mesh draws at bind, so the import AABB is
-    //                        EXACT here rather than a fallback
-    //   pose is this rig  -> the posed union
-    //   pose is some      -> a foreign rig's matrices are about to be uploaded
-    //   other rig            for this mesh; nothing here can bound that, and
-    //                        saying so is better than bounding it wrongly
-    if (mesh->is_skinned && view->pose && view->pose->active_bone_count > 0) {
-        if (mesh->skeleton != view->pose->skeleton || !mesh->bone_aabb)
+    //   no pose   -> render_update_skinning_uniforms sets skinned = 0 and the
+    //                mesh draws at bind, so the import AABB is EXACT here
+    //                rather than a fallback
+    //   a pose    -> the posed union
+    if (mesh->is_skinned && item->pose && item->pose->active_bone_count > 0) {
+        if (!mesh->bone_aabb)
             return false;
-        _posed_bounds(mesh, view->pose, out);
+        _posed_bounds(mesh, item->pose, out);
         if (aabb_is_empty(out))
             return false; // a skinned mesh that binds nothing
     }
@@ -405,7 +414,7 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
 }
 
 bool draw_run_key_equal(const DrawItem* head, const DrawItem* next) {
-    return next->mesh == head->mesh && next->lod == head->lod;
+    return next->mesh == head->mesh && next->lod == head->lod && next->pose == head->pose;
 }
 
 bool draw_run_can_join(const DrawItem* head, const DrawItem* next, const CullView* view) {

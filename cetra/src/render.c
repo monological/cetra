@@ -65,25 +65,13 @@ _Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
 _Static_assert(GI_ATLAS_TEXTURE_UNIT == IBL_SKYBOX_TEXTURE_UNIT,
                "GI atlas unit is the skybox unit reused; pbr_frag samples neither cube");
 
-// Global animation state for skinned mesh rendering (set via set_render_animation_state)
-static AnimationState* g_current_animation_state = NULL;
-
-void set_render_animation_state(AnimationState* state) {
-    g_current_animation_state = state;
-}
-
-AnimationState* get_render_animation_state(void) {
-    return g_current_animation_state;
-}
-
 CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustum* frustum) {
     // .occlusion stays false here: render_occlusion_pass is the ONE writer of
     // true, and only on the camera pass's view. The shadow layers and every
     // capture build their views through this same constructor, which is what
     // keeps a camera answer out of a light's cull without any of them opting
     // out.
-    CullView view = {engine->frustum_cull_enabled ? frustum : NULL, scene ? scene->wind : NULL,
-                     get_render_animation_state()};
+    CullView view = {engine->frustum_cull_enabled ? frustum : NULL, scene ? scene->wind : NULL};
     return view;
 }
 
@@ -129,23 +117,22 @@ static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) 
     cull->occlusion = true;
 }
 
-void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
+void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh,
+                                     const AnimationState* pose) {
     if (!program || !program->uniforms)
         return;
 
     UniformManager* u = program->uniforms;
 
-    if (mesh && mesh->is_skinned && g_current_animation_state &&
-        g_current_animation_state->active_bone_count > 0) {
+    if (mesh && mesh->is_skinned && pose && pose->active_bone_count > 0) {
         uniform_set_int(u, "skinned", 1);
 
-        GLsizei count = (GLsizei)g_current_animation_state->active_bone_count;
+        GLsizei count = (GLsizei)pose->active_bone_count;
 
         // Upload bone matrices
         GLint loc = uniform_location(u, "boneMatrices[0]");
         if (loc >= 0) {
-            glUniformMatrix4fv(loc, count, GL_FALSE,
-                               (const GLfloat*)g_current_animation_state->bone_matrices);
+            glUniformMatrix4fv(loc, count, GL_FALSE, (const GLfloat*)pose->bone_matrices);
         }
 
         // Previous-frame bones for skinned motion vectors (TAA), packed once per
@@ -153,7 +140,7 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh) {
         // uniform (e.g. the shadow depth pass) -> skipped.
         GLint prevLoc = uniform_location(u, "uPrevBoneRows[0]");
         if (prevLoc >= 0) {
-            glUniform4fv(prevLoc, count * 3, g_current_animation_state->prev_bone_rows);
+            glUniform4fv(prevLoc, count * 3, pose->prev_bone_rows);
         }
     } else {
         uniform_set_int(u, "skinned", 0);
@@ -711,7 +698,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
         }
 
         // Update skinning uniforms for skinned meshes
-        render_update_skinning_uniforms(program, mesh);
+        render_update_skinning_uniforms(program, mesh, item->pose);
 
         // Set mesh-specific uniforms for vertex colors and UV1
         uniform_set_int(u, "vertexColorExists", mesh->colors ? 1 : 0);
@@ -1072,7 +1059,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
             if (stats)
                 stats->material_switches++;
         }
-        render_update_skinning_uniforms(program, mesh);
+        render_update_skinning_uniforms(program, mesh, item->pose);
 
         bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !engine->show_wireframe;
         submit_draw_run(&state, u, item, run, two_sided, stats);

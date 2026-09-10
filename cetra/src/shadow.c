@@ -856,10 +856,11 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             bool foliage = (item->flags & DRAW_FOLIAGE) != 0;
 
             // The depth stage reads InstanceBlock, so casters batch here even
-            // when the same mesh cannot batch on the camera path: skinning is
-            // a single global pose, which every instance of one mesh shares by
-            // definition. Gated on the program all the same, so this follows
-            // the shader rather than restating what it does.
+            // when the same mesh cannot batch on the camera path. A run shares
+            // one pose by construction -- the pose is in the run key -- so one
+            // upload of bone matrices serves every instance in it. Gated on the
+            // program all the same, so this follows the shader rather than
+            // restating what it does.
             size_t run = batching ? _ordered_caster_run(list, order, count, pos) : 1;
             // No shading transforms: this stage reads uInstModel and nothing
             // else, so the rest of the block is bytes it cannot look at.
@@ -895,7 +896,7 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             uniform_set_int(u, "vertexColorExists", mesh->colors ? 1 : 0);
 
             // Skin animated meshes so they cast animated shadows
-            render_update_skinning_uniforms(program, mesh);
+            render_update_skinning_uniforms(program, mesh, item->pose);
 
             // A two-sided card has no back face, so culling either way would
             // drop it from the map entirely.

@@ -61,6 +61,12 @@ typedef struct LodSelect {
 typedef struct DrawItem {
     Mesh* mesh;             // never NULL: an item exists because a mesh does
     struct SceneNode* node; // transform; never the geometry
+    // The pose this item skins with: the nearest ancestor's node.pose, resolved
+    // at build (spec 12.1). Recorded on a SKINNED item only, so two unskinned
+    // props under two different characters still share a draw; NULL draws a
+    // skinned mesh at bind. Part of the run key: one draw uploads one set of
+    // bone matrices.
+    const struct AnimationState* pose;
     uint8_t lane;
     uint8_t flags;
     // Level from this mesh's chain, chosen from the camera and used by every
@@ -135,29 +141,26 @@ void scene_graph_touched(void);
 bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod,
                      bool gizmos);
 
-// What a pass culls against: its frustum, plus the two things that move
-// geometry off the import bounds a frustum test would otherwise use.
+// What a pass culls against: its frustum, plus the wind field that moves
+// geometry off the import bounds a frustum test would otherwise use. (The
+// other displacer, a skinned mesh's pose, rides on the item since spec 12.1 --
+// it is a property of the mesh being drawn, not of the pass drawing it.)
 //
 // Carried as a struct for two reasons, and neither is that the members vary by
 // pass -- the wind field never does. First, it keeps this file out of the
-// scene's wind field and out of render.c's animation-state global, so the
-// culler depends on what it is handed rather than on what it can reach.
-// Second, and the load-bearing one: replacing the `const Frustum*` this
-// REPLACED is what makes the compiler find every cull site. A site left on the
-// old signature does not build, where a site left on the old BOUND would
-// silently pop geometry.
+// scene's wind field, so the culler depends on what it is handed rather than on
+// what it can reach. Second, and the load-bearing one: replacing the `const
+// Frustum*` this REPLACED is what makes the compiler find every cull site. A
+// site left on the old signature does not build, where a site left on the old
+// BOUND would silently pop geometry.
 //
-// Build one with render_cull_view, at the pass. The pose is written by the app
-// from inside its own render callback, so the shadow pass and the camera pass
-// legitimately see different ones -- and a view built anywhere but the pass can
-// describe a pose that pass is not about to upload.
+// Build one with render_cull_view, at the pass.
 //
 // A NULL view, or a NULL frustum inside one, accepts everything -- which is how
 // a pass says it does not cull.
 typedef struct CullView {
     const Frustum* frustum;
-    const struct Wind* wind;           // the scene's field; NULL = nothing sways
-    const struct AnimationState* pose; // the live pose; NULL = every mesh is at bind
+    const struct Wind* wind; // the scene's field; NULL = nothing sways
     // True only on the camera pass's view, and only on frames the occlusion
     // pass ran: says draw_item_visible may read item->occluded. Occlusion is a
     // CAMERA answer, and a pass culling against a light's volume must never
@@ -185,9 +188,12 @@ bool draw_item_visible(const DrawItem* item, const CullView* view);
 // uses -- a second bound would be a second thing to keep in agreement.
 bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out);
 
-// Whether two items are the same DRAW: same geometry at the same level. The
-// level joins the key because one draw submits one index range, so two
-// instances of a mesh at different distances cannot share a draw.
+// Whether two items are the same DRAW: same geometry at the same level under
+// the same pose. The level joins the key because one draw submits one index
+// range, so two instances of a mesh at different distances cannot share a
+// draw; the pose because one draw uploads one set of bone matrices, so two rigs
+// posed differently cannot either. Poses are compared for equality, never
+// order -- an address is not stable across runs.
 //
 // ONLY FOR A CALLER THAT HAS ALREADY SETTLED VISIBILITY. This asks half of
 // draw_run_can_join, and the half it omits is the one whose two answers

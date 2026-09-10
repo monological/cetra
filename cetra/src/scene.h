@@ -31,6 +31,7 @@
 // Forward-declared so scene.h and particle_system.h never include each other
 // (particle_system.h forward-declares SceneNode in turn) -- avoids a cycle.
 struct ParticleSystem;
+struct AnimationState;
 // Directional wind field (wind.h); a scene-owned environmental object like sky.
 struct Wind;
 struct PostFX;
@@ -73,14 +74,21 @@ typedef struct SceneNode {
     bool prev_valid;
 
     // BY FUNCTION: node_set_name (owned string), node_add_mesh (uploads what
-    // it attaches), node_set_light, node_set_camera, node_set_particle_system.
-    // The three installs are borrowed; the Scene frees them.
+    // it attaches), node_set_light, node_set_camera, node_set_particle_system,
+    // node_set_pose. The four installs are borrowed; the Scene frees the first
+    // three and the pose's owner frees the pose.
     char* name;
     Mesh** meshes;
     size_t mesh_count;
     Light* light;
     Camera* camera;
     struct ParticleSystem* particle_system;
+    // The pose every skinned mesh under this node skins with (spec 12.1).
+    // Inherited by descendants that set none, resolved at draw-list build, so
+    // one write on a model's root poses its whole subtree and a second rig
+    // beside it carries its own. NULL all the way up draws a skinned mesh at
+    // bind.
+    struct AnimationState* pose;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     mat4 original_transform; // The local pose; node_set_position writes its column
@@ -113,6 +121,9 @@ void node_set_light(SceneNode* node, Light* light);
 void node_set_camera(SceneNode* node, Camera* camera);
 // Attach a particle system (borrowed) whose world transform is this node's.
 void node_set_particle_system(SceneNode* node, struct ParticleSystem* sys);
+// Install the pose (borrowed) this node's subtree skins with; NULL removes it.
+// The owner frees the pose after the scene, or clears it here first.
+void node_set_pose(SceneNode* node, struct AnimationState* pose);
 
 // find
 SceneNode* node_find(SceneNode* root, const char* name);

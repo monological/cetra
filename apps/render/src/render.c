@@ -2289,10 +2289,10 @@ static void render_frame_update(Engine* engine, float dt) {
 //
 // The animation belongs here and not in render, which is the half of this app's
 // staleness the roadmap row did not name: the depth pass draws skinned casters
-// from the state set_render_animation_state publishes, so a rig's shadow lagged
-// its body for the same reason its transform did. The snapshot and the update
-// stay adjacent -- animation_snapshot_prev_pose is the skinned analogue of the
-// node walk's prev := global latch and carries the identical double-call hazard.
+// from the pose on the model's root node, so a rig's shadow lagged its body for
+// the same reason its transform did. The snapshot and the update stay adjacent
+// -- animation_snapshot_prev_pose is the skinned analogue of the node walk's
+// prev := global latch and carries the identical double-call hazard.
 void pre_render_callback(Engine* engine, Scene* current_scene) {
     SceneNode* root_node = current_scene->root_node;
 
@@ -2313,7 +2313,6 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // Update animation
     if (anim_state && anim_state->playing) {
         update_animation(anim_state, delta_time);
-        set_render_animation_state(anim_state);
 
         // One-shot stretch diagnostic once the animation is mid-pose
         if (check_stretch && frames_rendered == 60) {
@@ -3535,6 +3534,8 @@ int main(int argc, char** argv) {
             set_animation(anim_state, scene->animations[play_idx]);
             anim_state->looping = true;
             play_animation(anim_state);
+            // The whole model skins with this one pose: it is the only rig here.
+            node_set_pose(scene->root_node, anim_state);
             printf("Playing animation: %s (index %zu of %zu)\n", scene->animations[play_idx]->name,
                    play_idx, scene->animation_count);
 

@@ -128,23 +128,16 @@ void engine_build_draw_list(Engine* engine, struct Scene* scene);
 // thing in either, because they share pbr_frag exactly.
 void engine_resolve_material_variants(Engine* engine, struct Scene* scene);
 
-// Animation state for skinned mesh rendering
-// Set before rendering to enable bone matrix upload for skinned meshes
-void set_render_animation_state(AnimationState* state);
-AnimationState* get_render_animation_state(void);
-
-// Upload skinning state ("skinned" flag + bone matrices) for a mesh from
-// the active animation state; shared by the scene and shadow depth passes
-void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh);
+// Upload skinning state ("skinned" flag + bone matrices) for a mesh from the
+// pose its draw item carries (NULL = at bind); shared by the scene, prepass and
+// shadow depth passes
+void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh,
+                                     const AnimationState* pose);
 
 // What a pass culls against, assembled in the ONE place that knows what a cull
 // view is made of -- which is also the one place `frustum_cull_enabled` is read.
 // Three sites built this by hand in two different spellings, and the third only
 // honoured the toggle because its caller happened to pass NULL.
-//
-// Call it AT the pass: the pose it reads is a process-global the app writes from
-// inside its own render callback, so a view built anywhere else can describe a
-// pose the pass is not about to upload.
 CullView render_cull_view(const Engine* engine, const struct Scene* scene, const Frustum* frustum);
 
 // What a draw loop has already bound, so it can skip re-binding it. Shared by
