@@ -165,3 +165,71 @@ and Yuksel measures it as introducing substantial noise.
 `clamp((a - cutoff) / max(fwidth(a), eps) + 0.5, 0, 1)`, which expresses distance-to-threshold in
 pixels so the transition is one pixel wide whatever the texture's own falloff is. Shipped in
 11.87 and unchanged by 11.88.
+
+---
+
+## Screen-space ambient occlusion and specular occlusion
+
+The GTAO sweep (`gtao_frag.glsl`) and the specular-occlusion term it feeds
+(`include/spec_occ.glsl`, `spec_occ_composite_frag.glsl`). The visibility bitmask is the
+live method; the bent cone is the predecessor it retired. Read across specs 4.2.1,
+11.3–11.5 and 11.75–11.77.
+
+### Therrien, Levesque & Gilet, *Screen Space Indirect Lighting with Visibility Bitmask*, The Visual Computer (2023)
+
+- arXiv:2301.11376v2, DOI 10.1007/s00371-022-02703-y. Reference implementation and code
+  notes: <https://cdrinmatane.github.io/posts/ssaovb-code/>. Converted from the arXiv PDF;
+  committed 2026-08-23, and the file records no fetch date.
+- [`therrien-2023-screen-space-visibility-bitmask.md`](therrien-2023-screen-space-visibility-bitmask.md)
+
+**What cetra takes from it — the method itself.** `gtao_frag.glsl` replaces GTAO's two
+horizon angles with the paper's visibility bitmask: 32 angular sectors per hemisphere slice
+packed into one `uint`, each depth sample marking the finite angular slab it occludes under
+a constant thickness. AO is `popcount(mask) / 32` averaged over the slices, and the unset
+(visible) bits carry the bent normal and the one-bounce SSGI gather. The finite thickness is
+the whole point over an infinite height-field: light passes behind a thin surface instead of
+being over-darkened into a halo, and no distance falloff is needed.
+
+**Followed against the authors' own reference shader where the two disagree.** The hit
+criterion is the ROUND rule of §3.1 / Figure 5 — a sector is set when at least half covered —
+not the floor/ceil of the published code, which over-set about half a sector per slab (spec
+11.76 measured heavily-occluded regions lightening ~1.3%, open regions bit-identical). The 32
+sectors (§4.1) and the angular-space spacing (§3.1) are the paper's.
+
+**Extended past the paper — the specular-occlusion term (spec 11.76).** The paper carries no
+specular method. Its §3.2 template — one sampling direction per hemisphere subregion,
+weighted by that subregion's unoccluded sectors — is applied to a *single* subregion, the GGX
+reflection lobe: the lobe is projected into each slice and tested against the same mask
+(`lobeSectors`), carried as two sums and divided last at the consumer (`specOccSplitAt`) so
+the denoise chain averages quantities linear in visibility. This is the default `split` mode
+and the engine's live specular occlusion; it replaced the Klehm 2011 cone term below, retired
+in spec 11.77.
+
+**Deviations:** a fixed `THICKNESS` constant rather than the paper's optional distance-linear
+scaling; two slices per pixel with spatial and temporal jitter, against the paper's single
+jittered slice per frame.
+
+### Klehm, Ritschel, Eisemann & Seidel, *Bent Normals and Cones in Screen-space*, VMV 2011
+
+- DOI 10.2312/PE/VMV/VMV11/177-182 (Vision, Modeling, and Visualization 2011, pp. 177–182).
+  The committed copy records only the DOI — no source URL and no fetch date, unlike the
+  entries above; add the author-hosted PDF link before trusting this bullet.
+- [`klehm-2011-bent-normals-and-cones-screen-space.md`](klehm-2011-bent-normals-and-cones-screen-space.md)
+
+**What cetra took from it, and retired.** Spec 11.3 built a specular-occlusion term from the
+paper's bent cone — the AO chain's bent normal plus a length-derived aperture (§3.2)
+intersected with a GGX reflection cone (spherical-cap overlap) — as `specOcclusionCone` in
+`spec_occ.glsl`, and 11.4 carried it through the split-composite change. It shipped opt-in as
+`--spec-occ bent` and the default flip never happened (frequency-mismatch mottling on smooth
+metal). Spec 11.76 replaced the default with the bitmask term above, and spec 11.77 deleted
+the cone path outright: `specOcclusionCone`, `coneOverlap` and `spec_lobe.glsl` are gone, and
+`spec_occ.glsl`'s header is the only surviving mention.
+
+**Why it went — the paper's own §3.2.** Klehm restricts the gather directions rather than
+using the cone as a visibility gate; cetra used cone overlap AS the gate, which fails *dark*
+where the paper's use fails *bright*, and that is what manufactured the contact ring specs
+11.75–11.76 chased. The bitmask answers the directional question before anything collapses to
+one cone.
+
+**Kept for its derivations, not its code.** The bent *normal* production still lives in
+`gtao_frag` (a debug view, booked for SSGI / SSR / DDGI); the bent *cone* does not.
