@@ -461,6 +461,7 @@ right. Closing it is a listen, not a script: run `./out/bin/gametest` windowed o
 jump (a high beep), spawn a box (a low beep), and walk the camera around the door -- its
 looping tone should pan left and right and fade with distance. The startup log names the
 mode (`audio: device, 2 ch @ <rate> Hz` with a card, `audio: offline (no device)` headless).
-The ledger in `specs/12.0-audio.md` records which OS it has been heard on -- none, at
-writing, for the same reason the gamepad path was owed: the machine it was built on has the
-backend but no one has sat and listened on each of the three.
+**Heard on macOS (2026-09-10)**: gametest windowed plays the jump and spawn beeps and the
+door's looping tone through CoreAudio. **Linux (ALSA/PulseAudio) and Windows (WASAPI) are
+still owed** the same one-minute listen -- the layer is identical above the device, but no
+one has run it on those two backends.
