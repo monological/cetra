@@ -1,4 +1,4 @@
-# Cetra as a Game Engine — Status: What We Have and What We Need
+# Cetra as a Game Engine — Roadmap: What We Have and What We Need
 
 A snapshot of where Cetra stands as a foundation for shipping an actual game (as
 opposed to a rendering library). Grounded against the current code via a full

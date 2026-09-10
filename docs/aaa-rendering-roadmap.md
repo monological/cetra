@@ -3047,7 +3047,7 @@ bound.
 *Added after B15 closed the table, by the comparison-against-other-engines habit this document
 recommends to itself and had run exactly once (11.59, which added D6–D11). Every other track asks
 what the renderer DOES; this one asks how content reaches it, and the answer had never been
-written down anywhere. Note `docs/game-engine-status.md` — a third document, and the one that owns
+written down anywhere. Note `docs/game-engine-roadmap.md` — a third document, and the one that owns
 everything that is not the graphics pipeline — already books audio, animation blending, IK,
 gamepad, save and UI. It does **not** book either row below.*
 
@@ -3466,7 +3466,7 @@ inside `texture_derive_levels` plus a recipe bump, with the cook absorbing the c
 row it pointed at needed four corrections, recorded there.) The
 comparison habit's third run is now due -- checking the other documents first, per the Track F
 lesson below, since animation blending, IK and audio are already booked in
-`docs/game-engine-status.md` and "not in this table" is not "not written down". (This sentence read 32, 37 and 38 until
+`docs/game-engine-roadmap.md` and "not in this table" is not "not written down". (This sentence read 32, 37 and 38 until
 the sweep after 11.99, and had read 29, 32, 37, 44 and "the re-scoped 36" until the sweep after
 11.69: it dropped 33, which was never built, and carried 44 and 36 after 11.62 and 11.69 shipped
 them. 29 went with 11.70, **and 33 with 11.73**. It then carried 32 for fourteen specs after 11.85
@@ -3510,7 +3510,7 @@ because the absence is not written anywhere. What found it was comparing against
 document. Worth doing again for the tracks that have never had that comparison. **Run a second time
 after B15, and it produced Track F** — the asset pipeline, rows 51 and 52. The comparison found
 four candidate subjects and only two were genuinely missing: animation blending, IK and audio are
-all already booked, with effort estimates, in `docs/game-engine-status.md`, **a third document this
+all already booked, with effort estimates, in `docs/game-engine-roadmap.md`, **a third document this
 one has never once cited.** So the habit needs a companion: before booking a subject as absent,
 check the other documents, because "not in this table" and "not written down" are different claims
 and this table is not the whole of what is written down.
