@@ -1,0 +1,547 @@
+#include "animator.h"
+#include "springbone.h"
+#include "ext/log.h"
+
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Events one update can carry to the callback. A clip authoring more crossings
+// than this in one frame drops the rest, once, by name.
+#define EVENTS_PER_UPDATE 32
+
+// ============================================================================
+// Lifetime
+// ============================================================================
+
+Animator* create_animator(Skeleton* skeleton) {
+    if (!skeleton) {
+        log_error("Cannot create Animator without skeleton");
+        return NULL;
+    }
+    Animator* a = calloc(1, sizeof(Animator));
+    if (!a) {
+        log_error("Failed to allocate memory for Animator");
+        return NULL;
+    }
+    a->state = create_animation_state(skeleton);
+    if (!a->state) {
+        free(a);
+        return NULL;
+    }
+    a->speed = 1.0f;
+    a->fade_weight = 1.0f;
+    a->playing = true;
+    return a;
+}
+
+void free_animator(Animator* a) {
+    if (!a)
+        return;
+    free_animation_state(a->state);
+    free(a);
+}
+
+// ============================================================================
+// The blend space
+// ============================================================================
+
+static float clip_seconds(const Animation* clip) {
+    return clip->duration / clip->ticks_per_second;
+}
+
+// Piecewise-linear between the two entries around `param`, clamped at the
+// ends. An entry's own position gives it exactly 1 and its neighbour exactly
+// 0, so a knob parked on an entry plays that clip alone.
+static void space_weights(AnimatorSpace* s, float param) {
+    for (int i = 0; i < ANIMATOR_SPACE_MAX; i++)
+        s->weights[i] = 0.0f;
+    int last = s->count - 1;
+    if (last <= 0 || param <= s->entries[0].position) {
+        s->weights[0] = 1.0f;
+        return;
+    }
+    if (param >= s->entries[last].position) {
+        s->weights[last] = 1.0f;
+        return;
+    }
+    int i = 0;
+    while (i < last - 1 && param > s->entries[i + 1].position)
+        i++;
+    float p0 = s->entries[i].position;
+    float span = s->entries[i + 1].position - p0;
+    float t = span > 0.0f ? (param - p0) / span : 1.0f;
+    s->weights[i] = 1.0f - t;
+    s->weights[i + 1] = t;
+}
+
+// Where entry i is, in its own ticks: the clock for the reference, the same
+// fraction of its own length for every other.
+static float entry_time_at(const AnimatorSpace* s, int i, float ref_time) {
+    if (i == s->ref)
+        return ref_time;
+    const Animation* ref = s->entries[s->ref].clip;
+    if (ref->duration <= 0.0f)
+        return 0.0f;
+    return (ref_time / ref->duration) * s->entries[i].clip->duration;
+}
+
+// Advance the clock by dt seconds. With one entry this is the single-clip
+// advance statement for statement: the rate factor is exactly 1.0f (one weight
+// of 1.0f times a length over itself), and multiplying by it is exact.
+static void space_advance(AnimatorSpace* s, float param, float dt, float speed) {
+    s->prev_time = s->time;
+    s->wrapped = false;
+    s->ended = false;
+    if (s->count == 0)
+        return;
+
+    space_weights(s, param);
+    int ref = 0;
+    while (ref < s->count - 1 && s->weights[ref] <= 0.0f)
+        ref++;
+    if (ref != s->ref) {
+        // The clock changes clips: keep the phase. The one rounding in the
+        // space, and never on a path with a single entry.
+        const Animation* old = s->entries[s->ref].clip;
+        const Animation* now = s->entries[ref].clip;
+        s->time = old->duration > 0.0f ? (s->time / old->duration) * now->duration : 0.0f;
+        s->prev_time = s->time;
+        s->ref = ref;
+    }
+
+    const Animation* anim = s->entries[ref].clip;
+    float ref_seconds = clip_seconds(anim);
+    float rate = 0.0f;
+    for (int i = 0; i < s->count; i++) {
+        if (s->weights[i] > 0.0f)
+            rate += s->weights[i] * (ref_seconds / clip_seconds(s->entries[i].clip));
+    }
+
+    float ticks_delta = dt * anim->ticks_per_second * speed * rate;
+    s->time += ticks_delta;
+
+    if (s->looping) {
+        if (anim->duration > 0.0f) {
+            s->wrapped = s->time >= anim->duration || s->time < 0.0f;
+            s->time = fmodf(s->time, anim->duration);
+            if (s->time < 0.0f)
+                s->time += anim->duration;
+        }
+    } else {
+        if (s->time >= anim->duration) {
+            s->time = anim->duration;
+            s->ended = !s->finished;
+            s->finished = true;
+        } else if (s->time < 0.0f) {
+            s->time = 0.0f;
+            s->ended = !s->finished;
+            s->finished = true;
+        }
+    }
+}
+
+// The space's pose into `out`, `scratch` for a second entry. At most two
+// entries carry weight, and they sum to 1, so one blend at the upper weight
+// is the whole mix.
+static void space_sample(const AnimatorSpace* s, const Skeleton* skeleton, Pose* out,
+                         Pose* scratch) {
+    int lo = -1, hi = -1;
+    for (int i = 0; i < s->count; i++) {
+        if (s->weights[i] <= 0.0f)
+            continue;
+        if (lo < 0)
+            lo = i;
+        else if (hi < 0)
+            hi = i;
+    }
+    if (lo < 0) {
+        pose_bind(skeleton, out);
+        return;
+    }
+    animation_sample_pose(s->entries[lo].clip, skeleton, entry_time_at(s, lo, s->time), out);
+    if (hi >= 0) {
+        animation_sample_pose(s->entries[hi].clip, skeleton, entry_time_at(s, hi, s->time),
+                              scratch);
+        pose_blend(out, scratch, s->weights[hi], out);
+    }
+}
+
+// ============================================================================
+// Switching sources
+// ============================================================================
+
+static bool clip_on_skeleton(const Animator* a, const Animation* clip) {
+    if (!clip)
+        return false;
+    if (clip->skeleton && clip->skeleton != a->state->skeleton) {
+        log_error("Animator on '%s' refuses clip '%s', which is bound to '%s'",
+                  a->state->skeleton->name, clip->name, clip->skeleton->name);
+        return false;
+    }
+    return true;
+}
+
+// `incoming` replaces the base. With a fade the current base keeps running as
+// the outgoing source until the fade completes; a switch that lands mid-fade
+// freezes what was on screen and fades from that instead, so any number of
+// rapid switches cost two samples a frame and never pop.
+static void switch_source(Animator* a, const AnimatorSpace* incoming, float fade_seconds) {
+    bool cut = a->base.count == 0 || fade_seconds <= 0.0f;
+    if (!cut) {
+        if (a->fading && a->base_pose.skeleton) {
+            a->frozen = a->base_pose;
+            a->outgoing_frozen = true;
+        } else {
+            a->outgoing = a->base;
+            a->outgoing_frozen = false;
+        }
+        a->fading = true;
+        a->fade_seconds = fade_seconds;
+        a->fade_elapsed = 0.0f;
+        a->fade_weight = 0.0f;
+    } else {
+        a->fading = false;
+        a->outgoing_frozen = false;
+        a->fade_weight = 1.0f;
+        // A cut teleports the targets the springs chase; snapping them is
+        // what a fade, being continuous, must not do.
+        if (a->state->springs)
+            spring_bone_reset(a->state->springs);
+    }
+    a->base = *incoming;
+}
+
+static void one_clip_space(AnimatorSpace* s, const Animation* clip, bool looping) {
+    memset(s, 0, sizeof(*s));
+    s->name = clip->name;
+    s->entries[0].clip = clip;
+    s->entries[0].position = 0.0f;
+    s->count = 1;
+    s->looping = looping;
+}
+
+void animator_play(Animator* a, const Animation* clip, float fade_seconds, bool looping) {
+    if (!a || !clip_on_skeleton(a, clip))
+        return;
+    AnimatorSpace s;
+    one_clip_space(&s, clip, looping);
+    a->resume_pending = false;
+    switch_source(a, &s, fade_seconds);
+}
+
+void animator_play_space(Animator* a, const char* name, const AnimatorEntry* entries, int count,
+                         float fade_seconds, bool looping) {
+    if (!a || !entries)
+        return;
+    if (count < 1 || count > ANIMATOR_SPACE_MAX) {
+        log_error("Animator: a blend space holds 1..%d entries, not %d", ANIMATOR_SPACE_MAX, count);
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        if (!clip_on_skeleton(a, entries[i].clip))
+            return;
+    }
+
+    AnimatorSpace s;
+    memset(&s, 0, sizeof(s));
+    s.name = name ? name : entries[0].clip->name;
+    s.looping = looping;
+    // Insertion by position; two entries at one position keep their order.
+    for (int i = 0; i < count; i++) {
+        int at = s.count;
+        while (at > 0 && s.entries[at - 1].position > entries[i].position) {
+            s.entries[at] = s.entries[at - 1];
+            at--;
+        }
+        s.entries[at] = entries[i];
+        s.count++;
+    }
+    a->resume_pending = false;
+    switch_source(a, &s, fade_seconds);
+}
+
+void animator_play_once(Animator* a, const Animation* clip, float fade_seconds) {
+    if (!a || !clip_on_skeleton(a, clip))
+        return;
+    // The first one-shot remembers where to return; a second during it does
+    // not overwrite that with the first.
+    if (!a->resume_pending && a->base.count > 0) {
+        a->resume = a->base;
+        a->resume_pending = true;
+        a->resume_fade = fade_seconds;
+    }
+    AnimatorSpace s;
+    one_clip_space(&s, clip, false);
+    switch_source(a, &s, fade_seconds);
+}
+
+void animator_stop(Animator* a) {
+    if (!a)
+        return;
+    memset(&a->base, 0, sizeof(a->base));
+    a->fading = false;
+    a->outgoing_frozen = false;
+    a->fade_weight = 1.0f;
+    a->resume_pending = false;
+    a->layer.phase = ANIMATOR_LAYER_OFF;
+    a->layer.weight = 0.0f;
+    if (a->state->springs)
+        spring_bone_reset(a->state->springs);
+    pose_bind(a->state->skeleton, &a->final);
+    animation_state_apply_pose(a->state, &a->final, 0.0f);
+}
+
+bool animator_finished(const Animator* a) {
+    return a ? a->finished : false;
+}
+
+const char* animator_source_name(const Animator* a) {
+    if (!a || a->base.count == 0 || !a->base.name)
+        return "";
+    return a->base.name;
+}
+
+// ============================================================================
+// The override layer
+// ============================================================================
+
+void animator_play_layer(Animator* a, const Animation* clip, const float* mask, float fade_in,
+                         float fade_out, bool looping) {
+    if (!a || !mask || !clip_on_skeleton(a, clip))
+        return;
+    AnimatorLayer* L = &a->layer;
+    // A layer re-played mid-fade keeps its weight, so a second wave over a
+    // half-faded first one continues from where the arm is.
+    float weight = L->phase == ANIMATOR_LAYER_OFF ? 0.0f : L->weight;
+    memset(L, 0, sizeof(*L));
+    L->clip = clip;
+    L->looping = looping;
+    L->fade_in = fade_in;
+    L->fade_out = fade_out;
+    L->weight = weight;
+    L->phase = ANIMATOR_LAYER_IN;
+    size_t n = a->state->skeleton->bone_count;
+    for (size_t i = 0; i < n; i++)
+        L->mask[i] = mask[i];
+}
+
+void animator_stop_layer(Animator* a, float fade_out) {
+    if (!a || a->layer.phase == ANIMATOR_LAYER_OFF)
+        return;
+    a->layer.fade_out = fade_out;
+    a->layer.phase = ANIMATOR_LAYER_OUT;
+}
+
+bool animator_layer_finished(const Animator* a) {
+    return a ? a->layer.finished : false;
+}
+
+int animator_mask_subtree(const Skeleton* skeleton, const char* root_bone, float* mask) {
+    if (!skeleton || !mask)
+        return 0;
+    size_t n = skeleton->bone_count;
+    for (size_t i = 0; i < n; i++)
+        mask[i] = 0.0f;
+    // The lookup reads the map and declares the skeleton non-const.
+    int root = get_bone_index_by_name((Skeleton*)skeleton, root_bone);
+    if (root < 0) {
+        log_error("Skeleton '%s' has no bone '%s' to mask", skeleton->name,
+                  root_bone ? root_bone : "(null)");
+        return 0;
+    }
+    // Parent-first order: a bone's parent is already decided when it is met.
+    int count = 0;
+    for (size_t i = 0; i < n; i++) {
+        int parent = skeleton->bones[i].parent_index;
+        bool in = (int)i == root || (parent >= 0 && (size_t)parent < i && mask[parent] > 0.0f);
+        mask[i] = in ? 1.0f : 0.0f;
+        count += in ? 1 : 0;
+    }
+    return count;
+}
+
+static void layer_advance(AnimatorLayer* L, float dt, float speed) {
+    L->wrapped = false;
+    L->ended = false;
+    if (L->phase == ANIMATOR_LAYER_OFF)
+        return;
+    const Animation* clip = L->clip;
+    L->prev_time = L->time;
+
+    float raw = L->time + dt * clip->ticks_per_second * speed;
+    if (L->looping) {
+        if (clip->duration > 0.0f) {
+            L->wrapped = raw >= clip->duration || raw < 0.0f;
+            raw = fmodf(raw, clip->duration);
+            if (raw < 0.0f)
+                raw += clip->duration;
+        }
+    } else if (raw >= clip->duration) {
+        L->ended = L->time < clip->duration;
+        raw = clip->duration;
+    } else if (raw < 0.0f) {
+        raw = 0.0f;
+    }
+    L->time = raw;
+
+    switch (L->phase) {
+        case ANIMATOR_LAYER_IN:
+            L->weight = L->fade_in > 0.0f ? L->weight + dt / L->fade_in : 1.0f;
+            if (L->weight >= 1.0f) {
+                L->weight = 1.0f;
+                L->phase = ANIMATOR_LAYER_ON;
+            }
+            break;
+        case ANIMATOR_LAYER_OUT:
+            L->weight = L->fade_out > 0.0f ? L->weight - dt / L->fade_out : 0.0f;
+            if (L->weight <= 0.0f) {
+                L->weight = 0.0f;
+                L->phase = ANIMATOR_LAYER_OFF;
+                L->finished = true;
+            }
+            break;
+        default:
+            break;
+    }
+    // A one-shot releases itself: it holds its last key (the interpolators
+    // clamp) while the weight fades out.
+    if (L->ended && (L->phase == ANIMATOR_LAYER_IN || L->phase == ANIMATOR_LAYER_ON))
+        L->phase = ANIMATOR_LAYER_OUT;
+}
+
+// ============================================================================
+// Events
+// ============================================================================
+
+void animator_set_event_callback(Animator* a, AnimatorEventFn fn, void* user) {
+    if (!a)
+        return;
+    a->on_event = fn;
+    a->event_user = user;
+}
+
+// The events of `clip` crossed by an advance from prev to now, in the order
+// crossed: [prev, now), or across the loop point [prev, end) then [0, now).
+// An advance that ends a one-shot includes its final tick, so an event at
+// the very end fires once.
+static void collect_events(const Animation* clip, float prev, float now, bool wrapped, bool ended,
+                           const char** fired, int* count, bool* dropped) {
+    for (int pass = 0; pass < 2; pass++) {
+        for (size_t e = 0; e < clip->event_count; e++) {
+            float t = clip->events[e].time_ticks;
+            bool hit;
+            if (wrapped)
+                hit = pass == 0 ? t >= prev : (t < now && t < prev);
+            else if (pass == 0)
+                hit = t >= prev && (t < now || (ended && t <= now));
+            else
+                hit = false;
+            if (!hit)
+                continue;
+            if (*count >= EVENTS_PER_UPDATE) {
+                *dropped = true;
+                return;
+            }
+            fired[(*count)++] = clip->events[e].name;
+        }
+        if (!wrapped)
+            break;
+    }
+}
+
+// ============================================================================
+// The frame
+// ============================================================================
+
+void animator_update(Animator* a, float dt) {
+    if (!a)
+        return;
+
+    // First and unconditional: a paused pose reads zero deformation velocity
+    // rather than a frozen nonzero one.
+    animation_snapshot_prev_pose(a->state);
+    a->finished = false;
+
+    if (!a->playing || a->base.count == 0)
+        return;
+    const Skeleton* skeleton = a->state->skeleton;
+
+    // Clocks and envelopes
+    space_advance(&a->base, a->param, dt, a->speed);
+    if (a->fading) {
+        if (!a->outgoing_frozen)
+            space_advance(&a->outgoing, a->param, dt, a->speed);
+        a->fade_elapsed += dt;
+        // Completed this frame: the outgoing is dropped, not blended at 1, so
+        // the pose from here on is the incoming source's alone.
+        if (a->fade_elapsed + 1e-6f >= a->fade_seconds) {
+            a->fading = false;
+            a->outgoing_frozen = false;
+            a->fade_weight = 1.0f;
+        } else {
+            a->fade_weight = a->fade_elapsed / a->fade_seconds;
+        }
+    }
+    layer_advance(&a->layer, dt, a->speed);
+
+    // The base, then the outgoing faded under it
+    space_sample(&a->base, skeleton, &a->base_pose, &a->scratch_b);
+    if (a->fading) {
+        const Pose* out_pose = &a->frozen;
+        if (!a->outgoing_frozen) {
+            space_sample(&a->outgoing, skeleton, &a->scratch_a, &a->scratch_b);
+            out_pose = &a->scratch_a;
+        }
+        pose_blend(out_pose, &a->base_pose, a->fade_weight, &a->base_pose);
+    }
+
+    // The override, on its bones
+    if (a->layer.phase != ANIMATOR_LAYER_OFF) {
+        for (size_t i = 0; i < skeleton->bone_count; i++)
+            a->layer_weights[i] = a->layer.weight * a->layer.mask[i];
+        animation_sample_pose(a->layer.clip, skeleton, a->layer.time, &a->scratch_layer);
+        pose_blend_masked(&a->base_pose, &a->scratch_layer, a->layer_weights, &a->final);
+    } else {
+        a->final = a->base_pose;
+    }
+
+    animation_state_apply_pose(a->state, &a->final, dt);
+
+    // Events, after the pose: the base's highest-weighted entry (ties to the
+    // lowest index) and the override clip. The outgoing source fires nothing.
+    if (a->on_event) {
+        const char* fired[EVENTS_PER_UPDATE];
+        int count = 0;
+        bool dropped = false;
+        const AnimatorSpace* s = &a->base;
+        int e = 0;
+        for (int i = 1; i < s->count; i++) {
+            if (s->weights[i] > s->weights[e])
+                e = i;
+        }
+        collect_events(s->entries[e].clip, entry_time_at(s, e, s->prev_time),
+                       entry_time_at(s, e, s->time), s->wrapped, s->ended, fired, &count, &dropped);
+        if (a->layer.phase != ANIMATOR_LAYER_OFF) {
+            collect_events(a->layer.clip, a->layer.prev_time, a->layer.time, a->layer.wrapped,
+                           a->layer.ended, fired, &count, &dropped);
+        }
+        if (dropped) {
+            log_warn("Animator on '%s': more than %d events crossed in one frame; the rest were "
+                     "dropped",
+                     skeleton->name, EVENTS_PER_UPDATE);
+        }
+        for (int i = 0; i < count; i++)
+            a->on_event(a, fired[i], a->event_user);
+    }
+
+    // The edge, and a one-shot's way back
+    if (a->base.ended) {
+        a->finished = true;
+        if (a->resume_pending) {
+            AnimatorSpace back = a->resume;
+            a->resume_pending = false;
+            switch_source(a, &back, a->resume_fade);
+        }
+    }
+}

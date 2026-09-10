@@ -31,7 +31,7 @@ set(CETRA_PUBLIC_INCLUDE_DIR ${PROJECT_BINARY_DIR}/include)
 set(CETRA_INTERNAL_INCLUDE_DIR ${PROJECT_BINARY_DIR}/include-internal)
 
 set(CETRA_PUBLIC_HEADERS
-    animation.h app.h camera.h common.h compat.h config_snapshot.h cook.h
+    animation.h animator.h app.h camera.h common.h compat.h config_snapshot.h cook.h
     cscene.h decal.h engine.h exposure.h geometry.h gi_volume.h ibl.h ies.h
     import.h input.h light.h material.h mesh.h mesh_builder.h noise.h
     particle_emitter.h particle_module.h particle_renderer.h particle_sim.h

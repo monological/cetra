@@ -25,6 +25,7 @@
 #include "cetra/import.h"
 #include "cetra/transform.h"
 #include "cetra/animation.h"
+#include "cetra/animator.h"
 #include "cetra/springbone.h"
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
@@ -42,6 +43,11 @@
 
 #include "cscene_apply.h"
 #include "render_args.h"
+
+// Dear ImGui via cimgui, for the Animation window this app draws itself: the
+// animator is the app's, so its panel is too.
+#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+#include "cimgui.h"
 
 /*
  * Constants
@@ -1906,9 +1912,10 @@ static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
 }
 
 /*
- * Animation playback state
+ * Animation playback: the animator owns the pose the model's root node skins
+ * with (spec 12.1).
  */
-static AnimationState* anim_state = NULL;
+static Animator* animator = NULL;
 
 /*
  * Frame counter (for the --check-stretch gate; --frames now uses the engine's
@@ -2283,6 +2290,70 @@ static void render_frame_update(Engine* engine, float dt) {
     }
 }
 
+// The Animation window: what plays, how it fades to the next clip, the blend
+// knob when a space has one, and the spring bones. Drawn only with a rig.
+static void render_anim_gui(const Engine* engine, Scene* scene) {
+    if (!engine || !engine->show_gui || !animator || !scene)
+        return;
+
+    static float fade_seconds = 0.25f;
+    static int clip_sel = -1;
+
+    igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
+    igSetNextWindowSize((ImVec2){300, 260}, ImGuiCond_FirstUseEver);
+    if (igBegin("Animation", NULL, 0)) {
+        igText("Playing: %s", animator_source_name(animator));
+        igCheckbox("Play", &animator->playing);
+        igSliderFloat("Speed", &animator->speed, 0.0f, 3.0f, "%.2f", 0);
+
+        // Pick a clip; it crossfades in over the fade. The first draw shows
+        // the clip the app started, so the combo does not restart it.
+        if (scene->animation_count > 0) {
+            if (clip_sel < 0 || (size_t)clip_sel >= scene->animation_count) {
+                clip_sel = 0;
+                for (size_t i = 0; i < scene->animation_count; i++) {
+                    if (animator->base.count == 1 &&
+                        animator->base.entries[0].clip == scene->animations[i])
+                        clip_sel = (int)i;
+                }
+            }
+            igSliderFloat("Fade (s)", &fade_seconds, 0.0f, 2.0f, "%.2f", 0);
+            if (igBeginCombo("Clip", scene->animations[clip_sel]->name, 0)) {
+                for (size_t i = 0; i < scene->animation_count; i++) {
+                    bool selected = (int)i == clip_sel;
+                    if (igSelectable_Bool(scene->animations[i]->name, selected, 0,
+                                          (ImVec2){0, 0}) &&
+                        !selected) {
+                        clip_sel = (int)i;
+                        animator_play(animator, scene->animations[i], fade_seconds, true);
+                    }
+                }
+                igEndCombo();
+            }
+        }
+        if (animator->base.count > 1) {
+            float lo = animator->base.entries[0].position;
+            float hi = animator->base.entries[animator->base.count - 1].position;
+            igSliderFloat("Blend", &animator->param, lo, hi, "%.2f", 0);
+        }
+
+        AnimationState* state = animator->state;
+        if (state->skeleton && igButton("Recalc Bind Pose", (ImVec2){0, 0}))
+            recalculate_inverse_bind_poses(state->skeleton);
+
+        if (state->springs &&
+            igCollapsingHeader_TreeNodeFlags("Spring Bones", ImGuiTreeNodeFlags_DefaultOpen)) {
+            SpringBoneSystem* sb = state->springs;
+            if (igCheckbox("Springs Enabled", &sb->enabled) && sb->enabled)
+                spring_bone_reset(sb); // re-enable snaps instead of lurching
+            igSliderFloat("Stiffness", &sb->params.stiffness, 0.0f, 1.0f, "%.3f", 0);
+            igSliderFloat("Damping", &sb->params.damping, 0.0f, 1.0f, "%.3f", 0);
+            igSliderFloat("Gravity", &sb->params.gravity, 0.0f, 30.0f, "%.2f", 0);
+        }
+    }
+    igEnd();
+}
+
 // Everything the frame's geometry depends on: the POSE, and the camera it is
 // read against. The engine propagates the graph as soon as this returns, and the
 // shadow pass follows.
@@ -2290,9 +2361,9 @@ static void render_frame_update(Engine* engine, float dt) {
 // The animation belongs here and not in render, which is the half of this app's
 // staleness the roadmap row did not name: the depth pass draws skinned casters
 // from the pose on the model's root node, so a rig's shadow lagged its body for
-// the same reason its transform did. The snapshot and the update stay adjacent
-// -- animation_snapshot_prev_pose is the skinned analogue of the node walk's
-// prev := global latch and carries the identical double-call hazard.
+// the same reason its transform did. The prev-pose latch and the update are one
+// call -- animator_update begins with the latch, the skinned analogue of the
+// node walk's prev := global, which carries the identical double-call hazard.
 void pre_render_callback(Engine* engine, Scene* current_scene) {
     SceneNode* root_node = current_scene->root_node;
 
@@ -2305,20 +2376,19 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // frame N is always pose N
     float delta_time = (float)engine->render_delta;
 
-    // Snapshot last frame's pose for skinned motion vectors (TAA) before this
-    // frame recomputes it. Every frame (even paused) so a still pose reads zero
-    // deformation velocity instead of a frozen nonzero one that would smear it.
-    animation_snapshot_prev_pose(anim_state);
-
-    // Update animation
-    if (anim_state && anim_state->playing) {
-        update_animation(anim_state, delta_time);
+    // The animator's update begins with last frame's pose latched for skinned
+    // motion vectors (TAA), every frame, paused or not -- so a still pose reads
+    // zero deformation velocity instead of a frozen nonzero one that would
+    // smear it. The GUI window is drawn first because igNewFrame has fired by
+    // now and a clip picked there should play this frame.
+    render_anim_gui(engine, current_scene);
+    if (animator) {
+        animator_update(animator, delta_time);
 
         // One-shot stretch diagnostic once the animation is mid-pose
         if (check_stretch && frames_rendered == 60) {
-            printf("\n===== SKINNING STRETCH CHECK (time=%.1f ticks) =====\n",
-                   anim_state->current_time);
-            report_skinning_stretch(root_node, anim_state);
+            printf("\n===== SKINNING STRETCH CHECK (time=%.1f ticks) =====\n", animator->base.time);
+            report_skinning_stretch(root_node, animator->state);
             printf("===== END STRETCH CHECK =====\n\n");
         }
     }
@@ -2359,7 +2429,7 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     // Render skeleton bones if enabled
     if (engine->show_bones) {
         Skeleton* skel = (current_scene->skeleton_count > 0) ? current_scene->skeletons[0] : NULL;
-        render_skeleton_bones(engine, skel, anim_state);
+        render_skeleton_bones(engine, skel, animator ? animator->state : NULL);
     }
 }
 
@@ -3528,28 +3598,27 @@ int main(int argc, char** argv) {
     // over animations embedded in the model file
     if (scene->animation_count > 0 && scene->skeleton_count > 0) {
         size_t play_idx = (first_cli_anim < scene->animation_count) ? first_cli_anim : 0;
-        anim_state = create_animation_state(scene->skeletons[0]);
-        if (anim_state) {
-            anim_state->debug_pose_dump = args.anim_debug != 0;
-            set_animation(anim_state, scene->animations[play_idx]);
-            anim_state->looping = true;
-            play_animation(anim_state);
+        animator = create_animator(scene->skeletons[0]);
+        if (animator) {
+            animator->state->debug_pose_dump = args.anim_debug != 0;
+            // A cut, looping: the single-clip player's own path.
+            animator_play(animator, scene->animations[play_idx], 0.0f, true);
             // The whole model skins with this one pose: it is the only rig here.
-            node_set_pose(scene->root_node, anim_state);
+            node_set_pose(scene->root_node, animator->state);
             printf("Playing animation: %s (index %zu of %zu)\n", scene->animations[play_idx]->name,
                    play_idx, scene->animation_count);
 
             // Spring-bone secondary motion for chains no animation drives.
             // Only hair: the "sheath root" chain is a rigid metal belt on
             // this rig and must stay welded to its authored pose.
-            anim_state->springs = create_spring_bone_system(scene->skeletons[0]);
-            if (anim_state->springs) {
-                int n = spring_bone_add_chains_by_prefix(anim_state->springs, "hair");
+            animator->state->springs = create_spring_bone_system(scene->skeletons[0]);
+            if (animator->state->springs) {
+                int n = spring_bone_add_chains_by_prefix(animator->state->springs, "hair");
                 if (n > 0) {
                     printf("Spring bones: %d chain(s) under prefix 'hair'\n", n);
                 }
                 if (args.no_springs) {
-                    anim_state->springs->enabled = false;
+                    animator->state->springs->enabled = false;
                 }
             }
         }
@@ -4363,8 +4432,8 @@ int main(int argc, char** argv) {
     }
 
     printf("Cleaning up...\n");
-    if (anim_state) {
-        free_animation_state(anim_state);
+    if (animator) {
+        free_animator(animator);
     }
     if (cscn) {
         cscene_free(cscn);
