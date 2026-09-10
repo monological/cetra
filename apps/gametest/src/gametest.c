@@ -1143,9 +1143,11 @@ static int run_anim_probe(Game* game, const char* which) {
         int matched = 0;
         for (size_t i = 0; i < clip->channel_count; i++)
             matched += clip->channels[i].bone_index >= 0 ? 1 : 0;
-        printf("anim import matched %d\n", matched);
-        printf("anim import channels %zu\n", clip->channel_count);
-        printf("anim import seconds %.3f\n", clip->duration / clip->ticks_per_second);
+        // `anim <case> <label> <key> <numbers>`, the one shape every probe line
+        // takes -- the audio probe's too, so one regex reads them all.
+        printf("anim import clip matched %d\n", matched);
+        printf("anim import clip channels %zu\n", clip->channel_count);
+        printf("anim import clip seconds %.3f\n", clip->duration / clip->ticks_per_second);
     } else {
         fprintf(stderr, "anim-probe: unknown case '%s'\n", which);
         rc = 1;

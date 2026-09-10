@@ -315,6 +315,16 @@ RECIPES = [
     {"name": "ortho_shadow", "scene": "assets/dir_shadow_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0",
                "--ortho", "12"]},
+    # --- animation ------------------------------------------------------------
+    # The first SKINNED golden (spec 12.1). Every arm in the `anim` gate group is
+    # an identity or a bone-space number, and both kinds pass under a skinning
+    # bug that is merely CONSISTENT -- a permuted bone order, a transposed
+    # matrix -- because they compare the pose against itself. This is the one
+    # picture in the corpus that goes through pbr_skinned_vert and skin.glsl, so
+    # a rig that poses correctly and SKINS wrongly has somewhere to show it.
+    {"name": "puppet", "scene": "assets/puppet.cscn", "size": (800, 600),
+     "flags": ["--anim-clip", "run", "-f", "30", "-W", "400", "-H", "300",
+               "--no-auto-exposure", "-E", "1.0"]},
 ]
 
 

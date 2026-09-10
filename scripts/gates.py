@@ -14883,6 +14883,373 @@ def run_audio_gate(workdir):
     return failures
 
 
+PUPPET = "assets/puppet.cscn"
+
+# "anim <case> <label> <key> <numbers...>" from gametest --anim-probe. The events
+# case also prints a non-numeric "fired <name> <tick>" line, which this
+# deliberately does not match: the counts are what the arms read.
+_ANIM_PROBE = re.compile(r"^anim ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+
+# "anim-probe frame <n> bone <i> rot <x y z w> pos <x y z> name <name>" from
+# render --anim-probe. The NAME is last because a rig may space its bone names,
+# so everything after "name " is one.
+_ANIM_BONE = re.compile(r"^anim-probe frame (\d+) bone \d+ rot "
+                        r"(-?[\d.eE+-]+) (-?[\d.eE+-]+) (-?[\d.eE+-]+) (-?[\d.eE+-]+) "
+                        r"pos \S+ \S+ \S+ name (.+)$", re.M)
+
+# The player trace's animation tail (spec 12.1), appended after `jump <d>`: the
+# knob, the locomotion space's three weights, the crossfade weight, the override
+# weight and the base source's name. APPENDED rather than inserted, so
+# _GAMETEST_TRACE above still matches the same line.
+_ANIM_TRACE = re.compile(r"player step (\d+) .* jump \d anim "
+                         r"(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) "
+                         r"(\w+)")
+
+
+def _anim_probe_run(case):
+    """{(label, key): [floats]} from one gametest --anim-probe run, or None if it
+    failed or measured nothing. The probe ticks ANIMATOR components through the
+    game loop's own update_all_animators at a fixed 1/60, on a rig whose clips are
+    authored in closed form -- so what it prints has a value this file can state.
+    """
+    r = subprocess.run([GAMETEST, "--anim-probe", case], capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    out = {(label, key): [float(v) for v in nums.split()]
+           for c, label, key, nums in _ANIM_PROBE.findall(text) if c == case}
+    if r.returncode != 0 or not out:
+        return None
+    return out
+
+
+def _anim_bone_pose(extra, frames=30):
+    """{bone name: (x, y, z, w)} for the LAST frame of a render --anim-probe run.
+
+    No screenshot and no framebuffer scaling: this reads a POSE, which the window
+    size cannot reach.
+    """
+    cmd = [RENDER, "-m", PUPPET, "-x", "-f", str(frames), "-W", "400", "-H", "300",
+           "--anim-probe"] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    hits = _ANIM_BONE.findall(r.stdout + r.stderr)
+    if r.returncode != 0 or not hits:
+        return None
+    last = max(int(h[0]) for h in hits)
+    return {name: (float(x), float(y), float(z), float(w))
+            for f, x, y, z, w, name in hits if int(f) == last}
+
+
+def _anim_render(workdir, tag, extra, frames=30):
+    """One puppet capture at the shared size; its path, or None."""
+    out = os.path.join(workdir, "anim_%s.ppm" % tag)
+    return None if render(PUPPET, out, extra, frames=frames) else out
+
+
+def _anim_frames(workdir, tag, extra, frames):
+    """The same with every frame kept, for an arm that reads a transition."""
+    out = os.path.join(workdir, "anim_%s.ppm" % tag)
+    if render(PUPPET, out, extra + ["--screenshot-every", "1"], frames=frames):
+        return None
+    return out
+
+
+def _anim_frame(base, n):
+    return base[:-4] + "_%06d.ppm" % n
+
+
+def run_anim_gate(workdir):
+    """The animation blend layer (spec 12.1), on a generated puppet whose clips are
+    authored in closed form -- so every bar below is a number this file states
+    rather than a frame somebody once looked at. Half the arms read PIXELS through
+    the render app; half read poses, weights and events through gametest's
+    --anim-probe, which drives ANIMATOR components with the game loop's own
+    update_all_animators.
+
+      anim-endpoints   a blend space parked on an entry is that clip ALONE, to the
+                       pixel, at both ends. Walk and run must also differ, or the
+                       arm would pass on any two identical frames.
+      anim-midpoint    blending the bind pose with a 90-degree rotation reads
+                       2*atan2(t*sin45, (1-t)+t*cos45): 21.59/45.00/68.41 degrees at
+                       t = .25/.5/.75. Slerp would read 22.5/45/67.5, so the QUARTER
+                       points are what tell the two apart -- the midpoint alone
+                       cannot, both being 45.
+      anim-crossfade   before the switch the frame is the outgoing clip alone; after
+                       the fade it is the incoming clip alone, bit for bit, as though
+                       snapped at the switch frame; mid-fade it is neither. A snap, a
+                       fade that never settles, and an incoming clock started at the
+                       fade's END each fail a different one of those three.
+      anim-layer       the override moves the frame it is masked onto.
+      anim-layer-release a one-shot layer fades itself out, and the frame returns to
+                       the base EXACTLY.
+      anim-weights     the space's weights sum to 1, read (1,0,0)/(0,1,0)/(0,0,1) on
+                       the three entries, split evenly between them, and clamp past
+                       both ends.
+      anim-fade        the crossfade envelope is 0 at the switch, exactly half at half
+                       the duration and exactly 1 when it settles -- and the settled
+                       pose equals the incoming clip played alone, to the bit.
+      anim-mask        a masked bone moves; an unmasked one does not move AT ALL (0
+                       exactly, not 0 to a tolerance), so a mask that leaks up the
+                       parent chain fails. Released, the pose is the base's again.
+      anim-two-rigs    two ANIMATOR entities ticked together hold different poses, and
+                       the one playing a clip equals that clip played alone: the pose
+                       is per node, not per process.
+      anim-phase       walk and run under one knob share ONE phase, advancing at the
+                       weighted mean of their cycle rates -- independent clocks would
+                       read 1/3 and 2/3 where this reads one number.
+      anim-events      a clip's events fire twice a cycle, twice as often at twice the
+                       rate, once per plant when two entries are mixed (never doubled)
+                       and never from a clip carrying none.
+      anim-clip-loads  the committed walk clip binds every one of the puppet's bones
+                       by exact name.
+      anim-trace-idle  the LOOP ticks the component: a standing player's trace reports
+                       the idle weight at 1, which stays 0 if update_all_animators is
+                       never called from the pre-render hook.
+    """
+    import math
+
+    if not os.path.exists(GAMETEST) or not os.path.exists(RENDER):
+        print("  anim         SKIP  (render or gametest not built)")
+        return []
+    failures = []
+
+    # --- anim-endpoints --------------------------------------------------------
+    ends = {t: _anim_render(workdir, t, e) for t, e in (
+        ("blend0", ["--anim-space", "walk,run", "--anim-blend", "0"]),
+        ("walk", ["--anim-clip", "walk"]),
+        ("blend1", ["--anim-space", "walk,run", "--anim-blend", "1"]),
+        ("run", ["--anim-clip", "run"]))}
+    if not all(ends.values()):
+        print("  anim-endpoints FAIL  a render failed")
+        failures.append("anim-endpoints")
+    else:
+        lo, _ = compare(ends["blend0"], ends["walk"])
+        hi, _ = compare(ends["blend1"], ends["run"])
+        apart, _ = compare(ends["walk"], ends["run"])
+        ok = lo == 0 and hi == 0 and apart > 0
+        print(f"  anim-endpoints {'PASS' if ok else 'FAIL'}  param 0 vs walk {lo} px, param 1 "
+              f"vs run {hi} px (want 0), walk vs run {apart} px (want > 0)")
+        if not ok:
+            failures.append("anim-endpoints")
+
+    # --- anim-midpoint ---------------------------------------------------------
+    def _nlerp_deg(t):
+        half = math.radians(45.0)
+        return math.degrees(2.0 * math.atan2(t * math.sin(half),
+                                             (1.0 - t) + t * math.cos(half)))
+
+    worst, seen = 0.0, True
+    for t in (0.25, 0.5, 0.75):
+        pose = _anim_bone_pose(["--anim-space", "rest,hold90", "--anim-blend", str(t)])
+        if not pose or "cetra_rig:LeftForeArm" not in pose:
+            seen = False
+            break
+        x, y, z, w = pose["cetra_rig:LeftForeArm"]
+        deg = math.degrees(2.0 * math.atan2(math.sqrt(x * x + y * y + z * z), abs(w)))
+        worst = max(worst, abs(deg - _nlerp_deg(t)))
+    if not seen:
+        print("  anim-midpoint FAIL  a probe failed or did not report the bone")
+        failures.append("anim-midpoint")
+    else:
+        ok = worst < 0.05
+        print(f"  anim-midpoint {'PASS' if ok else 'FAIL'}  worst error {worst:.4f} deg against "
+              f"nlerp's {_nlerp_deg(0.25):.2f}/{_nlerp_deg(0.5):.2f}/{_nlerp_deg(0.75):.2f} "
+              f"(want < 0.05; slerp would read 22.50/45.00/67.50)")
+        if not ok:
+            failures.append("anim-midpoint")
+
+    # --- anim-crossfade --------------------------------------------------------
+    switch = ["--anim-clip", "idle", "--anim-switch-to", "run", "--anim-switch-at", "20"]
+    fading = _anim_frames(workdir, "xf_fade", switch + ["--anim-fade", "0.25"], 41)
+    before = _anim_frames(workdir, "xf_before", ["--anim-clip", "idle"], 41)
+    snapped = _anim_frames(workdir, "xf_snap", switch + ["--anim-fade", "0"], 41)
+    if not (fading and before and snapped):
+        print("  anim-crossfade FAIL  a render failed")
+        failures.append("anim-crossfade")
+    else:
+        pre, _ = compare(_anim_frame(fading, 10), _anim_frame(before, 10))
+        post, _ = compare(_anim_frame(fading, 40), _anim_frame(snapped, 40))
+        mid_out, _ = compare(_anim_frame(fading, 27), _anim_frame(before, 27))
+        mid_in, _ = compare(_anim_frame(fading, 27), _anim_frame(snapped, 27))
+        ok = pre == 0 and post == 0 and mid_out > 0 and mid_in > 0
+        print(f"  anim-crossfade {'PASS' if ok else 'FAIL'}  f10 vs outgoing {pre} px, f40 vs "
+              f"snapped {post} px (want 0), f27 vs outgoing {mid_out} px and vs snapped "
+              f"{mid_in} px (want both > 0)")
+        if not ok:
+            failures.append("anim-crossfade")
+
+    # --- anim-layer / anim-layer-release ---------------------------------------
+    over = ["--anim-clip", "idle", "--anim-layer", "wave", "--anim-mask", "cetra_rig:RightArm"]
+    lay = _anim_render(workdir, "layer", over)
+    base = _anim_render(workdir, "layer_base", ["--anim-clip", "idle"])
+    if not (lay and base):
+        print("  anim-layer   FAIL  a render failed")
+        failures.append("anim-layer")
+    else:
+        moved, _ = compare(lay, base)
+        ok = moved > 0
+        print(f"  anim-layer   {'PASS' if ok else 'FAIL'}  the masked arm moves {moved} px "
+              f"against the base alone (want > 0)")
+        if not ok:
+            failures.append("anim-layer")
+
+    rel = _anim_render(workdir, "layer_rel", over + ["--anim-layer-once"], frames=91)
+    base90 = _anim_render(workdir, "layer_base90", ["--anim-clip", "idle"], frames=91)
+    if not (rel and base90):
+        print("  anim-layer-release FAIL  a render failed")
+        failures.append("anim-layer-release")
+    else:
+        left, _ = compare(rel, base90)
+        ok = left == 0
+        print(f"  anim-layer-release {'PASS' if ok else 'FAIL'}  {left} px left of the one-shot "
+              f"once it released (want 0)")
+        if not ok:
+            failures.append("anim-layer-release")
+
+    # --- anim-weights ----------------------------------------------------------
+    d = _anim_probe_run("locomotion")
+    want = {"p000": (1, 0, 0), "p025": (0.5, 0.5, 0), "p050": (0, 1, 0),
+            "p075": (0, 0.5, 0.5), "p100": (0, 0, 1), "p150": (0, 0, 1), "pm050": (1, 0, 0)}
+    if not d or any((k, "weights") not in d for k in want):
+        print("  anim-weights FAIL  the probe failed or measured nothing")
+        failures.append("anim-weights")
+    else:
+        worst = max(max(abs(a - b) for a, b in zip(d[(k, "weights")], v))
+                    for k, v in want.items())
+        sums = max(abs(sum(d[(k, "weights")]) - 1.0) for k in want)
+        ok = worst < 1e-4 and sums < 1e-5
+        print(f"  anim-weights {'PASS' if ok else 'FAIL'}  worst weight error {worst:.6f} "
+              f"(want < 1e-4), worst sum error {sums:.6f} (want < 1e-5)")
+        if not ok:
+            failures.append("anim-weights")
+
+    # --- anim-fade -------------------------------------------------------------
+    d = _anim_probe_run("crossfade")
+    need = [("t0", "fade"), ("thalf", "fade"), ("tF", "fade"), ("tpost", "settled"),
+            ("pose", "maxdiff")]
+    if not d or any(k not in d for k in need):
+        print("  anim-fade    FAIL  the probe failed or measured nothing")
+        failures.append("anim-fade")
+    else:
+        t0 = d[("t0", "fade")][0]
+        half = d[("thalf", "fade")][0]
+        full = d[("tF", "fade")][0]
+        settled = d[("tpost", "settled")][0]
+        same = d[("pose", "maxdiff")][0]
+        ok = t0 == 0.0 and abs(half - 0.5) < 1e-3 and full == 1.0 and settled == 1 and same == 0.0
+        print(f"  anim-fade    {'PASS' if ok else 'FAIL'}  envelope {t0:.3f}/{half:.3f}/"
+              f"{full:.3f} (want 0/0.5/1), settled {int(settled)}, settled pose vs the clip "
+              f"alone {same:.6f} (want 0 exactly)")
+        if not ok:
+            failures.append("anim-fade")
+
+    # --- anim-mask -------------------------------------------------------------
+    d = _anim_probe_run("layer")
+    need = [("w15", "weight"), ("w15", "finished"), ("masked_out", "maxdiff"),
+            ("masked_in", "maxdiff"), ("after", "weight"), ("after", "finished"),
+            ("after", "maxdiff")]
+    if not d or any(k not in d for k in need):
+        print("  anim-mask    FAIL  the probe failed or measured nothing")
+        failures.append("anim-mask")
+    else:
+        held = d[("w15", "weight")][0]
+        out = d[("masked_out", "maxdiff")][0]
+        inside = d[("masked_in", "maxdiff")][0]
+        gone = d[("after", "weight")][0]
+        done = d[("after", "finished")][0]
+        back = d[("after", "maxdiff")][0]
+        ok = (held == 1.0 and d[("w15", "finished")][0] == 0 and out == 0.0 and inside > 0.1
+              and gone == 0.0 and done == 1 and back == 0.0)
+        print(f"  anim-mask    {'PASS' if ok else 'FAIL'}  masked {inside:.4f} (want > 0.1), "
+              f"unmasked {out:.6f} (want 0 exactly), released {int(done)} and {back:.6f} back "
+              f"to the base")
+        if not ok:
+            failures.append("anim-mask")
+
+    # --- anim-two-rigs ---------------------------------------------------------
+    d = _anim_probe_run("two-rigs")
+    if not d or ("ab", "maxdiff") not in d or ("bc", "maxdiff") not in d:
+        print("  anim-two-rigs FAIL  the probe failed or measured nothing")
+        failures.append("anim-two-rigs")
+    else:
+        ab = d[("ab", "maxdiff")][0]
+        bc = d[("bc", "maxdiff")][0]
+        ok = ab > 0.05 and bc == 0.0
+        print(f"  anim-two-rigs {'PASS' if ok else 'FAIL'}  two rigs differ by {ab:.4f} "
+              f"(want > 0.05) and the matching pair by {bc:.6f} (want 0 exactly)")
+        if not ok:
+            failures.append("anim-two-rigs")
+
+    # --- anim-phase ------------------------------------------------------------
+    d = _anim_probe_run("phase")
+    need = [("walk", "frac"), ("run", "frac"), ("expected", "frac")]
+    if not d or any(k not in d for k in need):
+        print("  anim-phase   FAIL  the probe failed or measured nothing")
+        failures.append("anim-phase")
+    else:
+        w = d[("walk", "frac")][0]
+        r = d[("run", "frac")][0]
+        want_frac = d[("expected", "frac")][0]
+        ok = abs(w - r) < 1e-5 and abs(w - want_frac) < 1e-3
+        print(f"  anim-phase   {'PASS' if ok else 'FAIL'}  walk {w:.6f} and run {r:.6f} share "
+              f"one phase, against {want_frac:.6f} expected")
+        if not ok:
+            failures.append("anim-phase")
+
+    # --- anim-events -----------------------------------------------------------
+    d = _anim_probe_run("events")
+    want_counts = {"walk": 4, "run": 8, "mixed": 6, "idle": 0}
+    if not d or any((k, "count") not in d for k in want_counts):
+        print("  anim-events  FAIL  the probe failed or measured nothing")
+        failures.append("anim-events")
+    else:
+        got = {k: int(d[(k, "count")][0]) for k in want_counts}
+        ok = got == want_counts
+        print(f"  anim-events  {'PASS' if ok else 'FAIL'}  walk/run/mixed/idle "
+              f"{got['walk']}/{got['run']}/{got['mixed']}/{got['idle']} (want 4/8/6/0)")
+        if not ok:
+            failures.append("anim-events")
+
+    # --- anim-clip-loads -------------------------------------------------------
+    d = _anim_probe_run("import")
+    joints = 0
+    try:
+        with open(os.path.join(ROOT, "assets", "puppet.gltf")) as f:
+            doc = json.load(f)
+        joints = sum(1 for j in doc["skins"][0]["joints"]
+                     if doc["nodes"][j]["name"].startswith("cetra_rig:"))
+    except (OSError, ValueError, KeyError, IndexError):
+        joints = 0
+    if not d or ("clip", "matched") not in d or not joints:
+        print("  anim-clip-loads FAIL  the probe failed or the fixture could not be read")
+        failures.append("anim-clip-loads")
+    else:
+        matched = int(d[("clip", "matched")][0])
+        channels = int(d[("clip", "channels")][0])
+        ok = matched == joints and channels > matched
+        print(f"  anim-clip-loads {'PASS' if ok else 'FAIL'}  {matched} of the clip's "
+              f"{channels} channels bound by name (want all {joints} of the rig's bones)")
+        if not ok:
+            failures.append("anim-clip-loads")
+
+    # --- anim-trace-idle -------------------------------------------------------
+    r = subprocess.run([GAMETEST, "-x", "-f", "120", "--trace-player", "--trace-every", "20"],
+                       capture_output=True, text=True)
+    rows = {int(m[0]): m for m in _ANIM_TRACE.findall(r.stdout + r.stderr)}
+    late = [m for step, m in rows.items() if step >= 40]
+    if r.returncode != 0 or not late:
+        print("  anim-trace-idle FAIL  the run failed or traced no animation tail")
+        failures.append("anim-trace-idle")
+    else:
+        idle_w = min(float(m[2]) for m in late)
+        srcs = {m[7] for m in late}
+        ok = abs(idle_w - 1.0) < 1e-3 and srcs == {"locomotion"}
+        print(f"  anim-trace-idle {'PASS' if ok else 'FAIL'}  a standing player reports idle "
+              f"weight {idle_w:.3f} (want 1) from {sorted(srcs)}")
+        if not ok:
+            failures.append("anim-trace-idle")
+
+    return failures
+
+
 LOD_FIXTURE = "lod_fixture.gltf"
 # Eye positions marching away from the same target. Not a golden's framing --
 # the arm reads triangle counts, and what matters is that the sweep crosses
@@ -21922,6 +22289,8 @@ GATE_GROUPS = [
     ("gamepad", "gamepad input (a scripted pad through the action layer, spec 11.109):",
      run_gamepad_gate),
     ("audio", "audio (offline PCM through the spatializer, spec 12.0):", run_audio_gate),
+    ("anim", "animation blending (a blend space, a crossfade, a masked layer, spec 12.1):",
+     run_anim_gate),
     ("import", "import:", _run_import_gates),
     ("fixture-gen", "fixture generators (every gen_*.py reproduces its asset):",
      run_fixture_gen_gate),
