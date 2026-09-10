@@ -103,6 +103,7 @@ typedef struct GameInputState {
     double mouse_delta_y;
     double scroll_x; // This frame's wheel delta
     double scroll_y;
+    bool focused_prev;     // Whether the window had focus at the previous poll
     struct Engine* engine; // Borrowed
 
     // BY FUNCTION: input_set_pad_reader, input_set_pad_script. The reader the

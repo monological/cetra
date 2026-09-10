@@ -251,18 +251,26 @@ static Material* g_mat_bark;
 static Material* g_mat_leaf;
 static Material* g_mat_rock;
 
-// Third-person orbit around the character. There is no follow-camera helper in
-// cetra -- app.h offers only the mouse-drag orbit controller, which orbits a
-// fixed point rather than a moving one.
+// The look: a yaw about +Y and the elevation of the look direction, positive
+// up. First person puts the eye at the character's head; V swaps in an orbit
+// CAM_DISTANCE behind it along the same look, for watching what the character
+// does. There is no follow-camera helper in cetra -- app.h offers only the
+// mouse-drag orbit controller, which orbits a fixed point rather than a moving
+// one.
 static float g_cam_yaw = 0.6f;
-static float g_cam_pitch = 0.28f;
+static float g_cam_pitch = 0.0f;
+static bool g_orbit_camera = false;
 static const float CAM_DISTANCE = 14.0f;
+static const float EYE_HEIGHT = 1.0f; // Above the capsule's origin, which spans 1.3 either way
+static const float FIRST_PERSON_PITCH_LIMIT = 1.4f;
+// The orbit's old range (the eye's height above the head), in the look's sign
+static const float ORBIT_PITCH_MIN = -1.25f;
+static const float ORBIT_PITCH_MAX = 0.2f;
 
 // What the walk reads, and which key, pad button or pad axis each one is. The
-// left stick's Y is negated: GLFW reads it down-positive, and the move helper
-// takes +y as forward. The right stick keeps the mouse's sense, so a push
-// right or down turns the way a drag right or down does, and Q and E are a
-// full push left and right.
+// sticks' Y is negated: GLFW reads a stick down-positive, and forward and up
+// are +y here. A push right on the right stick, or the Right arrow, turns
+// right; a push up looks up.
 static const InputAction g_actions[] = {
     {"move_x",
      {INPUT_KEY(D, 1), INPUT_KEY(A, -1), INPUT_AXIS(LEFT_X, 1), INPUT_PAD(DPAD_RIGHT, 1),
@@ -272,13 +280,34 @@ static const InputAction g_actions[] = {
       INPUT_PAD(DPAD_DOWN, -1)}},
     {"jump", {INPUT_KEY(SPACE, 1), INPUT_PAD(A, 1)}},
     {"sprint", {INPUT_KEY(LEFT_SHIFT, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
-    {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(Q, -1), INPUT_KEY(E, 1)}},
-    {"look_y", {INPUT_AXIS(RIGHT_Y, 1)}},
+    {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(RIGHT, 1), INPUT_KEY(LEFT, -1)}},
+    {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
+    {"orbit", {INPUT_KEY(V, 1), INPUT_PAD(RIGHT_THUMB, 1)}},
+    {"release_cursor", {INPUT_KEY(TAB, 1)}},
 };
-// Radians per second at full deflection. The yaw rate is what Q and E turned
-// at per frame at 60 Hz before they were sources.
+// The stick and the arrows, in radians per second at full deflection; the
+// mouse in radians per pixel, which no frame delta scales.
 static const float LOOK_YAW_RATE = 1.8f;
-static const float LOOK_PITCH_RATE = 1.5f;
+static const float LOOK_PITCH_RATE = 1.2f;
+static const float MOUSE_LOOK_RATE = 0.0025f;
+
+// The cursor is captured on a click in the window and released on Tab (Escape
+// is the framework's quit). Raw motion where the platform has it, so the
+// desktop's acceleration curve stays out of the look. Nothing captures
+// headless: there is no pointer to capture and no event to read.
+static bool g_cursor_captured = false;
+static bool g_cursor_captured_this_frame = false;
+
+static void set_cursor_captured(Engine* engine, bool captured) {
+    if (engine->headless || captured == g_cursor_captured)
+        return;
+    glfwSetInputMode(engine->window, GLFW_CURSOR,
+                     captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    if (glfwRawMouseMotionSupported())
+        glfwSetInputMode(engine->window, GLFW_RAW_MOUSE_MOTION, captured ? GLFW_TRUE : GLFW_FALSE);
+    g_cursor_captured = captured;
+    g_cursor_captured_this_frame = captured;
+}
 
 // Where on_init's time goes, as startup-ms k=v rows (spec 11.99 Phase 0): the
 // attribution that decides which sites are worth a cook bracket. Wall clock,
@@ -2795,11 +2824,16 @@ static void on_update(Game* game, double dt) {
             vec3 pos, gn;
             character_controller_get_position(cc, pos);
             character_controller_get_ground_normal(cc, gn);
+            // The move columns are the action values the step acted on: a
+            // character travelling under a zero move is the physics, and
+            // under a nonzero one with nothing held is a key the window never
+            // saw released.
             printf("player t=%5.2f pos %8.2f %8.2f %8.2f  vel %6.2f %6.2f %6.2f  "
-                   "grounded %d  ground_n.y %.3f  terrain %.2f\n",
+                   "grounded %d  ground_n.y %.3f  terrain %.2f  move %5.2f %5.2f\n",
                    (double)step / 60.0, (double)pos[0], (double)pos[1], (double)pos[2],
                    (double)vel[0], (double)vel[1], (double)vel[2], grounded ? 1 : 0, (double)gn[1],
-                   (double)terrain_height_at(&g_terrain, pos[0], pos[2]));
+                   (double)terrain_height_at(&g_terrain, pos[0], pos[2]), (double)input_dir[0],
+                   0.0 - (double)input_dir[2]);
         }
     }
 }
@@ -2828,36 +2862,56 @@ static void on_pre_render(Game* game, double alpha) {
             camera_set_position(camera, eye);
             camera_set_look_at(camera, target);
         } else if (g_player) {
-            if (input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_LEFT) ||
-                input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_RIGHT)) {
+            // The mouse, per pixel. Not the first delta after a capture: the
+            // virtual position starts wherever the platform puts it, and that
+            // one is a jump rather than a movement.
+            if (g_cursor_captured && g_cursor_captured_this_frame) {
+                g_cursor_captured_this_frame = false;
+            } else if (g_cursor_captured) {
                 double dx = 0.0, dy = 0.0;
                 input_mouse_delta(&game->input, &dx, &dy);
-                g_cam_yaw -= (float)dx * 0.005f;
-                g_cam_pitch += (float)dy * 0.005f;
+                g_cam_yaw -= (float)dx * MOUSE_LOOK_RATE;
+                g_cam_pitch -= (float)dy * MOUSE_LOOK_RATE;
             }
-            // The stick and the keys, at a rate per second over the sim's own
-            // frame delta: exact headless, where the engine's dt is wall clock
-            // and this hook is handed an interpolant rather than a dt.
+            // A click in the window takes the cursor while the GUI does not
+            // want it; Tab gives it back. After the read, so the delta skipped
+            // is the capture's first, which arrives next frame.
+            if (!g_cursor_captured && input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
+                !engine_gui_wants_mouse())
+                set_cursor_captured(engine, true);
+            if (input_action_pressed(&game->input, "release_cursor"))
+                set_cursor_captured(engine, false);
+            if (input_action_pressed(&game->input, "orbit"))
+                g_orbit_camera = !g_orbit_camera;
+            // The stick and the arrows, at a rate per second over the sim's
+            // own frame delta: exact headless, where the engine's dt is wall
+            // clock and this hook is handed an interpolant rather than a dt.
             float look_dt = (float)game->sim_clock.delta;
             g_cam_yaw -= input_action_value(&game->input, "look_x") * LOOK_YAW_RATE * look_dt;
             g_cam_pitch += input_action_value(&game->input, "look_y") * LOOK_PITCH_RATE * look_dt;
-            if (g_cam_pitch < -0.2f)
-                g_cam_pitch = -0.2f;
-            if (g_cam_pitch > 1.25f)
-                g_cam_pitch = 1.25f;
+            g_cam_pitch = g_orbit_camera ? glm_clamp(g_cam_pitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
+                                         : glm_clamp(g_cam_pitch, -FIRST_PERSON_PITCH_LIMIT,
+                                                     FIRST_PERSON_PITCH_LIMIT);
 
-            vec3 target;
-            glm_vec3_copy(g_player->position, target);
-            target[1] += 1.5f;
+            vec3 head;
+            glm_vec3_copy(g_player->position, head);
+            head[1] += EYE_HEIGHT;
+            float cp = cosf(g_cam_pitch);
+            vec3 look = {sinf(g_cam_yaw) * cp, sinf(g_cam_pitch), cosf(g_cam_yaw) * cp};
 
-            float ch = cosf(g_cam_pitch);
-            vec3 eye = {target[0] - sinf(g_cam_yaw) * ch * CAM_DISTANCE,
-                        target[1] + sinf(g_cam_pitch) * CAM_DISTANCE,
-                        target[2] - cosf(g_cam_yaw) * ch * CAM_DISTANCE};
-            // Never below the ground the character is standing on.
-            float floor_y = terrain_height_at(&g_terrain, eye[0], eye[2]) + 1.0f;
-            if (eye[1] < floor_y)
-                eye[1] = floor_y;
+            vec3 eye, target;
+            if (g_orbit_camera) {
+                glm_vec3_scale(look, -CAM_DISTANCE, eye);
+                glm_vec3_add(head, eye, eye);
+                // Never below the ground the character is standing on.
+                float floor_y = terrain_height_at(&g_terrain, eye[0], eye[2]) + 1.0f;
+                if (eye[1] < floor_y)
+                    eye[1] = floor_y;
+                glm_vec3_copy(head, target);
+            } else {
+                glm_vec3_copy(head, eye);
+                glm_vec3_add(head, look, target);
+            }
             camera_set_position(camera, eye);
             camera_set_look_at(camera, target);
         }

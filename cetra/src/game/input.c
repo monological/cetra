@@ -138,16 +138,37 @@ void input_update(GameInputState* input) {
     input->mouse_prev_x = input->mouse_x;
     input->mouse_prev_y = input->mouse_y;
 
-    // From space, the first code GLFW defines: a lower one is an invalid enum
-    // it reports to the error callback, thirty-two times a frame.
+    // Nothing is held while the window is not focused, and this is the ONE
+    // backstop for a lost key-up. `glfwGetKey` returns GLFW's remembered state,
+    // which macOS strands "pressed" when a key-up is eaten by a modal loop (a
+    // window drag, the launch, an app switch) -- and once the view is no longer
+    // first responder no fresh key-up ever arrives to clear it, so the movement
+    // cannot be stopped by the keyboard. GLFW releases its keys on focus loss,
+    // so honouring focus makes regaining it (a click on the window) poll clean.
+    // A hidden window is never focused, so the guard is windowed-only or a
+    // headless run would read every key up. Pads are read from live device
+    // state and cannot strand this way, so they poll regardless.
+    bool focused =
+        input->engine->headless || glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++)
-        input->now.keys[key] = glfwGetKey(window, key) == GLFW_PRESS;
+        input->now.keys[key] = focused && glfwGetKey(window, key) == GLFW_PRESS;
     for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; button++)
-        input->now.mouse_buttons[button] = glfwGetMouseButton(window, button) == GLFW_PRESS;
+        input->now.mouse_buttons[button] =
+            focused && glfwGetMouseButton(window, button) == GLFW_PRESS;
 
     glfwGetCursorPos(window, &input->mouse_x, &input->mouse_y);
-    input->mouse_delta_x = input->mouse_x - input->mouse_prev_x;
-    input->mouse_delta_y = input->mouse_y - input->mouse_prev_y;
+    // A delta that spans an unfocused frame is not a look: the cursor may have
+    // moved anywhere off the window, and a captured cursor is recentred on the
+    // way back. Only the span between two focused polls is a movement, so the
+    // frame focus is regained reports none.
+    if (focused && input->focused_prev) {
+        input->mouse_delta_x = input->mouse_x - input->mouse_prev_x;
+        input->mouse_delta_y = input->mouse_y - input->mouse_prev_y;
+    } else {
+        input->mouse_delta_x = 0.0;
+        input->mouse_delta_y = 0.0;
+    }
+    input->focused_prev = focused;
 
     input->scroll_x = input->engine->input.scroll_dx;
     input->scroll_y = input->engine->input.scroll_dy;
