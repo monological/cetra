@@ -137,6 +137,11 @@ static bool ui_menu_paused = false;
 // --ui-screen: which screen to open at startup, if any. A file static because
 // the install runs from on_init, long after the flags were parsed.
 static const char* ui_screen_at_start = NULL;
+// --ui-focus: how many times to press "down" once a screen is up, so a golden
+// can photograph the focus visual. Fed through the real navigation path rather
+// than by setting focus directly, because a highlight proves nothing about a
+// menu if navigation is the half that is broken.
+static int ui_focus_steps = 0;
 // The backdrop's own fragment stage. Owned by the engine's program cache once
 // registered, like every other program in the tree.
 static ShaderProgram* ui_backdrop_program = NULL;
@@ -1538,6 +1543,278 @@ static int run_anim_probe(Game* game, const char* which) {
     return rc;
 }
 
+// The row in a given state, as an index, or -1. There is no focus accessor and
+// none is needed: UIElement.state is public, settled by the input pass, and is
+// the same value the drawing reads -- so this asks what the picture asks.
+static float ui_probe_state_index(UIElement** rows, int n, UIState want) {
+    for (int i = 0; i < n; i++)
+        if (rows[i]->state == want)
+            return (float)i;
+    return -1.0f;
+}
+
+static void ui_probe_rect(const char* which, const char* label, UIRect r) {
+    printf("ui %s %s rect %.6f %.6f %.6f %.6f\n", which, label, (double)r.x, (double)r.y,
+           (double)r.w, (double)r.h);
+}
+
+// Three equal buttons in a fixed-width panel: the smallest tree that exercises
+// FIXED, GROW, padding and spacing at once, and the one every arm below shares
+// so a number that moves means the layout moved and not the fixture.
+static UIElement* ui_probe_column(UIScreen* screen, UIElement** rows) {
+    UIElement* panel = ui_panel(ui_screen_root(screen));
+    panel->size_mode[0] = UI_FIXED;
+    panel->size[0] = 300.0f;
+    panel->padding[0] = panel->padding[1] = panel->padding[2] = panel->padding[3] = 10.0f;
+    panel->spacing = 8.0f;
+    rows[0] = ui_button(panel, "One", NULL, NULL);
+    rows[1] = ui_button(panel, "Two", NULL, NULL);
+    rows[2] = ui_button(panel, "Three", NULL, NULL);
+    for (int i = 0; i < 3; i++)
+        rows[i]->size_mode[0] = UI_GROW;
+    return panel;
+}
+
+/*
+ * The element tree as a pure function: layout, wrapping, geometric navigation,
+ * hit-testing, capture, the stack and theme resolution, printed as numbers.
+ *
+ * It needs a headless engine for ONE thing -- the font, because FIT sizing is
+ * made of measurement and measuring a string is what bakes its glyphs -- and it
+ * never draws a frame. ui_layout is pure, ui_update takes a plain struct of
+ * values rather than a device, so navigation and activation are driven here
+ * with no window, no pad and no GPU.
+ */
+static int run_ui_screens_probe(Game* game, const char* which) {
+    Engine* engine = game->engine;
+    Font* font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
+                           64.0f, true);
+    if (!font) {
+        fprintf(stderr, "ui-probe: could not load the font\n");
+        return 1;
+    }
+    UISystem* ui = create_ui_system(engine);
+    if (!ui) {
+        fprintf(stderr, "ui-probe: could not create the ui system\n");
+        return 1;
+    }
+    ui_set_font(ui, font, 22.0f);
+
+    const float font_size = 22.0f;
+    int rc = 0;
+
+    if (!strcmp(which, "layout")) {
+        UIScreen* s = ui_screen(ui, "probe");
+        UIElement* rows[3];
+        UIElement* panel = ui_probe_column(s, rows);
+        ui_layout(s, 1280.0f, 720.0f);
+        ui_probe_rect("layout", "panel", panel->rect);
+        ui_probe_rect("layout", "row0", rows[0]->rect);
+        ui_probe_rect("layout", "row1", rows[1]->rect);
+        ui_probe_rect("layout", "row2", rows[2]->rect);
+    } else if (!strcmp(which, "layout-resize")) {
+        // The SAME tree at three sizes. Layout is a pure function of (tree,
+        // width, height), so nothing may carry over between these three calls.
+        UIScreen* s = ui_screen(ui, "probe");
+        UIElement* rows[3];
+        UIElement* panel = ui_probe_column(s, rows);
+        ui_layout(s, 640.0f, 360.0f);
+        ui_probe_rect("layout-resize", "small", panel->rect);
+        ui_layout(s, 2560.0f, 1440.0f);
+        ui_probe_rect("layout-resize", "large", panel->rect);
+        // Back to the first size: the rects must be what they were, or layout
+        // is accumulating something instead of deriving it.
+        ui_layout(s, 640.0f, 360.0f);
+        ui_probe_rect("layout-resize", "again", panel->rect);
+    } else if (!strcmp(which, "wrap")) {
+        const char* para = "the quick brown fox jumps over the lazy dog and keeps on running";
+        const float limit = 400.0f;
+        int lines = 0;
+        const char* p = para;
+        while (*p && lines < 16) {
+            const size_t n = ui_text_wrap_point(font, font_size, 0.0f, p, limit);
+            if (n == 0)
+                break;
+            char buf[256];
+            const size_t copy = n < sizeof(buf) - 1 ? n : sizeof(buf) - 1;
+            memcpy(buf, p, copy);
+            buf[copy] = '\0';
+            char label[16];
+            snprintf(label, sizeof(label), "line%d", lines);
+            printf("ui wrap %s width %.6f\n", label,
+                   (double)ui_text_width(font, font_size, 0.0f, buf));
+            lines++;
+            p += n;
+            while (*p == ' ')
+                p++;
+        }
+        printf("ui wrap lines count %.6f\n", (double)lines);
+        printf("ui wrap limit points %.6f\n", (double)limit);
+    } else if (!strcmp(which, "nav")) {
+        UIScreen* s = ui_screen(ui, "probe");
+        UIElement* rows[3];
+        ui_probe_column(s, rows);
+        ui_push(ui, s);
+        const UIInput idle = {0};
+        ui_update(ui, &idle, 1280.0f, 720.0f);
+        printf("ui nav start focus %.6f\n", (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        UIInput down = {0};
+        down.nav_down = true;
+        ui_update(ui, &down, 1280.0f, 720.0f);
+        printf("ui nav down focus %.6f\n", (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        ui_update(ui, &down, 1280.0f, 720.0f);
+        printf("ui nav twice focus %.6f\n", (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        ui_update(ui, &down, 1280.0f, 720.0f);
+        printf("ui nav last focus %.6f\n", (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        // Off the end: focus wraps to the top rather than sticking there. This
+        // is the FOURTH press and not the third, because nothing is focused to
+        // begin with and the first press only acquires -- a detail worth the
+        // line, since counting presses instead of moves reads as a broken wrap.
+        ui_update(ui, &down, 1280.0f, 720.0f);
+        printf("ui nav wrapped focus %.6f\n",
+               (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        UIInput up = {0};
+        up.nav_up = true;
+        ui_update(ui, &up, 1280.0f, 720.0f);
+        printf("ui nav up focus %.6f\n", (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+    } else if (!strcmp(which, "hit")) {
+        UIScreen* s = ui_screen(ui, "probe");
+        UIElement* rows[3];
+        UIElement* panel = ui_probe_column(s, rows);
+        ui_push(ui, s);
+        const UIInput idle = {0};
+        ui_update(ui, &idle, 1280.0f, 720.0f);
+
+        // Point-in-rect against the rects layout settled: a control claims its
+        // own point and none of its neighbours'.
+        const float cx = rows[1]->rect.x + rows[1]->rect.w * 0.5f;
+        const float cy = rows[1]->rect.y + rows[1]->rect.h * 0.5f;
+        printf("ui hit centre row1 %.6f\n", ui_rect_hit(rows[1]->rect, cx, cy) ? 1.0 : 0.0);
+        printf("ui hit centre row0 %.6f\n", ui_rect_hit(rows[0]->rect, cx, cy) ? 1.0 : 0.0);
+        printf("ui hit centre row2 %.6f\n", ui_rect_hit(rows[2]->rect, cx, cy) ? 1.0 : 0.0);
+
+        // A point in the panel's own padding belongs to the PARENT: inside the
+        // panel, inside no row.
+        const float px = panel->rect.x + 2.0f;
+        const float py = panel->rect.y + 2.0f;
+        printf("ui hit padding panel %.6f\n", ui_rect_hit(panel->rect, px, py) ? 1.0 : 0.0);
+        int claimed = 0;
+        for (int i = 0; i < 3; i++)
+            claimed += ui_rect_hit(rows[i]->rect, px, py) ? 1 : 0;
+        printf("ui hit padding rows %.6f\n", (double)claimed);
+
+        // So does the spacing gap between two rows.
+        const float gy = rows[0]->rect.y + rows[0]->rect.h + 2.0f;
+        claimed = 0;
+        for (int i = 0; i < 3; i++)
+            claimed += ui_rect_hit(rows[i]->rect, cx, gy) ? 1 : 0;
+        printf("ui hit gap rows %.6f\n", (double)claimed);
+
+        // And the real pointer walk reaches the element under the cursor. The
+        // test is that its state LEAVES normal rather than that it is hover
+        // specifically: pointing at a control also focuses it, so the two
+        // states are not alternatives and asking for one finds neither.
+        UIInput at = {0};
+        at.pointer_x = cx;
+        at.pointer_y = cy;
+        ui_update(ui, &at, 1280.0f, 720.0f);
+        printf("ui hit pointer row1 %.6f\n", rows[1]->state != UI_STATE_NORMAL ? 1.0 : 0.0);
+        printf("ui hit pointer row0 %.6f\n", rows[0]->state != UI_STATE_NORMAL ? 1.0 : 0.0);
+    } else if (!strcmp(which, "capture")) {
+        UIScreen* hud = ui_screen(ui, "hud");
+        ui_screen_set_modal(hud, false);
+        ui_panel(ui_screen_root(hud));
+        UIScreen* menu = ui_screen(ui, "menu");
+        UIElement* rows[3];
+        ui_probe_column(menu, rows);
+
+        ui_push(ui, hud);
+        printf("ui capture hud captures %.6f\n", ui_captures_input(ui) ? 1.0 : 0.0);
+        ui_push(ui, menu);
+        printf("ui capture menu captures %.6f\n", ui_captures_input(ui) ? 1.0 : 0.0);
+        ui_pop(ui);
+        printf("ui capture popped captures %.6f\n", ui_captures_input(ui) ? 1.0 : 0.0);
+        ui_pop_all(ui);
+        printf("ui capture cleared captures %.6f\n", ui_captures_input(ui) ? 1.0 : 0.0);
+
+        // The switch a screen throws. What it does to each SOURCE is the
+        // gamepad group's ground, which drives real devices; what is asserted
+        // here is that the UI raises and lowers it and never leaves it raised.
+        input_set_suppressed(&game->input, true);
+        printf("ui capture raised suppressed %.6f\n",
+               input_is_suppressed(&game->input) ? 1.0 : 0.0);
+        input_set_suppressed(&game->input, false);
+        printf("ui capture lowered suppressed %.6f\n",
+               input_is_suppressed(&game->input) ? 1.0 : 0.0);
+    } else if (!strcmp(which, "stack")) {
+        UIScreen* a = ui_screen(ui, "a");
+        UIScreen* b = ui_screen(ui, "b");
+        ui_panel(ui_screen_root(a));
+        ui_panel(ui_screen_root(b));
+        printf("ui stack empty top %.6f\n", ui_top(ui) == NULL ? 1.0 : 0.0);
+        ui_push(ui, a);
+        printf("ui stack pushed top %.6f\n", ui_top(ui) == a ? 1.0 : 0.0);
+        ui_push(ui, b);
+        printf("ui stack second top %.6f\n", ui_top(ui) == b ? 1.0 : 0.0);
+        ui_pop(ui);
+        printf("ui stack popped top %.6f\n", ui_top(ui) == a ? 1.0 : 0.0);
+        ui_push(ui, b);
+        ui_pop_all(ui);
+        printf("ui stack cleared top %.6f\n", ui_top(ui) == NULL ? 1.0 : 0.0);
+        // Popping an empty stack is a no-op, not an underflow.
+        ui_pop(ui);
+        printf("ui stack underflow top %.6f\n", ui_top(ui) == NULL ? 1.0 : 0.0);
+    } else if (!strcmp(which, "theme-identity")) {
+        // Two identical trees, one of which sets a ZEROED style on every row.
+        // If zero really means inherit, the two emit the same vertices; if it
+        // means "black, no padding, no radius", they cannot.
+        UIScreen* plain = ui_screen(ui, "plain");
+        UIElement* plain_rows[3];
+        ui_probe_column(plain, plain_rows);
+
+        UIScreen* zeroed = ui_screen(ui, "zeroed");
+        UIElement* zero_rows[3];
+        ui_probe_column(zeroed, zero_rows);
+        const UIStyle nothing = {0};
+        for (int i = 0; i < 3; i++)
+            ui_set_style(zero_rows[i], &nothing);
+
+        UIDrawList* dl = ui_draw_list(ui);
+        ui_push(ui, plain);
+        ui_draw_list_begin(dl, 1280, 720);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_plain = ui_draw_list_signature(dl);
+        ui_pop(ui);
+
+        ui_push(ui, zeroed);
+        ui_draw_list_begin(dl, 1280, 720);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_zeroed = ui_draw_list_signature(dl);
+        ui_pop(ui);
+
+        printf("ui theme-identity styles match %.6f\n", sig_plain == sig_zeroed ? 1.0 : 0.0);
+        // A style that says something must NOT hash alike, or the comparison
+        // above would pass on a signature that ignores style entirely.
+        UIStyle loud = {0};
+        loud.corner_radius = 14.0f;
+        loud.bg[0] = loud.bg[3] = 1.0f;
+        for (int i = 0; i < 3; i++)
+            ui_set_style(zero_rows[i], &loud);
+        ui_push(ui, zeroed);
+        ui_draw_list_begin(dl, 1280, 720);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_loud = ui_draw_list_signature(dl);
+        ui_pop(ui);
+        printf("ui theme-identity styled differs %.6f\n", sig_loud != sig_plain ? 1.0 : 0.0);
+    } else {
+        fprintf(stderr, "ui-probe: unknown case '%s'\n", which);
+        rc = 1;
+    }
+
+    free_ui_system(ui);
+    return rc;
+}
+
 // --ui-probe (spec 12.2): the game-layer state a menu edits, checked with no
 // window, no GL and no audio device. It runs BEFORE the engine is created
 // rather than inside a headless game the way the audio and anim probes do,
@@ -1754,6 +2031,14 @@ static void ui_frame_input(Game* game) {
     if (menu_pressed && !menu_open && screen_pause)
         ui_push(ui_system, screen_pause);
 
+    // One synthetic "down" per frame while --ui-focus has any left, so a golden
+    // can be taken with the focus somewhere other than where it lands.
+    bool forced_down = false;
+    if (ui_focus_steps > 0 && menu_open) {
+        forced_down = true;
+        ui_focus_steps--;
+    }
+
     double mx = 0.0, my = 0.0;
     input_mouse_pos(&game->input, &mx, &my);
     const UIInput in = {
@@ -1763,7 +2048,7 @@ static void ui_frame_input(Game* game) {
         .pointer_pressed = input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT),
         .pointer_released = input_mouse_released(&game->input, GLFW_MOUSE_BUTTON_LEFT),
         .nav_up = input_action_pressed(&game->input, "ui_up"),
-        .nav_down = input_action_pressed(&game->input, "ui_down"),
+        .nav_down = input_action_pressed(&game->input, "ui_down") || forced_down,
         .nav_left = input_action_pressed(&game->input, "ui_left"),
         .nav_right = input_action_pressed(&game->input, "ui_right"),
         .accept = input_action_pressed(&game->input, "ui_accept"),
@@ -1987,6 +2272,11 @@ int main(int argc, const char* argv[]) {
     const char* anim_probe = NULL;
     const char* ui_probe = NULL;
     bool ui_enabled = true;
+    // 0 = the default below. A golden states the size it was baked at, so a
+    // headless app that cannot be sized can only be photographed at whatever
+    // this display happens to be.
+    int win_w = 0;
+    int win_h = 0;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
@@ -1999,6 +2289,10 @@ int main(int argc, const char* argv[]) {
             screenshot = argv[++i];
         } else if (!strcmp(a, "--screenshot-every") && i + 1 < argc) {
             screenshot_every = atoi(argv[++i]);
+        } else if ((!strcmp(a, "-W") || !strcmp(a, "--width")) && i + 1 < argc) {
+            win_w = atoi(argv[++i]);
+        } else if ((!strcmp(a, "-H") || !strcmp(a, "--height")) && i + 1 < argc) {
+            win_h = atoi(argv[++i]);
         } else if (!strcmp(a, "--msaa") && i + 1 < argc) {
             msaa = atoi(argv[++i]);
         } else if (!strcmp(a, "--trace-player")) {
@@ -2036,6 +2330,8 @@ int main(int argc, const char* argv[]) {
             // a game's does, which leaves no way to photograph one: a headless
             // run has no Escape key to press.
             ui_screen_at_start = argv[++i];
+        } else if (!strcmp(a, "--ui-focus") && i + 1 < argc) {
+            ui_focus_steps = atoi(argv[++i]);
         } else if (!strcmp(a, "--print-bindings")) {
             input_print_actions(actions, ACTION_COUNT);
             return 0;
@@ -2052,9 +2348,23 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    // Before the engine exists, because nothing it measures needs one.
-    if (ui_probe) {
+    // The settings case runs before the engine exists, because nothing it
+    // measures needs one. Every other case needs a font -- FIT sizing is made
+    // of measurement -- so it takes a headless game, the shape the audio and
+    // anim probes already established, and still never draws a frame.
+    if (ui_probe && !strcmp(ui_probe, "settings")) {
         return run_ui_probe(ui_probe);
+    }
+    if (ui_probe) {
+        GameConfig probe_config = {.engine = {.title = "ui-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "ui-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_ui_screens_probe(probe_game, ui_probe);
+        free_game(probe_game);
+        return rc;
     }
 
     // A self-contained offline render: a headless game, the offline audio
@@ -2105,8 +2415,8 @@ int main(int argc, const char* argv[]) {
 
     // Create game
     GameConfig config = {.engine = {.title = "Physics Test - JoltC Integration",
-                                    .width = 1280,
-                                    .height = 720,
+                                    .width = win_w > 0 ? win_w : 1280,
+                                    .height = win_h > 0 ? win_h : 720,
                                     .headless = headless}};
 
     // TAA replaces MSAA rather than joining it. This app is rigid meshes on the

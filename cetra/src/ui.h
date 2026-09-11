@@ -4,6 +4,7 @@
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "text.h"
 #include "texture.h"
@@ -166,6 +167,21 @@ void ui_draw_list_set_alpha(UIDrawList* dl, float alpha);
 // parent's clip however the rects are ordered.
 void ui_push_clip(UIDrawList* dl, UIRect r);
 void ui_pop_clip(UIDrawList* dl);
+
+/*
+ * A hash of every vertex the list currently holds.
+ *
+ * It exists so that two ways of asking for the same drawing can be shown to BE
+ * the same drawing: "zero means inherit" is a resolution step rather than a
+ * second drawing path only if a zeroed style and the theme's values written out
+ * in full emit identical geometry. Comparing pictures would establish that only
+ * to whatever tolerance the comparison used, and a colour that resolves one step
+ * differently can land inside it.
+ *
+ * The value means nothing on its own -- it is not stable across builds or
+ * layouts, and is only ever compared against another taken the same frame.
+ */
+uint64_t ui_draw_list_signature(const UIDrawList* dl);
 
 // An element's own fragment program for the next primitives emitted; NULL
 // returns to the default. The uniform contract a replacement is written
