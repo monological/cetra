@@ -126,7 +126,10 @@ float audio_get_bus_volume(const AudioSystem* audio, AudioBus bus) {
 }
 
 void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume) {
-    if (!audio)
+    // The bus is checked HERE and not only in group_for, which is where the
+    // check used to be enough: recording the value writes into a fixed array
+    // before that call is reached, so an out-of-range bus wrote past it.
+    if (!audio || bus < AUDIO_BUS_MASTER || bus >= AUDIO_BUS_COUNT)
         return;
     audio->volumes[bus] = volume;
     if (bus == AUDIO_BUS_MASTER) {

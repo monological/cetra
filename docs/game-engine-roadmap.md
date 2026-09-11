@@ -143,7 +143,7 @@ authoring/description, **not** save-game state. (§6.0)
 - **Scene graph** — hierarchical transforms, k-nearest-light selection (max-heap),
   frustum culling, ray-picking, motion-vector-ready previous transforms.
 - **Geometry** — procedural circle, rect (incl. rounded corners), Bézier curves,
-  box, cylinder, subdivided plane. _No sphere/capsule/torus generators._
+  box, cylinder, sphere, subdivided plane. _No capsule or torus generators._
 - **Text** — SDF text rendering (glow/plasma effects, 3D world-space text).
   _Word-wrapping is a TODO._
 - **Input** — keyboard, mouse and up to four gamepads through GLFW's standard
