@@ -16460,9 +16460,6 @@ CONFIG_GUI_LOCALS = {
 # Controls a snapshot deliberately cannot carry, with the reason. Not an escape hatch:
 # both reasons are about IDENTITY, which is what a snapshot needs and these lack.
 CONFIG_GUI_UNCARRIED = {
-    "stiffness": "spring-bone params live per SceneNode; a node has no stable key",
-    "damping": "spring-bone params live per SceneNode; a node has no stable key",
-    "gravity": "spring-bone params live per SceneNode; a node has no stable key",
     "sss_profiles": "profile SLOTS are assigned in material-block order at load, and "
                     "material->subsurface_profile indexes them",
 }
@@ -16744,10 +16741,13 @@ def run_config_gate(workdir):
     headless run and those lines are unreachable from this group.
 
     And config-coverage matches a gui.c target by its TRAILING member name, so a
-    control writing `sb->enabled` is satisfied by Water.enabled. The springs
-    checkbox is the live instance: it is reported carried and is not, while its
-    three siblings sit in CONFIG_GUI_UNCARRIED for exactly that reason. Fixing it
-    wants (struct, member) keying on both sides.
+    control writing `sb->enabled` would be satisfied by Water.enabled -- reported
+    carried while nothing carries it. The spring-bone sliders were the live
+    instance until spec 12.1 moved them out of gui.c (the engine panel reaches no
+    animator now, so the app draws them), which took the example away without
+    closing the hole: the next control to share a trailing member name with a
+    carried one inherits it. Closing it wants (struct, member) keying on both
+    sides.
     """
     failures = []
 
