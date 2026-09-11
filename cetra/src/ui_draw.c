@@ -7,6 +7,7 @@
 #include "program.h"
 #include "ui.h"
 #include "uniform.h"
+#include "util.h"
 
 // Nesting depth for clip rectangles. A menu nests a screen inside a panel
 // inside a scroll region and stops; this is far past that, and a fixed array
@@ -63,7 +64,6 @@ struct UIDrawList {
     size_t bcount, bcap;
 
     GLuint vao, vbo, ebo;
-    size_t vbo_bytes, ebo_bytes;
 
     // 1x1 opaque white. An untextured quad samples this rather than branching
     // in the shader, so every batch binds a texture and the bind is never
@@ -88,40 +88,33 @@ struct UIDrawList {
     int width, height; // points
     mat4 ortho;
     float time;
+
+    // Added to every vertex as it is emitted. A screen sliding in moves ONE
+    // number rather than an offset threaded through each element's rect --
+    // which would have missed the furniture, since a slider's track is computed
+    // from the element's own rect inside the draw rather than passed in.
+    float offset_x, offset_y;
+
+    // Multiplied into every vertex's alpha, for the same reason and with the
+    // same reach. Applying it to the RESOLVED STYLE instead missed everything
+    // that does not come from a style: a toggle's knob, a slider's fill and any
+    // app-drawn element pass their colours to ui_draw_rounded as literals, so a
+    // fading screen faded its surfaces while its furniture stayed solid.
+    float alpha;
 };
 
 // ---------------------------------------------------------------- allocation
 
+// grow_array, not a hand-rolled doubling loop. util.h's own comment records
+// that it exists because there were four such loops with three different seed
+// capacities and two overflow policies, none of which agreed and none of which
+// reported -- and it carries the SIZE_MAX guards none of the copies had.
 static bool _reserve_verts(UIDrawList* dl, size_t extra) {
-    if (dl->vcount + extra <= dl->vcap)
-        return true;
-    size_t cap = dl->vcap ? dl->vcap * 2 : 512;
-    while (cap < dl->vcount + extra)
-        cap *= 2;
-    UIVertex* v = realloc(dl->verts, cap * sizeof(UIVertex));
-    if (!v) {
-        log_error("ui: out of memory growing the vertex buffer to %zu", cap);
-        return false;
-    }
-    dl->verts = v;
-    dl->vcap = cap;
-    return true;
+    return grow_array((void**)&dl->verts, &dl->vcap, dl->vcount + extra, sizeof(UIVertex), 512);
 }
 
 static bool _reserve_idx(UIDrawList* dl, size_t extra) {
-    if (dl->icount + extra <= dl->icap)
-        return true;
-    size_t cap = dl->icap ? dl->icap * 2 : 768;
-    while (cap < dl->icount + extra)
-        cap *= 2;
-    unsigned int* i = realloc(dl->idx, cap * sizeof(unsigned int));
-    if (!i) {
-        log_error("ui: out of memory growing the index buffer to %zu", cap);
-        return false;
-    }
-    dl->idx = i;
-    dl->icap = cap;
-    return true;
+    return grow_array((void**)&dl->idx, &dl->icap, dl->icount + extra, sizeof(unsigned int), 768);
 }
 
 // ------------------------------------------------------------------ batching
@@ -154,16 +147,8 @@ static UIBatch* _batch_for(UIDrawList* dl, GLuint texture) {
             return b;
     }
 
-    if (dl->bcount + 1 > dl->bcap) {
-        size_t cap = dl->bcap ? dl->bcap * 2 : 32;
-        UIBatch* nb = realloc(dl->batches, cap * sizeof(UIBatch));
-        if (!nb) {
-            log_error("ui: out of memory growing the batch list to %zu", cap);
-            return NULL;
-        }
-        dl->batches = nb;
-        dl->bcap = cap;
-    }
+    if (!grow_array((void**)&dl->batches, &dl->bcap, dl->bcount + 1, sizeof(UIBatch), 32))
+        return NULL;
 
     UIBatch* b = &dl->batches[dl->bcount++];
     *b = (UIBatch){.texture = texture,
@@ -180,10 +165,12 @@ static UIBatch* _batch_for(UIDrawList* dl, GLuint texture) {
 // The one place geometry enters the list. Every primitive below is this call
 // with different numbers, which is why there is no second place for a corner
 // radius or a clip to be forgotten.
+// The quad's own corners ARE the rect the corner SDF measures against -- there
+// was a `rect` parameter for a caller that wanted to differ, every call site
+// passed NULL, and the fallback was the only path that ever ran.
 static void _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float x1, float y1,
-                       float u0, float v0, float u1, float v1, const float color[4],
-                       const float rect[4], float radius, float border_w, float mode,
-                       const float border[4]) {
+                       float u0, float v0, float u1, float v1, const float color[4], float radius,
+                       float border_w, float mode, const float border[4]) {
     if (!dl || x1 <= x0 || y1 <= y0)
         return;
     if (!_reserve_verts(dl, 4) || !_reserve_idx(dl, 6))
@@ -196,8 +183,7 @@ static void _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     static const float no_border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const float* c = color ? color : opaque_white;
     const float* bc = border ? border : no_border;
-    const float own[4] = {x0, y0, x1, y1};
-    const float* rc = rect ? rect : own;
+    const float rc[4] = {x0, y0, x1, y1};
 
     const unsigned int base = (unsigned int)dl->vcount;
     const float params[4] = {radius, border_w, mode, 0.0f};
@@ -208,11 +194,12 @@ static void _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     const float vs[4] = {v0, v0, v1, v1};
     for (int i = 0; i < 4; i++) {
         UIVertex* v = &dl->verts[dl->vcount++];
-        v->x = xs[i];
-        v->y = ys[i];
+        v->x = xs[i] + dl->offset_x;
+        v->y = ys[i] + dl->offset_y;
         v->u = us[i];
         v->v = vs[i];
         memcpy(v->color, c, sizeof(float) * 4);
+        v->color[3] *= dl->alpha;
         memcpy(v->rect, rc, sizeof(float) * 4);
         memcpy(v->params, params, sizeof(float) * 4);
         memcpy(v->border, bc, sizeof(float) * 4);
@@ -229,7 +216,7 @@ static void _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
 void ui_draw_quad(UIDrawList* dl, UIRect r, vec4 color) {
     if (!dl)
         return;
-    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, color, NULL, 0.0f, 0.0f,
+    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, color, 0.0f, 0.0f,
                UI_MODE_FILL, NULL);
 }
 
@@ -262,16 +249,24 @@ void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
         return;
     }
 
-    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, style->bg, NULL,
+    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, style->bg,
                style->corner_radius, has_border ? style->border_width : 0.0f, UI_MODE_FILL,
                style->border);
+}
+
+void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 border,
+                     float border_width) {
+    if (!dl)
+        return;
+    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, fill, radius,
+               border_width, UI_MODE_FILL, border);
 }
 
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint) {
     if (!dl)
         return;
     _push_quad(dl, tex ? tex->id : dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, tint,
-               NULL, 0.0f, 0.0f, tex ? UI_MODE_TEXTURE : UI_MODE_FILL, NULL);
+               0.0f, 0.0f, tex ? UI_MODE_TEXTURE : UI_MODE_FILL, NULL);
 }
 
 void ui_draw_9slice(UIDrawList* dl, UIRect r, const Texture* tex, const float insets[4],
@@ -307,9 +302,23 @@ void ui_draw_9slice(UIDrawList* dl, UIRect r, const Texture* tex, const float in
     for (int row = 0; row < 3; row++) {
         for (int col = 0; col < 3; col++) {
             _push_quad(dl, tex->id, xs[col], ys[row], xs[col + 1], ys[row + 1], us[col], vs[row],
-                       us[col + 1], vs[row + 1], tint, NULL, 0.0f, 0.0f, UI_MODE_TEXTURE, NULL);
+                       us[col + 1], vs[row + 1], tint, 0.0f, 0.0f, UI_MODE_TEXTURE, NULL);
         }
     }
+}
+
+void ui_draw_list_set_offset(UIDrawList* dl, float dx, float dy) {
+    if (!dl) {
+        return;
+    }
+    dl->offset_x = dx;
+    dl->offset_y = dy;
+}
+
+void ui_draw_list_set_alpha(UIDrawList* dl, float alpha) {
+    if (!dl)
+        return;
+    dl->alpha = alpha < 0.0f ? 0.0f : (alpha > 1.0f ? 1.0f : alpha);
 }
 
 void ui_push_clip(UIDrawList* dl, UIRect r) {
@@ -423,8 +432,19 @@ size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* te
         if (c == '\n')
             return i;
         const GlyphInfo* g = font_get_glyph(font, (int)c);
-        const float adv = _advance_between(font, prev, (int)c, scale, tracking) +
-                          (g ? g->advance_x * scale : 0.0f);
+        // A glyph the atlas cannot produce contributes NOTHING: no advance, and
+        // no pair adjustment either. Charging kerning and tracking for an absent
+        // glyph made this loop measure a longer string than the width and draw
+        // loops did -- three spellings of one rule, already disagreeing, under a
+        // header promising they cannot.
+        if (!g) {
+            prev = 0;
+            if (c == ' ')
+                last_break = i + 1;
+            continue;
+        }
+        const float adv =
+            _advance_between(font, prev, (int)c, scale, tracking) + g->advance_x * scale;
         if (w + adv > max_width && i > 0) {
             // Break at the last space if there was one; a single word longer
             // than the line breaks mid-word rather than overflowing, because
@@ -432,11 +452,39 @@ size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* te
             return last_break > 0 ? last_break : i;
         }
         w += adv;
-        prev = g ? (int)c : 0;
+        prev = (int)c;
         if (c == ' ')
             last_break = i + 1;
     }
     return len;
+}
+
+// One LINE's width -- up to the next newline or the end of the string. Not the
+// whole string's: alignment is per line, and positioning every line by the
+// longest one's width left each shorter line aligned to that line's edge
+// instead of to the rect it was drawn into.
+static float _line_width(Font* font, float size, float tracking, const unsigned char* p) {
+    const float scale = size / font->base_size;
+    float w = 0.0f;
+    int prev = 0;
+    for (; *p && *p != '\n'; p++) {
+        const GlyphInfo* g = font_get_glyph(font, (int)*p);
+        if (!g) {
+            prev = 0;
+            continue;
+        }
+        w += _advance_between(font, prev, (int)*p, scale, tracking) + g->advance_x * scale;
+        prev = (int)*p;
+    }
+    return w;
+}
+
+static float _align_pen(UIRect r, UIAlign align, float line_w) {
+    if (align == UI_ALIGN_CENTER)
+        return r.x + (r.w - line_w) * 0.5f;
+    if (align == UI_ALIGN_END)
+        return r.x + r.w - line_w;
+    return r.x;
 }
 
 float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style,
@@ -458,11 +506,8 @@ float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* st
     const float width = ui_text_width(font, size, tracking, text);
     const float line_h = ui_line_height(font, size, line_spacing);
 
-    float pen_x = r.x;
-    if (align == UI_ALIGN_CENTER)
-        pen_x = r.x + (r.w - width) * 0.5f;
-    else if (align == UI_ALIGN_END)
-        pen_x = r.x + r.w - width;
+    float pen_x =
+        _align_pen(r, align, _line_width(font, size, tracking, (const unsigned char*)text));
 
     // The baseline convention text.c uses, deliberately: the pen starts an
     // ascent below the top, so a string drawn here and one drawn through the
@@ -489,7 +534,8 @@ float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* st
     int prev = 0;
     for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
         if (*p == '\n') {
-            pen_x = r.x;
+            // The NEXT line's own width decides where it starts.
+            pen_x = _align_pen(r, align, _line_width(font, size, tracking, p + 1));
             pen_y += line_h;
             prev = 0; // no pair spans a line break
             continue;
@@ -521,7 +567,7 @@ float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* st
         const float x1 = x0 + (g->x1 - g->x0) * scale;
         const float y1 = y0 + (g->y1 - g->y0) * scale;
         _push_quad(dl, font->atlas_texture_id, x0, y0, x1, y1, g->u0, g->v0, g->u1, g->v1, color,
-                   NULL, 0.0f, 0.0f, UI_MODE_GLYPH, NULL);
+                   0.0f, 0.0f, UI_MODE_GLYPH, NULL);
         pen_x += g->advance_x * scale;
         prev = (int)*p;
     }
@@ -639,6 +685,7 @@ void ui_draw_list_begin(UIDrawList* dl, int width_points, int height_points) {
     dl->bcount = 0;
     dl->clip_depth = 0;
     dl->clip_refused = 0;
+    dl->alpha = 1.0f;
     dl->cur_program = NULL;
     dl->cur_rect = (UIRect){0, 0, (float)width_points, (float)height_points};
     dl->cur_focus = 0.0f;

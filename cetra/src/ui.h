@@ -134,6 +134,13 @@ void ui_draw_list_render(UIDrawList* dl);
 void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style);
 // The same without a style: a flat colour, square corners, no border.
 void ui_draw_quad(UIDrawList* dl, UIRect r, vec4 color);
+// A rounded fill with an optional border, without building a UIStyle to say so.
+// This is what a custom-drawn element reaches for: the furniture inside a
+// control -- a switch bed, a slider track -- is a rounded rectangle and a
+// colour, not a themed surface, and expressing it as a style meant assembling a
+// throwaway struct per piece.
+void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 border,
+                     float border_width);
 // An image stretched over the rect, multiplied by `tint`.
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint);
 // An image drawn as a nine-patch: the four corners keep their size, the four
@@ -143,6 +150,17 @@ void ui_draw_9slice(UIDrawList* dl, UIRect r, const Texture* tex, const float in
 // One line of text, positioned horizontally by `align` and vertically on the
 // font's baseline inside `r`. Returns the advance width actually drawn.
 float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style, UIAlign align);
+
+// Shifts everything emitted after it, in points. One number rather than an
+// offset applied to each rect, so furniture a control computes internally moves
+// with the element that owns it.
+void ui_draw_list_set_offset(UIDrawList* dl, float dx, float dy);
+
+// Multiplies the alpha of everything emitted after it. Here rather than on a
+// resolved style for the same reason: a control's furniture and an app-drawn
+// element pass their colours in directly, and would not fade with the screen
+// that carries them.
+void ui_draw_list_set_alpha(UIDrawList* dl, float alpha);
 
 // Clipping. Nested pushes intersect, so a child can never draw outside its
 // parent's clip however the rects are ordered.
@@ -322,6 +340,23 @@ UIElement* ui_screen_root(UIScreen* screen);
 // A modal screen consumes input: the game reads zero from every non-ui action
 // while one is on the stack. A non-modal screen (a HUD) draws and takes nothing.
 void ui_screen_set_modal(UIScreen* screen, bool modal);
+
+/*
+ * How a screen arrives. The transition is the SCREEN's, not the stack's, so a
+ * pause menu can slide while a settings screen over it fades, and it runs on
+ * the wall clock rather than the sim's -- a menu that stopped animating because
+ * it had paused the game would be animating for exactly nobody.
+ *
+ * Zero seconds, or UI_TRANSITION_NONE, is the whole off state: the screen is
+ * simply there on the frame it is pushed.
+ */
+typedef enum {
+    UI_TRANSITION_NONE = 0,
+    UI_TRANSITION_FADE,  // alpha 0 -> 1
+    UI_TRANSITION_SLIDE, // up from below, fading as it comes
+} UITransition;
+
+void ui_screen_transition(UIScreen* screen, UITransition kind, float seconds);
 
 void ui_push(UISystem* ui, UIScreen* screen);
 void ui_pop(UISystem* ui);

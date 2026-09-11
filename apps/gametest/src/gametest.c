@@ -24,8 +24,10 @@
 #include "cetra/geometry.h"
 #include "cetra/light.h"
 #include "cetra/app.h"
+#include "cetra/program.h"
 #include "cetra/text.h"
 #include "cetra/ui.h"
+#include "ui_backdrop.h"
 #include "cetra/game/game.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/physics.h"
@@ -131,6 +133,9 @@ static bool smoke_ui_paused = false;
 // --ui-screen: which screen to open at startup, if any. A file static because
 // the install runs from on_init, long after the flags were parsed.
 static const char* ui_screen_at_start = NULL;
+// The backdrop's own fragment stage. Owned by the engine's program cache once
+// registered, like every other program in the tree.
+static ShaderProgram* smoke_backdrop_program = NULL;
 static bool smoke_music = true;
 static float smoke_volume = 1.0f;
 static int smoke_tonemap = POSTFX_TONEMAP_NEUTRAL;
@@ -1504,6 +1509,24 @@ static int run_anim_probe(Game* game, const char* which) {
 // be wrong (a glyph mirrored about its own baseline, the scissor's
 // point-to-pixel conversion, the corner SDF, the blend func) is invisible to a
 // compile and obvious in a picture. Phase 7 replaces it with real screens.
+// A custom-drawn element: the volume as a segmented meter, painted straight
+// into the draw list. It gets the same rect the layout settled and the same
+// focus and hit-testing as a built-in kind -- ui_set_draw replaces the drawing
+// and nothing else.
+static void ui_smoke_draw_meter(UIElement* el, UIDrawList* dl, void* user) {
+    (void)user;
+    const int segments = 12;
+    const float gap = 3.0f;
+    const float w = (el->rect.w - gap * (float)(segments - 1)) / (float)segments;
+    const int lit = (int)(smoke_volume * (float)segments + 0.5f);
+    for (int i = 0; i < segments; i++) {
+        const UIRect seg = {el->rect.x + (w + gap) * (float)i, el->rect.y, w, el->rect.h};
+        vec4 on = {0.45f, 0.70f, 1.00f, 1.0f};
+        vec4 off = {0.20f, 0.21f, 0.26f, 1.0f};
+        ui_draw_rounded(dl, seg, 2.0f, i < lit ? on : off, NULL, 0.0f);
+    }
+}
+
 // The three bound controls, each reaching real state. A callback runs AFTER
 // the value has been written, so it reads the new one.
 static void ui_smoke_volume_changed(UIElement* el, void* user) {
@@ -1613,12 +1636,32 @@ static bool ui_smoke_install(Engine* engine) {
     }
     ui_set_font(smoke_ui, smoke_font, 22.0f);
 
+    // The app carries its own GLSL, the apps/network precedent. Registered with
+    // the engine's cache so the cache owns it; a failure is logged there and
+    // leaves the backdrop as an ordinary panel rather than taking the menu down.
+    smoke_backdrop_program =
+        create_program_from_source("ui_backdrop", UI_BACKDROP_VERT, UI_BACKDROP_FRAG, NULL);
+    if (smoke_backdrop_program)
+        engine_add_program(engine, smoke_backdrop_program);
+
     // One of each of the six, so the picture exercises every kind's emit path
     // and the column's layout at once. Nothing here is interactive yet: focus
     // and hit-testing arrive in phase 4, so what this proves is the tree, the
     // two-pass layout, the theme resolution and the emit.
     UIScreen* screen = ui_screen(smoke_ui, "smoke");
     smoke_screen = screen;
+    // The menu slides up as it arrives rather than appearing.
+    ui_screen_transition(screen, UI_TRANSITION_SLIDE, 0.18f);
+
+    // ESCAPE HATCH 2: a backdrop with its own fragment stage, filling the
+    // screen behind the panel. This is the layer's headline claim -- that a
+    // menu is not limited to what the element vocabulary can express -- and it
+    // had never been run, so uTime had never been read by anything.
+    UIElement* backdrop = ui_panel(ui_screen_root(screen));
+    backdrop->fill = true; // out of the flow, covering the screen
+    if (smoke_backdrop_program)
+        ui_set_element_program(backdrop, smoke_backdrop_program);
+
     UIElement* panel = ui_panel(ui_screen_root(screen));
     panel->align_cross = UI_ALIGN_CENTER;
     panel->size_mode[0] = UI_FIXED;
@@ -1649,6 +1692,13 @@ static bool ui_smoke_install(Engine* engine) {
         ui_selector(panel, "Tonemap", modes, 5, &smoke_tonemap, ui_smoke_tonemap_changed, engine);
     for (int i = 0; i < 5; i++)
         rows[i]->size_mode[0] = UI_GROW;
+
+    // ESCAPE HATCH 1: an element the app paints itself, which still lays out,
+    // still takes focus and still takes a click -- the point being that
+    // dropping out of the element vocabulary costs only the drawing.
+    UIElement* meter = ui_panel(panel);
+    ui_set_size(meter, UI_GROW, 0.0f, UI_FIXED, 26.0f);
+    ui_set_draw(meter, ui_smoke_draw_meter, NULL);
 
     // Closed by default, the way a game's menu is; --ui-screen opens one at
     // startup so a headless run can photograph it.

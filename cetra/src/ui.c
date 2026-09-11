@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +6,7 @@
 #include "engine.h"
 #include "ext/log.h"
 #include "ui.h"
+#include "util.h"
 
 // How fast hover and focus reach their target, in seconds. Short enough that a
 // menu feels immediate, long enough that a shader reading uFocus has something
@@ -21,6 +23,14 @@ struct UIScreen {
     UIElement* root;
     bool modal;
     UISystem* ui;
+
+    // How this screen arrives, and how far in it is. `t_in` eases 0 -> 1 while
+    // the screen is on the stack and is reset when it is pushed, so a screen
+    // pushed, popped and pushed again plays its entrance each time rather than
+    // appearing finished.
+    UITransition transition;
+    float transition_seconds;
+    float t_in;
     // Which element the keyboard or pad is on. Per screen, so pushing a screen
     // and popping it again returns to where the player was rather than to the
     // top of the list.
@@ -46,12 +56,20 @@ struct UISystem {
     // what makes press-slide-off-release do nothing.
     UIElement* pressed;
 
+    // The screen currently being emitted, and its entrance. Held here rather
+    // than threaded through _emit's recursion because every draw in the subtree
+    // needs them and nothing else does.
+    float screen_t;
+    float screen_slide;
+
     // Last frame's pointer, so hover can move focus only when the pointer has
     // actually MOVED. Moving it every frame would mean a resting mouse
     // overrode the pad on every single frame, and the stick could never take
     // the highlight off whatever the cursor happened to be sitting on.
+    //
+    // Seeded off-screen so the first frame counts as movement without a second
+    // field to say the first frame has not happened yet.
     float last_pointer_x, last_pointer_y;
-    bool pointer_seen;
 };
 
 // ------------------------------------------------------------------- theme
@@ -242,16 +260,10 @@ static UIElement* _new_element(UIElement* parent, UIKind kind) {
     el->parent = parent;
 
     if (parent) {
-        if (parent->child_count + 1 > parent->child_capacity) {
-            size_t cap = parent->child_capacity ? parent->child_capacity * 2 : 8;
-            UIElement** kids = realloc(parent->children, cap * sizeof(UIElement*));
-            if (!kids) {
-                log_error("ui: out of memory growing a child list to %zu", cap);
-                free(el);
-                return NULL;
-            }
-            parent->children = kids;
-            parent->child_capacity = cap;
+        if (!grow_array((void**)&parent->children, &parent->child_capacity, parent->child_count + 1,
+                        sizeof(UIElement*), 8)) {
+            free(el);
+            return NULL;
         }
         parent->children[parent->child_count++] = el;
     }
@@ -339,13 +351,7 @@ void ui_set_text(UIElement* el, const char* text) {
     if (!el)
         return;
     free(el->text);
-    el->text = NULL;
-    if (!text)
-        return;
-    const size_t n = strlen(text) + 1;
-    el->text = malloc(n);
-    if (el->text)
-        memcpy(el->text, text, n);
+    el->text = text ? safe_strdup(text) : NULL;
 }
 
 void ui_set_style(UIElement* el, const UIStyle* style) {
@@ -392,7 +398,7 @@ void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y) 
 #define UI_TRACK_H       4.0f
 #define UI_FURNITURE_GAP 14.0f
 
-static float _widest_option(const UISystem* ui, const UIElement* el, const UIStyle* s) {
+static float _widest_option(const UIElement* el, const UIStyle* s) {
     if (!el->options || el->option_count <= 0 || !s->font)
         return 0.0f;
     float widest = 0.0f;
@@ -402,7 +408,6 @@ static float _widest_option(const UISystem* ui, const UIElement* el, const UISty
         const float w = ui_text_width(s->font, s->font_size, s->tracking, el->options[i]);
         widest = w > widest ? w : widest;
     }
-    (void)ui;
     return widest;
 }
 
@@ -421,7 +426,7 @@ static void _intrinsic(const UISystem* ui, UIElement* el, float* out_w, float* o
             h = h > UI_KNOB_H ? h : UI_KNOB_H;
             break;
         case UI_SELECTOR:
-            w += UI_FURNITURE_GAP + _widest_option(ui, el, &s);
+            w += UI_FURNITURE_GAP + _widest_option(el, &s);
             break;
         case UI_SLIDER:
             // The track sits on its own row under the label, so the height grows
@@ -658,12 +663,11 @@ static void _emit(UISystem* ui, UIElement* el) {
                 const UIRect bed_rect = {el->rect.x + el->rect.w - s.padding[1] - UI_KNOB_W,
                                          el->rect.y + (el->rect.h - UI_KNOB_H) * 0.5f, UI_KNOB_W,
                                          UI_KNOB_H};
-                UIStyle bed = {.corner_radius = UI_KNOB_H * 0.5f};
                 const vec4 bed_on = {0.26f, 0.70f, 0.40f, 1.0f};
                 const vec4 bed_off = {0.24f, 0.25f, 0.30f, 1.0f};
-                for (int i = 0; i < 4; i++)
-                    bed.bg[i] = bed_off[i] + (bed_on[i] - bed_off[i]) * t;
-                ui_draw_rect(dl, bed_rect, &bed);
+                vec4 bed_colour;
+                glm_vec4_lerp((float*)bed_off, (float*)bed_on, t, bed_colour);
+                ui_draw_rounded(dl, bed_rect, UI_KNOB_H * 0.5f, bed_colour, NULL, 0.0f);
 
                 // The knob travels between the two ends rather than appearing
                 // at one of them.
@@ -671,11 +675,9 @@ static void _emit(UISystem* ui, UIElement* el) {
                 const float dia = UI_KNOB_H - inset * 2.0f;
                 const float x_off = bed_rect.x + inset;
                 const float x_on = bed_rect.x + bed_rect.w - inset - dia;
-                const UIRect knob_rect = {x_off + (x_on - x_off) * t, bed_rect.y + inset, dia, dia};
-                UIStyle cap = {.corner_radius = dia * 0.5f};
-                const vec4 cap_bg = {0.97f, 0.98f, 1.00f, 1.0f};
-                memcpy(cap.bg, cap_bg, sizeof(vec4));
-                ui_draw_rect(dl, knob_rect, &cap);
+                const UIRect knob_rect = {glm_lerp(x_off, x_on, t), bed_rect.y + inset, dia, dia};
+                vec4 cap_bg = {0.97f, 0.98f, 1.00f, 1.0f};
+                ui_draw_rounded(dl, knob_rect, dia * 0.5f, cap_bg, NULL, 0.0f);
                 break;
             }
             case UI_SLIDER: {
@@ -694,17 +696,13 @@ static void _emit(UISystem* ui, UIElement* el) {
                 t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
 
                 const UIRect track = _slider_track(ui, el);
-                UIStyle bar = {.corner_radius = UI_TRACK_H * 0.5f};
-                const vec4 bar_bg = {0.22f, 0.23f, 0.28f, 1.0f};
-                memcpy(bar.bg, bar_bg, sizeof(vec4));
-                ui_draw_rect(dl, track, &bar);
+                vec4 bar_bg = {0.22f, 0.23f, 0.28f, 1.0f};
+                ui_draw_rounded(dl, track, UI_TRACK_H * 0.5f, bar_bg, NULL, 0.0f);
 
                 UIRect filled = track;
                 filled.w *= t;
-                UIStyle lit = {.corner_radius = UI_TRACK_H * 0.5f};
-                const vec4 lit_bg = {0.45f, 0.70f, 1.00f, 1.0f};
-                memcpy(lit.bg, lit_bg, sizeof(vec4));
-                ui_draw_rect(dl, filled, &lit);
+                vec4 lit_bg = {0.45f, 0.70f, 1.00f, 1.0f};
+                ui_draw_rounded(dl, filled, UI_TRACK_H * 0.5f, lit_bg, NULL, 0.0f);
                 break;
             }
             case UI_SELECTOR: {
@@ -936,11 +934,9 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     // everywhere -- and it keeps pointer and pad on ONE highlight instead of a
     // hover colour and a focus ring disagreeing about where the player is.
     // Only on actual movement, so a resting cursor does not out-vote the stick.
-    const bool moved = !ui->pointer_seen || in->pointer_x != ui->last_pointer_x ||
-                       in->pointer_y != ui->last_pointer_y;
+    const bool moved = in->pointer_x != ui->last_pointer_x || in->pointer_y != ui->last_pointer_y;
     ui->last_pointer_x = in->pointer_x;
     ui->last_pointer_y = in->pointer_y;
-    ui->pointer_seen = true;
     if (moved && hovered)
         top->focused = hovered;
 
@@ -1007,6 +1003,14 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         ui->pressed->state = UI_STATE_ACTIVE;
 }
 
+// How far this screen's entrance has played, 0..1. A screen with no transition
+// is always 1, so every consumer reads one number and no caller branches.
+static float _screen_t(const UIScreen* s) {
+    if (!s || s->transition == UI_TRANSITION_NONE || s->transition_seconds <= 0.0f)
+        return 1.0f;
+    return s->t_in;
+}
+
 void ui_build(UISystem* ui, float width, float height, float dt) {
     if (!ui || !ui->dl || width <= 0.0f || height <= 0.0f)
         return;
@@ -1017,10 +1021,27 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
         UIScreen* s = ui->stack[i];
         if (!s || !s->root)
             continue;
+        if (s->transition_seconds > 0.0f && s->t_in < 1.0f) {
+            s->t_in += dt / s->transition_seconds;
+            if (s->t_in > 1.0f)
+                s->t_in = 1.0f;
+        }
         _ease(s->root, dt);
         ui_layout(s, width, height);
+        ui->screen_t = _screen_t(s);
+        ui->screen_slide =
+            (s->transition == UI_TRANSITION_SLIDE) ? (1.0f - ui->screen_t) * height * 0.04f : 0.0f;
+        ui_draw_list_set_offset(ui->dl, 0.0f, ui->screen_slide);
+        ui_draw_list_set_alpha(ui->dl, ui->screen_t);
         _emit(ui, s->root);
     }
+    // Cleared, not left at the last screen's value: the draw list outlives this
+    // loop and anything an app emits through the primitives afterwards would
+    // otherwise inherit a transition it has nothing to do with.
+    ui->screen_t = 1.0f;
+    ui->screen_slide = 0.0f;
+    ui_draw_list_set_offset(ui->dl, 0.0f, 0.0f);
+    ui_draw_list_set_alpha(ui->dl, 1.0f);
 }
 
 // ---------------------------------------------------------------- the system
@@ -1029,7 +1050,24 @@ static void _ui_overlay(Engine* engine, void* user) {
     UISystem* ui = user;
     if (!ui || !engine)
         return;
-    ui_build(ui, (float)engine->win_width, (float)engine->win_height, (float)engine->delta_time);
+    /*
+     * The frame's dt for everything the UI animates -- hover, focus, a toggle's
+     * travel, a screen's entrance.
+     *
+     * Headless takes the FIXED step, which is what engine.c already does for
+     * the frame it hands the update hook. Two reasons, and the second is the
+     * one that bites. A headless run's early frames are seconds apart in wall
+     * time because a scene is loading, so a transition measured against the
+     * wall clock is over before the first frame anyone captures. And a picture
+     * whose contents depend on how long a load took cannot be a golden: it
+     * would differ between two runs of the same build.
+     *
+     * Windowed takes the wall clock, and deliberately NOT the sim clock: a menu
+     * pauses the game, and a menu that stopped animating the moment it appeared
+     * would be animating for nobody.
+     */
+    const float dt = engine->headless ? (float)ENGINE_FIXED_FRAME_DT : (float)engine->delta_time;
+    ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);
     ui_draw_list_render(ui->dl);
 }
 
@@ -1050,6 +1088,8 @@ UISystem* create_ui_system(Engine* engine) {
         return NULL;
     }
     ui->font_size = 16.0f;
+    ui->last_pointer_x = -FLT_MAX;
+    ui->last_pointer_y = -FLT_MAX;
     return ui;
 }
 
@@ -1111,12 +1151,7 @@ UIScreen* ui_screen(UISystem* ui, const char* name) {
     }
     s->ui = ui;
     s->modal = true;
-    if (name) {
-        const size_t n = strlen(name) + 1;
-        s->name = malloc(n);
-        if (s->name)
-            memcpy(s->name, name, n);
-    }
+    s->name = name ? safe_strdup(name) : NULL;
     s->root = _new_element(NULL, UI_ROOT);
     if (!s->root) {
         free(s->name);
@@ -1131,18 +1166,12 @@ UIScreen* ui_screen(UISystem* ui, const char* name) {
     s->root->align_main = UI_ALIGN_CENTER;
     s->root->align_cross = UI_ALIGN_CENTER;
 
-    if (ui->screen_count + 1 > ui->screen_cap) {
-        size_t cap = ui->screen_cap ? ui->screen_cap * 2 : 8;
-        UIScreen** ns = realloc(ui->screens, cap * sizeof(UIScreen*));
-        if (!ns) {
-            log_error("ui: out of memory growing the screen list");
-            _free_element(s->root);
-            free(s->name);
-            free(s);
-            return NULL;
-        }
-        ui->screens = ns;
-        ui->screen_cap = cap;
+    if (!grow_array((void**)&ui->screens, &ui->screen_cap, ui->screen_count + 1, sizeof(UIScreen*),
+                    8)) {
+        _free_element(s->root);
+        free(s->name);
+        free(s);
+        return NULL;
     }
     ui->screens[ui->screen_count++] = s;
     return s;
@@ -1157,19 +1186,21 @@ void ui_screen_set_modal(UIScreen* screen, bool modal) {
         screen->modal = modal;
 }
 
+void ui_screen_transition(UIScreen* screen, UITransition kind, float seconds) {
+    if (!screen)
+        return;
+    screen->transition = kind;
+    screen->transition_seconds = seconds > 0.0f ? seconds : 0.0f;
+}
+
 void ui_push(UISystem* ui, UIScreen* screen) {
     if (!ui || !screen)
         return;
-    if (ui->stack_count + 1 > ui->stack_cap) {
-        size_t cap = ui->stack_cap ? ui->stack_cap * 2 : 8;
-        UIScreen** ns = realloc(ui->stack, cap * sizeof(UIScreen*));
-        if (!ns) {
-            log_error("ui: out of memory growing the screen stack");
-            return;
-        }
-        ui->stack = ns;
-        ui->stack_cap = cap;
-    }
+    if (!grow_array((void**)&ui->stack, &ui->stack_cap, ui->stack_count + 1, sizeof(UIScreen*), 8))
+        return;
+    // Replay the entrance. A screen pushed, popped and pushed again should
+    // arrive the same way each time, not appear already finished.
+    screen->t_in = 0.0f;
     ui->stack[ui->stack_count++] = screen;
 }
 
