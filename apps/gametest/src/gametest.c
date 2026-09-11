@@ -33,6 +33,12 @@
 #include "cetra/animator.h"
 #include "cetra/import.h"
 #include "cetra/ibl.h"
+#include "cetra/particle_system.h"
+#include "cetra/particle_emitter.h"
+#include "cetra/particle_module.h"
+#include "cetra/particle_renderer.h"
+#include "cetra/particle_sim.h"
+#include "cetra/texture.h"
 
 static MouseDragController* drag_controller = NULL;
 static Entity* player_entity = NULL;
@@ -49,9 +55,15 @@ static const char* hdr_path = NULL;
 // second rig beside the player playing its own clip, which is the per-node
 // pose seen from a game.
 #define PLAYER_SPEED 10.0f
-// Capsule centre to feet: radius 0.5 + half-height 0.5. The yaw rebuilds
-// this transform every step, so both sites read the same number.
-#define PLAYER_RIG_DROP (-1.0f)
+// How big the player is. The VISUAL and the collision capsule both come from
+// this: scaling one alone either sinks the feet through the floor or leaves the
+// character standing on nothing.
+#define PLAYER_SCALE  2.0f
+#define PLAYER_RADIUS (0.5f * PLAYER_SCALE)
+#define PLAYER_HALF_H (0.5f * PLAYER_SCALE)
+// Capsule centre to feet, derived rather than written down twice. The yaw
+// rebuilds the rig transform every step, so both sites read this.
+#define PLAYER_RIG_DROP (-(PLAYER_RADIUS + PLAYER_HALF_H))
 static bool no_puppet = false;
 static const char* puppet_path = "assets/puppet.gltf";
 static const char* twin_clip = NULL;
@@ -63,6 +75,26 @@ static Animation* clip_wave = NULL;
 static float wave_mask[MAX_BONES];
 static float player_yaw = 0.0f;
 static Sound* step_sound = NULL;
+
+// The chaser (a second puppet that hunts the player) and the hearts it earns.
+// It is its own entity with its own Animator, which is what per-node poses buy:
+// two rigs over ONE set of meshes, each posed independently in the same frame.
+#define CHASER_SPEED 6.0f // slower than the player, so it is escapable
+#define CATCH_RADIUS (1.6f * PLAYER_SCALE)
+// A few distinct hearts, not a cloud: RATE over SECONDS is the whole count,
+// so a burst is about five. Raising either turns it back into a puff.
+#define HEART_RATE    8.0f
+#define HEART_SECONDS 0.6f
+static Entity* chaser_entity = NULL;
+static Animator* chaser_animator = NULL;
+static SceneNode* chaser_rig = NULL;
+static float chaser_yaw = 0.0f;
+static bool no_chaser = false;
+
+static SceneNode* heart_node = NULL;
+static ParticleModule* heart_spawn = NULL;
+static float heart_timer = 0.0f;    // > 0 while a burst is emitting
+static float catch_cooldown = 0.0f; // so one catch is one burst, not sixty
 
 // --trace-player: the player's pose and the input it acted on, printed every
 // trace_every fixed steps, which is what the gate group reads.
@@ -345,29 +377,183 @@ static void on_anim_event(Animator* animator, const char* name, void* user) {
 //
 // TWO levels, and both are load-bearing. sync_entity_transforms overwrites the
 // entity node's local every step, so the drop from capsule centre to feet and
-// the facing yaw cannot live there -- they go on the inner node. And the
-// importer's scene root IS the model's own node, so a rig found by name can be
-// the root itself: re-parenting that under a child of itself is a cycle, and
-// every recursive walk in the engine would run until the stack ran out. Its
-// children are the rig in that case, so they move instead.
-static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float drop) {
+// the facing yaw cannot live there -- they go on the inner node.
+//
+// `rig` must be a node of its own, never the scene root. It used to accept the
+// root and move its CHILDREN, which was right only while the root held nothing
+// but the model: the floor is added before the player, so that scooped up the
+// floor and parented it to the character, and WASD drove the ground around with
+// him. take_puppet_root does the wrapping at import instead, before anything
+// else is in the scene.
+static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float drop,
+                             float scale) {
     SceneNode* holder = create_node();
     node_set_name(holder, entity->name);
     SceneNode* inner = create_node();
     node_set_name(inner, "rig");
     node_add_child(holder, inner);
-    if (rig == scene->root_node) {
-        // Bounded rather than drained: node_add_child refuses a cycle, and a
-        // `while (children_count)` on a refusal spins forever.
-        for (size_t guard = rig->children_count; guard > 0 && rig->children_count > 0; guard--)
-            node_add_child(inner, rig->children[0]);
-    } else {
-        node_add_child(inner, rig);
-    }
+    node_add_child(inner, rig);
     node_add_child(scene->root_node, holder);
     glm_translate_make(inner->original_transform, (vec3){0.0f, drop, 0.0f});
+    glm_scale_uni(inner->original_transform, scale);
     entity->node = holder;
     return inner;
+}
+
+// The imported model as a node that is NOT the scene root.
+//
+// create_scene_from_model_path makes the file's own node the root (spec 11.107),
+// and a root cannot be re-parented under one of its own descendants -- that is a
+// cycle, and every recursive walk in the engine runs until the stack is gone.
+// So its children move into a wrapper HERE, at import, while the scene still
+// contains nothing else. Doing it later is the bug this replaced: the root's
+// children by then include the floor.
+static SceneNode* take_puppet_root(Scene* scene) {
+    SceneNode* found = node_find(scene->root_node, "puppet");
+    if (!found)
+        return NULL;
+    if (found != scene->root_node)
+        return found;
+    SceneNode* wrapper = create_node();
+    node_set_name(wrapper, "puppet_rig");
+    // Bounded rather than drained: node_add_child refuses a cycle, and a
+    // `while (children_count)` on a refusal spins forever.
+    for (size_t guard = scene->root_node->children_count;
+         guard > 0 && scene->root_node->children_count > 0; guard--)
+        node_add_child(wrapper, scene->root_node->children[0]);
+    node_add_child(scene->root_node, wrapper);
+    return wrapper;
+}
+
+// Hearts weave as they rise. Written as a module rather than reached for from
+// curl noise, because the ask is ONE axis with a phase, and curl noise wanders
+// on three -- it reads as drift, not as a wobble.
+//
+// The phase comes from the particle's own `seed`, which is stable for its whole
+// life, so five hearts from one burst weave independently instead of swaying in
+// lockstep. Amplitude grows with age so they leave the burst tightly and spread
+// as they climb.
+typedef struct HeartWobble {
+    float amplitude; // metres of sway at full age
+    float cycles;    // full left-right sweeps over a lifetime
+} HeartWobble;
+
+static void heart_wobble_run(ParticleModule* m, ParticleEmitter* e, size_t begin, size_t end,
+                             float dt, float t) {
+    (void)t;
+    const HeartWobble* w = (const HeartWobble*)m->params;
+    ParticlePool* pool = e->pool;
+    for (size_t i = begin; i < end; i++) {
+        float life = pool->lifetime[i] > 0.0f ? pool->lifetime[i] : 1.0f;
+        float u = pool->age[i] / life; // 0 at birth, 1 at death
+        float phase = pool->seed[i] * 6.2831853f;
+        // The DERIVATIVE of amplitude * sin(phase), so the sway composes with
+        // the upward drift instead of fighting the integrator for position.
+        float omega = w->cycles * 6.2831853f / life;
+        float sway = w->amplitude * omega * cosf(phase + omega * pool->age[i]);
+        pool->velocity[i][0] += sway * u * dt * 8.0f;
+    }
+}
+
+static ParticleModule* particle_module_heart_wobble(float amplitude, float cycles) {
+    HeartWobble* w = malloc(sizeof(HeartWobble));
+    if (!w)
+        return NULL;
+    w->amplitude = amplitude;
+    w->cycles = cycles;
+    return create_particle_module("heart_wobble", PARTICLE_PHASE_UPDATE, heart_wobble_run, w);
+}
+
+// A heart, drawn into an RGBA sprite: the implicit curve
+// (x^2 + y^2 - 1)^3 - x^2*y^3 <= 0, which is the standard one. Generated rather
+// than shipped, like the puppet and the audio tones -- the demo carries no art.
+static unsigned char* heart_pixels(int size) {
+    unsigned char* px = malloc((size_t)size * size * 4);
+    if (!px)
+        return NULL;
+    // The curve (x^2 + y^2 - 1)^3 - x^2*y^3 <= 0 spans about x in [-1.2, 1.2]
+    // and y in [-1.35, 1.25]. The WINDOW has to contain all of that. The first
+    // cut of this shifted y down by 0.25, which clipped the top off both lobes
+    // and took the cleft with them -- and a heart without its cleft is a
+    // pentagon, which is exactly what it drew.
+    const float half = 1.45f;
+    // Supersampled rather than distance-faded: the implicit function grows at
+    // wildly different rates around the outline (fast at the point, slow at the
+    // lobes), so a fixed f/0.35 falloff blurs one end while the other stays
+    // hard. Coverage is uniform by construction.
+    const int ss = 4;
+    for (int j = 0; j < size; j++) {
+        for (int i = 0; i < size; i++) {
+            int hits = 0;
+            for (int sy = 0; sy < ss; sy++) {
+                for (int sx = 0; sx < ss; sx++) {
+                    float u = ((float)i + ((float)sx + 0.5f) / ss) / (float)size;
+                    float v = ((float)j + ((float)sy + 0.5f) / ss) / (float)size;
+                    float x = (u * 2.0f - 1.0f) * half;
+                    // Row 0 is uploaded first and lands at v = 0, which is the
+                    // BOTTOM of the billboard -- so the first row has to be the
+                    // heart's POINT. Writing +y up here draws it upside down.
+                    float y = (v * 2.0f - 1.0f) * half;
+                    float t = x * x + y * y - 1.0f;
+                    if (t * t * t - x * x * y * y * y <= 0.0f)
+                        hits++;
+                }
+            }
+            unsigned char* p = &px[((size_t)j * size + i) * 4];
+            p[0] = 255;
+            p[1] = 58;
+            p[2] = 96;
+            p[3] = (unsigned char)((float)hits / (float)(ss * ss) * 255.0f + 0.5f);
+        }
+    }
+    return px;
+}
+
+// One emitter, parked and silent until a catch moves it and turns it on.
+static void create_hearts(Engine* engine, Scene* scene) {
+    ShaderProgram* particle_prog = create_particle_program();
+    if (!particle_prog)
+        return;
+    engine_add_program(engine, particle_prog);
+
+    ParticleSystem* sys = create_particle_system("hearts");
+    particle_system_set_backend(sys, create_cpu_particle_sim_backend());
+
+    ParticleEmitter* em = create_particle_emitter("heart", 256);
+    ParticleRenderer* r = create_billboard_particle_renderer(particle_prog);
+    Texture* sprite = texture_load_memory_owned(scene->tex_pool, "heart_sprite", heart_pixels(96),
+                                                96, 96, 4, texture_desc(true));
+    if (sprite)
+        billboard_renderer_set_sprite(r, sprite, 2.0f);
+    // Unlit: a heart is an icon, not a surface, and lighting it makes it dim
+    // whenever the character walks into shadow.
+    billboard_renderer_set_lit(r, false);
+    particle_emitter_set_renderer(em, r);
+
+    heart_spawn = particle_module_spawn_rate(0.0f); // off until a catch
+    particle_emitter_add_module(em, heart_spawn);
+    particle_emitter_add_module(
+        em, particle_module_init_box_location(
+                (vec3){-1.1f * PLAYER_SCALE, 0.0f, -1.1f * PLAYER_SCALE},
+                (vec3){1.1f * PLAYER_SCALE, 0.9f * PLAYER_SCALE, 1.1f * PLAYER_SCALE}));
+    particle_emitter_add_module(em, particle_module_init_lifetime(1.1f, 1.9f));
+    particle_emitter_add_module(em, particle_module_init_size(0.22f, 0.34f));
+    particle_emitter_add_module(
+        em, particle_module_init_color((vec4){1.0f, 0.25f, 0.45f, 1.0f}, 0.08f));
+    // Up, and a little drag, so they rise and ease off rather than accelerate
+    // out of frame.
+    particle_emitter_add_module(em, particle_module_update_drift((vec3){0.0f, 1.4f, 0.0f}));
+    particle_emitter_add_module(em, particle_module_heart_wobble(0.45f, 1.5f));
+    particle_emitter_add_module(em, particle_module_update_rotation(-1.2f, 1.2f));
+    particle_emitter_add_module(em, particle_module_update_integrate(0.96f));
+
+    particle_system_add_emitter(sys, em);
+    scene_add_particle_system(scene, sys); // the scene owns and ticks it
+
+    heart_node = create_node();
+    node_set_name(heart_node, "hearts");
+    node_set_particle_system(heart_node, sys); // the node is the spawn frame
+    node_add_child(scene->root_node, heart_node);
 }
 
 // A second node tree over the puppet's mesh, shared by reference: two nodes on
@@ -401,7 +587,7 @@ static void on_init(Game* game) {
     if (!no_puppet) {
         scene = create_scene_from_model_path(puppet_path, NULL, engine->async_loader);
         if (scene) {
-            puppet_root = node_find(scene->root_node, "puppet");
+            puppet_root = take_puppet_root(scene);
             if (!puppet_root || scene->skeleton_count == 0 || scene->animation_count == 0) {
                 fprintf(stderr, "gametest: '%s' has no rig with clips; keeping the box\n",
                         puppet_path);
@@ -519,13 +705,13 @@ static void on_init(Game* game) {
 
     // Create player entity with CharacterController
     player_entity = create_entity(em, "player");
-    glm_vec3_copy((vec3){0, 2.0f, 0}, player_entity->position);
+    glm_vec3_copy((vec3){0, 2.0f * PLAYER_SCALE, 0}, player_entity->position);
 
     if (puppet_root) {
         // The puppet, its feet a capsule's half-height plus radius below the
         // entity, on the locomotion space; the box's colour and size are the
         // capsule's, which stays the physics body either way.
-        player_rig = attach_rig(scene, player_entity, puppet_root, PLAYER_RIG_DROP);
+        player_rig = attach_rig(scene, player_entity, puppet_root, PLAYER_RIG_DROP, PLAYER_SCALE);
         Skeleton* skeleton = scene->skeletons[0];
         Animation* idle = scene_find_animation(scene, "idle");
         Animation* walk = scene_find_animation(scene, "walk");
@@ -548,7 +734,7 @@ static void on_init(Game* game) {
                scene->animation_count);
     } else {
         // Player visual (capsule approximated as box for now)
-        vec3 player_size = {0.5f, 1.0f, 0.5f};
+        vec3 player_size = {PLAYER_RADIUS, PLAYER_RADIUS + PLAYER_HALF_H, PLAYER_RADIUS};
         vec3 player_color = {0.8f, 0.2f, 0.2f};
         SceneNode* player_node = create_box_node(scene, player_size, player_color, false);
         node_set_name(player_node, "player");
@@ -557,9 +743,9 @@ static void on_init(Game* game) {
 
     // Player character controller
     CharacterControllerConfig player_config = character_controller_default_config();
-    player_config.capsule_radius = 0.5f;
-    player_config.capsule_half_height = 0.5f;
-    player_config.step_height = 0.4f;
+    player_config.capsule_radius = PLAYER_RADIUS;
+    player_config.capsule_half_height = PLAYER_HALF_H;
+    player_config.step_height = 0.4f * PLAYER_SCALE;
     player_config.max_strength = 200.0f; // Strong enough to push door
 
     CharacterController* cc =
@@ -568,6 +754,35 @@ static void on_init(Game* game) {
         character_controller_set_contact_callback(cc, on_player_contact, game);
     }
     printf("Player created with CharacterController\n");
+
+    // The chaser: the same meshes, its own rig, its own Animator, its own
+    // character controller. It hunts the player in on_update.
+    if (puppet_root && !no_chaser) {
+        SceneNode* rig = clone_rig(puppet_root);
+        if (rig) {
+            chaser_entity = create_entity(em, "chaser");
+            // The far corner at the TOP LEFT of the view: the camera sits at
+            // +Z looking at the origin, so screen-right is +X and screen-up is
+            // -Z. At 6 m/s against the player's 10 it is a chase, not an ambush.
+            glm_vec3_copy((vec3){-20.0f, 2.0f * PLAYER_SCALE, -20.0f}, chaser_entity->position);
+            chaser_rig = attach_rig(scene, chaser_entity, rig, PLAYER_RIG_DROP, PLAYER_SCALE);
+
+            CharacterControllerConfig cfg = character_controller_default_config();
+            cfg.capsule_radius = PLAYER_RADIUS;
+            cfg.capsule_half_height = PLAYER_HALF_H;
+            cfg.step_height = 0.4f * PLAYER_SCALE;
+            entity_add_character_controller(chaser_entity, physics, &cfg);
+
+            chaser_animator = create_animator(scene->skeletons[0]);
+            if (chaser_animator) {
+                animator_play_space(chaser_animator, "locomotion", locomotion, 3, 0.0f, true);
+                entity_add_animator(chaser_entity, chaser_animator);
+            }
+            printf("Chaser created -- run!\n");
+        }
+    }
+
+    create_hearts(engine, scene);
 
     // A second rig beside the player on its own clip: two poses in one frame.
     if (puppet_root && twin_clip) {
@@ -579,7 +794,7 @@ static void on_init(Game* game) {
         } else if (rig) {
             Entity* twin = create_entity(em, "twin");
             glm_vec3_copy((vec3){-6.0f, 0.0f, 0.0f}, twin->position);
-            attach_rig(scene, twin, rig, 0.0f);
+            attach_rig(scene, twin, rig, 0.0f, PLAYER_SCALE);
             Animator* a = create_animator(scene->skeletons[0]);
             if (a) {
                 animator_play(a, clip, 0.0f, true);
@@ -702,6 +917,7 @@ static void on_update(Game* game, double dt) {
         glm_mat4_identity(player_rig->original_transform);
         glm_translate(player_rig->original_transform, (vec3){0.0f, PLAYER_RIG_DROP, 0.0f});
         glm_rotate_y(player_rig->original_transform, player_yaw, player_rig->original_transform);
+        glm_scale_uni(player_rig->original_transform, PLAYER_SCALE);
     }
 
     // Apply horizontal movement
@@ -731,6 +947,81 @@ static void on_update(Game* game, double dt) {
 
     // Set velocity (CharacterController will handle collision response)
     character_controller_set_velocity(cc, vel);
+
+    // The chaser: steer flat toward the player at its own speed, blend its legs
+    // from the speed it actually achieved, and face where it is going.
+    CharacterController* chase_cc =
+        chaser_entity ? entity_get_character_controller(chaser_entity) : NULL;
+    if (chase_cc) {
+        vec3 to_player;
+        glm_vec3_sub(player_entity->position, chaser_entity->position, to_player);
+        to_player[1] = 0.0f;
+        float gap = glm_vec3_norm(to_player);
+
+        vec3 chase_vel;
+        character_controller_get_velocity(chase_cc, chase_vel);
+        if (chaser_animator) {
+            float speed = hypotf(chase_vel[0], chase_vel[2]) / PLAYER_SPEED;
+            chaser_animator->param = speed > 1.0f ? 1.0f : speed;
+        }
+        if (chaser_rig && hypotf(chase_vel[0], chase_vel[2]) > 0.1f) {
+            float target = atan2f(chase_vel[0], chase_vel[2]);
+            float d = target - chaser_yaw;
+            while (d > (float)M_PI)
+                d -= 2.0f * (float)M_PI;
+            while (d < -(float)M_PI)
+                d += 2.0f * (float)M_PI;
+            float k = (float)dt * 12.0f;
+            chaser_yaw += d * (k > 1.0f ? 1.0f : k);
+            glm_mat4_identity(chaser_rig->original_transform);
+            glm_translate(chaser_rig->original_transform, (vec3){0.0f, PLAYER_RIG_DROP, 0.0f});
+            glm_rotate_y(chaser_rig->original_transform, chaser_yaw,
+                         chaser_rig->original_transform);
+            glm_scale_uni(chaser_rig->original_transform, PLAYER_SCALE);
+        }
+
+        // Close in unless already on top of him, so it does not jitter against
+        // the player's capsule once it arrives.
+        if (gap > CATCH_RADIUS * 0.5f) {
+            glm_vec3_scale(to_player, CHASER_SPEED / gap, to_player);
+            chase_vel[0] = to_player[0];
+            chase_vel[2] = to_player[2];
+        } else {
+            chase_vel[0] = 0.0f;
+            chase_vel[2] = 0.0f;
+        }
+        chase_vel[1] -= gravity * (float)dt;
+        character_controller_set_velocity(chase_cc, chase_vel);
+
+        // Caught: hearts, once. The cooldown is what makes it one burst rather
+        // than one per step for as long as the two overlap.
+        if (catch_cooldown > 0.0f)
+            catch_cooldown -= (float)dt;
+        if (gap < CATCH_RADIUS && catch_cooldown <= 0.0f) {
+            catch_cooldown = 2.0f;
+            heart_timer = HEART_SECONDS;
+            if (heart_spawn)
+                particle_module_spawn_rate_set(heart_spawn, HEART_RATE);
+            if (heart_node) {
+                // Burst from between the two of them, at chest height.
+                vec3 mid;
+                glm_vec3_add(player_entity->position, chaser_entity->position, mid);
+                glm_vec3_scale(mid, 0.5f, mid);
+                node_set_position(heart_node, (vec3){mid[0], mid[1], mid[2]});
+            }
+            printf("Caught!\n");
+            if (jump_sound)
+                audio_sound_play(jump_sound);
+        }
+    }
+
+    // The burst is a WINDOW, not a one-shot: the emitter keeps spawning for
+    // HEART_SECONDS and then stops, and the hearts already alive finish rising.
+    if (heart_timer > 0.0f) {
+        heart_timer -= (float)dt;
+        if (heart_timer <= 0.0f && heart_spawn)
+            particle_module_spawn_rate_set(heart_spawn, 0.0f);
+    }
 
     // The position is the one BEFORE this step; move_x and move_y are the
     // action values the step acted on. With a rig the line continues after
@@ -1208,6 +1499,8 @@ int main(int argc, const char* argv[]) {
             audio_file = argv[++i];
         } else if (!strcmp(a, "--no-puppet")) {
             no_puppet = true;
+        } else if (!strcmp(a, "--no-chaser")) {
+            no_chaser = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
             puppet_path = argv[++i];
         } else if (!strcmp(a, "--twin") && i + 1 < argc) {
@@ -1263,6 +1556,7 @@ int main(int argc, const char* argv[]) {
     printf("  WASD / left stick, dpad - Move the player (idle -> walk -> run as it speeds up)\n");
     printf("  Space / A - Jump\n");
     printf("  E / LB - Wave (the right arm, over whatever the legs are doing)\n");
+    printf("A second puppet chases you. Let it catch you (--no-chaser to turn it off).\n");
     printf("  F / X - Spawn falling box\n");
     printf("  R / Y - Raycast downward from player\n");
     printf("  G / B - Print ground state\n");
