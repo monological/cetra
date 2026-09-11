@@ -30,7 +30,12 @@ struct AudioSystem {
     ma_engine engine;
     bool no_device;                         // headless: rendered offline, no device
     ma_sound_group groups[AUDIO_BUS_COUNT]; // MASTER slot unused; MUSIC/SFX/UI are groups
-    Sound** sounds;                         // every held Sound, for teardown
+    // What each bus was last set to. Kept because miniaudio is write-only here
+    // -- there is no ma_engine_get_volume -- and a settings slider needs a value
+    // to open at. Seeded to unity at creation rather than left at calloc's zero,
+    // which would mean silence.
+    float volumes[AUDIO_BUS_COUNT];
+    Sound** sounds; // every held Sound, for teardown
     size_t sound_count;
     size_t sound_cap;
 };
@@ -70,6 +75,8 @@ AudioSystem* create_audio_system(bool headless) {
         return NULL;
 
     audio->no_device = headless;
+    for (int bus = AUDIO_BUS_MASTER; bus < AUDIO_BUS_COUNT; bus++)
+        audio->volumes[bus] = 1.0f;
 
     ma_engine_config cfg = ma_engine_config_init();
     if (audio->no_device) {
@@ -112,9 +119,16 @@ void free_audio_system(AudioSystem* audio) {
     free(audio);
 }
 
+float audio_get_bus_volume(const AudioSystem* audio, AudioBus bus) {
+    if (!audio || bus < AUDIO_BUS_MASTER || bus >= AUDIO_BUS_COUNT)
+        return 1.0f;
+    return audio->volumes[bus];
+}
+
 void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume) {
     if (!audio)
         return;
+    audio->volumes[bus] = volume;
     if (bus == AUDIO_BUS_MASTER) {
         ma_engine_set_volume(&audio->engine, volume);
         return;
