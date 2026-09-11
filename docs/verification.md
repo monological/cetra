@@ -550,6 +550,15 @@ Four things that leaves open, none of them reachable from this machine:
 - **Window mode.** It round-trips through the file and `settings_apply` does not act on it, so
   nothing has ever gone fullscreen. That is a gap in the feature and not only in the testing:
   GLFW needs a monitor choice and saved geometry the engine does not keep.
+- **`uTime` windowed.** The clock a custom element program is written against is
+  `total_frames * ENGINE_FIXED_FRAME_DT`, which is exactly right headless and wrong windowed —
+  it advances at sixty-over-refresh rather than in seconds, so a shader backdrop runs slow on a
+  144 Hz panel and fast on a stalling one. **It cannot simply take `engine->render_time`, and
+  that was tried and measured:** under the game framework that clock is the SIM's, so it stops
+  while the sim is paused — which is precisely when a menu is up. The entrance never advanced,
+  every screen with a transition drew at alpha 0, and both menu goldens moved by the whole
+  frame while the HUD, carrying no transition, kept drawing. The fix is a wall clock on the
+  windowed side only, and it wants its own before/after rather than a late guess.
 
 One measured caution about the two menu goldens. They are `apps/gametest` frames, and that app
 is 0 px run-to-run (the row above says so, re-measured twice for 12.1). The menu recipes

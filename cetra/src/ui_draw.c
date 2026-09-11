@@ -487,15 +487,14 @@ static float _align_pen(UIRect r, UIAlign align, float line_w) {
     return r.x;
 }
 
-float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style,
-                   UIAlign align) {
+void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style, UIAlign align) {
     if (!dl || !text)
-        return 0.0f;
+        return;
 
     Font* font = (style && style->font) ? style->font : dl->font;
     const float size = (style && style->font_size > 0.0f) ? style->font_size : dl->font_size;
     if (!font || font->base_size <= 0.0f || size <= 0.0f)
-        return 0.0f;
+        return;
 
     static const float default_fg[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     const float* color = style ? style->fg : default_fg;
@@ -503,7 +502,6 @@ float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* st
     const float line_spacing = style ? style->line_spacing : 0.0f;
 
     const float scale = size / font->base_size;
-    const float width = ui_text_width(font, size, tracking, text);
     const float line_h = ui_line_height(font, size, line_spacing);
 
     float pen_x =
@@ -571,7 +569,6 @@ float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* st
         pen_x += g->advance_x * scale;
         prev = (int)*p;
     }
-    return width;
 }
 
 // ------------------------------------------------------------------ lifecycle
@@ -696,6 +693,17 @@ void ui_draw_list_begin(UIDrawList* dl, int width_points, int height_points) {
     // every batch and never assigned, which made the spec's headline use for
     // ui_set_element_program -- a shader-driven animated background -- a
     // documented escape hatch with a frozen clock.
+    //
+    // It is NOT engine->render_time, for the reason ui.c records at the eased
+    // dt: under the game framework that clock is the SIM's, and it stops when
+    // the sim is paused -- which is exactly when a menu is up and its backdrop
+    // should still be moving. Measured: taking it froze this at the pause
+    // instant and moved both menu goldens.
+    //
+    // OWED: the frame counter is right headless and wrong windowed, where it
+    // runs at sixty-over-refresh rather than in seconds. The fix is a wall
+    // clock on the windowed side, and it wants its own measurement rather than
+    // a late guess -- docs/verification.md carries it.
     if (dl->engine)
         dl->time = (float)dl->engine->total_frames * (float)ENGINE_FIXED_FRAME_DT;
     // Top-left origin with +Y down, the space the text renderer and GLFW's
@@ -704,20 +712,17 @@ void ui_draw_list_begin(UIDrawList* dl, int width_points, int height_points) {
 }
 
 uint64_t ui_draw_list_signature(const UIDrawList* dl) {
-    // FNV-1a over the vertex bytes. The vertices ARE the drawing: the colour,
-    // the geometry, the rect a rounded corner is measured against and the mode
-    // that selects how it is filled all ride in them, so two lists that hash
-    // alike drew alike.
-    uint64_t h = 1469598103934665603ULL;
+    // The vertices ARE the drawing: the colour, the geometry, the rect a
+    // rounded corner is measured against and the mode that selects how it is
+    // filled all ride in them, so two lists that hash alike drew alike.
+    //
+    // util.h's digest rather than a local one. The hand-rolled copy this
+    // replaced carried the FNV basis with its final digit missing -- a constant
+    // no comparison here could ever have caught, since both sides of every
+    // comparison come from one build.
     if (!dl || !dl->verts)
-        return h;
-    const unsigned char* p = (const unsigned char*)dl->verts;
-    const size_t n = dl->vcount * sizeof(UIVertex);
-    for (size_t i = 0; i < n; i++) {
-        h ^= p[i];
-        h *= 1099511628211ULL;
-    }
-    return h;
+        return FNV1A64_BASIS;
+    return fnv1a64(FNV1A64_BASIS, dl->verts, dl->vcount * sizeof(UIVertex));
 }
 
 void ui_draw_list_render(UIDrawList* dl) {

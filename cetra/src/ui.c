@@ -56,12 +56,6 @@ struct UISystem {
     // what makes press-slide-off-release do nothing.
     UIElement* pressed;
 
-    // The screen currently being emitted, and its entrance. Held here rather
-    // than threaded through _emit's recursion because every draw in the subtree
-    // needs them and nothing else does.
-    float screen_t;
-    float screen_slide;
-
     // Last frame's pointer, so hover can move focus only when the pointer has
     // actually MOVED. Moving it every frame would mean a resting mouse
     // overrode the pad on every single frame, and the stick could never take
@@ -411,8 +405,24 @@ static float _widest_option(const UIElement* el, const UIStyle* s) {
     return widest;
 }
 
+/*
+ * The element's own padding where it names one, else the resolved style's.
+ *
+ * ONE rule, taking the style the caller already has: the box layout MEASURES
+ * and the box a control DRAWS INTO have to be the same box, and this was
+ * written out twice -- once here and once inline in _intrinsic -- which is two
+ * places for it to stop being.
+ */
+static void _padding_from(const UIElement* el, const UIStyle* s, float out[4]) {
+    if (el->padding[0] || el->padding[1] || el->padding[2] || el->padding[3]) {
+        memcpy(out, el->padding, sizeof(float) * 4);
+        return;
+    }
+    memcpy(out, s->padding, sizeof(float) * 4);
+}
+
 // What one element's own content wants, before any parent has a say.
-static void _intrinsic(const UISystem* ui, UIElement* el, float* out_w, float* out_h) {
+static void _intrinsic(const UISystem* ui, const UIElement* el, float* out_w, float* out_h) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float w = 0.0f, h = 0.0f;
     if (el->text && el->text[0] && s.font) {
@@ -437,9 +447,8 @@ static void _intrinsic(const UISystem* ui, UIElement* el, float* out_w, float* o
             break;
     }
 
-    const float* pad = (el->padding[0] || el->padding[1] || el->padding[2] || el->padding[3])
-                           ? el->padding
-                           : s.padding;
+    float pad[4];
+    _padding_from(el, &s, pad);
     *out_w = w + pad[1] + pad[3];
     *out_h = h + pad[0] + pad[2];
 }
@@ -450,13 +459,10 @@ static float _spacing_of(const UISystem* ui, const UIElement* el) {
     return ui->theme.spacing > 0.0f ? ui->theme.spacing : 8.0f;
 }
 
+// The same rule for a caller that has no style in hand and must resolve one.
 static void _padding_of(const UISystem* ui, const UIElement* el, float out[4]) {
-    if (el->padding[0] || el->padding[1] || el->padding[2] || el->padding[3]) {
-        memcpy(out, el->padding, sizeof(float) * 4);
-        return;
-    }
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
-    memcpy(out, s.padding, sizeof(float) * 4);
+    _padding_from(el, &s, out);
 }
 
 /*
@@ -1028,18 +1034,19 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
         }
         _ease(s->root, dt);
         ui_layout(s, width, height);
-        ui->screen_t = _screen_t(s);
-        ui->screen_slide =
-            (s->transition == UI_TRANSITION_SLIDE) ? (1.0f - ui->screen_t) * height * 0.04f : 0.0f;
-        ui_draw_list_set_offset(ui->dl, 0.0f, ui->screen_slide);
-        ui_draw_list_set_alpha(ui->dl, ui->screen_t);
+        // Locals, because the subtree reads the entrance through the DRAW
+        // LIST's offset and alpha -- which is what _emit actually consults.
+        // Nothing walks back up to the system for them.
+        const float screen_t = _screen_t(s);
+        const float slide =
+            (s->transition == UI_TRANSITION_SLIDE) ? (1.0f - screen_t) * height * 0.04f : 0.0f;
+        ui_draw_list_set_offset(ui->dl, 0.0f, slide);
+        ui_draw_list_set_alpha(ui->dl, screen_t);
         _emit(ui, s->root);
     }
     // Cleared, not left at the last screen's value: the draw list outlives this
     // loop and anything an app emits through the primitives afterwards would
     // otherwise inherit a transition it has nothing to do with.
-    ui->screen_t = 1.0f;
-    ui->screen_slide = 0.0f;
     ui_draw_list_set_offset(ui->dl, 0.0f, 0.0f);
     ui_draw_list_set_alpha(ui->dl, 1.0f);
 }
@@ -1065,6 +1072,22 @@ static void _ui_overlay(Engine* engine, void* user) {
      * Windowed takes the wall clock, and deliberately NOT the sim clock: a menu
      * pauses the game, and a menu that stopped animating the moment it appeared
      * would be animating for nobody.
+     */
+    /*
+     * NOT engine->render_delta, and this is the trap worth the paragraph.
+     *
+     * That field looks like exactly the right answer -- it is the rule every
+     * other per-frame consumer uses, and under engine_run it IS the fixed step
+     * headless. But the game framework SUBSTITUTES a frame clock, so under a
+     * Game it carries the SIM clock's delta, which is 0 while the sim is
+     * paused. A menu is the one thing that must keep animating when everything
+     * else has stopped, because pausing is usually what opened it.
+     *
+     * Taken from there, a screen's entrance never advanced: it drew at alpha 0
+     * and the menu was invisible, while the HUD -- carrying no transition, so
+     * its weight is a constant 1 -- kept drawing, which makes the failure look
+     * like a layout bug rather than a clock one. The menu goldens caught it and
+     * no gate arm can, since every probe passes a dt of its own.
      */
     const float dt = engine->headless ? (float)ENGINE_FIXED_FRAME_DT : (float)engine->delta_time;
     ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);

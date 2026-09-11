@@ -148,9 +148,13 @@ void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 ti
 // edges stretch along one axis and the centre stretches along both. `insets`
 // is top, right, bottom, left in texture pixels.
 void ui_draw_9slice(UIDrawList* dl, UIRect r, const Texture* tex, const float insets[4], vec4 tint);
-// One line of text, positioned horizontally by `align` and vertically on the
-// font's baseline inside `r`. Returns the advance width actually drawn.
-float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style, UIAlign align);
+// Text positioned horizontally by `align` and vertically on the font's baseline
+// inside `r`, starting a new line at every '\n' it carries.
+//
+// It returns nothing. The advance width it used to return cost a second walk of
+// the whole string to produce and no caller ever read it; `ui_text_width` is
+// the way to ask, and it is what the layout pass already uses.
+void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style, UIAlign align);
 
 // Shifts everything emitted after it, in points. One number rather than an
 // offset applied to each rect, so furniture a control computes internally moves
@@ -410,7 +414,12 @@ void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y);
 void ui_layout(UIScreen* screen, float width, float height);
 
 // Advances the hover/focus easing and emits the stack's geometry into the
-// system's draw list. Reads no input; ui_update is this plus the input pass.
+// system's draw list. Reads no input.
+//
+// It is NOT what ui_update calls, and ui_update is not this plus an input pass:
+// the two are separate walks fired from different frame hooks -- ui_update from
+// the frame-input hook before the fixed steps, this one from the overlay after
+// tone mapping -- and each lays out what it is about to use.
 void ui_build(UISystem* ui, float width, float height, float dt);
 
 /*
