@@ -242,9 +242,14 @@ first.
 # rigged + animated + normal-mapped, byte-identical ACROSS BUILDS:
 ./out/bin/render -m my_models/raiden/source/raiden_textured_rigged.glb \
     -t my_models/raiden/textures -e my_models/studio_small_03_8k.hdr \
-    -a my_models/animations/strut_walk.fbx -s my_models/animations/T-Pose.fbx \
+    -a assets/strut_walk.fbx -s assets/t_pose.fbx \
     -x -f 120 --no-springs --no-auto-exposure -E 1.0 -S out.ppm
 ```
+
+The clip is the COMMITTED one (`assets/strut_walk.fbx`) rather than the copy under
+`my_models/`, which is gitignored and so reproduces for nobody else. The two are **0 px**
+apart on this rig (measured, spec 12.1): the committed file differs only in bone-name
+prefixes, which `normalize_bone_name` strips either way, so the pose is the same pose.
 
 `--no-auto-exposure -E 1.0` is load-bearing: it stops the exposure drift
 above. `--no-springs` is no longer required for determinism (springs ride the
@@ -500,8 +505,8 @@ Closing it is a watch, not a script:
 ```bash
 ./out/bin/render -m my_models/raiden/source/raiden_textured_rigged.glb \
     -t my_models/raiden/textures -e my_models/studio_small_03_8k.hdr \
-    -a my_models/animations/strut_walk.fbx -a my_models/animations/flair.fbx \
-    -s my_models/animations/T-Pose.fbx \
+    -a assets/strut_walk.fbx -a assets/flair.fbx \
+    -s assets/t_pose.fbx \
     --anim-switch-to flair --anim-switch-at 120 --anim-fade 0.35
 ```
 
