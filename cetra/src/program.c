@@ -1075,6 +1075,18 @@ ShaderProgram* create_text_program() {
     return program;
 }
 
+ShaderProgram* create_ui_program() {
+    ShaderProgram* program = NULL;
+
+    if ((program = create_program_from_source("ui", ui_vert_shader_str, ui_frag_shader_str,
+                                              NULL)) == NULL) {
+        log_error("Failed to initialize ui shader program");
+        return NULL;
+    }
+
+    return program;
+}
+
 ShaderProgram* create_bone_program() {
     ShaderProgram* program = NULL;
 

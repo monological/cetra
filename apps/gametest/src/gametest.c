@@ -24,6 +24,8 @@
 #include "cetra/geometry.h"
 #include "cetra/light.h"
 #include "cetra/app.h"
+#include "cetra/text.h"
+#include "cetra/ui.h"
 #include "cetra/game/game.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/physics.h"
@@ -1450,6 +1452,76 @@ static int run_anim_probe(Game* game, const char* which) {
     return rc;
 }
 
+// --ui-smoke (spec 12.2, phase 2): the draw list with nothing above it -- no
+// elements, no layout, no input. It exists to put the primitives in front of a
+// pixel comparison BEFORE anything is built on them, because every way they can
+// be wrong (a glyph mirrored about its own baseline, the scissor's
+// point-to-pixel conversion, the corner SDF, the blend func) is invisible to a
+// compile and obvious in a picture. Phase 7 replaces it with real screens.
+static UIDrawList* smoke_dl = NULL;
+static Font* smoke_font = NULL;
+
+static void ui_smoke_draw(Engine* engine, void* user) {
+    (void)user;
+    if (!smoke_dl || !engine)
+        return;
+    ui_draw_list_begin(smoke_dl, engine->win_width, engine->win_height);
+
+    const UIRect panel = {60.0f, 40.0f, 320.0f, 150.0f};
+    const UIStyle style = {.bg = {0.08f, 0.09f, 0.12f, 0.92f},
+                           .fg = {0.90f, 0.92f, 0.96f, 1.0f},
+                           .border = {0.45f, 0.70f, 1.00f, 1.0f},
+                           .border_width = 2.0f,
+                           .corner_radius = 12.0f,
+                           .font_size = 24.0f};
+    ui_draw_rect(smoke_dl, panel, &style);
+    ui_draw_text(smoke_dl, ui_rect_inset(panel, 24.0f, 16.0f, 0.0f, 16.0f), "Cetra UI", &style,
+                 UI_ALIGN_CENTER);
+
+    // A square-cornered flat quad beside it, so the picture shows the rounded
+    // and unrounded paths are one geometry with a number changed rather than
+    // two code paths.
+    vec4 flat = {0.85f, 0.35f, 0.25f, 1.0f};
+    const UIRect swatch = {60.0f, 210.0f, 80.0f, 40.0f};
+    ui_draw_quad(smoke_dl, swatch, flat);
+
+    // A quad twice the size of the clip it is drawn under, so the picture
+    // shows exactly where the scissor landed. The conversion is the one piece
+    // of coordinate maths that cannot be checked by reading: the clip is in
+    // points measured from the TOP and the scissor is in framebuffer pixels
+    // measured from the BOTTOM, so a sign error survives a compile and shows
+    // up as a band in the wrong half of the screen.
+    vec4 green = {0.30f, 0.80f, 0.45f, 1.0f};
+    const UIRect clip = {160.0f, 210.0f, 100.0f, 40.0f};
+    ui_push_clip(smoke_dl, clip);
+    ui_draw_quad(smoke_dl, (UIRect){160.0f, 210.0f, 200.0f, 80.0f}, green);
+    ui_pop_clip(smoke_dl);
+
+    ui_draw_list_render(smoke_dl);
+}
+
+static bool ui_smoke_install(Engine* engine) {
+    smoke_font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
+                           64.0f, true);
+    if (!smoke_font) {
+        fprintf(stderr, "ui-smoke: could not load the font\n");
+        return false;
+    }
+    smoke_dl = create_ui_draw_list(engine);
+    if (!smoke_dl) {
+        fprintf(stderr, "ui-smoke: could not create the draw list\n");
+        return false;
+    }
+    ui_draw_list_set_font(smoke_dl, smoke_font, 24.0f);
+    engine_set_overlay(engine, ui_smoke_draw, NULL);
+    return true;
+}
+
+static void ui_smoke_shutdown(void) {
+    free_ui_draw_list(smoke_dl);
+    smoke_dl = NULL;
+}
+
 int main(int argc, const char* argv[]) {
     printf("=== Physics Test ===\n\n");
 
@@ -1467,6 +1539,7 @@ int main(int argc, const char* argv[]) {
     const char* audio_probe = NULL;
     const char* audio_file = NULL;
     const char* anim_probe = NULL;
+    bool ui_smoke = false;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
@@ -1507,6 +1580,8 @@ int main(int argc, const char* argv[]) {
             twin_clip = argv[++i];
         } else if (!strcmp(a, "--anim-probe") && i + 1 < argc) {
             anim_probe = argv[++i];
+        } else if (!strcmp(a, "--ui-smoke")) {
+            ui_smoke = true;
         } else if (!strcmp(a, "--print-bindings")) {
             input_print_actions(actions, ACTION_COUNT);
             return 0;
@@ -1595,6 +1670,10 @@ int main(int argc, const char* argv[]) {
         fprintf(stderr, "Failed to create game\n");
         return -1;
     }
+    if (ui_smoke && !ui_smoke_install(game->engine)) {
+        free_game(game);
+        return -1;
+    }
     game->engine->exit_after_frames = frames;
     engine_set_screenshot_path(game->engine, screenshot);
     game->engine->screenshot_every = screenshot_every;
@@ -1625,6 +1704,7 @@ int main(int argc, const char* argv[]) {
     game_run(game);
 
     // Cleanup
+    ui_smoke_shutdown();
     free_game(game);
 
     printf("Goodbye!\n");

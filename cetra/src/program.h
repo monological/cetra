@@ -257,6 +257,10 @@ ShaderProgram* create_layers_vt_feedback_program();
 
 // Text Program
 ShaderProgram* create_text_program();
+// The UI overlay's program (spec 12.2). One vertex format carries flat fills,
+// textured quads and SDF glyphs, so a screen is one or two draws rather than
+// one per element.
+ShaderProgram* create_ui_program();
 
 // Bone Visualization Program
 ShaderProgram* create_bone_program();

@@ -409,6 +409,12 @@ typedef struct Engine {
     // has an early return (escape key) that a store would silently skip.
     const EngineFrameClock* render_clock;
 
+    // Drawn after tone mapping, before the debug GUI (engine_set_overlay).
+    // NULL is the entire off state -- the call site is a pointer compare, so a
+    // frame with no overlay is the frame that existed before this hook did.
+    void (*overlay)(struct Engine* engine, void* user);
+    void* overlay_user;
+
     // The run's settings. The path is owned (engine_set_screenshot_path); the
     // two counts are plain writes, and anything not above zero is off.
     char* screenshot_path; // If set, save final frame here on exit (PPM)
@@ -509,6 +515,21 @@ typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
 
+// The one place an app may draw AFTER tone mapping (engine_set_overlay). It
+// runs at the end of the present pass, once the post chain has written the
+// display-resolution frame, and before the debug GUI -- which is a developer's
+// overlay and belongs on top of the game's.
+//
+// It exists because `render` is not this. That hook draws into the MSAA HDR
+// scene target at RENDER resolution, so what it emits is graded, bloomed,
+// grained, temporally filtered and rescaled by --render-scale: right for scene
+// content, wrong for a menu, whose text should reach the display as authored
+// and at the display's own resolution.
+//
+// It is the frame's last draw before the screenshot read-back, so what it
+// emits is captured headless -- which is what lets an overlay be a golden.
+typedef void (*EngineOverlayFunc)(Engine* engine, void* user);
+
 // What an engine is created from: the window, and every setting that the
 // window or the first render-target build reads. Fill the fields you mean with
 // designated initialisers and leave the rest zero; zero is the default, named
@@ -565,6 +586,8 @@ void engine_set_msaa_samples(Engine* engine, int samples);
 void engine_set_2d_preset(Engine* engine, Scene* scene);
 // Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);
+// Installs the post-tone-map overlay draw; NULL clears it. Borrowed `user`.
+void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user);
 
 // GLFW callbacks
 void engine_set_error_callback(Engine* engine, GLFWerrorfun error_callback);

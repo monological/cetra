@@ -1784,6 +1784,13 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
         engine->render_clock = clock;
 }
 
+void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user) {
+    if (!engine)
+        return;
+    engine->overlay = overlay;
+    engine->overlay_user = user;
+}
+
 void engine_set_render_time(Engine* engine, double time, double delta) {
     if (!engine)
         return;
@@ -1855,6 +1862,14 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->probe_set && fx_scene->probe_set->debug_atlas) {
         probe_atlas_debug_blit(fx_scene->probe_set->atlas, engine, engine->fb_width,
                                engine->fb_height);
+    }
+
+    // The app's overlay, then the GUI: both draw after tone mapping, and the
+    // debug panel goes over the game's own screens rather than under them.
+    if (engine->overlay) {
+        profiler_scope_begin(engine->profiler, "overlay");
+        engine->overlay(engine, engine->overlay_user);
+        profiler_scope_end(engine->profiler);
     }
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
