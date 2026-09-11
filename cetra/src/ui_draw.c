@@ -392,30 +392,45 @@ float ui_line_height(const Font* font, float size, float line_spacing) {
     return lh * (line_spacing > 0.0f ? line_spacing : 1.0f);
 }
 
-float ui_text_width(Font* font, float size, float tracking, const char* text) {
-    if (!font || !text || font->base_size <= 0.0f)
-        return 0.0f;
+// One LINE's width -- up to the next newline or the end of the string. Not the
+// whole string's: alignment is per line, and positioning every line by the
+// longest one's width left each shorter line aligned to that line's edge
+// instead of to the rect it was drawn into.
+static float _line_width(Font* font, float size, float tracking, const unsigned char* p) {
     const float scale = size / font->base_size;
-    float w = 0.0f, best = 0.0f;
+    float w = 0.0f;
     int prev = 0;
-    for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
-        if (*p == '\n') {
-            if (w > best)
-                best = w;
-            w = 0.0f;
-            prev = 0;
-            continue;
-        }
+    for (; *p && *p != '\n'; p++) {
         const GlyphInfo* g = font_get_glyph(font, (int)*p);
         if (!g) {
             prev = 0;
             continue;
         }
-        w += _advance_between(font, prev, (int)*p, scale, tracking);
-        w += g->advance_x * scale;
+        w += _advance_between(font, prev, (int)*p, scale, tracking) + g->advance_x * scale;
         prev = (int)*p;
     }
-    return w > best ? w : best;
+    return w;
+}
+
+// The widest line, as the max over _line_width rather than a walk of its own.
+// The per-glyph advance rule was spelled out three times in this file and one
+// of the copies had already drifted -- charging a kerning pair across a glyph
+// the atlas had refused -- so the rule now exists once and every measurement
+// and the draw all reach it.
+float ui_text_width(Font* font, float size, float tracking, const char* text) {
+    if (!font || !text || font->base_size <= 0.0f)
+        return 0.0f;
+    float best = 0.0f;
+    for (const unsigned char* p = (const unsigned char*)text; *p;) {
+        const float w = _line_width(font, size, tracking, p);
+        if (w > best)
+            best = w;
+        while (*p && *p != '\n')
+            p++;
+        if (*p == '\n')
+            p++;
+    }
+    return best;
 }
 
 size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* text,
@@ -457,26 +472,6 @@ size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* te
             last_break = i + 1;
     }
     return len;
-}
-
-// One LINE's width -- up to the next newline or the end of the string. Not the
-// whole string's: alignment is per line, and positioning every line by the
-// longest one's width left each shorter line aligned to that line's edge
-// instead of to the rect it was drawn into.
-static float _line_width(Font* font, float size, float tracking, const unsigned char* p) {
-    const float scale = size / font->base_size;
-    float w = 0.0f;
-    int prev = 0;
-    for (; *p && *p != '\n'; p++) {
-        const GlyphInfo* g = font_get_glyph(font, (int)*p);
-        if (!g) {
-            prev = 0;
-            continue;
-        }
-        w += _advance_between(font, prev, (int)*p, scale, tracking) + g->advance_x * scale;
-        prev = (int)*p;
-    }
-    return w;
 }
 
 static float _align_pen(UIRect r, UIAlign align, float line_w) {

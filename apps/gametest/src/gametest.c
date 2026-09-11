@@ -1543,6 +1543,20 @@ static int run_anim_probe(Game* game, const char* which) {
     return rc;
 }
 
+// A pad held at full left deflection with A down, through the same reader seam
+// the `gamepad` group scripts. No file and no device: it exists so the capture
+// arm can assert what suppression DOES to a real source, rather than asking the
+// flag to repeat what it was just told.
+static bool ui_probe_pad(void* ctx, int pad, GLFWgamepadstate* out) {
+    (void)ctx;
+    if (pad != 0 || !out)
+        return false;
+    memset(out, 0, sizeof(*out));
+    out->axes[GLFW_GAMEPAD_AXIS_LEFT_X] = 1.0f;
+    out->buttons[GLFW_GAMEPAD_BUTTON_A] = GLFW_PRESS;
+    return true;
+}
+
 // The row in a given state, as an index, or -1. There is no focus accessor and
 // none is needed: UIElement.state is public, settled by the input pass, and is
 // the same value the drawing reads -- so this asks what the picture asks.
@@ -1737,15 +1751,36 @@ static int run_ui_screens_probe(Game* game, const char* which) {
         ui_pop_all(ui);
         printf("ui capture cleared captures %.6f\n", ui_captures_input(ui) ? 1.0 : 0.0);
 
-        // The switch a screen throws. What it does to each SOURCE is the
-        // gamepad group's ground, which drives real devices; what is asserted
-        // here is that the UI raises and lowers it and never leaves it raised.
+        /*
+         * And what the switch actually DOES, through a real source.
+         *
+         * A scripted pad holds the left stick and A, so move_x -- a game action
+         * -- and ui_accept -- flagged `ui` -- both read. Raising suppression
+         * must take one to zero and leave the other alone, which is the whole
+         * contract and the branch's most dangerous new global.
+         *
+         * Asserting input_is_suppressed instead, as this did, proves only that
+         * a bool remembers what it was told: with no source held both actions
+         * read zero either way, and the arm passes over a layer that has gone
+         * completely deaf.
+         */
+        input_bind(&game->input, actions, ACTION_COUNT);
+        input_set_pad_reader(&game->input, ui_probe_pad, NULL, NULL);
+
+        input_update(&game->input);
+        printf("ui capture free move %.6f\n", (double)input_action_value(&game->input, "move_x"));
+        printf("ui capture free accept %.6f\n",
+               (double)input_action_value(&game->input, "ui_accept"));
+
         input_set_suppressed(&game->input, true);
-        printf("ui capture raised suppressed %.6f\n",
-               input_is_suppressed(&game->input) ? 1.0 : 0.0);
+        input_update(&game->input);
+        printf("ui capture held move %.6f\n", (double)input_action_value(&game->input, "move_x"));
+        printf("ui capture held accept %.6f\n",
+               (double)input_action_value(&game->input, "ui_accept"));
+
         input_set_suppressed(&game->input, false);
-        printf("ui capture lowered suppressed %.6f\n",
-               input_is_suppressed(&game->input) ? 1.0 : 0.0);
+        input_update(&game->input);
+        printf("ui capture given move %.6f\n", (double)input_action_value(&game->input, "move_x"));
     } else if (!strcmp(which, "stack")) {
         UIScreen* a = ui_screen(ui, "a");
         UIScreen* b = ui_screen(ui, "b");
@@ -2231,17 +2266,15 @@ static bool ui_install(Engine* engine) {
     // The menus are closed by default, the way a game's are; --ui-screen opens
     // one at startup so a headless run can photograph it.
     if (ui_screen_at_start) {
-        UIScreen* start = NULL;
-        if (!strcmp(ui_screen_at_start, "main"))
-            start = screen_main;
-        else if (!strcmp(ui_screen_at_start, "pause"))
-            start = screen_pause;
-        else if (!strcmp(ui_screen_at_start, "settings"))
-            start = screen_settings;
-        if (start)
-            ui_push(ui_system, start);
-        else if (strcmp(ui_screen_at_start, "hud") != 0)
+        // Looked up BY NAME through the layer rather than matched against a
+        // chain of handles here: a screen already carries the name it was made
+        // with, so a fifth one is reachable without editing this. The HUD is
+        // pushed above, so naming it is not an error, just nothing to do.
+        UIScreen* start = ui_find_screen(ui_system, ui_screen_at_start);
+        if (!start)
             fprintf(stderr, "ui-screen: no screen named '%s'\n", ui_screen_at_start);
+        else if (start != screen_hud)
+            ui_push(ui_system, start);
     }
 
     ui_attach(ui_system, engine);

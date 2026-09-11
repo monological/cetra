@@ -232,6 +232,29 @@ static UIStyle _resolve(const UISystem* ui, const UIElement* el, UIState state) 
 
     const UIStyle def = _default_style(el->kind, state);
     _inherit(&s, &def);
+
+    /*
+     * GEOMETRY is state-independent, and that is enforced here rather than
+     * promised in a comment somewhere.
+     *
+     * Layout resolves at UI_STATE_NORMAL and the drawing resolves at the LIVE
+     * state, so any field a per-state theme entry carries that layout also
+     * reads would size the box at one number and paint it at another. A theme
+     * setting button[UI_STATE_FOCUS].padding got a label drifting out of a
+     * control that had measured correctly -- and nothing would have failed,
+     * because both halves are individually doing what they were told.
+     *
+     * The paint fields stay per state, which is the whole point of the array.
+     * These do not.
+     */
+    if (state != UI_STATE_NORMAL) {
+        const UIStyle g = _resolve(ui, el, UI_STATE_NORMAL);
+        memcpy(s.padding, g.padding, sizeof(s.padding));
+        s.font = g.font;
+        s.font_size = g.font_size;
+        s.tracking = g.tracking;
+        s.line_spacing = g.line_spacing;
+    }
     return s;
 }
 
@@ -427,7 +450,15 @@ static void _intrinsic(const UISystem* ui, const UIElement* el, float* out_w, fl
     float w = 0.0f, h = 0.0f;
     if (el->text && el->text[0] && s.font) {
         w = ui_text_width(s.font, s.font_size, s.tracking, el->text);
-        h = ui_line_height(s.font, s.font_size, s.line_spacing);
+        // One line height PER LINE. ui_draw_text starts a new line at every
+        // '\n' it is given, so charging one made an authored two-line label
+        // measure half its height and draw outside its own rect and its
+        // parent's -- with the layout numbers all looking correct.
+        int lines = 1;
+        for (const char* p = el->text; *p; p++)
+            if (*p == '\n')
+                lines++;
+        h = ui_line_height(s.font, s.font_size, s.line_spacing) * (float)lines;
     }
 
     switch (el->kind) {
@@ -1162,6 +1193,15 @@ const UITheme* ui_theme(const UISystem* ui) {
 
 UIDrawList* ui_draw_list(UISystem* ui) {
     return ui ? ui->dl : NULL;
+}
+
+UIScreen* ui_find_screen(UISystem* ui, const char* name) {
+    if (!ui || !name)
+        return NULL;
+    for (size_t i = 0; i < ui->screen_count; i++)
+        if (ui->screens[i] && ui->screens[i]->name && !strcmp(ui->screens[i]->name, name))
+            return ui->screens[i];
+    return NULL;
 }
 
 UIScreen* ui_screen(UISystem* ui, const char* name) {
