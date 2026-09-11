@@ -6,7 +6,7 @@
 // Press P to pause/unpause
 // Press G to print ground state
 // Press R to raycast downward
-// Press Escape to open the menu where there is one (--ui-smoke)
+// Press Escape for the pause menu
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -118,28 +118,56 @@ static bool audio_muted = false;
 // The UI (spec 12.2). Declared up here rather than beside its functions because
 // on_pre_render asks whether the menu owns the pointer, and that is well above
 // them in this file.
-static UISystem* smoke_ui = NULL;
-static Font* smoke_font = NULL;
-static UIScreen* smoke_screen = NULL;
+static UISystem* ui_system = NULL;
+static Font* ui_font = NULL;
+// Four screens (spec 12.2, phase 7). The HUD sits at the BOTTOM of the stack
+// for the whole run and the menus push above it, which works because capture is
+// a property of the stack rather than of the top: ui_captures_input is true
+// while any screen on it is modal, and the HUD is the one that is not.
+static UIScreen* screen_main = NULL;
+static UIScreen* screen_pause = NULL;
+static UIScreen* screen_settings = NULL;
+static UIScreen* screen_hud = NULL;
 // The audio system is a local inside on_init; a menu callback takes only its
 // own user pointer, so the handle it needs is a file static like the sounds.
-static AudioSystem* smoke_audio = NULL;
-// Bound to state that actually does something. A control wired to a variable
-// nothing reads looks like a working feature and is not one, which is worse
-// than not shipping it: the volume moves the master bus and is audible, the
-// toggle mutes the music bus, and the selector is the live tone curve.
+static AudioSystem* ui_audio = NULL;
 // The menu's own contribution to the pause state, so it can be applied on its
 // edges and never stomp the pause the player asked for with P.
-static bool smoke_ui_paused = false;
+static bool ui_menu_paused = false;
 // --ui-screen: which screen to open at startup, if any. A file static because
 // the install runs from on_init, long after the flags were parsed.
 static const char* ui_screen_at_start = NULL;
 // The backdrop's own fragment stage. Owned by the engine's program cache once
 // registered, like every other program in the tree.
-static ShaderProgram* smoke_backdrop_program = NULL;
-static bool smoke_music = true;
-static float smoke_volume = 1.0f;
-static int smoke_tonemap = POSTFX_TONEMAP_NEUTRAL;
+static ShaderProgram* ui_backdrop_program = NULL;
+
+/*
+ * What the settings screen edits, and where it persists. The sliders bind
+ * straight into this struct -- a control is a VIEW of the app's variable, so
+ * there is nothing to read back -- and it is written out when the screen
+ * closes.
+ *
+ * The bloom toggle is the exception that makes the point: it binds the
+ * ENGINE's own field, because since 11.108 that is a plain bool and a copy to
+ * mediate it would only be a second place for the answer to live.
+ *
+ * Every control here moves something observable. window_mode is in the file and
+ * deliberately NOT on the screen: settings_apply cannot make it take effect
+ * yet, and a control that changes when clicked and does nothing is the defect
+ * this app already shipped once.
+ */
+static GameSettings ui_settings;
+static char ui_settings_path[1024];
+static bool ui_settings_have_path = false;
+static bool ui_settings_dirty = false;
+static int ui_tonemap = POSTFX_TONEMAP_NEUTRAL;
+
+// The HUD's two labels, rewritten from live state each frame.
+static UIElement* hud_speed_label = NULL;
+static UIElement* hud_anim_label = NULL;
+// The player's POST-SOLVE ground speed, latched where the animator's knob is
+// derived from it, so the number on screen and the rig cannot disagree.
+static float hud_ground_speed = 0.0f;
 
 // What the game reads, and which key, pad button or pad axis each one is.
 // The stick's Y is negated: GLFW reads it down-positive, and the move helper
@@ -707,7 +735,12 @@ static void on_init(Game* game) {
     AudioSystem* audio = create_audio_system(engine->headless);
     if (audio) {
         game_set_audio_system(game, audio);
-        smoke_audio = audio;
+        ui_audio = audio;
+        // The buses take the loaded settings here rather than at install: the
+        // audio system is created in this callback, so at install there was
+        // nothing to push them into.
+        if (ui_system)
+            settings_apply(&ui_settings, audio, NULL);
         if (audio_muted)
             audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
         jump_sound = audio_sound_from_tone(audio, 660.0f, AUDIO_BUS_SFX);
@@ -947,6 +980,7 @@ static void on_update(Game* game, double dt) {
     // POST-SOLVE one, before the input below overwrites it -- so walking into
     // a wall stops the walk rather than running on the spot.
     float ground_speed = hypotf(vel[0], vel[2]);
+    hud_ground_speed = ground_speed;
     if (player_animator) {
         float knob = ground_speed / PLAYER_SPEED;
         player_animator->param = knob > 1.0f ? 1.0f : knob;
@@ -1599,22 +1633,28 @@ static int run_ui_probe(const char* which) {
     return 0;
 }
 
-// --ui-smoke (spec 12.2, phase 2): the draw list with nothing above it -- no
-// elements, no layout, no input. It exists to put the primitives in front of a
-// pixel comparison BEFORE anything is built on them, because every way they can
-// be wrong (a glyph mirrored about its own baseline, the scissor's
-// point-to-pixel conversion, the corner SDF, the blend func) is invisible to a
-// compile and obvious in a picture. Phase 7 replaces it with real screens.
-// A custom-drawn element: the volume as a segmented meter, painted straight
-// into the draw list. It gets the same rect the layout settled and the same
-// focus and hit-testing as a built-in kind -- ui_set_draw replaces the drawing
-// and nothing else.
-static void ui_smoke_draw_meter(UIElement* el, UIDrawList* dl, void* user) {
+/*
+ * The screens (spec 12.2, phase 7): a main menu, a pause menu, a settings
+ * screen and a HUD. They replace phase 2's --ui-smoke, whose job was to put the
+ * draw primitives in front of a pixel comparison before anything was built on
+ * them, because every way they can be wrong (a glyph mirrored about its own
+ * baseline, the scissor's point-to-pixel conversion, the corner SDF, the blend
+ * func) is invisible to a compile and obvious in a picture.
+ *
+ * Nothing opens at startup unless --ui-screen says so. A main menu up by
+ * default would pause the sim before the first frame, which is the state every
+ * scripted-pad and trace run in the gate suite would then be driving against.
+ */
+// ESCAPE HATCH 1: a custom-drawn element, the master volume as a segmented
+// meter painted straight into the draw list. It gets the same rect the layout
+// settled and the same focus and hit-testing as a built-in kind -- ui_set_draw
+// replaces the drawing and nothing else.
+static void ui_draw_meter(UIElement* el, UIDrawList* dl, void* user) {
     (void)user;
     const int segments = 12;
     const float gap = 3.0f;
     const float w = (el->rect.w - gap * (float)(segments - 1)) / (float)segments;
-    const int lit = (int)(smoke_volume * (float)segments + 0.5f);
+    const int lit = (int)(ui_settings.master_volume * (float)segments + 0.5f);
     for (int i = 0; i < segments; i++) {
         const UIRect seg = {el->rect.x + (w + gap) * (float)i, el->rect.y, w, el->rect.h};
         vec4 on = {0.45f, 0.70f, 1.00f, 1.0f};
@@ -1623,44 +1663,63 @@ static void ui_smoke_draw_meter(UIElement* el, UIDrawList* dl, void* user) {
     }
 }
 
-// The three bound controls, each reaching real state. A callback runs AFTER
-// the value has been written, so it reads the new one.
-static void ui_smoke_volume_changed(UIElement* el, void* user) {
+// Every bound control reaches real state. A callback runs AFTER the value has
+// been written, so it reads the new one -- and because the sliders bind into
+// ui_settings directly, ONE handler pushing the whole struct does the same work
+// as four that each have to know their own bus.
+static void ui_settings_changed(UIElement* el, void* user) {
     (void)el;
-    (void)user;
-    if (smoke_audio)
-        audio_set_bus_volume(smoke_audio, AUDIO_BUS_MASTER, smoke_volume);
+    ui_settings_dirty = true;
+    settings_apply(&ui_settings, ui_audio, user);
 }
 
-static void ui_smoke_music_changed(UIElement* el, void* user) {
-    (void)el;
-    (void)user;
-    if (smoke_audio)
-        audio_set_bus_volume(smoke_audio, AUDIO_BUS_MUSIC, smoke_music ? 1.0f : 0.0f);
-}
-
-static void ui_smoke_tonemap_changed(UIElement* el, void* user) {
+static void ui_tonemap_changed(UIElement* el, void* user) {
     (void)el;
     Engine* engine = user;
     if (engine && engine->postfx)
-        engine->postfx->tonemap_mode = smoke_tonemap;
+        engine->postfx->tonemap_mode = ui_tonemap;
 }
 
-// Resume closes the menu; the frame-input pass then hands input and the sim
-// back on its own, because it reads ui_captures_input every frame rather than
-// on an edge.
-static void ui_smoke_resume(UIElement* el, void* user) {
+// Resume and Back are the same act -- close the screen on top -- so they are
+// the same function under two labels. The frame-input pass then hands input and
+// the sim back on its own, because it reads ui_captures_input every frame
+// rather than on an edge.
+static void ui_action_close(UIElement* el, void* user) {
     (void)el;
     (void)user;
-    ui_pop(smoke_ui);
+    ui_pop(ui_system);
+}
+
+// New Game closes every menu WITHOUT taking the HUD with them, which is what
+// ui_pop_all would do: the HUD is a screen like any other and lives at the
+// bottom of the same stack.
+static void ui_action_new_game(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    while (ui_top(ui_system) && ui_top(ui_system) != screen_hud)
+        ui_pop(ui_system);
+}
+
+static void ui_action_open_settings(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    ui_push(ui_system, screen_settings);
 }
 
 // Quitting is a menu item, which is where it belongs -- not a key.
-static void ui_smoke_quit(UIElement* el, void* user) {
+static void ui_action_quit(UIElement* el, void* user) {
     (void)el;
     Engine* engine = user;
     if (engine && engine->window)
         glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+}
+
+// Sets a label's text only when it actually changed: ui_set_text owns a copy,
+// and a HUD rewriting two strings sixty times a second for the same characters
+// is allocation with nothing to show for it.
+static void hud_set_text(UIElement* el, const char* text) {
+    if (el && (!el->text || strcmp(el->text, text) != 0))
+        ui_set_text(el, text);
 }
 
 /*
@@ -1669,17 +1728,31 @@ static void ui_smoke_quit(UIElement* el, void* user) {
  * `ui`, so it keeps reading while the menu itself has taken input away from the
  * game -- otherwise the key that opened the menu could not close it.
  */
-static void ui_smoke_frame_input(Game* game) {
-    if (!smoke_ui || !smoke_screen)
+static void ui_frame_input(Game* game) {
+    if (!ui_system)
         return;
+
+    // The HUD is the non-modal case, and it is what proves a screen coexists
+    // with gameplay: it draws every frame over a live sim and takes nothing.
+    char line[64];
+    snprintf(line, sizeof(line), "speed  %.2f", (double)hud_ground_speed);
+    hud_set_text(hud_speed_label, line);
+    snprintf(line, sizeof(line), "blend  %.2f",
+             player_animator ? (double)player_animator->param : 0.0);
+    hud_set_text(hud_anim_label, line);
 
     // The app decides only when a menu OPENS; closing is the layer's, through
     // UIInput.back. Doing both here left ui_pop with no caller and the back
     // field permanently false -- and wiring the field without removing this
     // would pop twice for one press, once in each place.
+    //
+    // "Open" means a MENU, not any screen: the HUD is on the stack for the
+    // whole run, so a bare ui_top test would read as a menu already being up
+    // and Escape would never open one.
     const bool menu_pressed = input_action_pressed(&game->input, "menu");
-    if (menu_pressed && !ui_top(smoke_ui))
-        ui_push(smoke_ui, smoke_screen);
+    const bool menu_open = ui_top(ui_system) && ui_top(ui_system) != screen_hud;
+    if (menu_pressed && !menu_open && screen_pause)
+        ui_push(ui_system, screen_pause);
 
     double mx = 0.0, my = 0.0;
     input_mouse_pos(&game->input, &mx, &my);
@@ -1694,14 +1767,24 @@ static void ui_smoke_frame_input(Game* game) {
         .nav_left = input_action_pressed(&game->input, "ui_left"),
         .nav_right = input_action_pressed(&game->input, "ui_right"),
         .accept = input_action_pressed(&game->input, "ui_accept"),
-        .back = menu_pressed && ui_top(smoke_ui) != NULL,
+        .back = menu_pressed && menu_open,
     };
-    ui_update(smoke_ui, &in, (float)game->engine->win_width, (float)game->engine->win_height);
+    ui_update(ui_system, &in, (float)game->engine->win_width, (float)game->engine->win_height);
+
+    // The file is written when the settings screen closes by ANY route -- its
+    // own Back button, Escape, or a pop from somewhere else. In the button's
+    // callback it would miss the other two; on each slider callback it would
+    // rewrite the file once per frame of a drag.
+    if (ui_settings_dirty && ui_top(ui_system) != screen_settings) {
+        ui_settings_dirty = false;
+        if (ui_settings_have_path)
+            settings_save(&ui_settings, ui_settings_path);
+    }
 
     // The one line that stops the character walking while a menu is up. Set
     // every frame rather than on the edges, so a screen closed by any route --
     // a button, a callback, a scene change -- gives input back.
-    const bool captured = ui_captures_input(smoke_ui);
+    const bool captured = ui_captures_input(ui_system);
     input_set_suppressed(&game->input, captured);
 
     // The menu pauses the sim on its EDGES, and through the pause API rather
@@ -1709,8 +1792,8 @@ static void ui_smoke_frame_input(Game* game) {
     // writer that mattered: the P key toggles pause from on_pre_render, later
     // in the same frame, and the next frame's assignment put it straight back
     // -- so the pause action lasted one frame and appeared dead.
-    if (captured != smoke_ui_paused) {
-        smoke_ui_paused = captured;
+    if (captured != ui_menu_paused) {
+        ui_menu_paused = captured;
         if (captured)
             game_pause(game);
         else
@@ -1718,98 +1801,171 @@ static void ui_smoke_frame_input(Game* game) {
     }
 }
 
-static bool ui_smoke_install(Engine* engine) {
-    smoke_font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
-                           64.0f, true);
-    if (!smoke_font) {
-        fprintf(stderr, "ui-smoke: could not load the font\n");
-        return false;
-    }
-    smoke_ui = create_ui_system(engine);
-    if (!smoke_ui) {
-        fprintf(stderr, "ui-smoke: could not create the ui system\n");
-        return false;
-    }
-    ui_set_font(smoke_ui, smoke_font, 22.0f);
-
-    // The app carries its own GLSL, the apps/network precedent. Registered with
-    // the engine's cache so the cache owns it; a failure is logged there and
-    // leaves the backdrop as an ordinary panel rather than taking the menu down.
-    smoke_backdrop_program =
-        create_program_from_source("ui_backdrop", UI_BACKDROP_VERT, UI_BACKDROP_FRAG, NULL);
-    if (smoke_backdrop_program)
-        engine_add_program(engine, smoke_backdrop_program);
-
-    // One of each of the six, so the picture exercises every kind's emit path
-    // and the column's layout at once. Nothing here is interactive yet: focus
-    // and hit-testing arrive in phase 4, so what this proves is the tree, the
-    // two-pass layout, the theme resolution and the emit.
-    UIScreen* screen = ui_screen(smoke_ui, "smoke");
-    smoke_screen = screen;
-    // The menu slides up as it arrives rather than appearing.
-    ui_screen_transition(screen, UI_TRANSITION_SLIDE, 0.18f);
-
-    // ESCAPE HATCH 2: a backdrop with its own fragment stage, filling the
-    // screen behind the panel. This is the layer's headline claim -- that a
-    // menu is not limited to what the element vocabulary can express -- and it
-    // had never been run, so uTime had never been read by anything.
-    UIElement* backdrop = ui_panel(ui_screen_root(screen));
-    backdrop->fill = true; // out of the flow, covering the screen
-    if (smoke_backdrop_program)
-        ui_set_element_program(backdrop, smoke_backdrop_program);
-
+// A menu's column, styled the same way on each screen that has one.
+static UIElement* ui_menu_panel(UIScreen* screen, const char* title) {
     UIElement* panel = ui_panel(ui_screen_root(screen));
     panel->align_cross = UI_ALIGN_CENTER;
     panel->size_mode[0] = UI_FIXED;
-    panel->size[0] = 300.0f;
+    panel->size[0] = 320.0f;
 
     // A per-element style: exactly the three-level chain the header describes,
     // used at its first level. Everything left at zero -- the colours, the
     // padding -- still comes from the theme and then the engine default, so
     // this says only what it means to change.
-    UIElement* heading = ui_label(panel, "Cetra UI");
-    const UIStyle title = {
+    UIElement* heading = ui_label(panel, title);
+    const UIStyle heading_style = {
         .font_size = 30.0f,
         .tracking = 1.5f,
         .line_spacing = 1.15f,
         .fg = {0.96f, 0.97f, 1.00f, 1.0f},
         .padding = {6.0f, 0.0f, 14.0f, 0.0f},
     };
-    ui_set_style(heading, &title);
-    // GROW on the cross axis, so every control is the panel's width. Left at
-    // FIT each one hugs its own text and the column comes out ragged.
-    UIElement* rows[5];
-    rows[0] = ui_button(panel, "Resume", ui_smoke_resume, NULL);
-    rows[1] = ui_button(panel, "Quit", ui_smoke_quit, engine);
-    rows[2] = ui_toggle(panel, "Music", &smoke_music, ui_smoke_music_changed, NULL);
-    rows[3] = ui_slider(panel, "Volume", 0.0f, 1.0f, &smoke_volume, ui_smoke_volume_changed, NULL);
+    ui_set_style(heading, &heading_style);
+    return panel;
+}
+
+// GROW on the cross axis, so every control is the panel's width. Left at FIT
+// each one hugs its own text and the column comes out ragged. The heading at
+// index 0 is skipped: GROWn it is left-aligned text in a wide box, where FIT
+// under the panel's centre alignment is the centred title this wants.
+static void ui_rows_grow(UIElement* panel) {
+    for (size_t i = 1; i < panel->child_count; i++)
+        panel->children[i]->size_mode[0] = UI_GROW;
+}
+
+static bool ui_install(Engine* engine) {
+    ui_font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
+                        64.0f, true);
+    if (!ui_font) {
+        fprintf(stderr, "ui: could not load the font\n");
+        return false;
+    }
+    ui_system = create_ui_system(engine);
+    if (!ui_system) {
+        fprintf(stderr, "ui: could not create the ui system\n");
+        return false;
+    }
+    ui_set_font(ui_system, ui_font, 22.0f);
+
+    // The player's own file, read before a control is built so every slider
+    // opens at the value it is about to edit. An absent file is the first run
+    // and leaves defaults; the audio half is pushed from on_init, where the
+    // audio system exists.
+    if (settings_default_path(ui_settings_path, sizeof(ui_settings_path))) {
+        ui_settings_have_path = true;
+        settings_load(&ui_settings, ui_settings_path);
+    } else {
+        settings_defaults(&ui_settings);
+    }
+    settings_apply(&ui_settings, NULL, engine);
+
+    // The app carries its own GLSL, the apps/network precedent. Registered with
+    // the engine's cache so the cache owns it; a failure is logged there and
+    // leaves the backdrop as an ordinary panel rather than taking the menu down.
+    ui_backdrop_program =
+        create_program_from_source("ui_backdrop", UI_BACKDROP_VERT, UI_BACKDROP_FRAG, NULL);
+    if (ui_backdrop_program)
+        engine_add_program(engine, ui_backdrop_program);
+
+    // The MAIN menu: the one screen with a backdrop, because it is the one
+    // drawn over nothing in particular. It fades rather than slides, which is
+    // what a game's first screen does.
+    screen_main = ui_screen(ui_system, "main");
+    ui_screen_set_modal(screen_main, true);
+    ui_screen_transition(screen_main, UI_TRANSITION_FADE, 0.20f);
+
+    // ESCAPE HATCH 2: a backdrop with its own fragment stage, filling the
+    // screen behind the panel. This is the layer's headline claim -- that a
+    // menu is not limited to what the element vocabulary can express.
+    UIElement* backdrop = ui_panel(ui_screen_root(screen_main));
+    backdrop->fill = true; // out of the flow, covering the screen
+    if (ui_backdrop_program)
+        ui_set_element_program(backdrop, ui_backdrop_program);
+
+    UIElement* main_panel = ui_menu_panel(screen_main, "CETRA");
+    ui_button(main_panel, "New Game", ui_action_new_game, NULL);
+    ui_button(main_panel, "Settings", ui_action_open_settings, NULL);
+    ui_button(main_panel, "Quit", ui_action_quit, engine);
+    ui_rows_grow(main_panel);
+
+    // The PAUSE menu, deliberately with NO backdrop: it is drawn over live
+    // gameplay, and hiding the thing the player paused defeats the point. The
+    // scene keeps rendering because pausing stops only the fixed step.
+    screen_pause = ui_screen(ui_system, "pause");
+    ui_screen_set_modal(screen_pause, true);
+    ui_screen_transition(screen_pause, UI_TRANSITION_SLIDE, 0.18f);
+    UIElement* pause_panel = ui_menu_panel(screen_pause, "Paused");
+    ui_button(pause_panel, "Resume", ui_action_close, NULL);
+    ui_button(pause_panel, "Settings", ui_action_open_settings, NULL);
+    ui_button(pause_panel, "Quit", ui_action_quit, engine);
+    ui_rows_grow(pause_panel);
+
+    // SETTINGS. Every control moves something the player can hear or see: the
+    // three sliders are the buses, VSync is the swap interval, Tonemap is the
+    // live curve. Bloom binds the ENGINE's own bool with no callback at all,
+    // which is the 11.108 dividend -- the field IS the setting, so there is
+    // nothing for a handler to forward.
+    screen_settings = ui_screen(ui_system, "settings");
+    ui_screen_set_modal(screen_settings, true);
+    ui_screen_transition(screen_settings, UI_TRANSITION_SLIDE, 0.18f);
+    UIElement* set_panel = ui_menu_panel(screen_settings, "Settings");
+    ui_slider(set_panel, "Master", 0.0f, 1.0f, &ui_settings.master_volume, ui_settings_changed,
+              engine);
+    ui_slider(set_panel, "Music", 0.0f, 1.0f, &ui_settings.music_volume, ui_settings_changed,
+              engine);
+    ui_slider(set_panel, "SFX", 0.0f, 1.0f, &ui_settings.sfx_volume, ui_settings_changed, engine);
+    if (engine->postfx)
+        ui_toggle(set_panel, "Bloom", &engine->postfx->bloom_enabled, NULL, NULL);
+    ui_toggle(set_panel, "VSync", &ui_settings.vsync, ui_settings_changed, engine);
     static const char* const modes[] = {"Passthrough", "ACES", "Neutral", "AgX", "Linear"};
-    rows[4] =
-        ui_selector(panel, "Tonemap", modes, 5, &smoke_tonemap, ui_smoke_tonemap_changed, engine);
-    for (int i = 0; i < 5; i++)
-        rows[i]->size_mode[0] = UI_GROW;
+    ui_tonemap = engine->postfx ? engine->postfx->tonemap_mode : POSTFX_TONEMAP_NEUTRAL;
+    ui_selector(set_panel, "Tonemap", modes, 5, &ui_tonemap, ui_tonemap_changed, engine);
 
-    // ESCAPE HATCH 1: an element the app paints itself, which still lays out,
-    // still takes focus and still takes a click -- the point being that
-    // dropping out of the element vocabulary costs only the drawing.
-    UIElement* meter = ui_panel(panel);
+    // ESCAPE HATCH 1 on screen: an element the app paints itself, which still
+    // lays out, still takes focus and still takes a click -- dropping out of
+    // the element vocabulary costs only the drawing.
+    UIElement* meter = ui_panel(set_panel);
     ui_set_size(meter, UI_GROW, 0.0f, UI_FIXED, 26.0f);
-    ui_set_draw(meter, ui_smoke_draw_meter, NULL);
+    ui_set_draw(meter, ui_draw_meter, NULL);
+    ui_button(set_panel, "Back", ui_action_close, NULL);
+    ui_rows_grow(set_panel);
 
-    // Closed by default, the way a game's menu is; --ui-screen opens one at
-    // startup so a headless run can photograph it.
-    if (ui_screen_at_start && screen && !strcmp(ui_screen_at_start, "smoke"))
-        ui_push(smoke_ui, screen);
-    else if (ui_screen_at_start)
-        fprintf(stderr, "ui-screen: no screen named '%s'\n", ui_screen_at_start);
+    // The HUD: NOT modal, so it never takes input, and pushed once for the
+    // whole run with the menus stacking above it. Explicit START alignment
+    // because a menu's root centres what it holds and a HUD's must not.
+    screen_hud = ui_screen(ui_system, "hud");
+    ui_screen_set_modal(screen_hud, false);
+    UIElement* hud_root = ui_screen_root(screen_hud);
+    hud_root->align_main = UI_ALIGN_START;
+    hud_root->align_cross = UI_ALIGN_START;
+    UIElement* hud_panel = ui_panel(hud_root);
+    hud_speed_label = ui_label(hud_panel, "speed  0.00");
+    hud_anim_label = ui_label(hud_panel, "blend  0.00");
+    ui_push(ui_system, screen_hud);
 
-    ui_attach(smoke_ui, engine);
+    // The menus are closed by default, the way a game's are; --ui-screen opens
+    // one at startup so a headless run can photograph it.
+    if (ui_screen_at_start) {
+        UIScreen* start = NULL;
+        if (!strcmp(ui_screen_at_start, "main"))
+            start = screen_main;
+        else if (!strcmp(ui_screen_at_start, "pause"))
+            start = screen_pause;
+        else if (!strcmp(ui_screen_at_start, "settings"))
+            start = screen_settings;
+        if (start)
+            ui_push(ui_system, start);
+        else if (strcmp(ui_screen_at_start, "hud") != 0)
+            fprintf(stderr, "ui-screen: no screen named '%s'\n", ui_screen_at_start);
+    }
+
+    ui_attach(ui_system, engine);
     return true;
 }
 
-static void ui_smoke_shutdown(void) {
-    free_ui_system(smoke_ui);
-    smoke_ui = NULL;
+static void ui_shutdown(void) {
+    free_ui_system(ui_system);
+    ui_system = NULL;
 }
 
 int main(int argc, const char* argv[]) {
@@ -1830,7 +1986,7 @@ int main(int argc, const char* argv[]) {
     const char* audio_file = NULL;
     const char* anim_probe = NULL;
     const char* ui_probe = NULL;
-    bool ui_smoke = false;
+    bool ui_enabled = true;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
@@ -1873,13 +2029,12 @@ int main(int argc, const char* argv[]) {
             anim_probe = argv[++i];
         } else if (!strcmp(a, "--ui-probe") && i + 1 < argc) {
             ui_probe = argv[++i];
-        } else if (!strcmp(a, "--ui-smoke")) {
-            ui_smoke = true;
+        } else if (!strcmp(a, "--no-ui")) {
+            ui_enabled = false;
         } else if (!strcmp(a, "--ui-screen") && i + 1 < argc) {
             // Open a screen at startup. A menu otherwise starts closed, the way
             // a game's does, which leaves no way to photograph one: a headless
             // run has no Escape key to press.
-            ui_smoke = true;
             ui_screen_at_start = argv[++i];
         } else if (!strcmp(a, "--print-bindings")) {
             input_print_actions(actions, ACTION_COUNT);
@@ -1941,7 +2096,7 @@ int main(int argc, const char* argv[]) {
     printf("  G / B - Print ground state\n");
     printf("  P / Start - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
-    printf("  Escape - Open the menu where there is one (--ui-smoke)\n");
+    printf("  Escape - Pause menu (--no-ui to run without any of it)\n");
     printf("Audio: a beep on jump and spawn, footsteps in time with the stride, a looping\n");
     printf("       tone at the door (--mute to silence)\n");
     printf("\nWalk into the door (right side) to push it open!\n\n");
@@ -1974,7 +2129,7 @@ int main(int argc, const char* argv[]) {
         fprintf(stderr, "Failed to create game\n");
         return -1;
     }
-    if (ui_smoke && !ui_smoke_install(game->engine)) {
+    if (ui_enabled && !ui_install(game->engine)) {
         free_game(game);
         return -1;
     }
@@ -1998,8 +2153,8 @@ int main(int argc, const char* argv[]) {
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);
 
     // Set game callbacks
-    if (ui_smoke) {
-        game_set_frame_input(game, ui_smoke_frame_input);
+    if (ui_enabled) {
+        game_set_frame_input(game, ui_frame_input);
     }
     game_set_init(game, on_init);
     game_set_update(game, on_update);
@@ -2011,7 +2166,7 @@ int main(int argc, const char* argv[]) {
     game_run(game);
 
     // Cleanup
-    ui_smoke_shutdown();
+    ui_shutdown();
     free_game(game);
 
     printf("Goodbye!\n");
