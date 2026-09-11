@@ -1,5 +1,6 @@
 #include <string.h>
-#include "compat.h" // strcasecmp/strncasecmp
+#include "compat.h"    // strcasecmp/strncasecmp
+#include "ext/cwalk.h" // cwk_path_get_basename
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -1414,6 +1415,40 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
     }
 
     size_t loaded = scene->animation_count - initial_count;
+
+    // A clip loaded from its own file is named after that FILE when the file
+    // holds exactly one, because the name in the file is not a name: every
+    // Mixamo export calls its take "mixamo.com", so loading a walk and a flair
+    // gives two clips that cannot be told apart -- and anything selecting one
+    // by name (a blend space, a scheduled crossfade) silently finds neither.
+    //
+    // Only for the single-clip case. A file carrying several has authored names
+    // that mean something, and overwriting them with one basename would be
+    // worse than the collision this fixes.
+    if (loaded == 1) {
+        Animation* clip = scene->animations[initial_count];
+        const char* base = NULL;
+        size_t base_len = 0;
+        cwk_path_get_basename(filepath, &base, &base_len);
+        if (base && base_len > 0) {
+            const char* dot = strrchr(base, '.');
+            size_t stem =
+                (dot && (size_t)(dot - base) < base_len) ? (size_t)(dot - base) : base_len;
+            char* named = malloc(stem + 1);
+            if (named) {
+                memcpy(named, base, stem);
+                named[stem] = '\0';
+                if (clip->name && strcmp(clip->name, named) != 0) {
+                    log_info("Clip '%s' from '%s' is named '%s' here: a file's own take name is "
+                             "not unique across files",
+                             clip->name, filepath, named);
+                }
+                free(clip->name);
+                clip->name = named;
+            }
+        }
+    }
+
     log_info("Loaded %zu animation(s) from '%s'%s", loaded, filepath,
              enable_retargeting ? " (retargeting enabled)" : "");
 

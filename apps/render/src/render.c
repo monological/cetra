@@ -2006,8 +2006,11 @@ static bool anim_setup_from_args(const RenderArgs* args, Scene* scene, size_t pl
             entries[i].clip = scene_find_animation(scene, args->anim_space[i]);
             entries[i].position = (float)i;
             if (!entries[i].clip) {
-                fprintf(stderr, "Error: --anim-space names clip '%s', which the scene lacks\n",
-                        args->anim_space[i]);
+                fprintf(stderr,
+                        "Error: --anim-space names clip '%s'. The scene has:", args->anim_space[i]);
+                for (size_t k = 0; k < scene->animation_count; k++)
+                    fprintf(stderr, " '%s'", scene->animations[k]->name);
+                fprintf(stderr, "\n");
                 return false;
             }
         }
@@ -2020,8 +2023,10 @@ static bool anim_setup_from_args(const RenderArgs* args, Scene* scene, size_t pl
         if (args->anim_clip) {
             clip = scene_find_animation(scene, args->anim_clip);
             if (!clip) {
-                fprintf(stderr, "Error: --anim-clip names '%s', which the scene lacks\n",
-                        args->anim_clip);
+                fprintf(stderr, "Error: --anim-clip names '%s'. The scene has:", args->anim_clip);
+                for (size_t i = 0; i < scene->animation_count; i++)
+                    fprintf(stderr, " '%s'", scene->animations[i]->name);
+                fprintf(stderr, "\n");
                 return false;
             }
         }
@@ -2392,8 +2397,12 @@ static void render_frame_update(Engine* engine, float dt) {
             fprintf(stderr, "frame %d: animation -> '%s' over %.2fs\n",
                     frame_schedule->anim_switch_at, to->name, frame_schedule->anim_fade);
         } else {
-            fprintf(stderr, "frame %d: no clip named '%s' to switch to\n",
-                    frame_schedule->anim_switch_at, frame_schedule->anim_switch_to);
+            fprintf(stderr,
+                    "frame %d: no clip named '%s'. The scene has:", frame_schedule->anim_switch_at,
+                    frame_schedule->anim_switch_to);
+            for (size_t i = 0; scene && i < scene->animation_count; i++)
+                fprintf(stderr, " '%s'", scene->animations[i]->name);
+            fprintf(stderr, "\n");
         }
     }
     // A camera TELEPORT (spec 11.67): the worst case for page residency, which
