@@ -43,6 +43,13 @@ void free_audio_system(AudioSystem* audio);
 
 // Linear gain, 1 = unity. MASTER scales the whole mix; the rest scale their bus.
 void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume);
+// What that bus was last set to, 1 until something sets it. miniaudio is
+// write-only here -- there is no ma_engine_get_volume for the master -- so this
+// reads a value the setter records rather than asking the mixer. A settings
+// screen needs it: a slider with nothing to initialise from opens at whatever
+// the widget happened to default to and silently rewrites the real volume the
+// first time it is touched.
+float audio_get_bus_volume(const AudioSystem* audio, AudioBus bus);
 
 // Fire-and-forget 2D: miniaudio owns the voice and reaps it at the end.
 void audio_play_oneshot(AudioSystem* audio, const char* path, AudioBus bus);

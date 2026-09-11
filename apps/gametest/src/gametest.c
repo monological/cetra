@@ -6,7 +6,7 @@
 // Press P to pause/unpause
 // Press G to print ground state
 // Press R to raycast downward
-// Press Escape to quit
+// Press Escape to open the menu where there is one (--ui-smoke)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +33,7 @@
 #include "cetra/game/physics.h"
 #include "cetra/game/character.h"
 #include "cetra/game/audio.h"
+#include "cetra/game/settings.h"
 #include "cetra/game/animator_component.h"
 #include "cetra/animator.h"
 #include "cetra/import.h"
@@ -1503,6 +1504,101 @@ static int run_anim_probe(Game* game, const char* which) {
     return rc;
 }
 
+// --ui-probe (spec 12.2): the game-layer state a menu edits, checked with no
+// window, no GL and no audio device. It runs BEFORE the engine is created
+// rather than inside a headless game the way the audio and anim probes do,
+// because none of it needs one -- settings.c is cJSON over a struct and an
+// offline AudioSystem opens nothing. That is what lets the `ui` gate assert on
+// it while the no-GPU-during-gates rule holds.
+static void ui_probe_print(const char* label, const GameSettings* s) {
+    printf("ui settings %s master %.6f\n", label, s->master_volume);
+    printf("ui settings %s music %.6f\n", label, s->music_volume);
+    printf("ui settings %s sfx %.6f\n", label, s->sfx_volume);
+    printf("ui settings %s ui %.6f\n", label, s->ui_volume);
+    printf("ui settings %s window_mode %.6f\n", label, (double)s->window_mode);
+    printf("ui settings %s vsync %.6f\n", label, s->vsync ? 1.0 : 0.0);
+}
+
+static int run_ui_probe(const char* which) {
+    if (strcmp(which, "settings") != 0) {
+        fprintf(stderr, "ui-probe: unknown case '%s'\n", which);
+        return 1;
+    }
+
+    // The platform path is part of what is under test, so the probe resolves it
+    // rather than taking one on the command line. CETRA_SETTINGS_DIR is what
+    // keeps a run out of the real user directory.
+    char path[1024];
+    if (!settings_default_path(path, sizeof(path))) {
+        fprintf(stderr, "ui-probe: could not resolve a settings path\n");
+        return 1;
+    }
+
+    GameSettings written;
+    settings_defaults(&written);
+    ui_probe_print("default", &written);
+
+    written.master_volume = 0.25f;
+    written.music_volume = 0.5f;
+    written.sfx_volume = 0.75f;
+    written.ui_volume = 0.125f;
+    written.window_mode = SETTINGS_WINDOW_FULLSCREEN;
+    written.vsync = false;
+    if (!settings_save(&written, path)) {
+        fprintf(stderr, "ui-probe: save failed\n");
+        return 1;
+    }
+
+    // Zeroed and not defaulted before the read: against a struct that already
+    // holds the answer, a loader that merely leaves a field alone passes.
+    GameSettings back;
+    memset(&back, 0, sizeof(back));
+    if (!settings_load(&back, path)) {
+        fprintf(stderr, "ui-probe: load failed\n");
+        return 1;
+    }
+    ui_probe_print("roundtrip", &back);
+
+    // The enum rides the file as a NAME. Read back as a number it would still
+    // round-trip while an inserted enumerator silently re-pointed every file a
+    // player already has, so the name is the half worth asserting.
+    bool named = false;
+    FILE* file = fopen(path, "rb");
+    if (file) {
+        char line[256];
+        while (fgets(line, sizeof(line), file)) {
+            if (strstr(line, "fullscreen")) {
+                named = true;
+                break;
+            }
+        }
+        fclose(file);
+    }
+    printf("ui settings named fullscreen %.6f\n", named ? 1.0 : 0.0);
+
+    // An absent file is the first run: defaults, not zeros. Zero is silence and
+    // a windowed mode, which is a plausible-looking wrong answer.
+    GameSettings absent;
+    memset(&absent, 0, sizeof(absent));
+    settings_load(&absent, "gametest-no-such-settings.json");
+    ui_probe_print("absent", &absent);
+
+    // What apply actually pushes. The getter is the only way to ask: miniaudio
+    // has no master get, so a settings screen reads what the setter recorded.
+    AudioSystem* audio = create_audio_system(true);
+    if (!audio) {
+        fprintf(stderr, "ui-probe: could not create the offline audio system\n");
+        return 1;
+    }
+    settings_apply(&back, audio, NULL);
+    printf("ui settings applied master %.6f\n", audio_get_bus_volume(audio, AUDIO_BUS_MASTER));
+    printf("ui settings applied music %.6f\n", audio_get_bus_volume(audio, AUDIO_BUS_MUSIC));
+    printf("ui settings applied sfx %.6f\n", audio_get_bus_volume(audio, AUDIO_BUS_SFX));
+    printf("ui settings applied ui %.6f\n", audio_get_bus_volume(audio, AUDIO_BUS_UI));
+    free_audio_system(audio);
+    return 0;
+}
+
 // --ui-smoke (spec 12.2, phase 2): the draw list with nothing above it -- no
 // elements, no layout, no input. It exists to put the primitives in front of a
 // pixel comparison BEFORE anything is built on them, because every way they can
@@ -1733,6 +1829,7 @@ int main(int argc, const char* argv[]) {
     const char* audio_probe = NULL;
     const char* audio_file = NULL;
     const char* anim_probe = NULL;
+    const char* ui_probe = NULL;
     bool ui_smoke = false;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
@@ -1774,6 +1871,8 @@ int main(int argc, const char* argv[]) {
             twin_clip = argv[++i];
         } else if (!strcmp(a, "--anim-probe") && i + 1 < argc) {
             anim_probe = argv[++i];
+        } else if (!strcmp(a, "--ui-probe") && i + 1 < argc) {
+            ui_probe = argv[++i];
         } else if (!strcmp(a, "--ui-smoke")) {
             ui_smoke = true;
         } else if (!strcmp(a, "--ui-screen") && i + 1 < argc) {
@@ -1796,6 +1895,11 @@ int main(int argc, const char* argv[]) {
             hdr_path = a;
             printf("Using HDR environment: %s\n\n", hdr_path);
         }
+    }
+
+    // Before the engine exists, because nothing it measures needs one.
+    if (ui_probe) {
+        return run_ui_probe(ui_probe);
     }
 
     // A self-contained offline render: a headless game, the offline audio
@@ -1837,7 +1941,7 @@ int main(int argc, const char* argv[]) {
     printf("  G / B - Print ground state\n");
     printf("  P / Start - Pause/unpause physics\n");
     printf("  Mouse drag - Orbit camera\n");
-    printf("  Escape - Quit\n");
+    printf("  Escape - Open the menu where there is one (--ui-smoke)\n");
     printf("Audio: a beep on jump and spawn, footsteps in time with the stride, a looping\n");
     printf("       tone at the door (--mute to silence)\n");
     printf("\nWalk into the door (right side) to push it open!\n\n");
