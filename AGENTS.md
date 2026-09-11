@@ -151,7 +151,12 @@ Each G-buffer target is only written when a post pass that consumes it is active
 8. Async texture uploads (<=5/frame), mask-array build, POM height resolve.
 9. App render callback -> `engine_render_scene`, or `engine_render_scene` itself
    when the app passed no callback (spec 11.107).
-10. `engine_present_frame` -> PostFX chain + GUI.
+10. `engine_present_frame` -> PostFX chain, then the app's **overlay hook**
+    (`engine_set_overlay`, spec 12.2 -- a general post-tonemap draw, which the
+    game UI installs itself into; the engine never learns what a `UISystem` is),
+    then the debug GUI, which is a developer's overlay and belongs on top of the
+    game's. With nothing installed the hook is a NULL compare, which is why all
+    33 goldens are 0 px with it in place.
 11. Screenshot capture (headless/CI), swap buffers.
 
 **Step 4 is where an app puts anything the frame's geometry depends on** (spec
@@ -181,10 +186,12 @@ functions. `apply_transform_to_nodes` used to fuse `prev := global` into the
 traversal, so a second walk in one frame made every node's previous pose its
 current one, zeroed every motion vector and stopped TAA reprojecting. The engine
 owns the latch and calls it once; anyone may call the walk again after a late
-graph change. **No golden can see that failure** -- all 31 are single frames with
-TAA off, thirty of them static scenes under a static camera and the thirty-first
-a rig posed purely by frame index, measured -- which is what the `transform` and `shadow-lag` gate
-groups exist for.
+graph change. **No golden can see that failure** -- all 33 are single frames with
+TAA off, thirty of them static scenes under a static camera, the thirty-first
+a rig posed purely by frame index, measured, and the last two menus over a sim
+that has advanced thirty steps. The last pair are the only ones with motion in
+them at all, and TAA being off is what keeps even those blind to it -- which is
+what the `transform` and `shadow-lag` gate groups exist for.
 
 **Scene passes** (`engine_render_scene`, in order). Before any of them, right after the draw-list
 build, the **occlusion pass** (spec 11.98) rasterises this frame's authored occluders into a CPU
@@ -421,12 +428,15 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | `character.c/h` | Character controller on Jolt `CharacterVirtual` |
 | `animator_component.c/h` | The `ANIMATOR` component (spec 12.1): an `Animator` the entity owns, its pose bound to the entity's node, ticked once per RENDERED frame from `game_pre_render` with the sim clock's delta -- never per fixed step, because the tick begins with the prev-pose latch and two in one frame would lose a step's motion vector. A paused sim passes 0 and the rig holds, reading zero deformation velocity |
 | `input.c/h` | The game layer's input, polled once a frame before the fixed steps: keys, mouse, up to four gamepads in GLFW's standard layout behind a reader seam (GLFW, or a scripted pad from a text file), and the action table a game reads instead of key codes (spec 11.109). Every device's state is one struct held twice, this frame's and the previous frame's, and every edge -- a key's, a pad button's, an action's -- is the two compared; a pad that appears has its previous state set to its current one, which is the whole connect rule and reaches an action for free. An action is evaluated on read, so there is no cache, no cap and no ordering to get wrong |
+| `settings.c/h` | What a PLAYER chose, persisted across runs (spec 12.2): the four bus volumes, window mode and vsync, as ONE descriptor table walked in both directions -- `config_snapshot.c`'s technique, because a writer and a reader maintained separately drift silently. It could not be rows in that file, whose owner enum has no Game and no AudioSystem. `settings_default_path` resolves the platform's own per-user location (`%APPDATA%`, `~/Library/Application Support`, `$XDG_CONFIG_HOME`), which nothing else in this engine does -- every other `fopen` writes relative to cwd; `CETRA_SETTINGS_DIR` overrides it, which is what keeps a gate and a golden bake hermetic. Input bindings are NOT carried: `input_bind` takes a borrowed const table, so persisting a rebinding wants the remapping UI it would exist for. Window mode persists and does not yet APPLY, since GLFW fullscreen needs a monitor choice and saved geometry the engine does not keep |
 | `audio.c/h` | The game layer's audio (spec 12.0): one output device wrapping miniaudio's high-level engine, wrapped as an `AudioSystem` the `Game` owns like the physics world. 2D fire-and-forget SFX and music, held voices from a file (WAV/MP3/FLAC) or a procedural tone, mixer buses, and 3D positional sound whose listener is the camera and whose sources are `AUDIO_SOURCE` components synced from their entities. The device is the seam: a windowed run opens the OS device, a headless run opens NONE and renders offline through `audio_system_read_pcm`, so everything above the device is deterministic and the `audio` gate group asserts on it with no hardware. miniaudio (single-header, vendored) carries its own CoreAudio/ALSA/WASAPI backends |
 
 **Support**
 | Module | Purpose |
 |--------|---------|
 | `text.c/h` | SDF text rendering (stb_truetype) with glow |
+| `ui.c/h` | The game UI layer (spec 12.2): a RETAINED tree of elements over a two-pass box layout, a geometric focus model, and a theme whose every zero means "inherit". The element list is CLOSED -- panel, label, button, toggle, slider, selector -- and three escape hatches sit under it, each keeping strictly more than the last: `ui_set_draw` keeps layout, focus and input while the app paints; `ui_set_element_program` keeps all of that and swaps only the fragment stage; the draw-list primitives take neither. Everything is in WINDOW POINTS, top-left origin, +Y down -- the space `text.c`'s ortho and GLFW's cursor already agree on, and deliberately not the engine's `InputState` space. `ui_layout` is a pure function of (tree, width, height): no GL, no clock, no input, which is what lets ten gate arms assert a menu with no GPU |
+| `ui_draw.c` | The UI's own draw list: quads, 9-slice, rounded rects and SDF glyph runs batched by (texture, program, clip) into one vertex buffer, drawn through `engine_set_overlay` AFTER tone mapping -- so a menu is never graded, bloomed, grained or rescaled by `--render-scale`, and IS captured by a headless screenshot, which is what makes a menu golden possible. Reuses `Font` and `font_get_glyph` from `text.c` and nothing else of it: that file is one draw call per mesh, hardcodes its SDF constants and clobbers GL state rather than restoring it |
 | `app.c/h` | App helpers: the mouse-drag orbit controller for a 3D viewer and its 2D twin, the canvas controller (pan, drag a picked node in the plane, zoom about the cursor; spec 11.108), a three-point light rig, input gating |
 | `cook.c/h` | The derived-data cook (spec 11.99): a transparent content-addressed cache over the deterministic startup bakes it wraps — the UE DDC model — plus the `--cook` pre-warm verb on forest and render. THE KEY IS THE IDENTITY (input bytes + recipe version + library version where a library owns the byte format), so a stale artefact is unfindable rather than detected; a miss always bakes live; a corrupt `.cca` is refused by name against a payload hash and treated as a miss. Process-global behind `cook_init`, main-thread-only, `cooked/` gitignored at the repo root, `CETRA_COOK_DIR`/`CETRA_NO_COOK` the env levers. **Never fold a worker count into a key, and never measure a bake without `--no-cook`** — gates and goldens isolate onto per-run cache dirs automatically. What may NOT be cooked is stated in the header charter (GPU resamples, GL handles, the scatter) |
 | `physics_cook.h/.cpp` | Jolt shape serialize/restore behind a C header — the one-C++-TU escape (`cluster_build.cpp`'s precedent), because JoltC binds none of Jolt's serialization. Exports `JPH_VERSION_ID` as the mandatory cook-key axis. The stream classes carry istream EOF semantics, and that is load-bearing: Jolt checks `IsEOF()` after a stream's LAST field, so a positional implementation refused every restore ever written (the 11.99 ledger's caught-live row) |
@@ -607,6 +617,11 @@ entry there before changing anything marked with a dagger.
   `layers_vt_feedback_vert/frag` for the vote pass
 - **Particles:** `particle_vert/frag`
 - **Text:** `text_vert/frag`
+- **Game UI:** `ui_vert/frag` — one program for every menu primitive, selected per vertex by a
+  `mode` attribute: a flat fill, a textured quad, or an SDF glyph. Rounded corners and borders are
+  an exact signed-distance evaluation rather than geometry, so a radius costs no vertices; the
+  glyph branch takes `fwidth` with no constant smoothing term, which is what keeps text the same
+  weight at any size
 - **Debug / util:** `shape_vert/geo/frag`, `bone_vert/frag`, `xyz_vert/frag`, `mask_copy_frag`
 
 Three rules from that inventory stay HERE, because each one is violated from a different file:
@@ -1168,6 +1183,31 @@ on (onset, pan, distance falloff, bus routing, file decode) with procedural tone
 committed audio. GLFW's analogue here is the OS device path; nothing in the suite exercises
 it, and `docs/verification.md` says which OS it has been heard on (none, at writing).
 
+**The UI is NOT a Game subsystem** (`cetra/src/ui.h`, spec 12.2), and that asymmetry with audio
+and physics is the thing to know about it. `create_ui_system` takes an `Engine`, draws through
+`engine_set_overlay`, and takes its input as a plain struct of VALUES rather than a
+`GameInputState` -- so a menu works with no game framework at all, and the dependency points
+from the optional layer to the engine rather than backwards. What the framework adds is only
+where the input pass goes: `game_set_frame_input` runs a hook immediately after `input_update()`
+and BEFORE the fixed steps, which is the one window in the frame where a UI can take input
+without losing one in each direction. A menu opened after the steps would let the same frame
+also walk the character, and the frame that closed it would drop a step of real input.
+
+**A menu takes input away from the game with one switch.** `input_set_suppressed` makes every
+action whose `ui` flag is false read zero, so a game reads its own action table unchanged and no
+call site needs guarding; the UI's own actions carry `ui = true` and keep reading, which is what
+lets the key that opened a menu close it. An app raises and lowers it EVERY FRAME from
+`ui_captures_input` rather than on edges, so a screen closed by any route -- a button, a
+callback, a scene change -- hands input back. Note this is separate from the debug GUI's capture
+check, which is applied per SOURCE inside the reader: folding the two together would have let an
+ImGui text field silence a gamepad.
+
+**Pausing is the app's, not the layer's.** A menu over a live world needs no support at all,
+because pausing stops only the fixed step while the whole render path keeps running -- which is
+why the scene behind a pause screen still draws. `apps/gametest` pauses on the EDGES of capture
+rather than assigning every frame: assigning made it the only writer that mattered, and the P
+key's own pause was put back a frame later.
+
 ## Particle System
 
 A general Niagara-style system: **System -> Emitter -> composable Modules
@@ -1273,7 +1313,7 @@ on the `Scene`.
 | render | `apps/render/` | FBX/GLB model viewer, orbit camera, animation retargeting, HDR/IBL | yes |
 | spores | `apps/spores/` | Cordyceps spore-room particle demo (curl-noise motes, game loop) | yes |
 | forest | `apps/forest/` | A walkable ISLAND since 11.63: ~5000 instanced trees/rocks on a CDLOD terrain quadtree, props and collision RESIDENT per region, sea past the shore, character on a Jolt mesh collider (spec 11.29), wind on the trees since 11.53. `--terrain-extent <f>` grows it past a kilometre; `--no-island` is the flat domain everything before 11.63 measured | yes |
-| gametest | `apps/gametest/` | Physics/character/entity demo on the action table: WASD or the left stick and dpad, jump on Space or A, boxes on F or X, a hinge door; `--pad-script` replays a scripted pad, `--trace-player` prints the pose and the commanded move each 30 steps (the `gamepad` gate group reads it), `--print-bindings` lists the table. Audio since 12.0: a beep on jump and spawn and a looping tone carried by the door as an `AUDIO_SOURCE` component, `--mute` to silence it, `--audio-probe <case>` for the headless offline render the `audio` gate reads. Animation since 12.1: the player IS the procedural puppet (`assets/puppet.gltf`) on an `ANIMATOR` component, blending idle/walk/run from the character's POST-SOLVE speed so a wall stops the walk, a jump one-shot that returns to the space by itself, a wave (E / LB) on the right arm's subtree, footsteps fired from the clips' own events, and a facing yaw on an inner node since the entity node's local is the loop's to write; `--no-puppet` keeps the red box, `--twin <clip>` stands a second rig beside it, `--anim-probe <case>` is the headless probe the `anim` gate group reads, and `--trace-player` appends its `anim ...` tail after `jump`. Frame-deterministic headless with the rig on the frame: two runs trace identically and the frame differs by 0 px (spec 11.109, re-measured 12.1) | yes |
+| gametest | `apps/gametest/` | Physics/character/entity demo on the action table: WASD or the left stick and dpad, jump on Space or A, boxes on F or X, a hinge door; `--pad-script` replays a scripted pad, `--trace-player` prints the pose and the commanded move each 30 steps (the `gamepad` gate group reads it), `--print-bindings` lists the table. Audio since 12.0: a beep on jump and spawn and a looping tone carried by the door as an `AUDIO_SOURCE` component, `--mute` to silence it, `--audio-probe <case>` for the headless offline render the `audio` gate reads. Animation since 12.1: the player IS the procedural puppet (`assets/puppet.gltf`) on an `ANIMATOR` component, blending idle/walk/run from the character's POST-SOLVE speed so a wall stops the walk, a jump one-shot that returns to the space by itself, a wave (E / LB) on the right arm's subtree, footsteps fired from the clips' own events, and a facing yaw on an inner node since the entity node's local is the loop's to write; `--no-puppet` keeps the red box, `--twin <clip>` stands a second rig beside it, `--anim-probe <case>` is the headless probe the `anim` gate group reads, and `--trace-player` appends its `anim ...` tail after `jump`. Menus since 12.2: a main menu, a pause menu, a settings screen and a non-modal HUD, all closed at startup with **Escape** opening the pause menu and Quit an item inside it; `--no-ui` runs without them, `--ui-screen <name>` opens one so a headless run can photograph it, `--ui-focus <n>` moves focus through the real navigation path, `-W`/`-H` size the window, and `--ui-probe <case>` is the headless probe the `ui` gate group reads -- the only probe in the tree that needs no window at all. It owns the corpus's only non-render-app goldens, `menu` and `menu_focus`. Frame-deterministic headless with the rig on the frame: two runs trace identically and the frame differs by 0 px (spec 11.109, re-measured 12.1) | yes |
 | tree | `apps/tree/` | Procedural recursive tree generator with ImGui sliders, on a domed island in a sea with a seabed under it, at sunset, walkable in first person (`--player`); `--no-water` for dry land. Specs 11.32, 11.35, 11.36 | yes (but NOT frame-deterministic on the orbit path: floor is 9k-31k px depending on framing, see `docs/verification.md`) |
 | shapes | `apps/shapes/` | Procedural geometry demo (rect/circle/bezier) | no |
 | sprites | `apps/sprites/` | The 2023 particle-globe sketch, behaving as it did: 540 hard-square points on a jittering sphere that spins up over time, raw colours through the passthrough tonemap (spec 11.105) | yes |
@@ -1285,7 +1325,7 @@ on the `Scene`.
 **`docs/verification.md` owns this** — how to run the two suites, what a release run moves, the
 determinism-by-source table, the per-asset ledger of what is safe to compare, and the cross-build
 recipe with the six times it has moved. `scripts/gates.py` asserts analytic properties;
-`scripts/goldens.py` compares 31 committed PNGs.
+`scripts/goldens.py` compares 33 committed PNGs.
 
 Four rules belong here rather than in a file you have to open first:
 
@@ -1311,7 +1351,8 @@ arms pass everywhere; timing arms and goldens are the two things that do not tra
 apps for several specs while the table above already said tree was "yes" -- it takes `-x`, `-f`,
 `-S` and `--screenshot-every` like the others), since 11.105 **sprites** and **network** take
 `-x`, `-f` and `-S`, and **gametest** has taken `-x`, `-f`, `-S` and `--screenshot-every`
-since 11.103 (this list left it out for six specs while the table said "no" for the same
+since 11.103, plus `-W` and `-H` since 12.2 -- which it needed before it could own a golden,
+since a recipe states the size it was baked at (this list left it out for six specs while the table said "no" for the same
 span); with `--pad-script` and `--trace-player` (spec 11.109) it is also the one app a
 headless run can PLAY. **`--screenshot-every` was the half of that claim
 that was not true until 11.62**: forest and spores parsed `-S` but not it, so capturing a

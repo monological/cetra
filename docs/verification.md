@@ -8,7 +8,7 @@ Three instruments, answering different questions:
 | instrument | asserts | blind to |
 |---|---|---|
 | `scripts/gates.py` | analytic properties — a ratio, a count, a penumbra width, whether two runs agree | anything nobody wrote an arm for; a bar too slack to fail |
-| `scripts/goldens.py` | 31 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
+| `scripts/goldens.py` | 33 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
 | a hand A/B | everything else | nothing, and that is the problem: it has no bar unless you measure one |
 
 **The one rule that governs all three: a pixel count quoted without its noise floor is not a
@@ -36,6 +36,10 @@ up as a difference. The corpus must not be re-baked off macOS.
   cover, and the two recipes (a pad on this Mac; Linux uinput) that would
 - [The audio device path](#the-audio-device-path) — what the `audio` group does not cover,
   and how to hear it on real hardware
+- [The real-character path](#the-real-character-path) — what the `anim` group asserts about
+  the math, and what only watching a real rig can settle
+- [The UI paths](#the-ui-paths) — what the `ui` group and the two menu goldens do not
+  cover: another display, a real pad through a menu, and the other two settings locations
 
 ---
 
@@ -181,6 +185,7 @@ first.
 | **Particles** (falling leaves, spores) | YES in headless (spec 11.2) -- ticked from the frame clock; game-loop step count is exactly one per frame | (automatic) |
 | **Skeletal animation** | YES in headless -- the frame clock steps a fixed 1/60 per frame so frame N is always pose N | (automatic) |
 | **Animation blending** (`animator.c`, spec 12.1) | YES in headless -- every clock in it (the blend space's, the crossfade's envelope, the override layer's) advances by the same fixed dt, so frame N is blend state N. In the game framework the dt is the SIM clock's, a whole number of fixed steps, so a paused sim holds the pose and reads zero deformation velocity | (automatic); `--anim-probe` prints the weights and every bone's pose, `%.9g`, so a textual diff is a bit diff |
+| **The game UI** (`ui.c`, spec 12.2) | YES in headless -- every clock it has (hover, focus, a toggle's travel, a screen's entrance) advances by the FIXED frame dt rather than the wall clock, so frame N is transition state N. It draws AFTER tone mapping, so no post pass can move it and nothing in the chain needs pinning for it | (automatic); `--ui-probe` prints layout, navigation, capture and settings as numbers, and is the one probe that needs no window at all |
 | **TAA jitter** | YES -- disabled in headless unless `--headless-jitter` | (automatic) |
 | **Orbit camera** | YES -- auto-rotation disabled in headless | `--cam-eye`/`--cam-target` for exact repro |
 | GTAO / SSR temporal accumulation | frame-count driven, not wall-clock; no drift observed across builds | `--no-ssr --no-ssao` if isolating |
@@ -197,7 +202,7 @@ first.
 | `assets/room.fbx`, `assets/c64.fbx` | no | no | room's textures point at a dead path; c64 renders fully (textured, lit) since specs 11.1 |
 | `apps/tree` | **yes** + particles | no | **NOT pixel-deterministic on the orbit path** -- measured 8,925 px run-to-run at 40 frames / 2800x1800, and 31,034 at the framing recorded above, so **measure the floor at YOUR framing before comparing anything**: it moves by a factor of three with resolution and frame count. The cause is `mouse_drag_update(drag_controller, glfwGetTime())` at **`tree.c:749`** -- and that call sits in an `else if` behind `if (player)`, so **`--player` never reaches it**, never creates the drag controller (`tree.c:1200`), and takes `engine->render_delta` instead. **`--player --headless` IS 0 px** -- measured x2 at 30 frames / 400x300 (spec 11.86), which makes it tree's first pixel-comparable framing and the one to use for any A/B in this app. It is what 11.86's normal-compression numbers were taken at. Wind, grass sway and falling leaves ARE frame-index-pure (spec 11.2); the ORBIT camera is what is not. **Spec 11.32 put a sea around it, ON by default**, and 11.35 put a seabed under the sea -- both under one `--no-water` guard, because a bed with no sea over it is a plate around a dome. **Its water is SPECTRAL by default since 11.35, not Gerstner** (`tree.c:1589`; `--gerstner-waves` switches back, and the four wave params it authors are DEAD unless you pass it). So the 45-pass/24-texture FFT cost and the FFT-only crest foam and caustics all apply to this app by default, and every cascade change in 11.33 and 11.35 reaches it. No tree capture from before 11.35 compares; none from before 11.36 does either, which re-scaled the water's absorption. |
 | `apps/spores` | particles | no | deterministic headless since spec 11.2 (x3 0 px; game-loop step count is exact). Since 11.103 it also takes `--taa`, `--headless-jitter` and `--msaa`, which exist to have MEASURED a refusal rather than to be used: its particles write no motion vector, so TAA reprojects every mote through the geometry behind it and turns dots into dashes. Compare its mote field at 4x against `--taa` if you want to see it; brighten 4x, the field is dim. |
-| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; the HDR path stays positional. **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by every surface writing a motion vector: rigid meshes on `pbr` and, since 12.1, one skinned rig on `pbr_skinned`, whose vectors come from the previous frame's bone rows (`uPrevBoneRows`) latched once per frame. `--no-puppet` is the all-rigid frame if you need to separate them. **Re-measured with the rig on the frame (spec 12.1): still 0 px and byte-identical traces.** **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
+| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; since 12.2 also `-W`/`-H` (so a golden can state the size it was baked at), `--no-ui`, `--ui-screen <name>`, `--ui-focus <n>` and `--ui-probe <case>`; the HDR path stays positional. **It is the only app with goldens that is not the render app** -- `menu` and `menu_focus` are its frames, since a menu is drawn over ITS scene. **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by every surface writing a motion vector: rigid meshes on `pbr` and, since 12.1, one skinned rig on `pbr_skinned`, whose vectors come from the previous frame's bone rows (`uPrevBoneRows`) latched once per frame. `--no-puppet` is the all-rigid frame if you need to separate them. **Re-measured with the rig on the frame (spec 12.1): still 0 px and byte-identical traces.** **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
 | `assets/puppet.cscn` | no | no | **the blending instrument (spec 12.1)**, and the corpus's first rig built to be MEASURED rather than looked at: twenty rigid boxes, one per bone, on the `cetra_rig:` names the committed walk clip carries, a T-pose with identity rest rotations and pure-translation bind offsets -- so a wrong axis or order reads as a number in `--anim-probe`. Feet on y = 0 and centred in x/z, which makes the render app's recentre a no-op (the generator asserts it). Seven clips, all authored in closed form: `idle`, `walk` and `run` loop in COS phase so the read frame is an extreme rather than a crossing; `jump` and `wave` are one-shots that end on bind; `hold90` swings one forearm to 90 degrees and HOLDS it past the read frame (a clip that ended there would wrap to bind in exactly the frame being measured -- `skinned_cull`'s own lesson); `rest` is the bind pose as a clip, the other endpoint of the analytic midpoint blend. Every animated joint also carries a translation track holding its bind offset, because an embedded clip with rotation keys alone reads position (0,0,0) and collapses the joint onto its parent. `puppet_golden` is baked from `--anim-clip run`. |
 | `assets/strut_walk.fbx` | no | no | a real walk cycle, animation-only (no mesh): 52 channels, 86 ticks at 60 tps. Binds onto the puppet by EXACT name -- twenty channels, one per bone, with an identity retarget delta since an animation-only file carries no source skeleton -- which is what `anim-clip-loads` asserts and what a retarget delta is measured against. The unmatched 32 are fingers, toes and a head tip the puppet does not model. **How it LOOKS on the puppet is unverified**: the puppet's rest rotations are identity where a real rig's are not, so the absolute rotations land differently. That is the retarget question the puppet cannot answer -- see "The real-character path" below. |
 | `apps/shapes`, `apps/splash` | no | no | **no capture path, and none is planned** (spec 11.103). shapes keeps 4x MSAA deliberately, so there is nothing to regress; adding headless is 40-60 lines for a decision that is not changing. `apps/splash` cannot be captured at all without porting it onto `engine_run` — it draws to the default framebuffer and the engine's screenshot lives in the loop it does not use. |
@@ -513,3 +518,44 @@ Closing it is a watch, not a script:
 and, windowed, `./out/bin/gametest --twin run` -- two rigs side by side under TAA, which is the
 one thing `anim-twin`'s headless frames cannot see: that neither smears into the other.
 **Owed.** The blend layer is identical above the rig, but nobody has watched it on one.
+
+---
+
+## The UI paths
+
+Spec 12.2's ten gate arms assert the UI where it is a pure function: `ui_layout` is
+(tree, width, height) with no GL, no clock and no input, and the input pass takes a struct of
+values rather than a device. So navigation, hit-testing, capture, the stack, wrapping, theme
+resolution and the settings round-trip are all checked with **no window and no GPU**, and the
+two menu goldens are the only place the layer's pixels are compared at all.
+
+Four things that leaves open, none of them reachable from this machine:
+
+- **Another display.** The layer works in window POINTS and is captured at framebuffer
+  resolution, so a Retina panel doubles it and a 1x panel does not. Every golden here was baked
+  at 2x on one Mac. Whether a menu reads correctly on a 4K panel at some other scale factor, or
+  on a 1x monitor, is a look nobody has had — and the `_detect_fb_scale` machinery means a
+  mismatch reports as "not the display it was baked on" rather than as a bug.
+- **A real controller through a menu.** The `ui` group drives navigation by writing the
+  `UIInput` struct directly, which is the layer's own contract and deliberately not a device.
+  The pad path above it — `ui_up`/`ui_down`/`ui_accept` as ACTIONS, sharing a table with the
+  game's — is exercised only by the scripted pad in the `gamepad` group. This is the same debt
+  spec 11.109 already carries, and closing that closes this.
+- **The settings file on Linux and Windows.** `settings_default_path` resolves three different
+  locations and only `~/Library/Application Support` has ever been written to. The other two
+  are one `#if` each and have never run. `CETRA_SETTINGS_DIR` is what the gate uses, so the
+  gate does not exercise the platform branches either — by design, since a hermetic test must
+  not write to a real user directory, but it means the branches are untested rather than
+  merely unasserted.
+- **Window mode.** It round-trips through the file and `settings_apply` does not act on it, so
+  nothing has ever gone fullscreen. That is a gap in the feature and not only in the testing:
+  GLFW needs a monitor choice and saved geometry the engine does not keep.
+
+One measured caution about the two menu goldens. They are `apps/gametest` frames, and that app
+is 0 px run-to-run (the row above says so, re-measured twice for 12.1). The menu recipes
+reproduce at 0 px by hand, standalone through `goldens.py --only`, and in a full 33-golden run —
+but `menu` was observed ONCE at 1212 px inside a full run and has not reproduced since. It is
+recorded here rather than explained: if it recurs, the first thing to suspect is the async
+texture upload budget (<=5/frame), which is the one part of a gametest frame that depends on
+how busy the machine is, and the fix is to give the recipe enough frames for the loads to have
+certainly landed.
