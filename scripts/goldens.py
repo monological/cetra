@@ -59,6 +59,9 @@ def _bin(name):
 
 BIN_DIR = os.environ.get("CETRA_BIN_DIR") or os.path.join(ROOT, "out", "bin")
 RENDER = _bin("render")
+# The second app with goldens (spec 12.2): a menu belongs to gametest, the only
+# app that carries a UI, and is drawn over ITS scene.
+GAMETEST = _bin("gametest")
 
 # Framebuffer pixels per requested pixel, measured once per run. Every recipe
 # below states both numbers -- a "size" that is the stored golden's, and a -W/-H
@@ -325,6 +328,21 @@ RECIPES = [
     {"name": "puppet", "scene": "assets/puppet.cscn", "size": (800, 600),
      "flags": ["--anim-clip", "run", "-f", "30", "-W", "400", "-H", "300",
                "--no-auto-exposure", "-E", "1.0"]},
+
+    # The menu (spec 12.2), and the first two goldens that are not the render
+    # app's. They carry no exposure pinning because there is no -E to pin with:
+    # gametest's frame is already deterministic headless (spec 11.109), and the
+    # UI itself is drawn AFTER tone mapping, so no post pass can reach it.
+    {"name": "menu", "app": "gametest", "size": (800, 600),
+     "flags": ["--ui-screen", "main", "-f", "30", "-W", "400", "-H", "300"]},
+    # The same frame with focus one row further down. The PAIR is what proves the
+    # focus visual: a highlight that never draws leaves these two identical, and
+    # their difference must sit inside the second button.
+    {"name": "menu_focus", "app": "gametest", "size": (800, 600),
+     # Two presses, not one: nothing is focused to begin with, so the first only
+     # acquires and the second is what moves.
+     "flags": ["--ui-screen", "main", "--ui-focus", "2", "-f", "30",
+               "-W", "400", "-H", "300"]},
 ]
 
 
@@ -371,9 +389,19 @@ def _sized_flags(recipe):
 
 def _render(recipe, out):
     """Render one recipe. Returns None on success, else the tail of its output."""
-    cmd = ([RENDER, "-m", os.path.join(ROOT, recipe["scene"]), "-x"]
-           + _sized_flags(recipe) + ["-S", out])
-    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    # A scene is the RENDER app's way in. gametest builds its own and takes no
+    # -m at all, so both halves come from the recipe rather than being assumed.
+    app = GAMETEST if recipe.get("app") == "gametest" else RENDER
+    cmd = [app]
+    if recipe.get("scene"):
+        cmd += ["-m", os.path.join(ROOT, recipe["scene"])]
+    cmd += ["-x"] + _sized_flags(recipe) + ["-S", out]
+    # A bake must not read or write the player's own settings: gametest resolves
+    # a per-user path at startup, so it gets one of its own here for the same
+    # reason the suites isolate the cook cache.
+    env = dict(os.environ)
+    env["CETRA_SETTINGS_DIR"] = os.path.join(tempfile.gettempdir(), "cetra-golden-settings")
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, env=env)
     if r.returncode != 0 or not os.path.exists(out):
         return (r.stdout + r.stderr)[-400:]
     return None
@@ -480,13 +508,15 @@ def main():
     args = ap.parse_args()
 
     if args.bin_dir:
-        global BIN_DIR, RENDER
+        global BIN_DIR, RENDER, GAMETEST
         BIN_DIR = os.path.abspath(args.bin_dir)
         RENDER = _bin("render")
+        GAMETEST = _bin("gametest")
 
     if args.list:
         for r in RECIPES:
-            print(f"{r['name']:<24} {r['size'][0]}x{r['size'][1]}  {r['scene']}")
+            print(f"{r['name']:<24} {r['size'][0]}x{r['size'][1]}  "
+                  f"{r.get('scene') or r.get('app', 'render')}")
             print(f"{'':24} {' '.join(r['flags'])}")
         return 0
 

@@ -22206,6 +22206,262 @@ def run_cook_gate(workdir):
     return failures
 
 
+# "ui <case> <label> <key> <numbers...>" from gametest --ui-probe: the same shape
+# the anim and audio probes print, so one reader serves all three.
+_UI_PROBE = re.compile(r"^ui ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+
+# The element constructors, counted by their FIRST PARAMETER and not by return
+# type: ui_screen_root also returns a UIElement*, so counting returns makes the
+# closed list seven and turns the arm below into a magic number.
+_UI_CTOR = re.compile(r"^UIElement\* (ui_\w+)\(UIElement\* parent", re.M)
+
+_UI_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "..", "cetra", "src", "ui.h")
+
+# What ui.h is allowed to export. Spelled out rather than counted, so adding a
+# seventh element fails by NAME and the failure says which one arrived.
+_UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_selector"]
+
+
+def _ui_probe(case, env=None):
+    """{(label, key): [numbers]} from one gametest --ui-probe run, or None.
+
+    No window, no GPU and no pad: every case here is layout, measurement or a
+    plain struct of input values, which is what lets the group run inside the
+    suite's CPU budget.
+    """
+    r = subprocess.run([GAMETEST, "--ui-probe", case], capture_output=True, text=True, env=env)
+    text = r.stdout + r.stderr
+    out = {(label, key): [float(v) for v in nums.split()]
+           for c, label, key, nums in _UI_PROBE.findall(text) if c == case}
+    if r.returncode != 0 or not out:
+        return None
+    return out
+
+
+def run_ui_gate(workdir):
+    """The game UI layer (spec 12.2), asserted where it is a pure function: layout
+    is (tree, width, height) with no GL and no clock, the input pass takes a
+    struct of values rather than a device, and the settings file is a table
+    walked both ways. So every arm below runs with no window and no GPU at all --
+    the two menu GOLDENS are what see pixels.
+
+      ui-layout      a column at 1280x720 lands on its closed form: the panel
+                     centred, its height the padding plus three rows plus two
+                     gaps, and every row inset by the padding and grown to the
+                     panel's width. The row HEIGHT is read rather than asserted,
+                     since it comes from the font's metrics.
+      ui-layout-resize the same tree at 640x360 and 2560x1440 centres at both, and
+                     laying it out at the first size AGAIN reproduces the first
+                     rects exactly -- layout derives its answer rather than
+                     accumulating it.
+      ui-wrap        a paragraph at 400 points breaks into lines that each fit,
+                     and the first line must be most of the way full: breaking at
+                     every word also never exceeds the limit.
+      ui-nav         down moves through the column and wraps off the end; up wraps
+                     the other way. Nothing is focused to begin with, so the first
+                     press ACQUIRES and the wrap is the fourth press, not the
+                     third.
+      ui-hit         a control claims its own centre and neither neighbour's; a
+                     point in the panel's padding, and one in the gap between two
+                     rows, belong to the parent and to no control. The pointer
+                     walk then reaches the element under the cursor.
+      ui-capture     a modal screen captures input and a non-modal HUD does not,
+                     popping gives it back, and the suppression switch the UI
+                     throws is lowered again. What suppression does to each SOURCE
+                     is the gamepad group's ground, which drives real devices.
+      ui-stack       push, pop, pop_all and a pop of the empty stack each leave the
+                     top where they should, including the underflow that must be a
+                     no-op rather than a crash.
+      ui-theme-identity a zeroed style emits vertices identical to no style at all,
+                     which is what makes "zero means inherit" a resolution step
+                     instead of a second drawing path -- and a style that DOES say
+                     something must differ, or the comparison proves nothing.
+      ui-elements-closed ui.h exports exactly the six element constructors. The
+                     scope ratchet, asserted rather than promised.
+      ui-settings-roundtrip write, read back into a ZEROED struct, and every field
+                     survives; the window mode rides the file as a name; an absent
+                     file leaves defaults rather than zeros; and apply reaches the
+                     mixer.
+    """
+    failed = []
+
+    def note(name, ok):
+        # Bookkeeping only. Each verdict LINE below prints its arm's name as a
+        # literal, because that source text is what gate-docs reads to tell the
+        # documented list from the one that actually runs -- a helper that
+        # formatted the name would leave every arm here invisible to it.
+        if not ok:
+            failed.append(name)
+
+    def close(a, b, tol=0.01):
+        return abs(a - b) <= tol
+
+    # ---- layout
+    p = _ui_probe("layout")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        panel = p[("panel", "rect")]
+        rows = [p[(f"row{i}", "rect")] for i in range(3)]
+        pad, gap, pw = 10.0, 8.0, 300.0
+        h = rows[0][3]
+        want_ph = 2 * pad + 3 * h + 2 * gap
+        ok = (close(panel[2], pw) and close(panel[3], want_ph)
+              and close(panel[0], (1280.0 - pw) / 2) and close(panel[1], (720.0 - want_ph) / 2)
+              and all(close(r[0], panel[0] + pad) for r in rows)
+              and all(close(r[2], pw - 2 * pad) for r in rows)
+              and all(close(rows[i][1], panel[1] + pad + i * (h + gap)) for i in range(3))
+              and all(close(r[3], h) for r in rows))
+        detail = (f"panel {panel[0]:.0f},{panel[1]:.0f} {panel[2]:.0f}x{panel[3]:.0f} "
+                  f"(want centred, h = 2*{pad:.0f} + 3*{h:.0f} + 2*{gap:.0f} = {want_ph:.0f}), "
+                  f"rows inset to {rows[0][2]:.0f} at y "
+                  f"{rows[0][1]:.0f}/{rows[1][1]:.0f}/{rows[2][1]:.0f}")
+    print(f"  ui-layout             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-layout", ok)
+
+    # ---- layout at other sizes
+    p = _ui_probe("layout-resize")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        small, large, again = p[("small", "rect")], p[("large", "rect")], p[("again", "rect")]
+        ok = (close(small[0], (640.0 - 300.0) / 2) and close(small[1], (360.0 - small[3]) / 2)
+              and close(large[0], (2560.0 - 300.0) / 2) and close(large[1], (1440.0 - large[3]) / 2)
+              and small == again)
+        detail = (f"640x360 -> {small[0]:.0f},{small[1]:.0f}; "
+                  f"2560x1440 -> {large[0]:.0f},{large[1]:.0f}; back to the first size "
+                  f"reproduces it {'exactly' if small == again else 'NOT exactly'}")
+    print(f"  ui-layout-resize      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-layout-resize", ok)
+
+    # ---- wrapping
+    p = _ui_probe("wrap")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        limit = p[("limit", "points")][0]
+        count = int(p[("lines", "count")][0])
+        widths = [p[(f"line{i}", "width")][0] for i in range(count)]
+        ok = count >= 2 and all(w <= limit for w in widths) and widths[0] > limit * 0.75
+        detail = (f"{count} lines at {limit:.0f} points, widths "
+                  + "/".join(f"{w:.0f}" for w in widths)
+                  + f" (want every line <= {limit:.0f} and the first > {limit * 0.75:.0f})")
+    print(f"  ui-wrap               {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-wrap", ok)
+
+    # ---- navigation
+    p = _ui_probe("nav")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        seq = [p[(k, "focus")][0] for k in ("start", "down", "twice", "last", "wrapped", "up")]
+        ok = seq == [-1.0, 0.0, 1.0, 2.0, 0.0, 2.0]
+        detail = ("focus " + " -> ".join(f"{v:.0f}" for v in seq)
+                  + " (want -1 0 1 2 0 2: nothing focused, then acquire, two moves, a wrap off "
+                    "the end and a wrap back)")
+    print(f"  ui-nav                {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-nav", ok)
+
+    # ---- hit testing
+    p = _ui_probe("hit")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        ok = (p[("centre", "row1")][0] == 1 and p[("centre", "row0")][0] == 0
+              and p[("centre", "row2")][0] == 0 and p[("padding", "panel")][0] == 1
+              and p[("padding", "rows")][0] == 0 and p[("gap", "rows")][0] == 0
+              and p[("pointer", "row1")][0] == 1 and p[("pointer", "row0")][0] == 0)
+        detail = (f"centre claims {p[('centre', 'row1')][0]:.0f} of row1 and "
+                  f"{p[('centre', 'row0')][0] + p[('centre', 'row2')][0]:.0f} of its neighbours; "
+                  f"padding and gap claim {p[('padding', 'rows')][0]:.0f}/"
+                  f"{p[('gap', 'rows')][0]:.0f} rows; the pointer walk reaches row1 "
+                  f"({p[('pointer', 'row1')][0]:.0f})")
+    print(f"  ui-hit                {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-hit", ok)
+
+    # ---- capture
+    p = _ui_probe("capture")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        ok = (p[("hud", "captures")][0] == 0 and p[("menu", "captures")][0] == 1
+              and p[("popped", "captures")][0] == 0 and p[("cleared", "captures")][0] == 0
+              and p[("raised", "suppressed")][0] == 1 and p[("lowered", "suppressed")][0] == 0)
+        detail = (f"hud {p[('hud', 'captures')][0]:.0f}, modal "
+                  f"{p[('menu', 'captures')][0]:.0f}, popped "
+                  f"{p[('popped', 'captures')][0]:.0f} (want 0/1/0); the switch raises to "
+                  f"{p[('raised', 'suppressed')][0]:.0f} and lowers to "
+                  f"{p[('lowered', 'suppressed')][0]:.0f}")
+    print(f"  ui-capture            {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-capture", ok)
+
+    # ---- the screen stack
+    p = _ui_probe("stack")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        keys = ["empty", "pushed", "second", "popped", "cleared", "underflow"]
+        vals = [p[(k, "top")][0] for k in keys]
+        ok = all(v == 1 for v in vals)
+        detail = ("top is where it should be after "
+                  + ", ".join(f"{k}={v:.0f}" for k, v in zip(keys, vals)) + " (want all 1)")
+    print(f"  ui-stack              {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-stack", ok)
+
+    # ---- theme resolution
+    p = _ui_probe("theme-identity")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        match = p[("styles", "match")][0]
+        differs = p[("styled", "differs")][0]
+        ok = match == 1 and differs == 1
+        detail = (f"a zeroed style hashes identically to no style ({match:.0f}, want 1) and a "
+                  f"style that says something does not ({differs:.0f}, want 1)")
+    print(f"  ui-theme-identity     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-theme-identity", ok)
+
+    # ---- the closed element list
+    try:
+        with open(_UI_HEADER, "r", encoding="utf-8") as f:
+            names = _UI_CTOR.findall(f.read())
+        ok = names == _UI_KINDS
+        detail = (f"ui.h exports {len(names)} element constructors: {', '.join(names)} "
+                  f"(want exactly {len(_UI_KINDS)})")
+    except OSError as e:
+        ok, detail = False, f"cannot read ui.h ({e})"
+    print(f"  ui-elements-closed    {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-elements-closed", ok)
+
+    # ---- settings
+    env = dict(os.environ)
+    env["CETRA_SETTINGS_DIR"] = os.path.join(workdir, "ui-settings")
+    p = _ui_probe("settings", env=env)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        want_default = {"master": 1.0, "music": 1.0, "sfx": 1.0, "ui": 1.0,
+                        "window_mode": 0.0, "vsync": 1.0}
+        want_written = {"master": 0.25, "music": 0.5, "sfx": 0.75, "ui": 0.125,
+                        "window_mode": 1.0, "vsync": 0.0}
+        ok = (all(close(p[("default", k)][0], v, 1e-6) for k, v in want_default.items())
+              and all(close(p[("roundtrip", k)][0], v, 1e-6) for k, v in want_written.items())
+              and all(close(p[("absent", k)][0], v, 1e-6) for k, v in want_default.items())
+              and p[("named", "fullscreen")][0] == 1
+              and all(close(p[("applied", k)][0], want_written[k], 1e-6)
+                      for k in ("master", "music", "sfx", "ui")))
+        detail = (f"written {p[('roundtrip', 'master')][0]:.3f}/"
+                  f"{p[('roundtrip', 'music')][0]:.3f}/{p[('roundtrip', 'sfx')][0]:.3f} survives "
+                  f"a read into a zeroed struct, the mode rides the file as a name "
+                  f"({p[('named', 'fullscreen')][0]:.0f}), an absent file leaves defaults, and "
+                  f"apply reaches the mixer ({p[('applied', 'master')][0]:.3f})")
+    print(f"  ui-settings-roundtrip {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-settings-roundtrip", ok)
+
+    return failed
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -22318,6 +22574,8 @@ GATE_GROUPS = [
     ("audio", "audio (offline PCM through the spatializer, spec 12.0):", run_audio_gate),
     ("anim", "animation blending (a blend space, a crossfade, a masked layer, spec 12.1):",
      run_anim_gate),
+    ("ui", "the game UI layer (layout, navigation, capture, settings; spec 12.2):",
+     run_ui_gate),
     ("import", "import:", _run_import_gates),
     ("fixture-gen", "fixture generators (every gen_*.py reproduces its asset):",
      run_fixture_gen_gate),
