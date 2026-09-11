@@ -67,6 +67,21 @@ typedef struct UIStyle {
     float font_size;  // 0 = inherit
     Font* font;       // NULL = inherit
 
+    /*
+     * Typography, per element and themeable like everything else here.
+     *
+     * `tracking` is extra advance after every glyph, in POINTS at the drawn
+     * size -- positive opens a line up, negative tightens it. `line_spacing`
+     * multiplies the font's own line height, so 1.0 is the face's leading and
+     * 0 means the same thing (inherit, then default to 1.0).
+     *
+     * Kerning is NOT a field: it is the face's own pair data and is always
+     * applied. There is no reason for an app to ask for badly spaced text, and
+     * a switch for it is a switch somebody eventually ships turned off.
+     */
+    float tracking;
+    float line_spacing;
+
     // A textured background. NULL draws the flat `bg` colour. The insets are a
     // 9-slice in texture pixels (top, right, bottom, left); all zero stretches
     // the image over the whole rect instead, which is what a plain image wants.
@@ -126,14 +141,208 @@ void ui_pop_clip(UIDrawList* dl);
 // against is declared in ui_frag.glsl: uRect, uResolution, uTime, uFocus, uTex.
 void ui_set_draw_program(UIDrawList* dl, struct ShaderProgram* program, UIRect rect, float focus);
 
-// Measurement, so layout can ask what a string costs without drawing it.
-// The font is non-const because a glyph is baked into the atlas on first use:
-// measuring a string is what CAUSES its glyphs to exist.
-float ui_text_width(Font* font, float size, const char* text);
-float ui_line_height(const Font* font, float size);
+/*
+ * Measurement, so layout can ask what a string costs without drawing it.
+ *
+ * These take `tracking` for the same reason ui_draw_text does: measuring and
+ * drawing MUST apply identical kerning and tracking, or a centred string is
+ * centred against a width it does not have and a hit test lands beside the
+ * glyph the player aimed at. One advance rule, used by both.
+ *
+ * The font is non-const because a glyph is baked into the atlas on first use:
+ * measuring a string is what CAUSES its glyphs to exist.
+ */
+float ui_text_width(Font* font, float size, float tracking, const char* text);
+float ui_line_height(const Font* font, float size, float line_spacing);
 // The byte offset at which `text` exceeds `max_width`, breaking on the last
 // word boundary at or before it. Returns the length when the whole string fits,
 // so a caller loops until it consumes the string.
-size_t ui_text_wrap_point(Font* font, float size, const char* text, float max_width);
+size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* text,
+                          float max_width);
+
+/*
+ * ===========================================================================
+ * The element tree.
+ *
+ * THE ELEMENT LIST IS CLOSED: panel, label, button, toggle, slider, selector.
+ * That is not a stage the layer is passing through on its way to a widget
+ * toolkit -- it is the property that keeps this a menu layer instead of a worse
+ * Dear ImGui, and the `ui-elements-closed` gate arm asserts the list against
+ * this header rather than trusting the promise. A seventh kind is a later spec
+ * with its own argument, never a patch to this one.
+ *
+ * What that costs is nothing, because three escape hatches sit under it and
+ * each keeps strictly more than the last: ui_set_draw keeps layout, focus and
+ * input while the app paints; ui_set_element_program keeps all of that and
+ * swaps only the fragment stage; and the draw-list primitives above take
+ * neither, for anything the vocabulary refuses outright.
+ * ===========================================================================
+ */
+
+typedef enum { UI_ROW = 0, UI_COLUMN = 1 } UIDir;
+
+// How an axis is sized. FIT hugs the content, GROW shares what the parent has
+// left over, FIXED is the authored number. Two passes settle them: measure
+// bottom-up for FIT, arrange top-down for GROW.
+typedef enum { UI_FIT = 0, UI_FIXED = 1, UI_GROW = 2 } UISize;
+
+/*
+ * UI_ROOT is a container and not a seventh element: it has no constructor, an
+ * app cannot make one, and `ui-elements-closed` counts constructors rather than
+ * enum entries. It exists because a screen's root must have NO look at all --
+ * zero padding, no background, no corner radius -- and borrowing UI_PANEL's
+ * styling meant cancelling it afterwards, which a zero cannot express while a
+ * zero means "inherit". A kind whose every default is already zero says it
+ * once, in the place that decides it.
+ */
+typedef enum {
+    UI_ROOT = 0,
+    UI_PANEL,
+    UI_LABEL,
+    UI_BUTTON,
+    UI_TOGGLE,
+    UI_SLIDER,
+    UI_SELECTOR,
+    UI_KIND_COUNT
+} UIKind;
+
+typedef enum {
+    UI_STATE_NORMAL = 0,
+    UI_STATE_HOVER,
+    UI_STATE_FOCUS,
+    UI_STATE_ACTIVE,
+    UI_STATE_DISABLED,
+    UI_STATE_COUNT
+} UIState;
+
+/*
+ * The look of a whole screen. Every UIStyle in here follows the zero-means-
+ * inherit rule above, so a theme filled in partway is legal and the rest comes
+ * from the engine default -- which is what makes `ui-theme-identity` assertable:
+ * a zeroed style must produce the same vertices as the resolved one spelled out
+ * in full, or "zero is the default" is really a second drawing path.
+ */
+typedef struct UITheme {
+    Font* font;
+    float font_size;
+    float spacing; // gap between siblings, when a container names none
+    // No entry for UI_ROOT: a screen root draws nothing, so a style for it
+    // would be a field that cannot have an effect.
+    UIStyle panel;
+    UIStyle label;
+    UIStyle button[UI_STATE_COUNT];
+    UIStyle toggle[UI_STATE_COUNT];
+    UIStyle slider[UI_STATE_COUNT];
+    UIStyle selector[UI_STATE_COUNT];
+} UITheme;
+
+typedef struct UIElement UIElement;
+typedef struct UIScreen UIScreen;
+typedef struct UISystem UISystem;
+
+// Fired after the value has already been written through the bound pointer, so
+// a handler reads the new value rather than being told what it will become.
+typedef void (*UIActionFn)(UIElement* el, void* user);
+typedef void (*UIDrawFn)(UIElement* el, UIDrawList* dl, void* user);
+
+struct UIElement {
+    // ENGINE-OWNED: the layout pass and the input pass write these; read them,
+    // never write them.
+    UIKind kind;
+    UIRect rect;   // settled by ui_layout, in points
+    UIState state; // settled by the input pass
+    float t_hover; // 0..1, eased toward whether the pointer is inside
+    float t_focus; // 0..1, eased toward whether this element has focus
+    UIElement* parent;
+    UIElement** children;
+    size_t child_count, child_capacity;
+
+    // BY FUNCTION
+    char* text;                    // ui_set_text (owned)
+    UIStyle* style;                // ui_set_style (owned copy); NULL = the theme's
+    UIDrawFn draw;                 // ui_set_draw
+    void* draw_user;               //   "
+    struct ShaderProgram* program; // ui_set_element_program
+
+    // SETTINGS: plain writes at any time.
+    UIDir dir;           // how this element's CHILDREN are laid out
+    UISize size_mode[2]; // x, y
+    float size[2];       // the number FIXED uses
+    float padding[4];    // top, right, bottom, left; 0 = the style's
+    float spacing;       // gap between children; 0 = the theme's
+    UIAlign align_main, align_cross;
+    bool focusable;
+    bool disabled;
+    bool fill; // ignore layout and cover the whole screen (a backdrop)
+
+    // What a control writes through. Borrowed, and exactly one is non-NULL for
+    // the kind that uses it: the control is a VIEW of the app's own variable,
+    // not a copy the app has to read back.
+    bool* bound_bool;
+    float* bound_float;
+    int* bound_int;
+    float range_lo, range_hi;   // slider
+    const char* const* options; // selector (borrowed)
+    int option_count;           //   "
+    UIActionFn action;
+    void* action_user;
+};
+
+// The system owns the screens, the theme, the font and the draw list.
+UISystem* create_ui_system(struct Engine* engine);
+void free_ui_system(UISystem* ui);
+// Installs the overlay hook, so the system draws itself every frame.
+void ui_attach(UISystem* ui, struct Engine* engine);
+void ui_set_font(UISystem* ui, Font* font, float size);
+void ui_set_theme(UISystem* ui, const UITheme* theme); // copied
+const UITheme* ui_theme(const UISystem* ui);
+UIDrawList* ui_draw_list(UISystem* ui);
+
+// A screen is full-screen by construction; there are no floating windows, which
+// is most of what this layer does not have to implement.
+UIScreen* ui_screen(UISystem* ui, const char* name);
+UIElement* ui_screen_root(UIScreen* screen);
+// A modal screen consumes input: the game reads zero from every non-ui action
+// while one is on the stack. A non-modal screen (a HUD) draws and takes nothing.
+void ui_screen_set_modal(UIScreen* screen, bool modal);
+
+void ui_push(UISystem* ui, UIScreen* screen);
+void ui_pop(UISystem* ui);
+void ui_pop_all(UISystem* ui);
+UIScreen* ui_top(const UISystem* ui);
+// True while a modal screen is on the stack -- what the game gates its own
+// input on, and what input_set_suppressed is driven from.
+bool ui_captures_input(const UISystem* ui);
+
+// The six. Each appends to `parent` and returns the new element.
+UIElement* ui_panel(UIElement* parent);
+UIElement* ui_label(UIElement* parent, const char* text);
+UIElement* ui_button(UIElement* parent, const char* text, UIActionFn action, void* user);
+UIElement* ui_toggle(UIElement* parent, const char* text, bool* bound, UIActionFn action,
+                     void* user);
+UIElement* ui_slider(UIElement* parent, const char* text, float lo, float hi, float* bound,
+                     UIActionFn action, void* user);
+UIElement* ui_selector(UIElement* parent, const char* text, const char* const* options, int count,
+                       int* bound, UIActionFn action, void* user);
+
+void ui_set_text(UIElement* el, const char* text);
+void ui_set_style(UIElement* el, const UIStyle* style);
+void ui_set_draw(UIElement* el, UIDrawFn draw, void* user);
+void ui_set_element_program(UIElement* el, struct ShaderProgram* program);
+// Convenience for the two size axes, since every element sets them together.
+void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y);
+
+/*
+ * Settles every element's rect for a screen at this size, in points. PURE: no
+ * GL, no clock, no input, no allocation beyond the tree that already exists.
+ * That is what lets the `ui` gate group assert a layout numerically with no
+ * window and no GPU -- a menu's geometry is a function of a tree and a size,
+ * and a test that needs a framebuffer to check it is testing the wrong thing.
+ */
+void ui_layout(UIScreen* screen, float width, float height);
+
+// Advances the hover/focus easing and emits the stack's geometry into the
+// system's draw list. Input is not read here: phase 4 adds ui_update above it.
+void ui_build(UISystem* ui, float width, float height, float dt);
 
 #endif // _UI_H_

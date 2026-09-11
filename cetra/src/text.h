@@ -69,9 +69,6 @@ typedef struct TextVertex {
     float r, g, b, a;
 } TextVertex;
 
-// Text alignment
-typedef enum { TEXT_ALIGN_LEFT = 0, TEXT_ALIGN_CENTER = 1, TEXT_ALIGN_RIGHT = 2 } TextAlignment;
-
 // Text effects
 typedef enum {
     TEXT_EFFECT_NONE = 0,   // Plain SDF text
@@ -115,9 +112,6 @@ typedef struct TextMesh {
     char* text;
     size_t text_length;
 
-    float max_width;
-    TextAlignment alignment;
-
     vec4 color;
 
     // Per-character animation
@@ -150,6 +144,15 @@ void font_release(Font* font);
 
 // Glyph access
 GlyphInfo* font_get_glyph(Font* font, int codepoint);
+// The pair adjustment between two codepoints, in pixels AT THE FONT'S BASE
+// SIZE -- the same units as GlyphInfo.advance_x, so a caller applies one scale
+// to both and the two cannot drift apart.
+//
+// Reads the legacy `kern` table AND GPOS, which is where a modern face actually
+// ships its kerning; a reader that knows only `kern` returns 0 for most of them
+// and looks like a font without kerning rather than a reader that cannot see
+// it. 0 when the face defines no pair, which is the correct no-op.
+float font_kern_advance(const Font* font, int prev_codepoint, int codepoint);
 
 // TextMesh
 TextMesh* create_text_mesh(Font* font, const char* text, float font_size);
@@ -158,8 +161,6 @@ void free_text_mesh(TextMesh* mesh);
 void text_mesh_set_text(TextMesh* mesh, const char* text);
 void text_mesh_set_color(TextMesh* mesh, vec4 color);
 void text_mesh_set_font_size(TextMesh* mesh, float size);
-void text_mesh_set_alignment(TextMesh* mesh, TextAlignment alignment);
-void text_mesh_set_max_width(TextMesh* mesh, float width);
 
 // Per-character animation
 void text_mesh_set_char_color(TextMesh* mesh, size_t index, vec4 color);
@@ -174,7 +175,6 @@ void text_mesh_upload(TextMesh* mesh);
 
 // Text measurement
 float text_measure_width(Font* font, const char* text, float size);
-float text_measure_height(const Font* font, const char* text, float size, float max_width);
 void text_measure_bounds(Font* font, const char* text, float size, float* out_x0, float* out_y0,
                          float* out_x1, float* out_y1);
 

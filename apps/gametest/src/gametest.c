@@ -1458,47 +1458,11 @@ static int run_anim_probe(Game* game, const char* which) {
 // be wrong (a glyph mirrored about its own baseline, the scissor's
 // point-to-pixel conversion, the corner SDF, the blend func) is invisible to a
 // compile and obvious in a picture. Phase 7 replaces it with real screens.
-static UIDrawList* smoke_dl = NULL;
+static UISystem* smoke_ui = NULL;
 static Font* smoke_font = NULL;
-
-static void ui_smoke_draw(Engine* engine, void* user) {
-    (void)user;
-    if (!smoke_dl || !engine)
-        return;
-    ui_draw_list_begin(smoke_dl, engine->win_width, engine->win_height);
-
-    const UIRect panel = {60.0f, 40.0f, 320.0f, 150.0f};
-    const UIStyle style = {.bg = {0.08f, 0.09f, 0.12f, 0.92f},
-                           .fg = {0.90f, 0.92f, 0.96f, 1.0f},
-                           .border = {0.45f, 0.70f, 1.00f, 1.0f},
-                           .border_width = 2.0f,
-                           .corner_radius = 12.0f,
-                           .font_size = 24.0f};
-    ui_draw_rect(smoke_dl, panel, &style);
-    ui_draw_text(smoke_dl, ui_rect_inset(panel, 24.0f, 16.0f, 0.0f, 16.0f), "Cetra UI", &style,
-                 UI_ALIGN_CENTER);
-
-    // A square-cornered flat quad beside it, so the picture shows the rounded
-    // and unrounded paths are one geometry with a number changed rather than
-    // two code paths.
-    vec4 flat = {0.85f, 0.35f, 0.25f, 1.0f};
-    const UIRect swatch = {60.0f, 210.0f, 80.0f, 40.0f};
-    ui_draw_quad(smoke_dl, swatch, flat);
-
-    // A quad twice the size of the clip it is drawn under, so the picture
-    // shows exactly where the scissor landed. The conversion is the one piece
-    // of coordinate maths that cannot be checked by reading: the clip is in
-    // points measured from the TOP and the scissor is in framebuffer pixels
-    // measured from the BOTTOM, so a sign error survives a compile and shows
-    // up as a band in the wrong half of the screen.
-    vec4 green = {0.30f, 0.80f, 0.45f, 1.0f};
-    const UIRect clip = {160.0f, 210.0f, 100.0f, 40.0f};
-    ui_push_clip(smoke_dl, clip);
-    ui_draw_quad(smoke_dl, (UIRect){160.0f, 210.0f, 200.0f, 80.0f}, green);
-    ui_pop_clip(smoke_dl);
-
-    ui_draw_list_render(smoke_dl);
-}
+static bool smoke_music = true;
+static float smoke_volume = 0.7f;
+static int smoke_window_mode = 0;
 
 static bool ui_smoke_install(Engine* engine) {
     smoke_font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
@@ -1507,19 +1471,56 @@ static bool ui_smoke_install(Engine* engine) {
         fprintf(stderr, "ui-smoke: could not load the font\n");
         return false;
     }
-    smoke_dl = create_ui_draw_list(engine);
-    if (!smoke_dl) {
-        fprintf(stderr, "ui-smoke: could not create the draw list\n");
+    smoke_ui = create_ui_system(engine);
+    if (!smoke_ui) {
+        fprintf(stderr, "ui-smoke: could not create the ui system\n");
         return false;
     }
-    ui_draw_list_set_font(smoke_dl, smoke_font, 24.0f);
-    engine_set_overlay(engine, ui_smoke_draw, NULL);
+    ui_set_font(smoke_ui, smoke_font, 22.0f);
+
+    // One of each of the six, so the picture exercises every kind's emit path
+    // and the column's layout at once. Nothing here is interactive yet: focus
+    // and hit-testing arrive in phase 4, so what this proves is the tree, the
+    // two-pass layout, the theme resolution and the emit.
+    UIScreen* screen = ui_screen(smoke_ui, "smoke");
+    UIElement* panel = ui_panel(ui_screen_root(screen));
+    panel->align_cross = UI_ALIGN_CENTER;
+    panel->size_mode[0] = UI_FIXED;
+    panel->size[0] = 300.0f;
+
+    // A per-element style: exactly the three-level chain the header describes,
+    // used at its first level. Everything left at zero -- the colours, the
+    // padding -- still comes from the theme and then the engine default, so
+    // this says only what it means to change.
+    UIElement* heading = ui_label(panel, "Cetra UI");
+    const UIStyle title = {
+        .font_size = 30.0f,
+        .tracking = 1.5f,
+        .line_spacing = 1.15f,
+        .fg = {0.96f, 0.97f, 1.00f, 1.0f},
+        .padding = {6.0f, 0.0f, 14.0f, 0.0f},
+    };
+    ui_set_style(heading, &title);
+    // GROW on the cross axis, so every control is the panel's width. Left at
+    // FIT each one hugs its own text and the column comes out ragged.
+    UIElement* rows[5];
+    rows[0] = ui_button(panel, "Resume", NULL, NULL);
+    rows[1] = ui_button(panel, "Settings", NULL, NULL);
+    rows[2] = ui_toggle(panel, "Music", &smoke_music, NULL, NULL);
+    rows[3] = ui_slider(panel, "Volume", 0.0f, 1.0f, &smoke_volume, NULL, NULL);
+    static const char* const modes[] = {"Windowed", "Fullscreen"};
+    rows[4] = ui_selector(panel, "Window", modes, 2, &smoke_window_mode, NULL, NULL);
+    for (int i = 0; i < 5; i++)
+        rows[i]->size_mode[0] = UI_GROW;
+
+    ui_push(smoke_ui, screen);
+    ui_attach(smoke_ui, engine);
     return true;
 }
 
 static void ui_smoke_shutdown(void) {
-    free_ui_draw_list(smoke_dl);
-    smoke_dl = NULL;
+    free_ui_system(smoke_ui);
+    smoke_ui = NULL;
 }
 
 int main(int argc, const char* argv[]) {

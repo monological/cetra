@@ -43,7 +43,10 @@ void main() {
         // renderers disagreeing about where a glyph's edge is would show as
         // text that changes weight depending on which one drew it.
         float dist = texture(uTex, vUV).r;
-        float sw = fwidth(dist) * 0.5 + 0.02;
+        // fwidth alone, with no constant added. A fixed smoothing term is a
+        // fixed blur in FIELD units, so it widens as the glyph shrinks: at menu
+        // sizes it is most of the edge, and the text reads soft and uneven.
+        float sw = max(fwidth(dist) * 0.5, 1e-4);
         float core = smoothstep(0.5 - sw, 0.5 + sw, dist);
         float alpha = core * vColor.a;
         if (alpha < 0.003)

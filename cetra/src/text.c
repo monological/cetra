@@ -336,8 +336,6 @@ TextMesh* create_text_mesh(Font* font, const char* text, float font_size) {
     glm_vec4_one(mesh->color);
     glm_mat4_identity(mesh->transform);
 
-    mesh->alignment = TEXT_ALIGN_LEFT;
-    mesh->max_width = 0.0f;
     mesh->is_screen_space = true;
     mesh->needs_rebuild = true;
 
@@ -396,20 +394,6 @@ void text_mesh_set_font_size(TextMesh* mesh, float size) {
     if (!mesh)
         return;
     mesh->font_size = size;
-    mesh->needs_rebuild = true;
-}
-
-void text_mesh_set_alignment(TextMesh* mesh, TextAlignment alignment) {
-    if (!mesh)
-        return;
-    mesh->alignment = alignment;
-    mesh->needs_rebuild = true;
-}
-
-void text_mesh_set_max_width(TextMesh* mesh, float width) {
-    if (!mesh)
-        return;
-    mesh->max_width = width;
     mesh->needs_rebuild = true;
 }
 
@@ -500,10 +484,16 @@ void text_mesh_rebuild(TextMesh* mesh) {
         }
 
         // Calculate quad corners
+        // stb's glyph box is Y-DOWN: y0 is the offset from the baseline to the
+        // TOP of the bitmap and is negative above it, so the box is ADDED to
+        // the pen. Subtracting it displaces every glyph by 2*y0 + height, which
+        // depends on that glyph's own ascent and descent -- so tall letters and
+        // x-height letters land at different heights and the line reads as a
+        // ragged baseline instead of a uniform offset anyone would notice.
         float x0 = cursor_x + glyph->x0 * scale;
-        float y0 = cursor_y - glyph->y1 * scale;
+        float y0 = cursor_y + glyph->y0 * scale;
         float x1 = cursor_x + glyph->x1 * scale;
-        float y1 = cursor_y - glyph->y0 * scale;
+        float y1 = cursor_y + glyph->y1 * scale;
 
         // Apply per-character offset
         if (mesh->char_offsets) {
@@ -589,6 +579,18 @@ void text_mesh_upload(TextMesh* mesh) {
 
 // --- Text Measurement ---
 
+float font_kern_advance(const Font* font, int prev_codepoint, int codepoint) {
+    if (!font || !font->stb_font_info || prev_codepoint <= 0 || font->base_size <= 0.0f)
+        return 0.0f;
+    const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
+    const int kern = stbtt_GetCodepointKernAdvance(info, prev_codepoint, codepoint);
+    if (kern == 0)
+        return 0.0f;
+    // Base-size pixels, matching how advance_x was baked, so one scale covers
+    // both at draw time.
+    return (float)kern * stbtt_ScaleForPixelHeight(info, font->base_size);
+}
+
 float text_measure_width(Font* font, const char* text, float size) {
     if (!font || !text)
         return 0.0f;
@@ -612,23 +614,6 @@ float text_measure_width(Font* font, const char* text, float size) {
     }
 
     return width > max_width ? width : max_width;
-}
-
-float text_measure_height(const Font* font, const char* text, float size, float max_width) {
-    if (!font || !text)
-        return 0.0f;
-
-    (void)max_width; // TODO: implement word wrapping
-
-    float scale = size / font->base_size;
-    int line_count = 1;
-
-    for (const char* p = text; *p; p++) {
-        if (*p == '\n')
-            line_count++;
-    }
-
-    return line_count * font->line_height * scale;
 }
 
 void text_measure_bounds(Font* font, const char* text, float size, float* out_x0, float* out_y0,

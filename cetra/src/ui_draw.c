@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -337,44 +338,74 @@ void ui_set_draw_program(UIDrawList* dl, ShaderProgram* program, UIRect rect, fl
 
 // ----------------------------------------------------------------- text
 
-float ui_line_height(const Font* font, float size) {
-    if (!font || font->base_size <= 0.0f)
-        return size;
-    return font->line_height * (size / font->base_size);
+/*
+ * The one advance rule, used by measuring, wrapping and drawing alike.
+ *
+ * Between two glyphs the pen moves by the face's own KERN pair plus the style's
+ * TRACKING; after a glyph it moves by that glyph's advance. Both are applied
+ * BETWEEN glyphs rather than after each, so neither a leading nor a trailing
+ * gap creeps into a measured width -- which is what would make a centred string
+ * sit off-centre by half a tracking.
+ *
+ * Everything that needs a width has to go through this, or a string is centred
+ * against a width it does not have and a hit test lands beside the glyph the
+ * player aimed at.
+ */
+static float _advance_between(const Font* font, int prev, int cp, float scale, float tracking) {
+    if (prev <= 0)
+        return 0.0f;
+    return font_kern_advance(font, prev, cp) * scale + tracking;
 }
 
-float ui_text_width(Font* font, float size, const char* text) {
+float ui_line_height(const Font* font, float size, float line_spacing) {
+    if (!font || font->base_size <= 0.0f)
+        return size;
+    const float lh = font->line_height * (size / font->base_size);
+    return lh * (line_spacing > 0.0f ? line_spacing : 1.0f);
+}
+
+float ui_text_width(Font* font, float size, float tracking, const char* text) {
     if (!font || !text || font->base_size <= 0.0f)
         return 0.0f;
     const float scale = size / font->base_size;
     float w = 0.0f, best = 0.0f;
+    int prev = 0;
     for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
         if (*p == '\n') {
             if (w > best)
                 best = w;
             w = 0.0f;
+            prev = 0;
             continue;
         }
         const GlyphInfo* g = font_get_glyph(font, (int)*p);
-        if (g)
-            w += g->advance_x * scale;
+        if (!g) {
+            prev = 0;
+            continue;
+        }
+        w += _advance_between(font, prev, (int)*p, scale, tracking);
+        w += g->advance_x * scale;
+        prev = (int)*p;
     }
     return w > best ? w : best;
 }
 
-size_t ui_text_wrap_point(Font* font, float size, const char* text, float max_width) {
+size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* text,
+                          float max_width) {
     if (!font || !text || font->base_size <= 0.0f)
         return text ? strlen(text) : 0;
     const float scale = size / font->base_size;
     const size_t len = strlen(text);
     float w = 0.0f;
     size_t last_break = 0;
+    int prev = 0;
     for (size_t i = 0; i < len; i++) {
         const unsigned char c = (unsigned char)text[i];
         if (c == '\n')
             return i;
         const GlyphInfo* g = font_get_glyph(font, (int)c);
-        const float adv = g ? g->advance_x * scale : 0.0f;
+        const float adv = _advance_between(font, prev, (int)c, scale, tracking) +
+                          (g ? g->advance_x * scale : 0.0f);
         if (w + adv > max_width && i > 0) {
             // Break at the last space if there was one; a single word longer
             // than the line breaks mid-word rather than overflowing, because
@@ -382,6 +413,7 @@ size_t ui_text_wrap_point(Font* font, float size, const char* text, float max_wi
             return last_break > 0 ? last_break : i;
         }
         w += adv;
+        prev = g ? (int)c : 0;
         if (c == ' ')
             last_break = i + 1;
     }
@@ -400,9 +432,12 @@ float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* st
 
     static const float default_fg[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     const float* color = style ? style->fg : default_fg;
+    const float tracking = style ? style->tracking : 0.0f;
+    const float line_spacing = style ? style->line_spacing : 0.0f;
 
     const float scale = size / font->base_size;
-    const float width = ui_text_width(font, size, text);
+    const float width = ui_text_width(font, size, tracking, text);
+    const float line_h = ui_line_height(font, size, line_spacing);
 
     float pen_x = r.x;
     if (align == UI_ALIGN_CENTER)
@@ -415,25 +450,61 @@ float ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* st
     // text renderer sit on the same line rather than a few pixels apart.
     float pen_y = r.y + font->ascent * scale;
 
+    // One framebuffer pixel, expressed in points. Every glyph QUAD CORNER is
+    // snapped to this grid below.
+    //
+    // Snapping the string's origin alone is not enough, and that is worth
+    // recording because it looks like it should be: a glyph's top edge is
+    // pen_y - y1 * scale, and y1 is an integer in ATLAS pixels, so at a
+    // fractional scale every letter lands on a different fraction of a pixel
+    // however the origin was placed. The SDF edge then resolves differently per
+    // letter and the line reads as a wavy baseline of uneven weight.
+    //
+    // Snapping the corner and advancing the pen in float is what keeps the
+    // spacing exact: the pen never sees the rounding, so no advance is
+    // quantised and the glyph's own size is untouched.
+    const float px = (dl->width > 0 && dl->engine->fb_width > 0)
+                         ? (float)dl->width / (float)dl->engine->fb_width
+                         : 1.0f;
+
+    int prev = 0;
     for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
         if (*p == '\n') {
             pen_x = r.x;
-            pen_y += font->line_height * scale;
+            pen_y += line_h;
+            prev = 0; // no pair spans a line break
             continue;
         }
         const GlyphInfo* g = font_get_glyph(font, (int)*p);
-        if (!g)
+        if (!g) {
+            prev = 0;
             continue;
-        // GlyphInfo's box is y-UP about the baseline, so the top edge is the
-        // larger extent negated. Getting this backwards renders every glyph
-        // mirrored about its own baseline, which reads as a font bug.
-        const float x0 = pen_x + g->x0 * scale;
-        const float y0 = pen_y - g->y1 * scale;
-        const float x1 = pen_x + g->x1 * scale;
-        const float y1 = pen_y - g->y0 * scale;
+        }
+        // The same rule the measurement used, so what is drawn is exactly as
+        // wide as what was measured -- otherwise a centred string is centred
+        // against a width it does not have.
+        pen_x += _advance_between(font, prev, (int)*p, scale, tracking);
+        // GlyphInfo's box is stb's, and stb's is Y-DOWN: y0 is the offset from
+        // the baseline to the TOP of the bitmap, NEGATIVE above it. So the box
+        // is ADDED to the pen, never subtracted.
+        //
+        // Negating it -- which is what text.c does -- displaces every glyph by
+        // 2*y0 + height, a quantity that depends on that glyph's own ascent and
+        // descent. Tall letters and x-height letters therefore land at
+        // different heights and the line reads as a ragged baseline rather than
+        // as a uniform offset anyone would notice.
+        float x0 = pen_x + g->x0 * scale;
+        float y0 = pen_y + g->y0 * scale;
+        if (px > 0.0f) {
+            x0 = floorf(x0 / px + 0.5f) * px;
+            y0 = floorf(y0 / px + 0.5f) * px;
+        }
+        const float x1 = x0 + (g->x1 - g->x0) * scale;
+        const float y1 = y0 + (g->y1 - g->y0) * scale;
         _push_quad(dl, font->atlas_texture_id, x0, y0, x1, y1, g->u0, g->v0, g->u1, g->v1, color,
                    NULL, 0.0f, 0.0f, UI_MODE_GLYPH, NULL);
         pen_x += g->advance_x * scale;
+        prev = (int)*p;
     }
     return width;
 }
