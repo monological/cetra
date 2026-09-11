@@ -703,6 +703,23 @@ void ui_draw_list_begin(UIDrawList* dl, int width_points, int height_points) {
     glm_ortho(0.0f, (float)width_points, (float)height_points, 0.0f, -1.0f, 1.0f, dl->ortho);
 }
 
+uint64_t ui_draw_list_signature(const UIDrawList* dl) {
+    // FNV-1a over the vertex bytes. The vertices ARE the drawing: the colour,
+    // the geometry, the rect a rounded corner is measured against and the mode
+    // that selects how it is filled all ride in them, so two lists that hash
+    // alike drew alike.
+    uint64_t h = 1469598103934665603ULL;
+    if (!dl || !dl->verts)
+        return h;
+    const unsigned char* p = (const unsigned char*)dl->verts;
+    const size_t n = dl->vcount * sizeof(UIVertex);
+    for (size_t i = 0; i < n; i++) {
+        h ^= p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 void ui_draw_list_render(UIDrawList* dl) {
     if (!dl || dl->icount == 0 || !dl->program)
         return;
