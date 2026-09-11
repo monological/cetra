@@ -356,6 +356,12 @@ UIDrawList* ui_draw_list(UISystem* ui);
 // A screen is full-screen by construction; there are no floating windows, which
 // is most of what this layer does not have to implement.
 UIScreen* ui_screen(UISystem* ui, const char* name);
+// The screen created under this name, or NULL. It exists because the name was
+// otherwise stored, freed and read by nothing, while an app that wanted to open
+// a screen BY name -- which is what a `--ui-screen` flag or a save file has --
+// had to keep its own chain of string compares beside its own handles, and
+// extend it for every screen added.
+UIScreen* ui_find_screen(UISystem* ui, const char* name);
 UIElement* ui_screen_root(UIScreen* screen);
 // A modal screen consumes input: the game reads zero from every non-ui action
 // while one is on the stack. A non-modal screen (a HUD) draws and takes nothing.
