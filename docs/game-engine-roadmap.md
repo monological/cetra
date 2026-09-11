@@ -14,11 +14,13 @@ _Last updated: 2026-09-10._
 
 The hard, specialized tech is done to a high standard. The renderer is
 AAA-caliber and the physics is best-in-class. What's missing is the unglamorous
-but well-understood glue: save/serialization, an in-game UI/menu layer,
-and (near ship) Steamworks. Gamepad input landed in spec
-11.109 (still owed a real-pad check), audio in spec 12.0 (heard on macOS,
-owed on Linux and Windows) and animation blending in spec 12.1 (gate-verified
-on a generated puppet; a real character is owed a look). 11.109 was the pivot from the renderer era to the game-platform
+but well-understood glue: save games, and (near ship) Steamworks. Gamepad input
+landed in spec 11.109 (still owed a real-pad check), audio in spec 12.0 (heard
+on macOS, owed on Linux and Windows), animation blending in spec 12.1
+(gate-verified on a generated puppet; a real character is owed a look) and the
+game UI in spec 12.2 (menus, a HUD, and the settings half of serialization;
+owed another display, a real pad through a menu, and the two settings paths this
+machine cannot write). 11.109 was the pivot from the renderer era to the game-platform
 era, which is numbered from 12.0; it stays the last renderer-era spec, and the
 major bump marks the change in the *kind* of work, as every prior one did.
 
@@ -183,8 +185,8 @@ are rough and assume a single experienced dev.
 |---|---|---|---|
 | **Audio** | **Done, spec 12.0** -- miniaudio wrapped as a game-layer `AudioSystem`: one device, 2D SFX and music, 3D positional sound with the camera as listener, mixer buses, and the `AUDIO_SOURCE` component implemented. The layer above the device is gate-verified off offline PCM (onset, pan, distance, bus routing, decode), and heard on macOS. Still owed: a listen on Linux and Windows (`docs/verification.md`). | No game ships silent. Steam players expect it, and the offline-render path doubles as the deterministic test seam. | done (~1 week) |
 | **Gamepad input** | **Done, spec 11.109** -- GLFW's standard layout behind a reader seam, an action table, hot-plug, a loadable mapping file; the layer above the seam gate-verified by a scripted pad. Still owed: one run with a real controller, or the Linux uinput recipe (`docs/verification.md`), since no pad was at hand. | Steam players expect controller support. Steam itself presents a virtual Xbox pad to a GLFW game, which is what shipped titles rely on; Steam Input's own API is a second reader behind the same seam, booked with Steamworks. | done (~2 days) |
-| **Save / serialization** | Partial — `.cscn` describes scenes, but nothing persists runtime state | The level/authoring half exists (§6.0). Still missing: save games, settings persistence, and any entity/physics state serializer. | ~1–2 weeks |
-| **Game UI / menus** | Absent (ImGui is dev-only; SDF text exists) | Main menu, HUD, pause, inventory, settings screens. | ~2–3 weeks |
+| **Save / serialization** | Partial — `.cscn` describes scenes; **settings persist since spec 12.2** (`game/settings.c`, a per-user file in the platform's own location), but no runtime GAME state does | The level/authoring half exists (§6.0), and the settings half is done. Still missing: save games and any entity/physics state serializer. | ~1 week |
+| **Game UI / menus** | **Done, spec 12.2** -- a retained tree of elements over a pure two-pass layout, a geometric focus model, and a theme whose every zero means inherit, drawn through a general post-tonemap overlay hook so a menu is neither graded nor rescaled and IS captured by a headless screenshot. The element list is CLOSED (panel, label, button, toggle, slider, selector) with three escape hatches under it: a custom draw callback, a custom fragment program, and the raw draw-list primitives. Input is settled at one depth -- a `ui` flag on an action and one suppression switch -- and Escape now opens a menu in every app instead of quitting. Ten gate arms assert layout, wrapping, navigation, hit-testing, capture, the stack, theme resolution, the closed list and the settings round-trip with no GPU at all, plus two menu goldens. Still owed: a 4K/HiDPI display other than this one, a real controller through a menu, and the Linux and Windows settings paths. | Main menu, HUD, pause, settings screens. Inventory is an app's own screen built from these elements. | done (~1 week) |
 | **Animation blending** | **Done, spec 12.1** -- a blend layer over the single-clip animator: a pose became a blendable value, and over it a phase-synced 1D blend space, a crossfade whose settled pose is the incoming clip's own bit for bit, one bone-masked override layer that releases itself, and clip events dispatched after the pose is applied. Poses are per node, so two rigs animate independently; the `ANIMATOR` component ticks one once per rendered frame from the sim clock. Thirteen gate arms on a generated puppet (endpoints to the pixel, an analytic 21.60/45.00/68.40-degree nlerp midpoint, crossfade timing, mask and release, two rigs, one shared phase, event counts, and the committed walk clip binding all twenty bones by name), plus the corpus's first skinned golden. Still owed: a real character, judged by eye (`docs/verification.md`). | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | done (~1 week) |
 | **Steamworks integration** | Absent | Achievements, cloud saves, overlay, input API. Needed near ship. | ~1 week |
 | **IK** | Absent | Foot planting, look-at/aim. Quality-of-life, not blocking. | ~1 week (two-bone) |
@@ -214,10 +216,14 @@ its own branch.
    crossfade, one masked override layer and clip events, with per-node poses so
    two rigs animate at once); the remaining item is a look at a real character,
    per `docs/verification.md`.
-4. **Game UI layer** (~2–3 weeks) — retained-mode menu/HUD built on the SDF text
-   renderer (or a thin immediate-mode game UI distinct from debug ImGui).
-5. **Save/settings serialization** (~1–2 weeks) — start with settings + a simple
-   entity/state save format; `.cscn` already covers scene description.
+4. **Game UI layer** — done in spec 12.2 (a retained tree, a pure two-pass
+   layout, geometric focus, a closed element list with three escape hatches under
+   it, and settings persistence), with gametest carrying main, pause, settings and
+   HUD screens; the remaining items are a 4K display, a real pad through a menu,
+   and the Linux and Windows settings paths, per `docs/verification.md`.
+5. **Save serialization** (~1 week) — an entity/state save format. Settings are
+   done in spec 12.2 and `.cscn` already covers scene description, so what is left
+   is runtime game state.
 6. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
 
 Fill in genre-specific systems (scripting, AI/navmesh, networking) only as the

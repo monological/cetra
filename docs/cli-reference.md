@@ -784,6 +784,27 @@ from the wall clock, and off since 11.109 (108 px with it on, 0 without, same bu
 different sample counts are still not comparable, for the ordinary reason that they resolve
 differently.
 
+**Spec 12.2 gave it menus.** `apps/gametest` carries four screens — a main menu, a pause menu, a
+settings screen and a non-modal HUD — built on the game UI layer (`cetra/src/ui.h`). They are on
+by default and all closed: **Escape** opens the pause menu, and quitting is an item inside it
+rather than a key, which is the change every app in the tree took. `--no-ui` runs without any of
+it. `--ui-screen <name>` opens one at startup (`main`, `pause` or `settings`), because a headless
+run has no Escape key to press and a menu otherwise never appears in a capture; `--ui-focus <n>`
+then presses "down" n times through the real navigation path, which is how `menu_focus` is
+photographed with the focus somewhere other than where it lands — and because nothing is focused
+to begin with, the first press only ACQUIRES, so `2` is what reaches the second button. `-W <n>`
+and `-H <n>` set the window size, which this app had no way to state before and a golden recipe
+needs.
+
+`--ui-probe <case>` is the headless probe the `ui` gate group reads, in the shape `--audio-probe`
+and `--anim-probe` established: it prints `ui <case> <label> <key> <numbers>` and exits. The cases
+are `layout`, `layout-resize`, `wrap`, `nav`, `hit`, `capture`, `stack`, `theme-identity` and
+`settings`. **It needs no window and no GPU** — layout is a pure function of (tree, width, height)
+and the input pass takes a struct of values rather than a device — and `settings` needs no engine
+at all, so it runs before one is created. `CETRA_SETTINGS_DIR` points the settings case, and any
+gametest run, at a directory of its own rather than the player's real one; the gate and the
+golden bake both set it.
+
 **`apps/spores`** gained `--taa`, `--headless-jitter` and `--msaa <n>` in 11.103 and **kept its four
 samples**, which is the one refusal in that spec. `particle_frag` declares a single output, so a
 mote writes no motion vector and reprojects through whatever geometry sits behind it — zero on a
