@@ -2296,9 +2296,6 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     }
 
     switch (key) {
-        case GLFW_KEY_ESCAPE:
-            glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
-            break;
         case GLFW_KEY_G:
             engine->show_gui = !engine->show_gui;
             break;

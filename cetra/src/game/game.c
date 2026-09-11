@@ -88,6 +88,11 @@ void game_set_init(Game* game, GameInitFunc func) {
         game->on_init = func;
 }
 
+void game_set_frame_input(Game* game, GameFrameInputFunc func) {
+    if (game)
+        game->on_frame_input = func;
+}
+
 void game_set_update(Game* game, GameUpdateFunc func) {
     if (game)
         game->on_update = func;
@@ -193,9 +198,11 @@ static void game_frame_update(Engine* engine, float dt) {
     game->sim_clock.delta = 0.0;
 
     input_update(&game->input);
-    if (input_key_pressed(&game->input, GLFW_KEY_ESCAPE)) {
-        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
-        return;
+
+    // Between the poll and the steps: the one window where a UI can take input
+    // away from the sim without the frame that opened a menu also being played.
+    if (game->on_frame_input) {
+        game->on_frame_input(game);
     }
 
     // The engine passes raw dt; apply the game's own spiral-of-death clamp.

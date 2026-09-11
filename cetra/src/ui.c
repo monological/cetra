@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,11 +11,20 @@
 // to animate with.
 #define UI_EASE_SECONDS 0.12f
 
+// How many focusable elements one screen's navigation can see. A menu reaches
+// nowhere near this; a screen that exceeds it says so rather than leaving the
+// overflow drawn, clickable and unreachable by pad in silence.
+#define UI_NAV_MAX 128
+
 struct UIScreen {
     char* name;
     UIElement* root;
     bool modal;
     UISystem* ui;
+    // Which element the keyboard or pad is on. Per screen, so pushing a screen
+    // and popping it again returns to where the player was rather than to the
+    // top of the list.
+    UIElement* focused;
 };
 
 struct UISystem {
@@ -30,6 +40,18 @@ struct UISystem {
 
     UIScreen** stack; // borrowed into `screens`
     size_t stack_count, stack_cap;
+
+    // The element a pointer press captured, held until release. Release over
+    // this same element activates it; release anywhere else cancels, which is
+    // what makes press-slide-off-release do nothing.
+    UIElement* pressed;
+
+    // Last frame's pointer, so hover can move focus only when the pointer has
+    // actually MOVED. Moving it every frame would mean a resting mouse
+    // overrode the pad on every single frame, and the stick could never take
+    // the highlight off whatever the cursor happened to be sitting on.
+    float last_pointer_x, last_pointer_y;
+    bool pointer_seen;
 };
 
 // ------------------------------------------------------------------- theme
@@ -44,9 +66,11 @@ static UIStyle _default_style(UIKind kind, UIState state) {
     UIStyle s = {0};
     s.font_size = 16.0f;
     // The bottom of the inherit chain, so these are what a style that names
-    // nothing resolves to: the face's own leading, and no added tracking.
+    // nothing resolves to: the face's own leading, no added tracking, and an
+    // image drawn at its own brightness rather than multiplied by a fill.
     s.line_spacing = 1.0f;
     s.tracking = 0.0f;
+    s.bg_tint[0] = s.bg_tint[1] = s.bg_tint[2] = s.bg_tint[3] = 1.0f;
     switch (kind) {
         case UI_ROOT:
             // A screen root is a container, not a surface: no fill, no padding, no
@@ -76,9 +100,13 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.padding[0] = s.padding[2] = 10.0f;
             s.padding[1] = s.padding[3] = 18.0f;
             if (state == UI_STATE_HOVER) {
-                s.bg[0] = 0.18f;
-                s.bg[1] = 0.20f;
-                s.bg[2] = 0.26f;
+                // Clearly apart from NORMAL. The first version moved the
+                // channels by 0.05 and read as no feedback at all, which makes
+                // a menu feel broken long before anyone calls it subtle.
+                s.bg[0] = 0.26f;
+                s.bg[1] = 0.29f;
+                s.bg[2] = 0.38f;
+                s.fg[0] = s.fg[1] = s.fg[2] = 1.0f;
             } else if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
                 s.bg[0] = 0.16f;
                 s.bg[1] = 0.34f;
@@ -98,16 +126,27 @@ static UIStyle _default_style(UIKind kind, UIState state) {
     return s;
 }
 
-// Copies any field of `from` that `into` left at zero. The one place the
+static bool _vec4_absent(const vec4 v) {
+    return v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f && v[3] == 0.0f;
+}
+
+// Copies any field of `from` that `into` left absent. The one place the
 // zero-means-inherit rule is implemented, so there is no second place for it to
 // mean something else.
+//
+// Every colour asks the same question through _vec4_absent. `border` used to
+// test its ALPHA alone, which quietly destroyed authored colour: a style saying
+// "gold border, currently switched off" -- {0.8, 0.6, 0.2, 0} -- had its RGB
+// overwritten wholesale and its alpha raised to the level below's, turning on a
+// border the author had turned off, in a colour they never chose. `bg` in the
+// same state was preserved, so one rule contradicted the other.
 static void _inherit(UIStyle* into, const UIStyle* from) {
-    if (into->bg[3] == 0.0f && into->bg[0] == 0.0f && into->bg[1] == 0.0f && into->bg[2] == 0.0f)
-        memcpy(into->bg, from->bg, sizeof(vec4));
-    if (into->fg[3] == 0.0f && into->fg[0] == 0.0f && into->fg[1] == 0.0f && into->fg[2] == 0.0f)
-        memcpy(into->fg, from->fg, sizeof(vec4));
-    if (into->border[3] == 0.0f)
-        memcpy(into->border, from->border, sizeof(vec4));
+    if (_vec4_absent(into->bg))
+        glm_vec4_copy((float*)from->bg, into->bg);
+    if (_vec4_absent(into->fg))
+        glm_vec4_copy((float*)from->fg, into->fg);
+    if (_vec4_absent(into->border))
+        glm_vec4_copy((float*)from->border, into->border);
     if (into->border_width == 0.0f)
         into->border_width = from->border_width;
     if (into->corner_radius == 0.0f)
@@ -123,6 +162,8 @@ static void _inherit(UIStyle* into, const UIStyle* from) {
         into->tracking = from->tracking;
     if (into->line_spacing == 0.0f)
         into->line_spacing = from->line_spacing;
+    if (_vec4_absent(into->bg_tint))
+        glm_vec4_copy((float*)from->bg_tint, into->bg_tint);
     if (!into->bg_tex) {
         into->bg_tex = from->bg_tex;
         memcpy(into->bg_slice, from->bg_slice, sizeof(float) * 4);
@@ -151,16 +192,34 @@ static const UIStyle* _theme_entry(const UITheme* t, UIKind kind, UIState state)
     }
 }
 
+/*
+ * Four levels, one rule: the element's own style, then the theme's entry for
+ * its kind and state, then the screen's globals, then the engine default. Each
+ * fills only what the level above left absent.
+ *
+ * The globals used to be three special cases bolted on after the chain -- a
+ * font fallback, a font_size re-test that called _theme_entry a SECOND time to
+ * work out whether anything above had set it, and spacing's own function with
+ * its own hard-coded default. Being outside the chain is what made them wrong:
+ * the font_size patch read the THEME's size and never the system's, so
+ * ui_set_font's size reached the draw list and no element at all, and every
+ * menu silently rendered at the default 16 no matter what the app asked for.
+ * Measured consistently by the layout, so nothing ever contradicted it.
+ *
+ * As a level they cost nothing and UITheme.font -- which no code read -- starts
+ * working.
+ */
 static UIStyle _resolve(const UISystem* ui, const UIElement* el, UIState state) {
     UIStyle s = el->style ? *el->style : (UIStyle){0};
     _inherit(&s, _theme_entry(&ui->theme, el->kind, state));
+
+    const UIStyle globals = {.font = ui->theme.font ? ui->theme.font : ui->font,
+                             .font_size =
+                                 ui->theme.font_size > 0.0f ? ui->theme.font_size : ui->font_size};
+    _inherit(&s, &globals);
+
     const UIStyle def = _default_style(el->kind, state);
     _inherit(&s, &def);
-    if (!s.font)
-        s.font = ui->font;
-    if (ui->theme.font_size > 0.0f && (!el->style || el->style->font_size == 0.0f) &&
-        _theme_entry(&ui->theme, el->kind, state)->font_size == 0.0f)
-        s.font_size = ui->theme.font_size;
     return s;
 }
 
@@ -328,8 +387,8 @@ void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y) 
 // selector's value, the slider's track. Measured here and nowhere else, because
 // a control sized from its text alone draws its furniture on top of that text --
 // which is exactly what the first build of this did.
-#define UI_KNOB_W        26.0f
-#define UI_KNOB_H        16.0f
+#define UI_KNOB_W        38.0f
+#define UI_KNOB_H        20.0f
 #define UI_TRACK_H       4.0f
 #define UI_FURNITURE_GAP 14.0f
 
@@ -545,16 +604,21 @@ static UIRect _centred_row(UIRect box, const UIStyle* s) {
     return r;
 }
 
+// The input pass writes `state`; the easing follows it. Deriving the state back
+// out of the eased weights instead would be circular -- the weights chase the
+// state -- and a focus ring would take a frame to notice it had moved.
 static UIState _state_of(const UIElement* el) {
-    if (el->disabled)
-        return UI_STATE_DISABLED;
-    if (el->state == UI_STATE_ACTIVE)
-        return UI_STATE_ACTIVE;
-    if (el->t_focus > 0.5f)
-        return UI_STATE_FOCUS;
-    if (el->t_hover > 0.5f)
-        return UI_STATE_HOVER;
-    return UI_STATE_NORMAL;
+    return el->disabled ? UI_STATE_DISABLED : el->state;
+}
+
+// Where a slider's track is. ONE definition, read by the draw and by the hit
+// test alike: two copies of this rectangle would drift, and the symptom would
+// be a bar that fills to a different place than the one you clicked.
+static UIRect _slider_track(const UISystem* ui, const UIElement* el) {
+    const UIStyle s = _resolve(ui, el, _state_of(el));
+    const float lh = ui_line_height(s.font, s.font_size, s.line_spacing);
+    return (UIRect){el->rect.x + s.padding[3], el->rect.y + s.padding[0] + lh + UI_FURNITURE_GAP,
+                    el->rect.w - s.padding[1] - s.padding[3], UI_TRACK_H};
 }
 
 static void _emit(UISystem* ui, UIElement* el) {
@@ -586,15 +650,32 @@ static void _emit(UISystem* ui, UIElement* el) {
                 UIRect inner = _centred_row(el->rect, &s);
                 inner.w -= UI_KNOB_W + UI_FURNITURE_GAP;
                 ui_draw_text(dl, inner, el->text, &s, UI_ALIGN_START);
-                const bool on = el->bound_bool && *el->bound_bool;
-                const UIRect box = {el->rect.x + el->rect.w - s.padding[1] - UI_KNOB_W,
-                                    el->rect.y + (el->rect.h - UI_KNOB_H) * 0.5f, UI_KNOB_W,
-                                    UI_KNOB_H};
-                UIStyle knob = {.corner_radius = UI_KNOB_H * 0.5f};
-                const vec4 knob_on = {0.30f, 0.72f, 0.42f, 1.0f};
-                const vec4 knob_off = {0.25f, 0.26f, 0.30f, 1.0f};
-                memcpy(knob.bg, on ? knob_on : knob_off, sizeof(vec4));
-                ui_draw_rect(dl, box, &knob);
+                // Everything below is driven by t_value, not by the bool: the
+                // value flips at once and the PICTURE crosses over, which is
+                // what makes a switch feel thrown rather than teleported.
+                const float t = el->t_value;
+
+                const UIRect bed_rect = {el->rect.x + el->rect.w - s.padding[1] - UI_KNOB_W,
+                                         el->rect.y + (el->rect.h - UI_KNOB_H) * 0.5f, UI_KNOB_W,
+                                         UI_KNOB_H};
+                UIStyle bed = {.corner_radius = UI_KNOB_H * 0.5f};
+                const vec4 bed_on = {0.26f, 0.70f, 0.40f, 1.0f};
+                const vec4 bed_off = {0.24f, 0.25f, 0.30f, 1.0f};
+                for (int i = 0; i < 4; i++)
+                    bed.bg[i] = bed_off[i] + (bed_on[i] - bed_off[i]) * t;
+                ui_draw_rect(dl, bed_rect, &bed);
+
+                // The knob travels between the two ends rather than appearing
+                // at one of them.
+                const float inset = 2.0f;
+                const float dia = UI_KNOB_H - inset * 2.0f;
+                const float x_off = bed_rect.x + inset;
+                const float x_on = bed_rect.x + bed_rect.w - inset - dia;
+                const UIRect knob_rect = {x_off + (x_on - x_off) * t, bed_rect.y + inset, dia, dia};
+                UIStyle cap = {.corner_radius = dia * 0.5f};
+                const vec4 cap_bg = {0.97f, 0.98f, 1.00f, 1.0f};
+                memcpy(cap.bg, cap_bg, sizeof(vec4));
+                ui_draw_rect(dl, knob_rect, &cap);
                 break;
             }
             case UI_SLIDER: {
@@ -612,8 +693,7 @@ static void _emit(UISystem* ui, UIElement* el) {
                     t = (*el->bound_float - el->range_lo) / span;
                 t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
 
-                const UIRect track = {label.x, label.y + label.h + UI_FURNITURE_GAP, label.w,
-                                      UI_TRACK_H};
+                const UIRect track = _slider_track(ui, el);
                 UIStyle bar = {.corner_radius = UI_TRACK_H * 0.5f};
                 const vec4 bar_bg = {0.22f, 0.23f, 0.28f, 1.0f};
                 memcpy(bar.bg, bar_bg, sizeof(vec4));
@@ -657,10 +737,274 @@ static void _ease(UIElement* el, float dt) {
         (el->state == UI_STATE_HOVER || el->state == UI_STATE_ACTIVE) ? 1.0f : 0.0f;
     const float focus_target =
         (el->state == UI_STATE_FOCUS || el->state == UI_STATE_ACTIVE) ? 1.0f : 0.0f;
-    el->t_hover += (hover_target - el->t_hover) * (step < 1.0f ? step : 1.0f);
-    el->t_focus += (focus_target - el->t_focus) * (step < 1.0f ? step : 1.0f);
+    const float value_target =
+        (el->kind == UI_TOGGLE && el->bound_bool && *el->bound_bool) ? 1.0f : 0.0f;
+    const float k = step < 1.0f ? step : 1.0f;
+    el->t_hover += (hover_target - el->t_hover) * k;
+    el->t_focus += (focus_target - el->t_focus) * k;
+    el->t_value += (value_target - el->t_value) * k;
     for (size_t i = 0; i < el->child_count; i++)
         _ease(el->children[i], dt);
+}
+
+// --------------------------------------------------------------------- input
+
+/*
+ * The deepest, topmost element claiming the point, or NULL.
+ *
+ * REVERSE child order: a child draws after its parent and a later sibling over
+ * an earlier one, so the last match is the one actually on top and the one the
+ * player believes they clicked. This is UIKit's hitTest walking subviews
+ * backwards, for exactly the same reason.
+ *
+ * Only a focusable element claims. A panel or a label is transparent to the
+ * pointer by construction -- the equivalent of pointer-events: none, defaulted
+ * the safe way round, so decoration never swallows a click meant for the
+ * control underneath it.
+ */
+static UIElement* _hit(UIElement* el, float x, float y) {
+    if (!el || el->disabled)
+        return NULL;
+    for (size_t i = el->child_count; i-- > 0;) {
+        UIElement* got = _hit(el->children[i], x, y);
+        if (got)
+            return got;
+    }
+    return (el->focusable && ui_rect_hit(el->rect, x, y)) ? el : NULL;
+}
+
+static void _gather(UIElement* el, UIElement** out, size_t* n, size_t cap) {
+    if (!el || *n >= cap)
+        return;
+    if (el->focusable && !el->disabled)
+        out[(*n)++] = el;
+    for (size_t i = 0; i < el->child_count; i++)
+        _gather(el->children[i], out, n, cap);
+}
+
+static void _centre(const UIElement* el, float* cx, float* cy) {
+    *cx = el->rect.x + el->rect.w * 0.5f;
+    *cy = el->rect.y + el->rect.h * 0.5f;
+}
+
+/*
+ * Focus movement is GEOMETRIC, not tree order: the nearest focusable element
+ * whose centre lies in the direction asked for, wrapping to the far side when
+ * there is none. Tree order would walk a two-column settings screen in the
+ * order the columns happened to be built, which is not the order a player sees.
+ */
+static UIElement* _nav(UIElement* root, const UIElement* from, int dx, int dy) {
+    if (dx == 0 && dy == 0)
+        return NULL; // opposed keys in one frame: no direction was asked for
+
+    UIElement* items[UI_NAV_MAX];
+    size_t n = 0;
+    _gather(root, items, &n, UI_NAV_MAX);
+    if (n == 0)
+        return NULL;
+    if (n == UI_NAV_MAX)
+        log_error("ui: more than %d focusable elements; the rest cannot be reached by pad or key",
+                  UI_NAV_MAX);
+    if (!from)
+        return items[0];
+
+    float fx, fy;
+    _centre(from, &fx, &fy);
+
+    UIElement* best = NULL;
+    float best_score = 0.0f;
+    UIElement* wrap = NULL;
+    float wrap_score = 0.0f;
+
+    /*
+     * A real CONE, not a half-plane. `along > 0` alone put every element that
+     * was not strictly ahead into the wrap bucket -- and in a single column
+     * every centre shares an x exactly, so pressing LEFT made `along` zero for
+     * all of them, nothing was ahead, and focus jumped to the furthest row in
+     * the menu. Requiring the sideways drift to stay inside the forward
+     * distance means an axis with nothing genuinely along it finds no candidate
+     * and correctly does nothing.
+     */
+    const float cone = 1.0f; // across must not exceed along
+    for (size_t i = 0; i < n; i++) {
+        if (items[i] == from)
+            continue;
+        float cx, cy;
+        _centre(items[i], &cx, &cy);
+        const float along = (float)dx * (cx - fx) + (float)dy * (cy - fy);
+        const float across = (float)dy * (cx - fx) + (float)dx * (cy - fy);
+        const float across_abs = fabsf(across);
+
+        if (along > 0.0f) {
+            if (across_abs > along * cone)
+                continue; // outside the cone: a neighbour, not a successor
+            const float score = along + across_abs * 2.0f;
+            if (!best || score < best_score) {
+                best = items[i];
+                best_score = score;
+            }
+        } else if (along < 0.0f) {
+            // Wrapping lands on the furthest element that is still in line --
+            // the same cone test, so wrap cannot reach across columns either.
+            if (across_abs > -along * cone)
+                continue;
+            const float score = -along + across_abs * 2.0f;
+            if (!wrap || score > wrap_score) {
+                wrap = items[i];
+                wrap_score = score;
+            }
+        }
+    }
+    return best ? best : wrap;
+}
+
+// Left/right on a control that has a value adjusts it rather than moving focus.
+// Returns true when it consumed the press.
+static bool _adjust(UIElement* el, int dir) {
+    if (!el || el->disabled)
+        return false;
+    if (el->kind == UI_SLIDER && el->bound_float) {
+        const float span = el->range_hi - el->range_lo;
+        float v = *el->bound_float + (float)dir * span * 0.05f;
+        v = v < el->range_lo ? el->range_lo : (v > el->range_hi ? el->range_hi : v);
+        *el->bound_float = v;
+        if (el->action)
+            el->action(el, el->action_user);
+        return true;
+    }
+    if (el->kind == UI_SELECTOR && el->bound_int && el->option_count > 0) {
+        int i = *el->bound_int + dir;
+        while (i < 0)
+            i += el->option_count;
+        *el->bound_int = i % el->option_count;
+        if (el->action)
+            el->action(el, el->action_user);
+        return true;
+    }
+    return false;
+}
+
+// The value a control writes is written BEFORE its callback runs, so a handler
+// reads the new state rather than being told what it is about to become.
+static void _activate(UIElement* el) {
+    if (!el || el->disabled)
+        return;
+    if (el->kind == UI_TOGGLE && el->bound_bool)
+        *el->bound_bool = !*el->bound_bool;
+    else if (el->kind == UI_SELECTOR && el->bound_int && el->option_count > 0)
+        *el->bound_int = (*el->bound_int + 1) % el->option_count;
+    if (el->action)
+        el->action(el, el->action_user);
+}
+
+static void _clear_states(UIElement* el) {
+    if (!el)
+        return;
+    if (el->state != UI_STATE_DISABLED)
+        el->state = UI_STATE_NORMAL;
+    for (size_t i = 0; i < el->child_count; i++)
+        _clear_states(el->children[i]);
+}
+
+void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
+    if (!ui)
+        return;
+    UIScreen* top = ui_top(ui);
+    if (!top || !top->root) {
+        ui->pressed = NULL;
+        return;
+    }
+
+    // This frame's rectangles, before anything is tested against them.
+    ui_layout(top, width, height);
+
+    // Clear the WHOLE stack, assign only on the top. Clearing the top alone
+    // left a screen that had been pushed over holding whatever hover or focus
+    // it carried at that moment -- and ui_build draws every screen in the
+    // stack, so the second screen a game pushes would light a focus ring on a
+    // screen that no longer takes input, with _ease keeping it alive.
+    for (size_t i = 0; i < ui->stack_count; i++)
+        if (ui->stack[i] && ui->stack[i]->root)
+            _clear_states(ui->stack[i]->root);
+
+    if (!in)
+        return;
+
+    UIElement* hovered = _hit(top->root, in->pointer_x, in->pointer_y);
+
+    // Moving the pointer over an item highlights it, which is what a menu does
+    // everywhere -- and it keeps pointer and pad on ONE highlight instead of a
+    // hover colour and a focus ring disagreeing about where the player is.
+    // Only on actual movement, so a resting cursor does not out-vote the stick.
+    const bool moved = !ui->pointer_seen || in->pointer_x != ui->last_pointer_x ||
+                       in->pointer_y != ui->last_pointer_y;
+    ui->last_pointer_x = in->pointer_x;
+    ui->last_pointer_y = in->pointer_y;
+    ui->pointer_seen = true;
+    if (moved && hovered)
+        top->focused = hovered;
+
+    // Press captures. Release over the captured element activates it; release
+    // anywhere else cancels. That is what makes press-slide-off-release not
+    // fire, which is the behaviour every pointer UI has and every user expects.
+    if (in->pointer_pressed) {
+        ui->pressed = hovered;
+        if (hovered)
+            top->focused = hovered;
+    }
+    // A held slider tracks the pointer: pressing anywhere on the row jumps the
+    // value there and holding drags it, which is what every slider does. It
+    // runs off the CAPTURED element rather than the hovered one, so the drag
+    // survives the pointer leaving the track -- grabbing a knob and pulling
+    // past the end should peg the value, not drop the grab.
+    if (ui->pressed && ui->pressed->kind == UI_SLIDER && in->pointer_down &&
+        ui->pressed->bound_float) {
+        UIElement* sl = ui->pressed;
+        const UIRect track = _slider_track(ui, sl);
+        float t = track.w > 0.0f ? (in->pointer_x - track.x) / track.w : 0.0f;
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        const float v = sl->range_lo + t * (sl->range_hi - sl->range_lo);
+        if (v != *sl->bound_float) {
+            *sl->bound_float = v;
+            if (sl->action)
+                sl->action(sl, sl->action_user);
+        }
+    }
+
+    if (in->pointer_released) {
+        // A slider was already set by the drag above; activating it again on
+        // release would fire its callback a second time for one gesture.
+        if (ui->pressed && ui->pressed == hovered && ui->pressed->kind != UI_SLIDER)
+            _activate(ui->pressed);
+        ui->pressed = NULL;
+    }
+
+    if (in->nav_up || in->nav_down || in->nav_left || in->nav_right) {
+        const int dx = (in->nav_right ? 1 : 0) - (in->nav_left ? 1 : 0);
+        const int dy = (in->nav_down ? 1 : 0) - (in->nav_up ? 1 : 0);
+        // Sideways on a value control adjusts it; only an unconsumed press
+        // moves focus.
+        if (!(dx != 0 && _adjust(top->focused, dx))) {
+            UIElement* next = _nav(top->root, top->focused, dx, dy);
+            if (next)
+                top->focused = next;
+        }
+    }
+
+    if (in->accept && top->focused)
+        _activate(top->focused);
+    if (in->back)
+        ui_pop(ui);
+
+    // States for this frame's draw. Focus first, then hover over it, then the
+    // held element, so a pressed control looks pressed rather than merely
+    // hovered.
+    if (top->focused && top->focused->state != UI_STATE_DISABLED)
+        top->focused->state = UI_STATE_FOCUS;
+    if (hovered && hovered->state != UI_STATE_DISABLED && hovered != top->focused)
+        hovered->state = UI_STATE_HOVER;
+    if (ui->pressed && in->pointer_down && ui->pressed->state != UI_STATE_DISABLED)
+        ui->pressed->state = UI_STATE_ACTIVE;
 }
 
 void ui_build(UISystem* ui, float width, float height, float dt) {

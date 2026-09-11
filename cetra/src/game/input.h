@@ -86,6 +86,20 @@ typedef struct InputSource {
 typedef struct InputAction {
     const char* name;
     InputSource sources[INPUT_ACTION_SOURCES]; // Unused entries zero
+    /*
+     * Whether this action belongs to the UI rather than the game.
+     *
+     * While input is suppressed -- which is what a modal menu does -- a game
+     * action reads zero and a UI action still reads, so a menu can be navigated
+     * with the character standing still and no call site has to remember to ask
+     * whether a menu is open. One branch in one place rather than a guard at
+     * every read, which is the version somebody eventually forgets.
+     *
+     * LAST in the struct deliberately: every table in the tree is a positional
+     * initialiser of the form {"jump", {INPUT_KEY(SPACE, 1)}}, and a field
+     * inserted before `sources` would silently rebind all of them.
+     */
+    bool ui;
 } InputAction;
 
 typedef struct GameInputState {
@@ -115,6 +129,10 @@ typedef struct GameInputState {
     // binding, and how much of it is bound.
     const InputAction* actions;
     size_t action_count;
+
+    // BY FUNCTION: input_set_suppressed. While true, every action whose `ui`
+    // flag is false reads zero and no edge.
+    bool suppressed;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     float stick_dead_zone;   // Radial, per stick; default 0.2
@@ -191,6 +209,13 @@ bool input_set_pad_script(GameInputState* input, const char* path);
 // source is checked against its kind's code range once here, and a table
 // with a bad one is refused whole, logged by action and source.
 void input_bind(GameInputState* input, const InputAction* actions, size_t count);
+
+// Take the game's input away, or give it back: while suppressed, every action
+// that is not flagged `ui` reads zero and produces no edge. A modal menu raises
+// it and lowers it on close, so a game reads its own actions unconditionally
+// and still stands still while a menu is up.
+void input_set_suppressed(GameInputState* input, bool suppressed);
+bool input_is_suppressed(const GameInputState* input);
 
 // An action's value this frame, -1..1. A name the table does not have logs
 // once and reads 0, so a typo says so rather than playing as a dead key.

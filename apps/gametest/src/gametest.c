@@ -112,6 +112,29 @@ static Sound* jump_sound = NULL;
 static Sound* spawn_sound = NULL;
 static bool audio_muted = false;
 
+// The UI (spec 12.2). Declared up here rather than beside its functions because
+// on_pre_render asks whether the menu owns the pointer, and that is well above
+// them in this file.
+static UISystem* smoke_ui = NULL;
+static Font* smoke_font = NULL;
+static UIScreen* smoke_screen = NULL;
+// The audio system is a local inside on_init; a menu callback takes only its
+// own user pointer, so the handle it needs is a file static like the sounds.
+static AudioSystem* smoke_audio = NULL;
+// Bound to state that actually does something. A control wired to a variable
+// nothing reads looks like a working feature and is not one, which is worse
+// than not shipping it: the volume moves the master bus and is audible, the
+// toggle mutes the music bus, and the selector is the live tone curve.
+// The menu's own contribution to the pause state, so it can be applied on its
+// edges and never stomp the pause the player asked for with P.
+static bool smoke_ui_paused = false;
+// --ui-screen: which screen to open at startup, if any. A file static because
+// the install runs from on_init, long after the flags were parsed.
+static const char* ui_screen_at_start = NULL;
+static bool smoke_music = true;
+static float smoke_volume = 1.0f;
+static int smoke_tonemap = POSTFX_TONEMAP_NEUTRAL;
+
 // What the game reads, and which key, pad button or pad axis each one is.
 // The stick's Y is negated: GLFW reads it down-positive, and the move helper
 // takes +y as forward.
@@ -128,6 +151,22 @@ static const InputAction actions[] = {
     {"raycast", {INPUT_KEY(R, 1), INPUT_PAD(Y, 1)}},
     {"ground", {INPUT_KEY(G, 1), INPUT_PAD(B, 1)}},
     {"wave", {INPUT_KEY(E, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
+
+    /*
+     * The UI's own, flagged so they keep reading while the menu has taken input
+     * away from the game -- the key that opens a menu has to be able to close
+     * it. Escape rather than a quit: a menu is what Escape does in a game, and
+     * quitting is an item inside it.
+     *
+     * BACK on the pad, not START: `pause` already holds START, and a button
+     * doing two things is a bug waiting for whichever reader runs first.
+     */
+    {"menu", {INPUT_KEY(ESCAPE, 1), INPUT_PAD(BACK, 1)}, true},
+    {"ui_up", {INPUT_KEY(UP, 1), INPUT_PAD(DPAD_UP, 1)}, true},
+    {"ui_down", {INPUT_KEY(DOWN, 1), INPUT_PAD(DPAD_DOWN, 1)}, true},
+    {"ui_left", {INPUT_KEY(LEFT, 1), INPUT_PAD(DPAD_LEFT, 1)}, true},
+    {"ui_right", {INPUT_KEY(RIGHT, 1), INPUT_PAD(DPAD_RIGHT, 1)}, true},
+    {"ui_accept", {INPUT_KEY(ENTER, 1), INPUT_PAD(A, 1)}, true},
 };
 #define ACTION_COUNT (sizeof(actions) / sizeof(actions[0]))
 
@@ -662,6 +701,7 @@ static void on_init(Game* game) {
     AudioSystem* audio = create_audio_system(engine->headless);
     if (audio) {
         game_set_audio_system(game, audio);
+        smoke_audio = audio;
         if (audio_muted)
             audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
         jump_sound = audio_sound_from_tone(audio, 660.0f, AUDIO_BUS_SFX);
@@ -1104,7 +1144,13 @@ static void on_pre_render(Game* game, double alpha) {
     }
 
     Engine* engine = game->engine;
-    if (drag_controller && app_can_process_3d_input(engine)) {
+    // A menu owns the pointer while it is up: without this, clicking a button
+    // also orbits the camera behind it. Asked of the INPUT layer, which already
+    // holds the answer -- the frame-input pass set it from ui_captures_input --
+    // rather than of the UI, which is a layer this callback should not need to
+    // know about. It also composes: anything that suppresses input, menu or
+    // not, gates the camera for free.
+    if (drag_controller && app_can_process_3d_input(engine) && !input_is_suppressed(&game->input)) {
         mouse_drag_update(drag_controller, glfwGetTime());
     }
 }
@@ -1458,11 +1504,100 @@ static int run_anim_probe(Game* game, const char* which) {
 // be wrong (a glyph mirrored about its own baseline, the scissor's
 // point-to-pixel conversion, the corner SDF, the blend func) is invisible to a
 // compile and obvious in a picture. Phase 7 replaces it with real screens.
-static UISystem* smoke_ui = NULL;
-static Font* smoke_font = NULL;
-static bool smoke_music = true;
-static float smoke_volume = 0.7f;
-static int smoke_window_mode = 0;
+// The three bound controls, each reaching real state. A callback runs AFTER
+// the value has been written, so it reads the new one.
+static void ui_smoke_volume_changed(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    if (smoke_audio)
+        audio_set_bus_volume(smoke_audio, AUDIO_BUS_MASTER, smoke_volume);
+}
+
+static void ui_smoke_music_changed(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    if (smoke_audio)
+        audio_set_bus_volume(smoke_audio, AUDIO_BUS_MUSIC, smoke_music ? 1.0f : 0.0f);
+}
+
+static void ui_smoke_tonemap_changed(UIElement* el, void* user) {
+    (void)el;
+    Engine* engine = user;
+    if (engine && engine->postfx)
+        engine->postfx->tonemap_mode = smoke_tonemap;
+}
+
+// Resume closes the menu; the frame-input pass then hands input and the sim
+// back on its own, because it reads ui_captures_input every frame rather than
+// on an edge.
+static void ui_smoke_resume(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    ui_pop(smoke_ui);
+}
+
+// Quitting is a menu item, which is where it belongs -- not a key.
+static void ui_smoke_quit(UIElement* el, void* user) {
+    (void)el;
+    Engine* engine = user;
+    if (engine && engine->window)
+        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+}
+
+/*
+ * Escape opens the menu and closes it again, which is what it does in every
+ * game that has one; quitting is a menu item, not a key. The action is flagged
+ * `ui`, so it keeps reading while the menu itself has taken input away from the
+ * game -- otherwise the key that opened the menu could not close it.
+ */
+static void ui_smoke_frame_input(Game* game) {
+    if (!smoke_ui || !smoke_screen)
+        return;
+
+    // The app decides only when a menu OPENS; closing is the layer's, through
+    // UIInput.back. Doing both here left ui_pop with no caller and the back
+    // field permanently false -- and wiring the field without removing this
+    // would pop twice for one press, once in each place.
+    const bool menu_pressed = input_action_pressed(&game->input, "menu");
+    if (menu_pressed && !ui_top(smoke_ui))
+        ui_push(smoke_ui, smoke_screen);
+
+    double mx = 0.0, my = 0.0;
+    input_mouse_pos(&game->input, &mx, &my);
+    const UIInput in = {
+        .pointer_x = (float)mx,
+        .pointer_y = (float)my,
+        .pointer_down = input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_LEFT),
+        .pointer_pressed = input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT),
+        .pointer_released = input_mouse_released(&game->input, GLFW_MOUSE_BUTTON_LEFT),
+        .nav_up = input_action_pressed(&game->input, "ui_up"),
+        .nav_down = input_action_pressed(&game->input, "ui_down"),
+        .nav_left = input_action_pressed(&game->input, "ui_left"),
+        .nav_right = input_action_pressed(&game->input, "ui_right"),
+        .accept = input_action_pressed(&game->input, "ui_accept"),
+        .back = menu_pressed && ui_top(smoke_ui) != NULL,
+    };
+    ui_update(smoke_ui, &in, (float)game->engine->win_width, (float)game->engine->win_height);
+
+    // The one line that stops the character walking while a menu is up. Set
+    // every frame rather than on the edges, so a screen closed by any route --
+    // a button, a callback, a scene change -- gives input back.
+    const bool captured = ui_captures_input(smoke_ui);
+    input_set_suppressed(&game->input, captured);
+
+    // The menu pauses the sim on its EDGES, and through the pause API rather
+    // than by storing the field. Assigning it every frame made this the only
+    // writer that mattered: the P key toggles pause from on_pre_render, later
+    // in the same frame, and the next frame's assignment put it straight back
+    // -- so the pause action lasted one frame and appeared dead.
+    if (captured != smoke_ui_paused) {
+        smoke_ui_paused = captured;
+        if (captured)
+            game_pause(game);
+        else
+            game_unpause(game);
+    }
+}
 
 static bool ui_smoke_install(Engine* engine) {
     smoke_font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
@@ -1483,6 +1618,7 @@ static bool ui_smoke_install(Engine* engine) {
     // and hit-testing arrive in phase 4, so what this proves is the tree, the
     // two-pass layout, the theme resolution and the emit.
     UIScreen* screen = ui_screen(smoke_ui, "smoke");
+    smoke_screen = screen;
     UIElement* panel = ui_panel(ui_screen_root(screen));
     panel->align_cross = UI_ALIGN_CENTER;
     panel->size_mode[0] = UI_FIXED;
@@ -1504,16 +1640,23 @@ static bool ui_smoke_install(Engine* engine) {
     // GROW on the cross axis, so every control is the panel's width. Left at
     // FIT each one hugs its own text and the column comes out ragged.
     UIElement* rows[5];
-    rows[0] = ui_button(panel, "Resume", NULL, NULL);
-    rows[1] = ui_button(panel, "Settings", NULL, NULL);
-    rows[2] = ui_toggle(panel, "Music", &smoke_music, NULL, NULL);
-    rows[3] = ui_slider(panel, "Volume", 0.0f, 1.0f, &smoke_volume, NULL, NULL);
-    static const char* const modes[] = {"Windowed", "Fullscreen"};
-    rows[4] = ui_selector(panel, "Window", modes, 2, &smoke_window_mode, NULL, NULL);
+    rows[0] = ui_button(panel, "Resume", ui_smoke_resume, NULL);
+    rows[1] = ui_button(panel, "Quit", ui_smoke_quit, engine);
+    rows[2] = ui_toggle(panel, "Music", &smoke_music, ui_smoke_music_changed, NULL);
+    rows[3] = ui_slider(panel, "Volume", 0.0f, 1.0f, &smoke_volume, ui_smoke_volume_changed, NULL);
+    static const char* const modes[] = {"Passthrough", "ACES", "Neutral", "AgX", "Linear"};
+    rows[4] =
+        ui_selector(panel, "Tonemap", modes, 5, &smoke_tonemap, ui_smoke_tonemap_changed, engine);
     for (int i = 0; i < 5; i++)
         rows[i]->size_mode[0] = UI_GROW;
 
-    ui_push(smoke_ui, screen);
+    // Closed by default, the way a game's menu is; --ui-screen opens one at
+    // startup so a headless run can photograph it.
+    if (ui_screen_at_start && screen && !strcmp(ui_screen_at_start, "smoke"))
+        ui_push(smoke_ui, screen);
+    else if (ui_screen_at_start)
+        fprintf(stderr, "ui-screen: no screen named '%s'\n", ui_screen_at_start);
+
     ui_attach(smoke_ui, engine);
     return true;
 }
@@ -1583,6 +1726,12 @@ int main(int argc, const char* argv[]) {
             anim_probe = argv[++i];
         } else if (!strcmp(a, "--ui-smoke")) {
             ui_smoke = true;
+        } else if (!strcmp(a, "--ui-screen") && i + 1 < argc) {
+            // Open a screen at startup. A menu otherwise starts closed, the way
+            // a game's does, which leaves no way to photograph one: a headless
+            // run has no Escape key to press.
+            ui_smoke = true;
+            ui_screen_at_start = argv[++i];
         } else if (!strcmp(a, "--print-bindings")) {
             input_print_actions(actions, ACTION_COUNT);
             return 0;
@@ -1695,6 +1844,9 @@ int main(int argc, const char* argv[]) {
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);
 
     // Set game callbacks
+    if (ui_smoke) {
+        game_set_frame_input(game, ui_smoke_frame_input);
+    }
     game_set_init(game, on_init);
     game_set_update(game, on_update);
     game_set_pre_render(game, on_pre_render);

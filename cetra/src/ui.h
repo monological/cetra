@@ -54,8 +54,13 @@ typedef enum { UI_ALIGN_START = 0, UI_ALIGN_CENTER = 1, UI_ALIGN_END = 2 } UIAli
  * How one element looks. Every field's ZERO is "inherit or absent", which is
  * the CameraDesc / LightDesc convention: fill the fields you mean and leave the
  * rest alone. A zeroed UIStyle is therefore a legal style that resolves to the
- * theme's, rather than a black box with no padding -- which is what makes a
- * theme a resolution step and not a second drawing path.
+ * theme's, rather than a black box with no padding -- a theme is a resolution
+ * step and not a second drawing path.
+ *
+ * The cost of that convention, stated plainly because it is easy to meet by
+ * accident: a zero cannot be an authored VALUE. There is no way to say "no
+ * border on focus" or "no padding on the left" against a level below that sets
+ * one, because the field that would say so is the field that means inherit.
  */
 typedef struct UIStyle {
     vec4 bg;     // fill; alpha 0 = no fill drawn
@@ -85,7 +90,15 @@ typedef struct UIStyle {
     // A textured background. NULL draws the flat `bg` colour. The insets are a
     // 9-slice in texture pixels (top, right, bottom, left); all zero stretches
     // the image over the whole rect instead, which is what a plain image wants.
+    //
+    // `bg_tint` multiplies the image and resolves to OPAQUE WHITE, not to `bg`.
+    // They were one field, and that made an untinted image unspellable: the
+    // value meaning "no tint" is zero, which is also the value meaning
+    // "inherit", so a style naming only bg_tex was multiplied by the theme's
+    // fill and arrived at a tenth of its brightness -- or, with nothing above
+    // it, by transparent black, and drew nothing at all.
     Texture* bg_tex;
+    vec4 bg_tint;
     float bg_slice[4];
 } UIStyle;
 
@@ -167,9 +180,8 @@ size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* te
  * THE ELEMENT LIST IS CLOSED: panel, label, button, toggle, slider, selector.
  * That is not a stage the layer is passing through on its way to a widget
  * toolkit -- it is the property that keeps this a menu layer instead of a worse
- * Dear ImGui, and the `ui-elements-closed` gate arm asserts the list against
- * this header rather than trusting the promise. A seventh kind is a later spec
- * with its own argument, never a patch to this one.
+ * Dear ImGui. A seventh kind is a later spec with its own argument, never a
+ * patch to this one.
  *
  * What that costs is nothing, because three escape hatches sit under it and
  * each keeps strictly more than the last: ui_set_draw keeps layout, focus and
@@ -253,6 +265,11 @@ struct UIElement {
     UIState state; // settled by the input pass
     float t_hover; // 0..1, eased toward whether the pointer is inside
     float t_focus; // 0..1, eased toward whether this element has focus
+    // 0..1, eased toward the element's own VALUE -- a toggle's bound bool. The
+    // value itself flips instantly, because a handler reading a half-flipped
+    // bool would be a bug; this is only what the drawing interpolates, so a
+    // switch travels instead of teleporting.
+    float t_value;
     UIElement* parent;
     UIElement** children;
     size_t child_count, child_capacity;
@@ -335,14 +352,56 @@ void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y);
 /*
  * Settles every element's rect for a screen at this size, in points. PURE: no
  * GL, no clock, no input, no allocation beyond the tree that already exists.
- * That is what lets the `ui` gate group assert a layout numerically with no
- * window and no GPU -- a menu's geometry is a function of a tree and a size,
- * and a test that needs a framebuffer to check it is testing the wrong thing.
+ *
+ * A menu's geometry is a function of a tree and a size, so keeping it pure is
+ * what lets it be checked numerically with no window and no GPU at all.
  */
 void ui_layout(UIScreen* screen, float width, float height);
 
 // Advances the hover/focus easing and emits the stack's geometry into the
-// system's draw list. Input is not read here: phase 4 adds ui_update above it.
+// system's draw list. Reads no input; ui_update is this plus the input pass.
 void ui_build(UISystem* ui, float width, float height, float dt);
+
+/*
+ * One frame of input, as VALUES rather than as a device.
+ *
+ * Deliberately not a GameInputState: this layer is part of the engine and the
+ * game framework is optional, so taking a game type here would make a menu
+ * impossible without the game loop and would point the dependency backwards.
+ * It also means the whole input pass is a pure function of a struct, so the
+ * gate arms drive navigation and activation with no window, no GPU and no
+ * Game at all.
+ *
+ * The caller supplies EDGES, already computed, because it is the caller that
+ * knows what a press means -- a key, a pad button, or an action that is both.
+ * Positions are in window points, the space everything else here uses.
+ */
+typedef struct UIInput {
+    float pointer_x, pointer_y;
+    bool pointer_down;     // held this frame
+    bool pointer_pressed;  // went down this frame
+    bool pointer_released; // came up this frame
+
+    bool nav_up, nav_down, nav_left, nav_right; // edges
+    bool accept;                                // edge: activate the focused element
+    bool back;                                  // edge: leave the top screen
+} UIInput;
+
+/*
+ * The INPUT pass. Lay the top screen out, hit-test the pointer, move focus,
+ * activate, fire callbacks, and settle whether the UI is holding input.
+ *
+ * WHERE THIS GOES MATTERS, and getting it wrong costs a frame of input in each
+ * direction. It belongs immediately after the frame's input poll and BEFORE the
+ * game's fixed steps -- which under the game framework is the frame-input hook,
+ * game_set_frame_input, and NOT pre-render or the update hook. A game reads
+ * its actions during those steps, so a UI that opened a menu after them would
+ * let the frame that opened it also walk the character, and the frame that
+ * closed it would drop a step of real input.
+ *
+ * Layout runs here rather than at draw time for the same reason: a hit test
+ * against last frame's rectangles lands a click where an element used to be.
+ */
+void ui_update(UISystem* ui, const UIInput* in, float width, float height);
 
 #endif // _UI_H_

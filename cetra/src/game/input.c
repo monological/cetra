@@ -48,6 +48,27 @@ void input_init(GameInputState* input, Engine* engine) {
     input->mouse_prev_x = input->mouse_x;
     input->mouse_prev_y = input->mouse_y;
 
+    /*
+     * Keep a click that began and ended between two polls.
+     *
+     * This layer POLLS the button once a frame and calls the difference an
+     * edge, so a press and release that both land inside one frame are never
+     * observed at all: not delayed, dropped. Neither edge fires and the click
+     * simply does not exist. It reads as a UI that ignores you until you press
+     * and HOLD, and it gets worse the longer a frame is -- which is to say,
+     * worst in a debug build with physics under it, where it is most likely to
+     * be met.
+     *
+     * Sticky latches such a press until the next read and then clears it, so
+     * the press edge lands on one frame and the release on the next. Holding a
+     * button is unaffected, because its state was never in doubt.
+     *
+     * Keys have exactly the same hole and are deliberately NOT made sticky
+     * here: it would make a tapped key read as held for an extra frame in every
+     * app that polls one, which is a wider change than this defect warrants.
+     */
+    glfwSetInputMode(engine->window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
+
     glfwSetJoystickCallback(_joystick_callback);
 }
 
@@ -534,9 +555,15 @@ static float _source_value(const InputDevices* d, const InputSource* s) {
         case INPUT_SRC_NONE:
             return 0.0f;
         case INPUT_SRC_KEY:
-            return d->keys[s->code] ? s->scale : 0.0f;
+            // The debug GUI takes a DEVICE, not an action. Asking per source is
+            // what keeps that true: gating the whole action on the keyboard
+            // question killed the GAMEPAD too, so typing a number into an ImGui
+            // slider stopped a pad player moving. A held key and a held stick
+            // are the same action and must still be able to disagree about who
+            // is currently allowed to drive it.
+            return engine_gui_wants_keyboard() ? 0.0f : (d->keys[s->code] ? s->scale : 0.0f);
         case INPUT_SRC_MOUSE_BUTTON:
-            return d->mouse_buttons[s->code] ? s->scale : 0.0f;
+            return engine_gui_wants_mouse() ? 0.0f : (d->mouse_buttons[s->code] ? s->scale : 0.0f);
         case INPUT_SRC_PAD_BUTTON:
             return d->pads[0].buttons[s->code] ? s->scale : 0.0f;
         case INPUT_SRC_PAD_AXIS:
@@ -586,23 +613,53 @@ static bool _over(float value) {
     return fabsf(value) > INPUT_ACTION_THRESHOLD;
 }
 
-float input_action_value(const GameInputState* input, const char* name) {
+void input_set_suppressed(GameInputState* input, bool suppressed) {
+    if (input)
+        input->suppressed = suppressed;
+}
+
+bool input_is_suppressed(const GameInputState* input) {
+    return input && input->suppressed;
+}
+
+/*
+ * The table entry a read may actually see: one gate above all four queries, so
+ * a caller reads its actions unconditionally and a menu still stops the player.
+ *
+ * This answers ONE question -- who owns the game's input -- and the debug GUI's
+ * claim on a device is deliberately not folded in here. That is a fact about a
+ * keyboard or a mouse, not about an action, and _source_value applies it where
+ * it belongs; asking it at this level took the gamepad down with the keyboard.
+ *
+ * A `ui` action is exempt, because the key that opened a menu has to be able to
+ * close it.
+ */
+static const InputAction* _readable(const GameInputState* input, const char* name) {
     const InputAction* a = _action(input, name);
+    if (!a)
+        return NULL;
+    if (input->suppressed && !a->ui)
+        return NULL;
+    return a;
+}
+
+float input_action_value(const GameInputState* input, const char* name) {
+    const InputAction* a = _readable(input, name);
     return a ? _action_value(&input->now, a) : 0.0f;
 }
 
 bool input_action_down(const GameInputState* input, const char* name) {
-    const InputAction* a = _action(input, name);
+    const InputAction* a = _readable(input, name);
     return a && _over(_action_value(&input->now, a));
 }
 
 bool input_action_pressed(const GameInputState* input, const char* name) {
-    const InputAction* a = _action(input, name);
+    const InputAction* a = _readable(input, name);
     return a && _over(_action_value(&input->now, a)) && !_over(_action_value(&input->prev, a));
 }
 
 bool input_action_released(const GameInputState* input, const char* name) {
-    const InputAction* a = _action(input, name);
+    const InputAction* a = _readable(input, name);
     return a && !_over(_action_value(&input->now, a)) && _over(_action_value(&input->prev, a));
 }
 

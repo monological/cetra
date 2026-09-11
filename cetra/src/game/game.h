@@ -25,6 +25,17 @@ struct AudioSystem;
 
 // Game callbacks - implement these in your game
 typedef void (*GameInitFunc)(struct Game* game);
+/*
+ * Once per FRAME, immediately after the input poll and BEFORE the fixed steps.
+ *
+ * This is the only window in which a UI can take input away from the game
+ * without losing a frame in each direction: on_update runs inside the step loop
+ * (zero to N times a frame) and pre-render runs after it, so a menu opened
+ * there would let the same frame also walk the character, and closing it would
+ * drop a step of real input. Anything that decides what the sim is allowed to
+ * read belongs here; anything that moves the world does not.
+ */
+typedef void (*GameFrameInputFunc)(struct Game* game);
 typedef void (*GameUpdateFunc)(struct Game* game, double dt);
 // Everything that must be settled before the frame reads the geometry: the
 // camera, and any node added, removed or moved. The engine propagates the graph
@@ -89,6 +100,7 @@ typedef struct Game {
 
     // Callbacks
     GameInitFunc on_init;
+    GameFrameInputFunc on_frame_input;
     GameUpdateFunc on_update;
     GamePreRenderFunc on_pre_render;
     GameRenderFunc on_render;
@@ -116,6 +128,7 @@ void free_game(Game* game);
 
 // Set callbacks before running
 void game_set_init(Game* game, GameInitFunc func);
+void game_set_frame_input(Game* game, GameFrameInputFunc func);
 void game_set_update(Game* game, GameUpdateFunc func);
 void game_set_pre_render(Game* game, GamePreRenderFunc func);
 void game_set_render(Game* game, GameRenderFunc func);

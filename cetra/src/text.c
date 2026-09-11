@@ -652,10 +652,15 @@ void text_measure_bounds(Font* font, const char* text, float size, float* out_x0
             continue;
 
         // Match text_mesh_rebuild vertex calculation exactly
+        // The same Y-DOWN box as text_mesh_rebuild: stb's y0 is the offset from
+        // the baseline to the TOP and is negative above it, so it is ADDED. The
+        // two are required to agree -- this function exists to report where the
+        // other one will draw -- and for a while they did not, which centred
+        // every string in apps/splash against a box mirrored about its baseline.
         float x0 = cursor_x + glyph->x0 * scale;
-        float y0 = cursor_y - glyph->y1 * scale;
+        float y0 = cursor_y + glyph->y0 * scale;
         float x1 = cursor_x + glyph->x1 * scale;
-        float y1 = cursor_y - glyph->y0 * scale;
+        float y1 = cursor_y + glyph->y1 * scale;
 
         if (x0 < min_x)
             min_x = x0;

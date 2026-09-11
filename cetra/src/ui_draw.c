@@ -75,6 +75,11 @@ struct UIDrawList {
 
     UIRect clip[UI_CLIP_MAX];
     int clip_depth;
+    // Pushes that arrived past the depth limit. Counted rather than dropped, so
+    // the matching pops consume these before they touch the real stack -- a
+    // refused push that a pop still unwinds pops a level nobody pushed and
+    // hands the rest of the frame its grandparent's clip.
+    int clip_refused;
 
     ShaderProgram* cur_program;
     UIRect cur_rect;
@@ -245,11 +250,15 @@ void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
     if (style->bg_tex) {
         const bool sliced = style->bg_slice[0] > 0.0f || style->bg_slice[1] > 0.0f ||
                             style->bg_slice[2] > 0.0f || style->bg_slice[3] > 0.0f;
+        // The TINT, not the fill. They were one field, which made an untinted
+        // image unspellable -- the value meaning "no tint" is the value meaning
+        // "inherit" -- so an image was multiplied by whatever fill the theme
+        // happened to carry, or by transparent black, and vanished.
         if (sliced) {
-            ui_draw_9slice(dl, r, style->bg_tex, style->bg_slice, (float*)style->bg);
+            ui_draw_9slice(dl, r, style->bg_tex, style->bg_slice, (float*)style->bg_tint);
             return;
         }
-        ui_draw_textured_quad(dl, r, style->bg_tex, (float*)style->bg);
+        ui_draw_textured_quad(dl, r, style->bg_tex, (float*)style->bg_tint);
         return;
     }
 
@@ -307,7 +316,11 @@ void ui_push_clip(UIDrawList* dl, UIRect r) {
     if (!dl)
         return;
     if (dl->clip_depth >= UI_CLIP_MAX) {
-        log_error("ui: clip stack overflow at depth %d; the push is refused", UI_CLIP_MAX);
+        // Counted, not dropped: the matching pop has to unwind THIS rather than
+        // a real level. Everything deeper keeps the current clip, which is the
+        // conservative answer -- narrower than asked for, never wider.
+        log_error("ui: clip stack is %d deep; this push keeps the current clip", UI_CLIP_MAX);
+        dl->clip_refused++;
         return;
     }
     // Intersect with the enclosing clip, so a child cannot escape its parent
@@ -324,7 +337,13 @@ void ui_push_clip(UIDrawList* dl, UIRect r) {
 }
 
 void ui_pop_clip(UIDrawList* dl) {
-    if (dl && dl->clip_depth > 0)
+    if (!dl)
+        return;
+    if (dl->clip_refused > 0) {
+        dl->clip_refused--; // unwind a push that never reached the stack
+        return;
+    }
+    if (dl->clip_depth > 0)
         dl->clip_depth--;
 }
 
@@ -619,11 +638,19 @@ void ui_draw_list_begin(UIDrawList* dl, int width_points, int height_points) {
     dl->icount = 0;
     dl->bcount = 0;
     dl->clip_depth = 0;
+    dl->clip_refused = 0;
     dl->cur_program = NULL;
     dl->cur_rect = (UIRect){0, 0, (float)width_points, (float)height_points};
     dl->cur_focus = 0.0f;
     dl->width = width_points;
     dl->height = height_points;
+    // uTime is part of the contract a custom element program is written
+    // against, so it has to actually advance. It was declared, uploaded to
+    // every batch and never assigned, which made the spec's headline use for
+    // ui_set_element_program -- a shader-driven animated background -- a
+    // documented escape hatch with a frozen clock.
+    if (dl->engine)
+        dl->time = (float)dl->engine->total_frames * (float)ENGINE_FIXED_FRAME_DT;
     // Top-left origin with +Y down, the space the text renderer and GLFW's
     // cursor already agree on.
     glm_ortho(0.0f, (float)width_points, (float)height_points, 0.0f, -1.0f, 1.0f, dl->ortho);
@@ -660,14 +687,14 @@ void ui_draw_list_render(UIDrawList* dl) {
     glBindBuffer(GL_ARRAY_BUFFER, dl->vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dl->ebo);
 
-    // Orphan and refill rather than glBufferSubData: the size changes every
-    // frame as elements come and go, and orphaning lets the driver hand back a
-    // fresh block instead of stalling on the one still being read.
+    // One re-specification per buffer. A glBufferData WITH data already orphans
+    // -- the driver is free to hand back a fresh block rather than stall on the
+    // one still being read -- so the NULL call that preceded it bought nothing
+    // and paid for a second allocation. The orphan idiom the old comment named
+    // is glBufferData(NULL) followed by glBufferSubData; this was neither.
     const size_t vbytes = dl->vcount * sizeof(UIVertex);
     const size_t ibytes = dl->icount * sizeof(unsigned int);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vbytes, NULL, GL_STREAM_DRAW);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)vbytes, dl->verts, GL_STREAM_DRAW);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ibytes, NULL, GL_STREAM_DRAW);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ibytes, dl->idx, GL_STREAM_DRAW);
 
     // The clip rect is in points and the scissor is in framebuffer pixels

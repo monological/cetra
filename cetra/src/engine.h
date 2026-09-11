@@ -74,7 +74,8 @@ typedef struct Engine {
     // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
     // rebuilds the targets at the next frame top), screenshot_path (owned
     // string), the five callbacks and user_data (installs), and the animation
-    // clock (engine_set_render_clock samples a borrowed one each frame,
+    // clock (engine_set_render_clock samples a borrowed one each frame, and
+    // the overlay, engine_set_overlay),
     // engine_set_render_time sets a frame's directly for a loop that is not
     // engine_run).
     //
