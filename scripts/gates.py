@@ -22267,9 +22267,13 @@ def run_ui_gate(workdir):
                      rows, belong to the parent and to no control. The pointer
                      walk then reaches the element under the cursor.
       ui-capture     a modal screen captures input and a non-modal HUD does not,
-                     popping gives it back, and the suppression switch the UI
-                     throws is lowered again. What suppression does to each SOURCE
-                     is the gamepad group's ground, which drives real devices.
+                     and popping gives it back. Then what suppression DOES, driven
+                     through the pad reader seam rather than asked of the flag: a
+                     held stick and button reach move_x and ui_accept, raising the
+                     switch takes move_x to zero EXACTLY while ui_accept -- flagged
+                     `ui` -- keeps reading, and lowering it hands move_x back. The
+                     free reads are asserted too, or the rest would pass over a
+                     layer that reads nothing at all.
       ui-stack       push, pop, pop_all and a pop of the empty stack each leave the
                      top where they should, including the underflow that must be a
                      no-op rather than a crash.
@@ -22385,14 +22389,23 @@ def run_ui_gate(workdir):
     if not p:
         ok, detail = False, "the probe produced nothing"
     else:
+        free_move, free_accept = p[("free", "move")][0], p[("free", "accept")][0]
+        held_move, held_accept = p[("held", "move")][0], p[("held", "accept")][0]
+        given_move = p[("given", "move")][0]
         ok = (p[("hud", "captures")][0] == 0 and p[("menu", "captures")][0] == 1
               and p[("popped", "captures")][0] == 0 and p[("cleared", "captures")][0] == 0
-              and p[("raised", "suppressed")][0] == 1 and p[("lowered", "suppressed")][0] == 0)
+              # The held pad must actually reach both actions, or every
+              # assertion below passes over a layer that reads nothing at all.
+              and free_move > 0.5 and free_accept > 0.5
+              # Zero EXACTLY: suppression returns a zero, it does not attenuate.
+              and held_move == 0.0 and held_accept > 0.5
+              and given_move > 0.5)
         detail = (f"hud {p[('hud', 'captures')][0]:.0f}, modal "
                   f"{p[('menu', 'captures')][0]:.0f}, popped "
-                  f"{p[('popped', 'captures')][0]:.0f} (want 0/1/0); the switch raises to "
-                  f"{p[('raised', 'suppressed')][0]:.0f} and lowers to "
-                  f"{p[('lowered', 'suppressed')][0]:.0f}")
+                  f"{p[('popped', 'captures')][0]:.0f} (want 0/1/0); with a pad held, move_x "
+                  f"{free_move:.2f} -> {held_move:.2f} -> {given_move:.2f} (want it taken to 0 "
+                  f"and handed back) while ui_accept holds {free_accept:.2f} -> "
+                  f"{held_accept:.2f} (want it unaffected)")
     print(f"  ui-capture            {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-capture", ok)
 
