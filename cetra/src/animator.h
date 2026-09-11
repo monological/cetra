@@ -96,21 +96,24 @@ typedef struct Animator {
     bool resume_pending;
     float resume_fade;
     AnimatorLayer layer;
-    bool finished;  // true only on the frame a non-looping base source ended
-    Pose base_pose; // the base layer's output this frame, before the override
-    Pose final;     // the pose applied this frame
-    Pose scratch_a;
-    Pose scratch_b;
-    Pose scratch_layer;
-    float layer_weights[MAX_BONES];
+    bool finished; // true only on the frame a non-looping base source ended
+    // The pose applied this frame. The override layer blends into it in place,
+    // so this is the base layer's output only until that has run.
+    Pose base_pose;
     AnimatorEventFn on_event;
     void* event_user;
 
-    // BY FUNCTION: animator_play, animator_play_space, animator_play_once,
-    // animator_stop, animator_play_layer, animator_stop_layer,
-    // animator_set_event_callback.
+    // Per-update scratch. Not state: nothing reads these between frames, and
+    // they are members rather than locals because a Pose is ~6 KB and
+    // animator_update is called once per rig per frame.
+    Pose scratch_a; // the outgoing source, then the override's sample
+    Pose scratch_b; // a blend space's second entry
+    float layer_weights[MAX_BONES];
 
-    // SETTINGS: plain stores.
+    // SETTINGS: plain stores. Everything above is the animator's own; write
+    // these directly, at any time. What PLAYS is not a setting -- it goes
+    // through animator_play, animator_play_space, animator_play_once,
+    // animator_stop, animator_play_layer and animator_stop_layer.
     bool playing;
     float speed; // multiplies every clock's advance; fades are not scaled
     float param; // the blend space's position; clamped to its entries

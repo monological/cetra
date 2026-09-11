@@ -8,7 +8,7 @@ Three instruments, answering different questions:
 | instrument | asserts | blind to |
 |---|---|---|
 | `scripts/gates.py` | analytic properties — a ratio, a count, a penumbra width, whether two runs agree | anything nobody wrote an arm for; a bar too slack to fail |
-| `scripts/goldens.py` | 30 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
+| `scripts/goldens.py` | 31 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
 | a hand A/B | everything else | nothing, and that is the problem: it has no bar unless you measure one |
 
 **The one rule that governs all three: a pixel count quoted without its noise floor is not a
@@ -180,6 +180,7 @@ first.
 | **Spring bones** (`springbone.c`) | YES in headless -- stepped by the animation clock, which is the frame clock | `--no-springs` only to isolate spring motion in an A/B |
 | **Particles** (falling leaves, spores) | YES in headless (spec 11.2) -- ticked from the frame clock; game-loop step count is exactly one per frame | (automatic) |
 | **Skeletal animation** | YES in headless -- the frame clock steps a fixed 1/60 per frame so frame N is always pose N | (automatic) |
+| **Animation blending** (`animator.c`, spec 12.1) | YES in headless -- every clock in it (the blend space's, the crossfade's envelope, the override layer's) advances by the same fixed dt, so frame N is blend state N. In the game framework the dt is the SIM clock's, a whole number of fixed steps, so a paused sim holds the pose and reads zero deformation velocity | (automatic); `--anim-probe` prints the weights and every bone's pose, `%.9g`, so a textual diff is a bit diff |
 | **TAA jitter** | YES -- disabled in headless unless `--headless-jitter` | (automatic) |
 | **Orbit camera** | YES -- auto-rotation disabled in headless | `--cam-eye`/`--cam-target` for exact repro |
 | GTAO / SSR temporal accumulation | frame-count driven, not wall-clock; no drift observed across builds | `--no-ssr --no-ssao` if isolating |
@@ -196,7 +197,9 @@ first.
 | `assets/room.fbx`, `assets/c64.fbx` | no | no | room's textures point at a dead path; c64 renders fully (textured, lit) since specs 11.1 |
 | `apps/tree` | **yes** + particles | no | **NOT pixel-deterministic on the orbit path** -- measured 8,925 px run-to-run at 40 frames / 2800x1800, and 31,034 at the framing recorded above, so **measure the floor at YOUR framing before comparing anything**: it moves by a factor of three with resolution and frame count. The cause is `mouse_drag_update(drag_controller, glfwGetTime())` at **`tree.c:749`** -- and that call sits in an `else if` behind `if (player)`, so **`--player` never reaches it**, never creates the drag controller (`tree.c:1200`), and takes `engine->render_delta` instead. **`--player --headless` IS 0 px** -- measured x2 at 30 frames / 400x300 (spec 11.86), which makes it tree's first pixel-comparable framing and the one to use for any A/B in this app. It is what 11.86's normal-compression numbers were taken at. Wind, grass sway and falling leaves ARE frame-index-pure (spec 11.2); the ORBIT camera is what is not. **Spec 11.32 put a sea around it, ON by default**, and 11.35 put a seabed under the sea -- both under one `--no-water` guard, because a bed with no sea over it is a plate around a dome. **Its water is SPECTRAL by default since 11.35, not Gerstner** (`tree.c:1589`; `--gerstner-waves` switches back, and the four wave params it authors are DEAD unless you pass it). So the 45-pass/24-texture FFT cost and the FFT-only crest foam and caustics all apply to this app by default, and every cascade change in 11.33 and 11.35 reaches it. No tree capture from before 11.35 compares; none from before 11.36 does either, which re-scaled the water's absorption. |
 | `apps/spores` | particles | no | deterministic headless since spec 11.2 (x3 0 px; game-loop step count is exact). Since 11.103 it also takes `--taa`, `--headless-jitter` and `--msaa`, which exist to have MEASURED a refusal rather than to be used: its particles write no motion vector, so TAA reprojects every mote through the geometry behind it and turns dots into dashes. Compare its mote field at 4x against `--taa` if you want to see it; brighten 4x, the field is dim. |
-| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; the HDR path stays positional. **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by being rigid meshes on `pbr` — every surface writes a motion vector. **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
+| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; the HDR path stays positional. **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by every surface writing a motion vector: rigid meshes on `pbr` and, since 12.1, one skinned rig on `pbr_skinned`, whose vectors come from the previous frame's bone rows (`uPrevBoneRows`) latched once per frame. `--no-puppet` is the all-rigid frame if you need to separate them. **Re-measured with the rig on the frame (spec 12.1): still 0 px and byte-identical traces.** **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
+| `assets/puppet.cscn` | no | no | **the blending instrument (spec 12.1)**, and the corpus's first rig built to be MEASURED rather than looked at: twenty rigid boxes, one per bone, on the `cetra_rig:` names the committed walk clip carries, a T-pose with identity rest rotations and pure-translation bind offsets -- so a wrong axis or order reads as a number in `--anim-probe`. Feet on y = 0 and centred in x/z, which makes the render app's recentre a no-op (the generator asserts it). Seven clips, all authored in closed form: `idle`, `walk` and `run` loop in COS phase so the read frame is an extreme rather than a crossing; `jump` and `wave` are one-shots that end on bind; `hold90` swings one forearm to 90 degrees and HOLDS it past the read frame (a clip that ended there would wrap to bind in exactly the frame being measured -- `skinned_cull`'s own lesson); `rest` is the bind pose as a clip, the other endpoint of the analytic midpoint blend. Every animated joint also carries a translation track holding its bind offset, because an embedded clip with rotation keys alone reads position (0,0,0) and collapses the joint onto its parent. `puppet_golden` is baked from `--anim-clip run`. |
+| `assets/strut_walk.fbx` | no | no | a real walk cycle, animation-only (no mesh): 52 channels, 86 ticks at 60 tps. Binds onto the puppet by EXACT name -- twenty channels, one per bone, with an identity retarget delta since an animation-only file carries no source skeleton -- which is what `anim-clip-loads` asserts and what a retarget delta is measured against. The unmatched 32 are fingers, toes and a head tip the puppet does not model. **How it LOOKS on the puppet is unverified**: the puppet's rest rotations are identity where a real rig's are not, so the absolute rotations land differently. That is the retarget question the puppet cannot answer -- see "The real-character path" below. |
 | `apps/shapes`, `apps/splash` | no | no | **no capture path, and none is planned** (spec 11.103). shapes keeps 4x MSAA deliberately, so there is nothing to regress; adding headless is 40-60 lines for a decision that is not changing. `apps/splash` cannot be captured at all without porting it onto `engine_run` — it draws to the default framebuffer and the engine's screenshot lives in the loop it does not use. |
 | `apps/sprites`, `apps/network` | particles / no | no | **capturable since 11.105** (`-x -f -S`) and **0 px run-to-run** (measured x2 at 30 frames in spec 11.108; both are 4x MSAA, TAA off under the 2D preset). Neither has a golden, so a capture against the previous commit is their whole proof; sprites' one recorded move is 11.107's clear colour (one 8-bit code over 1,222,050 px). |
 | `apps/pcb` | no | no | **A repository of its own since 11.105** (`../apps/pcb`, cetra as a submodule) and not gitignored, though `AGENTS.md`'s app table lists it; capturable the same way and **0 px run-to-run** (spec 11.108). Built against every phase of the three API specs from its submodule, which is what makes it the one consumer that tests the public surface from outside the tree. |
@@ -465,3 +468,43 @@ mode (`audio: device, 2 ch @ <rate> Hz` with a card, `audio: offline (no device)
 door's looping tone through CoreAudio. **Linux (ALSA/PulseAudio) and Windows (WASAPI) are
 still owed** the same one-minute listen -- the layer is identical above the device, but no
 one has run it on those two backends.
+
+### The real-character path
+
+Spec 12.1 built the blend layer against a puppet whose clips are authored in closed form, and
+that is what makes its thirteen gate arms assert numbers rather than impressions: an endpoint
+is 0 px, an unmasked bone moves by 0 exactly, a settled crossfade equals the incoming clip bit
+for bit, the nlerp midpoint reads 21.60/45.00/68.40 degrees at the quarter points. All of that
+is true of the MATH. None of it is a claim about how a character looks.
+
+**What no suite here covers is a real rig.** The puppet has twenty bones, identity rest
+rotations, boxes for limbs and no spring bones; a real character has a hundred-odd bones, an
+authored rest pose, skin that slides over joints, and hair. Four things only a person watching
+one can settle:
+
+- **Foot sliding through the locomotion blend.** The phase is shared, which is what stops feet
+  skating between walk and run -- but whether the two clips' stride LENGTHS agree at a given
+  speed is a content question, and the puppet's do not have to.
+- **The crossfade transient on real limbs.** 0.25 s reads well on box arms. Whether an arm with
+  a shoulder and a wrist swings through the fade or snaps at its ends is a look.
+- **The override layer over a real upper body**, with fingers under the mask and a spring-boned
+  mane on top of it: the layer runs before the springs, so the springs should follow the waving
+  arm rather than fight it.
+- **`assets/strut_walk.fbx` on a rig whose rest pose is not identity.** On the puppet it binds
+  by name with an identity delta and the legs land where the clip's absolute rotations put them.
+  On a real rig the retarget delta is doing work, and that is the path spec 11.x's retargeting
+  analysis is about.
+
+Closing it is a watch, not a script:
+
+```bash
+./out/bin/render -m my_models/raiden/source/raiden_textured_rigged.glb \
+    -t my_models/raiden/textures -e my_models/studio_small_03_8k.hdr \
+    -a my_models/animations/strut_walk.fbx -a my_models/animations/flair.fbx \
+    -s my_models/animations/T-Pose.fbx \
+    --anim-switch-to flair --anim-switch-at 120 --anim-fade 0.35
+```
+
+and, windowed, `./out/bin/gametest --twin run` -- two rigs side by side under TAA, which is the
+one thing `anim-twin`'s headless frames cannot see: that neither smears into the other.
+**Owed.** The blend layer is identical above the rig, but nobody has watched it on one.

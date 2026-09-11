@@ -760,6 +760,21 @@ that plays a fixed geometry, measures the mixed PCM and prints it, then exits â€
 takes the WAV to load from `--audio-file <path>`. Because it opens no device, it runs anywhere the
 gate suite does.
 
+**Spec 12.1 made the player a rig.** `apps/gametest` loads `assets/puppet.gltf` and drives it from
+an `ANIMATOR` component: idle, walk and run blended from the character controller's POST-SOLVE
+speed (so walking into a wall stops the walk rather than running on the spot), a jump one-shot
+crossfaded onto the base layer that returns to the locomotion space by itself, a wave on the right
+arm's subtree bound to **E / left bumper**, and footsteps fired from the clips' own timeline events
+through 12.0's audio. `--no-puppet` keeps the original red box (and the all-rigid frame);
+`--puppet <path>` swaps the rig; `--twin <clip>` stands a second rig beside the player playing its
+own clip, which is what two independent poses in one frame look like. `--anim-probe <case>` is the
+headless probe the `anim` gate group reads -- `locomotion`, `crossfade`, `layer`, `two-rigs`,
+`phase`, `events` and `import` -- built like `--audio-probe`: a self-contained headless game with
+no window that ticks ANIMATOR components through the loop's own `update_all_animators` at a fixed
+1/60, prints `anim <case> <label> <key> <numbers>` and exits. `--trace-player` gains a tail after
+`jump`: `anim <knob> <w_idle> <w_walk> <w_run> <fade> <layer> <source>`, APPENDED rather than
+inserted so the `gamepad` group's regex still matches the same line.
+
 **It is frame-deterministic headless, and this paragraph said otherwise for six specs.** Two runs
 of one script trace byte-identically and their frames differ by **0 px** (measured, spec 11.109),
 because headless the engine hands the loop its FIXED frame dt, the seed is `srand(42)` and Jolt

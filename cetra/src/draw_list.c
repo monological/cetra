@@ -239,6 +239,13 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene, const Animatio
         return "draw mode the program's geometry stage cannot take";
     // Another rig's matrices would be uploaded for this mesh, which skins it
     // into garbage that still looks like a frame.
+    //
+    // The one reason here that depends on the NODE rather than the mesh, which
+    // matters because the latch below is per mesh: one mesh shared by two nodes
+    // (mesh_ref) whose inherited poses differ in skeleton flips that latch every
+    // build, and the once-per-change rule becomes once per frame. No scene in
+    // the tree does that yet -- the twin rigs share a skeleton -- so it is a
+    // trap rather than a defect.
     if (mesh->is_skinned && pose && pose->skeleton != mesh->skeleton)
         return "skinned to a skeleton that is not the pose it inherits (node_set_pose the right "
                "one on this node)";

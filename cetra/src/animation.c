@@ -429,8 +429,6 @@ AnimationState* create_animation_state(Skeleton* skeleton) {
     }
 
     state->skeleton = skeleton;
-    state->speed = 1.0f;
-    state->looping = true;
 
     // Initialize bone matrices to identity
     for (int i = 0; i < MAX_BONES; i++) {
@@ -477,80 +475,6 @@ void free_animation_state(AnimationState* state) {
         free(state->global_transforms);
 
     free(state);
-}
-
-void set_animation(AnimationState* state, Animation* animation) {
-    if (!state)
-        return;
-
-    state->current_animation = animation;
-    state->current_time = 0.0f;
-    if (state->springs)
-        spring_bone_reset(state->springs);
-}
-
-void play_animation(AnimationState* state) {
-    if (state)
-        state->playing = true;
-}
-
-void pause_animation(AnimationState* state) {
-    if (state)
-        state->playing = false;
-}
-
-void stop_animation(AnimationState* state) {
-    if (!state)
-        return;
-
-    state->playing = false;
-    state->current_time = 0.0f;
-    if (state->springs)
-        spring_bone_reset(state->springs);
-    compute_bind_pose_matrices(state);
-}
-
-void reset_animation(AnimationState* state) {
-    if (!state)
-        return;
-
-    state->current_time = 0.0f;
-    if (state->current_animation) {
-        compute_bone_matrices(state, 0.0f);
-    } else {
-        compute_bind_pose_matrices(state);
-    }
-}
-
-void update_animation(AnimationState* state, float delta_time) {
-    if (!state || !state->playing || !state->current_animation)
-        return;
-
-    const Animation* anim = state->current_animation;
-
-    // Advance time
-    float ticks_delta = delta_time * anim->ticks_per_second * state->speed;
-    state->current_time += ticks_delta;
-
-    // Handle looping/end
-    if (state->looping) {
-        if (anim->duration > 0.0f) {
-            state->current_time = fmodf(state->current_time, anim->duration);
-            if (state->current_time < 0.0f)
-                state->current_time += anim->duration;
-        }
-    } else {
-        if (state->current_time >= anim->duration) {
-            state->current_time = anim->duration;
-            state->playing = false;
-        } else if (state->current_time < 0.0f) {
-            state->current_time = 0.0f;
-            state->playing = false;
-        }
-    }
-
-    // Recompute bone matrices
-    compute_bone_matrices(state, delta_time);
 }
 
 void animation_snapshot_prev_pose(AnimationState* state) {
@@ -1135,15 +1059,6 @@ void animation_state_apply_pose(AnimationState* state, const Pose* pose, float d
     state->active_bone_count = skeleton->bone_count;
 }
 
-void compute_bone_matrices(AnimationState* state, float delta_time) {
-    if (!state || !state->skeleton)
-        return;
-
-    Pose pose;
-    animation_sample_pose(state->current_animation, state->skeleton, state->current_time, &pose);
-    animation_state_apply_pose(state, &pose, delta_time);
-}
-
 void compute_bind_pose_matrices(AnimationState* state) {
     if (!state || !state->skeleton)
         return;
@@ -1215,11 +1130,5 @@ void print_animation_state(const AnimationState* state) {
     printf("  Skeleton: %s\n", state->skeleton
                                    ? (state->skeleton->name ? state->skeleton->name : "(unnamed)")
                                    : "NULL");
-    printf("  Animation: %s\n",
-           state->current_animation
-               ? (state->current_animation->name ? state->current_animation->name : "(unnamed)")
-               : "NULL");
-    printf("  Time: %.2f, Speed: %.2f, %s, %s\n", state->current_time, state->speed,
-           state->playing ? "PLAYING" : "PAUSED", state->looping ? "LOOPING" : "ONCE");
     printf("  Active bones: %zu\n", state->active_bone_count);
 }

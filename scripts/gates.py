@@ -15003,6 +15003,12 @@ def run_anim_gate(workdir):
       anim-trace-idle  the LOOP ticks the component: a standing player's trace reports
                        the idle weight at 1, which stays 0 if update_all_animators is
                        never called from the pre-render hook.
+      anim-twin        a second rig playing its own clip changes the FRAME -- two poses
+                       in one draw. This is the only arm that reaches the per-node pose
+                       through the renderer: the probes compare bone matrices on the
+                       CPU, where a process-global pose would still look right. With
+                       one, both rigs would hold the same state and the two runs would
+                       be identical.
     """
     import math
 
@@ -15246,6 +15252,27 @@ def run_anim_gate(workdir):
               f"weight {idle_w:.3f} (want 1) from {sorted(srcs)}")
         if not ok:
             failures.append("anim-trace-idle")
+
+    # --- anim-twin -------------------------------------------------------------
+    twins = {}
+    for clip in ("idle", "run"):
+        out = os.path.join(workdir, "anim_twin_%s.ppm" % clip)
+        r = subprocess.run([GAMETEST, "-x", "-f", "8", "--twin", clip, "-S", out],
+                           capture_output=True, text=True)
+        twins[clip] = out if r.returncode == 0 and os.path.exists(out) else None
+    if not all(twins.values()):
+        print("  anim-twin    FAIL  a run failed")
+        failures.append("anim-twin")
+    else:
+        # Eight frames: the spawned boxes are still above the top edge from this
+        # camera, so their rand() positions cannot reach the comparison.
+        moved, _ = compare(twins["idle"], twins["run"])
+        ok = moved >= 20
+        print(f"  anim-twin    {'PASS' if ok else 'FAIL'}  a second rig on its own clip moves "
+              f"{moved} px (want >= 20); on a process-global pose both rigs would hold one "
+              f"state and this would be 0")
+        if not ok:
+            failures.append("anim-twin")
 
     return failures
 

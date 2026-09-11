@@ -146,14 +146,12 @@ AnimationChannel* get_channel_for_bone_name(Animation* animation, const char* bo
 
 struct SpringBoneSystem;
 
+// A skeleton's live pose and the buffers a frame skins from. WHAT PLAYS is
+// not here -- an Animator owns the clock, the blend and the fades (animator.h),
+// and hands this a finished Pose. A node points at one of these (node_set_pose)
+// and every skinned mesh under it draws from these matrices.
 typedef struct AnimationState {
-    Animation* current_animation;
     Skeleton* skeleton;
-
-    float current_time; // In ticks
-    float speed;        // Playback speed multiplier (1.0 = normal)
-    bool looping;
-    bool playing;
 
     // Computed bone matrices (global transform * inverse bind pose)
     mat4 bone_matrices[MAX_BONES];
@@ -191,16 +189,10 @@ typedef struct AnimationState {
 // Animation state functions
 AnimationState* create_animation_state(Skeleton* skeleton);
 void free_animation_state(AnimationState* state);
-void set_animation(AnimationState* state, Animation* animation);
-void play_animation(AnimationState* state);
-void pause_animation(AnimationState* state);
-void stop_animation(AnimationState* state);
-void reset_animation(AnimationState* state);
-void update_animation(AnimationState* state, float delta_time);
 // Snapshot the current bone matrices into prev_bone_rows (packed affine rows)
-// for next frame's skinned motion vectors. Call once per frame BEFORE
-// update_animation, unconditionally — so a paused pose reads zero deformation
-// velocity rather than a frozen nonzero one.
+// for next frame's skinned motion vectors. Once per frame, BEFORE the pose is
+// rebuilt, and unconditionally -- so a paused pose reads zero deformation
+// velocity rather than a frozen nonzero one. animator_update begins with it.
 void animation_snapshot_prev_pose(AnimationState* state);
 
 // --- Keyframe Interpolation ---
@@ -230,6 +222,12 @@ typedef struct Pose {
     // blend against it has numbers, but applying it copies the bind MATRIX --
     // an affine decomposed and rebuilt is not the same bits, and a bone no clip
     // touches has to skin exactly as it did before there was a Pose.
+    //
+    // That exactness is the SINGLE-SOURCE path's. pose_blend marks a bone
+    // driven if EITHER side drove it, so the moment a blend touches a bone the
+    // undriven side contributes its bind local decomposed and recomposed. That
+    // is unavoidable -- a matrix cannot be blended -- and it is why the identity
+    // the migration rests on is claimed for one clip and not for a fade.
     uint8_t driven[MAX_BONES];
 } Pose;
 
@@ -259,9 +257,8 @@ void animation_state_apply_pose(AnimationState* state, const Pose* pose, float d
 
 // --- Bone Matrix Computation ---
 
-// The current clip at the current time, sampled and applied. delta_time drives
-// the optional spring-bone simulation (pass 0 to pose without advancing springs)
-void compute_bone_matrices(AnimationState* state, float delta_time);
+// The bind pose into the state's matrices, springs untouched. What a state
+// holds before anything has played through it.
 void compute_bind_pose_matrices(AnimationState* state);
 
 // --- Debug ---

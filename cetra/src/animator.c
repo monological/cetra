@@ -156,6 +156,9 @@ static void space_sample(const AnimatorSpace* s, const Skeleton* skeleton, Pose*
             hi = i;
     }
     if (lo < 0) {
+        // Unreachable as called -- space_weights always leaves a weight on a
+        // non-empty space, and both callers check count first. A guard, so a
+        // future caller gets the bind pose rather than uninitialised bones.
         pose_bind(skeleton, out);
         return;
     }
@@ -288,8 +291,8 @@ void animator_stop(Animator* a) {
     a->layer.weight = 0.0f;
     if (a->state->springs)
         spring_bone_reset(a->state->springs);
-    pose_bind(a->state->skeleton, &a->final);
-    animation_state_apply_pose(a->state, &a->final, 0.0f);
+    pose_bind(a->state->skeleton, &a->base_pose);
+    animation_state_apply_pose(a->state, &a->base_pose, 0.0f);
 }
 
 bool animator_finished(const Animator* a) {
@@ -496,20 +499,24 @@ void animator_update(Animator* a, float dt) {
         pose_blend(out_pose, &a->base_pose, a->fade_weight, &a->base_pose);
     }
 
-    // The override, on its bones
+    // The override, on its bones. In place: pose_blend_masked may alias, and
+    // copying 6 KB to a second buffer every frame bought nothing.
     if (a->layer.phase != ANIMATOR_LAYER_OFF) {
         for (size_t i = 0; i < skeleton->bone_count; i++)
             a->layer_weights[i] = a->layer.weight * a->layer.mask[i];
-        animation_sample_pose(a->layer.clip, skeleton, a->layer.time, &a->scratch_layer);
-        pose_blend_masked(&a->base_pose, &a->scratch_layer, a->layer_weights, &a->final);
-    } else {
-        a->final = a->base_pose;
+        animation_sample_pose(a->layer.clip, skeleton, a->layer.time, &a->scratch_a);
+        pose_blend_masked(&a->base_pose, &a->scratch_a, a->layer_weights, &a->base_pose);
     }
 
-    animation_state_apply_pose(a->state, &a->final, dt);
+    animation_state_apply_pose(a->state, &a->base_pose, dt);
 
     // Events, after the pose: the base's highest-weighted entry (ties to the
     // lowest index) and the override clip. The outgoing source fires nothing.
+    //
+    // Collected before any of them is dispatched, because a handler is allowed
+    // to call animator_play -- which rewrites the very space being read. That
+    // is what the buffer is for; being AFTER the pose is the dispatch's
+    // position, not the buffer's doing.
     if (a->on_event) {
         const char* fired[EVENTS_PER_UPDATE];
         int count = 0;

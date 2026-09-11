@@ -4613,6 +4613,11 @@ int main(int argc, char** argv) {
 
     printf("Cleaning up...\n");
     if (animator) {
+        // The scene outlives this (the engine frees it below), so the pose it
+        // points at has to go before the state does.
+        Scene* posed = engine_get_scene(engine);
+        if (posed && posed->root_node)
+            node_set_pose(posed->root_node, NULL);
         free_animator(animator);
     }
     if (cscn) {

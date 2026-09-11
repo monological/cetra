@@ -36,8 +36,15 @@ Animator* entity_add_animator(struct Entity* entity, Animator* animator) {
         return NULL;
     c->animator = animator;
     c->node = entity->node;
-    if (c->node)
+    if (c->node) {
         node_set_pose(c->node, animator->state);
+    } else {
+        // Not fatal -- an entity may get its node later -- but silence here
+        // reads downstream as a rig that animates and never draws.
+        log_warn("Entity '%s' has no node yet; its animator poses nothing until "
+                 "node_set_pose is called",
+                 entity->name);
+    }
     entity_add_component(entity, COMPONENT_ANIMATOR, c);
     entity_set_component_free(entity, COMPONENT_ANIMATOR, animator_component_free);
     return animator;

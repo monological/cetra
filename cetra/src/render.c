@@ -2403,8 +2403,12 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
         }
     }
 
-    // Second pass: Draw ANIMATED POSE in RED (when animation has been played)
-    if (anim_state && anim_state->global_transforms && anim_state->current_time > 0.0f) {
+    // Second pass: the LIVE pose in RED. Drawn whenever there is a state to
+    // draw: its globals hold the bind pose until something plays through it, and
+    // red over green is exactly what a rig at bind should look like. This used
+    // to ask the state's clock whether anything had played, which the state no
+    // longer keeps -- what plays is the Animator's business (spec 12.1).
+    if (anim_state && anim_state->global_transforms) {
         for (size_t i = 0; i < skel->bone_count; i++) {
             const Bone* bone = &skel->bones[i];
             if (bone->parent_index < 0)

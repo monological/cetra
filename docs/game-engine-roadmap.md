@@ -6,7 +6,7 @@ subsystem sweep. Companion to `rendering-roadmap.md` — **that** doc owns the
 graphics pipeline in depth; **this** doc owns everything else (physics, gameplay,
 assets, core, and the gaps between "engine" and "shippable game").
 
-_Last updated: 2026-07-21._
+_Last updated: 2026-09-10._
 
 ---
 
@@ -15,9 +15,10 @@ _Last updated: 2026-07-21._
 The hard, specialized tech is done to a high standard. The renderer is
 AAA-caliber and the physics is best-in-class. What's missing is the unglamorous
 but well-understood glue: save/serialization, an in-game UI/menu layer,
-animation blending, and (near ship) Steamworks. Gamepad input landed in spec
-11.109 (still owed a real-pad check) and audio in spec 12.0 (heard on macOS,
-owed on Linux and Windows). 11.109 was the pivot from the renderer era to the game-platform
+and (near ship) Steamworks. Gamepad input landed in spec
+11.109 (still owed a real-pad check), audio in spec 12.0 (heard on macOS,
+owed on Linux and Windows) and animation blending in spec 12.1 (gate-verified
+on a generated puppet; a real character is owed a look). 11.109 was the pivot from the renderer era to the game-platform
 era, which is numbered from 12.0; it stays the last renderer-era spec, and the
 major bump marks the change in the *kind* of work, as every prior one did.
 
@@ -65,7 +66,8 @@ Built on **Jolt Physics** via the JoltC C wrapper (`cetra/src/game/`).
 - **Entity/component layer** — lightweight entity-with-components (not a
   data-oriented ECS): one component per type per entity, bitmask queries via
   linear scan. Component slots: `MESH_RENDERER`, `RIGID_BODY`, `CHARACTER`,
-  `ANIMATOR`, `AUDIO_SOURCE` (last three are declared but unimplemented).
+  `ANIMATOR` (implemented in 12.1), `AUDIO_SOURCE` (12.0). `MESH_RENDERER` is a
+  bare enum line and always has been -- an entity's visual is its `node`.
 
 ### Animation & assets (good)
 
@@ -76,6 +78,10 @@ Built on **Jolt Physics** via the JoltC C wrapper (`cetra/src/game/`).
 - **Retargeting** — semantic Mixamo→custom-rig bone matching with rest-pose
   compensation (rotation-only; no root motion/scale/IK). Sophisticated for what
   it is.
+- **Blending** (spec 12.1) — a pose is a blendable value, and over it: a
+  phase-synced 1D blend space, a crossfade when what plays changes, one
+  bone-masked override layer, and clip events through a callback. Poses are
+  per scene NODE, so two rigs animate independently in one frame.
 - **Spring bones** — Verlet secondary motion (hair/cloth/straps) with length +
   swing-angle constraints. No collision.
 - **Asset import (Assimp)** — FBX/glTF/GLB/OBJ; full PBR material extraction
@@ -179,7 +185,7 @@ are rough and assume a single experienced dev.
 | **Gamepad input** | **Done, spec 11.109** -- GLFW's standard layout behind a reader seam, an action table, hot-plug, a loadable mapping file; the layer above the seam gate-verified by a scripted pad. Still owed: one run with a real controller, or the Linux uinput recipe (`docs/verification.md`), since no pad was at hand. | Steam players expect controller support. Steam itself presents a virtual Xbox pad to a GLFW game, which is what shipped titles rely on; Steam Input's own API is a second reader behind the same seam, booked with Steamworks. | done (~2 days) |
 | **Save / serialization** | Partial — `.cscn` describes scenes, but nothing persists runtime state | The level/authoring half exists (§6.0). Still missing: save games, settings persistence, and any entity/physics state serializer. | ~1–2 weeks |
 | **Game UI / menus** | Absent (ImGui is dev-only; SDF text exists) | Main menu, HUD, pause, inventory, settings screens. | ~2–3 weeks |
-| **Animation blending** | Absent (one clip at a time) | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | ~1–2 weeks |
+| **Animation blending** | **Done, spec 12.1** -- a blend layer over the single-clip animator: a pose became a blendable value, and over it a phase-synced 1D blend space, a crossfade whose settled pose is the incoming clip's own bit for bit, one bone-masked override layer that releases itself, and clip events dispatched after the pose is applied. Poses are per node, so two rigs animate independently; the `ANIMATOR` component ticks one once per rendered frame from the sim clock. Thirteen gate arms on a generated puppet (endpoints to the pixel, an analytic 21.60/45.00/68.40-degree nlerp midpoint, crossfade timing, mask and release, two rigs, one shared phase, event counts, and the committed walk clip binding all twenty bones by name), plus the corpus's first skinned golden. Still owed: a real character, judged by eye (`docs/verification.md`). | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | done (~1 week) |
 | **Steamworks integration** | Absent | Achievements, cloud saves, overlay, input API. Needed near ship. | ~1 week |
 | **IK** | Absent | Foot planting, look-at/aim. Quality-of-life, not blocking. | ~1 week (two-bone) |
 | **VFX authoring, scripting, navmesh/AI, networking** | Absent | Only needed depending on genre. The particle system exists but emitters are built in code — an authoring/preset layer would come before heavy VFX work. Scripting (Lua) speeds iteration; navmesh/AI for enemies; networking for multiplayer. | genre-dependent |
@@ -204,8 +210,10 @@ its own branch.
 2. **Audio** — done in spec 12.0 (miniaudio: SFX + music + 3D positional through
    the `AUDIO_SOURCE` component), heard on macOS; the remaining item is a listen on
    Linux and Windows, per `docs/verification.md`.
-3. **Animation blending** (~1–2 weeks) — a small blend layer over the existing
-   single-clip animator; unlocks real locomotion.
+3. **Animation blending** — done in spec 12.1 (a phase-synced blend space, a
+   crossfade, one masked override layer and clip events, with per-node poses so
+   two rigs animate at once); the remaining item is a look at a real character,
+   per `docs/verification.md`.
 4. **Game UI layer** (~2–3 weeks) — retained-mode menu/HUD built on the SDF text
    renderer (or a thin immediate-mode game UI distinct from debug ImGui).
 5. **Save/settings serialization** (~1–2 weeks) — start with settings + a simple

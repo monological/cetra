@@ -49,6 +49,9 @@ static const char* hdr_path = NULL;
 // second rig beside the player playing its own clip, which is the per-node
 // pose seen from a game.
 #define PLAYER_SPEED 10.0f
+// Capsule centre to feet: radius 0.5 + half-height 0.5. The yaw rebuilds
+// this transform every step, so both sites read the same number.
+#define PLAYER_RIG_DROP (-1.0f)
 static bool no_puppet = false;
 static const char* puppet_path = "assets/puppet.gltf";
 static const char* twin_clip = NULL;
@@ -354,7 +357,9 @@ static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float
     node_set_name(inner, "rig");
     node_add_child(holder, inner);
     if (rig == scene->root_node) {
-        while (rig->children_count > 0)
+        // Bounded rather than drained: node_add_child refuses a cycle, and a
+        // `while (children_count)` on a refusal spins forever.
+        for (size_t guard = rig->children_count; guard > 0 && rig->children_count > 0; guard--)
             node_add_child(inner, rig->children[0]);
     } else {
         node_add_child(inner, rig);
@@ -367,14 +372,13 @@ static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float
 
 // A second node tree over the puppet's mesh, shared by reference: two nodes on
 // one skinned mesh never batch, and each carries its own pose.
-static SceneNode* clone_rig(Scene* scene, SceneNode* puppet_root) {
+static SceneNode* clone_rig(SceneNode* puppet_root) {
     SceneNode* mesh_node = node_find(puppet_root, "puppet_mesh");
     if (!mesh_node || mesh_node->mesh_count == 0)
         return NULL;
     SceneNode* rig = create_node();
     node_set_name(rig, "twin_rig");
     node_add_mesh(rig, mesh_ref(mesh_node->meshes[0]));
-    (void)scene;
     return rig;
 }
 
@@ -521,7 +525,7 @@ static void on_init(Game* game) {
         // The puppet, its feet a capsule's half-height plus radius below the
         // entity, on the locomotion space; the box's colour and size are the
         // capsule's, which stays the physics body either way.
-        player_rig = attach_rig(scene, player_entity, puppet_root, -1.0f);
+        player_rig = attach_rig(scene, player_entity, puppet_root, PLAYER_RIG_DROP);
         Skeleton* skeleton = scene->skeletons[0];
         Animation* idle = scene_find_animation(scene, "idle");
         Animation* walk = scene_find_animation(scene, "walk");
@@ -568,7 +572,7 @@ static void on_init(Game* game) {
     // A second rig beside the player on its own clip: two poses in one frame.
     if (puppet_root && twin_clip) {
         Animation* clip = scene_find_animation(scene, twin_clip);
-        SceneNode* rig = clip ? clone_rig(scene, puppet_root) : NULL;
+        SceneNode* rig = clip ? clone_rig(puppet_root) : NULL;
         if (!clip) {
             fprintf(stderr, "gametest: --twin names clip '%s', which the puppet lacks\n",
                     twin_clip);
@@ -696,7 +700,7 @@ static void on_update(Game* game, double dt) {
         float k = (float)dt * 12.0f;
         player_yaw += delta * (k > 1.0f ? 1.0f : k);
         glm_mat4_identity(player_rig->original_transform);
-        glm_translate(player_rig->original_transform, (vec3){0.0f, -1.0f, 0.0f});
+        glm_translate(player_rig->original_transform, (vec3){0.0f, PLAYER_RIG_DROP, 0.0f});
         glm_rotate_y(player_rig->original_transform, player_yaw, player_rig->original_transform);
     }
 

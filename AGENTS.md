@@ -181,8 +181,9 @@ functions. `apply_transform_to_nodes` used to fuse `prev := global` into the
 traversal, so a second walk in one frame made every node's previous pose its
 current one, zeroed every motion vector and stopped TAA reprojecting. The engine
 owns the latch and calls it once; anyone may call the walk again after a late
-graph change. **No golden can see that failure** -- all 30 are static scenes under
-a static camera, measured -- which is what the `transform` and `shadow-lag` gate
+graph change. **No golden can see that failure** -- all 31 are single frames with
+TAA off, thirty of them static scenes under a static camera and the thirty-first
+a rig posed purely by frame index, measured -- which is what the `transform` and `shadow-lag` gate
 groups exist for.
 
 **Scene passes** (`engine_render_scene`, in order). Before any of them, right after the draw-list
@@ -384,7 +385,8 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | Module | Purpose |
 |--------|---------|
 | `import.c/h` | Assimp-based FBX / OBJ / glTF-GLB loading |
-| `animation.c/h` | Skeletal animation, `bone_matrices[128]`, prev-pose for TAA motion vectors |
+| `animation.c/h` | Skeletal animation: clips, skeletons, and the POSE seam (spec 12.1) -- `animation_sample_pose` evaluates ONE clip into per-bone TRS with its retargeting and hierarchy in per-call scratch, `pose_blend` mixes two, `animation_state_apply_pose` turns one into `bone_matrices[128]`. A bone no clip drives copies its bind MATRIX rather than a decomposed rebuild, which is what keeps the single-clip path bit-identical. Prev-pose for TAA motion vectors |
+| `animator.c/h` | What PLAYS on a skeleton (spec 12.1), and how one thing becomes another: a phase-synced 1D blend space (every entry on one clock, so a foot planted 40% through the walk is planted 40% through the run), a crossfade that drops the outgoing source on completion so the settled pose is the incoming one exactly, one bone-masked override layer that releases itself, and clip events dispatched AFTER the pose is applied -- so a handler may play something. No state machine: a game decides what plays, this fades and blends it |
 | `rigging.c/h` | Semantic bone matching + cross-rig retargeting (not GPU skinning) |
 | `springbone.c/h` | Procedural secondary motion (Verlet) on un-animated bone chains |
 | `async_loader.c/h` | Background texture streaming (pthread pool sized `get_cpu_cores() - 2`, clamped to [2, 8]) |
@@ -415,8 +417,9 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 |--------|---------|
 | `game.c/h` | Fixed-timestep loop, init/update/render/shutdown callbacks, ticks particles + physics |
 | `physics.c/h` | Jolt Physics: rigid bodies, raycasts, sweeps, 5 constraint types + motors. **Jolt's default `Trace` is `DummyTrace`, which is `JPH_ASSERT(false)`**, so any condition Jolt merely wants to REPORT takes a breakpoint instead. The one met so far is `SHAPE_MESH` over a large run of exactly coplanar triangles — the tree builder cannot split them, falls back to a random split, and traces. Spec 11.63's island hit it with a perfectly flat sea floor and fixed it at the geometry. **Two things this entry claimed for a spec cycle and got wrong, both narrowing it.** The trace is `JPH_IF_DEBUG`-wrapped (`AABBTreeBuilder.cpp:205`), so the death is **debug-build only** — a release build indexes the same degenerate soup silently and badly, which is the worse half. And `JPH::Trace` / `JPH::AssertFailed` are **assignable `JPH_EXPORT extern` pointers**, so a handler absolutely can be installed; what JoltC lacks is a C entry point for doing it, and a C++ TU has been precedented since `cluster_build.cpp`. Nothing installs one today, so the geometry fix is what is load-bearing — but it is the right place because flat collision geometry is bad regardless, not because it was the only place reachable |
-| `entity.c/h`, `component.h` | ECS-lite entities + components (mesh/rigidbody/character/animator/audio) |
+| `entity.c/h`, `component.h` | ECS-lite entities + components. `RIGID_BODY`, `CHARACTER`, `ANIMATOR` (12.1) and `AUDIO_SOURCE` (12.0) are implemented; `MESH_RENDERER` is a bare enum line -- an entity's visual is its `node` |
 | `character.c/h` | Character controller on Jolt `CharacterVirtual` |
+| `animator_component.c/h` | The `ANIMATOR` component (spec 12.1): an `Animator` the entity owns, its pose bound to the entity's node, ticked once per RENDERED frame from `game_pre_render` with the sim clock's delta -- never per fixed step, because the tick begins with the prev-pose latch and two in one frame would lose a step's motion vector. A paused sim passes 0 and the rig holds, reading zero deformation velocity |
 | `input.c/h` | The game layer's input, polled once a frame before the fixed steps: keys, mouse, up to four gamepads in GLFW's standard layout behind a reader seam (GLFW, or a scripted pad from a text file), and the action table a game reads instead of key codes (spec 11.109). Every device's state is one struct held twice, this frame's and the previous frame's, and every edge -- a key's, a pad button's, an action's -- is the two compared; a pad that appears has its previous state set to its current one, which is the whole connect rule and reaches an action for free. An action is evaluated on read, so there is no cache, no cap and no ordering to get wrong |
 | `audio.c/h` | The game layer's audio (spec 12.0): one output device wrapping miniaudio's high-level engine, wrapped as an `AudioSystem` the `Game` owns like the physics world. 2D fire-and-forget SFX and music, held voices from a file (WAV/MP3/FLAC) or a procedural tone, mixer buses, and 3D positional sound whose listener is the camera and whose sources are `AUDIO_SOURCE` components synced from their entities. The device is the seam: a windowed run opens the OS device, a headless run opens NONE and renders offline through `audio_system_read_pcm`, so everything above the device is deterministic and the `audio` gate group asserts on it with no hardware. miniaudio (single-header, vendored) carries its own CoreAudio/ALSA/WASAPI backends |
 
@@ -489,8 +492,9 @@ Three rules the next editor needs:
 `pbr_skinned` (spec 11.95). One mask means the same thing in both, which is why a second family
 cost a builder argument rather than a second set of gates. `instanced` still falls out of the
 link — a skinned program has no `InstanceBlock`, so 11.28's rule that it never carries more than
-one instance holds without anything asserting it. **Nothing in the golden corpus is skinned**, so
-`pbr-variant-skinned` is the only instrument that can see that family at all.
+one instance holds without anything asserting it. **Until 12.1 nothing in the golden corpus was skinned**, which made
+`pbr-variant-skinned` the only instrument that could see that family at all; `puppet_golden` is
+now the first picture in the corpus that goes through `pbr_skinned_vert` and `skin.glsl`.
 
 **`include/noise.glsl` owns three hashes, and two shaders are exempt from using them.** `ign` is
 interleaved-gradient noise for SCREEN-space dither; `hash21(vec2 p, vec2 k)` and `hash13(vec3 p,
@@ -1269,7 +1273,7 @@ on the `Scene`.
 | render | `apps/render/` | FBX/GLB model viewer, orbit camera, animation retargeting, HDR/IBL | yes |
 | spores | `apps/spores/` | Cordyceps spore-room particle demo (curl-noise motes, game loop) | yes |
 | forest | `apps/forest/` | A walkable ISLAND since 11.63: ~5000 instanced trees/rocks on a CDLOD terrain quadtree, props and collision RESIDENT per region, sea past the shore, character on a Jolt mesh collider (spec 11.29), wind on the trees since 11.53. `--terrain-extent <f>` grows it past a kilometre; `--no-island` is the flat domain everything before 11.63 measured | yes |
-| gametest | `apps/gametest/` | Physics/character/entity demo on the action table: WASD or the left stick and dpad, jump on Space or A, boxes on F or X, a hinge door; `--pad-script` replays a scripted pad, `--trace-player` prints the pose and the commanded move each 30 steps (the `gamepad` gate group reads it), `--print-bindings` lists the table. Audio since 12.0: a beep on jump and spawn and a looping tone carried by the door as an `AUDIO_SOURCE` component, `--mute` to silence it, `--audio-probe <case>` for the headless offline render the `audio` gate reads. Frame-deterministic headless: two runs trace identically and the frame differs by 0 px (spec 11.109) | yes |
+| gametest | `apps/gametest/` | Physics/character/entity demo on the action table: WASD or the left stick and dpad, jump on Space or A, boxes on F or X, a hinge door; `--pad-script` replays a scripted pad, `--trace-player` prints the pose and the commanded move each 30 steps (the `gamepad` gate group reads it), `--print-bindings` lists the table. Audio since 12.0: a beep on jump and spawn and a looping tone carried by the door as an `AUDIO_SOURCE` component, `--mute` to silence it, `--audio-probe <case>` for the headless offline render the `audio` gate reads. Animation since 12.1: the player IS the procedural puppet (`assets/puppet.gltf`) on an `ANIMATOR` component, blending idle/walk/run from the character's POST-SOLVE speed so a wall stops the walk, a jump one-shot that returns to the space by itself, a wave (E / LB) on the right arm's subtree, footsteps fired from the clips' own events, and a facing yaw on an inner node since the entity node's local is the loop's to write; `--no-puppet` keeps the red box, `--twin <clip>` stands a second rig beside it, `--anim-probe <case>` is the headless probe the `anim` gate group reads, and `--trace-player` appends its `anim ...` tail after `jump`. Frame-deterministic headless with the rig on the frame: two runs trace identically and the frame differs by 0 px (spec 11.109, re-measured 12.1) | yes |
 | tree | `apps/tree/` | Procedural recursive tree generator with ImGui sliders, on a domed island in a sea with a seabed under it, at sunset, walkable in first person (`--player`); `--no-water` for dry land. Specs 11.32, 11.35, 11.36 | yes (but NOT frame-deterministic on the orbit path: floor is 9k-31k px depending on framing, see `docs/verification.md`) |
 | shapes | `apps/shapes/` | Procedural geometry demo (rect/circle/bezier) | no |
 | sprites | `apps/sprites/` | The 2023 particle-globe sketch, behaving as it did: 540 hard-square points on a jittering sphere that spins up over time, raw colours through the passthrough tonemap (spec 11.105) | yes |
@@ -1281,7 +1285,7 @@ on the `Scene`.
 **`docs/verification.md` owns this** — how to run the two suites, what a release run moves, the
 determinism-by-source table, the per-asset ledger of what is safe to compare, and the cross-build
 recipe with the six times it has moved. `scripts/gates.py` asserts analytic properties;
-`scripts/goldens.py` compares 30 committed PNGs.
+`scripts/goldens.py` compares 31 committed PNGs.
 
 Four rules belong here rather than in a file you have to open first:
 
@@ -1339,6 +1343,16 @@ app:
   whose animated length exceeds 3x bind length, with the offending bone weights. The
   decisive diagnostic for "spike" artifacts (rigid geometry stays ~1x; a mis-bound
   vertex shows up as a 100x+ edge).
+- `--anim-clip <name>` - Play this clip rather than the first `-a` one.
+- `--anim-space <a>,<b>` + `--anim-blend <t>` - A two-entry blend space, `a` at 0 and `b`
+  at 1, and its knob. Parked on an entry it is that clip alone, to the pixel.
+- `--anim-switch-to <name>` + `--anim-switch-at <frame>` + `--anim-fade <sec>` - Crossfade
+  to a clip on a named frame (default fade 0.25). After it settles the pose is the
+  incoming clip's own, as though it had been snapped at the switch.
+- `--anim-layer <name>` + `--anim-mask <bone>` - Play a clip on the override layer over
+  that bone's subtree; `--anim-layer-once` plays it once and lets it release itself.
+- `--anim-probe` - Print the frame's weights and every bone's global pose, `%.9g`, so a
+  textual diff is a bit diff. What the `anim` gate group reads.
 
 **Every other flag is in `docs/cli-reference.md`** — the render app's PostFX and environment set
 (TAA, water, sky, clouds, contact shadows, decals, IES, LUTs, layers, probes, the profiler), plus
@@ -1405,7 +1419,7 @@ refuses by name when it finds no baked noise, and `config-clouds` reads both hal
 cannot re-capture, since its members' cubes are released into the atlas. An env-only probe
 IS refreshed.
 
-**Animation debugging recipe:** (1) render the model with no animation as the bind-pose
+**Animation debugging recipe:** (0) `render -m assets/puppet.cscn --anim-probe` poses a rig whose bind is pure translation and whose clips are authored in closed form, so a wrong axis, order or handedness reads as a NUMBER rather than a silhouette; `-a assets/strut_walk.fbx` on it is a real walk cycle bound by exact name with an identity retarget delta, which is what a delta is measured against. Then, on the real rig: (1) render the model with no animation as the bind-pose
 baseline; (2) play the animation on its native skeleton (e.g. `-m T-Pose.fbx -a clip.fbx`)
 to validate the core pipeline; (3) retarget onto the target model and compare frame
 strips. Feeding the T-pose itself as the animation (`-a T-Pose.fbx`) must reproduce the
