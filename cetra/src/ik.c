@@ -105,6 +105,7 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
     // the one direction the pole cannot resolve. Taken from the bind pose, where the
     // chain's plane is whatever the rig author meant by it.
     glm_vec3_copy((vec3){1.0f, 0.0f, 0.0f}, foot->fallback_axis);
+    bool axis_derived = false;
     mat4* bind = calloc(skeleton->bone_count, sizeof(mat4));
     if (bind) {
         skeleton_compute_bind_globals(skeleton, bind);
@@ -118,10 +119,19 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
             if (glm_vec3_norm(axis) > IK_DIR_EPS) {
                 glm_vec3_normalize(axis);
                 glm_vec3_copy(axis, foot->fallback_axis);
+                axis_derived = true;
             }
         }
         free(bind);
     }
+    // Said out loud rather than guessed in silence. This axis decides WHICH WAY the
+    // knee bends in the one configuration the pole cannot resolve -- and on a rig whose
+    // bind pose is exactly that configuration, an arbitrary (1,0,0) is a knee bending
+    // sideways for no reason the caller can see.
+    if (!axis_derived)
+        log_error("ik_add_foot: '%s' -> '%s' -> '%s' gives no bend axis at bind; "
+                  "falling back to +X, which may bend the knee sideways",
+                  hip_bone, knee_bone, ankle_bone);
 
     return (int)system->foot_count++;
 }
@@ -157,7 +167,12 @@ bool ik_set_pelvis(IkSystem* system, const char* pelvis_bone) {
         if (!system->in_pelvis_subtree[system->feet[i].ankle_index]) {
             log_error("ik_set_pelvis: '%s' is not an ancestor of every registered foot",
                       pelvis_bone);
+            // All or nothing. Clearing the mask while leaving a previously accepted
+            // pelvis_index set would arm the drop against a mask matching no bone: the
+            // deficit is computed, the translation reaches nothing, and the caller was
+            // told false about a call it may not have expected to matter.
             memset(system->in_pelvis_subtree, 0, sizeof(system->in_pelvis_subtree));
+            system->pelvis_index = -1;
             return false;
         }
     }
@@ -288,10 +303,10 @@ static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target,
     glm_quat_rotatev(q_hip, ankle_rel, ankle_rel);
     glm_vec3_add(a, ankle_rel, ankle_carried);
 
-    rotate_global(g[f->hip_index], q_hip, a);
-    rotate_global(g[f->knee_index], q_hip, knee_new);
-    rotate_global(g[f->ankle_index], q_hip, ankle_carried);
-
+    // Every exit in this function leaves the chain at its animated pose, which is what
+    // the header promises. This guard used to sit AFTER the three writes below, so the
+    // one exit that could fire late left a thigh swung and a shin not -- a half-solved
+    // chain, which is a state the contract says cannot occur.
     vec3 shin_from, shin_to;
     glm_vec3_sub(ankle_carried, knee_new, shin_from);
     glm_vec3_sub(ankle_new, knee_new, shin_to);
@@ -299,6 +314,10 @@ static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target,
         return;
     glm_vec3_normalize(shin_from);
     glm_vec3_normalize(shin_to);
+
+    rotate_global(g[f->hip_index], q_hip, a);
+    rotate_global(g[f->knee_index], q_hip, knee_new);
+    rotate_global(g[f->ankle_index], q_hip, ankle_carried);
 
     versor q_knee;
     glm_quat_from_vecs(shin_from, shin_to, q_knee);
@@ -362,12 +381,19 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
             glm_vec3_distance(f->target, f->applied_target) > system->params.teleport_distance;
         if (snap) {
             glm_vec3_copy(f->target, f->applied_target);
-            glm_vec3_copy(f->normal, f->applied_normal);
             f->has_applied = true;
         } else {
             glm_vec3_lerp(f->applied_target, f->target, ease, f->applied_target);
-            glm_vec3_lerp(f->applied_normal, f->normal, ease, f->applied_normal);
         }
+
+        // Settled HERE, once, and read unchanged by both consumers below. It has to be
+        // here rather than in either of them: the pelvis drop mutates every ankle in
+        // its subtree, so a second reading taken after it sees a smaller lift and
+        // returns a larger weight -- the hips get lowered from one number and the legs
+        // solved from another. This loop is the last point at which the globals are
+        // still the clip's own pose, which is the only moment the question has a true
+        // answer (see the header).
+        f->applied_weight = ik_effective_weight(system, f, global_transforms);
     }
 
     // The pelvis drop, before any chain is solved, so every chain solves against where
@@ -379,10 +405,11 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         float worst = 0.0f;
         for (size_t i = 0; i < system->foot_count; i++) {
             const IkFoot* f = &system->feet[i];
-            // The SAME weight the solve will use. Reading the raw one here let a foot
-            // the solve had released still pull the hips down, which bobbed the whole
-            // body every frame and read as legs scissoring in and out.
-            const float weight = ik_effective_weight(system, f, global_transforms);
+            // The same value the solve reads, settled before this loop moved anything.
+            // Reading the raw weight here let a foot the solve had released still pull
+            // the hips down, which bobbed the whole body every frame and read as legs
+            // scissoring in and out.
+            const float weight = f->applied_weight;
             if (weight <= 0.0f)
                 continue; // released, or unweighted: it must not drag the hips down
             vec3 a, b, c, ab, bc;
@@ -413,7 +440,7 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         if (f->weight <= 0.0f)
             continue; // skipped entirely, so weight 0 is bit-identical to no IK
 
-        const float weight = ik_effective_weight(system, f, global_transforms);
+        const float weight = f->applied_weight;
         if (weight <= 0.0f)
             continue; // the clip has lifted this foot clear: leave the stride alone
 

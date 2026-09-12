@@ -22239,8 +22239,12 @@ def _ui_probe(case, env=None):
     return out
 
 
-# "save <case> <label> <key> <numbers...>" from gametest --save-probe: the shape
-# the audio, anim and ui probes already print, so one reader serves all four.
+# "save <case> <label> <key> <numbers...>" from gametest --save-probe: the shape the
+# audio, anim, ui and ik probes already print. FIVE readers now parse it, one per
+# group, differing only in a flag and a regex -- the sentence here used to claim one
+# reader served all of them, which each new probe has made less true. Worth collapsing
+# into a single _gametest_probe(flag, rx, case, env) the day a sixth arrives, or the
+# day one of them needs a timeout and the other four silently do not get it.
 # "ik <case> <label> <key> <numbers...>" from gametest --ik-probe. The character
 # class admits no letters and no exponent on purpose: a nan or an inf prints a line
 # this cannot match, so the key vanishes from the dict and the arm fails on absence.
@@ -22250,10 +22254,13 @@ _IK_PROBE = re.compile(r"^ik ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 
 def _ik_probe_run(case):
     """{(label, key): [floats]} from one gametest --ik-probe run, or None if it failed
-    or measured nothing. These six cases build a rig and nothing else -- no physics
-    world, no window, no frame -- because a two-bone solve is a pure function of a hip,
-    a target and two segment lengths, and a world would only make exact arithmetic
-    depend on contact slop.
+    or measured nothing.
+
+    One run of ANY case. Six of them build a rig and nothing else -- no physics world,
+    no window, no frame -- because a two-bone solve is a pure function of a hip, a
+    target and two segment lengths, and a world would only make exact arithmetic depend
+    on contact slop. The other three DO build a Jolt world and the --ik-ground fixture,
+    because planting's input is a raycast. run_ik_gate says where the line is drawn.
     """
     r = subprocess.run([GAMETEST, "--ik-probe", case], capture_output=True, text=True)
     text = r.stdout + r.stderr
@@ -22343,7 +22350,7 @@ def run_ik_gate(workdir):
     if not os.path.exists(GAMETEST):
         print("  ik           SKIP  (gametest not built)")
         return []
-    del workdir # every case is arithmetic: nothing is rendered and nothing is written
+    del workdir # nothing is rendered and nothing is written; three cases do raycast
     failures = []
 
     # --- ik-reach --------------------------------------------------------------
@@ -22377,17 +22384,26 @@ def run_ik_gate(workdir):
         far_bend = d[("far", "bend")][0]
         align = d[("far", "align")][0]
         hip_dist = d[("atHip", "dist")][0]
+        hip_bend = d[("atHip", "bend")][0]
         # A clamped leg is straight to within what acos can resolve AT its own
         # singularity, not to zero: the distance lands exactly on thigh + shin, so the
         # cosine lands on -1, where acos's derivative is unbounded and float epsilon
         # comes back as ~0.02 degrees. Asserting 0 here would be asserting that the
         # arithmetic is better than it can be.
+        #
+        # The at-hip half asserts the REFUSAL: a target on the hip gives no direction to
+        # aim along, the solve returns without touching the pose, and from bind that
+        # leaves the leg straight at full extension. An isfinite() check stood here and
+        # could never fail -- the probe's grammar admits no letters, so a nan never
+        # matches, the key never arrives, and the `need` guard above fails first. It was
+        # the only assertion this end of the arm had.
         ok = (abs(far_dist - span) < 1e-5 and far_bend < 0.05 and align > 1.0 - 1e-6
-              and math.isfinite(hip_dist))
+              and abs(hip_dist - span) < 1e-5 and hip_bend < 0.05)
         print(f"  ik-clamp     {'PASS' if ok else 'FAIL'}  beyond reach the ankle sits "
               f"{far_dist:.6f} from the hip against a span of {span:.6f}, bend "
-              f"{far_bend:.6f} deg, aim {align:.8f} (want 1); on the hip it stays finite "
-              f"at {hip_dist:.6f}")
+              f"{far_bend:.6f} deg, aim {align:.8f} (want 1); a target ON the hip is "
+              f"refused and leaves the leg straight at {hip_dist:.6f} with bend "
+              f"{hip_bend:.6f}")
         if not ok:
             failures.append("ik-clamp")
 
@@ -22456,16 +22472,24 @@ def run_ik_gate(workdir):
         failures.append("ik-analytic")
     else:
         seg = d[("rig", "segments")]
-        worst, seen, expected = 0.0, 0, []
+        worst, seen, expected, reach_miss = 0.0, 0, [], 0.0
         for i in range(5):
-            if (f"c{i}", "bend") not in d or (f"c{i}", "dist") not in d:
+            keys = [(f"c{i}", k) for k in ("bend", "dist", "want")]
+            if any(k not in d for k in keys):
                 continue
             got = d[(f"c{i}", "bend")][0]
-            want = _ik_knee_bend_deg(seg[0], seg[1], d[(f"c{i}", "dist")][0])
+            reached = d[(f"c{i}", "dist")][0]
+            asked = d[(f"c{i}", "want")][0]
+            # Against the distance ASKED for, not the one reached. Deriving the expected
+            # bend from `reached` alone is self-consistent for a solver that put the
+            # ankle anywhere it liked and reported the matching angle -- the arm this
+            # group is anchored on would have scored 0.0000 on it.
+            reach_miss = max(reach_miss, abs(reached - asked))
+            want = _ik_knee_bend_deg(seg[0], seg[1], asked)
             expected.append(want)
             worst = max(worst, abs(got - want))
             seen += 1
-        ok = seen == 5 and worst < 0.05
+        ok = seen == 5 and worst < 0.05 and reach_miss < 1e-5
         shown = "/".join(f"{v:.2f}" for v in expected) if expected else "none"
         print(f"  ik-analytic  {'PASS' if ok else 'FAIL'}  {seen} of 5 distances, worst "
               f"error {worst:.4f} deg against the closed form's {shown} (want < 0.05)")
@@ -22575,7 +22599,11 @@ def run_ik_gate(workdir):
         off = d[("off", "travel")][0]
         on = d[("on", "travel")][0]
         ratio = (on / off) if off > 1e-6 else 0.0
-        ok = off > 0.05 and ratio > 0.6
+        # A BAND, not a floor, and the upper bound is the half this arm was missing. A
+        # weld reads 0 -- but an IK that never ran at all reads 1.0, and that is the
+        # other way this feature breaks. One-sided, the arm written to catch a stride
+        # being overwritten would have passed a solve that was never applied.
+        ok = off > 0.05 and 0.6 < ratio < 0.95
         print(f"  ik-swing     {'PASS' if ok else 'FAIL'}  the ankle travels {off:.6f} over a "
               f"walk cycle with IK off and {on:.6f} with it on, {ratio * 100.0:.0f} per cent "
               f"(want > 60; a foot welded to the ground reads 0). Damped and not equal because "
