@@ -145,6 +145,7 @@ AnimationChannel* get_channel_for_bone_name(Animation* animation, const char* bo
 // --- Animation State ---
 
 struct SpringBoneSystem;
+struct IkSystem;
 
 // A skeleton's live pose and the buffers a frame skins from. WHAT PLAYS is
 // not here -- an Animator owns the clock, the blend and the fades (animator.h),
@@ -167,6 +168,9 @@ typedef struct AnimationState {
 
     // Optional spring-bone secondary motion (see springbone.h)
     struct SpringBoneSystem* springs;
+
+    // Optional two-bone IK, applied after the springs (see ik.h)
+    struct IkSystem* ik;
 
     // Dump the first animated pose to stdout: per bone, whether the clip drives
     // it at all, its bind and animated global positions, the distance between

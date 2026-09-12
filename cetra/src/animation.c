@@ -1,4 +1,5 @@
 #include "animation.h"
+#include "ik.h"
 #include "springbone.h"
 #include "util.h"
 #include "ext/log.h"
@@ -455,6 +456,7 @@ AnimationState* create_animation_state(Skeleton* skeleton) {
     }
 
     state->springs = NULL;
+    state->ik = NULL;
 
     // Compute initial bind pose
     compute_bind_pose_matrices(state);
@@ -468,6 +470,9 @@ void free_animation_state(AnimationState* state) {
 
     if (state->springs)
         free_spring_bone_system(state->springs);
+
+    if (state->ik)
+        free_ik_system(state->ik);
 
     if (state->local_transforms)
         free(state->local_transforms);
@@ -1038,6 +1043,12 @@ void animation_state_apply_pose(AnimationState* state, const Pose* pose, float d
         spring_bone_update(state->springs, state->local_transforms, state->global_transforms,
                            delta_time);
     }
+
+    // Two-bone IK: plant a foot on ground the clip knew nothing about. AFTER the
+    // springs, because their pass re-accumulates every unsimulated bone from its
+    // parent and would erase a solve written before it (see ik.h).
+    if (state->ik)
+        ik_solve(state->ik, state->global_transforms, delta_time);
 
     // PASS 2: Compute final bone matrices (global * inverse bind pose)
     for (size_t i = 0; i < skeleton->bone_count; i++) {

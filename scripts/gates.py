@@ -22241,6 +22241,211 @@ def _ui_probe(case, env=None):
 
 # "save <case> <label> <key> <numbers...>" from gametest --save-probe: the shape
 # the audio, anim and ui probes already print, so one reader serves all four.
+# "ik <case> <label> <key> <numbers...>" from gametest --ik-probe. The character
+# class admits no letters and no exponent on purpose: a nan or an inf prints a line
+# this cannot match, so the key vanishes from the dict and the arm fails on absence.
+# Every arm gets its NaN check for free that way.
+_IK_PROBE = re.compile(r"^ik ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+
+
+def _ik_probe_run(case):
+    """{(label, key): [floats]} from one gametest --ik-probe run, or None if it failed
+    or measured nothing. These six cases build a rig and nothing else -- no physics
+    world, no window, no frame -- because a two-bone solve is a pure function of a hip,
+    a target and two segment lengths, and a world would only make exact arithmetic
+    depend on contact slop.
+    """
+    r = subprocess.run([GAMETEST, "--ik-probe", case], capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    out = {(label, key): [float(v) for v in nums.split()]
+           for c, label, key, nums in _IK_PROBE.findall(text) if c == case}
+    if r.returncode != 0 or not out:
+        return None
+    return out
+
+
+def _ik_knee_bend_deg(a, b, c):
+    """The knee's deviation from straight for segments a, b at hip-to-ankle distance c.
+
+    The law of cosines gives the INTERIOR angle; what the probe measures is the angle
+    between the thigh and shin directions, which is its supplement.
+    """
+    cos_interior = (a * a + b * b - c * c) / (2.0 * a * b)
+    return 180.0 - math.degrees(math.acos(max(-1.0, min(1.0, cos_interior))))
+
+
+def run_ik_gate(workdir):
+    """Two-bone IK (spec 12.4), on the puppet whose limb lengths the fixture generator
+    states. Six arms drive the solver with SYNTHETIC targets through gametest's
+    --ik-probe and need no physics at all. Every expected angle is recomputed here in
+    Python from the segment lengths the probe reports, so nothing is a magic number
+    copied from a run. The bind pose is the SINGULAR configuration -- hip to ankle is
+    thigh plus shin exactly -- which is why the singular and identity arms are the two
+    this group could least afford to omit.
+
+      ik-reach     a target inside the reach is HIT: the ankle lands on it over a sweep
+                   of nine directions, and the leg actually bends to do it. A solver
+                   that merely points at a target passes nothing here.
+      ik-clamp     a target beyond the reach leaves the leg straight and AIMED -- the
+                   ankle at full extension, the bend 0, and the leg direction agreeing
+                   with the target direction. A target ON the hip is the other
+                   unreachable end and must not make a direction from a zero vector.
+      ik-singular  at full extension the bend is 0 and at the inner fold it is 180: the
+                   two places acos's argument lands on -1 or +1, where one ulp of float
+                   error is a NaN. A NaN fails by ABSENCE, the probe line no longer
+                   matching the numeric grammar. Straightness is held to 0.05 degrees
+                   and not to 0, because acos's derivative is unbounded exactly there
+                   and float epsilon comes back as about 0.02 -- asserting 0 would be
+                   asserting the arithmetic is better than it can be.
+      ik-identity  weight 0 changes the pose by 0 EXACTLY, because the solver skips the
+                   chain rather than solving it with a null weight. Re-solving a bent
+                   leg onto the ankle it already has is idempotence rather than that
+                   identity -- the second pass reads a hip the first one rotated -- so
+                   it is held to a tolerance and the two are asserted apart.
+      ik-pole      the knee goes the way the pole says, and reversing the pole reverses
+                   it. The SPAN between the two is what proves the pole is read at all
+                   rather than defaulted, which a sign test alone would not catch.
+      ik-analytic  the closed form, the arm this group is anchored on: the bend at five
+                   distances, against acos((a^2 + b^2 - c^2) / 2ab) computed here from
+                   the segments and the distance the probe reports. The sweep stops
+                   short of full extension deliberately, because the derivative there
+                   is unbounded and a nearer value would assert float noise.
+    """
+    if not os.path.exists(GAMETEST):
+        print("  ik           SKIP  (gametest not built)")
+        return []
+    del workdir # every case is arithmetic: nothing is rendered and nothing is written
+    failures = []
+
+    # --- ik-reach --------------------------------------------------------------
+    d = _ik_probe_run("reach")
+    if not d:
+        print("  ik-reach     FAIL  the probe failed or measured nothing")
+        failures.append("ik-reach")
+    else:
+        residuals = [d[(f"t{i}", "residual")][0] for i in range(9) if (f"t{i}", "residual") in d]
+        bends = [d[(f"t{i}", "bend")][0] for i in range(9) if (f"t{i}", "bend") in d]
+        worst = max(residuals) if residuals else 1.0
+        least_bend = min(bends) if bends else 0.0
+        ok = len(residuals) == 9 and worst < 1e-5 and least_bend > 1.0
+        print(f"  ik-reach     {'PASS' if ok else 'FAIL'}  {len(residuals)} targets, worst "
+              f"residual {worst:.7f} m (want < 1e-5), least bend {least_bend:.3f} deg "
+              f"(want > 1: a straight leg did not solve)")
+        if not ok:
+            failures.append("ik-reach")
+
+    # --- ik-clamp --------------------------------------------------------------
+    d = _ik_probe_run("clamp")
+    need = [("far", "dist"), ("far", "bend"), ("far", "align"), ("atHip", "dist"),
+            ("atHip", "bend"), ("rig", "segments")]
+    if not d or any(k not in d for k in need):
+        print("  ik-clamp     FAIL  the probe failed or measured nothing")
+        failures.append("ik-clamp")
+    else:
+        seg = d[("rig", "segments")]
+        span = seg[0] + seg[1]
+        far_dist = d[("far", "dist")][0]
+        far_bend = d[("far", "bend")][0]
+        align = d[("far", "align")][0]
+        hip_dist = d[("atHip", "dist")][0]
+        # A clamped leg is straight to within what acos can resolve AT its own
+        # singularity, not to zero: the distance lands exactly on thigh + shin, so the
+        # cosine lands on -1, where acos's derivative is unbounded and float epsilon
+        # comes back as ~0.02 degrees. Asserting 0 here would be asserting that the
+        # arithmetic is better than it can be.
+        ok = (abs(far_dist - span) < 1e-5 and far_bend < 0.05 and align > 1.0 - 1e-6
+              and math.isfinite(hip_dist))
+        print(f"  ik-clamp     {'PASS' if ok else 'FAIL'}  beyond reach the ankle sits "
+              f"{far_dist:.6f} from the hip against a span of {span:.6f}, bend "
+              f"{far_bend:.6f} deg, aim {align:.8f} (want 1); on the hip it stays finite "
+              f"at {hip_dist:.6f}")
+        if not ok:
+            failures.append("ik-clamp")
+
+    # --- ik-singular -----------------------------------------------------------
+    d = _ik_probe_run("singular")
+    need = [("full", "bend"), ("full", "dist"), ("folded", "bend"), ("folded", "dist"),
+            ("rig", "segments")]
+    if not d or any(k not in d for k in need):
+        print("  ik-singular  FAIL  the probe failed, or a NaN kept a line from matching")
+        failures.append("ik-singular")
+    else:
+        seg = d[("rig", "segments")]
+        span, fold = seg[0] + seg[1], abs(seg[0] - seg[1])
+        full_bend = d[("full", "bend")][0]
+        folded_bend = d[("folded", "bend")][0]
+        # 0.05 rather than 0 for the same reason ik-clamp carries it: this IS the
+        # singularity, and acos cannot resolve the last few ulps of its own argument.
+        ok = (full_bend < 0.05 and folded_bend > 180.0 - 0.5
+              and abs(d[("full", "dist")][0] - span) < 1e-5
+              and abs(d[("folded", "dist")][0] - fold) < 1e-3)
+        print(f"  ik-singular  {'PASS' if ok else 'FAIL'}  at full extension bend "
+              f"{full_bend:.6f} deg (want 0) and reach {d[('full', 'dist')][0]:.6f} of "
+              f"{span:.6f}; at the inner fold bend {folded_bend:.4f} deg (want 180) and "
+              f"reach {d[('folded', 'dist')][0]:.6f} of {fold:.6f}")
+        if not ok:
+            failures.append("ik-singular")
+
+    # --- ik-identity -----------------------------------------------------------
+    d = _ik_probe_run("identity")
+    need = [("bent", "maxdiff"), ("zeroweight", "maxdiff")]
+    if not d or any(k not in d for k in need):
+        print("  ik-identity  FAIL  the probe failed or measured nothing")
+        failures.append("ik-identity")
+    else:
+        bent = d[("bent", "maxdiff")][0]
+        zero = d[("zeroweight", "maxdiff")][0]
+        ok = zero == 0.0 and bent < 1e-5
+        print(f"  ik-identity  {'PASS' if ok else 'FAIL'}  weight 0 moves the pose by "
+              f"{zero:.6f} (want 0 exactly, the chain is skipped); re-solving a bent leg "
+              f"onto its own ankle moves it {bent:.7f} (want < 1e-5, idempotence rather "
+              f"than identity)")
+        if not ok:
+            failures.append("ik-identity")
+
+    # --- ik-pole ---------------------------------------------------------------
+    d = _ik_probe_run("pole")
+    need = [("fwd", "kneez"), ("back", "kneez"), ("span", "delta")]
+    if not d or any(k not in d for k in need):
+        print("  ik-pole      FAIL  the probe failed or measured nothing")
+        failures.append("ik-pole")
+    else:
+        fwd = d[("fwd", "kneez")][0]
+        back = d[("back", "kneez")][0]
+        span = d[("span", "delta")][0]
+        ok = fwd > 0.05 and back < -0.05 and span > 0.10
+        print(f"  ik-pole      {'PASS' if ok else 'FAIL'}  knee at z {fwd:+.4f} forward "
+              f"and {back:+.4f} reversed (want opposite signs past 0.05), {span:.4f} apart "
+              f"(want > 0.10, or the pole was never read)")
+        if not ok:
+            failures.append("ik-pole")
+
+    # --- ik-analytic -----------------------------------------------------------
+    d = _ik_probe_run("analytic")
+    if not d or ("rig", "segments") not in d:
+        print("  ik-analytic  FAIL  the probe failed or measured nothing")
+        failures.append("ik-analytic")
+    else:
+        seg = d[("rig", "segments")]
+        worst, seen, expected = 0.0, 0, []
+        for i in range(5):
+            if (f"c{i}", "bend") not in d or (f"c{i}", "dist") not in d:
+                continue
+            got = d[(f"c{i}", "bend")][0]
+            want = _ik_knee_bend_deg(seg[0], seg[1], d[(f"c{i}", "dist")][0])
+            expected.append(want)
+            worst = max(worst, abs(got - want))
+            seen += 1
+        ok = seen == 5 and worst < 0.05
+        shown = "/".join(f"{v:.2f}" for v in expected) if expected else "none"
+        print(f"  ik-analytic  {'PASS' if ok else 'FAIL'}  {seen} of 5 distances, worst "
+              f"error {worst:.4f} deg against the closed form's {shown} (want < 0.05)")
+        if not ok:
+            failures.append("ik-analytic")
+
+    return failures
+
+
 _SAVE_PROBE = re.compile(r"^save ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 
 
@@ -22788,6 +22993,8 @@ GATE_GROUPS = [
      run_ui_gate),
     ("save", "save serialization (entities, spawners, drops, migrations; spec 12.3):",
      run_save_gate),
+    ("ik", "two-bone IK (reach, clamp, the singular bind pose, the pole; spec 12.4):",
+     run_ik_gate),
     ("import", "import:", _run_import_gates),
     ("fixture-gen", "fixture generators (every gen_*.py reproduces its asset):",
      run_fixture_gen_gate),

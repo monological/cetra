@@ -22,6 +22,7 @@
 #include "cetra/scene.h"
 #include "cetra/engine.h"
 #include "cetra/geometry.h"
+#include "cetra/ik.h"
 #include "cetra/light.h"
 #include "cetra/app.h"
 #include "cetra/program.h"
@@ -1611,6 +1612,273 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
     return rc;
 }
 
+// --ik-probe: the two-bone solver as a pure function (spec 12.4). The six cases here
+// need no physics and no frame at all -- a solve is (hip, target, thigh, shin, pole)
+// and nothing else, so giving them a world would make exact arithmetic depend on
+// Jolt's contact slop for no gain. The cases that DO need a raycast are the ones that
+// stand the rig on real ground, and they are separate for that reason.
+//
+// Prints `ik <case> <label> <key> <numbers...>` at %.6f, the grammar the audio, anim,
+// ui and save probes already share. Note the gate's regex admits no letters and no
+// exponent, so a nan or an inf prints a line it cannot match: the key vanishes from
+// the dict and the arm fails on absence. NaN is caught for free, on every arm.
+#define IK_PROBE_HIP   "cetra_rig:LeftUpLeg"
+#define IK_PROBE_KNEE  "cetra_rig:LeftLeg"
+#define IK_PROBE_ANKLE "cetra_rig:LeftFoot"
+
+// The bend the gate states in closed form: the angle at the knee for a hip-to-ankle
+// distance c, which is acos((c^2 - a^2 - b^2) / 2ab) measured as the deviation from
+// straight. Read off the solved globals rather than recomputed, so what is asserted is
+// what the solver actually produced.
+static float ik_probe_bend_deg(const mat4* g, const IkFoot* foot) {
+    vec3 a, b, c, thigh, shin;
+    glm_vec3_copy((float*)g[foot->hip_index][3], a);
+    glm_vec3_copy((float*)g[foot->knee_index][3], b);
+    glm_vec3_copy((float*)g[foot->ankle_index][3], c);
+    glm_vec3_sub(b, a, thigh);
+    glm_vec3_sub(c, b, shin);
+    if (glm_vec3_norm(thigh) < 1e-8f || glm_vec3_norm(shin) < 1e-8f)
+        return 0.0f;
+    glm_vec3_normalize(thigh);
+    glm_vec3_normalize(shin);
+    return glm_deg(acosf(glm_clamp(glm_vec3_dot(thigh, shin), -1.0f, 1.0f)));
+}
+
+static float ik_probe_residual(const mat4* g, const IkFoot* foot, const vec3 target) {
+    vec3 ankle;
+    glm_vec3_copy((float*)g[foot->ankle_index][3], ankle);
+    return glm_vec3_distance(ankle, (float*)target);
+}
+
+static int run_ik_probe(Game* game, const char* which) {
+    Scene* probe_scene =
+        create_scene_from_model_path(puppet_path, NULL, game->engine->async_loader);
+    if (!probe_scene || probe_scene->skeleton_count == 0) {
+        fprintf(stderr, "ik-probe: could not load a rig from '%s'\n", puppet_path);
+        if (probe_scene)
+            free_scene(probe_scene);
+        return 1;
+    }
+    game_set_scene(game, probe_scene);
+
+    Skeleton* skel = probe_scene->skeletons[0];
+    AnimationState* state = create_animation_state(skel);
+    IkSystem* ik = create_ik_system(skel);
+    if (!state || !ik) {
+        fprintf(stderr, "ik-probe: could not build a state or an IK system\n");
+        return 1;
+    }
+    // +Z is the direction the puppet faces and the way its jump clip bends the knee.
+    const int foot_index =
+        ik_add_foot(ik, IK_PROBE_HIP, IK_PROBE_KNEE, IK_PROBE_ANKLE, (vec3){0.0f, 0.0f, 1.0f});
+    if (foot_index < 0) {
+        fprintf(stderr, "ik-probe: the rig lacks the left leg chain\n");
+        return 1;
+    }
+    const IkFoot* foot = &ik->feet[foot_index];
+    state->ik = ik; // the state owns it from here, and frees it
+
+    // Bind gives the hip and the segment lengths this rig actually has, rather than
+    // numbers restated here: thigh and shin measured, and the hip to solve from.
+    compute_bind_pose_matrices(state);
+    vec3 hip, knee, ankle;
+    glm_vec3_copy(state->global_transforms[foot->hip_index][3], hip);
+    glm_vec3_copy(state->global_transforms[foot->knee_index][3], knee);
+    glm_vec3_copy(state->global_transforms[foot->ankle_index][3], ankle);
+    const float seg_a = glm_vec3_distance(hip, knee);
+    const float seg_b = glm_vec3_distance(knee, ankle);
+
+    // Every case re-poses from bind first, so one case cannot leave the rig somewhere
+    // the next one reads. reach_limit is lifted to 1 so the clamp under test is the
+    // geometric one and not a safety margin the gate would have to know about.
+    ik->params.reach_limit = 1.0f;
+    ik->params.max_pelvis_drop = 0.0f;
+    ik->params.blend_rate = 0.0f;
+
+    int rc = 0;
+
+    if (!strcmp(which, "reach")) {
+        // Nine directions at a distance the leg can certainly make, each solved from a
+        // fresh bind pose. A solver that merely POINTS at a target passes nothing here.
+        const float c = (seg_a + seg_b) * 0.85f;
+        const vec3 dirs[9] = {{0, -1, 0},        {0.3f, -1, 0},     {-0.3f, -1, 0},
+                              {0, -1, 0.3f},     {0, -1, -0.3f},    {0.2f, -1, 0.2f},
+                              {-0.2f, -1, 0.2f}, {0.2f, -1, -0.2f}, {0.5f, -1, 0.1f}};
+        for (int i = 0; i < 9; i++) {
+            compute_bind_pose_matrices(state);
+            vec3 dir, target;
+            glm_vec3_copy((float*)dirs[i], dir);
+            glm_vec3_normalize(dir);
+            glm_vec3_scale(dir, c, target);
+            glm_vec3_add(hip, target, target);
+            ik_reset(ik);
+            ik_foot_set_target(ik, foot_index, target, (vec3){0, 1, 0}, 1.0f);
+            ik_solve(ik, state->global_transforms, 0.0f);
+            printf("ik reach t%d residual %.6f\n", i,
+                   (double)ik_probe_residual(state->global_transforms, foot, target));
+            printf("ik reach t%d bend %.6f\n", i,
+                   (double)ik_probe_bend_deg(state->global_transforms, foot));
+        }
+    } else if (!strcmp(which, "clamp")) {
+        // Beyond reach the leg must go straight AND stay aimed; a target ON the hip is
+        // the other unreachable end and must not divide by a zero-length direction.
+        compute_bind_pose_matrices(state);
+        vec3 far_target = {hip[0], hip[1] - (seg_a + seg_b) * 2.0f, hip[2]};
+        ik_reset(ik);
+        ik_foot_set_target(ik, foot_index, far_target, (vec3){0, 1, 0}, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+        vec3 solved_ankle, leg_dir, want_dir;
+        glm_vec3_copy(state->global_transforms[foot->ankle_index][3], solved_ankle);
+        glm_vec3_sub(solved_ankle, hip, leg_dir);
+        glm_vec3_sub(far_target, hip, want_dir);
+        glm_vec3_normalize(leg_dir);
+        glm_vec3_normalize(want_dir);
+        printf("ik clamp far dist %.6f\n", (double)glm_vec3_distance(solved_ankle, hip));
+        printf("ik clamp far bend %.6f\n",
+               (double)ik_probe_bend_deg(state->global_transforms, foot));
+        printf("ik clamp far align %.6f\n", (double)glm_vec3_dot(leg_dir, want_dir));
+
+        compute_bind_pose_matrices(state);
+        ik_reset(ik);
+        ik_foot_set_target(ik, foot_index, hip, (vec3){0, 1, 0}, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+        glm_vec3_copy(state->global_transforms[foot->ankle_index][3], solved_ankle);
+        printf("ik clamp atHip dist %.6f\n", (double)glm_vec3_distance(solved_ankle, hip));
+        printf("ik clamp atHip bend %.6f\n",
+               (double)ik_probe_bend_deg(state->global_transforms, foot));
+    } else if (!strcmp(which, "singular")) {
+        // The two places acos's argument lands exactly on -1 or +1, where one ulp of
+        // float error is a NaN. Full extension first, then the inner fold.
+        compute_bind_pose_matrices(state);
+        vec3 t = {hip[0], hip[1] - (seg_a + seg_b), hip[2]};
+        ik_reset(ik);
+        ik_foot_set_target(ik, foot_index, t, (vec3){0, 1, 0}, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+        printf("ik singular full bend %.6f\n",
+               (double)ik_probe_bend_deg(state->global_transforms, foot));
+        printf(
+            "ik singular full dist %.6f\n",
+            (double)glm_vec3_distance((float*)state->global_transforms[foot->ankle_index][3], hip));
+
+        compute_bind_pose_matrices(state);
+        vec3 folded = {hip[0], hip[1] - fabsf(seg_a - seg_b), hip[2]};
+        ik_reset(ik);
+        ik_foot_set_target(ik, foot_index, folded, (vec3){0, 1, 0}, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+        printf("ik singular folded bend %.6f\n",
+               (double)ik_probe_bend_deg(state->global_transforms, foot));
+        printf(
+            "ik singular folded dist %.6f\n",
+            (double)glm_vec3_distance((float*)state->global_transforms[foot->ankle_index][3], hip));
+    } else if (!strcmp(which, "identity")) {
+        // Asking for the ankle where it ALREADY is changes nothing -- and from a BENT
+        // pose, not the bind one, so this is idempotence rather than a restatement of
+        // the singular case. A weight of 0 must also be bit-identical to no IK at all.
+        compute_bind_pose_matrices(state);
+        vec3 bent = {hip[0], hip[1] - (seg_a + seg_b) * 0.8f, hip[2] + 0.05f};
+        ik_reset(ik);
+        ik_foot_set_target(ik, foot_index, bent, (vec3){0, 1, 0}, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+
+        mat4 before[3];
+        glm_mat4_copy(state->global_transforms[foot->hip_index], before[0]);
+        glm_mat4_copy(state->global_transforms[foot->knee_index], before[1]);
+        glm_mat4_copy(state->global_transforms[foot->ankle_index], before[2]);
+
+        vec3 settled;
+        glm_vec3_copy(state->global_transforms[foot->ankle_index][3], settled);
+        ik_foot_set_target(ik, foot_index, settled, (vec3){0, 1, 0}, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+
+        float worst = 0.0f;
+        const int idx[3] = {foot->hip_index, foot->knee_index, foot->ankle_index};
+        for (int j = 0; j < 3; j++) {
+            const float* m = (const float*)state->global_transforms[idx[j]];
+            const float* n = (const float*)before[j];
+            for (int k = 0; k < 16; k++) {
+                const float diff = fabsf(m[k] - n[k]);
+                if (diff > worst)
+                    worst = diff;
+            }
+        }
+        printf("ik identity bent maxdiff %.6f\n", (double)worst);
+
+        compute_bind_pose_matrices(state);
+        mat4 untouched;
+        glm_mat4_copy(state->global_transforms[foot->knee_index], untouched);
+        ik_foot_set_target(ik, foot_index, bent, (vec3){0, 1, 0}, 0.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+        float zero_worst = 0.0f;
+        const float* m = (const float*)state->global_transforms[foot->knee_index];
+        const float* n = (const float*)untouched;
+        for (int k = 0; k < 16; k++) {
+            const float diff = fabsf(m[k] - n[k]);
+            if (diff > zero_worst)
+                zero_worst = diff;
+        }
+        printf("ik identity zeroweight maxdiff %.6f\n", (double)zero_worst);
+    } else if (!strcmp(which, "pole")) {
+        // The knee goes the way the pole says, and reversing the pole reverses it. The
+        // SPAN between the two is what proves the pole is read at all rather than
+        // defaulted, which a sign test alone would not catch.
+        float knee_z[2];
+        for (int s = 0; s < 2; s++) {
+            free_ik_system(state->ik);
+            state->ik = NULL;
+            IkSystem* sys = create_ik_system(skel);
+            if (!sys) {
+                fprintf(stderr, "ik-probe: could not rebuild the system\n");
+                return 1;
+            }
+            sys->params.reach_limit = 1.0f;
+            sys->params.max_pelvis_drop = 0.0f;
+            sys->params.blend_rate = 0.0f;
+            const float sign = s == 0 ? 1.0f : -1.0f;
+            const int fi = ik_add_foot(sys, IK_PROBE_HIP, IK_PROBE_KNEE, IK_PROBE_ANKLE,
+                                       (vec3){0.0f, 0.0f, sign});
+            state->ik = sys;
+            compute_bind_pose_matrices(state);
+            vec3 t = {hip[0], hip[1] - (seg_a + seg_b) * 0.9f, hip[2]};
+            ik_reset(sys);
+            ik_foot_set_target(sys, fi, t, (vec3){0, 1, 0}, 1.0f);
+            ik_solve(sys, state->global_transforms, 0.0f);
+            knee_z[s] = state->global_transforms[sys->feet[fi].knee_index][3][2] - hip[2];
+        }
+        printf("ik pole fwd kneez %.6f\n", (double)knee_z[0]);
+        printf("ik pole back kneez %.6f\n", (double)knee_z[1]);
+        printf("ik pole span delta %.6f\n", (double)fabsf(knee_z[0] - knee_z[1]));
+    } else if (!strcmp(which, "analytic")) {
+        // The arm this group is anchored on. The gate computes the same closed form in
+        // Python and matches it; the sweep stops short of full extension deliberately,
+        // because the derivative there is unbounded and a nearer value would be
+        // asserting float noise rather than the solver.
+        const float span = seg_a + seg_b;
+        const float cs[5] = {span * 0.9878f, span * 0.9756f, span * 0.8537f, span * 0.7317f,
+                             span * 0.6098f};
+        for (int i = 0; i < 5; i++) {
+            compute_bind_pose_matrices(state);
+            vec3 t = {hip[0], hip[1] - cs[i], hip[2]};
+            ik_reset(ik);
+            ik_foot_set_target(ik, foot_index, t, (vec3){0, 1, 0}, 1.0f);
+            ik_solve(ik, state->global_transforms, 0.0f);
+            printf("ik analytic c%d bend %.6f\n", i,
+                   (double)ik_probe_bend_deg(state->global_transforms, foot));
+            printf("ik analytic c%d dist %.6f\n", i,
+                   (double)glm_vec3_distance((float*)state->global_transforms[foot->ankle_index][3],
+                                             hip));
+        }
+    } else {
+        fprintf(stderr, "ik-probe: unknown case '%s'\n", which);
+        rc = 1;
+    }
+
+    if (rc == 0)
+        printf("ik %s rig segments %.6f %.6f\n", which, (double)seg_a, (double)seg_b);
+
+    free_animation_state(state); // frees the IK system with it
+    return rc;
+}
+
 // --anim-probe: the animator layer as a game sees it -- ANIMATOR components on
 // entities, ticked by the loop's own update_all_animators at the fixed 1/60 --
 // measured on the CPU and printed as `anim <case> <label> <key> <numbers>`,
@@ -2838,6 +3106,7 @@ int main(int argc, const char* argv[]) {
     const char* audio_probe = NULL;
     const char* audio_file = NULL;
     const char* anim_probe = NULL;
+    const char* ik_probe = NULL;
     const char* ui_probe = NULL;
     const char* save_probe = NULL;
     bool ui_enabled = true;
@@ -2892,6 +3161,8 @@ int main(int argc, const char* argv[]) {
             twin_clip = argv[++i];
         } else if (!strcmp(a, "--anim-probe") && i + 1 < argc) {
             anim_probe = argv[++i];
+        } else if (!strcmp(a, "--ik-probe") && i + 1 < argc) {
+            ik_probe = argv[++i];
         } else if (!strcmp(a, "--ui-probe") && i + 1 < argc) {
             ui_probe = argv[++i];
         } else if (!strcmp(a, "--save-probe") && i + 1 < argc) {
@@ -2957,6 +3228,21 @@ int main(int argc, const char* argv[]) {
 
     // The same shape for the animator: a headless game, the rig loaded, the
     // components ticked by the loop's own function, no window.
+    // The same shape again for the IK solver, and for the same reason: these six cases
+    // are arithmetic, so they want a rig and nothing else -- no physics world, no
+    // window, no frame.
+    if (ik_probe) {
+        GameConfig probe_config = {.engine = {.title = "ik-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "ik-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_ik_probe(probe_game, ik_probe);
+        free_game(probe_game);
+        return rc;
+    }
+
     if (anim_probe) {
         GameConfig probe_config = {.engine = {.title = "anim-probe", .headless = true}};
         Game* probe_game = create_game(&probe_config);
