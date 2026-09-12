@@ -4,10 +4,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../animator.h"
 #include "../ext/log.h"
 #include "../json_util.h"
+#include "../scene.h"
 #include "../util.h"
+#include "animator_component.h"
+#include "character.h"
+#include "entity.h"
 #include "game.h"
+#include "physics.h"
 
 #if defined(_WIN32)
 #include <direct.h>
@@ -348,6 +354,336 @@ static const SaveField SAVE_WORLD_FIELDS[] = {
 #define SAVE_WORLD_COUNT   ((int)(sizeof(SAVE_WORLD_FIELDS) / sizeof(SAVE_WORLD_FIELDS[0])))
 #define SAVE_WORLD_VERSION 1
 
+// ---------------------------------------------------------------- entities
+
+/*
+ * A body's live state, through the only entry points that reach it.
+ *
+ * The getters take a non-const RigidBody because asking Jolt is not a const
+ * operation on its side; nothing here mutates the body. There is no
+ * rigid_body_get_position at all -- a body's pose reaches C through
+ * sync_physics_to_entities, which writes entity->position and entity->rotation
+ * each step, so the pose is saved off the ENTITY rows below and pushed back
+ * into the body on load.
+ */
+static void _get_body_linear(const void* base, double* out, int n) {
+    vec3 v = {0.0f, 0.0f, 0.0f};
+    rigid_body_get_linear_velocity((RigidBody*)base, v);
+    for (int i = 0; i < n; i++)
+        out[i] = v[i];
+}
+
+static void _set_body_linear(void* base, const double* v, int n) {
+    vec3 out = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < n; i++)
+        out[i] = (float)v[i];
+    rigid_body_set_linear_velocity((RigidBody*)base, out);
+}
+
+static void _get_body_angular(const void* base, double* out, int n) {
+    vec3 v = {0.0f, 0.0f, 0.0f};
+    rigid_body_get_angular_velocity((RigidBody*)base, v);
+    for (int i = 0; i < n; i++)
+        out[i] = v[i];
+}
+
+static void _set_body_angular(void* base, const double* v, int n) {
+    vec3 out = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < n; i++)
+        out[i] = (float)v[i];
+    rigid_body_set_angular_velocity((RigidBody*)base, out);
+}
+
+/*
+ * A CharacterVirtual is not a body, so none of the above reaches it and
+ * physics_world_shift_origin's warning applies here too: its pose has its own
+ * entry points and nothing else moves it.
+ */
+static void _get_char_position(const void* base, double* out, int n) {
+    vec3 v = {0.0f, 0.0f, 0.0f};
+    character_controller_get_position((const CharacterController*)base, v);
+    for (int i = 0; i < n; i++)
+        out[i] = v[i];
+}
+
+static void _set_char_position(void* base, const double* v, int n) {
+    vec3 out = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < n; i++)
+        out[i] = (float)v[i];
+    character_controller_set_position((CharacterController*)base, out);
+}
+
+static void _get_char_velocity(const void* base, double* out, int n) {
+    vec3 v = {0.0f, 0.0f, 0.0f};
+    character_controller_get_velocity((const CharacterController*)base, v);
+    for (int i = 0; i < n; i++)
+        out[i] = v[i];
+}
+
+static void _set_char_velocity(void* base, const double* v, int n) {
+    vec3 out = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < n; i++)
+        out[i] = (float)v[i];
+    character_controller_set_velocity((CharacterController*)base, out);
+}
+
+/*
+ * The entity's own state. `id` is deliberately absent: create_entity hands out
+ * id = next_id++, and creation order depends on which content a run built, so
+ * the same id names a different object between two runs of one binary. The NAME
+ * is the identity, which is what every match below uses.
+ */
+static const SaveField SAVE_ENTITY_FIELDS[] = {
+    SAVE_ROW(SAVE_BOOL, "active", Entity, active),
+    SAVE_ROW(SAVE_VEC3, "position", Entity, position),
+    SAVE_ROW(SAVE_QUAT, "rotation", Entity, rotation),
+    SAVE_ROW(SAVE_VEC3, "scale", Entity, scale),
+};
+#define SAVE_ENTITY_COUNT ((int)(sizeof(SAVE_ENTITY_FIELDS) / sizeof(SAVE_ENTITY_FIELDS[0])))
+
+static const SaveField SAVE_BODY_FIELDS[] = {
+    SAVE_ROW_FN(SAVE_VEC3, "linear_velocity", _get_body_linear, _set_body_linear),
+    SAVE_ROW_FN(SAVE_VEC3, "angular_velocity", _get_body_angular, _set_body_angular),
+};
+#define SAVE_BODY_COUNT ((int)(sizeof(SAVE_BODY_FIELDS) / sizeof(SAVE_BODY_FIELDS[0])))
+
+static const SaveField SAVE_CHAR_FIELDS[] = {
+    SAVE_ROW_FN(SAVE_VEC3, "position", _get_char_position, _set_char_position),
+    SAVE_ROW_FN(SAVE_VEC3, "velocity", _get_char_velocity, _set_char_velocity),
+};
+#define SAVE_CHAR_COUNT ((int)(sizeof(SAVE_CHAR_FIELDS) / sizeof(SAVE_CHAR_FIELDS[0])))
+
+/*
+ * A component, keyed by a NAME and never by its ComponentType value.
+ *
+ * COMPONENT_BIT is 1u << type, so removing a member of that enum renumbers
+ * every one after it and an old file's numbers would silently mean different
+ * components. component_mask is a runtime query optimisation; it does not reach
+ * disk. Keyed by name, the enum is free to be reordered or have members retired
+ * and no save file notices.
+ */
+typedef struct SaveComponent {
+    const char* key;
+    const SaveField* rows;
+    int count;
+    void* (*of)(Entity* entity); // the component on this entity, or NULL
+} SaveComponent;
+
+static void* _body_of(Entity* entity) {
+    return entity_get_rigid_body(entity);
+}
+
+static void* _character_of(Entity* entity) {
+    return entity_get_character_controller(entity);
+}
+
+static const SaveComponent SAVE_COMPONENTS[] = {
+    {"rigid_body", SAVE_BODY_FIELDS, SAVE_BODY_COUNT, _body_of},
+    {"character", SAVE_CHAR_FIELDS, SAVE_CHAR_COUNT, _character_of},
+};
+#define SAVE_COMPONENT_COUNT ((int)(sizeof(SAVE_COMPONENTS) / sizeof(SAVE_COMPONENTS[0])))
+
+#define SAVE_ENTITIES_VERSION 1
+
+/*
+ * The animator, by hand rather than through a table, and the reason is the one
+ * thing a table of offsets cannot hold: what plays is named by a BORROWED
+ * const char* -- a pointer to a clip's or a space's own name, not storage this
+ * module could take an offset of or write into. config_snapshot.c hand-writes
+ * its source block for exactly the same reason.
+ *
+ * What is saved is a SNAP: the source's name, its clock, and the three plain
+ * settings. A save taken mid-crossfade therefore loads with the DESTINATION
+ * playing, which is a frame of discontinuity on a load screen nobody watches,
+ * against carrying both sources, the fade envelope, the resume source and the
+ * layer's whole bone mask.
+ */
+static void _write_animator(cJSON* entry, const Animator* animator) {
+    cJSON* obj = cJSON_AddObjectToObject(entry, "animator");
+    if (!obj)
+        return;
+    const char* source = animator_source_name(animator);
+    cJSON_AddStringToObject(obj, "source", source ? source : "");
+    json_add_float(obj, "time", animator->base.time);
+    cJSON_AddBoolToObject(obj, "looping", animator->base.looping);
+    cJSON_AddBoolToObject(obj, "playing", animator->playing);
+    json_add_float(obj, "speed", animator->speed);
+    json_add_float(obj, "param", animator->param);
+}
+
+static bool _read_animator(const cJSON* entry, Animator* animator, Scene* scene) {
+    const cJSON* obj = cJSON_GetObjectItemCaseSensitive(entry, "animator");
+    if (!cJSON_IsObject(obj))
+        return false;
+
+    const char* source = json_string_or(obj, "source");
+    const char* playing_now = animator_source_name(animator);
+
+    /*
+     * Only play something when the name DIFFERS from what is already playing.
+     * The common case is that the app played its locomotion space in its own
+     * init and the save names that same space, where re-playing would rebuild
+     * a blend space this module does not have the entries for. A different
+     * name can only be a single clip, which the scene can still find by name.
+     */
+    if (source && source[0] && (!playing_now || strcmp(source, playing_now) != 0)) {
+        const Animation* clip = scene ? scene_find_animation(scene, source) : NULL;
+        if (clip)
+            animator_play(animator, clip, 0.0f,
+                          cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(obj, "looping")));
+        else
+            log_warn("save: no animation '%s' in this scene; the rig keeps what it plays", source);
+    }
+
+    const cJSON* time = cJSON_GetObjectItemCaseSensitive(obj, "time");
+    if (cJSON_IsNumber(time))
+        animator->base.time = (float)time->valuedouble;
+    const cJSON* playing = cJSON_GetObjectItemCaseSensitive(obj, "playing");
+    if (cJSON_IsBool(playing))
+        animator->playing = cJSON_IsTrue(playing);
+    const cJSON* speed = cJSON_GetObjectItemCaseSensitive(obj, "speed");
+    if (cJSON_IsNumber(speed))
+        animator->speed = (float)speed->valuedouble;
+    const cJSON* param = cJSON_GetObjectItemCaseSensitive(obj, "param");
+    if (cJSON_IsNumber(param))
+        animator->param = (float)param->valuedouble;
+    return true;
+}
+
+static bool _write_entities(SaveSystem* save, cJSON* root, int* written) {
+    EntityManager* em = save->game ? save->game->entity_manager : NULL;
+    if (!em)
+        return true; // a game with no entities writes no section, rather than an empty one
+
+    cJSON* section = _section(root, "entities", true);
+    if (!section)
+        return false;
+    cJSON_AddNumberToObject(section, "version", SAVE_ENTITIES_VERSION);
+    cJSON* list = cJSON_AddArrayToObject(section, "list");
+    if (!list)
+        return false;
+
+    for (size_t e = 0; e < em->count; e++) {
+        Entity* entity = em->entities[e];
+        if (!entity)
+            continue;
+        cJSON* obj = cJSON_CreateObject();
+        if (!obj || !cJSON_AddItemToArray(list, obj)) {
+            cJSON_Delete(obj);
+            return false;
+        }
+        // Both identities, the way config_snapshot.c writes its array elements:
+        // the name is the stable key and the index is what an unnamed entry
+        // would match on. Every Entity has a name, so the index is a diagnostic
+        // rather than a fallback -- but writing it costs nothing and reading a
+        // file by eye is easier for it.
+        cJSON_AddStringToObject(obj, "name", entity->name);
+        cJSON_AddNumberToObject(obj, "index", (double)e);
+
+        for (int i = 0; i < SAVE_ENTITY_COUNT; i++) {
+            if (!_write_field(obj, &SAVE_ENTITY_FIELDS[i], entity))
+                return false;
+            (*written)++;
+        }
+
+        for (int c = 0; c < SAVE_COMPONENT_COUNT; c++) {
+            const SaveComponent* comp = &SAVE_COMPONENTS[c];
+            const void* base = comp->of(entity);
+            if (!base)
+                continue;
+            cJSON* cobj = cJSON_AddObjectToObject(obj, comp->key);
+            if (!cobj)
+                return false;
+            for (int i = 0; i < comp->count; i++) {
+                if (!_write_field(cobj, &comp->rows[i], base))
+                    return false;
+                (*written)++;
+            }
+        }
+
+        const Animator* animator = entity_get_animator(entity);
+        if (animator)
+            _write_animator(obj, animator);
+    }
+    return true;
+}
+
+static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* r) {
+    EntityManager* em = save->game ? save->game->entity_manager : NULL;
+    if (!em)
+        return;
+
+    const cJSON* section = _section((cJSON*)root, "entities", false);
+    if (!cJSON_IsObject(section))
+        return;
+    const cJSON* list = cJSON_GetObjectItemCaseSensitive(section, "list");
+    if (!cJSON_IsArray(list))
+        return;
+
+    const cJSON* entry = NULL;
+    cJSON_ArrayForEach(entry, list) {
+        const char* name = json_string_or(entry, "name");
+        if (!name)
+            continue;
+
+        Entity* entity = find_entity_by_name(em, name);
+        if (!entity) {
+            /*
+             * A record whose target the scene no longer provides. Dropped and
+             * counted rather than refused: a patched level is the normal way
+             * this happens, and refusing the file would mean every content
+             * edit invalidated every save already in players' hands.
+             */
+            r->dropped_missing_entity++;
+            continue;
+        }
+
+        for (int i = 0; i < SAVE_ENTITY_COUNT; i++) {
+            if (_read_field(entry, &SAVE_ENTITY_FIELDS[i], entity))
+                r->fields_restored++;
+        }
+
+        for (int c = 0; c < SAVE_COMPONENT_COUNT; c++) {
+            const SaveComponent* comp = &SAVE_COMPONENTS[c];
+            const cJSON* cobj = cJSON_GetObjectItemCaseSensitive(entry, comp->key);
+            if (!cJSON_IsObject(cobj))
+                continue;
+            void* base = comp->of(entity);
+            if (!base) {
+                // The file carries a component this entity does not have -- the
+                // same class of mismatch as a key this build no longer knows,
+                // and counted with it.
+                r->dropped_unknown_component++;
+                continue;
+            }
+            for (int i = 0; i < comp->count; i++) {
+                if (_read_field(cobj, &comp->rows[i], base))
+                    r->fields_restored++;
+            }
+        }
+
+        Animator* animator = entity_get_animator(entity);
+        if (animator && _read_animator(entry, animator, save->game->scene))
+            r->fields_restored++;
+
+        /*
+         * The pose has to be pushed into the BODY, not just stored on the
+         * entity. entity->position and entity->rotation are a copy that
+         * sync_physics_to_entities rewrites from Jolt every step, so a restore
+         * that wrote only those would be overwritten before the next frame drew
+         * -- the load would appear to do nothing at all.
+         */
+        RigidBody* body = entity_get_rigid_body(entity);
+        if (body) {
+            rigid_body_set_position(body, entity->position);
+            rigid_body_set_rotation(body, entity->rotation);
+            rigid_body_activate(body);
+        }
+
+        r->entities_restored++;
+    }
+}
+
 // ----------------------------------------------------------------- system
 
 SaveSystem* create_save_system(Game* game) {
@@ -547,6 +883,9 @@ bool save_write(SaveSystem* save, const char* path) {
         }
     }
 
+    if (ok)
+        ok = _write_entities(save, root, &written);
+
     if (!ok) {
         cJSON_Delete(root);
         log_error("save: could not serialise");
@@ -609,8 +948,12 @@ SaveLoadResult save_read(SaveSystem* save, const char* path) {
         }
     }
 
+    _read_entities(save, root, &r);
+
     cJSON_Delete(root);
     r.ok = true;
-    log_info("save: read '%s' (version %d, %d fields)", path, r.from_version, r.fields_restored);
+    log_info("save: read '%s' (version %d, %d fields, %d entities, %d dropped)", path,
+             r.from_version, r.fields_restored, r.entities_restored,
+             r.dropped_missing_entity + r.dropped_unknown_spawner + r.dropped_unknown_component);
     return r;
 }
