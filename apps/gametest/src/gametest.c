@@ -886,15 +886,27 @@ static void on_init(Game* game) {
     }
 
     // Create floor entity (static physics body)
-    Entity* floor = create_entity(em, "floor");
-    glm_vec3_copy((vec3){0, -0.5f, 0}, floor->position);
+    //
+    // The collider is a box CENTRED on the entity, so the surface a body rests on is
+    // half an extent above that centre -- and the drawn plane has to be lifted to meet
+    // it. One constant, read by the visual and the collider both, because these were
+    // two independent literals and had drifted: the floor was drawn half a metre below
+    // the surface everything stood on. Nothing caught it because no golden photographs
+    // a body against the floor, and the anim probes compare bone matrices on the CPU.
+    const float floor_half_y = 0.5f;
 
-    // Floor visual
+    Entity* floor = create_entity(em, "floor");
+    glm_vec3_copy((vec3){0, -floor_half_y, 0}, floor->position);
+
+    // Floor visual, lifted onto the collider's top by that same half-extent
     SceneNode* floor_node = create_node();
     node_set_name(floor_node, "floor");
     Mesh* floor_mesh = create_mesh();
-    Plane floor_plane = {
-        .position = {0, 0, 0}, .width = 50.0f, .depth = 50.0f, .segments_w = 10, .segments_d = 10};
+    Plane floor_plane = {.position = {0, floor_half_y, 0},
+                         .width = 50.0f,
+                         .depth = 50.0f,
+                         .segments_w = 10,
+                         .segments_d = 10};
     mesh_generate_plane(floor_mesh, &floor_plane);
 
     Material* floor_mat = create_material();
@@ -913,7 +925,7 @@ static void on_init(Game* game) {
     // Floor physics (static box)
     PhysicsShapeDesc floor_shape = {
         .type = SHAPE_BOX,
-        .box.half_extents = {25.0f, 0.5f, 25.0f},
+        .box.half_extents = {25.0f, floor_half_y, 25.0f},
         .density = 0.0f // Static body
     };
     entity_add_rigid_body(floor, physics, &floor_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
