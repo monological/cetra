@@ -22239,6 +22239,189 @@ def _ui_probe(case, env=None):
     return out
 
 
+# "save <case> <label> <key> <numbers...>" from gametest --save-probe: the shape
+# the audio, anim and ui probes already print, so one reader serves all four.
+_SAVE_PROBE = re.compile(r"^save ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+
+
+def _save_probe(case, workdir):
+    """{(label, key): [numbers]} from one gametest --save-probe run, or None.
+
+    Each case writes into its OWN directory under the run's workdir, through the
+    same CETRA_SETTINGS_DIR the settings path honours. Two reasons: a probe must
+    never write a real player's save, and the cases share one slot name, so they
+    would otherwise read each other's file.
+    """
+    env = dict(os.environ)
+    env["CETRA_SETTINGS_DIR"] = os.path.join(workdir, "save-" + case)
+    r = subprocess.run([GAMETEST, "--save-probe", case], capture_output=True, text=True, env=env)
+    text = r.stdout + r.stderr
+    out = {(label, key): [float(v) for v in nums.split()]
+           for c, label, key, nums in _SAVE_PROBE.findall(text) if c == case}
+    if r.returncode != 0 or not out:
+        return None
+    return out
+
+
+def run_save_gate(workdir):
+    """Save serialization (spec 12.3), asserted where it is a pure function of a
+    file and a world. No window and no frame: the probe builds a scene, a physics
+    world and a handful of entities of its own, so every number below is one this
+    file can state in closed form.
+
+      save-roundtrip a write, the live values ZEROED, and a read: all eight app
+                     fields come back. Zeroed rather than merely left alone,
+                     because against values that still hold the answer a reader
+                     that stores nothing at all would pass.
+      save-format    the file carries a version per SECTION rather than one for
+                     everything, and names its components -- the ComponentType
+                     enum is positional, so a number there would re-point every
+                     old save the day a member is retired.
+      save-entities  a pose and a velocity survive being moved away and zeroed.
+                     The pose proves it went into the BODY: entity->position is
+                     a copy sync_physics_to_entities rewrites every step, so a
+                     restore that wrote only that would read back as nothing.
+      save-spawned   a crate destroyed outright comes back from its recipe, at
+                     the position it had. Its size and colour live nowhere else.
+      save-missing   a record naming an entity the scene no longer has drops
+                     exactly one and the rest of the file still loads.
+      save-unknown-spawner a recipe this build does not have drops one and counts
+                     it, rather than costing the file -- one unbuildable crate
+                     must not cost a player everything else in the save.
+      save-floor     a file below the version floor applies NOTHING; the live
+                     value is the one that was already there.
+      save-migrate   a key whose MEANING changed (percent at version 1, a
+                     fraction at version 2) is repaired by one registered step.
+                     This is the only case a tagged format cannot detect itself.
+    """
+    failed = []
+
+    def note(name, ok):
+        # Bookkeeping only. Each verdict LINE below spells its arm's name out as
+        # a literal, because that source text is what gate-docs reads to tell
+        # the documented list from the one that actually runs.
+        if not ok:
+            failed.append(name)
+
+    def close(a, b, tol=1e-4):
+        return abs(a - b) <= tol
+
+    # ---- roundtrip
+    p = _save_probe("roundtrip", workdir)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        want = {"box_count": 7.0, "player_yaw": 1.25, "chaser_yaw": -0.5, "heart_timer": 0.25,
+                "catch_cooldown": 1.5, "door_open_pending": 1.0, "door_open_velocity": -6.0,
+                "player_touching_door": 1.0}
+        got = {k: p[("read", k)][0] for k in want if ("read", k) in p}
+        ok = (p.get(("read", "ok"), [0])[0] == 1.0 and len(got) == len(want)
+              and all(close(got[k], want[k]) for k in want))
+        detail = (f"{len(got)} of {len(want)} fields back from a zeroed struct, "
+                  f"box_count {got.get('box_count', -1):.0f} (want 7), "
+                  f"player_yaw {got.get('player_yaw', -1):.3f} (want 1.25), "
+                  f"door_open_velocity {got.get('door_open_velocity', 0):.1f} (want -6)")
+    print(f"  save-roundtrip        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-roundtrip", ok)
+
+    # ---- format: read back what the roundtrip case actually wrote
+    path = os.path.join(workdir, "save-roundtrip", "probe.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+        sections = [k for k in ("world", "gametest") if k in doc]
+        versioned = [k for k in sections if isinstance(doc[k], dict) and "version" in doc[k]]
+        ok = len(versioned) == len(sections) and len(sections) == 2 and "version" in doc
+        detail = (f"{len(versioned)} of {len(sections)} sections carry their own version "
+                  f"(want 2), and the file carries one too")
+    except (OSError, ValueError) as e:
+        ok, detail = False, f"cannot read what the probe wrote ({e})"
+    print(f"  save-format           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-format", ok)
+
+    # ---- entities
+    p = _save_probe("entities", workdir)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        pos = p.get(("read", "position"), [])
+        vel = p.get(("read", "velocity"), [])
+        count = p.get(("read", "count"), [0])[0]
+        ok = (count == 1.0 and len(pos) == 3 and len(vel) == 3
+              and close(pos[0], 1.0) and close(pos[1], 2.0) and close(pos[2], 3.0)
+              and close(vel[0], 4.0) and close(vel[1], -5.0) and close(vel[2], 6.0))
+        detail = (f"{count:.0f} entity restored to {pos} (want [1, 2, 3], moved to -9 first) "
+                  f"with velocity {vel} (want [4, -5, 6], zeroed first)")
+    print(f"  save-entities         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-entities", ok)
+
+    # ---- spawned
+    p = _save_probe("spawned", workdir)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        before = p.get(("before", "found"), [1])[0]
+        after = p.get(("after", "found"), [0])[0]
+        spawned = p.get(("after", "count"), [0])[0]
+        pos = p.get(("after", "position"), [])
+        ok = (before == 0.0 and after == 1.0 and spawned == 1.0 and len(pos) == 3
+              and close(pos[0], 2.0) and close(pos[1], 8.0) and close(pos[2], -3.0))
+        detail = (f"destroyed (found {before:.0f}), then {spawned:.0f} rebuilt from its recipe "
+                  f"(found {after:.0f}) at {pos} (want [2, 8, -3])")
+    print(f"  save-spawned          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-spawned", ok)
+
+    # ---- drops: one file, two policies
+    p = _save_probe("drops", workdir)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+        missing = unknown = -1.0
+        loaded = 0.0
+    else:
+        missing = p.get(("read", "missing"), [-1])[0]
+        unknown = p.get(("read", "unknown_spawner"), [-1])[0]
+        loaded = p.get(("read", "ok"), [0])[0]
+        ok = missing == 1.0 and loaded == 1.0
+        detail = (f"an absent entity dropped {missing:.0f} (want 1) and the file still "
+                  f"loaded (ok {loaded:.0f}, want 1)")
+    print(f"  save-missing          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-missing", ok)
+
+    ok = unknown == 1.0 and loaded == 1.0
+    detail = (f"an unregistered recipe dropped {unknown:.0f} (want 1) and the file still "
+              f"loaded (ok {loaded:.0f}, want 1)")
+    print(f"  save-unknown-spawner  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-unknown-spawner", ok)
+
+    # ---- floor
+    p = _save_probe("floor", workdir)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        refused = p.get(("read", "ok"), [1])[0]
+        yaw = p.get(("read", "player_yaw"), [0])[0]
+        ok = refused == 0.0 and close(yaw, 3.0)
+        detail = (f"refused (ok {refused:.0f}, want 0) and player_yaw left at {yaw:.1f} "
+                  f"(want 3, the live value; the file said 99)")
+    print(f"  save-floor            {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-floor", ok)
+
+    # ---- migrate
+    p = _save_probe("migrate", workdir)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        steps = p.get(("read", "steps"), [0])[0]
+        scaled = p.get(("read", "scaled"), [0])[0]
+        ok = steps == 1.0 and close(scaled, 0.75)
+        detail = (f"{steps:.0f} step run (want 1) turning 75 percent at version 1 into "
+                  f"{scaled:.3f} at version 2 (want 0.750)")
+    print(f"  save-migrate          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-migrate", ok)
+
+    return failed
+
+
 def run_ui_gate(workdir):
     """The game UI layer (spec 12.2), asserted where it is a pure function: layout
     is (tree, width, height) with no GL and no clock, the input pass takes a
@@ -22589,6 +22772,8 @@ GATE_GROUPS = [
      run_anim_gate),
     ("ui", "the game UI layer (layout, navigation, capture, settings; spec 12.2):",
      run_ui_gate),
+    ("save", "save serialization (entities, spawners, drops, migrations; spec 12.3):",
+     run_save_gate),
     ("import", "import:", _run_import_gates),
     ("fixture-gen", "fixture generators (every gen_*.py reproduces its asset):",
      run_fixture_gen_gate),
