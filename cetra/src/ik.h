@@ -42,6 +42,17 @@ typedef struct IkFootParams {
     float max_pelvis_drop;   // how far the pelvis may descend for an out-of-reach foot, metres
     float teleport_distance; // a target jumping farther than this snaps instead of easing
     float blend_rate;        // 1/seconds the applied target eases toward the requested one
+    // How far above its target an animated foot may be and still be planted, as a
+    // fraction of the leg's own length, so it carries across rigs and scales. Past it
+    // the clip has lifted the foot deliberately and the solve lets go.
+    //
+    // This decision lives in the SOLVER and not in the caller, and that is not taste. A
+    // caller can only read the globals from before its own frame, which by then hold
+    // the LAST solve -- so a planted foot reads as already planted, holds, and the
+    // stride dies with the feet welded to the ground. Here the globals are still the
+    // clip's own pose for this frame, which is the only moment the question has a true
+    // answer. Zero disables the release entirely and plants at full weight.
+    float plant_fraction;
 } IkFootParams;
 
 typedef struct IkFoot {
