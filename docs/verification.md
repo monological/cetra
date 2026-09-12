@@ -42,6 +42,9 @@ up as a difference. The corpus must not be re-baked off macOS.
   cover: another display, a real pad through a menu, and the other two settings locations
 - [The save paths](#the-save-paths) — what the `save` group asserts, why a restored world is
   deliberately not bit-exact, and the migration nobody can test until time passes
+- [The foot-planting path](#the-foot-planting-path) — what the `ik` group asserts about the
+  solve, why eleven arms passed while the feet were welded to the floor, and why planting is
+  not locking
 
 ---
 
@@ -484,7 +487,7 @@ one has run it on those two backends.
 ### The real-character path
 
 Spec 12.1 built the blend layer against a puppet whose clips are authored in closed form, and
-that is what makes its thirteen gate arms assert numbers rather than impressions: an endpoint
+that is what makes its fourteen gate arms assert numbers rather than impressions: an endpoint
 is 0 px, an unmasked bone moves by 0 exactly, a settled crossfade equals the incoming clip bit
 for bit, the nlerp midpoint reads 21.60/45.00/68.40 degrees at the quarter points. All of that
 is true of the MATH. None of it is a claim about how a character looks.
@@ -542,6 +545,73 @@ order) ought to cancel out of the difference entirely. **Do not theorise about t
 measuring the floor**, which is this document's own first rule: render each of the two
 configurations TWICE and diff those, and find out whether one run of one configuration is even
 reproducible, before reading anything into the number the arm prints.
+
+---
+
+## The foot-planting path
+
+Spec 12.4's twelve arms assert two-bone IK where it is a pure function. Six drive the solver
+with synthetic targets and no physics at all, so a bend is `acos((c² − a² − b²)/2ab)` and
+nothing else — matched to 0.0000 degrees at five distances, against a closed form the gate
+computes itself from the segment lengths the probe reports, so neither side carries the other's
+number. Three stand the rig on a ramp rising 1 in 4, where the feet are 0.20 apart and the
+ground under them therefore differs by 0.050000 exactly, and on a staircase where it differs by
+one riser with the uphill foot on the OTHER side — which is what catches a solver that has
+hardcoded which leg bends. Six feet land on their target to 0.00000000 m.
+
+**Eleven of those twelve passed while the player's feet were welded to the floor.**
+
+That is the fact worth carrying out of this spec. Every arm except one poses the rig ONCE and
+solves once, and a solve that overwrites a stride looks perfect in a single pose. The defect was
+found by watching the character walk, reported as "the legs don't move", and it was found three
+times in a row as each fix exposed the next: a release decided from the caller's stale globals
+welded the feet; correcting the ankle's ground clearance re-welded them by removing the accident
+that had been disabling planting; a pelvis reading the raw weight instead of the faded one bobbed
+the whole body at frame rate. `ik-swing` — which ticks a walk cycle and measures the ankle's
+vertical travel — exists only because of that, and was written after the first report rather than
+before it.
+
+**What the group asserts is the SOLVE. It is not a claim about walking.** Four things only a
+person watching can settle:
+
+- **A stride through real locomotion.** `ik-swing` measures amplitude (0.128942 against the clip's
+  own 0.149859) and nothing about shape. A walk that is the right height and the wrong rhythm
+  passes it.
+- **The plant fraction as a LOOK.** It is 0.10 of leg length, and its two failure modes are
+  opposite and both visible: too small and feet float over a slope, too large and swinging feet
+  are dragged back down. No number here says which way it is wrong.
+- **The pelvis drop as a silhouette.** `docs/foot-locking.md` records the warning that dragging
+  hips down to reach produces "T-Rex" posturing, and that a little sliding beats breaking the
+  source animation. Ours drops up to 0.5 and nobody has judged how that reads.
+- **Two characters.** The chaser carries the same rig and nothing plants ITS feet, so the
+  per-entity question `anim-two-rigs` had to ask of the animator goes unasked here.
+- **Nothing photographs it.** All twelve arms read CPU numbers, so a solve that is correct in
+  model space but spliced into the wrong node or the wrong space would pass every one of them.
+  A pixel arm was considered and dropped, for three reasons worth recording rather than
+  rediscovering: on flat ground the solve is now an IDENTITY by design (0.0198 degrees), so
+  IK against `--no-ik` at the default spawn measures nothing; standing the player on the ramp
+  needs camera and position flags gametest does not have; and `menu`'s 752 px bistability would
+  sit inside whatever bar such an arm could set. A 34th golden was refused for the same
+  determinism reason — see the `anim-twin` note above.
+
+**And planting is not LOCKING, which is the larger gap.** Planting answers "where is the ground
+under this foot" every frame and keeps no memory, so a contact point is never held and a walking
+character slides — not as a bug to find but as a property of the design. The staircase case has
+to run with release DISABLED for the same reason: a foot reaching down to a lower tread is 0.25
+above its target, and a release decided on height alone cannot tell that apart from a foot the
+clip has swung up. `docs/foot-locking.md` writes up the technique that closes this and the four
+specific things missing here — a held world-space contact, two thresholds with hysteresis rather
+than one, velocity continuity in the blend, and an extension soft-clamp in place of the hip drop.
+
+Closing it is a watch, not a script:
+
+```bash
+./out/bin/gametest --ik-ground        # walk onto the ramp at +X, the stairs at -X
+./out/bin/gametest --no-ik            # the same without planting, to tell the two apart
+```
+
+**Owed.** The solver is exact on ground nobody has walked across, and the feature it is a
+prerequisite for has not been built.
 
 ---
 
