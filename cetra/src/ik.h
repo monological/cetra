@@ -38,7 +38,9 @@
  */
 
 typedef struct IkFootParams {
-    float reach_limit;       // fraction of (thigh + shin) a chain may extend to; < 1 keeps a bend
+    float reach_limit; // fraction of (thigh + shin) a chain may extend to. Leave it at 1: see
+    // ik_default_params, where shortening the reach to "keep a bend" is shown
+    // to buy an unremovable 11.5 degrees on a rig whose bind pose is straight
     float max_pelvis_drop;   // how far the pelvis may descend for an out-of-reach foot, metres
     float teleport_distance; // a target jumping farther than this snaps instead of easing
     float blend_rate;        // 1/seconds the applied target eases toward the requested one
@@ -60,18 +62,18 @@ typedef struct IkFoot {
     int hip_index;
     int knee_index;
     int ankle_index;
-    vec3 pole_local;     // knee-forward, in the HIP's frame, so a turning hip carries it
-    vec3 fallback_axis;  // bend axis from the bind pose, for a leg aimed along the pole
-    vec3 applied_target; // what the last solve actually used, after easing
-    vec3 applied_normal;
-    bool has_applied; // false until the first solve; the snap latch
+    vec3 pole_local;      // knee-forward, in the HIP's frame, so a turning hip carries it
+    vec3 fallback_axis;   // bend axis from the bind pose, for a leg aimed along the pole
+    vec3 applied_target;  // what the last solve actually used, after easing
+    float applied_weight; // and the weight it applied, after the release fade
+    bool has_applied;     // false until the first solve; the snap latch
 
     // SETTINGS: plain stores, written every frame by whoever knows the ground.
     vec3 target; // model space, where the ankle should land
-    // The surface the foot stands on, model space. Carried and eased alongside the
-    // target so a caller and a probe can read it, but the solve does NOT yet pitch the
-    // sole onto it -- that wants a sole axis this rig does not state, and guessing one
-    // is worse than leaving the foot at the orientation its clip gave it.
+    // The surface the foot stands on, model space. Stated by the caller because it is
+    // part of the contract, and currently READ BY NOTHING: the solve does not yet pitch
+    // the sole onto it, which wants a sole axis this rig does not state, and guessing
+    // one is worse than leaving the foot at the orientation its clip gave it.
     vec3 normal;
     float weight; // 0 = the animated pose exactly (and bit-identical), 1 = full IK
 } IkFoot;
