@@ -38,9 +38,10 @@
  */
 
 typedef struct IkFootParams {
-    float reach_limit; // fraction of (thigh + shin) a chain may extend to. Leave it at 1: see
-    // ik_default_params, where shortening the reach to "keep a bend" is shown
-    // to buy an unremovable 11.5 degrees on a rig whose bind pose is straight
+    // Fraction of (thigh + shin) a chain may extend to. Leave it at 1: ik_default_params
+    // records that shortening the reach to "keep a bend" buys an unremovable 11.5
+    // degrees on a rig whose bind pose is exactly straight.
+    float reach_limit;
     float max_pelvis_drop;   // how far the pelvis may descend for an out-of-reach foot, metres
     float teleport_distance; // a target jumping farther than this snaps instead of easing
     float blend_rate;        // 1/seconds the applied target eases toward the requested one
