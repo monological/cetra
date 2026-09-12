@@ -22314,8 +22314,13 @@ def run_ik_gate(workdir):
                    same ray unfiltered is asserted to HIT the character, so the arm
                    cannot quietly go vacuous the day the capsule stops being there.
       ik-plant     six feet, over flat ground and both fixtures, land ON the ground the
-                   ray found rather than near it. Without the pelvis drop the uphill
-                   leg cannot reach and this is the arm that would say so.
+                   ray found rather than near it. Without the pelvis drop the uphill leg
+                   cannot reach and this is the arm that would say so. These three cases
+                   run with RELEASE OFF, deliberately: they ask whether the solve reaches
+                   the ground it was handed, and whether a foot should be planted at all
+                   is ik-swing's question. Mixed together, a foot whose target sits below
+                   the clip's fades to partial weight and lands short, which reads as a
+                   solver that misses when it is a release behaving as specified.
       ik-slope     a ramp rising 1 in 4: the two feet find ground one slope times one
                    stance apart, and BOTH of those come from the probe, so neither side
                    carries a constant the other has to match. The uphill knee bends and
@@ -22325,6 +22330,15 @@ def run_ik_gate(workdir):
       ik-repeat    two runs of the slope case print identical digits. The raycast is the
                    one input this feature has that nothing else in the suite would
                    notice going order-dependent.
+      ik-swing     a walk cycle actually TICKED, with the ankle's vertical travel
+                   measured across it. Every other arm here poses the rig ONCE, which is
+                   exactly why all of them passed while the player's feet were welded to
+                   the floor and the legs had stopped moving -- a solve that overwrites a
+                   stride looks perfect in a single pose. A weld reads 0. The bar is 60
+                   per cent of the clip's own travel rather than 100, because release is
+                   a weight FADE: a foot halfway up its swing is still part planted, so
+                   the stride is damped by design and parity would be asserting a design
+                   this does not have.
     """
     if not os.path.exists(GAMETEST):
         print("  ik           SKIP  (gametest not built)")
@@ -22550,6 +22564,24 @@ def run_ik_gate(workdir):
               f"{'identical' if ok else 'DIFFERENT'} digits across {len(first)} measurements")
         if not ok:
             failures.append("ik-repeat")
+
+    # --- ik-swing --------------------------------------------------------------
+    d = _ik_probe_run("swing")
+    need = [("off", "travel"), ("on", "travel")]
+    if not d or any(k not in d for k in need):
+        print("  ik-swing     FAIL  the probe failed or measured nothing")
+        failures.append("ik-swing")
+    else:
+        off = d[("off", "travel")][0]
+        on = d[("on", "travel")][0]
+        ratio = (on / off) if off > 1e-6 else 0.0
+        ok = off > 0.05 and ratio > 0.6
+        print(f"  ik-swing     {'PASS' if ok else 'FAIL'}  the ankle travels {off:.6f} over a "
+              f"walk cycle with IK off and {on:.6f} with it on, {ratio * 100.0:.0f} per cent "
+              f"(want > 60; a foot welded to the ground reads 0). Damped and not equal because "
+              f"release is a weight fade, so a foot mid-swing is still part planted")
+        if not ok:
+            failures.append("ik-swing")
 
     return failures
 

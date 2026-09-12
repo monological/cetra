@@ -18,10 +18,20 @@
 
 IkFootParams ik_default_params(void) {
     IkFootParams p;
-    p.reach_limit = 0.995f;
+    // Full extension, deliberately. Shortening the reach to "keep a bend off the
+    // singularity" is a trap: near full extension the knee angle goes as the SQUARE
+    // ROOT of the shortening, so on a rig whose bind pose is exactly straight, 0.995
+    // buys an unremovable 11.5 degrees -- the legs read as permanently bent and swing
+    // from the hip alone. Numerical safety at the singularity is the cosine clamp's
+    // job, not this one's. A game that wants a soft knee should bend the clip.
+    p.reach_limit = 1.0f;
     p.max_pelvis_drop = 0.5f;
     p.teleport_distance = 0.5f;
     p.blend_rate = 12.0f;
+    // A tenth of the leg: on a rig whose thigh and shin sum to 0.82 that is 0.082, and
+    // this puppet's walk carries the ankle about 0.15 over a stride -- so a foot is
+    // fully released around halfway up its swing and planted again near contact.
+    p.plant_fraction = 0.10f;
     return p;
 }
 
@@ -296,6 +306,42 @@ static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target,
     rotate_global(g[f->ankle_index], q_knee, ankle_new);
 }
 
+// How much of this foot's plant actually applies: its requested weight, faded out as
+// the clip lifts the foot clear of its target.
+//
+// ONE answer, used by both the pelvis drop and the leg solve. They disagreed once --
+// the drop read the raw weight while the solve read the faded one -- so a foot the
+// solve had released still dragged the hips down, the whole body bobbed, and every
+// ankle moved with it. At frame rate that reads as legs scissoring in and out.
+//
+// Measured against `globals`, which at this point in the frame still hold the clip's
+// own pose. A caller cannot answer this: by the time it runs they hold the last solve.
+static float ik_effective_weight(const IkSystem* system, const IkFoot* f, mat4* globals) {
+    if (f->weight <= 0.0f)
+        return 0.0f;
+    if (system->params.plant_fraction <= 0.0f)
+        return f->weight;
+
+    vec3 hip, knee, ankle, thigh, shin;
+    glm_vec3_copy(globals[f->hip_index][3], hip);
+    glm_vec3_copy(globals[f->knee_index][3], knee);
+    glm_vec3_copy(globals[f->ankle_index][3], ankle);
+    glm_vec3_sub(knee, hip, thigh);
+    glm_vec3_sub(ankle, knee, shin);
+
+    const float range =
+        system->params.plant_fraction * (glm_vec3_norm(thigh) + glm_vec3_norm(shin));
+    if (range <= 0.0f)
+        return f->weight;
+
+    const float lift = ankle[1] - f->applied_target[1];
+    if (lift <= 0.0f)
+        return f->weight;
+
+    const float fall = 1.0f - lift / range;
+    return fall > 0.0f ? f->weight * fall : 0.0f;
+}
+
 void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
     if (!system || !system->enabled || system->foot_count == 0 || !global_transforms)
         return;
@@ -333,8 +379,12 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         float worst = 0.0f;
         for (size_t i = 0; i < system->foot_count; i++) {
             const IkFoot* f = &system->feet[i];
-            if (f->weight <= 0.0f)
-                continue; // a foot at zero must not drag the hips down
+            // The SAME weight the solve will use. Reading the raw one here let a foot
+            // the solve had released still pull the hips down, which bobbed the whole
+            // body every frame and read as legs scissoring in and out.
+            const float weight = ik_effective_weight(system, f, global_transforms);
+            if (weight <= 0.0f)
+                continue; // released, or unweighted: it must not drag the hips down
             vec3 a, b, c, ab, bc;
             glm_vec3_copy(global_transforms[f->hip_index][3], a);
             glm_vec3_copy(global_transforms[f->knee_index][3], b);
@@ -344,7 +394,7 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
             const float reach =
                 (glm_vec3_norm(ab) + glm_vec3_norm(bc)) * system->params.reach_limit;
             const float deficit =
-                (glm_vec3_distance((float*)f->applied_target, a) - reach) * f->weight;
+                (glm_vec3_distance((float*)f->applied_target, a) - reach) * weight;
             if (deficit > worst)
                 worst = deficit;
         }
@@ -363,11 +413,15 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         if (f->weight <= 0.0f)
             continue; // skipped entirely, so weight 0 is bit-identical to no IK
 
+        const float weight = ik_effective_weight(system, f, global_transforms);
+        if (weight <= 0.0f)
+            continue; // the clip has lifted this foot clear: leave the stride alone
+
         // Blend the TARGET rather than the matrices: a lerp of two rotations is
         // neither a rotation nor orthogonal, and would shear the limb on the way.
         vec3 ankle, effective;
         glm_vec3_copy(global_transforms[f->ankle_index][3], ankle);
-        glm_vec3_lerp(ankle, (float*)f->applied_target, f->weight, effective);
+        glm_vec3_lerp(ankle, (float*)f->applied_target, weight, effective);
         solve_two_bone(global_transforms, f, effective, &system->params);
     }
 
