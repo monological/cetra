@@ -25,8 +25,10 @@
  * for exactly that reason) and break every existing save on a physics upgrade.
  * Poses and velocities are restored into a freshly built world and the solver
  * settles from there, so a crate may come to rest a fraction of a millimetre
- * from where it was. The save-sim gate arm is what bounds that drift; anyone
- * measuring a difference and filing it as corruption should read this first.
+ * from where it was. That drift is NOT yet bounded by a gate arm -- see "The
+ * save paths" in docs/verification.md for what is owed and why the tolerance
+ * has to be measured before it is quoted. Anyone measuring a difference and
+ * filing it as corruption should read this first.
  *
  * WHY JSON, since the question comes up: a save is small, read once, on one
  * machine, by one binary. Protocol Buffers and Cap'n Proto each want a
@@ -66,15 +68,21 @@ typedef struct SaveSystem SaveSystem;
 
 // ------------------------------------------------------------------ fields
 
+/*
+ * Every type here has a live row. A string type and a named-enum type were
+ * written first and carried no consumer -- and the dead arms were not free:
+ * the string case in the decoder returned a success it had not written a value
+ * for, which would have handed the store an uninitialised buffer the day
+ * anything reached it. config_snapshot.c has both if they are wanted back, and
+ * wants a consumer before they return.
+ */
 typedef enum {
     SAVE_BOOL = 0,
     SAVE_INT,
     SAVE_FLOAT,
     SAVE_DOUBLE,
     SAVE_VEC3,
-    SAVE_QUAT,   // a cglm versor: four floats, x y z w
-    SAVE_ENUM,   // an int in memory, a NAME in the file
-    SAVE_STRING, // a fixed char[N] at an offset; `cap` is that N
+    SAVE_QUAT, // a cglm versor: four floats, x y z w
 } SaveType;
 
 /*
@@ -106,46 +114,49 @@ typedef struct SaveField {
      */
     const char* former_key;
     size_t offset;
-    size_t cap;                // SAVE_STRING only: the char[N] in the struct
-    const char* const* labels; // SAVE_ENUM only
-    int label_count;
-    SaveGetFn get; // non-NULL means the offset is unused
+    /*
+     * A variable that is not a member of anything. Set, it IS the field's
+     * address and `offset` is unused -- which is what lets an app put a table
+     * over the file statics it already has, without gathering them into a
+     * struct for the serializer's benefit or writing an accessor pair per
+     * variable to reach them.
+     */
+    void* addr;
+    SaveGetFn get; // non-NULL means neither offset nor addr is used
     SaveSetFn set;
 } SaveField;
 
+/*
+ * Designated rather than positional, so adding a field to SaveField does not
+ * mean editing every macro and the struct's field ORDER stops being
+ * load-bearing. config_snapshot.c's positional CFG_ROW is not a precedent to
+ * copy here: it predates this and amortises over three hundred rows.
+ *
+ * Note what is NOT borrowed from that file: its CFG_STRUCT token paste, which
+ * welds an owner enum to a struct type so a row naming one owner with another's
+ * member is a compile error. The hazard it guards cannot be written here --
+ * SAVE_ROW names the struct and the member in ONE offsetof, so the compiler
+ * checks the pairing itself.
+ */
 #define SAVE_ROW(type_, key_, struct_, member_) \
-    {(unsigned char)(type_), key_, NULL, offsetof(struct_, member_), 0, NULL, 0, NULL, NULL}
+    {.type = (unsigned char)(type_), .key = (key_), .offset = offsetof(struct_, member_)}
 
 // The same row, naming what the key used to be so old files still find it.
 #define SAVE_ROW_WAS(type_, key_, former_, struct_, member_) \
-    {(unsigned char)(type_), key_, former_, offsetof(struct_, member_), 0, NULL, 0, NULL, NULL}
+    {.type = (unsigned char)(type_),                         \
+     .key = (key_),                                          \
+     .former_key = (former_),                                \
+     .offset = offsetof(struct_, member_)}
 
-// The cap comes from the member itself, so a widened buffer cannot leave a
-// stale length behind in the table.
-#define SAVE_ROW_STR(key_, struct_, member_) \
-    {(unsigned char)SAVE_STRING,             \
-     key_,                                   \
-     NULL,                                   \
-     offsetof(struct_, member_),             \
-     sizeof(((struct_*)0)->member_),         \
-     NULL,                                   \
-     0,                                      \
-     NULL,                                   \
-     NULL}
+// A plain variable, by address. `&x` is an address constant, so a table of
+// these is still a static initialiser.
+#define SAVE_ROW_AT(type_, key_, addr_) \
+    {.type = (unsigned char)(type_), .key = (key_), .addr = (addr_)}
 
-#define SAVE_ROW_ENUM(key_, struct_, member_, labels_) \
-    {(unsigned char)SAVE_ENUM,                         \
-     key_,                                             \
-     NULL,                                             \
-     offsetof(struct_, member_),                       \
-     0,                                                \
-     labels_,                                          \
-     (int)(sizeof(labels_) / sizeof((labels_)[0])),    \
-     NULL,                                             \
-     NULL}
-
+// A value reachable only through a function pair -- state that lives inside
+// Jolt, or anywhere else this module cannot take the address of.
 #define SAVE_ROW_FN(type_, key_, get_, set_) \
-    {(unsigned char)(type_), key_, NULL, 0, 0, NULL, 0, get_, set_}
+    {.type = (unsigned char)(type_), .key = (key_), .get = (get_), .set = (set_)}
 
 // ------------------------------------------------------------------ result
 
@@ -175,7 +186,6 @@ typedef struct SaveLoadResult {
     int dropped_missing_entity;
     int dropped_unknown_spawner;
     int dropped_unknown_component;
-    int unknown_keys;
 } SaveLoadResult;
 
 // ------------------------------------------------------------------ system

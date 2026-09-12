@@ -593,8 +593,14 @@ not a defect. What the arms do NOT yet bound is how far that drift goes over man
 save-step-reload-step comparison with a measured tolerance is the arm this group is still owed,
 and the tolerance has to be measured before it is quoted, not guessed.
 
-Four more things this cannot settle from here:
+Five more things this cannot settle from here:
 
+- **The rename path.** `former_key` on a descriptor row is what makes a renamed key cost no
+  migration at all — the reader tries the current name, then the old one. It ships with no
+  consumer and no arm: nothing in the tree writes a `SAVE_ROW_WAS`, so the first person to rely
+  on it will be the first to exercise it. It is three lines and the affordance has to exist
+  before it is needed to be worth anything, which is the argument for keeping it — not for
+  believing it works.
 - **A migration in anger.** The chain is exercised by a synthetic version-1 file the probe
   writes itself, which proves the mechanism and nothing about the judgement. The real test is
   a format that changed for a reason nobody anticipated, read by a build shipped months later,

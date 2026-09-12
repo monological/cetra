@@ -22273,10 +22273,13 @@ def run_save_gate(workdir):
                      fields come back. Zeroed rather than merely left alone,
                      because against values that still hold the answer a reader
                      that stores nothing at all would pass.
-      save-format    the file carries a version per SECTION rather than one for
-                     everything, and names its components -- the ComponentType
-                     enum is positional, so a number there would re-point every
-                     old save the day a member is retired.
+      save-format    what the writer actually put on disk: a version per SECTION
+                     rather than one for the file, and a component keyed by NAME.
+                     The ComponentType enum is positional, so a number there
+                     would re-point every existing save the day a member is
+                     retired -- which is the most expensive silent corruption
+                     this format has, and the reason it is asserted against a
+                     file that really contains an entity.
       save-entities  a pose and a velocity survive being moved away and zeroed.
                      The pose proves it went into the BODY: entity->position is
                      a copy sync_physics_to_entities rewrites every step, so a
@@ -22324,23 +22327,34 @@ def run_save_gate(workdir):
     print(f"  save-roundtrip        {'PASS' if ok else 'FAIL'}  {detail}")
     note("save-roundtrip", ok)
 
-    # ---- format: read back what the roundtrip case actually wrote
-    path = os.path.join(workdir, "save-roundtrip", "probe.json")
+    # ---- format: read back what the writer actually put on disk.
+    # The entities case is run HERE rather than at its own arm below, because
+    # this arm needs a file that contains an entity -- the roundtrip case writes
+    # none, so reading that one could never see a component at all.
+    p_entities = _save_probe("entities", workdir)
+    path = os.path.join(workdir, "save-entities", "probe.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             doc = json.load(f)
-        sections = [k for k in ("world", "gametest") if k in doc]
+        sections = [k for k in ("world", "gametest", "entities") if k in doc]
         versioned = [k for k in sections if isinstance(doc[k], dict) and "version" in doc[k]]
-        ok = len(versioned) == len(sections) and len(sections) == 2 and "version" in doc
+        entry = (doc.get("entities", {}).get("list") or [{}])[0]
+        named = "rigid_body" in entry
+        # Every component key must be a name. A digit where a name belongs is
+        # the enum leaking onto disk.
+        numeric = [k for k in entry if k.isdigit()]
+        ok = (len(versioned) == 3 and len(sections) == 3 and "version" in doc
+              and named and not numeric)
         detail = (f"{len(versioned)} of {len(sections)} sections carry their own version "
-                  f"(want 2), and the file carries one too")
+                  f"(want 3), the file carries one too, and the component rides as "
+                  f"'rigid_body' ({named}) with {len(numeric)} numeric keys (want 0)")
     except (OSError, ValueError) as e:
         ok, detail = False, f"cannot read what the probe wrote ({e})"
     print(f"  save-format           {'PASS' if ok else 'FAIL'}  {detail}")
     note("save-format", ok)
 
-    # ---- entities
-    p = _save_probe("entities", workdir)
+    # ---- entities (the run the format arm above already made)
+    p = p_entities
     if not p:
         ok, detail = False, "the probe produced nothing"
     else:

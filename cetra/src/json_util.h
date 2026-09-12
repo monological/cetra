@@ -7,7 +7,8 @@
  * config_snapshot.c carried the first two as file statics with a comment saying
  * they were worth sharing "the day a third cJSON reader appears rather than on
  * the second". save.c is that third reader, so here they are. That comment also
- * claimed cscene.c held the same pair, which is not so and is corrected there:
+ * claimed cscene.c held the same pair. It does not, and since this is the file
+ * that would have received them, the correction belongs here rather than there:
  * cscene.c's get_float / get_bool / get_vec3 are bool-returning PRESENCE tests,
  * because a .cscn leaves an unspecified field at its engine default. These two
  * answer a different question -- what is the value, or this fallback -- and the
@@ -42,5 +43,13 @@ int json_int_or(const cJSON* obj, const char* key, int fallback);
  * hook; the string this writes is the string that lands in the file.
  */
 bool json_add_float(cJSON* obj, const char* key, float value);
+
+/*
+ * The same float as a free-standing item, for an ARRAY -- cJSON has no
+ * AddRawToArray, and a caller that re-typed the snprintf would put the
+ * precision rule in a second place where only one of the two would ever be
+ * changed. NULL on allocation failure.
+ */
+cJSON* json_float_item(float value);
 
 #endif // _JSON_UTIL_H_
