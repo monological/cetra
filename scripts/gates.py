@@ -14755,7 +14755,49 @@ def run_gamepad_gate(workdir):
     return failures
 
 
-# "audio <case> <label> rms <l> <r>" from gametest --audio-probe.
+# Every --*-probe reader below spawns gametest and reads one case out of the stream.
+# This is the half they share; what differs is the grammar, which each keeps.
+#
+# The timeout is the reason this is one function rather than five. None of the five had
+# one, so a gametest that wedged hung the whole suite rather than failing a group -- and
+# a fix applied to the reader you happened to be looking at would have left four behind.
+_PROBE_TIMEOUT = 300
+
+
+def _gametest_probe_text(flag, case, env=None, extra=None):
+    """(combined output, returncode) from one gametest --<x>-probe run.
+
+    stderr is merged in deliberately: a probe that refuses by name says so there, and an
+    arm that sees neither the numbers nor the reason is a worse failure than a red one.
+    A timeout reads as a failed run, since that is what a caller can act on.
+    """
+    try:
+        r = subprocess.run([GAMETEST, flag, case] + (extra or []),
+                           capture_output=True, text=True, env=env, timeout=_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return "", 1
+    return r.stdout + r.stderr, r.returncode
+
+
+def _gametest_probe(flag, rx, case, env=None, extra=None):
+    """{(label, key): [floats]} from one gametest --<x>-probe run, or None if it failed
+    or measured nothing.
+
+    The shape four probes print -- "<keyword> <case> <label> <key> <numbers...>" -- read
+    back through the caller's own compiled regex. Audio is the fifth probe and keeps its
+    own reader: its grammar carries a literal rms token, no key, and a fixed pair of
+    numbers, so it shares the spawn above and nothing else.
+    """
+    text, code = _gametest_probe_text(flag, case, env, extra)
+    out = {(label, key): [float(v) for v in nums.split()]
+           for c, label, key, nums in rx.findall(text) if c == case}
+    if code != 0 or not out:
+        return None
+    return out
+
+
+# "audio <case> <label> rms <l> <r>" from gametest --audio-probe. The one probe grammar
+# that is not the four-field shape _gametest_probe reads, so this parses its own.
 _AUDIO_PROBE = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) (-?[\d.]+)$", re.M)
 
 
@@ -14764,12 +14806,10 @@ def _audio_probe_run(case, extra=None):
     failed or measured nothing. The probe is a headless offline render (miniaudio's
     noDevice mode), so its PCM is a pure function of the frames pulled -- no device,
     deterministic, and asset-free but for the decode case's synthesized WAV."""
-    r = subprocess.run([GAMETEST, "--audio-probe", case] + (extra or []),
-                       capture_output=True, text=True)
-    text = r.stdout + r.stderr
+    text, code = _gametest_probe_text("--audio-probe", case, extra=extra)
     out = {label: (float(l), float(rr)) for c, label, l, rr in _AUDIO_PROBE.findall(text)
            if c == case}
-    if r.returncode != 0 or not out:
+    if code != 0 or not out:
         return None
     return out
 
@@ -14912,13 +14952,7 @@ def _anim_probe_run(case):
     game loop's own update_all_animators at a fixed 1/60, on a rig whose clips are
     authored in closed form -- so what it prints has a value this file can state.
     """
-    r = subprocess.run([GAMETEST, "--anim-probe", case], capture_output=True, text=True)
-    text = r.stdout + r.stderr
-    out = {(label, key): [float(v) for v in nums.split()]
-           for c, label, key, nums in _ANIM_PROBE.findall(text) if c == case}
-    if r.returncode != 0 or not out:
-        return None
-    return out
+    return _gametest_probe("--anim-probe", _ANIM_PROBE, case)
 
 
 def _anim_bone_pose(extra, frames=30):
@@ -22206,8 +22240,10 @@ def run_cook_gate(workdir):
     return failures
 
 
-# "ui <case> <label> <key> <numbers...>" from gametest --ui-probe: the same shape
-# the anim and audio probes print, so one reader serves all three.
+# "ui <case> <label> <key> <numbers...>" from gametest --ui-probe: the four-field
+# shape _gametest_probe reads, which the anim, ik and save probes print too. Audio
+# does NOT -- it carries a literal rms token and a fixed pair of numbers -- and keeps
+# its own reader beside that helper.
 _UI_PROBE = re.compile(r"^ui ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 
 # The element constructors, counted by their FIRST PARAMETER and not by return
@@ -22230,21 +22266,9 @@ def _ui_probe(case, env=None):
     plain struct of input values, which is what lets the group run inside the
     suite's CPU budget.
     """
-    r = subprocess.run([GAMETEST, "--ui-probe", case], capture_output=True, text=True, env=env)
-    text = r.stdout + r.stderr
-    out = {(label, key): [float(v) for v in nums.split()]
-           for c, label, key, nums in _UI_PROBE.findall(text) if c == case}
-    if r.returncode != 0 or not out:
-        return None
-    return out
+    return _gametest_probe("--ui-probe", _UI_PROBE, case, env=env)
 
 
-# "save <case> <label> <key> <numbers...>" from gametest --save-probe: the shape the
-# audio, anim, ui and ik probes already print. FIVE readers now parse it, one per
-# group, differing only in a flag and a regex -- the sentence here used to claim one
-# reader served all of them, which each new probe has made less true. Worth collapsing
-# into a single _gametest_probe(flag, rx, case, env) the day a sixth arrives, or the
-# day one of them needs a timeout and the other four silently do not get it.
 # "ik <case> <label> <key> <numbers...>" from gametest --ik-probe. The character
 # class admits no letters and no exponent on purpose: a nan or an inf prints a line
 # this cannot match, so the key vanishes from the dict and the arm fails on absence.
@@ -22254,21 +22278,37 @@ _IK_PROBE = re.compile(r"^ik ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 
 def _ik_probe_run(case):
     """{(label, key): [floats]} from one gametest --ik-probe run, or None if it failed
-    or measured nothing.
+    or measured nothing. UNCACHED: one call is one process.
 
-    One run of ANY case. Six of them build a rig and nothing else -- no physics world,
+    One run of ANY case. Seven of them build a rig and nothing else -- no physics world,
     no window, no frame -- because a two-bone solve is a pure function of a hip, a
     target and two segment lengths, and a world would only make exact arithmetic depend
     on contact slop. The other three DO build a Jolt world and the --ik-ground fixture,
     because planting's input is a raycast. run_ik_gate says where the line is drawn.
     """
-    r = subprocess.run([GAMETEST, "--ik-probe", case], capture_output=True, text=True)
-    text = r.stdout + r.stderr
-    out = {(label, key): [float(v) for v in nums.split()]
-           for c, label, key, nums in _IK_PROBE.findall(text) if c == case}
-    if r.returncode != 0 or not out:
-        return None
-    return out
+    return _gametest_probe("--ik-probe", _IK_PROBE, case)
+
+
+@functools.cache
+def _ik_probe(case):
+    """_ik_probe_run memoised by case: ten distinct cases where the arms ask fifteen
+    times, and every one of them spawns a process that loads the rig -- three of them a
+    Jolt world and the ground fixture as well.
+
+    Fifteen becomes TWELVE, not eleven, and the arithmetic is worth writing down because
+    it is easy to get wrong by one: nine cases spawn once each, and slope spawns three
+    times -- once through here for ik-plant, and twice more below for ik-repeat, which
+    must not come from the cache. The three spawns this removes are ground, slope and
+    step, which are the expensive ones, so the wall-clock saving is larger than 3 of 15.
+
+    The returned dict is SHARED between callers. Every arm reads it and none writes,
+    which is what makes that safe; an arm that needs to mutate one must copy it first.
+
+    ik-repeat must NOT use this, and calls _ik_probe_run twice instead. Its whole
+    assertion is that two separate process launches print identical digits, so served
+    from here it would compare an object with itself and could never fail again.
+    """
+    return _ik_probe_run(case)
 
 
 def _ik_knee_bend_deg(a, b, c):
@@ -22354,7 +22394,7 @@ def run_ik_gate(workdir):
     failures = []
 
     # --- ik-reach --------------------------------------------------------------
-    d = _ik_probe_run("reach")
+    d = _ik_probe("reach")
     if not d:
         print("  ik-reach     FAIL  the probe failed or measured nothing")
         failures.append("ik-reach")
@@ -22371,7 +22411,7 @@ def run_ik_gate(workdir):
             failures.append("ik-reach")
 
     # --- ik-clamp --------------------------------------------------------------
-    d = _ik_probe_run("clamp")
+    d = _ik_probe("clamp")
     need = [("far", "dist"), ("far", "bend"), ("far", "align"), ("atHip", "dist"),
             ("atHip", "bend"), ("rig", "segments")]
     if not d or any(k not in d for k in need):
@@ -22408,7 +22448,7 @@ def run_ik_gate(workdir):
             failures.append("ik-clamp")
 
     # --- ik-singular -----------------------------------------------------------
-    d = _ik_probe_run("singular")
+    d = _ik_probe("singular")
     need = [("full", "bend"), ("full", "dist"), ("folded", "bend"), ("folded", "dist"),
             ("rig", "segments")]
     if not d or any(k not in d for k in need):
@@ -22432,7 +22472,7 @@ def run_ik_gate(workdir):
             failures.append("ik-singular")
 
     # --- ik-identity -----------------------------------------------------------
-    d = _ik_probe_run("identity")
+    d = _ik_probe("identity")
     need = [("bent", "maxdiff"), ("zeroweight", "maxdiff")]
     if not d or any(k not in d for k in need):
         print("  ik-identity  FAIL  the probe failed or measured nothing")
@@ -22449,7 +22489,7 @@ def run_ik_gate(workdir):
             failures.append("ik-identity")
 
     # --- ik-pole ---------------------------------------------------------------
-    d = _ik_probe_run("pole")
+    d = _ik_probe("pole")
     need = [("fwd", "kneez"), ("back", "kneez"), ("span", "delta")]
     if not d or any(k not in d for k in need):
         print("  ik-pole      FAIL  the probe failed or measured nothing")
@@ -22466,7 +22506,7 @@ def run_ik_gate(workdir):
             failures.append("ik-pole")
 
     # --- ik-analytic -----------------------------------------------------------
-    d = _ik_probe_run("analytic")
+    d = _ik_probe("analytic")
     if not d or ("rig", "segments") not in d:
         print("  ik-analytic  FAIL  the probe failed or measured nothing")
         failures.append("ik-analytic")
@@ -22497,7 +22537,7 @@ def run_ik_gate(workdir):
             failures.append("ik-analytic")
 
     # --- ik-ray-self -----------------------------------------------------------
-    d = _ik_probe_run("ground")
+    d = _ik_probe("ground")
     need = [("self", "filtered"), ("self", "unfiltered"), ("self", "onfloor")]
     if not d or any(k not in d for k in need):
         print("  ik-ray-self  FAIL  the probe failed or measured nothing")
@@ -22520,7 +22560,7 @@ def run_ik_gate(workdir):
     # --- ik-plant --------------------------------------------------------------
     soles, probed = [], True
     for case in ("ground", "slope", "step"):
-        dd = _ik_probe_run(case)
+        dd = _ik_probe(case)
         if not dd or ("pose", "soleleft") not in dd or ("pose", "soleright") not in dd:
             probed = False
             break
@@ -22539,7 +22579,7 @@ def run_ik_gate(workdir):
             failures.append("ik-plant")
 
     # --- ik-slope --------------------------------------------------------------
-    d = _ik_probe_run("slope")
+    d = _ik_probe("slope")
     need = [("ray", "left"), ("ray", "right"), ("ray", "delta"), ("rig", "stance"),
             ("fixture", "slope"), ("pose", "bendleft"), ("pose", "bendright")]
     if not d or any(k not in d for k in need):
@@ -22560,7 +22600,7 @@ def run_ik_gate(workdir):
             failures.append("ik-slope")
 
     # --- ik-step ---------------------------------------------------------------
-    d = _ik_probe_run("step")
+    d = _ik_probe("step")
     need = [("ray", "delta"), ("fixture", "riser"), ("pose", "bendleft"), ("pose", "bendright")]
     if not d or any(k not in d for k in need):
         print("  ik-step      FAIL  the probe failed or measured nothing")
@@ -22590,7 +22630,7 @@ def run_ik_gate(workdir):
             failures.append("ik-repeat")
 
     # --- ik-swing --------------------------------------------------------------
-    d = _ik_probe_run("swing")
+    d = _ik_probe("swing")
     need = [("off", "travel"), ("on", "travel")]
     if not d or any(k not in d for k in need):
         print("  ik-swing     FAIL  the probe failed or measured nothing")
@@ -22614,6 +22654,8 @@ def run_ik_gate(workdir):
     return failures
 
 
+# "save <case> <label> <key> <numbers...>" from gametest --save-probe: the four-field
+# shape the anim, ui and ik probes print too, read back through _gametest_probe.
 _SAVE_PROBE = re.compile(r"^save ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 
 
@@ -22627,13 +22669,7 @@ def _save_probe(case, workdir):
     """
     env = dict(os.environ)
     env["CETRA_SETTINGS_DIR"] = os.path.join(workdir, "save-" + case)
-    r = subprocess.run([GAMETEST, "--save-probe", case], capture_output=True, text=True, env=env)
-    text = r.stdout + r.stderr
-    out = {(label, key): [float(v) for v in nums.split()]
-           for c, label, key, nums in _SAVE_PROBE.findall(text) if c == case}
-    if r.returncode != 0 or not out:
-        return None
-    return out
+    return _gametest_probe("--save-probe", _SAVE_PROBE, case, env=env)
 
 
 def run_save_gate(workdir):
