@@ -126,6 +126,10 @@ static int ik_foot_right = -1;
 // Smoothed rather than switched: grounded is a bool, and planting a foot the instant
 // it becomes true snaps the leg into place at the end of a jump.
 static float ik_weight = 0.0f;
+// How far the ankle rides above the sole in the bind pose. A planted foot has to keep
+// that clearance: target the ankle AT the ground and the foot sinks into it by its own
+// thickness, which on flat ground also stops IK being the identity it should be there.
+static float ik_ankle_lift = 0.0f;
 
 static SceneNode* heart_node = NULL;
 static ParticleModule* heart_spawn = NULL;
@@ -1101,6 +1105,12 @@ static void on_init(Game* game) {
                     } else {
                         player_animator->state->ik = player_ik;
                         player_skel_root = puppet_root;
+                        // create_animation_state leaves the globals at the bind pose,
+                        // so the ankle's height above the sole is readable here with
+                        // no second pass and no number written down.
+                        ik_ankle_lift =
+                            player_animator->state->global_transforms[player_ik->feet[ik_foot_left]
+                                                                          .ankle_index][3][1];
                     }
                 }
             }
@@ -1559,10 +1569,19 @@ static void ik_update_targets(Game* game) {
         vec3 target = {0.0f, 0.0f, 0.0f};
         vec3 normal = {0.0f, 0.0f, 0.0f};
         glm_vec3_copy(globals[player_ik->feet[feet[i]].ankle_index][3], ankle);
-        if (ik_ground_under_foot(physics, to_world, to_model, ankle, target, normal))
+        if (ik_ground_under_foot(physics, to_world, to_model, ankle, target, normal)) {
+            // The ray is vertical, so the hit shares the ankle's x and z and this is
+            // exactly how high the CLIP is holding the foot. A foot near the ground is
+            // planted on it; one the clip has swung up is released, or the solve would
+            // overwrite the stride and the legs would stop moving.
+            // Ground plus the ankle's clearance above the sole. Whether the foot is
+            // near enough to be planted at all is the solver's to decide -- only it
+            // sees this frame's animated pose rather than last frame's solved one.
+            target[1] += ik_ankle_lift;
             ik_foot_set_target(player_ik, feet[i], target, normal, ik_weight);
-        else
+        } else {
             ik_foot_set_target(player_ik, feet[i], ankle, (vec3){0.0f, 1.0f, 0.0f}, 0.0f);
+        }
     }
 }
 
@@ -2028,6 +2047,74 @@ static int run_ik_probe(Game* game, const char* which) {
                    (double)glm_vec3_distance((float*)state->global_transforms[foot->ankle_index][3],
                                              hip));
         }
+    } else if (!strcmp(which, "swing")) {
+        // A walk cycle actually TICKED, with each ankle's vertical travel measured over
+        // it. Every other case in this probe poses the rig once and solves once, which
+        // is precisely why eleven arms passed while the player's feet were welded to
+        // the floor: a solve that overwrites a stride looks perfect in a single pose.
+        Animation* walk = scene_find_animation(probe_scene, "walk");
+        if (!walk) {
+            fprintf(stderr, "ik-probe: the rig lacks a walk clip\n");
+            return 1;
+        }
+
+        for (int with_ik = 0; with_ik < 2; with_ik++) {
+            Animator* an = create_animator(skel);
+            if (!an) {
+                fprintf(stderr, "ik-probe: could not create an animator\n");
+                return 1;
+            }
+            int lf = -1, rf = -1;
+            IkSystem* sys = NULL;
+            if (with_ik) {
+                // Its own system: the one above is owned by `state` and freed with it.
+                sys = create_ik_system(skel);
+                if (!sys) {
+                    fprintf(stderr, "ik-probe: could not create an IK system\n");
+                    return 1;
+                }
+                lf = ik_add_foot(sys, "cetra_rig:LeftUpLeg", "cetra_rig:LeftLeg",
+                                 "cetra_rig:LeftFoot", (vec3){0.0f, 0.0f, 1.0f});
+                rf = ik_add_foot(sys, "cetra_rig:RightUpLeg", "cetra_rig:RightLeg",
+                                 "cetra_rig:RightFoot", (vec3){0.0f, 0.0f, 1.0f});
+                ik_set_pelvis(sys, "cetra_rig:Hips");
+                an->state->ik = sys;
+            }
+            animator_play(an, walk, 0.0f, true);
+
+            float lo = 1e9f, hi = -1e9f;
+            // Taken before the bone INDEX below is named, which would otherwise shadow
+            // the bind POSITION this comes from.
+            const float bind_lift = ankle[1];
+            const int ankle_bone = ik->feet[foot_index].ankle_index;
+            for (int t = 0; t < 60; t++) {
+                // Targets first, from the pose the last tick left, then the tick --
+                // the order the app runs in, where on_pre_render precedes the animator.
+                if (sys) {
+                    const int ids[2] = {lf, rf};
+                    for (int k = 0; k < 2; k++) {
+                        if (ids[k] < 0)
+                            continue;
+                        vec3 at = {0.0f, 0.0f, 0.0f};
+                        glm_vec3_copy(
+                            an->state->global_transforms[sys->feet[ids[k]].ankle_index][3], at);
+                        // Flat ground at model y = 0, plus the ankle's bind clearance
+                        // above the sole -- without which a planted foot is driven into
+                        // the floor by its own thickness. The release is the solver's.
+                        ik_foot_set_target(sys, ids[k], (vec3){at[0], bind_lift, at[2]},
+                                           (vec3){0.0f, 1.0f, 0.0f}, 1.0f);
+                    }
+                }
+                animator_update(an, 1.0f / 60.0f);
+                const float y = an->state->global_transforms[ankle_bone][3][1];
+                if (y < lo)
+                    lo = y;
+                if (y > hi)
+                    hi = y;
+            }
+            printf("ik swing %s travel %.6f\n", with_ik ? "on" : "off", (double)(hi - lo));
+            free_animator(an);
+        }
     } else if (!strcmp(which, "ground") || !strcmp(which, "slope") || !strcmp(which, "step")) {
         // The three cases that need a raycast, and so a world. The rig is placed at a
         // stand point and its origin put at the ground there; everything reported is
@@ -2063,8 +2150,13 @@ static int run_ik_probe(Game* game, const char* which) {
         // taken before that call is stale from here on.
         foot = &ik->feet[foot_index];
         ik_set_pelvis(ik, "cetra_rig:Hips");
-        ik->params.reach_limit = 0.995f;
         ik->params.max_pelvis_drop = 0.5f;
+        // Release OFF for these three. They ask whether the solve reaches the ground it
+        // was given; whether a foot should be planted at all is a different question,
+        // and --ik-probe swing is what asks it. Left on, a foot whose target sits below
+        // the clip's fades to partial weight and lands short -- which would read here as
+        // a solver that misses, when it is a release doing exactly what it says.
+        ik->params.plant_fraction = 0.0f;
         compute_bind_pose_matrices(state);
 
         // The stance is MEASURED rather than restated, so the gate can multiply it by
@@ -2117,6 +2209,14 @@ static int run_ik_probe(Game* game, const char* which) {
             printf("ik ground self onfloor %d\n",
                    (fh && filtered.entity && !strcmp(filtered.entity->name, "floor")) ? 1 : 0);
         }
+
+        // The ankle's bind clearance above the sole, which the app adds too. Without it
+        // this probe targets the bare ground while the app targets ground plus
+        // clearance -- so the solver's release sees a foot a whole clearance "lifted",
+        // lets go of it, and these cases measure a released foot while the app measures
+        // a planted one. Every arm built on them would then assert the wrong thing.
+        lt[1] += ankle[1];
+        rt[1] += ankle[1];
 
         ik_reset(ik);
         ik_foot_set_target(ik, foot_index, lt, ln, 1.0f);
