@@ -109,20 +109,44 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
         int advance, left_bearing;
         stbtt_GetCodepointHMetrics(info, codepoint, &advance, &left_bearing);
 
-        int x0, y0, x1, y1;
+        /*
+         * ONE SDF call per glyph, and its pixels are kept.
+         *
+         * This asked twice -- once for the metrics, discarding the bitmap, and
+         * again below for the bitmap -- and that cost three separate defects.
+         *
+         * stbtt_GetGlyphSDF returns NULL for a glyph with no outline (a SPACE,
+         * most of all) and returns it BEFORE writing *width, *height, *xoff or
+         * *yoff ("if empty, return NULL", stb_truetype.h). So the metrics probe
+         * read four UNINITIALISED locals for every blank glyph, advanced
+         * cursor_x and row_height by whatever the stack happened to hold, and
+         * put a later glyph's destination outside the atlas. That is a heap
+         * overflow which faults only when the allocation ends on a page
+         * boundary -- so it crashed occasionally and corrupted quietly the rest
+         * of the time, and looked like flakiness because uninitialised stack
+         * differs run to run.
+         *
+         * The discarded return was also a leaked rasterisation per glyph, and
+         * rasterising twice is the expensive half of building an atlas.
+         *
+         * Initialised to zero here because a NULL return leaves them untouched:
+         * an empty glyph must measure zero, not whatever was in the frame.
+         */
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        int glyph_w = 0, glyph_h = 0;
+        unsigned char* sdf_data = NULL;
+
         if (font->is_sdf) {
-            int w, h;
-            stbtt_GetCodepointSDF(info, scale, codepoint, (int)font->sdf_spread, on_edge_value,
-                                  pixel_dist_scale, &w, &h, &x0, &y0);
-            // Adjust to get bounding box
-            x1 = x0 + w;
-            y1 = y0 + h;
+            sdf_data =
+                stbtt_GetCodepointSDF(info, scale, codepoint, (int)font->sdf_spread, on_edge_value,
+                                      pixel_dist_scale, &glyph_w, &glyph_h, &x0, &y0);
+            x1 = x0 + glyph_w;
+            y1 = y0 + glyph_h;
         } else {
             stbtt_GetCodepointBitmapBox(info, codepoint, scale, scale, &x0, &y0, &x1, &y1);
+            glyph_w = x1 - x0;
+            glyph_h = y1 - y0;
         }
-
-        int glyph_w = x1 - x0;
-        int glyph_h = y1 - y0;
 
         // Check if we need to wrap to next row
         if (cursor_x + glyph_w + padding > atlas_size) {
@@ -131,8 +155,15 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
             row_height = 0;
         }
 
-        // Check if we need bigger atlas
-        while (cursor_y + glyph_h + padding > atlas_size) {
+        /*
+         * Grow until the glyph fits BOTH ways. The horizontal half was missing:
+         * a glyph wider than the atlas wrapped to cursor_x = padding above and
+         * still did not fit, and nothing grew for it -- so every row of its
+         * copy ran into the next row, and the last ran off the end of the
+         * allocation.
+         */
+        while (cursor_x + glyph_w + padding > atlas_size ||
+               cursor_y + glyph_h + padding > atlas_size) {
             // Reallocate with larger size
             int new_size = atlas_size * 2;
             unsigned char* new_data = calloc(new_size * new_size, 1);
@@ -149,26 +180,20 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
             atlas_size = new_size;
         }
 
-        // Render glyph to atlas
+        // Render glyph to atlas, from the pixels the one call above returned.
         if (glyph_w > 0 && glyph_h > 0) {
             unsigned char* dest = atlas_data + cursor_y * atlas_size + cursor_x;
 
-            if (font->is_sdf) {
-                int w, h, xoff, yoff;
-                unsigned char* sdf_data =
-                    stbtt_GetCodepointSDF(info, scale, codepoint, (int)font->sdf_spread,
-                                          on_edge_value, pixel_dist_scale, &w, &h, &xoff, &yoff);
-                if (sdf_data) {
-                    for (int row = 0; row < h; row++) {
-                        memcpy(dest + row * atlas_size, sdf_data + row * w, w);
-                    }
-                    stbtt_FreeSDF(sdf_data, NULL);
-                }
-            } else {
+            if (sdf_data) {
+                for (int row = 0; row < glyph_h; row++)
+                    memcpy(dest + row * atlas_size, sdf_data + row * glyph_w, glyph_w);
+            } else if (!font->is_sdf) {
                 stbtt_MakeCodepointBitmap(info, dest, glyph_w, glyph_h, atlas_size, scale, scale,
                                           codepoint);
             }
         }
+        if (sdf_data)
+            stbtt_FreeSDF(sdf_data, NULL);
 
         // Create glyph info with UVs based on current atlas_size
         // Note: if atlas resizes later, these UVs become invalid, but we resize
