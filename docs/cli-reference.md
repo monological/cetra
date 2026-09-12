@@ -819,19 +819,27 @@ callback — **no window and no frame**, though unlike `--ui-probe` it does crea
 because the crates it spawns upload their meshes. Each case wants its own `CETRA_SETTINGS_DIR`:
 they share one slot name, so they would otherwise read each other's file.
 
-`--ik-ground` adds the ground spec 12.4 needs to plant a foot on: a ramp rising 1 in 4 from
-x = 14, and three steps of half a metre at x = −15/−17/−19. **Off by default, and that is not
-caution.** The menu is drawn over the live scene through a backdrop that is 77% opaque, so the
-floor reads through it and anything added in frame moves both menu goldens; gated, all 33 are
-unmoved. `--no-ik` runs the player without foot planting at all, which is the comparison
-`ik-frame` would want and the quickest way to tell a planting artefact from an animation one.
+The ground spec 12.4 needs to plant a foot on is **always in the scene**: a ramp rising 1 in 4
+from x = 14, and three steps of half a metre at x = −15/−17/−19. Walk **+X** for the ramp, **−X**
+for the stairs; that is where the knee actually bends, since on the flat floor the solve is
+correctly an identity and there is nothing to see.
+
+It stood behind an `--ik-ground` flag at first, to keep it out of the two menu goldens — the
+menu is drawn over the live scene through a backdrop only 77% opaque, so the floor reads
+through it and anything in frame moves them. That traded the only demonstration of the feature
+for two unchanged reference images, which is the wrong way round: the goldens carry the fixture
+now and were re-baked for it.
+
+`--no-ik` runs the player without foot planting at all, which is the quickest way to tell a
+planting artefact from an animation one — worth knowing that the walk clip bends no knee of its
+own, so on flat ground the two look identical by design.
 
 `--ik-probe <case>` is the headless probe the `ik` gate group reads, in the same shape as the
 four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,
 `identity`, `pole` and `analytic` build a rig and nothing else — a two-bone solve is a pure
 function of a hip, a target and two segment lengths, and giving those a world would only make
 exact arithmetic depend on contact slop. `ground`, `slope` and `step` add a physics world and
-`--ik-ground`'s fixture, because planting's input is a RAYCAST and three bug classes live only
+the ramp-and-steps fixture, because planting's input is a RAYCAST and three bug classes live only
 there: the ray hitting the character's own capsule, the ray missing the ramp and finding the
 floor beneath it, and a hit point that is right while the plane is wrong. Those three run with
 release disabled — they ask whether the solve reaches the ground it was handed, not whether a

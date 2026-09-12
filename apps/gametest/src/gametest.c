@@ -109,10 +109,6 @@ static Animator* chaser_animator = NULL;
 static SceneNode* chaser_rig = NULL;
 static float chaser_yaw = 0.0f;
 static bool no_chaser = false;
-// The ramp and steps of spec 12.4. Off by default, and that is not caution: the menu
-// is drawn OVER the live scene through a backdrop that is 77 percent opaque, so the
-// floor reads through it and any new geometry in frame would move both menu goldens.
-static bool ik_ground = false;
 
 // Foot planting (spec 12.4). player_skel_root is the node the pose hangs under, and
 // inverting its global transform is what turns a world-space raycast hit into the
@@ -1222,9 +1218,12 @@ static void on_init(Game* game) {
         }
     }
 
-    // The uneven ground, before the broad phase is optimised so its bodies are covered
-    if (ik_ground)
-        build_ik_ground(game);
+    // The uneven ground, before the broad phase is optimised so its bodies are covered.
+    // Always present: flat floor is the one case where foot planting is correctly a
+    // no-op, so a demo without a slope demonstrates nothing. It stood behind a flag to
+    // keep it out of the two menu goldens, which photograph the world through a
+    // backdrop that is only 77 percent opaque -- those now include it.
+    build_ik_ground(game);
 
     // Optimize broad phase after adding initial bodies
     physics_world_optimize(physics);
@@ -3573,8 +3572,6 @@ int main(int argc, const char* argv[]) {
             no_puppet = true;
         } else if (!strcmp(a, "--no-chaser")) {
             no_chaser = true;
-        } else if (!strcmp(a, "--ik-ground")) {
-            ik_ground = true;
         } else if (!strcmp(a, "--no-ik")) {
             no_ik = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {

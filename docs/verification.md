@@ -606,7 +606,7 @@ than one, velocity continuity in the blend, and an extension soft-clamp in place
 Closing it is a watch, not a script:
 
 ```bash
-./out/bin/gametest --ik-ground        # walk onto the ramp at +X, the stairs at -X
+./out/bin/gametest                    # walk onto the ramp at +X, the stairs at -X
 ./out/bin/gametest --no-ik            # the same without planting, to tell the two apart
 ```
 
