@@ -819,6 +819,26 @@ callback — **no window and no frame**, though unlike `--ui-probe` it does crea
 because the crates it spawns upload their meshes. Each case wants its own `CETRA_SETTINGS_DIR`:
 they share one slot name, so they would otherwise read each other's file.
 
+`--ik-ground` adds the ground spec 12.4 needs to plant a foot on: a ramp rising 1 in 4 from
+x = 14, and three steps of half a metre at x = −15/−17/−19. **Off by default, and that is not
+caution.** The menu is drawn over the live scene through a backdrop that is 77% opaque, so the
+floor reads through it and anything added in frame moves both menu goldens; gated, all 33 are
+unmoved. `--no-ik` runs the player without foot planting at all, which is the comparison
+`ik-frame` would want and the quickest way to tell a planting artefact from an animation one.
+
+`--ik-probe <case>` is the headless probe the `ik` gate group reads, in the same shape as the
+four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,
+`identity`, `pole` and `analytic` build a rig and nothing else — a two-bone solve is a pure
+function of a hip, a target and two segment lengths, and giving those a world would only make
+exact arithmetic depend on contact slop. `ground`, `slope` and `step` add a physics world and
+`--ik-ground`'s fixture, because planting's input is a RAYCAST and three bug classes live only
+there: the ray hitting the character's own capsule, the ray missing the ramp and finding the
+floor beneath it, and a hit point that is right while the plane is wrong. Those three run with
+release disabled — they ask whether the solve reaches the ground it was handed, not whether a
+foot should be planted at all. `swing` is the one that asks the second question: it ticks a walk
+cycle and measures the ankle's vertical travel, and it is the only case that would notice the
+feet welding to the floor, which every other arm passed straight through.
+
 **`apps/spores`** gained `--taa`, `--headless-jitter` and `--msaa <n>` in 11.103 and **kept its four
 samples**, which is the one refusal in that spec. `particle_frag` declares a single output, so a
 mote writes no motion vector and reprojects through whatever geometry sits behind it — zero on a
