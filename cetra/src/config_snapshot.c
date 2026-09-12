@@ -13,6 +13,7 @@
 #include "exposure.h"
 #include "gi_volume.h"
 #include "ibl.h"
+#include "json_util.h"
 #include "light.h"
 #include "light_cluster.h"
 #include "material.h"
@@ -1014,7 +1015,7 @@ static bool _write_field(cJSON* obj, const ConfigField* f, const void* base) {
         case CFG_VEC3: {
             const float* v = (const float*)p;
             const int n = f->type == CFG_VEC2 ? 2 : 3;
-            double xyz[3] = {v[0], v[1], n > 2 ? v[2] : 0.0};
+            const double xyz[3] = {v[0], v[1], n > 2 ? v[2] : 0.0};
             cJSON* arr = cJSON_CreateDoubleArray(xyz, n);
             if (!arr)
                 return false;
@@ -1040,7 +1041,7 @@ static bool _write_field(cJSON* obj, const ConfigField* f, const void* base) {
     return false;
 }
 
-static void _write_source(cJSON* root, Engine* engine) {
+static void _write_source(cJSON* root, const Engine* engine) {
     cJSON* src = cJSON_AddObjectToObject(root, "source");
     if (!src)
         return;
@@ -1653,20 +1654,6 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
     return written;
 }
 
-// The two shapes the source block is made of. cscene.c has the same pair as
-// file statics of its own; they are not shared because a `static` in one .c is
-// not reachable from another, which is a seam worth widening the day a third
-// cJSON reader appears rather than on the second.
-static const char* _string_or(const cJSON* obj, const char* key) {
-    const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    return cJSON_IsString(item) ? item->valuestring : NULL;
-}
-
-static int _int_or(const cJSON* obj, const char* key, int fallback) {
-    const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
-    return cJSON_IsNumber(item) ? (int)item->valuedouble : fallback;
-}
-
 bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** out) {
     if (out)
         *out = NULL;
@@ -1693,10 +1680,10 @@ bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** 
 
     // Into the READ buffers, so the answer survives the parse tree without
     // touching what the writer will emit.
-    _copy_source_path(_read_model, sizeof(_read_model), _string_or(src, "model"));
-    _copy_source_path(_read_hdr, sizeof(_read_hdr), _string_or(src, "hdr"));
-    _copy_source_path(_read_lut, sizeof(_read_lut), _string_or(src, "lut"));
-    _copy_source_path(_read_textures, sizeof(_read_textures), _string_or(src, "textures"));
+    _copy_source_path(_read_model, sizeof(_read_model), json_string_or(src, "model"));
+    _copy_source_path(_read_hdr, sizeof(_read_hdr), json_string_or(src, "hdr"));
+    _copy_source_path(_read_lut, sizeof(_read_lut), json_string_or(src, "lut"));
+    _copy_source_path(_read_textures, sizeof(_read_textures), json_string_or(src, "textures"));
     _read_back.model = _read_model;
     _read_back.hdr = _read_hdr;
     _read_back.lut = _read_lut;
@@ -1707,8 +1694,8 @@ bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** 
         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "no_texture_compression"));
     _read_back.texture_compress_colour =
         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "texture_compress_colour"));
-    _read_back.width = _int_or(src, "width", 0);
-    _read_back.height = _int_or(src, "height", 0);
+    _read_back.width = json_int_or(src, "width", 0);
+    _read_back.height = json_int_or(src, "height", 0);
 
     cJSON_Delete(root);
     if (out)
