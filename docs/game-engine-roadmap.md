@@ -6,21 +6,24 @@ subsystem sweep. Companion to `rendering-roadmap.md` — **that** doc owns the
 graphics pipeline in depth; **this** doc owns everything else (physics, gameplay,
 assets, core, and the gaps between "engine" and "shippable game").
 
-_Last updated: 2026-09-10._
+_Last updated: 2026-09-12._
 
 ---
 
 ## Verdict
 
 The hard, specialized tech is done to a high standard. The renderer is
-AAA-caliber and the physics is best-in-class. What's missing is the unglamorous
-but well-understood glue: save games, and (near ship) Steamworks. Gamepad input
+AAA-caliber and the physics is best-in-class. What's left of the unglamorous but
+well-understood glue is Steamworks, near ship. Gamepad input
 landed in spec 11.109 (still owed a real-pad check), audio in spec 12.0 (heard
 on macOS, owed on Linux and Windows), animation blending in spec 12.1
-(gate-verified on a generated puppet; a real character is owed a look) and the
+(gate-verified on a generated puppet; a real character is owed a look), the
 game UI in spec 12.2 (menus, a HUD, and the settings half of serialization;
 owed another display, a real pad through a menu, and the two settings paths this
-machine cannot write). 11.109 was the pivot from the renderer era to the game-platform
+machine cannot write) and save games in spec 12.3 (entities, spawned objects,
+per-section versions and a migration chain; owed a drift tolerance over many
+steps, and a migration that changed for a reason nobody anticipated, which only
+time produces). 11.109 was the pivot from the renderer era to the game-platform
 era, which is numbered from 12.0; it stays the last renderer-era spec, and the
 major bump marks the change in the *kind* of work, as every prior one did.
 
@@ -185,7 +188,7 @@ are rough and assume a single experienced dev.
 |---|---|---|---|
 | **Audio** | **Done, spec 12.0** -- miniaudio wrapped as a game-layer `AudioSystem`: one device, 2D SFX and music, 3D positional sound with the camera as listener, mixer buses, and the `AUDIO_SOURCE` component implemented. The layer above the device is gate-verified off offline PCM (onset, pan, distance, bus routing, decode), and heard on macOS. Still owed: a listen on Linux and Windows (`docs/verification.md`). | No game ships silent. Steam players expect it, and the offline-render path doubles as the deterministic test seam. | done (~1 week) |
 | **Gamepad input** | **Done, spec 11.109** -- GLFW's standard layout behind a reader seam, an action table, hot-plug, a loadable mapping file; the layer above the seam gate-verified by a scripted pad. Still owed: one run with a real controller, or the Linux uinput recipe (`docs/verification.md`), since no pad was at hand. | Steam players expect controller support. Steam itself presents a virtual Xbox pad to a GLFW game, which is what shipped titles rely on; Steam Input's own API is a second reader behind the same seam, booked with Steamworks. | done (~2 days) |
-| **Save / serialization** | Partial — `.cscn` describes scenes; **settings persist since spec 12.2** (`game/settings.c`, a per-user file in the platform's own location), but no runtime GAME state does | The level/authoring half exists (§6.0), and the settings half is done. Still missing: save games and any entity/physics state serializer. | ~1 week |
+| **Save / serialization** | **Done, spec 12.3** — `game/save.c`, a third descriptor table walked both ways, beside `.cscn` (what exists) and the config snapshot (how it is tuned). Entities matched by NAME, components keyed by name rather than by a positional enum, a GET/SET row pair for state that lives inside Jolt, spawned objects carrying the recipe that made them, per-SECTION versions with a migration chain that runs on the parsed tree, and an atomic write. File-level problems refuse the file; record-level problems drop the record and count it, so one unbuildable object never costs a player the rest. Eight gate arms, no GPU. Still owed: a drift tolerance measured over many steps, the Linux and Windows paths, and unknown-field preservation for the day Steam Cloud syncs between patch levels. | done (~1 week) |
 | **Game UI / menus** | **Done, spec 12.2** -- a retained tree of elements over a pure two-pass layout, a geometric focus model, and a theme whose every zero means inherit, drawn through a general post-tonemap overlay hook so a menu is neither graded nor rescaled and IS captured by a headless screenshot. The element list is CLOSED (panel, label, button, toggle, slider, selector) with three escape hatches under it: a custom draw callback, a custom fragment program, and the raw draw-list primitives. Input is settled at one depth -- a `ui` flag on an action and one suppression switch -- and Escape now opens a menu in every app instead of quitting. Ten gate arms assert layout, wrapping, navigation, hit-testing, capture, the stack, theme resolution, the closed list and the settings round-trip with no GPU at all, plus two menu goldens. Still owed: a 4K/HiDPI display other than this one, a real controller through a menu, and the Linux and Windows settings paths. | Main menu, HUD, pause, settings screens. Inventory is an app's own screen built from these elements. | done (~1 week) |
 | **Animation blending** | **Done, spec 12.1** -- a blend layer over the single-clip animator: a pose became a blendable value, and over it a phase-synced 1D blend space, a crossfade whose settled pose is the incoming clip's own bit for bit, one bone-masked override layer that releases itself, and clip events dispatched after the pose is applied. Poses are per node, so two rigs animate independently; the `ANIMATOR` component ticks one once per rendered frame from the sim clock. Thirteen gate arms on a generated puppet (endpoints to the pixel, an analytic 21.60/45.00/68.40-degree nlerp midpoint, crossfade timing, mask and release, two rigs, one shared phase, event counts, and the committed walk clip binding all twenty bones by name), plus the corpus's first skinned golden. Still owed: a real character, judged by eye (`docs/verification.md`). | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | done (~1 week) |
 | **Steamworks integration** | Absent | Achievements, cloud saves, overlay, input API. Needed near ship. | ~1 week |
@@ -221,9 +224,14 @@ its own branch.
    it, and settings persistence), with gametest carrying main, pause, settings and
    HUD screens; the remaining items are a 4K display, a real pad through a menu,
    and the Linux and Windows settings paths, per `docs/verification.md`.
-5. **Save serialization** (~1 week) — an entity/state save format. Settings are
-   done in spec 12.2 and `.cscn` already covers scene description, so what is left
-   is runtime game state.
+5. **Save serialization** — done in spec 12.3 (entity and component state, spawned
+   objects rebuilt from their recipes, per-section versions and a migration chain,
+   written atomically). A restored world is deliberately not bit-exact: Jolt's
+   solver state stays out of the file, or the format would pin to `JPH_VERSION_ID`
+   and break every save on a physics upgrade. The remaining items are a measured
+   drift tolerance, the two platform paths this machine cannot write, and a
+   migration that changed for a reason nobody anticipated — see
+   `docs/verification.md`.
 6. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
 
 Fill in genre-specific systems (scripting, AI/navmesh, networking) only as the

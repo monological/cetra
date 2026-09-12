@@ -40,6 +40,8 @@ up as a difference. The corpus must not be re-baked off macOS.
   the math, and what only watching a real rig can settle
 - [The UI paths](#the-ui-paths) — what the `ui` group and the two menu goldens do not
   cover: another display, a real pad through a menu, and the other two settings locations
+- [The save paths](#the-save-paths) — what the `save` group asserts, why a restored world is
+  deliberately not bit-exact, and the migration nobody can test until time passes
 
 ---
 
@@ -568,3 +570,48 @@ recorded here rather than explained: if it recurs, the first thing to suspect is
 texture upload budget (<=5/frame), which is the one part of a gametest frame that depends on
 how busy the machine is, and the fix is to give the recipe enough frames for the loads to have
 certainly landed.
+
+---
+
+## The save paths
+
+Spec 12.3's eight gate arms assert the save format where it is a pure function of a file and a
+world. The probe builds its own scene, physics world and entities, so every number an arm
+checks is one this repository can state in closed form: eight app fields back from a ZEROED
+struct, a pose and a velocity restored after both were moved away, a destroyed crate rebuilt
+from its recipe at the position it had, one drop each for an absent entity and an unregistered
+recipe with the file still loading, a refusal below the version floor that applies nothing, and
+a 75-at-version-1 that becomes 0.75 at version 2.
+
+**A restored world is not bit-exact, and that is the design rather than a shortfall.** Jolt's
+contact caches, island assignments and sleep timers are not serialized, because doing so would
+pin the save format to `JPH_VERSION_ID` — which `physics_cook.h` already exports for exactly
+that reason — and break every save in players' hands on a physics upgrade. Poses and velocities
+are restored into a freshly built world and the solver settles from there. Anyone measuring a
+crate that came to rest a fraction of a millimetre from where it was is looking at the trade,
+not a defect. What the arms do NOT yet bound is how far that drift goes over many steps: a
+save-step-reload-step comparison with a measured tolerance is the arm this group is still owed,
+and the tolerance has to be measured before it is quoted, not guessed.
+
+Four more things this cannot settle from here:
+
+- **A migration in anger.** The chain is exercised by a synthetic version-1 file the probe
+  writes itself, which proves the mechanism and nothing about the judgement. The real test is
+  a format that changed for a reason nobody anticipated, read by a build shipped months later,
+  and only time produces that. The committed fixture ladder the spec describes is the shape
+  that would catch it, and it wants real historical files rather than hand-authored ones —
+  which is why none are committed yet: there is exactly one version so far, so a ladder would
+  be a rung.
+- **The save file on Linux and Windows.** `save_default_path` resolves the same three locations
+  `settings_default_path` does, and only `~/Library/Application Support` has ever been written
+  to. This is the same debt spec 12.2 already carries, and closing that closes this.
+- **Forward compatibility.** An older build reading a newer save skips keys it does not know
+  and reads the ones it does, which is as far as it goes. A key whose MEANING changed in the
+  newer build reads wrong, silently, because nothing in an older binary can know that happened.
+  Unknown-field PRESERVATION — writing back what it did not understand — is what would fix it,
+  and it becomes real the day Steam Cloud syncs one player's save between two machines on
+  different patch levels.
+- **A crash mid-write.** The write is atomic by temp-file-and-rename, flushed and fsynced
+  before the rename, which is the departure from `settings.c` and `config_snapshot.c` that a
+  player's progress justifies. Nothing has actually pulled the plug on one to watch the old
+  file survive.
