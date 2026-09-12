@@ -22310,6 +22310,21 @@ def run_ik_gate(workdir):
                    the segments and the distance the probe reports. The sweep stops
                    short of full extension deliberately, because the derivative there
                    is unbounded and a nearer value would assert float noise.
+      ik-ray-self  the foot ray finds the WORLD and not the body it was cast from. The
+                   same ray unfiltered is asserted to HIT the character, so the arm
+                   cannot quietly go vacuous the day the capsule stops being there.
+      ik-plant     six feet, over flat ground and both fixtures, land ON the ground the
+                   ray found rather than near it. Without the pelvis drop the uphill
+                   leg cannot reach and this is the arm that would say so.
+      ik-slope     a ramp rising 1 in 4: the two feet find ground one slope times one
+                   stance apart, and BOTH of those come from the probe, so neither side
+                   carries a constant the other has to match. The uphill knee bends and
+                   the downhill one is left where the clip had it.
+      ik-step      the same over one riser, with the uphill foot on the OTHER side. A
+                   solver that hardcoded which leg bends passes the ramp and fails here.
+      ik-repeat    two runs of the slope case print identical digits. The raycast is the
+                   one input this feature has that nothing else in the suite would
+                   notice going order-dependent.
     """
     if not os.path.exists(GAMETEST):
         print("  ik           SKIP  (gametest not built)")
@@ -22442,6 +22457,99 @@ def run_ik_gate(workdir):
               f"error {worst:.4f} deg against the closed form's {shown} (want < 0.05)")
         if not ok:
             failures.append("ik-analytic")
+
+    # --- ik-ray-self -----------------------------------------------------------
+    d = _ik_probe_run("ground")
+    need = [("self", "filtered"), ("self", "unfiltered"), ("self", "onfloor")]
+    if not d or any(k not in d for k in need):
+        print("  ik-ray-self  FAIL  the probe failed or measured nothing")
+        failures.append("ik-ray-self")
+    else:
+        filt = d[("self", "filtered")][0]
+        unfilt = d[("self", "unfiltered")][0]
+        onfloor = d[("self", "onfloor")][0]
+        # The unfiltered leg is asserted to HIT. Without it this arm would keep passing
+        # on a world where the capsule had quietly stopped existing, which is a test
+        # that proves the filter works by never exercising it.
+        ok = filt == 0 and onfloor == 1 and unfilt == 1
+        print(f"  ik-ray-self  {'PASS' if ok else 'FAIL'}  filtered, the ray lands on the floor "
+              f"({int(onfloor)}) and not the character ({int(filt)}); unfiltered from the same "
+              f"origin it does hit the character ({int(unfilt)}, want 1, or this arm is "
+              f"vacuous)")
+        if not ok:
+            failures.append("ik-ray-self")
+
+    # --- ik-plant --------------------------------------------------------------
+    soles, probed = [], True
+    for case in ("ground", "slope", "step"):
+        dd = _ik_probe_run(case)
+        if not dd or ("pose", "soleleft") not in dd or ("pose", "soleright") not in dd:
+            probed = False
+            break
+        soles.append(dd[("pose", "soleleft")][0])
+        soles.append(dd[("pose", "soleright")][0])
+    if not probed or len(soles) != 6:
+        print("  ik-plant     FAIL  a probe failed or measured nothing")
+        failures.append("ik-plant")
+    else:
+        worst = max(soles)
+        ok = worst < 1e-6
+        print(f"  ik-plant     {'PASS' if ok else 'FAIL'}  over flat ground, the ramp and the "
+              f"steps, six feet land on the ground their ray found; worst miss {worst:.8f} m "
+              f"(want < 1e-6)")
+        if not ok:
+            failures.append("ik-plant")
+
+    # --- ik-slope --------------------------------------------------------------
+    d = _ik_probe_run("slope")
+    need = [("ray", "left"), ("ray", "right"), ("ray", "delta"), ("rig", "stance"),
+            ("fixture", "slope"), ("pose", "bendleft"), ("pose", "bendright")]
+    if not d or any(k not in d for k in need):
+        print("  ik-slope     FAIL  the probe failed or measured nothing")
+        failures.append("ik-slope")
+    else:
+        stance = d[("rig", "stance")][0]
+        slope = d[("fixture", "slope")][0]
+        want = slope * stance
+        got = d[("ray", "delta")][0]
+        up, down = d[("pose", "bendleft")][0], d[("pose", "bendright")][0]
+        ok = abs(got - want) < 1e-4 and up > down + 10.0
+        print(f"  ik-slope     {'PASS' if ok else 'FAIL'}  the feet find ground "
+              f"{d[('ray', 'left')][0]:.4f} and {d[('ray', 'right')][0]:.4f}, {got:.6f} apart "
+              f"against slope {slope:g} times stance {stance:g} = {want:.6f}; the uphill knee "
+              f"bends {up:.2f} deg against the downhill {down:.2f}")
+        if not ok:
+            failures.append("ik-slope")
+
+    # --- ik-step ---------------------------------------------------------------
+    d = _ik_probe_run("step")
+    need = [("ray", "delta"), ("fixture", "riser"), ("pose", "bendleft"), ("pose", "bendright")]
+    if not d or any(k not in d for k in need):
+        print("  ik-step      FAIL  the probe failed or measured nothing")
+        failures.append("ik-step")
+    else:
+        riser = d[("fixture", "riser")][0]
+        got = d[("ray", "delta")][0]
+        left, right = d[("pose", "bendleft")][0], d[("pose", "bendright")][0]
+        ok = abs(got - riser) < 1e-4 and right > left + 10.0
+        print(f"  ik-step      {'PASS' if ok else 'FAIL'}  one riser apart, {got:.6f} against "
+              f"{riser:.6f}; the uphill knee here is the RIGHT one ({right:.2f} deg against the "
+              f"left's {left:.2f}) -- the mirror of the ramp, so a solver that hardcoded a leg "
+              f"passes one and fails the other")
+        if not ok:
+            failures.append("ik-step")
+
+    # --- ik-repeat -------------------------------------------------------------
+    first, second = _ik_probe_run("slope"), _ik_probe_run("slope")
+    if not first or not second:
+        print("  ik-repeat    FAIL  a probe failed or measured nothing")
+        failures.append("ik-repeat")
+    else:
+        ok = first == second
+        print(f"  ik-repeat    {'PASS' if ok else 'FAIL'}  two runs of the slope case print "
+              f"{'identical' if ok else 'DIFFERENT'} digits across {len(first)} measurements")
+        if not ok:
+            failures.append("ik-repeat")
 
     return failures
 
