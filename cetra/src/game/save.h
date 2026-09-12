@@ -236,6 +236,40 @@ bool save_register_spawner(SaveSystem* save, const char* name, SaveSpawnFn fn, v
  */
 bool save_note_spawn(SaveSystem* save, const char* entity_name, const char* spawner, cJSON* params);
 
+// -------------------------------------------------------------- migrations
+
+/*
+ * One step of a section's history: the tree as version N, rewritten in place to
+ * be version N+1. False means the step could not be made, which skips the rest
+ * of that section rather than costing the file.
+ *
+ * IT RUNS ON THE PARSED TREE, BEFORE THE DESCRIPTOR WALK, and that is the point
+ * of the design rather than an implementation detail. A migration written today
+ * must still behave identically in three years, when the struct it used to
+ * correspond to has moved on -- so it is handed JSON and never a C object. This
+ * is Minecraft's DataFixerUpper shape, and the reason Unreal reaches for
+ * FCustomVersion rather than one engine-wide number.
+ *
+ * What a migration is FOR is the case tags cannot express: a key whose MEANING
+ * changed -- same name, same type, different units. A rename is cheaper, and
+ * wants a row's former_key and no function at all. A field added or removed
+ * needs nothing whatsoever.
+ */
+typedef bool (*SaveMigrateFn)(cJSON* section);
+
+/*
+ * Register the step that takes `section` from `from_version` to from_version+1.
+ * The chain is walked in order, so a file three versions behind runs three
+ * functions. A MISSING step stops that section where it is: its rows are left
+ * at their current values and the load says so by name, because half-migrated
+ * data is worse than none.
+ *
+ * `section` is borrowed. False (logged) if that step is already registered or
+ * there is no room.
+ */
+bool save_register_migration(SaveSystem* save, const char* section, int from_version,
+                             SaveMigrateFn fn);
+
 // ------------------------------------------------------------------- file
 
 /*
