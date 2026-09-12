@@ -218,7 +218,8 @@ bool save_register_table(SaveSystem* save, const char* section, int version, con
  * `params` is the object the writer produced for this entity; the function owns
  * nothing and must not retain it.
  */
-typedef struct Entity* (*SaveSpawnFn)(struct EntityManager* em, const cJSON* params, void* user);
+typedef struct Entity* (*SaveSpawnFn)(struct EntityManager* em, const char* name,
+                                      const cJSON* params, void* user);
 
 bool save_register_spawner(SaveSystem* save, const char* name, SaveSpawnFn fn, void* user);
 

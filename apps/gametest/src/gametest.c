@@ -34,6 +34,7 @@
 #include "cetra/game/character.h"
 #include "cetra/game/audio.h"
 #include "cetra/game/settings.h"
+#include "cetra/game/save.h"
 #include "cetra/game/animator_component.h"
 #include "cetra/animator.h"
 #include "cetra/import.h"
@@ -52,6 +53,7 @@ static Constraint* door_hinge = NULL;
 static ShaderProgram* pbr_shader = NULL;
 static int box_count = 0;
 static const char* hdr_path = NULL;
+static SaveSystem* save_system = NULL;
 
 // Animation (spec 12.1): the player is the procedural puppet on an ANIMATOR
 // component -- idle, walk and run blended from the controller's post-solve
@@ -192,6 +194,16 @@ static const InputAction actions[] = {
     {"wave", {INPUT_KEY(E, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
 
     /*
+     * Quicksave and quickload, as ordinary game actions rather than keys read
+     * somewhere by hand -- so they rebind like everything else and a pad can
+     * reach them. NOT flagged `ui`, which means a menu suppresses them: saving
+     * from inside a pause screen would capture the menu's own state as part of
+     * the world, and the screen stack is not what a save is about.
+     */
+    {"quicksave", {INPUT_KEY(F5, 1), INPUT_PAD(RIGHT_BUMPER, 1)}},
+    {"quickload", {INPUT_KEY(F9, 1), INPUT_PAD(RIGHT_THUMB, 1)}},
+
+    /*
      * The UI's own, flagged so they keep reading while the menu has taken input
      * away from the game -- the key that opens a menu has to be able to close
      * it. Escape rather than a quit: a menu is what Escape does in a game, and
@@ -240,7 +252,11 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
         mat->roughness = 0.4f;
         mat->metallic = 0.3f;
     }
-    material_set_program(mat, pbr_shader);
+    // Guarded because the save probe builds crates before any shader exists:
+    // it never draws, and an unguarded call logs an error for a program the
+    // run is never going to need.
+    if (pbr_shader)
+        material_set_program(mat, pbr_shader);
     mesh->material = mat;
 
     node_add_mesh(node, mesh);
@@ -331,50 +347,164 @@ static void create_door(Game* game, vec3 position) {
     }
 }
 
-// Spawn a falling box at a random position above the scene
-static void spawn_falling_box(Game* game) {
+/*
+ * One crate, from explicit arguments.
+ *
+ * BOTH ways in go through here -- the keypress rolls the arguments, the loader
+ * reads them back from the file -- so a restored crate is built by the same
+ * code that built the original rather than by a second copy free to drift from
+ * it. Splitting this out is what makes the crates saveable at all: the size and
+ * colour used to be rolled inline and then stored only inside a Material and a
+ * Jolt shape, where nothing could read them back, and the rand01 sequence that
+ * produced them cannot be replayed without a draw count nobody keeps.
+ */
+static Entity* spawn_box(Game* game, const char* name, vec3 pos, float half, vec3 color) {
     EntityManager* em = game_get_entity_manager(game);
     PhysicsWorld* physics = game_get_physics_world(game);
     Scene* scene = game_get_scene(game);
 
     if (!em || !physics || !scene)
-        return;
-
-    char name[32];
-    snprintf(name, sizeof(name), "box_%d", box_count++);
+        return NULL;
 
     Entity* box = create_entity(em, name);
-
-    // Random position above the scene
-    float x = (rand01() - 0.5f) * 20.0f;
-    float z = (rand01() - 0.5f) * 20.0f;
-    vec3 pos = {x, 15.0f + rand01() * 5.0f, z};
+    if (!box)
+        return NULL;
     glm_vec3_copy(pos, box->position);
 
-    // Random color
-    vec3 color = {0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f};
-
-    // Random size
-    float scale = 0.5f + rand01() * 1.0f;
-    vec3 half_extents = {scale, scale, scale};
-
-    // Create visual
+    vec3 half_extents = {half, half, half};
     SceneNode* node = create_box_node(scene, half_extents, color, false);
     node_set_name(node, name);
     box->node = node;
 
-    // Add physics body (density ~50 kg/m³, like a light wooden crate)
+    // Add physics body (density ~50 kg/m3, like a light wooden crate)
     PhysicsShapeDesc shape = {
-        .type = SHAPE_BOX,
-        .box.half_extents = {half_extents[0], half_extents[1], half_extents[2]},
-        .density = 50.0f};
+        .type = SHAPE_BOX, .box.half_extents = {half, half, half}, .density = 50.0f};
     entity_add_rigid_body(box, physics, &shape, MOTION_DYNAMIC, OBJ_LAYER_DYNAMIC);
+    return box;
+}
+
+// The recipe's arguments, in the shape the save file carries them.
+static cJSON* box_params(vec3 pos, float half, vec3 color) {
+    cJSON* params = cJSON_CreateObject();
+    if (!params)
+        return NULL;
+    const double p[3] = {pos[0], pos[1], pos[2]};
+    const double c[3] = {color[0], color[1], color[2]};
+    cJSON_AddItemToObject(params, "position", cJSON_CreateDoubleArray(p, 3));
+    cJSON_AddNumberToObject(params, "half", half);
+    cJSON_AddItemToObject(params, "color", cJSON_CreateDoubleArray(c, 3));
+    return params;
+}
+
+static bool params_vec3(const cJSON* params, const char* key, vec3 out) {
+    const cJSON* arr = cJSON_GetObjectItemCaseSensitive(params, key);
+    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != 3)
+        return false;
+    for (int i = 0; i < 3; i++) {
+        const cJSON* e = cJSON_GetArrayItem(arr, i);
+        if (!cJSON_IsNumber(e))
+            return false;
+        out[i] = (float)e->valuedouble;
+    }
+    return true;
+}
+
+/*
+ * The registered "box" recipe. The position it reads is only a starting point:
+ * the entity's own saved pose is applied over it a moment later, which is what
+ * puts a restored crate where it actually was rather than where it first fell.
+ */
+static Entity* spawn_box_from_save(EntityManager* em, const char* name, const cJSON* params,
+                                   void* user) {
+    (void)em;
+    Game* game = (Game*)user;
+    vec3 pos = {0.0f, 0.0f, 0.0f};
+    vec3 color = {0.5f, 0.5f, 0.5f};
+    if (!params || !params_vec3(params, "position", pos) || !params_vec3(params, "color", color)) {
+        fprintf(stderr, "gametest: box params are malformed; '%s' is not restored\n", name);
+        return NULL;
+    }
+    const cJSON* half = cJSON_GetObjectItemCaseSensitive(params, "half");
+    if (!cJSON_IsNumber(half))
+        return NULL;
+    return spawn_box(game, name, pos, (float)half->valuedouble, color);
+}
+
+// Spawn a falling box at a random position above the scene
+static void spawn_falling_box(Game* game) {
+    char name[32];
+    snprintf(name, sizeof(name), "box_%d", box_count++);
+
+    // Random position above the scene, random colour, random size
+    float x = (rand01() - 0.5f) * 20.0f;
+    float z = (rand01() - 0.5f) * 20.0f;
+    vec3 pos = {x, 15.0f + rand01() * 5.0f, z};
+    vec3 color = {0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f, 0.3f + rand01() * 0.7f};
+    float half = 0.5f + rand01() * 1.0f;
+
+    if (!spawn_box(game, name, pos, half, color))
+        return;
+
+    // Recorded as it happens, by the only code that holds these numbers.
+    if (save_system)
+        save_note_spawn(save_system, name, "box", box_params(pos, half, color));
 
     printf("Spawned %s at (%.1f, %.1f, %.1f)\n", name, pos[0], pos[1], pos[2]);
 }
 
 // Track if player is touching door this frame (declared before on_update uses it)
 static bool player_touching_door = false;
+
+/*
+ * The state an entity walk cannot reach, and why this is a table of ACCESSORS
+ * rather than a struct.
+ *
+ * A save that carries every entity still restores a world whose player faces
+ * the wrong way, whose next crate collides with an existing name, and whose
+ * door forgets it was mid-swing: a facing angle, a spawn counter and two
+ * deferred flags live in file statics here and nowhere the engine can see. They
+ * are genuinely per-file state, so they are reached by name through the row
+ * pair save.h provides for exactly this case.
+ *
+ * Gathering them into one struct was the other option and is the worse one. It
+ * would rewrite the door, yaw and catch logic in a file the anim, audio, ui and
+ * gamepad groups plus two goldens all read, to buy nothing over a pair of
+ * one-line functions.
+ */
+#define APP_ROW_FNS(name_, type_)                               \
+    static void _get_##name_(const void* b, double* o, int n) { \
+        (void)b;                                                \
+        (void)n;                                                \
+        o[0] = (double)name_;                                   \
+    }                                                           \
+    static void _set_##name_(void* b, const double* v, int n) { \
+        (void)b;                                                \
+        (void)n;                                                \
+        name_ = (type_)v[0];                                    \
+    }
+
+APP_ROW_FNS(box_count, int)
+APP_ROW_FNS(player_yaw, float)
+APP_ROW_FNS(chaser_yaw, float)
+APP_ROW_FNS(heart_timer, float)
+APP_ROW_FNS(catch_cooldown, float)
+APP_ROW_FNS(door_open_pending, bool)
+APP_ROW_FNS(door_open_velocity, float)
+APP_ROW_FNS(player_touching_door, bool)
+
+static const SaveField SAVE_APP_FIELDS[] = {
+    SAVE_ROW_FN(SAVE_INT, "box_count", _get_box_count, _set_box_count),
+    SAVE_ROW_FN(SAVE_FLOAT, "player_yaw", _get_player_yaw, _set_player_yaw),
+    SAVE_ROW_FN(SAVE_FLOAT, "chaser_yaw", _get_chaser_yaw, _set_chaser_yaw),
+    SAVE_ROW_FN(SAVE_FLOAT, "heart_timer", _get_heart_timer, _set_heart_timer),
+    SAVE_ROW_FN(SAVE_FLOAT, "catch_cooldown", _get_catch_cooldown, _set_catch_cooldown),
+    SAVE_ROW_FN(SAVE_BOOL, "door_open_pending", _get_door_open_pending, _set_door_open_pending),
+    SAVE_ROW_FN(SAVE_FLOAT, "door_open_velocity", _get_door_open_velocity, _set_door_open_velocity),
+    SAVE_ROW_FN(SAVE_BOOL, "player_touching_door", _get_player_touching_door,
+                _set_player_touching_door),
+};
+#define SAVE_APP_COUNT   ((int)(sizeof(SAVE_APP_FIELDS) / sizeof(SAVE_APP_FIELDS[0])))
+#define SAVE_APP_VERSION 1
 
 // Character contact callback for door interaction
 static void on_player_contact(CharacterController* cc, Entity* hit_entity, vec3 contact_position,
@@ -735,6 +865,16 @@ static void on_init(Game* game) {
     // Create entity manager
     EntityManager* em = create_entity_manager(game);
     game_set_entity_manager(game, em);
+
+    // The save system. Here rather than at startup because a spawner needs the
+    // game it spawns into, and the app table's accessors need nothing at all --
+    // the base is the game only because a table must address something.
+    save_system = create_save_system(game);
+    if (save_system) {
+        save_register_table(save_system, "gametest", SAVE_APP_VERSION, SAVE_APP_FIELDS,
+                            SAVE_APP_COUNT, game);
+        save_register_spawner(save_system, "box", spawn_box_from_save, game);
+    }
 
     // Audio: one device, two SFX beeps. Headless opens no device (offline).
     AudioSystem* audio = create_audio_system(engine->headless);
@@ -1143,6 +1283,29 @@ static void on_update(Game* game, double dt) {
             audio_sound_play(spawn_sound);
     }
 
+    /*
+     * Quicksave and quickload. In the fixed step rather than the frame hook so
+     * that what is written is a settled world: on_update runs after the last
+     * step's physics sync, where pre_render would catch the world mid-frame
+     * with the entity poses of one step and the bodies of the next.
+     */
+    if (save_system && input_action_pressed(&game->input, "quicksave")) {
+        char path[1024];
+        if (save_default_path(path, sizeof(path), "quick"))
+            save_write(save_system, path);
+    }
+    if (save_system && input_action_pressed(&game->input, "quickload")) {
+        char path[1024];
+        if (save_default_path(path, sizeof(path), "quick")) {
+            const SaveLoadResult r = save_read(save_system, path);
+            if (r.ok)
+                printf("Loaded: %d entities, %d spawned, %d dropped\n", r.entities_restored,
+                       r.entities_spawned,
+                       r.dropped_missing_entity + r.dropped_unknown_spawner +
+                           r.dropped_unknown_component);
+        }
+    }
+
     if (input_action_pressed(&game->input, "raycast") && physics) {
         vec3 down = {0, -1, 0};
         RaycastHit hit;
@@ -1230,6 +1393,9 @@ static void on_shutdown(Game* game) {
         free_mouse_drag_controller(drag_controller);
         drag_controller = NULL;
     }
+
+    free_save_system(save_system);
+    save_system = NULL;
 }
 
 // Mouse callback for camera control
@@ -2286,6 +2452,255 @@ static void ui_shutdown(void) {
     ui_system = NULL;
 }
 
+/*
+ * --save-probe: the save format asserted where it is a pure function of a file
+ * and a world, printed as `save <case> <label> <key> <numbers>` at %.6f so the
+ * one regex the audio, anim and ui probes already share reads it too.
+ *
+ * It builds its own small world rather than using on_init's: a probe game has
+ * no init callback, and a handful of entities makes every number below
+ * something this file can state in closed form.
+ */
+typedef struct ProbeState {
+    float scaled;
+} ProbeState;
+
+static ProbeState probe_state;
+
+static const SaveField SAVE_PROBE_FIELDS[] = {
+    SAVE_ROW(SAVE_FLOAT, "scaled", ProbeState, scaled),
+};
+#define SAVE_PROBE_COUNT ((int)(sizeof(SAVE_PROBE_FIELDS) / sizeof(SAVE_PROBE_FIELDS[0])))
+
+/*
+ * The case tags cannot express: "scaled" meant percent at version 1 and a unit
+ * fraction at version 2. Same key, same type, different meaning -- so only a
+ * migration can repair it, and this is what one looks like.
+ */
+static bool probe_migrate_scaled(cJSON* section) {
+    cJSON* item = cJSON_GetObjectItemCaseSensitive(section, "scaled");
+    if (!cJSON_IsNumber(item))
+        return false;
+    cJSON_SetNumberHelper(item, item->valuedouble / 100.0);
+    return true;
+}
+
+static int save_probe_path(char* out, size_t cap, const char* slot) {
+    if (!save_default_path(out, cap, slot)) {
+        fprintf(stderr, "save-probe: could not resolve a save path\n");
+        return 0;
+    }
+    return 1;
+}
+
+static int run_save_probe(Game* game, const char* which) {
+    // A scene of its own: spawn_box builds a visual, and the node it makes has
+    // to belong somewhere even though this probe never draws a frame.
+    Scene* scene = create_scene();
+    game_set_scene(game, scene);
+
+    PhysicsConfig physics_config = physics_default_config();
+    PhysicsWorld* physics = create_physics_world(&physics_config);
+    if (physics)
+        game_set_physics_world(game, physics);
+    EntityManager* em = create_entity_manager(game);
+    game_set_entity_manager(game, em);
+
+    save_system = create_save_system(game);
+    if (!save_system) {
+        fprintf(stderr, "save-probe: no save system\n");
+        return 1;
+    }
+    save_register_table(save_system, "gametest", SAVE_APP_VERSION, SAVE_APP_FIELDS, SAVE_APP_COUNT,
+                        game);
+    save_register_spawner(save_system, "box", spawn_box_from_save, game);
+
+    char path[1024];
+    if (!save_probe_path(path, sizeof(path), "probe"))
+        return 1;
+    int rc = 0;
+
+    if (!strcmp(which, "roundtrip")) {
+        box_count = 7;
+        player_yaw = 1.25f;
+        chaser_yaw = -0.5f;
+        heart_timer = 0.25f;
+        catch_cooldown = 1.5f;
+        door_open_pending = true;
+        door_open_velocity = -6.0f;
+        player_touching_door = true;
+        printf("save roundtrip wrote box_count %.6f\n", (double)box_count);
+        printf("save roundtrip wrote player_yaw %.6f\n", (double)player_yaw);
+        printf("save roundtrip wrote door_open_velocity %.6f\n", (double)door_open_velocity);
+        if (!save_write(save_system, path)) {
+            fprintf(stderr, "save-probe: write failed\n");
+            return 1;
+        }
+        // Zeroed, not merely left alone: against values that already hold the
+        // answer, a reader that stores nothing at all would pass.
+        box_count = 0;
+        player_yaw = 0.0f;
+        chaser_yaw = 0.0f;
+        heart_timer = 0.0f;
+        catch_cooldown = 0.0f;
+        door_open_pending = false;
+        door_open_velocity = 0.0f;
+        player_touching_door = false;
+        const SaveLoadResult r = save_read(save_system, path);
+        printf("save roundtrip read ok %.6f\n", r.ok ? 1.0 : 0.0);
+        printf("save roundtrip read box_count %.6f\n", (double)box_count);
+        printf("save roundtrip read player_yaw %.6f\n", (double)player_yaw);
+        printf("save roundtrip read chaser_yaw %.6f\n", (double)chaser_yaw);
+        printf("save roundtrip read heart_timer %.6f\n", (double)heart_timer);
+        printf("save roundtrip read catch_cooldown %.6f\n", (double)catch_cooldown);
+        printf("save roundtrip read door_open_pending %.6f\n", door_open_pending ? 1.0 : 0.0);
+        printf("save roundtrip read door_open_velocity %.6f\n", (double)door_open_velocity);
+        printf("save roundtrip read player_touching_door %.6f\n", player_touching_door ? 1.0 : 0.0);
+    } else if (!strcmp(which, "entities")) {
+        vec3 pos = {1.0f, 2.0f, 3.0f};
+        vec3 color = {0.5f, 0.25f, 0.125f};
+        Entity* box = spawn_box(game, "probe_box", pos, 0.5f, color);
+        if (!box) {
+            fprintf(stderr, "save-probe: could not build a box\n");
+            return 1;
+        }
+        RigidBody* rb = entity_get_rigid_body(box);
+        rigid_body_set_linear_velocity(rb, (vec3){4.0f, -5.0f, 6.0f});
+        printf("save entities wrote position %.6f %.6f %.6f\n", (double)box->position[0],
+               (double)box->position[1], (double)box->position[2]);
+        printf("save entities wrote velocity %.6f %.6f %.6f\n", 4.0, -5.0, 6.0);
+        if (!save_write(save_system, path))
+            return 1;
+
+        // Moved and stopped, so a reader that does nothing cannot pass.
+        rigid_body_set_position(rb, (vec3){-9.0f, -9.0f, -9.0f});
+        rigid_body_set_linear_velocity(rb, (vec3){0.0f, 0.0f, 0.0f});
+        glm_vec3_copy((vec3){-9.0f, -9.0f, -9.0f}, box->position);
+
+        const SaveLoadResult r = save_read(save_system, path);
+        vec3 v;
+        rigid_body_get_linear_velocity(rb, v);
+        printf("save entities read count %.6f\n", (double)r.entities_restored);
+        printf("save entities read position %.6f %.6f %.6f\n", (double)box->position[0],
+               (double)box->position[1], (double)box->position[2]);
+        printf("save entities read velocity %.6f %.6f %.6f\n", (double)v[0], (double)v[1],
+               (double)v[2]);
+    } else if (!strcmp(which, "spawned")) {
+        vec3 pos = {2.0f, 8.0f, -3.0f};
+        vec3 color = {0.75f, 0.5f, 0.25f};
+        Entity* box = spawn_box(game, "box_0", pos, 0.875f, color);
+        if (!box)
+            return 1;
+        save_note_spawn(save_system, "box_0", "box", box_params(pos, 0.875f, color));
+        if (!save_write(save_system, path))
+            return 1;
+
+        // A world that never had it: the record is now the only thing that
+        // says this crate ever existed.
+        destroy_entity(em, box);
+        printf("save spawned before found %.6f\n", find_entity_by_name(em, "box_0") ? 1.0 : 0.0);
+        const SaveLoadResult r = save_read(save_system, path);
+        const Entity* back = find_entity_by_name(em, "box_0");
+        printf("save spawned after count %.6f\n", (double)r.entities_spawned);
+        printf("save spawned after found %.6f\n", back ? 1.0 : 0.0);
+        if (back)
+            printf("save spawned after position %.6f %.6f %.6f\n", (double)back->position[0],
+                   (double)back->position[1], (double)back->position[2]);
+    } else if (!strcmp(which, "drops")) {
+        // One record naming an entity nothing provides, one naming a spawner
+        // this build does not have. Both drop; neither costs the file.
+        cJSON* root = cJSON_CreateObject();
+        cJSON_AddNumberToObject(root, "version", SAVE_FORMAT_VERSION);
+        cJSON* section = cJSON_AddObjectToObject(root, "entities");
+        cJSON_AddNumberToObject(section, "version", 1);
+        cJSON* list = cJSON_AddArrayToObject(section, "list");
+        cJSON* a = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "name", "a_ghost");
+        cJSON_AddItemToArray(list, a);
+        cJSON* b = cJSON_CreateObject();
+        cJSON_AddStringToObject(b, "name", "b_ghost");
+        cJSON_AddStringToObject(b, "spawner", "no_such_recipe");
+        cJSON_AddItemToArray(list, b);
+        char* text = cJSON_Print(root);
+        cJSON_Delete(root);
+        FILE* f = fopen(path, "wb");
+        if (!f || !text) {
+            free(text);
+            if (f)
+                fclose(f);
+            return 1;
+        }
+        fputs(text, f);
+        fclose(f);
+        free(text);
+
+        const SaveLoadResult r = save_read(save_system, path);
+        printf("save drops read ok %.6f\n", r.ok ? 1.0 : 0.0);
+        printf("save drops read missing %.6f\n", (double)r.dropped_missing_entity);
+        printf("save drops read unknown_spawner %.6f\n", (double)r.dropped_unknown_spawner);
+    } else if (!strcmp(which, "floor")) {
+        player_yaw = 3.0f;
+        cJSON* root = cJSON_CreateObject();
+        cJSON_AddNumberToObject(root, "version", SAVE_FLOOR - 1);
+        cJSON* section = cJSON_AddObjectToObject(root, "gametest");
+        cJSON_AddNumberToObject(section, "version", 1);
+        cJSON_AddNumberToObject(section, "player_yaw", 99.0);
+        char* text = cJSON_Print(root);
+        cJSON_Delete(root);
+        FILE* f = fopen(path, "wb");
+        if (!f || !text) {
+            free(text);
+            if (f)
+                fclose(f);
+            return 1;
+        }
+        fputs(text, f);
+        fclose(f);
+        free(text);
+
+        const SaveLoadResult r = save_read(save_system, path);
+        // Refused whole: nothing below the floor is applied, so the live value
+        // is the one that was already there.
+        printf("save floor read ok %.6f\n", r.ok ? 1.0 : 0.0);
+        printf("save floor read player_yaw %.6f\n", (double)player_yaw);
+    } else if (!strcmp(which, "migrate")) {
+        probe_state.scaled = 0.0f;
+        save_register_table(save_system, "probe", 2, SAVE_PROBE_FIELDS, SAVE_PROBE_COUNT,
+                            &probe_state);
+        save_register_migration(save_system, "probe", 1, probe_migrate_scaled);
+
+        cJSON* root = cJSON_CreateObject();
+        cJSON_AddNumberToObject(root, "version", SAVE_FORMAT_VERSION);
+        cJSON* section = cJSON_AddObjectToObject(root, "probe");
+        cJSON_AddNumberToObject(section, "version", 1);
+        cJSON_AddNumberToObject(section, "scaled", 75.0); // percent, at version 1
+        char* text = cJSON_Print(root);
+        cJSON_Delete(root);
+        FILE* f = fopen(path, "wb");
+        if (!f || !text) {
+            free(text);
+            if (f)
+                fclose(f);
+            return 1;
+        }
+        fputs(text, f);
+        fclose(f);
+        free(text);
+
+        const SaveLoadResult r = save_read(save_system, path);
+        printf("save migrate read ok %.6f\n", r.ok ? 1.0 : 0.0);
+        printf("save migrate read steps %.6f\n", (double)r.migrations_run);
+        printf("save migrate read scaled %.6f\n", (double)probe_state.scaled);
+    } else {
+        fprintf(stderr, "save-probe: unknown case '%s'\n", which);
+        rc = 1;
+    }
+
+    free_save_system(save_system);
+    save_system = NULL;
+    return rc;
+}
+
 int main(int argc, const char* argv[]) {
     printf("=== Physics Test ===\n\n");
 
@@ -2304,6 +2719,7 @@ int main(int argc, const char* argv[]) {
     const char* audio_file = NULL;
     const char* anim_probe = NULL;
     const char* ui_probe = NULL;
+    const char* save_probe = NULL;
     bool ui_enabled = true;
     // 0 = the default below. A golden states the size it was baked at, so a
     // headless app that cannot be sized can only be photographed at whatever
@@ -2356,6 +2772,8 @@ int main(int argc, const char* argv[]) {
             anim_probe = argv[++i];
         } else if (!strcmp(a, "--ui-probe") && i + 1 < argc) {
             ui_probe = argv[++i];
+        } else if (!strcmp(a, "--save-probe") && i + 1 < argc) {
+            save_probe = argv[++i];
         } else if (!strcmp(a, "--no-ui")) {
             ui_enabled = false;
         } else if (!strcmp(a, "--ui-screen") && i + 1 < argc) {
@@ -2425,6 +2843,20 @@ int main(int argc, const char* argv[]) {
             return -1;
         }
         int rc = run_anim_probe(probe_game, anim_probe);
+        free_game(probe_game);
+        return rc;
+    }
+
+    // And for the save format: a headless game, a physics world and a few
+    // entities of its own, no window and no frame.
+    if (save_probe) {
+        GameConfig probe_config = {.engine = {.title = "save-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "save-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_save_probe(probe_game, save_probe);
         free_game(probe_game);
         return rc;
     }
