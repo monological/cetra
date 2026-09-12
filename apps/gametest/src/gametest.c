@@ -114,6 +114,19 @@ static bool no_chaser = false;
 // floor reads through it and any new geometry in frame would move both menu goldens.
 static bool ik_ground = false;
 
+// Foot planting (spec 12.4). player_skel_root is the node the pose hangs under, and
+// inverting its global transform is what turns a world-space raycast hit into the
+// MODEL space the solver works in -- drop, facing yaw and scale all at once, so
+// there is no scale factor written down here to get wrong.
+static bool no_ik = false;
+static IkSystem* player_ik = NULL;
+static SceneNode* player_skel_root = NULL;
+static int ik_foot_left = -1;
+static int ik_foot_right = -1;
+// Smoothed rather than switched: grounded is a bool, and planting a foot the instant
+// it becomes true snaps the leg into place at the end of a jump.
+static float ik_weight = 0.0f;
+
 static SceneNode* heart_node = NULL;
 static ParticleModule* heart_spawn = NULL;
 static float heart_timer = 0.0f;    // > 0 while a burst is emitting
@@ -301,6 +314,22 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
          // but NOT under the engine default of 0.4
 #define IK_STEP_HALF_Z 4.0f
 #define IK_STEP_COUNT  3
+// The shared edge of the first two steps: step 0 spans [-16,-14] and step 1 [-18,-16],
+// so standing here puts one foot on each tread and the difference is one riser
+// exactly -- with the UPHILL foot on the opposite side from the ramp's, which is what
+// catches a solver that has hardcoded which leg bends.
+#define IK_STEP_NOSING (-16.0f)
+
+// The foot ray starts above the ankle and reaches below it. Up has to clear the
+// tallest thing a foot may already be standing on; down has to find ground the leg
+// could actually reach. At this rig's scale the ankle rides about 0.16 above the sole,
+// so a metre up and three down is ample -- and what stops a foot in mid-air seizing on
+// the floor far below it is the WEIGHT, not the length of the ray.
+#define IK_FOOT_RAY_UP  1.0f
+#define IK_FOOT_RAY_LEN 3.0f
+// 1/seconds the plant fades in and out. Grounded is a bool, and switching straight on
+// it plants the leg the instant a jump lands, which reads as a snap.
+#define IK_WEIGHT_RATE 10.0f
 
 // The ramp's top plane, the one equation the gate restates: y = slope * (x - foot_x).
 static float ik_ramp_height_at(float x) {
@@ -1051,6 +1080,30 @@ static void on_init(Game* game) {
             animator_play_space(player_animator, "locomotion", locomotion, 3, 0.0f, true);
             animator_set_event_callback(player_animator, on_anim_event, game);
             entity_add_animator(player_entity, player_animator);
+
+            // Both legs, and Hips as the pelvis a foot that cannot reach asks down.
+            // ik_set_pelvis refuses a bone that is not an ancestor of every foot, so
+            // the check that this rig is shaped the way the solve assumes is the
+            // call itself. The state owns the system and frees it.
+            if (!no_ik) {
+                player_ik = create_ik_system(skeleton);
+                if (player_ik) {
+                    ik_foot_left =
+                        ik_add_foot(player_ik, "cetra_rig:LeftUpLeg", "cetra_rig:LeftLeg",
+                                    "cetra_rig:LeftFoot", (vec3){0.0f, 0.0f, 1.0f});
+                    ik_foot_right =
+                        ik_add_foot(player_ik, "cetra_rig:RightUpLeg", "cetra_rig:RightLeg",
+                                    "cetra_rig:RightFoot", (vec3){0.0f, 0.0f, 1.0f});
+                    if (ik_foot_left < 0 || ik_foot_right < 0 ||
+                        !ik_set_pelvis(player_ik, "cetra_rig:Hips")) {
+                        free_ik_system(player_ik);
+                        player_ik = NULL;
+                    } else {
+                        player_animator->state->ik = player_ik;
+                        player_skel_root = puppet_root;
+                    }
+                }
+            }
         }
         printf("Player is the puppet: %zu bones, %zu clips\n", skeleton->bone_count,
                scene->animation_count);
@@ -1444,6 +1497,75 @@ static void on_update(Game* game, double dt) {
 
 // Pre-render callback - the camera the frame's geometry is read against. The
 // engine propagates the graph as soon as this returns.
+// One foot's ground target: raycast under its current ankle and hand the hit back in
+// MODEL space, which is the only space the solver speaks. Returns false when nothing
+// is under it -- walked off an edge -- and the caller then lets that foot go.
+//
+// Filtered to the STATIC layer, and that is required rather than tidy: a character's
+// inner body is created in OBJ_LAYER_DYNAMIC, so an unfiltered ray cast from inside
+// the capsule hits the player and plants the foot on itself. The cost is that feet
+// plant on the floor and the ramp but not on the crates, which are dynamic.
+static bool ik_ground_under_foot(PhysicsWorld* physics, mat4 to_world, mat4 to_model,
+                                 vec3 ankle_model, vec3 out_target, vec3 out_normal) {
+    vec3 ankle_world, origin;
+    glm_mat4_mulv3(to_world, ankle_model, 1.0f, ankle_world);
+    glm_vec3_copy(ankle_world, origin);
+    origin[1] += IK_FOOT_RAY_UP;
+
+    RaycastHit hit;
+    vec3 down = {0.0f, -1.0f, 0.0f};
+    if (!physics_world_raycast_filtered(physics, origin, down, IK_FOOT_RAY_LEN,
+                                        1u << OBJ_LAYER_STATIC, &hit))
+        return false;
+
+    glm_mat4_mulv3(to_model, hit.position, 1.0f, out_target);
+    glm_mat4_mulv3(to_model, hit.normal, 0.0f, out_normal);
+    glm_vec3_normalize(out_normal);
+    return true;
+}
+
+// Targets are set HERE and not in on_update, and the difference is not stylistic.
+// update_all_animators runs once per RENDERED frame, from game_pre_render, after this
+// hook returns. on_update is the fixed step: it may run zero times in a frame or
+// several, so a target set there reaches the single animator tick either stale or as
+// the last of N.
+static void ik_update_targets(Game* game) {
+    if (!player_ik || !player_skel_root || !player_animator || !player_animator->state)
+        return;
+    PhysicsWorld* physics = game_get_physics_world(game);
+    if (!physics)
+        return;
+
+    // The node's global is propagated AFTER this hook, so it is one frame old. That
+    // is the same frame of lag the target already carries by construction, and the
+    // solver's easing absorbs it.
+    mat4 to_world, to_model;
+    glm_mat4_copy(player_skel_root->global_transform, to_world);
+    glm_mat4_inv(to_world, to_model);
+
+    CharacterController* cc = entity_get_character_controller(player_entity);
+    const float want = (cc && character_controller_is_grounded(cc)) ? 1.0f : 0.0f;
+    const float rate = (float)game->sim_clock.delta * IK_WEIGHT_RATE;
+    ik_weight += (want - ik_weight) * (rate > 1.0f ? 1.0f : rate);
+
+    mat4* globals = player_animator->state->global_transforms;
+    const int feet[2] = {ik_foot_left, ik_foot_right};
+    for (int i = 0; i < 2; i++) {
+        if (feet[i] < 0)
+            continue;
+        // Zeroed because cppcheck cannot see through an out-parameter and reads these
+        // as used before set. The writes below are unconditional on the true path.
+        vec3 ankle = {0.0f, 0.0f, 0.0f};
+        vec3 target = {0.0f, 0.0f, 0.0f};
+        vec3 normal = {0.0f, 0.0f, 0.0f};
+        glm_vec3_copy(globals[player_ik->feet[feet[i]].ankle_index][3], ankle);
+        if (ik_ground_under_foot(physics, to_world, to_model, ankle, target, normal))
+            ik_foot_set_target(player_ik, feet[i], target, normal, ik_weight);
+        else
+            ik_foot_set_target(player_ik, feet[i], ankle, (vec3){0.0f, 1.0f, 0.0f}, 0.0f);
+    }
+}
+
 static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
 
@@ -1453,6 +1575,8 @@ static void on_pre_render(Game* game, double alpha) {
         game_toggle_pause(game);
         printf("Game %s\n", game_is_paused(game) ? "PAUSED" : "RESUMED");
     }
+
+    ik_update_targets(game);
 
     Engine* engine = game->engine;
     // A menu owns the pointer while it is up: without this, clicking a button
@@ -1648,6 +1772,43 @@ static float ik_probe_residual(const mat4* g, const IkFoot* foot, const vec3 tar
     vec3 ankle;
     glm_vec3_copy((float*)g[foot->ankle_index][3], ankle);
     return glm_vec3_distance(ankle, (float*)target);
+}
+
+// The world the three PLANTING cases need, on the scene the caller has already set: a
+// physics world, the floor on_init would have built, the ramp and steps, and a real
+// character capsule at the stand point.
+//
+// The capsule is not decoration. ik-ray-self asserts a foot ray finds the world and
+// not the body it was cast from, and in a world with no body that assertion is
+// vacuously true -- the arm would pass on a solver that had no filter at all.
+static PhysicsWorld* ik_probe_world(Game* game, const vec3 stand) {
+    PhysicsConfig physics_config = physics_default_config();
+    PhysicsWorld* physics = create_physics_world(&physics_config);
+    if (!physics)
+        return NULL;
+    game_set_physics_world(game, physics);
+    EntityManager* em = create_entity_manager(game);
+    game_set_entity_manager(game, em);
+    pbr_shader = engine_get_program(game->engine, CETRA_PROGRAM_PBR);
+
+    const float floor_half_y = 0.5f;
+    Entity* floor = create_entity(em, "floor");
+    glm_vec3_copy((vec3){0.0f, -floor_half_y, 0.0f}, floor->position);
+    PhysicsShapeDesc floor_shape = {
+        .type = SHAPE_BOX, .box.half_extents = {25.0f, floor_half_y, 25.0f}, .density = 0.0f};
+    entity_add_rigid_body(floor, physics, &floor_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
+
+    build_ik_ground(game);
+
+    Entity* player = create_entity(em, "player");
+    glm_vec3_copy((float*)stand, player->position);
+    CharacterControllerConfig cc = character_controller_default_config();
+    cc.capsule_radius = PLAYER_RADIUS;
+    cc.capsule_half_height = PLAYER_HALF_H;
+    entity_add_character_controller(player, physics, &cc);
+
+    physics_world_optimize(physics);
+    return physics;
 }
 
 static int run_ik_probe(Game* game, const char* which) {
@@ -1867,6 +2028,110 @@ static int run_ik_probe(Game* game, const char* which) {
                    (double)glm_vec3_distance((float*)state->global_transforms[foot->ankle_index][3],
                                              hip));
         }
+    } else if (!strcmp(which, "ground") || !strcmp(which, "slope") || !strcmp(which, "step")) {
+        // The three cases that need a raycast, and so a world. The rig is placed at a
+        // stand point and its origin put at the ground there; everything reported is
+        // then a consequence of the geometry under each foot, which is the only thing
+        // these arms assert.
+        vec3 stand;
+        if (!strcmp(which, "slope"))
+            glm_vec3_copy((vec3){IK_RAMP_STAND, ik_ramp_height_at(IK_RAMP_STAND), 0.0f}, stand);
+        else if (!strcmp(which, "step"))
+            glm_vec3_copy((vec3){IK_STEP_NOSING, IK_STEP_RISER * 1.5f, 0.0f}, stand);
+        else
+            glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, stand);
+
+        PhysicsWorld* physics = ik_probe_world(game, stand);
+        if (!physics) {
+            fprintf(stderr, "ik-probe: could not build a world\n");
+            return 1;
+        }
+
+        // Model space stands where the rig stands: the probe has no node chain, so the
+        // transform is the stand point and nothing else.
+        mat4 to_world, to_model;
+        glm_translate_make(to_world, stand);
+        glm_mat4_inv(to_world, to_model);
+
+        const int right = ik_add_foot(ik, "cetra_rig:RightUpLeg", "cetra_rig:RightLeg",
+                                      "cetra_rig:RightFoot", (vec3){0.0f, 0.0f, 1.0f});
+        if (right < 0) {
+            fprintf(stderr, "ik-probe: the rig lacks the right leg chain\n");
+            return 1;
+        }
+        // ik_add_foot grows the array with realloc, which may move it, so the pointer
+        // taken before that call is stale from here on.
+        foot = &ik->feet[foot_index];
+        ik_set_pelvis(ik, "cetra_rig:Hips");
+        ik->params.reach_limit = 0.995f;
+        ik->params.max_pelvis_drop = 0.5f;
+        compute_bind_pose_matrices(state);
+
+        // The stance is MEASURED rather than restated, so the gate can multiply it by
+        // the slope it already knows and get the expected difference without either
+        // side carrying a number the other has to match.
+        vec3 la, ra;
+        glm_vec3_copy(state->global_transforms[foot->ankle_index][3], la);
+        glm_vec3_copy(state->global_transforms[ik->feet[right].ankle_index][3], ra);
+        printf("ik %s rig stance %.6f\n", which, (double)fabsf(la[0] - ra[0]));
+        // The fixture's own numbers, so the gate can derive what it expects instead of
+        // restating constants that live here. Two places holding one number is how the
+        // floor's visual and its collider drifted half a metre apart.
+        printf("ik %s fixture slope %.6f\n", which, (double)IK_RAMP_SLOPE);
+        printf("ik %s fixture riser %.6f\n", which, (double)IK_STEP_RISER);
+
+        vec3 lt = {0.0f, 0.0f, 0.0f};
+        vec3 ln = {0.0f, 0.0f, 0.0f};
+        vec3 rt = {0.0f, 0.0f, 0.0f};
+        vec3 rn = {0.0f, 0.0f, 0.0f};
+        const bool lhit = ik_ground_under_foot(physics, to_world, to_model, la, lt, ln);
+        const bool rhit = ik_ground_under_foot(physics, to_world, to_model, ra, rt, rn);
+        if (!lhit || !rhit) {
+            fprintf(stderr, "ik-probe: no ground under a foot at the stand point\n");
+            return 1;
+        }
+        vec3 lw, rw;
+        glm_mat4_mulv3(to_world, lt, 1.0f, lw);
+        glm_mat4_mulv3(to_world, rt, 1.0f, rw);
+        printf("ik %s ray left %.6f\n", which, (double)lw[1]);
+        printf("ik %s ray right %.6f\n", which, (double)rw[1]);
+        printf("ik %s ray delta %.6f\n", which, (double)fabsf(lw[1] - rw[1]));
+
+        if (!strcmp(which, "ground")) {
+            // Both rays again, one filtered and one not, from the same origin. The
+            // unfiltered one is what an unguarded implementation would cast, and it is
+            // shown here rather than argued about.
+            vec3 origin, down = {0.0f, -1.0f, 0.0f};
+            glm_mat4_mulv3(to_world, la, 1.0f, origin);
+            origin[1] += IK_FOOT_RAY_UP;
+            RaycastHit filtered, unfiltered;
+            const bool fh = physics_world_raycast_filtered(physics, origin, down, IK_FOOT_RAY_LEN,
+                                                           1u << OBJ_LAYER_STATIC, &filtered);
+            const bool uh =
+                physics_world_raycast(physics, origin, down, IK_FOOT_RAY_LEN, &unfiltered);
+            const bool f_self = fh && filtered.entity && !strcmp(filtered.entity->name, "player");
+            const bool u_self =
+                uh && unfiltered.entity && !strcmp(unfiltered.entity->name, "player");
+            printf("ik ground self filtered %d\n", f_self ? 1 : 0);
+            printf("ik ground self unfiltered %d\n", u_self ? 1 : 0);
+            printf("ik ground self onfloor %d\n",
+                   (fh && filtered.entity && !strcmp(filtered.entity->name, "floor")) ? 1 : 0);
+        }
+
+        ik_reset(ik);
+        ik_foot_set_target(ik, foot_index, lt, ln, 1.0f);
+        ik_foot_set_target(ik, right, rt, rn, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+        printf("ik %s pose bendleft %.6f\n", which,
+               (double)ik_probe_bend_deg(state->global_transforms, foot));
+        printf("ik %s pose bendright %.6f\n", which,
+               (double)ik_probe_bend_deg(state->global_transforms, &ik->feet[right]));
+
+        vec3 solved_l, solved_r;
+        glm_vec3_copy(state->global_transforms[foot->ankle_index][3], solved_l);
+        glm_vec3_copy(state->global_transforms[ik->feet[right].ankle_index][3], solved_r);
+        printf("ik %s pose soleleft %.6f\n", which, (double)glm_vec3_distance(solved_l, lt));
+        printf("ik %s pose soleright %.6f\n", which, (double)glm_vec3_distance(solved_r, rt));
     } else {
         fprintf(stderr, "ik-probe: unknown case '%s'\n", which);
         rc = 1;
@@ -3155,6 +3420,8 @@ int main(int argc, const char* argv[]) {
             no_chaser = true;
         } else if (!strcmp(a, "--ik-ground")) {
             ik_ground = true;
+        } else if (!strcmp(a, "--no-ik")) {
+            no_ik = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
             puppet_path = argv[++i];
         } else if (!strcmp(a, "--twin") && i + 1 < argc) {
