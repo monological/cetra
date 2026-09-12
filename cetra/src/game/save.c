@@ -63,6 +63,14 @@ typedef struct SaveSpawnRecord {
     cJSON* params;
 } SaveSpawnRecord;
 
+#define SAVE_MAX_MIGRATIONS 32
+
+typedef struct SaveMigration {
+    const char* section;
+    int from_version;
+    SaveMigrateFn fn;
+} SaveMigration;
+
 struct SaveSystem {
     Game* game; // borrowed
     SaveTable tables[SAVE_MAX_TABLES];
@@ -72,12 +80,16 @@ struct SaveSystem {
     SaveSpawnRecord* records;
     int record_count;
     int record_cap;
+    SaveMigration migrations[SAVE_MAX_MIGRATIONS];
+    int migration_count;
 };
 
-// Declared here so the entity walk can reach them; defined beside
-// save_register_spawner and save_note_spawn, which is where they belong to read.
+// Declared here so the entity walk can reach them; defined beside the
+// registration functions they belong to, which are written further down.
 static const SaveSpawner* _find_spawner(const SaveSystem* save, const char* name);
 static SaveSpawnRecord* _find_record(const SaveSystem* save, const char* entity_name);
+static bool _migrate_section(const SaveSystem* save, const char* section, cJSON* obj, int from,
+                             int to, SaveLoadResult* r);
 
 /*
  * A row's field, as void*. The offset arithmetic needs a byte pointer, and a
@@ -649,9 +661,16 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
     if (!em)
         return;
 
-    const cJSON* section = _section((cJSON*)root, "entities", false);
+    cJSON* section = _section((cJSON*)root, "entities", false);
     if (!cJSON_IsObject(section))
         return;
+
+    // Migrated whole, before a single record is read: a step that rewrites how
+    // entries are shaped has to see the list, not one entry at a time.
+    const int was = json_int_or(section, "version", 1);
+    if (!_migrate_section(save, "entities", section, was, SAVE_ENTITIES_VERSION, r))
+        return;
+
     const cJSON* list = cJSON_GetObjectItemCaseSensitive(section, "list");
     if (!cJSON_IsArray(list))
         return;
@@ -879,6 +898,67 @@ bool save_note_spawn(SaveSystem* save, const char* entity_name, const char* spaw
     return true;
 }
 
+// -------------------------------------------------------------- migrations
+
+bool save_register_migration(SaveSystem* save, const char* section, int from_version,
+                             SaveMigrateFn fn) {
+    if (!save || !section || !section[0] || !fn) {
+        log_error("save: a migration needs a section and a function");
+        return false;
+    }
+    for (int i = 0; i < save->migration_count; i++) {
+        if (save->migrations[i].from_version == from_version &&
+            strcmp(save->migrations[i].section, section) == 0) {
+            log_error("save: '%s' already migrates from version %d", section, from_version);
+            return false;
+        }
+    }
+    if (save->migration_count >= SAVE_MAX_MIGRATIONS) {
+        log_error("save: no room for a migration of '%s' (%d is the cap)", section,
+                  SAVE_MAX_MIGRATIONS);
+        return false;
+    }
+    save->migrations[save->migration_count++] =
+        (SaveMigration){.section = section, .from_version = from_version, .fn = fn};
+    return true;
+}
+
+/*
+ * Bring one section's tree from the version the file wrote to the version this
+ * build reads, one registered step at a time.
+ *
+ * A file NEWER than this build runs nothing at all -- `from` is already at or
+ * past `to`, the loop does not execute, and what is left is the ordinary
+ * name-keyed read where unknown keys are skipped and known ones land. That is
+ * as far as forward compatibility goes here, and it is worth knowing it is not
+ * free: a key whose meaning changed in the newer build reads wrong, silently,
+ * because nothing in an older binary can know that happened.
+ */
+static bool _migrate_section(const SaveSystem* save, const char* section, cJSON* obj, int from,
+                             int to, SaveLoadResult* r) {
+    for (int v = from; v < to; v++) {
+        const SaveMigration* step = NULL;
+        for (int i = 0; i < save->migration_count && !step; i++) {
+            if (save->migrations[i].from_version == v &&
+                strcmp(save->migrations[i].section, section) == 0)
+                step = &save->migrations[i];
+        }
+        if (!step) {
+            log_warn("save: nothing migrates '%s' from version %d to %d; that section is left "
+                     "as it was",
+                     section, v, v + 1);
+            return false;
+        }
+        if (!step->fn(obj)) {
+            log_warn("save: migrating '%s' from version %d failed; that section is left as it was",
+                     section, v);
+            return false;
+        }
+        r->migrations_run++;
+    }
+    return true;
+}
+
 // ------------------------------------------------------------------- path
 
 bool save_default_path(char* out, size_t cap, const char* slot) {
@@ -1067,8 +1147,14 @@ SaveLoadResult save_read(SaveSystem* save, const char* path) {
 
     for (int t = 0; t < save->table_count; t++) {
         const SaveTable* table = &save->tables[t];
-        const cJSON* obj = _section(root, table->section, false);
+        cJSON* obj = _section(root, table->section, false);
         if (!obj || !cJSON_IsObject(obj))
+            continue;
+        // A section absent a version is version 1: the first format wrote one,
+        // so this only covers a hand-written file, and guessing the oldest is
+        // the reading that runs every migration rather than skipping any.
+        const int was = json_int_or(obj, "version", 1);
+        if (!_migrate_section(save, table->section, obj, was, table->version, &r))
             continue;
         for (int i = 0; i < table->count; i++) {
             if (_read_field(obj, &table->rows[i], table->base))
