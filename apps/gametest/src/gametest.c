@@ -108,6 +108,10 @@ static Animator* chaser_animator = NULL;
 static SceneNode* chaser_rig = NULL;
 static float chaser_yaw = 0.0f;
 static bool no_chaser = false;
+// The ramp and steps of spec 12.4. Off by default, and that is not caution: the menu
+// is drawn OVER the live scene through a backdrop that is 77 percent opaque, so the
+// floor reads through it and any new geometry in frame would move both menu goldens.
+static bool ik_ground = false;
 
 static SceneNode* heart_node = NULL;
 static ParticleModule* heart_spawn = NULL;
@@ -270,6 +274,95 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
     node_add_child(scene->root_node, node);
 
     return node;
+}
+
+// The ground a foot planting solver needs: a ramp of known slope and three steps.
+//
+// Both numbers the `ik` gate asserts are pure geometry and no contact slop can move
+// them. Standing at the ramp's x = IK_RAMP_STAND the two feet are IK_STANCE apart, so
+// the ground under them differs by IK_RAMP_SLOPE * IK_STANCE exactly; the steps give a
+// difference of one riser with the UPHILL foot on the opposite side, which is what
+// catches a solver that has hardcoded which leg bends.
+//
+// A rotated box rather than an authored wedge: entity_set_rotation_euler reaches
+// settings.Rotation through entity_add_rigid_body AND the node local through
+// sync_entity_transforms, so one rotation moves the collider and the visual together
+// and the fixture needs no new asset. The rotation must be set BEFORE the body is
+// created, which is the only ordering constraint here.
+#define IK_RAMP_SLOPE  0.25f // rise over run; atan(0.25) = 14.036 degrees
+#define IK_RAMP_FOOT_X 14.0f // where the ramp's top plane meets the floor
+#define IK_RAMP_STAND  18.0f // the x the gate stands the rig at
+#define IK_RAMP_HALF_X 6.0f
+#define IK_RAMP_HALF_Y 0.5f
+#define IK_RAMP_HALF_Z 4.0f
+#define IK_STEP_RISER \
+    0.5f // under gametest's step_height (0.4 * PLAYER_SCALE = 0.8),
+         // but NOT under the engine default of 0.4
+#define IK_STEP_HALF_Z 4.0f
+#define IK_STEP_COUNT  3
+
+// The ramp's top plane, the one equation the gate restates: y = slope * (x - foot_x).
+static float ik_ramp_height_at(float x) {
+    return IK_RAMP_SLOPE * (x - IK_RAMP_FOOT_X);
+}
+
+static void build_ik_ground(Game* game) {
+    EntityManager* em = game_get_entity_manager(game);
+    PhysicsWorld* physics = game_get_physics_world(game);
+    Scene* scene = game_get_scene(game);
+    if (!em || !physics || !scene)
+        return;
+
+    const float angle = atanf(IK_RAMP_SLOPE);
+    vec3 ramp_color = {0.35f, 0.30f, 0.28f};
+
+    // The centre is DERIVED from the top plane rather than written down: rotating a box
+    // by `angle` lifts its top face by half_y / cos(angle) above the centre, so the
+    // centre sits that far below the plane at the stand point. Writing the answer as a
+    // literal is how the ramp and the number the gate asserts would drift apart.
+    vec3 ramp_size = {IK_RAMP_HALF_X, IK_RAMP_HALF_Y, IK_RAMP_HALF_Z};
+    Entity* ramp = create_entity(em, "ik_ramp");
+    glm_vec3_copy((vec3){IK_RAMP_STAND,
+                         ik_ramp_height_at(IK_RAMP_STAND) - IK_RAMP_HALF_Y / cosf(angle), 0.0f},
+                  ramp->position);
+    entity_set_rotation_euler(ramp, (vec3){0.0f, 0.0f, angle});
+
+    SceneNode* ramp_node = create_box_node(scene, ramp_size, ramp_color, false);
+    node_set_name(ramp_node, "ik_ramp");
+    ramp->node = ramp_node;
+
+    PhysicsShapeDesc ramp_shape = {
+        .type = SHAPE_BOX,
+        .box.half_extents = {IK_RAMP_HALF_X, IK_RAMP_HALF_Y, IK_RAMP_HALF_Z},
+        .density = 0.0f};
+    entity_add_rigid_body(ramp, physics, &ramp_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
+
+    // The steps march away along -X, each one riser taller and sitting ON the floor, so
+    // a step's top is riser * (n + 1) and its half height is half of that. No rotation
+    // and no trig: the whole point of the pair is that one fixture is analytic in a
+    // direction the other is not.
+    for (int i = 0; i < IK_STEP_COUNT; i++) {
+        const float top = IK_STEP_RISER * (float)(i + 1);
+        const float half_y = top * 0.5f;
+        char name[32];
+        snprintf(name, sizeof(name), "ik_step_%d", i);
+
+        vec3 step_size = {1.0f, half_y, IK_STEP_HALF_Z};
+        Entity* step = create_entity(em, name);
+        glm_vec3_copy((vec3){-15.0f - 2.0f * (float)i, half_y, 0.0f}, step->position);
+
+        SceneNode* step_node = create_box_node(scene, step_size, ramp_color, false);
+        node_set_name(step_node, name);
+        step->node = step_node;
+
+        PhysicsShapeDesc step_shape = {
+            .type = SHAPE_BOX, .box.half_extents = {1.0f, half_y, IK_STEP_HALF_Z}, .density = 0.0f};
+        entity_add_rigid_body(step, physics, &step_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
+    }
+
+    printf("IK ground: a ramp rising %g in %g from x=%g, and %d steps of %g\n",
+           (double)IK_RAMP_SLOPE, 1.0, (double)IK_RAMP_FOOT_X, IK_STEP_COUNT,
+           (double)IK_STEP_RISER);
 }
 
 // Create a door with hinge constraint
@@ -1047,6 +1140,10 @@ static void on_init(Game* game) {
             audio_sound_play(beacon);
         }
     }
+
+    // The uneven ground, before the broad phase is optimised so its bodies are covered
+    if (ik_ground)
+        build_ik_ground(game);
 
     // Optimize broad phase after adding initial bodies
     physics_world_optimize(physics);
@@ -2787,6 +2884,8 @@ int main(int argc, const char* argv[]) {
             no_puppet = true;
         } else if (!strcmp(a, "--no-chaser")) {
             no_chaser = true;
+        } else if (!strcmp(a, "--ik-ground")) {
+            ik_ground = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
             puppet_path = argv[++i];
         } else if (!strcmp(a, "--twin") && i + 1 < argc) {
