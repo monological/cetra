@@ -713,7 +713,11 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
             }
 
             const cJSON* params = cJSON_GetObjectItemCaseSensitive(entry, "params");
-            entity = spawner->fn(em, params, spawner->user);
+            // The NAME goes with the params. A recipe that invented its own
+            // would build an entity the file no longer describes, and the next
+            // save would write a different one -- so the identity the file
+            // recorded is handed over rather than re-derived.
+            entity = spawner->fn(em, name, params, spawner->user);
             if (!entity) {
                 log_warn("save: spawner '%s' refused to rebuild '%s'", spawner_name, name);
                 r->dropped_unknown_spawner++;
