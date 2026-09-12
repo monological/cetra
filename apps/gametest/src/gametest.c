@@ -294,13 +294,20 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
     return node;
 }
 
+// Half the floor collider's thickness, and the one place it is written. The floor is a
+// box CENTRED on its entity, so its walkable top is this far above that centre and the
+// drawn plane has to be lifted by the same amount. Two independent literals is exactly
+// how the visual and the collider drifted half a metre apart; the probe builds its own
+// floor, so there are two construction sites and still only one number.
+#define GAMETEST_FLOOR_HALF_Y 0.5f
+
 // The ground a foot planting solver needs: a ramp of known slope and three steps.
 //
 // Both numbers the `ik` gate asserts are pure geometry and no contact slop can move
-// them. Standing at the ramp's x = IK_RAMP_STAND the two feet are IK_STANCE apart, so
-// the ground under them differs by IK_RAMP_SLOPE * IK_STANCE exactly; the steps give a
-// difference of one riser with the UPHILL foot on the opposite side, which is what
-// catches a solver that has hardcoded which leg bends.
+// them. Standing at the ramp's x = IK_RAMP_STAND the feet are one stance apart -- which
+// the probe MEASURES and prints rather than restating as a constant here, so neither
+// side holds the other's number -- and the ground under them differs by the slope times
+// that stance. The steps give a difference of one riser instead.
 //
 // A rotated box rather than an authored wedge: entity_set_rotation_euler reaches
 // settings.Rotation through entity_add_rigid_body AND the node local through
@@ -322,7 +329,13 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 // so standing here puts one foot on each tread and the difference is one riser
 // exactly -- with the UPHILL foot on the opposite side from the ramp's, which is what
 // catches a solver that has hardcoded which leg bends.
-#define IK_STEP_NOSING (-16.0f)
+#define IK_STEP_HALF_X  1.0f
+#define IK_STEP_FIRST_X (-15.0f)
+#define IK_STEP_PITCH   2.0f
+// DERIVED, not asserted: the first two steps share this edge, so standing here puts one
+// foot on each tread. Spelling it as a literal is what made the comment above have to
+// explain the arithmetic the code could not.
+#define IK_STEP_NOSING (IK_STEP_FIRST_X - IK_STEP_HALF_X)
 
 // The foot ray starts above the ankle and reaches below it. Up has to clear the
 // tallest thing a foot may already be standing on; down has to find ground the leg
@@ -365,10 +378,12 @@ static void build_ik_ground(Game* game) {
     node_set_name(ramp_node, "ik_ramp");
     ramp->node = ramp_node;
 
-    PhysicsShapeDesc ramp_shape = {
-        .type = SHAPE_BOX,
-        .box.half_extents = {IK_RAMP_HALF_X, IK_RAMP_HALF_Y, IK_RAMP_HALF_Z},
-        .density = 0.0f};
+    // ramp_size, not a second triple. The drawn box and the collider have to be the
+    // same box: this fixture exists so the ground a ray finds is the ground you see,
+    // and writing its extents twice is how the floor's two halves drifted apart.
+    PhysicsShapeDesc ramp_shape = {.type = SHAPE_BOX,
+                                   .box.half_extents = {ramp_size[0], ramp_size[1], ramp_size[2]},
+                                   .density = 0.0f};
     entity_add_rigid_body(ramp, physics, &ramp_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
 
     // The steps march away along -X, each one riser taller and sitting ON the floor, so
@@ -381,16 +396,20 @@ static void build_ik_ground(Game* game) {
         char name[32];
         snprintf(name, sizeof(name), "ik_step_%d", i);
 
-        vec3 step_size = {1.0f, half_y, IK_STEP_HALF_Z};
+        vec3 step_size = {IK_STEP_HALF_X, half_y, IK_STEP_HALF_Z};
         Entity* step = create_entity(em, name);
-        glm_vec3_copy((vec3){-15.0f - 2.0f * (float)i, half_y, 0.0f}, step->position);
+        glm_vec3_copy((vec3){IK_STEP_FIRST_X - IK_STEP_PITCH * (float)i, half_y, 0.0f},
+                      step->position);
 
         SceneNode* step_node = create_box_node(scene, step_size, ramp_color, false);
         node_set_name(step_node, name);
         step->node = step_node;
 
+        // step_size again, for the reason the ramp gives above.
         PhysicsShapeDesc step_shape = {
-            .type = SHAPE_BOX, .box.half_extents = {1.0f, half_y, IK_STEP_HALF_Z}, .density = 0.0f};
+            .type = SHAPE_BOX,
+            .box.half_extents = {step_size[0], step_size[1], step_size[2]},
+            .density = 0.0f};
         entity_add_rigid_body(step, physics, &step_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
     }
 
@@ -1020,16 +1039,14 @@ static void on_init(Game* game) {
     // two independent literals and had drifted: the floor was drawn half a metre below
     // the surface everything stood on. Nothing caught it because no golden photographs
     // a body against the floor, and the anim probes compare bone matrices on the CPU.
-    const float floor_half_y = 0.5f;
-
     Entity* floor = create_entity(em, "floor");
-    glm_vec3_copy((vec3){0, -floor_half_y, 0}, floor->position);
+    glm_vec3_copy((vec3){0, -GAMETEST_FLOOR_HALF_Y, 0}, floor->position);
 
     // Floor visual, lifted onto the collider's top by that same half-extent
     SceneNode* floor_node = create_node();
     node_set_name(floor_node, "floor");
     Mesh* floor_mesh = create_mesh();
-    Plane floor_plane = {.position = {0, floor_half_y, 0},
+    Plane floor_plane = {.position = {0, GAMETEST_FLOOR_HALF_Y, 0},
                          .width = 50.0f,
                          .depth = 50.0f,
                          .segments_w = 10,
@@ -1052,7 +1069,7 @@ static void on_init(Game* game) {
     // Floor physics (static box)
     PhysicsShapeDesc floor_shape = {
         .type = SHAPE_BOX,
-        .box.half_extents = {25.0f, floor_half_y, 25.0f},
+        .box.half_extents = {25.0f, GAMETEST_FLOOR_HALF_Y, 25.0f},
         .density = 0.0f // Static body
     };
     entity_add_rigid_body(floor, physics, &floor_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
@@ -1464,6 +1481,13 @@ static void on_update(Game* game, double dt) {
         char path[1024];
         if (save_system && save_default_path(path, sizeof(path), "quick")) {
             const SaveLoadResult r = save_read(save_system, path);
+            // The one teleport this app has. ik.h gives the caller exactly one duty
+            // beyond setting targets, and this is where it falls due: without it the
+            // feet ease through the world toward their new ground for a few frames.
+            // teleport_distance catches the long jumps on its own, so what leaks
+            // through is precisely a short load -- the case nobody would notice failing.
+            if (r.ok && player_ik)
+                ik_reset(player_ik);
             if (r.ok)
                 printf("Loaded: %d entities, %d spawned, %d dropped\n", r.entities_restored,
                        r.entities_spawned,
@@ -1540,7 +1564,11 @@ static bool ik_ground_under_foot(PhysicsWorld* physics, mat4 to_world, mat4 to_m
 // several, so a target set there reaches the single animator tick either stale or as
 // the last of N.
 static void ik_update_targets(Game* game) {
-    if (!player_ik || !player_skel_root || !player_animator || !player_animator->state)
+    // One test, not four: player_skel_root, player_animator and its state are assigned
+    // in the same block as player_ik, which is NULLed on every failure path there, so
+    // a non-null player_ik already implies the rest. Testing them separately would
+    // suggest they can disagree and invite someone to set player_ik somewhere else.
+    if (!player_ik)
         return;
     PhysicsWorld* physics = game_get_physics_world(game);
     if (!physics)
@@ -1549,6 +1577,12 @@ static void ik_update_targets(Game* game) {
     // The node's global is propagated AFTER this hook, so it is one frame old. That
     // is the same frame of lag the target already carries by construction, and the
     // solver's easing absorbs it.
+    //
+    // On the FIRST frame it has never been propagated at all, so this would be the
+    // identity and the targets would be computed in the wrong space. What prevents
+    // that is the weight test below -- ik_weight starts at 0 and the early return
+    // fires before to_world is used. That is deliberate, not luck: it used to be
+    // luck, resting on the player also happening to spawn airborne.
     mat4 to_world, to_model;
     glm_mat4_copy(player_skel_root->global_transform, to_world);
     glm_mat4_inv(to_world, to_model);
@@ -1557,6 +1591,15 @@ static void ik_update_targets(Game* game) {
     const float want = (cc && character_controller_is_grounded(cc)) ? 1.0f : 0.0f;
     const float rate = (float)game->sim_clock.delta * IK_WEIGHT_RATE;
     ik_weight += (want - ik_weight) * (rate > 1.0f ? 1.0f : rate);
+    // Snapped, because the decay is asymptotic and never actually arrives. Left alone,
+    // ik_weight stays a hair above zero for the whole of a jump, so the solver's
+    // "weight 0 is bit-identical to no IK" path -- which it documents -- never fires,
+    // and two raycasts plus two full solves run every airborne frame to move an ankle
+    // by an epsilon.
+    if (want == 0.0f && ik_weight < 1e-3f)
+        ik_weight = 0.0f;
+    if (ik_weight == 0.0f)
+        return;
 
     mat4* globals = player_animator->state->global_transforms;
     const int feet[2] = {ik_foot_left, ik_foot_right};
@@ -1810,11 +1853,11 @@ static PhysicsWorld* ik_probe_world(Game* game, const vec3 stand) {
     game_set_entity_manager(game, em);
     pbr_shader = engine_get_program(game->engine, CETRA_PROGRAM_PBR);
 
-    const float floor_half_y = 0.5f;
     Entity* floor = create_entity(em, "floor");
-    glm_vec3_copy((vec3){0.0f, -floor_half_y, 0.0f}, floor->position);
-    PhysicsShapeDesc floor_shape = {
-        .type = SHAPE_BOX, .box.half_extents = {25.0f, floor_half_y, 25.0f}, .density = 0.0f};
+    glm_vec3_copy((vec3){0.0f, -GAMETEST_FLOOR_HALF_Y, 0.0f}, floor->position);
+    PhysicsShapeDesc floor_shape = {.type = SHAPE_BOX,
+                                    .box.half_extents = {25.0f, GAMETEST_FLOOR_HALF_Y, 25.0f},
+                                    .density = 0.0f};
     entity_add_rigid_body(floor, physics, &floor_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
 
     build_ik_ground(game);
@@ -1984,17 +2027,24 @@ static int run_ik_probe(Game* game, const char* which) {
         printf("ik identity bent maxdiff %.6f\n", (double)worst);
 
         compute_bind_pose_matrices(state);
-        mat4 untouched;
-        glm_mat4_copy(state->global_transforms[foot->knee_index], untouched);
+        mat4 untouched[3];
+        for (int j = 0; j < 3; j++)
+            glm_mat4_copy(state->global_transforms[idx[j]], untouched[j]);
         ik_foot_set_target(ik, foot_index, bent, (vec3){0, 1, 0}, 0.0f);
         ik_solve(ik, state->global_transforms, 0.0f);
+
+        // All three bones, as the bent half above already does. Comparing the knee
+        // alone let a weight-0 solve that rotated the hip or the ankle pass an arm
+        // whose docstring claims the POSE is unchanged.
         float zero_worst = 0.0f;
-        const float* m = (const float*)state->global_transforms[foot->knee_index];
-        const float* n = (const float*)untouched;
-        for (int k = 0; k < 16; k++) {
-            const float diff = fabsf(m[k] - n[k]);
-            if (diff > zero_worst)
-                zero_worst = diff;
+        for (int j = 0; j < 3; j++) {
+            const float* m = (const float*)state->global_transforms[idx[j]];
+            const float* n = (const float*)untouched[j];
+            for (int k = 0; k < 16; k++) {
+                const float diff = fabsf(m[k] - n[k]);
+                if (diff > zero_worst)
+                    zero_worst = diff;
+            }
         }
         printf("ik identity zeroweight maxdiff %.6f\n", (double)zero_worst);
     } else if (!strcmp(which, "pole")) {
@@ -2046,6 +2096,11 @@ static int run_ik_probe(Game* game, const char* which) {
             printf("ik analytic c%d dist %.6f\n", i,
                    (double)glm_vec3_distance((float*)state->global_transforms[foot->ankle_index][3],
                                              hip));
+            // What was ASKED for, so the gate can check the solve went where it was
+            // sent. Without it the arm computes its expected bend from the distance the
+            // solve reached, which is self-consistent for a solver that put the ankle
+            // anywhere at all.
+            printf("ik analytic c%d want %.6f\n", i, (double)cs[i]);
         }
     } else if (!strcmp(which, "swing")) {
         // A walk cycle actually TICKED, with each ankle's vertical travel measured over
