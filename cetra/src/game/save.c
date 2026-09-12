@@ -52,13 +52,32 @@ typedef struct SaveSpawner {
     void* user;
 } SaveSpawner;
 
+/*
+ * What made one entity, and from what. The name is COPIED because an entity may
+ * be destroyed while its record is still the only description of it; `params` is
+ * owned here and deleted with the system.
+ */
+typedef struct SaveSpawnRecord {
+    char name[64]; // matches Entity.name
+    const char* spawner;
+    cJSON* params;
+} SaveSpawnRecord;
+
 struct SaveSystem {
     Game* game; // borrowed
     SaveTable tables[SAVE_MAX_TABLES];
     int table_count;
     SaveSpawner spawners[SAVE_MAX_SPAWNERS];
     int spawner_count;
+    SaveSpawnRecord* records;
+    int record_count;
+    int record_cap;
 };
+
+// Declared here so the entity walk can reach them; defined beside
+// save_register_spawner and save_note_spawn, which is where they belong to read.
+static const SaveSpawner* _find_spawner(const SaveSystem* save, const char* name);
+static SaveSpawnRecord* _find_record(const SaveSystem* save, const char* entity_name);
 
 /*
  * A row's field, as void*. The offset arithmetic needs a byte pointer, and a
@@ -580,6 +599,23 @@ static bool _write_entities(SaveSystem* save, cJSON* root, int* written) {
         cJSON_AddStringToObject(obj, "name", entity->name);
         cJSON_AddNumberToObject(obj, "index", (double)e);
 
+        /*
+         * An entity nobody authored carries the recipe that made it. An authored
+         * one does not: its record is a state overlay on something the scene
+         * provides, so there is nothing to rebuild it from and nothing to write.
+         */
+        const SaveSpawnRecord* rec = _find_record(save, entity->name);
+        if (rec) {
+            cJSON_AddStringToObject(obj, "spawner", rec->spawner);
+            if (rec->params) {
+                cJSON* copy = cJSON_Duplicate(rec->params, true);
+                if (!copy || !cJSON_AddItemToObject(obj, "params", copy)) {
+                    cJSON_Delete(copy);
+                    return false;
+                }
+            }
+        }
+
         for (int i = 0; i < SAVE_ENTITY_COUNT; i++) {
             if (!_write_field(obj, &SAVE_ENTITY_FIELDS[i], entity))
                 return false;
@@ -628,14 +664,49 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
 
         Entity* entity = find_entity_by_name(em, name);
         if (!entity) {
-            /*
-             * A record whose target the scene no longer provides. Dropped and
-             * counted rather than refused: a patched level is the normal way
-             * this happens, and refusing the file would mean every content
-             * edit invalidated every save already in players' hands.
-             */
-            r->dropped_missing_entity++;
-            continue;
+            const char* spawner_name = json_string_or(entry, "spawner");
+            if (!spawner_name) {
+                /*
+                 * An AUTHORED record whose target the scene no longer provides.
+                 * Dropped and counted rather than refused: a patched level is
+                 * the ordinary way this happens, and refusing the file would
+                 * mean every content edit invalidated every save already in
+                 * players' hands.
+                 */
+                r->dropped_missing_entity++;
+                continue;
+            }
+
+            const SaveSpawner* spawner = _find_spawner(save, spawner_name);
+            if (!spawner || !spawner->fn) {
+                /*
+                 * Either this build never knew the name, or it knows it as a
+                 * TOMBSTONE -- a registration with no function, which is how a
+                 * recipe is retired so that losing these entities is a decision
+                 * somebody wrote down. Both drop one record; neither costs the
+                 * file, because one unbuildable crate must not cost a player
+                 * everything else in the save.
+                 */
+                log_warn("save: no spawner '%s' in this build; '%s' is not restored", spawner_name,
+                         name);
+                r->dropped_unknown_spawner++;
+                continue;
+            }
+
+            const cJSON* params = cJSON_GetObjectItemCaseSensitive(entry, "params");
+            entity = spawner->fn(em, params, spawner->user);
+            if (!entity) {
+                log_warn("save: spawner '%s' refused to rebuild '%s'", spawner_name, name);
+                r->dropped_unknown_spawner++;
+                continue;
+            }
+
+            // Re-noted so that saving again writes this entity out the same way
+            // it came in; without it a load would quietly strip every spawned
+            // thing from the NEXT save.
+            save_note_spawn(save, entity->name, spawner->name,
+                            params ? cJSON_Duplicate(params, true) : NULL);
+            r->entities_spawned++;
         }
 
         for (int i = 0; i < SAVE_ENTITY_COUNT; i++) {
@@ -703,7 +774,13 @@ SaveSystem* create_save_system(Game* game) {
 }
 
 void free_save_system(SaveSystem* save) {
-    // Every table and every spawner is borrowed; there is nothing else to free.
+    if (!save)
+        return;
+    // Tables and spawners are borrowed. The spawn records are not: their params
+    // were handed over by save_note_spawn and this is where they end.
+    for (int i = 0; i < save->record_count; i++)
+        cJSON_Delete(save->records[i].params);
+    free(save->records);
     free(save);
 }
 
@@ -748,6 +825,57 @@ bool save_register_spawner(SaveSystem* save, const char* name, SaveSpawnFn fn, v
     // so the name still resolves and the entity is dropped by a decision
     // rather than by a lookup that silently stopped matching.
     save->spawners[save->spawner_count++] = (SaveSpawner){.name = name, .fn = fn, .user = user};
+    return true;
+}
+
+static const SaveSpawner* _find_spawner(const SaveSystem* save, const char* name) {
+    for (int i = 0; i < save->spawner_count; i++) {
+        if (strcmp(save->spawners[i].name, name) == 0)
+            return &save->spawners[i];
+    }
+    return NULL;
+}
+
+static SaveSpawnRecord* _find_record(const SaveSystem* save, const char* entity_name) {
+    for (int i = 0; i < save->record_count; i++) {
+        if (strcmp(save->records[i].name, entity_name) == 0)
+            return &save->records[i];
+    }
+    return NULL;
+}
+
+bool save_note_spawn(SaveSystem* save, const char* entity_name, const char* spawner,
+                     cJSON* params) {
+    if (!save || !entity_name || !entity_name[0] || !spawner || !spawner[0]) {
+        cJSON_Delete(params); // owned on every path, refusals included
+        log_error("save: a spawn record needs an entity name and a spawner");
+        return false;
+    }
+
+    SaveSpawnRecord* rec = _find_record(save, entity_name);
+    if (rec) {
+        cJSON_Delete(rec->params);
+        rec->spawner = spawner;
+        rec->params = params;
+        return true;
+    }
+
+    if (save->record_count == save->record_cap) {
+        const int cap = save->record_cap ? save->record_cap * 2 : 32;
+        SaveSpawnRecord* grown = realloc(save->records, (size_t)cap * sizeof(*grown));
+        if (!grown) {
+            cJSON_Delete(params);
+            log_error("save: out of memory recording '%s'", entity_name);
+            return false;
+        }
+        save->records = grown;
+        save->record_cap = cap;
+    }
+
+    rec = &save->records[save->record_count++];
+    snprintf(rec->name, sizeof(rec->name), "%s", entity_name);
+    rec->spawner = spawner;
+    rec->params = params;
     return true;
 }
 

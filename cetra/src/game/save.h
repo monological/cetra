@@ -222,6 +222,20 @@ typedef struct Entity* (*SaveSpawnFn)(struct EntityManager* em, const cJSON* par
 
 bool save_register_spawner(SaveSystem* save, const char* name, SaveSpawnFn fn, void* user);
 
+/*
+ * Remember that `entity_name` was made by `spawner` from `params`.
+ *
+ * This is the half a registry alone cannot supply. Knowing HOW to rebuild a
+ * crate says nothing about which crates exist or how big each one is -- in
+ * gametest those come from rand01() and are then stored only inside a Material
+ * and a Jolt shape, where nothing can read them back. So the arguments are
+ * recorded here, at the moment of spawning, by the only code that has them.
+ *
+ * TAKES OWNERSHIP of `params` (which may be NULL), including when it refuses,
+ * so a caller never has to unwind. Re-noting a name replaces its record.
+ */
+bool save_note_spawn(SaveSystem* save, const char* entity_name, const char* spawner, cJSON* params);
+
 // ------------------------------------------------------------------- file
 
 /*
