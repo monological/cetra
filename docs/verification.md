@@ -521,6 +521,28 @@ and, windowed, `./out/bin/gametest --twin run` -- two rigs side by side under TA
 one thing `anim-twin`'s headless frames cannot see: that neither smears into the other.
 **Owed.** The blend layer is identical above the rig, but nobody has watched it on one.
 
+**Two cautions about `anim-twin` specifically, one settled and one not.**
+
+The settled one: that arm failed intermittently, and the cause was not in animation at all. It
+was a heap overflow in the GLYPH ATLAS — `stbtt_GetGlyphSDF` returns NULL for a glyph with no
+outline and returns it before writing `*width`, `*height`, `*xoff` or `*yoff`, so `text.c`'s
+metrics probe read four uninitialised locals for every blank glyph. The default charset begins
+with a space, so this happened on the first glyph of every SDF font load, advanced the atlas
+cursor by whatever the stack held, and put a later glyph's write outside the allocation. It
+faulted only when that allocation ended on a page boundary, which is why it looked like flake.
+Fixed by asking once and keeping the pixels. Recorded here because the arm's NAME points at
+animation and the fault was in text: an intermittent failure in this group is worth suspecting
+elsewhere before it is suspected in the blend layer.
+
+The unsettled one: the arm's pixel count varies a great deal run to run — 55937, 35967, 224729
+and 55937 across four runs in one session, every one of them passing a `>= 20` threshold by
+orders of magnitude. That is not what a frame-deterministic app should produce, and the two
+processes it compares differ only in the twin's clip, so the crates (same seed, same draw
+order) ought to cancel out of the difference entirely. **Do not theorise about this before
+measuring the floor**, which is this document's own first rule: render each of the two
+configurations TWICE and diff those, and find out whether one run of one configuration is even
+reproducible, before reading anything into the number the arm prints.
+
 ---
 
 ## The UI paths
