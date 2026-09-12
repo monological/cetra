@@ -805,6 +805,20 @@ at all, so it runs before one is created. `CETRA_SETTINGS_DIR` points the settin
 gametest run, at a directory of its own rather than the player's real one; the gate and the
 golden bake both set it.
 
+**Saving (spec 12.3).** `F5` / right bumper quicksaves and `F9` / right stick click quickloads,
+both ordinary rows in the action table so they rebind like anything else. They are deliberately
+NOT flagged `ui`, so a menu suppresses them — saving from inside a pause screen would fold the
+menu's own state into what the world looks like. The file goes beside `settings.json` in the
+platform's per-user location, so `CETRA_SETTINGS_DIR` points it somewhere hermetic too.
+
+`--save-probe <case>` is the headless probe the `save` gate group reads, in the same shape as
+the three above: it prints `save <case> <label> <key> <numbers>` and exits. The cases are
+`roundtrip`, `entities`, `spawned`, `drops`, `floor` and `migrate`. It builds its own scene,
+physics world and entities rather than using `on_init`'s, since a probe game has no init
+callback — **no window and no frame**, though unlike `--ui-probe` it does create a GL context,
+because the crates it spawns upload their meshes. Each case wants its own `CETRA_SETTINGS_DIR`:
+they share one slot name, so they would otherwise read each other's file.
+
 **`apps/spores`** gained `--taa`, `--headless-jitter` and `--msaa <n>` in 11.103 and **kept its four
 samples**, which is the one refusal in that spec. `particle_frag` declares a single output, so a
 mote writes no motion vector and reprojects through whatever geometry sits behind it — zero on a
