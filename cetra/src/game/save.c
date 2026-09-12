@@ -97,10 +97,14 @@ static bool _migrate_section(const SaveSystem* save, const char* section, cJSON*
  * unaligned bytes -- so the byte pointer never escapes these two functions.
  */
 static void* _field_ptr(void* base, const SaveField* f) {
+    if (f->addr)
+        return f->addr;
     return (void*)((unsigned char*)base + f->offset);
 }
 
 static const void* _field_ptr_const(const void* base, const SaveField* f) {
+    if (f->addr)
+        return f->addr;
     return (const void*)((const unsigned char*)base + f->offset);
 }
 
@@ -114,20 +118,6 @@ static int _type_width(SaveType type) {
         default:
             return 1;
     }
-}
-
-static const char* _enum_label(const SaveField* f, int value) {
-    if (!f->labels || value < 0 || value >= f->label_count)
-        return NULL;
-    return f->labels[value];
-}
-
-static int _enum_value(const SaveField* f, const char* label) {
-    for (int i = 0; i < f->label_count; i++) {
-        if (f->labels[i] && strcmp(f->labels[i], label) == 0)
-            return i;
-    }
-    return -1;
 }
 
 // --------------------------------------------------------------- sections
@@ -146,8 +136,7 @@ static cJSON* _section(cJSON* root, const char* name, bool create) {
 // ------------------------------------------------------------------ write
 
 // Read one row out of `base` into up to four doubles, through the accessor pair
-// where the row has one. Strings do not pass through here -- they are the one
-// type with no numeric form.
+// where the row has one.
 static void _load_value(const SaveField* f, const void* base, double* v) {
     const int n = _type_width((SaveType)f->type);
     if (f->get) {
@@ -160,7 +149,6 @@ static void _load_value(const SaveField* f, const void* base, double* v) {
             v[0] = *(const bool*)p ? 1.0 : 0.0;
             break;
         case SAVE_INT:
-        case SAVE_ENUM:
             v[0] = *(const int*)p;
             break;
         case SAVE_FLOAT:
@@ -176,8 +164,6 @@ static void _load_value(const SaveField* f, const void* base, double* v) {
                 v[i] = fv[i];
             break;
         }
-        case SAVE_STRING:
-            break;
     }
 }
 
@@ -185,25 +171,19 @@ static bool _write_field(cJSON* obj, const SaveField* f, const void* base) {
     if (!obj)
         return false;
 
-    if ((SaveType)f->type == SAVE_STRING) {
-        // An accessor row cannot be a string: there is no numeric buffer to
-        // carry one, and no consumer has wanted it.
-        const char* s = (const char*)_field_ptr_const(base, f);
-        return cJSON_AddStringToObject(obj, f->key, s) != NULL;
-    }
-
     double v[4] = {0.0, 0.0, 0.0, 0.0};
     _load_value(f, base, v);
 
     switch ((SaveType)f->type) {
         case SAVE_BOOL:
             return cJSON_AddBoolToObject(obj, f->key, v[0] != 0.0) != NULL;
+        // An int and a double are both exactly what cJSON's own printer writes;
+        // only a float needs the narrower precision below.
         case SAVE_INT:
+        case SAVE_DOUBLE:
             return cJSON_AddNumberToObject(obj, f->key, v[0]) != NULL;
         case SAVE_FLOAT:
             return json_add_float(obj, f->key, (float)v[0]);
-        case SAVE_DOUBLE:
-            return cJSON_AddNumberToObject(obj, f->key, v[0]) != NULL;
         case SAVE_VEC3:
         case SAVE_QUAT: {
             const int n = _type_width((SaveType)f->type);
@@ -211,11 +191,10 @@ static bool _write_field(cJSON* obj, const SaveField* f, const void* base) {
             if (!arr)
                 return false;
             for (int i = 0; i < n; i++) {
-                // Through the same %.9g writer a scalar float takes, so a
-                // position and a height read alike in the file.
-                char text[32];
-                snprintf(text, sizeof(text), "%.9g", v[i]);
-                cJSON* item = cJSON_CreateRaw(text);
+                // The same item a scalar float takes, so a position and a
+                // height really are written alike rather than by two copies of
+                // one rule.
+                cJSON* item = json_float_item((float)v[i]);
                 if (!item || !cJSON_AddItemToArray(arr, item)) {
                     cJSON_Delete(item);
                     return false;
@@ -223,19 +202,6 @@ static bool _write_field(cJSON* obj, const SaveField* f, const void* base) {
             }
             return true;
         }
-        case SAVE_ENUM: {
-            const int value = (int)v[0];
-            const char* label = _enum_label(f, value);
-            // An out-of-range value is a bug upstream, not here: name it rather
-            // than writing a label that would read back as something else.
-            if (!label) {
-                log_warn("save: %s holds unknown value %d", f->key, value);
-                return cJSON_AddNumberToObject(obj, f->key, value) != NULL;
-            }
-            return cJSON_AddStringToObject(obj, f->key, label) != NULL;
-        }
-        case SAVE_STRING:
-            break;
     }
     return false;
 }
@@ -286,23 +252,6 @@ static int _decode_value(const SaveField* f, const cJSON* item, double* out) {
             }
             return want;
         }
-        case SAVE_ENUM: {
-            // A number is accepted as well as a label, so a hand-edited file
-            // still loads; the writer only ever emits labels.
-            if (cJSON_IsNumber(item)) {
-                out[0] = item->valuedouble;
-                return 1;
-            }
-            if (!cJSON_IsString(item) || !item->valuestring)
-                return 0;
-            const int value = _enum_value(f, item->valuestring);
-            if (value < 0)
-                return 0;
-            out[0] = value;
-            return 1;
-        }
-        case SAVE_STRING:
-            return cJSON_IsString(item) ? 1 : 0;
     }
     return 0;
 }
@@ -320,7 +269,6 @@ static void _store_value(const SaveField* f, void* base, const double* v, int n)
             *(bool*)p = v[0] != 0.0;
             break;
         case SAVE_INT:
-        case SAVE_ENUM:
             *(int*)p = (int)v[0];
             break;
         case SAVE_FLOAT:
@@ -336,8 +284,6 @@ static void _store_value(const SaveField* f, void* base, const double* v, int n)
                 dst[i] = (float)v[i];
             break;
         }
-        case SAVE_STRING:
-            break;
     }
 }
 
@@ -347,21 +293,10 @@ static bool _read_field(const cJSON* obj, const SaveField* f, void* base) {
     if (!item)
         return false;
 
-    if ((SaveType)f->type == SAVE_STRING) {
-        if (!cJSON_IsString(item) || !item->valuestring || f->cap == 0) {
-            log_warn("save: '%s' is not a string; ignored", f->key);
-            return false;
-        }
-        char* dst = (char*)_field_ptr(base, f);
-        snprintf(dst, f->cap, "%s", item->valuestring);
-        return true;
-    }
-
     double v[4] = {0.0, 0.0, 0.0, 0.0};
     const int n = _decode_value(f, item, v);
     if (n == 0) {
-        log_warn("save: '%s' is not a %s; ignored", f->key,
-                 (SaveType)f->type == SAVE_ENUM ? "known value" : "value of the right shape");
+        log_warn("save: '%s' is not a value of the right shape; ignored", f->key);
         return false;
     }
     _store_value(f, base, v, n);
@@ -557,13 +492,21 @@ static bool _read_animator(const cJSON* entry, Animator* animator, Scene* scene)
      * a blend space this module does not have the entries for. A different
      * name can only be a single clip, which the scene can still find by name.
      */
+    const cJSON* looping = cJSON_GetObjectItemCaseSensitive(obj, "looping");
+    const bool loops = cJSON_IsTrue(looping);
+
     if (source && source[0] && (!playing_now || strcmp(source, playing_now) != 0)) {
         const Animation* clip = scene ? scene_find_animation(scene, source) : NULL;
         if (clip)
-            animator_play(animator, clip, 0.0f,
-                          cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(obj, "looping")));
+            animator_play(animator, clip, 0.0f, loops);
         else
             log_warn("save: no animation '%s' in this scene; the rig keeps what it plays", source);
+    } else if (cJSON_IsBool(looping)) {
+        // The COMMON path takes it too. Applied only by the re-play branch
+        // above, `looping` was written every save and read back on none of the
+        // loads that matter -- the app has usually played this very source in
+        // its own init, which is the case the branch skips.
+        animator->base.looping = loops;
     }
 
     const cJSON* time = cJSON_GetObjectItemCaseSensitive(obj, "time");
@@ -662,8 +605,12 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
         return;
 
     cJSON* section = _section((cJSON*)root, "entities", false);
-    if (!cJSON_IsObject(section))
+    if (!section)
+        return; // a file from a game with no entities carries no section
+    if (!cJSON_IsObject(section)) {
+        log_warn("save: 'entities' is not an object; no entity was restored");
         return;
+    }
 
     // Migrated whole, before a single record is read: a step that rewrites how
     // entries are shaped has to see the list, not one entry at a time.
@@ -672,14 +619,20 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
         return;
 
     const cJSON* list = cJSON_GetObjectItemCaseSensitive(section, "list");
-    if (!cJSON_IsArray(list))
+    if (!cJSON_IsArray(list)) {
+        log_warn("save: 'entities.list' is not an array; no entity was restored");
         return;
+    }
 
     const cJSON* entry = NULL;
     cJSON_ArrayForEach(entry, list) {
         const char* name = json_string_or(entry, "name");
-        if (!name)
+        if (!name) {
+            // The name IS the identity; a record without one addresses nothing.
+            log_warn("save: an entity record carries no name; dropped");
+            r->dropped_missing_entity++;
             continue;
+        }
 
         Entity* entity = find_entity_by_name(em, name);
         if (!entity) {
@@ -811,6 +764,18 @@ bool save_register_table(SaveSystem* save, const char* section, int version, con
                          int count, void* base) {
     if (!save || !section || !rows || count <= 0 || !base) {
         log_error("save: a table needs a section, rows and an object");
+        return false;
+    }
+    /*
+     * The entity array is written by this module under its own name, and it is
+     * not a registered table -- so the duplicate check below cannot see it, and
+     * without this an app could register rows over it. Both walks would then
+     * write one object and the migration chain would run twice across it.
+     * ("world" needs no such guard: it IS registered, first, so it trips the
+     * duplicate check.)
+     */
+    if (strcmp(section, "entities") == 0) {
+        log_error("save: the section name 'entities' is reserved for the entity array");
         return false;
     }
     for (int i = 0; i < save->table_count; i++) {

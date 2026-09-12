@@ -54,6 +54,17 @@ static ShaderProgram* pbr_shader = NULL;
 static int box_count = 0;
 static const char* hdr_path = NULL;
 static SaveSystem* save_system = NULL;
+/*
+ * Edges taken once per FRAME and consumed by the next fixed step.
+ *
+ * Input is polled once a frame, outside the step loop, so every step of a
+ * multi-step frame reads the same press -- one F5 on a frame that ran five
+ * steps meant five whole saves, each with its own fsync. The flag is what makes
+ * the edge happen once while the WORK still happens in the settled world a
+ * fixed step is.
+ */
+static bool save_pending = false;
+static bool load_pending = false;
 
 // Animation (spec 12.1): the player is the procedural puppet on an ANIMATOR
 // component -- idle, walk and run blended from the controller's post-solve
@@ -252,11 +263,7 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
         mat->roughness = 0.4f;
         mat->metallic = 0.3f;
     }
-    // Guarded because the save probe builds crates before any shader exists:
-    // it never draws, and an unguarded call logs an error for a program the
-    // run is never going to need.
-    if (pbr_shader)
-        material_set_program(mat, pbr_shader);
+    material_set_program(mat, pbr_shader);
     mesh->material = mat;
 
     node_add_mesh(node, mesh);
@@ -425,15 +432,20 @@ static Entity* spawn_box_from_save(EntityManager* em, const char* name, const cJ
         return NULL;
     }
     const cJSON* half = cJSON_GetObjectItemCaseSensitive(params, "half");
-    if (!cJSON_IsNumber(half))
+    if (!cJSON_IsNumber(half)) {
+        fprintf(stderr, "gametest: box '%s' has no size; not restored\n", name);
         return NULL;
+    }
     return spawn_box(game, name, pos, (float)half->valuedouble, color);
 }
 
 // Spawn a falling box at a random position above the scene
 static void spawn_falling_box(Game* game) {
+    // The counter advances only once the crate exists. It is SAVED state now,
+    // so a refused spawn that burned a name would leave a permanent gap in what
+    // the file carries.
     char name[32];
-    snprintf(name, sizeof(name), "box_%d", box_count++);
+    snprintf(name, sizeof(name), "box_%d", box_count);
 
     // Random position above the scene, random colour, random size
     float x = (rand01() - 0.5f) * 20.0f;
@@ -444,6 +456,7 @@ static void spawn_falling_box(Game* game) {
 
     if (!spawn_box(game, name, pos, half, color))
         return;
+    box_count++;
 
     // Recorded as it happens, by the only code that holds these numbers.
     if (save_system)
@@ -456,52 +469,29 @@ static void spawn_falling_box(Game* game) {
 static bool player_touching_door = false;
 
 /*
- * The state an entity walk cannot reach, and why this is a table of ACCESSORS
- * rather than a struct.
+ * The state an entity walk cannot reach.
  *
  * A save that carries every entity still restores a world whose player faces
  * the wrong way, whose next crate collides with an existing name, and whose
  * door forgets it was mid-swing: a facing angle, a spawn counter and two
- * deferred flags live in file statics here and nowhere the engine can see. They
- * are genuinely per-file state, so they are reached by name through the row
- * pair save.h provides for exactly this case.
+ * deferred flags live in file statics here and nowhere the engine can see.
  *
- * Gathering them into one struct was the other option and is the worse one. It
- * would rewrite the door, yaw and catch logic in a file the anim, audio, ui and
- * gamepad groups plus two goldens all read, to buy nothing over a pair of
- * one-line functions.
+ * Addressed directly, because they are plain variables and save.h has a row for
+ * exactly that. The two alternatives are both worse: gathering them into a
+ * struct for the serializer's benefit would rewrite door, yaw and catch logic
+ * across a file the anim, audio, ui and gamepad groups and two goldens all
+ * read, and a generated accessor pair per variable states each type twice -- in
+ * the row and in the cast -- with nothing checking the two agree.
  */
-#define APP_ROW_FNS(name_, type_)                               \
-    static void _get_##name_(const void* b, double* o, int n) { \
-        (void)b;                                                \
-        (void)n;                                                \
-        o[0] = (double)name_;                                   \
-    }                                                           \
-    static void _set_##name_(void* b, const double* v, int n) { \
-        (void)b;                                                \
-        (void)n;                                                \
-        name_ = (type_)v[0];                                    \
-    }
-
-APP_ROW_FNS(box_count, int)
-APP_ROW_FNS(player_yaw, float)
-APP_ROW_FNS(chaser_yaw, float)
-APP_ROW_FNS(heart_timer, float)
-APP_ROW_FNS(catch_cooldown, float)
-APP_ROW_FNS(door_open_pending, bool)
-APP_ROW_FNS(door_open_velocity, float)
-APP_ROW_FNS(player_touching_door, bool)
-
 static const SaveField SAVE_APP_FIELDS[] = {
-    SAVE_ROW_FN(SAVE_INT, "box_count", _get_box_count, _set_box_count),
-    SAVE_ROW_FN(SAVE_FLOAT, "player_yaw", _get_player_yaw, _set_player_yaw),
-    SAVE_ROW_FN(SAVE_FLOAT, "chaser_yaw", _get_chaser_yaw, _set_chaser_yaw),
-    SAVE_ROW_FN(SAVE_FLOAT, "heart_timer", _get_heart_timer, _set_heart_timer),
-    SAVE_ROW_FN(SAVE_FLOAT, "catch_cooldown", _get_catch_cooldown, _set_catch_cooldown),
-    SAVE_ROW_FN(SAVE_BOOL, "door_open_pending", _get_door_open_pending, _set_door_open_pending),
-    SAVE_ROW_FN(SAVE_FLOAT, "door_open_velocity", _get_door_open_velocity, _set_door_open_velocity),
-    SAVE_ROW_FN(SAVE_BOOL, "player_touching_door", _get_player_touching_door,
-                _set_player_touching_door),
+    SAVE_ROW_AT(SAVE_INT, "box_count", &box_count),
+    SAVE_ROW_AT(SAVE_FLOAT, "player_yaw", &player_yaw),
+    SAVE_ROW_AT(SAVE_FLOAT, "chaser_yaw", &chaser_yaw),
+    SAVE_ROW_AT(SAVE_FLOAT, "heart_timer", &heart_timer),
+    SAVE_ROW_AT(SAVE_FLOAT, "catch_cooldown", &catch_cooldown),
+    SAVE_ROW_AT(SAVE_BOOL, "door_open_pending", &door_open_pending),
+    SAVE_ROW_AT(SAVE_FLOAT, "door_open_velocity", &door_open_velocity),
+    SAVE_ROW_AT(SAVE_BOOL, "player_touching_door", &player_touching_door),
 };
 #define SAVE_APP_COUNT   ((int)(sizeof(SAVE_APP_FIELDS) / sizeof(SAVE_APP_FIELDS[0])))
 #define SAVE_APP_VERSION 1
@@ -1284,19 +1274,22 @@ static void on_update(Game* game, double dt) {
     }
 
     /*
-     * Quicksave and quickload. In the fixed step rather than the frame hook so
-     * that what is written is a settled world: on_update runs after the last
-     * step's physics sync, where pre_render would catch the world mid-frame
-     * with the entity poses of one step and the bodies of the next.
+     * Quicksave and quickload. The WORK is here, in the fixed step, because
+     * on_update runs after the step's physics sync and writes a settled world
+     * -- pre_render would catch the entity poses of one step against the bodies
+     * of the next. The EDGE is not here: on_frame_input took it once for the
+     * whole frame, and the flag is what carries it across.
      */
-    if (save_system && input_action_pressed(&game->input, "quicksave")) {
+    if (save_pending) {
+        save_pending = false;
         char path[1024];
-        if (save_default_path(path, sizeof(path), "quick"))
+        if (save_system && save_default_path(path, sizeof(path), "quick"))
             save_write(save_system, path);
     }
-    if (save_system && input_action_pressed(&game->input, "quickload")) {
+    if (load_pending) {
+        load_pending = false;
         char path[1024];
-        if (save_default_path(path, sizeof(path), "quick")) {
+        if (save_system && save_default_path(path, sizeof(path), "quick")) {
             const SaveLoadResult r = save_read(save_system, path);
             if (r.ok)
                 printf("Loaded: %d entities, %d spawned, %d dropped\n", r.entities_restored,
@@ -2206,7 +2199,21 @@ static void hud_set_text(UIElement* el, const char* text) {
  * `ui`, so it keeps reading while the menu itself has taken input away from the
  * game -- otherwise the key that opened the menu could not close it.
  */
-static void ui_frame_input(Game* game) {
+static void on_frame_input(Game* game) {
+    /*
+     * Once per FRAME, which is the whole reason these are taken here. on_update
+     * runs once per fixed STEP, and input is polled outside that loop -- so a
+     * frame that ran five steps read the same press five times, and one F5 was
+     * five entire saves with five fsyncs. Only the EDGE moves here; the work
+     * still happens in the step, against the settled world.
+     *
+     * Above the ui_system guard, because --no-ui is a game that can still save.
+     */
+    if (input_action_pressed(&game->input, "quicksave"))
+        save_pending = true;
+    if (input_action_pressed(&game->input, "quickload"))
+        load_pending = true;
+
     if (!ui_system)
         return;
 
@@ -2495,9 +2502,13 @@ static int save_probe_path(char* out, size_t cap, const char* slot) {
 
 static int run_save_probe(Game* game, const char* which) {
     // A scene of its own: spawn_box builds a visual, and the node it makes has
-    // to belong somewhere even though this probe never draws a frame.
+    // to belong somewhere even though this probe never draws a frame. The
+    // program comes from the engine the same way on_init gets it -- the probe
+    // stands in for the app, so it should reach the app's path rather than have
+    // create_box_node tolerate a missing one.
     Scene* scene = create_scene();
     game_set_scene(game, scene);
+    pbr_shader = engine_get_program(game->engine, CETRA_PROGRAM_PBR);
 
     PhysicsConfig physics_config = physics_default_config();
     PhysicsWorld* physics = create_physics_world(&physics_config);
@@ -2928,9 +2939,9 @@ int main(int argc, const char* argv[]) {
     engine_set_mouse_button_callback(game->engine, mouse_button_callback);
 
     // Set game callbacks
-    if (ui_enabled) {
-        game_set_frame_input(game, ui_frame_input);
-    }
+    // Unconditional: the hook carries the quicksave edges as well as the menu,
+    // and it returns early of its own accord when there is no UI.
+    game_set_frame_input(game, on_frame_input);
     game_set_init(game, on_init);
     game_set_update(game, on_update);
     game_set_pre_render(game, on_pre_render);
