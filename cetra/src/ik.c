@@ -1,0 +1,375 @@
+#include "ik.h"
+
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "ext/log.h"
+
+// A leg at full extension puts acos's argument exactly on -1, and one ulp past it is
+// NaN. That NaN would reach bone_matrices, and from there prev_bone_rows, so it
+// poisons the FOLLOWING frame's motion vectors as well as this one's picture. Two
+// clamps are carried rather than one because they bound different things: the
+// distance clamp bounds the geometry a caller asked for, the cosine clamp bounds the
+// rounding of the division that follows.
+#define IK_EPS       1e-6f // a length below which a segment has no direction
+#define IK_DIR_EPS   1e-8f // the same for a cross product, which squares the error
+#define IK_REACH_PAD 1e-4f // held off the inner limit, where the knee folds back on itself
+
+IkFootParams ik_default_params(void) {
+    IkFootParams p;
+    p.reach_limit = 0.995f;
+    p.max_pelvis_drop = 0.5f;
+    p.teleport_distance = 0.5f;
+    p.blend_rate = 12.0f;
+    return p;
+}
+
+IkSystem* create_ik_system(Skeleton* skeleton) {
+    if (!skeleton) {
+        log_error("create_ik_system: no skeleton");
+        return NULL;
+    }
+    IkSystem* system = calloc(1, sizeof(IkSystem));
+    if (!system) {
+        log_error("create_ik_system: out of memory");
+        return NULL;
+    }
+    system->skeleton = skeleton;
+    system->pelvis_index = -1;
+    system->params = ik_default_params();
+    system->enabled = true;
+    system->needs_reset = true;
+    return system;
+}
+
+void free_ik_system(IkSystem* system) {
+    if (!system)
+        return;
+    free(system->feet);
+    free(system);
+}
+
+int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
+                const char* ankle_bone, const vec3 knee_forward) {
+    if (!system || !hip_bone || !knee_bone || !ankle_bone) {
+        log_error("ik_add_foot: a null argument");
+        return -1;
+    }
+
+    Skeleton* skeleton = system->skeleton;
+    // The lookup reads the map and declares the skeleton non-const.
+    const int hip = get_bone_index_by_name(skeleton, hip_bone);
+    const int knee = get_bone_index_by_name(skeleton, knee_bone);
+    const int ankle = get_bone_index_by_name(skeleton, ankle_bone);
+    if (hip < 0 || knee < 0 || ankle < 0) {
+        log_error("ik_add_foot: '%s' has no bone named '%s'", skeleton->name,
+                  hip < 0 ? hip_bone : (knee < 0 ? knee_bone : ankle_bone));
+        return -1;
+    }
+    if (skeleton->bones[knee].parent_index != hip || skeleton->bones[ankle].parent_index != knee) {
+        log_error("ik_add_foot: '%s' -> '%s' -> '%s' is not a parent chain", hip_bone, knee_bone,
+                  ankle_bone);
+        return -1;
+    }
+
+    IkFoot* grown = realloc(system->feet, (system->foot_count + 1) * sizeof(IkFoot));
+    if (!grown) {
+        log_error("ik_add_foot: out of memory");
+        return -1;
+    }
+    system->feet = grown;
+
+    IkFoot* foot = &system->feet[system->foot_count];
+    memset(foot, 0, sizeof(*foot));
+    foot->hip_index = hip;
+    foot->knee_index = knee;
+    foot->ankle_index = ankle;
+
+    glm_vec3_copy((float*)knee_forward, foot->pole_local);
+    if (glm_vec3_norm(foot->pole_local) < IK_DIR_EPS)
+        glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, foot->pole_local);
+    glm_vec3_normalize(foot->pole_local);
+
+    // The axis a leg bends about when it is aimed straight ALONG the pole, which is
+    // the one direction the pole cannot resolve. Taken from the bind pose, where the
+    // chain's plane is whatever the rig author meant by it.
+    glm_vec3_copy((vec3){1.0f, 0.0f, 0.0f}, foot->fallback_axis);
+    mat4* bind = calloc(skeleton->bone_count, sizeof(mat4));
+    if (bind) {
+        skeleton_compute_bind_globals(skeleton, bind);
+        vec3 a, c, limb, axis;
+        glm_vec3_copy(bind[hip][3], a);
+        glm_vec3_copy(bind[ankle][3], c);
+        glm_vec3_sub(c, a, limb);
+        if (glm_vec3_norm(limb) > IK_EPS) {
+            glm_vec3_normalize(limb);
+            glm_vec3_cross(limb, foot->pole_local, axis);
+            if (glm_vec3_norm(axis) > IK_DIR_EPS) {
+                glm_vec3_normalize(axis);
+                glm_vec3_copy(axis, foot->fallback_axis);
+            }
+        }
+        free(bind);
+    }
+
+    return (int)system->foot_count++;
+}
+
+bool ik_set_pelvis(IkSystem* system, const char* pelvis_bone) {
+    if (!system || !pelvis_bone) {
+        log_error("ik_set_pelvis: a null argument");
+        return false;
+    }
+
+    Skeleton* skeleton = system->skeleton;
+    const int pelvis = get_bone_index_by_name(skeleton, pelvis_bone);
+    if (pelvis < 0) {
+        log_error("ik_set_pelvis: '%s' has no bone named '%s'", skeleton->name, pelvis_bone);
+        return false;
+    }
+
+    // Bones are ordered parent-first, so one forward pass settles the whole subtree.
+    memset(system->in_pelvis_subtree, 0, sizeof(system->in_pelvis_subtree));
+    for (size_t i = 0; i < skeleton->bone_count && i < MAX_BONES; i++) {
+        if ((int)i == pelvis) {
+            system->in_pelvis_subtree[i] = 1;
+            continue;
+        }
+        const int parent = skeleton->bones[i].parent_index;
+        if (parent >= 0 && system->in_pelvis_subtree[parent])
+            system->in_pelvis_subtree[i] = 1;
+    }
+
+    // Dropping a pelvis that does not carry every foot would lower half a body and
+    // leave the rest standing, which reads as a broken rig rather than a short leg.
+    for (size_t i = 0; i < system->foot_count; i++) {
+        if (!system->in_pelvis_subtree[system->feet[i].ankle_index]) {
+            log_error("ik_set_pelvis: '%s' is not an ancestor of every registered foot",
+                      pelvis_bone);
+            memset(system->in_pelvis_subtree, 0, sizeof(system->in_pelvis_subtree));
+            return false;
+        }
+    }
+
+    system->pelvis_index = pelvis;
+    return true;
+}
+
+void ik_foot_set_target(IkSystem* system, int foot, const vec3 target, const vec3 normal,
+                        float weight) {
+    if (!system) {
+        log_error("ik_foot_set_target: no system");
+        return;
+    }
+    if (foot < 0 || (size_t)foot >= system->foot_count) {
+        log_error("ik_foot_set_target: no foot %d", foot);
+        return;
+    }
+    IkFoot* f = &system->feet[foot];
+    glm_vec3_copy((float*)target, f->target);
+    if (normal)
+        glm_vec3_copy((float*)normal, f->normal);
+    f->weight = weight < 0.0f ? 0.0f : (weight > 1.0f ? 1.0f : weight);
+}
+
+void ik_reset(IkSystem* system) {
+    if (!system) {
+        log_error("ik_reset: no system");
+        return;
+    }
+    system->needs_reset = true;
+}
+
+// Rotate a bone's global by q about its own head, which the caller states rather than
+// reading back: the head is where the bone WILL be, and for the knee and ankle that is
+// not where it currently is. springbone.c's write-back, with the position supplied.
+static void rotate_global(mat4 m, versor q, const vec3 head) {
+    mat4 rot, out;
+    glm_quat_mat4(q, rot);
+    glm_mat4_mul(rot, m, out);
+    glm_mat4_copy(out, m);
+    m[3][0] = head[0];
+    m[3][1] = head[1];
+    m[3][2] = head[2];
+    m[3][3] = 1.0f;
+}
+
+// Rotate hip and knee so the ankle lands on `target`. Model space throughout, and only
+// this chain's three bones are written. A degenerate segment leaves the chain at its
+// animated pose, the way a spring bone follows rigidly below its own epsilon.
+static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target,
+                           const IkFootParams* params) {
+    vec3 a, b, c;
+    glm_vec3_copy(g[f->hip_index][3], a);
+    glm_vec3_copy(g[f->knee_index][3], b);
+    glm_vec3_copy(g[f->ankle_index][3], c);
+
+    vec3 ab, bc;
+    glm_vec3_sub(b, a, ab);
+    glm_vec3_sub(c, b, bc);
+    const float l1 = glm_vec3_norm(ab);
+    const float l2 = glm_vec3_norm(bc);
+    if (l1 < IK_EPS || l2 < IK_EPS)
+        return;
+
+    vec3 d;
+    glm_vec3_sub((float*)target, a, d);
+    const float want = glm_vec3_norm(d);
+    if (want < IK_EPS)
+        return; // the target sits on the hip: there is no direction to aim along
+
+    vec3 dir;
+    glm_vec3_normalize_to(d, dir);
+
+    float lo = fabsf(l1 - l2) * (1.0f + IK_REACH_PAD);
+    float hi = (l1 + l2) * params->reach_limit;
+    if (hi < lo)
+        hi = lo;
+    const float dist = glm_clamp(want, lo, hi);
+
+    // The bend plane, and its ordering is the reverse of the textbook one. On a rig
+    // whose bind pose is straight and whose locomotion never bends a knee, the current
+    // triangle is degenerate on nearly every frame, so the POLE is the primary source
+    // and the triangle normal the fallback. The pole rides the hip's own frame, so a
+    // clip that turns the hips carries knee-forward around with it.
+    vec3 pole, axis;
+    glm_mat4_mulv3(g[f->hip_index], (float*)f->pole_local, 0.0f, pole);
+    glm_vec3_cross(dir, pole, axis);
+    if (glm_vec3_norm(axis) < IK_DIR_EPS) {
+        vec3 ac;
+        glm_vec3_sub(c, a, ac);
+        glm_vec3_cross(ab, ac, axis);
+    }
+    if (glm_vec3_norm(axis) < IK_DIR_EPS)
+        glm_vec3_copy((float*)f->fallback_axis, axis);
+    if (glm_vec3_norm(axis) < IK_DIR_EPS)
+        return;
+    glm_vec3_normalize(axis);
+
+    float cos_hip = (l1 * l1 + dist * dist - l2 * l2) / (2.0f * l1 * dist);
+    cos_hip = glm_clamp(cos_hip, -1.0f, 1.0f);
+
+    vec3 knee_dir;
+    glm_vec3_copy(dir, knee_dir);
+    glm_vec3_rotate(knee_dir, acosf(cos_hip), axis);
+
+    vec3 knee_new, ankle_new, scratch;
+    glm_vec3_scale(knee_dir, l1, scratch);
+    glm_vec3_add(a, scratch, knee_new);
+    glm_vec3_scale(dir, dist, scratch);
+    glm_vec3_add(a, scratch, ankle_new);
+
+    // The thigh swings onto its new direction and carries the whole limb rigidly, so
+    // the shin's own swing below is measured against where the ankle ENDED UP, not
+    // where it started.
+    vec3 from, to;
+    glm_vec3_normalize_to(ab, from);
+    glm_vec3_sub(knee_new, a, to);
+    if (glm_vec3_norm(to) < IK_DIR_EPS)
+        return;
+    glm_vec3_normalize(to);
+
+    versor q_hip;
+    glm_quat_from_vecs(from, to, q_hip);
+
+    vec3 ankle_rel, ankle_carried;
+    glm_vec3_sub(c, a, ankle_rel);
+    glm_quat_rotatev(q_hip, ankle_rel, ankle_rel);
+    glm_vec3_add(a, ankle_rel, ankle_carried);
+
+    rotate_global(g[f->hip_index], q_hip, a);
+    rotate_global(g[f->knee_index], q_hip, knee_new);
+    rotate_global(g[f->ankle_index], q_hip, ankle_carried);
+
+    vec3 shin_from, shin_to;
+    glm_vec3_sub(ankle_carried, knee_new, shin_from);
+    glm_vec3_sub(ankle_new, knee_new, shin_to);
+    if (glm_vec3_norm(shin_from) < IK_DIR_EPS || glm_vec3_norm(shin_to) < IK_DIR_EPS)
+        return;
+    glm_vec3_normalize(shin_from);
+    glm_vec3_normalize(shin_to);
+
+    versor q_knee;
+    glm_quat_from_vecs(shin_from, shin_to, q_knee);
+    rotate_global(g[f->knee_index], q_knee, knee_new);
+    rotate_global(g[f->ankle_index], q_knee, ankle_new);
+}
+
+void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
+    if (!system || !system->enabled || system->foot_count == 0 || !global_transforms)
+        return;
+
+    if (delta_time < 0.0f)
+        delta_time = 0.0f;
+    float ease = system->params.blend_rate * delta_time;
+    if (ease > 1.0f)
+        ease = 1.0f;
+
+    // Ease, or snap. A target that jumped farther than teleport_distance did not move
+    // -- the thing standing on it did -- and easing across that draws a foot through
+    // the world instead of putting it down somewhere else.
+    for (size_t i = 0; i < system->foot_count; i++) {
+        IkFoot* f = &system->feet[i];
+        const bool snap =
+            system->needs_reset || !f->has_applied ||
+            glm_vec3_distance(f->target, f->applied_target) > system->params.teleport_distance;
+        if (snap) {
+            glm_vec3_copy(f->target, f->applied_target);
+            glm_vec3_copy(f->normal, f->applied_normal);
+            f->has_applied = true;
+        } else {
+            glm_vec3_lerp(f->applied_target, f->target, ease, f->applied_target);
+            glm_vec3_lerp(f->applied_normal, f->normal, ease, f->applied_normal);
+        }
+    }
+
+    // The pelvis drop, before any chain is solved, so every chain solves against where
+    // the hips ENDED UP. A pure translation of the subtree: for a translation the
+    // matrix product is just the offset added to the translation column, which is
+    // exact, costs no multiply, and -- unlike a re-accumulation -- composes with
+    // corrections the spring pass has already written.
+    if (system->pelvis_index >= 0 && system->params.max_pelvis_drop > 0.0f) {
+        float worst = 0.0f;
+        for (size_t i = 0; i < system->foot_count; i++) {
+            const IkFoot* f = &system->feet[i];
+            if (f->weight <= 0.0f)
+                continue; // a foot at zero must not drag the hips down
+            vec3 a, b, c, ab, bc;
+            glm_vec3_copy(global_transforms[f->hip_index][3], a);
+            glm_vec3_copy(global_transforms[f->knee_index][3], b);
+            glm_vec3_copy(global_transforms[f->ankle_index][3], c);
+            glm_vec3_sub(b, a, ab);
+            glm_vec3_sub(c, b, bc);
+            const float reach =
+                (glm_vec3_norm(ab) + glm_vec3_norm(bc)) * system->params.reach_limit;
+            const float deficit =
+                (glm_vec3_distance((float*)f->applied_target, a) - reach) * f->weight;
+            if (deficit > worst)
+                worst = deficit;
+        }
+        if (worst > 0.0f) {
+            const float drop =
+                worst < system->params.max_pelvis_drop ? worst : system->params.max_pelvis_drop;
+            for (size_t i = 0; i < system->skeleton->bone_count && i < MAX_BONES; i++) {
+                if (system->in_pelvis_subtree[i])
+                    global_transforms[i][3][1] -= drop;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < system->foot_count; i++) {
+        const IkFoot* f = &system->feet[i];
+        if (f->weight <= 0.0f)
+            continue; // skipped entirely, so weight 0 is bit-identical to no IK
+
+        // Blend the TARGET rather than the matrices: a lerp of two rotations is
+        // neither a rotation nor orthogonal, and would shear the limb on the way.
+        vec3 ankle, effective;
+        glm_vec3_copy(global_transforms[f->ankle_index][3], ankle);
+        glm_vec3_lerp(ankle, (float*)f->applied_target, f->weight, effective);
+        solve_two_bone(global_transforms, f, effective, &system->params);
+    }
+
+    system->needs_reset = false;
+}
