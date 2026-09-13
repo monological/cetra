@@ -1255,27 +1255,9 @@ static float grotto_float_velocity(float centre_y, float vy, float dt) {
     return vy;
 }
 
-// The bed the WATER shoals over, which must agree with the rock actually drawn or the
-// surf keys off a surface nobody can see. That agreement used to be a restated formula;
-// now it is the same function, so the two cannot drift.
-//
-// The fallback matters: a refused field leaves the shaft unbuilt, and answering with the
-// old analytic cone keeps the water shoaling over SOMETHING rather than over whatever
-// uninitialised params happen to hold.
-static float grotto_bed_height(void* ctx, float x, float z) {
-    (void)ctx;
-    if (g_shaft_ready)
-        return terrain_height_at(&g_shaft, x, z);
-
-    const float d = fmaxf(fabsf(x), fabsf(z));
-    const float inner = 25.0f, outer = GROTTO_BASIN_HALF;
-    if (d <= inner)
-        return GROTTO_SEABED_Y;
-    if (d >= outer)
-        return GROTTO_SEABED_FAR;
-    const float t = (d - inner) / (outer - inner);
-    return GROTTO_SEABED_Y + (GROTTO_SEABED_FAR - GROTTO_SEABED_Y) * t;
-}
+// The bed adapter that used to live here is gone with the shore: build_ocean hands the
+// water no height function now, so there is nothing for it to agree with. See the note
+// there for why a crater rim should never have been a foreshore.
 
 // The ocean. Placement is `level` alone: the surface is a projected grid in NDC and is
 // effectively infinite, so `extent` bounds only the bed field and not what is drawn.
@@ -1289,11 +1271,31 @@ static void build_ocean(Scene* scene) {
         return;
     }
     water->level = GROTTO_WATER_Y;
-    // The ISLAND's extent, not the basin's: this bounds the bed field the water shoals
-    // over, so stopping it at the basin would leave the coast with no bed under it and no
-    // waterline to trace where the land actually meets the sea.
-    water->extent = SHAFT_EXTENT;
-    water->height_at = grotto_bed_height;
+    water->extent = SHAFT_EXTENT; // inert with no bed below; bounds the bed field only
+    /*
+     * NO BED, and that is what turns the beach off.
+     *
+     * A bed provider is what makes this a SHORE. Handing one over had the water tracing a
+     * waterline around the crater -- 844 points over 4546 units, at a foreshore slope of
+     * 1.4 -- and then doing what a shore does: swash, run-up, wetness, and foam. A 130-unit
+     * cliff is not a foreshore, so every one of those was the engine correctly serving a
+     * question nobody meant to ask.
+     *
+     * Switching the foam flags off could not fix it, because none of them is where the foam
+     * came from. water_frag computes shore foam from `Shoal` and breaking crests from the
+     * depth limit, and BOTH are functions of the bed: with none, the shoal factor is 1
+     * everywhere and both terms are identically zero -- the shader says so itself, and
+     * notes it needs no `bedAvailable` guard for exactly that reason. Breaking is also the
+     * one whitecap source the Gerstner path carries, which is why the surf survived turning
+     * the spectral model off.
+     *
+     * NULL is the documented normal case and not a degraded one: the surface takes its
+     * water column from resolved scene depth per fragment, which works against arbitrary
+     * geometry rather than only a heightfield. What it gives up is SHOALING, which a crater
+     * rim has no use for. The turquoise is untouched -- that is the refraction resolve of
+     * real lit geometry attenuated over a depth-buffer path, never the bed callback.
+     */
+    water->height_at = NULL;
     water->height_ctx = NULL;
 
     // apps/tree's lagoon rather than the library's open-ocean blue: greener, and about
@@ -1325,8 +1327,31 @@ static void build_ocean(Scene* scene) {
     // A calm sea, not the default. create_water ships a fully-developed 11.5 m/s wind
     // over 120 km of fetch -- about two metres of significant height, which on a 120 m
     // basin is a storm in a bathtub.
-    water->sea.wind_sea.wind_speed = 6.0f;
-    water->sea.wind_sea.fetch = 15000.0f;
+    /*
+     * Spectral, not Gerstner. The library defaults to the closed-form octaves, which are
+     * lake scale; this is a sea, and the cascades are what give it a real spectrum.
+     *
+     * One consequence to know rather than discover: FFT is the path that reports a
+     * JACOBIAN, and crest foam is selected from it with no uniform in the way. So whitecaps
+     * are back on the table here even with no bed, and the only lever on them is sea state
+     * -- a surface that does not fold hard enough to reach the onset compression grows no
+     * foam. Hence the calm authoring below; raising the wind is what would bring them back.
+     */
+    water->wave_model = WATER_WAVES_FFT;
+
+    /*
+     * Calmer than the Gerstner authoring was, because FFT actually READS this and Gerstner
+     * never did -- it has no sea state to ask.
+     *
+     * At 6 m/s over 15 km the seed reported Hs 1.92 m with a slope variance of 0.0996
+     * against Cox-Munk's 0.0337: nearly three times the reference, on a pool about 100
+     * units across. That is a surface folding hard enough to feed the Jacobian crest foam,
+     * which has no switch -- so the sea state IS the switch, and leaving it at storm
+     * numbers while claiming the calm suppresses whitecaps would have been a comment that
+     * lied. A train is calmed by lower wind or shorter fetch; both, here.
+     */
+    water->sea.wind_sea.wind_speed = 2.5f;
+    water->sea.wind_sea.fetch = 900.0f;
 
     scene->water = water; // the scene owns it and frees it
     printf("Ocean: level %g, bed %g to %g, lagoon scatter\n", (double)water->level,
