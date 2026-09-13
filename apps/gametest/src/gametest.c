@@ -99,10 +99,12 @@ static Animation* clip_swim = NULL;
 // restart the stroke continuously and it would never advance past its first tick.
 static bool player_in_swim_clip = false;
 static bool chaser_in_swim_clip = false;
-// A file static because the flag is parsed in main and read in on_pre_render, long
-// after. Off by default: it repoints every headless capture, and the two menu goldens
-// photograph this camera.
-static bool follow_cam = false;
+// A file static because the flag is parsed in main and read in on_pre_render, long after.
+// ON by default, with --no-follow-cam to opt out, which is the shape --no-puppet,
+// --no-chaser and --no-ik already use. It was off while the camera was being settled; a
+// demo whose subject is a drop into a cavern should not ship with the camera pinned to
+// the world origin.
+static bool follow_cam = true;
 // The camera's heading, moved by the arrow keys and by NOTHING else.
 //
 // Every automatic version of this was wrong, and in the same way each time: player_yaw
@@ -4047,8 +4049,8 @@ int main(int argc, const char* argv[]) {
             no_puppet = true;
         } else if (!strcmp(a, "--no-chaser")) {
             no_chaser = true;
-        } else if (!strcmp(a, "--follow-cam")) {
-            follow_cam = true;
+        } else if (!strcmp(a, "--no-follow-cam")) {
+            follow_cam = false;
         } else if (!strcmp(a, "--no-ik")) {
             no_ik = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
@@ -4174,7 +4176,7 @@ int main(int argc, const char* argv[]) {
     printf("  R / Y - Raycast downward from player\n");
     printf("  G / B - Print ground state\n");
     printf("  P / Start - Pause/unpause physics\n");
-    printf("  Mouse drag - Orbit camera (--follow-cam to trail the player instead)\n");
+    printf("  Arrow keys - Turn the camera (--no-follow-cam for the fixed orbit instead)\n");
     printf("  Walk off the edge - fall into the grotto and swim; the chaser swims too\n");
     printf("  Escape - Pause menu (--no-ui to run without any of it)\n");
     printf("Audio: a beep on jump and spawn, footsteps in time with the stride, a looping\n");
