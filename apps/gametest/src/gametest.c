@@ -574,18 +574,50 @@ static float shaft_smoothstep(float e0, float e1, float x) {
 // keeps real weight at r = 0, and the profile is a lerp rather than a max.
 static float shaft_height(float x, float z) {
     const float d = sqrtf(x * x + z * z);
-    // Break the symmetry BEFORE it becomes a radius. A pure radial profile reads as
-    // turned on a lathe from every angle, and no amount of fbm on top hides it.
     const float ang = atan2f(z, x);
-    const float warp = 1.0f + 0.16f * sinf(ang * 3.0f) + 0.09f * sinf(ang * 5.0f + 1.7f);
-    const float r = d / (GROTTO_BASIN_HALF * warp);
+
+    // A second noise tap, far enough from the first that the two are independent. It
+    // warps the RADIUS, so the shaft is out of round by a different amount in every
+    // direction rather than by a formula.
+    const float rw = terrain_height_at(&g_shaft_noise, x + 613.0f, z - 421.0f);
+
+    /*
+     * Break the symmetry before it becomes a radius -- but NOT with a pure function of
+     * the angle. sin(3a) + sin(5a) alone is identical at every height, so it flutes the
+     * shaft into evenly spaced vertical ridges: a lathe-turned column, which is the exact
+     * artifact this term was added to avoid. Folding the radial noise into the phase is
+     * what stops the ridges being straight and evenly spaced.
+     */
+    const float warp =
+        1.0f + 0.16f * sinf(ang * 3.0f + rw * 0.7f) + 0.09f * sinf(ang * 5.0f + 1.7f - rw * 0.4f);
+    const float r = (d + rw * 1.2f) / (GROTTO_BASIN_HALF * warp);
 
     const float t = shaft_smoothstep(SHAFT_FLOOR_R, SHAFT_RIM_R, r);
     float h = GROTTO_SEABED_Y + (GROTTO_CLIFF_TOP - GROTTO_SEABED_Y) * t;
 
-    // Detail everywhere, and more of it up the walls where it reads as bedding planes.
-    // The floor term is what keeps the collider unsplittable-free; do not take it to zero.
-    h += terrain_height_at(&g_shaft_noise, x, z) * (0.35f + 1.65f * t);
+    /*
+     * TERRACES, and they are the answer to a limit rather than a flourish.
+     *
+     * A heightfield is h = f(x, z), so every feature it can express is a COLUMN: going up
+     * a near-vertical wall does not change x or z, so any detail added to the height is
+     * constant the whole way up and smears into vertical streaks. No amount of noise
+     * fixes that, because the noise is the thing being smeared.
+     *
+     * Horizontal variety therefore has to come from the PROFILE being non-monotonic --
+     * stepping the radial ramp, so the wall climbs in benches. That is a shape a
+     * heightfield can hold, and it is what reads as bedding planes.
+     */
+    const float bench = 0.055f * sinf(t * 16.0f + rw * 0.5f);
+    h += (GROTTO_CLIFF_TOP - GROTTO_SEABED_Y) * bench;
+
+    /*
+     * Detail weighted toward the FLOOR, which is the opposite of the obvious weighting
+     * and the reason the walls striped. On the floor a height displacement is the whole
+     * relief and it is what keeps the collider free of coplanar runs; on a wall the same
+     * displacement barely moves the surface and only rakes it vertically. Wall detail
+     * belongs to the triplanar material, not to the geometry.
+     */
+    h += terrain_height_at(&g_shaft_noise, x, z) * (1.0f - 0.65f * t);
     return h;
 }
 
@@ -600,7 +632,11 @@ static void build_shaft(Game* game) {
     g_shaft_noise.extent = GROTTO_BASIN_HALF;
     g_shaft_noise.height = 2.5f; // amplitude of the rock detail, not of the shaft
     g_shaft_noise.base_freq = 0.035f;
-    g_shaft_noise.octaves = 5;
+    // Four and not five. At base_freq 0.035 the fifth octave lands near 1.8 world units,
+    // against a tile cell of 1.25 -- close enough to the mesh Nyquist that it aliases onto
+    // the triangle grid and prints as a regular field of facets rather than as rock.
+    // Dropping one octave puts the finest detail at about 3.6 units, clear of the lattice.
+    g_shaft_noise.octaves = 4;
     g_shaft_noise.seed = 20260913u;
     g_shaft_noise.island_start = 0.0f; // island shaping is a DOME and has no inverse
     g_shaft_noise.field = NULL;
@@ -1023,7 +1059,13 @@ static void build_lights(Scene* scene) {
         // light the seabed and leave every wall the panel exists for unlit.
         .direction = {0.0f, 1.0f, 0.0f},
         .up = {0.0f, 0.0f, 1.0f}, // the panel then lies in the XZ plane
-        .color = {0.16f, 0.90f, 0.82f},
+        // Pale, not saturated, and that distinction is the whole reason the cavern was
+        // one flat teal. These panels are the ONLY light on the rock now that the fill rig
+        // is retired, so their colour is not a tint on the scene -- it is the scene's
+        // entire spectrum, and a strongly cyan light makes every surface cyan whatever its
+        // albedo. The vivid turquoise belongs to the WATER, where scatter_glow puts it;
+        // the light it casts has to stay broad enough for rock to read as rock.
+        .color = {0.62f, 0.93f, 0.89f},
         .intensity = 55.0f,   // nits
         .size = {pool, pool}, // a zero here would silently mean 50 by 50
         // Left at zero on purpose. A panel's range shrinks only the CULL SPHERE, since the
@@ -1044,6 +1086,74 @@ static void build_lights(Scene* scene) {
     printf("Lights: platform cone at y=%g (%g to %g deg), pool panels %gx%g at %g\n",
            (double)spot_y, (double)inner_deg, (double)outer_deg, (double)pool, (double)pool,
            (double)GROTTO_WATER_Y);
+}
+
+/*
+ * The dark, as a box over the shaft rather than a dimmer on the scene.
+ *
+ * Three of the four terms that reach the basin floor are NOT occluded by geometry, so no
+ * arrangement of rock darkens it: IBL diffuse is texture(irradianceMap, N), a cube lookup
+ * on the normal alone, its specular twin reads the reflection vector, and the baked sky
+ * lights its own virtual ground so even downward directions in the cube carry sun. The
+ * fill rig was the fourth and build_lights already retired it. Of what is left, the only
+ * handle is ibl->intensity, which dims the platform and the sky by exactly as much.
+ *
+ * A fog VOLUME is the one lever that is bounded in world space, so it can make the pit
+ * dark BECAUSE it is a pit and leave everything above it alone. It sits under the rim and
+ * not under the platform: the long fall stays clear air, which is what keeps the middle
+ * of the drop empty rather than milky, and the walls fade in as you reach them.
+ */
+static void build_cavern_fog(Scene* scene, PostFX* fx) {
+    if (!scene)
+        return;
+
+    // Top at the rim, floor below the basin, and wider than the walls so the ramp-in
+    // happens inside rock rather than in open air at the edge of the box.
+    const float top = GROTTO_CLIFF_TOP;
+    const float bottom = GROTTO_SEABED_FAR - 6.0f;
+    FogVolume vol = {
+        .center = {0.0f, 0.5f * (top + bottom), 0.0f},
+        .half_extent = {GROTTO_BASIN_HALF + 10.0f, 0.5f * (top - bottom),
+                        GROTTO_BASIN_HALF + 10.0f},
+        .density = 0.018f,
+        .feather = 12.0f,
+        // Only slightly toward the pool's turquoise. The panels already carry the colour
+        // of this place, and a saturated medium on top of a saturated key light is how
+        // the whole cavern collapses into one hue -- the fog should read as depth, not as
+        // a second coat of paint. White here would leave the surrounding air alone.
+        .tint = {0.38f, 0.64f, 0.62f},
+    };
+    if (!scene_add_fog_volume(scene, &vol))
+        fprintf(stderr, "Cavern fog: volume refused\n");
+
+    if (!fx)
+        return;
+
+    /*
+     * Two defaults that turn this fog into a BRIGHTENER, both of which have to be closed
+     * by hand or the pit ends up milky and lighter than it started.
+     *
+     * fog_ambient_from_sky ships true and the sky stamps its zenith radiance over the
+     * ambient every frame, so the medium glows with daylight no matter what is overhead.
+     * postfx_set_fog_ambient takes the value AND clears that flag, which is why it is a
+     * call and not a field write.
+     *
+     * fog_sun_boost multiplies shaft in-scatter that is gathered through the same
+     * visibility test the shadow map answers -- and that test returns LIT for anything
+     * outside the cascade, which down here is most of the basin. Left at 1.0 the sun
+     * pours into exactly the geometry the fog is meant to hide.
+     */
+    postfx_set_fog_ambient(fx, (vec3){0.0f, 0.0f, 0.0f});
+    fx->fog_sun_boost = 0.0f;
+
+    // The froxel volume is spent over the camera's depth range, and 60 is the default.
+    // The shaft floor sits ~190 under the platform, so at the default every slice is
+    // used up long before the fog is reached and the box renders as nothing at all.
+    if (fx->fog_far < 400.0f)
+        fx->fog_far = 400.0f;
+
+    printf("Cavern fog: box y %g to %g, half %g, density %g, sun boost off\n", (double)bottom,
+           (double)top, (double)(GROTTO_BASIN_HALF + 10.0f), (double)vol.density);
 }
 
 // Create a door with hinge constraint
@@ -1689,6 +1799,7 @@ static void on_init(Game* game) {
     // whatever stands between, so the pit could not be made dark while it ran. See
     // build_lights for what replaces it and why there are two panels.
     build_lights(scene);
+    build_cavern_fog(scene, engine->postfx);
 
     // Create physics world
     PhysicsConfig physics_config = physics_default_config();
