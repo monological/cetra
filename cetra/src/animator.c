@@ -344,24 +344,24 @@ int animator_mask_subtree(const Skeleton* skeleton, const char* root_bone, float
     if (!skeleton || !mask)
         return 0;
     size_t n = skeleton->bone_count;
-    for (size_t i = 0; i < n; i++)
-        mask[i] = 0.0f;
     // The lookup reads the map and declares the skeleton non-const.
     int root = get_bone_index_by_name((Skeleton*)skeleton, root_bone);
     if (root < 0) {
+        // Cleared even on refusal: a caller handed a mask it may not re-initialise, and
+        // leaving last call's weights in it masks a different subtree than it asked for.
+        for (size_t i = 0; i < n; i++)
+            mask[i] = 0.0f;
         log_error("Skeleton '%s' has no bone '%s' to mask", skeleton->name,
                   root_bone ? root_bone : "(null)");
         return 0;
     }
-    // Parent-first order: a bone's parent is already decided when it is met.
-    int count = 0;
-    for (size_t i = 0; i < n; i++) {
-        int parent = skeleton->bones[i].parent_index;
-        bool in = (int)i == root || (parent >= 0 && (size_t)parent < i && mask[parent] > 0.0f);
-        mask[i] = in ? 1.0f : 0.0f;
-        count += in ? 1 : 0;
-    }
-    return count;
+    // The mark is the shared one; this layer is the name, the log and the weights.
+    // uint8_t 0/1 to float 0/1 is exact, so what a blend reads is unchanged.
+    uint8_t marked[MAX_BONES];
+    const size_t count = skeleton_mark_subtree(skeleton, root, marked);
+    for (size_t i = 0; i < n; i++)
+        mask[i] = marked[i] ? 1.0f : 0.0f;
+    return (int)count;
 }
 
 static void layer_advance(AnimatorLayer* L, float dt, float speed) {
