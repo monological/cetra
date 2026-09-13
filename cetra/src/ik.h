@@ -71,7 +71,18 @@ typedef struct IkFoot {
     bool has_applied;
 
     // SETTINGS: plain stores, written every frame by whoever knows the ground.
-    vec3 target; // model space, where the ankle should land
+    // How far this ankle rides above its sole, defaulted at ik_add_foot from the bind
+    // pose and applied by ik_foot_set_ground -- never by ik_foot_set_target, which takes
+    // a point for the ankle itself. Targeting the ankle AT the ground sinks the foot into
+    // the floor by its own thickness, and on flat ground that also stops the solve being
+    // the identity it should be there.
+    //
+    // It lives here rather than in the three callers that each derived it from the same
+    // bind pose -- one of which carried a comment warning that it had to agree with
+    // another. The default assumes the bind sole sits at model y = 0, which is what
+    // makes it derivable at all; a rig built otherwise overwrites this.
+    float sole_offset;
+    vec3 target; // model space, where the ankle should land, BEFORE sole_offset
     // The surface the foot stands on, model space. Stated by the caller because it is
     // part of the contract, and currently READ BY NOTHING: the solve does not yet pitch
     // the sole onto it, which wants a sole axis this rig does not state, and guessing
@@ -107,7 +118,21 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
 // not an ancestor of every registered foot.
 bool ik_set_pelvis(IkSystem* system, const char* pelvis_bone);
 
+// Where the ANKLE should land, verbatim. The raw form, for a caller that has a point
+// it wants the ankle at.
 void ik_foot_set_target(IkSystem* system, int foot, const vec3 target, const vec3 normal,
+                        float weight);
+
+// Where the GROUND is: the same thing with sole_offset added, so the foot stands ON the
+// surface rather than sinking into it by its own thickness.
+//
+// Two entry points rather than one flag, because a target and a ground are different
+// claims and only the caller knows which it holds. Folding the offset into
+// ik_foot_set_target instead was tried and is wrong: thirteen of its call sites pass
+// arbitrary geometry -- a reach test, a full extension, an exact distance -- and adding
+// a sole clearance to those moved every one of them by the offset, which four gate arms
+// caught to the millimetre and every golden missed, since a golden only ever plants.
+void ik_foot_set_ground(IkSystem* system, int foot, const vec3 ground, const vec3 normal,
                         float weight);
 
 // Snap every foot to its target on the next solve, instead of easing to it.
