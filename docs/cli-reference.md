@@ -836,12 +836,22 @@ the default world, on the 12.4 reasoning that a flag hiding a feature from the o
 that show the world trades the demonstration for two unchanged reference images. The camera is
 the exception because it repoints every headless capture rather than adding to one.
 
-There is no mouse control and nothing to learn: it sits a fixed distance behind whichever way
-the character is already facing, reusing the smoothed yaw the locomotion block maintains. That
-also keeps world-aligned WASD coherent — the camera ends up behind whatever direction you walked
-— at the cost that after a sharp turn, W still moves world +Z, which is now sideways on screen.
+**The arrow keys turn it and nothing else does**, `apps/forest`'s bindings and rates — the right
+stick too, on a pad. It orbits the player's position at a fixed distance, pitch clamped so the
+eye cannot roll under the floor. Movement under the flag is camera-relative: W into the screen,
+S back toward the lens, whichever way you have aimed it.
+
+It shipped first as a camera that trailed the player's facing automatically, which was wrong in
+a way worth recording because two sign changes failed to fix it. `player_yaw` follows the
+velocity, so a camera chasing it can never be in front of you: pressing back turned the
+character round and the camera swung in behind, both directions read as forward, and there was
+no backward left to invert. A heading the player controls has none of that.
+
 It is mutually exclusive with mouse-drag orbit, the way `apps/tree`'s walker is: both own the
-camera, and `mouse_drag_update` rewrites the eye from the orbit parameters every frame.
+camera, and `mouse_drag_update` rewrites the eye from the orbit parameters every frame. The
+arrows are shared with menu navigation, which is safe rather than the collision the action
+table warns about — `ui_up`/`ui_down` carry the `ui` flag, so a menu suppresses the camera
+actions and the arrows navigate it, while with no menu open the UI ignores them.
 
 `--no-ik` runs the player without foot planting at all, which is the quickest way to tell a
 planting artefact from an animation one — worth knowing that the walk clip bends no knee of its
