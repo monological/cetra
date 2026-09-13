@@ -108,6 +108,25 @@ static bool chaser_in_swim_clip = false;
 // demo whose subject is a drop into a cavern should not ship with the camera pinned to
 // the world origin.
 static bool follow_cam = true;
+
+// An explicit camera pose, apps/render's --cam-eye/--cam-target shape carried over here.
+//
+// It exists because this app's camera is a FOLLOWER: it is derived from the player every
+// frame, so there is no way to state a view, and a framing seen interactively cannot be
+// photographed again -- which makes any question about what the frame looks like
+// unanswerable except by the person holding the keyboard. Setting a pose stands the
+// follower down, since both want to own the camera and the later writer would win
+// silently.
+static bool cam_eye_set = false;
+static bool cam_target_set = false;
+static vec3 cam_pose_eye = {0.0f, 0.0f, 0.0f};
+static vec3 cam_pose_target = {0.0f, 0.0f, 0.0f};
+static vec3 cam_pose_up = {0.0f, 1.0f, 0.0f};
+static float cam_pose_fov_deg = 0.0f; // 0 = leave the camera's own default
+
+static bool parse_vec3_arg(const char* s, vec3 out) {
+    return s && sscanf(s, "%f,%f,%f", &out[0], &out[1], &out[2]) == 3;
+}
 // The camera's heading, moved by the arrow keys and by NOTHING else.
 //
 // Every automatic version of this was wrong, and in the same way each time: player_yaw
@@ -1192,10 +1211,23 @@ static void build_lights(Scene* scene) {
         .direction = {0.0f, -1.0f, 0.0f},
         .color = {1.0f, 0.96f, 0.90f},
         .intensity = 100000.0f, // CANDELA: a spot is punctual, where a panel is in nits
-        // Unlike a panel, a spot's range genuinely windows the falloff. This is the one
-        // knob that keeps the platform light off the cavern 130 units below it, and the
-        // dark middle of the fall is what it buys.
-        .range = spot_y + 30.0f,
+        /*
+         * Down past the rim, not just past the plate -- and unlike a panel's, a spot's
+         * range genuinely windows the falloff, so this number is the look and not just a
+         * culling bound.
+         *
+         * At spot_y + 30 it died at y = -30 while the shaft's upper rock sits near -47,
+         * so that rock was outside the range and the panels are 130 units below it again:
+         * with the fill rig retired, the band between plate and pool had no light in it
+         * at all. Reaching the rim lets inverse-square do the work instead -- the wall at
+         * -47 is twice as far from the lamp as the plate, so it lands near a quarter
+         * brightness and keeps fading down the shaft. That gradient IS the fall.
+         *
+         * It does NOT fix the black wedge that used to swing across the plate; that was
+         * the cluster index pool overflowing, and the panel ranges below are what fixed
+         * it. Two separate faults that looked like one.
+         */
+        .range = spot_y + 120.0f,
         .inner_cutoff = glm_rad(inner_deg),
         .outer_cutoff = glm_rad(outer_deg),
         .cast_shadows = true, // a perspective map, so the ramp and steps cast on the plate
@@ -1238,11 +1270,23 @@ static void build_lights(Scene* scene) {
         .color = {0.62f, 0.93f, 0.89f},
         .intensity = 55.0f,   // nits
         .size = {pool, pool}, // a zero here would silently mean 50 by 50
-        // Left at zero on purpose. A panel's range shrinks only the CULL SPHERE, since the
-        // area branch returns before the punctual falloff -- so setting it truncates the
-        // light at a cluster boundary rather than softening it. Derived, the radius spans
-        // the whole shaft, which is what keeps the pool reaching the rim.
-        .range = 0.0f,
+        /*
+         * BOUNDED, and leaving it derived is what put a black wedge in the frame.
+         *
+         * A panel's range shrinks only the CULL SPHERE -- the area branch returns before
+         * the punctual falloff -- so this costs the look nothing and buys the culler
+         * everything. Derived, light_cull_radius inverts a 90x90 panel's far-field
+         * irradiance against a 1/256 floor and lands in the THOUSANDS of units, so both
+         * panels sat in all 3072 froxels of the grid. Three clusterable lights then want
+         * 9216 index slots against a 6144 cap, and _assign_index_offsets answers an
+         * overflow by zeroing whole clusters -- those froxels lose every local light and
+         * render black. The grid is camera-aligned, so the dead region swung with the
+         * view and read as a cutoff that followed the player around.
+         *
+         * 220 spans the basin from the water at -180 to the rim near -47 with the lateral
+         * half-width folded in, and stops well short of the plate, which the spot lights.
+         */
+        .range = 220.0f,
     };
     add_scene_light(scene, &up);
 
@@ -1251,6 +1295,10 @@ static void build_lights(Scene* scene) {
     down.position[1] = GROTTO_WATER_Y - 0.25f;
     down.direction[1] = -1.0f;
     down.intensity = 22.0f; // dimmer: it only has to make the bed readable through water
+    // Tighter than the up panel's, because the job is smaller: this one only has to reach
+    // a seabed a few units under it, across a basin 120 wide. Every froxel it does not
+    // claim is one the index pool keeps.
+    down.range = 90.0f;
     add_scene_light(scene, &down);
 
     printf("Lights: platform cone at y=%g (%g to %g deg), pool panels %gx%g at %g\n",
@@ -1285,7 +1333,12 @@ static void build_cavern_fog(Scene* scene, PostFX* fx) {
         .center = {0.0f, 0.5f * (top + bottom), 0.0f},
         .half_extent = {GROTTO_BASIN_HALF + 10.0f, 0.5f * (top - bottom),
                         GROTTO_BASIN_HALF + 10.0f},
-        .density = 0.018f,
+        // Thin, because the box is tall. Optical depth is density times the distance
+        // looked through, so 0.018 over the shaft's ~140 units left a transmittance near
+        // 0.08 -- ninety percent of the rock's own light gone before it reached the eye,
+        // which is most of why the pit read as a void rather than as a deep space. At
+        // 0.012 the far wall stays visible and the haze still separates near from far.
+        .density = 0.012f,
         .feather = 12.0f,
         // Only slightly toward the pool's turquoise. The panels already carry the colour
         // of this place, and a saturated medium on top of a saturated key light is how
@@ -1300,21 +1353,47 @@ static void build_cavern_fog(Scene* scene, PostFX* fx) {
         return;
 
     /*
-     * Two defaults that turn this fog into a BRIGHTENER, both of which have to be closed
-     * by hand or the pit ends up milky and lighter than it started.
+     * The medium's own light, and it must not be zero.
      *
-     * fog_ambient_from_sky ships true and the sky stamps its zenith radiance over the
-     * ambient every frame, so the medium glows with daylight no matter what is overhead.
-     * postfx_set_fog_ambient takes the value AND clears that flag, which is why it is a
-     * call and not a field write.
+     * froxel_inject seeds in-scatter as `S = ambientColor` and then adds each directional
+     * scaled by `sunBoost`. Zero both and S is exactly zero, which does not make a dim
+     * medium -- it makes a PURELY ABSORBING one. The composite is
+     * scene * transmittance + inscatter, so with no in-scatter every extra metre of fog
+     * drives the pixel toward black, and the basin renders as a growing black wedge that
+     * eats the rock behind it. Shipped exactly that, and the tint cannot rescue it: tint
+     * colours the EXTINCTION, not the light scattered back toward the eye.
      *
-     * fog_sun_boost multiplies shaft in-scatter that is gathered through the same
-     * visibility test the shadow map answers -- and that test returns LIT for anything
-     * outside the cascade, which down here is most of the basin. Left at 1.0 the sun
-     * pours into exactly the geometry the fog is meant to hide.
+     * So the ambient is a dim turquoise rather than nothing: it is the water's glow
+     * hanging in the air of the shaft, and it is what makes depth read as depth instead
+     * of as a hole. fog_ambient_from_sky still has to go, or the sky stamps its zenith
+     * radiance over this every frame and the pit fills with daylight --
+     * postfx_set_fog_ambient clears that flag as well as writing the value, which is why
+     * it is a call and not a field write.
+     *
+     * fog_sun_boost stays at zero, and that one was right: it gathers shaft in-scatter
+     * through the same visibility test the shadow map answers, and that test reports LIT
+     * for anything outside the cascade, which down here is most of the basin. There are
+     * no god rays in a cave lit from its floor.
      */
-    postfx_set_fog_ambient(fx, (vec3){0.0f, 0.0f, 0.0f});
+    postfx_set_fog_ambient(fx, (vec3){0.02f, 0.09f, 0.10f});
     fx->fog_sun_boost = 0.0f;
+
+    /*
+     * No GLOBAL air term: this scene wants fog in the cavern and nowhere else.
+     *
+     * A volume arms the froxel pass without fog_enabled, which is the documented way to
+     * get local fog -- but arming the pass also brings up the global height fog, and its
+     * defaults are density 0.02 with fog_floor_y at 0.0, which is exactly the platform's
+     * own height. Density is MAXIMUM at that floor and decays over four units above it,
+     * so the plate sits in the thickest part of a layer nobody asked for.
+     *
+     * Zeroed on its own merits and NOT as a fix: it was measured against the black wedge
+     * across the plate and changed nothing there, which is how that suspicion died. The
+     * wedge was the cluster index pool overflowing. What this removes is a ground haze
+     * the scene never asked for, and it is recorded here because the next reader will
+     * otherwise reach for fog_enabled and find it already false.
+     */
+    fx->fog_density = 0.0f;
 
     // The froxel volume is spent over the camera's depth range, and 60 is the default.
     // The shaft floor sits ~190 under the platform, so at the default every slice is
@@ -2222,9 +2301,26 @@ static void on_init(Game* game) {
     // Setup camera
     CameraDesc camera_desc = {
         .position = {0.0f, 20.0f, 35.0f}, .fov = 0.8f, .near = 0.1f, .far = 1000.0f};
+    // The FOV rides the desc rather than the built camera, so the explicit pose and the
+    // default go through one construction path instead of two.
+    if (cam_pose_fov_deg > 0.0f)
+        camera_desc.fov = glm_rad(cam_pose_fov_deg);
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
     engine->camera_mode = CAMERA_MODE_ORBIT;
+
+    // Both halves, or neither: an eye with no target is a direction nobody stated, and
+    // silently keeping half of a pose is worse than ignoring it.
+    if (cam_eye_set && cam_target_set) {
+        glm_vec3_copy(cam_pose_up, camera->up_vector);
+        camera_set_position(camera, cam_pose_eye);
+        camera_set_look_at(camera, cam_pose_target);
+        printf("Camera pose: eye %g,%g,%g target %g,%g,%g fov %g\n", (double)cam_pose_eye[0],
+               (double)cam_pose_eye[1], (double)cam_pose_eye[2], (double)cam_pose_target[0],
+               (double)cam_pose_target[1], (double)cam_pose_target[2], (double)cam_pose_fov_deg);
+    } else if (cam_eye_set || cam_target_set) {
+        fprintf(stderr, "--cam-eye and --cam-target must both be given; ignoring the pose\n");
+    }
 
     // Create drag controller
     drag_controller = create_mouse_drag_controller(engine);
@@ -2795,7 +2891,7 @@ static void on_pre_render(Game* game, double alpha) {
     // the orbit want to own the camera, and mouse_drag_update rewrites the eye from the
     // orbit parameters every frame, so leaving both live means the follow pose is
     // overwritten the moment the pointer moves.
-    if (follow_cam) {
+    if (follow_cam && !(cam_eye_set && cam_target_set)) {
         follow_camera_update(game);
     } else if (drag_controller && app_can_process_3d_input(engine) &&
                !input_is_suppressed(&game->input)) {
@@ -4737,6 +4833,19 @@ int main(int argc, const char* argv[]) {
             no_chaser = true;
         } else if (!strcmp(a, "--no-follow-cam")) {
             follow_cam = false;
+        } else if (!strcmp(a, "--fov") && i + 1 < argc) {
+            cam_pose_fov_deg = (float)atof(argv[++i]);
+        } else if (!strcmp(a, "--cam-eye") && i + 1 < argc) {
+            cam_eye_set = parse_vec3_arg(argv[++i], cam_pose_eye);
+            if (!cam_eye_set)
+                fprintf(stderr, "--cam-eye expects x,y,z\n");
+        } else if (!strcmp(a, "--cam-target") && i + 1 < argc) {
+            cam_target_set = parse_vec3_arg(argv[++i], cam_pose_target);
+            if (!cam_target_set)
+                fprintf(stderr, "--cam-target expects x,y,z\n");
+        } else if (!strcmp(a, "--cam-up") && i + 1 < argc) {
+            if (!parse_vec3_arg(argv[++i], cam_pose_up))
+                fprintf(stderr, "--cam-up expects x,y,z\n");
         } else if (!strcmp(a, "--no-ik")) {
             no_ik = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
