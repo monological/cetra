@@ -1241,6 +1241,29 @@ static void on_init(Game* game) {
         }
     }
 
+    /*
+     * Fit the shadow map to the grotto, which the library default does not.
+     *
+     * ortho_size ships at 2000 with a far plane of 7500 -- one map over a 4000-unit box,
+     * sized for a world far larger than this one. Nothing here was ever tall enough to
+     * show what that costs: a 50x50 plate one unit thick has no surface that can shadow
+     * itself. A 28-unit cliff wall does, and it came out carrying the shadow map's own
+     * rasterization as a grid of triangles across the rock.
+     *
+     * 80 covers the 120-unit basin corner to corner with margin, which is about 25 times
+     * the texel density. That is the fix -- not a bigger bias, which would clear the acne
+     * by pushing every shadow off its caster and would peter-pan the ramp and steps the
+     * IK fixture needs to read correctly.
+     *
+     * Per-app rather than in the library: cascade_count > 1 is the more principled answer
+     * but takes a different fit path, and shadow.c records count 1 as a byte-identity
+     * bridge other apps' goldens rest on.
+     */
+    if (scene->shadow_system) {
+        scene->shadow_system->ortho_size = 80.0f;
+        scene->shadow_system->far_plane = 400.0f;
+    }
+
     // A low fill under the sky's sun, the whole lighting without one. At full
     // scale the rig's key is 3.0 against the sun's 6.0, which reads as two suns
     // and casts in two directions; under an HDR there is no sun and the rig is
