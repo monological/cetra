@@ -1911,9 +1911,7 @@ static int run_ik_probe(Game* game, const char* which) {
     const float seg_b = glm_vec3_distance(knee, ankle);
 
     // Every case re-poses from bind first, so one case cannot leave the rig somewhere
-    // the next one reads. reach_limit is lifted to 1 so the clamp under test is the
-    // geometric one and not a safety margin the gate would have to know about.
-    ik->params.reach_limit = 1.0f;
+    // the next one reads.
     ik->params.max_pelvis_drop = 0.0f;
     ik->params.blend_rate = 0.0f;
 
@@ -2059,7 +2057,6 @@ static int run_ik_probe(Game* game, const char* which) {
                 fprintf(stderr, "ik-probe: could not rebuild the system\n");
                 return 1;
             }
-            sys->params.reach_limit = 1.0f;
             sys->params.max_pelvis_drop = 0.0f;
             sys->params.blend_rate = 0.0f;
             const float sign = s == 0 ? 1.0f : -1.0f;
