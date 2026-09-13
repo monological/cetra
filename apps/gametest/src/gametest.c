@@ -558,11 +558,23 @@ static void grotto_box(Scene* scene, EntityManager* em, PhysicsWorld* physics, c
 // engine code is added for it.
 #define SHAFT_FIELD_RES     257 // node-centred: res-1 must halve, so 257 and not 256
 #define SHAFT_TILES         4
-#define SHAFT_TILE_SEGS     40    // (2*60/4)/40 = 0.75 units a vertex
-#define SHAFT_COLLIDER_SEGS 48    // coarser than the visual, as terrain.h intends
-#define SHAFT_FLOOR_R       0.30f // normalised radius the pool floor reaches out to
-#define SHAFT_RIM_R         0.88f // and where the wall has finished climbing
-#define SHAFT_LAYER_TEX     512   // one ground layer map, square and periodic
+#define SHAFT_TILE_SEGS     40 // (2*60/4)/40 = 0.75 units a vertex
+#define SHAFT_COLLIDER_SEGS 72 // coarser than the visual, as terrain.h intends
+// How far the LAND runs, against GROTTO_BASIN_HALF, which is only how far the BASIN does.
+// The two are different questions and used to share one number: the terrain stopped at the
+// basin, so its square domain ended in mid-air and the edge of the world was a visible slab
+// hanging over the sea.
+#define SHAFT_EXTENT  100.0f
+#define SHAFT_FLOOR_R 0.30f // normalised radius the pool floor reaches out to
+#define SHAFT_RIM_R   0.88f // and where the wall has finished climbing
+// Where the outward slope has finished falling, and how deep it has fallen to. Normalised
+// on GROTTO_BASIN_HALF like the two above, so 1.55 is about 93 world units -- inside the
+// domain, with the corners (141) well past it. The depth is what matters: -196 is under
+// the water at -180, so the domain's own boundary drowns and the edge a player can see is
+// a shoreline rather than a cut.
+#define SHAFT_SHORE_R   1.55f
+#define SHAFT_SHORE_Y   -196.0f
+#define SHAFT_LAYER_TEX 512 // one ground layer map, square and periodic
 
 // The field, and a SECOND params carrying no field at all.
 //
@@ -671,9 +683,17 @@ static float shaft_height(float x, float z) {
     const float r0 = sqrtf(x * x + z * z) / GROTTO_BASIN_HALF;
     const float crag = 2.0f * shaft_smoothstep(SHAFT_FLOOR_R * 0.8f, SHAFT_FLOOR_R * 1.7f, r0);
 
-    const float wx = x + 12.0f * terrain_height_at(&g_shaft_warp, x, z) +
+    // The LANDFORM warp is gated on the same unwarped radius as the crag, and for the same
+    // reason: horizontal displacement drags whatever stands at the sample point toward the
+    // centre, so over the pool it hauls wall height into the water. Ungated it lifted the
+    // floor to -184 against a swimmer foot probe at -185. Gating both leaves the pool
+    // computed from its true radius; the floor noise below is what keeps it from being a
+    // surface of revolution, and from being a coplanar run Jolt cannot split.
+    const float land = 12.0f * shaft_smoothstep(SHAFT_FLOOR_R * 0.8f, SHAFT_FLOOR_R * 1.7f, r0);
+
+    const float wx = x + land * terrain_height_at(&g_shaft_warp, x, z) +
                      crag * terrain_height_at(&g_shaft_crag, x, z);
-    const float wz = z + 12.0f * terrain_height_at(&g_shaft_warp, x + 918.0f, z + 517.0f) +
+    const float wz = z + land * terrain_height_at(&g_shaft_warp, x + 918.0f, z + 517.0f) +
                      crag * terrain_height_at(&g_shaft_crag, x - 377.0f, z + 244.0f);
 
     const float r = sqrtf(wx * wx + wz * wz) / GROTTO_BASIN_HALF;
@@ -700,7 +720,31 @@ static float shaft_height(float x, float z) {
      * line plants a swimmer on the bottom. Small, and weighted away from the wall where
      * the ridged term above has the relief covered.
      */
-    h += terrain_height_at(&g_shaft_noise, x, z) * (1.0f - 0.8f * t);
+    // Weighted down from 1.0 at the floor to leave margin under the swimmer probe: the
+    // rule is about the floor's HIGHEST point, so the full noise amplitude spent its whole
+    // budget on one poke. 0.6 keeps well over a unit of relief, which is all Jolt needs.
+    h += terrain_height_at(&g_shaft_noise, x, z) * (0.6f - 0.45f * t);
+
+    /*
+     * And beyond the rim the ground FALLS AWAY to the sea.
+     *
+     * Without this the crater is a square plateau: the height function flattens past the
+     * rim, the field's domain ends, and the terrain simply stops in mid-air with the water
+     * visible 130 units below. From the platform that reads as the edge of a slab, which
+     * is the one thing that says "this is a fixture" rather than "this is a place".
+     *
+     * Falling to below the waterline makes the boundary DROWN instead. The shoreline the
+     * player sees is then where this slope crosses the water, somewhere on the way down,
+     * and the square itself is under the sea with no edge to find. The basin becomes a
+     * crater on a rocky island -- and since the water is one infinite plane, the pool at
+     * the bottom of the shaft and the sea around the island are the same surface, which
+     * is what makes the reading hold together rather than needing two water levels.
+     *
+     * The ridged term above is still live out here (its weight is t, which saturates at
+     * the rim), so the drowned flat is not a run of coplanar triangles and Jolt can still
+     * split it.
+     */
+    h += (SHAFT_SHORE_Y - GROTTO_CLIFF_TOP) * shaft_smoothstep(SHAFT_RIM_R, SHAFT_SHORE_R, r);
     return h;
 }
 
@@ -712,7 +756,7 @@ static void build_shaft(Game* game) {
         return;
 
     g_shaft_noise = terrain_default_params();
-    g_shaft_noise.extent = GROTTO_BASIN_HALF;
+    g_shaft_noise.extent = SHAFT_EXTENT;
     g_shaft_noise.height = 2.5f; // amplitude of the rock detail, not of the shaft
     g_shaft_noise.base_freq = 0.035f;
     // Four and not five. At base_freq 0.035 the fifth octave lands near 1.8 world units,
@@ -763,7 +807,7 @@ static void build_shaft(Game* game) {
     g_shaft_crag.seed = 31337007u;
 
     g_shaft = terrain_default_params();
-    g_shaft.extent = GROTTO_BASIN_HALF;
+    g_shaft.extent = SHAFT_EXTENT;
     g_shaft.tiles = SHAFT_TILES;
     g_shaft.tile_segments = SHAFT_TILE_SEGS;
     g_shaft.island_start = 0.0f;
@@ -1124,7 +1168,10 @@ static void build_ocean(Scene* scene) {
         return;
     }
     water->level = GROTTO_WATER_Y;
-    water->extent = GROTTO_BASIN_HALF;
+    // The ISLAND's extent, not the basin's: this bounds the bed field the water shoals
+    // over, so stopping it at the basin would leave the coast with no bed under it and no
+    // waterline to trace where the land actually meets the sea.
+    water->extent = SHAFT_EXTENT;
     water->height_at = grotto_bed_height;
     water->height_ctx = NULL;
 
