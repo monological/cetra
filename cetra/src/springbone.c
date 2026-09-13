@@ -335,11 +335,10 @@ void spring_bone_update(SpringBoneSystem* system, mat4* local_transforms, mat4* 
 
         versor swing;
         glm_quat_from_vecs(dir_target, dir_sim, swing);
-        mat4 rotation;
-        glm_quat_mat4(swing, rotation);
-        glm_mat4_mul(rotation, target, global_transforms[i]);
-        glm_vec3_copy(head, global_transforms[i][3]);
-        global_transforms[i][3][3] = 1.0f;
+        // Same write-back the IK solve uses, from animation.h: rotate the animated
+        // orientation and put the head back where it was. src and dest differ here
+        // because the animated pose is still wanted in `target` after this.
+        skeleton_rotate_global(global_transforms[i], target, swing, head);
     }
 
     system->needs_reset = false;
