@@ -1984,9 +1984,20 @@ static void follow_camera_update(Engine* engine) {
     glm_vec3_copy(player_entity->position, focus);
     focus[1] += FOLLOW_CAM_LOOK_Y;
 
-    // The puppet faces +Z at yaw 0, so the camera sits back along -Z rotated by the yaw.
-    vec3 eye = {focus[0] - sinf(player_yaw) * FOLLOW_CAM_DISTANCE, focus[1] + FOLLOW_CAM_HEIGHT,
-                focus[2] - cosf(player_yaw) * FOLLOW_CAM_DISTANCE};
+    // The camera sits OPPOSITE the facing, and the sign is the whole of it.
+    //
+    // The puppet faces +Z at yaw 0, but W drives -Z: input_action_move writes
+    // out[2] = -move_y and W binds move_y at +1. So walking forward settles player_yaw at
+    // pi, and a camera placed on the -Z side at yaw 0 starts on the side the player walks
+    // INTO. It then whips around as the yaw catches up, which reads as the controls being
+    // backwards rather than as a camera on the wrong side.
+    //
+    // Placing it at +(sin, cos) puts it behind the direction of travel from the first
+    // frame, standing start included. The movement is deliberately not the thing changed:
+    // the gamepad gate's scripted pads and --trace-player's expected displacements are all
+    // written against W meaning -Z.
+    vec3 eye = {focus[0] + sinf(player_yaw) * FOLLOW_CAM_DISTANCE, focus[1] + FOLLOW_CAM_HEIGHT,
+                focus[2] + cosf(player_yaw) * FOLLOW_CAM_DISTANCE};
 
     camera_set_position(engine->camera, eye);
     camera_set_look_at(engine->camera, focus);
