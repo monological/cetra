@@ -665,6 +665,34 @@ worth stating plainly rather than leaving to be discovered:
 - **The chaser now swims after you**, which is the per-entity question `anim-two-rigs` had to
   ask of the animator and nothing asks here.
 
+Spec 12.7 replaced the boxes with an eroded heightfield and added a lighting rig, and it
+brings three more blind spots — two of which cost hours before they were understood:
+
+- **The clustered light budget has no arm, and its failure looks like a renderer fault.**
+  `LC_MAX_CLUSTER_INDICES` is 6144 over 3072 froxels: an average of **two** lights per
+  froxel, and it is a UBO at 12 KB against GL 4.1's 16 KB guaranteed minimum, so it cannot
+  meaningfully grow. Three lights with frustum-wide reach do not fit. 12.7's two pool panels
+  were authored with `range = 0`, which `light_cull_radius` derives into the *thousands* of
+  units for a 90x90 panel, so both sat in every froxel and the pool overflowed. Since 12.7 a
+  starved cluster keeps the slots it was granted rather than losing every light, so the
+  symptom is now a dim corner instead of a black hole — but nothing measures the budget, and
+  the warning naming the widest-reaching light is the only instrument. **Read the warnings**:
+  it had been printing the answer on every run for hours.
+- **Terrain correctness is asserted by ONE measurement, and it is not a picture.** The pool
+  floor's *highest* point is checked against the swimmer foot probe at build time, because a
+  floating character whose feet reach rock plants on the bottom. It has caught four separate
+  regressions — an ungated crag warp, an ungated landform warp, a domain change, and a seed
+  change — and not one of them was visible in a frame. Anything that moves the field's noise
+  lattice can breach it, so extent, resolution and seeds are all inputs to it.
+- **Startup cost is unmeasured and was 19.7 s.** `terrain.c` memoises the Perlin permutation
+  table one entry deep; four noise seeds interleaved seven taps a point cost seven million
+  Fisher-Yates shuffles. One shared seed took the fill from 11.7 s to 2.7 s. No arm would
+  have noticed, and the profile had to be added by hand to find it.
+- **Both menu goldens are knowingly stale.** They have been since 12.6 flipped the follow
+  camera on by default, and 12.7 moved the world under them four times over. Re-baking is
+  deferred deliberately rather than forgotten: the terrain is still being shaped, and a bake
+  of a shape still in motion is a bake that gets redone.
+
 Closing it is a watch, not a script:
 
 ```bash
