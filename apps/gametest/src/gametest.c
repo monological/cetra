@@ -104,7 +104,12 @@ static bool chaser_in_swim_clip = false;
 // photograph this camera.
 static bool follow_cam = false;
 static float wave_mask[MAX_BONES];
-static float player_yaw = 0.0f;
+// Facing -Z at spawn, which is the direction W drives. Zero would be +Z, so the puppet
+// would stand facing the way S goes and spin 180 the first time you pressed forward --
+// and with --follow-cam the camera would swing round with it, reading as inverted
+// controls. The facing block below writes this from velocity once moving; this is only
+// where it starts.
+static float player_yaw = (float)M_PI;
 static Sound* step_sound = NULL;
 
 // The chaser (a second puppet that hunts the player) and the hearts it earns.
@@ -1984,20 +1989,17 @@ static void follow_camera_update(Engine* engine) {
     glm_vec3_copy(player_entity->position, focus);
     focus[1] += FOLLOW_CAM_LOOK_Y;
 
-    // The camera sits OPPOSITE the facing, and the sign is the whole of it.
+    // Behind the facing: the puppet faces (sin yaw, 0, cos yaw), so the eye goes the
+    // other way along it. W then pushes the character away from the camera and S pulls it
+    // back, which is the whole contract.
     //
-    // The puppet faces +Z at yaw 0, but W drives -Z: input_action_move writes
-    // out[2] = -move_y and W binds move_y at +1. So walking forward settles player_yaw at
-    // pi, and a camera placed on the -Z side at yaw 0 starts on the side the player walks
-    // INTO. It then whips around as the yaw catches up, which reads as the controls being
-    // backwards rather than as a camera on the wrong side.
-    //
-    // Placing it at +(sin, cos) puts it behind the direction of travel from the first
-    // frame, standing start included. The movement is deliberately not the thing changed:
-    // the gamepad gate's scripted pads and --trace-player's expected displacements are all
-    // written against W meaning -Z.
-    vec3 eye = {focus[0] + sinf(player_yaw) * FOLLOW_CAM_DISTANCE, focus[1] + FOLLOW_CAM_HEIGHT,
-                focus[2] + cosf(player_yaw) * FOLLOW_CAM_DISTANCE};
+    // The spawn used to break that, and the cause was not here. player_yaw starts at 0,
+    // which the rig reads as facing +Z, while W drives -Z -- input_action_move writes
+    // out[2] = -move_y and W binds move_y at +1. So a fresh player faced one way and
+    // walked the other, spun 180 on the first keypress, and took the camera round with
+    // it. The fix is at the spawn, where player_yaw now starts facing -Z.
+    vec3 eye = {focus[0] - sinf(player_yaw) * FOLLOW_CAM_DISTANCE, focus[1] + FOLLOW_CAM_HEIGHT,
+                focus[2] - cosf(player_yaw) * FOLLOW_CAM_DISTANCE};
 
     camera_set_position(engine->camera, eye);
     camera_set_look_at(engine->camera, focus);
