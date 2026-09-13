@@ -1434,15 +1434,24 @@ static void build_lights(Scene* scene) {
      * onto a wall, and it suits this exactly: panels are single-sided, so one facing up
      * lights every wall above it and spends nothing on submerged rock.
      *
-     * TWO because the water's colour depends on a LIT BED. It resolves as
-     * bed * exp(-absorption * path) + inscatter, and the bed term is the refraction
-     * resolve of real geometry -- so with the fill rig gone the basin floor has no light
-     * at all, the shallows read black, and only deep water keeps colour from the glow.
-     * The downward panel lights the floor that is seen through.
+     * TWO, back to back at the waterline, doing different jobs at very different strengths.
+     *
+     * DOWN is the one that matters, and it exists for the water's COLOUR rather than for
+     * the rock. The surface resolves as bed * exp(-absorption * path) + inscatter, where
+     * the bed term is the refraction resolve of real geometry -- so an unlit basin floor
+     * makes the shallows read black and leaves only deep water coloured. It lights the
+     * floor that is seen through, which is what the turquoise actually is.
+     *
+     * UP is a wash and no longer a light source. It carried the walls at 55 nits when the
+     * fill rig had just been retired and nothing else reached down here; the platform spot
+     * reaches past the rim now and does that job properly, with inverse-square giving the
+     * fade a single panel never could. At 1 nit this is the suggestion of bounce off the
+     * pool onto the rock immediately above it -- the part the spot, coming from overhead,
+     * cannot produce. Anything near the old value is the spot's job done twice.
      *
      * Neither lights the WATER: water_key_light goes through scene_key_directional, which
-     * skips every non-directional light. So the panels cannot double-brighten the surface
-     * they sit in, and its own look stays the glow plus the sky.
+     * skips every non-directional light. So they cannot double-brighten the surface they
+     * sit in, and its own look stays the glow plus the sky.
      */
     const float pool = 2.0f * GROTTO_BASIN_HALF * 0.75f; // a little wider than the pool
 
@@ -1451,47 +1460,53 @@ static void build_lights(Scene* scene) {
         .type = LIGHT_AREA,
         .position = {0.0f, GROTTO_WATER_Y + 0.25f, 0.0f},
         // Not a default to inherit: a zero direction here is straight DOWN, which would
-        // light the seabed and leave every wall the panel exists for unlit.
+        // aim this at the seabed the other panel already covers and leave the walls unlit.
         .direction = {0.0f, 1.0f, 0.0f},
         .up = {0.0f, 0.0f, 1.0f}, // the panel then lies in the XZ plane
-        // Pale, not saturated, and that distinction is the whole reason the cavern was
-        // one flat teal. These panels are the ONLY light on the rock now that the fill rig
-        // is retired, so their colour is not a tint on the scene -- it is the scene's
-        // entire spectrum, and a strongly cyan light makes every surface cyan whatever its
-        // albedo. The vivid turquoise belongs to the WATER, where scatter_glow puts it;
-        // the light it casts has to stay broad enough for rock to read as rock.
+        // Pale rather than saturated: a strongly cyan light makes every surface cyan
+        // whatever its albedo, and the vivid turquoise belongs to the water itself.
         .color = {0.62f, 0.93f, 0.89f},
-        .intensity = 55.0f,   // nits
+        .intensity = 1.0f, // nits -- a wash, not a source; see the note above
+        .size = {pool, pool},
+        // Tightened WITH the intensity. A panel this dim delivers nothing at 220 units, so
+        // claiming froxels out there is pure cost against a pool that averages two lights
+        // per froxel -- and leaving range at 0 would derive a radius from the far-field
+        // irradiance and put it in all 3072 of them, which is what starved the grid before.
+        .range = 70.0f,
+    };
+    add_scene_light(scene, &up);
+
+    LightDesc down = {
+        .name = "water_glow_down",
+        .type = LIGHT_AREA,
+        .position = {0.0f, GROTTO_WATER_Y - 0.25f, 0.0f},
+        // Stated, not inherited: a zero direction is already straight down, but a panel
+        // whose whole purpose is which way it faces should not depend on a default.
+        .direction = {0.0f, -1.0f, 0.0f},
+        .up = {0.0f, 0.0f, 1.0f}, // the panel then lies in the XZ plane
+        // Pale, not saturated. A strongly cyan light makes every surface cyan whatever its
+        // albedo, and the vivid turquoise belongs to the WATER, where scatter_glow puts it.
+        .color = {0.62f, 0.93f, 0.89f},
+        .intensity = 22.0f,   // nits; it only has to make the bed readable through water
         .size = {pool, pool}, // a zero here would silently mean 50 by 50
         /*
          * BOUNDED, and leaving it derived is what put a black wedge in the frame.
          *
          * A panel's range shrinks only the CULL SPHERE -- the area branch returns before
          * the punctual falloff -- so this costs the look nothing and buys the culler
-         * everything. Derived, light_cull_radius inverts a 90x90 panel's far-field
-         * irradiance against a 1/256 floor and lands in the THOUSANDS of units, so both
-         * panels sat in all 3072 froxels of the grid. Three clusterable lights then want
-         * 9216 index slots against a 6144 cap, and _assign_index_offsets answers an
-         * overflow by zeroing whole clusters -- those froxels lose every local light and
-         * render black. The grid is camera-aligned, so the dead region swung with the
-         * view and read as a cutoff that followed the player around.
+         * everything. Derived, light_cull_radius inverts a panel's far-field irradiance
+         * against a 1/256 floor and lands in the THOUSANDS of units, so the two panels
+         * that used to be here sat in all 3072 froxels of the grid. Three clusterable
+         * lights then want 9216 index slots against a 6144 cap, and _assign_index_offsets
+         * answered the overflow by zeroing whole clusters -- those froxels lost every
+         * local light and rendered black. The grid is camera-aligned, so the dead region
+         * swung with the view and read as a cutoff that followed the player around.
          *
-         * 220 spans the basin from the water at -180 to the rim near -47 with the lateral
-         * half-width folded in, and stops well short of the plate, which the spot lights.
+         * 90 is all this one needs: a seabed a few units under it, across a basin 120
+         * wide. Every froxel it does not claim is one the index pool keeps.
          */
-        .range = 220.0f,
+        .range = 90.0f,
     };
-    add_scene_light(scene, &up);
-
-    LightDesc down = up;
-    down.name = "water_glow_down";
-    down.position[1] = GROTTO_WATER_Y - 0.25f;
-    down.direction[1] = -1.0f;
-    down.intensity = 22.0f; // dimmer: it only has to make the bed readable through water
-    // Tighter than the up panel's, because the job is smaller: this one only has to reach
-    // a seabed a few units under it, across a basin 120 wide. Every froxel it does not
-    // claim is one the index pool keeps.
-    down.range = 90.0f;
     add_scene_light(scene, &down);
 
     printf("Lights: platform cone at y=%g (%g to %g deg), pool panels %gx%g at %g\n",
