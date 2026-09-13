@@ -56,7 +56,8 @@ void recalculate_inverse_bind_poses(Skeleton* skeleton);
 void skeleton_compute_bind_globals(Skeleton* skeleton, mat4* globals);
 
 // Mark root and every bone descended from it, 1 in out[] and 0 elsewhere; returns how
-// many were marked. out holds bone_count entries and is written in full, so a caller
+// many were marked. out holds bone_count entries -- which add_bone_to_skeleton bounds at
+// MAX_BONES, so a MAX_BONES array is always enough -- and is written in full, so a caller
 // needs no clear of its own.
 //
 // One forward pass, because bones are ordered parent-first: a bone's parent is already
