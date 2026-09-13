@@ -830,11 +830,16 @@ through it and anything in frame moves them. That traded the only demonstration 
 for two unchanged reference images, which is the wrong way round: the goldens carry the fixture
 now and were re-baked for it.
 
-`--follow-cam` trails the player instead of orbiting the world origin, and is the only part of
-spec 12.6 behind a flag. The rest of that spec — the walled basin, the ocean and swimming — is
-the default world, on the 12.4 reasoning that a flag hiding a feature from the only two pictures
-that show the world trades the demonstration for two unchanged reference images. The camera is
-the exception because it repoints every headless capture rather than adding to one.
+The follow camera is **on by default**; `--no-follow-cam` gives back the fixed orbit about the
+world origin. It shipped behind `--follow-cam` while the camera was being settled and was turned
+around once it was: a demo whose subject is a drop into a cavern should not open with the camera
+pinned to a point the player walks away from. The opt-out spelling matches `--no-puppet`,
+`--no-chaser` and `--no-ik`.
+
+That makes the whole of spec 12.6 default-on, which is the 12.4 reasoning carried to its end —
+a flag that hides a feature from the only two pictures showing the world trades the
+demonstration for two unchanged reference images. Both menu goldens photograph this camera, so
+both were re-baked for it.
 
 **The arrow keys turn it and nothing else does**, `apps/forest`'s bindings and rates — the right
 stick too, on a pad. It orbits the player's position at a fixed distance, pitch clamped so the
