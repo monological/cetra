@@ -637,6 +637,42 @@ doing at the time:
 **Owed.** The solver is exact on ground nobody has walked across, and the feature it is a
 prerequisite for has not been built.
 
+### The grotto, the ocean and swimming
+
+Spec 12.6 put the platform in a walled basin with a turquoise sea around it, made both
+characters swim, and added a swim clip. **Not one line of it has a gate arm**, and that is
+worth stating plainly rather than leaving to be discovered:
+
+- **Swimming is a feel, and nothing measures a feel.** The float is a critically damped drive
+  toward the surface with the rise clamped, and its two failure modes are opposite and both
+  only visible: too stiff and the character pops out of the water like a cork, too soft and it
+  sinks before recovering. The numbers were chosen against two *hazards* rather than by eye —
+  the seabed sits below the foot ray's reach, and three metres under the feet so
+  `stick_to_floor_distance` cannot grab it — but nothing asserts how it reads.
+- **The water's colour is authored, not derived.** Turquoise is a pale bed seen through clear
+  water, so it depends on the seabed's albedo, the depth, and the sun's elevation together. Any
+  of the three moving changes the look with no arm to notice. The `water` and `beach` gate
+  groups drive the render app against their own fixtures and never see gametest.
+- **The swim clip is checked for existence, not for shape.** `fixture-gen` asserts the
+  committed asset is what the generator emits, and the regeneration was verified to carry
+  thirteen channels against thirteen samplers — but whether a breaststroke *reads* as one is a
+  watch, and the clip shares the rig's known limitation that its walk bends no knee.
+- **`--follow-cam` is photographed by nothing.** It is off for the golden bakes by design, so
+  the two menu images keep the orbit framing, which means the follow path has no pixel
+  coverage at all.
+- **The chaser now swims after you**, which is the per-entity question `anim-two-rigs` had to
+  ask of the animator and nothing asks here.
+
+Closing it is a watch, not a script:
+
+```bash
+./out/bin/gametest                      # walk off the edge, land in water, swim
+./out/bin/gametest --follow-cam         # the camera trails you over the edge
+./out/bin/gametest --no-chaser          # the NPC's swim, isolated by removing it
+```
+
+**Owed.** Every part of it.
+
 ---
 
 ## The UI paths
