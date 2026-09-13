@@ -42,6 +42,8 @@
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
 #include "cetra/water.h"
+#include "cetra/procedural/terrain.h"
+#include "cetra/procedural/erosion.h"
 #include "cetra/particle_system.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
@@ -529,42 +531,204 @@ static void grotto_box(Scene* scene, EntityManager* em, PhysicsWorld* physics, c
     entity_add_rigid_body(e, physics, &shape, MOTION_STATIC, OBJ_LAYER_STATIC);
 }
 
-// The basin the ocean sits in: a seabed, a skirt down from the platform edge, and a
-// cliff ring with an inward overhang. All static, all before physics_world_optimize.
+// The shaft: the basin walls and floor as one eroded heightfield rather than boxes.
 //
-// The seabed is NOT decoration. Water colour is bed * exp(-absorption * path) where the
-// bed term is the refraction resolve of real geometry and the path length comes from the
-// depth buffer -- with nothing behind the surface every pixel takes the maximum path and
-// the sea becomes one flat colour. A pale floor under shallow water IS the turquoise.
-static void build_grotto(Game* game) {
+// A roofless shaft is single-valued in Y, which is the whole reason this is a heightfield
+// and not a voxel field -- so the procedural terrain subsystem applies unchanged and no
+// engine code is added for it.
+#define SHAFT_FIELD_RES     257 // node-centred: res-1 must halve, so 257 and not 256
+#define SHAFT_TILES         4
+#define SHAFT_TILE_SEGS     24    // (2*60/4)/24 = 1.25 units a vertex
+#define SHAFT_COLLIDER_SEGS 48    // coarser than the visual, as terrain.h intends
+#define SHAFT_FLOOR_R       0.30f // normalised radius the pool floor reaches out to
+#define SHAFT_RIM_R         0.88f // and where the wall has finished climbing
+
+// The field, and a SECOND params carrying no field at all.
+//
+// The second is a detail source, not a terrain: with `field` NULL and island shaping off,
+// terrain_height_at is the analytic fbm and nothing else, which is how a caller outside
+// terrain.c reaches that noise -- noise_perlin3_tiled is not exported, and reusing this
+// costs nothing and inherits the tuned octave set.
+static TerrainParams g_shaft;
+static TerrainParams g_shaft_noise;
+static TerrainField g_shaft_field;
+static bool g_shaft_ready = false;
+
+static float shaft_smoothstep(float e0, float e1, float x) {
+    float t = (x - e0) / (e1 - e0);
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Pool floor, walls climbing to the rim, and rock beyond it that fills the square
+// domain's corners -- a round shaft in a square field leaves them, and filling them with
+// solid rock is what a shaft wants anyway.
+//
+// THE FLOOR IS NEVER FLAT AND NEVER CLAMPED, which is a Jolt requirement before it is a
+// look. A large run of exactly coplanar collider triangles fails Jolt's triangle splitter
+// and takes JPH_ASSERT(false) through DummyTrace -- a debug-build death, and worse in
+// release, where the same unsplittable BVH is built silently. Spec 11.63 shipped exactly
+// that from a saturating island floor and fixed it at the geometry. So the fbm below
+// keeps real weight at r = 0, and the profile is a lerp rather than a max.
+static float shaft_height(float x, float z) {
+    const float d = sqrtf(x * x + z * z);
+    // Break the symmetry BEFORE it becomes a radius. A pure radial profile reads as
+    // turned on a lathe from every angle, and no amount of fbm on top hides it.
+    const float ang = atan2f(z, x);
+    const float warp = 1.0f + 0.16f * sinf(ang * 3.0f) + 0.09f * sinf(ang * 5.0f + 1.7f);
+    const float r = d / (GROTTO_BASIN_HALF * warp);
+
+    const float t = shaft_smoothstep(SHAFT_FLOOR_R, SHAFT_RIM_R, r);
+    float h = GROTTO_SEABED_Y + (GROTTO_CLIFF_TOP - GROTTO_SEABED_Y) * t;
+
+    // Detail everywhere, and more of it up the walls where it reads as bedding planes.
+    // The floor term is what keeps the collider unsplittable-free; do not take it to zero.
+    h += terrain_height_at(&g_shaft_noise, x, z) * (0.35f + 1.65f * t);
+    return h;
+}
+
+static void build_shaft(Game* game) {
     EntityManager* em = game_get_entity_manager(game);
     PhysicsWorld* physics = game_get_physics_world(game);
     Scene* scene = game_get_scene(game);
     if (!em || !physics || !scene)
         return;
 
-    vec3 sand = {0.82f, 0.78f, 0.62f}; // pale, because the water tints a bed rather than
-                                       // making the colour itself
-    vec3 rock = {0.26f, 0.24f, 0.26f};
+    g_shaft_noise = terrain_default_params();
+    g_shaft_noise.extent = GROTTO_BASIN_HALF;
+    g_shaft_noise.height = 2.5f; // amplitude of the rock detail, not of the shaft
+    g_shaft_noise.base_freq = 0.035f;
+    g_shaft_noise.octaves = 5;
+    g_shaft_noise.seed = 20260913u;
+    g_shaft_noise.island_start = 0.0f; // island shaping is a DOME and has no inverse
+    g_shaft_noise.field = NULL;
 
-    // Seabed. One slab at the near depth under the whole basin, and a deeper ring
-    // outside the platform's reach, so the water deepens away from the island.
-    const float bed_half_y = 1.0f;
-    grotto_box(scene, em, physics, "grotto_seabed",
-               (vec3){0.0f, GROTTO_SEABED_Y - bed_half_y, 0.0f},
-               (vec3){GROTTO_BASIN_HALF, bed_half_y, GROTTO_BASIN_HALF}, sand, 0.0f);
+    g_shaft = terrain_default_params();
+    g_shaft.extent = GROTTO_BASIN_HALF;
+    g_shaft.tiles = SHAFT_TILES;
+    g_shaft.tile_segments = SHAFT_TILE_SEGS;
+    g_shaft.island_start = 0.0f;
+    g_shaft.field = NULL; // installed after the erode, never before
+
+    if (!terrain_field_alloc(&g_shaft_field, SHAFT_FIELD_RES)) {
+        fprintf(stderr, "Shaft: field allocation failed\n");
+        return;
+    }
+
+    // Hand-filled, in terrain_field_seed's shape but NOT through it: that function nulls
+    // the installed field and writes the analytic fbm over every node, which is the one
+    // thing a shaped basin must not have done to it.
+    for (int j = 0; j < SHAFT_FIELD_RES; ++j) {
+        const float z =
+            terrain_world_z(&g_shaft, terrain_field_node(g_shaft.extent, SHAFT_FIELD_RES, j));
+        for (int i = 0; i < SHAFT_FIELD_RES; ++i) {
+            const float x =
+                terrain_world_x(&g_shaft, terrain_field_node(g_shaft.extent, SHAFT_FIELD_RES, i));
+            g_shaft_field.height[(size_t)j * SHAFT_FIELD_RES + i] = shaft_height(x, z);
+        }
+    }
+    terrain_field_measure(&g_shaft_field); // owed by whoever last wrote the field
+
+    // Erosion over the shaped field. Thermal is what puts scree at the foot of the walls
+    // and hydraulic is what carves channels down them, and the basin being CLOSED --
+    // erosion zeroes flux across the domain boundary -- is an artifact for an island and
+    // exactly right here: water ponds in the middle and the deposit mask becomes the silt.
+    //
+    // talus is a SLOPE and the threshold is talus * cell, so the default 0.62 over this
+    // 0.47-unit cell shaves far harder than it does over forest's 1.96. The walls run at
+    // about 2.4, so anything near the default collapses them into a saucer.
+    ErosionParams ep = erosion_default_params();
+    ep.talus = 3.0f;
+    ep.thermal_every = 8;
+    ep.iterations = 120;
+    ErosionStats st;
+    if (!terrain_erode(&g_shaft_field, &g_shaft, &ep, &st))
+        fprintf(stderr, "Shaft: erosion refused, using the unworn field\n");
+
+    g_shaft.field = &g_shaft_field;
+    terrain_field_build_pyramid(&g_shaft_field); // last: the levels are copies
+
+    Material* rock = create_material();
+    glm_vec3_copy((vec3){0.28f, 0.26f, 0.27f}, rock->albedo);
+    rock->roughness = 0.85f;
+    rock->metallic = 0.0f;
+    material_set_program(rock, pbr_shader);
+
+    SceneNode* group = create_node();
+    node_set_name(group, "shaft");
+    node_add_child(scene->root_node, group);
+
+    int built = 0;
+    for (int tz = 0; tz < g_shaft.tiles; ++tz) {
+        for (int tx = 0; tx < g_shaft.tiles; ++tx) {
+            Mesh* mesh = create_mesh();
+            if (!terrain_build_tile(&g_shaft, tx, tz, mesh)) {
+                free_mesh(mesh);
+                continue;
+            }
+            mesh->material = rock;
+            SceneNode* node = create_node();
+            node_add_mesh(node, mesh);
+            node_add_child(group, node);
+            built++;
+        }
+    }
+
+    // One static mesh collider for the whole shaft. MOTION_STATIC is not a choice:
+    // entity_add_rigid_body refuses a mesh shape on anything else by name.
+    //
+    // The triangle count is REPORTED rather than assumed, and that is about evidence
+    // rather than tidiness. A silent false from terrain_build_collider leaves the basin
+    // with no collision at all, which from outside looks exactly like a working build --
+    // and it would also mean Jolt never indexed these triangles, so a run that did not
+    // assert would prove nothing about the coplanar hazard this geometry is shaped to
+    // avoid. A number here is what makes a quiet run meaningful.
+    size_t collider_tris = 0;
+    Entity* e = create_entity(em, "shaft");
+    if (e) {
+        Mesh* collider = create_mesh();
+        if (terrain_build_collider(&g_shaft, SHAFT_COLLIDER_SEGS, collider)) {
+            PhysicsShapeDesc desc = {.type = SHAPE_MESH, .density = 0.0f};
+            desc.mesh.vertices = collider->vertices;
+            desc.mesh.vertex_count = collider->vertex_count;
+            desc.mesh.indices = collider->indices;
+            desc.mesh.index_count = collider->index_count;
+            entity_add_rigid_body(e, physics, &desc, MOTION_STATIC, OBJ_LAYER_STATIC);
+            collider_tris = collider->index_count / 3;
+        } else {
+            fprintf(stderr, "Shaft: collider build refused; the basin has no collision\n");
+        }
+        free_mesh(collider); // borrowed for the create call only; Jolt has copied it
+    }
+
+    g_shaft_ready = true;
+    printf("Shaft: %d tiles over %g units, field %d^2, collider %zu tris, y %g to %g\n", built,
+           (double)(2.0f * g_shaft.extent), SHAFT_FIELD_RES, collider_tris,
+           (double)g_shaft_field.min_y, (double)g_shaft_field.max_y);
+}
+
+// The lip under the platform's own rim. Static, and before physics_world_optimize.
+//
+// This is all that is left of the box grotto: the seabed, the cliff ring and the inward
+// overhang are now build_shaft's eroded heightfield. The skirt stays a box because it
+// belongs to the PLATFORM rather than to the basin -- it is what stops a 50x50 plate
+// reading as a plane with no thickness, and it deliberately does not reach the water.
+static void build_platform_skirt(Game* game) {
+    EntityManager* em = game_get_entity_manager(game);
+    PhysicsWorld* physics = game_get_physics_world(game);
+    Scene* scene = game_get_scene(game);
+    if (!em || !physics || !scene)
+        return;
+
+    vec3 rock = {0.26f, 0.24f, 0.26f};
 
     const float platform_half = 25.0f;
     // A lip under the platform's rim, so it reads as a slab hanging in the air rather
     // than a plate with no thickness. It deliberately does NOT reach the water.
     const float skirt_half_y = GROTTO_SKIRT_DROP * 0.5f;
     const float skirt_mid_y = -skirt_half_y;
-    const float cliff_half_y = (GROTTO_CLIFF_TOP - GROTTO_SEABED_FAR) * 0.5f;
-    const float cliff_mid_y = GROTTO_SEABED_FAR + cliff_half_y;
-    const float ring = GROTTO_BASIN_HALF + GROTTO_WALL_THICK;
-
-    // Four skirts and four cliff walls. The signs walk the perimeter: x then z, each
-    // twice, so one loop body serves eight boxes and no wall is written out by hand.
+    // Four skirts. The signs walk the perimeter: x then z, each twice, so one loop body
+    // serves four boxes and no lip is written out by hand.
     for (int i = 0; i < 4; i++) {
         const float s = (i & 1) ? -1.0f : 1.0f;
         const bool along_x = i < 2;
@@ -589,27 +753,10 @@ static void build_grotto(Game* game) {
                         along_x ? platform_half + 2.0f * skirt_t : skirt_t};
         snprintf(name, sizeof(name), "grotto_skirt_%d", i);
         grotto_box(scene, em, physics, name, skirt_c, skirt_h, rock, 0.0f);
-
-        vec3 wall_c = {along_x ? s * ring : 0.0f, cliff_mid_y, along_x ? 0.0f : s * ring};
-        vec3 wall_h = {along_x ? GROTTO_WALL_THICK : ring, cliff_half_y,
-                       along_x ? ring : GROTTO_WALL_THICK};
-        snprintf(name, sizeof(name), "grotto_cliff_%d", i);
-        grotto_box(scene, em, physics, name, wall_c, wall_h, rock, 0.0f);
-
-        // The overhang: a slab at the top leaning inward, which is what reads as a cave
-        // mouth rather than a well. Tilted about Z, so only the x-facing pair lean; the
-        // z-facing pair would need an X tilt and the asymmetry is not worth the cost.
-        if (along_x) {
-            vec3 over_c = {s * (GROTTO_BASIN_HALF - 2.0f), GROTTO_CLIFF_TOP - 2.0f, 0.0f};
-            vec3 over_h = {6.0f, 1.5f, ring};
-            snprintf(name, sizeof(name), "grotto_over_%d", i);
-            grotto_box(scene, em, physics, name, over_c, over_h, rock, s * 0.45f);
-        }
     }
 
-    printf("Grotto: water at %g, seabed %g to %g, cliff ring at %g rising to %g\n",
-           (double)GROTTO_WATER_Y, (double)GROTTO_SEABED_Y, (double)GROTTO_SEABED_FAR,
-           (double)GROTTO_BASIN_HALF, (double)GROTTO_CLIFF_TOP);
+    printf("Platform skirt: four lips at +/-%g, hanging %g below the plate\n",
+           (double)platform_half, (double)GROTTO_SKIRT_DROP);
 }
 
 // Whether a capsule centre is under the surface. One predicate, so the player, the
@@ -641,12 +788,18 @@ static float grotto_float_velocity(float centre_y, float vy, float dt) {
     return vy;
 }
 
-// The bed the WATER shoals over, which must agree with the seabed drawn above or the
-// surf keys off a surface nobody can see. Flat under the platform's reach, falling away
-// outside it -- the same shape grotto_box lays down, stated analytically because the
-// water wants a function rather than a mesh.
+// The bed the WATER shoals over, which must agree with the rock actually drawn or the
+// surf keys off a surface nobody can see. That agreement used to be a restated formula;
+// now it is the same function, so the two cannot drift.
+//
+// The fallback matters: a refused field leaves the shaft unbuilt, and answering with the
+// old analytic cone keeps the water shoaling over SOMETHING rather than over whatever
+// uninitialised params happen to hold.
 static float grotto_bed_height(void* ctx, float x, float z) {
     (void)ctx;
+    if (g_shaft_ready)
+        return terrain_height_at(&g_shaft, x, z);
+
     const float d = fmaxf(fabsf(x), fabsf(z));
     const float inner = 25.0f, outer = GROTTO_BASIN_HALF;
     if (d <= inner)
@@ -1577,9 +1730,11 @@ static void on_init(Game* game) {
     // keep it out of the two menu goldens, which photograph the world through a
     // backdrop that is only 77 percent opaque -- those now include it.
     build_ik_ground(game);
-    // The basin around it. Both before the optimize below, which the comment there
-    // requires: every static body has to exist first.
-    build_grotto(game);
+    // The basin around it, and the platform's own lip. All before the optimize below,
+    // which the comment there requires: every static body has to exist first. The shaft
+    // goes first because build_ocean's bed callback reads the field it installs.
+    build_shaft(game);
+    build_platform_skirt(game);
     build_ocean(scene);
 
     // Optimize broad phase after adding initial bodies
