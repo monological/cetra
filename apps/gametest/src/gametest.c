@@ -122,10 +122,10 @@ static float cam_pitch = -0.35f;
 #define CAM_PITCH_MAX   0.2f
 static float wave_mask[MAX_BONES];
 // Facing -Z at spawn, which is the direction W drives. Zero would be +Z, so the puppet
-// would stand facing the way S goes and spin 180 the first time you pressed forward --
-// and with --follow-cam the camera would swing round with it, reading as inverted
-// controls. The facing block below writes this from velocity once moving; this is only
-// where it starts.
+// would stand facing the way S goes and spin 180 the first time you pressed forward, in
+// front of a camera whose own yaw starts at this same angle and never follows this one.
+// The facing block below writes this from velocity once moving; this is only where it
+// starts.
 static float player_yaw = (float)M_PI;
 static Sound* step_sound = NULL;
 
@@ -268,7 +268,7 @@ static const InputAction actions[] = {
     {"quickload", {INPUT_KEY(F9, 1), INPUT_PAD(RIGHT_THUMB, 1)}},
 
     /*
-     * The follow camera's rotation (--follow-cam only), forest's bindings.
+     * The follow camera's rotation, forest's bindings. Read unless --no-follow-cam.
      *
      * These share the arrow keys with ui_up/ui_down below and that is safe rather than
      * the bug the BACK note warns about: those carry `ui`, so a menu suppresses these
@@ -411,7 +411,7 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 #define GROTTO_TERMINAL_V 25.0f
 #define GROTTO_SWIM_SPEED 4.0f // against PLAYER_SPEED 10: a swimmer is not a runner
 
-// The follow camera (--follow-cam). forest's constants, scaled: this character is
+// The follow camera. forest's constants, scaled: this character is
 // PLAYER_SCALE 2, so forest's 14 and 1 would sit it half as far back as intended.
 #define FOLLOW_CAM_DISTANCE (9.0f * PLAYER_SCALE)
 #define FOLLOW_CAM_HEIGHT   (3.0f * PLAYER_SCALE)
