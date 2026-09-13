@@ -41,6 +41,7 @@
 #include "cetra/import.h"
 #include "cetra/ibl.h"
 #include "cetra/sky.h"
+#include "cetra/water.h"
 #include "cetra/particle_system.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
@@ -123,6 +124,11 @@ static int ik_foot_right = -1;
 // Smoothed rather than switched: grounded is a bool, and planting a foot the instant
 // it becomes true snaps the leg into place at the end of a jump.
 static float ik_weight = 0.0f;
+// Whether each character is in the water, settled once per fixed step in on_update and
+// read by ik_update_targets in the pre-render hook. File statics because the two live in
+// different hooks, the same reason ik_weight is one.
+static bool player_swimming = false;
+static bool chaser_swimming = false;
 
 static SceneNode* heart_node = NULL;
 static ParticleModule* heart_spawn = NULL;
@@ -330,6 +336,25 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 // explain the arithmetic the code could not.
 #define IK_STEP_NOSING (IK_STEP_FIRST_X - IK_STEP_HALF_X)
 
+// The grotto (spec 12.6): the 50x50 plate is a plateau in a walled basin with an ocean
+// between it and the cliff. Walking off the edge was always possible and always
+// unhandled -- a CharacterVirtual has no y limit, so you fell forever. This gives the
+// fall a bottom.
+//
+// Two of these are chosen against hazards rather than by eye. A floating character sits
+// with its feet at GROTTO_WATER_Y + PLAYER_RIG_DROP = -8; the IK foot ray starts a metre
+// above that and reaches three down, so a seabed at -11 is out of reach and cannot plant
+// a swimmer's feet on the bottom even if the swimming gate were missed. And
+// stick_to_floor_distance is 0.5, so a bed three metres under the feet is inert where a
+// shallower one would pull a treading character down and report it grounded.
+#define GROTTO_WATER_Y    -6.0f  // still-water plane
+#define GROTTO_SEABED_Y   -11.0f // basin floor near the platform
+#define GROTTO_SEABED_FAR -14.0f // and at the cliff, so the water deepens outward
+#define GROTTO_BASIN_HALF 60.0f  // cliff ring, half extent
+#define GROTTO_CLIFF_TOP  14.0f  // high enough to close the horizon off
+#define GROTTO_WALL_THICK 4.0f
+#define GROTTO_SWIM_SPEED 4.0f // against PLAYER_SPEED 10: a swimmer is not a runner
+
 // The foot ray starts above the ankle and reaches below it. Up has to clear the
 // tallest thing a foot may already be standing on; down has to find ground the leg
 // could actually reach. At this rig's scale the ankle rides about 0.16 above the sole,
@@ -409,6 +434,180 @@ static void build_ik_ground(Game* game) {
     printf("IK ground: a ramp rising %g in %g from x=%g, and %d steps of %g\n",
            (double)IK_RAMP_SLOPE, 1.0, (double)IK_RAMP_FOOT_X, IK_STEP_COUNT,
            (double)IK_STEP_RISER);
+}
+
+// One static box, the idiom build_ik_ground uses: the half-extent triple goes into the
+// node and the shape once each, never written twice.
+static void grotto_box(Scene* scene, EntityManager* em, PhysicsWorld* physics, const char* name,
+                       vec3 centre, vec3 half, vec3 color, float tilt_z) {
+    Entity* e = create_entity(em, name);
+    if (!e)
+        return;
+    glm_vec3_copy(centre, e->position);
+    // Before the body: entity_set_rotation_euler reaches settings.Rotation through
+    // entity_add_rigid_body and the node local through sync_entity_transforms, so one
+    // call moves collider and visual together -- but only in that order.
+    if (tilt_z != 0.0f)
+        entity_set_rotation_euler(e, (vec3){0.0f, 0.0f, tilt_z});
+
+    SceneNode* node = create_box_node(scene, half, color, false);
+    node_set_name(node, name);
+    e->node = node;
+
+    PhysicsShapeDesc shape = {
+        .type = SHAPE_BOX, .box.half_extents = {half[0], half[1], half[2]}, .density = 0.0f};
+    entity_add_rigid_body(e, physics, &shape, MOTION_STATIC, OBJ_LAYER_STATIC);
+}
+
+// The basin the ocean sits in: a seabed, a skirt down from the platform edge, and a
+// cliff ring with an inward overhang. All static, all before physics_world_optimize.
+//
+// The seabed is NOT decoration. Water colour is bed * exp(-absorption * path) where the
+// bed term is the refraction resolve of real geometry and the path length comes from the
+// depth buffer -- with nothing behind the surface every pixel takes the maximum path and
+// the sea becomes one flat colour. A pale floor under shallow water IS the turquoise.
+static void build_grotto(Game* game) {
+    EntityManager* em = game_get_entity_manager(game);
+    PhysicsWorld* physics = game_get_physics_world(game);
+    Scene* scene = game_get_scene(game);
+    if (!em || !physics || !scene)
+        return;
+
+    vec3 sand = {0.82f, 0.78f, 0.62f}; // pale, because the water tints a bed rather than
+                                       // making the colour itself
+    vec3 rock = {0.26f, 0.24f, 0.26f};
+
+    // Seabed. One slab at the near depth under the whole basin, and a deeper ring
+    // outside the platform's reach, so the water deepens away from the island.
+    const float bed_half_y = 1.0f;
+    grotto_box(scene, em, physics, "grotto_seabed",
+               (vec3){0.0f, GROTTO_SEABED_Y - bed_half_y, 0.0f},
+               (vec3){GROTTO_BASIN_HALF, bed_half_y, GROTTO_BASIN_HALF}, sand, 0.0f);
+
+    const float platform_half = 25.0f;
+    const float skirt_half_y = (0.0f - GROTTO_SEABED_Y) * 0.5f;
+    const float skirt_mid_y = GROTTO_SEABED_Y + skirt_half_y;
+    const float cliff_half_y = (GROTTO_CLIFF_TOP - GROTTO_SEABED_FAR) * 0.5f;
+    const float cliff_mid_y = GROTTO_SEABED_FAR + cliff_half_y;
+    const float ring = GROTTO_BASIN_HALF + GROTTO_WALL_THICK;
+
+    // Four skirts and four cliff walls. The signs walk the perimeter: x then z, each
+    // twice, so one loop body serves eight boxes and no wall is written out by hand.
+    for (int i = 0; i < 4; i++) {
+        const float s = (i & 1) ? -1.0f : 1.0f;
+        const bool along_x = i < 2;
+        char name[32];
+
+        vec3 skirt_c = {along_x ? s * platform_half : 0.0f, skirt_mid_y,
+                        along_x ? 0.0f : s * platform_half};
+        vec3 skirt_h = {along_x ? 0.5f : platform_half, skirt_half_y,
+                        along_x ? platform_half : 0.5f};
+        snprintf(name, sizeof(name), "grotto_skirt_%d", i);
+        grotto_box(scene, em, physics, name, skirt_c, skirt_h, rock, 0.0f);
+
+        vec3 wall_c = {along_x ? s * ring : 0.0f, cliff_mid_y, along_x ? 0.0f : s * ring};
+        vec3 wall_h = {along_x ? GROTTO_WALL_THICK : ring, cliff_half_y,
+                       along_x ? ring : GROTTO_WALL_THICK};
+        snprintf(name, sizeof(name), "grotto_cliff_%d", i);
+        grotto_box(scene, em, physics, name, wall_c, wall_h, rock, 0.0f);
+
+        // The overhang: a slab at the top leaning inward, which is what reads as a cave
+        // mouth rather than a well. Tilted about Z, so only the x-facing pair lean; the
+        // z-facing pair would need an X tilt and the asymmetry is not worth the cost.
+        if (along_x) {
+            vec3 over_c = {s * (GROTTO_BASIN_HALF - 2.0f), GROTTO_CLIFF_TOP - 2.0f, 0.0f};
+            vec3 over_h = {6.0f, 1.5f, ring};
+            snprintf(name, sizeof(name), "grotto_over_%d", i);
+            grotto_box(scene, em, physics, name, over_c, over_h, rock, s * 0.45f);
+        }
+    }
+
+    printf("Grotto: water at %g, seabed %g to %g, cliff ring at %g rising to %g\n",
+           (double)GROTTO_WATER_Y, (double)GROTTO_SEABED_Y, (double)GROTTO_SEABED_FAR,
+           (double)GROTTO_BASIN_HALF, (double)GROTTO_CLIFF_TOP);
+}
+
+// Whether a capsule centre is under the surface. One predicate, so the player, the
+// chaser and the IK gate cannot disagree about what "in the water" means.
+static bool grotto_submerged(const vec3 p) {
+    return p[1] < GROTTO_WATER_Y;
+}
+
+// Tread water: drive the capsule toward the surface and damp it, rather than fall.
+//
+// This is newly authored rather than wired to anything. Jolt's buoyancy is not bound in
+// this engine at all, gravity_factor exists only on RigidBody and is unreachable from a
+// CharacterVirtual, and the gravity passed to character_controller_update is world-wide
+// and shared by every character. The seam that IS available is the velocity the app sets
+// each step, so that is where this lives.
+//
+// Critically damped toward the surface with the return clamped: a long fall arrives with
+// a large downward velocity, and an undamped spring would fire the character back out of
+// the water like a cork.
+static float grotto_float_velocity(float centre_y, float vy, float dt) {
+    const float depth = GROTTO_WATER_Y - centre_y; // positive when under
+    const float buoyancy = 18.0f;                  // toward the surface, per metre under
+    const float drag = 6.0f;                       // vertical damping, 1/s
+    const float rise_max = 4.0f;                   // never breach
+
+    vy += (buoyancy * depth - drag * vy) * dt;
+    if (vy > rise_max)
+        vy = rise_max;
+    return vy;
+}
+
+// The bed the WATER shoals over, which must agree with the seabed drawn above or the
+// surf keys off a surface nobody can see. Flat under the platform's reach, falling away
+// outside it -- the same shape grotto_box lays down, stated analytically because the
+// water wants a function rather than a mesh.
+static float grotto_bed_height(void* ctx, float x, float z) {
+    (void)ctx;
+    const float d = fmaxf(fabsf(x), fabsf(z));
+    const float inner = 25.0f, outer = GROTTO_BASIN_HALF;
+    if (d <= inner)
+        return GROTTO_SEABED_Y;
+    if (d >= outer)
+        return GROTTO_SEABED_FAR;
+    const float t = (d - inner) / (outer - inner);
+    return GROTTO_SEABED_Y + (GROTTO_SEABED_FAR - GROTTO_SEABED_Y) * t;
+}
+
+// The ocean. Placement is `level` alone: the surface is a projected grid in NDC and is
+// effectively infinite, so `extent` bounds only the bed field and not what is drawn.
+// The cliff ring is what gives the water a visible edge -- at this camera the ground
+// plane's vanishing point sits above the top of the frame, so there is no horizon in
+// shot to end it.
+static void build_ocean(Scene* scene) {
+    Water* water = create_water();
+    if (!water) {
+        fprintf(stderr, "Failed to create water\n");
+        return;
+    }
+    water->level = GROTTO_WATER_Y;
+    water->extent = GROTTO_BASIN_HALF;
+    water->height_at = grotto_bed_height;
+    water->height_ctx = NULL;
+
+    // apps/tree's lagoon rather than the library's open-ocean blue: greener, and about
+    // four times brighter. Turquoise is a pale bed seen THROUGH water -- the water tints
+    // a bed, it does not make the colour -- so this and the sand floor are one decision.
+    glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter_albedo);
+    // Left at zero deliberately: apps/tree tried a self-illumination floor under this and
+    // reverted it as an authored constant wearing a new name.
+    glm_vec3_zero(water->scatter_glow);
+
+    // Absorption stays the clear-seawater default -- gametest is one unit to the metre,
+    // so it needs no scaling, which is the conversion tree has to do and this does not.
+
+    // A calm sea, not the default. create_water ships a fully-developed 11.5 m/s wind
+    // over 120 km of fetch -- about two metres of significant height, which on a 120 m
+    // basin is a storm in a bathtub.
+    water->sea.wind_sea.wind_speed = 6.0f;
+    water->sea.wind_sea.fetch = 15000.0f;
+
+    scene->water = water; // the scene owns it and frees it
+    printf("Ocean: level %g, bed %g to %g, lagoon scatter\n", (double)water->level,
+           (double)GROTTO_SEABED_Y, (double)GROTTO_SEABED_FAR);
 }
 
 // Create a door with hinge constraint
@@ -1269,6 +1468,10 @@ static void on_init(Game* game) {
     // keep it out of the two menu goldens, which photograph the world through a
     // backdrop that is only 77 percent opaque -- those now include it.
     build_ik_ground(game);
+    // The basin around it. Both before the optimize below, which the comment there
+    // requires: every static body has to exist first.
+    build_grotto(game);
+    build_ocean(scene);
 
     // Optimize broad phase after adding initial bodies
     physics_world_optimize(physics);
@@ -1375,9 +1578,19 @@ static void on_update(Game* game, double dt) {
     vel[0] = input_dir[0] * PLAYER_SPEED;
     vel[2] = input_dir[2] * PLAYER_SPEED;
 
-    // Apply gravity
+    // Gravity, or buoyancy where the water is. Swimming is surface-only by design: you
+    // float and cannot go under, which is impossible to get stuck in and reads clearly
+    // at this camera distance.
     float gravity = 20.0f;
-    vel[1] -= gravity * (float)dt;
+    player_swimming = grotto_submerged(player_entity->position);
+    if (player_swimming) {
+        vel[1] = grotto_float_velocity(player_entity->position[1], vel[1], (float)dt);
+        // A swimmer is slower than a runner, and the stroke should read as effort.
+        vel[0] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
+        vel[2] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
+    } else {
+        vel[1] -= gravity * (float)dt;
+    }
 
     // Jump when on ground
     bool grounded = character_controller_is_grounded(cc);
@@ -1441,7 +1654,18 @@ static void on_update(Game* game, double dt) {
             chase_vel[0] = 0.0f;
             chase_vel[2] = 0.0f;
         }
-        chase_vel[1] -= gravity * (float)dt;
+        // Its own handling, not the player's: this one never zeroes chase_vel[1] when
+        // grounded, so it carries accumulated downward velocity into the water and would
+        // sink through a clamp written for a character that does.
+        chaser_swimming = grotto_submerged(chaser_entity->position);
+        if (chaser_swimming) {
+            chase_vel[1] =
+                grotto_float_velocity(chaser_entity->position[1], chase_vel[1], (float)dt);
+            chase_vel[0] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
+            chase_vel[2] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
+        } else {
+            chase_vel[1] -= gravity * (float)dt;
+        }
         character_controller_set_velocity(chase_cc, chase_vel);
 
         // Caught: hearts, once. The cooldown is what makes it one burst rather
@@ -1632,7 +1856,12 @@ static void ik_update_targets(Game* game) {
     glm_mat4_inv(to_world, to_model);
 
     CharacterController* cc = entity_get_character_controller(player_entity);
-    const float want = (cc && character_controller_is_grounded(cc)) ? 1.0f : 0.0f;
+    // Not-swimming as well as grounded, and the second half is load-bearing: the foot ray
+    // filters on OBJ_LAYER_STATIC and nothing else, so the seabed is indistinguishable
+    // from the floor to it. Grounded alone would plant a treading swimmer's feet on the
+    // bottom the moment the bed came within reach.
+    const float want =
+        (cc && character_controller_is_grounded(cc) && !player_swimming) ? 1.0f : 0.0f;
     const float rate = (float)game->sim_clock.delta * IK_WEIGHT_RATE;
     ik_weight += (want - ik_weight) * (rate > 1.0f ? 1.0f : rate);
     // Snapped, because the decay is asymptotic and never actually arrives. Left alone,
