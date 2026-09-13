@@ -858,6 +858,19 @@ arrows are shared with menu navigation, which is safe rather than the collision 
 table warns about — `ui_up`/`ui_down` carry the `ui` flag, so a menu suppresses the camera
 actions and the arrows navigate it, while with no menu open the UI ignores them.
 
+**And since 12.7 the camera can be STATED rather than followed**: `--cam-eye x,y,z`,
+`--cam-target x,y,z`, `--cam-up x,y,z` and `--fov <degrees>`, the render app's spelling. Both
+eye and target or neither — half a pose is a direction nobody gave, and it is refused by name
+rather than half-applied. A stated pose stands the follower down, so it also overrides
+`--no-follow-cam`'s orbit.
+
+It exists because a followed camera cannot be re-photographed. The eye is derived from the
+player every frame, so a framing seen once is gone, and *every* question of the form "what
+does this look like, and did that change it" needs the same pixels twice. Diagnosing the
+cluster-overflow wedge took four A/B comparisons against a pinned pose; without one there is
+nothing to compare, and the frame moves for reasons that have nothing to do with the change
+under test. The same reason apps/render grew these first.
+
 `--no-ik` runs the player without foot planting at all, which is the quickest way to tell a
 planting artefact from an animation one — worth knowing that the walk clip bends no knee of its
 own, so on flat ground the two look identical by design.
