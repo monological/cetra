@@ -99,6 +99,10 @@ static Animation* clip_swim = NULL;
 // restart the stroke continuously and it would never advance past its first tick.
 static bool player_in_swim_clip = false;
 static bool chaser_in_swim_clip = false;
+// A file static because the flag is parsed in main and read in on_pre_render, long
+// after. Off by default: it repoints every headless capture, and the two menu goldens
+// photograph this camera.
+static bool follow_cam = false;
 static float wave_mask[MAX_BONES];
 static float player_yaw = 0.0f;
 static Sound* step_sound = NULL;
@@ -360,6 +364,12 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 #define GROTTO_CLIFF_TOP  14.0f  // high enough to close the horizon off
 #define GROTTO_WALL_THICK 4.0f
 #define GROTTO_SWIM_SPEED 4.0f // against PLAYER_SPEED 10: a swimmer is not a runner
+
+// The follow camera (--follow-cam). forest's constants, scaled: this character is
+// PLAYER_SCALE 2, so forest's 14 and 1 would sit it half as far back as intended.
+#define FOLLOW_CAM_DISTANCE (9.0f * PLAYER_SCALE)
+#define FOLLOW_CAM_HEIGHT   (3.0f * PLAYER_SCALE)
+#define FOLLOW_CAM_LOOK_Y   (1.0f * PLAYER_SCALE)
 
 // The foot ray starts above the ankle and reaches below it. Up has to clear the
 // tallest thing a foot may already be standing on; down has to find ground the leg
@@ -1930,6 +1940,35 @@ static void ik_update_targets(Game* game) {
     }
 }
 
+// Trail the player at a fixed distance behind whichever way it is facing.
+//
+// HERE rather than in on_render, and that is not stylistic: the engine derives the view
+// and projection matrices immediately after this hook returns, so a pose written from
+// the render callback is a frame late.
+//
+// It follows the ENTITY position rather than the rig's global_transform, for the same
+// reason ik_update_targets does: the graph walk runs after this hook, so a node's global
+// is one frame old, while entity->position was settled by the last fixed step.
+//
+// Yaw comes from player_yaw, the smoothed facing the locomotion block already maintains,
+// so there is nothing to drive and nothing to learn -- and world-aligned WASD stays
+// coherent, because the camera ends up behind whatever direction you walked.
+static void follow_camera_update(Engine* engine) {
+    if (!engine || !engine->camera || !player_entity)
+        return;
+
+    vec3 focus;
+    glm_vec3_copy(player_entity->position, focus);
+    focus[1] += FOLLOW_CAM_LOOK_Y;
+
+    // The puppet faces +Z at yaw 0, so the camera sits back along -Z rotated by the yaw.
+    vec3 eye = {focus[0] - sinf(player_yaw) * FOLLOW_CAM_DISTANCE, focus[1] + FOLLOW_CAM_HEIGHT,
+                focus[2] - cosf(player_yaw) * FOLLOW_CAM_DISTANCE};
+
+    camera_set_position(engine->camera, eye);
+    camera_set_look_at(engine->camera, focus);
+}
+
 static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
 
@@ -1949,7 +1988,14 @@ static void on_pre_render(Game* game, double alpha) {
     // rather than of the UI, which is a layer this callback should not need to
     // know about. It also composes: anything that suppresses input, menu or
     // not, gates the camera for free.
-    if (drag_controller && app_can_process_3d_input(engine) && !input_is_suppressed(&game->input)) {
+    // Either/or, the way apps/tree resolves the same collision: both the follower and
+    // the orbit want to own the camera, and mouse_drag_update rewrites the eye from the
+    // orbit parameters every frame, so leaving both live means the follow pose is
+    // overwritten the moment the pointer moves.
+    if (follow_cam) {
+        follow_camera_update(engine);
+    } else if (drag_controller && app_can_process_3d_input(engine) &&
+               !input_is_suppressed(&game->input)) {
         mouse_drag_update(drag_controller, glfwGetTime());
     }
 }
@@ -3886,6 +3932,8 @@ int main(int argc, const char* argv[]) {
             no_puppet = true;
         } else if (!strcmp(a, "--no-chaser")) {
             no_chaser = true;
+        } else if (!strcmp(a, "--follow-cam")) {
+            follow_cam = true;
         } else if (!strcmp(a, "--no-ik")) {
             no_ik = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
@@ -4011,7 +4059,8 @@ int main(int argc, const char* argv[]) {
     printf("  R / Y - Raycast downward from player\n");
     printf("  G / B - Print ground state\n");
     printf("  P / Start - Pause/unpause physics\n");
-    printf("  Mouse drag - Orbit camera\n");
+    printf("  Mouse drag - Orbit camera (--follow-cam to trail the player instead)\n");
+    printf("  Walk off the edge - fall into the grotto and swim; the chaser swims too\n");
     printf("  Escape - Pause menu (--no-ui to run without any of it)\n");
     printf("Audio: a beep on jump and spawn, footsteps in time with the stride, a looping\n");
     printf("       tone at the door (--mute to silence)\n");
