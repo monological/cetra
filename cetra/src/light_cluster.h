@@ -225,6 +225,17 @@ typedef struct LightClusterContext {
     uint8_t touched[LC_MAX_CLUSTER_LIGHTS][LC_TOUCH_STRIDE];
     uint16_t counts[LC_CLUSTER_COUNT];  // per-cluster light counts (fill pass 1)
     uint32_t offsets[LC_CLUSTER_COUNT]; // per-cluster index-pool offsets (prefix sum)
+    // What the prefix sum actually GRANTED each cluster: its count, except where
+    // the pool ran out and it got the remainder. The fill pass has to honour
+    // this rather than the count -- that pass reuses counts[] as a write cursor,
+    // so a clamped cluster would otherwise write past its own allocation and
+    // into the next cluster's list.
+    uint16_t caps[LC_CLUSTER_COUNT];
+    // Borrowed for the duration of a build so an overflow can NAME the light
+    // that caused it. The cost of an overflow lands on whichever clusters the
+    // walk reaches last, which is nowhere near the light responsible, so a
+    // warning without a name sends the reader hunting. NULL where unnamed.
+    const char* packed_names[LC_MAX_CLUSTER_LIGHTS];
     bool warned_dir_overflow;
     bool warned_packed_overflow;
     bool warned_index_overflow;

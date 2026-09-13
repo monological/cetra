@@ -321,6 +321,9 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
 
         _pack_cluster_light(&ctx->lights.cluster_lights[num_packed], light, radius,
                             shadow_live_punctual_layer(scene->shadow_system, light));
+        // Borrowed, not owned: the light outlives this build, and the only reader
+        // is the overflow warning, which runs before this function is called again.
+        ctx->packed_names[num_packed] = light->name;
         num_packed++;
         if (light->type == LIGHT_AREA)
             num_area++;
@@ -360,28 +363,90 @@ static void _mark_touched_clusters(LightClusterContext* ctx, const ClusterFrame*
     }
 }
 
-// Prefix-sum the counts into index-pool offsets, truncating at the pool cap.
-// A truncated cluster keeps count 0 rather than aliasing another's list.
-// Returns the live index count.
+static int _popcount8(uint8_t b) {
+    int n = 0;
+    while (b) {
+        n += b & 1u;
+        b >>= 1;
+    }
+    return n;
+}
+
+/*
+ * Say WHICH light did it.
+ *
+ * The old text reported only that the pool had overflowed, which is true and
+ * almost unactionable: the shortfall is paid by whichever clusters the linear
+ * walk reaches last, so the dark froxels appear nowhere near the light that
+ * consumed the pool, and the grid is camera-aligned, so they swing with the
+ * view. A reader with only "some clusters dropped their lights" has to find a
+ * light with unbounded reach by elimination.
+ *
+ * Coverage is the number the fix follows from: a light touching every froxel is
+ * one whose range wants bounding, and its radius says by how much. Counted off
+ * the touch bitset the build already filled, on a path that runs once.
+ */
+static void _warn_index_overflow(const LightClusterContext* ctx, int starved, uint32_t dropped) {
+    const int num_packed = ctx->lights.light_counts[1];
+    int worst = -1, worst_cover = -1;
+    for (int li = 0; li < num_packed; li++) {
+        int cover = 0;
+        for (int b = 0; b < LC_TOUCH_STRIDE; b++)
+            cover += _popcount8(ctx->touched[li][b]);
+        if (cover > worst_cover) {
+            worst_cover = cover;
+            worst = li;
+        }
+    }
+
+    if (worst < 0) {
+        log_warn("Cluster index pool (%d) overflowed: %d of %d clusters starved, %u slots dropped",
+                 LC_MAX_CLUSTER_INDICES, starved, LC_CLUSTER_COUNT, dropped);
+        return;
+    }
+
+    const char* name = ctx->packed_names[worst] ? ctx->packed_names[worst] : "unnamed";
+    const float radius = ctx->view_spheres[worst][3];
+    log_warn("Cluster index pool (%d) overflowed: %d of %d clusters starved, %u slots dropped. "
+             "Widest reach is light %d '%s', covering %d of %d clusters at radius %.0f -- bound "
+             "its range",
+             LC_MAX_CLUSTER_INDICES, starved, LC_CLUSTER_COUNT, dropped, worst, name, worst_cover,
+             LC_CLUSTER_COUNT, (double)(radius < 0.0f ? 0.0f : radius));
+}
+
+/*
+ * Prefix-sum the counts into index-pool offsets, CLAMPING at the pool cap.
+ *
+ * A cluster past the cap keeps whatever slots remain instead of losing every
+ * light it had. That is the difference between a froxel shading with some of
+ * its lights and one shading with none, and the second is not a subtle failure:
+ * an unlit froxel renders black, so an overflow used to punch a hard-edged hole
+ * through the frame that moved with the camera and read as a renderer fault
+ * rather than as a budget being spent. Degrading to "slightly underlit" keeps
+ * the warning as the thing that reports the problem.
+ *
+ * Returns the live index count.
+ */
 static uint32_t _assign_index_offsets(LightClusterContext* ctx) {
     uint32_t total = 0;
-    bool truncated = false;
+    uint32_t dropped = 0;
+    int starved = 0;
 
     for (int ci = 0; ci < LC_CLUSTER_COUNT; ci++) {
         uint32_t count = ctx->counts[ci];
-        if (total + count > LC_MAX_CLUSTER_INDICES) {
-            ctx->offsets[ci] = 0;
-            ctx->counts[ci] = 0;
-            truncated = true;
-            continue;
+        const uint32_t room = LC_MAX_CLUSTER_INDICES - total;
+        if (count > room) {
+            dropped += count - room;
+            count = room;
+            starved++;
         }
         ctx->offsets[ci] = total;
+        ctx->caps[ci] = (uint16_t)count;
         total += count;
     }
 
-    if (truncated && !ctx->warned_index_overflow) {
-        log_warn("Cluster index pool (%d) overflowed; some clusters dropped their lights",
-                 LC_MAX_CLUSTER_INDICES);
+    if (starved && !ctx->warned_index_overflow) {
+        _warn_index_overflow(ctx, starved, dropped);
         ctx->warned_index_overflow = true;
     }
     return total;
@@ -405,10 +470,12 @@ static void _fill_index_pool(LightClusterContext* ctx) {
                     int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
                     if (!(touched[ci >> 3] & (1u << (ci & 7))))
                         continue;
-                    uint32_t slot = ctx->offsets[ci] + ctx->counts[ci];
-                    if (slot >= LC_MAX_CLUSTER_INDICES)
-                        continue; // truncated cluster
-                    ctx->index_pool.indices[slot] = (uint16_t)li;
+                    // Against the GRANT, not the pool end. counts[] is this
+                    // pass's write cursor, so a cluster the prefix sum clamped
+                    // would run straight into its neighbour's list without this.
+                    if (ctx->counts[ci] >= ctx->caps[ci])
+                        continue; // starved: it keeps the lights it was granted
+                    ctx->index_pool.indices[ctx->offsets[ci] + ctx->counts[ci]] = (uint16_t)li;
                     ctx->counts[ci]++;
                 }
     }
