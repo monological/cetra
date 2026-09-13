@@ -389,12 +389,24 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 // a swimmer's feet on the bottom even if the swimming gate were missed. And
 // stick_to_floor_distance is 0.5, so a bed three metres under the feet is inert where a
 // shallower one would pull a treading character down and report it grounded.
-#define GROTTO_WATER_Y    -6.0f  // still-water plane
-#define GROTTO_SEABED_Y   -11.0f // basin floor near the platform
-#define GROTTO_SEABED_FAR -14.0f // and at the cliff, so the water deepens outward
+// The platform hangs in the air and the cavern is a long way under it. The drop is the
+// point, so the cavern must not be visible from up top: its rim sits far enough below
+// that the follow camera, whose pitch stops at -1.25 rad, cannot get it into frame from
+// the platform. You see sky past the edge, then you fall, and the walls close in on the
+// way down.
+#define GROTTO_WATER_Y    -80.0f // still-water plane, and an 80-unit fall to reach it
+#define GROTTO_SEABED_Y   -88.0f // basin floor near the middle
+#define GROTTO_SEABED_FAR -92.0f // and at the cliff, so the water deepens outward
 #define GROTTO_BASIN_HALF 60.0f  // cliff ring, half extent
-#define GROTTO_CLIFF_TOP  14.0f  // high enough to close the horizon off
+#define GROTTO_CLIFF_TOP  -50.0f // 50 below the platform: out of sight until you drop
 #define GROTTO_WALL_THICK 4.0f
+// How far the platform's own edge hangs below it. A lip, not a wall -- the skirt used to
+// run all the way to the seabed, which is the cavern the drop is supposed to hide.
+#define GROTTO_SKIRT_DROP 3.0f
+// Terminal velocity for the fall. Not flavour: free fall over 80 units arrives at about
+// 56 m/s, and the buoyancy below trades that off over roughly 13 units of depth -- which
+// is straight through an 8-unit basin and into the seabed. At 25 the plunge is under 6.
+#define GROTTO_TERMINAL_V 25.0f
 #define GROTTO_SWIM_SPEED 4.0f // against PLAYER_SPEED 10: a swimmer is not a runner
 
 // The follow camera (--follow-cam). forest's constants, scaled: this character is
@@ -533,8 +545,10 @@ static void build_grotto(Game* game) {
                (vec3){GROTTO_BASIN_HALF, bed_half_y, GROTTO_BASIN_HALF}, sand, 0.0f);
 
     const float platform_half = 25.0f;
-    const float skirt_half_y = (0.0f - GROTTO_SEABED_Y) * 0.5f;
-    const float skirt_mid_y = GROTTO_SEABED_Y + skirt_half_y;
+    // A lip under the platform's rim, so it reads as a slab hanging in the air rather
+    // than a plate with no thickness. It deliberately does NOT reach the water.
+    const float skirt_half_y = GROTTO_SKIRT_DROP * 0.5f;
+    const float skirt_mid_y = -skirt_half_y;
     const float cliff_half_y = (GROTTO_CLIFF_TOP - GROTTO_SEABED_FAR) * 0.5f;
     const float cliff_mid_y = GROTTO_SEABED_FAR + cliff_half_y;
     const float ring = GROTTO_BASIN_HALF + GROTTO_WALL_THICK;
@@ -546,10 +560,23 @@ static void build_grotto(Game* game) {
         const bool along_x = i < 2;
         char name[32];
 
-        vec3 skirt_c = {along_x ? s * platform_half : 0.0f, skirt_mid_y,
-                        along_x ? 0.0f : s * platform_half};
-        vec3 skirt_h = {along_x ? 0.5f : platform_half, skirt_half_y,
-                        along_x ? platform_half : 0.5f};
+        /*
+         * OUTSIDE the platform, not centred on its edge, and that is a z-fighting fix
+         * rather than tidiness. Centred on +/-25 with a half-extent of 0.5 the skirt
+         * spanned 24.5 to 25.5, and its top face at y = 0 was coplanar with the floor
+         * plane over that half-unit strip -- two surfaces in one plane, the depth test
+         * picking a winner per pixel per frame, and the platform edge crawling with
+         * stripes that changed as the camera moved.
+         *
+         * At 25.5 it spans 25 to 26: touching the floor along one edge, overlapping it
+         * nowhere. The long axis runs slightly past the corner so the four do not leave
+         * a notch where they meet.
+         */
+        const float skirt_t = 0.5f;
+        vec3 skirt_c = {along_x ? s * (platform_half + skirt_t) : 0.0f, skirt_mid_y,
+                        along_x ? 0.0f : s * (platform_half + skirt_t)};
+        vec3 skirt_h = {along_x ? skirt_t : platform_half + 2.0f * skirt_t, skirt_half_y,
+                        along_x ? platform_half + 2.0f * skirt_t : skirt_t};
         snprintf(name, sizeof(name), "grotto_skirt_%d", i);
         grotto_box(scene, em, physics, name, skirt_c, skirt_h, rock, 0.0f);
 
@@ -1690,6 +1717,12 @@ static void on_update(Game* game, double dt) {
         vel[2] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
     } else {
         vel[1] -= gravity * (float)dt;
+        // Terminal velocity, and it is load-bearing rather than flavour. An 80-unit drop
+        // arrives at about 56 m/s, and the float below trades that against buoyancy over
+        // roughly 13 units of depth -- through an 8-unit basin and into the seabed. At 25
+        // the plunge is under 6 and the water catches you.
+        if (vel[1] < -GROTTO_TERMINAL_V)
+            vel[1] = -GROTTO_TERMINAL_V;
     }
 
     // Jump when on ground
