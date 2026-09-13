@@ -40,6 +40,7 @@
 #include "cetra/animator.h"
 #include "cetra/import.h"
 #include "cetra/ibl.h"
+#include "cetra/sky.h"
 #include "cetra/particle_system.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
@@ -972,10 +973,64 @@ static void on_init(Game* game) {
             if (ibl)
                 free_ibl_resources(ibl);
         }
+    } else {
+        /*
+         * No HDR: bake a physically-based sky and derive the IBL from it. The
+         * ocean needs both. With iblEnabled 0 the water's reflection term is
+         * identically zero and its horizon goes black, and the environment is
+         * half of what its in-scatter multiplies -- so a sea under no sky is
+         * legal, runs, and looks wrong.
+         *
+         * The library's 35 degree sun is taken as it comes rather than authored
+         * down to apps/tree's 0.8. At that elevation sunDir.y is 0.014, so the
+         * sun delivers about one per cent of the in-scatter: right for a sunset
+         * seascape, and a dark hole for a basin walled in by cliffs.
+         */
+        SkyAtmosphere* sky = create_sky_atmosphere();
+        IBLResources* sky_ibl = create_ibl_resources();
+        if (sky && sky_ibl && sky_bake_static_luts(sky, engine) == 0 &&
+            sky_bake(sky, sky_ibl, engine) == 0) {
+            scene->sky = sky;
+            scene->ibl = sky_ibl;
+            scene->render_skybox = true;
+            scene->skybox_brightness = 1.0f;
+
+            /*
+             * A real directional the sky owns and retints, not a second light
+             * standing beside the rig. Water picks its glitter source through
+             * scene_key_directional -- the directional delivering most to a
+             * horizontal surface -- so an uncoupled sky would draw the disc in
+             * one place and its reflection on the sea in another.
+             */
+            LightDesc sun_desc = {.name = "sun", .type = LIGHT_DIRECTIONAL, .cast_shadows = true};
+            Light* sun = create_light(&sun_desc);
+            if (sun) {
+                sky->sun_light = sun;
+                sky->sun_base_intensity = 6.0f;
+                sky_apply_sun_to_light(sky); // owns direction, tint and intensity
+                scene_add_light(scene, sun);
+
+                SceneNode* sun_node = create_node();
+                node_set_name(sun_node, "sun");
+                node_set_light(sun_node, sun);
+                node_add_child(scene->root_node, sun_node);
+            }
+            printf("Sky: sun at elevation %.1f azimuth %.1f\n", (double)sky->sun_elevation_deg,
+                   (double)sky->sun_azimuth_deg);
+        } else {
+            fprintf(stderr, "Failed to bake the sky\n");
+            if (sky)
+                free_sky_atmosphere(sky);
+            if (sky_ibl)
+                free_ibl_resources(sky_ibl);
+        }
     }
 
-    // Add lights
-    scene_add_three_point_lights(scene, 1.0f);
+    // A low fill under the sky's sun, the whole lighting without one. At full
+    // scale the rig's key is 3.0 against the sun's 6.0, which reads as two suns
+    // and casts in two directions; under an HDR there is no sun and the rig is
+    // all there is.
+    scene_add_three_point_lights(scene, scene->sky ? 0.25f : 1.0f);
 
     // Create physics world
     PhysicsConfig physics_config = physics_default_config();
