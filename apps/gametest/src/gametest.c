@@ -93,6 +93,12 @@ static Animator* player_animator = NULL;
 static AnimatorEntry locomotion[3];
 static Animation* clip_jump = NULL;
 static Animation* clip_wave = NULL;
+static Animation* clip_swim = NULL;
+// Which of the two sources each character is playing, so the crossfade fires on the
+// water's EDGE rather than every step -- re-issuing animator_play each frame would
+// restart the stroke continuously and it would never advance past its first tick.
+static bool player_in_swim_clip = false;
+static bool chaser_in_swim_clip = false;
 static float wave_mask[MAX_BONES];
 static float player_yaw = 0.0f;
 static Sound* step_sound = NULL;
@@ -1336,6 +1342,7 @@ static void on_init(Game* game) {
         Animation* run = scene_find_animation(scene, "run");
         clip_jump = scene_find_animation(scene, "jump");
         clip_wave = scene_find_animation(scene, "wave");
+        clip_swim = scene_find_animation(scene, "swim");
         add_footsteps(walk);
         add_footsteps(run);
         animator_mask_subtree(skeleton, "cetra_rig:RightArm", wave_mask);
@@ -1556,6 +1563,18 @@ static void on_update(Game* game, double dt) {
     if (player_animator) {
         float knob = ground_speed / PLAYER_SPEED;
         player_animator->param = knob > 1.0f ? 1.0f : knob;
+
+        // Swim is its own source, crossfaded on the edge, and deliberately NOT a fourth
+        // entry in the locomotion space: the trace gates its weight columns on a count of
+        // three, so a fourth would blank them and fail anim-trace-idle. It is also the
+        // wrong shape -- swim is not faster than run, it is a different medium.
+        if (clip_swim && player_swimming != player_in_swim_clip) {
+            if (player_swimming)
+                animator_play(player_animator, clip_swim, 0.25f, true);
+            else
+                animator_play_space(player_animator, "locomotion", locomotion, 3, 0.25f, true);
+            player_in_swim_clip = player_swimming;
+        }
     }
     if (player_rig && ground_speed > 0.1f) {
         // The puppet faces +Z at yaw 0. Smoothed on sim time, so it is the
@@ -1627,6 +1646,16 @@ static void on_update(Game* game, double dt) {
         if (chaser_animator) {
             float speed = hypotf(chase_vel[0], chase_vel[2]) / PLAYER_SPEED;
             chaser_animator->param = speed > 1.0f ? 1.0f : speed;
+
+            // The same edge for the chaser, which is what makes chaser_swimming more than
+            // bookkeeping: it swims after you rather than walking along the bottom.
+            if (clip_swim && chaser_swimming != chaser_in_swim_clip) {
+                if (chaser_swimming)
+                    animator_play(chaser_animator, clip_swim, 0.25f, true);
+                else
+                    animator_play_space(chaser_animator, "locomotion", locomotion, 3, 0.25f, true);
+                chaser_in_swim_clip = chaser_swimming;
+            }
         }
         if (chaser_rig && hypotf(chase_vel[0], chase_vel[2]) > 0.1f) {
             float target = atan2f(chase_vel[0], chase_vel[2]);
