@@ -122,10 +122,6 @@ static int ik_foot_right = -1;
 // Smoothed rather than switched: grounded is a bool, and planting a foot the instant
 // it becomes true snaps the leg into place at the end of a jump.
 static float ik_weight = 0.0f;
-// How far the ankle rides above the sole in the bind pose. A planted foot has to keep
-// that clearance: target the ankle AT the ground and the foot sinks into it by its own
-// thickness, which on flat ground also stops IK being the identity it should be there.
-static float ik_ankle_lift = 0.0f;
 
 static SceneNode* heart_node = NULL;
 static ParticleModule* heart_spawn = NULL;
@@ -1118,12 +1114,6 @@ static void on_init(Game* game) {
                     } else {
                         player_animator->state->ik = player_ik;
                         player_skel_root = puppet_root;
-                        // create_animation_state leaves the globals at the bind pose,
-                        // so the ankle's height above the sole is readable here with
-                        // no second pass and no number written down.
-                        ik_ankle_lift =
-                            player_animator->state->global_transforms[player_ik->feet[ik_foot_left]
-                                                                          .ankle_index][3][1];
                     }
                 }
             }
@@ -1616,11 +1606,11 @@ static void ik_update_targets(Game* game) {
             // exactly how high the CLIP is holding the foot. A foot near the ground is
             // planted on it; one the clip has swung up is released, or the solve would
             // overwrite the stride and the legs would stop moving.
-            // Ground plus the ankle's clearance above the sole. Whether the foot is
-            // near enough to be planted at all is the solver's to decide -- only it
-            // sees this frame's animated pose rather than last frame's solved one.
-            target[1] += ik_ankle_lift;
-            ik_foot_set_target(player_ik, feet[i], target, normal, ik_weight);
+            // The bare ground: ik_foot_set_ground adds the ankle's own clearance above
+            // the sole. Whether the foot is near enough to be planted at all is the
+            // solver's to decide -- only it sees this frame's animated pose rather than
+            // last frame's solved one.
+            ik_foot_set_ground(player_ik, feet[i], target, normal, ik_weight);
         } else {
             ik_foot_set_target(player_ik, feet[i], ankle, (vec3){0.0f, 1.0f, 0.0f}, 0.0f);
         }
@@ -2134,9 +2124,6 @@ static int run_ik_probe(Game* game, const char* which) {
             animator_play(an, walk, 0.0f, true);
 
             float lo = 1e9f, hi = -1e9f;
-            // Taken before the bone INDEX below is named, which would otherwise shadow
-            // the bind POSITION this comes from.
-            const float bind_lift = ankle[1];
             const int ankle_bone = ik->feet[foot_index].ankle_index;
             for (int t = 0; t < 60; t++) {
                 // Targets first, from the pose the last tick left, then the tick --
@@ -2149,10 +2136,10 @@ static int run_ik_probe(Game* game, const char* which) {
                         vec3 at = {0.0f, 0.0f, 0.0f};
                         glm_vec3_copy(
                             an->state->global_transforms[sys->feet[ids[k]].ankle_index][3], at);
-                        // Flat ground at model y = 0, plus the ankle's bind clearance
-                        // above the sole -- without which a planted foot is driven into
-                        // the floor by its own thickness. The release is the solver's.
-                        ik_foot_set_target(sys, ids[k], (vec3){at[0], bind_lift, at[2]},
+                        // Flat ground at model y = 0. The ankle's clearance above the
+                        // sole is the solver's, added by ik_foot_set_ground, and so is
+                        // the release.
+                        ik_foot_set_ground(sys, ids[k], (vec3){at[0], 0.0f, at[2]},
                                            (vec3){0.0f, 1.0f, 0.0f}, 1.0f);
                     }
                 }
@@ -2261,28 +2248,34 @@ static int run_ik_probe(Game* game, const char* which) {
                    (fh && filtered.entity && !strcmp(filtered.entity->name, "floor")) ? 1 : 0);
         }
 
-        // The ankle's bind clearance above the sole, which the app adds too. Without it
-        // this probe targets the bare ground while the app targets ground plus
-        // clearance -- so the solver's release sees a foot a whole clearance "lifted",
-        // lets go of it, and these cases measure a released foot while the app measures
-        // a planted one. Every arm built on them would then assert the wrong thing.
-        lt[1] += ankle[1];
-        rt[1] += ankle[1];
-
         ik_reset(ik);
-        ik_foot_set_target(ik, foot_index, lt, ln, 1.0f);
-        ik_foot_set_target(ik, right, rt, rn, 1.0f);
+        // Ground, so these read what the app reads: ik_foot_set_ground adds the same
+        // clearance the app's planting path gets. Targeting the bare ground here instead
+        // would put the solver's release a whole clearance "lifted", and every arm built
+        // on these cases would assert a released foot while the app plants one.
+        ik_foot_set_ground(ik, foot_index, lt, ln, 1.0f);
+        ik_foot_set_ground(ik, right, rt, rn, 1.0f);
         ik_solve(ik, state->global_transforms, 0.0f);
         printf("ik %s pose bendleft %.6f\n", which,
                (double)ik_probe_bend_deg(state->global_transforms, foot));
         printf("ik %s pose bendright %.6f\n", which,
                (double)ik_probe_bend_deg(state->global_transforms, &ik->feet[right]));
 
+        // Where the ankle SHOULD be: the ground the ray found, plus the clearance the
+        // solver adds for that foot. Read back from the engine rather than re-derived
+        // here, so the arm compares against the number the solve actually used instead
+        // of a second copy this file computed to agree with it.
+        vec3 want_l, want_r;
+        glm_vec3_copy(lt, want_l);
+        glm_vec3_copy(rt, want_r);
+        want_l[1] += foot->sole_offset;
+        want_r[1] += ik->feet[right].sole_offset;
+
         vec3 solved_l, solved_r;
         glm_vec3_copy(state->global_transforms[foot->ankle_index][3], solved_l);
         glm_vec3_copy(state->global_transforms[ik->feet[right].ankle_index][3], solved_r);
-        printf("ik %s pose soleleft %.6f\n", which, (double)glm_vec3_distance(solved_l, lt));
-        printf("ik %s pose soleright %.6f\n", which, (double)glm_vec3_distance(solved_r, rt));
+        printf("ik %s pose soleleft %.6f\n", which, (double)glm_vec3_distance(solved_l, want_l));
+        printf("ik %s pose soleright %.6f\n", which, (double)glm_vec3_distance(solved_r, want_r));
     } else {
         fprintf(stderr, "ik-probe: unknown case '%s'\n", which);
         rc = 1;
