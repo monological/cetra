@@ -123,6 +123,12 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
             }
         }
         free(bind);
+    } else {
+        // Refused rather than half-registered. sole_offset comes from these globals too,
+        // so a foot that survived this would plant into the floor by its own thickness
+        // for the rest of the run -- under a log line that talks about the bend axis.
+        log_error("ik_add_foot: out of memory");
+        return -1;
     }
     // Said out loud rather than guessed in silence. This axis decides WHICH WAY the
     // knee bends in the one configuration the pole cannot resolve -- and on a rig whose
@@ -198,9 +204,7 @@ void ik_foot_set_ground(IkSystem* system, int foot, const vec3 ground, const vec
         log_error("ik_foot_set_ground: no foot %d", foot);
         return;
     }
-    vec3 at;
-    glm_vec3_copy((float*)ground, at);
-    at[1] += system->feet[foot].sole_offset;
+    vec3 at = {ground[0], ground[1] + system->feet[foot].sole_offset, ground[2]};
     ik_foot_set_target(system, foot, at, normal, weight);
 }
 
@@ -212,9 +216,8 @@ void ik_reset(IkSystem* system) {
     system->needs_reset = true;
 }
 
-// The head is stated rather than read back because for the knee and the ankle it is
-// where the bone WILL be, not where it currently is. skeleton_rotate_global (animation.h)
-// is the shared form; springbone.c writes its swing through the same one.
+// The in-place form of skeleton_rotate_global, which is what every site here wants;
+// naming it keeps the subscript off both sides of each call.
 static void rotate_global(mat4 m, versor q, const vec3 head) {
     skeleton_rotate_global(m, m, q, head);
 }
@@ -407,11 +410,11 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
     // corrections the spring pass has already written.
     if (system->pelvis_index >= 0 && system->params.max_pelvis_drop > 0.0f) {
         float worst = 0.0f;
-        // The leg length of the foot that asked for `worst`, carried out of the loop so
-        // the cap below is a fraction OF THAT LEG. Capping per foot inside the loop
-        // instead would change the question from "how far may the hips drop" to "how
-        // much may each foot ask for", which are different the moment two feet disagree
-        // -- which is exactly what the ramp and the stairs are built to produce.
+        // The leg length of the foot that asked for `worst`, so the cap below is a
+        // fraction of the DEEPEST foot's leg rather than of each foot's own. The two
+        // forms differ only when the legs differ in LENGTH -- with one cap for every
+        // foot, max(min(d, cap)) and min(max(d), cap) are identically equal. No rig in
+        // this tree is asymmetric, so nothing here can tell them apart.
         float worst_leg = 0.0f;
         for (size_t i = 0; i < system->foot_count; i++) {
             const IkFoot* f = &system->feet[i];

@@ -72,7 +72,16 @@ int spring_bone_add_chain(SpringBoneSystem* system, const char* root_bone_name) 
     }
 
     // Mark the descendant subtree (parent-first order makes this one pass)
-    // and find each bone's first in-chain child, which provides its tip
+    // and find each bone's first in-chain child, which provides its tip.
+    //
+    // This is the third copy of the walk that skeleton_mark_subtree (animation.h) owns,
+    // and spec 12.5 converted the other two and deliberately left this one. Not because
+    // the fusion below is load-bearing -- first_child[] and new_joints are a trivial
+    // second pass over a finished mark -- but because this file has no gate arm and no
+    // golden, and is inert in the whole corpus: nothing registers a chain under the
+    // "hair" prefix the render app looks for, so spring_bone_update returns at its first
+    // guard in every golden. Refactoring an uninstrumented file buys nothing verifiable.
+    // Note this copy also lacks the shared helper's parent < i guard.
     bool in_chain[MAX_BONES] = {false};
     int first_child[MAX_BONES];
     in_chain[root_index] = true;
@@ -335,9 +344,8 @@ void spring_bone_update(SpringBoneSystem* system, mat4* local_transforms, mat4* 
 
         versor swing;
         glm_quat_from_vecs(dir_target, dir_sim, swing);
-        // Same write-back the IK solve uses, from animation.h: rotate the animated
-        // orientation and put the head back where it was. src and dest differ here
-        // because the animated pose is still wanted in `target` after this.
+        // Rotate the animated orientation and put the head back where it was. src and
+        // dest differ because `target` is still wanted after this.
         skeleton_rotate_global(global_transforms[i], target, swing, head);
     }
 

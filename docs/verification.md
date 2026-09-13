@@ -582,7 +582,8 @@ person watching can settle:
   are dragged back down. No number here says which way it is wrong.
 - **The pelvis drop as a silhouette.** `docs/foot-locking.md` records the warning that dragging
   hips down to reach produces "T-Rex" posturing, and that a little sliding beats breaking the
-  source animation. Ours drops up to 0.5 and nobody has judged how that reads.
+  source animation. Ours drops up to 0.61 of a leg (0.5 m on this rig) and nobody has
+  judged how that reads.
 - **Two characters.** The chaser carries the same rig and nothing plants ITS feet, so the
   per-entity question `anim-two-rigs` had to ask of the animator goes unasked here.
 - **Nothing photographs it.** All twelve arms read CPU numbers, so a solve that is correct in

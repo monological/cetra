@@ -14779,7 +14779,7 @@ def _gametest_probe_text(flag, case, env=None, extra=None):
     return r.stdout + r.stderr, r.returncode
 
 
-def _gametest_probe(flag, rx, case, env=None, extra=None):
+def _gametest_probe(flag, rx, case, env=None):
     """{(label, key): [floats]} from one gametest --<x>-probe run, or None if it failed
     or measured nothing.
 
@@ -14788,7 +14788,7 @@ def _gametest_probe(flag, rx, case, env=None, extra=None):
     own reader: its grammar carries a literal rms token, no key, and a fixed pair of
     numbers, so it shares the spawn above and nothing else.
     """
-    text, code = _gametest_probe_text(flag, case, env, extra)
+    text, code = _gametest_probe_text(flag, case, env)
     out = {(label, key): [float(v) for v in nums.split()]
            for c, label, key, nums in rx.findall(text) if c == case}
     if code != 0 or not out:
@@ -14796,8 +14796,12 @@ def _gametest_probe(flag, rx, case, env=None, extra=None):
     return out
 
 
-# "audio <case> <label> rms <l> <r>" from gametest --audio-probe. The one probe grammar
-# that is not the four-field shape _gametest_probe reads, so this parses its own.
+# "audio <case> <label> rms <l> <r>" from gametest --audio-probe. This IS the four-field
+# shape -- the literal rms sits in the key slot -- so the grammar is not what keeps it
+# separate. What does is the return type: this group's eleven index sites read {label:
+# (l, r)}, where _gametest_probe yields {(label, key): [floats]}. Folding it in is a
+# real simplification and costs re-indexing those eleven; spec 12.5 recorded it rather
+# than doing it, since nothing else in that group was being changed.
 _AUDIO_PROBE = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) (-?[\d.]+)$", re.M)
 
 
@@ -22291,22 +22295,14 @@ def _ik_probe_run(case):
 
 @functools.cache
 def _ik_probe(case):
-    """_ik_probe_run memoised by case: ten distinct cases where the arms ask fifteen
-    times, and every one of them spawns a process that loads the rig -- three of them a
-    Jolt world and the ground fixture as well.
+    """_ik_probe_run memoised by case: the arms ask for ten distinct cases fifteen times,
+    and each spawn loads the rig -- three of them a Jolt world and the ground fixture too.
 
-    Fifteen becomes TWELVE, not eleven, and the arithmetic is worth writing down because
-    it is easy to get wrong by one: nine cases spawn once each, and slope spawns three
-    times -- once through here for ik-plant, and twice more below for ik-repeat, which
-    must not come from the cache. The three spawns this removes are ground, slope and
-    step, which are the expensive ones, so the wall-clock saving is larger than 3 of 15.
+    The returned dict is SHARED between callers. Every arm reads and none writes, which
+    is what makes that safe; an arm needing to mutate one must copy it first.
 
-    The returned dict is SHARED between callers. Every arm reads it and none writes,
-    which is what makes that safe; an arm that needs to mutate one must copy it first.
-
-    ik-repeat must NOT use this, and calls _ik_probe_run twice instead. Its whole
-    assertion is that two separate process launches print identical digits, so served
-    from here it would compare an object with itself and could never fail again.
+    ik-repeat calls _ik_probe_run twice instead, and asserts `first is not second` so
+    that routing it through here fails rather than going quietly vacuous.
     """
     return _ik_probe_run(case)
 
@@ -22323,7 +22319,7 @@ def _ik_knee_bend_deg(a, b, c):
 
 def run_ik_gate(workdir):
     """Two-bone IK (spec 12.4), on the puppet whose limb lengths the fixture generator
-    states. Six arms drive the solver with SYNTHETIC targets through gametest's
+    states. Seven arms drive the solver with SYNTHETIC targets through gametest's
     --ik-probe and need no physics at all. Every expected angle is recomputed here in
     Python from the segment lengths the probe reports, so nothing is a magic number
     copied from a run. The bind pose is the SINGULAR configuration -- hip to ankle is
@@ -22360,6 +22356,12 @@ def run_ik_gate(workdir):
       ik-ray-self  the foot ray finds the WORLD and not the body it was cast from. The
                    same ray unfiltered is asserted to HIT the character, so the arm
                    cannot quietly go vacuous the day the capsule stops being there.
+      ik-sole      sole_offset IS the ankle's bind height, which is the one thing
+                   ik-plant cannot say. That arm compares the solved ankle against
+                   IkFoot.target, and ik_foot_set_ground WROTE that target as ground plus
+                   sole_offset -- so both sides of it descend from the same field and a
+                   doubled or zeroed offset moves them together. Here the probe's own
+                   read of the bind pose is the independent half.
       ik-plant     six feet, over flat ground and both fixtures, land ON the ground the
                    ray found rather than near it. Without the pelvis drop the uphill leg
                    cannot reach and this is the arm that would say so. These three cases
@@ -22557,6 +22559,24 @@ def run_ik_gate(workdir):
         if not ok:
             failures.append("ik-ray-self")
 
+    # --- ik-sole ---------------------------------------------------------------
+    d = _ik_probe("ground")
+    if not d or ("rig", "soleoffset") not in d:
+        print("  ik-sole      FAIL  the probe failed or measured nothing")
+        failures.append("ik-sole")
+    else:
+        got, bind = d[("rig", "soleoffset")][0], d[("rig", "soleoffset")][1]
+        # Exact, not a tolerance: both are the same bind ankle Y read twice, once by
+        # ik_add_foot through skeleton_compute_bind_globals and once by the probe off the
+        # posed state. Anything but equality means the engine derived it from something
+        # else, which is the whole failure this arm exists for.
+        ok = got == bind and bind > 0.0
+        print(f"  ik-sole      {'PASS' if ok else 'FAIL'}  the engine's sole_offset is "
+              f"{got:.6f} against the rig's bind ankle height {bind:.6f} (want equal, and "
+              f"non-zero or a planted foot would sink by its own thickness)")
+        if not ok:
+            failures.append("ik-sole")
+
     # --- ik-plant --------------------------------------------------------------
     soles, probed = [], True
     for case in ("ground", "slope", "step"):
@@ -22623,9 +22643,15 @@ def run_ik_gate(workdir):
         print("  ik-repeat    FAIL  a probe failed or measured nothing")
         failures.append("ik-repeat")
     else:
-        ok = first == second
+        # `is not` carries the whole arm. This must be TWO process launches: served from
+        # the memo both names would be one object, first == second would be trivially
+        # true, and the one arm asserting cross-process determinism would pass forever
+        # without anything noticing. gate-arm-docs reads print sites, not probe calls, so
+        # nothing else would catch it. The identity test fails loudly instead.
+        ok = first is not second and first == second
         print(f"  ik-repeat    {'PASS' if ok else 'FAIL'}  two runs of the slope case print "
-              f"{'identical' if ok else 'DIFFERENT'} digits across {len(first)} measurements")
+              f"{'identical' if ok else 'DIFFERENT'} digits across {len(first)} measurements"
+              f"{'' if first is not second else ' -- VACUOUS: both came from the cache'}")
         if not ok:
             failures.append("ik-repeat")
 

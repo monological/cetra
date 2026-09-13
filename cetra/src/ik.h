@@ -34,7 +34,8 @@
  *
  * The engine half knows nothing about physics. Where the ground is, and whether a
  * foot is on it at all, are the app's to answer -- it raycasts and calls
- * ik_foot_set_target with plain vectors in the skeleton's model space.
+ * ik_foot_set_ground (or ik_foot_set_target, for a point the ankle itself should reach)
+ * with plain vectors in the skeleton's model space.
  */
 
 typedef struct IkFootParams {
@@ -67,26 +68,28 @@ typedef struct IkFoot {
     vec3 fallback_axis;   // bend axis from the bind pose, for a leg aimed along the pole
     vec3 applied_target;  // what the last solve actually used, after easing
     float applied_weight; // and the weight it applied, after the release fade
-    // False until this foot's first solve, and the reason it is PER FOOT rather than
-    // the system's needs_reset: a foot registered after a solve has applied_target
-    // zeroed to the model origin, and easing onto its real target from there walks the
-    // leg across the world. Arming system->needs_reset instead was measured moving the
-    // menu golden 672 px, so the distinction is load-bearing and not bookkeeping.
+    // False until this foot's first solve, and PER FOOT rather than the system's
+    // needs_reset because only a per-foot latch can express it: a foot registered after
+    // a solve has applied_target still zeroed to the model origin, and easing onto its
+    // real target from there walks the leg across the world. needs_reset is system-wide
+    // and re-arms feet that are already settled.
     bool has_applied;
 
-    // SETTINGS: plain stores, written every frame by whoever knows the ground.
-    // How far this ankle rides above its sole, defaulted at ik_add_foot from the bind
-    // pose and applied by ik_foot_set_ground -- never by ik_foot_set_target, which takes
-    // a point for the ankle itself. Targeting the ankle AT the ground sinks the foot into
-    // the floor by its own thickness, and on flat ground that also stops the solve being
-    // the identity it should be there.
+    // SETTINGS: plain stores, written directly at any time.
+
+    // How far this ankle rides above its sole. Unlike its neighbours this is a per-rig
+    // CONSTANT, derived once at ik_add_foot from the bind pose -- overwrite it only for
+    // a rig whose bind sole does not rest at model y = 0, which is the assumption that
+    // makes it derivable at all. Applied by ik_foot_set_ground and never by
+    // ik_foot_set_target, which takes a point for the ankle itself.
     //
     // It lives here rather than in the three callers that each derived it from the same
     // bind pose -- one of which carried a comment warning that it had to agree with
-    // another. The default assumes the bind sole sits at model y = 0, which is what
-    // makes it derivable at all; a rig built otherwise overwrites this.
+    // another.
     float sole_offset;
-    vec3 target; // model space, where the ankle should land, BEFORE sole_offset
+    // Model space, where the ANKLE should land. sole_offset is already folded in when it
+    // was set through ik_foot_set_ground, so this is the ankle point either way.
+    vec3 target;
     // The surface the foot stands on, model space. Stated by the caller because it is
     // part of the contract, and currently READ BY NOTHING: the solve does not yet pitch
     // the sole onto it, which wants a sole axis this rig does not state, and guessing
@@ -131,11 +134,11 @@ void ik_foot_set_target(IkSystem* system, int foot, const vec3 target, const vec
 // surface rather than sinking into it by its own thickness.
 //
 // Two entry points rather than one flag, because a target and a ground are different
-// claims and only the caller knows which it holds. Folding the offset into
-// ik_foot_set_target instead was tried and is wrong: thirteen of its call sites pass
-// arbitrary geometry -- a reach test, a full extension, an exact distance -- and adding
-// a sole clearance to those moved every one of them by the offset, which four gate arms
-// caught to the millimetre and every golden missed, since a golden only ever plants.
+// claims and only the caller knows which it holds -- often a line apart: a planting
+// caller hands over the surface, and the same caller releasing a foot re-targets the
+// ankle's own current position at weight 0 and must NOT have a clearance added to it.
+// Folding the offset into ik_foot_set_target was tried and is wrong: most of its call
+// sites pass arbitrary geometry, and a sole clearance displaced every one of them.
 void ik_foot_set_ground(IkSystem* system, int foot, const vec3 ground, const vec3 normal,
                         float weight);
 
