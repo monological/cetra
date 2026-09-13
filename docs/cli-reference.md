@@ -830,6 +830,19 @@ through it and anything in frame moves them. That traded the only demonstration 
 for two unchanged reference images, which is the wrong way round: the goldens carry the fixture
 now and were re-baked for it.
 
+`--follow-cam` trails the player instead of orbiting the world origin, and is the only part of
+spec 12.6 behind a flag. The rest of that spec — the walled basin, the ocean and swimming — is
+the default world, on the 12.4 reasoning that a flag hiding a feature from the only two pictures
+that show the world trades the demonstration for two unchanged reference images. The camera is
+the exception because it repoints every headless capture rather than adding to one.
+
+There is no mouse control and nothing to learn: it sits a fixed distance behind whichever way
+the character is already facing, reusing the smoothed yaw the locomotion block maintains. That
+also keeps world-aligned WASD coherent — the camera ends up behind whatever direction you walked
+— at the cost that after a sharp turn, W still moves world +Z, which is now sideways on screen.
+It is mutually exclusive with mouse-drag orbit, the way `apps/tree`'s walker is: both own the
+camera, and `mouse_drag_update` rewrites the eye from the orbit parameters every frame.
+
 `--no-ik` runs the player without foot planting at all, which is the quickest way to tell a
 planting artefact from an animation one — worth knowing that the walk clip bends no knee of its
 own, so on flat ground the two look identical by design.
