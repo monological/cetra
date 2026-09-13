@@ -385,29 +385,37 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 // unhandled -- a CharacterVirtual has no y limit, so you fell forever. This gives the
 // fall a bottom.
 //
-// Two of these are chosen against hazards rather than by eye. A floating character sits
-// with its feet at GROTTO_WATER_Y + PLAYER_RIG_DROP = -8; the IK foot ray starts a metre
-// above that and reaches three down, so a seabed at -11 is out of reach and cannot plant
-// a swimmer's feet on the bottom even if the swimming gate were missed. And
-// stick_to_floor_distance is 0.5, so a bed three metres under the feet is inert where a
-// shallower one would pull a treading character down and report it grounded.
 // The platform hangs in the air and the cavern is a long way under it. The drop is the
 // point, so the cavern must not be visible from up top: its rim sits far enough below
 // that the follow camera, whose pitch stops at -1.25 rad, cannot get it into frame from
 // the platform. You see sky past the edge, then you fall, and the walls close in on the
 // way down.
-#define GROTTO_WATER_Y    -80.0f // still-water plane, and an 80-unit fall to reach it
-#define GROTTO_SEABED_Y   -88.0f // basin floor near the middle
-#define GROTTO_SEABED_FAR -92.0f // and at the cliff, so the water deepens outward
-#define GROTTO_BASIN_HALF 60.0f  // cliff ring, half extent
-#define GROTTO_CLIFF_TOP  -50.0f // 50 below the platform: out of sight until you drop
+//
+// EVERY DEPTH BELOW IS RELATIVE TO THE WATER, which is what lets the whole basin be
+// moved by editing one number. The clearances are the reason it has to stay that way.
+// A floating character sits with its feet at GROTTO_WATER_Y + PLAYER_RIG_DROP, i.e. two
+// units under the surface at this rig's scale; the IK foot ray starts a metre above that
+// and reaches three down, so it probes to five under the surface and an eight-deep basin
+// is out of its reach -- it cannot plant a swimmer's feet on the bottom even if the
+// swimming gate were missed. And stick_to_floor_distance is 0.5, so a bed six metres
+// under the feet is inert where a shallower one would pull a treading character down and
+// report it grounded. Deepen the basin freely; SHALLOWING it past six breaks both.
+#define GROTTO_WATER_Y    -180.0f // still-water plane, and a 180-unit fall to reach it
+#define GROTTO_SEABED_Y   -188.0f // basin floor near the middle: eight under the water
+#define GROTTO_SEABED_FAR -192.0f // and at the cliff, so the water deepens outward
+#define GROTTO_BASIN_HALF 60.0f   // cliff ring, half extent
+#define GROTTO_CLIFF_TOP  -50.0f  // 50 below the platform: out of sight until you drop
 #define GROTTO_WALL_THICK 4.0f
 // How far the platform's own edge hangs below it. A lip, not a wall -- the skirt used to
 // run all the way to the seabed, which is the cavern the drop is supposed to hide.
 #define GROTTO_SKIRT_DROP 3.0f
-// Terminal velocity for the fall. Not flavour: free fall over 80 units arrives at about
-// 56 m/s, and the buoyancy below trades that off over roughly 13 units of depth -- which
-// is straight through an 8-unit basin and into the seabed. At 25 the plunge is under 6.
+// Terminal velocity for the fall. Not flavour: uncapped, free fall over 180 units
+// arrives at about 85 m/s, and the buoyancy below trades speed off over roughly half a
+// unit of depth per m/s -- which at 85 is far through an eight-unit basin and into the
+// seabed. At 25 the plunge is under 6, and that is what the basin depth is sized for.
+//
+// It is a CAP, so it does not scale with the drop: lengthening the fall costs more
+// seconds, never more speed, and the plunge depth is the same as it was at 80 units.
 #define GROTTO_TERMINAL_V 25.0f
 #define GROTTO_SWIM_SPEED 4.0f // against PLAYER_SPEED 10: a swimmer is not a runner
 
