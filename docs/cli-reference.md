@@ -838,7 +838,11 @@ own, so on flat ground the two look identical by design.
 four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,
 `identity`, `pole` and `analytic` build a rig and nothing else — a two-bone solve is a pure
 function of a hip, a target and two segment lengths, and giving those a world would only make
-exact arithmetic depend on contact slop. `ground`, `slope` and `step` add a physics world and
+exact arithmetic depend on contact slop. **`swing` is a seventh rig-only case and the one the
+group leans on hardest**: it ticks an actual walk cycle and measures each ankle's vertical
+travel with planting on and off. Every other case poses the rig ONCE and solves once, which is
+how eleven arms came to pass while the player's feet were welded to the floor — a solve that
+overwrites a stride looks perfect in a single pose. `ground`, `slope` and `step` add a physics world and
 the ramp-and-steps fixture, because planting's input is a RAYCAST and three bug classes live only
 there: the ray hitting the character's own capsule, the ray missing the ramp and finding the
 floor beneath it, and a hit point that is right while the plane is wrong. Those three run with
