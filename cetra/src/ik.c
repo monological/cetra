@@ -18,13 +18,6 @@
 
 IkFootParams ik_default_params(void) {
     IkFootParams p;
-    // Full extension, deliberately. Shortening the reach to "keep a bend off the
-    // singularity" is a trap: near full extension the knee angle goes as the SQUARE
-    // ROOT of the shortening, so on a rig whose bind pose is exactly straight, 0.995
-    // buys an unremovable 11.5 degrees -- the legs read as permanently bent and swing
-    // from the hip alone. Numerical safety at the singularity is the cosine clamp's
-    // job, not this one's. A game that wants a soft knee should bend the clip.
-    p.reach_limit = 1.0f;
     p.max_pelvis_drop = 0.5f;
     p.teleport_distance = 0.5f;
     p.blend_rate = 12.0f;
@@ -223,8 +216,7 @@ static void rotate_global(mat4 m, versor q, const vec3 head) {
 // Rotate hip and knee so the ankle lands on `target`. Model space throughout, and only
 // this chain's three bones are written. A degenerate segment leaves the chain at its
 // animated pose, the way a spring bone follows rigidly below its own epsilon.
-static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target,
-                           const IkFootParams* params) {
+static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target) {
     vec3 a, b, c;
     glm_vec3_copy(g[f->hip_index][3], a);
     glm_vec3_copy(g[f->knee_index][3], b);
@@ -247,8 +239,14 @@ static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target,
     vec3 dir;
     glm_vec3_normalize_to(d, dir);
 
+    // Full extension, and deliberately not a knob. Shortening the reach to "keep a bend
+    // off the singularity" is a trap: near full extension the knee angle goes as the
+    // SQUARE ROOT of the shortening, so on a rig whose bind pose is exactly straight
+    // 0.995 buys an unremovable 11.5 degrees -- the legs read as permanently bent and
+    // swing from the hip alone. Numerical safety at the singularity is the cosine
+    // clamp's job below, not this one's; a game that wants a soft knee bends the clip.
     float lo = fabsf(l1 - l2) * (1.0f + IK_REACH_PAD);
-    float hi = (l1 + l2) * params->reach_limit;
+    float hi = l1 + l2;
     if (hi < lo)
         hi = lo;
     const float dist = glm_clamp(want, lo, hi);
@@ -418,8 +416,7 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
             glm_vec3_copy(global_transforms[f->ankle_index][3], c);
             glm_vec3_sub(b, a, ab);
             glm_vec3_sub(c, b, bc);
-            const float reach =
-                (glm_vec3_norm(ab) + glm_vec3_norm(bc)) * system->params.reach_limit;
+            const float reach = glm_vec3_norm(ab) + glm_vec3_norm(bc);
             const float deficit =
                 (glm_vec3_distance((float*)f->applied_target, a) - reach) * weight;
             if (deficit > worst)
@@ -449,7 +446,7 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         vec3 ankle, effective;
         glm_vec3_copy(global_transforms[f->ankle_index][3], ankle);
         glm_vec3_lerp(ankle, (float*)f->applied_target, weight, effective);
-        solve_two_bone(global_transforms, f, effective, &system->params);
+        solve_two_bone(global_transforms, f, effective);
     }
 
     system->needs_reset = false;

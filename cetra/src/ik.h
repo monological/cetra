@@ -38,10 +38,6 @@
  */
 
 typedef struct IkFootParams {
-    // Fraction of (thigh + shin) a chain may extend to. Leave it at 1: ik_default_params
-    // records that shortening the reach to "keep a bend" buys an unremovable 11.5
-    // degrees on a rig whose bind pose is exactly straight.
-    float reach_limit;
     float max_pelvis_drop;   // how far the pelvis may descend for an out-of-reach foot, metres
     float teleport_distance; // a target jumping farther than this snaps instead of easing
     float blend_rate;        // 1/seconds the applied target eases toward the requested one
@@ -67,7 +63,12 @@ typedef struct IkFoot {
     vec3 fallback_axis;   // bend axis from the bind pose, for a leg aimed along the pole
     vec3 applied_target;  // what the last solve actually used, after easing
     float applied_weight; // and the weight it applied, after the release fade
-    bool has_applied;     // false until the first solve; the snap latch
+    // False until this foot's first solve, and the reason it is PER FOOT rather than
+    // the system's needs_reset: a foot registered after a solve has applied_target
+    // zeroed to the model origin, and easing onto its real target from there walks the
+    // leg across the world. Arming system->needs_reset instead was measured moving the
+    // menu golden 672 px, so the distinction is load-bearing and not bookkeeping.
+    bool has_applied;
 
     // SETTINGS: plain stores, written every frame by whoever knows the ground.
     vec3 target; // model space, where the ankle should land
