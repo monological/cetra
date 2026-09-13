@@ -45,6 +45,7 @@
 #include "cetra/procedural/terrain.h"
 #include "cetra/procedural/erosion.h"
 #include "cetra/procedural/terrain_tex.h"
+#include "cetra/cook.h"
 #include "cetra/particle_system.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
@@ -423,7 +424,7 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 // under the feet is inert where a shallower one would pull a treading character down and
 // report it grounded. Deepen the basin freely; SHALLOWING it past six breaks both.
 #define GROTTO_WATER_Y    -180.0f // still-water plane, and a 180-unit fall to reach it
-#define GROTTO_SEABED_Y   -188.0f // basin floor near the middle: eight under the water
+#define GROTTO_SEABED_Y   -190.0f // basin floor near the middle: ten under the water
 #define GROTTO_SEABED_FAR -192.0f // and at the cliff, so the water deepens outward
 #define GROTTO_BASIN_HALF 60.0f   // cliff ring, half extent
 #define GROTTO_CLIFF_TOP  -50.0f  // 50 below the platform: out of sight until you drop
@@ -556,24 +557,47 @@ static void grotto_box(Scene* scene, EntityManager* em, PhysicsWorld* physics, c
 // A roofless shaft is single-valued in Y, which is the whole reason this is a heightfield
 // and not a voxel field -- so the procedural terrain subsystem applies unchanged and no
 // engine code is added for it.
-#define SHAFT_FIELD_RES     257 // node-centred: res-1 must halve, so 257 and not 256
-#define SHAFT_TILES         4
-#define SHAFT_TILE_SEGS     40 // (2*60/4)/40 = 0.75 units a vertex
-#define SHAFT_COLLIDER_SEGS 72 // coarser than the visual, as terrain.h intends
-// How far the LAND runs, against GROTTO_BASIN_HALF, which is only how far the BASIN does.
-// The two are different questions and used to share one number: the terrain stopped at the
-// basin, so its square domain ended in mid-air and the edge of the world was a visible slab
-// hanging over the sea.
-#define SHAFT_EXTENT  100.0f
+#define SHAFT_FIELD_RES     1025 // node-centred: res-1 must halve, so 1025 and not 1024
+#define SHAFT_TILES         16
+#define SHAFT_TILE_SEGS     48  // (2*800/16)/48 = 2.08 units a vertex
+#define SHAFT_COLLIDER_SEGS 192 // coarser than the visual, as terrain.h intends
+/*
+ * How far the LAND runs, against GROTTO_BASIN_HALF, which is only how far the BASIN does.
+ * The two are different questions and used to share one number: the terrain stopped at the
+ * basin, so its square domain ended in mid-air and the edge of the world was a visible slab.
+ *
+ * 800 is 1600 units across for a crater 53 units wide, and that RATIO is the point rather
+ * than the number. A crater has to be a hole in something, and "something" means ground
+ * that runs past where the eye gives up. Two earlier attempts undershot it -- at 100 the
+ * land read as an islet, at 300 the far slope was still a ridge against the sky from the
+ * platform -- and each time the tell was the same: you could see where the world stopped.
+ *
+ * The field resolution rises WITH the extent and never after it. Those two set the cell
+ * size between them, so moving one alone silently re-scales every noise frequency tuned
+ * against it. 1025 over 1600 units is 1.56 units a cell; the crater spans about 34 of them
+ * and keeps its shape, while the plain is sampled at whatever distance was going to hide
+ * anyway. Erosion costs the square of this, so it is the number to look at first if
+ * startup ever becomes the complaint.
+ */
+#define SHAFT_EXTENT  800.0f
 #define SHAFT_FLOOR_R 0.30f // normalised radius the pool floor reaches out to
 #define SHAFT_RIM_R   0.88f // and where the wall has finished climbing
-// Where the outward slope has finished falling, and how deep it has fallen to. Normalised
-// on GROTTO_BASIN_HALF like the two above, so 1.55 is about 93 world units -- inside the
-// domain, with the corners (141) well past it. The depth is what matters: -196 is under
-// the water at -180, so the domain's own boundary drowns and the edge a player can see is
-// a shoreline rather than a cut.
-#define SHAFT_SHORE_R   1.55f
-#define SHAFT_SHORE_Y   -196.0f
+/*
+ * Where the land finally gives up, normalised on GROTTO_BASIN_HALF like the two above.
+ *
+ * The descent starts at the PLAIN radius, not at the rim. Starting it at the rim is what
+ * made the first attempt an islet: the ground turned over and fell the moment the crater
+ * wall topped out, so the whole landform was 90 units wide with sea on every side. 10.0 is
+ * about 600 world units of open ground beyond a 53-unit crater before anything falls.
+ *
+ * And -216 is under the water at -180, so the descent finishes SUBMERGED: the domain's own
+ * square boundary and its corners drown, and the only edge a player can find is a waterline
+ * somewhere on that slope. Everything past 12.5 (about 750 units) is already under the sea,
+ * which puts the corners at 1131 units both drowned and far outside anything in frame.
+ */
+#define SHAFT_PLAIN_R   10.00f
+#define SHAFT_SHORE_R   12.50f
+#define SHAFT_SHORE_Y   -216.0f
 #define SHAFT_LAYER_TEX 512 // one ground layer map, square and periodic
 
 // The field, and a SECOND params carrying no field at all.
@@ -744,7 +768,13 @@ static float shaft_height(float x, float z) {
      * the rim), so the drowned flat is not a run of coplanar triangles and Jolt can still
      * split it.
      */
-    h += (SHAFT_SHORE_Y - GROTTO_CLIFF_TOP) * shaft_smoothstep(SHAFT_RIM_R, SHAFT_SHORE_R, r);
+    // Open ground beyond the rim, rolling rather than flat: without this the plain is an
+    // apron at one height and reads as a tabletop the crater was cut into. The warp noise
+    // is already low frequency -- 83 units a cycle -- which is the scale that reads as
+    // landform from the platform rather than as texture.
+    h += terrain_height_at(&g_shaft_warp, x + 211.0f, z - 133.0f) * 9.0f * t;
+
+    h += (SHAFT_SHORE_Y - GROTTO_CLIFF_TOP) * shaft_smoothstep(SHAFT_PLAIN_R, SHAFT_SHORE_R, r);
     return h;
 }
 
@@ -776,7 +806,23 @@ static void build_shaft(Game* game) {
     g_shaft_warp.height = 1.0f;
     g_shaft_warp.base_freq = 0.012f; // ~83 units a cycle
     g_shaft_warp.octaves = 3;
-    g_shaft_warp.seed = 77712345u;
+    /*
+     * Every source below INHERITS the seed rather than setting its own, and that is a
+     * performance contract, not tidiness.
+     *
+     * terrain.c memoises the Perlin permutation table ONE entry deep, keyed on the seed,
+     * and rebuilds it with a 256-element Fisher-Yates whenever the seed differs from the
+     * last call. Its own comment says a shuffle per call "would dominate load time
+     * entirely" -- which is exactly what four seeds did here: shaft_height interleaves
+     * seven taps across warp, crag, ridge and floor noise, so the memo missed on nearly
+     * every one and the fill paid about seven million shuffles. Measured at 11.7 s of a
+     * 15.7 s terrain build, against 1.7 s for the erosion sim it dwarfed.
+     *
+     * One seed means one table, built once and hit forever after. The four fields stay
+     * decorrelated by what actually separates them -- base_freq spanning 0.012 to 0.14,
+     * and sample offsets in the hundreds of units -- so sharing a table costs nothing
+     * visible. Giving any of them its own seed again reinstates the thrash.
+     */
 
     // The ridge source, read through shaft_ridge. Higher frequency than the warp, since
     // this one IS detail -- but still clear of the tile lattice at 1.25 units a vertex.
@@ -794,7 +840,7 @@ static void build_shaft(Game* game) {
     // definition of aliasing, and it prints as the regular hatching the dumps show across
     // the pool floor. Two octaves stop at 3.6 units, about eight samples a cycle.
     g_shaft_ridge.octaves = 2;
-    g_shaft_ridge.seed = 5150077u;
+    // Seed inherited from g_shaft_noise: see the permutation-table note above.
 
     // Short wavelength, modest amplitude. The measured wall climbs about 6 units per 1.4
     // horizontal -- a base slope near 4 -- so a 3-unit radial shove moves the surface some
@@ -804,7 +850,7 @@ static void build_shaft(Game* game) {
     g_shaft_crag.height = 3.0f;
     g_shaft_crag.base_freq = 0.10f; // ~10 units a cycle, clear of the 0.47 field cell
     g_shaft_crag.octaves = 3;
-    g_shaft_crag.seed = 31337007u;
+    // Seed inherited from g_shaft_noise: see the permutation-table note above.
 
     g_shaft = terrain_default_params();
     g_shaft.extent = SHAFT_EXTENT;
@@ -849,9 +895,84 @@ static void build_shaft(Game* game) {
     // across the pool floor. The sim is here to add scree and channels, not to sand the
     // rock down.
     ep.iterations = 40;
-    ErosionStats st;
-    if (!terrain_erode(&g_shaft_field, &g_shaft, &ep, &st))
-        fprintf(stderr, "Shaft: erosion refused, using the unworn field\n");
+
+    /*
+     * Cooked, and no longer optional.
+     *
+     * Erosion is O(res^2 * iterations), so taking the field from 257 to 1025 to carry the
+     * wider land multiplied this sim by sixteen and put fourteen seconds in front of every
+     * launch. Nothing else in startup is close; the whole rest of it is sub-second. A hit
+     * reloads the four worn planes off disk and skips the sim outright, so only the first
+     * run after a shape change pays -- which is what lets the land be this large at all.
+     *
+     * The key folds the SEEDED HEIGHT PLANE rather than the parameters that produced it.
+     * The bytes capture the bowl profile, both warps, the ridge, the plain roll and the
+     * shore descent transitively, so editing any of those invalidates the cache without
+     * anyone remembering to add a field here -- which is the failure this pattern exists
+     * to prevent. Every ErosionParams scalar folds EXCEPT workers: worker-invariance is
+     * the erosion module's own proven contract, and folding it would fracture the cache
+     * while contradicting the invariant. The extent folds too, since it decides the cell
+     * size the talus threshold is measured against.
+     */
+    CookKey ek = cook_key("gametest-shaft-erosion/1");
+    cook_key_i32(&ek, SHAFT_FIELD_RES);
+    cook_key_i32(&ek, ep.iterations);
+    cook_key_f32(&ek, ep.dt);
+    cook_key_f32(&ek, ep.rain);
+    cook_key_f32(&ek, ep.evaporation);
+    cook_key_f32(&ek, ep.capacity);
+    cook_key_f32(&ek, ep.dissolve);
+    cook_key_f32(&ek, ep.deposit);
+    cook_key_f32(&ek, ep.min_tilt);
+    cook_key_f32(&ek, ep.talus);
+    cook_key_f32(&ek, ep.thermal_rate);
+    cook_key_i32(&ek, ep.thermal_every);
+    cook_key_f32(&ek, g_shaft.extent);
+    const size_t plane_bytes = (size_t)SHAFT_FIELD_RES * (size_t)SHAFT_FIELD_RES * sizeof(float);
+    cook_key_bytes(&ek, g_shaft_field.height, plane_bytes);
+
+    CookBlob sec[5];
+    bool restored = false;
+    if (cook_fetch(&ek, sec, 5)) {
+        if (sec[0].size == 2 * sizeof(float) && sec[1].size == plane_bytes &&
+            sec[2].size == plane_bytes && sec[3].size == plane_bytes &&
+            sec[4].size == plane_bytes) {
+            // Adopt the planes rather than copying into the field's own: each is an
+            // independent allocation the field frees individually, and the pyramid built
+            // below aliases whatever pointer it holds by then.
+            memcpy(&g_shaft_field.min_y, sec[0].data, sizeof(float));
+            memcpy(&g_shaft_field.max_y, (const char*)sec[0].data + sizeof(float), sizeof(float));
+            free(g_shaft_field.height);
+            free(g_shaft_field.flow);
+            free(g_shaft_field.deposit);
+            free(g_shaft_field.wear);
+            g_shaft_field.height = sec[1].data;
+            g_shaft_field.flow = sec[2].data;
+            g_shaft_field.deposit = sec[3].data;
+            g_shaft_field.wear = sec[4].data;
+            free(sec[0].data);
+            restored = true;
+        } else {
+            for (int s = 0; s < 5; ++s)
+                free(sec[s].data);
+            fprintf(stderr, "Shaft: the cooked field disagrees with the recipe; eroding live\n");
+        }
+    }
+
+    if (!restored) {
+        ErosionStats st;
+        if (!terrain_erode(&g_shaft_field, &g_shaft, &ep, &st)) {
+            fprintf(stderr, "Shaft: erosion refused, using the unworn field\n");
+        } else {
+            float range[2] = {g_shaft_field.min_y, g_shaft_field.max_y};
+            CookBlob out[5] = {{range, sizeof(range)},
+                               {g_shaft_field.height, plane_bytes},
+                               {g_shaft_field.flow, plane_bytes},
+                               {g_shaft_field.deposit, plane_bytes},
+                               {g_shaft_field.wear, plane_bytes}};
+            cook_store(&ek, out, 5);
+        }
+    }
 
     /*
      * The swimmer clearance, MEASURED after the erode rather than reasoned about before it.
