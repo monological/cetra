@@ -223,6 +223,36 @@ def wave():
             "hips_y": None}
 
 
+def swim(period=1.6, arm_deg=55.0, knee_deg=40.0, thigh_deg=18.0, bob=0.015):
+    """A breaststroke, and a new function rather than another gait() call.
+
+    gait swings the arms about Y -- across the body, which is what walking does. A
+    stroke sweeps them out and back in the frontal plane, which is Z, and the legs
+    fold rather than swing, which is X at the knee. Nothing in gait's shape survives
+    that, so sharing it would cost more parameters than writing this.
+
+    Mirrored left to right rather than counter-phased: both arms pull together and
+    both knees fold together, which is what makes it read as a stroke and not a walk
+    performed underwater.
+    """
+    rot = {
+        # Out on the catch, in on the recovery. Opposite signs so the pair sweeps
+        # symmetrically away from the midline.
+        "LeftArm": loop_keys(period, lambda p: quat_axis(Z, arm_deg * math.sin(p))),
+        "RightArm": loop_keys(period, lambda p: quat_axis(Z, -arm_deg * math.sin(p))),
+        # The kick trails the pull by half a cycle, which is the whole rhythm of a
+        # breaststroke: arms pull, then legs drive.
+        "LeftLeg": loop_keys(period, lambda p: quat_axis(X, knee_deg * (1.0 - math.cos(p)))),
+        "RightLeg": loop_keys(period, lambda p: quat_axis(X, knee_deg * (1.0 - math.cos(p)))),
+        "LeftUpLeg": loop_keys(period, lambda p: quat_axis(X, -thigh_deg * math.sin(p))),
+        "RightUpLeg": loop_keys(period, lambda p: quat_axis(X, -thigh_deg * math.sin(p))),
+    }
+    hips = [(period * k / KEYS_PER_LOOP,
+             BIND[0][1] + bob * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP))
+            for k in range(KEYS_PER_LOOP + 1)]
+    return {"loop": True, "length": period, "rot": rot, "hips_y": hips}
+
+
 def hold90():
     keys = [(0.0, IDENT), (0.25, quat_axis(Z, 90.0)), (4.0, quat_axis(Z, 90.0))]
     return {"loop": False, "length": 4.0, "rot": {"LeftForeArm": keys}, "hips_y": None}
@@ -241,6 +271,11 @@ CLIPS = [
     ("wave", wave()),
     ("hold90", hold90()),
     ("rest", rest()),
+    # Appended, and that is the cheap place: the packer mints chunks in this order with
+    # cumulative offsets, so a clip added here leaves every existing byteOffset, accessor
+    # and animation index untouched. Every consumer binds by NAME through accessor
+    # indirection, so no existing clip's sampled values move either.
+    ("swim", swim()),
 ]
 
 READ_FRAME_T = 0.5  # frame 30 at 1/60
