@@ -38,7 +38,11 @@
  */
 
 typedef struct IkFootParams {
-    float max_pelvis_drop;   // how far the pelvis may descend for an out-of-reach foot, metres
+    // How far the pelvis may descend for a foot that cannot reach, as a fraction of that
+    // foot's own leg length -- the same units plant_fraction uses, and for the same
+    // reason: it carries across rigs and scales where a metre does not. 0 disables the
+    // drop entirely.
+    float max_pelvis_drop;
     float teleport_distance; // a target jumping farther than this snaps instead of easing
     float blend_rate;        // 1/seconds the applied target eases toward the requested one
     // How far above its target an animated foot may be and still be planted, as a

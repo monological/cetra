@@ -2188,7 +2188,11 @@ static int run_ik_probe(Game* game, const char* which) {
         // taken before that call is stale from here on.
         foot = &ik->feet[foot_index];
         ik_set_pelvis(ik, "cetra_rig:Hips");
-        ik->params.max_pelvis_drop = 0.5f;
+        // The engine default, restated so these cases carry the app's own bound rather
+        // than a number of their own. It is a fraction of leg length, so the 0.5 that
+        // stood here while it was metres would now be a TIGHTER cap (0.41 m on this rig),
+        // and the fixture's numbers would move for a change of units alone.
+        ik->params.max_pelvis_drop = 0.6098f;
         // Release OFF for these three. They ask whether the solve reaches the ground it
         // was given; whether a foot should be planted at all is a different question,
         // and --ik-probe swing is what asks it. Left on, a foot whose target sits below

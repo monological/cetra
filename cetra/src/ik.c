@@ -18,7 +18,10 @@
 
 IkFootParams ik_default_params(void) {
     IkFootParams p;
-    p.max_pelvis_drop = 0.5f;
+    // 0.61 of a leg, which on this puppet's 0.82 is the 0.5 m this was before it became
+    // a fraction -- chosen to preserve the behaviour rather than to retune it. As a
+    // fraction it carries to a rig of another size, which a metre never did.
+    p.max_pelvis_drop = 0.6098f;
     p.teleport_distance = 0.5f;
     p.blend_rate = 12.0f;
     // A tenth of the leg: on a rig whose thigh and shin sum to 0.82 that is 0.082, and
@@ -404,6 +407,12 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
     // corrections the spring pass has already written.
     if (system->pelvis_index >= 0 && system->params.max_pelvis_drop > 0.0f) {
         float worst = 0.0f;
+        // The leg length of the foot that asked for `worst`, carried out of the loop so
+        // the cap below is a fraction OF THAT LEG. Capping per foot inside the loop
+        // instead would change the question from "how far may the hips drop" to "how
+        // much may each foot ask for", which are different the moment two feet disagree
+        // -- which is exactly what the ramp and the stairs are built to produce.
+        float worst_leg = 0.0f;
         for (size_t i = 0; i < system->foot_count; i++) {
             const IkFoot* f = &system->feet[i];
             // The same value the solve reads, settled before this loop moved anything.
@@ -422,12 +431,14 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
             const float reach = glm_vec3_norm(ab) + glm_vec3_norm(bc);
             const float deficit =
                 (glm_vec3_distance((float*)f->applied_target, a) - reach) * weight;
-            if (deficit > worst)
+            if (deficit > worst) {
                 worst = deficit;
+                worst_leg = reach;
+            }
         }
         if (worst > 0.0f) {
-            const float drop =
-                worst < system->params.max_pelvis_drop ? worst : system->params.max_pelvis_drop;
+            const float cap = system->params.max_pelvis_drop * worst_leg;
+            const float drop = worst < cap ? worst : cap;
             for (size_t i = 0; i < system->skeleton->bone_count && i < MAX_BONES; i++) {
                 if (system->in_pelvis_subtree[i])
                     global_transforms[i][3][1] -= drop;
