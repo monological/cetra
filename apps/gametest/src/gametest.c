@@ -1607,9 +1607,9 @@ static void ik_update_targets(Game* game) {
             // planted on it; one the clip has swung up is released, or the solve would
             // overwrite the stride and the legs would stop moving.
             // The bare ground: ik_foot_set_ground adds the ankle's own clearance above
-            // the sole. Whether the foot is near enough to be planted at all is the
+            // the sole. Whether the foot is near enough to be planted at all is also the
             // solver's to decide -- only it sees this frame's animated pose rather than
-            // last frame's solved one.
+            // last frame's solved one, which is why the release lives there and not here.
             ik_foot_set_ground(player_ik, feet[i], target, normal, ik_weight);
         } else {
             ik_foot_set_target(player_ik, feet[i], ankle, (vec3){0.0f, 1.0f, 0.0f}, 0.0f);
@@ -1787,7 +1787,7 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
     return rc;
 }
 
-// --ik-probe: the two-bone solver as a pure function (spec 12.4). The six cases here
+// --ik-probe: the two-bone solver as a pure function (spec 12.4). The seven rig-only cases here
 // need no physics and no frame at all -- a solve is (hip, target, thigh, shin, pole)
 // and nothing else, so giving them a world would make exact arithmetic depend on
 // Jolt's contact slop for no gain. The cases that DO need a raycast are the ones that
@@ -2188,11 +2188,9 @@ static int run_ik_probe(Game* game, const char* which) {
         // taken before that call is stale from here on.
         foot = &ik->feet[foot_index];
         ik_set_pelvis(ik, "cetra_rig:Hips");
-        // The engine default, restated so these cases carry the app's own bound rather
-        // than a number of their own. It is a fraction of leg length, so the 0.5 that
-        // stood here while it was metres would now be a TIGHTER cap (0.41 m on this rig),
-        // and the fixture's numbers would move for a change of units alone.
-        ik->params.max_pelvis_drop = 0.6098f;
+        // The engine default, read rather than restated: these cases carry the app's own
+        // bound, not a fixture number that drifts the day the default is retuned.
+        ik->params.max_pelvis_drop = ik_default_params().max_pelvis_drop;
         // Release OFF for these three. They ask whether the solve reaches the ground it
         // was given; whether a foot should be planted at all is a different question,
         // and --ik-probe swing is what asks it. Left on, a foot whose target sits below
@@ -2265,21 +2263,30 @@ static int run_ik_probe(Game* game, const char* which) {
         printf("ik %s pose bendright %.6f\n", which,
                (double)ik_probe_bend_deg(state->global_transforms, &ik->feet[right]));
 
-        // Where the ankle SHOULD be: the ground the ray found, plus the clearance the
-        // solver adds for that foot. Read back from the engine rather than re-derived
-        // here, so the arm compares against the number the solve actually used instead
-        // of a second copy this file computed to agree with it.
+        // Where the ankle should be, taken from the engine's own stored target rather
+        // than recomposed here: ik_foot_set_ground already wrote ground + sole_offset
+        // into it. Rebuilding that sum in this file would be a second statement of the
+        // composition, and the day it stops being a plain +Y -- IkFoot.normal exists for
+        // exactly that -- the arm would keep asserting the old formula and pass on a
+        // wrong pose.
+        //
+        // That leaves this arm asserting only that the solve REACHED what it was handed.
+        // The separate soleoffset line below is what pins the handed value itself.
         vec3 want_l, want_r;
-        glm_vec3_copy(lt, want_l);
-        glm_vec3_copy(rt, want_r);
-        want_l[1] += foot->sole_offset;
-        want_r[1] += ik->feet[right].sole_offset;
+        glm_vec3_copy((float*)foot->target, want_l);
+        glm_vec3_copy(ik->feet[right].target, want_r);
 
         vec3 solved_l, solved_r;
         glm_vec3_copy(state->global_transforms[foot->ankle_index][3], solved_l);
         glm_vec3_copy(state->global_transforms[ik->feet[right].ankle_index][3], solved_r);
         printf("ik %s pose soleleft %.6f\n", which, (double)glm_vec3_distance(solved_l, want_l));
         printf("ik %s pose soleright %.6f\n", which, (double)glm_vec3_distance(solved_r, want_r));
+        // The one number the arms above cannot falsify: both sides of their comparison
+        // now come from sole_offset, so doubling it or zeroing it moves the target and
+        // the solved ankle together. This states what it IS -- the ankle's own height in
+        // the bind pose -- against a value read independently of the solver.
+        printf("ik %s rig soleoffset %.6f %.6f\n", which, (double)foot->sole_offset,
+               (double)ankle[1]);
     } else {
         fprintf(stderr, "ik-probe: unknown case '%s'\n", which);
         rc = 1;
@@ -3641,7 +3648,7 @@ int main(int argc, const char* argv[]) {
 
     // The same shape for the animator: a headless game, the rig loaded, the
     // components ticked by the loop's own function, no window.
-    // The same shape again for the IK solver, and for the same reason: these six cases
+    // The same shape again for the IK solver, and for the same reason: these ten cases
     // are arithmetic, so they want a rig and nothing else -- no physics world, no
     // window, no frame.
     if (ik_probe) {
