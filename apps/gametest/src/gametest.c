@@ -103,6 +103,21 @@ static bool chaser_in_swim_clip = false;
 // after. Off by default: it repoints every headless capture, and the two menu goldens
 // photograph this camera.
 static bool follow_cam = false;
+// The camera's heading, moved by the arrow keys and by NOTHING else.
+//
+// Every automatic version of this was wrong, and in the same way each time: player_yaw
+// follows the velocity, so a camera that chased it could never be in front of you.
+// Pressing back turned the character round and the camera swung in behind -- both
+// directions read as forward, and no sign change could fix it because there was no
+// backward to invert. A camera that only moves when you move it has none of that.
+static float cam_yaw = (float)M_PI;
+static float cam_pitch = -0.35f;
+// forest's, in radians per second at full deflection, and the pitch clamped so the eye
+// cannot roll under the floor or over the top.
+#define LOOK_YAW_RATE   1.8f
+#define LOOK_PITCH_RATE 1.2f
+#define CAM_PITCH_MIN   -1.25f
+#define CAM_PITCH_MAX   0.2f
 static float wave_mask[MAX_BONES];
 // Facing -Z at spawn, which is the direction W drives. Zero would be +Z, so the puppet
 // would stand facing the way S goes and spin 180 the first time you pressed forward --
@@ -249,6 +264,18 @@ static const InputAction actions[] = {
      */
     {"quicksave", {INPUT_KEY(F5, 1), INPUT_PAD(RIGHT_BUMPER, 1)}},
     {"quickload", {INPUT_KEY(F9, 1), INPUT_PAD(RIGHT_THUMB, 1)}},
+
+    /*
+     * The follow camera's rotation (--follow-cam only), forest's bindings.
+     *
+     * These share the arrow keys with ui_up/ui_down below and that is safe rather than
+     * the bug the BACK note warns about: those carry `ui`, so a menu suppresses these
+     * and the arrows navigate it, while with no menu open the UI ignores them and they
+     * turn the camera. The hazard there is two readers acting at once, which the
+     * suppression switch is exactly what prevents.
+     */
+    {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(RIGHT, 1), INPUT_KEY(LEFT, -1)}},
+    {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
 
     /*
      * The UI's own, flagged so they keep reading while the menu has taken input
@@ -1631,9 +1658,25 @@ static void on_update(Game* game, double dt) {
         glm_scale_uni(player_rig->original_transform, PLAYER_SCALE);
     }
 
-    // Apply horizontal movement
-    vel[0] = input_dir[0] * PLAYER_SPEED;
-    vel[2] = input_dir[2] * PLAYER_SPEED;
+    // Apply horizontal movement. Under the follow camera it is CAMERA-RELATIVE: W goes
+    // into the screen and S comes back toward the camera, whichever way the world is
+    // turned. World-aligned input stops making sense the moment the camera is not facing
+    // a fixed direction -- which is the whole point of a camera that follows.
+    //
+    // Without the flag it stays world-aligned, because the fixed orbit camera is what
+    // every gamepad script and trace displacement was written against.
+    if (follow_cam) {
+        // forward = (sin, 0, cos); right = forward x up = (-cos, 0, sin).
+        const float cf_x = sinf(cam_yaw), cf_z = cosf(cam_yaw);
+        // input_dir[2] is already negated by input_action_move, so W arrives as -1 --
+        // hence the minus, which puts W on +forward.
+        const float fwd = -input_dir[2], strafe = input_dir[0];
+        vel[0] = (cf_x * fwd + -cf_z * strafe) * PLAYER_SPEED;
+        vel[2] = (cf_z * fwd + cf_x * strafe) * PLAYER_SPEED;
+    } else {
+        vel[0] = input_dir[0] * PLAYER_SPEED;
+        vel[2] = input_dir[2] * PLAYER_SPEED;
+    }
 
     // Gravity, or buoyancy where the water is. Swimming is surface-only by design: you
     // float and cannot go under, which is impossible to get stuck in and reads clearly
@@ -1981,7 +2024,8 @@ static void ik_update_targets(Game* game) {
 // Yaw comes from player_yaw, the smoothed facing the locomotion block already maintains,
 // so there is nothing to drive and nothing to learn -- and world-aligned WASD stays
 // coherent, because the camera ends up behind whatever direction you walked.
-static void follow_camera_update(Engine* engine) {
+static void follow_camera_update(Game* game) {
+    Engine* engine = game ? game->engine : NULL;
     if (!engine || !engine->camera || !player_entity)
         return;
 
@@ -1989,17 +2033,19 @@ static void follow_camera_update(Engine* engine) {
     glm_vec3_copy(player_entity->position, focus);
     focus[1] += FOLLOW_CAM_LOOK_Y;
 
-    // Behind the facing: the puppet faces (sin yaw, 0, cos yaw), so the eye goes the
-    // other way along it. W then pushes the character away from the camera and S pulls it
-    // back, which is the whole contract.
-    //
-    // The spawn used to break that, and the cause was not here. player_yaw starts at 0,
-    // which the rig reads as facing +Z, while W drives -Z -- input_action_move writes
-    // out[2] = -move_y and W binds move_y at +1. So a fresh player faced one way and
-    // walked the other, spun 180 on the first keypress, and took the camera round with
-    // it. The fix is at the spawn, where player_yaw now starts facing -Z.
-    vec3 eye = {focus[0] - sinf(player_yaw) * FOLLOW_CAM_DISTANCE, focus[1] + FOLLOW_CAM_HEIGHT,
-                focus[2] - cosf(player_yaw) * FOLLOW_CAM_DISTANCE};
+    // On the sim clock rather than the frame's, so the turn is the same headless and
+    // windowed -- this hook is handed an interpolant, not a delta.
+    const float look_dt = (float)game->sim_clock.delta;
+    cam_yaw -= input_action_value(&game->input, "look_x") * LOOK_YAW_RATE * look_dt;
+    cam_pitch += input_action_value(&game->input, "look_y") * LOOK_PITCH_RATE * look_dt;
+    cam_pitch = glm_clamp(cam_pitch, CAM_PITCH_MIN, CAM_PITCH_MAX);
+
+    // Orbit the player on that heading. The camera follows POSITION and never rotates on
+    // its own: the arrows are the only thing that turns it.
+    const float cp = cosf(cam_pitch);
+    vec3 eye = {focus[0] - sinf(cam_yaw) * cp * FOLLOW_CAM_DISTANCE,
+                focus[1] + FOLLOW_CAM_HEIGHT - sinf(cam_pitch) * FOLLOW_CAM_DISTANCE,
+                focus[2] - cosf(cam_yaw) * cp * FOLLOW_CAM_DISTANCE};
 
     camera_set_position(engine->camera, eye);
     camera_set_look_at(engine->camera, focus);
@@ -2029,7 +2075,7 @@ static void on_pre_render(Game* game, double alpha) {
     // orbit parameters every frame, so leaving both live means the follow pose is
     // overwritten the moment the pointer moves.
     if (follow_cam) {
-        follow_camera_update(engine);
+        follow_camera_update(game);
     } else if (drag_controller && app_can_process_3d_input(engine) &&
                !input_is_suppressed(&game->input)) {
         mouse_drag_update(drag_controller, glfwGetTime());
