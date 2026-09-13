@@ -590,9 +590,10 @@ person watching can settle:
   A pixel arm was considered and dropped, for three reasons worth recording rather than
   rediscovering: on flat ground the solve is now an IDENTITY by design (0.0198 degrees), so
   IK against `--no-ik` at the default spawn measures nothing; standing the player on the ramp
-  needs camera and position flags gametest does not have; and `menu`'s 752 px bistability would
-  sit inside whatever bar such an arm could set. A 34th golden was refused for the same
-  determinism reason — see the `anim-twin` note above.
+  needs camera and position flags gametest does not have; and the two menu goldens' instability
+  would sit inside whatever bar such an arm could set — 752 px twice, 672 px three times and
+  675 px once, each of which read 0 px on a re-run of the same binary (spec 12.5). A 34th golden
+  was refused for the same determinism reason — see the `anim-twin` note above.
 
 **And planting is not LOCKING, which is the larger gap.** Planting answers "where is the ground
 under this foot" every frame and keeps no memory, so a contact point is never held and a walking
@@ -609,6 +610,28 @@ Closing it is a watch, not a script:
 ./out/bin/gametest                    # walk onto the ramp at +X, the stairs at -X
 ./out/bin/gametest --no-ik            # the same without planting, to tell the two apart
 ```
+
+**What spec 12.5 learned about these instruments**, which is worth more than the cleanup it was
+doing at the time:
+
+- **The goldens are structurally blind to half this module.** A build that failed FIVE `ik` arms
+  — `ik-reach`, `ik-clamp`, `ik-singular`, `ik-analytic` and `ik-plant`, every one of them by
+  exactly the same 0.08 m — passed all 33 goldens. Every gametest golden is a *planting* path,
+  and planting was the half that stayed correct. The six synthetic arms are the only thing in
+  the tree that sees the geometric path at all.
+- **`ik-pole` is a weak arm and still is.** It passed throughout that same build while its
+  measured value moved 37 per cent (±0.1786 to ±0.2445): it asserts opposite signs and a span,
+  never a magnitude. Same family as the four arms 12.4's own review strengthened for passing
+  "for a reason that could not fail".
+- **Nothing has ever exercised `max_pelvis_drop`'s cap.** 12.5 changed it from metres to a
+  fraction of leg length and every arm printed identical digits — because a foot on a 1-in-4
+  ramp asks for far less than half a leg, so `min(worst, cap)` returns `worst` either way. A
+  wrong cap passed before that change and passes after it.
+- **`springbone.c` has no instrument of any kind.** No gate arm, no golden, and it is inert in
+  the corpus: `render.c` registers chains only under the prefix `hair`, and no fixture rig has
+  such a bone, so `spring_bone_update` returns at its first guard in every golden. 12.5 shares a
+  write-back between it and `ik.c`; the IK half is covered by twelve arms and the spring half by
+  nothing. Closing that is its own piece of work.
 
 **Owed.** The solver is exact on ground nobody has walked across, and the feature it is a
 prerequisite for has not been built.
