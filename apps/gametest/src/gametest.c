@@ -905,11 +905,26 @@ static void build_ocean(Scene* scene) {
 
     // apps/tree's lagoon rather than the library's open-ocean blue: greener, and about
     // four times brighter. Turquoise is a pale bed seen THROUGH water -- the water tints
-    // a bed, it does not make the colour -- so this and the sand floor are one decision.
+    // a bed, it does not make the colour -- so this and the LIT basin floor are one
+    // decision, which is why build_lights aims a panel down at that floor.
     glm_vec3_copy((vec3){0.03f, 0.13f, 0.14f}, water->scatter_albedo);
-    // Left at zero deliberately: apps/tree tried a self-illumination floor under this and
-    // reverted it as an authored constant wearing a new name.
-    glm_vec3_zero(water->scatter_glow);
+    /*
+     * No longer zero, and the reversal is the point. apps/tree tried a glow floor and
+     * reverted it as an authored constant wearing a new name -- correct for tree, where
+     * the sun lit the sea and a glow was a second answer to a solved question. Here the
+     * pool is the light source of the whole cavern and the glow IS the art direction.
+     *
+     * It emits NOTHING, and nothing downstream of it does either. The term is
+     * inscatter = scatter_albedo*incident + scatter_glow, which feeds FragColor and
+     * stops; the G-buffer albedo writes scatter_albedo alone and says in its own comment
+     * that the glow is not reflectance, so SSGI cannot bounce it, and every capture path
+     * skips water outright so no probe or DDGI sweep can see it either.
+     *
+     * What it buys is the LOOK: a surface bright enough to cross the bloom threshold.
+     * The rock is lit by the panels in build_lights. Two mechanisms, one appearance, and
+     * conflating them is how this ends up a glowing sheet in an unlit hole.
+     */
+    glm_vec3_copy((vec3){0.02f, 0.20f, 0.22f}, water->scatter_glow);
 
     // Absorption stays the clear-seawater default -- gametest is one unit to the metre,
     // so it needs no scaling, which is the conversion tree has to do and this does not.
@@ -923,6 +938,112 @@ static void build_ocean(Scene* scene) {
     scene->water = water; // the scene owns it and frees it
     printf("Ocean: level %g, bed %g to %g, lagoon scatter\n", (double)water->level,
            (double)GROTTO_SEABED_Y, (double)GROTTO_SEABED_FAR);
+}
+
+// A light, its node and its registration. Three lights want the same five lines, and the
+// node is not optional: a light on no node is never placed by the transform walk.
+static Light* add_scene_light(Scene* scene, const LightDesc* desc) {
+    Light* light = create_light(desc);
+    if (!light) {
+        fprintf(stderr, "Failed to create light %s\n", desc->name ? desc->name : "(unnamed)");
+        return NULL;
+    }
+    scene_add_light(scene, light);
+    SceneNode* node = create_node();
+    node_set_name(node, desc->name);
+    node_set_light(node, light);
+    node_add_child(scene->root_node, node);
+    return light;
+}
+
+/*
+ * The lights that are PLACED rather than inherited: a cone over the platform, and the
+ * pool at the bottom of the shaft lighting the rock around it.
+ *
+ * This replaces app.c's three-point rig, which lit the basin harder than the sky did and
+ * said nothing about it. Its three descs set no .type, so they are DIRECTIONAL, and no
+ * .cast_shadows, so shadow_map_index stays -1 and pbr_frag reads that as "no shadow test"
+ * and leaves visibility at 1.0. Three downward directionals therefore lit the basin floor
+ * at full NdotL through 140 units of rock, with no occlusion of any kind. No amount of
+ * cliff makes a pit dark while that is running, which is why this is the phase that
+ * carries the look and not the geometry.
+ */
+static void build_lights(Scene* scene) {
+    if (!scene || !scene->root_node)
+        return;
+
+    // The platform's cone. The cutoffs are HALF-ANGLES in radians, and the desc's zero
+    // means 12.5 and 15 degrees -- a spotlight circle in the middle of a 50x50 plate.
+    // That plate's half-diagonal is 35.4, so from 45 up its corner subtends 38 degrees;
+    // the outer edge carries past that so the falloff finishes OFF the plate rather than
+    // across it, which is the difference between a lit stage and a visible pool of light.
+    const float spot_y = 45.0f;
+    const float inner_deg = 38.0f, outer_deg = 47.0f;
+    LightDesc spot = {
+        .name = "platform_key",
+        .type = LIGHT_SPOT,
+        .position = {0.0f, spot_y, 0.0f},
+        .direction = {0.0f, -1.0f, 0.0f},
+        .color = {1.0f, 0.96f, 0.90f},
+        .intensity = 100000.0f, // CANDELA: a spot is punctual, where a panel is in nits
+        // Unlike a panel, a spot's range genuinely windows the falloff. This is the one
+        // knob that keeps the platform light off the cavern 130 units below it, and the
+        // dark middle of the fall is what it buys.
+        .range = spot_y + 30.0f,
+        .inner_cutoff = glm_rad(inner_deg),
+        .outer_cutoff = glm_rad(outer_deg),
+        .cast_shadows = true, // a perspective map, so the ramp and steps cast on the plate
+    };
+    add_scene_light(scene, &spot);
+
+    /*
+     * The pool, as TWO one-sided panels back to back at the waterline.
+     *
+     * An LTC panel is the only mechanism here that puts light from a horizontal surface
+     * onto a wall, and it suits this exactly: panels are single-sided, so one facing up
+     * lights every wall above it and spends nothing on submerged rock.
+     *
+     * TWO because the water's colour depends on a LIT BED. It resolves as
+     * bed * exp(-absorption * path) + inscatter, and the bed term is the refraction
+     * resolve of real geometry -- so with the fill rig gone the basin floor has no light
+     * at all, the shallows read black, and only deep water keeps colour from the glow.
+     * The downward panel lights the floor that is seen through.
+     *
+     * Neither lights the WATER: water_key_light goes through scene_key_directional, which
+     * skips every non-directional light. So the panels cannot double-brighten the surface
+     * they sit in, and its own look stays the glow plus the sky.
+     */
+    const float pool = 2.0f * GROTTO_BASIN_HALF * 0.75f; // a little wider than the pool
+
+    LightDesc up = {
+        .name = "water_glow_up",
+        .type = LIGHT_AREA,
+        .position = {0.0f, GROTTO_WATER_Y + 0.25f, 0.0f},
+        // Not a default to inherit: a zero direction here is straight DOWN, which would
+        // light the seabed and leave every wall the panel exists for unlit.
+        .direction = {0.0f, 1.0f, 0.0f},
+        .up = {0.0f, 0.0f, 1.0f}, // the panel then lies in the XZ plane
+        .color = {0.16f, 0.90f, 0.82f},
+        .intensity = 55.0f,   // nits
+        .size = {pool, pool}, // a zero here would silently mean 50 by 50
+        // Left at zero on purpose. A panel's range shrinks only the CULL SPHERE, since the
+        // area branch returns before the punctual falloff -- so setting it truncates the
+        // light at a cluster boundary rather than softening it. Derived, the radius spans
+        // the whole shaft, which is what keeps the pool reaching the rim.
+        .range = 0.0f,
+    };
+    add_scene_light(scene, &up);
+
+    LightDesc down = up;
+    down.name = "water_glow_down";
+    down.position[1] = GROTTO_WATER_Y - 0.25f;
+    down.direction[1] = -1.0f;
+    down.intensity = 22.0f; // dimmer: it only has to make the bed readable through water
+    add_scene_light(scene, &down);
+
+    printf("Lights: platform cone at y=%g (%g to %g deg), pool panels %gx%g at %g\n",
+           (double)spot_y, (double)inner_deg, (double)outer_deg, (double)pool, (double)pool,
+           (double)GROTTO_WATER_Y);
 }
 
 // Create a door with hinge constraint
@@ -1563,11 +1684,11 @@ static void on_init(Game* game) {
         scene->shadow_system->far_plane = 400.0f;
     }
 
-    // A low fill under the sky's sun, the whole lighting without one. At full
-    // scale the rig's key is 3.0 against the sun's 6.0, which reads as two suns
-    // and casts in two directions; under an HDR there is no sun and the rig is
-    // all there is.
-    scene_add_three_point_lights(scene, scene->sky ? 0.25f : 1.0f);
+    // The placed lights, in place of app.c's three-point fill. That rig was the brightest
+    // thing in the basin and nothing declared it: unshadowed directionals reach a fragment
+    // whatever stands between, so the pit could not be made dark while it ran. See
+    // build_lights for what replaces it and why there are two panels.
+    build_lights(scene);
 
     // Create physics world
     PhysicsConfig physics_config = physics_default_config();
