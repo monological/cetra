@@ -105,6 +105,10 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
         vec3 a, c, limb, axis;
         glm_vec3_copy(bind[hip][3], a);
         glm_vec3_copy(bind[ankle][3], c);
+        // The ankle's own height at bind IS its clearance above the sole, on any rig
+        // whose bind sole rests at model y = 0. Free here: the bind globals are already
+        // built for the axis below.
+        foot->sole_offset = c[1];
         glm_vec3_sub(c, a, limb);
         if (glm_vec3_norm(limb) > IK_EPS) {
             glm_vec3_normalize(limb);
@@ -179,6 +183,22 @@ void ik_foot_set_target(IkSystem* system, int foot, const vec3 target, const vec
     if (normal)
         glm_vec3_copy((float*)normal, f->normal);
     f->weight = weight < 0.0f ? 0.0f : (weight > 1.0f ? 1.0f : weight);
+}
+
+void ik_foot_set_ground(IkSystem* system, int foot, const vec3 ground, const vec3 normal,
+                        float weight) {
+    if (!system) {
+        log_error("ik_foot_set_ground: no system");
+        return;
+    }
+    if (foot < 0 || (size_t)foot >= system->foot_count) {
+        log_error("ik_foot_set_ground: no foot %d", foot);
+        return;
+    }
+    vec3 at;
+    glm_vec3_copy((float*)ground, at);
+    at[1] += system->feet[foot].sole_offset;
+    ik_foot_set_target(system, foot, at, normal, weight);
 }
 
 void ik_reset(IkSystem* system) {
