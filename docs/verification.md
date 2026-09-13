@@ -657,17 +657,19 @@ worth stating plainly rather than leaving to be discovered:
   committed asset is what the generator emits, and the regeneration was verified to carry
   thirteen channels against thirteen samplers — but whether a breaststroke *reads* as one is a
   watch, and the clip shares the rig's known limitation that its walk bends no knee.
-- **`--follow-cam` is photographed by nothing.** It is off for the golden bakes by design, so
-  the two menu images keep the orbit framing, which means the follow path has no pixel
-  coverage at all.
+- **The follow camera's REST pose is photographed; its ROTATION is not.** It is on for the
+  golden bakes now, so both menu images frame the player from `cam_yaw`/`cam_pitch`'s initial
+  values and a regression in the placement would move them. No golden presses an arrow key,
+  so nothing covers the turning, the pitch clamp, or the camera-relative movement basis that
+  reads from the same yaw -- which is the half that failed twice in review.
 - **The chaser now swims after you**, which is the per-entity question `anim-two-rigs` had to
   ask of the animator and nothing asks here.
 
 Closing it is a watch, not a script:
 
 ```bash
-./out/bin/gametest                      # walk off the edge, land in water, swim
-./out/bin/gametest --follow-cam         # the camera trails you over the edge
+./out/bin/gametest                      # walk off the edge, land in water, swim; arrows turn the camera
+./out/bin/gametest --no-follow-cam      # the fixed orbit instead, for comparison
 ./out/bin/gametest --no-chaser          # the NPC's swim, isolated by removing it
 ```
 
