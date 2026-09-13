@@ -55,6 +55,39 @@ void recalculate_inverse_bind_poses(Skeleton* skeleton);
 // (caller provides bone_count entries)
 void skeleton_compute_bind_globals(Skeleton* skeleton, mat4* globals);
 
+// Mark root and every bone descended from it, 1 in out[] and 0 elsewhere; returns how
+// many were marked. out holds bone_count entries and is written in full, so a caller
+// needs no clear of its own.
+//
+// One forward pass, because bones are ordered parent-first: a bone's parent is already
+// decided when the loop reaches it. The parent < i test is what makes that safe to
+// state rather than assume -- a skeleton whose order is violated gets a bone excluded
+// rather than reading a slot the pass has not written yet.
+//
+// The root is an INDEX and not a name: the two callers resolve it differently, one
+// from a name with its own log line and one from a bone it already holds, and folding
+// the lookup in here would force a name on the caller that does not have one.
+size_t skeleton_mark_subtree(const Skeleton* skeleton, int root, uint8_t* out);
+
+// Rotate a bone's global by q about `head`, which the caller states rather than the
+// function reading it back: for a mid-chain joint the head is where the bone WILL be,
+// not where it currently is. dest and src may be the same matrix.
+//
+// static inline, deliberately. The build pins no -ffp-contract, so whether the compiler
+// contracts glm_mat4_mul's multiply-add chains into FMAs can follow the inlining context
+// -- and both call sites currently have this inlined into them. An extern in animation.c
+// would change that context for a function whose output feeds skinning matrices, to buy
+// nothing.
+static inline void skeleton_rotate_global(mat4 dest, mat4 src, versor q, const vec3 head) {
+    mat4 rot;
+    glm_quat_mat4(q, rot);
+    glm_mat4_mul(rot, src, dest);
+    dest[3][0] = head[0];
+    dest[3][1] = head[1];
+    dest[3][2] = head[2];
+    dest[3][3] = 1.0f;
+}
+
 // --- Keyframes ---
 
 typedef struct PositionKey {

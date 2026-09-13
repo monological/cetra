@@ -142,17 +142,7 @@ bool ik_set_pelvis(IkSystem* system, const char* pelvis_bone) {
         return false;
     }
 
-    // Bones are ordered parent-first, so one forward pass settles the whole subtree.
-    memset(system->in_pelvis_subtree, 0, sizeof(system->in_pelvis_subtree));
-    for (size_t i = 0; i < skeleton->bone_count && i < MAX_BONES; i++) {
-        if ((int)i == pelvis) {
-            system->in_pelvis_subtree[i] = 1;
-            continue;
-        }
-        const int parent = skeleton->bones[i].parent_index;
-        if (parent >= 0 && system->in_pelvis_subtree[parent])
-            system->in_pelvis_subtree[i] = 1;
-    }
+    skeleton_mark_subtree(skeleton, pelvis, system->in_pelvis_subtree);
 
     // Dropping a pelvis that does not carry every foot would lower half a body and
     // leave the rest standing, which reads as a broken rig rather than a short leg.
@@ -199,18 +189,11 @@ void ik_reset(IkSystem* system) {
     system->needs_reset = true;
 }
 
-// Rotate a bone's global by q about its own head, which the caller states rather than
-// reading back: the head is where the bone WILL be, and for the knee and ankle that is
-// not where it currently is. springbone.c's write-back, with the position supplied.
+// The head is stated rather than read back because for the knee and the ankle it is
+// where the bone WILL be, not where it currently is. skeleton_rotate_global (animation.h)
+// is the shared form; springbone.c writes its swing through the same one.
 static void rotate_global(mat4 m, versor q, const vec3 head) {
-    mat4 rot, out;
-    glm_quat_mat4(q, rot);
-    glm_mat4_mul(rot, m, out);
-    glm_mat4_copy(out, m);
-    m[3][0] = head[0];
-    m[3][1] = head[1];
-    m[3][2] = head[2];
-    m[3][3] = 1.0f;
+    skeleton_rotate_global(m, m, q, head);
 }
 
 // Rotate hip and knee so the ankle lands on `target`. Model space throughout, and only

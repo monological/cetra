@@ -144,6 +144,20 @@ void skeleton_compute_bind_globals(Skeleton* skeleton, mat4* globals) {
     }
 }
 
+size_t skeleton_mark_subtree(const Skeleton* skeleton, int root, uint8_t* out) {
+    if (!skeleton || !out)
+        return 0;
+
+    size_t marked = 0;
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        const int parent = skeleton->bones[i].parent_index;
+        const bool in = (int)i == root || (parent >= 0 && (size_t)parent < i && out[parent] != 0);
+        out[i] = in ? 1 : 0;
+        marked += in ? 1 : 0;
+    }
+    return marked;
+}
+
 void recalculate_inverse_bind_poses(Skeleton* skeleton) {
     if (!skeleton || skeleton->bone_count == 0)
         return;
