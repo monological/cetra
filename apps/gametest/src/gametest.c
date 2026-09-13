@@ -44,6 +44,7 @@
 #include "cetra/water.h"
 #include "cetra/procedural/terrain.h"
 #include "cetra/procedural/erosion.h"
+#include "cetra/procedural/terrain_tex.h"
 #include "cetra/particle_system.h"
 #include "cetra/particle_emitter.h"
 #include "cetra/particle_module.h"
@@ -542,6 +543,7 @@ static void grotto_box(Scene* scene, EntityManager* em, PhysicsWorld* physics, c
 #define SHAFT_COLLIDER_SEGS 48    // coarser than the visual, as terrain.h intends
 #define SHAFT_FLOOR_R       0.30f // normalised radius the pool floor reaches out to
 #define SHAFT_RIM_R         0.88f // and where the wall has finished climbing
+#define SHAFT_LAYER_TEX     512   // one ground layer map, square and periodic
 
 // The field, and a SECOND params carrying no field at all.
 //
@@ -648,11 +650,86 @@ static void build_shaft(Game* game) {
     g_shaft.field = &g_shaft_field;
     terrain_field_build_pyramid(&g_shaft_field); // last: the levels are copies
 
+    // The layered rock. Which layer shows at a texel is decided on the CPU, by the splat:
+    // terrain_bake_splat writes rock from SLOPE ALONE into .r, silt from the deposit mask
+    // into .g and gravel from flow into .b. So "bare rock up the walls, silt on the basin
+    // floor" costs nothing to author -- it is what the erosion already knows, and rock
+    // lands on a cliff whether or not water ever ran there. layers.glsl itself has no
+    // slope or height input; it reads the splat and the layer heights and nothing else.
+    const struct {
+        TerrainLayerKind kind;
+        const char* name;
+        float uv_scale;
+    } layers[] = {
+        // Slot 0 is the REMAINDER -- what shows where all three splat channels are low.
+        // forest puts grass there; a cave has none, so rock takes it at a broad scale and
+        // slot 1 takes rock again at a tighter one with its own seed. Two rock layers
+        // rather than one is what stops a 140-unit wall reading as a single tiling.
+        {TERRAIN_LAYER_ROCK, "base", 9.0f},
+        {TERRAIN_LAYER_ROCK, "scoured", 4.0f},
+        {TERRAIN_LAYER_SILT, "silt", 5.0f},
+        {TERRAIN_LAYER_GRAVEL, "gravel", 3.0f},
+    };
+    const int layer_count = (int)(sizeof(layers) / sizeof(layers[0]));
+
     Material* rock = create_material();
-    glm_vec3_copy((vec3){0.28f, 0.26f, 0.27f}, rock->albedo);
-    rock->roughness = 0.85f;
-    rock->metallic = 0.0f;
     material_set_program(rock, pbr_shader);
+    rock->roughness = 0.9f;
+    rock->metallic = 0.0f;
+    // Registered with the scene, which nothing in gametest has ever needed to do: the
+    // layer INDICES are resolved by material_texture_array_build, which walks
+    // scene->materials. An unregistered layered material keeps every index at -1 and
+    // renders as layer 0 everywhere -- a plausible frame, and the wrong one.
+    scene_add_material(scene, rock);
+
+    for (int i = 0; i < layer_count; ++i) {
+        unsigned char *albedo = NULL, *surface = NULL;
+        terrain_layer_maps(layers[i].kind, SHAFT_LAYER_TEX, 20260913u + (unsigned)i * 977u, &albedo,
+                           &surface);
+        if (!albedo || !surface) {
+            free(albedo);
+            free(surface);
+            fprintf(stderr, "Shaft: layer %s bake failed\n", layers[i].name);
+            continue;
+        }
+        char key[64];
+        snprintf(key, sizeof(key), "shaft_layer_%s_a", layers[i].name);
+        material_set_layer_albedo_tex(rock, i,
+                                      texture_load_memory_owned(scene->tex_pool, key, albedo,
+                                                                SHAFT_LAYER_TEX, SHAFT_LAYER_TEX, 4,
+                                                                texture_desc(false)));
+        snprintf(key, sizeof(key), "shaft_layer_%s_s", layers[i].name);
+        material_set_layer_surface_tex(rock, i,
+                                       texture_load_memory_owned(scene->tex_pool, key, surface,
+                                                                 SHAFT_LAYER_TEX, SHAFT_LAYER_TEX,
+                                                                 4, texture_desc(false)));
+        rock->layers[i].uv_scale = layers[i].uv_scale;
+    }
+
+    const int splat_res = g_shaft_field.res;
+    unsigned char* splat = malloc((size_t)splat_res * (size_t)splat_res * 3u);
+    if (splat && terrain_bake_splat(&g_shaft, splat_res, splat)) {
+        material_set_splat_tex(rock, texture_load_memory_owned(scene->tex_pool, "shaft_splat",
+                                                               splat, splat_res, splat_res, 3,
+                                                               texture_desc(false)));
+    } else {
+        free(splat);
+        fprintf(stderr, "Shaft: splat bake failed; the rock falls back to layer 0\n");
+    }
+
+    // WORLD_XZ and not UV1, which is not a preference: build_grid writes UV1 as a literal
+    // zero, so a mesh-local splat samples one texel and the whole shaft resolves to layer
+    // 0. That shipped broken once already, through a green suite.
+    rock->splat_space = SPLAT_SPACE_WORLD_XZ;
+    rock->splat_origin[0] = terrain_world_x(&g_shaft, -g_shaft.extent);
+    rock->splat_origin[1] = terrain_world_z(&g_shaft, -g_shaft.extent);
+    rock->splat_size[0] = rock->splat_size[1] = 2.0f * g_shaft.extent;
+    rock->layer_count = layer_count; // LAST: it is what arms the shader
+
+    // The mesh side of the same switch, and it has to precede the first tile built below.
+    // The layers carry the rock's colour now, so the vertex tint must become macro
+    // variation -- left as a colour the two multiply and the shaft comes out near black.
+    g_shaft.layered = true;
 
     SceneNode* group = create_node();
     node_set_name(group, "shaft");
