@@ -539,7 +539,7 @@ static void grotto_box(Scene* scene, EntityManager* em, PhysicsWorld* physics, c
 // engine code is added for it.
 #define SHAFT_FIELD_RES     257 // node-centred: res-1 must halve, so 257 and not 256
 #define SHAFT_TILES         4
-#define SHAFT_TILE_SEGS     24    // (2*60/4)/24 = 1.25 units a vertex
+#define SHAFT_TILE_SEGS     40    // (2*60/4)/40 = 0.75 units a vertex
 #define SHAFT_COLLIDER_SEGS 48    // coarser than the visual, as terrain.h intends
 #define SHAFT_FLOOR_R       0.30f // normalised radius the pool floor reaches out to
 #define SHAFT_RIM_R         0.88f // and where the wall has finished climbing
@@ -553,6 +553,15 @@ static void grotto_box(Scene* scene, EntityManager* em, PhysicsWorld* physics, c
 // costs nothing and inherits the tuned octave set.
 static TerrainParams g_shaft;
 static TerrainParams g_shaft_noise;
+// Two more, and they are not decoration. g_shaft_warp displaces the SAMPLE POINT before
+// any radius is taken, which is the only thing that stops features organising into rings;
+// g_shaft_ridge is the high-frequency source the creasing transform below runs on.
+static TerrainParams g_shaft_warp;
+static TerrainParams g_shaft_ridge;
+// The crag warp: the same idea as g_shaft_warp but at a fraction of the wavelength. On a
+// wall this steep a horizontal displacement is worth about four times a vertical one, so
+// this is where the rock detail has to live.
+static TerrainParams g_shaft_crag;
 static TerrainField g_shaft_field;
 static bool g_shaft_ready = false;
 
@@ -572,52 +581,107 @@ static float shaft_smoothstep(float e0, float e1, float x) {
 // release, where the same unsplittable BVH is built silently. Spec 11.63 shipped exactly
 // that from a saturating island floor and fixed it at the geometry. So the fbm below
 // keeps real weight at r = 0, and the profile is a lerp rather than a max.
+// Crease a smooth noise into a sharp one.
+//
+// Perlin is smooth BY CONSTRUCTION, so any sum of it -- however many octaves -- gives
+// dunes: rounded humps with no edges anywhere. 1 - |n| folds the field at every zero
+// crossing, turning each one into a crease, and squaring sharpens the crease into an
+// edge while flattening the basins between. That fold is the difference between a
+// surface that reads as drifted and one that reads as fractured.
+static float shaft_ridge(float v, float amp) {
+    if (amp <= 0.0f)
+        return 0.0f;
+    float n = 1.0f - fabsf(v / amp);
+    if (n < 0.0f)
+        n = 0.0f;
+    return n * n;
+}
+
+/*
+ * The shaft's surface.
+ *
+ * TWO ARTIFACTS WERE SHIPPED HERE BEFORE THIS SHAPE, and they came from one mistake, so
+ * the history is worth more than the formula. First a height detail f(x, z) on a
+ * near-vertical wall, which cannot vary as you climb -- x and z do not change going up --
+ * and rakes into vertical streaks. Then a terrace term added to fix that, which was a
+ * sine over the RADIAL parameter and so drew seven concentric rings round the basin: a
+ * contour map. An angular warp of sin(3a) + sin(5a) fluted it on top, because a pure
+ * function of the angle is identical at every height.
+ *
+ * The common cause is that every one of those terms was a smooth analytic function of
+ * (r, a), and such a function can only ever produce rings and lobes. Real rock is not a
+ * function of anything: it is fracture and collapse, irregular at every scale. So the
+ * regular terms are gone entirely rather than retuned, and what replaces them is noise
+ * that is warped before it is measured and creased after.
+ */
 static float shaft_height(float x, float z) {
-    const float d = sqrtf(x * x + z * z);
-    const float ang = atan2f(z, x);
-
-    // A second noise tap, far enough from the first that the two are independent. It
-    // warps the RADIUS, so the shaft is out of round by a different amount in every
-    // direction rather than by a formula.
-    const float rw = terrain_height_at(&g_shaft_noise, x + 613.0f, z - 421.0f);
-
     /*
-     * Break the symmetry before it becomes a radius -- but NOT with a pure function of
-     * the angle. sin(3a) + sin(5a) alone is identical at every height, so it flutes the
-     * shaft into evenly spaced vertical ridges: a lathe-turned column, which is the exact
-     * artifact this term was added to avoid. Folding the radial noise into the phase is
-     * what stops the ridges being straight and evenly spaced.
+     * DOMAIN WARP FIRST, which is the single line that matters most here.
+     *
+     * Everything below keys off a radius, and a radius is precisely what turns any wobble
+     * into a ring -- features line up into contours around the centre because the centre
+     * is what they are measured from. Displacing the sample point by noise BEFORE the
+     * radius is taken means there is no clean r left for anything to organise on. Two
+     * independent taps, so the displacement is a genuine 2D vector rather than a radial
+     * stretch wearing a new name.
      */
-    const float warp =
-        1.0f + 0.16f * sinf(ang * 3.0f + rw * 0.7f) + 0.09f * sinf(ang * 5.0f + 1.7f - rw * 0.4f);
-    const float r = (d + rw * 1.2f) / (GROTTO_BASIN_HALF * warp);
+    // 12 and not 30. At 30 against a 60-unit basin the warp could drag a sample from the
+    // middle of the pool out to most of the way up the wall, which is measurable rather
+    // than theoretical: the pool floor came out at -174 when it is authored at -188, so
+    // rock was breaching the water surface in the middle of the pool. The warp has to be
+    // big enough to break the radial symmetry and small enough not to redraw the basin.
+    // TWO warps, and the second is where the rock is.
+    //
+    // The first is the landform: low frequency, large amplitude, enough to take the basin
+    // out of round so nothing organises into rings. The second is the crag detail, at a
+    // tenth of the wavelength -- and it is horizontal for a measured reason. The wall
+    // climbs ~6 units per 1.4 horizontal, so its slope is about 4; shoving the surface
+    // sideways by 3 units therefore moves it vertically by ~12, where adding 3 units of
+    // height to the same wall only bends the rate of climb and never carves a ledge. The
+    // profile dump is what settled that: a vertical ridge term modulated the rise and
+    // never once reversed it.
+    // The crag is GATED on the unwarped radius, and that gate is what lets it be strong.
+    //
+    // Horizontal displacement drags whatever is at the sample point toward the centre, so
+    // an ungated crag pulls WALL heights into the pool: measured, it lifted the pool floor
+    // from -185.7 to -184.2 and breached the swimmer probe, the same failure the 30-unit
+    // landform warp produced. Gating on the raw radius -- not on t, which is computed from
+    // the warped position and would be circular -- makes the floor immune by construction
+    // instead of by tuning, and with the floor safe the amplitude can go up where it is
+    // wanted.
+    const float r0 = sqrtf(x * x + z * z) / GROTTO_BASIN_HALF;
+    const float crag = 2.0f * shaft_smoothstep(SHAFT_FLOOR_R * 0.8f, SHAFT_FLOOR_R * 1.7f, r0);
 
+    const float wx = x + 12.0f * terrain_height_at(&g_shaft_warp, x, z) +
+                     crag * terrain_height_at(&g_shaft_crag, x, z);
+    const float wz = z + 12.0f * terrain_height_at(&g_shaft_warp, x + 918.0f, z + 517.0f) +
+                     crag * terrain_height_at(&g_shaft_crag, x - 377.0f, z + 244.0f);
+
+    const float r = sqrtf(wx * wx + wz * wz) / GROTTO_BASIN_HALF;
     const float t = shaft_smoothstep(SHAFT_FLOOR_R, SHAFT_RIM_R, r);
     float h = GROTTO_SEABED_Y + (GROTTO_CLIFF_TOP - GROTTO_SEABED_Y) * t;
 
-    /*
-     * TERRACES, and they are the answer to a limit rather than a flourish.
-     *
-     * A heightfield is h = f(x, z), so every feature it can express is a COLUMN: going up
-     * a near-vertical wall does not change x or z, so any detail added to the height is
-     * constant the whole way up and smears into vertical streaks. No amount of noise
-     * fixes that, because the noise is the thing being smeared.
-     *
-     * Horizontal variety therefore has to come from the PROFILE being non-monotonic --
-     * stepping the radial ramp, so the wall climbs in benches. That is a shape a
-     * heightfield can hold, and it is what reads as bedding planes.
-     */
-    const float bench = 0.055f * sinf(t * 16.0f + rw * 0.5f);
-    h += (GROTTO_CLIFF_TOP - GROTTO_SEABED_Y) * bench;
+    // The wall, as creased noise read at the WARPED position so it inherits the same
+    // broken symmetry. The offset re-centres a 0..1 ridge about zero, so the term cuts
+    // into the profile as well as standing off it -- gullies as well as buttresses.
+    const float ridged =
+        shaft_ridge(terrain_height_at(&g_shaft_ridge, wx, wz), g_shaft_ridge.height);
+    // Amplitude comes DOWN as the frequency goes up, and the pair is the point: relief is
+    // read as slope, so 5 units across a 7-unit wavelength bites far harder than 9 across
+    // 33 did. Kept on t so the pool floor stays inside the swimmer clearance.
+    h += (ridged - 0.35f) * 5.0f * t;
 
     /*
-     * Detail weighted toward the FLOOR, which is the opposite of the obvious weighting
-     * and the reason the walls striped. On the floor a height displacement is the whole
-     * relief and it is what keeps the collider free of coplanar runs; on a wall the same
-     * displacement barely moves the surface and only rakes it vertically. Wall detail
-     * belongs to the triplanar material, not to the geometry.
+     * The floor term, which is doing a different job from the wall and is scaled for it.
+     *
+     * It is the anti-coplanar relief the Jolt BVH needs -- a large run of exactly planar
+     * collider triangles fails the splitter -- so it must never reach zero. It is also
+     * bounded by the swimmer clearance: a floating character's feet sit two units under
+     * the surface and the IK foot ray probes three below that, so rock rising past that
+     * line plants a swimmer on the bottom. Small, and weighted away from the wall where
+     * the ridged term above has the relief covered.
      */
-    h += terrain_height_at(&g_shaft_noise, x, z) * (1.0f - 0.65f * t);
+    h += terrain_height_at(&g_shaft_noise, x, z) * (1.0f - 0.8f * t);
     return h;
 }
 
@@ -640,6 +704,44 @@ static void build_shaft(Game* game) {
     g_shaft_noise.seed = 20260913u;
     g_shaft_noise.island_start = 0.0f; // island shaping is a DOME and has no inverse
     g_shaft_noise.field = NULL;
+
+    // The warp. LOW frequency and large amplitude on purpose: this is not detail, it is
+    // the term that decides where the wall is at all, and it has to move the sample point
+    // by tens of units to break the basin out of round at a scale the eye reads as
+    // landform rather than as texture.
+    g_shaft_warp = g_shaft_noise;
+    g_shaft_warp.height = 1.0f;
+    g_shaft_warp.base_freq = 0.012f; // ~83 units a cycle
+    g_shaft_warp.octaves = 3;
+    g_shaft_warp.seed = 77712345u;
+
+    // The ridge source, read through shaft_ridge. Higher frequency than the warp, since
+    // this one IS detail -- but still clear of the tile lattice at 1.25 units a vertex.
+    g_shaft_ridge = g_shaft_noise;
+    g_shaft_ridge.height = 1.0f;
+    // SHORT wavelength, because what makes rock read as rock is local slope, not
+    // amplitude. At 0.030 this ran a 33-unit wavelength against a wall whose base slope is
+    // about 4, so even nine units of relief perturbed it by 0.27 -- seven percent, which
+    // renders as a smooth funnel however jagged the generator is. At 0.14 the wavelength
+    // is about 7 units, and a few units of relief across that is a local slope near 1.
+    g_shaft_ridge.base_freq = 0.14f;
+    // Two, not four, and it follows from the frequency above rather than from taste. Each
+    // octave halves the wavelength, so four octaves from a 7-unit base reaches 0.89 units
+    // -- against a 0.469-unit field cell that is under two samples per cycle, which is the
+    // definition of aliasing, and it prints as the regular hatching the dumps show across
+    // the pool floor. Two octaves stop at 3.6 units, about eight samples a cycle.
+    g_shaft_ridge.octaves = 2;
+    g_shaft_ridge.seed = 5150077u;
+
+    // Short wavelength, modest amplitude. The measured wall climbs about 6 units per 1.4
+    // horizontal -- a base slope near 4 -- so a 3-unit radial shove moves the surface some
+    // 12 units vertically. That is the leverage a vertical term does not have, and it is
+    // why detail belongs here rather than in the height.
+    g_shaft_crag = g_shaft_noise;
+    g_shaft_crag.height = 3.0f;
+    g_shaft_crag.base_freq = 0.10f; // ~10 units a cycle, clear of the 0.47 field cell
+    g_shaft_crag.octaves = 3;
+    g_shaft_crag.seed = 31337007u;
 
     g_shaft = terrain_default_params();
     g_shaft.extent = GROTTO_BASIN_HALF;
@@ -678,10 +780,50 @@ static void build_shaft(Game* game) {
     ErosionParams ep = erosion_default_params();
     ep.talus = 3.0f;
     ep.thermal_every = 8;
-    ep.iterations = 120;
+    // Fewer passes. Thermal erosion flattens toward the angle of repose, which is exactly
+    // the operation that smooths the short-wavelength relief above back out -- and the
+    // dumps show it also sharpening the field's own lattice aliasing into diagonal stripes
+    // across the pool floor. The sim is here to add scree and channels, not to sand the
+    // rock down.
+    ep.iterations = 40;
     ErosionStats st;
     if (!terrain_erode(&g_shaft_field, &g_shaft, &ep, &st))
         fprintf(stderr, "Shaft: erosion refused, using the unworn field\n");
+
+    /*
+     * The swimmer clearance, MEASURED after the erode rather than reasoned about before it.
+     *
+     * A floating character's feet sit at GROTTO_WATER_Y + PLAYER_RIG_DROP and the IK foot
+     * ray reaches three units below that, so rock rising past that line lets a swimmer
+     * plant on the bottom. The rule is about the floor's HIGHEST point, which is exactly
+     * what a noisy floor makes easy to get wrong -- a mean says nothing here, because one
+     * node poking up is enough to catch a foot.
+     *
+     * After the erode and not before, because this basin is CLOSED: the sim ponds water in
+     * the middle and deposits there, so erosion raises this floor. Measuring the seeded
+     * field would be measuring the wrong surface, in the wrong direction.
+     *
+     * The disc is the nominal floor, not an exact one -- the domain warp means world
+     * radius and the profile's t no longer agree -- but it is the middle of the pool,
+     * which is where a swimmer actually floats.
+     */
+    const float floor_radius = SHAFT_FLOOR_R * GROTTO_BASIN_HALF;
+    float floor_max = GROTTO_SEABED_FAR;
+    for (int j = 0; j < SHAFT_FIELD_RES; ++j) {
+        const float z = terrain_field_node(g_shaft.extent, SHAFT_FIELD_RES, j);
+        for (int i = 0; i < SHAFT_FIELD_RES; ++i) {
+            const float x = terrain_field_node(g_shaft.extent, SHAFT_FIELD_RES, i);
+            const float y = g_shaft_field.height[(size_t)j * SHAFT_FIELD_RES + i];
+            if (y > floor_max && sqrtf(x * x + z * z) <= floor_radius)
+                floor_max = y;
+        }
+    }
+    const float swim_probe = GROTTO_WATER_Y + PLAYER_RIG_DROP - 3.0f;
+    if (floor_max > swim_probe)
+        fprintf(stderr,
+                "Shaft: pool floor reaches %g, above the swimmer foot probe at %g -- a "
+                "swimmer can plant on the bottom\n",
+                (double)floor_max, (double)swim_probe);
 
     g_shaft.field = &g_shaft_field;
     terrain_field_build_pyramid(&g_shaft_field); // last: the levels are copies
@@ -701,10 +843,28 @@ static void build_shaft(Game* game) {
         // forest puts grass there; a cave has none, so rock takes it at a broad scale and
         // slot 1 takes rock again at a tighter one with its own seed. Two rock layers
         // rather than one is what stops a 140-unit wall reading as a single tiling.
-        {TERRAIN_LAYER_ROCK, "base", 9.0f},
-        {TERRAIN_LAYER_ROCK, "scoured", 4.0f},
-        {TERRAIN_LAYER_SILT, "silt", 5.0f},
-        {TERRAIN_LAYER_GRAVEL, "gravel", 3.0f},
+        // uv_scale is WORLD UNITS PER TILE, so small numbers repeat harder. These were
+        // 9/4/5/3, tuned by eye against forest's ground, where the camera looks DOWN at
+        // terrain from a distance. A shaft wall is 140 units of near-vertical rock read
+        // from a few metres away, and at those numbers one map tiled thirty times up it
+        // and printed as a field of scales. Larger tiles trade crispness for not
+        // announcing the texture, which is the right trade on a wall you stand next to.
+        // ONE layer, and the four that were here are the reason the basin had contour
+        // rings painted on it.
+        //
+        // terrain_bake_splat picks the layer from SLOPE, through smoothstep(0.62, 0.88).
+        // On a basin slope is a function of the radius, so every layer boundary it draws
+        // is a circle round the centre -- and where slope sits near that threshold a hair
+        // of noise flips the choice back and forth, which bands hard. The dumped splat
+        // shows exactly that: a green silt ring hugging the pool and red/green filaments
+        // across the outer field. No amount of retuning removes it, because a slope-keyed
+        // splat on a radial landform can only draw contours.
+        //
+        // Slot 0 is the remainder and takes weight 1 everywhere when it is the only entry,
+        // so with one layer the splat is never consulted and there is nothing to band.
+        // What carries the rock now is the GEOMETRY and the triplanar detail on it, which
+        // is where the variety should have been coming from all along.
+        {TERRAIN_LAYER_ROCK, "base", 18.0f},
     };
     const int layer_count = (int)(sizeof(layers) / sizeof(layers[0]));
 
@@ -712,6 +872,14 @@ static void build_shaft(Game* game) {
     material_set_program(rock, pbr_shader);
     rock->roughness = 0.9f;
     rock->metallic = 0.0f;
+    // Brown, and it has to be applied HERE rather than in the layer maps. albedo
+    // multiplies every layer the shader blends, so one warm value browns the bedrock, the
+    // silt and the gravel together and keeps the relation between them -- where retuning
+    // four procedural palettes would be four chances to break it. terrain_tex bakes a
+    // GROUND set, grey-green bedrock and pale silt meant to sit under a sky; the default
+    // white albedo passed that palette through unchanged, which is why the shaft read as
+    // wet concrete instead of rock.
+    glm_vec3_copy((vec3){0.52f, 0.34f, 0.22f}, rock->albedo);
     // Registered with the scene, which nothing in gametest has ever needed to do: the
     // layer INDICES are resolved by material_texture_array_build, which walks
     // scene->materials. An unregistered layered material keeps every index at -1 and
@@ -815,9 +983,11 @@ static void build_shaft(Game* game) {
     }
 
     g_shaft_ready = true;
-    printf("Shaft: %d tiles over %g units, field %d^2, collider %zu tris, y %g to %g\n", built,
-           (double)(2.0f * g_shaft.extent), SHAFT_FIELD_RES, collider_tris,
-           (double)g_shaft_field.min_y, (double)g_shaft_field.max_y);
+    printf("Shaft: %d tiles over %g units, field %d^2, collider %zu tris, y %g to %g, pool "
+           "floor tops at %g (swimmer probe %g)\n",
+           built, (double)(2.0f * g_shaft.extent), SHAFT_FIELD_RES, collider_tris,
+           (double)g_shaft_field.min_y, (double)g_shaft_field.max_y, (double)floor_max,
+           (double)swim_probe);
 }
 
 // The lip under the platform's own rim. Static, and before physics_world_optimize.
@@ -2553,6 +2723,50 @@ static void follow_camera_update(Game* game) {
     vec3 eye = {focus[0] - sinf(cam_yaw) * cp * FOLLOW_CAM_DISTANCE,
                 focus[1] + FOLLOW_CAM_HEIGHT - sinf(cam_pitch) * FOLLOW_CAM_DISTANCE,
                 focus[2] - cosf(cam_yaw) * cp * FOLLOW_CAM_DISTANCE};
+
+    /*
+     * Keep the camera in front of the rock instead of inside it.
+     *
+     * The orbit above is a pure function of yaw, pitch and the player, so nothing in it
+     * knows the basin exists: stand near a wall and the eye is simply placed behind it,
+     * and the shot becomes the far side of the world seen through the near side. A ray
+     * from the player to where the eye WANTS to be answers that directly -- if rock is in
+     * the way the arm is shortened to just short of the hit, so the shot tightens rather
+     * than breaking.
+     *
+     * Filtered to STATIC on purpose. Crates and the door are things you walk around, not
+     * things the camera should be shoved by, and letting a physics prop drive the camera
+     * is how a follow cam starts lurching for reasons the player cannot see.
+     *
+     * This is a RAY, and that is a stated limit rather than an oversight: a zero-radius
+     * probe can pass beside an edge the frustum still straddles, so a corner can clip the
+     * near plane even when the ray is clear. The skin below buys most of that back, and
+     * physics_world_sweep_body is the honest fix if it turns out not to be enough.
+     */
+    PhysicsWorld* physics = game_get_physics_world(game);
+    if (physics) {
+        vec3 arm;
+        glm_vec3_sub(eye, focus, arm);
+        const float want = glm_vec3_norm(arm);
+        if (want > 1e-4f) {
+            vec3 dir;
+            glm_vec3_divs(arm, want, dir);
+            RaycastHit hit;
+            if (physics_world_raycast_filtered(physics, focus, dir, want, 1u << OBJ_LAYER_STATIC,
+                                               &hit) &&
+                hit.hit) {
+                // Never collapse onto the player: inside its own capsule the rig fills the
+                // frame and the near plane starts clipping the puppet instead of the rock.
+                const float min_arm = 2.0f * PLAYER_SCALE;
+                const float skin = 0.6f;
+                float len = hit.distance - skin;
+                if (len < min_arm)
+                    len = min_arm;
+                glm_vec3_scale(dir, len, arm);
+                glm_vec3_add(focus, arm, eye);
+            }
+        }
+    }
 
     camera_set_position(engine->camera, eye);
     camera_set_look_at(engine->camera, focus);
