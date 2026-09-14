@@ -434,13 +434,25 @@ def _env_mismatch(recipe, got):
     return f"rendered {got[0]}x{got[1]}, golden is {want[0]}x{want[1]}" if got else "unreadable"
 
 
-def cmd_check(recipes, workdir):
+def cmd_check(recipes, workdir, allow_missing=False):
     failures = []
     for r in recipes:
         name = r["name"]
         g = golden_path(name)
         if not os.path.exists(g):
-            print(f"  {name:<24} SKIP  no golden committed")
+            # A MISSING GOLDEN IS A FAILURE, because the two ways to reach this
+            # line are indistinguishable from here and only one of them is
+            # benign: a recipe whose image was never baked, and a recipe whose
+            # image this script can no longer find. Skipping served the first
+            # and hid the second -- a moved or deleted golden read as "not baked
+            # yet" and the suite stayed green with the reference gone.
+            # --allow-missing is the escape for the benign case, stated by
+            # whoever knows it applies.
+            if allow_missing:
+                print(f"  {name:<24} SKIP  no golden committed (--allow-missing)")
+                continue
+            print(f"  {name:<24} FAIL  no golden at {g[len(ROOT) + 1:]}")
+            failures.append(name)
             continue
         out = os.path.join(workdir, f"{name}.ppm")
         err = _render(r, out)
@@ -500,6 +512,8 @@ def main():
     ap.add_argument("--rebake", nargs="*", metavar="NAME",
                     help="re-render and overwrite (no names = all)")
     ap.add_argument("--only", metavar="NAME", help="check just this one")
+    ap.add_argument("--allow-missing", action="store_true",
+                    help="a recipe with no committed golden skips instead of failing")
     ap.add_argument("--list", action="store_true", help="print the recipe table")
     ap.add_argument("--keep", action="store_true", help="keep the rendered frames")
     ap.add_argument("--bin-dir", metavar="DIR",
@@ -543,7 +557,7 @@ def main():
             failures = cmd_rebake(recipes, workdir)
         else:
             print(f"checking {len(recipes)} golden(s):")
-            failures = cmd_check(recipes, workdir)
+            failures = cmd_check(recipes, workdir, args.allow_missing)
     finally:
         if args.keep:
             print(f"\nframes in {workdir}")

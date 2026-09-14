@@ -17299,6 +17299,42 @@ def run_fixture_gen_gate(workdir):
                 if os.path.getsize(regenerated) == 0:
                     drifted.append(f"{f}: emitted empty")
 
+    # DISCOVERY IS ITSELF UNDER TEST, and nothing above can see it fail. Every
+    # check in this arm is driven by `gens`, so a glob that matches nothing runs
+    # no generator, compares no asset, collects no drift, and prints PASS -- the
+    # whole corpus silently uncovered by one wrong path. The walk is the ground
+    # truth the glob is measured against: a generator that exists anywhere under
+    # assets/ and did not reach `gens` is named here rather than missed.
+    #
+    # A count, not a hardcoded number: 54 today, and a literal would have to be
+    # edited by whoever adds the 55th -- which is the kind of chore that gets
+    # done by lowering the number to match.
+    # The walk stops at the self-contained bundles. abandoned_window, ivy_arcade
+    # and raiden carry their own scenes and their own producers, and this arm has
+    # never run any of them: ivy_arcade/gen_ivy_mat.py writes into its own
+    # textures/ and reads across into abandoned_window's, and build_arcade.py
+    # needs Blender. Pruning them keeps this assertion about the corpus
+    # fixture-gen governs instead of failing on a gap it was never asked to
+    # close -- the gap is real and belongs in docs/verification.md, not hidden
+    # behind a name this loop happens not to match.
+    self_contained = {"abandoned_window", "ivy_arcade", "raiden", "__pycache__"}
+    found = set()
+    for walk_root, walk_dirs, walk_files in os.walk(src_dir):
+        walk_dirs[:] = [d for d in walk_dirs if d not in self_contained]
+        for f in walk_files:
+            if f.startswith("gen_") and f.endswith(".py"):
+                found.add(os.path.join(walk_root, f))
+    undiscovered = sorted(os.path.relpath(p, src_dir) for p in found - set(gens))
+    if undiscovered:
+        drifted.insert(0, f"{len(undiscovered)} generator(s) this arm never ran: "
+                          f"{', '.join(undiscovered[:4])}")
+    # And the same argument one level down: generators that all fail their
+    # dependency check, or emit into a directory this arm does not look in,
+    # leave both counters at zero while every other signal reads clean.
+    elif not compared or not binary:
+        drifted.insert(0, f"compared {compared} text and {binary} binary assets; "
+                          "a run that verifies nothing is not a pass")
+
     ok = not drifted
     detail = (f"{len(gens)} generators, {compared} text assets byte-identical, "
               f"{binary} binary emitted non-empty" if ok else "; ".join(drifted[:6]))
