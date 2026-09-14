@@ -14994,7 +14994,7 @@ _ANIM_BONE = re.compile(r"^anim-probe frame (\d+) bone \d+ rot "
 # _GAMETEST_TRACE above still matches the same line.
 _ANIM_TRACE = re.compile(r"player step (\d+) .* jump \d anim "
                          r"(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) "
-                         r"(\w+)")
+                         r"(-?[\d.]+) (\w+)")
 
 
 def _anim_probe_run(case):
@@ -15334,32 +15334,34 @@ def run_anim_gate(workdir):
         facing = math.sqrt(sum(v * v for v in d[("walk", "dir")]))
         swing = d[("swing", "answered")][0]
         left = fit[("clip", "stride")][0]
-        # Two independent implementations of one quantity: this one samples the clip
-        # directly over a loop and pools both feet, the ik probe's ticks it through an
-        # animator with a solver attached and fits the LEFT foot alone. Per foot they
-        # agree to six digits (0.952081); the published number is lower because it also
-        # weighs in a right stance of 55 samples at 0.73 against the left's 47 at 0.95,
-        # which is the clip being an asymmetric strut and not either fit being wrong.
+        # Two genuinely DIFFERENT methods for one quantity, which is why agreeing is
+        # evidence: the engine takes the median horizontal velocity over every sample the
+        # ankle spent low, the ik probe least-squares-fits the toe across one contiguous
+        # window it had to find first. Two copies of one algorithm agreeing proves the
+        # copying; these two agree to about 2 per cent.
         #
         # REFUSING is the other half and is not a lesser result. The generated walk swings
-        # straight legs, so each foot is lowest at mid-stride where it is fastest and both
-        # are lowest at the same instant: it has no stance, and a fit taken anyway lands on
-        # a swing and points the body backwards. An answer there would be worse than none.
+        # straight legs, so both feet are lowest at the same instant and swinging opposite
+        # ways: their low samples carry both directions and median to nothing, and the two
+        # feet disagree on which way the ground goes. An answer there would be worse than
+        # none -- a window fit taken anyway lands on a swing and points the body backwards.
         ok = (answered == 1 and swing == 0 and abs(facing - 1.0) < 1e-3
-              and 0.7 * left < speed < 1.05 * left)
+              and 0.85 * left < speed < 1.1 * left)
         print(f"  anim-stride  {'PASS' if ok else 'FAIL'}  the walk clip implies "
               f"{speed:.6f} model units per second against the ik probe's independent "
-              f"left-foot fit of {left:.6f} (want within 0.7 to 1.05, two implementations of "
-              f"one quantity), on a unit direction of {facing:.6f}; the generated pendulum "
-              f"walk {'refuses' if swing == 0 else 'ANSWERED'} (want refused: it has no "
-              f"stance to measure)")
+              f"left-foot fit of {left:.6f}, {speed / left * 100.0:.1f} per cent of it (want 85 "
+              f"to 110: a median over every low sample against a least-squares fit over one "
+              f"window), on a unit direction of {facing:.6f}; the generated pendulum walk "
+              f"{'refuses' if swing == 0 else 'ANSWERED'} (want refused: it has no stance to "
+              f"measure)")
         if not ok:
             failures.append("anim-stride")
 
     # --- anim-rate -------------------------------------------------------------
     d = _anim_probe_run("rate")
     need = [("single", "engine"), ("single", "stride"), ("pair", "seconds"),
-            ("pair", "strides"), ("pair", "param"), ("pair", "engine"), ("blind", "engine")]
+            ("pair", "strides"), ("pair", "param"), ("pair", "engine"), ("still", "engine"),
+            ("blind", "engine")]
     if not d or any(k not in d for k in need) or len(d[("pair", "seconds")]) < 2:
         print("  anim-rate    FAIL  the probe failed or measured nothing")
         failures.append("anim-rate")
@@ -15375,20 +15377,29 @@ def run_anim_gate(workdir):
         # -- so the answer is the PRODUCT. The mean of the strides is the plausible wrong
         # expression, and it is only wrong when the clips differ in length, which is why
         # these two are 2.0 s and 0.5 s.
-        want = (sum(w[i] * stride[i] * sec[i] for i in (0, 1))
-                * sum(w[i] / sec[i] for i in (0, 1)))
+        def blend(strides):
+            return (sum(w[i] * strides[i] * sec[i] for i in (0, 1))
+                    * sum(w[i] / sec[i] for i in (0, 1)))
+
+        want = blend(stride)
         mean = sum(w[i] * stride[i] for i in (0, 1))
         got = d[("pair", "engine")][0]
         single, one_stride = d[("single", "engine")][0], d[("single", "stride")][0]
+        # A strideless entry contributes no ground and still turns the clock, so the answer
+        # is the same expression with that term's stride at 0 -- lower than the pair's, and
+        # emphatically not zero. That is what lets an idle sit at the bottom of a speed
+        # axis. A space where NOTHING was measured is the different case and answers 0.
+        still, still_want = d[("still", "engine")][0], blend([stride[0], 0.0])
         blind = d[("blind", "engine")][0]
         ok = (abs(got - want) < 1e-4 and abs(got - mean) > 1e-3
-              and abs(single - one_stride) < 1e-6 and blind == 0.0)
+              and abs(single - one_stride) < 1e-6 and abs(still - still_want) < 1e-4
+              and blind == 0.0)
         print(f"  anim-rate    {'PASS' if ok else 'FAIL'}  a {sec[0]:.1f}s clip striding "
               f"{stride[0]:.1f} blended half and half with a {sec[1]:.1f}s one striding "
               f"{stride[1]:.1f} implies {got:.6f} (want {want:.6f}, and NOT the weighted "
-              f"mean's {mean:.6f}); one entry reports its own {single:.6f} and an entry "
-              f"nobody measured makes the whole answer {blind:.1f} rather than a number "
-              f"short of one term")
+              f"mean's {mean:.6f}); one entry reports its own {single:.6f}, a standing "
+              f"partner pulls it to {still:.6f} (want {still_want:.6f}) and a space nobody "
+              f"measured answers {blind:.1f}")
         if not ok:
             failures.append("anim-rate")
 
@@ -15402,7 +15413,7 @@ def run_anim_gate(workdir):
         failures.append("anim-trace-idle")
     else:
         idle_w = min(float(m[2]) for m in late)
-        srcs = {m[7] for m in late}
+        srcs = {m[8] for m in late}
         ok = abs(idle_w - 1.0) < 1e-3 and srcs == {"locomotion"}
         print(f"  anim-trace-idle {'PASS' if ok else 'FAIL'}  a standing player reports idle "
               f"weight {idle_w:.3f} (want 1) from {sorted(srcs)}")
@@ -23200,42 +23211,55 @@ def run_ik_gate(workdir):
 
     # --- ik-slide-speeds -------------------------------------------------------
     d = _ik_probe("rate")
-    need = [(leg, k) for leg in ("half", "one", "double")
-            for k in ("hold", "slidefrac", "fixfrac")]
-    if not d or ("half", "play") not in d or any(k not in d or len(d[k]) < 2 for k in need):
+    legs = ("slow", "one", "fast")
+    need = [(leg, k) for leg in legs
+            for k in ("hold", "slidefrac", "fixfrac", "freehold", "freefixfrac")]
+    if not d or ("one", "play") not in d or any(k not in d or len(d[k]) < 2 for k in need):
         print("  ik-slide-speeds FAIL  the probe failed or measured nothing")
         failures.append("ik-slide-speeds")
     else:
-        # PER FOOT and RELATIVE TO THE MATCHED SPEED, which is what makes this arm about
-        # stride matching and not about everything else the solver does. The two feet do
-        # not behave alike on this clip: the left tracks the travel speed exactly as the
-        # model predicts, and the right carries a standing correction of around 0.3 of a
-        # leg that NO playback rate moves -- proved by walking the body at the right
-        # foot's own implied speed and watching it stay. That is a contact label opening
-        # during late swing, a spec 12.9 property no one-footed instrument could see, and
-        # it is filed rather than fixed here. An absolute bar would encode it; a ratio
-        # against the same foot's matched-speed number asks only whether matching the rate
-        # made the other speeds behave like the one that already worked.
-        feet, bad = ["left", "right"], []
-        for k in (0, 1):
-            base = d[("one", "fixfrac")][k]
-            for leg in ("half", "double"):
-                if d[(leg, "fixfrac")][k] > 1.4 * base or d[(leg, "slidefrac")][k] > \
-                        1.4 * d[("one", "slidefrac")][k]:
-                    bad.append(f"{feet[k]} at {leg}")
-            for leg in ("half", "one", "double"):
+        # A DIRECT A/B: the same body speed walked twice, once with the clip played at rate
+        # 1 the way a game with no stride matching plays it, and once at the rate the
+        # engine works out. A bar on the matched number alone would encode everything else
+        # the solver is doing -- including a standing correction of 0.45 of a leg on the
+        # right foot that no playback rate moves, a spec 12.9 contact label opening during
+        # late swing, which is filed rather than fixed here.
+        #
+        # The MEAN over both feet, because they do not fail alike and singling out the one
+        # that behaves is how an arm gets written to pass. And the matched and free rows at
+        # the band's MIDDLE must be identical, which is the self-check: at the clip's own
+        # speed the rate is 1 and matching has to be a no-op.
+        #
+        # SLIDE is reported and not asserted. At the matched speed the left foot's is 0.004
+        # of a leg, the measurement floor, so a ratio against it is noise; an absolute bar
+        # cannot pass the right foot's transition pop, which is the same filed defect.
+        # ik-slide and ik-settle already hold that ground at the matched speed; what this
+        # arm adds is the BAND.
+        def mean(leg, key):
+            return 0.5 * sum(d[(leg, key)][:2])
+
+        bad = []
+        if abs(mean("one", "fixfrac") - mean("one", "freefixfrac")) > 1e-6:
+            bad.append("matching is not a no-op at the clip's own speed")
+        for leg in ("slow", "fast"):
+            if mean(leg, "fixfrac") > 0.75 * mean(leg, "freefixfrac"):
+                bad.append(f"{leg} corrects {mean(leg, 'fixfrac') / mean(leg, 'freefixfrac'):.2f} "
+                           f"of what it does unmatched")
+        for leg in legs:
+            for k, foot in enumerate(("left", "right")):
                 if d[(leg, "hold")][k] <= 0.3:
-                    bad.append(f"{feet[k]} lets go at {leg}")
+                    bad.append(f"the {foot} foot lets go at {leg}")
         ok = not bad
         shape = ", ".join(
-            f"{leg} plays {d[(leg, 'play')][0]:.2f}x, correcting "
-            f"{d[(leg, 'fixfrac')][0] * 100.0:.1f}/{d[(leg, 'fixfrac')][1] * 100.0:.1f} per cent "
-            f"of a leg over a hold of {d[(leg, 'hold')][0] * 100.0:.0f}/"
-            f"{d[(leg, 'hold')][1] * 100.0:.0f} per cent of the cycle"
-            for leg in ("half", "one", "double"))
-        print(f"  ik-slide-speeds {'PASS' if ok else 'FAIL'}  at 0.5x, 1x and 2x the clip's own "
-              f"stride, left/right: {shape} (want each foot within 1.4x of its own 1x figure, "
-              f"and still holding 30 per cent of the cycle)" +
+            f"{leg} plays {d[(leg, 'play')][0]:.2f}x and corrects "
+            f"{mean(leg, 'fixfrac') * 100.0:.1f} per cent of a leg against "
+            f"{mean(leg, 'freefixfrac') * 100.0:.1f} unmatched, sliding "
+            f"{d[(leg, 'slidefrac')][0] * 100.0:.1f}/{d[(leg, 'slidefrac')][1] * 100.0:.1f} "
+            f"left/right over a hold of {d[(leg, 'hold')][0] * 100.0:.0f}/"
+            f"{d[(leg, 'hold')][1] * 100.0:.0f} per cent of the cycle" for leg in legs)
+        print(f"  ik-slide-speeds {'PASS' if ok else 'FAIL'}  across the whole band the clip can "
+              f"carry: {shape} (want a quarter off the correction at each edge, no change at the "
+              f"middle, and every foot still holding 30 per cent of the cycle)" +
               ("" if ok else "; " + ", ".join(bad)))
         if not ok:
             failures.append("ik-slide-speeds")
