@@ -47,6 +47,7 @@ import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
 here = os.path.dirname(os.path.abspath(__file__))
 
@@ -60,7 +61,7 @@ r = np.sqrt((u - 0.5) ** 2 + (v - 0.5) ** 2)
 rings = 0.5 + 0.5 * np.cos(r * 2.0 * math.pi * 24.0)
 tex = np.clip(checker * 0.7 + rings * 0.3, 0.0, 1.0)
 Image.fromarray((tex * 255).astype(np.uint8), "L").convert("RGB").save(
-    os.path.join(here, "dof_fixture_checker.png"))
+    asset_path("dof_fixture_checker.png"))
 
 # ---- geometry, one primitive per material ----------------------------------
 # Each primitive owns contiguous vertex/index ranges in the shared buffer.
@@ -234,7 +235,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(here, "dof_fixture.gltf")
+out = asset_path("dof_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

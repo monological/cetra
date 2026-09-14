@@ -26,13 +26,12 @@ camera, and pinned exposure. Regenerate with:
 import base64
 import json
 import math
-import os
 import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
-here = os.path.dirname(os.path.abspath(__file__))
 
 # ---- occlusion texture: white with a dark radial ring ----------------------
 RES = 512
@@ -44,7 +43,7 @@ r = np.sqrt((u - 0.5) ** 2 + (v - 0.5) ** 2)
 # unmistakable, non-zero so the strength blend still has room to move it.
 ring = 1.0 - 0.75 * np.exp(-(((r - 0.30) / 0.08) ** 2))
 Image.fromarray((np.clip(ring, 0.0, 1.0) * 255).astype(np.uint8), "L").save(
-    os.path.join(here, "ao_fixture_ao.png"))
+    asset_path("ao_fixture_ao.png"))
 
 # ---- geometry --------------------------------------------------------------
 positions = []
@@ -146,7 +145,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(here, "ao_fixture.gltf")
+out = asset_path("ao_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

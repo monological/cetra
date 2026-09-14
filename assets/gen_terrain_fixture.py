@@ -29,9 +29,10 @@ that quietly stops testing something is worse than no fixture:
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 RES = 256
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terrain_fixture.r16")
+OUT = asset_path("terrain_fixture.r16")
 
 # Deliberately not round, not symmetric between the two axes, and not a single
 # frequency. The two trig terms run at different rates so a transpose is a large

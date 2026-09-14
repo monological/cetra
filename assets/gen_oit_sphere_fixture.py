@@ -16,6 +16,7 @@ import json
 import struct
 import math
 import os
+from fixture_paths import asset_path
 
 # Silhouette smoothness matters for translucent spheres (the Fresnel rim rides the
 # outline, and every layer's edge is visible), so tessellate finely -- same counts
@@ -106,7 +107,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oit_sphere_fixture.gltf")
+out = asset_path("oit_sphere_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

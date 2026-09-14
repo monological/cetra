@@ -46,6 +46,7 @@ import base64
 import json
 import os
 import struct
+from fixture_paths import asset_path
 
 HALF_W = 0.5
 HEIGHT = 2.0
@@ -193,7 +194,7 @@ def _cscn(wind):
 
 
 here = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(here, "wind_uv_fixture.gltf")
+out = asset_path("wind_uv_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
@@ -203,7 +204,7 @@ with open(out, "w") as f:
 # opened by hand to see what the arm is comparing against.
 for name, wind in (("wind_uv_fixture.cscn", WIND),
                    ("wind_uv_fixture_still.cscn", dict(WIND, strength=0.0))):
-    p = os.path.join(here, name)
+    p = asset_path(name)
     with open(p, "w") as f:
         json.dump(_cscn(wind), f, indent=1)
         f.write("\n")

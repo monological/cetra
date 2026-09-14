@@ -32,6 +32,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 RINGS = 48    # latitude divisions, matching the other sphere fixtures
 SECTORS = 96  # longitude divisions
@@ -212,7 +213,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skin_curvature_fixture.gltf")
+out = asset_path("skin_curvature_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

@@ -51,6 +51,7 @@ import base64
 import json
 import os
 import struct
+from fixture_paths import asset_path
 
 BACKDROP_Z = -5.0    # far enough back that the panel is unambiguously in front
 BACKDROP_HALF_X = 10.0
@@ -190,8 +191,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                   "catcher_transparency_fixture.gltf")
+out = asset_path("catcher_transparency_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

@@ -57,6 +57,7 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import gen_layer_fixture as base  # noqa: E402  (the one source for shared constants)
+from fixture_paths import asset_path
 
 HALF = base.HALF          # the domain is [-HALF, HALF] on both axes, like the parent
 DOMAIN = 2.0 * HALF
@@ -362,11 +363,11 @@ CSCN = {
 
 def main():
     _assert_fixture_still_tests_something()
-    Image.fromarray(_splat(), "RGB").save(os.path.join(HERE, SPLAT_NAME))
-    with open(os.path.join(HERE, "layer_vt_fixture.gltf"), "w") as f:
+    Image.fromarray(_splat(), "RGB").save(asset_path(SPLAT_NAME))
+    with open(asset_path("layer_vt_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
         f.write("\n")
-    with open(os.path.join(HERE, "layer_vt_fixture.cscn"), "w") as f:
+    with open(asset_path("layer_vt_fixture.cscn"), "w") as f:
         json.dump(CSCN, f, indent=1)
         f.write("\n")
     print(f"wrote layer_vt_fixture.gltf, layer_vt_fixture.cscn and {SPLAT_NAME} at {TEX}x{TEX}")

@@ -44,6 +44,7 @@ import base64
 import json
 import os
 import struct
+from fixture_paths import asset_path
 
 GROUND = 4.0      # ground half-extent; wide enough that the lit region frames the band
 OCCLUDER_A = 0.5  # occluder half-width  (a)
@@ -140,7 +141,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "area_shadow_fixture.gltf")
+out = asset_path("area_shadow_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

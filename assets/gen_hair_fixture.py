@@ -52,11 +52,12 @@ import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ATLAS = os.path.join(HERE, "hair_fixture_atlas.png")
-FLOW = os.path.join(HERE, "hair_fixture_flow.png")
-GLTF = os.path.join(HERE, "hair_fixture.gltf")
+ATLAS = asset_path("hair_fixture_atlas.png")
+FLOW = asset_path("hair_fixture_flow.png")
+GLTF = asset_path("hair_fixture.gltf")
 
 SIZE = 512
 SPACING = 7.0  # texels between strand centres
@@ -212,7 +213,7 @@ def write_cscn(name, comment, **hair):
         "camera": {"eye": [0.0, 0.0, 3.2], "target": [0.0, 0.0, 0.0], "fov": 45},
         "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
     }
-    with open(os.path.join(HERE, name), "w") as f:
+    with open(asset_path(name), "w") as f:
         json.dump(doc, f, indent=2)
         f.write("\n")
 

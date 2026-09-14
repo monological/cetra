@@ -52,13 +52,12 @@ Regenerate with: python3 assets/gen_layer_fixture.py
 
 import base64
 import json
-import os
 import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 TEX = 64  # every map, so the array's canonical size is 64 and the blit is 1:1
 
@@ -272,10 +271,10 @@ def _assert_fixture_still_tests_something():
 
 def _write_maps():
     for name, arr in LAYERS:
-        Image.fromarray(arr, "RGBA").save(os.path.join(HERE, name))
-    Image.fromarray(_surface(), "RGBA").save(os.path.join(HERE, SURFACE_NAME))
-    Image.fromarray(_surface_relief(), "RGBA").save(os.path.join(HERE, RELIEF_NAME))
-    Image.fromarray(_splat(), "RGB").save(os.path.join(HERE, SPLAT_NAME))
+        Image.fromarray(arr, "RGBA").save(asset_path(name))
+    Image.fromarray(_surface(), "RGBA").save(asset_path(SURFACE_NAME))
+    Image.fromarray(_surface_relief(), "RGBA").save(asset_path(RELIEF_NAME))
+    Image.fromarray(_splat(), "RGB").save(asset_path(SPLAT_NAME))
 
 
 # --- geometry ---------------------------------------------------------------
@@ -404,10 +403,10 @@ CSCN = {
 def main():
     _assert_fixture_still_tests_something()
     _write_maps()
-    with open(os.path.join(HERE, "layer_fixture.gltf"), "w") as f:
+    with open(asset_path("layer_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
         f.write("\n")
-    with open(os.path.join(HERE, "layer_fixture.cscn"), "w") as f:
+    with open(asset_path("layer_fixture.cscn"), "w") as f:
         json.dump(CSCN, f, indent=1)
         f.write("\n")
     print(f"wrote layer_fixture.gltf, layer_fixture.cscn and {len(LAYERS) + 3} maps at {TEX}x{TEX}")

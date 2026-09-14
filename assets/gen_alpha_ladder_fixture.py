@@ -37,13 +37,12 @@ Regenerate with: python3 assets/gen_alpha_ladder_fixture.py
 import base64
 import json
 import math
-import os
 import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 TEX = 512
 CUTOFF = 0.4           # the leaf materials' value; this fixture stands in for foliage
@@ -186,8 +185,8 @@ def main():
     # cutoff, dense enough to read.
     assert 0.12 < cov_leaf < 0.30, f"leaf coverage {cov_leaf:.3f} outside [0.12, 0.30]"
     assert 0.06 < cov_speck < 0.20, f"speck coverage {cov_speck:.3f} outside [0.06, 0.20]"
-    Image.fromarray(leaves, "RGBA").save(os.path.join(HERE, "alpha_ladder_leaves.png"))
-    Image.fromarray(specks, "RGBA").save(os.path.join(HERE, "alpha_ladder_specks.png"))
+    Image.fromarray(leaves, "RGBA").save(asset_path("alpha_ladder_leaves.png"))
+    Image.fromarray(specks, "RGBA").save(asset_path("alpha_ladder_specks.png"))
 
     # One row per content class; the third reuses alphacov's committed dot
     # grid rather than regenerating it, so the lattice here IS the lattice the
@@ -249,9 +248,9 @@ def main():
         "camera": {"eye": [0.0, 0.0, 0.0], "target": [0.0, 0.0, -1.0], "fov": FOV},
         "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
     }
-    with open(os.path.join(HERE, "alpha_ladder_fixture.gltf"), "w") as f:
+    with open(asset_path("alpha_ladder_fixture.gltf"), "w") as f:
         json.dump(gltf, f, indent=1)
-    with open(os.path.join(HERE, "alpha_ladder_fixture.cscn"), "w") as f:
+    with open(asset_path("alpha_ladder_fixture.cscn"), "w") as f:
         json.dump(cscn, f, indent=1)
     mips = ", ".join(f"{_mip_of_card(k):.1f}" for k in range(CARDS))
     print(f"wrote alpha_ladder_fixture.gltf/.cscn, leaves (coverage {cov_leaf:.3f}) and "

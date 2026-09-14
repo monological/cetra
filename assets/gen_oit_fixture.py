@@ -13,6 +13,7 @@ import base64
 import json
 import struct
 import os
+from fixture_paths import asset_path
 
 HALF = 0.7  # quad half-extent
 
@@ -78,7 +79,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oit_fixture.gltf")
+out = asset_path("oit_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

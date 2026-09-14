@@ -40,9 +40,9 @@ one honest instance of the thing that moved the default.
 import base64
 import json
 import math
-import os
 import struct
 import zlib
+from fixture_paths import asset_path
 
 
 def png_rgb(width, height, rows):
@@ -268,5 +268,4 @@ def emit(path, g):
 
 
 if __name__ == "__main__":
-    here = os.path.dirname(os.path.abspath(__file__))
-    emit(os.path.join(here, "emissive_fixture.gltf"), build())
+    emit(asset_path("emissive_fixture.gltf"), build())

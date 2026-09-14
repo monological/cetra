@@ -47,6 +47,7 @@ import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -199,9 +200,9 @@ def main():
     assert np.abs(nx).max() > 0.5, "normal slope too gentle: the Z rebuild is flat near the pole"
     assert rough.ndim == 2, "roughness must be single channel or the loader declines BC4"
 
-    Image.fromarray(albedo, "RGB").save(os.path.join(HERE, "texcomp_albedo.png"))
-    Image.fromarray(normal, "RGB").save(os.path.join(HERE, "texcomp_normal.png"))
-    Image.fromarray(rough, "L").save(os.path.join(HERE, "texcomp_rough.png"))
+    Image.fromarray(albedo, "RGB").save(asset_path("texcomp_albedo.png"))
+    Image.fromarray(normal, "RGB").save(asset_path("texcomp_normal.png"))
+    Image.fromarray(rough, "L").save(asset_path("texcomp_rough.png"))
 
     # THE PROPERTY THIS FIXTURE EXISTS FOR, asserted rather than hoped.
     #
@@ -226,12 +227,12 @@ def main():
     # And that the roughness really is one channel ON DISK -- the loader offers
     # BC4 only to a single-channel source, so a grey RGB here would exercise the
     # DECLINE path while looking like it tested BC4.
-    assert Image.open(os.path.join(HERE, "texcomp_rough.png")).mode == "L", \
+    assert Image.open(asset_path("texcomp_rough.png")).mode == "L", \
         "roughness must be saved single-channel or the BC4 arm tests nothing"
 
-    with open(os.path.join(HERE, "texcomp_fixture.gltf"), "w") as f:
+    with open(asset_path("texcomp_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
-    with open(os.path.join(HERE, "texcomp_fixture.cscn"), "w") as f:
+    with open(asset_path("texcomp_fixture.cscn"), "w") as f:
         json.dump(CSCN, f, indent=1)
     print(f"wrote texcomp_fixture.gltf, texcomp_fixture.cscn and 3 maps at {TEX}x{TEX}")
 

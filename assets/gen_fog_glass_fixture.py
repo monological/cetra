@@ -74,6 +74,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 # --- framing, shared with the gate ------------------------------------------------------
 FOVY_DEG = 45.0
@@ -359,10 +360,10 @@ scene_desc = {
 # committed asset in the middle of a gate run.
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "fog_glass_fixture.gltf"), "w") as f:
+    with open(asset_path("fog_glass_fixture.gltf"), "w") as f:
         json.dump(gltf, f, indent=1)
         f.write("\n")
-    with open(os.path.join(here, "fog_glass_fixture.cscn"), "w") as f:
+    with open(asset_path("fog_glass_fixture.cscn"), "w") as f:
         json.dump(scene_desc, f, indent=1)
         f.write("\n")
     print("wrote fog_glass_fixture.gltf + .cscn")

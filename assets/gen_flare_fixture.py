@@ -51,9 +51,9 @@ import base64
 import json
 import os
 import struct
+from fixture_paths import asset_path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-GLTF = os.path.join(HERE, "flare_fixture.gltf")
+GLTF = asset_path("flare_fixture.gltf")
 
 # Up and to the LEFT, so the ghosts owe the gate the lower-right.
 EMITTER_CENTRE = (-1.6, 1.1)

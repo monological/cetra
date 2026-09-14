@@ -48,6 +48,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 FOV_DEG = 40.0
 
@@ -283,16 +284,16 @@ still_cscn = json.loads(json.dumps(cscn))
 still_cscn["models"] = [{"path": "shadow_lag_still.gltf"}]
 
 here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "shadow_lag_fixture.gltf"), "w") as f:
+with open(asset_path("shadow_lag_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-with open(os.path.join(here, "shadow_lag_fixture.cscn"), "w") as f:
+with open(asset_path("shadow_lag_fixture.cscn"), "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")
-with open(os.path.join(here, "shadow_lag_still.gltf"), "w") as f:
+with open(asset_path("shadow_lag_still.gltf"), "w") as f:
     json.dump(still_gltf, f, indent=1)
     f.write("\n")
-with open(os.path.join(here, "shadow_lag_still.cscn"), "w") as f:
+with open(asset_path("shadow_lag_still.cscn"), "w") as f:
     json.dump(still_cscn, f, indent=1)
     f.write("\n")
 

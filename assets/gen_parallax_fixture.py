@@ -18,11 +18,11 @@ how the height map reaches Material.height_tex. Regenerate with:
 
 import base64
 import json
-import os
 import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
 RES = 512
 COURSES = 5          # brick rows over the tile
@@ -70,12 +70,11 @@ brick = np.stack([brick_r, np.full_like(u, 0.16), np.full_like(u, 0.12)], axis=-
 mortar = np.stack([np.full_like(u, 0.55), np.full_like(u, 0.53), np.full_like(u, 0.50)], axis=-1)
 albedo_rgb = np.where(on_brick[..., None], brick, mortar)
 
-here = os.path.dirname(os.path.abspath(__file__))
 
 
 def save_png(arr01, name, mode="RGB"):
     img = Image.fromarray((np.clip(arr01, 0.0, 1.0) * 255).astype(np.uint8), mode)
-    img.save(os.path.join(here, name))
+    img.save(asset_path(name))
 
 
 save_png(albedo_rgb, "parallax_fixture_albedo.png", "RGB")
@@ -150,7 +149,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(here, "parallax_fixture.gltf")
+out = asset_path("parallax_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

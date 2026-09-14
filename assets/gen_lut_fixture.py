@@ -78,6 +78,7 @@ import base64
 import json
 import os
 import struct
+from fixture_paths import asset_path
 
 # ---------------------------------------------------------------------------
 # The tables
@@ -354,18 +355,18 @@ cscn = {
 }
 
 here = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(here, "lut_fixture.gltf")
+out = asset_path("lut_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-scn = os.path.join(here, "lut_fixture.cscn")
+scn = asset_path("lut_fixture.cscn")
 with open(scn, "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")
 
 written = []
 for name, title, n, fn in TABLES:
-    p = os.path.join(here, name)
+    p = asset_path(name)
     write_cube(p, title, n, fn)
     written.append(f"{name} ({n}^3)")
 

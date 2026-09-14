@@ -40,6 +40,7 @@ import json
 import struct
 import math
 import os
+from fixture_paths import asset_path
 
 # ---- geometry: one unit UV sphere (radius 0.5) + one ground quad -----------
 STACKS = 48
@@ -192,7 +193,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "area_light_fixture.gltf")
+out = asset_path("area_light_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
@@ -229,7 +230,7 @@ guard = {
     "buffers": gltf["buffers"],
 }
 
-guard_out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "area_light_guard.gltf")
+guard_out = asset_path("area_light_guard.gltf")
 with open(guard_out, "w") as f:
     json.dump(guard, f, indent=1)
     f.write("\n")

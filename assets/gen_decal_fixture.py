@@ -59,6 +59,7 @@ import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -701,14 +702,14 @@ CSCN = {
 
 def main():
     _assert_fixture_still_tests_something()
-    Image.fromarray(_poster(), "RGBA").save(os.path.join(HERE, "decal_poster.png"))
-    Image.fromarray(_scorch_albedo(), "RGBA").save(os.path.join(HERE, "decal_scorch.png"))
+    Image.fromarray(_poster(), "RGBA").save(asset_path("decal_poster.png"))
+    Image.fromarray(_scorch_albedo(), "RGBA").save(asset_path("decal_scorch.png"))
     Image.fromarray(_scorch_surface(), "RGBA").save(
-        os.path.join(HERE, "decal_scorch_surface.png"))
-    with open(os.path.join(HERE, "decal_fixture.gltf"), "w") as f:
+        asset_path("decal_scorch_surface.png"))
+    with open(asset_path("decal_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
         f.write("\n")
-    with open(os.path.join(HERE, "decal_fixture.cscn"), "w") as f:
+    with open(asset_path("decal_fixture.cscn"), "w") as f:
         json.dump(CSCN, f, indent=1)
         f.write("\n")
     print("wrote decal_fixture.gltf, decal_fixture.cscn and three painted images "

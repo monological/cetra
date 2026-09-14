@@ -37,6 +37,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 FOV_DEG = 45.0
 ASPECT = 4.0 / 3.0  # the gate renders 400x300
@@ -206,10 +207,10 @@ cscn = {
 }
 
 here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "skinned_cull_fixture.gltf"), "w") as f:
+with open(asset_path("skinned_cull_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-with open(os.path.join(here, "skinned_cull_fixture.cscn"), "w") as f:
+with open(asset_path("skinned_cull_fixture.cscn"), "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")
 

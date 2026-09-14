@@ -44,6 +44,7 @@ import importlib.util
 import json
 import math
 import os
+from fixture_paths import asset_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -124,7 +125,7 @@ FILES = [
 ]
 
 for name, horiz, span, note, tail in FILES:
-    write_ies(os.path.join(HERE, name), horiz, span, note, tail)
+    write_ies(asset_path(name), horiz, span, note, tail)
 
 # ---- run the real tool over them, and check it against what we painted -------
 #
@@ -137,7 +138,7 @@ _tool = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_tool)
 
 for name, horiz, span, note, tail in FILES:
-    table, meta = _tool.load(os.path.join(HERE, name))
+    table, meta = _tool.load(asset_path(name))
     symmetric = len(horiz) == 1
 
     assert meta["symmetric"] == symmetric, \
@@ -199,7 +200,7 @@ CSCN = {
     "camera": {"eye": [0.0, 1.9, 4.4], "target": [0.0, 0.25, 0.0], "fov": 42},
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }
-with open(os.path.join(HERE, "ies_fixture.cscn"), "w") as fh:
+with open(asset_path("ies_fixture.cscn"), "w") as fh:
     json.dump(CSCN, fh, indent=1)
     fh.write("\n")
 

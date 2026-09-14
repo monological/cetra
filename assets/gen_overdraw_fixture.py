@@ -50,6 +50,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 FOV_DEG = 45.0
 NEAR_GAP = 4.0    # camera to the nearest quad
@@ -143,10 +144,10 @@ def _write(name, quads, note):
     }
 
     here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, f"{name}.gltf"), "w") as f:
+    with open(asset_path(f"{name}.gltf"), "w") as f:
         json.dump(gltf, f, indent=1)
         f.write("\n")
-    with open(os.path.join(here, f"{name}.cscn"), "w") as f:
+    with open(asset_path(f"{name}.cscn"), "w") as f:
         json.dump(cscn, f, indent=1)
         f.write("\n")
     print(f"wrote {name}.gltf and {name}.cscn ({len(quads)} quads, {note})")

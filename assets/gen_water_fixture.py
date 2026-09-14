@@ -30,6 +30,7 @@ import json
 import os
 import struct
 import sys
+from fixture_paths import asset_path
 
 WATER_LEVEL = 0.0
 # The wedge spans from well under the water to well over it: the shoreline has to
@@ -294,10 +295,10 @@ scene_desc = {
 # three specs -- it stopped emitting the `water` block the fixture needs to have a surface
 # at all, and nothing noticed because nobody runs a generator that is already "done".
 out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(out_dir, "water_fixture.gltf"), "w") as f:
+with open(asset_path("water_fixture.gltf", out_dir), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-with open(os.path.join(out_dir, "water_fixture.cscn"), "w") as f:
+with open(asset_path("water_fixture.cscn", out_dir), "w") as f:
     json.dump(scene_desc, f, indent=1)
     f.write("\n")
 print("wrote water_fixture.gltf + water_fixture.cscn")
