@@ -3,7 +3,9 @@
 Reference notes, in our own words, on the foot-locking technique described at
 <https://theorangeduck.com/page/inverse-kinematics-foot-locking> (Daniel Holden,
 theorangeduck.com). Written up here because spec 12.4 shipped foot *planting* and hit
-exactly the failure modes this method exists to fix. Nothing here is implemented yet.
+exactly the failure modes this method exists to fix. **Spec 12.9 implemented it** — the last
+section says what shipped, where the shipped form deviates and why, and what the demo cannot
+show. Everything between here and there describes the METHOD, and is left as it was written.
 
 ---
 
@@ -128,26 +130,59 @@ locking would sit in front of it without disturbing the solver.
 
 ---
 
-## What this would mean for `cetra/src/ik.c`
+## What it cost, and where it deviates (spec 12.9)
 
-Gaps between this and what spec 12.4 shipped, in the order they bite:
+**Implemented.** The five gaps below are closed; each entry says how, and where the shipped
+form differs from the method above. The numbers are `ik-slide`'s: a stance foot travels
+**0.0112 m** across the ground where planting left **0.0783 m**, over the same ticks, with the
+body moving at the speed the clip's own feet imply.
 
-1. **No contact signal.** We infer "should this foot be planted" purely from its height
-   above the target. The method wants a per-frame contact label from the clip. We are not
-   starting from nothing: `add_footsteps` already fires `step_l` / `step_r` events on the
-   walk and run clips, so authored contact *onsets* exist — what is missing is the
-   duration of each contact, not its start.
-2. **No hysteresis.** One threshold where the method uses two. This is the most likely
-   cause of the oscillation observed by eye.
-3. **No held contact point.** `applied_target` tracks the ray hit every frame, so it moves
-   with the character. Nothing is ever frozen, so sliding is not merely possible — it is
-   guaranteed.
-4. **Position-only blending.** `blend_rate` lerps a position; inertialization carries
-   velocity too.
-5. **The pelvis drop is the warned-against remedy**, and should probably become a
-   soft-clamp on extension with the drop bounded much harder, or removed.
+1. **The contact signal is derived at RUNTIME, from the pose at the solve seam, and judged at
+   the ANKLE.** The method labels contacts offline from toe speed and height. Two deviations,
+   both forced:
+   - Our clips carry no root motion — the character controller moves the entity — so a stance
+     foot's model-space horizontal speed is the walk speed rather than zero, and the horizontal
+     term thresholds to nothing. Height and vertical speed say the same thing about a foot set
+     down and not yet picked up, and need no authored data and no baking step.
+   - Judged at the toe, as the method has it, the label found **6 contacts over 3 cycles**: on a
+     clip retargeted onto a rig of other proportions the toe JOINT passes back through its own
+     bind clearance in mid-swing (0.0390 against a stance 0.0137), slowly enough that the speed
+     test admits it too. The ankle reads 0.12 airborne against 0.085 planted and separates
+     cleanly. The toe is still what a lock HOLDS — that is about where the contact is, not how
+     it is found.
+2. **Hysteresis.** `lock_distance` 0.15 of a leg and `unlock_distance` 0.45, the larger by
+   design. `ik-hysteresis` asserts one pin per walk cycle, and it is the only arm that sees a
+   flapping label: the fraction and the agreement barely move when the state flips.
+3. **The held contact point.** `contact_world`, frozen in WORLD space — `ik_set_world` is what
+   the caller owes for that. Captured AFTER the solve rather than before: taken from the clip's
+   pose it names somewhere the foot is not yet, and the lock then spends its first ticks
+   dragging the foot onto it, which is travel across the ground and reads as the slide. Taken at
+   the end of the frame the decision is made, the pin moves nothing. That also retires the
+   method's "height clamped to the ground" step — by then the solve has already put the ankle on
+   the ground it was handed.
+4. **Inertialization.** `blend_rate` became `transition_time`: a cubic Hermite from the captured
+   offset, in position AND velocity, to zero. The half worth naming is that it FINISHES — once
+   decayed the applied target is the requested one exactly, where an exponential ease against a
+   moving target sits a constant distance behind for as long as the motion lasts (0.039 m here,
+   which was the whole residual). It needs the standard guard: the velocity term may not carry
+   the output further from the target than the position offset already is.
+5. **The pelvis drop is demoted, not removed**, and the extension soft-clamp is **REFUSED**.
+   `max_pelvis_drop` is halved to 0.31 of a leg — set from the content, being the deepest thing
+   the demo world asks — and `ik-drop` exercises the cap and the refusal under it, which spec
+   12.5 recorded nothing had. The soft clamp loses on arithmetic this rig makes brutal: a band
+   has to begin below full extension to smooth anything, and near full extension the knee angle
+   goes as the SQUARE ROOT of the shortening, so 1 per cent of band costs 16.2 degrees of
+   permanent bend, 2 per cent 23.0 and 5 per cent 36.4. What it buys is continuity in the
+   ankle's VELOCITY as a target leaves reach; the position is already continuous. **That is a
+   property of a bind pose that is exactly straight, not of the method** — on a rig that binds
+   bent the band costs a fraction of it, so re-measure rather than inherit the refusal.
 
-A foot-locking pass would be its own spec. 12.4's planting is a prerequisite for it — the
-ground query, the model-space conversion and the two-bone solve are all reusable as they
-stand — but locking is a layer above, with its own state, its own thresholds and its own
-blend.
+### What the demo cannot show
+
+`gametest`'s player moves at `PLAYER_SPEED` 10 m/s on a rig whose leg is 0.82 m and whose clip
+implies a 0.95 m/s stride. At eighteen times its animation's speed the contact label never
+fires, no lock ever forms, and the frame is **0 px** against `--no-lock`. That is the mechanism
+behaving correctly — there is no contact to hold — and it is the demo, not the feature, that
+cannot demonstrate it. Walked at a stick deflection of 0.12, near the clip's own stride, the
+same frame moves **52,244 px**. A game that wants this benefit has to match its travel speed to
+its clips' stride, or carry root motion; neither is in this engine.
