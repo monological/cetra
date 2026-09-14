@@ -64,6 +64,14 @@ def asset(name):
     sweep -- once into unbounded recursion, and once (having fixed that) into a
     docstring rewritten to say the opposite of what it meant.
     """
+    # An absolute path is already an answer -- several arms build a mutated
+    # fixture in the workdir and hand the result straight back here. It has to
+    # return BEFORE the split: os.path.join discards its earlier arguments when
+    # one is absolute, but splitting "/a/b" yields a leading empty segment, and
+    # join then treats that as an ordinary relative piece and builds
+    # assets/a/b instead.
+    if os.path.isabs(name):
+        return name
     return os.path.join(ROOT, "assets", *asset_subpath(name).split("/"))
 
 
