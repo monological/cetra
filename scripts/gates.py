@@ -22648,6 +22648,14 @@ def run_ik_gate(workdir):
                    mean hold collapses against the same clip at its own speed. That it
                    still pins at all is asserted too, or the arm would pass on a
                    feature that had stopped working.
+      ik-drop      the pelvis drop's CAP, and the refusal underneath it. A foot half a
+                   metre past full extension drops the hips by the cap exactly and is
+                   left short of the rest -- dragging them the whole way is the "T-Rex"
+                   posture the technique warns against, and a little sliding is better
+                   than breaking the source animation. The arm asserts the deficit
+                   EXCEEDS the cap first: spec 12.5 found nothing in the tree ever asked
+                   for more than it, so min(deficit, cap) returned the deficit and a
+                   wrong cap passed.
       ik-contact   the solver's contact label finds ONE contact per walk cycle. That
                    count is the arm: a label that flaps splits a stance into several
                    runs while the fraction and the agreement barely move, and a lock
@@ -23017,6 +23025,33 @@ def run_ik_gate(workdir):
               f"and {fast_pins:.0f} pins says it still locks at all)")
         if not ok:
             failures.append("ik-unlock")
+
+    # --- ik-drop ---------------------------------------------------------------
+    p = _ik_probe("drop")
+    need = [("pelvis", "moved"), ("pelvis", "cap"), ("reach", "deficit"),
+            ("reach", "short")]
+    if not p or any(k not in p for k in need):
+        print("  ik-drop      FAIL  the probe failed or measured nothing")
+        failures.append("ik-drop")
+    else:
+        moved = p[("pelvis", "moved")][0]
+        cap = p[("pelvis", "cap")][0]
+        deficit = p[("reach", "deficit")][0]
+        short = p[("reach", "short")][0]
+        # The cap has to BIND for this to be a test of it at all -- spec 12.5 found that
+        # every fixture in the tree asks for less than the cap, so min(deficit, cap)
+        # returns the deficit and a wrong cap passes. Hence deficit > cap asserted first.
+        # The second half is the refusal: whatever the drop does not cover, the foot is
+        # left short of. Dragging the hips the rest of the way is the "T-Rex" posture the
+        # technique warns against, and a solver that did it would fail here.
+        ok = (deficit > cap > 0.0 and abs(moved - cap) < 1e-6 and
+              abs(short - (deficit - cap)) < 1e-6)
+        print(f"  ik-drop      {'PASS' if ok else 'FAIL'}  a foot {deficit:.6f} m past full "
+              f"extension drops the pelvis {moved:.6f} m and no further (cap {cap:.6f}), "
+              f"leaving the foot {short:.6f} m short (want the remainder exactly; the hips "
+              f"covering it is the posture the method warns against)")
+        if not ok:
+            failures.append("ik-drop")
 
     # --- ik-contact ------------------------------------------------------------
     if not d or any(k not in d for k in [("label", "runs"), ("label", "cycles"),
