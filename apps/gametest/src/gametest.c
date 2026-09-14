@@ -3373,6 +3373,14 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
 // arm reads is that the feature LETS GO rather than straining the chain to hold on.
 #define IK_LOCK_FAST 3.0f
 
+// The travel speeds the `rate` case walks the body at, as multiples of the clip's own
+// stride. Half and double are the two a game actually spends its time between, and one is
+// the free operating point the `lock` case already measures -- carried here so all three
+// are read off one instrument and a regression at the easy speed cannot hide.
+#define IK_RATE_COUNT 3
+static const float IK_RATE_MULT[IK_RATE_COUNT] = {0.5f, 1.0f, 2.0f};
+static const char* IK_RATE_TAG[IK_RATE_COUNT] = {"half", "one", "double"};
+
 // The bend the gate states in closed form: the angle at the knee for a hip-to-ankle
 // distance c, which is acos((c^2 - a^2 - b^2) / 2ab) measured as the deviation from
 // straight. Read off the solved globals rather than recomputed, so what is asserted is
@@ -3432,6 +3440,170 @@ static int ik_probe_longest_run(const bool* flag, int n, int* start) {
     }
     *start = best_at;
     return best;
+}
+
+// Where a foot stands still, and how fast the ground goes past it while it does.
+typedef struct IkProbeStance {
+    float low, lift; // the ankle's lowest point over the recording, and its total travel
+    int start, run;  // the longest contact window, in ticks
+    float stride;    // the ground speed that window implies, model units per second
+    vec3 dir;        // the direction the body travels to make that so
+} IkProbeStance;
+
+// The stance window and the speed it implies, read off a RECORDING of one foot: `ankle`
+// and `toe` are its model-space positions over `ticks` ticks at 60 Hz, and `inside` comes
+// back as the window's own per-tick flag, which a caller can cross against a solver's
+// label.
+//
+// The window is where the ankle sits within IK_LOCK_BAND of its own lift. The speed is
+// the least-squares slope of the TOE's horizontal travel across the whole window rather
+// than across its two endpoints: a foot that rocks at heel-strike and toe-off moves the
+// endpoints without moving the average, and the endpoint form read a stride 2x short. The
+// toe is what a lock holds, so the toe is what has to come out stationary.
+//
+// False, with the reason on stderr, for a recording with no window or a stance that does
+// not travel -- which is a real answer about the clip and not a failure of the fit.
+static bool ik_probe_stance(const vec3* ankle, const vec3* toe, int ticks, bool* inside,
+                            IkProbeStance* out) {
+    // The band is a fraction of the foot's OWN lift, not of the leg. A clip that barely
+    // picks its feet up and one that marches both want "near the bottom of this foot's
+    // travel", and a band in leg lengths read 77 per cent of the cycle as contact.
+    float high = -1e9f;
+    out->low = 1e9f;
+    for (int t = 0; t < ticks; t++) {
+        if (ankle[t][1] < out->low)
+            out->low = ankle[t][1];
+        if (ankle[t][1] > high)
+            high = ankle[t][1];
+    }
+    out->lift = high - out->low;
+    for (int t = 0; t < ticks; t++)
+        inside[t] = ankle[t][1] <= out->low + IK_LOCK_BAND * out->lift;
+    out->run = ik_probe_longest_run(inside, ticks, &out->start);
+    if (out->run < 3 || out->lift < 1e-5f) {
+        fprintf(stderr, "ik-probe: no contact window in %d ticks\n", ticks);
+        return false;
+    }
+
+    const int s = out->start, e = out->start + out->run - 1;
+    float mean_t = 0.0f, var_t = 0.0f;
+    vec3 mean_p = {0.0f, 0.0f, 0.0f}, slope = {0.0f, 0.0f, 0.0f};
+    for (int t = s; t <= e; t++) {
+        mean_t += (float)t;
+        mean_p[0] += toe[t][0];
+        mean_p[2] += toe[t][2];
+    }
+    mean_t /= (float)out->run;
+    mean_p[0] /= (float)out->run;
+    mean_p[2] /= (float)out->run;
+    for (int t = s; t <= e; t++) {
+        const float dt = (float)t - mean_t;
+        var_t += dt * dt;
+        slope[0] += dt * (toe[t][0] - mean_p[0]);
+        slope[2] += dt * (toe[t][2] - mean_p[2]);
+    }
+    if (var_t <= 0.0f) {
+        fprintf(stderr, "ik-probe: the contact window has no extent\n");
+        return false;
+    }
+    glm_vec3_scale(slope, 60.0f / var_t, slope); // per tick, then per second
+    out->stride = glm_vec3_norm(slope);
+    if (out->stride < 1e-5f) {
+        fprintf(stderr, "ik-probe: the stance foot does not travel\n");
+        return false;
+    }
+    // The body goes the way the stance foot does not.
+    glm_vec3_scale(slope, -1.0f / out->stride, out->dir);
+    return true;
+}
+
+// How far a held contact travels across the WORLD over `run` ticks from `start`: the
+// toe's recorded model position with the body's own travel added back in, measured from
+// where it stood on the first tick of the window. `step` comes back as the largest single
+// tick of that travel, which is what a transition that pops looks like and what the total
+// cannot see -- a foot that jumps once and then holds still reports the same drift as one
+// that eases over the whole stance.
+//
+// Read at the TOE and flattened to the ground plane: a lock holds the toe and leaves the
+// heel free, so an ankle that lifts at toe-off is the clip being preserved rather than a
+// contact slipping.
+// (`toe` and `dir` are read-only here; cglm's vector calls are not const-qualified.)
+static float ik_probe_drift(vec3* toe, int start, int run, vec3 dir, float speed, float* step) {
+    vec3 anchor, prev = {0.0f, 0.0f, 0.0f};
+    float worst = 0.0f;
+    *step = 0.0f;
+    glm_vec3_scale(dir, speed * (float)start / 60.0f, anchor);
+    glm_vec3_add(toe[start], anchor, anchor);
+    anchor[1] = 0.0f;
+    for (int t = start; t < start + run; t++) {
+        vec3 body, world;
+        glm_vec3_scale(dir, speed * (float)t / 60.0f, body);
+        glm_vec3_add(toe[t], body, world);
+        world[1] = 0.0f;
+        const float drift = glm_vec3_distance(world, anchor);
+        if (drift > worst)
+            worst = drift;
+        if (t > start) {
+            const float d = glm_vec3_distance(world, prev);
+            if (d > *step)
+                *step = d;
+        }
+        glm_vec3_copy(world, prev);
+    }
+    return worst;
+}
+
+// The rate to play a clip at so the ground goes past its feet at `want`. This is the
+// whole of stride matching and it is one division -- the difficulty is entirely in the
+// denominator, which nothing outside the animator can compute.
+static float ik_rate_playback(const Animator* animator, float want) {
+    (void)animator;
+    (void)want;
+    // Spec 12.10 phase 0: what a game that does not stride-match gets, which is what
+    // `ik-slide-speeds` is red against. The engine cannot yet answer the question.
+    return 1.0f;
+}
+
+// A rig that walks: an animator playing `clip` with an IK system on the pose seam, both
+// legs, both toes and the pelvis wired. `plant_only` zeroes lock_distance, which is the
+// 12.4 behaviour and the A in every A/B here.
+//
+// The animator owns the system through `state->ik` and frees it, so one free_animator
+// releases both. NULL with the reason on stderr when the rig cannot carry the case --
+// and the toes are REFUSED rather than falling back to the ankle, since a case that
+// quietly measured an ankle lock would report a number for a feature nobody asked for.
+static Animator* ik_probe_walker(Skeleton* skel, Animation* clip, bool plant_only, int* left,
+                                 int* right) {
+    Animator* an = create_animator(skel);
+    IkSystem* sys = create_ik_system(skel);
+    if (!an || !sys) {
+        fprintf(stderr, "ik-probe: could not build the walking rig\n");
+        free_animator(an);
+        free_ik_system(sys);
+        return NULL;
+    }
+    *left = ik_add_foot(sys, "cetra_rig:LeftUpLeg", "cetra_rig:LeftLeg", "cetra_rig:LeftFoot",
+                        (vec3){0.0f, 0.0f, 1.0f});
+    *right = ik_add_foot(sys, "cetra_rig:RightUpLeg", "cetra_rig:RightLeg", "cetra_rig:RightFoot",
+                         (vec3){0.0f, 0.0f, 1.0f});
+    if (*left < 0 || *right < 0 || !ik_set_pelvis(sys, "cetra_rig:Hips")) {
+        fprintf(stderr, "ik-probe: the rig lacks both legs\n");
+        free_animator(an);
+        free_ik_system(sys);
+        return NULL;
+    }
+    if (!ik_foot_set_toe(sys, *left, "cetra_rig:LeftToeBase") ||
+        !ik_foot_set_toe(sys, *right, "cetra_rig:RightToeBase")) {
+        fprintf(stderr, "ik-probe: the rig lacks toe bones\n");
+        free_animator(an);
+        free_ik_system(sys);
+        return NULL;
+    }
+    if (plant_only)
+        sys->params.lock_distance = 0.0f;
+    an->state->ik = sys;
+    animator_play(an, clip, 0.0f, true);
+    return an;
 }
 
 // The world the three PLANTING cases need, on the scene the caller has already set: a
@@ -3859,40 +4031,20 @@ static int run_ik_probe(Game* game, const char* which) {
         // summary here would have named.
         const bool trace = getenv("CETRA_IK_TRACE") != NULL;
 
-        // low, lift and run carry no initialiser on purpose: pass 0 either sets all three
-        // or returns, so a value here would only ever be the one nothing reads.
-        float low, lift, stride = 0.0f, slide[2] = {0.0f, 0.0f}, jump[2] = {0.0f, 0.0f};
-        int s = 0, run, transitions, pins = 0, fast_hold = 0, fast_pins = 0;
+        // lift and run carry no initialiser on purpose: pass 0 either sets both or
+        // returns, so a value here would only ever be the one nothing reads. stride does,
+        // because pass 1 reads it in an expression the analyser cannot order.
+        float lift, stride = 0.0f, slide[2] = {0.0f, 0.0f}, jump[2] = {0.0f, 0.0f};
+        int run, transitions, pins = 0, fast_hold = 0, fast_pins = 0;
         int hs = 0, hold_run = 0, hold_total = 0;
         vec3 dir = {0.0f, 0.0f, 0.0f};
 
         for (int pass = 0; pass < 4; pass++) {
-            Animator* an = create_animator(skel);
-            IkSystem* sys = create_ik_system(skel);
-            if (!an || !sys) {
-                fprintf(stderr, "ik-probe: could not build the walking rig\n");
+            int lf, rf;
+            Animator* an = ik_probe_walker(skel, walk, pass <= 1, &lf, &rf);
+            if (!an)
                 return 1;
-            }
-            const int lf = ik_add_foot(sys, "cetra_rig:LeftUpLeg", "cetra_rig:LeftLeg",
-                                       "cetra_rig:LeftFoot", (vec3){0.0f, 0.0f, 1.0f});
-            const int rf = ik_add_foot(sys, "cetra_rig:RightUpLeg", "cetra_rig:RightLeg",
-                                       "cetra_rig:RightFoot", (vec3){0.0f, 0.0f, 1.0f});
-            if (lf < 0 || rf < 0 || !ik_set_pelvis(sys, "cetra_rig:Hips")) {
-                fprintf(stderr, "ik-probe: the rig lacks both legs\n");
-                return 1;
-            }
-            // Refused loudly rather than falling back to the ankle: this case exists to
-            // measure a TOE lock, and one that quietly measured an ankle lock instead
-            // would report a number for a feature nobody asked for.
-            if (!ik_foot_set_toe(sys, lf, "cetra_rig:LeftToeBase") ||
-                !ik_foot_set_toe(sys, rf, "cetra_rig:RightToeBase")) {
-                fprintf(stderr, "ik-probe: the rig lacks toe bones\n");
-                return 1;
-            }
-            if (pass <= 1)
-                sys->params.lock_distance = 0.0f;
-            an->state->ik = sys;
-            animator_play(an, walk, 0.0f, true);
+            IkSystem* sys = an->state->ik;
 
             const float weight = pass == 0 ? 0.0f : 1.0f;
             const float speed = pass == 3 ? stride * IK_LOCK_FAST : stride;
@@ -3949,60 +4101,13 @@ static int run_ik_probe(Game* game, const char* which) {
             }
 
             if (pass == 0) {
-                // The contact band is a fraction of the foot's OWN lift, not of the leg.
-                // A clip that barely picks its feet up and one that marches both want
-                // "near the bottom of this foot's travel", and a band in leg lengths read
-                // 77 per cent of the cycle as contact.
-                float high = -1e9f;
-                low = 1e9f;
-                for (int t = 0; t < ticks; t++) {
-                    if (ank[t][1] < low)
-                        low = ank[t][1];
-                    if (ank[t][1] > high)
-                        high = ank[t][1];
-                }
-                lift = high - low;
-                for (int t = 0; t < ticks; t++)
-                    inside[t] = ank[t][1] <= low + IK_LOCK_BAND * lift;
-                run = ik_probe_longest_run(inside, ticks, &s);
-                if (run < 3 || lift < 1e-5f) {
-                    fprintf(stderr, "ik-probe: no contact window in %d ticks\n", ticks);
+                IkProbeStance stance;
+                if (!ik_probe_stance(ank, toe[0], ticks, inside, &stance))
                     return 1;
-                }
-                // The stance velocity by least squares over the whole window rather than
-                // from its two endpoints: a foot that rocks at heel-strike and toe-off
-                // moves the endpoints without moving the average, and the endpoint form
-                // read a stride 2x short. Measured at the TOE, which is the point a lock
-                // holds and so the point that has to come out stationary.
-                const int e = s + run - 1;
-                float mean_t = 0.0f, var_t = 0.0f;
-                vec3 mean_p = {0.0f, 0.0f, 0.0f}, slope = {0.0f, 0.0f, 0.0f};
-                for (int t = s; t <= e; t++) {
-                    mean_t += (float)t;
-                    mean_p[0] += toe[0][t][0];
-                    mean_p[2] += toe[0][t][2];
-                }
-                mean_t /= (float)run;
-                mean_p[0] /= (float)run;
-                mean_p[2] /= (float)run;
-                for (int t = s; t <= e; t++) {
-                    const float dt = (float)t - mean_t;
-                    var_t += dt * dt;
-                    slope[0] += dt * (toe[0][t][0] - mean_p[0]);
-                    slope[2] += dt * (toe[0][t][2] - mean_p[2]);
-                }
-                if (var_t <= 0.0f) {
-                    fprintf(stderr, "ik-probe: the contact window has no extent\n");
-                    return 1;
-                }
-                glm_vec3_scale(slope, 60.0f / var_t, slope); // per tick, then per second
-                stride = glm_vec3_norm(slope);
-                if (stride < 1e-5f) {
-                    fprintf(stderr, "ik-probe: the stance foot does not travel\n");
-                    return 1;
-                }
-                // The body goes the way the stance foot does not.
-                glm_vec3_scale(slope, -1.0f / stride, dir);
+                lift = stance.lift;
+                run = stance.run;
+                stride = stance.stride;
+                glm_vec3_copy(stance.dir, dir);
 
                 // The label's own statistics, from the unsolved pass so they describe the
                 // CLIP rather than the solver's response to itself, and against this
@@ -4059,35 +4164,8 @@ static int run_ik_probe(Game* game, const char* which) {
                     fprintf(stderr, "ik-probe: the lock never held\n");
                     return 1;
                 }
-                // The toe and not the ankle: a lock holds the toe and leaves the heel
-                // free, so an ankle that lifts at toe-off is the clip being preserved
-                // rather than a contact slipping.
-                const int he = hs + hold_run - 1;
-                for (int p = 0; p < 2; p++) {
-                    vec3 anchor, prev = {0.0f, 0.0f, 0.0f};
-                    glm_vec3_scale(dir, stride * (float)hs / 60.0f, anchor);
-                    glm_vec3_add(toe[p + 1][hs], anchor, anchor);
-                    anchor[1] = 0.0f;
-                    for (int t = hs; t <= he; t++) {
-                        vec3 body, world;
-                        glm_vec3_scale(dir, stride * (float)t / 60.0f, body);
-                        glm_vec3_add(toe[p + 1][t], body, world);
-                        world[1] = 0.0f;
-                        const float drift = glm_vec3_distance(world, anchor);
-                        if (drift > slide[p])
-                            slide[p] = drift;
-                        // The largest single TICK of travel, which is what a transition
-                        // that pops looks like and what the total drift cannot see: a foot
-                        // that jumps once and then holds still reports the same slide as
-                        // one that eases over the whole stance.
-                        if (t > hs) {
-                            const float step = glm_vec3_distance(world, prev);
-                            if (step > jump[p])
-                                jump[p] = step;
-                        }
-                        glm_vec3_copy(world, prev);
-                    }
-                }
+                for (int p = 0; p < 2; p++)
+                    slide[p] = ik_probe_drift(toe[p + 1], hs, hold_run, dir, stride, &jump[p]);
             }
         }
 
@@ -4110,6 +4188,147 @@ static int run_ik_probe(Game* game, const char* which) {
         // a target that steps rather than blending shows here and in nothing else.
         printf("ik lock plant step %.6f\n", (double)jump[0]);
         printf("ik lock hold step %.6f\n", (double)jump[1]);
+    } else if (!strcmp(which, "rate")) {
+        // The same stance slide the `lock` case reads, at THREE travel speeds instead of
+        // one. `lock` walks the body at exactly the speed the clip's own feet imply, which
+        // is the one operating point where locking works for free; a game travels at
+        // whatever its controller says. This case is the claim that the feature survives
+        // that, and the only thing that makes it survive is playing the clip at
+        // `wanted / implied` -- which is what `ik_rate_playback` below asks the engine for.
+        //
+        // Read the LOCK case first. Everything here about the recording, the window, the
+        // anchor and why the toe carries the measurement is stated there.
+        if (load_animations_from_file(probe_scene, skel, WALK_CLIP, false, NULL) <= 0) {
+            fprintf(stderr, "ik-probe: %s did not load\n", WALK_CLIP);
+            return 1;
+        }
+        Animation* walk = scene_find_animation(probe_scene, "strut_walk");
+        if (!walk || walk->ticks_per_second <= 0.0) {
+            fprintf(stderr, "ik-probe: %s carries no usable clip\n", WALK_CLIP);
+            return 1;
+        }
+        const float seconds = (float)(walk->duration / walk->ticks_per_second);
+        const int cycle = (int)(seconds * 60.0f + 0.5f);
+        const int ticks = cycle * IK_LOCK_CYCLES;
+        if (cycle < 2 || ticks > IK_LOCK_TICKS) {
+            fprintf(stderr, "ik-probe: a %.3f s clip does not fit the rate window\n",
+                    (double)seconds);
+            return 1;
+        }
+
+        const float leg = seg_a + seg_b;
+        vec3 ank[IK_LOCK_TICKS] = {{0.0f, 0.0f, 0.0f}};
+        vec3 toe[IK_LOCK_TICKS] = {{0.0f, 0.0f, 0.0f}};
+        vec3 asked[IK_LOCK_TICKS] = {{0.0f, 0.0f, 0.0f}}; // the unsolved ankle, then the gap
+        bool held[IK_LOCK_TICKS] = {false};
+        bool inside[IK_LOCK_TICKS] = {false};
+        IkProbeStance stance;
+
+        // The reference: weight 0 and a body that does not move, so the stride is the
+        // clip's own and never the solver's response to itself.
+        {
+            int lf, rf;
+            Animator* an = ik_probe_walker(skel, walk, false, &lf, &rf);
+            if (!an)
+                return 1;
+            IkSystem* sys = an->state->ik;
+            mat4 still;
+            glm_mat4_identity(still);
+            for (int t = 0; t < ticks; t++) {
+                ik_set_world(sys, still);
+                const int ids[2] = {lf, rf};
+                for (int k = 0; k < 2; k++) {
+                    vec3 at;
+                    glm_vec3_copy(an->state->global_transforms[sys->feet[ids[k]].ankle_index][3],
+                                  at);
+                    ik_foot_set_ground(sys, ids[k], (vec3){at[0], 0.0f, at[2]},
+                                       (vec3){0.0f, 1.0f, 0.0f}, 0.0f);
+                }
+                animator_update(an, 1.0f / 60.0f);
+                glm_vec3_copy(an->state->global_transforms[sys->feet[lf].ankle_index][3], ank[t]);
+                glm_vec3_copy(an->state->global_transforms[sys->feet[lf].toe_index][3], toe[t]);
+            }
+            free_animator(an);
+            if (!ik_probe_stance(ank, toe, ticks, inside, &stance))
+                return 1;
+        }
+        printf("ik rate clip stride %.6f\n", (double)stance.stride);
+
+        for (int m = 0; m < IK_RATE_COUNT; m++) {
+            const float want = stance.stride * IK_RATE_MULT[m];
+            float play = 1.0f;
+
+            // Two passes at the same playback rate, differing only in whether the solver
+            // is asked to do anything. The second is what the rig looks like; the first is
+            // what the animator ASKED for, and the gap between them is the correction --
+            // the number this case exists for. Slide alone cannot see it: a lock inside
+            // its unlock distance holds the foot perfectly still while the leg is hauled
+            // a third of a metre away from the pose, which is a foot that does not slide
+            // on a character that does not walk.
+            for (int solved = 0; solved < 2; solved++) {
+                int lf, rf;
+                Animator* an = ik_probe_walker(skel, walk, false, &lf, &rf);
+                if (!an)
+                    return 1;
+                IkSystem* sys = an->state->ik;
+                play = ik_rate_playback(an, want);
+                an->speed = play;
+
+                for (int t = 0; t < ticks; t++) {
+                    mat4 to_world;
+                    vec3 at;
+                    glm_mat4_identity(to_world);
+                    glm_vec3_scale(stance.dir, want * (float)t / 60.0f, at);
+                    glm_translate(to_world, at);
+                    ik_set_world(sys, to_world);
+
+                    const int ids[2] = {lf, rf};
+                    for (int k = 0; k < 2; k++) {
+                        vec3 stand;
+                        glm_vec3_copy(
+                            an->state->global_transforms[sys->feet[ids[k]].ankle_index][3], stand);
+                        ik_foot_set_ground(sys, ids[k], (vec3){stand[0], 0.0f, stand[2]},
+                                           (vec3){0.0f, 1.0f, 0.0f}, solved ? 1.0f : 0.0f);
+                    }
+                    animator_update(an, 1.0f / 60.0f);
+                    glm_vec3_copy(an->state->global_transforms[sys->feet[lf].ankle_index][3],
+                                  ank[t]);
+                    if (solved) {
+                        glm_vec3_copy(an->state->global_transforms[sys->feet[lf].toe_index][3],
+                                      toe[t]);
+                        held[t] = sys->feet[lf].lock != IK_LOCK_OFF;
+                        glm_vec3_sub(ank[t], asked[t], asked[t]); // solved minus asked
+                    } else {
+                        glm_vec3_copy(ank[t], asked[t]);
+                    }
+                }
+                free_animator(an);
+            }
+
+            // Past the first cycle, for the reason the lock case gives: a cold rig's
+            // first lock settles over ticks no later one spends.
+            int hs = 0;
+            const int hold = ik_probe_longest_run(held + cycle, ticks - cycle, &hs);
+            hs += cycle;
+            float step = 0.0f, fix = 0.0f;
+            const float slide =
+                hold >= 3 ? ik_probe_drift(toe, hs, hold, stance.dir, want, &step) : 0.0f;
+            for (int t = hs; t < hs + hold; t++) {
+                const float d = glm_vec3_norm(asked[t]);
+                if (d > fix)
+                    fix = d;
+            }
+            // The hold fraction is not decoration and the arm must read it: a lock that
+            // lets go after three ticks drifts almost nothing over them, so a slide bar
+            // alone passes the case this exists to catch from the other side.
+            printf("ik rate %s play %.6f\n", IK_RATE_TAG[m], (double)play);
+            printf("ik rate %s hold %.6f\n", IK_RATE_TAG[m], (double)((float)hold / (float)cycle));
+            printf("ik rate %s slide %.6f\n", IK_RATE_TAG[m], (double)slide);
+            printf("ik rate %s slidefrac %.6f\n", IK_RATE_TAG[m], (double)(slide / leg));
+            printf("ik rate %s step %.6f\n", IK_RATE_TAG[m], (double)step);
+            printf("ik rate %s fix %.6f\n", IK_RATE_TAG[m], (double)fix);
+            printf("ik rate %s fixfrac %.6f\n", IK_RATE_TAG[m], (double)(fix / leg));
+        }
     } else if (!strcmp(which, "ground") || !strcmp(which, "slope") || !strcmp(which, "step")) {
         // The three cases that need a raycast, and so a world. The rig is placed at a
         // stand point and its origin put at the ground there; everything reported is
