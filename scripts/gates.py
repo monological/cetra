@@ -22637,6 +22637,14 @@ def run_ik_gate(workdir):
                    stance. The window is asserted to BE a stance first: a label that
                    said "always in contact" would report a small drift for the wrong
                    reason, and one that said "never" would leave nothing to measure.
+      ik-contact   the solver's contact label finds ONE contact per walk cycle. That
+                   count is the arm: a label that flaps splits a stance into several
+                   runs while the fraction and the agreement barely move, and a lock
+                   built on it releases and re-grabs mid stride. The fraction and the
+                   agreement with the probe's own independent height window are the
+                   other two halves -- the label is the ANKLE's lift and speed, the
+                   window is the ankle's height against its own travel, so they are
+                   different quantities and agreeing is evidence.
     """
     if not os.path.exists(GAMETEST):
         print("  ik           SKIP  (gametest not built)")
@@ -22951,6 +22959,31 @@ def run_ik_gate(workdir):
               f"of a leg; planting holds no contact point, so it reads the stance)")
         if not ok:
             failures.append("ik-slide")
+
+    # --- ik-contact ------------------------------------------------------------
+    if not d or any(k not in d for k in [("label", "runs"), ("label", "cycles"),
+                                         ("label", "fraction"), ("label", "agree")]):
+        print("  ik-contact   FAIL  the probe failed or measured nothing")
+        failures.append("ik-contact")
+    else:
+        runs = d[("label", "runs")][0]
+        cycles = d[("label", "cycles")][0]
+        share = d[("label", "fraction")][0]
+        agree = d[("label", "agree")][0]
+        # ONE contact per cycle is the whole arm. A label that flaps splits a stance into
+        # several runs and nothing else here would notice -- the fraction barely moves and
+        # the agreement barely moves, but a lock built on it releases and re-grabs mid
+        # stride. This caught exactly that: judged at the toe the count was 6 over 3
+        # cycles, because a retargeted clip's toe joint passes back through its own bind
+        # clearance in mid-swing, slowly enough that the speed test admits it too.
+        ok = (runs == cycles and 0.3 < share < 0.7 and agree > 0.6)
+        print(f"  ik-contact   {'PASS' if ok else 'FAIL'}  {runs:.0f} contacts over "
+              f"{cycles:.0f} cycles (want one each, or the label is flapping), the foot "
+              f"down {share * 100.0:.0f} per cent of the time (want 30 to 70) and agreeing "
+              f"{agree * 100.0:.0f} per cent with the probe's own height window (want > 60; "
+              f"two different quantities, so agreement is evidence rather than a tautology)")
+        if not ok:
+            failures.append("ik-contact")
 
     return failures
 

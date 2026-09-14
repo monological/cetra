@@ -3702,6 +3702,14 @@ static int run_ik_probe(Game* game, const char* which) {
             fprintf(stderr, "ik-probe: the rig lacks both legs\n");
             return 1;
         }
+        // Refused loudly rather than falling back to the ankle: this case exists to
+        // measure a toe lock, and one that quietly measured an ankle lock instead would
+        // report a number for a feature nobody asked for.
+        if (!ik_foot_set_toe(sys, lf, "cetra_rig:LeftToeBase") ||
+            !ik_foot_set_toe(sys, rf, "cetra_rig:RightToeBase")) {
+            fprintf(stderr, "ik-probe: the rig lacks toe bones\n");
+            return 1;
+        }
         an->state->ik = sys;
         animator_play(an, walk, 0.0f, true);
 
@@ -3709,6 +3717,13 @@ static int run_ik_probe(Game* game, const char* which) {
         // Zeroed because cppcheck cannot see that the bounds check above makes `ticks`
         // at least two cycles, and reads the fill loop as possibly not running.
         vec3 path[IK_LOCK_TICKS] = {{0.0f, 0.0f, 0.0f}};
+        bool label[IK_LOCK_TICKS] = {false};
+        // Every summary below is an aggregate, and an aggregate cannot say WHICH ticks
+        // went wrong. CETRA_IK_TRACE=1 prints the per-tick heights and label to stderr,
+        // where the probe's numeric grammar cannot reach it; that dump is what showed
+        // the toe joint dipping back through its own bind clearance in mid-swing, which
+        // no summary here would have named.
+        const bool trace = getenv("CETRA_IK_TRACE") != NULL;
         for (int t = 0; t < ticks; t++) {
             // Targets first, from the pose the last tick left, then the tick -- the
             // order the app runs in, where on_pre_render precedes the animator.
@@ -3721,6 +3736,11 @@ static int run_ik_probe(Game* game, const char* which) {
             }
             animator_update(an, 1.0f / 60.0f);
             glm_vec3_copy(an->state->global_transforms[ankle_bone][3], path[t]);
+            label[t] = sys->feet[lf].in_contact;
+            if (trace)
+                fprintf(stderr, "ik-trace %3d toe %.4f ankle %.4f label %d\n", t,
+                        (double)an->state->global_transforms[sys->feet[lf].toe_index][3][1],
+                        (double)path[t][1], label[t] ? 1 : 0);
         }
 
         const float leg = seg_a + seg_b;
@@ -3792,9 +3812,30 @@ static int run_ik_probe(Game* game, const char* which) {
                 slide = drift;
         }
 
+        // The solver's own contact label against this instrument's independent window.
+        // Two different quantities on purpose -- the label is the TOE's height above the
+        // ground it was handed plus its vertical speed, the window is the ANKLE's height
+        // against its own travel -- so agreement between them is evidence and not a
+        // tautology. `runs` is how many separate contacts the label found, which is what
+        // says whether it is one steady stance per cycle or a state flapping.
+        int labelled = 0, both = 0, either = 0, runs = 0;
+        for (int t = 0; t < ticks; t++) {
+            const bool inside = path[t][1] <= low + IK_LOCK_BAND * lift;
+            labelled += label[t] ? 1 : 0;
+            both += (label[t] && inside) ? 1 : 0;
+            either += (label[t] || inside) ? 1 : 0;
+            if (label[t] && (t == 0 || !label[t - 1]))
+                runs++;
+        }
+
         printf("ik lock clip seconds %.6f\n", (double)seconds);
         printf("ik lock clip stride %.6f\n", (double)stride);
         printf("ik lock foot lift %.6f\n", (double)lift);
+        printf("ik lock label fraction %.6f\n", (double)((float)labelled / (float)ticks));
+        printf("ik lock label agree %.6f\n",
+               (double)(either > 0 ? (float)both / (float)either : 0.0f));
+        printf("ik lock label runs %.6f\n", (double)runs);
+        printf("ik lock label cycles %.6f\n", (double)IK_LOCK_CYCLES);
         printf("ik lock contact ticks %.6f\n", (double)run);
         printf("ik lock contact fraction %.6f\n", (double)((float)run / (float)cycle));
         // Reported twice on purpose: metres are what a person judges, and the fraction
