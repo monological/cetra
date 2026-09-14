@@ -10375,7 +10375,11 @@ def run_water_gate(workdir):
     # out from a stripped water block and twenty-odd red arms.
     gen = os.path.join(ROOT, "assets", "generators", "gen_water_fixture.py")
     regen_dir = os.path.join(workdir, "regen")
-    os.makedirs(regen_dir, exist_ok=True)
+    # An alternate corpus ROOT, so it is shaped like the real one: asset_path
+    # appends the kind directory to whatever root it is given, and a generator
+    # must not have to mkdir on a path it might only be reading.
+    for kind in set(ASSET_KINDS.values()):
+        os.makedirs(os.path.join(regen_dir, kind), exist_ok=True)
     # `proc`, not `r`: this function uses `r` as a probe-ROW loop variable in several
     # comprehensions, and `r` is the file's universal name for a CompletedProcess. The two
     # meanings only stay apart because Python scopes comprehension targets.
@@ -10388,7 +10392,7 @@ def run_water_gate(workdir):
         drifted = []
         for name in ("water_fixture.gltf", WATER_FIXTURE):
             committed = asset(name)
-            regenerated = os.path.join(regen_dir, name)
+            regenerated = os.path.join(regen_dir, *asset_subpath(name).split("/"))
             if not os.path.exists(regenerated):
                 drifted.append(f"{name}: not emitted")
                 continue
