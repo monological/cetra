@@ -29,6 +29,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 # Unit cube, 24 verts (per-face normals), CCW from outside.
 FACES = [
@@ -156,7 +157,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "light_import_fixture.gltf")
+out = asset_path("light_import_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
@@ -191,7 +192,7 @@ point["nodes"][1] = {
     "extensions": {"KHR_lights_punctual": {"light": 0}},
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "point_import_fixture.gltf")
+out = asset_path("point_import_fixture.gltf")
 with open(out, "w") as f:
     json.dump(point, f, indent=1)
     f.write("\n")
@@ -235,7 +236,7 @@ spot["nodes"][1] = {
     "extensions": {"KHR_lights_punctual": {"light": 0}},
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spot_import_fixture.gltf")
+out = asset_path("spot_import_fixture.gltf")
 with open(out, "w") as f:
     json.dump(spot, f, indent=1)
     f.write("\n")

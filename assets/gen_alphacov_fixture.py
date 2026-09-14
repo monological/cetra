@@ -45,6 +45,7 @@ import struct
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -314,7 +315,7 @@ def main():
     assert uniform_level is not None, \
         "the chain never goes uniform; the far band has no saturation to read"
 
-    Image.fromarray(img, "RGBA").save(os.path.join(HERE, "alphacov_dots.png"))
+    Image.fromarray(img, "RGBA").save(asset_path("alphacov_dots.png"))
 
     # And that each band lands where its arm assumes. The depth is a joint
     # function of six numbers across two files, and any one of them can quietly
@@ -423,9 +424,9 @@ def main():
         f"the quad's mip {quad_mip:.2f} selects a level with a budget of {quad_budget:.1f} ON "
         f"texels; below 4 it is starved and near-empty becomes correct")
 
-    with open(os.path.join(HERE, "alphacov_fixture.gltf"), "w") as f:
+    with open(asset_path("alphacov_fixture.gltf"), "w") as f:
         json.dump(GLTF, f, indent=1)
-    with open(os.path.join(HERE, "alphacov_fixture.cscn"), "w") as f:
+    with open(asset_path("alphacov_fixture.cscn"), "w") as f:
         json.dump(CSCN, f, indent=1)
     print(f"wrote alphacov_fixture.gltf, alphacov_fixture.cscn and a {TEX}x{TEX} dot grid; "
           f"coverage {cov0:.3f} -> " + " -> ".join(f"{c:.3f}" for c in drifted))

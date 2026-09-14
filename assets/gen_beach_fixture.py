@@ -32,6 +32,7 @@ import math
 import os
 import struct
 import sys
+from fixture_paths import asset_path
 
 WATER_LEVEL = 0.0
 # The extent the .cscn authors. render_dome_bed_height sizes itself off this, so the
@@ -288,10 +289,10 @@ scene_desc = {
 }
 
 out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(out_dir, "beach_fixture.gltf"), "w") as f:
+with open(asset_path("beach_fixture.gltf", out_dir), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-with open(os.path.join(out_dir, "beach_fixture.cscn"), "w") as f:
+with open(asset_path("beach_fixture.cscn", out_dir), "w") as f:
     json.dump(scene_desc, f, indent=1)
     f.write("\n")
 print("wrote beach_fixture.gltf + beach_fixture.cscn")

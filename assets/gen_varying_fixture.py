@@ -51,8 +51,8 @@ Regenerate with: python3 assets/gen_varying_fixture.py
 import base64
 import json
 import math
-import os
 import struct
+from fixture_paths import asset_path
 
 # --- the fins -----------------------------------------------------------------------------
 
@@ -270,12 +270,11 @@ cscn = {
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(here, "varying_fixture.gltf")
+out = asset_path("varying_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-scn = os.path.join(here, "varying_fixture.cscn")
+scn = asset_path("varying_fixture.cscn")
 with open(scn, "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")

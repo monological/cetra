@@ -62,6 +62,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 # Interior spans x,z in [-1,1] and y in [0,2] -- a 2 m room at the engine's prop
 # scale, so the app's scene-scaled near plane and shadow cascades behave as they
@@ -300,7 +301,7 @@ def emit(filename, room, mat_by_group):
         ],
     }
 
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    out = asset_path(filename)
     with open(out, "w") as f:
         json.dump(gltf, f, indent=1)
         f.write("\n")
@@ -429,7 +430,7 @@ def check_rooms_cscn():
     rather than a step -- so they are the one thing worth reading back. Asserting
     PROBE_OVERLAP against itself, which is what this was, cannot fail.
     """
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cornell_rooms.cscn")
+    path = asset_path("cornell_rooms.cscn")
     if not os.path.exists(path):
         return  # the .gltf is emitted first on a fresh checkout
     with open(path) as f:

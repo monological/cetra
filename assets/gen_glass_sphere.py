@@ -16,6 +16,7 @@ import json
 import struct
 import os
 import math
+from fixture_paths import asset_path
 
 # UV sphere. Silhouette smoothness matters for glass (the Fresnel rim rides the
 # outline), so tessellate finely. Normals are the unit position (exact for a
@@ -129,7 +130,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glass_sphere.gltf")
+out = asset_path("glass_sphere.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

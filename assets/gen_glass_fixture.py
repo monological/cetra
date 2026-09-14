@@ -14,6 +14,7 @@ import base64
 import json
 import struct
 import os
+from fixture_paths import asset_path
 
 # One unit quad in the XY plane, facing +Z (two triangles)
 positions = [(-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0)]
@@ -138,7 +139,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glass_fixture.gltf")
+out = asset_path("glass_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

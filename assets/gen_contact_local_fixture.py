@@ -62,6 +62,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 # ---- the geometry, and the numbers every assert below is written against ----
 GROUND_HALF = 5.0     # ground quad half-extent
@@ -390,9 +391,9 @@ def write_gltf(path, with_cube):
 
 
 here = os.path.dirname(os.path.abspath(__file__))
-write_gltf(os.path.join(here, "contact_local_fixture.gltf"), with_cube=True)
-write_gltf(os.path.join(here, "contact_local_bare.gltf"), with_cube=False)
-with open(os.path.join(here, "contact_local_fixture.cscn"), "w") as fh:
+write_gltf(asset_path("contact_local_fixture.gltf"), with_cube=True)
+write_gltf(asset_path("contact_local_bare.gltf"), with_cube=False)
+with open(asset_path("contact_local_fixture.cscn"), "w") as fh:
     json.dump(CSCN, fh, indent=1)
     fh.write("\n")
 print("wrote contact_local_fixture.gltf, contact_local_bare.gltf and contact_local_fixture.cscn")

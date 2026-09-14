@@ -36,6 +36,7 @@ import base64
 import json
 import os
 import struct
+from fixture_paths import asset_path
 
 # One unit quad in the XY plane, facing +Z (two triangles)
 positions = [(-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0)]
@@ -238,13 +239,13 @@ mix_desc["fogVolumes"] = [
 ]
 
 here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "fog_volume_fixture.gltf"), "w") as f:
+with open(asset_path("fog_volume_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-with open(os.path.join(here, "fog_volume_fixture.cscn"), "w") as f:
+with open(asset_path("fog_volume_fixture.cscn"), "w") as f:
     json.dump(scene_desc, f, indent=1)
     f.write("\n")
-with open(os.path.join(here, "fog_volume_mix_fixture.cscn"), "w") as f:
+with open(asset_path("fog_volume_mix_fixture.cscn"), "w") as f:
     json.dump(mix_desc, f, indent=1)
     f.write("\n")
 print("wrote fog_volume_fixture.gltf + .cscn + fog_volume_mix_fixture.cscn")

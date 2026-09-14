@@ -49,6 +49,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 PROP_COUNT = 130  # 2 * 64 + 2 -- straddles the UBO chunk seam on purpose
 COLS = 13
@@ -269,7 +270,7 @@ gltf = {
 }
 
 here = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(here, "instancing_fixture.gltf")
+out = asset_path("instancing_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=2)
     f.write("\n")

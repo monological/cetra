@@ -57,6 +57,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 CARDS = 12          # layers in the deepest band
 ALPHA = 0.15        # per-card opacity; (1-a)^12 = 0.142, so B stays visible
@@ -233,11 +234,11 @@ cscn = {
 }
 
 here = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(here, "oit_cards_fixture.gltf")
+out = asset_path("oit_cards_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-scene_out = os.path.join(here, "oit_cards_fixture.cscn")
+scene_out = asset_path("oit_cards_fixture.cscn")
 with open(scene_out, "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")
