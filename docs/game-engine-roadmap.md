@@ -6,7 +6,7 @@ subsystem sweep. Companion to `rendering-roadmap.md` — **that** doc owns the
 graphics pipeline in depth; **this** doc owns everything else (physics, gameplay,
 assets, core, and the gaps between "engine" and "shippable game").
 
-_Last updated: 2026-09-12._
+_Last updated: 2026-09-14._
 
 ---
 
@@ -26,10 +26,26 @@ steps, and a migration that changed for a reason nobody anticipated, which only
 time produces) and two-bone foot planting in spec 12.4 (a closed-form solver on
 12.1's pose seam, a ramp and steps to plant on, twelve gate arms; owed the
 foot LOCKING it is a prerequisite for, without which a walking character still
-slides, and a look at the plant fraction as a silhouette rather than a number).
+slides, and a look at the plant fraction as a silhouette rather than a number),
+whose deferred review items spec 12.5 then closed.
 11.109 was the pivot from the renderer era to the game-platform
 era, which is numbered from 12.0; it stays the last renderer-era spec, and the
 major bump marks the change in the *kind* of work, as every prior one did.
+
+**Specs 12.6 and 12.7 are a different kind of spec from the six above, and the
+distinction is worth keeping.** Each of those six closed a named gap in the
+table below. These two closed none. They put the game layer onto subsystems the
+renderer era had built and never once driven from a game — the procedural
+terrain, erosion, the water surface, the derived-data cook — by giving
+`gametest` a plate floating 180 units above an eroded crater, a luminous pool at
+the bottom of it, and swimming when you land. What that bought is not a feature
+but EXERCISE, and it is worth recording what exercise alone found: a clustered
+light index pool that zeroed a froxel's entire list on overflow instead of
+clamping it (fixed in the engine, `light_cluster.c`), a cook recipe one byte
+over the name limit that had therefore cached nothing at all, and a Perlin
+permutation table whose one-deep memo cost eleven seconds of every launch to
+four interleaved seeds. A demo app that only ever shows what already works is
+not paying for itself.
 
 The graphics API (OpenGL 4.1, no Vulkan/Metal/DirectX, no compute shaders) is
 **not** a blocker for shipping on Steam. GL 4.1 runs on Windows/Linux/macOS and
@@ -165,9 +181,13 @@ authoring/description, **not** save-game state. (§6.0)
 ### Apps (working demos)
 
 `render` (flagship model/scene viewer, `.cscn` driver + CI screenshot harness),
-`gametest` (a genuinely playable physics sandbox: WASD character with jump,
-spawnable crates, raycasts, a motorized hinge door you push open), `spores`
-(curl-noise particle room on the game loop, headless-capable), `tree`
+`gametest` (the game layer's whole surface in one app, and the closest thing in
+the tree to a vertical slice: a skinned puppet on an `ANIMATOR` blending
+idle/walk/run from the character's own post-solve speed, feet planted by
+two-bone IK on a ramp and three steps, menus and a HUD, save and load, audio, a
+scripted-pad path, spawnable crates, raycasts and a motorized hinge door — all
+of it on a plate floating above a crater you can fall into and swim in),
+`spores` (curl-noise particle room on the game loop, headless-capable), `tree`
 (procedural trees), `shapes` (2D primitive demo), `splash` (SDF text
 showcase).
 
@@ -196,7 +216,7 @@ are rough and assume a single experienced dev.
 | **Game UI / menus** | **Done, spec 12.2** -- a retained tree of elements over a pure two-pass layout, a geometric focus model, and a theme whose every zero means inherit, drawn through a general post-tonemap overlay hook so a menu is neither graded nor rescaled and IS captured by a headless screenshot. The element list is CLOSED (panel, label, button, toggle, slider, selector) with three escape hatches under it: a custom draw callback, a custom fragment program, and the raw draw-list primitives. Input is settled at one depth -- a `ui` flag on an action and one suppression switch -- and Escape now opens a menu in every app instead of quitting. Ten gate arms assert layout, wrapping, navigation, hit-testing, capture, the stack, theme resolution, the closed list and the settings round-trip with no GPU at all, plus two menu goldens. Still owed: a 4K/HiDPI display other than this one, a real controller through a menu, and the Linux and Windows settings paths. | Main menu, HUD, pause, settings screens. Inventory is an app's own screen built from these elements. | done (~1 week) |
 | **Animation blending** | **Done, spec 12.1** -- a blend layer over the single-clip animator: a pose became a blendable value, and over it a phase-synced 1D blend space, a crossfade whose settled pose is the incoming clip's own bit for bit, one bone-masked override layer that releases itself, and clip events dispatched after the pose is applied. Poses are per node, so two rigs animate independently; the `ANIMATOR` component ticks one once per rendered frame from the sim clock. Thirteen gate arms on a generated puppet (endpoints to the pixel, an analytic 21.60/45.00/68.40-degree nlerp midpoint, crossfade timing, mask and release, two rigs, one shared phase, event counts, and the committed walk clip binding all twenty bones by name), plus the corpus's first skinned golden. Still owed: a real character, judged by eye (`docs/verification.md`). | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | done (~1 week) |
 | **Steamworks integration** | Absent | Achievements, cloud saves, overlay, input API. Needed near ship. | ~1 week |
-| **IK** | **Partial, spec 12.4** — two-bone foot PLANTING: a closed-form solver on 12.1's pose seam, writing globals only; a ramp of known slope and three steps always in the world, since flat ground is the one case where planting is correctly a no-op; and twelve gate arms, of which the load-bearing one ticks a walk cycle and measures the ankle's travel, because every other arm poses the rig once and all of them passed while the feet were welded to the floor. Six feet land on their target to 0.00000000 m across flat ground and both fixtures. What it does NOT do is hold a world-space contact, so a walking character still slides and the stride runs at 89% of the clip's own; `docs/foot-locking.md` records the technique that closes that, and the four specific things this lacks. Look-at/aim untouched. | Foot planting, look-at/aim. Quality-of-life, not blocking. | planting done (~1 week); locking and look-at still open |
+| **IK** | **Partial, specs 12.4 and 12.5** — two-bone foot PLANTING: a closed-form solver on 12.1's pose seam, writing globals only; a ramp of known slope and three steps always in the world, since flat ground is the one case where planting is correctly a no-op; and twelve gate arms, of which the load-bearing one ticks a walk cycle and measures the ankle's travel, because every other arm poses the rig once and all of them passed while the feet were welded to the floor. Six feet land on their target to 0.00000000 m across flat ground and both fixtures. What it does NOT do is hold a world-space contact, so a walking character still slides and the stride runs at 89% of the clip's own; `docs/foot-locking.md` records the technique that closes that, and the four specific things this lacks. Spec 12.5 closed the eight review items 12.4 deferred — a `sole_offset` derived once from the bind pose, so a caller states a GROUND rather than an ankle target and no call site re-derives the clearance; `max_pelvis_drop` as a FRACTION of leg length rather than metres, so it carries to a rig of another size; and the probe memoisation, whose stated hazard turned out not to exist. That was quality, not coverage: the five debts `docs/verification.md` records against this path all stand, and its verdict line stays Owed. Look-at/aim untouched. | Foot planting, look-at/aim. Quality-of-life, not blocking. | planting done (~1 week); locking and look-at still open |
 | **VFX authoring, scripting, navmesh/AI, networking** | Absent | Only needed depending on genre. The particle system exists but emitters are built in code — an authoring/preset layer would come before heavy VFX work. Scripting (Lua) speeds iteration; navmesh/AI for enemies; networking for multiplayer. | genre-dependent |
 
 Also worth noting (not "gaps" but design ceilings):
@@ -236,7 +256,14 @@ its own branch.
    drift tolerance, the two platform paths this machine cannot write, and a
    migration that changed for a reason nobody anticipated — see
    `docs/verification.md`.
-6. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
+6. **Foot locking** — not started, and the one item here that an earlier spec
+   explicitly booked rather than merely left undone. Planting has no memory, so
+   a foot chases the animation and a walking character slides; the stride runs
+   at 89% of the clip's own. `docs/foot-locking.md` already carries the
+   technique and the four things the current solver lacks, and 12.4's
+   ankle-travel arm — the one that caught every other arm passing while the feet
+   were welded to the floor — is the instrument that would measure it.
+7. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
 
 Fill in genre-specific systems (scripting, AI/navmesh, networking) only as the
 actual game design demands them (YAGNI).
