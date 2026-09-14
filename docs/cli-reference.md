@@ -875,6 +875,14 @@ under test. The same reason apps/render grew these first.
 planting artefact from an animation one — worth knowing that the walk clip bends no knee of its
 own, so on flat ground the two look identical by design.
 
+`--no-lock` (spec 12.9) keeps planting and drops the LOCKING above it: contacts are still found
+and feet still meet the ground, but no world-space point is held, which is the 12.4 behaviour.
+**At the player's default speed the two are 0 px apart**, and that is the mechanism working: the
+player moves at 10 m/s on a rig whose clip implies 0.95 m/s, so the contact label never fires and
+there is nothing to hold. Walk at about a tenth of full stick — near the clip's own stride — and
+the same frame moves 52,244 px. Anything that wants the benefit in a real game has to match its
+travel speed to its clips, or carry root motion.
+
 `--ik-probe <case>` is the headless probe the `ik` gate group reads, in the same shape as the
 four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,
 `identity`, `pole` and `analytic` build a rig and nothing else — a two-bone solve is a pure
