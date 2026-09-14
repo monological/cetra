@@ -347,7 +347,7 @@ RECIPES = [
 
 
 def golden_path(name):
-    return os.path.join(ASSETS, f"{name}_golden.png")
+    return os.path.join(ASSETS, "goldens", f"{name}_golden.png")
 
 
 def _detect_fb_scale():
