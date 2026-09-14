@@ -323,18 +323,21 @@ float animator_stride_speed(const Animator* a) {
     // the second is how fast the one shared clock walks that loop, and the clock
     // runs at the blended clip LENGTH. Their product is metres per second.
     float ground = 0.0f, phase_rate = 0.0f;
+    bool any = false;
     for (int i = 0; i < a->base.count; i++) {
         if (w[i] <= 0.0f)
             continue;
-        if (a->base.entries[i].stride <= 0.0f)
-            return 0.0f; // an entry nobody measured; say so rather than guess
         const float seconds = clip_seconds(a->base.entries[i].clip);
         if (seconds <= 0.0f)
             return 0.0f;
+        // A strideless entry still occupies the clock, so it counts towards the
+        // phase rate and contributes no ground. That is what makes an idle at
+        // one end of a speed axis pull the answer down instead of erasing it.
         ground += w[i] * a->base.entries[i].stride * seconds;
         phase_rate += w[i] / seconds;
+        any = any || a->base.entries[i].stride > 0.0f;
     }
-    return ground * phase_rate;
+    return any ? ground * phase_rate : 0.0f;
 }
 
 // ============================================================================

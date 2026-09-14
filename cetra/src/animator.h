@@ -38,10 +38,15 @@ typedef struct AnimatorEntry {
     float position;
     // The ground speed this entry implies at speed 1, in whatever units the
     // param axis uses -- it is a denominator, so the units cancel as long as
-    // they are the caller's own. 0 = unknown, which is what an entry that was
-    // never measured carries and what makes animator_stride_speed say so.
-    // animation_stride_speed measures one, in MODEL units, and a rig on a
-    // scaled node owes the scale.
+    // they are the caller's own. animation_stride_speed measures one, in MODEL
+    // units, and a rig on a scaled node owes the scale.
+    //
+    // 0 means this entry lays down NO GROUND. That is the truth about a
+    // standing clip and it is also what an entry nobody measured carries, and
+    // the two are deliberately not distinguished here: an idle at 0 is what
+    // lets a speed axis reach zero, and a moving clip that could not be
+    // measured is the CALLER's to refuse, since only the caller knows which of
+    // its entries were supposed to move.
     float stride;
 } AnimatorEntry;
 
@@ -161,9 +166,10 @@ bool animator_finished(const Animator* animator);
 const char* animator_source_name(const Animator* animator);
 
 // The ground speed the playing pose implies at `speed` 1, blended the way the
-// pose is, in the units the entries' strides are in. 0 when nothing plays or
-// any entry carrying weight has no stride -- which is the zero value, so a
-// space nobody measured reports honestly rather than plausibly.
+// pose is, in the units the entries' strides are in. 0 when nothing plays or no
+// entry carrying weight has a stride -- so a space nobody measured reports
+// nothing rather than something, while a standing entry beside a walking one
+// correctly pulls the answer down towards zero.
 //
 // Divide the speed a game wants to travel at by this and write the result to
 // `speed`: that is the whole of stride matching, and the reason the division
