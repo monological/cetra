@@ -69,6 +69,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 # The occlusion buffer's shape, restated rather than imported (the terrain
 # gate's third-copy idiom): the gate must be able to fail when this file and
@@ -584,7 +585,7 @@ POST = {"tonemap": "neutral", "exposure": 1.0}
 
 def write_json(name, payload):
     here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, name), "w") as f:
+    with open(asset_path(name), "w") as f:
         json.dump(payload, f, indent=1)
         f.write("\n")
 

@@ -49,8 +49,8 @@ Regenerate with: python3 assets/gen_mask_fixture.py
 
 import base64
 import json
-import os
 import struct
+from fixture_paths import asset_path
 
 HALF = 0.62
 GAP = 0.22  # clear space between the quads, so none samples another's edge
@@ -201,12 +201,11 @@ cscn = {
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(here, "mask_fixture.gltf")
+out = asset_path("mask_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-scn = os.path.join(here, "mask_fixture.cscn")
+scn = asset_path("mask_fixture.cscn")
 with open(scn, "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")

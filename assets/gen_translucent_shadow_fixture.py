@@ -56,6 +56,7 @@ import math
 import os
 import struct
 import zlib
+from fixture_paths import asset_path
 
 # --- the canopy ------------------------------------------------------------
 PANELS = 4
@@ -326,12 +327,12 @@ cscn = {
 }
 
 here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "translucent_shadow_ramp.png"), "wb") as f:
+with open(asset_path("translucent_shadow_ramp.png"), "wb") as f:
     f.write(ramp_png)
-with open(os.path.join(here, "translucent_shadow_fixture.gltf"), "w") as f:
+with open(asset_path("translucent_shadow_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-with open(os.path.join(here, "translucent_shadow_fixture.cscn"), "w") as f:
+with open(asset_path("translucent_shadow_fixture.cscn"), "w") as f:
     json.dump(cscn, f, indent=1)
     f.write("\n")
 

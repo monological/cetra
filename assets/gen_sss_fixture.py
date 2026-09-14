@@ -17,6 +17,7 @@ import json
 import struct
 import math
 import os
+from fixture_paths import asset_path
 
 RINGS = 48    # latitude divisions
 SECTORS = 96  # longitude divisions
@@ -134,7 +135,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sss_fixture.gltf")
+out = asset_path("sss_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

@@ -29,6 +29,7 @@ Regenerate with: python3 assets/gen_fbx_unit_fixture.py
 """
 
 import os
+from fixture_paths import asset_path
 
 # The assimp test cube: 8 shared corner vertices (24 floats) at +/-0.5, quads
 # with the FBX negative-terminated last index, 72 per-polygon-vertex normal
@@ -142,7 +143,7 @@ Connections:  {{
 }}
 """
 
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fbx_unit_fixture.fbx")
+    out = asset_path("fbx_unit_fixture.fbx")
     with open(out, "w") as f:
         f.write(fbx)
     print("wrote", out, f"({os.path.getsize(out)} bytes)")

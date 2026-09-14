@@ -17244,7 +17244,7 @@ def run_fixture_gen_gate(workdir):
     # never asked for, and a flat mirror makes two sidecars with one basename
     # clobber each other. Pruned by SUFFIX, so the next .fbm needs no edit here.
     self_contained = {"abandoned_window", "ivy_arcade", "raiden", "__pycache__"}
-    found, inputs, committed_at, ambiguous = set(), [], {}, []
+    found, helpers, inputs, committed_at, ambiguous = set(), [], [], {}, []
     for walk_root, walk_dirs, walk_files in os.walk(src_dir):
         walk_dirs[:] = [d for d in walk_dirs
                         if d not in self_contained and not d.endswith(".fbm")]
@@ -17252,6 +17252,11 @@ def run_fixture_gen_gate(workdir):
             path = os.path.join(walk_root, f)
             if f.startswith("gen_") and f.endswith(".py"):
                 found.add(path)
+            elif f.endswith(".py"):
+                # A module the generators import rather than one this arm runs
+                # (fixture_paths). It has to reach the mirror or every generator
+                # dies on the import, so it is collected here and copied below.
+                helpers.append(path)
             elif f.endswith(".png") and not f.endswith("_golden.png"):
                 inputs.append(path)
             # A basename in two places would make "the committed twin" a choice,
@@ -17261,7 +17266,12 @@ def run_fixture_gen_gate(workdir):
                 ambiguous.append(f"{f}: committed in two places")
             committed_at[f] = path
     gens = sorted(found)
+    helpers = sorted(helpers)
     inputs = sorted(inputs)
+    # Every module this arm ships, by import name. A generator that cannot find
+    # one of these has a broken fixture; anything else it cannot find (numpy,
+    # PIL) is a property of the machine. The two are told apart below.
+    own_modules = {os.path.basename(p)[:-3] for p in gens + helpers}
     # Byte equality is the contract a .gltf, .cscn, .ies or .cube has -- all four are text
     # a generator writes deterministically. It is NOT the contract a .png has, whose bytes
     # come out of PIL and zlib and move with those libraries rather than with the fixture.
@@ -17299,7 +17309,7 @@ def run_fixture_gen_gate(workdir):
         # coverage while the pass line read one generator short. Unrun siblings
         # cannot read as outputs: the mtime stamps only count writes, and -B
         # keeps their import from minting a __pycache__ the scan would count.
-        for path in gens + inputs:
+        for path in gens + helpers + inputs:
             shutil.copy2(path, run_dir)
         stamps = {f: os.stat(os.path.join(run_dir, f)).st_mtime_ns
                   for f in os.listdir(run_dir)}
@@ -17311,9 +17321,15 @@ def run_fixture_gen_gate(workdir):
             last = tail[-1][:90] if tail else "no output"
             # A generator needing numpy or PIL is a property of this machine, not of the
             # fixture, so it is reported apart from a real drift rather than as one. A
-            # missing SIBLING is a property of the fixture and must fail loudly.
+            # missing module this arm SHIPS is a property of the fixture and must fail
+            # loudly -- tested against the set of modules actually copied into the mirror
+            # rather than against a gen_ prefix, which said the same thing while only
+            # covering the generators. fixture_paths is a sibling every generator imports
+            # and matches no prefix, so the narrower test filed all 54 as a machine fault
+            # and left `drifted` empty.
+            absent = re.search(r"No module named '([\w.]+)'", proc.stderr or "")
             is_dep = ("ModuleNotFoundError" in (proc.stderr or "")
-                      and "No module named 'gen_" not in (proc.stderr or ""))
+                      and not (absent and absent.group(1).split(".")[0] in own_modules))
             (missing_dep if is_dep
              else drifted).append(f"{name}: exited {proc.returncode} ({last})")
             continue

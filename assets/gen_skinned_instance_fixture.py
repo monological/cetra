@@ -33,8 +33,8 @@ Regenerate with:
 
 import base64
 import json
-import os
 import struct
+from fixture_paths import asset_path
 
 HALF = 0.4      # panel half-extent
 OFFSET = 0.55   # each panel's distance from the origin along X
@@ -177,8 +177,7 @@ gltf = {
     ],
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(here, "skinned_instance_fixture.gltf")
+out = asset_path("skinned_instance_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=2)
     f.write("\n")

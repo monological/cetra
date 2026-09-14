@@ -23,6 +23,7 @@ import json
 import struct
 import math
 import os
+from fixture_paths import asset_path
 
 # ---- one unit UV sphere (radius 0.5), position + normal + uv ---------------
 STACKS = 48
@@ -132,7 +133,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheen_fixture.gltf")
+out = asset_path("sheen_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

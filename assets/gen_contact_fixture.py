@@ -42,6 +42,7 @@ import math
 import os
 import random
 import struct
+from fixture_paths import asset_path
 
 rng = random.Random(20260724)   # deterministic pile: same rocks every run
 
@@ -225,7 +226,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "contact_fixture.gltf")
+out = asset_path("contact_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

@@ -33,6 +33,7 @@ import os
 
 import numpy as np
 from PIL import Image
+from fixture_paths import asset_path
 
 
 def carbon_weave_normal_datauri(size=256):
@@ -170,7 +171,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clearcoat_fixture.gltf")
+out = asset_path("clearcoat_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

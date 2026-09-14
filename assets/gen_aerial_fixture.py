@@ -30,6 +30,7 @@ import json
 import math
 import os
 import struct
+from fixture_paths import asset_path
 
 # Camera vantage the geometry is composed for; mirrored in aerial_fixture.cscn.
 # High enough that the nearest visible ground clears the app's scene-scaled near
@@ -232,7 +233,7 @@ gltf = {
     ],
 }
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aerial_fixture.gltf")
+out = asset_path("aerial_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
