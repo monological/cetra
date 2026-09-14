@@ -94,7 +94,8 @@ def paint_atlas():
 def derive_flow():
     """Run the real tool, then check it against the angles we painted."""
     spec = importlib.util.spec_from_file_location(
-        "gen_hair_flow", os.path.join(HERE, os.pardir, "tools", "gen_hair_flow.py"))
+        "gen_hair_flow",
+        os.path.join(HERE, os.pardir, os.pardir, "tools", "gen_hair_flow.py"))
     tool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool)
     tool.main([ATLAS, "-o", FLOW])

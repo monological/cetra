@@ -15,7 +15,13 @@ module exists rather than each generator spelling the join itself.
 
 import os
 
+# This module sits with the generators, one level inside the asset tree, so a
+# generated file resolves against the PARENT. Deriving it rather than naming it
+# is what keeps the sandbox working: a mirror that reproduces the tree gets its
+# own assets root out of the same expression, where a literal "assets" would
+# reach the committed corpus from inside the scratch copy.
 HERE = os.path.dirname(os.path.abspath(__file__))
+ASSETS = os.path.dirname(HERE)
 
 
 def asset_path(filename, root=None):
@@ -33,4 +39,4 @@ def asset_path(filename, root=None):
     that file against itself, passing while testing nothing and corrupting the
     corpus on the way through.
     """
-    return os.path.join(root or HERE, filename)
+    return os.path.join(root or ASSETS, filename)

@@ -133,7 +133,8 @@ for name, horiz, span, note, tail in FILES:
 # is not on the path. gen_hair_fixture.py does the same, and run_fixture_gen_gate
 # symlinks tools/ into its scratch tree precisely so this keeps working there.
 _spec = importlib.util.spec_from_file_location(
-    "gen_ies_table", os.path.join(HERE, os.pardir, "tools", "gen_ies_table.py"))
+    "gen_ies_table",
+    os.path.join(HERE, os.pardir, os.pardir, "tools", "gen_ies_table.py"))
 _tool = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_tool)
 

@@ -75,7 +75,8 @@ EXPOSURE = 4.0
 
 def _shader_const_vec3(name):
     """A generated const vec3, read out of the shader include."""
-    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cetra", "shaders",
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "cetra",
+                       "shaders",
                        "include", "scotopic_weights.glsl")
     with open(os.path.normpath(src)) as fh:
         text = fh.read()
@@ -103,7 +104,8 @@ def _shader_ramp():
     file's job is the opposite -- to build a ladder that fits the real ramp -- so
     it reads the real ramp.
     """
-    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cetra", "shaders",
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "cetra",
+                       "shaders",
                        "include", "purkinje.glsl")
     with open(os.path.normpath(src)) as fh:
         text = fh.read()

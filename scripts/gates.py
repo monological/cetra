@@ -10338,7 +10338,7 @@ def run_water_gate(workdir):
     # The fixture's generator still produces the fixture. No renders, no GPU: this is a
     # text comparison, and it is here because the alternative to asserting it is finding
     # out from a stripped water block and twenty-odd red arms.
-    gen = os.path.join(ROOT, "assets", "gen_water_fixture.py")
+    gen = os.path.join(ROOT, "assets", "generators", "gen_water_fixture.py")
     regen_dir = os.path.join(workdir, "regen")
     os.makedirs(regen_dir, exist_ok=True)
     # `proc`, not `r`: this function uses `r` as a probe-ROW loop variable in several
@@ -17293,7 +17293,7 @@ def run_fixture_gen_gate(workdir):
         tools_link = os.path.join(run_root, "tools")
         if not os.path.exists(tools_link):
             os.symlink(os.path.join(ROOT, "tools"), tools_link)
-        # ...and ../cetra, for the same reason one level further out:
+        # ...and cetra, for the same reason one level further out:
         # gen_purkinje_fixture reads the shipped ramp edges and the rod tint out
         # of the shader includes rather than restating them, so its straddle
         # asserts are claims about the REAL ramp instead of about its own copy.
@@ -17309,13 +17309,26 @@ def run_fixture_gen_gate(workdir):
         # coverage while the pass line read one generator short. Unrun siblings
         # cannot read as outputs: the mtime stamps only count writes, and -B
         # keeps their import from minting a __pycache__ the scan would count.
+        #
+        # MIRRORED AT THEIR OWN SUBPATHS, not flattened onto run_dir. A generator
+        # resolves everything from its own location, so where it sits inside the
+        # mirror is what its ../.. reaches resolve through -- flattened, a script
+        # from assets/generators/ would land beside assets/ and climb one level
+        # too far, past the symlinks above and out of the scratch tree entirely.
         for path in gens + helpers + inputs:
-            shutil.copy2(path, run_dir)
-        stamps = {f: os.stat(os.path.join(run_dir, f)).st_mtime_ns
-                  for f in os.listdir(run_dir)}
+            dest = os.path.join(run_dir, os.path.relpath(path, src_dir))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(path, dest)
+        stamps = {}
+        for stamp_root, _stamp_dirs, stamp_files in os.walk(run_dir):
+            for f in stamp_files:
+                p = os.path.join(stamp_root, f)
+                stamps[os.path.relpath(p, run_dir)] = os.stat(p).st_mtime_ns
 
-        proc = subprocess.run([sys.executable, "-B", os.path.join(run_dir, name)],
-                              capture_output=True, text=True, cwd=run_dir)
+        script = os.path.join(run_dir, os.path.relpath(gen, src_dir))
+        proc = subprocess.run([sys.executable, "-B", script],
+                              capture_output=True, text=True,
+                              cwd=os.path.dirname(script))
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout).strip().splitlines()
             last = tail[-1][:90] if tail else "no output"
@@ -17334,13 +17347,27 @@ def run_fixture_gen_gate(workdir):
              else drifted).append(f"{name}: exited {proc.returncode} ({last})")
             continue
 
-        wrote = [f for f in sorted(os.listdir(run_dir))
-                 if f != name and stamps.get(f) != os.stat(os.path.join(run_dir, f)).st_mtime_ns]
+        # Keyed by subpath, to match the stamps: a generator writes beside itself
+        # or into a sibling kind directory, and a flat listing would miss both.
+        # The emitted NAME is still what the committed index is keyed by, so the
+        # comparison below stays a basename lookup.
+        seen_now = {}
+        for wrote_root, _wrote_dirs, wrote_files in os.walk(run_dir):
+            for f in wrote_files:
+                p = os.path.join(wrote_root, f)
+                seen_now[os.path.relpath(p, run_dir)] = os.stat(p).st_mtime_ns
+        script_rel = os.path.relpath(gen, src_dir)
+        wrote = sorted(rel for rel, mtime in seen_now.items()
+                       if rel != script_rel and stamps.get(rel) != mtime)
         if not wrote:
             drifted.append(f"{name}: wrote nothing")
             continue
-        for f in wrote:
-            committed, regenerated = committed_at.get(f), os.path.join(run_dir, f)
+        for rel in wrote:
+            # The subpath says where it landed; the basename is what the
+            # committed index is keyed by, and the two differ once a generator
+            # emits into a sibling directory rather than beside itself.
+            f = os.path.basename(rel)
+            committed, regenerated = committed_at.get(f), os.path.join(run_dir, rel)
             if not committed or not os.path.exists(committed):
                 drifted.append(f"{f}: emitted but not committed")
             elif f.endswith(text_ext):
@@ -19206,7 +19233,17 @@ def _import_fixture_gen(filename, group="layers"):
     a second group wanted this, which would have had the decals gate reporting
     itself as the layers one.
     """
-    path = os.path.join(ROOT, "assets", filename)
+    gen_dir = os.path.join(ROOT, "assets", "generators")
+    path = os.path.join(gen_dir, filename)
+    # The generators' own directory has to be importable for the duration. A
+    # generator imports its siblings by bare name -- fixture_paths, and
+    # gen_layer_vt_fixture imports gen_layer_fixture -- which resolves for free
+    # when the script RUNS, because Python puts a script's directory on the path
+    # itself. Loading one by file location gets no such context, so without this
+    # every one of them raises ImportError, is reported as a missing dependency
+    # and SKIPs the arm that wanted it. That reads as an environment without
+    # numpy rather than as a broken path, and the suite still says it passed.
+    sys.path.insert(0, gen_dir)
     try:
         spec = importlib.util.spec_from_file_location(filename[:-3], path)
         mod = importlib.util.module_from_spec(spec)
@@ -19214,6 +19251,8 @@ def _import_fixture_gen(filename, group="layers"):
     except ImportError as exc:
         print(f"  {group:<17} SKIP  ({filename[:-3]} needs {exc.name})")
         return None
+    finally:
+        sys.path.remove(gen_dir)
     return mod
 
 
