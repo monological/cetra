@@ -608,7 +608,7 @@ person watching can settle:
   judged how that reads.
 - **Two characters.** The chaser carries the same rig and nothing plants ITS feet, so the
   per-entity question `anim-two-rigs` had to ask of the animator goes unasked here.
-- **Nothing photographs it.** All twelve arms read CPU numbers, so a solve that is correct in
+- **Nothing photographs it.** All eighteen arms read CPU numbers, so a solve that is correct in
   model space but spliced into the wrong node or the wrong space would pass every one of them.
   A pixel arm was considered and dropped, for three reasons worth recording rather than
   rediscovering: on flat ground the solve is now an IDENTITY by design (0.0198 degrees), so
@@ -656,8 +656,32 @@ doing at the time:
   write-back between it and `ik.c`; the IK half is covered by twelve arms and the spring half by
   nothing. Closing that is its own piece of work.
 
-**Owed.** The solver is exact on ground nobody has walked across, and the feature it is a
-prerequisite for has not been built.
+**What spec 12.9 added to this list, and what it did not.**
+
+- **The lock is live in the app and the demo cannot show it.** `gametest`'s player moves at
+  `PLAYER_SPEED` 10 m/s on a rig with an 0.82 m leg, against a clip implying 0.95 m/s. At
+  eighteen times its animation's stride the contact label never fires, no lock forms, and the
+  frame is **0 px** against `--no-lock` -- the mechanism behaving correctly, since there is no
+  contact to hold. Walked at a stick deflection of 0.12, near the clip's own stride, the same
+  frame moves **52,244 px**. A game that wants the benefit has to match travel speed to stride
+  or carry root motion, and this engine does neither.
+- **A real character is still owed, and now the reason is specific.**
+  `--puppet assets/models/t_pose.fbx` does NOT work: gametest requires the rig to carry clips
+  named idle, walk and run, and the only committed humanoid (a 65-bone Mixamo Beta rig, with
+  toe bones) carries Mixamo-named stacks. The repo has one humanoid locomotion clip,
+  `strut_walk.fbx`, which cannot fill a three-entry blend space. Standing a real character in
+  gametest is its own piece of work.
+- **The menu goldens' instability reaches 48,886 px.** This section already warned that they
+  cannot support single-measurement attribution. Spec 12.9 met a `menu` failure of 48,886 px --
+  the Quit button focused, not a few edge pixels -- which survived a bisect across four commits,
+  a build of master and a build of each phase, and a diff proving two of those builds render the
+  frame byte-identically by hand. It read **0 px on a re-run of the same binary with no
+  rebuild**, as did `menu_focus`. The recorded magnitudes of 752, 672 and 675 px are small
+  enough to be mistaken for noise around a real change. This one is not, and it cost most of an
+  afternoon. **Re-run first. Always.**
+
+**Owed.** The solve is exact and the lock holds to 1.4 per cent of a leg, on ground nobody has
+walked across at a speed the animation agrees with.
 
 ### The grotto, the ocean and swimming
 
