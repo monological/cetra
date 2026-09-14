@@ -36,20 +36,18 @@ highlights, far below the fp16/WS_SCENE_MAX ceilings.
 The sibling dof_fixture.cscn authors the light, ambient, camera (eye z=+6,
 target the panel -- the target IS the autofocus distance), and pinned
 exposure. Regenerate with:
-  python3 assets/gen_dof_fixture.py
+  python3 assets/generators/gen_dof_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 
 import numpy as np
 from PIL import Image
 from fixture_paths import asset_path, asset_ref
 
-here = os.path.dirname(os.path.abspath(__file__))
 
 # ---- panel texture: fine checker with concentric rings ---------------------
 RES = 512

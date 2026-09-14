@@ -23,13 +23,12 @@ they agree by reading where the waterline actually lands.
 
 Emissive, like the water fixture, so what reaches the water is authored rather
 than the product of a light rig. Regenerate with:
-    python3 assets/gen_beach_fixture.py
+    python3 assets/generators/gen_beach_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 import sys
 from fixture_paths import asset_path, asset_ref
@@ -288,7 +287,7 @@ scene_desc = {
     "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
 }
 
-out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+out_dir = sys.argv[1] if len(sys.argv) > 1 else None
 with open(asset_path("beach_fixture.gltf", out_dir), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

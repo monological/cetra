@@ -28,7 +28,7 @@ fixture is about which PROGRAM the mesh takes, not about what skinning computes,
 and a pose that cannot drift is one less reason for the frame to move.
 
 Regenerate with:
-  python3 assets/gen_skinned_instance_fixture.py
+  python3 assets/generators/gen_skinned_instance_fixture.py
 """
 
 import base64

@@ -33,12 +33,11 @@ Two design choices are load-bearing:
 The .cscn ships one dim light aimed away from the panels: the render app injects
 a three-point rig when a no-IBL scene has zero lights, and that rig's specular
 would add a channel-equal term to both halves of the ratio and pull it toward 1.
-Regenerate with: python3 assets/gen_absorption_fixture.py
+Regenerate with: python3 assets/generators/gen_absorption_fixture.py
 """
 
 import base64
 import json
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -187,11 +186,10 @@ scene_desc = {
     "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
 }
 
-out_dir = os.path.dirname(os.path.abspath(__file__))
-with open(asset_path("absorption_fixture.gltf", out_dir), "w") as f:
+with open(asset_path("absorption_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
-with open(asset_path("absorption_fixture.cscn", out_dir), "w") as f:
+with open(asset_path("absorption_fixture.cscn"), "w") as f:
     json.dump(scene_desc, f, indent=1)
     f.write("\n")
 print("wrote absorption_fixture.gltf + absorption_fixture.cscn")

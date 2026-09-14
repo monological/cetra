@@ -39,12 +39,11 @@ entries are built from one dict rather than written out three times -- "only the
 UV differs" is then structural instead of a promise maintained across three
 literals.
 
-Regenerate with: python3 assets/gen_wind_uv_fixture.py
+Regenerate with: python3 assets/generators/gen_wind_uv_fixture.py
 """
 
 import base64
 import json
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -193,7 +192,6 @@ def _cscn(wind):
     }
 
 
-here = os.path.dirname(os.path.abspath(__file__))
 out = asset_path("wind_uv_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)

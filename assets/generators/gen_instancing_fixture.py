@@ -41,13 +41,12 @@ whole point is that the shadow pass, which walks the graph once per cascade
 with no culling, has something to walk.
 
 Regenerate with:
-  python3 assets/gen_instancing_fixture.py
+  python3 assets/generators/gen_instancing_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path
 
@@ -269,7 +268,6 @@ gltf = {
     ],
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 out = asset_path("instancing_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=2)

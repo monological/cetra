@@ -47,14 +47,13 @@ near-side cascades (shadow.c's history) -- grazing ground is where a bias
 scheme fails first, so it gets its own acne measurement.
 
 Regenerate with:
-  python3 assets/gen_dir_shadow_fixture.py
+  python3 assets/generators/gen_dir_shadow_fixture.py
 (the .cscn files are hand-authored, not generated.)
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path
 

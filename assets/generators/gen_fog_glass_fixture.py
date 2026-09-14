@@ -66,13 +66,12 @@ length, and the expected transmittance at either depth is a closed form the arm 
 Pinned rather than inherited because the app derives density from the scene radius, so a
 geometry change would silently re-tune the very quantity under test.
 
-Regenerate with: python3 assets/gen_fog_glass_fixture.py
+Regenerate with: python3 assets/generators/gen_fog_glass_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -359,7 +358,6 @@ scene_desc = {
 # layout and the medium it pins -- and a generator that wrote on import would rewrite a
 # committed asset in the middle of a gate run.
 if __name__ == "__main__":
-    here = os.path.dirname(os.path.abspath(__file__))
     with open(asset_path("fog_glass_fixture.gltf"), "w") as f:
         json.dump(gltf, f, indent=1)
         f.write("\n")

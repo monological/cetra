@@ -1353,14 +1353,20 @@ recipe with the six times it has moved. `scripts/gates.py` asserts analytic prop
 **`assets/` is split by KIND since spec 12.8** — `scenes/`, `models/`, `textures/`, `goldens/`,
 `generators/`, `lut/`, `ies/`, `data/`, with `abandoned_window/`, `ivy_arcade/` and `raiden/` left
 whole because each carries its own scenes and producers. **Nothing that names an asset spells a
-directory**: a generator says `asset_path("foo.gltf")`, `gates.py` says `asset("foo.cscn")`, and
-both route by EXTENSION, so a new fixture lands in the right place with nothing to register and a
-later re-split changes one function rather than two hundred call sites. Three couplings are what
+directory**: a generator says `asset_path("foo.gltf")` to write one and `asset_ref("foo.png")` to
+name one inside a file it emits, `gates.py` says `asset("foo.cscn")`, and all three route through
+`fixture_paths.asset_subpath` — ONE statement of the taxonomy, imported rather than restated, so a
+new fixture lands in the right place with nothing to register and a later re-split changes one
+function rather than two hundred call sites. It shipped as two copies of the map and they had
+already drifted before either was used in anger, which is the argument for the import. Three couplings are what
 that routing exists to hold, and each renders a plausible frame when broken: a generator resolves
 its outputs against its own `__file__`, which is what lets `fixture-gen` sandbox one by copying it;
 a `.cscn` resolves its model against the SCENE FILE's directory, so it names `../models/<x>`; and a
-glTF image `uri` resolves through the texture pool, which strips leading segments and cannot climb,
-so it names `../textures/<x>`.
+glTF image `uri` resolves through the texture pool, whose directory is the model's, so it names
+`../textures/<x>` — which works because `find_existing_subpath` probes `base + subpath` VERBATIM
+first and only then starts stripping leading segments. Stripping alone can only ever shorten a
+name, so a BARE sibling filename can never reach another kind's directory; the explicit `../` is
+what does the reaching.
 
 Four rules belong here rather than in a file you have to open first:
 

@@ -40,13 +40,12 @@ WHY A SKINNED CLIP. The importer resolves every animation channel against the
 SKELETON: a node-TRS animation on an unskinned mesh has no path into this engine.
 One joint, identity inverse bind, every vertex fully weighted to it.
 
-Regenerate with: python3 assets/gen_shadow_lag_fixture.py
+Regenerate with: python3 assets/generators/gen_shadow_lag_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -283,7 +282,6 @@ still_gltf["asset"]["generator"] = "gen_shadow_lag_fixture.py (still twin)"
 still_cscn = json.loads(json.dumps(cscn))
 still_cscn["models"] = [{"path": asset_ref("shadow_lag_still.gltf")}]
 
-here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("shadow_lag_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

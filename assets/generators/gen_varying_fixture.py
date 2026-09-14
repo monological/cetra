@@ -45,7 +45,7 @@ is zero on geometry by construction.
 Deliberately NOT a golden. Its whole purpose is to differ between two sample counts, and the
 arms compare within one build.
 
-Regenerate with: python3 assets/gen_varying_fixture.py
+Regenerate with: python3 assets/generators/gen_varying_fixture.py
 """
 
 import base64

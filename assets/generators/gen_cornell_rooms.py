@@ -54,7 +54,7 @@ the light under and behind the boxes.
 
 Geometry is flat-shaded quads: each face owns its four vertices and one normal, so
 the interior corners stay hard and no normal is shared across a colour boundary.
-Deterministic by construction. Regenerate with: python3 assets/gen_cornell_rooms.py
+Deterministic by construction. Regenerate with: python3 assets/generators/gen_cornell_rooms.py
 """
 
 import base64

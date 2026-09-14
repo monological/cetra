@@ -41,7 +41,7 @@ Column edges land on texel boundaries of the FORCED-coarse atlas too
 (VT_MACRO_RES below), so the macro arm's selection read stays pure at a
 resolution where the checker is unrepresentable.
 
-Regenerate with: python3 assets/gen_layer_vt_fixture.py
+Regenerate with: python3 assets/generators/gen_layer_vt_fixture.py
 """
 
 import base64

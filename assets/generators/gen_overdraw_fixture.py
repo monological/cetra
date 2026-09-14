@@ -41,14 +41,13 @@ quads are sized against a 16:9 frame with margin even though the gate renders
 and would look like an instrument fault rather than a framing one.
 
 Regenerate with:
-  python3 assets/gen_overdraw_fixture.py
+  python3 assets/generators/gen_overdraw_fixture.py
 """
 
 import argparse
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -143,7 +142,6 @@ def _write(name, quads, note):
         "post": {"tonemap": "neutral", "exposure": 1.0},
     }
 
-    here = os.path.dirname(os.path.abspath(__file__))
     with open(asset_path(f"{name}.gltf"), "w") as f:
         json.dump(gltf, f, indent=1)
         f.write("\n")

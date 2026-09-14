@@ -31,7 +31,7 @@ Toggle --contact-shadows (or the GUI checkbox) and watch the crevices between th
 rocks deepen. --cs-strength / --cs-distance tune it.
 
 Regenerate the geometry with:
-  python3 assets/gen_contact_fixture.py
+  python3 assets/generators/gen_contact_fixture.py
 (the .cscn is hand-authored, not generated. Generation is seeded, so the pile is
 deterministic and the golden reproduces.)
 """
@@ -39,7 +39,6 @@ deterministic and the golden reproduces.)
 import base64
 import json
 import math
-import os
 import random
 import struct
 from fixture_paths import asset_path

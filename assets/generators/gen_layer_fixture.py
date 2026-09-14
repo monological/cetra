@@ -47,7 +47,7 @@ holds its ground until the ramp overwhelms its height advantage and then gives
 way over a few texels, where a linear blend crosses over gradually across the
 whole width.
 
-Regenerate with: python3 assets/gen_layer_fixture.py
+Regenerate with: python3 assets/generators/gen_layer_fixture.py
 """
 
 import base64
