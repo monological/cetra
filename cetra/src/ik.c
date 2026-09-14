@@ -18,10 +18,19 @@
 
 IkFootParams ik_default_params(void) {
     IkFootParams p;
-    // 0.61 of a leg, which on this puppet's 0.82 is the 0.5 m this was before it became
-    // a fraction -- chosen to preserve the behaviour rather than to retune it. As a
-    // fraction it carries to a rig of another size, which a metre never did.
-    p.max_pelvis_drop = 0.6098f;
+    // Half what it was, and set from the content rather than from taste. The technique's
+    // author is explicit that dragging the hips down to reach produces "T-Rex" posturing
+    // and that a little sliding is better than breaking the source animation, so the
+    // question is how small this can be -- and the answer is whatever the deepest thing
+    // in the world asks for. That is the demo staircase, whose 0.5 m riser leaves the
+    // lower foot 0.25 m past reach: 0.305 of this rig's leg. 0.31 covers it and nothing
+    // beyond it, where the 0.6098 that stood until spec 12.9 was double.
+    //
+    // Nothing had ever exercised the old cap -- spec 12.5 measured that: every fixture
+    // asked for less than it, so min(deficit, cap) returned the deficit and a wrong cap
+    // passed either way. ik-drop is what tests it now, and it tests the REFUSAL with it:
+    // past the cap the foot is left short rather than the hips dragged further.
+    p.max_pelvis_drop = 0.31f;
     p.teleport_distance = 0.5f;
     // Long enough to be smooth at 60 Hz and short enough that a foot is not still
     // catching up when the next contact arrives -- a stance on this walk is 0.7 s.
@@ -356,6 +365,17 @@ static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target, size_t b
     // 0.995 buys an unremovable 11.5 degrees -- the legs read as permanently bent and
     // swing from the hip alone. Numerical safety at the singularity is the cosine
     // clamp's job below, not this one's; a game that wants a soft knee bends the clip.
+    //
+    // Spec 12.9 REFUSED the exponential soft-clamp its method prescribes here, on that
+    // same arithmetic re-measured: a soft band has to start BELOW full extension to
+    // smooth anything, and on this rig's 0.42 + 0.40 leg a band of 1 per cent costs 16.2
+    // degrees of permanent bend, 2 per cent costs 23.0 and 5 per cent costs 36.4. What
+    // the softening buys is continuity in the ankle's VELOCITY as a target leaves reach
+    // -- the position is already continuous, since min(want, hi) is. A visible bend in
+    // every near-straight leg to smooth a kink in an unreachable one is the wrong trade,
+    // and it is the wrong trade specifically because this rig binds straight. On a rig
+    // that binds with a bent knee the same band costs a fraction of this, and the
+    // refusal should be re-measured rather than inherited.
     float lo = fabsf(l1 - l2) * (1.0f + IK_REACH_PAD);
     float hi = l1 + l2;
     if (hi < lo)

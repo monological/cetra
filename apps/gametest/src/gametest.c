@@ -3617,6 +3617,41 @@ static int run_ik_probe(Game* game, const char* which) {
             // anywhere at all.
             printf("ik analytic c%d want %.6f\n", i, (double)cs[i]);
         }
+    } else if (!strcmp(which, "drop")) {
+        // The pelvis drop's CAP, which spec 12.5 found nothing had ever exercised: every
+        // fixture asks for less than it, so min(deficit, cap) returns the deficit and a
+        // wrong cap passes either way. Here the target is put half a metre past anything
+        // the leg can reach, so the cap is the only thing that can answer.
+        //
+        // What it asserts is a REFUSAL as much as a value. The technique's author warns
+        // that dragging the hips down to reach produces "T-Rex" posturing and that a
+        // little sliding is better than breaking the source animation, so this cap is
+        // deliberately small and the foot is deliberately left short.
+        if (!ik_set_pelvis(ik, "cetra_rig:Hips")) {
+            fprintf(stderr, "ik-probe: the rig lacks a pelvis\n");
+            return 1;
+        }
+        ik->params.max_pelvis_drop = ik_default_params().max_pelvis_drop;
+        // Release OFF, as the three planting cases run it and for the same reason. The
+        // release fades a foot whose ankle sits above its target, and a target half a
+        // metre below the floor is indistinguishable to it from a foot the clip has
+        // lifted -- so with it on the foot is let go before the drop can see it and this
+        // case measures nothing at all, which is how it read first time.
+        ik->params.plant_fraction = 0.0f;
+        compute_bind_pose_matrices(state);
+        const float before = state->global_transforms[ik->pelvis_index][3][1];
+        const float reach = seg_a + seg_b;
+        const float asked = reach + 0.5f;
+        vec3 target = {hip[0], hip[1] - asked, hip[2]};
+        ik_reset(ik);
+        ik_foot_set_target(ik, foot_index, target, (vec3){0.0f, 1.0f, 0.0f}, 1.0f);
+        ik_solve(ik, state->global_transforms, 0.0f);
+        printf("ik drop pelvis moved %.6f\n",
+               (double)(before - state->global_transforms[ik->pelvis_index][3][1]));
+        printf("ik drop pelvis cap %.6f\n", (double)(ik->params.max_pelvis_drop * reach));
+        printf("ik drop reach deficit %.6f\n", (double)(asked - reach));
+        printf("ik drop reach short %.6f\n",
+               (double)ik_probe_residual(state->global_transforms, foot, target));
     } else if (!strcmp(which, "swing")) {
         // A walk cycle actually TICKED, with each ankle's vertical travel measured over
         // it. Every other case in this probe poses the rig once and solves once, which
