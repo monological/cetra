@@ -279,6 +279,22 @@ void pose_bind(const Skeleton* skeleton, Pose* out);
 void animation_sample_pose(const Animation* anim, const Skeleton* skeleton, float time_ticks,
                            Pose* out);
 
+// The ground speed this clip's own feet imply at playback rate 1, in MODEL units per
+// second, and the direction the body must travel for them to be stationary (may be NULL).
+// `ankle` and `toe` are the two feet's bone indices, left and right in either order.
+//
+// MODEL units, so a caller whose rig sits on a scaled node owes the scale -- the same
+// division of labour `ik_set_world` states, and the same one that silently halved a
+// threshold in spec 12.9.
+//
+// False when the clip does not walk, which is a real answer about the clip and not a
+// failure to measure: a stance has to exist (each foot dwelling once per loop, the two
+// alternating) before "how fast does the ground go past it" means anything. A pendulum
+// swing where the foot is lowest exactly where it is fastest has no such window, and
+// fitting one anyway yields a plausible number pointing the wrong way.
+bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, const int ankle[2],
+                            const int toe[2], float* out_speed, vec3 out_dir);
+
 // out = a at t = 0, b at t = 1: positions and scales lerped, rotations nlerped
 // along the shorter arc. Outside (0, 1) the nearer pose is copied, flags
 // included. A bone undriven in both stays undriven. out may alias a or b.
