@@ -70,10 +70,22 @@ BONES = [
     ("RightHand", "RightForeArm", (-0.74, 1.46, 0.0), (-0.80, 1.46, 0.0), (0.06, 0.03, 0.04)),
     ("LeftUpLeg", "Hips", (0.10, 0.90, 0.0), (0.10, 0.69, 0.0), (0.075, 0.21, 0.075)),
     ("LeftLeg", "LeftUpLeg", (0.10, 0.48, 0.0), (0.10, 0.28, 0.0), (0.065, 0.20, 0.065)),
-    ("LeftFoot", "LeftLeg", (0.10, 0.08, 0.0), (0.10, 0.04, 0.0), (0.06, 0.04, 0.12)),
+    ("LeftFoot", "LeftLeg", (0.10, 0.08, 0.0), (0.10, 0.04, -0.04), (0.06, 0.04, 0.08)),
     ("RightUpLeg", "Hips", (-0.10, 0.90, 0.0), (-0.10, 0.69, 0.0), (0.075, 0.21, 0.075)),
     ("RightLeg", "RightUpLeg", (-0.10, 0.48, 0.0), (-0.10, 0.28, 0.0), (0.065, 0.20, 0.065)),
-    ("RightFoot", "RightLeg", (-0.10, 0.08, 0.0), (-0.10, 0.04, 0.0), (0.06, 0.04, 0.12)),
+    ("RightFoot", "RightLeg", (-0.10, 0.08, 0.0), (-0.10, 0.04, -0.04), (0.06, 0.04, 0.08)),
+    # The toes (spec 12.9), APPENDED rather than filed beside their own feet: a bone
+    # inserted mid-table renumbers every one after it, and the order is what the engine
+    # accumulates globals in. At the end their parents are still earlier, which is the
+    # only property the table has to have.
+    #
+    # They take the front of the foot rather than extending it -- the foot box gave up
+    # the z it hands over -- because the mesh is asserted symmetric in z below, and a toe
+    # that reached further forward than the heel reaches back would fire that assert. The
+    # sole stays at y = 0 on both boxes, which is the bind pose ik_add_foot derives
+    # `sole_offset` from, and the ankle bind is untouched so that offset is unchanged.
+    ("LeftToeBase", "LeftFoot", (0.10, 0.04, 0.04), (0.10, 0.02, 0.08), (0.05, 0.02, 0.04)),
+    ("RightToeBase", "RightFoot", (-0.10, 0.04, 0.04), (-0.10, 0.02, 0.08), (0.05, 0.02, 0.04)),
 ]
 NAMES = [PREFIX + b[0] for b in BONES]
 INDEX = {n: i for i, n in enumerate(NAMES)}
