@@ -71,6 +71,18 @@ typedef struct IkFootParams {
     // data and no baking step, and is what the deviation costs.
     float contact_height;
     float contact_speed;
+
+    // Locking (spec 12.9). A labelled contact locks when the solve is displacing the
+    // foot by less than lock_distance, and releases when the label ends or the clip has
+    // carried the foot more than unlock_distance from the point that was frozen. Both
+    // fractions of leg length. 0 in lock_distance disables locking outright, which is
+    // what leaves planting's behaviour reachable.
+    //
+    // unlock_distance is deliberately the LARGER, and that gap is the whole hysteresis:
+    // with one threshold the decision is re-made from scratch every frame and can flip,
+    // which is what "scissoring in and out very quickly" looks like.
+    float lock_distance;
+    float unlock_distance;
 } IkFootParams;
 
 typedef struct IkFoot {
@@ -83,7 +95,6 @@ typedef struct IkFoot {
     // to the real thing. The toe is the part in contact roughly nine times out of ten,
     // and leaving the heel free is what preserves the animation.
     int toe_index;
-    float toe_offset;     // how far the toe rides above its sole, as sole_offset is for the ankle
     vec3 pole_local;      // knee-forward, in the HIP's frame, so a turning hip carries it
     vec3 fallback_axis;   // bend axis from the bind pose, for a leg aimed along the pole
     vec3 applied_target;  // what the last solve actually used, after easing
@@ -103,6 +114,20 @@ typedef struct IkFoot {
     bool in_contact;
     vec3 clip_ankle_prev; // the ankle's model position at the previous solve
     bool has_clip_prev;   // false until there are two solves to difference
+
+    // The held contact (spec 12.9): where the TOE was pinned, in WORLD space, and
+    // whether it is pinned at all. World and not model, which is the entire point --
+    // a model-space point travels with the character, which is what planting already
+    // did and what a lock exists to stop. It costs the system a model-to-world matrix
+    // the caller has to supply; see ik_set_world.
+    bool locked;
+    vec3 contact_world;
+    // Everything hanging off the ankle -- toes, and whatever else a rig puts there --
+    // resolved once at ik_add_foot. The solve rotates these rigidly with the ankle, or
+    // they keep the pose the clip gave them while the ankle moves out from under them.
+    // Nothing could see that before this spec: no rig in the corpus had a bone below an
+    // ankle, so the subtree was always empty.
+    uint8_t below_ankle[MAX_BONES];
 
     // SETTINGS: plain stores, written directly at any time.
 
@@ -133,7 +158,12 @@ typedef struct IkSystem {
     size_t foot_count;
     int pelvis_index;                     // -1 = no pelvis drop
     uint8_t in_pelvis_subtree[MAX_BONES]; // resolved once, at ik_set_pelvis
-    IkFootParams params;                  // shared by every foot
+    // Where this rig stands. Identity until ik_set_world, under which world space IS
+    // model space -- correct for a rig that never moves and wrong for one that does, in
+    // the specific way that makes a lock do nothing at all.
+    mat4 model_to_world;
+    mat4 world_to_model;
+    IkFootParams params; // shared by every foot
     bool enabled;
     bool needs_reset; // snap every foot on the next solve
 } IkSystem;
@@ -177,7 +207,15 @@ void ik_foot_set_target(IkSystem* system, int foot, const vec3 target, const vec
 void ik_foot_set_ground(IkSystem* system, int foot, const vec3 ground, const vec3 normal,
                         float weight);
 
-// Snap every foot to its target on the next solve, instead of easing to it.
+// Where the skeleton's model space sits in the world, for the frame about to be solved.
+// A locked foot holds a WORLD point, so a caller that moves the rig must set this every
+// frame or the held point travels with the character and the lock does nothing. Inverted
+// once here rather than per foot.
+void ik_set_world(IkSystem* system, mat4 model_to_world);
+
+// Snap every foot to its target on the next solve, instead of easing to it. Also drops
+// every held contact: after a teleport the world point a foot was pinned to is somewhere
+// the character no longer is.
 void ik_reset(IkSystem* system);
 
 // Correct the accumulated pose. Globals only -- nothing re-accumulates after this

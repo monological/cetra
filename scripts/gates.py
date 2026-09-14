@@ -22628,15 +22628,26 @@ def run_ik_gate(workdir):
                    the stride is damped by design and parity would be asserting a design
                    this does not have.
       ik-slide     the SLIDE, in metres: how far a foot already in contact travels
-                   across the ground while the body moves over it. The body's speed is
-                   not chosen by the fixture, it is read off the clip -- the stance
-                   foot's own mean backward velocity -- so it is by construction the
-                   speed at which the animation's feet are stationary in the world, and
-                   every millimetre reported is the solver's. Planting keeps no memory,
-                   so its target travels with the character and this reads most of the
-                   stance. The window is asserted to BE a stance first: a label that
-                   said "always in contact" would report a small drift for the wrong
-                   reason, and one that said "never" would leave nothing to measure.
+                   across the ground while the body moves over it, locked against
+                   planted, over the SAME ticks. The body's speed is not chosen by the
+                   fixture, it is read off the clip -- the stance foot's own mean
+                   backward velocity -- so it is by construction the speed at which the
+                   animation's feet are stationary in the world, and every millimetre
+                   reported is the solver's. Both windows are asserted to be real
+                   first: a label that said "always in contact" would report a small
+                   drift for the wrong reason, one that said "never" would leave
+                   nothing to measure, and a lock that claimed four ticks would look
+                   perfect over them.
+      ik-hysteresis one pin per walk cycle. Two thresholds instead of one is the whole
+                   of the hysteresis, and this is the only arm that can see it: with a
+                   single threshold the decision is re-made every frame and flips, and
+                   the pin count comes out several times the cycle count while every
+                   other number here barely moves.
+      ik-unlock    walked at three times the speed its own feet imply, a lock releases
+                   rather than straining to hold a point the animation has left: the
+                   mean hold collapses against the same clip at its own speed. That it
+                   still pins at all is asserted too, or the arm would pass on a
+                   feature that had stopped working.
       ik-contact   the solver's contact label finds ONE contact per walk cycle. That
                    count is the arm: a label that flaps splits a stance into several
                    runs while the fraction and the agreement barely move, and a lock
@@ -22936,29 +22947,76 @@ def run_ik_gate(workdir):
 
     # --- ik-slide --------------------------------------------------------------
     d = _ik_probe("lock")
-    need = [("clip", "stride"), ("contact", "fraction"), ("plant", "slide"),
-            ("plant", "slidefrac")]
+    need = [("clip", "stride"), ("contact", "fraction"), ("hold", "fraction"),
+            ("plant", "slide"), ("plant", "slidefrac"), ("hold", "slide"),
+            ("hold", "slidefrac")]
     if not d or any(k not in d for k in need):
         print("  ik-slide     FAIL  the probe failed or measured nothing")
         failures.append("ik-slide")
     else:
         stride = d[("clip", "stride")][0]
         frac = d[("contact", "fraction")][0]
-        slide = d[("plant", "slide")][0]
-        share = d[("plant", "slidefrac")][0]
-        # The window has to BE a stance before the travel across it means anything, and
-        # a walk's is a little over half its cycle. Both halves of this guard have been
-        # wrong once: a contact band stated as a fraction of LEG length rather than of
-        # the foot's own lift read 77 per cent of the cycle as contact.
-        window = 0.35 < frac < 0.75 and stride > 0.05
-        ok = window and share < 0.02
-        print(f"  ik-slide     {'PASS' if ok else 'FAIL'}  the stance foot travels "
-              f"{slide:.6f} m across the ground, {share * 100.0:.1f} per cent of a leg, "
-              f"while the body moves at the clip's own {stride:.6f} m/s over a contact "
-              f"window of {frac * 100.0:.0f} per cent of the cycle (want under 2 per cent "
-              f"of a leg; planting holds no contact point, so it reads the stance)")
+        hold = d[("hold", "fraction")][0]
+        plant_m, plant = d[("plant", "slide")][0], d[("plant", "slidefrac")][0]
+        hold_m, held = d[("hold", "slide")][0], d[("hold", "slidefrac")][0]
+        # The window has to BE a stance before the travel across it means anything, and a
+        # walk's is a little over half its cycle. Both halves of this guard have been wrong
+        # once: a contact band stated as a fraction of LEG length rather than of the foot's
+        # own lift read 77 per cent of the cycle as contact. The hold has to be a real
+        # share of the cycle too, since both numbers are read over the interval the lock
+        # claims and a lock that claimed four ticks would look perfect over them.
+        window = 0.35 < frac < 0.75 and stride > 0.05 and 0.3 < hold < 0.75
+        ok = window and held < 0.02 and held < plant
+        print(f"  ik-slide     {'PASS' if ok else 'FAIL'}  over the {hold * 100.0:.0f} per "
+              f"cent of the cycle the lock holds, the toe travels {hold_m:.6f} m across the "
+              f"ground against planting's {plant_m:.6f} m over the same ticks -- "
+              f"{held * 100.0:.1f} against {plant * 100.0:.1f} per cent of a leg (want under "
+              f"2, and under planting's). The body moves at the clip's own "
+              f"{stride:.6f} m/s, so every millimetre is the solver's")
         if not ok:
             failures.append("ik-slide")
+
+    # --- ik-hysteresis ---------------------------------------------------------
+    if not d or any(k not in d for k in [("hold", "pins"), ("label", "cycles")]):
+        print("  ik-hysteresis FAIL  the probe failed or measured nothing")
+        failures.append("ik-hysteresis")
+    else:
+        pins = d[("hold", "pins")][0]
+        cycles = d[("label", "cycles")][0]
+        # One pin per walk cycle. With a single threshold the decision is re-made from
+        # scratch every frame and can flip, which is the "scissoring in and out very
+        # quickly" the technique's author describes; that shows up here and nowhere else
+        # as a pin count several times the cycle count.
+        ok = pins == cycles
+        print(f"  ik-hysteresis {'PASS' if ok else 'FAIL'}  the lock pins {pins:.0f} times "
+              f"over {cycles:.0f} cycles (want one each; one threshold instead of two flips "
+              f"the state and reads several)")
+        if not ok:
+            failures.append("ik-hysteresis")
+
+    # --- ik-unlock -------------------------------------------------------------
+    if not d or any(k not in d for k in [("hold", "total"), ("hold", "pins"),
+                                         ("fast", "ticks"), ("fast", "pins")]):
+        print("  ik-unlock    FAIL  the probe failed or measured nothing")
+        failures.append("ik-unlock")
+    else:
+        pins = d[("hold", "pins")][0]
+        total = d[("hold", "total")][0]
+        fast_pins = d[("fast", "pins")][0]
+        fast = d[("fast", "ticks")][0]
+        # Walked at three times the speed its own feet imply, every lock breaks its unlock
+        # distance almost at once. The feature must LET GO rather than strain the chain to
+        # hold a point the animation has left, so the mean hold collapses. fast_pins > 0 is
+        # what stops this passing because nothing ever locked at all.
+        mean = total / pins if pins > 0 else 0.0
+        fast_mean = fast / fast_pins if fast_pins > 0 else 0.0
+        ok = fast_pins > 0 and mean > 0 and fast_mean < 0.6 * mean
+        print(f"  ik-unlock    {'PASS' if ok else 'FAIL'}  at three times the clip's own "
+              f"speed a lock lasts {fast_mean:.0f} ticks against {mean:.0f} at its own "
+              f"(want under 60 per cent; an unreachable lock releases rather than straining, "
+              f"and {fast_pins:.0f} pins says it still locks at all)")
+        if not ok:
+            failures.append("ik-unlock")
 
     # --- ik-contact ------------------------------------------------------------
     if not d or any(k not in d for k in [("label", "runs"), ("label", "cycles"),
