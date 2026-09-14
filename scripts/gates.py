@@ -23127,6 +23127,33 @@ def run_ik_gate(workdir):
         if not ok:
             failures.append("ik-contact")
 
+    # --- ik-slide-speeds -------------------------------------------------------
+    d = _ik_probe("rate")
+    legs = ["half", "one", "double"]
+    need = [(leg, k) for leg in legs for k in ("hold", "slidefrac", "fixfrac", "play")]
+    if not d or any(k not in d for k in need):
+        print("  ik-slide-speeds FAIL  the probe failed or measured nothing")
+        failures.append("ik-slide-speeds")
+    else:
+        rows = [(leg, d[(leg, "hold")][0], d[(leg, "slidefrac")][0], d[(leg, "fixfrac")][0],
+                 d[(leg, "play")][0]) for leg in legs]
+        # Three bars, and the third is the one this arm exists for. A lock inside its
+        # unlock distance holds the foot perfectly still whatever the body is doing, so
+        # SLIDE alone passes a character walking at half its clip's speed with the leg
+        # hauled a third of a metre from the pose -- a foot that does not slide on a
+        # character that does not walk. `fix` is that gap, the largest distance the solver
+        # moved the ankle from where the animator put it. HOLD catches the other end,
+        # where the mismatch breaks the unlock distance and the lock simply gives up.
+        ok = all(h > 0.3 and s < 0.01 and f < 0.10 for _, h, s, f, _ in rows)
+        print(f"  ik-slide-speeds {'PASS' if ok else 'FAIL'}  at 0.5x, 1x and 2x the clip's "
+              f"own stride: " +
+              ", ".join(f"{leg} plays {p:.2f}x holding {h * 100.0:.0f} per cent of the cycle, "
+                        f"{s * 100.0:.2f} per cent of a leg of slide and {f * 100.0:.1f} of "
+                        f"correction" for leg, h, s, f, p in rows) +
+              " (want hold > 30, slide < 1, correction < 10)")
+        if not ok:
+            failures.append("ik-slide-speeds")
+
     return failures
 
 
