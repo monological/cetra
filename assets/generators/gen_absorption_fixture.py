@@ -40,7 +40,7 @@ import base64
 import json
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # One unit quad in the XY plane, facing +Z (two triangles)
 positions = [(-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0)]
@@ -172,7 +172,7 @@ FOV = 45.0
 EYE_Z = 4.6
 scene_desc = {
     "version": 1,
-    "models": [{"path": "absorption_fixture.gltf"}],
+    "models": [{"path": asset_ref("absorption_fixture.gltf")}],
     "lights": [
         {
             "name": "AbsorbFill",

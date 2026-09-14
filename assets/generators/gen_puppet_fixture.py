@@ -48,7 +48,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 PREFIX = "cetra_rig:"
 
@@ -439,7 +439,7 @@ POST = {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False,
 
 cscn = {
     "version": 1,
-    "models": [{"path": "puppet.gltf"}],
+    "models": [{"path": asset_ref("puppet.gltf")}],
     "lights": [LIGHT],
     "camera": CAMERA,
     "post": POST,

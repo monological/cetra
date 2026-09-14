@@ -18,9 +18,6 @@
 #include "cetra/import.h"
 #include "cetra/geometry.h"
 
-#define FBX_MODEL_PATH  "./models/room.fbx"
-#define FBX_TEXTURE_DIR "./textures/room.fbm"
-
 /*
  * Constants
  */

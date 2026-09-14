@@ -50,7 +50,7 @@ import math
 import os
 import re
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # ---------------------------------------------------------------------------
 # The ladder
@@ -323,7 +323,7 @@ gltf = {
 
 cscn = {
     "version": 1,
-    "models": [{"path": "purkinje_fixture.gltf"}],
+    "models": [{"path": asset_ref("purkinje_fixture.gltf")}],
     # One dim white directional, for gen_lut_fixture's reason: a .cscn with no
     # lights gets the render app's automatic three-point rig, which is three
     # lights this fixture did not choose. White and dim, so whatever it

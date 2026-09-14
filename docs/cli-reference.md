@@ -65,7 +65,7 @@ Gerstner the way to isolate it.
 wave trains — the 16th flat key is `farLod`, added by 11.35 for far-field filtering; specs 11.33
 phase 5, 11.35, 11.42, 11.48), and the flags override it rather than the reverse — so `--no-water`
 exists and is the only way to switch off a surface a `.cscn` asked for.
-`assets/water_fixture.cscn` authors all 36 and is the block's worked example (35 until 11.84 split the in-scatter in two). **No flag can set any
+`assets/scenes/water_fixture.cscn` authors all 36 and is the block's worked example (35 until 11.84 split the in-scatter in two). **No flag can set any
 of the SEA STATE**, which makes a scene file the only way in and `water-seastate` the only arm on
 that path; editing any of it re-seeds the initial spectrum on the next frame, which is a CPU pass
 over three 128² grids.
@@ -760,7 +760,7 @@ that plays a fixed geometry, measures the mixed PCM and prints it, then exits �
 takes the WAV to load from `--audio-file <path>`. Because it opens no device, it runs anywhere the
 gate suite does.
 
-**Spec 12.1 made the player a rig.** `apps/gametest` loads `assets/puppet.gltf` and drives it from
+**Spec 12.1 made the player a rig.** `apps/gametest` loads `assets/models/puppet.gltf` and drives it from
 an `ANIMATOR` component: idle, walk and run blended from the character controller's POST-SOLVE
 speed (so walking into a wall stops the walk rather than running on the spot), a jump one-shot
 crossfaded onto the base layer that returns to the locomotion space by itself, a wave on the right

@@ -38,7 +38,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # --- camera, and the frustum edge it implies ---------------------------------
 FOV_DEG = 45.0
@@ -280,7 +280,7 @@ POST = {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False,
 
 cscn = {
     "version": 1,
-    "models": [{"path": "wind_cull_fixture.gltf"}],
+    "models": [{"path": asset_ref("wind_cull_fixture.gltf")}],
     "lights": [LIGHT],
     "camera": CAMERA,
     "post": POST,

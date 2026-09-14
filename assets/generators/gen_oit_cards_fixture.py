@@ -57,7 +57,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 CARDS = 12          # layers in the deepest band
 ALPHA = 0.15        # per-card opacity; (1-a)^12 = 0.142, so B stays visible
@@ -225,7 +225,7 @@ gltf = {
 # and emits nothing.
 cscn = {
     "version": 1,
-    "models": [{"path": "oit_cards_fixture.gltf"}],
+    "models": [{"path": asset_ref("oit_cards_fixture.gltf")}],
     "lights": [{"name": "oit_cards_no_rig", "type": "directional",
                 "direction": [0.0, -1.0, 0.0], "intensity": 0.0}],
     "camera": {"eye": [0.0, CAM_Y, CAM_Z], "target": [0.0, CAM_Y, 0.0], "fov": FOVY_DEG},

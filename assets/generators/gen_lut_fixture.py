@@ -78,7 +78,7 @@ import base64
 import json
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # ---------------------------------------------------------------------------
 # The tables
@@ -345,7 +345,7 @@ gltf = {
 CAM_Z = 7.4
 cscn = {
     "version": 1,
-    "models": [{"path": "lut_fixture.gltf"}],
+    "models": [{"path": asset_ref("lut_fixture.gltf")}],
     "lights": [{"name": "LutFill", "type": "directional", "direction": [0.0, 0.0, -1.0],
                 "color": [1.0, 1.0, 1.0], "intensity": 0.05, "cast_shadows": False}],
     "camera": {"eye": [0.0, 0.0, CAM_Z], "target": [0.0, 0.0, 0.0], "fov": 40},

@@ -438,7 +438,7 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   more specs and was the right call: invisible at studio/prop scene scales (<0.1 % extinction over
   ~100 m), with `--fog` already providing sun-driven depth haze. What unblocked it was not B1's 3D
   machinery — that was never the constraint — but building the world-scale scene this note was
-  waiting for (`assets/aerial_fixture.gltf`, ridges from 20 to 95 km). The predicted shape was
+  waiting for (`assets/models/aerial_fixture.gltf`, ridges from 20 to 95 km). The predicted shape was
   right: a units→km knob (`world_units_per_km`, `--world-scale`) plus a transmittance-LUT term,
   now a 32³ volume folded into the fog composite rather than a term in the deleted `fog_frag`.
 - **Note.** The engine's frame output is not frame-invariant for a static scene even with
@@ -478,7 +478,7 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   `refract(-V,N,1/ior)·thickness` — thickness 0 = thin (tint+blur only, per spec), box mips
   = the roughness blur. Diffuse yields via `kD *= 1-transmission`; specular/emissive stay.
   `sceneColorTex` rides dead unit 6 (height bind removed). `--no-refraction` kill switch;
-  `assets/glass_fixture.gltf` (generated) is the end-to-end test. v1 limits documented in
+  `assets/models/glass_fixture.gltf` (generated) is the end-to-end test. v1 limits documented in
   the spec: no G-buffer writes for glass (AO/SSR/TAA-velocity blind), refracted image
   excludes catcher/other transparents, unsorted overlap.
 - **GL 4.1 approach.** Render opaque scene → resolve to a color texture → draw transmissive
@@ -620,7 +620,7 @@ Effort key: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 3+ weeks.
   freed unit 4) and auto-enables POM with a default depth (`--parallax-scale`). Runs once after the
   async texture loader drains (same defer-until-idle idiom as the mask array). `import.c`/assimp stay
   byte-clean.
-- **Fixture:** `assets/gen_parallax_fixture.py` → a brick wall (external albedo/normal + procedural
+- **Fixture:** `assets/generators/gen_parallax_fixture.py` → a brick wall (external albedo/normal + procedural
   `_height` PNG); `--parallax`/`--no-parallax`/`--parallax-scale`; the render app now defaults the
   texture dir to the model's own directory (external-texture glTF loads without `-t`).
 - **Known limitation — grazing silhouette aliasing.** The silhouette `discard` is all-or-nothing per

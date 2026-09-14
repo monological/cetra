@@ -24,6 +24,36 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.dirname(HERE)
 
 
+KIND = {".gltf": "models", ".glb": "models", ".fbx": "models",
+        ".ies": "ies", ".cube": "lut",
+        ".png": "textures", ".jpg": "textures", ".jpeg": "textures", ".hdr": "textures"}
+
+
+def asset_ref(filename):
+    """How one asset NAMES another from inside a committed file.
+
+    Not a path this process opens -- it is stored in a .cscn or a .gltf and
+    resolved later, by whoever loads it. Three consumers, all spelling
+    "../<kind>/", and the uniformity is a coincidence worth knowing because
+    they resolve through different machinery:
+
+      a scene's model / profile / lut   against the SCENE's own directory, so
+                                        ../models/x.gltf counts from scenes/
+      a glTF image uri                  through the texture pool, whose
+                                        directory is dirname(model), so
+                                        ../textures/x.png counts from models/
+      a scene's material texture        the same pool, and so the same ../ --
+                                        counted from models/ and not from the
+                                        scene that named it
+
+    Relative rather than a -t argument on every render: gates.py has 38 inline
+    render sites against 4 that pass -t, and -t would have to be suppressed for
+    the self-contained bundles, whose models and images stay together.
+    """
+    kind = KIND.get(os.path.splitext(filename)[1].lower())
+    return f"../{kind}/{filename}" if kind else filename
+
+
 def asset_path(filename, root=None):
     """Absolute path to a generated asset, read or written.
 

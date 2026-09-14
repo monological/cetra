@@ -195,13 +195,13 @@ forcing the software path when a real adapter is also present.
 
 ## Checking a VM is working
 
-Build and render one frame. `render` needs a model, so `assets/c64.fbx` is the cheap one:
+Build and render one frame. `render` needs a model, so `assets/models/c64.fbx` is the cheap one:
 
 ```bash
 ./build.sh --target linux      # or --target windows
 ```
 
-then on the guest, run `render -m assets/c64.fbx -x -f 2 -S <path>` (under `xvfb-run` on Linux) and
+then on the guest, run `render -m assets/models/c64.fbx -x -f 2 -S <path>` (under `xvfb-run` on Linux) and
 confirm the exit code is 0 and the file is non-empty. A frame of the right size can still be black,
 so read a few bytes if the answer matters — a real one spans most of the 0-255 range.
 

@@ -52,7 +52,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ATLAS = asset_path("hair_fixture_atlas.png")
@@ -151,7 +151,7 @@ def write_gltf():
     gltf = {
         "asset": {"version": "2.0", "generator": "gen_hair_fixture.py"},
         "samplers": [{"wrapS": 33071, "wrapT": 33071}],
-        "images": [{"uri": os.path.basename(ATLAS)}],
+        "images": [{"uri": asset_ref(os.path.basename(ATLAS))}],
         "textures": [{"source": 0, "sampler": 0}],
         "materials": [{
             "name": "hair_card",
@@ -194,7 +194,7 @@ LIGHT = {"name": "key", "type": "directional",
          "direction": [-0.7071, 0.0, -0.7071],
          "color": [1.0, 1.0, 1.0], "intensity": 3.0}
 
-BASE_HAIR = {"anisotropy": 0.85, "anisotropyMap": "hair_fixture_flow.png"}
+BASE_HAIR = {"anisotropy": 0.85, "anisotropyMap": asset_ref("hair_fixture_flow.png")}
 
 
 def write_cscn(name, comment, **hair):
@@ -208,7 +208,7 @@ def write_cscn(name, comment, **hair):
     doc = {
         "version": 1,
         "_comment": comment,
-        "models": [{"path": "hair_fixture.gltf"}],
+        "models": [{"path": asset_ref("hair_fixture.gltf")}],
         "materials": {"hair_card": material},
         "lights": [LIGHT],
         "camera": {"eye": [0.0, 0.0, 3.2], "target": [0.0, 0.0, 0.0], "fov": 45},

@@ -41,7 +41,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 
 TEX = 512
@@ -231,7 +231,7 @@ def main():
                                                 "metallicFactor": 0.0, "roughnessFactor": 1.0}}
                       for i, n in enumerate(names)],
         "textures": [{"source": i} for i in range(len(images))],
-        "images": [{"uri": u} for u in images],
+        "images": [{"uri": asset_ref(u)} for u in images],
         "accessors": [a for i, row in enumerate(rows) for a in accessors(4 * i, row[0])],
         "bufferViews": views,
         "buffers": [{"uri": "data:application/octet-stream;base64," +
@@ -239,7 +239,7 @@ def main():
     }
     cscn = {
         "version": 1,
-        "models": [{"path": "alpha_ladder_fixture.gltf"}],
+        "models": [{"path": asset_ref("alpha_ladder_fixture.gltf")}],
         # Lit from just off the camera axis, no shadows: the cards are the
         # subject and a shadow would be a second thing in the frame.
         "lights": [{"name": "LadderKey", "type": "directional",

@@ -47,7 +47,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 here = os.path.dirname(os.path.abspath(__file__))
 
@@ -220,7 +220,7 @@ for i, p in enumerate(prims):
 gltf = {
     "asset": {"version": "2.0", "generator": "gen_dof_fixture.py"},
     "extensionsUsed": ["KHR_materials_emissive_strength"],
-    "images": [{"uri": "dof_fixture_checker.png"}],
+    "images": [{"uri": asset_ref("dof_fixture_checker.png")}],
     "textures": [{"source": 0}],
     "materials": materials,
     "scene": 0,

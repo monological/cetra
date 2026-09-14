@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "_comment": "The same lobes with NO strand map, which is the state the feature is worthless in: one tangent for the whole quad, so the halves match however the atlas was painted. This arm is what makes the reference arm's split attributable to the map rather than to the lobes, and it is the shape the coordinate hash this replaced would have measured as.",
+  "models": [
+    {
+      "path": "../models/hair_fixture.gltf"
+    }
+  ],
+  "materials": {
+    "hair_card": {
+      "anisotropy": 0.85
+    }
+  },
+  "lights": [
+    {
+      "name": "key",
+      "type": "directional",
+      "direction": [
+        -0.7071,
+        0.0,
+        -0.7071
+      ],
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "intensity": 3.0
+    }
+  ],
+  "camera": {
+    "eye": [
+      0.0,
+      0.0,
+      3.2
+    ],
+    "target": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "fov": 45
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0,
+    "auto_exposure": false
+  }
+}

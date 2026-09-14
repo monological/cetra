@@ -50,7 +50,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 FOV_DEG = 45.0
 NEAR_GAP = 4.0    # camera to the nearest quad
@@ -134,7 +134,7 @@ def _write(name, quads, note):
     }
     cscn = {
         "version": 1,
-        "models": [{"path": f"{name}.gltf"}],
+        "models": [{"path": asset_ref(f"{name}.gltf")}],
         "lights": [{"name": "OverdrawSun", "type": "directional",
                     "direction": [0.0, -0.25, -0.97], "color": [1.0, 1.0, 1.0],
                     "intensity": 3.0, "cast_shadows": False}],

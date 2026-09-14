@@ -69,7 +69,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # The occlusion buffer's shape, restated rather than imported (the terrain
 # gate's third-copy idiom): the gate must be able to fail when this file and
@@ -594,7 +594,7 @@ portal, portal_boxes, portal_cam, inside_eye, near_eye, hidden_n = build_portal(
 write_json("occlusion_fixture.gltf", portal.gltf())
 base_cscn = {
     "version": 1,
-    "models": [{"path": "occlusion_fixture.gltf"}],
+    "models": [{"path": asset_ref("occlusion_fixture.gltf")}],
     "lights": [LIGHT],
     "camera": portal_cam,
     "post": POST,
@@ -623,7 +623,7 @@ scatter, scatter_boxes, scatter_cam, sc_hidden, sc_total = build_scatter()
 write_json("occlusion_scatter.gltf", scatter.gltf())
 write_json("occlusion_scatter.cscn", {
     "version": 1,
-    "models": [{"path": "occlusion_scatter.gltf"}],
+    "models": [{"path": asset_ref("occlusion_scatter.gltf")}],
     "lights": [LIGHT],
     "camera": scatter_cam,
     "post": POST,

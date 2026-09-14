@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "_comment": "Hair lobes driven by the derived strand map. The reference arm.",
+  "models": [
+    {
+      "path": "../models/hair_fixture.gltf"
+    }
+  ],
+  "materials": {
+    "hair_card": {
+      "anisotropy": 0.85,
+      "anisotropyMap": "../textures/hair_fixture_flow.png"
+    }
+  },
+  "lights": [
+    {
+      "name": "key",
+      "type": "directional",
+      "direction": [
+        -0.7071,
+        0.0,
+        -0.7071
+      ],
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "intensity": 3.0
+    }
+  ],
+  "camera": {
+    "eye": [
+      0.0,
+      0.0,
+      3.2
+    ],
+    "target": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "fov": 45
+  },
+  "post": {
+    "tonemap": "neutral",
+    "exposure": 1.0,
+    "auto_exposure": false
+  }
+}

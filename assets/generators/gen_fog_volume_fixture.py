@@ -36,7 +36,7 @@ import base64
 import json
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # One unit quad in the XY plane, facing +Z (two triangles)
 positions = [(-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0)]
@@ -155,7 +155,7 @@ scene_desc = {
         "tint colours the SHARED lighting rather than adding radiance of its own, so a box",
         "can be smoke, dust or mist and cannot be a glow.",
     ],
-    "models": [{"path": "fog_volume_fixture.gltf"}],
+    "models": [{"path": asset_ref("fog_volume_fixture.gltf")}],
     "fogVolumes": [
         {
             "center": [cx, 1.0, 0.0],

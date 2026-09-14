@@ -30,7 +30,7 @@ import json
 import os
 import struct
 import sys
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 WATER_LEVEL = 0.0
 # The wedge spans from well under the water to well over it: the shoreline has to
@@ -193,7 +193,7 @@ TARGET = [0.0, WATER_LEVEL - 0.25, WEDGE_FAR_Z * 0.35]
 
 scene_desc = {
     "version": 1,
-    "models": [{"path": "water_fixture.gltf"}],
+    "models": [{"path": asset_ref("water_fixture.gltf")}],
     "lights": [
         {
             "name": "WaterKey",

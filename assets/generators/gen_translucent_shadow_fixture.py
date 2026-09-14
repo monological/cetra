@@ -56,7 +56,7 @@ import math
 import os
 import struct
 import zlib
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # --- the canopy ------------------------------------------------------------
 PANELS = 4
@@ -287,7 +287,7 @@ gltf = {
     "materials": materials,
     "textures": [{"source": 0, "sampler": 0}],
     "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}],
-    "images": [{"uri": "translucent_shadow_ramp.png"}],
+    "images": [{"uri": asset_ref("translucent_shadow_ramp.png")}],
     "accessors": [
         {"bufferView": 0, "componentType": 5126, "count": len(positions), "type": "VEC3",
          "min": all_min, "max": all_max},
@@ -318,7 +318,7 @@ gltf = {
 # are both 0 px against --no-shadows and could not be reused here.
 cscn = {
     "version": 1,
-    "models": [{"path": "translucent_shadow_fixture.gltf"}],
+    "models": [{"path": asset_ref("translucent_shadow_fixture.gltf")}],
     "lights": [{"name": "tsl_sun", "type": "directional", "direction": SUN_DIR,
                 "intensity": 3.0, "cast_shadows": True}],
     "camera": {"eye": CAM_EYE, "target": CAM_TARGET, "fov": FOVY_DEG},

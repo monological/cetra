@@ -30,7 +30,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 
 # ---- occlusion texture: white with a dark radial ring ----------------------
@@ -99,7 +99,7 @@ pmax = [max(p[k] for p in positions) for k in range(3)]
 
 gltf = {
     "asset": {"version": "2.0", "generator": "gen_ao_fixture.py"},
-    "images": [{"uri": "ao_fixture_ao.png"}],
+    "images": [{"uri": asset_ref("ao_fixture_ao.png")}],
     "textures": [{"source": 0}],
     "materials": [
         {

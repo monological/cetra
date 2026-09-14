@@ -62,7 +62,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # ---- the geometry, and the numbers every assert below is written against ----
 GROUND_HALF = 5.0     # ground quad half-extent
@@ -191,7 +191,7 @@ def _practical(name, pos):
 
 CSCN = {
     "version": 1,
-    "models": [{"path": "contact_local_fixture.gltf"}],
+    "models": [{"path": asset_ref("contact_local_fixture.gltf")}],
     "environment": {"ambient": [0.04, 0.042, 0.05]},
     "lights": [_practical("practical_back", LIGHT_BACK),
                _practical("practical_front", LIGHT_FRONT)],

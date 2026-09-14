@@ -74,7 +74,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # --- framing, shared with the gate ------------------------------------------------------
 FOVY_DEG = 45.0
@@ -336,7 +336,7 @@ scene_desc = {
         "either depth a closed form. The app derives density from the scene radius, so",
         "inheriting it would let a geometry change re-tune the quantity under test.",
     ],
-    "models": [{"path": "fog_glass_fixture.gltf"}],
+    "models": [{"path": asset_ref("fog_glass_fixture.gltf")}],
     "lights": [
         {
             "name": "FogGlassKey",

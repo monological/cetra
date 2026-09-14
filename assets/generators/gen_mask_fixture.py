@@ -50,7 +50,7 @@ Regenerate with: python3 assets/gen_mask_fixture.py
 import base64
 import json
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HALF = 0.62
 GAP = 0.22  # clear space between the quads, so none samples another's edge
@@ -190,7 +190,7 @@ gltf = {
 # between them is the alpha path rather than the falloff.
 cscn = {
     "version": 1,
-    "models": [{"path": "mask_fixture.gltf"}],
+    "models": [{"path": asset_ref("mask_fixture.gltf")}],
     "lights": [{"name": "MaskSun", "type": "directional", "direction": [0.0, -0.3, -0.95],
                 "color": [1.0, 1.0, 1.0], "intensity": 3.0, "cast_shadows": False}],
     # Aimed at the quads' mid-height so all three sit on one horizontal band,

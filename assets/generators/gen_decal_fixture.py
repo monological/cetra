@@ -59,7 +59,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -476,7 +476,7 @@ def _assert_fixture_still_tests_something():
     # poster would be painted OVER and the arm would assert the exact opposite of
     # what it says.
     poster_index = next(i for i, dec in enumerate(CSCN["decals"])
-                        if dec["image"] == "decal_poster.png")
+                        if dec["image"] == asset_ref("decal_poster.png"))
     assert OVERLAP_INDEX > poster_index, (
         f"the overlap's slot {OVERLAP_INDEX} is not past the poster's {poster_index}")
     assert OVERLAP_INDEX == len(CSCN["decals"]), (
@@ -667,7 +667,7 @@ GLTF = {
 
 CSCN = {
     "version": 1,
-    "models": [{"path": "decal_fixture.gltf"}],
+    "models": [{"path": asset_ref("decal_fixture.gltf")}],
     # Authored so a probe capture has an environment to be made of: a probe
     # cannot be created without a precomputed IBL, and a file whose probes are
     # refused still parses and still renders -- which is the trap cornell_rooms
@@ -677,15 +677,15 @@ CSCN = {
         {"position": list(POSTER_POS),
          "size": list(POSTER_HALF),
          "direction": [0.0, 0.0, -1.0],
-         "image": "decal_poster.png",
+         "image": asset_ref("decal_poster.png"),
          "opacity": 1.0,
          "angleFade": ANGLE_FADE,
          "feather": FEATHER},
         {"position": list(SCORCH_POS),
          "size": list(SCORCH_HALF),
          "direction": [0.0, -1.0, 0.0],
-         "image": "decal_scorch.png",
-         "surface": "decal_scorch_surface.png",
+         "image": asset_ref("decal_scorch.png"),
+         "surface": asset_ref("decal_scorch_surface.png"),
          "opacity": 1.0,
          "angleFade": ANGLE_FADE,
          "feather": FEATHER},
