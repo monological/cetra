@@ -57,6 +57,20 @@ typedef struct IkFootParams {
     // clip's own pose for this frame, which is the only moment the question has a true
     // answer. Zero disables the release entirely and plants at full weight.
     float plant_fraction;
+
+    // Contact labelling (spec 12.9). A foot is in contact when its ankle is within
+    // contact_height of the ground it was handed AND rising or falling slower than
+    // contact_speed -- both fractions of leg length, the second per second, so they
+    // carry across rigs.
+    //
+    // Holden's method labels contacts OFFLINE from toe speed and height, on clips that
+    // carry root motion. Ours do not: the character controller moves the entity, so a
+    // stance foot's model-space speed is the walk speed rather than zero and a
+    // horizontal threshold would label nothing. The vertical pair says the same thing
+    // about a foot that has been set down and not yet picked up, needs no authored
+    // data and no baking step, and is what the deviation costs.
+    float contact_height;
+    float contact_speed;
 } IkFootParams;
 
 typedef struct IkFoot {
@@ -64,6 +78,12 @@ typedef struct IkFoot {
     int hip_index;
     int knee_index;
     int ankle_index;
+    // The bone the contact is judged at and, from spec 12.9, held at. Defaults to the
+    // ankle, which is what a rig with no toe bone has to use; ik_foot_set_toe moves it
+    // to the real thing. The toe is the part in contact roughly nine times out of ten,
+    // and leaving the heel free is what preserves the animation.
+    int toe_index;
+    float toe_offset;     // how far the toe rides above its sole, as sole_offset is for the ankle
     vec3 pole_local;      // knee-forward, in the HIP's frame, so a turning hip carries it
     vec3 fallback_axis;   // bend axis from the bind pose, for a leg aimed along the pole
     vec3 applied_target;  // what the last solve actually used, after easing
@@ -74,6 +94,15 @@ typedef struct IkFoot {
     // real target from there walks the leg across the world. needs_reset is system-wide
     // and re-arms feet that are already settled.
     bool has_applied;
+
+    // The contact label this solve settled, and the state it is derived from (spec
+    // 12.9). Read it to ask whether the clip has this foot on the ground; it is a
+    // statement about the ANIMATION, not about the solve, and it is answered here for
+    // the same reason the release is: only at this point in the frame do the globals
+    // still hold the clip's own pose.
+    bool in_contact;
+    vec3 clip_ankle_prev; // the ankle's model position at the previous solve
+    bool has_clip_prev;   // false until there are two solves to difference
 
     // SETTINGS: plain stores, written directly at any time.
 
@@ -120,6 +149,12 @@ IkFootParams ik_default_params(void);
 // foot's index, or -1 if a name is missing or the bones are not a chain.
 int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
                 const char* ankle_bone, const vec3 knee_forward);
+
+// The toe of a registered foot: where contact is judged and, once locked, held. Must be
+// a child of that foot's ankle. Refused when the bone is missing or is parented
+// elsewhere, leaving the foot judged at its ankle, which is what a rig with no toe bone
+// gets and is a real limitation rather than a simplification.
+bool ik_foot_set_toe(IkSystem* system, int foot, const char* toe_bone);
 
 // The bone a foot that cannot reach lowers. Refused when the bone is missing, or is
 // not an ancestor of every registered foot.
