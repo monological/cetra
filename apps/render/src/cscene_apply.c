@@ -46,11 +46,30 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         // path buffers back these pointers directly.
         args->model_path = cscn->model_path;
     } else if (args->model_path && !args->no_scene_file) {
-        // Convenience: a bare model with a .cscn beside it picks it up.
+        // Convenience: a bare model with a .cscn of the same stem picks it up.
         // cwalk swaps the basename's extension (and appends when there is
         // none) without tripping over dots in directory names.
         char probe_path[CSCENE_MAX_PATH];
         cwk_path_change_extension(args->model_path, "cscn", probe_path, sizeof(probe_path));
+        if (!path_exists(probe_path)) {
+            // ...and a SIBLING DIRECTORY's, which is where it lives once a
+            // corpus is split by kind (spec 12.8): a model in models/ has its
+            // scene in scenes/. Probing both is what keeps "-m <model>" meaning
+            // the same thing it meant when the two sat side by side -- without
+            // it the model loads bare, every look field is silently dropped,
+            // and the frame renders plausibly with the wrong camera and lights.
+            char sibling[CSCENE_MAX_PATH];
+            const char* slash = path_last_sep(probe_path);
+            if (slash) {
+                char parent[CSCENE_MAX_PATH];
+                snprintf(parent, sizeof(parent), "%.*s", (int)(slash - probe_path), probe_path);
+                const char* up = path_last_sep(parent);
+                snprintf(sibling, sizeof(sibling), "%.*s/scenes/%s", (int)(up ? up - parent : 0),
+                         parent, slash + 1);
+                if (up && path_exists(sibling))
+                    snprintf(probe_path, sizeof(probe_path), "%s", sibling);
+            }
+        }
         if (path_exists(probe_path)) {
             cscn = cscene_load(probe_path);
         }
