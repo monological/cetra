@@ -4726,6 +4726,57 @@ static int run_anim_probe(Game* game, const char* which) {
         float swing_speed = 0.0f;
         printf("anim stride swing answered %d\n",
                animation_stride_speed(swung, skel, ankle, toe, &swing_speed, NULL) ? 1 : 0);
+    } else if (!strcmp(which, "rate")) {
+        // What a blend space implies about the ground, which is the one number a game
+        // cannot compute for itself. At ONE entry it is the entry's own stride and there
+        // is nothing to get wrong; at two it is not the weighted mean of the strides, and
+        // the gate recomputes both from the inputs printed here rather than taking the
+        // engine's word for which it is.
+        //
+        // The two entries are chosen for their LENGTHS and not their motion -- 2.0 s
+        // against 0.5 s, the widest ratio this rig offers -- because the mean and the true
+        // answer part company exactly when the clips differ in duration, which is the
+        // ordinary walk-and-run case. The strides are stated rather than measured: what is
+        // under test is the blend, and measuring would add a second thing that could be
+        // wrong. The committed clips cannot exhibit this any other way, since rescaling one
+        // clip's time changes its stride inversely and under that the two expressions
+        // coincide exactly.
+        const Animation* one = scene_find_animation(scene, "idle");
+        const Animation* two = scene_find_animation(scene, "run");
+        if (!one || !two) {
+            fprintf(stderr, "anim-probe: the rig lacks a pair to blend\n");
+            return 1;
+        }
+        const float strides[2] = {1.0f, 2.0f};
+        AnimatorEntry pair[2] = {{one, 0.0f, strides[0]}, {two, 1.0f, strides[1]}};
+        Animator* an = create_animator(skel);
+        if (!an) {
+            fprintf(stderr, "anim-probe: could not create an animator\n");
+            return 1;
+        }
+        animator_play_space(an, "pair", pair, 1, 0.0f, true);
+        printf("anim rate single engine %.6f\n", (double)animator_stride_speed(an));
+        printf("anim rate single stride %.6f\n", (double)strides[0]);
+
+        animator_play_space(an, "pair", pair, 2, 0.0f, true);
+        an->param = 0.5f;
+        printf("anim rate pair seconds %.6f %.6f\n",
+               (double)(one->duration / one->ticks_per_second),
+               (double)(two->duration / two->ticks_per_second));
+        printf("anim rate pair strides %.6f %.6f\n", (double)strides[0], (double)strides[1]);
+        printf("anim rate pair param %.6f\n", (double)an->param);
+        // Read BEFORE any tick, which is the order a game runs in: the knob is written in
+        // the update and the animator ticks in pre-render. A query reading the weights the
+        // last advance left would answer for the previous frame's knob.
+        printf("anim rate pair engine %.6f\n", (double)animator_stride_speed(an));
+
+        // And an entry nobody measured makes the whole answer 0 rather than a plausible
+        // number short of one term.
+        AnimatorEntry blind[2] = {{one, 0.0f, strides[0]}, {two, 1.0f, 0.0f}};
+        animator_play_space(an, "blind", blind, 2, 0.0f, true);
+        an->param = 0.5f;
+        printf("anim rate blind engine %.6f\n", (double)animator_stride_speed(an));
+        free_animator(an);
     } else {
         fprintf(stderr, "anim-probe: unknown case '%s'\n", which);
         rc = 1;

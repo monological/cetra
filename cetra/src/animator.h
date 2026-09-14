@@ -36,6 +36,13 @@
 typedef struct AnimatorEntry {
     const Animation* clip;
     float position;
+    // The ground speed this entry implies at speed 1, in whatever units the
+    // param axis uses -- it is a denominator, so the units cancel as long as
+    // they are the caller's own. 0 = unknown, which is what an entry that was
+    // never measured carries and what makes animator_stride_speed say so.
+    // animation_stride_speed measures one, in MODEL units, and a rig on a
+    // scaled node owes the scale.
+    float stride;
 } AnimatorEntry;
 
 // A source: a blend space and its clock. The clock is kept in the TICKS of
@@ -152,6 +159,22 @@ bool animator_finished(const Animator* animator);
 // The base source's name: a space's given one, a clip's own, "" when nothing
 // plays.
 const char* animator_source_name(const Animator* animator);
+
+// The ground speed the playing pose implies at `speed` 1, blended the way the
+// pose is, in the units the entries' strides are in. 0 when nothing plays or
+// any entry carrying weight has no stride -- which is the zero value, so a
+// space nobody measured reports honestly rather than plausibly.
+//
+// Divide the speed a game wants to travel at by this and write the result to
+// `speed`: that is the whole of stride matching, and the reason the division
+// cannot be done outside the animator is the denominator. The space keeps ONE
+// clock, in the ticks of its reference entry, and the blended pose covers
+// `sum(w * stride * seconds)` of ground per unit of phase while the phase
+// advances at `sum(w / seconds)` -- so the product is what a caller needs, and
+// it collapses to the weighted mean of the strides only when every clip is the
+// same length. A game that reaches for the mean is wrong the moment its walk
+// and run differ in duration, by an amount that reads as a tuning problem.
+float animator_stride_speed(const Animator* animator);
 
 // --- Override layer ---
 

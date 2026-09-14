@@ -15356,6 +15356,42 @@ def run_anim_gate(workdir):
         if not ok:
             failures.append("anim-stride")
 
+    # --- anim-rate -------------------------------------------------------------
+    d = _anim_probe_run("rate")
+    need = [("single", "engine"), ("single", "stride"), ("pair", "seconds"),
+            ("pair", "strides"), ("pair", "param"), ("pair", "engine"), ("blind", "engine")]
+    if not d or any(k not in d for k in need) or len(d[("pair", "seconds")]) < 2:
+        print("  anim-rate    FAIL  the probe failed or measured nothing")
+        failures.append("anim-rate")
+    else:
+        sec = d[("pair", "seconds")]
+        stride = d[("pair", "strides")]
+        # The weights the space would give, recomputed here rather than read back: two
+        # entries at 0 and 1 with the knob between them are a plain lerp.
+        t = d[("pair", "param")][0]
+        w = [1.0 - t, t]
+        # The space keeps ONE clock. The blended pose lays down sum(w * stride * seconds)
+        # of ground per turn of the loop, and the clock turns the loop at sum(w / seconds)
+        # -- so the answer is the PRODUCT. The mean of the strides is the plausible wrong
+        # expression, and it is only wrong when the clips differ in length, which is why
+        # these two are 2.0 s and 0.5 s.
+        want = (sum(w[i] * stride[i] * sec[i] for i in (0, 1))
+                * sum(w[i] / sec[i] for i in (0, 1)))
+        mean = sum(w[i] * stride[i] for i in (0, 1))
+        got = d[("pair", "engine")][0]
+        single, one_stride = d[("single", "engine")][0], d[("single", "stride")][0]
+        blind = d[("blind", "engine")][0]
+        ok = (abs(got - want) < 1e-4 and abs(got - mean) > 1e-3
+              and abs(single - one_stride) < 1e-6 and blind == 0.0)
+        print(f"  anim-rate    {'PASS' if ok else 'FAIL'}  a {sec[0]:.1f}s clip striding "
+              f"{stride[0]:.1f} blended half and half with a {sec[1]:.1f}s one striding "
+              f"{stride[1]:.1f} implies {got:.6f} (want {want:.6f}, and NOT the weighted "
+              f"mean's {mean:.6f}); one entry reports its own {single:.6f} and an entry "
+              f"nobody measured makes the whole answer {blind:.1f} rather than a number "
+              f"short of one term")
+        if not ok:
+            failures.append("anim-rate")
+
     # --- anim-trace-idle -------------------------------------------------------
     r = subprocess.run([GAMETEST, "-x", "-f", "120", "--trace-player", "--trace-every", "20"],
                        capture_output=True, text=True)
