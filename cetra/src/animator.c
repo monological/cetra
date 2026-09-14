@@ -321,7 +321,8 @@ float animator_stride_speed(const Animator* a) {
     // Ground per unit of PHASE, and phase per second. Neither is the answer on
     // its own: the first is what the blended pose lays down over a whole loop,
     // the second is how fast the one shared clock walks that loop, and the clock
-    // runs at the blended clip LENGTH. Their product is metres per second.
+    // runs at the blended clip LENGTH. Their product is the ground speed, in
+    // whatever units the entries' strides were given in.
     float ground = 0.0f, phase_rate = 0.0f;
     bool any = false;
     for (int i = 0; i < a->base.count; i++) {

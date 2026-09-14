@@ -1033,11 +1033,10 @@ bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, con
     mat4* globals = malloc(sizeof(mat4) * MAX_BONES);
     vec3* ank = malloc(sizeof(vec3) * (size_t)n * 2);
     vec3* tip = malloc(sizeof(vec3) * (size_t)n * 2);
-    bool* band = malloc(sizeof(bool) * (size_t)n * 2);
-    bool ok = pose && locals && globals && ank && tip && band;
+    bool ok = pose && locals && globals && ank && tip;
 
     // One loop, sampled evenly. The clip's last key IS its first, so the sample after
-    // n-1 is sample 0 and the window arithmetic below may wrap freely.
+    // n-1 is sample 0 and the central differences below may wrap freely.
     for (int i = 0; ok && i < n; i++) {
         animation_sample_pose(clip, skeleton, clip->duration * (float)i / (float)n, pose);
         for (size_t b = 0; b < skeleton->bone_count; b++) {
@@ -1054,9 +1053,11 @@ bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, con
     float* vx = malloc(sizeof(float) * (size_t)n);
     float* vz = malloc(sizeof(float) * (size_t)n);
     ok = ok && vx && vz;
-    // Both feet always, even once one has refused: a loop that stops at the first refusal
-    // leaves the other foot at zero and the trace then reads as though the foot nobody
-    // measured were the one at fault.
+    // Both feet always. Nothing here refuses -- a foot with no lift or too few low samples
+    // leaves its speed at zero and the agreement test below is what turns that into a
+    // refusal. A loop that stopped at the first failure would leave the other foot
+    // unmeasured, and the trace then reads as though the foot nobody looked at were the
+    // one at fault, which cost an hour once.
     for (int f = 0; ok && f < 2; f++) {
         float low = 1e30f, high = -1e30f;
         for (int i = 0; i < n; i++) {
@@ -1151,7 +1152,6 @@ bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, con
     free(globals);
     free(ank);
     free(tip);
-    free(band);
     return ok;
 }
 
