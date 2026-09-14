@@ -22627,6 +22627,16 @@ def run_ik_gate(workdir):
                    a weight FADE: a foot halfway up its swing is still part planted, so
                    the stride is damped by design and parity would be asserting a design
                    this does not have.
+      ik-slide     the SLIDE, in metres: how far a foot already in contact travels
+                   across the ground while the body moves over it. The body's speed is
+                   not chosen by the fixture, it is read off the clip -- the stance
+                   foot's own mean backward velocity -- so it is by construction the
+                   speed at which the animation's feet are stationary in the world, and
+                   every millimetre reported is the solver's. Planting keeps no memory,
+                   so its target travels with the character and this reads most of the
+                   stance. The window is asserted to BE a stance first: a label that
+                   said "always in contact" would report a small drift for the wrong
+                   reason, and one that said "never" would leave nothing to measure.
     """
     if not os.path.exists(GAMETEST):
         print("  ik           SKIP  (gametest not built)")
@@ -22915,6 +22925,32 @@ def run_ik_gate(workdir):
               f"release is a weight fade, so a foot mid-swing is still part planted")
         if not ok:
             failures.append("ik-swing")
+
+    # --- ik-slide --------------------------------------------------------------
+    d = _ik_probe("lock")
+    need = [("clip", "stride"), ("contact", "fraction"), ("plant", "slide"),
+            ("plant", "slidefrac")]
+    if not d or any(k not in d for k in need):
+        print("  ik-slide     FAIL  the probe failed or measured nothing")
+        failures.append("ik-slide")
+    else:
+        stride = d[("clip", "stride")][0]
+        frac = d[("contact", "fraction")][0]
+        slide = d[("plant", "slide")][0]
+        share = d[("plant", "slidefrac")][0]
+        # The window has to BE a stance before the travel across it means anything, and
+        # a walk's is a little over half its cycle. Both halves of this guard have been
+        # wrong once: a contact band stated as a fraction of LEG length rather than of
+        # the foot's own lift read 77 per cent of the cycle as contact.
+        window = 0.35 < frac < 0.75 and stride > 0.05
+        ok = window and share < 0.02
+        print(f"  ik-slide     {'PASS' if ok else 'FAIL'}  the stance foot travels "
+              f"{slide:.6f} m across the ground, {share * 100.0:.1f} per cent of a leg, "
+              f"while the body moves at the clip's own {stride:.6f} m/s over a contact "
+              f"window of {frac * 100.0:.0f} per cent of the cycle (want under 2 per cent "
+              f"of a leg; planting holds no contact point, so it reads the stance)")
+        if not ok:
+            failures.append("ik-slide")
 
     return failures
 
