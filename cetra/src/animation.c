@@ -965,6 +965,239 @@ void animation_sample_pose(const Animation* anim, const Skeleton* skeleton, floa
     }
 }
 
+// ============================================================================
+// What a clip's feet imply about the ground
+// ============================================================================
+
+// A foot within this fraction of its own LIFT of its lowest point is standing on
+// something. A fraction of the foot's own travel and not of the leg: a clip that barely
+// picks its feet up and one that marches both mean "near the bottom of this foot's
+// range", and a band in leg lengths reads most of a shuffle as contact.
+#define STRIDE_BAND     0.15f
+#define STRIDE_MIN_LIFT 1e-4f
+// A loop is sampled at this rate before the band is applied. High enough that a short
+// stance is several samples, low enough that a long clip stays cheap; the bounds below
+// are what keep both true for a clip of any length.
+#define STRIDE_HZ        60.0f
+#define STRIDE_MIN_SAMPS 12
+#define STRIDE_MAX_SAMPS 512
+
+// One foot's dwell over a sampled loop: where it starts, how long it lasts, and the
+// horizontal velocity the toe carries across it.
+typedef struct FootDwell {
+    int start, run; // indices into the sample arrays, wrapping at `n`
+    vec3 slope;     // model units per second, the direction the TOE goes
+    float var;      // the fit's own spread, which is how much it is worth
+    float lift;     // the ankle's total vertical travel over the loop
+} FootDwell;
+
+// The number of separate dwells in a circular flag array, and the longest one. Circular
+// because a clip loops: a stance that straddles the loop point is one stance, and a
+// linear scan calls it two, which is the difference between a clip that walks and a clip
+// this refuses.
+static int dwell_runs(const bool* flag, int n, int* start, int* longest) {
+    int runs = 0, best = 0, best_at = 0;
+    for (int i = 0; i < n; i++) {
+        if (!flag[i] || flag[(i + n - 1) % n])
+            continue; // not the first sample of a run
+        runs++;
+        int len = 0;
+        while (len < n && flag[(i + len) % n])
+            len++;
+        if (len > best) {
+            best = len;
+            best_at = i;
+        }
+    }
+    if (runs == 0 && n > 0 && flag[0]) {
+        // Every sample is inside the band, so no sample is a run's first: one dwell
+        // covering the whole loop, which is a foot that never lifts.
+        runs = 1;
+        best = n;
+        best_at = 0;
+    }
+    *start = best_at;
+    *longest = best;
+    return runs;
+}
+
+// The least-squares horizontal velocity of `p` over the dwell, in model units per second:
+// the slope across the WHOLE window rather than between its endpoints, because a foot
+// that rocks at heel-strike and toe-off moves the endpoints without moving the average.
+static bool dwell_slope(const vec3* p, int n, float hz, FootDwell* d) {
+    float mean_t = 0.0f, var_t = 0.0f;
+    vec3 mean_p = {0.0f, 0.0f, 0.0f};
+    glm_vec3_zero(d->slope);
+    for (int k = 0; k < d->run; k++) {
+        const int i = (d->start + k) % n;
+        mean_t += (float)k;
+        mean_p[0] += p[i][0];
+        mean_p[2] += p[i][2];
+    }
+    mean_t /= (float)d->run;
+    mean_p[0] /= (float)d->run;
+    mean_p[2] /= (float)d->run;
+    for (int k = 0; k < d->run; k++) {
+        const int i = (d->start + k) % n;
+        const float dt = (float)k - mean_t;
+        var_t += dt * dt;
+        d->slope[0] += dt * (p[i][0] - mean_p[0]);
+        d->slope[2] += dt * (p[i][2] - mean_p[2]);
+    }
+    if (var_t <= 0.0f)
+        return false;
+    glm_vec3_scale(d->slope, hz / var_t, d->slope); // per sample, then per second
+    d->var = var_t;
+    return true;
+}
+
+// Where a dwell sits in the loop, as a fraction of it, with the wrap handled.
+static float dwell_phase(const FootDwell* d, int n) {
+    return fmodf((float)d->start + 0.5f * (float)(d->run - 1), (float)n) / (float)n;
+}
+
+bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, const int ankle[2],
+                            const int toe[2], float* out_speed, vec3 out_dir) {
+    if (!clip || !skeleton || !ankle || !toe || !out_speed)
+        return false;
+    if (clip->duration <= 0.0f || clip->ticks_per_second <= 0.0f)
+        return false;
+    for (int f = 0; f < 2; f++) {
+        if (ankle[f] < 0 || (size_t)ankle[f] >= skeleton->bone_count || toe[f] < 0 ||
+            (size_t)toe[f] >= skeleton->bone_count)
+            return false;
+    }
+
+    const float seconds = clip->duration / clip->ticks_per_second;
+    int n = (int)(seconds * STRIDE_HZ + 0.5f);
+    if (n < STRIDE_MIN_SAMPS)
+        n = STRIDE_MIN_SAMPS;
+    if (n > STRIDE_MAX_SAMPS)
+        n = STRIDE_MAX_SAMPS;
+
+    Pose* pose = malloc(sizeof(Pose));
+    mat4* locals = malloc(sizeof(mat4) * MAX_BONES);
+    mat4* globals = malloc(sizeof(mat4) * MAX_BONES);
+    vec3* ank = malloc(sizeof(vec3) * (size_t)n * 2);
+    vec3* tip = malloc(sizeof(vec3) * (size_t)n * 2);
+    bool* band = malloc(sizeof(bool) * (size_t)n * 2);
+    bool ok = pose && locals && globals && ank && tip && band;
+
+    // One loop, sampled evenly. The clip's last key IS its first, so the sample after
+    // n-1 is sample 0 and the window arithmetic below may wrap freely.
+    for (int i = 0; ok && i < n; i++) {
+        animation_sample_pose(clip, skeleton, clip->duration * (float)i / (float)n, pose);
+        for (size_t b = 0; b < skeleton->bone_count; b++) {
+            pose_local(skeleton, pose, b, locals[b]);
+            accumulate_global(&skeleton->bones[b], b, skeleton->bone_count, locals, globals);
+        }
+        for (int f = 0; f < 2; f++) {
+            glm_vec3_copy(globals[ankle[f]][3], ank[f * n + i]);
+            glm_vec3_copy(globals[toe[f]][3], tip[f * n + i]);
+        }
+    }
+
+    FootDwell dwell[2] = {{0, 0, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f},
+                          {0, 0, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f}};
+    for (int f = 0; ok && f < 2; f++) {
+        float low = 1e30f, high = -1e30f;
+        for (int i = 0; i < n; i++) {
+            const float y = ank[f * n + i][1];
+            low = y < low ? y : low;
+            high = y > high ? y : high;
+        }
+        dwell[f].lift = high - low;
+        if (high - low < STRIDE_MIN_LIFT) {
+            ok = false; // the foot never leaves the ground, so nothing marks a stance
+            break;
+        }
+        for (int i = 0; i < n; i++)
+            band[f * n + i] = ank[f * n + i][1] <= low + STRIDE_BAND * (high - low);
+        // ONE dwell per foot per loop. Two is a foot that dips twice -- which is what a
+        // straight-leg swing does, being lowest at mid-stride where it is fastest -- and
+        // the fit over either half of it is a stride pointing the wrong way.
+        if (dwell_runs(&band[f * n], n, &dwell[f].start, &dwell[f].run) != 1 || dwell[f].run < 3 ||
+            dwell[f].run >= n || !dwell_slope(&tip[f * n], n, STRIDE_HZ, &dwell[f])) {
+            ok = false;
+            break;
+        }
+    }
+
+    // Every number below is an aggregate over two feet, and an aggregate cannot say which
+    // foot or which samples produced it. CETRA_STRIDE_TRACE=1 prints the per-foot window
+    // and fit to stderr, which is what a disagreement with an independent measurement has
+    // to be resolved against.
+    if (getenv("CETRA_STRIDE_TRACE")) {
+        for (int f = 0; f < 2; f++)
+            fprintf(stderr,
+                    "stride-trace %s foot %d samples %d lift %.4f dwell %d..%d (%d) phase "
+                    "%.4f slope %.4f %.4f speed %.6f\n",
+                    clip->name ? clip->name : "?", f, n, (double)dwell[f].lift, dwell[f].start,
+                    dwell[f].start + dwell[f].run - 1, dwell[f].run,
+                    (double)dwell_phase(&dwell[f], n), (double)dwell[f].slope[0],
+                    (double)dwell[f].slope[2], (double)glm_vec3_norm(dwell[f].slope));
+    }
+
+    if (ok) {
+        // The two feet must ALTERNATE. A gait whose feet dwell together is not walking on
+        // them, and this is the test a pendulum swing fails outright: both its legs reach
+        // their lowest point at the same instant.
+        float apart = fabsf(dwell_phase(&dwell[0], n) - dwell_phase(&dwell[1], n));
+        if (apart > 0.5f)
+            apart = 1.0f - apart;
+        ok = apart > 0.35f;
+    }
+
+    float speed = 0.0f;
+    vec3 pooled = {0.0f, 0.0f, 0.0f};
+    if (ok) {
+        // And they must AGREE, in direction and in magnitude. Two independent fits of one
+        // quantity: a clip whose feet disagree has no single ground speed to report, and
+        // the tolerance is wide because a stylised walk is allowed to be asymmetric --
+        // strut_walk's stances are 47 samples at 0.95 and 55 at 0.73, which is one foot
+        // dragging and not a broken fit.
+        const float m0 = glm_vec3_norm(dwell[0].slope), m1 = glm_vec3_norm(dwell[1].slope);
+        ok = m0 > 1e-5f && m1 > 1e-5f && fabsf(m0 - m1) < 0.35f * 0.5f * (m0 + m1);
+        if (ok) {
+            vec3 u0, u1;
+            glm_vec3_scale(dwell[0].slope, 1.0f / m0, u0);
+            glm_vec3_scale(dwell[1].slope, 1.0f / m1, u1);
+            ok = glm_vec3_dot(u0, u1) > 0.9f;
+        }
+    }
+    if (ok) {
+        // ONE fit over both stances rather than the mean of two, and on an asymmetric
+        // clip the difference is real (0.817 against 0.842 here). Each slope is weighted
+        // by its own spread, which is both "the body speed that best explains both
+        // windows at once" and the correct way to combine two regression slopes -- a
+        // long stance pins the body over more of the loop and says more about it. A plain
+        // mean gives a short, noisy window the same vote as a long, clean one.
+        vec3 a, b;
+        glm_vec3_scale(dwell[0].slope, dwell[0].var, a);
+        glm_vec3_scale(dwell[1].slope, dwell[1].var, b);
+        glm_vec3_add(a, b, pooled);
+        glm_vec3_scale(pooled, 1.0f / (dwell[0].var + dwell[1].var), pooled);
+        speed = glm_vec3_norm(pooled);
+        ok = speed > 1e-5f;
+    }
+
+    if (ok) {
+        *out_speed = speed;
+        if (out_dir) {
+            // The body goes the way the stance feet do not.
+            glm_vec3_scale(pooled, -1.0f / speed, out_dir);
+        }
+    }
+
+    free(pose);
+    free(locals);
+    free(globals);
+    free(ank);
+    free(tip);
+    free(band);
+    return ok;
+}
+
 static void blend_bone(const BoneTransform* a, const BoneTransform* b, float t,
                        BoneTransform* out) {
     glm_vec3_lerp((float*)a->position, (float*)b->position, t, out->position);
