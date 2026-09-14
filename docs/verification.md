@@ -230,8 +230,8 @@ covers it either.
 | `apps/tree` | **yes** + particles | no | **NOT pixel-deterministic on the orbit path** -- measured 8,925 px run-to-run at 40 frames / 2800x1800, and 31,034 at the framing recorded above, so **measure the floor at YOUR framing before comparing anything**: it moves by a factor of three with resolution and frame count. The cause is `mouse_drag_update(drag_controller, glfwGetTime())` at **`tree.c:749`** -- and that call sits in an `else if` behind `if (player)`, so **`--player` never reaches it**, never creates the drag controller (`tree.c:1200`), and takes `engine->render_delta` instead. **`--player --headless` IS 0 px** -- measured x2 at 30 frames / 400x300 (spec 11.86), which makes it tree's first pixel-comparable framing and the one to use for any A/B in this app. It is what 11.86's normal-compression numbers were taken at. Wind, grass sway and falling leaves ARE frame-index-pure (spec 11.2); the ORBIT camera is what is not. **Spec 11.32 put a sea around it, ON by default**, and 11.35 put a seabed under the sea -- both under one `--no-water` guard, because a bed with no sea over it is a plate around a dome. **Its water is SPECTRAL by default since 11.35, not Gerstner** (`tree.c:1589`; `--gerstner-waves` switches back, and the four wave params it authors are DEAD unless you pass it). So the 45-pass/24-texture FFT cost and the FFT-only crest foam and caustics all apply to this app by default, and every cascade change in 11.33 and 11.35 reaches it. No tree capture from before 11.35 compares; none from before 11.36 does either, which re-scaled the water's absorption. |
 | `apps/spores` | particles | no | deterministic headless since spec 11.2 (x3 0 px; game-loop step count is exact). Since 11.103 it also takes `--taa`, `--headless-jitter` and `--msaa`, which exist to have MEASURED a refusal rather than to be used: its particles write no motion vector, so TAA reprojects every mote through the geometry behind it and turns dots into dashes. Compare its mote field at 4x against `--taa` if you want to see it; brighten 4x, the field is dim. |
 | `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; since 12.2 also `-W`/`-H` (so a golden can state the size it was baked at), `--no-ui`, `--ui-screen <name>`, `--ui-focus <n>` and `--ui-probe <case>`; the HDR path stays positional. **It is the only app with goldens that is not the render app** -- `menu` and `menu_focus` are its frames, since a menu is drawn over ITS scene. **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by every surface writing a motion vector: rigid meshes on `pbr` and, since 12.1, one skinned rig on `pbr_skinned`, whose vectors come from the previous frame's bone rows (`uPrevBoneRows`) latched once per frame. `--no-puppet` is the all-rigid frame if you need to separate them. **Re-measured with the rig on the frame (spec 12.1): still 0 px and byte-identical traces.** **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
-| `assets/scenes/puppet.cscn` | no | no | **the blending instrument (spec 12.1)**, and the corpus's first rig built to be MEASURED rather than looked at: twenty rigid boxes, one per bone, on the `cetra_rig:` names the committed walk clip carries, a T-pose with identity rest rotations and pure-translation bind offsets -- so a wrong axis or order reads as a number in `--anim-probe`. Feet on y = 0 and centred in x/z, which makes the render app's recentre a no-op (the generator asserts it). Seven clips, all authored in closed form: `idle`, `walk` and `run` loop in COS phase so the read frame is an extreme rather than a crossing; `jump` and `wave` are one-shots that end on bind; `hold90` swings one forearm to 90 degrees and HOLDS it past the read frame (a clip that ended there would wrap to bind in exactly the frame being measured -- `skinned_cull`'s own lesson); `rest` is the bind pose as a clip, the other endpoint of the analytic midpoint blend. Every animated joint also carries a translation track holding its bind offset, because an embedded clip with rotation keys alone reads position (0,0,0) and collapses the joint onto its parent. `puppet_golden` is baked from `--anim-clip run`. |
-| `assets/models/strut_walk.fbx` | no | no | a real walk cycle, animation-only (no mesh): 52 channels, 86 ticks at 60 tps. Binds onto the puppet by EXACT name -- twenty channels, one per bone, with an identity retarget delta since an animation-only file carries no source skeleton -- which is what `anim-clip-loads` asserts and what a retarget delta is measured against. The unmatched 32 are fingers, toes and a head tip the puppet does not model. **How it LOOKS on the puppet is unverified**: the puppet's rest rotations are identity where a real rig's are not, so the absolute rotations land differently. That is the retarget question the puppet cannot answer -- see "The real-character path" below. |
+| `assets/scenes/puppet.cscn` | no | no | **the blending instrument (spec 12.1)**, and the corpus's first rig built to be MEASURED rather than looked at: twenty-two rigid boxes, one per bone (twenty until spec 12.9 added the toes), on the `cetra_rig:` names the committed walk clip carries, a T-pose with identity rest rotations and pure-translation bind offsets -- so a wrong axis or order reads as a number in `--anim-probe`. Feet on y = 0 and centred in x/z, which makes the render app's recentre a no-op (the generator asserts it). Seven clips, all authored in closed form: `idle`, `walk` and `run` loop in COS phase so the read frame is an extreme rather than a crossing; `jump` and `wave` are one-shots that end on bind; `hold90` swings one forearm to 90 degrees and HOLDS it past the read frame (a clip that ended there would wrap to bind in exactly the frame being measured -- `skinned_cull`'s own lesson); `rest` is the bind pose as a clip, the other endpoint of the analytic midpoint blend. Every animated joint also carries a translation track holding its bind offset, because an embedded clip with rotation keys alone reads position (0,0,0) and collapses the joint onto its parent. `puppet_golden` is baked from `--anim-clip run`. |
+| `assets/models/strut_walk.fbx` | no | no | a real walk cycle, animation-only (no mesh): 52 channels, 86 ticks at 60 tps. Binds onto the puppet by EXACT name -- twenty-two channels, one per bone, with an identity retarget delta since an animation-only file carries no source skeleton -- which is what `anim-clip-loads` asserts and what a retarget delta is measured against. The unmatched 30 are fingers, a second toe joint and a head tip the puppet does not model. **How it LOOKS on the puppet is unverified**: the puppet's rest rotations are identity where a real rig's are not, so the absolute rotations land differently. That is the retarget question the puppet cannot answer -- see "The real-character path" below. |
 | `apps/shapes`, `apps/splash` | no | no | **no capture path, and none is planned** (spec 11.103). shapes keeps 4x MSAA deliberately, so there is nothing to regress; adding headless is 40-60 lines for a decision that is not changing. `apps/splash` cannot be captured at all without porting it onto `engine_run` — it draws to the default framebuffer and the engine's screenshot lives in the loop it does not use. |
 | `apps/sprites`, `apps/network` | particles / no | no | **capturable since 11.105** (`-x -f -S`) and **0 px run-to-run** (measured x2 at 30 frames in spec 11.108; both are 4x MSAA, TAA off under the 2D preset). Neither has a golden, so a capture against the previous commit is their whole proof; sprites' one recorded move is 11.107's clear colour (one 8-bit code over 1,222,050 px). |
 | `apps/pcb` | no | no | **A repository of its own since 11.105** (`../apps/pcb`, cetra as a submodule) and not gitignored, though `AGENTS.md`'s app table lists it; capturable the same way and **0 px run-to-run** (spec 11.108). Built against every phase of the three API specs from its submodule, which is what makes it the one consumer that tests the public surface from outside the tree. |
@@ -514,7 +514,7 @@ is 0 px, an unmasked bone moves by 0 exactly, a settled crossfade equals the inc
 for bit, the nlerp midpoint reads 21.60/45.00/68.40 degrees at the quarter points. All of that
 is true of the MATH. None of it is a claim about how a character looks.
 
-**What no suite here covers is a real rig.** The puppet has twenty bones, identity rest
+**What no suite here covers is a real rig.** The puppet has twenty-two bones, identity rest
 rotations, boxes for limbs and no spring bones; a real character has a hundred-odd bones, an
 authored rest pose, skin that slides over joints, and hair. Four things only a person watching
 one can settle:
@@ -572,7 +572,7 @@ reproducible, before reading anything into the number the arm prints.
 
 ## The foot-planting path
 
-Spec 12.4's twelve arms assert two-bone IK where it is a pure function. Six drive the solver
+Spec 12.4's thirteen arms assert two-bone IK where it is a pure function. Six drive the solver
 with synthetic targets and no physics at all, so a bend is `acos((c² − a² − b²)/2ab)` and
 nothing else — matched to 0.0000 degrees at five distances, against a closed form the gate
 computes itself from the segment lengths the probe reports, so neither side carries the other's
@@ -593,7 +593,7 @@ the whole body at frame rate. `ik-swing` — which ticks a walk cycle and measur
 vertical travel — exists only because of that, and was written after the first report rather than
 before it.
 
-**What the group asserts is the SOLVE. It is not a claim about walking.** Four things only a
+**What the group asserts is the SOLVE. It is not a claim about walking.** Five things only a
 person watching can settle:
 
 - **A stride through real locomotion.** `ik-swing` measures amplitude (0.128942 against the clip's
@@ -604,11 +604,11 @@ person watching can settle:
   are dragged back down. No number here says which way it is wrong.
 - **The pelvis drop as a silhouette.** `docs/foot-locking.md` records the warning that dragging
   hips down to reach produces "T-Rex" posturing, and that a little sliding beats breaking the
-  source animation. Ours drops up to 0.61 of a leg (0.5 m on this rig) and nobody has
-  judged how that reads.
+  source animation. Ours dropped up to 0.61 of a leg until spec 12.9 halved it to 0.31 (0.2542 m on this
+  rig), which ik-drop now exercises; nobody has judged how the remainder reads.
 - **Two characters.** The chaser carries the same rig and nothing plants ITS feet, so the
   per-entity question `anim-two-rigs` had to ask of the animator goes unasked here.
-- **Nothing photographs it.** All eighteen arms read CPU numbers, so a solve that is correct in
+- **Nothing photographs it.** All nineteen arms read CPU numbers, so a solve that is correct in
   model space but spliced into the wrong node or the wrong space would pass every one of them.
   A pixel arm was considered and dropped, for three reasons worth recording rather than
   rediscovering: on flat ground the solve is now an IDENTITY by design (0.0198 degrees), so
@@ -632,6 +632,7 @@ Closing it is a watch, not a script:
 ```bash
 ./out/bin/gametest                    # walk onto the ramp at +X, the stairs at -X
 ./out/bin/gametest --no-ik            # the same without planting, to tell the two apart
+./out/bin/gametest --no-lock          # planting without locking -- but see the speed note
 ```
 
 **What spec 12.5 learned about these instruments**, which is worth more than the cleanup it was
@@ -640,7 +641,7 @@ doing at the time:
 - **The goldens are structurally blind to half this module.** A build that failed FIVE `ik` arms
   — `ik-reach`, `ik-clamp`, `ik-singular`, `ik-analytic` and `ik-plant`, every one of them by
   exactly the same 0.08 m — passed all 33 goldens. Every gametest golden is a *planting* path,
-  and planting was the half that stayed correct. The six synthetic arms are the only thing in
+  and planting was the half that stayed correct. The synthetic arms are the only thing in
   the tree that sees the geometric path at all.
 - **`ik-pole` is a weak arm and still is.** It passed throughout that same build while its
   measured value moved 37 per cent (±0.1786 to ±0.2445): it asserts opposite signs and a span,
@@ -653,24 +654,27 @@ doing at the time:
 - **`springbone.c` has no instrument of any kind.** No gate arm, no golden, and it is inert in
   the corpus: `render.c` registers chains only under the prefix `hair`, and no fixture rig has
   such a bone, so `spring_bone_update` returns at its first guard in every golden. 12.5 shares a
-  write-back between it and `ik.c`; the IK half is covered by twelve arms and the spring half by
+  write-back between it and `ik.c`; the IK half is covered by nineteen arms and the spring half by
   nothing. Closing that is its own piece of work.
 
 **What spec 12.9 added to this list, and what it did not.**
 
 - **The lock is live in the app and the demo cannot show it.** `gametest`'s player moves at
   `PLAYER_SPEED` 10 m/s on a rig with an 0.82 m leg, against a clip implying 0.95 m/s. At
-  eighteen times its animation's stride the contact label never fires, no lock forms, and the
+  about ten times its animation's stride the contact label never fires, no lock forms, and the
   frame is **0 px** against `--no-lock` -- the mechanism behaving correctly, since there is no
   contact to hold. Walked at a stick deflection of 0.12, near the clip's own stride, the same
   frame moves **52,244 px**. A game that wants the benefit has to match travel speed to stride
   or carry root motion, and this engine does neither.
-- **A real character is still owed, and now the reason is specific.**
-  `--puppet assets/models/t_pose.fbx` does NOT work: gametest requires the rig to carry clips
-  named idle, walk and run, and the only committed humanoid (a 65-bone Mixamo Beta rig, with
-  toe bones) carries Mixamo-named stacks. The repo has one humanoid locomotion clip,
-  `strut_walk.fbx`, which cannot fill a three-entry blend space. Standing a real character in
-  gametest is its own piece of work.
+- **A real character is still owed, and the reason is narrower than it first looked.**
+  `--puppet assets/models/t_pose.fbx` does NOT work, and not for the reason first written here:
+  `take_puppet_root` requires a node named exactly **`puppet`**, which only the generated rig
+  has, so the load is refused before any clip is looked at (the committed humanoid is a 65-bone
+  Mixamo Beta rig WITH toe bones, and its `rest_pose_` clip does import). Past that it would
+  fail again at the idle/walk/run lookup, since the repo has one humanoid locomotion clip.
+  `--puppet` is therefore far less general than its name: it swaps one generated rig for
+  another. Standing a real character in gametest is its own piece of work, and now a specific
+  one -- a node-name convention and two missing clips, not a retarget.
 - **The menu goldens' instability reaches 48,886 px.** This section already warned that they
   cannot support single-measurement attribution. Spec 12.9 met a `menu` failure of 48,886 px --
   the Quit button focused, not a few edge pixels -- which survived a bisect across four commits,
@@ -680,7 +684,15 @@ doing at the time:
   enough to be mistaken for noise around a real change. This one is not, and it cost most of an
   afternoon. **Re-run first. Always.**
 
-**Owed.** The solve is exact and the lock holds to 1.4 per cent of a leg, on ground nobody has
+- **The demo's own walk clip has no stance phase, and that is the remaining limit.** `gait()`
+  swings thighs about a straight leg, so the foot never dwells and a lock has nothing to hold
+  during locomotion. `--ik-probe lock` plays the committed `strut_walk.fbx` for exactly that
+  reason. `--speed 1.2` makes the feature visible (22,643 px against `--no-lock`) by dropping
+  the gear into the idle/walk blend, where the feet are slow enough to be labelled -- which is
+  demonstrating it around the edges of the problem rather than through it. Giving the generated
+  clips a real stance is the next thing this fixture wants.
+
+**Owed.** The solve is exact and the lock holds to 0.4 per cent of a leg, on ground nobody has
 walked across at a speed the animation agrees with.
 
 ### The grotto, the ocean and swimming

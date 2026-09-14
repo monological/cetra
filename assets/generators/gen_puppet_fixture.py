@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate assets/puppet.gltf + puppet.cscn -- the animation blending instrument (spec 12.1).
+"""Generate assets/models/puppet.gltf + assets/scenes/puppet.cscn -- the animation blending instrument (spec 12.1).
 
-A figure of twenty rigid boxes, one per bone, on the `cetra_rig:` bone names
-the committed walk cycle (assets/strut_walk.fbx) carries, so that clip binds to
+A figure of twenty-two rigid boxes, one per bone, on the `cetra_rig:` bone names
+the committed walk cycle (assets/models/strut_walk.fbx) carries, so that clip binds to
 this rig by exact name. Every clip the blending gates read is authored HERE, in
 closed form, so what a gate expects is a number this file states and not a
 frame somebody looked at.
