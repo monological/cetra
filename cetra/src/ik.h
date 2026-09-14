@@ -44,8 +44,15 @@ typedef struct IkFootParams {
     // reason: it carries across rigs and scales where a metre does not. 0 disables the
     // drop entirely.
     float max_pelvis_drop;
-    float teleport_distance; // a target jumping farther than this snaps instead of easing
-    float blend_rate;        // 1/seconds the applied target eases toward the requested one
+    float teleport_distance; // a target jumping farther than this snaps instead of blending
+    // Seconds over which a transition's discontinuity is blended away (spec 12.9). The
+    // offset at a lock or a release is captured in position AND velocity and decays
+    // through cubic basis weights, so once it has decayed the applied target IS the
+    // requested one. A first-order ease never reaches that: against a target moving at
+    // the walk speed it sits a constant distance behind for as long as the motion lasts,
+    // which measured 0.039 m and was the whole of the slide left after the lock landed.
+    // 0 applies the requested target verbatim.
+    float transition_time;
     // How far above its target an animated foot may be and still be planted, as a
     // fraction of the leg's own length, so it carries across rigs and scales. Past it
     // the clip has lifted the foot deliberately and the solve lets go.
@@ -122,6 +129,23 @@ typedef struct IkFoot {
     // the caller has to supply; see ik_set_world.
     bool locked;
     vec3 contact_world;
+    // True for the one frame between deciding to lock and having a point to lock to. The
+    // contact is captured AFTER the solve, from where the foot actually ended up, because
+    // the decision is made from the clip's pose and the frame then moves the foot off it
+    // -- captured before, the lock spends its first ticks dragging the foot onto a point
+    // it was never at, which is travel across the ground and reads as exactly the slide
+    // the feature exists to remove.
+    bool contact_pending;
+    // The inertialization (spec 12.9): the discontinuity captured at the last transition
+    // and how long it has been decaying. offset_vel is the half a position-only blend
+    // drops, and dropping it is why a foot used to arrive at a lock with the wrong speed
+    // and be dragged straight afterwards.
+    vec3 offset_pos;
+    vec3 offset_vel;
+    float since_transition;
+    vec3 applied_prev; // the last solve's applied target, for the output's own velocity
+    vec3 want_prev;    // and the last requested one, for the input's
+    bool has_want_prev;
     // Everything hanging off the ankle -- toes, and whatever else a rig puts there --
     // resolved once at ik_add_foot. The solve rotates these rigidly with the ankle, or
     // they keep the pose the clip gave them while the ankle moves out from under them.
