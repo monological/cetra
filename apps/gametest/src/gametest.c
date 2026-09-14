@@ -900,10 +900,16 @@ static void build_shaft(Game* game) {
      * Cooked, and no longer optional.
      *
      * Erosion is O(res^2 * iterations), so taking the field from 257 to 1025 to carry the
-     * wider land multiplied this sim by sixteen and put fourteen seconds in front of every
-     * launch. Nothing else in startup is close; the whole rest of it is sub-second. A hit
-     * reloads the four worn planes off disk and skips the sim outright, so only the first
-     * run after a shape change pays -- which is what lets the land be this large at all.
+     * wider land multiplied this sim by sixteen. A hit reloads the four worn planes off
+     * disk and skips the sim outright, so only the first run after a shape change pays --
+     * which is what lets the land be this large at all.
+     *
+     * The recipe name must fit COOK_RECIPE_MAX, which COUNTS THE NUL: 23 characters, not
+     * 24. cook_key refuses a longer one and hands back an invalid key, and that refusal is
+     * silent in every counter the summary prints -- fetch and store both return before
+     * they reach the miss, the refusal or the store failure -- so an over-long name
+     * subtracts this site from the report rather than failing anywhere in it. The name
+     * here was one byte over when it was written, and cooked nothing at all.
      *
      * The key folds the SEEDED HEIGHT PLANE rather than the parameters that produced it.
      * The bytes capture the bowl profile, both warps, the ridge, the plain roll and the
@@ -914,7 +920,7 @@ static void build_shaft(Game* game) {
      * while contradicting the invariant. The extent folds too, since it decides the cell
      * size the talus threshold is measured against.
      */
-    CookKey ek = cook_key("gametest-shaft-erosion/1");
+    CookKey ek = cook_key("shaft-erosion/1");
     cook_key_i32(&ek, SHAFT_FIELD_RES);
     cook_key_i32(&ek, ep.iterations);
     cook_key_f32(&ek, ep.dt);
