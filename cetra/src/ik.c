@@ -39,15 +39,16 @@ IkFootParams ik_default_params(void) {
     // this puppet's walk carries the ankle about 0.15 over a stride -- so a foot is
     // fully released around halfway up its swing and planted again near contact.
     p.plant_fraction = 0.10f;
-    // A toe within 5 per cent of a leg of the ground and moving up or down slower than
-    // a quarter of a leg per second is down. On this puppet that is 0.041 m and 0.205
-    // m/s, against a walk whose toe lifts 0.165 m in about a fifth of a second -- so a
-    // swinging foot clears both by a wide margin and neither is a hair trigger.
+    // An ANKLE within 5 per cent of a leg of the ground it was handed, and moving up or
+    // down slower than a quarter of a leg per second, is down. On this puppet that is
+    // 0.041 m and 0.205 m/s, against a walk whose ankle lifts 0.149 m in about a fifth of
+    // a second -- so a swinging foot clears both by a wide margin and neither is a hair
+    // trigger. The ankle and not the toe: see ik_contact_label for the measurement.
     p.contact_height = 0.05f;
     p.contact_speed = 0.25f;
-    // A fifth of a leg of displacement is still close enough to the animation to pin to;
-    // past half a leg the clip has walked away from the point and straining the chain to
-    // hold it is worse than letting go. The gap between them is the hysteresis, and it is
+    // 15 per cent of a leg of displacement is still close enough to the animation to pin
+    // to; past 45 per cent the clip has walked away from the point and straining the chain
+    // to hold it is worse than letting go. The gap between them is the hysteresis, and it is
     // wide because the cost of the two errors is not symmetric: an early unlock is a
     // little sliding, a flapping lock is a visible stutter.
     p.lock_distance = 0.15f;
@@ -62,6 +63,7 @@ void ik_set_world(IkSystem* system, mat4 model_to_world) {
     }
     glm_mat4_copy(model_to_world, system->model_to_world);
     glm_mat4_inv(system->model_to_world, system->world_to_model);
+    system->world_set = true;
 }
 
 IkSystem* create_ik_system(Skeleton* skeleton) {
@@ -131,10 +133,17 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
     // contact.
     foot->toe_index = ankle;
 
-    // The ankle's PROPER descendants: the subtree less the ankle itself, which the
-    // solve writes explicitly. Resolved here because the chain cannot change afterwards.
-    skeleton_mark_subtree(skeleton, ankle, foot->below_ankle);
-    foot->below_ankle[ankle] = 0;
+    // The ankle's PROPER descendants: the subtree less the ankle itself, which the solve
+    // writes explicitly. Resolved here, as a list rather than the mask the shared walk
+    // returns, because the chain cannot change afterwards and the solve sweeps this twice
+    // a frame.
+    uint8_t mask[MAX_BONES];
+    skeleton_mark_subtree(skeleton, ankle, mask);
+    mask[ankle] = 0;
+    foot->below_count = 0;
+    for (size_t b = 0; b < skeleton->bone_count && b < MAX_BONES; b++)
+        if (mask[b])
+            foot->below_ankle[foot->below_count++] = (uint8_t)b;
 
     glm_vec3_copy((float*)knee_forward, foot->pole_local);
     if (glm_vec3_norm(foot->pole_local) < IK_DIR_EPS)
@@ -297,10 +306,9 @@ void ik_reset(IkSystem* system) {
     // unlock distance would release a frame later after one frame of a leg reaching for
     // the place it used to stand.
     for (size_t i = 0; i < system->foot_count; i++) {
-        system->feet[i].has_clip_prev = false;
-        system->feet[i].has_want_prev = false;
-        system->feet[i].locked = false;
-        system->feet[i].contact_pending = false;
+        system->feet[i].has_prev = false;
+        system->feet[i].has_solved_foot = false;
+        system->feet[i].lock = IK_LOCK_OFF;
     }
 }
 
@@ -317,26 +325,27 @@ static void rotate_global(mat4 m, versor q, const vec3 head) {
 // This is not re-accumulation and cannot be: ik_solve deliberately takes no
 // local_transforms (the header says why). A rigid rotation about a point needs only the
 // globals, which is exactly what a bone below the ankle undergoes.
-static void rotate_below(mat4* g, const uint8_t* mask, size_t count, versor q, const vec3 pivot) {
+static void rotate_below(mat4* g, const IkFoot* f, versor q, const vec3 pivot) {
+    if (f->below_count == 0)
+        return; // a rig with nothing under the ankle pays for this feature exactly nothing
     mat4 r;
     glm_quat_mat4(q, r);
-    for (size_t i = 0; i < count && i < MAX_BONES; i++) {
-        if (!mask[i])
-            continue;
-        vec3 rel;
-        glm_vec3_sub(g[i][3], (float*)pivot, rel);
-        glm_mat4_mulv3(r, rel, 0.0f, rel);
-        mat4 turned;
-        glm_mat4_mul(r, g[i], turned);
-        glm_mat4_copy(turned, g[i]);
-        glm_vec3_add((float*)pivot, rel, g[i][3]);
+    for (size_t k = 0; k < f->below_count; k++) {
+        const int i = f->below_ankle[k];
+        // The head this bone ends up at, which the three chain writes state directly and a
+        // descendant has to derive: the pivot plus its rotated offset from the pivot.
+        vec3 head;
+        glm_vec3_sub(g[i][3], (float*)pivot, head);
+        glm_mat4_mulv3(r, head, 0.0f, head);
+        glm_vec3_add((float*)pivot, head, head);
+        rotate_global(g[i], q, head);
     }
 }
 
 // Rotate hip and knee so the ankle lands on `target`. Model space throughout, and only
 // this chain's three bones are written. A degenerate segment leaves the chain at its
 // animated pose, the way a spring bone follows rigidly below its own epsilon.
-static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target, size_t bone_count) {
+static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target) {
     vec3 a, b, c;
     glm_vec3_copy(g[f->hip_index][3], a);
     glm_vec3_copy(g[f->knee_index][3], b);
@@ -449,13 +458,13 @@ static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target, size_t b
     rotate_global(g[f->ankle_index], q_hip, ankle_carried);
     // The thigh swings the whole limb, and the foot is part of the limb. About the HIP,
     // which is what the three writes above turn around.
-    rotate_below(g, f->below_ankle, bone_count, q_hip, a);
+    rotate_below(g, f, q_hip, a);
 
     versor q_knee;
     glm_quat_from_vecs(shin_from, shin_to, q_knee);
     rotate_global(g[f->knee_index], q_knee, knee_new);
     rotate_global(g[f->ankle_index], q_knee, ankle_new);
-    rotate_below(g, f->below_ankle, bone_count, q_knee, knee_new);
+    rotate_below(g, f, q_knee, knee_new);
 }
 
 // How much of this foot's plant actually applies: its requested weight, faded out as
@@ -466,8 +475,8 @@ static void solve_two_bone(mat4* g, const IkFoot* f, const vec3 target, size_t b
 // solve had released still dragged the hips down, the whole body bobbed, and every
 // ankle moved with it. At frame rate that reads as legs scissoring in and out.
 //
-// Measured against `globals`, which at this point in the frame still hold the clip's
-// own pose. A caller cannot answer this: by the time it runs they hold the last solve.
+// Measured where the globals still hold the clip's own pose for this frame. A caller
+// cannot answer this: by the time it runs they hold the last solve.
 static float ik_effective_weight(const IkSystem* system, const IkFoot* f, float ankle_y,
                                  float leg) {
     if (f->weight <= 0.0f)
@@ -482,7 +491,7 @@ static float ik_effective_weight(const IkSystem* system, const IkFoot* f, float 
     // part-faded anyway. Letting it fade costs the whole feature: measured, the fade ran
     // the first five ticks of every stance at 0.63 to 1.00 weight, the foot could not hold
     // the point it had just pinned, and the slide came out WORSE than planting's.
-    if (f->locked)
+    if (f->lock != IK_LOCK_OFF)
         return f->weight;
 
     const float range = system->params.plant_fraction * leg;
@@ -497,9 +506,9 @@ static float ik_effective_weight(const IkSystem* system, const IkFoot* f, float 
     return fall > 0.0f ? f->weight * fall : 0.0f;
 }
 
-// Whether the CLIP has this foot on the ground: the toe low enough, and not travelling
+// Whether the CLIP has this foot on the ground: the ankle low enough, and not travelling
 // vertically. A statement about the animation rather than about the solve, and answered
-// here for the same reason the release is -- these globals are still the clip's own pose.
+// here for the same reason the release is -- this pose is still the clip's own.
 //
 // It is NOT the release test wearing a different name, and the two are deliberately
 // separate. The release asks how much IK to apply and fades; this asks a yes or no
@@ -515,25 +524,23 @@ static float ik_effective_weight(const IkSystem* system, const IkFoot* f, float 
 // into two. The ankle at the same instants reads 0.12 airborne against 0.085 planted,
 // which separates cleanly. The toe stays the thing a lock HOLDS, because that is about
 // where the contact is and not about how it is found.
-static bool ik_contact_label(const IkSystem* system, const IkFoot* f, mat4* globals, float leg,
+static bool ik_contact_label(const IkSystem* system, const IkFoot* f, float ankle_y, float leg,
                              float delta_time) {
     if (leg <= 0.0f)
         return false;
-    vec3 ankle;
-    glm_vec3_copy(globals[f->ankle_index][3], ankle);
 
     // Against the target the caller set rather than against a plane, so a foot on a step
     // is judged by its own tread and not by the one the other foot is on. The target is
     // already the ankle's grounded height -- ik_foot_set_ground folded sole_offset in --
     // so this difference is the lift and needs no further correction.
-    if (ankle[1] - f->target[1] > system->params.contact_height * leg)
+    if (ankle_y - f->target[1] > system->params.contact_height * leg)
         return false;
 
     // Speed needs two solves to exist. Before the second, height alone decides, which
     // is the right default: the alternative calls every foot airborne on the frame a
     // rig is created, and a lock that begins one frame late is visible.
-    if (f->has_clip_prev && delta_time > 0.0f) {
-        const float rise = fabsf(ankle[1] - f->clip_ankle_prev[1]) / delta_time;
+    if (f->has_prev && delta_time > 0.0f) {
+        const float rise = fabsf(ankle_y - f->prev_ankle_y) / delta_time;
         if (rise > system->params.contact_speed * leg)
             return false;
     }
@@ -547,13 +554,16 @@ static bool ik_contact_label(const IkSystem* system, const IkFoot* f, mat4* glob
 // and neither knows nor cares whether the point came from a live ray or from a contact
 // frozen four frames ago. Locking is a layer in FRONT of solve_two_bone, not a change
 // to it.
-// Returns true on the frame a contact is PINNED, which the caller takes verbatim instead
-// of easing into. Easing into a lock is the one case where the ease is wrong: by then
-// applied_target has spent the whole swing chasing a fast-moving foot and is a long way
-// behind it, so the lock inherits that lag and spends the stance paying it off -- measured
-// at 0.13 m of world travel before this, against 0.005 m once converged. The label has
-// already established the foot is at that point; the ease would be smoothing a
-// discontinuity that is not there.
+// Returns true when the lock CHANGED state this frame -- pinned or released -- which is
+// what the caller captures a transition on. Both are discontinuities in `want`: a pin
+// swaps the caller's target for a held point, a release swaps it back.
+//
+// Every distance here is MODEL space, which is the space `leg` is measured in and the
+// space every threshold in this file is a fraction of. The held contact is the one thing
+// stored in world -- that is its entire purpose -- so it is converted IN, once, rather
+// than the live toe being converted out. Tested the other way round the comparison is a
+// world distance against a model threshold, and on a rig whose node carries a scale the
+// threshold is silently multiplied by it: at scale 2 the documented 0.45 of a leg is 0.225.
 static bool ik_lock_update(IkSystem* system, IkFoot* f, mat4* globals, float leg, vec3 want) {
     glm_vec3_copy(f->target, want);
     // No weight, no contact. weight is the caller saying it is planting this foot at all,
@@ -561,59 +571,66 @@ static bool ik_lock_update(IkSystem* system, IkFoot* f, mat4* globals, float leg
     // target is the ankle's own position at weight 0, which would pin a contact in
     // mid-air. It also keeps a lock out of the frames before a caller has established
     // where the rig stands, since those are the frames it holds the weight at zero.
-    if (system->params.lock_distance <= 0.0f || f->weight <= 0.0f) {
-        const bool was = f->locked;
-        f->locked = false;
-        f->contact_pending = false;
+    // No weight, no contact, and no world, no contact. weight is the caller saying it is
+    // planting this foot at all -- during a jump the target is the ankle's own position at
+    // weight 0, which would pin a contact in mid-air. world_set is the caller's other
+    // obligation, and pinning without it holds a MODEL point, which is worse than not
+    // locking: the foot welds to the body instead of to the ground.
+    if (system->params.lock_distance <= 0.0f || f->weight <= 0.0f || !system->world_set) {
+        const bool was = f->lock != IK_LOCK_OFF;
+        f->lock = IK_LOCK_OFF;
         return was;
     }
-    bool pinned = false, released = false;
+    bool changed = false;
 
     vec3 ankle, toe, foot_vec;
     glm_vec3_copy(globals[f->ankle_index][3], ankle);
     glm_vec3_copy(globals[f->toe_index][3], toe);
-    // This frame's ankle-to-toe vector, carrying the foot's current orientation. Read
-    // live rather than from the bind pose, so a foot the clip has pitched onto its toe
-    // converts through the pitch it actually has.
-    glm_vec3_sub(toe, ankle, foot_vec);
+    // The ankle-to-toe vector, carrying the foot's orientation. From the last SOLVE where
+    // there is one -- see solved_foot_vec; the live pre-solve vector is wrong by the
+    // rotation the solve is about to apply. Live only before the first solve, and from the
+    // bind pose never: a foot the clip has pitched onto its toe converts through the pitch
+    // it actually has.
+    if (f->has_solved_foot)
+        glm_vec3_copy(f->solved_foot_vec, foot_vec);
+    else
+        glm_vec3_sub(toe, ankle, foot_vec);
 
-    if (f->locked && !f->contact_pending) {
-        vec3 toe_world;
-        glm_mat4_mulv3(system->model_to_world, toe, 1.0f, toe_world);
+    if (f->lock == IK_LOCK_HELD) {
+        // The held point, back in model space. Computed once and used by both the release
+        // test and the target below it.
+        vec3 contact_model;
+        glm_mat4_mulv3(system->world_to_model, f->contact_world, 1.0f, contact_model);
         // Either condition releases: the clip picked the foot up, or it has carried the
         // foot so far from the pinned point that holding it would strain the chain. The
         // second is what makes an unreachable lock a non-event rather than a stretch.
         if (!f->in_contact ||
-            glm_vec3_distance(toe_world, f->contact_world) > system->params.unlock_distance * leg) {
-            f->locked = false;
-            released = true;
+            glm_vec3_distance(toe, contact_model) > system->params.unlock_distance * leg) {
+            f->lock = IK_LOCK_OFF;
+            changed = true;
+        } else {
+            // The pinned toe less this frame's foot vector: the ankle that puts the toe
+            // where it was left. The heel is free to lift, which is what preserves the
+            // clip's own toe-off. Exact only to the chain rotation the solve is about to
+            // apply, since foot_vec is read before it.
+            glm_vec3_sub(contact_model, foot_vec, want);
         }
-    } else if (f->in_contact) {
+    } else if (f->in_contact &&
+               glm_vec3_distance(ankle, f->target) <= system->params.lock_distance * leg) {
         // How far the solve is already displacing this foot from where the animation put
         // it. Pinning while that is large welds the foot at a place the clip disagrees
-        // with, and the correction gets paid on every frame of the stance instead of
-        // once at the transition.
-        if (glm_vec3_distance(ankle, f->target) <= system->params.lock_distance * leg) {
-            // Decided here, captured after the solve. This frame keeps the caller's
-            // target, so the pin itself moves nothing and the point taken at the end of
-            // it is where the foot genuinely is -- no offset to blend, and the height
-            // clamp the method prescribes is unnecessary because the solve has already
-            // put the ankle on the ground it was handed.
-            f->locked = true;
-            f->contact_pending = true;
-            pinned = true;
-        }
+        // with, and the correction gets paid on every frame of the stance instead of once
+        // at the transition.
+        //
+        // Decided here, captured after the solve. This frame keeps the caller's target, so
+        // the pin itself moves nothing and the point taken at the end of it is where the
+        // foot genuinely is -- no offset to blend, and the height clamp the method
+        // prescribes is unnecessary because the solve has already put the ankle on the
+        // ground it was handed.
+        f->lock = IK_LOCK_PINNING;
+        changed = true;
     }
-
-    if (f->locked && !f->contact_pending) {
-        // The pinned toe, back in model space, less this frame's foot vector: the ankle
-        // that puts the toe where it was left. The heel is free to lift, which is what
-        // preserves the clip's own toe-off.
-        vec3 contact_model;
-        glm_mat4_mulv3(system->world_to_model, f->contact_world, 1.0f, contact_model);
-        glm_vec3_sub(contact_model, foot_vec, want);
-    }
-    return pinned || released;
+    return changed;
 }
 
 // The captured discontinuity, decayed. A cubic Hermite from (offset_pos, offset_vel) at
@@ -638,91 +655,114 @@ static void ik_inertial_offset(const IkFoot* f, float span, vec3 out) {
     glm_vec3_add(p, v, out);
 }
 
+// Move `applied_target` toward `want`, absorbing a transition's discontinuity. Three
+// cases and they are genuinely three: a target that TELEPORTED is taken verbatim, because
+// the foot is meant to appear somewhere else rather than travel there; a lock or release
+// CHANGES what `want` means, so the discontinuity is captured and decayed; and otherwise
+// there is nothing to absorb and the caller's target applies exactly.
+//
+// That last case is why the exponential ease this replaced is gone rather than reduced:
+// once an offset has decayed the applied target IS the requested one, where an ease is
+// never finished and against a moving target sits a constant distance behind it forever.
+// The cost is that an unlocked foot now follows its target unfiltered -- a caller whose
+// ground query is noisy filters it, because this no longer will.
+static void ik_advance_applied(IkSystem* system, IkFoot* f, const vec3 want, bool changed,
+                               float delta_time) {
+    const float span = system->params.transition_time;
+    const bool snap =
+        system->needs_reset || !f->has_applied ||
+        glm_vec3_distance((float*)want, f->applied_target) > system->params.teleport_distance;
+
+    if (snap) {
+        glm_vec3_zero(f->offset_pos);
+        glm_vec3_zero(f->offset_vel);
+        f->since_transition = span;
+        f->has_applied = true;
+    } else if (changed && span > 0.0f) {
+        // Where the output is against where the input has just jumped to, in position and
+        // in velocity. The input's velocity comes from the CALLER's target and not from
+        // `want`: the caller writes one every frame whatever the lock is doing, so it is
+        // never differenced across the discontinuity being captured. Differenced across
+        // it, the captured velocity is the jump over one tick, the cap below binds every
+        // single time at exactly span/delta_time, and the blend degenerates into a fixed
+        // reshaping of the position curve that no longer carries any measured velocity.
+        vec3 out_vel = {0.0f, 0.0f, 0.0f}, in_vel = {0.0f, 0.0f, 0.0f};
+        if (delta_time > 0.0f) {
+            glm_vec3_sub(f->applied_target, f->applied_prev, out_vel);
+            glm_vec3_scale(out_vel, 1.0f / delta_time, out_vel);
+            if (f->has_prev) {
+                glm_vec3_sub((float*)f->target, f->target_prev, in_vel);
+                glm_vec3_scale(in_vel, 1.0f / delta_time, in_vel);
+            }
+        }
+        glm_vec3_sub(f->applied_target, (float*)want, f->offset_pos);
+        glm_vec3_sub(out_vel, in_vel, f->offset_vel);
+        // The velocity term may not carry the output FURTHER from the target than the
+        // position offset already is. A pin is captured at a position offset of very
+        // nearly zero -- the pinned point is where the foot already was -- so uncapped a
+        // large velocity takes the foot out and brings it back, which is the slide the
+        // lock exists to remove, reintroduced by the thing meant to smooth it.
+        for (int k = 0; k < 3; k++) {
+            const float cap = fabsf(f->offset_pos[k]) / span;
+            f->offset_vel[k] = glm_clamp(f->offset_vel[k], -cap, cap);
+        }
+        f->since_transition = 0.0f;
+    } else {
+        f->since_transition += delta_time;
+    }
+
+    glm_vec3_copy(f->applied_target, f->applied_prev);
+    // Zeroed for cppcheck, which reads an out-parameter as used before set.
+    vec3 offset = {0.0f, 0.0f, 0.0f};
+    ik_inertial_offset(f, span, offset);
+    glm_vec3_add((float*)want, offset, f->applied_target);
+}
+
 void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
     if (!system || !system->enabled || system->foot_count == 0 || !global_transforms)
         return;
 
     if (delta_time < 0.0f)
         delta_time = 0.0f;
-    const float span = system->params.transition_time;
 
-    // Blend, or snap. A target that jumped farther than teleport_distance did not move
-    // -- the thing standing on it did -- and blending across that draws a foot through
-    // the world instead of putting it down somewhere else.
+    // Said once rather than behaving as one threshold in silence. The gap between the two
+    // IS the hysteresis (see the header); inverted, a lock releases sooner than it forms
+    // and flips every frame, which reads as a stutter nobody would trace to a parameter.
+    if (system->params.lock_distance > system->params.unlock_distance &&
+        !system->warned_thresholds) {
+        log_error("ik_solve: lock_distance %.3f exceeds unlock_distance %.3f; there is no "
+                  "hysteresis gap and a contact will flip every frame",
+                  (double)system->params.lock_distance, (double)system->params.unlock_distance);
+        system->warned_thresholds = true;
+    }
+
+    // One pass per foot, in the one window where `global_transforms` still hold the clip's
+    // own pose: label the contact, settle the lock, move the applied target, settle the
+    // weight, record what next frame differences against. Everything after this loop reads
+    // what it left rather than the globals, which is what stops the pelvis drop and the
+    // solve disagreeing about a foot (see ik_effective_weight).
     for (size_t i = 0; i < system->foot_count; i++) {
         IkFoot* f = &system->feet[i];
 
-        // The label and then the lock, both BEFORE the ease, because both read the
-        // globals as the clip left them and the ease is what turns the answer into a
-        // target. `want` is the caller's target, or the pinned contact's, and from here
-        // down nothing else needs to know which.
         vec3 hip, knee, ankle, thigh, shin;
         glm_vec3_copy(global_transforms[f->hip_index][3], hip);
         glm_vec3_copy(global_transforms[f->knee_index][3], knee);
         glm_vec3_copy(global_transforms[f->ankle_index][3], ankle);
         glm_vec3_sub(knee, hip, thigh);
         glm_vec3_sub(ankle, knee, shin);
-        const float leg = glm_vec3_norm(thigh) + glm_vec3_norm(shin);
+        // Settled once and stored, because the pelvis drop needs the same number from the
+        // same unmodified globals a hundred lines below. Derived twice it is two spellings
+        // of the quantity every threshold in this file is a fraction of, with nothing
+        // saying they must agree.
+        f->leg = glm_vec3_norm(thigh) + glm_vec3_norm(shin);
 
-        f->in_contact = ik_contact_label(system, f, global_transforms, leg, delta_time);
+        f->in_contact = ik_contact_label(system, f, ankle[1], f->leg, delta_time);
         // Zeroed because cppcheck cannot see through an out-parameter and reads it as
         // used before set; ik_lock_update writes it on its first line in every path.
         vec3 want = {0.0f, 0.0f, 0.0f};
-        const bool changed = ik_lock_update(system, f, global_transforms, leg, want);
-
-        // The requested target's own velocity, taken before anything is blended onto it,
-        // so a transition can capture the MISMATCH in velocity and not just in position.
-        vec3 want_vel = {0.0f, 0.0f, 0.0f};
-        if (f->has_want_prev && delta_time > 0.0f) {
-            glm_vec3_sub(want, f->want_prev, want_vel);
-            glm_vec3_scale(want_vel, 1.0f / delta_time, want_vel);
-        }
-
-        const bool snap =
-            system->needs_reset || !f->has_applied ||
-            glm_vec3_distance(want, f->applied_target) > system->params.teleport_distance;
-        if (snap) {
-            // A hard snap carries NO offset. This is the case where the foot is meant to
-            // appear somewhere else rather than travel there, so smoothing it is the one
-            // thing that would be wrong.
-            glm_vec3_zero(f->offset_pos);
-            glm_vec3_zero(f->offset_vel);
-            f->since_transition = span;
-            f->has_applied = true;
-        } else if (changed && span > 0.0f) {
-            // A lock or a release. Capture where the output is against where the input
-            // has just jumped to, in position and in velocity, and let it decay.
-            vec3 out_vel = {0.0f, 0.0f, 0.0f};
-            if (delta_time > 0.0f) {
-                glm_vec3_sub(f->applied_target, f->applied_prev, out_vel);
-                glm_vec3_scale(out_vel, 1.0f / delta_time, out_vel);
-            }
-            glm_vec3_sub(f->applied_target, want, f->offset_pos);
-            glm_vec3_sub(out_vel, want_vel, f->offset_vel);
-            // The velocity term may not carry the output FURTHER from the target than the
-            // position offset already is. A lock is captured at a position offset of very
-            // nearly zero -- the pinned point is the grounded ankle, which is what the
-            // caller's target already was -- while the velocity mismatch is the whole of
-            // the swing speed, so uncapped the blend takes the foot out and brings it
-            // back: measured at 0.030 m of excursion, which is the slide the lock exists
-            // to remove, reintroduced by the thing meant to smooth it. Capped, velocity
-            // continuity still has its effect wherever there is a real offset to blend.
-            for (int k = 0; k < 3; k++) {
-                const float cap = fabsf(f->offset_pos[k]) / span;
-                f->offset_vel[k] = glm_clamp(f->offset_vel[k], -cap, cap);
-            }
-            f->since_transition = 0.0f;
-        } else {
-            f->since_transition += delta_time;
-        }
-
-        glm_vec3_copy(f->applied_target, f->applied_prev);
-        // Zeroed for cppcheck, which reads an out-parameter as used before set.
-        vec3 offset = {0.0f, 0.0f, 0.0f};
-        ik_inertial_offset(f, span, offset);
-        glm_vec3_add(want, offset, f->applied_target);
-        glm_vec3_copy(want, f->want_prev);
-        f->has_want_prev = true;
+        glm_vec3_copy(f->target, want);
+        const bool changed = ik_lock_update(system, f, global_transforms, f->leg, want);
+        ik_advance_applied(system, f, want, changed, delta_time);
 
         // Settled HERE, once, and read unchanged by both consumers below. It has to be
         // here rather than in either of them: the pelvis drop mutates every ankle in
@@ -731,15 +771,15 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         // solved from another. This loop is the last point at which the globals are
         // still the clip's own pose, which is the only moment the question has a true
         // answer (see the header).
-        f->applied_weight = ik_effective_weight(system, f, ankle[1], leg);
+        f->applied_weight = ik_effective_weight(system, f, ankle[1], f->leg);
 
-        // The pose next frame's contact speed is differenced against. Recorded even for
-        // a foot at weight 0: whether the clip has a foot down is not conditional on
-        // whether IK is being applied to it, and a history that went blank while a
-        // character was airborne would have to be re-established on landing, one frame
-        // late.
-        glm_vec3_copy(ankle, f->clip_ankle_prev);
-        f->has_clip_prev = true;
+        // What next frame differences against. Recorded even for a foot at weight 0:
+        // whether the clip has a foot down is not conditional on whether IK is being
+        // applied to it, and a history that went blank while a character was airborne
+        // would have to be re-established on landing, one frame late.
+        f->prev_ankle_y = ankle[1];
+        glm_vec3_copy(f->target, f->target_prev);
+        f->has_prev = true;
     }
 
     // The pelvis drop, before any chain is solved, so every chain solves against where
@@ -764,18 +804,16 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
             const float weight = f->applied_weight;
             if (weight <= 0.0f)
                 continue; // released, or unweighted: it must not drag the hips down
-            vec3 a, b, c, ab, bc;
+            vec3 a;
             glm_vec3_copy(global_transforms[f->hip_index][3], a);
-            glm_vec3_copy(global_transforms[f->knee_index][3], b);
-            glm_vec3_copy(global_transforms[f->ankle_index][3], c);
-            glm_vec3_sub(b, a, ab);
-            glm_vec3_sub(c, b, bc);
-            const float reach = glm_vec3_norm(ab) + glm_vec3_norm(bc);
+            // f->leg, not a second derivation: nothing has written global_transforms since
+            // the loop above settled it, so the two would be bit-identical by construction
+            // and drift apart the day one of them changes.
             const float deficit =
-                (glm_vec3_distance((float*)f->applied_target, a) - reach) * weight;
+                (glm_vec3_distance((float*)f->applied_target, a) - f->leg) * weight;
             if (deficit > worst) {
                 worst = deficit;
-                worst_leg = reach;
+                worst_leg = f->leg;
             }
         }
         if (worst > 0.0f) {
@@ -802,7 +840,7 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         vec3 ankle, effective;
         glm_vec3_copy(global_transforms[f->ankle_index][3], ankle);
         glm_vec3_lerp(ankle, (float*)f->applied_target, weight, effective);
-        solve_two_bone(global_transforms, f, effective, system->skeleton->bone_count);
+        solve_two_bone(global_transforms, f, effective);
     }
 
     // The contacts decided this frame, captured now that the feet are where they will be
@@ -813,11 +851,17 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
     // target was used.
     for (size_t i = 0; i < system->foot_count; i++) {
         IkFoot* f = &system->feet[i];
-        if (!f->contact_pending)
+        // Every foot, not only a pinning one: this is what next frame's held target is
+        // derived through, and a lock that formed on a frame with no recorded vector would
+        // fall back to the pre-solve one and pop.
+        glm_vec3_sub(global_transforms[f->toe_index][3], global_transforms[f->ankle_index][3],
+                     f->solved_foot_vec);
+        f->has_solved_foot = true;
+        if (f->lock != IK_LOCK_PINNING)
             continue;
         glm_mat4_mulv3(system->model_to_world, global_transforms[f->toe_index][3], 1.0f,
                        f->contact_world);
-        f->contact_pending = false;
+        f->lock = IK_LOCK_HELD;
     }
 
     system->needs_reset = false;

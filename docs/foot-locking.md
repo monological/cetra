@@ -54,9 +54,9 @@ further than `unlockDistance` from the clip's foot.
 `unlockDistance` is deliberately **larger** than `lockDistance`. That gap is hysteresis,
 and its purpose is to stop the state flipping back and forth frame to frame.
 
-> This is the piece our implementation is missing outright. `plant_fraction` is a single
-> threshold with no hysteresis, so the decision is re-made from scratch every frame and
-> can oscillate — which is what "scissoring in and out very quickly" looks like.
+> **Was:** `plant_fraction` was a single threshold with no hysteresis, so the decision was
+> re-made from scratch every frame and could oscillate. Spec 12.9 added the pair; see the
+> last section.
 
 ## Holding the lock
 
@@ -75,9 +75,9 @@ output being the input plus the decaying offset terms.
 Locking captures the difference between the animated trajectory and the static contact;
 unlocking captures the reverse, easing the foot back onto the animation.
 
-> Ours eases `applied_target` toward the requested target with a plain position lerp at
-> `blend_rate`. That is continuous in position and discontinuous in velocity, so a foot
-> arrives at a lock with the wrong speed and has to be dragged straight afterwards.
+> **Was:** `applied_target` eased toward the requested target with a plain position lerp at
+> `blend_rate` — continuous in position and discontinuous in velocity. `blend_rate` is gone;
+> see the last section for what replaced it and for the one thing the replacement needs.
 
 ## How the IK solve relates to it
 
@@ -95,14 +95,15 @@ locking would sit in front of it without disturbing the solver.
   to avoid hyper-extension produces "T-Rex" posturing, and the author's judgement is that
   *"a little bit of sliding is better than breaking the source animation."*
 
-  **This indicts our `max_pelvis_drop` directly.** We drop the pelvis whenever a foot
-  cannot reach, which is exactly the remedy being warned against.
+  **This indicted our `max_pelvis_drop` directly**, and 12.9 halved it and left the foot
+  short past the cap — but REFUSED the soft clamp, on arithmetic peculiar to a rig that binds
+  straight. Both are in the last section.
 
 - **Lock the toe, not the heel.** The toe is the part in contact roughly nine times out of
   ten; heel-only contact is rare and unstable, and leaving the heel free preserves the
-  animation. *Our rig has no toe bone* — the chain ends at `LeftFoot`/`RightFoot` — so
-  ankle-locking is all that is available to us, and that is a real limitation rather than
-  a simplification.
+  animation. *Our rig had no toe bone* — the chain ended at `LeftFoot`/`RightFoot` — which
+  spec 12.9 fixed by generating one, and the lock holds there. Contact is still DETECTED at
+  the ankle, for a measured reason the last section gives.
 
 - **Unreachable locks** are handled by the `unlockDistance` threshold: if the animation
   travels too far from the contact point, the lock simply releases rather than straining
@@ -134,7 +135,7 @@ locking would sit in front of it without disturbing the solver.
 
 **Implemented.** The five gaps below are closed; each entry says how, and where the shipped
 form differs from the method above. The numbers are `ik-slide`'s: a stance foot travels
-**0.0112 m** across the ground where planting left **0.0783 m**, over the same ticks, with the
+**0.0034 m** across the ground where planting left **0.0783 m**, over the same ticks, with the
 body moving at the speed the clip's own feet imply.
 
 1. **The contact signal is derived at RUNTIME, from the pose at the solve seam, and judged at
@@ -151,8 +152,13 @@ body moving at the speed the clip's own feet imply.
      cleanly. The toe is still what a lock HOLDS — that is about where the contact is, not how
      it is found.
 2. **Hysteresis.** `lock_distance` 0.15 of a leg and `unlock_distance` 0.45, the larger by
-   design. `ik-hysteresis` asserts one pin per walk cycle, and it is the only arm that sees a
-   flapping label: the fraction and the agreement barely move when the state flips.
+   design, and an inverted pair is refused by name rather than behaving as one threshold.
+   `ik-hysteresis` asserts one pin per walk cycle — a flapping LOCK; `ik-contact`'s
+   `runs == cycles` is the same shape for a flapping LABEL, and the two are different
+   quantities. **Both distances are compared in MODEL space**, which they were not at first:
+   testing the held contact against the live toe in WORLD space silently multiplies the
+   threshold by any scale on the rig's node, and gametest carries `PLAYER_SCALE 2`, so the
+   documented 0.45 was behaving as 0.225. No arm could see it — the probe runs at scale 1.
 3. **The held contact point.** `contact_world`, frozen in WORLD space — `ik_set_world` is what
    the caller owes for that. Captured AFTER the solve rather than before: taken from the clip's
    pose it names somewhere the foot is not yet, and the lock then spends its first ticks
@@ -166,6 +172,16 @@ body moving at the speed the clip's own feet imply.
    moving target sits a constant distance behind for as long as the motion lasts (0.039 m here,
    which was the whole residual). It needs the standard guard: the velocity term may not carry
    the output further from the target than the position offset already is.
+
+   Two things about it are easy to get wrong and both were, at first. The input velocity must
+   be differenced from the CALLER's target and not from the resolved one — differenced across
+   the very discontinuity being captured, it is the jump over one tick, the guard binds every
+   single time at exactly `transition_time / dt`, and the blend degenerates into a fixed
+   reshaping of the position curve carrying no measured velocity at all. And the ease this
+   replaced was also filtering the caller's target every frame; nothing does now, so an unlocked
+   foot follows a noisy ground query unfiltered and `teleport_distance` is the only remaining
+   guard. That is a consequence of exact tracking rather than an oversight, but it is the
+   caller's to know about.
 5. **The pelvis drop is demoted, not removed**, and the extension soft-clamp is **REFUSED**.
    `max_pelvis_drop` is halved to 0.31 of a leg — set from the content, being the deepest thing
    the demo world asks — and `ik-drop` exercises the cap and the refusal under it, which spec
@@ -180,7 +196,7 @@ body moving at the speed the clip's own feet imply.
 ### What the demo cannot show
 
 `gametest`'s player moves at `PLAYER_SPEED` 10 m/s on a rig whose leg is 0.82 m and whose clip
-implies a 0.95 m/s stride. At eighteen times its animation's speed the contact label never
+implies a 0.95 m/s stride. At about ten times its animation's speed the contact label never
 fires, no lock ever forms, and the frame is **0 px** against `--no-lock`. That is the mechanism
 behaving correctly — there is no contact to hold — and it is the demo, not the feature, that
 cannot demonstrate it. Walked at a stick deflection of 0.12, near the clip's own stride, the

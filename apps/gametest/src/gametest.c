@@ -79,7 +79,19 @@ static bool load_pending = false;
 // the clips' events. --no-puppet keeps the red box; --twin <clip> stands a
 // second rig beside the player playing its own clip, which is the per-node
 // pose seen from a game.
+// The committed walk cycle: a real one, with a stance phase. The generated gait() cannot
+// stand in for it -- that swings thighs about a straight leg, so the foot traces an arc and
+// never dwells, and a contact phase is the thing locking holds.
+#define WALK_CLIP "assets/models/strut_walk.fbx"
+
 #define PLAYER_SPEED 10.0f
+// What the player actually walks at, PLAYER_SPEED unless --speed says otherwise. A knob
+// rather than a constant because the two things this app has to demonstrate want opposite
+// values: 10 m/s is the demo's feel on a 1600-unit island, and foot LOCKING (spec 12.9)
+// only engages when travel speed is near the stride its clip implies -- about 0.95 m/s on
+// this rig. At the default the contact label never fires, so --no-lock is 0 px against
+// locking: the mechanism behaving correctly and showing nothing.
+static float player_speed = PLAYER_SPEED;
 // How big the player is. The VISUAL and the collision capsule both come from
 // this: scaling one alone either sinks the feet through the floor or leaves the
 // character standing on nothing.
@@ -1960,9 +1972,13 @@ static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float
 // contains nothing else. Doing it later is the bug this replaced: the root's
 // children by then include the floor.
 static SceneNode* take_puppet_root(Scene* scene) {
+    // A node called "puppet" if the model names one, and the whole model if it does not.
+    // Requiring the name meant --puppet only ever accepted the generated fixture: every
+    // other rigged model in the tree was refused before a clip was read, and the app fell
+    // back to the red box with a message about missing clips that was not the reason.
     SceneNode* found = node_find(scene->root_node, "puppet");
     if (!found)
-        return NULL;
+        found = scene->root_node;
     if (found != scene->root_node)
         return found;
     SceneNode* wrapper = create_node();
@@ -2371,11 +2387,33 @@ static void on_init(Game* game) {
         Animation* idle = scene_find_animation(scene, "idle");
         Animation* walk = scene_find_animation(scene, "walk");
         Animation* run = scene_find_animation(scene, "run");
+        // A rig that is not the generated puppet carries none of those three, and before
+        // this that meant the red box: the locomotion space could not be built, so no
+        // animator was added and the IK that hangs off it never was either.
+        //
+        // Give it the committed walk cycle for the two moving entries and whatever the
+        // model's OWN first clip is for the standing one -- a rigged model almost always
+        // ships a rest or bind pose, and it is the difference between a character that
+        // stands when you let go and one that walks on the spot forever. One clip filling
+        // all three was tried and is exactly that bug.
+        if (!idle || !walk || !run) {
+            Animation* rest = scene->animation_count > 0 ? scene->animations[0] : NULL;
+            if (load_animations_from_file(scene, skeleton, WALK_CLIP, true, NULL) > 0) {
+                Animation* strut = scene_find_animation(scene, "strut_walk");
+                if (strut) {
+                    walk = run = strut;
+                    idle = rest ? rest : strut;
+                    printf("Rig carries no idle/walk/run: standing on '%s', moving on '%s'\n",
+                           idle->name, strut->name);
+                }
+            }
+        }
         clip_jump = scene_find_animation(scene, "jump");
         clip_wave = scene_find_animation(scene, "wave");
         clip_swim = scene_find_animation(scene, "swim");
         add_footsteps(walk);
-        add_footsteps(run);
+        if (run != walk)
+            add_footsteps(run);
         animator_mask_subtree(skeleton, "cetra_rig:RightArm", wave_mask);
         locomotion[0] = (AnimatorEntry){idle, 0.0f};
         locomotion[1] = (AnimatorEntry){walk, 0.5f};
@@ -2399,21 +2437,28 @@ static void on_init(Game* game) {
                     ik_foot_right =
                         ik_add_foot(player_ik, "cetra_rig:RightUpLeg", "cetra_rig:RightLeg",
                                     "cetra_rig:RightFoot", (vec3){0.0f, 0.0f, 1.0f});
-                    // The toe is where a contact is held (spec 12.9). Not fatal if the
-                    // rig has none -- ik_foot_set_toe leaves the foot judged and held at
-                    // its ankle, which is what --puppet on another rig may well want --
-                    // but the puppet has toes since 12.9 and a silent miss would be a
-                    // feature quietly downgraded.
-                    if (!ik_foot_set_toe(player_ik, ik_foot_left, "cetra_rig:LeftToeBase") ||
-                        !ik_foot_set_toe(player_ik, ik_foot_right, "cetra_rig:RightToeBase"))
-                        printf("No toe bones on this rig; contacts are held at the ankle\n");
-                    if (no_lock)
-                        player_ik->params.lock_distance = 0.0f;
                     if (ik_foot_left < 0 || ik_foot_right < 0 ||
                         !ik_set_pelvis(player_ik, "cetra_rig:Hips")) {
                         free_ik_system(player_ik);
                         player_ik = NULL;
                     } else {
+                        // After the chain is known good, or a rig missing a leg bone gets
+                        // told it has no toes -- twice, by a helper handed -1 -- ahead of
+                        // the refusal that actually applies. Both calls are made before
+                        // either is reported, so one toe and not the other is not a foot
+                        // silently left at the ankle under a message about both.
+                        const bool lt =
+                            ik_foot_set_toe(player_ik, ik_foot_left, "cetra_rig:LeftToeBase");
+                        const bool rt =
+                            ik_foot_set_toe(player_ik, ik_foot_right, "cetra_rig:RightToeBase");
+                        // Not fatal: a foot with no toe is judged and held at its ankle,
+                        // which is what --puppet on another rig may well want. Said out
+                        // loud because the puppet has toes since 12.9, so on the default
+                        // rig this line means something is wrong.
+                        if (!lt || !rt)
+                            printf("No toe bones on this rig; contacts are held at the ankle\n");
+                        if (no_lock)
+                            player_ik->params.lock_distance = 0.0f;
                         player_animator->state->ik = player_ik;
                         player_skel_root = puppet_root;
                     }
@@ -2558,7 +2603,7 @@ static void on_init(Game* game) {
     // runs differ by pixels while the sim beneath them did not.
     engine->show_gui = !engine->headless;
     engine->show_fps = !engine->headless;
-    // A rig brings twenty joint nodes, each of which would wear a gizmo.
+    // A rig brings twenty-two joint nodes, each of which would wear a gizmo.
     engine->show_xyz = puppet_root == NULL;
 
     // Spawn a few initial boxes
@@ -2621,6 +2666,11 @@ static void on_update(Game* game, double dt) {
     float ground_speed = hypotf(vel[0], vel[2]);
     hud_ground_speed = ground_speed;
     if (player_animator) {
+        // Against PLAYER_SPEED, the blend space's own reference, and NOT against whatever
+        // --speed capped travel at. Dividing by the cap re-normalises the gear, so full
+        // stick is knob 1.0 and the run clip at any speed -- which makes --speed useless
+        // for the one thing it is for: walking at the rate the walk clip implies, where
+        // foot locking has a contact to hold.
         float knob = ground_speed / PLAYER_SPEED;
         player_animator->param = knob > 1.0f ? 1.0f : knob;
 
@@ -2666,11 +2716,11 @@ static void on_update(Game* game, double dt) {
         // input_dir[2] is already negated by input_action_move, so W arrives as -1 --
         // hence the minus, which puts W on +forward.
         const float fwd = -input_dir[2], strafe = input_dir[0];
-        vel[0] = (cf_x * fwd + -cf_z * strafe) * PLAYER_SPEED;
-        vel[2] = (cf_z * fwd + cf_x * strafe) * PLAYER_SPEED;
+        vel[0] = (cf_x * fwd + -cf_z * strafe) * player_speed;
+        vel[2] = (cf_z * fwd + cf_x * strafe) * player_speed;
     } else {
-        vel[0] = input_dir[0] * PLAYER_SPEED;
-        vel[2] = input_dir[2] * PLAYER_SPEED;
+        vel[0] = input_dir[0] * player_speed;
+        vel[2] = input_dir[2] * player_speed;
     }
 
     // Gravity, or buoyancy where the water is. Swimming is surface-only by design: you
@@ -2681,8 +2731,8 @@ static void on_update(Game* game, double dt) {
     if (player_swimming) {
         vel[1] = grotto_float_velocity(player_entity->position[1], vel[1], (float)dt);
         // A swimmer is slower than a runner, and the stroke should read as effort.
-        vel[0] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
-        vel[2] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
+        vel[0] *= GROTTO_SWIM_SPEED / player_speed;
+        vel[2] *= GROTTO_SWIM_SPEED / player_speed;
     } else {
         vel[1] -= gravity * (float)dt;
         // Terminal velocity, and it is load-bearing rather than flavour. An 80-unit drop
@@ -2726,7 +2776,7 @@ static void on_update(Game* game, double dt) {
         vec3 chase_vel;
         character_controller_get_velocity(chase_cc, chase_vel);
         if (chaser_animator) {
-            float speed = hypotf(chase_vel[0], chase_vel[2]) / PLAYER_SPEED;
+            float speed = hypotf(chase_vel[0], chase_vel[2]) / player_speed;
             chaser_animator->param = speed > 1.0f ? 1.0f : speed;
 
             // The same edge for the chaser, which is what makes chaser_swimming more than
@@ -2772,8 +2822,8 @@ static void on_update(Game* game, double dt) {
         if (chaser_swimming) {
             chase_vel[1] =
                 grotto_float_velocity(chaser_entity->position[1], chase_vel[1], (float)dt);
-            chase_vel[0] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
-            chase_vel[2] *= GROTTO_SWIM_SPEED / PLAYER_SPEED;
+            chase_vel[0] *= GROTTO_SWIM_SPEED / player_speed;
+            chase_vel[2] *= GROTTO_SWIM_SPEED / player_speed;
         } else {
             chase_vel[1] -= gravity * (float)dt;
         }
@@ -2982,17 +3032,29 @@ static void ik_update_targets(Game* game) {
     // by an epsilon.
     if (want == 0.0f && ik_weight < 1e-3f)
         ik_weight = 0.0f;
-    if (ik_weight == 0.0f)
-        return;
-
-    // After the early return, deliberately. A held contact is a WORLD point (spec 12.9),
-    // so the solver needs this matrix -- but the identity the first frame carries is
-    // exactly the wrong space, and the reason the targets below are computed after this
-    // return is the same reason. Past it the transform has been propagated at least once.
-    ik_set_world(player_ik, to_world);
 
     mat4* globals = player_animator->state->global_transforms;
     const int feet[2] = {ik_foot_left, ik_foot_right};
+    // Zero is HANDED OVER rather than returned on, which is the whole point of snapping it
+    // and was missing: returning here left IkFoot.weight at whatever the last call passed,
+    // a hair above zero forever, so the bit-identical path never fired and -- since spec
+    // 12.9 -- a lock could form in mid-air against a target and a world matrix both frozen
+    // at the last grounded frame, to be released one frame after landing with the leg
+    // reaching for where the character used to be.
+    if (ik_weight == 0.0f) {
+        for (int i = 0; i < 2; i++)
+            if (feet[i] >= 0)
+                ik_foot_set_target(player_ik, feet[i],
+                                   globals[player_ik->feet[feet[i]].ankle_index][3],
+                                   (vec3){0.0f, 1.0f, 0.0f}, 0.0f);
+        return;
+    }
+
+    // Past the weight gate, where the transform has been propagated at least once: the
+    // identity the first frame carries is exactly the wrong space for a WORLD contact, and
+    // it is the same reason the targets below are computed here rather than above.
+    ik_set_world(player_ik, to_world);
+
     for (int i = 0; i < 2; i++) {
         if (feet[i] < 0)
             continue;
@@ -3279,7 +3341,8 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
     return rc;
 }
 
-// --ik-probe: the two-bone solver as a pure function (spec 12.4). The seven rig-only cases here
+// --ik-probe: the two-bone solver as a pure function (spec 12.4) and the lock above it
+// (spec 12.9). The nine rig-only cases here
 // need no physics and no frame at all -- a solve is (hip, target, thigh, shin, pole)
 // and nothing else, so giving them a world would make exact arithmetic depend on
 // Jolt's contact slop for no gain. The cases that DO need a raycast are the ones that
@@ -3296,7 +3359,7 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
 // The walk the `lock` case ticks, and the generated one cannot stand in for it: gait()
 // swings thighs about a straight leg, so its foot traces an arc and never dwells. A
 // contact phase is the thing locking holds, and only a real cycle has one.
-#define IK_LOCK_CLIP "assets/models/strut_walk.fbx"
+#define WALK_CLIP "assets/models/strut_walk.fbx"
 // A foot within this fraction of its own LIFT of its lowest point is in contact. The
 // instrument states this itself rather than reading the solver's label, because an arm
 // that took its window from the thing it measures could be fooled by a label wrong in
@@ -3337,6 +3400,23 @@ static float ik_probe_residual(const mat4* g, const IkFoot* foot, const vec3 tar
 // The longest run of consecutive true ticks, and where it starts. Several cycles are
 // recorded so at least one stance falls wholly inside the recording rather than straddling
 // the loop point, where one run would read as two short ones.
+// How many ticks are true, and how many separate runs of true there are. Written once
+// rather than three times: the rising-edge test carries a `t == 0` boundary case that is
+// three chances to get wrong, and two of the three counts feed an exact-equality arm.
+static int ik_probe_count(const bool* flag, int n) {
+    int hits = 0;
+    for (int i = 0; i < n; i++)
+        hits += flag[i] ? 1 : 0;
+    return hits;
+}
+
+static int ik_probe_runs(const bool* flag, int n) {
+    int runs = 0;
+    for (int i = 0; i < n; i++)
+        runs += (flag[i] && (i == 0 || !flag[i - 1])) ? 1 : 0;
+    return runs;
+}
+
 static int ik_probe_longest_run(const bool* flag, int n, int* start) {
     int best = 0, best_at = 0, run = 0;
     for (int i = 0; i < n; i++) {
@@ -3683,6 +3763,13 @@ static int run_ik_probe(Game* game, const char* which) {
                 rf = ik_add_foot(sys, "cetra_rig:RightUpLeg", "cetra_rig:RightLeg",
                                  "cetra_rig:RightFoot", (vec3){0.0f, 0.0f, 1.0f});
                 ik_set_pelvis(sys, "cetra_rig:Hips");
+                // PLANTING only, said rather than inherited. This case measures the stride
+                // a release fade leaves, and its bar is argued in those terms; with the
+                // defaults it would also lock -- silently, since a rig that never moves
+                // needs no world matrix to do so -- and the number would be a blend of two
+                // features under a docstring describing one. The `lock` case is where
+                // locking is measured.
+                sys->params.lock_distance = 0.0f;
                 an->state->ik = sys;
             }
             animator_play(an, walk, 0.0f, true);
@@ -3729,13 +3816,13 @@ static int run_ik_probe(Game* game, const char* which) {
         // animation's own feet are stationary in the world, so every metre this reports
         // is the solver's and none of it is the fixture's. Choosing a speed instead
         // would make the number say as much about the choice as about the solve.
-        if (load_animations_from_file(probe_scene, skel, IK_LOCK_CLIP, false, NULL) <= 0) {
-            fprintf(stderr, "ik-probe: %s did not load\n", IK_LOCK_CLIP);
+        if (load_animations_from_file(probe_scene, skel, WALK_CLIP, false, NULL) <= 0) {
+            fprintf(stderr, "ik-probe: %s did not load\n", WALK_CLIP);
             return 1;
         }
         Animation* walk = scene_find_animation(probe_scene, "strut_walk");
         if (!walk || walk->ticks_per_second <= 0.0) {
-            fprintf(stderr, "ik-probe: %s carries no usable clip\n", IK_LOCK_CLIP);
+            fprintf(stderr, "ik-probe: %s carries no usable clip\n", WALK_CLIP);
             return 1;
         }
         const float seconds = (float)(walk->duration / walk->ticks_per_second);
@@ -3774,8 +3861,8 @@ static int run_ik_probe(Game* game, const char* which) {
 
         // low, lift and run carry no initialiser on purpose: pass 0 either sets all three
         // or returns, so a value here would only ever be the one nothing reads.
-        float low, lift, stride = 0.0f, slide[2] = {0.0f, 0.0f};
-        int s = 0, run, transitions = 0, pins = 0, fast_hold = 0, fast_pins = 0;
+        float low, lift, stride = 0.0f, slide[2] = {0.0f, 0.0f}, jump[2] = {0.0f, 0.0f};
+        int s = 0, run, transitions, pins = 0, fast_hold = 0, fast_pins = 0;
         int hs = 0, hold_run = 0, hold_total = 0;
         vec3 dir = {0.0f, 0.0f, 0.0f};
 
@@ -3840,13 +3927,7 @@ static int run_ik_probe(Game* game, const char* which) {
                 if (pass < 3)
                     glm_vec3_copy(an->state->global_transforms[toe_bone][3], toe[pass][t]);
                 label[t] = sys->feet[lf].in_contact;
-                held[t] = sys->feet[lf].locked;
-                if (pass == 3) {
-                    // Counted as it goes, because pass 2's run has already been read off
-                    // `held` by the time this overwrites it.
-                    fast_hold += held[t] ? 1 : 0;
-                    fast_pins += (held[t] && (t == 0 || !held[t - 1])) ? 1 : 0;
-                }
+                held[t] = sys->feet[lf].lock != IK_LOCK_OFF;
                 if (trace) {
                     vec3 body, world;
                     glm_vec3_scale(dir, speed * (float)t / 60.0f, body);
@@ -3856,11 +3937,16 @@ static int run_ik_probe(Game* game, const char* which) {
                             "world %.4f %.4f w %.3f\n",
                             pass, t, (double)an->state->global_transforms[toe_bone][3][1],
                             (double)an->state->global_transforms[ankle_bone][3][1],
-                            label[t] ? 1 : 0, sys->feet[lf].locked ? 1 : 0, (double)world[0],
-                            (double)world[2], (double)sys->feet[lf].applied_weight);
+                            label[t] ? 1 : 0, held[t] ? 1 : 0, (double)world[0], (double)world[2],
+                            (double)sys->feet[lf].applied_weight);
                 }
             }
             free_animator(an); // frees the IK system with it
+
+            if (pass == 3) {
+                fast_hold = ik_probe_count(held, ticks);
+                fast_pins = ik_probe_runs(held, ticks);
+            }
 
             if (pass == 0) {
                 // The contact band is a fraction of the foot's OWN lift, not of the leg.
@@ -3925,13 +4011,12 @@ static int run_ik_probe(Game* game, const char* which) {
                 // agreement is evidence rather than a tautology. `transitions` is how many
                 // separate contacts were found, which is what says whether it is one
                 // steady stance per cycle or a state flapping.
-                int labelled = 0, both = 0, either = 0;
+                const int labelled = ik_probe_count(label, ticks);
+                transitions = ik_probe_runs(label, ticks);
+                int both = 0, either = 0;
                 for (int t = 0; t < ticks; t++) {
-                    labelled += label[t] ? 1 : 0;
                     both += (label[t] && inside[t]) ? 1 : 0;
                     either += (label[t] || inside[t]) ? 1 : 0;
-                    if (label[t] && (t == 0 || !label[t - 1]))
-                        transitions++;
                 }
                 printf("ik lock clip seconds %.6f\n", (double)seconds);
                 printf("ik lock clip stride %.6f\n", (double)stride);
@@ -3979,7 +4064,7 @@ static int run_ik_probe(Game* game, const char* which) {
                 // rather than a contact slipping.
                 const int he = hs + hold_run - 1;
                 for (int p = 0; p < 2; p++) {
-                    vec3 anchor;
+                    vec3 anchor, prev = {0.0f, 0.0f, 0.0f};
                     glm_vec3_scale(dir, stride * (float)hs / 60.0f, anchor);
                     glm_vec3_add(toe[p + 1][hs], anchor, anchor);
                     anchor[1] = 0.0f;
@@ -3991,6 +4076,16 @@ static int run_ik_probe(Game* game, const char* which) {
                         const float drift = glm_vec3_distance(world, anchor);
                         if (drift > slide[p])
                             slide[p] = drift;
+                        // The largest single TICK of travel, which is what a transition
+                        // that pops looks like and what the total drift cannot see: a foot
+                        // that jumps once and then holds still reports the same slide as
+                        // one that eases over the whole stance.
+                        if (t > hs) {
+                            const float step = glm_vec3_distance(world, prev);
+                            if (step > jump[p])
+                                jump[p] = step;
+                        }
+                        glm_vec3_copy(world, prev);
                     }
                 }
             }
@@ -4011,6 +4106,10 @@ static int run_ik_probe(Game* game, const char* which) {
         printf("ik lock plant slidefrac %.6f\n", (double)(slide[0] / leg));
         printf("ik lock hold slide %.6f\n", (double)slide[1]);
         printf("ik lock hold slidefrac %.6f\n", (double)(slide[1] / leg));
+        // The transition's own number, which Phase 4 planned and did not ship. A weight or
+        // a target that steps rather than blending shows here and in nothing else.
+        printf("ik lock plant step %.6f\n", (double)jump[0]);
+        printf("ik lock hold step %.6f\n", (double)jump[1]);
     } else if (!strcmp(which, "ground") || !strcmp(which, "slope") || !strcmp(which, "step")) {
         // The three cases that need a raycast, and so a world. The rig is placed at a
         // stand point and its origin put at the ground there; everything reported is
@@ -4317,7 +4416,8 @@ static int run_anim_probe(Game* game, const char* which) {
         // eight, the midpoint mix six from the walk alone (1.5 cycles per
         // second and only the heavier entry fires), and idle none.
         add_footsteps(walk);
-        add_footsteps(run);
+        if (run != walk)
+            add_footsteps(run);
         Animator* a = probe_rig(em, skel, "a");
         const float knobs[] = {0.5f, 0.75f, 1.0f, 0.0f};
         const char* labels[] = {"walk", "mixed", "run", "idle"};
@@ -5446,6 +5546,10 @@ int main(int argc, const char* argv[]) {
         } else if (!strcmp(a, "--cam-up") && i + 1 < argc) {
             if (!parse_vec3_arg(argv[++i], cam_pose_up))
                 fprintf(stderr, "--cam-up expects x,y,z\n");
+        } else if (!strcmp(a, "--speed") && i + 1 < argc) {
+            player_speed = strtof(argv[++i], NULL);
+            if (player_speed <= 0.0f)
+                player_speed = PLAYER_SPEED;
         } else if (!strcmp(a, "--no-lock")) {
             no_lock = true;
         } else if (!strcmp(a, "--no-ik")) {
@@ -5574,6 +5678,10 @@ int main(int argc, const char* argv[]) {
     printf("  G / B - Print ground state\n");
     printf("  P / Start - Pause/unpause physics\n");
     printf("  Arrow keys - Turn the camera (--no-follow-cam for the fixed orbit instead)\n");
+    printf("  --speed <m/s> - Walk at another speed (default %.0f). Foot locking engages\n",
+           (double)PLAYER_SPEED);
+    printf("                  only near the stride the clip implies, about 1 -- at the\n");
+    printf("                  default nothing is ever in contact and --no-lock looks the same\n");
     printf("  Walk off the edge - fall into the grotto and swim; the chaser swims too\n");
     printf("  Escape - Pause menu (--no-ui to run without any of it)\n");
     printf("Audio: a beep on jump and spawn, footsteps in time with the stride, a looping\n");

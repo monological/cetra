@@ -22557,9 +22557,10 @@ def _ik_knee_bend_deg(a, b, c):
 
 
 def run_ik_gate(workdir):
-    """Two-bone IK (spec 12.4), on the puppet whose limb lengths the fixture generator
-    states. Seven arms drive the solver with SYNTHETIC targets through gametest's
-    --ik-probe and need no physics at all. Every expected angle is recomputed here in
+    """Two-bone IK and foot locking (specs 12.4 and 12.9), on the puppet whose limb
+    lengths the fixture generator states. Twelve arms drive the solver with SYNTHETIC
+    targets through gametest's --ik-probe and need no physics at all; six stand the rig
+    on real ground and raycast. Every expected angle is recomputed here in
     Python from the segment lengths the probe reports, so nothing is a magic number
     copied from a run. The bind pose is the SINGULAR configuration -- hip to ankle is
     thigh plus shin exactly -- which is why the singular and identity arms are the two
@@ -22656,6 +22657,14 @@ def run_ik_gate(workdir):
                    EXCEEDS the cap first: spec 12.5 found nothing in the tree ever asked
                    for more than it, so min(deficit, cap) returned the deficit and a
                    wrong cap passed.
+      ik-settle    the largest single TICK of travel while a contact is held, which
+                   ik-slide's total cannot see: a foot that jumps once and then holds
+                   still reports the same drift as one that eases across a whole stance.
+                   Spec 12.9 planned this arm and shipped without it; written afterwards
+                   it immediately found that the held target was derived through the
+                   PRE-solve ankle-to-toe vector, so the toe landed off the contact by
+                   that vector times the rotation the solve was about to apply -- one
+                   tick carrying the WHOLE of the residual drift, 0.010256 of 0.010256.
       ik-contact   the solver's contact label finds ONE contact per walk cycle. That
                    count is the arm: a label that flaps splits a stance into several
                    runs while the fraction and the agreement barely move, and a lock
@@ -22915,7 +22924,8 @@ def run_ik_gate(workdir):
 
     # --- ik-repeat -------------------------------------------------------------
     first, second = _ik_probe_run("slope"), _ik_probe_run("slope")
-    if not first or not second:
+    lock_a, lock_b = _ik_probe_run("lock"), _ik_probe_run("lock")
+    if not first or not second or not lock_a or not lock_b:
         print("  ik-repeat    FAIL  a probe failed or measured nothing")
         failures.append("ik-repeat")
     else:
@@ -22924,10 +22934,14 @@ def run_ik_gate(workdir):
         # true, and the one arm asserting cross-process determinism would pass forever
         # without anything noticing. gate-arm-docs reads print sites, not probe calls, so
         # nothing else would catch it. The identity test fails loudly instead.
-        ok = first is not second and first == second
-        print(f"  ik-repeat    {'PASS' if ok else 'FAIL'}  two runs of the slope case print "
-              f"{'identical' if ok else 'DIFFERENT'} digits across {len(first)} measurements"
-              f"{'' if first is not second else ' -- VACUOUS: both came from the cache'}")
+        ok = (first is not second and first == second and
+              lock_a is not lock_b and lock_a == lock_b)
+        print(f"  ik-repeat    {'PASS' if ok else 'FAIL'}  two runs each of the slope and lock "
+              f"cases print {'identical' if ok else 'DIFFERENT'} digits across "
+              f"{len(first)} and {len(lock_a)} measurements"
+              f"{'' if first is not second else ' -- VACUOUS: both came from the cache'}. The "
+              f"lock case is the noise floor for ik-slide, which quotes a number without one "
+              f"otherwise")
         if not ok:
             failures.append("ik-repeat")
 
@@ -22974,27 +22988,30 @@ def run_ik_gate(workdir):
         # share of the cycle too, since both numbers are read over the interval the lock
         # claims and a lock that claimed four ticks would look perfect over them.
         window = 0.35 < frac < 0.75 and stride > 0.05 and 0.3 < hold < 0.75
-        ok = window and held < 0.02 and held < plant
+        ok = window and held < 0.01 and held < plant
         print(f"  ik-slide     {'PASS' if ok else 'FAIL'}  over the {hold * 100.0:.0f} per "
               f"cent of the cycle the lock holds, the toe travels {hold_m:.6f} m across the "
               f"ground against planting's {plant_m:.6f} m over the same ticks -- "
               f"{held * 100.0:.1f} against {plant * 100.0:.1f} per cent of a leg (want under "
-              f"2, and under planting's). The body moves at the clip's own "
+              f"1, and under planting's). The body moves at the clip's own "
               f"{stride:.6f} m/s, so every millimetre is the solver's")
         if not ok:
             failures.append("ik-slide")
 
     # --- ik-hysteresis ---------------------------------------------------------
+    d = _ik_probe("lock")
     if not d or any(k not in d for k in [("hold", "pins"), ("label", "cycles")]):
         print("  ik-hysteresis FAIL  the probe failed or measured nothing")
         failures.append("ik-hysteresis")
     else:
         pins = d[("hold", "pins")][0]
         cycles = d[("label", "cycles")][0]
-        # One pin per walk cycle. With a single threshold the decision is re-made from
-        # scratch every frame and can flip, which is the "scissoring in and out very
-        # quickly" the technique's author describes; that shows up here and nowhere else
-        # as a pin count several times the cycle count.
+        # One pin per walk cycle. The argument for two thresholds rather than one is the
+        # technique author's -- a single threshold is re-decided every frame and can flip,
+        # the "scissoring in and out very quickly" he describes -- and a flip would show
+        # here, as a pin count several times the cycle count, and in no other arm. Stated
+        # as the reasoning it is: nobody has run this build with the thresholds equal, so
+        # this is not a number that was measured and then asserted.
         ok = pins == cycles
         print(f"  ik-hysteresis {'PASS' if ok else 'FAIL'}  the lock pins {pins:.0f} times "
               f"over {cycles:.0f} cycles (want one each; one threshold instead of two flips "
@@ -23003,6 +23020,7 @@ def run_ik_gate(workdir):
             failures.append("ik-hysteresis")
 
     # --- ik-unlock -------------------------------------------------------------
+    d = _ik_probe("lock")
     if not d or any(k not in d for k in [("hold", "total"), ("hold", "pins"),
                                          ("fast", "ticks"), ("fast", "pins")]):
         print("  ik-unlock    FAIL  the probe failed or measured nothing")
@@ -23053,7 +23071,38 @@ def run_ik_gate(workdir):
         if not ok:
             failures.append("ik-drop")
 
+    # --- ik-settle -------------------------------------------------------------
+    d = _ik_probe("lock")
+    need = [("hold", "step"), ("plant", "step"), ("rig", "segments")]
+    if not d or any(k not in d for k in need):
+        print("  ik-settle    FAIL  the probe failed or measured nothing")
+        failures.append("ik-settle")
+    else:
+        step = d[("hold", "step")][0]
+        plant_step = d[("plant", "step")][0]
+        leg = sum(d[("rig", "segments")])
+        # The largest single TICK of travel while a contact is held. ik-slide's total
+        # cannot see a transition that pops: a foot that jumps once and then holds still
+        # reports the same drift as one that eases across the whole stance. It is a
+        # distinct failure and it was a real one -- the held target was derived through the
+        # PRE-solve ankle-to-toe vector, so the toe landed off the contact by that vector
+        # times the rotation the solve was about to apply, once, on the frame after every
+        # pin. Step and slide read 0.010256 and 0.010256: the entire drift was one tick.
+        # Bounded in ABSOLUTE terms and against planting, NOT as a share of the total
+        # drift. "The drift is spread rather than spent in one tick" was the first
+        # formulation and it is exactly backwards: the better the lock, the smaller the
+        # total, and the more of what remains is necessarily its own largest tick. It
+        # would have failed the fix that motivated it.
+        ok = step < 0.5 * plant_step and step < 0.01 * leg
+        print(f"  ik-settle    {'PASS' if ok else 'FAIL'}  the largest single tick of held "
+              f"travel is {step:.6f} m -- {step / leg * 100.0:.1f} per cent of a leg (want "
+              f"under 1) and under half planting's {plant_step:.6f} over the same window. A "
+              f"transition that pops shows here and in no other arm")
+        if not ok:
+            failures.append("ik-settle")
+
     # --- ik-contact ------------------------------------------------------------
+    d = _ik_probe("lock")
     if not d or any(k not in d for k in [("label", "runs"), ("label", "cycles"),
                                          ("label", "fraction"), ("label", "agree")]):
         print("  ik-contact   FAIL  the probe failed or measured nothing")

@@ -38,13 +38,28 @@
  * with plain vectors in the skeleton's model space.
  */
 
+// Whether a foot is holding a contact, and the one frame in between (spec 12.9). The
+// decision to pin is made BEFORE the solve, from the clip's pose, and the point is
+// captured AFTER it, from where the foot ended up -- so there is a frame that is neither
+// off nor held, and naming it beats two booleans that can express a fourth state nobody
+// means. IK_LOCK_OFF is zero, so a memset foot is unlocked.
+typedef enum IkLockState {
+    IK_LOCK_OFF = 0,
+    IK_LOCK_PINNING, // decided this frame; contact_world is written after the solve
+    IK_LOCK_HELD,    // contact_world is a real point and the leg solves onto it
+} IkLockState;
+
 typedef struct IkFootParams {
     // How far the pelvis may descend for a foot that cannot reach, as a fraction of that
     // foot's own leg length -- the same units plant_fraction uses, and for the same
     // reason: it carries across rigs and scales where a metre does not. 0 disables the
     // drop entirely.
     float max_pelvis_drop;
-    float teleport_distance; // a target jumping farther than this snaps instead of blending
+    // METRES, and the one field here that is not a fraction of leg length. A teleport is
+    // a world event -- a load, a respawn -- rather than a rig-relative one, so it does not
+    // want to scale with the character. Say so when changing it; every other distance in
+    // this struct follows the opposite convention.
+    float teleport_distance; // a target jumping farther than this is taken verbatim
     // Seconds over which a transition's discontinuity is blended away (spec 12.9). The
     // offset at a lock or a release is captured in position AND velocity and decays
     // through cubic basis weights, so once it has decayed the applied target IS the
@@ -63,6 +78,12 @@ typedef struct IkFootParams {
     // stride dies with the feet welded to the ground. Here the globals are still the
     // clip's own pose for this frame, which is the only moment the question has a true
     // answer. Zero disables the release entirely and plants at full weight.
+    //
+    // MUST stay looser than contact_height. A locked foot takes its weight unfaded, and
+    // the argument for that is that the contact label is the stricter test of the same
+    // question -- so a locked foot is one this would only have part-faded anyway. Tune
+    // this below contact_height and that reasoning inverts silently, with nothing in the
+    // code, the comments or the arms to notice.
     float plant_fraction;
 
     // Contact labelling (spec 12.9). A foot is in contact when its ankle is within
@@ -76,6 +97,8 @@ typedef struct IkFootParams {
     // horizontal threshold would label nothing. The vertical pair says the same thing
     // about a foot that has been set down and not yet picked up, needs no authored
     // data and no baking step, and is what the deviation costs.
+    //
+    // contact_height must stay TIGHTER than plant_fraction; see there for why.
     float contact_height;
     float contact_speed;
 
@@ -87,7 +110,8 @@ typedef struct IkFootParams {
     //
     // unlock_distance is deliberately the LARGER, and that gap is the whole hysteresis:
     // with one threshold the decision is re-made from scratch every frame and can flip,
-    // which is what "scissoring in and out very quickly" looks like.
+    // which is what "scissoring in and out very quickly" looks like. An inverted pair is
+    // refused by name on the first solve rather than quietly behaving as one threshold.
     float lock_distance;
     float unlock_distance;
 } IkFootParams;
@@ -104,11 +128,15 @@ typedef struct IkFoot {
     int toe_index;
     vec3 pole_local;      // knee-forward, in the HIP's frame, so a turning hip carries it
     vec3 fallback_axis;   // bend axis from the bind pose, for a leg aimed along the pole
-    vec3 applied_target;  // what the last solve actually used, after easing
+    vec3 applied_target;  // what the last solve actually used, after the transition blend
     float applied_weight; // and the weight it applied, after the release fade
+    // Thigh plus shin, settled once per solve from the clip's own pose. Every distance
+    // threshold in IkFootParams is a fraction of this, and the pelvis drop needs it after
+    // the loop that computes it -- deriving it twice is two spellings of one quantity.
+    float leg;
     // False until this foot's first solve, and PER FOOT rather than the system's
     // needs_reset because only a per-foot latch can express it: a foot registered after
-    // a solve has applied_target still zeroed to the model origin, and easing onto its
+    // a solve has applied_target still zeroed to the model origin, and blending onto its
     // real target from there walks the leg across the world. needs_reset is system-wide
     // and re-arms feet that are already settled.
     bool has_applied;
@@ -119,23 +147,28 @@ typedef struct IkFoot {
     // the same reason the release is: only at this point in the frame do the globals
     // still hold the clip's own pose.
     bool in_contact;
-    vec3 clip_ankle_prev; // the ankle's model position at the previous solve
-    bool has_clip_prev;   // false until there are two solves to difference
+    // The ankle's model HEIGHT at the previous solve, and a float rather than the vec3 it
+    // was: the label deliberately has no horizontal term (see contact_speed), and storing
+    // three components invites adding one back without meeting that argument.
+    float prev_ankle_y;
+    bool has_prev; // false until there are two solves to difference
 
     // The held contact (spec 12.9): where the TOE was pinned, in WORLD space, and
     // whether it is pinned at all. World and not model, which is the entire point --
     // a model-space point travels with the character, which is what planting already
     // did and what a lock exists to stop. It costs the system a model-to-world matrix
     // the caller has to supply; see ik_set_world.
-    bool locked;
+    IkLockState lock;
     vec3 contact_world;
-    // True for the one frame between deciding to lock and having a point to lock to. The
-    // contact is captured AFTER the solve, from where the foot actually ended up, because
-    // the decision is made from the clip's pose and the frame then moves the foot off it
-    // -- captured before, the lock spends its first ticks dragging the foot onto a point
-    // it was never at, which is travel across the ground and reads as exactly the slide
-    // the feature exists to remove.
-    bool contact_pending;
+    // The ankle-to-toe vector as the last SOLVE left it, which is what converts a held toe
+    // point back into an ankle target. The live pre-solve vector is the obvious choice and
+    // is wrong by exactly the rotation the solve is about to apply: the toe then lands off
+    // the contact by |foot_vec| times that angle, once, on the frame after every pin --
+    // measured as a single-tick pop carrying the WHOLE of the residual drift. One frame of
+    // lag tracks the foot's pitch through toe-off, which a vector frozen at the pin would
+    // not.
+    vec3 solved_foot_vec;
+    bool has_solved_foot;
     // The inertialization (spec 12.9): the discontinuity captured at the last transition
     // and how long it has been decaying. offset_vel is the half a position-only blend
     // drops, and dropping it is why a foot used to arrive at a lock with the wrong speed
@@ -144,14 +177,25 @@ typedef struct IkFoot {
     vec3 offset_vel;
     float since_transition;
     vec3 applied_prev; // the last solve's applied target, for the output's own velocity
-    vec3 want_prev;    // and the last requested one, for the input's
-    bool has_want_prev;
+    // And the last target the CALLER set, for the input's. Deliberately the caller's
+    // target and not the target the lock resolved to: the caller writes one every frame
+    // whatever the lock is doing, so differencing it is never taken across the very
+    // discontinuity a transition exists to absorb. Differenced across it, the captured
+    // velocity is the size of the jump over one tick, the cap below binds every time,
+    // and the blend degenerates to a fixed reshaping of the position curve.
+    vec3 target_prev;
     // Everything hanging off the ankle -- toes, and whatever else a rig puts there --
     // resolved once at ik_add_foot. The solve rotates these rigidly with the ankle, or
     // they keep the pose the clip gave them while the ankle moves out from under them.
-    // Nothing could see that before this spec: no rig in the corpus had a bone below an
-    // ankle, so the subtree was always empty.
+    // Nothing had ever seen that: no rig IK was RUN on had a bone below an ankle, so the
+    // subtree was always empty.
+    //
+    // A list of indices and not a mask, unlike IkSystem.in_pelvis_subtree. That one
+    // covers most of a skeleton and is swept once; this one covers a toe and is swept
+    // twice per foot per frame, so a mask costs a scan of the whole skeleton to move one
+    // bone -- and the whole scan again to move none, which is every rig without toes.
     uint8_t below_ankle[MAX_BONES];
+    size_t below_count;
 
     // SETTINGS: plain stores, written directly at any time.
 
@@ -185,11 +229,23 @@ typedef struct IkSystem {
     // Where this rig stands. Identity until ik_set_world, under which world space IS
     // model space -- correct for a rig that never moves and wrong for one that does, in
     // the specific way that makes a lock do nothing at all.
+    //
+    // A DERIVED PAIR: write them only through ik_set_world, which inverts. Setting
+    // model_to_world directly leaves the inverse stale, and a held contact then converts
+    // through the wrong one -- a lock holding a point nowhere near the foot, which
+    // renders as a perfectly plausible frame.
     mat4 model_to_world;
     mat4 world_to_model;
+    // False until a caller has said where the rig stands. A lock refuses to pin without
+    // it rather than pinning against the identity, which would hold a MODEL-space point:
+    // the foot would weld to the body, fight the clip's own stance travel, and release
+    // only after unlock_distance -- planting's failure mode from spec 12.4, re-armed and
+    // silent. Nothing fails silently (spec 11.107) applies to a caller's obligations too.
+    bool world_set;
     IkFootParams params; // shared by every foot
     bool enabled;
-    bool needs_reset; // snap every foot on the next solve
+    bool needs_reset;       // snap every foot on the next solve
+    bool warned_thresholds; // the inverted-hysteresis complaint is said once, not per frame
 } IkSystem;
 
 // Created with default params; adjust system->params directly to tune.
@@ -237,7 +293,7 @@ void ik_foot_set_ground(IkSystem* system, int foot, const vec3 ground, const vec
 // once here rather than per foot.
 void ik_set_world(IkSystem* system, mat4 model_to_world);
 
-// Snap every foot to its target on the next solve, instead of easing to it. Also drops
+// Snap every foot to its target on the next solve, instead of blending to it. Also drops
 // every held contact: after a teleport the world point a foot was pinned to is somewhere
 // the character no longer is.
 void ik_reset(IkSystem* system);

@@ -876,12 +876,24 @@ planting artefact from an animation one — worth knowing that the walk clip ben
 own, so on flat ground the two look identical by design.
 
 `--no-lock` (spec 12.9) keeps planting and drops the LOCKING above it: contacts are still found
-and feet still meet the ground, but no world-space point is held, which is the 12.4 behaviour.
+and feet still meet the ground, but no world-space point is held — planting's behaviour, though
+not bit-identical to 12.4's, since the transition blend and the pelvis cap both changed under it.
 **At the player's default speed the two are 0 px apart**, and that is the mechanism working: the
-player moves at 10 m/s on a rig whose clip implies 0.95 m/s, so the contact label never fires and
-there is nothing to hold. Walk at about a tenth of full stick — near the clip's own stride — and
-the same frame moves 52,244 px. Anything that wants the benefit in a real game has to match its
-travel speed to its clips, or carry root motion.
+player moves at 10 m/s on a rig whose walk clip implies 0.95, so the contact label never fires and
+there is nothing to hold.
+
+`--speed <m/s>` is what makes it visible, and it needs the companion fact that the locomotion
+knob is `ground_speed / PLAYER_SPEED` — against the blend space's REFERENCE speed, not against
+whatever `--speed` capped travel at. Normalised against the cap, full stick reads 1.0 and plays
+the run clip at any speed, which is useless for the one thing the flag is for. So:
+
+```bash
+./out/bin/gametest --speed 1.2              # walk with W at the rate the clip implies
+./out/bin/gametest --speed 1.2 --no-lock    # the same, planting only
+```
+
+measures 22,643 px apart at frame 180. Anything that wants this benefit in a real game has to
+match its travel speed to its clips, or carry root motion; this engine does neither.
 
 `--ik-probe <case>` is the headless probe the `ik` gate group reads, in the same shape as the
 four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,
@@ -898,7 +910,19 @@ floor beneath it, and a hit point that is right while the plane is wrong. Those 
 release disabled — they ask whether the solve reaches the ground it was handed, not whether a
 foot should be planted at all. `swing` is the one that asks the second question: it ticks a walk
 cycle and measures the ankle's vertical travel, and it is the only case that would notice the
-feet welding to the floor, which every other arm passed straight through.
+feet welding to the floor, which every other arm passed straight through. It runs PLANTING only,
+said rather than inherited, since its bar is argued in terms of the release fade.
+
+Spec 12.9 added two more rig-only cases, taking the tally to nine: `drop` puts a foot half a
+metre past full extension so the pelvis cap is the only thing that can answer (nothing had ever
+exercised it), and `lock` runs the same walk clip FOUR times — at weight 0 for a clip-only
+reference, then planting, then locking, then locking with the body walked at three times the
+speed its own feet imply. The first exists because a reference read off a solved pass moves
+whenever the solver does, which makes every A/B incomparable with the one before it; the last is
+the refusal, asserting the feature lets go rather than straining. `CETRA_IK_TRACE=1` dumps that
+case's per-tick heights, contact label and lock state to stderr, where the probe's numeric
+grammar cannot reach them — it is what found a retargeted clip's toe joint passing back through
+its own bind clearance in mid-swing, which no aggregate would have named.
 
 **`apps/spores`** gained `--taa`, `--headless-jitter` and `--msaa <n>` in 11.103 and **kept its four
 samples**, which is the one refusal in that spec. `particle_frag` declares a single output, so a
