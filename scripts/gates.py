@@ -23264,6 +23264,30 @@ def run_ik_gate(workdir):
         if not ok:
             failures.append("ik-slide-speeds")
 
+    # --- ik-scale --------------------------------------------------------------
+    d = _ik_probe("scale")
+    need = [(s, k) for s in ("one", "two") for k in ("hold", "slidefrac")]
+    if not d or any(k not in d for k in need):
+        print("  ik-scale     FAIL  the probe failed or measured nothing")
+        failures.append("ik-scale")
+    else:
+        h1, h2 = d[("one", "hold")][0], d[("two", "hold")][0]
+        s1, s2 = d[("one", "slidefrac")][0], d[("two", "slidefrac")][0]
+        # Every threshold the solver owns is in MODEL space and a fraction of the leg, so
+        # a scale on the rig's node must change nothing it decides. This is the blind spot
+        # spec 12.9 shipped a live bug through -- a WORLD distance compared against a model
+        # threshold, which at gametest's PLAYER_SCALE 2 made the documented unlock distance
+        # behave as half of itself -- and no arm could see it, because every other case in
+        # this probe runs the rig at scale 1. Re-introducing that exact bug takes the slide
+        # at scale two from 0.0037 to 0.0121 and leaves scale one untouched.
+        ok = abs(h1 - h2) < 1e-4 and abs(s1 - s2) < 1e-5
+        print(f"  ik-scale     {'PASS' if ok else 'FAIL'}  on a node scaled 1 and 2 the same "
+              f"walk holds {h1 * 100.0:.0f} and {h2 * 100.0:.0f} per cent of the cycle and "
+              f"slides {s1:.6f} and {s2:.6f} of a leg (want equal: a scale reaches the world "
+              f"matrix and nothing the solver decides)")
+        if not ok:
+            failures.append("ik-scale")
+
     return failures
 
 

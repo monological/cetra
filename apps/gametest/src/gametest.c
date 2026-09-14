@@ -4496,6 +4496,97 @@ static int run_ik_probe(Game* game, const char* which) {
             printf("ik rate %s freefixfrac %.6f %.6f\n", IK_RATE_TAG[m], (double)(fix[0][0] / leg),
                    (double)(fix[0][1] / leg));
         }
+    } else if (!strcmp(which, "scale")) {
+        // The same walk twice, on a rig node scaled 1 and 2. Every threshold the solver
+        // owns is in MODEL space and a fraction of the leg, so a scale on the node must
+        // change nothing it decides -- and measured in model units the two runs have to
+        // come out the same.
+        //
+        // This is the blind spot spec 12.9 shipped a live bug through: it compared a WORLD
+        // distance against a model threshold, so at gametest's PLAYER_SCALE 2 the
+        // documented unlock distance was behaving as half of itself. No arm could see it
+        // because every case in this probe runs the rig at scale 1, and the app that
+        // carries the scale has no arm at all. The model-to-world stride conversion is the
+        // same seam one layer up, which is why the case is here rather than left implied.
+        if (load_animations_from_file(probe_scene, skel, WALK_CLIP, false, NULL) <= 0) {
+            fprintf(stderr, "ik-probe: %s did not load\n", WALK_CLIP);
+            return 1;
+        }
+        Animation* walk = scene_find_animation(probe_scene, "strut_walk");
+        if (!walk || walk->ticks_per_second <= 0.0) {
+            fprintf(stderr, "ik-probe: %s carries no usable clip\n", WALK_CLIP);
+            return 1;
+        }
+        const int cycle = (int)((float)(walk->duration / walk->ticks_per_second) * 60.0f + 0.5f);
+        const int ticks = cycle * IK_LOCK_CYCLES;
+        if (cycle < 2 || ticks > IK_LOCK_TICKS) {
+            fprintf(stderr, "ik-probe: the clip does not fit the scale window\n");
+            return 1;
+        }
+        const int ankle_bone[2] = {get_bone_index_by_name(skel, "cetra_rig:LeftFoot"),
+                                   get_bone_index_by_name(skel, "cetra_rig:RightFoot")};
+        const int toe_bone[2] = {get_bone_index_by_name(skel, "cetra_rig:LeftToeBase"),
+                                 get_bone_index_by_name(skel, "cetra_rig:RightToeBase")};
+        float clip_stride = 0.0f;
+        vec3 dir = {0.0f, 0.0f, 0.0f};
+        if (!animation_stride_speed(walk, skel, ankle_bone, toe_bone, &clip_stride, dir)) {
+            fprintf(stderr, "ik-probe: %s implies no stride\n", WALK_CLIP);
+            return 1;
+        }
+
+        const float leg = seg_a + seg_b;
+        vec3 toe[IK_LOCK_TICKS] = {{0.0f, 0.0f, 0.0f}};
+        bool held[IK_LOCK_TICKS] = {false};
+        for (int si = 0; si < 2; si++) {
+            const float rig = si ? 2.0f : 1.0f;
+            int lf, rf;
+            Animator* an = ik_probe_walker(skel, walk, clip_stride, false, &lf, &rf);
+            if (!an)
+                return 1;
+            IkSystem* sys = an->state->ik;
+            const int ids[2] = {lf, rf};
+
+            for (int t = 0; t < ticks; t++) {
+                // The body travels at the clip's speed in WORLD units, which is the model
+                // stride times the rig's own scale. Getting that conversion wrong is the
+                // failure this case exists to catch, so it is spelled out rather than
+                // folded into the translation.
+                mat4 to_world;
+                vec3 at;
+                glm_vec3_scale(dir, clip_stride * rig * (float)t / 60.0f, at);
+                glm_translate_make(to_world, at);
+                glm_scale_uni(to_world, rig);
+                ik_set_world(sys, to_world);
+
+                for (int k = 0; k < 2; k++) {
+                    // Model space, and unchanged by the rig's scale: a ground target is
+                    // where the ankle already is, flattened.
+                    vec3 stand;
+                    glm_vec3_copy(an->state->global_transforms[sys->feet[ids[k]].ankle_index][3],
+                                  stand);
+                    ik_foot_set_ground(sys, ids[k], (vec3){stand[0], 0.0f, stand[2]},
+                                       (vec3){0.0f, 1.0f, 0.0f}, 1.0f);
+                }
+                animator_update(an, 1.0f / 60.0f);
+                glm_vec3_copy(an->state->global_transforms[sys->feet[lf].toe_index][3], toe[t]);
+                held[t] = sys->feet[lf].lock != IK_LOCK_OFF;
+            }
+            free_animator(an);
+
+            int hs = 0;
+            const int run = ik_probe_longest_run(held + cycle, ticks - cycle, &hs);
+            hs += cycle;
+            float step = 0.0f;
+            // In MODEL units at both scales -- the recorded toe is model-space and the
+            // body travel is added back at the model stride -- so the two runs are
+            // directly comparable and a scale leaking into a threshold shows as a
+            // difference rather than as a number needing interpretation.
+            const float slide =
+                run >= 3 ? ik_probe_drift(toe, hs, run, dir, clip_stride, &step) : 0.0f;
+            printf("ik scale %s hold %.6f\n", si ? "two" : "one",
+                   (double)((float)run / (float)cycle));
+            printf("ik scale %s slidefrac %.6f\n", si ? "two" : "one", (double)(slide / leg));
+        }
     } else if (!strcmp(which, "ground") || !strcmp(which, "slope") || !strcmp(which, "step")) {
         // The three cases that need a raycast, and so a world. The rig is placed at a
         // stand point and its origin put at the ground there; everything reported is
