@@ -44,7 +44,7 @@ sample count is which quad is there at all: the 0.2 quad is below the 0.4
 cutoff and must be absent at every count. It was not, for want of an arm asking
 -- see spec 11.87 and `mask-samples`.
 
-Regenerate with: python3 assets/gen_mask_fixture.py
+Regenerate with: python3 assets/generators/gen_mask_fixture.py
 """
 
 import base64

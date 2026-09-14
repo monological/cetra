@@ -16,14 +16,13 @@ surface -- on a bright diffuse body the 0.04 dielectric F0 tint is swamped:
                 --no-specular flag also disables the effect)
 Geometry is one shared UV sphere; materials are flat factors (no textures), so
 the fixture has no external dependencies. Regenerate with:
-  python3 assets/gen_specular_fixture.py
+  python3 assets/generators/gen_specular_fixture.py
 """
 
 import base64
 import json
 import struct
 import math
-import os
 from fixture_paths import asset_path
 
 # ---- one unit UV sphere (radius 0.5), position + normal + uv ---------------

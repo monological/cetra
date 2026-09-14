@@ -20,7 +20,7 @@ What this asset guards, in order of discovery:
 The sibling ao_fixture.cscn authors the light, the no-IBL ambient fill (which
 is the term aoMap multiplies -- without it the texture is invisible), the
 camera, and pinned exposure. Regenerate with:
-  python3 assets/gen_ao_fixture.py
+  python3 assets/generators/gen_ao_fixture.py
 """
 
 import base64

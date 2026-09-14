@@ -29,12 +29,11 @@ sun term to in-scatter, and the backdrop is emissive so nothing else needs light
 render app injects a three-point rig into a no-IBL scene with zero lights, which would
 put an uncontrolled second source into the in-scatter.
 
-Regenerate with: python3 assets/gen_fog_volume_fixture.py
+Regenerate with: python3 assets/generators/gen_fog_volume_fixture.py
 """
 
 import base64
 import json
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -238,7 +237,6 @@ mix_desc["fogVolumes"] = [
     volume(1.30, 0.55, BOX_DENSITY * 0.5, WARM_TINT),
 ]
 
-here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("fog_volume_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

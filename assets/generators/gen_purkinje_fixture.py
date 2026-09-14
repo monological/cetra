@@ -41,7 +41,7 @@ WHAT EACH ROW IS FOR, and none of them is decoration:
                operator, so it must move LEAST at every rung. A build with the
                wrong tint HUE fails this and nothing else.
 
-Regenerate: python3 assets/gen_purkinje_fixture.py
+Regenerate: python3 assets/generators/gen_purkinje_fixture.py
 """
 
 import base64
@@ -338,7 +338,6 @@ cscn = {
     "post": {"tonemap": "neutral", "exposure": EXPOSURE},
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("purkinje_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

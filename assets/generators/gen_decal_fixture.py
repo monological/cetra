@@ -48,20 +48,18 @@ and four mutations index the first -- but where the third goes, and what makes
 its read point legible, is geometry, and geometry belongs in the file that owns
 the geometry.
 
-Regenerate with: python3 assets/gen_decal_fixture.py
+Regenerate with: python3 assets/generators/gen_decal_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 
 import numpy as np
 from PIL import Image
 from fixture_paths import asset_path, asset_ref
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 TEX = 64  # every painted image is TEX x TEX
 

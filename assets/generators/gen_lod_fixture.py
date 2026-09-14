@@ -27,13 +27,12 @@ a level change moves: switching level leaves draws and instances exactly where
 they were.
 
 Regenerate with:
-  python3 assets/gen_lod_fixture.py
+  python3 assets/generators/gen_lod_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path
 
@@ -190,7 +189,6 @@ gltf = {
     ],
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 out = asset_path("lod_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=2)

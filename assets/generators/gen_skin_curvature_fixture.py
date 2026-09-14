@@ -24,13 +24,12 @@ zero across each facet and spikes at the seams; and Penner's model assumes a
 convex surface, so a saddle would be outside what the fit describes.
 
 Lighting, camera and the skin material live in the sibling .cscn.
-Regenerate with: python3 assets/gen_skin_curvature_fixture.py
+Regenerate with: python3 assets/generators/gen_skin_curvature_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path
 

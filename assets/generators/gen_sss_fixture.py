@@ -9,14 +9,13 @@ tight-scattering wax on the right, so the two read differently under the same
 light -- the per-material-profile A/B. Under the key light each sphere has a
 clean shadow terminator where the SSS blur softens + tints the falloff; a moody
 env shows the thin-edge translucency. Flat color, no texture deps.
-Regenerate with: python3 assets/gen_sss_fixture.py
+Regenerate with: python3 assets/generators/gen_sss_fixture.py
 """
 
 import base64
 import json
 import struct
 import math
-import os
 from fixture_paths import asset_path
 
 RINGS = 48    # latitude divisions

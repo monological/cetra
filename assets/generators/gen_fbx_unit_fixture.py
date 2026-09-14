@@ -25,7 +25,7 @@ re-expresses a peak > 1 color as engine intensity -- so the gate's pinned
 arriving intensity is 50 cd, comfortably under the 10,000 cd unitless-format
 ceiling. If either conversion changes, the gate trips; that is the point.
 
-Regenerate with: python3 assets/gen_fbx_unit_fixture.py
+Regenerate with: python3 assets/generators/gen_fbx_unit_fixture.py
 """
 
 import os

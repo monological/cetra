@@ -21,7 +21,7 @@ fixture still has no external dependencies. It is not decoration: it is the one
 tangent-space normal in the corpus that reaches pbr_frag through a path of its
 own, since assimp exposes it at aiTextureType_CLEARCOAT index 2 and import.c's
 index-0 mapping table cannot reach it. Regenerate with:
-  python3 assets/gen_clearcoat_fixture.py
+  python3 assets/generators/gen_clearcoat_fixture.py
 """
 
 import base64
@@ -29,7 +29,6 @@ import io
 import json
 import struct
 import math
-import os
 
 import numpy as np
 from PIL import Image

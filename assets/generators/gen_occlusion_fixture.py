@@ -61,13 +61,12 @@ would NOT follow a recenter shift, so the generator replicates the app's
 bounds math and asserts the offset is zero.
 
 Regenerate with:
-  python3 assets/gen_occlusion_fixture.py
+  python3 assets/generators/gen_occlusion_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -584,7 +583,6 @@ POST = {"tonemap": "neutral", "exposure": 1.0}
 
 
 def write_json(name, payload):
-    here = os.path.dirname(os.path.abspath(__file__))
     with open(asset_path(name), "w") as f:
         json.dump(payload, f, indent=1)
         f.write("\n")

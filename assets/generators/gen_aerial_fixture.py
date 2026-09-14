@@ -22,13 +22,12 @@ the horizon colour rather than merely darkening.
 Deterministic by construction (a fixed sum-of-sines crest, no RNG), so the file
 regenerates byte-identically.
 
-Regenerate with: python3 assets/gen_aerial_fixture.py
+Regenerate with: python3 assets/generators/gen_aerial_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path
 

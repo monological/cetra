@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate assets/flare_fixture.gltf, the lens-flare test asset (spec 11.21).
 
-    python3 assets/gen_flare_fixture.py
+    python3 assets/generators/gen_flare_fixture.py
 
 WHAT THIS IS FOR
 

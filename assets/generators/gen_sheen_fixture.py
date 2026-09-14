@@ -15,14 +15,13 @@ rim at grazing angles -- the whole point of the lobe -- stands out:
                   --no-sheen flag also disables the effect)
 Geometry is one shared UV sphere; materials are flat factors (no textures), so
 the fixture has no external dependencies. Regenerate with:
-  python3 assets/gen_sheen_fixture.py
+  python3 assets/generators/gen_sheen_fixture.py
 """
 
 import base64
 import json
 import struct
 import math
-import os
 from fixture_paths import asset_path
 
 # ---- one unit UV sphere (radius 0.5), position + normal + uv ---------------

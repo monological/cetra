@@ -31,7 +31,7 @@ toward an edge, the chain goes structureless early, and distribution fires
 around mip 3 -- so this row shows the dither regime and what the jittered
 lookup does to it, on content with no lattice to beat against.
 
-Regenerate with: python3 assets/gen_alpha_ladder_fixture.py
+Regenerate with: python3 assets/generators/gen_alpha_ladder_fixture.py
 """
 
 import base64

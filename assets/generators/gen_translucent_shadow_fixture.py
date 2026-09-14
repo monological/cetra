@@ -47,13 +47,12 @@ reason: the camera is DERIVED (it must frame the ground and exclude the canopy),
 so a copied one would stop framing the scene the moment a distance changed.
 
 Regenerate with:
-  python3 assets/gen_translucent_shadow_fixture.py
+  python3 assets/generators/gen_translucent_shadow_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 import zlib
 from fixture_paths import asset_path, asset_ref
@@ -326,7 +325,6 @@ cscn = {
              "bloom": {"enabled": False}},
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("translucent_shadow_ramp.png"), "wb") as f:
     f.write(ramp_png)
 with open(asset_path("translucent_shadow_fixture.gltf"), "w") as f:

@@ -21,13 +21,12 @@ deleted -- so the same asset now guards the opposite property:
     ships its own.
 
 Flat color, no texture deps.
-Regenerate with: python3 assets/gen_light_import_fixture.py
+Regenerate with: python3 assets/generators/gen_light_import_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path
 

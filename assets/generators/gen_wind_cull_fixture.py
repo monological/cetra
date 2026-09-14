@@ -30,13 +30,12 @@ without also depending on the flex path -- wind_uv_fixture already owns that.
 Mode 0 also displaces along +X ONLY (`sway` is 0..1, never negative), so the
 travel direction is known rather than oscillating through zero.
 
-Regenerate with: python3 assets/gen_wind_cull_fixture.py
+Regenerate with: python3 assets/generators/gen_wind_cull_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -293,7 +292,6 @@ cscn = {
     },
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("wind_cull_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

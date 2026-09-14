@@ -3953,7 +3953,7 @@ static int run_anim_probe(Game* game, const char* which) {
         int n = load_animations_from_file(scene, skel, "assets/models/strut_walk.fbx", false, NULL);
         Animation* clip = n > 0 ? scene_find_animation(scene, "strut_walk") : NULL;
         if (!clip) {
-            fprintf(stderr, "anim-probe: assets/strut_walk.fbx did not load\n");
+            fprintf(stderr, "anim-probe: assets/models/strut_walk.fbx did not load\n");
             return 1;
         }
         int matched = 0;

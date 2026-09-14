@@ -29,13 +29,12 @@ THE SWING IS A ROTATION ABOUT THE ORIGIN, so the panel's distance from the pivot
 is what carries it, and the arm's geometry is derived from the camera below
 rather than tuned by eye.
 
-Regenerate with: python3 assets/gen_skinned_cull_fixture.py
+Regenerate with: python3 assets/generators/gen_skinned_cull_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -206,7 +205,6 @@ cscn = {
     "post": POST,
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("skinned_cull_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

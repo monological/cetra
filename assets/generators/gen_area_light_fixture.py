@@ -32,14 +32,13 @@ sibling loads too and you light the scene with two panels:
       --area-light 0,2,0,0,-1,0,1.5,0.6,30
 
 Regenerate with:
-  python3 assets/gen_area_light_fixture.py
+  python3 assets/generators/gen_area_light_fixture.py
 """
 
 import base64
 import json
 import struct
 import math
-import os
 from fixture_paths import asset_path
 
 # ---- geometry: one unit UV sphere (radius 0.5) + one ground quad -----------

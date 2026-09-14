@@ -21,7 +21,6 @@ The rule: a gate that pins exposure cannot see a space-mixing bug.
 import argparse
 import base64
 import functools
-import glob
 import importlib.util
 import inspect
 import json
@@ -43,12 +42,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # that used to join ROOT/assets/<name> pass the same bare name they always did,
 # and the ~60 module constants holding one need no change at all.
 #
-# Routing by EXTENSION rather than by a table of names: a fixture added later
-# lands in the right directory with nothing to register, and a name this map has
-# no kind for resolves flat, which is what the self-contained bundles
-# (abandoned_window, ivy_arcade, raiden) and any nested path want.
-_ASSET_KIND = {".gltf": "models", ".glb": "models", ".fbx": "models", ".cscn": "scenes",
-               ".png": "textures", ".cube": "lut", ".ies": "ies", ".r16": "data"}
+# The taxonomy itself is IMPORTED and not restated. It shipped as two tables,
+# one here and one in fixture_paths, and they had drifted apart before either
+# was used in anger -- this side was missing .glb and every image format, that
+# side was missing .cscn and .r16. The generators' copy is the one that
+# survives, because it is the only one a generator can reach: fixture-gen
+# sandboxes a generator by copying assets/ into a scratch tree with no scripts/
+# in it, so a dependency pointing the other way would break the sandbox.
+# fixture_paths imports nothing but os and has no side effects.
+sys.path.insert(0, os.path.join(ROOT, "assets", "generators"))
+from fixture_paths import KIND as ASSET_KINDS  # noqa: E402  (the one taxonomy)
+from fixture_paths import asset_ref, asset_subpath  # noqa: E402
 
 
 def asset(name):
@@ -60,9 +64,7 @@ def asset(name):
     sweep -- once into unbounded recursion, and once (having fixed that) into a
     docstring rewritten to say the opposite of what it meant.
     """
-    kind = _ASSET_KIND.get(os.path.splitext(name)[1]) if "/" not in name else None
-    parts = [ROOT, "assets"] + ([kind] if kind else []) + [name]
-    return os.path.join(*parts)
+    return os.path.join(ROOT, "assets", *asset_subpath(name).split("/"))
 
 
 # Where the app binaries come from. `out/bin` is build.sh's default (Debug, no
@@ -1007,7 +1009,7 @@ def _scanline_ripple(pix, w, h, project, radius, cx, half=SSS_RIPPLE_WINDOW):
 
 # --- lens flare and chromatic aberration (spec 11.21 / B7) --------------------
 
-# Frame-plane positions of the two dim marks in assets/flare_fixture.gltf, and
+# Frame-plane positions of the two dim marks in assets/models/flare_fixture.gltf, and
 # the camera that sees them. Kept here rather than derived from the .gltf: the
 # gate's whole claim is that measured separation matches an ANALYTIC prediction,
 # and reading the geometry back from the asset under test would let a broken
@@ -1496,7 +1498,7 @@ def run_penumbra_gate(workdir):
 # whose answer is computable before rendering, measured on the shadow term alone
 # (shadowed frame divided by a --no-shadows frame).
 #
-# Mirrors assets/dir_shadow_fixture.cscn / _lowsun.cscn / gen_dir_shadow_fixture.py
+# Mirrors assets/scenes/dir_shadow_fixture.cscn / _lowsun.cscn and its generator
 # -- these numbers and the camera have to match the fixtures or the gate measures
 # a different scene than it predicts. The sun is at azimuth 0 (travel -Z), so a
 # sphere of radius r centred at (cx, h, 0) shadows the ellipse
@@ -2019,10 +2021,13 @@ def _ies_probe(workdir, scene, extra=None):
 def _ies_variant(src, dst, name):
     """A copy of the fixture naming a different .ies. The only thing that varies.
 
-    The bare name is enough: cscn_copy resolves a profile against the source scene's
-    directory, which is assets/, exactly as the engine does.
+    ROUTED, not bare. cscn_copy resolves a relative profile against the SOURCE
+    SCENE's directory, and since 12.8 that is assets/scenes/ while the profiles
+    are in assets/ies/ -- a bare name resolved next to the scene, loaded
+    nothing, and every arm in this group reported zero rows. An absolute path
+    passes cscn_copy's isabs check untouched, which is what the engine gets.
     """
-    cscn_copy(src, dst, lambda d: d["lights"][0].__setitem__("profile", name))
+    cscn_copy(src, dst, lambda d: d["lights"][0].__setitem__("profile", asset(name)))
 
 
 def _mirror_asymmetry(path):
@@ -2362,7 +2367,7 @@ def run_ies_gate(workdir):
     def _spot(cone):
         def mutate(d):
             d["lights"][0].update({"type": "spot", "direction": [0.0, -1.0, 0.0],
-                                   "cone": cone, "profile": "ies_symmetric.ies"})
+                                   "cone": cone, "profile": asset("ies_symmetric.ies")})
         return mutate
 
     cone_shots, cone_err = {}, None
@@ -2677,7 +2682,11 @@ def run_contact_gate(workdir):
             print(f"  {arm} ERROR the base render failed: {err.strip()[-200:]}")
         return ["contact-local", "contact-mapped", "contact-fold"]
     bare, err = _contact_read(
-        workdir, "bare", lambda d: d["models"].__setitem__(0, {"path": CONTACT_BARE_MODEL}))
+        workdir, "bare",
+        # Absolute: a relative model resolves against the SOURCE scene's own
+        # directory, which is assets/scenes/ since 12.8, and the models are a
+        # sibling directory away.
+        lambda d: d["models"].__setitem__(0, {"path": asset(CONTACT_BARE_MODEL)}))
     if err:
         print(f"  contact-local ERROR bare-twin render failed: {err.strip()[-200:]}")
         failures.append("contact-local")
@@ -3861,7 +3870,7 @@ def run_lut_gate(workdir):
     shutil.copy(cubes["swap"], os.path.join(workdir, "lut_swap.cube"))
 
     def _author(d):
-        d.setdefault("post", {})["lut"] = {"path": "lut_swap.cube", "strength": 1.0,
+        d.setdefault("post", {})["lut"] = {"path": asset_ref("lut_swap.cube"), "strength": 1.0,
                                            "interp": "tetrahedral"}
 
     cscn_copy(scene, authored, _author)
@@ -3873,7 +3882,7 @@ def run_lut_gate(workdir):
     beaten = os.path.join(workdir, "lut_beaten.cscn")
 
     def _author_weak(d):
-        d.setdefault("post", {})["lut"] = {"path": "lut_swap.cube", "strength": 0.25,
+        d.setdefault("post", {})["lut"] = {"path": asset_ref("lut_swap.cube"), "strength": 0.25,
                                            "interp": "trilinear"}
 
     cscn_copy(scene, beaten, _author_weak)
@@ -17227,10 +17236,11 @@ def run_gate_docs_gate(workdir):
 
 
 def run_fixture_gen_gate(workdir):
-    """Every gen_*.py still emits the asset committed beside it.
+    """Every gen_*.py still emits the asset committed for it, where it is committed.
 
-      fixture-gen  each generator runs and reproduces its committed outputs. No GPU and
-                   no render, which is why it can afford to cover the whole corpus.
+      fixture-gen  each generator runs and reproduces its committed outputs, in both
+                   content and LOCATION. No GPU and no render, which is why it can
+                   afford to cover the whole corpus.
 
     It exists because gen_water_fixture.py silently stopped emitting its water block: a
     regeneration would have stripped 21 authored keys and taken twenty-odd water arms with
@@ -17238,13 +17248,18 @@ def run_fixture_gen_gate(workdir):
     fixture whose generator nobody has run since committing it.
 
     Run as a COPY in a scratch directory rather than through an output-directory argument.
-    A generator resolves both its inputs and its outputs against __file__, so moving the
-    script moves the writes -- which buys this coverage without 34 scripts having to learn
-    a convention they have no other use for. The scratch directory has to MIRROR the tree,
-    not just hold the script: the non-golden PNGs are what the textured fixtures read, and
-    one generator loads a module from ../tools, and one reads constants out of
-    ../cetra/shaders/include; both are symlinked rather than copied because
-    nothing writes outside its own directory.
+    A generator resolves its outputs through fixture_paths, which resolves against ITS OWN
+    __file__ -- so mirroring the helper alongside the scripts moves the writes with them,
+    and 54 scripts need no convention they have no other use for. The scratch directory has
+    to MIRROR the tree, not just hold the scripts: two generators load a module from
+    ../../tools and one reads constants out of ../../cetra/shaders/include, both symlinked
+    rather than copied because nothing writes outside its own directory, and the kind
+    directories are pre-created because asset_path serves reads as well as writes.
+
+    COPIED AND NEVER SYMLINKED, and that is not a preference. sys.path[0] is REALPATHed
+    while __file__ is not, so a symlinked script imports its siblings from the real tree
+    and every write escapes into the committed corpus; a symlinked image is worse, since
+    the first generator to save one truncates the committed file through the link.
     """
     src_dir = os.path.join(ROOT, "assets")
 
@@ -17289,7 +17304,9 @@ def run_fixture_gen_gate(workdir):
             # and this arm would quietly compare against whichever the walk
             # reached first. Refuse instead: it is the confusion a move creates.
             if f in committed_at:
-                ambiguous.append(f"{f}: committed in two places")
+                ambiguous.append(
+                    f"{f}: committed at {os.path.relpath(committed_at[f], src_dir)} "
+                    f"and {os.path.relpath(path, src_dir)}")
             committed_at[f] = path
     gens = sorted(found)
     helpers = sorted(helpers)
@@ -17316,6 +17333,12 @@ def run_fixture_gen_gate(workdir):
         run_root = os.path.join(workdir, "gen", name[:-3])
         run_dir = os.path.join(run_root, "assets")
         os.makedirs(run_dir, exist_ok=True)
+        # The kind directories exist before a generator runs, because asset_path
+        # serves READS as well as writes and must not mkdir on a read -- a
+        # generator asking where a texture lives would otherwise create the
+        # directory as a side effect of looking.
+        for kind in set(ASSET_KINDS.values()):
+            os.makedirs(os.path.join(run_dir, kind), exist_ok=True)
         tools_link = os.path.join(run_root, "tools")
         if not os.path.exists(tools_link):
             os.symlink(os.path.join(ROOT, "tools"), tools_link)
@@ -17396,7 +17419,20 @@ def run_fixture_gen_gate(workdir):
             committed, regenerated = committed_at.get(f), os.path.join(run_dir, rel)
             if not committed or not os.path.exists(committed):
                 drifted.append(f"{f}: emitted but not committed")
-            elif f.endswith(text_ext):
+                continue
+            # WHERE it landed, not only what it holds. Indexing by basename is
+            # what makes this arm survive a re-split, and it is also what made
+            # it blind to one: spec 12.8 shipped with asset_path unrouted, so
+            # every generator wrote a flat file at the corpus root while this
+            # arm found the committed twin under its kind directory, compared
+            # the bytes, and passed. Content equality alone cannot tell a
+            # generator that works from one that has stopped updating the
+            # corpus at all.
+            want = os.path.relpath(os.path.dirname(committed), src_dir)
+            got = os.path.dirname(rel) or "."
+            if want != got:
+                drifted.append(f"{f}: emitted into {got}, committed in {want}")
+            if f.endswith(text_ext):
                 compared += 1
                 with open(committed) as f_committed, open(regenerated) as f_regenerated:
                     if f_committed.read() != f_regenerated.read():
@@ -17415,9 +17451,14 @@ def run_fixture_gen_gate(workdir):
     # Counts rather than hardcoded numbers: a literal would have to be edited by
     # whoever adds the 55th generator, which is the kind of chore that gets done
     # by lowering the number to match.
+    # `ambiguous` is an INDEPENDENT claim about the corpus, not a rung on the
+    # coverage ladder -- chained, a tree with both a duplicated basename and
+    # dead discovery reported only the duplicate, and the second problem cost a
+    # second round trip to find. The two below do subsume each other: no
+    # generators means nothing compared, so the elif picks the sharper message.
     if ambiguous:
         drifted.insert(0, "; ".join(sorted(set(ambiguous))[:4]))
-    elif not gens:
+    if not gens:
         drifted.insert(0, "no generators found under assets/; this arm ran nothing")
     elif not compared or not binary:
         drifted.insert(0, f"compared {compared} text and {binary} binary assets; "

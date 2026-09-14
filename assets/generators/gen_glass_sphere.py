@@ -8,13 +8,12 @@ environment through the body, and a faint cool attenuation tint for a crystal
 (not plastic) read. No textures -- the look comes entirely from the material +
 whatever environment it is rendered under (a detailed HDR sells it best).
 
-Regenerate with: python3 assets/gen_glass_sphere.py
+Regenerate with: python3 assets/generators/gen_glass_sphere.py
 """
 
 import base64
 import json
 import struct
-import os
 import math
 from fixture_paths import asset_path
 

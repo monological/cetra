@@ -40,13 +40,12 @@ its bind offset, and the generator asserts that pairing.
 The bone names keep their colon through assimp's glTF path (as they do through
 FBX); the `anim-clip-loads` gate arm is what notices if that ever stops.
 
-Regenerate with: python3 assets/gen_puppet_fixture.py
+Regenerate with: python3 assets/generators/gen_puppet_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -445,7 +444,6 @@ cscn = {
     "post": POST,
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("puppet.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

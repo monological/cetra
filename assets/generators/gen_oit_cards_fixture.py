@@ -48,14 +48,13 @@ bounding box -- so a hand-copied camera would silently stop framing the scene th
 moment any distance above changed.
 
 Regenerate with:
-  python3 assets/gen_oit_cards_fixture.py
+  python3 assets/generators/gen_oit_cards_fixture.py
 """
 
 import base64
 import colorsys
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -233,7 +232,6 @@ cscn = {
              "bloom": {"enabled": False}},
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 out = asset_path("oit_cards_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)

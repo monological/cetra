@@ -36,13 +36,12 @@ No environment and no second light, so the umbra is genuinely black and the
 transition spans the full available range.
 
 Regenerate with:
-  python3 assets/gen_area_shadow_fixture.py
+  python3 assets/generators/gen_area_shadow_fixture.py
 (the .cscn is hand-authored, not generated.)
 """
 
 import base64
 import json
-import os
 import struct
 from fixture_paths import asset_path
 

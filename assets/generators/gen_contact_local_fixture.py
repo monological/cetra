@@ -54,13 +54,12 @@ is the same ground with the cube deleted and nothing else changed, so an arm tha
 swaps the model path is varying the occluder and only the occluder.
 
 Regenerate the geometry AND the scene with:
-  python3 assets/gen_contact_local_fixture.py
+  python3 assets/generators/gen_contact_local_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -390,7 +389,6 @@ def write_gltf(path, with_cube):
         f.write("\n")
 
 
-here = os.path.dirname(os.path.abspath(__file__))
 write_gltf(asset_path("contact_local_fixture.gltf"), with_cube=True)
 write_gltf(asset_path("contact_local_bare.gltf"), with_cube=False)
 with open(asset_path("contact_local_fixture.cscn"), "w") as fh:
