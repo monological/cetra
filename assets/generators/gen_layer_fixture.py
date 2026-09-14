@@ -56,7 +56,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 
 TEX = 64  # every map, so the array's canonical size is 64 and the blit is 1:1
@@ -373,17 +373,17 @@ GLTF = {
 # comparing two framings as much as two projections.
 CSCN = {
     "version": 1,
-    "models": [{"path": "layer_fixture.gltf"}],
+    "models": [{"path": asset_ref("layer_fixture.gltf")}],
     "materials": {
         "layered_surface": {
-            "splat": SPLAT_NAME,
+            "splat": asset_ref(SPLAT_NAME),
             "layerBlend": LAYER_BLEND_SHARPNESS,
             # Layer 1 takes the relief map; the rest share the flat one, which is
             # also what exercises mask_layer_for's dedup (one file, three uses,
             # one array layer).
             "layers": [
-                {"albedo": name,
-                 "surface": RELIEF_NAME if i == 1 else SURFACE_NAME,
+                {"albedo": asset_ref(name),
+                 "surface": asset_ref(RELIEF_NAME if i == 1 else SURFACE_NAME),
                  "uvScale": UV_SCALE}
                 for i, (name, _) in enumerate(LAYERS)
             ],

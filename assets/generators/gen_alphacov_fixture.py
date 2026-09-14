@@ -45,7 +45,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -248,7 +248,7 @@ GLTF = {
             "metallicFactor": 0.0, "roughnessFactor": 1.0},
     }],
     "textures": [{"source": 0}],
-    "images": [{"uri": "alphacov_dots.png"}],
+    "images": [{"uri": asset_ref("alphacov_dots.png")}],
     "accessors": [
         {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": mn, "max": mx},
         {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
@@ -265,7 +265,7 @@ GLTF = {
 }
 
 CSCN = {
-    "models": [{"path": "alphacov_fixture.gltf"}],
+    "models": [{"path": asset_ref("alphacov_fixture.gltf")}],
     # The key is "eye", not "position" -- a wrong one parses, warns nowhere and
     # leaves the auto-framed camera in place, which is the trap texcomp_fixture
     # and decal_fixture both record.

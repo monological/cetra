@@ -22,7 +22,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 RES = 512
 COURSES = 5          # brick rows over the tile
@@ -102,8 +102,8 @@ gltf = {
     "asset": {"version": "2.0", "generator": "gen_parallax_fixture.py"},
     "samplers": [{"wrapS": 10497, "wrapT": 10497}],
     "images": [
-        {"uri": "parallax_fixture_albedo.png"},
-        {"uri": "parallax_fixture_normal.png"},
+        {"uri": asset_ref("parallax_fixture_albedo.png")},
+        {"uri": asset_ref("parallax_fixture_normal.png")},
     ],
     "textures": [{"source": 0, "sampler": 0}, {"source": 1, "sampler": 0}],
     "materials": [

@@ -32,7 +32,7 @@ import math
 import os
 import struct
 import sys
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 WATER_LEVEL = 0.0
 # The extent the .cscn authors. render_dome_bed_height sizes itself off this, so the
@@ -209,7 +209,7 @@ TARGET = [0.0, WATER_LEVEL - 0.4, -DOME_RADIUS * 0.10]
 
 scene_desc = {
     "version": 1,
-    "models": [{"path": "beach_fixture.gltf"}],
+    "models": [{"path": asset_ref("beach_fixture.gltf")}],
     "lights": [
         {
             "name": "BeachKey",

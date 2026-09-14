@@ -90,7 +90,7 @@ static bool load_pending = false;
 // rebuilds the rig transform every step, so both sites read this.
 #define PLAYER_RIG_DROP (-(PLAYER_RADIUS + PLAYER_HALF_H))
 static bool no_puppet = false;
-static const char* puppet_path = "assets/puppet.gltf";
+static const char* puppet_path = "assets/models/puppet.gltf";
 static const char* twin_clip = NULL;
 static SceneNode* player_rig = NULL; // the puppet under the entity's node: drop + yaw
 static Animator* player_animator = NULL;
@@ -3950,7 +3950,7 @@ static int run_anim_probe(Game* game, const char* which) {
         }
     } else if (!strcmp(which, "import")) {
         // The committed walk clip binds onto the puppet by exact name.
-        int n = load_animations_from_file(scene, skel, "assets/strut_walk.fbx", false, NULL);
+        int n = load_animations_from_file(scene, skel, "assets/models/strut_walk.fbx", false, NULL);
         Animation* clip = n > 0 ? scene_find_animation(scene, "strut_walk") : NULL;
         if (!clip) {
             fprintf(stderr, "anim-probe: assets/strut_walk.fbx did not load\n");

@@ -38,6 +38,33 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# The committed corpus is split by KIND (spec 12.8), and a call site says a
+# filename rather than a path so it never learns the taxonomy -- the ~150 sites
+# that used to join ROOT/assets/<name> pass the same bare name they always did,
+# and the ~60 module constants holding one need no change at all.
+#
+# Routing by EXTENSION rather than by a table of names: a fixture added later
+# lands in the right directory with nothing to register, and a name this map has
+# no kind for resolves flat, which is what the self-contained bundles
+# (abandoned_window, ivy_arcade, raiden) and any nested path want.
+_ASSET_KIND = {".gltf": "models", ".glb": "models", ".fbx": "models", ".cscn": "scenes",
+               ".png": "textures", ".cube": "lut", ".ies": "ies", ".r16": "data"}
+
+
+def asset(name):
+    """Absolute path to a committed asset, routed to its kind directory.
+
+    Assembled through a list rather than as a join of the root, the corpus
+    directory and the name. That three-argument shape is what ~150 call sites
+    were swept FROM, and written here it makes this function match its own
+    sweep -- once into unbounded recursion, and once (having fixed that) into a
+    docstring rewritten to say the opposite of what it meant.
+    """
+    kind = _ASSET_KIND.get(os.path.splitext(name)[1]) if "/" not in name else None
+    parts = [ROOT, "assets"] + ([kind] if kind else []) + [name]
+    return os.path.join(*parts)
+
+
 # Where the app binaries come from. `out/bin` is build.sh's default (Debug, no
 # -O at all); `out/release/bin` is `./build.sh --release`.
 #
@@ -118,7 +145,7 @@ def _cscn_camera(name, **extra):
     thresholds), which is worth keeping visibly distinct from what the scene
     file dictates.
     """
-    with open(os.path.join(ROOT, "assets", name)) as f:
+    with open(asset(name)) as f:
         cam = json.load(f)["camera"]
     return {"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
             "fovy_deg": float(cam["fov"]), **extra}
@@ -126,12 +153,12 @@ def _cscn_camera(name, **extra):
 # Scale-invariance gates. Scaling every emitter by K and the exposure by 1/K is
 # a no-op on a correctly normalised pipeline, so the two frames must match.
 SCALE_GATES = [
-    ("punctual", "assets/cornell_point.cscn", []),
-    ("area", "assets/area_scale_fixture.cscn", []),
-    ("subsurface", "assets/sss_scale_fixture.cscn", []),
+    ("punctual", "assets/scenes/cornell_point.cscn", []),
+    ("area", "assets/scenes/area_scale_fixture.cscn", []),
+    ("subsurface", "assets/scenes/sss_scale_fixture.cscn", []),
     # Fog's in-scatter radiance is a real emitter, so the scaler lifts
     # fog.ambient alongside the lights.
-    ("fog", "assets/froxel_scale_fixture.cscn", ["--fog"]),
+    ("fog", "assets/scenes/froxel_scale_fixture.cscn", ["--fog"]),
 ]
 
 # Pass on PEAK error, not on a differing-pixel count.
@@ -298,7 +325,7 @@ def _detect_fb_scale(workdir):
     """
     global _FB_SCALE
     probe = os.path.join(workdir, "_fbscale.ppm")
-    scene = os.path.join(ROOT, "assets", "parallax_fixture.gltf")
+    scene = asset("parallax_fixture.gltf")
     r = subprocess.run([RENDER, "-m", scene, "-x", "-f", "1", "-W", "100", "-H", "100",
                         "-S", probe], capture_output=True, text=True)
     if r.returncode == 0 and os.path.exists(probe):
@@ -545,7 +572,7 @@ def _skin_sample_points(radius, cx):
 
 def _skin_render(workdir, tag, extra):
     out = os.path.join(workdir, f"skin_{tag}.ppm")
-    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    scene = asset("skin_curvature_fixture.cscn")
     # --no-sss isolates the analytic falloff from the screen-space blur, which is
     # the only way to attribute what is measured. --no-shadows because the far
     # side of a convex caster is in its own shadow, so shadows multiply the whole
@@ -578,7 +605,7 @@ def run_skin_offpath_gate(workdir):
     """
     fails = []
     for scene_name in SKIN_OFFPATH_SCENES:
-        scene = os.path.join(ROOT, "assets", scene_name)
+        scene = asset(scene_name)
         if not os.path.exists(scene):
             print(f"  skin-off     SKIP  (missing {scene_name})")
             continue
@@ -606,7 +633,7 @@ def run_skin_offpath_gate(workdir):
     # create slack at any size and this gate read 0 px. The lever is the authored
     # radius against the ceiling -- The pyramid's ceiling is about
     # 0.42 at the fixture's framing, so 0.28 is delivered in full and 1.5 is not.
-    fixture = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    fixture = asset("skin_curvature_fixture.cscn")
     if os.path.exists(fixture):
         a = os.path.join(workdir, "skinlive_a.ppm")
         b = os.path.join(workdir, "skinlive_b.ppm")
@@ -728,7 +755,7 @@ def run_hair_flow_gate(workdir):
     size = ["-W", "800", "-H", "600"]
     fails, frames, box = [], {}, None
     for label, name in arms:
-        scene = os.path.join(ROOT, "assets", name)
+        scene = asset(name)
         if not os.path.exists(scene):
             print(f"  hair-flow    SKIP  (missing {name})")
             return []
@@ -783,7 +810,7 @@ def run_skin_area_gate(workdir):
     fails = []
     for label, scene_name in (("area", "skin_area_fixture.cscn"),
                               ("directional", "skin_curvature_fixture.cscn")):
-        scene = os.path.join(ROOT, "assets", scene_name)
+        scene = asset(scene_name)
         if not os.path.exists(scene):
             print(f"  skin-area    SKIP  (missing {scene_name})")
             continue
@@ -842,7 +869,7 @@ def _skin_sample(workdir, tag, dims, extra):
     fixed angle is coarser but always defined, which is what a gate spanning both
     regimes needs.
     """
-    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    scene = asset("skin_curvature_fixture.cscn")
     out = os.path.join(workdir, f"skinm_{tag}.ppm")
     # --no-shadows so the far side is not multiplied away, --no-bloom so nothing
     # smears the falloff being measured, --no-dither because the crossing is
@@ -885,7 +912,7 @@ def run_sss_invariance_gate(workdir):
     A 4x sweep: the old cap engaged part-way up, so a short sweep could sit
     entirely inside the clamped regime and read flat while being wrong.
     """
-    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    scene = asset("skin_curvature_fixture.cscn")
     if not os.path.exists(scene):
         print("  sss-scale    SKIP  (missing skin_curvature_fixture.cscn)")
         return []
@@ -1001,7 +1028,7 @@ _SRGB_LIN = [((v / 255.0 + 0.055) / 1.055) ** 2.4 if v / 255.0 > 0.04045
 
 def _flare_render(workdir, tag, extra):
     out = os.path.join(workdir, f"flare_{tag}.ppm")
-    scene = os.path.join(ROOT, "assets", "flare_fixture.cscn")
+    scene = asset("flare_fixture.cscn")
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-auto-exposure", "-E", "1.0", "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
@@ -1048,7 +1075,7 @@ def _flare_separation(w, h, pix, name):
 
 
 def run_flare_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "flare_fixture.cscn")
+    fixture = asset("flare_fixture.cscn")
     if not os.path.exists(fixture):
         print("  flare        SKIP  (missing flare_fixture.cscn)")
         return []
@@ -1200,7 +1227,7 @@ def run_sss_banding_gate(workdir):
     Runs with SSS ON, which is the whole point -- every other skin gate runs
     --no-sss and is structurally blind to this.
     """
-    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    scene = asset("skin_curvature_fixture.cscn")
     if not os.path.exists(scene):
         print("  sss-band     SKIP  (missing skin_curvature_fixture.cscn)")
         return []
@@ -1264,7 +1291,7 @@ def run_skin_handoff_gate(workdir):
     +11.54. It is already at the reference, so pre-integration standing down where
     the blur is unclamped is correct, not a feature going missing.
     """
-    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    scene = asset("skin_curvature_fixture.cscn")
     if not os.path.exists(scene):
         print("  skin-handoff SKIP  (missing skin_curvature_fixture.cscn)")
         return []
@@ -1294,7 +1321,7 @@ def run_skin_handoff_gate(workdir):
 
 
 def run_skin_curvature_gate(workdir):
-    scene = os.path.join(ROOT, "assets", "skin_curvature_fixture.cscn")
+    scene = asset("skin_curvature_fixture.cscn")
     if not os.path.exists(scene):
         print("  skin-curve   SKIP  (missing skin_curvature_fixture.cscn)")
         return []
@@ -1414,7 +1441,7 @@ def run_skin_curvature_gate(workdir):
 
 
 def run_penumbra_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "area_shadow_fixture.gltf")
+    fixture = asset("area_shadow_fixture.gltf")
     if not os.path.exists(fixture):
         print("  penumbra     SKIP  (missing area_shadow_fixture.gltf)")
         return []
@@ -1576,7 +1603,7 @@ def _dir_visible(p):
 
 def _dir_render(workdir, scene, tag, extra):
     out = os.path.join(workdir, f"dir_{tag}.ppm")
-    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", scene), "-x", "-f", "30",
+    cmd = [RENDER, "-m", asset(scene), "-x", "-f", "30",
            "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600", "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
@@ -1622,7 +1649,7 @@ def _term_reader(shadow_frame, ref_frame):
 # reference implementation before the cascade port could copy it, spec 10.5
 # phase 2a), so it must not vanish behind a missing cascade fixture.
 def run_grazing_gate(workdir):
-    leak = os.path.join(ROOT, "assets", "cornell_leak.gltf")
+    leak = asset("cornell_leak.gltf")
     if not os.path.exists(leak):
         print("  grazing      SKIP  (missing cornell_leak.gltf)")
         return []
@@ -1703,7 +1730,7 @@ def _taa_churn(workdir, fixture, tag, extra, frames=120, first=90):
 # measure it. Default settings deliberately (PCSS on, full post): the defect
 # was invisible to every gate that pins the pipeline down.
 def run_catcher_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "contact_fixture.cscn")
+    fixture = asset("contact_fixture.cscn")
     if not os.path.exists(fixture):
         print("  catcher      SKIP  (missing contact_fixture.cscn)")
         return []
@@ -1732,7 +1759,7 @@ CLOUD_CHURN_FACTOR = 9.7  # 153015/23656 measured at phase 5, x1.5 headroom
 
 
 def run_cloud_churn_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "aerial_fixture.gltf")
+    fixture = asset("aerial_fixture.gltf")
     if not os.path.exists(fixture):
         print("  clouds       SKIP  (missing aerial_fixture.gltf)")
         return []
@@ -1803,7 +1830,7 @@ OIT_MOMENT_GAIN_MIN = 2.5
 
 def _oit_fixture_materials():
     """(background rgb, [(card rgb, alpha)]) straight out of the fixture."""
-    path = os.path.join(ROOT, "assets", "oit_cards_fixture.gltf")
+    path = asset("oit_cards_fixture.gltf")
     with open(path) as f:
         mats = json.load(f)["materials"]
     bg = mats[0]["emissiveFactor"]
@@ -1867,7 +1894,7 @@ def _oit_error(path, truth):
 
 def _oit_render(workdir, tag, extra):
     out = os.path.join(workdir, f"oit_{tag}.ppm")
-    scene = os.path.join(ROOT, "assets", "oit_cards_fixture.cscn")
+    scene = asset("oit_cards_fixture.cscn")
     # --no-vignette is load-bearing, not tidiness: the default vignette is on and
     # radial, so it would darken the outer bands by a fraction of the very error
     # being measured. The rest keeps anything that could add to a flat emissive
@@ -1884,7 +1911,7 @@ def _oit_render(workdir, tag, extra):
 
 
 def run_oit_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "oit_cards_fixture.cscn")
+    fixture = asset("oit_cards_fixture.cscn")
     if not os.path.exists(fixture):
         print("  oit-cards    SKIP  (missing oit_cards_fixture.cscn)")
         return []
@@ -2139,7 +2166,7 @@ def _contact_read(workdir, tag, mutate, extra=None):
     texel moves them together and the control stays a control.
     """
     scn = os.path.join(workdir, f"contact_{tag}.cscn")
-    cscn_copy(os.path.join(ROOT, "assets", CONTACT_FIXTURE), scn, mutate)
+    cscn_copy(asset(CONTACT_FIXTURE), scn, mutate)
     out = os.path.join(workdir, f"contact_{tag}.ppm")
     err = render(scn, out, ["-W", "640", "-H", "400", "--no-auto-exposure", "-E", "1.0",
                             "--cs-debug", "--cs-distance", CONTACT_CS_DISTANCE] + (extra or []))
@@ -2176,7 +2203,7 @@ def run_ies_gate(workdir):
     THIRD implementation of the same table, and no probe reaches it. Both halves are
     needed and neither substitutes.
     """
-    fixture = os.path.join(ROOT, "assets", "ies_fixture.cscn")
+    fixture = asset("ies_fixture.cscn")
     if not os.path.exists(fixture):
         print("  ies-table    SKIP  (missing ies_fixture.cscn)")
         return []
@@ -2372,12 +2399,11 @@ def run_ies_gate(workdir):
     flag_runs = (
         # The fixture authors ies_symmetric; overriding with the asymmetric file must move
         # the frame, and must land on the SAME frame the authored asymmetric variant gives.
-        ("override", fixture, ["--ies-profile", os.path.join(ROOT, "assets",
-                                                             "ies_asymmetric.ies")]),
+        ("override", fixture, ["--ies-profile", asset("ies_asymmetric.ies")]),
         # ...and a scene with two point lights and no profile anywhere in it.
-        ("bare", os.path.join(ROOT, "assets", "contact_local_fixture.cscn"), []),
-        ("bare_ies", os.path.join(ROOT, "assets", "contact_local_fixture.cscn"),
-         ["--ies-profile", os.path.join(ROOT, "assets", "ies_asymmetric.ies")]),
+        ("bare", asset("contact_local_fixture.cscn"), []),
+        ("bare_ies", asset("contact_local_fixture.cscn"),
+         ["--ies-profile", asset("ies_asymmetric.ies")]),
     )
     for tag, scene, extra in flag_runs:
         if not os.path.exists(scene):
@@ -2409,7 +2435,7 @@ def run_ies_gate(workdir):
     return failures
 
 
-AO_SCENE = os.path.join(ROOT, "assets", "cornell_rooms.cscn")
+AO_SCENE = asset("cornell_rooms.cscn")
 # AO on vs off moves 32% of this frame at PAE 71/255. The bar is a fraction of
 # that with room to spare: what it exists to catch is the chain going SILENT --
 # an FBO the driver refuses, a gate that stopped arming, a format nothing can
@@ -2636,7 +2662,7 @@ def run_contact_gate(workdir):
     exactly 0.0000; packing the raw shadow_layer takes contact-stale from the map-less
     reading to 1.0000.
     """
-    fixture = os.path.join(ROOT, "assets", CONTACT_FIXTURE)
+    fixture = asset(CONTACT_FIXTURE)
     if not os.path.exists(fixture):
         print(f"  contact-local SKIP  ({CONTACT_FIXTURE} not present)")
         return []
@@ -2828,7 +2854,7 @@ def _catcher_samples(path):
 
 def _catcher_render(workdir, tag, extra):
     out = os.path.join(workdir, f"catchertr_{tag}.ppm")
-    scene = os.path.join(ROOT, "assets", "catcher_transparency_fixture.cscn")
+    scene = asset("catcher_transparency_fixture.cscn")
     # --no-recenter is the fixture's whole premise: the app lifts a model's
     # bounding-box base onto y=0, and the geometry under test is the half of the
     # panel BELOW y=0. Recentred, there is nothing left to measure.
@@ -2844,7 +2870,7 @@ def _catcher_render(workdir, tag, extra):
 
 
 def run_catcher_transparency_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "catcher_transparency_fixture.cscn")
+    fixture = asset("catcher_transparency_fixture.cscn")
     if not os.path.exists(fixture):
         print("  catcher-tr   SKIP  (missing catcher_transparency_fixture.cscn)")
         return []
@@ -2872,7 +2898,7 @@ def run_catcher_transparency_gate(workdir):
 
 
 def run_dir_shadow_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")
+    fixture = asset("dir_shadow_fixture.cscn")
     if not os.path.exists(fixture):
         print("  dir-shadow   SKIP  (missing dir_shadow_fixture.cscn)")
         return []
@@ -3143,7 +3169,7 @@ def _origin_offset_fixture(workdir, offset):
     coordinates: the projector subtracts eye from point, and both took the same
     offset.
     """
-    src = os.path.join(ROOT, "assets", "dir_shadow_fixture.gltf")
+    src = asset("dir_shadow_fixture.gltf")
     with open(src) as fh:
         doc = json.load(fh)
     for node in doc["nodes"]:
@@ -3152,7 +3178,7 @@ def _origin_offset_fixture(workdir, offset):
     with open(gltf, "w") as fh:
         json.dump(doc, fh)
 
-    with open(os.path.join(ROOT, "assets", "dir_shadow_fixture.cscn")) as fh:
+    with open(asset("dir_shadow_fixture.cscn")) as fh:
         scene = json.load(fh)
     scene["models"] = [{"path": gltf}]
     for key in ("eye", "target"):
@@ -3323,7 +3349,7 @@ def run_origin_gate(workdir):
     not" instead of against a remembered number.
     """
     failures = []
-    if not os.path.exists(os.path.join(ROOT, "assets", "dir_shadow_fixture.gltf")):
+    if not os.path.exists(asset("dir_shadow_fixture.gltf")):
         print("  shadow-offset SKIP  (missing dir_shadow_fixture.gltf)")
         return failures
 
@@ -3557,7 +3583,7 @@ LUT_PROBE_MIN_CODES = 4
 
 def _lut_render(workdir, name, extra, scene=None):
     out = os.path.join(workdir, name + ".ppm")
-    src = scene or os.path.join(ROOT, "assets", LUT_SCENE)
+    src = scene or asset(LUT_SCENE)
     err = render(src, out, ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-vignette"]
                  + extra)
     return (None, err) if err else (out, None)
@@ -3574,7 +3600,7 @@ def _lut_patch_points():
     ground truth a function of the thing under test and, since that generator
     writes at module scope, would rewrite the committed assets mid-gate.
     """
-    with open(os.path.join(ROOT, "assets", LUT_FIXTURE)) as f:
+    with open(asset(LUT_FIXTURE)) as f:
         nodes = json.load(f)["nodes"]
     return [(n["name"], tuple(n["translation"])) for n in nodes
             if n.get("name", "").startswith("patch_")]
@@ -3710,11 +3736,11 @@ def run_lut_gate(workdir):
                     and the reason trilinear is kept reachable at all.
     """
     failures = []
-    scene = os.path.join(ROOT, "assets", LUT_SCENE)
+    scene = asset(LUT_SCENE)
     if not os.path.exists(scene):
         print("  lut          SKIP  (missing %s)" % LUT_SCENE)
         return []
-    cubes = {n: os.path.join(ROOT, "assets", "lut_%s.cube" % n)
+    cubes = {n: asset("lut_%s.cube" % n)
              for n in ("identity", "swap", "steep", "neutral")}
     missing = [p for p in cubes.values() if not os.path.exists(p)]
     if missing:
@@ -4043,7 +4069,7 @@ PK_LIT_RUNG = 1
 
 def _pk_render(workdir, name, extra, scene=None):
     out = os.path.join(workdir, "pk_" + name + ".ppm")
-    src = scene or os.path.join(ROOT, "assets", PK_SCENE)
+    src = scene or asset(PK_SCENE)
     err = render(src, out, PK_PIN + extra)
     return (None, err) if err else (out, None)
 
@@ -4055,7 +4081,7 @@ def _pk_patch_points():
     agrees with the asset only until someone edits the generator, and the
     failure is silent -- the arm keeps passing while sampling the backdrop.
     """
-    with open(os.path.join(ROOT, "assets", PK_FIXTURE)) as f:
+    with open(asset(PK_FIXTURE)) as f:
         nodes = json.load(f)["nodes"]
     out = []
     for n in nodes:
@@ -4085,7 +4111,7 @@ def _pk_ladder_radiance():
     The neutral row is scaled to photopic luminance 1, so its emissive value IS
     the rung's luminance -- which is what the rod ramp is a function of.
     """
-    with open(os.path.join(ROOT, "assets", PK_FIXTURE)) as f:
+    with open(asset(PK_FIXTURE)) as f:
         g = json.load(f)
     by_name = {m["name"]: m for m in g["materials"]}
     out = {}
@@ -4180,7 +4206,7 @@ def run_purkinje_gate(workdir):
     THE SCENE ARM'S OWN TWO LEGS. 0 px alone passes a dead feature, 11.22's
     lesson.
     """
-    fixture = os.path.join(ROOT, "assets", PK_SCENE)
+    fixture = asset(PK_SCENE)
     if not os.path.exists(fixture):
         print("  purkinje     SKIP  (missing purkinje_fixture.cscn)")
         return []
@@ -4215,7 +4241,7 @@ def run_purkinje_gate(workdir):
     # and a power-of-two ratio, so both exposures and their quotient are exact.
     # At a non-exact ratio the two weights differ in the last fp32 bit and
     # quantize to different codes on the ramp's steep part (measured 148 px).
-    with open(os.path.join(ROOT, "assets", PK_SCENE)) as fh:
+    with open(asset(PK_SCENE)) as fh:
         _authored_e = float(json.load(fh)["post"]["exposure"])
     dbg4, err = _pk_render(workdir, "dbg4",
                            ["-E", repr(_authored_e * 4.0), "--purkinje", "--purkinje-debug"])
@@ -4361,7 +4387,7 @@ def run_purkinje_gate(workdir):
     # fixture renders its own subject unshifted (measured: global gate exactly
     # 0.0000). At 12x the disc is still hundreds of pixels to sample while the
     # kept population stays the dark star field, and the gate opens.
-    moon_src = os.path.join(ROOT, "assets", "moon_fixture.cscn")
+    moon_src = asset("moon_fixture.cscn")
     if not os.path.exists(moon_src):
         print("  purkinje-lamp SKIP  (missing moon_fixture.cscn)")
     else:
@@ -4412,7 +4438,7 @@ def run_purkinje_gate(workdir):
                 failures.append("purkinje-lamp")
 
     # --- purkinje-scene ----------------------------------------------------
-    aerial = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    aerial = asset(STARS_FIXTURE)
     common = ["--no-scene-file", "--sky", "--no-auto-exposure", "-E", "1.0", "--no-dither"]
     night = common + ["--stars", "--night-floor", "--sun-elevation", "-12"]
     day = common + ["--sun-elevation", "35"]
@@ -4557,7 +4583,7 @@ def run_purkinje_gate(workdir):
 
     # --- purkinje-off ------------------------------------------------------
     authored = os.path.join(workdir, "pk_authored.cscn")
-    cscn_copy(os.path.join(ROOT, "assets", PK_SCENE), authored, lambda d: d["post"].update(
+    cscn_copy(asset(PK_SCENE), authored, lambda d: d["post"].update(
         {"purkinje": {"enabled": True, "strength": 0.55}}))
     a_out, e1 = _pk_render(workdir, "authored", [], scene=authored)
     c_out, e2 = _pk_render(workdir, "bycli", ["--purkinje", "--purkinje-strength", "0.55"])
@@ -4577,7 +4603,7 @@ def run_purkinje_gate(workdir):
 
     # --- purkinje-config ---------------------------------------------------
     dump = os.path.join(workdir, "pk_config.json")
-    err = render(os.path.join(ROOT, "assets", PK_SCENE),
+    err = render(asset(PK_SCENE),
                  os.path.join(workdir, "pk_cfg.ppm"),
                  PK_PIN + ["--config-dump", dump])
     if err or not os.path.exists(dump):
@@ -4620,7 +4646,7 @@ def run_purkinje_gate(workdir):
 
 
 def run_dither_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "aerial_fixture.gltf")
+    fixture = asset("aerial_fixture.gltf")
     if not os.path.exists(fixture):
         print("  dither       SKIP  (missing aerial_fixture.gltf)")
         return []
@@ -4743,7 +4769,7 @@ TSL_OPAQUE_SAMPLE = (6.0, 0.0, -1.786)
 
 def _tsl_render(workdir, tag, extra):
     out = os.path.join(workdir, f"tsl_{tag}.ppm")
-    scene = os.path.join(ROOT, "assets", "translucent_shadow_fixture.cscn")
+    scene = asset("translucent_shadow_fixture.cscn")
     # --no-ssao is load-bearing, not tidiness: the arms compare shadowed ground
     # against lit ground, and GTAO darkens near the panels by an amount the open
     # reference does not get. Measured: it biased every band ~2.8%. The rest
@@ -4783,7 +4809,7 @@ def _tsl_reader(path):
 
 
 def run_translucent_shadow_gate(workdir):
-    fixture = os.path.join(ROOT, "assets", "translucent_shadow_fixture.cscn")
+    fixture = asset("translucent_shadow_fixture.cscn")
     if not os.path.exists(fixture):
         print("  tsl          SKIP  (missing translucent_shadow_fixture.cscn)")
         return []
@@ -5029,7 +5055,7 @@ def _gpu_cmd(out, extra, profile, fixture=GPU_FIXTURE, size=("800", "600"), fram
     warm-up window against +4% to +5% at steady state, because compiling its
     second program is part of what the short run is timing.
     """
-    return ([RENDER, "-m", os.path.join(ROOT, "assets", fixture), "-x", "-f", frames,
+    return ([RENDER, "-m", asset(fixture), "-x", "-f", frames,
              "-W", size[0], "-H", size[1], "--no-auto-exposure", "-E", "1.0", "-S", out]
             + (["--profiler"] if profile else []) + extra)
 
@@ -5270,7 +5296,7 @@ def run_profiler_gate(workdir):
     fixture has no gated scope. So the fixture is the arm: --gi-volume, whose first sweep
     runs every probe in ONE frame and is the largest gated scope in the tree.
     """
-    if not os.path.exists(os.path.join(ROOT, "assets", GPU_FIXTURE)):
+    if not os.path.exists(asset(GPU_FIXTURE)):
         print(f"  gpu          SKIP  (missing {GPU_FIXTURE})")
         return []
 
@@ -5555,7 +5581,7 @@ def _fixture_mesh_nodes(name="instancing_fixture.gltf", prefix=None):
     fixture's name-classes, which is how the occlusion arms read their
     populations.
     """
-    path = os.path.join(ROOT, "assets", name)
+    path = asset(name)
     with open(path) as f:
         gltf = json.load(f)
     return sum(1 for n in gltf["nodes"]
@@ -6091,7 +6117,7 @@ def run_cloud_shadow_gate(workdir):
     where its property is legible rather than a representative frame, and the four pinned
     arms need the deck to have GAPS -- see CLOUDSHADOW_COVERAGE.
     """
-    scene = os.path.join(ROOT, "assets", CLOUDSHADOW_FIXTURE)
+    scene = asset(CLOUDSHADOW_FIXTURE)
     if not os.path.exists(scene):
         print(f"  cloudshadow-dark SKIP  ({CLOUDSHADOW_FIXTURE} not present)")
         return []
@@ -6250,7 +6276,7 @@ def _stars_delta(on_path, off_path, box):
 
 def _stars_pair(workdir, tag, elev, extra=None, frames=30):
     """Render the stars-on / stars-off twin at one elevation; returns (on, off, err)."""
-    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    scene = asset(STARS_FIXTURE)
     on = os.path.join(workdir, f"stars_{tag}_on.ppm")
     off = os.path.join(workdir, f"stars_{tag}_off.ppm")
     common = ["--sun-elevation", elev] + STARS_PIN + (extra or [])
@@ -6288,7 +6314,7 @@ def run_stars_gate(workdir):
                       beats an authoring file at 0 px. Deleting the parse is what the
                       first reading catches.
     """
-    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    scene = asset(STARS_FIXTURE)
     if not os.path.exists(scene):
         print(f"  stars-night SKIP  ({STARS_FIXTURE} not present)")
         return []
@@ -6381,7 +6407,7 @@ def run_stars_gate(workdir):
     # idiom). The authored variant pins the library-default latitude/hour so the flag
     # twin CAN match it; the moved variant then rotates exactly the two fields no flag
     # reaches.
-    cscn_src = os.path.join(ROOT, "assets", "aerial_fixture.cscn")
+    cscn_src = asset("aerial_fixture.cscn")
     authored = os.path.join(workdir, "stars_cscn_authored.cscn")
     rotated = os.path.join(workdir, "stars_cscn_rotated.cscn")
 
@@ -6441,7 +6467,7 @@ NIGHTFLOOR_FOG_RATIO_MIN = 1.02
 
 def _nightfloor_pair(workdir, tag, extra, frames=30):
     """Render the floor-on / floor-off twin; returns (on, off, err)."""
-    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    scene = asset(STARS_FIXTURE)
     on = os.path.join(workdir, f"nfloor_{tag}_on.ppm")
     off = os.path.join(workdir, f"nfloor_{tag}_off.ppm")
     err = render(scene, on, ["--night-floor"] + extra, frames=frames) or \
@@ -6470,7 +6496,7 @@ def run_nightfloor_gate(workdir):
     Read as deltas throughout: the floor is a small absolute lift, so an on-frame alone
     says nothing about whether the term arrived.
     """
-    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    scene = asset(STARS_FIXTURE)
     if not os.path.exists(scene):
         print(f"  nightfloor-sky SKIP  ({STARS_FIXTURE} not present)")
         return []
@@ -6527,7 +6553,7 @@ def run_nightfloor_gate(workdir):
         if not ok:
             failures.append("nightfloor-daylight")
 
-    cscn_src = os.path.join(ROOT, "assets", "aerial_fixture.cscn")
+    cscn_src = asset("aerial_fixture.cscn")
     authored = os.path.join(workdir, "nfloor_cscn.cscn")
 
     def _floor_author(d):
@@ -6623,7 +6649,7 @@ def run_cycle_gate(workdir):
     The GUI's disabled-slider guards are deliberately NOT covered -- no headless arm can
     reach them, and saying so beats leaving them looking tested.
     """
-    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    scene = asset(STARS_FIXTURE)
     if not os.path.exists(scene):
         print(f"  cycle-quiesce SKIP  ({STARS_FIXTURE} not present)")
         return []
@@ -6656,7 +6682,7 @@ def run_cycle_gate(workdir):
     # moves; without it a third of the schedule is asserted by nothing.
     base = ["--sun-elevation", "12", "--sun-azimuth", "40"] + STARS_PIN
     slice_scenes = [("sky", scene, base),
-                    ("sheen", os.path.join(ROOT, "assets", "sheen_fixture.gltf"),
+                    ("sheen", asset("sheen_fixture.gltf"),
                      ["--sky"] + base)]
     for tag, path, flags in slice_scenes:
         if not os.path.exists(path):
@@ -6729,7 +6755,7 @@ def run_cycle_gate(workdir):
             failures.append("cycle-det")
 
     # The authored block against its flag twin, and the way off it.
-    cscn_src = os.path.join(ROOT, "assets", "aerial_fixture.cscn")
+    cscn_src = asset("aerial_fixture.cscn")
     authored = os.path.join(workdir, "cycle_cscn.cscn")
 
     def _cycle_author(d):
@@ -6964,7 +6990,7 @@ def _moon_render(workdir, tag, extra, frames=30, moon=True):
     the twin renders two identical frames. Every arm here passes angles, so every off leg
     would have been silently on.
     """
-    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    scene = asset(STARS_FIXTURE)
     out = os.path.join(workdir, f"moon_{tag}.ppm")
     tail = ["--moon"] if moon else ["--no-moon"]
     err = render(scene, out, extra + tail, frames=frames)
@@ -7187,7 +7213,7 @@ def run_moon_gate(workdir):
     them.
     """
     failures = []
-    scene = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    scene = asset(STARS_FIXTURE)
 
     # --- moon-probe: the closed form, exact ---------------------------------
     probe_ok, probe_worst, probe_note = True, 0.0, ""
@@ -7575,7 +7601,7 @@ def run_moon_gate(workdir):
             failures.append("moon-cycle")
 
     # --- moon-cscn: the authored block IS the flag path ---------------------
-    cscn_src = os.path.join(ROOT, "assets", "aerial_fixture.cscn")
+    cscn_src = asset("aerial_fixture.cscn")
     authored = os.path.join(workdir, "moon_authored.cscn")
     cscn_sun_el, cscn_sun_az = _moon_sun_at_elongation(MOON_EL_LOW, MOON_AZ, 180.0)
 
@@ -7617,7 +7643,7 @@ def run_moon_gate(workdir):
     # The honest home for two claims no image can carry: that the moon is OFF by default,
     # and that its disc is really 0.53 degrees rather than whatever three pixels suggest.
     dump = os.path.join(workdir, "moon_config.json")
-    cfg_src = os.path.join(ROOT, "assets", STARS_FIXTURE)
+    cfg_src = asset(STARS_FIXTURE)
     # --no-shadows, and it is isolating the claim rather than dodging one. The SETTINGS
     # round-trip is exact -- the two dumps compare field for field identical, and the
     # frames are 0 px with this flag. With shadows on the pair differs by 917 px lying
@@ -7752,7 +7778,7 @@ def run_fog_volume_gate(workdir):
     depth alive and the volume rode along". Run without it and the arms test their own
     subject. Dither off because the reads are channel ratios where a +/-1 LSB is large.
     """
-    scene = os.path.join(ROOT, "assets", FOGVOL_FIXTURE)
+    scene = asset(FOGVOL_FIXTURE)
     if not os.path.exists(scene):
         print(f"  fogvol-density SKIP  ({FOGVOL_FIXTURE} not present)")
         return []
@@ -7812,7 +7838,7 @@ def run_fog_volume_gate(workdir):
     if not ok:
         failures.append("fogvol-off")
 
-    mix_scene = os.path.join(ROOT, "assets", FOGVOL_MIX_FIXTURE)
+    mix_scene = asset(FOGVOL_MIX_FIXTURE)
     if not os.path.exists(mix_scene):
         print(f"  fogvol-fold    SKIP  ({FOGVOL_MIX_FIXTURE} not present)")
         return failures
@@ -7933,7 +7959,7 @@ def _fogdepth_ratios(workdir, name, gen, extra):
     The medium comes from the generator, so the frame is rendered in the one its own
     asserts are calibrated in.
     """
-    scene = os.path.join(ROOT, "assets", FOGDEPTH_FIXTURE)
+    scene = asset(FOGDEPTH_FIXTURE)
     fog = ["--fog", "--fog-density", str(gen.FOG_DENSITY), "--fog-height", str(gen.FOG_HEIGHT)]
     pin = ["--no-auto-exposure", "-E", "1.0", "--no-dither"]
     out, boxes = {}, None
@@ -8005,7 +8031,7 @@ def run_fogdepth_gate(workdir):
     unlike the sibling fog-volume group: its reason is arming attribution, which does not
     apply here, and AO is constant between the two legs of every ratio anyway.
     """
-    scene = os.path.join(ROOT, "assets", FOGDEPTH_FIXTURE)
+    scene = asset(FOGDEPTH_FIXTURE)
     if not os.path.exists(scene):
         print(f"  fogdepth-coverage SKIP  ({FOGDEPTH_FIXTURE} not present)")
         return []
@@ -8086,7 +8112,7 @@ def run_absorption_gate(workdir):
     Dither off and bloom off: the read is a channel ratio on a low-radiance
     surface, where a +/-1 LSB and a bright-pass bleed are both large.
     """
-    scene = os.path.join(ROOT, "assets", ABSORB_FIXTURE)
+    scene = asset(ABSORB_FIXTURE)
     if not os.path.exists(scene):
         print(f"  absorb-thin  SKIP  ({ABSORB_FIXTURE} not present)")
         return []
@@ -8767,7 +8793,7 @@ def _water_probe(extra, scene=None):
     bare coordinate, so anything that does not is a header of some kind and a third one
     added later needs no change here.
     """
-    cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "2",
+    cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "2",
            "-W", "200", "-H", "150", "--water-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
     head, rows = {}, []
@@ -8796,7 +8822,7 @@ def _water_ramp_edges():
     Returned as (low, high) by HEIGHT, so which end is near and which is far comes from the
     file rather than from an assumption this function makes about the orientation.
     """
-    with open(os.path.join(ROOT, "assets", "water_fixture.gltf")) as f:
+    with open(asset("water_fixture.gltf")) as f:
         doc = json.load(f)
     raw = base64.b64decode(doc["buffers"][0]["uri"].split(",", 1)[1])
     prim = next(m["primitives"][0] for m in doc["meshes"] if m["name"] == "water_ramp")
@@ -8886,7 +8912,7 @@ def _water_glitter_box():
            "fovy_deg": float(WATER_GLITTER_CAMERA["fov"])}
     w, h = 400.0, 300.0 # render()'s size; the projection is what matters, not the count
     project = _projector(cam, w, h)
-    with open(os.path.join(ROOT, "assets", WATER_FIXTURE)) as f:
+    with open(asset(WATER_FIXTURE)) as f:
         level = float(json.load(f)["water"]["level"])
 
     el = math.radians(WATER_GLITTER_SUN["sun"]["elevation"])
@@ -9017,7 +9043,7 @@ def _water_fft_probe(extra, scene=None):
     declining is one of the results: the flag is only ever passed with a spectral surface
     already asked for, so nothing to measure means the surface did not survive the flags.
     """
-    cmd = [RENDER, "-m", scene or os.path.join(ROOT, "assets", WATER_FIXTURE), "-x", "-f", "4",
+    cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "4",
            "-W", "200", "-H", "150", "--water-fft-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
     head, rows, impulse = {}, [], {}
@@ -9466,7 +9492,7 @@ def run_water_night_gate(workdir):
     reads 0.2207 at midnight against 0.2478 at noon whatever the sea does.
     """
     failures = []
-    scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
+    scene = asset(WATER_FIXTURE)
     base = WATER_PIN + WATER_NO_CATCHER
     night = os.path.join(workdir, "water_night.cscn")
     _water_night_variant(scene, night)
@@ -9942,7 +9968,7 @@ def run_water_gate(workdir):
     The two evaluate the same sum from the same fields with duplicated constants, and
     closing that needs a GPU readback this harness does not have.
     """
-    scene = os.path.join(ROOT, "assets", WATER_FIXTURE)
+    scene = asset(WATER_FIXTURE)
     if not os.path.exists(scene):
         print(f"  water-det    SKIP  ({WATER_FIXTURE} not present)")
         return []
@@ -10352,7 +10378,7 @@ def run_water_gate(workdir):
     else:
         drifted = []
         for name in ("water_fixture.gltf", WATER_FIXTURE):
-            committed = os.path.join(ROOT, "assets", name)
+            committed = asset(name)
             regenerated = os.path.join(regen_dir, name)
             if not os.path.exists(regenerated):
                 drifted.append(f"{name}: not emitted")
@@ -10371,7 +10397,7 @@ def run_water_gate(workdir):
         # Minus the refused ones, which the reader cannot tell from accepted keys and
         # which belong in neither of the two sets below (spec 11.84).
         accepted_keys = read_keys - refused_keys
-        fixture_water = json.load(open(os.path.join(ROOT, "assets", WATER_FIXTURE))).get("water", {})
+        fixture_water = json.load(open(asset(WATER_FIXTURE))).get("water", {})
         fixture_keys = {k for k in fixture_water if not k.startswith("_")}
         if accepted_keys != known_keys:
             drifted.append(f"parse_water accepts {sorted(accepted_keys ^ known_keys)} "
@@ -10835,7 +10861,7 @@ SHORE_TWIN_MIN_DRIFT = 0.05
 
 
 def _beach_render(out, extra, frames=30):
-    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", BEACH_FIXTURE), "-x", "-f", str(frames),
+    cmd = [RENDER, "-m", asset(BEACH_FIXTURE), "-x", "-f", str(frames),
            "-W", BEACH_SIZE[0], "-H", BEACH_SIZE[1], "-S", out] + WATER_PIN + extra
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
@@ -10858,7 +10884,7 @@ def _beach_profile():
 
     A surface of revolution, so one radius has one height and the ring vertices collapse.
     """
-    with open(os.path.join(ROOT, "assets", BEACH_MESH)) as f:
+    with open(asset(BEACH_MESH)) as f:
         doc = json.load(f)
     raw = base64.b64decode(doc["buffers"][0]["uri"].split(",", 1)[1])
     prim = next(m["primitives"][0] for m in doc["meshes"] if m["name"] == "beach_dome")
@@ -10995,7 +11021,7 @@ def run_beach_gate(workdir):
     leave the surface shoaling against nothing visible, which is a defect no arm reading
     only the water could name.
     """
-    scene = os.path.join(ROOT, "assets", BEACH_FIXTURE)
+    scene = asset(BEACH_FIXTURE)
     if not os.path.exists(scene):
         print(f"  beach-shoreline SKIP  ({BEACH_FIXTURE} not present)")
         return []
@@ -11111,7 +11137,7 @@ def run_beach_gate(workdir):
     # a ring covering a fifth of a second against taps reaching back eighteen seconds -- so
     # every tap but the first clamped to the oldest slot and the wet sand collapsed to two
     # tones, which is precisely what the accumulation exists to avoid.
-    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", BEACH_FIXTURE), "-x", "-f", "3",
+    cmd = [RENDER, "-m", asset(BEACH_FIXTURE), "-x", "-f", "3",
            "-W", "320", "-H", "240", "--shore-probe"] + BEACH_BED + BEACH_GERSTNER
     r = _run(cmd, capture_output=True, text=True)
 
@@ -11194,7 +11220,7 @@ def run_mask_gate(workdir):
     appearing at all is not -- and it did, because the cutoff was replaced by a
     fixed 0.02 whenever A2C was live. mask-samples below is the arm that asks.
     """
-    scene = os.path.join(ROOT, "assets", MASK_FIXTURE)
+    scene = asset(MASK_FIXTURE)
     if not os.path.exists(scene):
         print(f"  mask-opaque  SKIP  ({MASK_FIXTURE} not present)")
         return []
@@ -11435,7 +11461,7 @@ def run_alphacov_gate(workdir):
     # One tuple names the group's arms for every skip and error path, so a
     # fourth arm cannot be remembered in one path and vanish from another.
     arms = ("alphacov-mip", "alphacov-deep", "alphacov-far")
-    scene = os.path.join(ROOT, "assets", ALPHACOV_FIXTURE)
+    scene = asset(ALPHACOV_FIXTURE)
     if not os.path.exists(scene):
         for arm in arms:
             print(f"  {arm} SKIP  ({ALPHACOV_FIXTURE} not present)")
@@ -11602,7 +11628,7 @@ def run_ladder_gate(workdir):
     """
     arms = ("ladder-fire", "ladder-truth", "ladder-a2c", "ladder-still", "ladder-churn",
             "ladder-gate")
-    scene = os.path.join(ROOT, "assets", LADDER_FIXTURE)
+    scene = asset(LADDER_FIXTURE)
     if not os.path.exists(scene):
         for arm in arms:
             print(f"  {arm} SKIP  ({LADDER_FIXTURE} not present)")
@@ -11757,7 +11783,7 @@ def run_taa_ortho_gate(workdir):
     full scale, or at two converged frames, an un-negated offset is invisible.
     """
     arms = ("taa-ortho",)
-    scene = os.path.join(ROOT, "assets", TAA_ORTHO_FIXTURE)
+    scene = asset(TAA_ORTHO_FIXTURE)
     if not os.path.exists(scene):
         print(f"  taa-ortho    SKIP  ({TAA_ORTHO_FIXTURE} not present)")
         return []
@@ -12000,7 +12026,7 @@ def run_ortho_gate(workdir):
     failures = []
 
     # --- ortho-view-eye -------------------------------------------------------
-    scene = os.path.join(ROOT, "assets", MASK_FIXTURE)
+    scene = asset(MASK_FIXTURE)
     eye_far, target = ORTHO_VIEW_CAM["eye"], ORTHO_VIEW_CAM["target"]
     axis = [e - t for e, t in zip(eye_far, target)]
     view_dist = math.sqrt(sum(c * c for c in axis))
@@ -12031,7 +12057,7 @@ def run_ortho_gate(workdir):
             failures.append("ortho-view-eye")
 
     # --- ortho-ao -------------------------------------------------------------
-    scene = os.path.join(ROOT, "assets", ORTHO_AO_FIXTURE)
+    scene = asset(ORTHO_AO_FIXTURE)
     # The axis runs from the authored eye TO the target, so the far eye sits
     # back along it: target MINUS the unit vector. Added instead, the eye lands
     # under the ground on the far side, both legs render the underside of the
@@ -12084,7 +12110,7 @@ def run_ortho_gate(workdir):
             failures.append("ortho-ao")
 
     # --- ortho-dof ------------------------------------------------------------
-    scene = os.path.join(ROOT, "assets", ORTHO_DOF_FIXTURE)
+    scene = asset(ORTHO_DOF_FIXTURE)
     dof_dist = math.sqrt(sum((e - t) ** 2 for e, t in zip(ORTHO_DOF_CAM["eye"],
                                                             ORTHO_DOF_CAM["target"])))
     dof_height = _ortho_height_matching(ORTHO_DOF_CAM["fovy_deg"], dof_dist)
@@ -12114,7 +12140,7 @@ def run_ortho_gate(workdir):
             failures.append("ortho-dof")
 
     # --- ortho-cluster --------------------------------------------------------
-    scene = os.path.join(ROOT, "assets", LOD_FIXTURE)
+    scene = asset(LOD_FIXTURE)
     # The reading is one log line, printed on the first cluster build, so the
     # two-frame log render serves; the size rides along because the count was
     # calibrated at this aspect.
@@ -12174,7 +12200,7 @@ def run_ortho_gate(workdir):
             failures.append("ortho-lod-height")
 
     # --- ortho-fog-volume -----------------------------------------------------
-    scene = os.path.join(ROOT, "assets", FOGVOL_FIXTURE)
+    scene = asset(FOGVOL_FIXTURE)
     fog_eye, fog_target = ORTHO_FOG_CAM["eye"], ORTHO_FOG_CAM["target"]
     fog_dist = math.sqrt(sum((e - t) ** 2 for e, t in zip(fog_eye, fog_target)))
     fog_height = _ortho_height_matching(ORTHO_FOG_CAM["fovy_deg"], fog_dist)
@@ -12352,7 +12378,7 @@ def run_terrain_gate(workdir):
     a field wired to the wrong world scale, transposed, or clamped to zero outside
     its domain all render as perfectly plausible terrain.
     """
-    fixture = os.path.join(ROOT, "assets", TERRAIN_FIXTURE)
+    fixture = asset(TERRAIN_FIXTURE)
     if not os.path.exists(FOREST):
         print(f"  terrain-closed-form SKIP  (forest not built)")
         return []
@@ -12988,7 +13014,7 @@ def run_overdraw_gate(workdir):
     fastest run, and the table at the bottom of this function for the eight
     samples that establish it.
     """
-    layers_scene = os.path.join(ROOT, "assets", OVERDRAW_LAYERS)
+    layers_scene = asset(OVERDRAW_LAYERS)
     if not os.path.exists(layers_scene):
         print(f"  overdraw-exact SKIP  ({OVERDRAW_LAYERS} not present)")
         return []
@@ -13043,7 +13069,7 @@ def run_overdraw_gate(workdir):
     #
     # A timing arm, so it measures its own floor first -- the only honest way to
     # claim a delta, and what gpu-scale does two gates up.
-    tiles = os.path.join(ROOT, "assets", OVERDRAW_TILES)
+    tiles = asset(OVERDRAW_TILES)
     if not os.path.exists(tiles):
         print(f"  prepass-crossover SKIP  ({OVERDRAW_TILES} not present)")
         return failures
@@ -13188,9 +13214,9 @@ def run_prepass_gate(workdir):
 
     off = os.path.join(workdir, "prepass_off.ppm")
     on = os.path.join(workdir, "prepass_on.ppm")
-    err = render(os.path.join(ROOT, "assets", "instancing_fixture.cscn"), off,
+    err = render(asset("instancing_fixture.cscn"), off,
                  ["--no-auto-exposure", "-E", "1.0"])
-    err = err or render(os.path.join(ROOT, "assets", "instancing_fixture.cscn"), on,
+    err = err or render(asset("instancing_fixture.cscn"), on,
                         ["--no-auto-exposure", "-E", "1.0", "--depth-prepass"])
     if err:
         print(f"  prepass-identity ERROR render failed: {err.strip()[-200:]}")
@@ -14927,7 +14953,7 @@ def run_audio_gate(workdir):
     return failures
 
 
-PUPPET = "assets/puppet.cscn"
+PUPPET = "assets/scenes/puppet.cscn"
 
 # "anim <case> <label> <key> <numbers...>" from gametest --anim-probe. The events
 # case also prints a non-numeric "fired <name> <tick>" line, which this
@@ -15256,7 +15282,7 @@ def run_anim_gate(workdir):
     d = _anim_probe_run("import")
     joints = 0
     try:
-        with open(os.path.join(ROOT, "assets", "puppet.gltf")) as f:
+        with open(asset("puppet.gltf")) as f:
             doc = json.load(f)
         joints = sum(1 for j in doc["skins"][0]["joints"]
                      if doc["nodes"][j]["name"].startswith("cetra_rig:"))
@@ -15324,7 +15350,7 @@ LOD_SWEEP = ("0,1.5,4", "0,3,30", "0,6,90")
 
 def _skin_fixture_triangles():
     """Triangle count of the skinned fixture, read from the glTF it generated."""
-    path = os.path.join(ROOT, "assets", SKIN_FIXTURE)
+    path = asset(SKIN_FIXTURE)
     with open(path) as f:
         gltf = json.load(f)
     prim = gltf["meshes"][0]["primitives"][0]
@@ -15346,7 +15372,7 @@ def run_lod_gate(workdir):
     leaves draws and instances exactly where they were, so an arm watching those
     could not tell working selection from none.
     """
-    if not os.path.exists(os.path.join(ROOT, "assets", LOD_FIXTURE)):
+    if not os.path.exists(asset(LOD_FIXTURE)):
         print(f"  lod          SKIP  (missing {LOD_FIXTURE})")
         return []
 
@@ -15441,7 +15467,7 @@ def run_lod_gate(workdir):
 
 
 def run_submission_gate(workdir):
-    if not os.path.exists(os.path.join(ROOT, "assets", SUBMIT_FIXTURE)):
+    if not os.path.exists(asset(SUBMIT_FIXTURE)):
         print(f"  submit       SKIP  (missing {SUBMIT_FIXTURE})")
         return []
 
@@ -15472,7 +15498,7 @@ def run_submission_gate(workdir):
     # hitting reports every node reference as a build and zero shares, which is
     # the dead-feature failure. The expectations are read from the glTF, so
     # regenerating the fixture cannot leave the arm asserting a stale shape.
-    with open(os.path.join(ROOT, "assets", "instancing_fixture.gltf")) as f:
+    with open(asset("instancing_fixture.gltf")) as f:
         want_built = len(json.load(f)["meshes"])
     imported = base.get("import")
     if imported is None:
@@ -15832,7 +15858,7 @@ LIST_FIXTURES = (
 def run_draw_list_gate(workdir):
     failures = []
     for fixture, extra, why in LIST_FIXTURES:
-        path = os.path.join(ROOT, "assets", fixture)
+        path = asset(fixture)
         if not os.path.exists(path):
             print(f"  list-identity SKIP  (missing {fixture})")
             continue
@@ -15859,7 +15885,7 @@ def run_draw_list_gate(workdir):
     # late pass takes only transmissive; with it off the late pass takes both.
     # Rendering the same fixture both ways and asserting they DIFFER is what
     # proves the routing is live rather than collapsed to one branch.
-    fixture = os.path.join(ROOT, "assets", "oit_cards_fixture.cscn")
+    fixture = asset("oit_cards_fixture.cscn")
     if not os.path.exists(fixture):
         print("  oit-identity SKIP  (missing oit_cards_fixture.cscn)")
         return failures
@@ -15891,9 +15917,9 @@ def run_translucent_offpath_gate(workdir):
     """
     failures = []
     for name, rel, extra in (
-        ("cornell_point", "assets/cornell_point.cscn", ["-W", "800", "-H", "600"]),
-        ("dir_shadow", "assets/dir_shadow_fixture.cscn", ["-W", "800", "-H", "600", "--no-pcss"]),
-        ("contact", "assets/contact_fixture.cscn", ["-W", "640", "-H", "400"]),
+        ("cornell_point", "assets/scenes/cornell_point.cscn", ["-W", "800", "-H", "600"]),
+        ("dir_shadow", "assets/scenes/dir_shadow_fixture.cscn", ["-W", "800", "-H", "600", "--no-pcss"]),
+        ("contact", "assets/scenes/contact_fixture.cscn", ["-W", "640", "-H", "400"]),
     ):
         scene = os.path.join(ROOT, rel)
         if not os.path.exists(scene):
@@ -15943,7 +15969,7 @@ def run_translucent_offpath_gate(workdir):
 
 def run_range_gate():
     """glTF KHR_lights_punctual `range` must survive import unchanged."""
-    fixture = os.path.join(ROOT, "assets", "point_import_fixture.gltf")
+    fixture = asset("point_import_fixture.gltf")
     if not os.path.exists(fixture):
         print("  gltf-range   SKIP  (missing point_import_fixture.gltf)")
         return []
@@ -15986,7 +16012,7 @@ def run_cone_gate():
     inverts -- turning a soft edge into a hard step. Falsified by hand at 11.57:
     the raw radians read 0.3491 / 0.5236, wrong AND inverted.
     """
-    fixture = os.path.join(ROOT, "assets", "spot_import_fixture.gltf")
+    fixture = asset("spot_import_fixture.gltf")
     if not os.path.exists(fixture):
         print("  gltf-cone    SKIP  (missing spot_import_fixture.gltf)")
         return []
@@ -16063,7 +16089,7 @@ def run_fbx_unit_gate():
     symptom of spec 11.1's c64). A second render with --no-unit-scale is the
     mechanical twin: the same file read raw must place the light at 200 cm.
     """
-    fixture = os.path.join(ROOT, "assets", "fbx_unit_fixture.fbx")
+    fixture = asset("fbx_unit_fixture.fbx")
     if not os.path.exists(fixture):
         print("  fbx-unit     SKIP  (missing fbx_unit_fixture.fbx)")
         return []
@@ -16198,7 +16224,7 @@ def _probe_run(workdir, tag, mutate=None, extra=None, frames=30, fixture=None):
 
     Returns (pixels, w, h, output) or (None, None, None, error).
     """
-    src = os.path.join(ROOT, "assets", fixture or PROBE_FIXTURE)
+    src = asset(fixture or PROBE_FIXTURE)
     if not os.path.exists(src):
         return None, None, None, "missing fixture"
     scene = src
@@ -16298,7 +16324,7 @@ def run_probe_set_gate(workdir):
     this fixture authors two. The multi-probe SSR path is implemented and ungated;
     the suite has no SSR gate of any kind to add it to.
     """
-    if not os.path.exists(os.path.join(ROOT, "assets", PROBE_FIXTURE)):
+    if not os.path.exists(asset(PROBE_FIXTURE)):
         print(f"  probe-set-single SKIP  {PROBE_FIXTURE} not found")
         return []
     failures = []
@@ -16509,7 +16535,7 @@ def _config_run(workdir, name, extra, model=CONFIG_FIXTURE, frames=2):
     dump = os.path.join(workdir, f"config_{name}.json")
     cmd = [RENDER, "-x", "-f", str(frames), "-S", ppm, "--config-dump", dump]
     if model:
-        cmd += ["-m", os.path.join(ROOT, "assets", model), "-W", "400", "-H", "300"]
+        cmd += ["-m", asset(model), "-W", "400", "-H", "300"]
     r = _run(cmd + extra, capture_output=True, text=True)
     return ppm, dump, r.stdout + r.stderr
 
@@ -16821,7 +16847,7 @@ def run_config_gate(workdir):
     if not ok:
         failures.append("config-coverage")
 
-    if not os.path.exists(os.path.join(ROOT, "assets", CONFIG_FIXTURE)):
+    if not os.path.exists(asset(CONFIG_FIXTURE)):
         print(f"  config-roundtrip SKIP  {CONFIG_FIXTURE} not found")
         return failures
 
@@ -17464,7 +17490,7 @@ def _sss_tag_rim(path, cam):
 
 def _sss_tag_shift(workdir, samples):
     """How much a SECOND profile in the frame moves the tag-2 sphere's rim. Should be nothing."""
-    scene = os.path.join(ROOT, "assets", SSS_TAG_FIXTURE)
+    scene = asset(SSS_TAG_FIXTURE)
     twin = os.path.join(workdir, "sss_msaa_one.cscn")
     cscn_copy(scene, twin, lambda d: d["materials"].pop("sss_skin_a", None))
     two = _sss_tag_render(workdir, f"two_{samples}", scene, samples)
@@ -17505,7 +17531,7 @@ def run_sss_tag_gate(workdir):
     129 px of the frame and the misfile moved 23. The terminator is what makes the defect
     exist to be measured.
     """
-    scene = os.path.join(ROOT, "assets", SSS_TAG_FIXTURE)
+    scene = asset(SSS_TAG_FIXTURE)
     if not os.path.exists(scene):
         print(f"  sss-tag      SKIP  ({SSS_TAG_FIXTURE} not present)")
         return []
@@ -17565,7 +17591,7 @@ VARY_COVERAGE_MIN = 8000  # 26,183 px differ between the sample counts in albedo
 def _vary_render(workdir, tag, mode, samples):
     """The fixture at one render mode and one sample count. Own harness: render() is 400x300."""
     out = os.path.join(workdir, f"vary_{tag}.ppm")
-    cmd = [RENDER, "-m", os.path.join(ROOT, "assets", VARY_FIXTURE), "-x", "-f", "30",
+    cmd = [RENDER, "-m", asset(VARY_FIXTURE), "-x", "-f", "30",
            "-W", "800", "-H", "600", "--render-mode", str(mode), "--msaa", str(samples),
            "-S", out]
     r = _run(cmd, capture_output=True, text=True)
@@ -17617,7 +17643,7 @@ def _wind_uv_flex():
     Returned in node order, left to right, which is the order the centroids come
     back in.
     """
-    with open(os.path.join(ROOT, "assets", "wind_uv_fixture.gltf")) as f:
+    with open(asset("wind_uv_fixture.gltf")) as f:
         doc = json.load(f)
     raw = base64.b64decode(doc["buffers"][0]["uri"].split(",", 1)[1])
     out = []
@@ -17682,8 +17708,8 @@ def run_wind_uv_gate(workdir):
     that all moved by the same wrong amount look exactly like three quads that
     moved correctly.
     """
-    scene = os.path.join(ROOT, "assets", WIND_UV_FIXTURE)
-    still = os.path.join(ROOT, "assets", WIND_UV_STILL)
+    scene = asset(WIND_UV_FIXTURE)
+    still = asset(WIND_UV_STILL)
     if not (os.path.exists(scene) and os.path.exists(still)):
         print(f"  wind-uv-flex SKIP  ({WIND_UV_FIXTURE} not present)")
         return []
@@ -17759,7 +17785,7 @@ def run_varying_gate(workdir):
     it is expected to go to zero the day the varyings are qualified or the fixture is rendered
     on an immune path, and that should arrive as a deliberate edit here rather than silently.
     """
-    scene = os.path.join(ROOT, "assets", VARY_FIXTURE)
+    scene = asset(VARY_FIXTURE)
     if not os.path.exists(scene):
         print(f"  vary-ground  SKIP  ({VARY_FIXTURE} not present)")
         return []
@@ -18240,8 +18266,8 @@ def run_emissive_gate(workdir):
     half empty background.
     """
     failures = []
-    fixture = os.path.join(ROOT, "assets", EMISSIVE_FIXTURE)
-    cornell = os.path.join(ROOT, "assets", CORNELL_FIXTURE)
+    fixture = asset(EMISSIVE_FIXTURE)
+    cornell = asset(CORNELL_FIXTURE)
 
     # --- geometry -----------------------------------------------------------
     if not os.path.exists(cornell):
@@ -18388,7 +18414,7 @@ def run_emissive_gate(workdir):
                 failures.append("emissive-placed")
 
     # --- intent -------------------------------------------------------------
-    water = os.path.join(ROOT, "assets", EMISSIVE_WATER_FIXTURE)
+    water = asset(EMISSIVE_WATER_FIXTURE)
     if not os.path.exists(water):
         print(f"  emissive-unlit SKIP  ({EMISSIVE_WATER_FIXTURE} not present)")
     else:
@@ -18520,7 +18546,7 @@ def run_emissive_gate(workdir):
     # Both directions in one arm, because separately neither is worth much: the
     # shadowed zero is only meaningful beside a frame proving the band can read a
     # leak at all.
-    leak_src = os.path.join(ROOT, "assets", EMISSIVE_LEAK_FIXTURE)
+    leak_src = asset(EMISSIVE_LEAK_FIXTURE)
     if not os.path.exists(leak_src):
         print(f"  emissive-occluded SKIP ({EMISSIVE_LEAK_FIXTURE} not present)")
     else:
@@ -18860,12 +18886,12 @@ def run_exposure_gate(workdir):
                         it.
     """
     failures = []
-    src = os.path.join(ROOT, "assets", EXPOSURE_FIXTURE)
+    src = asset(EXPOSURE_FIXTURE)
     if not os.path.exists(src):
         print(f"  exposure-darkens SKIP ({EXPOSURE_FIXTURE} not present)")
         return failures
 
-    scale_src = os.path.join(ROOT, "assets", EXPOSURE_SCALE_FIXTURE)
+    scale_src = asset(EXPOSURE_SCALE_FIXTURE)
     if not os.path.exists(scale_src):
         print(f"  exposure-darkens SKIP ({EXPOSURE_SCALE_FIXTURE} not present)")
         return failures
@@ -19056,7 +19082,7 @@ def run_cull_gate(workdir):
     SKIN = "skinned_cull_fixture"
     SIZE = ("400", "300")
     for name in (WIND, SKIN):
-        if not os.path.exists(os.path.join(ROOT, "assets", f"{name}.cscn")):
+        if not os.path.exists(asset(f"{name}.cscn")):
             print(f"  cull         SKIP  (missing {name}.cscn)")
             return []
 
@@ -19066,7 +19092,7 @@ def run_cull_gate(workdir):
     # _fixture_mesh_nodes states: a hand-copied count goes stale when the
     # generator changes and the arm passes against whatever it was told.
     wind_meshes = _fixture_mesh_nodes(f"{WIND}.gltf")
-    with open(os.path.join(ROOT, "assets", f"{WIND}.gltf")) as f:
+    with open(asset(f"{WIND}.gltf")) as f:
         behind = sum(1 for n in json.load(f)["nodes"] if n["name"].startswith("wind_behind"))
 
     # Cascades pinned on the command line, not inherited: 3 is the render APP's
@@ -19120,7 +19146,7 @@ def run_cull_gate(workdir):
     def cull_identity(tag, fixture, note, measured):
         on = os.path.join(workdir, f"cull_{tag}_on.ppm")
         off = os.path.join(workdir, f"cull_{tag}_off.ppm")
-        scene = os.path.join(ROOT, "assets", f"{fixture}.cscn")
+        scene = asset(f"{fixture}.cscn")
         pin = ["--no-auto-exposure", "-E", "1.0"]
         err = render(scene, on, pin) or render(scene, off, pin + ["--no-frustum-cull"])
         if err:
@@ -19173,7 +19199,7 @@ def run_cull_gate(workdir):
     # bound got safer.
     #
     # max_abs, not max_l2: the margin inflates the AABB per AXIS.
-    rows, _ = _probe_render(os.path.join(ROOT, "assets", f"{WIND}.cscn"),
+    rows, _ = _probe_render(asset(f"{WIND}.cscn"),
                             "--wind-bound-probe", "wind-bound-probe", frames=2)
     head = next((r for r in rows if r.get("kind") == "header"), None)
     samples = [r for r in rows if r.get("kind") in ("mesh", "sweep")]
@@ -19483,7 +19509,7 @@ def run_layers_gate(workdir):
     world-XZ fixture.
     """
     failures = []
-    src = os.path.join(ROOT, "assets", "layer_fixture.cscn")
+    src = asset("layer_fixture.cscn")
     if not os.path.exists(src):
         print("  layers-select     SKIP  (missing layer_fixture.cscn)")
         return []
@@ -19645,7 +19671,7 @@ def run_layers_gate(workdir):
     # in either direction. Inline rather than in a helper: gate-arm-docs reads
     # this function's own source, and a helper's arms would read as documented
     # but never run.
-    vt_src = os.path.join(ROOT, "assets", "layer_vt_fixture.cscn")
+    vt_src = asset("layer_vt_fixture.cscn")
     g2 = _layer_vt_gen()
     if not os.path.exists(vt_src) or g2 is None:
         if g2 is not None:
@@ -20360,7 +20386,7 @@ def _decal_run(workdir, tag, mutate=None, extra=None, frames=4):
 
     Returns (pixels, w, h, output) or (None, None, None, error).
     """
-    src = os.path.join(ROOT, "assets", DECAL_FIXTURE)
+    src = asset(DECAL_FIXTURE)
     if not os.path.exists(src):
         return None, None, None, "missing fixture"
     scene = src
@@ -20368,7 +20394,7 @@ def _decal_run(workdir, tag, mutate=None, extra=None, frames=4):
         scene = os.path.join(workdir, f"decal_{tag}.cscn")
         cscn_copy(src, scene, mutate)
     out = os.path.join(workdir, f"decal_{tag}.ppm")
-    cmd = [RENDER, "-m", scene, "-t", os.path.join(ROOT, "assets"), "-x", "-f", str(frames),
+    cmd = [RENDER, "-m", scene, "-t", os.path.join(ROOT, "assets", "textures"), "-x", "-f", str(frames),
            "-W", "400", "-H", "300", "-S", out,
            "--no-auto-exposure", "-E", "1.0"] + (extra or [])
     r = _run(cmd, capture_output=True, text=True)
@@ -20504,7 +20530,7 @@ def run_decal_gate(workdir):
     renderer hands back the exact code the generator painted and the assertion
     argues about nothing else -- not the BRDF, not exposure, not the tonemap.
     """
-    if not os.path.exists(os.path.join(ROOT, "assets", DECAL_FIXTURE)):
+    if not os.path.exists(asset(DECAL_FIXTURE)):
         print(f"  decals-identity SKIP  {DECAL_FIXTURE} not found")
         return []
     gen = _decal_gen()
@@ -20853,7 +20879,7 @@ def run_decal_gate(workdir):
     # after the CLI, so a dump taken in another mode would restore that mode and
     # overrule the flag, and the comparison would be against a different picture.
     _, dump, _ = _config_run(workdir, "decals",
-                             ["-t", os.path.join(ROOT, "assets"), "--render-mode", "6",
+                             ["-t", os.path.join(ROOT, "assets", "textures"), "--render-mode", "6",
                               "--no-auto-exposure", "-E", "1.0"],
                              model=DECAL_FIXTURE, frames=4)
     carried, restored_px, keys = [], None, 0
@@ -20873,7 +20899,7 @@ def run_decal_gate(workdir):
         shot = os.path.join(workdir, "config_decals_restored.ppm")
         # No look flags here on purpose: the snapshot carries them, which is the
         # claim -- "give somebody the JSON and they see your pixels".
-        subprocess.run([RENDER, "--config", edited, "-t", os.path.join(ROOT, "assets"),
+        subprocess.run([RENDER, "--config", edited, "-t", os.path.join(ROOT, "assets", "textures"),
                         "-x", "-f", "4", "-W", "400", "-H", "300", "-S", shot],
                        capture_output=True, text=True)
         on = os.path.join(workdir, "decal_on.ppm")
@@ -20951,7 +20977,7 @@ def _texcomp_probe(workdir, extra, scene=None):
     churning for one argument.
     """
     del workdir
-    rows, _ = _probe_render(scene or os.path.join(ROOT, "assets", TEXCOMP_FIXTURE),
+    rows, _ = _probe_render(scene or asset(TEXCOMP_FIXTURE),
                             "--texture-probe", "texture-probe", extra=extra, frames=3)
     total = next((r for r in rows if r.get("kind") == "total"), None)
     if total is None:
@@ -20998,7 +21024,7 @@ def run_texcomp_gate(workdir):
     Most of a compressed texture's bytes are in the chain. This plane recedes to
     its vanishing point, which is what makes the chain reachable at all.
     """
-    scene = os.path.join(ROOT, "assets", TEXCOMP_FIXTURE)
+    scene = asset(TEXCOMP_FIXTURE)
     if not os.path.exists(scene):
         print(f"  texcomp-off SKIP  ({TEXCOMP_FIXTURE} not present)")
         return []
@@ -21295,8 +21321,8 @@ def run_shadow_lag_gate(workdir):
     come back green against code that was never built.
     """
     del workdir # frames go to a temp path the arm indexes; nothing is compared to a golden
-    moving = os.path.join(ROOT, "assets", "shadow_lag_fixture.cscn")
-    parked = os.path.join(ROOT, "assets", "shadow_lag_still.cscn")
+    moving = asset("shadow_lag_fixture.cscn")
+    parked = asset("shadow_lag_still.cscn")
     if not os.path.exists(RENDER) or not all(os.path.exists(p) for p in (moving, parked)):
         print("  shadow-lag-holds SKIP  (render or shadow_lag fixtures not present)")
         return []
@@ -21537,7 +21563,7 @@ def run_occlusion_gate(workdir):
     claims are integers off the submission table, on the cull group's reasoning:
     a pixel identity alone passes a culler that culls nothing.
     """
-    if not os.path.exists(os.path.join(ROOT, "assets", OCCLUSION_FIXTURE)):
+    if not os.path.exists(asset(OCCLUSION_FIXTURE)):
         print("  occlusion    SKIP  (missing fixture)")
         return []
     failures = []
@@ -21678,11 +21704,11 @@ def run_occlusion_gate(workdir):
     # the HIERARCHY -- the tile fold, the footprint rounding, the mask --
     # against a per-pixel test at 4x resolution over the identical box set.
     # The identity arms above carry the raster half.
-    rows, _ = _probe_render(os.path.join(ROOT, "assets", OCCLUSION_FIXTURE),
+    rows, _ = _probe_render(asset(OCCLUSION_FIXTURE),
                             "--occlusion-probe", "occlusion-probe")
-    mat_rows, _ = _probe_render(os.path.join(ROOT, "assets", OCCLUSION_MAT),
+    mat_rows, _ = _probe_render(asset(OCCLUSION_MAT),
                                 "--occlusion-probe", "occlusion-probe")
-    bare_rows, _ = _probe_render(os.path.join(ROOT, "assets", OCCLUSION_BARE),
+    bare_rows, _ = _probe_render(asset(OCCLUSION_BARE),
                                  "--occlusion-probe", "occlusion-probe")
     summary = next((r for r in rows if r.get("kind") == "summary"), None)
     sweep = next((r for r in rows if r.get("kind") == "sweep"), None)
@@ -21741,7 +21767,7 @@ def run_occlusion_gate(workdir):
     # build that culls "some" is as wrong as one that culls none. The clock is
     # printed as context only; at this size the GPU timer's own jitter dwarfs
     # it, which is the crossover's whole reason for existing.
-    with open(os.path.join(ROOT, "assets", "occlusion_scatter.gltf")) as f:
+    with open(asset("occlusion_scatter.gltf")) as f:
         sc_names = [n.get("name", "") for n in json.load(f).get("nodes", [])]
     pillar_cols = {n.split("_")[-1] for n in sc_names if n.startswith("occl_pillar_")}
     sc_hidden = sum(1 for n in sc_names
@@ -21854,7 +21880,7 @@ def run_pbr_variant_gate(workdir):
     arms = ["pbr-variant-full", "pbr-variant-lean", "pbr-variant-keeps",
             "pbr-variant-samplers", "pbr-variant-skinned"]
 
-    sheen_model = os.path.join(ROOT, "assets", "sheen_fixture.gltf")
+    sheen_model = asset("sheen_fixture.gltf")
     if not os.path.exists(sheen_model):
         print("  pbr-variant-full SKIP  (sheen fixture not present)")
         return []
@@ -21920,7 +21946,7 @@ def run_pbr_variant_gate(workdir):
     # --- skinned ------------------------------------------------------------
     # Its own render, because the sheen fixture has no skinned mesh and nothing
     # in the golden corpus is skinned either.
-    skinned_model = os.path.join(ROOT, "assets", SKIN_FIXTURE)
+    skinned_model = asset(SKIN_FIXTURE)
     if not os.path.exists(skinned_model):
         print(f"  pbr-variant-skinned SKIP  ({SKIN_FIXTURE} not present)")
         return failures
@@ -21984,7 +22010,7 @@ def run_clearcoat_gate(workdir):
     display encode, no dither. These bytes are the shader's own output and the
     sRGB decode every other gate applies would be wrong on them.
     """
-    scene = os.path.join(ROOT, "assets", CC_FIXTURE)
+    scene = asset(CC_FIXTURE)
     if not os.path.exists(scene):
         print(f"  clearcoat-normal SKIP  ({CC_FIXTURE} not present)")
         return []
@@ -22360,7 +22386,7 @@ def run_cook_gate(workdir):
     dt = os.path.join(workdir, "cook_dt")
     tex_live_ppm = os.path.join(workdir, "cook_tex_live.ppm")
     tex_warm_ppm = os.path.join(workdir, "cook_tex_warm.ppm")
-    scene = os.path.join(ROOT, "assets", TEXCOMP_FIXTURE)
+    scene = asset(TEXCOMP_FIXTURE)
 
     def texture_run(tag, extra, shot=None):
         cmd = [RENDER, "-m", scene, "-x", "-f", "2", "-W", "400", "-H", "300",

@@ -47,7 +47,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -145,8 +145,8 @@ GLTF = {
         "normalTexture": {"index": 1},
     }],
     "textures": [{"source": 0}, {"source": 1}, {"source": 2}],
-    "images": [{"uri": "texcomp_albedo.png"}, {"uri": "texcomp_normal.png"},
-               {"uri": "texcomp_rough.png"}],
+    "images": [{"uri": asset_ref("texcomp_albedo.png")}, {"uri": asset_ref("texcomp_normal.png")},
+               {"uri": asset_ref("texcomp_rough.png")}],
     "accessors": [
         {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": mn, "max": mx},
         {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
@@ -163,7 +163,7 @@ GLTF = {
 # two storage formats, so anything that could move the frame for a second reason
 # has to be nailed down first.
 CSCN = {
-    "models": [{"path": "texcomp_fixture.gltf"}],
+    "models": [{"path": asset_ref("texcomp_fixture.gltf")}],
     # The key is "eye", NOT "position". A wrong key here parses, warns nowhere
     # useful and silently leaves the auto-framed camera in place -- which is how
     # the first two drafts of this fixture were read as badly framed rather than

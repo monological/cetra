@@ -44,7 +44,7 @@ import importlib.util
 import json
 import math
 import os
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -188,7 +188,7 @@ for span, probe, want in ((180.0, 190.0, 170.0), (180.0, 350.0, 10.0),
 # that makes normalising lossless, and a scene authoring a number would hide it.
 CSCN = {
     "version": 1,
-    "models": [{"path": "contact_local_bare.gltf"}],
+    "models": [{"path": asset_ref("contact_local_bare.gltf")}],
     "environment": {"ambient": [0.02, 0.02, 0.024]},
     "lights": [{
         "name": "ies_lamp",
@@ -196,7 +196,7 @@ CSCN = {
         "position": [0.0, 2.0, 0.0],
         "color": [1.0, 1.0, 1.0],
         "range": 12.0,
-        "profile": "ies_symmetric.ies",
+        "profile": asset_ref("ies_symmetric.ies"),
     }],
     "camera": {"eye": [0.0, 1.9, 4.4], "target": [0.0, 0.25, 0.0], "fov": 42},
     "post": {"tonemap": "neutral", "exposure": 1.0},

@@ -208,7 +208,7 @@ cmake --workflow --preset windows-debug
 Example apps are built in the `out/bin` directory.
 
 ```
-./out/bin/render -m assets/c64.fbx -t assets/c64.fbm
+./out/bin/render -m assets/models/c64.fbx -t assets/models/c64.fbm
 ./out/bin/tree --player
 ./out/bin/forest
 ```

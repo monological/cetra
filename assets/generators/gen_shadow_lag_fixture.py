@@ -48,7 +48,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 FOV_DEG = 40.0
 
@@ -254,7 +254,7 @@ POST = {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False,
 
 cscn = {
     "version": 1,
-    "models": [{"path": "shadow_lag_fixture.gltf"}],
+    "models": [{"path": asset_ref("shadow_lag_fixture.gltf")}],
     "lights": [LIGHT],
     "camera": CAMERA,
     "post": POST,
@@ -281,7 +281,7 @@ still_gltf["buffers"][0]["uri"] = ("data:application/octet-stream;base64," +
 still_gltf["asset"]["generator"] = "gen_shadow_lag_fixture.py (still twin)"
 
 still_cscn = json.loads(json.dumps(cscn))
-still_cscn["models"] = [{"path": "shadow_lag_still.gltf"}]
+still_cscn["models"] = [{"path": asset_ref("shadow_lag_still.gltf")}]
 
 here = os.path.dirname(os.path.abspath(__file__))
 with open(asset_path("shadow_lag_fixture.gltf"), "w") as f:
