@@ -28,6 +28,12 @@ IkFootParams ik_default_params(void) {
     // this puppet's walk carries the ankle about 0.15 over a stride -- so a foot is
     // fully released around halfway up its swing and planted again near contact.
     p.plant_fraction = 0.10f;
+    // A toe within 5 per cent of a leg of the ground and moving up or down slower than
+    // a quarter of a leg per second is down. On this puppet that is 0.041 m and 0.205
+    // m/s, against a walk whose toe lifts 0.165 m in about a fifth of a second -- so a
+    // swinging foot clears both by a wide margin and neither is a hair trigger.
+    p.contact_height = 0.05f;
+    p.contact_speed = 0.25f;
     return p;
 }
 
@@ -91,6 +97,10 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
     foot->hip_index = hip;
     foot->knee_index = knee;
     foot->ankle_index = ankle;
+    // Judged at the ankle until a toe is registered. Not -1: every reader would then
+    // carry the same two-branch test, and a rig without a toe is not a rig without a
+    // contact.
+    foot->toe_index = ankle;
 
     glm_vec3_copy((float*)knee_forward, foot->pole_local);
     if (glm_vec3_norm(foot->pole_local) < IK_DIR_EPS)
@@ -112,6 +122,7 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
         // whose bind sole rests at model y = 0. Free here: the bind globals are already
         // built for the axis below.
         foot->sole_offset = c[1];
+        foot->toe_offset = c[1]; // the toe IS the ankle until ik_foot_set_toe says otherwise
         glm_vec3_sub(c, a, limb);
         if (glm_vec3_norm(limb) > IK_EPS) {
             glm_vec3_normalize(limb);
@@ -140,6 +151,43 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
                   hip_bone, knee_bone, ankle_bone);
 
     return (int)system->foot_count++;
+}
+
+bool ik_foot_set_toe(IkSystem* system, int foot, const char* toe_bone) {
+    if (!system || !toe_bone || foot < 0 || (size_t)foot >= system->foot_count) {
+        log_error("ik_foot_set_toe: a null argument or no such foot");
+        return false;
+    }
+    Skeleton* skeleton = system->skeleton;
+    const int toe = get_bone_index_by_name(skeleton, toe_bone);
+    IkFoot* f = &system->feet[foot];
+    if (toe < 0) {
+        log_error("ik_foot_set_toe: '%s' has no bone named '%s'", skeleton->name, toe_bone);
+        return false;
+    }
+    // A child of the ANKLE, not merely a descendant. A toe two joints down would still
+    // ride the solve, but the ankle-to-toe offset the lock converts through is taken as
+    // a rigid vector, and that is only true across one joint.
+    if (skeleton->bones[toe].parent_index != f->ankle_index) {
+        log_error("ik_foot_set_toe: '%s' is not a child of this foot's ankle", toe_bone);
+        return false;
+    }
+
+    mat4* bind = calloc(skeleton->bone_count, sizeof(mat4));
+    if (!bind) {
+        log_error("ik_foot_set_toe: out of memory");
+        return false;
+    }
+    skeleton_compute_bind_globals(skeleton, bind);
+    // The same derivation sole_offset gets, on the same assumption: a bind sole at
+    // model y = 0. A toe is thinner than an ankle is tall, so the two differ and using
+    // the ankle's for both would call a toe in contact while it was still a heel's
+    // height off the ground.
+    f->toe_offset = bind[toe][3][1];
+    free(bind);
+
+    f->toe_index = toe;
+    return true;
 }
 
 bool ik_set_pelvis(IkSystem* system, const char* pelvis_bone) {
@@ -214,6 +262,13 @@ void ik_reset(IkSystem* system) {
         return;
     }
     system->needs_reset = true;
+    // A teleport invalidates the pose the contact speed is differenced against: across
+    // the jump the toe appears to move the whole distance in one frame, which reads as
+    // a foot travelling at an enormous rate and suppresses the label for exactly one
+    // frame after every load. Dropping the history says the truth instead, which is
+    // that there is no previous pose to compare with.
+    for (size_t i = 0; i < system->foot_count; i++)
+        system->feet[i].has_clip_prev = false;
 }
 
 // The in-place form of skeleton_rotate_global, which is what every site here wants;
@@ -368,6 +423,54 @@ static float ik_effective_weight(const IkSystem* system, const IkFoot* f, mat4* 
     return fall > 0.0f ? f->weight * fall : 0.0f;
 }
 
+// Whether the CLIP has this foot on the ground: the toe low enough, and not travelling
+// vertically. A statement about the animation rather than about the solve, and answered
+// here for the same reason the release is -- these globals are still the clip's own pose.
+//
+// It is NOT the release test wearing a different name, and the two are deliberately
+// separate. The release asks how much IK to apply and fades; this asks a yes or no
+// about where the animation has put the foot, and a lock needs the second. Folding them
+// would make a partly-released foot partly in contact, which is not a state the world
+// has.
+// It is judged at the ANKLE and held at the TOE, and that split was measured rather than
+// chosen. Holden detects at the toe, on clips authored for the rig that plays them; on a
+// clip retargeted onto a rig of other proportions the toe JOINT passes back through its
+// own bind clearance in mid-swing -- traced at 0.0390 against a stance value of 0.0137 --
+// and since that pass is the bottom of an arc it is momentarily slow as well, so neither
+// a height threshold nor a speed threshold rejects it and the label breaks each stance
+// into two. The ankle at the same instants reads 0.12 airborne against 0.085 planted,
+// which separates cleanly. The toe stays the thing a lock HOLDS, because that is about
+// where the contact is and not about how it is found.
+static bool ik_contact_label(const IkSystem* system, const IkFoot* f, mat4* globals,
+                             float delta_time) {
+    vec3 hip, knee, ankle, thigh, shin;
+    glm_vec3_copy(globals[f->hip_index][3], hip);
+    glm_vec3_copy(globals[f->knee_index][3], knee);
+    glm_vec3_copy(globals[f->ankle_index][3], ankle);
+    glm_vec3_sub(knee, hip, thigh);
+    glm_vec3_sub(ankle, knee, shin);
+    const float leg = glm_vec3_norm(thigh) + glm_vec3_norm(shin);
+    if (leg <= 0.0f)
+        return false;
+
+    // Against the target the caller set rather than against a plane, so a foot on a step
+    // is judged by its own tread and not by the one the other foot is on. The target is
+    // already the ankle's grounded height -- ik_foot_set_ground folded sole_offset in --
+    // so this difference is the lift and needs no further correction.
+    if (ankle[1] - f->target[1] > system->params.contact_height * leg)
+        return false;
+
+    // Speed needs two solves to exist. Before the second, height alone decides, which
+    // is the right default: the alternative calls every foot airborne on the frame a
+    // rig is created, and a lock that begins one frame late is visible.
+    if (f->has_clip_prev && delta_time > 0.0f) {
+        const float rise = fabsf(ankle[1] - f->clip_ankle_prev[1]) / delta_time;
+        if (rise > system->params.contact_speed * leg)
+            return false;
+    }
+    return true;
+}
+
 void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
     if (!system || !system->enabled || system->foot_count == 0 || !global_transforms)
         return;
@@ -401,6 +504,15 @@ void ik_solve(IkSystem* system, mat4* global_transforms, float delta_time) {
         // still the clip's own pose, which is the only moment the question has a true
         // answer (see the header).
         f->applied_weight = ik_effective_weight(system, f, global_transforms);
+
+        // The contact label, from the same globals and in the same window, then the
+        // pose it will be differenced against next frame. Recorded even for a foot at
+        // weight 0: whether the clip has a foot down is not conditional on whether IK
+        // is being applied to it, and a label that went blank while a character was
+        // airborne would have to be re-established on landing, one frame late.
+        f->in_contact = ik_contact_label(system, f, global_transforms, delta_time);
+        glm_vec3_copy(global_transforms[f->ankle_index][3], f->clip_ankle_prev);
+        f->has_clip_prev = true;
     }
 
     // The pelvis drop, before any chain is solved, so every chain solves against where
