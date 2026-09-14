@@ -878,22 +878,27 @@ own, so on flat ground the two look identical by design.
 `--no-lock` (spec 12.9) keeps planting and drops the LOCKING above it: contacts are still found
 and feet still meet the ground, but no world-space point is held — planting's behaviour, though
 not bit-identical to 12.4's, since the transition blend and the pelvis cap both changed under it.
-**At the player's default speed the two are 0 px apart**, and that is the mechanism working: the
-player moves at 10 m/s on a rig whose walk clip implies 0.95, so the contact label never fires and
-there is nothing to hold.
+**On the generated puppet the two are 0 px apart at any speed**, and that is the mechanism
+working: its walk is a straight-leg pendulum with no stance, so the contact label never fires and
+there is nothing to hold. The run says so at startup — *"Locomotion clips imply no stride"* — and
+travel stays a fraction of `PLAYER_SPEED` 10.
 
-`--speed <m/s>` is what makes it visible, and it needs the companion fact that the locomotion
-knob is `ground_speed / PLAYER_SPEED` — against the blend space's REFERENCE speed, not against
-whatever `--speed` capped travel at. Normalised against the cap, full stick reads 1.0 and plays
-the run clip at any speed, which is useless for the one thing the flag is for. So:
+**On a rig whose clips DO imply a stride, travel comes from them** (spec 12.10) and the
+comparison needs no flag at all:
 
 ```bash
-./out/bin/gametest --speed 1.2              # walk with W at the rate the clip implies
-./out/bin/gametest --speed 1.2 --no-lock    # the same, planting only
+./out/bin/gametest --puppet assets/models/t_pose.fbx            # full stick is 2.67 m/s
+./out/bin/gametest --puppet assets/models/t_pose.fbx --no-lock  # the same, planting only
 ```
 
-measures 22,643 px apart at frame 180. Anything that wants this benefit in a real game has to
-match its travel speed to its clips, or carry root motion; this engine does neither.
+measures **2217 px** apart at full stick. The axis is metres per second there: each locomotion
+entry sits at the speed its clip implies, and the clip is played between 0.6x and 1.6x to cover
+what sits between and beyond them.
+
+`--speed <m/s>` still caps travel, and since 12.10 it also **overrides the derived figure** — so
+it is now a way to walk slower than full stick rather than the only way to see the feature. It no
+longer carries the old caveat about which constant the knob divides by: an absolute axis has no
+gear to re-normalise.
 
 `--ik-probe <case>` is the headless probe the `ik` gate group reads, in the same shape as the
 four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,

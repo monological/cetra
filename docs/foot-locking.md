@@ -3,9 +3,11 @@
 Reference notes, in our own words, on the foot-locking technique described at
 <https://theorangeduck.com/page/inverse-kinematics-foot-locking> (Daniel Holden,
 theorangeduck.com). Written up here because spec 12.4 shipped foot *planting* and hit
-exactly the failure modes this method exists to fix. **Spec 12.9 implemented it** — the last
-section says what shipped, where the shipped form deviates and why, and what the demo cannot
-show. Everything between here and there describes the METHOD, and is left as it was written.
+exactly the failure modes this method exists to fix. **Spec 12.9 implemented it** and **spec
+12.10 gave the demo a travel speed its clips could carry** — the last two sections say what
+shipped, where the shipped form deviates and why, and what it took to make the feature
+visible at all. Everything between here and there describes the METHOD, and is left as it was
+written.
 
 ---
 
@@ -193,12 +195,37 @@ body moving at the speed the clip's own feet imply.
    property of a bind pose that is exactly straight, not of the method** — on a rig that binds
    bent the band costs a fraction of it, so re-measure rather than inherit the refusal.
 
-### What the demo cannot show
+### What the demo could not show, and what fixed it (spec 12.10)
 
-`gametest`'s player moves at `PLAYER_SPEED` 10 m/s on a rig whose leg is 0.82 m and whose clip
-implies a 0.95 m/s stride. At about ten times its animation's speed the contact label never
-fires, no lock ever forms, and the frame is **0 px** against `--no-lock`. That is the mechanism
-behaving correctly — there is no contact to hold — and it is the demo, not the feature, that
-cannot demonstrate it. Walked at a stick deflection of 0.12, near the clip's own stride, the
-same frame moves **52,244 px**. A game that wants this benefit has to match its travel speed to
-its clips' stride, or carry root motion; neither is in this engine.
+**Was:** `gametest`'s player moved at `PLAYER_SPEED` 10 m/s on a rig whose leg is 0.82 m and whose
+clip implies a 0.95 m/s stride. At about ten times its animation's speed the contact label never
+fired, no lock ever formed, and the frame was **0 px** against `--no-lock` — the mechanism behaving
+correctly, there being no contact to hold, and the demo rather than the feature failing to show it.
+Walked at a stick deflection of 0.12 the same frame moved 52,244 px. The note ended: *a game that
+wants this benefit has to match its travel speed to its clips' stride, or carry root motion;
+neither is in this engine.*
+
+**Spec 12.10 did the first of those.** `animation_stride_speed` measures the ground speed a clip's
+own feet imply, `animator_stride_speed` blends it across a space, and a game divides the speed it
+wants to travel at by the answer to get a playback rate. `gametest`'s locomotion entries now sit at
+the world speeds they imply, its knob is metres per second, and full stick is derived from the
+fastest clip instead of written down. On `t_pose.fbx` + `strut_walk` that is 2.67 m/s, and against
+`--no-lock` the frame moves **2217 px** at full stick where it was 0.
+
+Three things that spec learned about the feature, which belong here rather than there:
+
+- **A lock inside its `unlock_distance` holds the toe perfectly still whatever the body is doing.**
+  So SLIDE alone does not measure whether locking is working: at half the clip's speed the foot does
+  not travel at all while the leg is hauled a third of a metre away from the pose. That is the
+  T-Rex posture this page records the method warning against, arriving by a different route, and
+  what sees it is the distance between the solved ankle and the one the animator asked for.
+- **Past the band a clip can carry, the honest answer is to blend to another clip.** `gametest`
+  stretches playback between 0.6x and 1.6x and no further; outside that a walk reads as a stagger
+  or a sprint, and stretching further trades a sliding foot for a worse-looking one.
+- **The contact label opens during late swing on one foot of `strut_walk`**, leaving the right
+  ankle a standing correction of about 0.45 of a leg that no playback rate moves — proved by
+  walking the body at that foot's own implied speed and watching it stay. Every instrument spec
+  12.9 built reads the LEFT foot, which is why nineteen arms never saw it. Filed, not fixed:
+  moving the label would move `ik-contact`, `ik-slide` and `ik-hysteresis` with it.
+
+Root motion is still not in this engine, and is the other answer to the same problem.
