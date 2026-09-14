@@ -22020,6 +22020,12 @@ def run_cook_gate(workdir):
     """The derived-data cook (spec 11.99): a transparent content-addressed
     cache over the deterministic startup bakes, plus the --cook pre-warm verb.
 
+      cook-recipe   every cook_key literal in the tree fits COOK_RECIPE_MAX,
+                    which counts the NUL. Static, and first because an
+                    over-long name is refused where the key is BUILT: the site
+                    then reports no miss, no refusal and no store failure, so
+                    every counter below reads as though it had never been
+                    written at all.
       cook-identity a warm cooked run equals a live --no-cook run: the
                     render-mode-6 frame at 0 px (every cooked texture lands in
                     it) and the region digests equal (the uncooked control).
@@ -22058,6 +22064,50 @@ def run_cook_gate(workdir):
     must be exactly what this group put there.
     """
     failures = []
+
+    # --- cook-recipe --------------------------------------------------------
+    # Static and FIRST, because what it catches is invisible to every counter
+    # the arms below read. cook_key refuses a recipe that does not fit and
+    # returns an invalid key; fetch and store then return before they touch
+    # hits, misses, refusals or store failures, so an over-long name subtracts
+    # a site from the summary rather than appearing anywhere in it -- which
+    # reads exactly like a site nobody ever wrote. Running it ahead of the
+    # renders also keeps it alive when one of them fails and the group returns
+    # early.
+    #
+    # The limit is read from the header rather than restated here: it is the
+    # size of the container's recipe field, and a second copy of a number is a
+    # second thing to keep in step.
+    with open(os.path.join(ROOT, "cetra", "src", "cook.h"), encoding="utf-8") as fh:
+        found = re.search(r"#define\s+COOK_RECIPE_MAX\s+(\d+)", fh.read())
+    recipe_max = int(found.group(1)) if found else 0
+    sites = []
+    for base in ("cetra/src", "apps"):
+        for dirpath, _dirs, names in os.walk(os.path.join(ROOT, base)):
+            for name in sorted(names):
+                if not name.endswith((".c", ".cpp", ".h")):
+                    continue
+                path = os.path.join(dirpath, name)
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+                for recipe in re.findall(r'cook_key\("([^"]*)"\)', text):
+                    sites.append((os.path.relpath(path, ROOT), recipe))
+    over = [f"{p}: '{r}' is {len(r)}" for p, r in sites if len(r) >= recipe_max]
+    ok = recipe_max > 0 and bool(sites) and not over
+    if not recipe_max:
+        detail = "COOK_RECIPE_MAX not found in cetra/src/cook.h"
+    elif not sites:
+        detail = "no cook_key literals found -- the call shape or this scan has moved"
+    elif over:
+        detail = (f"{len(over)} of {len(sites)} recipes exceed the {recipe_max - 1} usable "
+                  f"characters: {'; '.join(over)}")
+    else:
+        detail = (f"{len(sites)} recipe literals, longest {max(len(r) for _p, r in sites)} "
+                  f"of {recipe_max - 1} usable ({recipe_max} counts the NUL)")
+    print(f"  cook-recipe  {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("cook-recipe")
+
     d1 = os.path.join(workdir, "cook_d1")
     d2 = os.path.join(workdir, "cook_d2")
     live_ppm = os.path.join(workdir, "cook_live.ppm")
