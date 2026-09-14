@@ -17221,9 +17221,47 @@ def run_fixture_gen_gate(workdir):
     nothing writes outside its own directory.
     """
     src_dir = os.path.join(ROOT, "assets")
-    gens = sorted(glob.glob(os.path.join(src_dir, "gen_*.py")))
-    inputs = [p for p in sorted(glob.glob(os.path.join(src_dir, "*.png")))
-              if not p.endswith("_golden.png")]
+
+    # ONE WALK, and the arm's whole picture of the corpus comes out of it: which
+    # generators exist, which images they read back, and where each committed
+    # asset lives. It is deliberately not a set of globs per kind -- this arm
+    # asserts that a generator reproduces what is committed, and that claim does
+    # not depend on the directory layout. Indexing by BASENAME is what makes it
+    # layout-agnostic: a generator emits a filename, and where the committed twin
+    # sits is this index's problem rather than the gate's.
+    #
+    # The walk stops at the self-contained bundles. abandoned_window, ivy_arcade
+    # and raiden carry their own scenes and their own producers, and this arm has
+    # never run any of them: ivy_arcade/gen_ivy_mat.py writes into its own
+    # textures/ and reads across into abandoned_window's, and build_arcade.py
+    # needs Blender. Pruning them keeps this arm's assertions about the corpus
+    # fixture-gen governs instead of failing on a gap it was never asked to
+    # close -- the gap is real and belongs in docs/verification.md, not hidden
+    # behind a name a loop happens not to match.
+    # A .fbm is assimp's sidecar convention -- the textures belonging to one FBX,
+    # named after it. Nothing generated reads them, so they are pruned with the
+    # bundles: collecting them would hand every generator's mirror nine images it
+    # never asked for, and a flat mirror makes two sidecars with one basename
+    # clobber each other. Pruned by SUFFIX, so the next .fbm needs no edit here.
+    self_contained = {"abandoned_window", "ivy_arcade", "raiden", "__pycache__"}
+    found, inputs, committed_at, ambiguous = set(), [], {}, []
+    for walk_root, walk_dirs, walk_files in os.walk(src_dir):
+        walk_dirs[:] = [d for d in walk_dirs
+                        if d not in self_contained and not d.endswith(".fbm")]
+        for f in sorted(walk_files):
+            path = os.path.join(walk_root, f)
+            if f.startswith("gen_") and f.endswith(".py"):
+                found.add(path)
+            elif f.endswith(".png") and not f.endswith("_golden.png"):
+                inputs.append(path)
+            # A basename in two places would make "the committed twin" a choice,
+            # and this arm would quietly compare against whichever the walk
+            # reached first. Refuse instead: it is the confusion a move creates.
+            if f in committed_at:
+                ambiguous.append(f"{f}: committed in two places")
+            committed_at[f] = path
+    gens = sorted(found)
+    inputs = sorted(inputs)
     # Byte equality is the contract a .gltf, .cscn, .ies or .cube has -- all four are text
     # a generator writes deterministically. It is NOT the contract a .png has, whose bytes
     # come out of PIL and zlib and move with those libraries rather than with the fixture.
@@ -17286,8 +17324,8 @@ def run_fixture_gen_gate(workdir):
             drifted.append(f"{name}: wrote nothing")
             continue
         for f in wrote:
-            committed, regenerated = os.path.join(src_dir, f), os.path.join(run_dir, f)
-            if not os.path.exists(committed):
+            committed, regenerated = committed_at.get(f), os.path.join(run_dir, f)
+            if not committed or not os.path.exists(committed):
                 drifted.append(f"{f}: emitted but not committed")
             elif f.endswith(text_ext):
                 compared += 1
@@ -17299,38 +17337,19 @@ def run_fixture_gen_gate(workdir):
                 if os.path.getsize(regenerated) == 0:
                     drifted.append(f"{f}: emitted empty")
 
-    # DISCOVERY IS ITSELF UNDER TEST, and nothing above can see it fail. Every
-    # check in this arm is driven by `gens`, so a glob that matches nothing runs
-    # no generator, compares no asset, collects no drift, and prints PASS -- the
-    # whole corpus silently uncovered by one wrong path. The walk is the ground
-    # truth the glob is measured against: a generator that exists anywhere under
-    # assets/ and did not reach `gens` is named here rather than missed.
+    # THE ARM'S OWN REACH IS UNDER TEST, and nothing above can see it fail.
+    # Every check here is driven by `gens` and `committed_at`, both of which come
+    # out of one walk -- so a walk that finds nothing runs no generator, compares
+    # no asset, collects no drift, and prints PASS with the whole corpus
+    # uncovered. These two assertions are what make the counts mean something.
     #
-    # A count, not a hardcoded number: 54 today, and a literal would have to be
-    # edited by whoever adds the 55th -- which is the kind of chore that gets
-    # done by lowering the number to match.
-    # The walk stops at the self-contained bundles. abandoned_window, ivy_arcade
-    # and raiden carry their own scenes and their own producers, and this arm has
-    # never run any of them: ivy_arcade/gen_ivy_mat.py writes into its own
-    # textures/ and reads across into abandoned_window's, and build_arcade.py
-    # needs Blender. Pruning them keeps this assertion about the corpus
-    # fixture-gen governs instead of failing on a gap it was never asked to
-    # close -- the gap is real and belongs in docs/verification.md, not hidden
-    # behind a name this loop happens not to match.
-    self_contained = {"abandoned_window", "ivy_arcade", "raiden", "__pycache__"}
-    found = set()
-    for walk_root, walk_dirs, walk_files in os.walk(src_dir):
-        walk_dirs[:] = [d for d in walk_dirs if d not in self_contained]
-        for f in walk_files:
-            if f.startswith("gen_") and f.endswith(".py"):
-                found.add(os.path.join(walk_root, f))
-    undiscovered = sorted(os.path.relpath(p, src_dir) for p in found - set(gens))
-    if undiscovered:
-        drifted.insert(0, f"{len(undiscovered)} generator(s) this arm never ran: "
-                          f"{', '.join(undiscovered[:4])}")
-    # And the same argument one level down: generators that all fail their
-    # dependency check, or emit into a directory this arm does not look in,
-    # leave both counters at zero while every other signal reads clean.
+    # Counts rather than hardcoded numbers: a literal would have to be edited by
+    # whoever adds the 55th generator, which is the kind of chore that gets done
+    # by lowering the number to match.
+    if ambiguous:
+        drifted.insert(0, "; ".join(sorted(set(ambiguous))[:4]))
+    elif not gens:
+        drifted.insert(0, "no generators found under assets/; this arm ran nothing")
     elif not compared or not binary:
         drifted.insert(0, f"compared {compared} text and {binary} binary assets; "
                           "a run that verifies nothing is not a pass")
