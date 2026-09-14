@@ -53,16 +53,20 @@ static float clip_seconds(const Animation* clip) {
 // Piecewise-linear between the two entries around `param`, clamped at the
 // ends. An entry's own position gives it exactly 1 and its neighbour exactly
 // 0, so a knob parked on an entry plays that clip alone.
-static void space_weights(AnimatorSpace* s, float param) {
+// Into `out` rather than into the space, so a query may ask what the weights
+// WOULD be for a param the last advance has not seen yet -- a game writes the
+// knob in its update and the animator ticks in pre-render, so anything reading
+// weights in between would otherwise read the previous frame's.
+static void space_weights(const AnimatorSpace* s, float param, float* out) {
     for (int i = 0; i < ANIMATOR_SPACE_MAX; i++)
-        s->weights[i] = 0.0f;
+        out[i] = 0.0f;
     int last = s->count - 1;
     if (last <= 0 || param <= s->entries[0].position) {
-        s->weights[0] = 1.0f;
+        out[0] = 1.0f;
         return;
     }
     if (param >= s->entries[last].position) {
-        s->weights[last] = 1.0f;
+        out[last] = 1.0f;
         return;
     }
     int i = 0;
@@ -71,8 +75,8 @@ static void space_weights(AnimatorSpace* s, float param) {
     float p0 = s->entries[i].position;
     float span = s->entries[i + 1].position - p0;
     float t = span > 0.0f ? (param - p0) / span : 1.0f;
-    s->weights[i] = 1.0f - t;
-    s->weights[i + 1] = t;
+    out[i] = 1.0f - t;
+    out[i + 1] = t;
 }
 
 // Where entry i is, in its own ticks: the clock for the reference, the same
@@ -96,7 +100,7 @@ static void space_advance(AnimatorSpace* s, float param, float dt, float speed) 
     if (s->count == 0)
         return;
 
-    space_weights(s, param);
+    space_weights(s, param, s->weights);
     int ref = 0;
     while (ref < s->count - 1 && s->weights[ref] <= 0.0f)
         ref++;
@@ -303,6 +307,34 @@ const char* animator_source_name(const Animator* a) {
     if (!a || a->base.count == 0 || !a->base.name)
         return "";
     return a->base.name;
+}
+
+float animator_stride_speed(const Animator* a) {
+    if (!a || a->base.count == 0)
+        return 0.0f;
+
+    // The weights this param would produce, not the ones the last advance left:
+    // a game writes the knob and reads this back before the animator ticks.
+    float w[ANIMATOR_SPACE_MAX];
+    space_weights(&a->base, a->param, w);
+
+    // Ground per unit of PHASE, and phase per second. Neither is the answer on
+    // its own: the first is what the blended pose lays down over a whole loop,
+    // the second is how fast the one shared clock walks that loop, and the clock
+    // runs at the blended clip LENGTH. Their product is metres per second.
+    float ground = 0.0f, phase_rate = 0.0f;
+    for (int i = 0; i < a->base.count; i++) {
+        if (w[i] <= 0.0f)
+            continue;
+        if (a->base.entries[i].stride <= 0.0f)
+            return 0.0f; // an entry nobody measured; say so rather than guess
+        const float seconds = clip_seconds(a->base.entries[i].clip);
+        if (seconds <= 0.0f)
+            return 0.0f;
+        ground += w[i] * a->base.entries[i].stride * seconds;
+        phase_rate += w[i] / seconds;
+    }
+    return ground * phase_rate;
 }
 
 // ============================================================================
