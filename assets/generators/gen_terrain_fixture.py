@@ -27,7 +27,6 @@ that quietly stops testing something is worse than no fixture:
 """
 
 import math
-import os
 import struct
 from fixture_paths import asset_path
 

@@ -43,13 +43,12 @@ around the recenter, because the property under test is the thing the recenter
 removes.
 
 Regenerate with:
-  python3 assets/gen_catcher_transparency_fixture.py
+  python3 assets/generators/gen_catcher_transparency_fixture.py
 (the .cscn is hand-authored, not generated.)
 """
 
 import base64
 import json
-import os
 import struct
 from fixture_paths import asset_path
 

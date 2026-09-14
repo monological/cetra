@@ -6,13 +6,12 @@ BLEND, no transmission) at staggered depths, so their screen-space overlap has n
 consistent draw order. Under the unsorted alpha-blend late pass the layering is
 wrong from one side and flips (pops) as the camera orbits to the other; under
 weighted-blended OIT it stays correct and stable from every angle. Flat color, no
-texture deps. Regenerate with: python3 assets/gen_oit_fixture.py
+texture deps. Regenerate with: python3 assets/generators/gen_oit_fixture.py
 """
 
 import base64
 import json
 import struct
-import os
 from fixture_paths import asset_path
 
 HALF = 0.7  # quad half-extent

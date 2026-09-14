@@ -8,14 +8,13 @@ and back faces, and the three overlap into a region where the depth order change
 across the surface -- the "no single correct draw order" case that sorting can't
 solve. Under the unsorted late pass the layering is wrong from some angles and
 pops as the camera orbits; under weighted-blended OIT it stays correct and stable.
-Flat color, no texture deps. Regenerate with: python3 assets/gen_oit_sphere_fixture.py
+Flat color, no texture deps. Regenerate with: python3 assets/generators/gen_oit_sphere_fixture.py
 """
 
 import base64
 import json
 import struct
 import math
-import os
 from fixture_paths import asset_path
 
 # Silhouette smoothness matters for translucent spheres (the Fresnel rim rides the

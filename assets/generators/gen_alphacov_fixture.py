@@ -34,20 +34,18 @@ The material is ALPHA_MASK at cutoff 0.5 -- the glTF default, and deliberately
 not the 0.4 both leaf materials use, so an arm reading this cannot pass by
 accident on a hardcoded 0.4.
 
-Regenerate with: python3 assets/gen_alphacov_fixture.py
+Regenerate with: python3 assets/generators/gen_alphacov_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 
 import numpy as np
 from PIL import Image
 from fixture_paths import asset_path, asset_ref
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 TEX = 512            # power of two, so the chain halves cleanly to 1x1
 DOT_PITCH = 16       # texels between dot centres

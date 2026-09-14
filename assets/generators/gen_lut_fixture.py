@@ -71,12 +71,11 @@ at Resolve's 33 it sits far under one 8-bit code and the arm would measure
 nothing. A fixture's job is to make the property legible -- the same reason the
 cloud arms pin --cloud-coverage 0.10 rather than the default.
 
-Regenerate with: python3 assets/gen_lut_fixture.py
+Regenerate with: python3 assets/generators/gen_lut_fixture.py
 """
 
 import base64
 import json
-import os
 import struct
 from fixture_paths import asset_path, asset_ref
 
@@ -354,7 +353,6 @@ cscn = {
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }
 
-here = os.path.dirname(os.path.abspath(__file__))
 out = asset_path("lut_fixture.gltf")
 with open(out, "w") as f:
     json.dump(gltf, f, indent=1)

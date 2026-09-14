@@ -22,12 +22,11 @@ is reading one surface at one depth rather than an average over a slope.
 Everything is emissive on black. An emitter's radiance is its factor exactly, so
 what reaches the water is authored rather than the product of a light rig, and the
 transmitted colour a gate reads is not also measuring the lighting. Regenerate
-with: python3 assets/gen_water_fixture.py
+with: python3 assets/generators/gen_water_fixture.py
 """
 
 import base64
 import json
-import os
 import struct
 import sys
 from fixture_paths import asset_path, asset_ref
@@ -294,7 +293,7 @@ scene_desc = {
 # the assertion whose absence let this script drift out of step with its own output for
 # three specs -- it stopped emitting the `water` block the fixture needs to have a surface
 # at all, and nothing noticed because nobody runs a generator that is already "done".
-out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+out_dir = sys.argv[1] if len(sys.argv) > 1 else None
 with open(asset_path("water_fixture.gltf", out_dir), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")

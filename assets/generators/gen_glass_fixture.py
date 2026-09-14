@@ -7,13 +7,12 @@ A 2x2 colored backdrop wall sits behind two glass panels:
   - frosted panel (transmission 1, roughness 0.4, ior 1.5, thin)
       -> shows the pure roughness BLUR of the backdrop
 All geometry shares one unit-quad; materials are flat colors so the fixture
-has no texture dependencies. Regenerate with: python3 assets/gen_glass_fixture.py
+has no texture dependencies. Regenerate with: python3 assets/generators/gen_glass_fixture.py
 """
 
 import base64
 import json
 import struct
-import os
 from fixture_paths import asset_path
 
 # One unit quad in the XY plane, facing +Z (two triangles)

@@ -211,7 +211,9 @@ consequences are worth knowing before reading a path here:
 - **A `.cscn` names its model as `../models/<name>`** and an image `uri` inside a `.gltf` as
   `../textures/<name>`. Both resolve where a bare sibling name no longer can: the first
   against the scene file's own directory, the second through the texture pool, which strips
-  leading segments and cannot climb out of `models/`.
+  `base + subpath` verbatim before it starts stripping leading segments — and stripping only
+  ever shortens a name, so a bare sibling filename cannot reach a sibling directory while an
+  explicit `../` can.
 
 **One generator has never had drift coverage**: `assets/ivy_arcade/gen_ivy_mat.py`. The
 `fixture-gen` gate walks for generators but prunes the self-contained bundles, and this one

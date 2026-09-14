@@ -37,7 +37,7 @@ The scene names the symmetric one on a point light with NO authored intensity,
 which is what exercises the peak-seeding path: the light must come out at the
 file's own peak candela.
 
-Regenerate with: python3 assets/gen_ies_fixture.py
+Regenerate with: python3 assets/generators/gen_ies_fixture.py
 """
 
 import importlib.util

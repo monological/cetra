@@ -36,20 +36,18 @@ THE THREE MAPS ARE THE THREE FORMATS, one each, so an arm can attribute a change
              quantities. Writing this as grey RGB would silently exercise the
              DECLINE path while looking like it tested BC4.
 
-Regenerate with: python3 assets/gen_texcomp_fixture.py
+Regenerate with: python3 assets/generators/gen_texcomp_fixture.py
 """
 
 import base64
 import json
 import math
-import os
 import struct
 
 import numpy as np
 from PIL import Image
 from fixture_paths import asset_path, asset_ref
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 TEX = 512          # power of two, so the chain halves cleanly to 1x1
 NEAR, FAR = 1.0, 400.0

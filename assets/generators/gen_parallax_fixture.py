@@ -13,7 +13,7 @@ height loader (`resolve_height_maps`) resolves the height sibling:
   - parallax_fixture_height.png  (grayscale, WHITE = raised) -> loaded by convention
 glTF carries no height slot; `parallax_fixture_albedo.png` -> `_height` sibling is
 how the height map reaches Material.height_tex. Regenerate with:
-  python3 assets/gen_parallax_fixture.py
+  python3 assets/generators/gen_parallax_fixture.py
 """
 
 import base64

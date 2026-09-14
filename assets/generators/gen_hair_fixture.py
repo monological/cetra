@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate assets/hair_fixture.*, the strand-map test asset (spec 11.20 / roadmap B8).
 
-    python3 assets/gen_hair_fixture.py
+    python3 assets/generators/gen_hair_fixture.py
 
 Writes the atlas, derives the strand map from it with tools/gen_hair_flow.py,
 checks the derivation against the angles it painted, and emits the glTF and the
