@@ -3432,7 +3432,7 @@ static int run_ik_probe(Game* game, const char* which) {
     // Every case re-poses from bind first, so one case cannot leave the rig somewhere
     // the next one reads.
     ik->params.max_pelvis_drop = 0.0f;
-    ik->params.blend_rate = 0.0f;
+    ik->params.transition_time = 0.0f;
 
     int rc = 0;
 
@@ -3577,7 +3577,7 @@ static int run_ik_probe(Game* game, const char* which) {
                 return 1;
             }
             sys->params.max_pelvis_drop = 0.0f;
-            sys->params.blend_rate = 0.0f;
+            sys->params.transition_time = 0.0f;
             const float sign = s == 0 ? 1.0f : -1.0f;
             const int fi = ik_add_foot(sys, IK_PROBE_HIP, IK_PROBE_KNEE, IK_PROBE_ANKLE,
                                        (vec3){0.0f, 0.0f, sign});
@@ -3712,14 +3712,21 @@ static int run_ik_probe(Game* game, const char* which) {
             return 1;
         }
 
-        // Two passes over the same clip: the first with locking off, which establishes
-        // the contact window, the body speed and the slide planting leaves; the second
-        // with it on, at the same speed over the same window, so the pair differs in the
-        // solver and in nothing else. lock_distance 0 is what switches it off, which is
-        // also how an app asks for planting's behaviour back.
+        // Four passes over one clip, differing only in what the solver is asked to do:
+        //
+        //   0  weight 0 -- the clip alone, and the ONLY source of the contact window and
+        //      the body speed. A reference taken from a solved pass moves whenever the
+        //      solver moves: the stride read 0.587 m/s under planting and 0.895 under an
+        //      inertialized planting, which would have made every A/B incomparable with
+        //      the one before it.
+        //   1  planting, lock_distance 0 -- the 12.4 behaviour.
+        //   2  locking.
+        //   3  locking, with the body walked at three times the speed the clip implies.
+        //
+        // 1 and 2 are the A/B and are read over one interval; 3 is the refusal.
         const float leg = seg_a + seg_b;
         vec3 ank[IK_LOCK_TICKS] = {{0.0f, 0.0f, 0.0f}};
-        vec3 toe[2][IK_LOCK_TICKS] = {{{0.0f, 0.0f, 0.0f}}};
+        vec3 toe[3][IK_LOCK_TICKS] = {{{0.0f, 0.0f, 0.0f}}};
         bool label[IK_LOCK_TICKS] = {false};  // the solver's contact label
         bool held[IK_LOCK_TICKS] = {false};   // and where it actually pinned one
         bool inside[IK_LOCK_TICKS] = {false}; // this instrument's own height window
@@ -3737,9 +3744,7 @@ static int run_ik_probe(Game* game, const char* which) {
         int hs = 0, hold_run = 0, hold_total = 0;
         vec3 dir = {0.0f, 0.0f, 0.0f};
 
-        // Pass 0 unlocked, pass 1 locked at the clip's own speed, pass 2 locked at three
-        // times it. The first two are the A/B; the third is the refusal.
-        for (int pass = 0; pass < 3; pass++) {
+        for (int pass = 0; pass < 4; pass++) {
             Animator* an = create_animator(skel);
             IkSystem* sys = create_ik_system(skel);
             if (!an || !sys) {
@@ -3762,21 +3767,22 @@ static int run_ik_probe(Game* game, const char* which) {
                 fprintf(stderr, "ik-probe: the rig lacks toe bones\n");
                 return 1;
             }
-            if (pass == 0)
+            if (pass <= 1)
                 sys->params.lock_distance = 0.0f;
             an->state->ik = sys;
             animator_play(an, walk, 0.0f, true);
 
+            const float weight = pass == 0 ? 0.0f : 1.0f;
+            const float speed = pass == 3 ? stride * IK_LOCK_FAST : stride;
             const int ankle_bone = sys->feet[lf].ankle_index;
             const int toe_bone = sys->feet[lf].toe_index;
             for (int t = 0; t < ticks; t++) {
-                // Where the rig stands this tick. On pass 0 it is the identity and goes
-                // unread; on pass 1 it is the body's travel, which is what makes the
-                // frozen contact a WORLD point rather than one that rides along.
+                // Where the rig stands this tick. Identity on pass 0, where nothing reads
+                // it; from there on it is the body's travel, which is what makes a frozen
+                // contact a WORLD point rather than one that rides along.
                 mat4 to_world;
                 glm_mat4_identity(to_world);
                 if (pass) {
-                    const float speed = pass == 2 ? stride * IK_LOCK_FAST : stride;
                     vec3 at;
                     glm_vec3_scale(dir, speed * (float)t / 60.0f, at);
                     glm_translate(to_world, at);
@@ -3791,30 +3797,32 @@ static int run_ik_probe(Game* game, const char* which) {
                     glm_vec3_copy(an->state->global_transforms[sys->feet[ids[k]].ankle_index][3],
                                   at);
                     ik_foot_set_ground(sys, ids[k], (vec3){at[0], 0.0f, at[2]},
-                                       (vec3){0.0f, 1.0f, 0.0f}, 1.0f);
+                                       (vec3){0.0f, 1.0f, 0.0f}, weight);
                 }
                 animator_update(an, 1.0f / 60.0f);
-                glm_vec3_copy(an->state->global_transforms[ankle_bone][3], ank[t]);
-                if (pass < 2)
+                if (pass == 0)
+                    glm_vec3_copy(an->state->global_transforms[ankle_bone][3], ank[t]);
+                if (pass < 3)
                     glm_vec3_copy(an->state->global_transforms[toe_bone][3], toe[pass][t]);
                 label[t] = sys->feet[lf].in_contact;
                 held[t] = sys->feet[lf].locked;
-                if (pass == 2) {
-                    // Counted as it goes, because pass 2 reuses `held` and pass 1's
-                    // run has already been read off it by the time this runs.
+                if (pass == 3) {
+                    // Counted as it goes, because pass 2's run has already been read off
+                    // `held` by the time this overwrites it.
                     fast_hold += held[t] ? 1 : 0;
                     fast_pins += (held[t] && (t == 0 || !held[t - 1])) ? 1 : 0;
                 }
                 if (trace) {
                     vec3 body, world;
-                    glm_vec3_scale(dir, stride * (float)t / 60.0f, body);
-                    glm_vec3_add(toe[pass][t], body, world);
+                    glm_vec3_scale(dir, speed * (float)t / 60.0f, body);
+                    glm_vec3_add(an->state->global_transforms[toe_bone][3], body, world);
                     fprintf(stderr,
                             "ik-trace %d %3d toe %.4f ankle %.4f label %d locked %d "
                             "world %.4f %.4f w %.3f\n",
-                            pass, t, (double)toe[pass][t][1], (double)ank[t][1], label[t] ? 1 : 0,
-                            sys->feet[lf].locked ? 1 : 0, (double)world[0], (double)world[2],
-                            (double)sys->feet[lf].applied_weight);
+                            pass, t, (double)an->state->global_transforms[toe_bone][3][1],
+                            (double)an->state->global_transforms[ankle_bone][3][1],
+                            label[t] ? 1 : 0, sys->feet[lf].locked ? 1 : 0, (double)world[0],
+                            (double)world[2], (double)sys->feet[lf].applied_weight);
                 }
             }
             free_animator(an); // frees the IK system with it
@@ -3872,11 +3880,11 @@ static int run_ik_probe(Game* game, const char* which) {
                     fprintf(stderr, "ik-probe: the stance foot does not travel\n");
                     return 1;
                 }
-                glm_vec3_scale(slope, -1.0f / stride,
-                               dir); // the body goes the way the foot does not
+                // The body goes the way the stance foot does not.
+                glm_vec3_scale(slope, -1.0f / stride, dir);
 
-                // The label's own statistics, from the unlocked pass so they describe the
-                // CLIP rather than the solver's response to itself. Against this
+                // The label's own statistics, from the unsolved pass so they describe the
+                // CLIP rather than the solver's response to itself, and against this
                 // instrument's independent window: the label is the ankle's lift and
                 // speed, the window is the ankle's height against its own travel, so
                 // agreement is evidence rather than a tautology. `transitions` is how many
@@ -3902,14 +3910,14 @@ static int run_ik_probe(Game* game, const char* which) {
                 printf("ik lock contact fraction %.6f\n", (double)((float)run / (float)cycle));
             }
 
-            if (pass == 1) {
-                // Both passes are measured over ONE interval, the longest the lock
-                // actually held, so the pair differs in the solver and not in where it
-                // was read. Measuring each pass over its own window was tried and is not
-                // a comparison: the height window opens about three ticks before the
-                // label does, and that sliver of genuine swing is larger than everything
-                // the feature does -- it read 0.109 planted against 0.134 held and said
-                // the lock had made things worse.
+            if (pass == 2) {
+                // Both A/B passes are measured over ONE interval, the longest the lock
+                // actually held, so the pair differs in the solver and not in where it was
+                // read. Measuring each over its own window was tried and is not a
+                // comparison: the height window opens about three ticks before the label
+                // does, and that sliver of genuine swing is larger than everything the
+                // feature does -- it read 0.109 planted against 0.134 held and said the
+                // lock had made things worse.
                 //
                 // The interval being the feature's own claim is not a licence to shrink
                 // it: ik-contact bounds the label's share of the cycle and its transition
@@ -3919,7 +3927,14 @@ static int run_ik_probe(Game* game, const char* which) {
                     hold_total += held[t] ? 1 : 0;
                     pins += (held[t] && (t == 0 || !held[t - 1])) ? 1 : 0;
                 }
-                hold_run = ik_probe_longest_run(held, ticks, &hs);
+                // Past the first cycle. The rig starts from ik_reset, so the first lock of
+                // a recording is taken from a cold state and settles over a few ticks
+                // that no later one spends -- measured at 0.026 m against 0.010 for the
+                // cycles either side of it. Three cycles are recorded exactly so a
+                // settled one is available to read; taking the longest run over all of
+                // them was reporting the warm-up.
+                hold_run = ik_probe_longest_run(held + cycle, ticks - cycle, &hs);
+                hs += cycle;
                 if (hold_run < 3) {
                     fprintf(stderr, "ik-probe: the lock never held\n");
                     return 1;
@@ -3931,12 +3946,12 @@ static int run_ik_probe(Game* game, const char* which) {
                 for (int p = 0; p < 2; p++) {
                     vec3 anchor;
                     glm_vec3_scale(dir, stride * (float)hs / 60.0f, anchor);
-                    glm_vec3_add(toe[p][hs], anchor, anchor);
+                    glm_vec3_add(toe[p + 1][hs], anchor, anchor);
                     anchor[1] = 0.0f;
                     for (int t = hs; t <= he; t++) {
                         vec3 body, world;
                         glm_vec3_scale(dir, stride * (float)t / 60.0f, body);
-                        glm_vec3_add(toe[p][t], body, world);
+                        glm_vec3_add(toe[p + 1][t], body, world);
                         world[1] = 0.0f;
                         const float drift = glm_vec3_distance(world, anchor);
                         if (drift > slide[p])
@@ -3952,8 +3967,7 @@ static int run_ik_probe(Game* game, const char* which) {
         printf("ik lock hold total %.6f\n", (double)hold_total);
         // The refusal: at three times the clip's own speed every lock breaks its unlock
         // distance almost immediately, and what matters is that it lets go rather than
-        // straining. A count of pins that has not exploded says the hysteresis is doing
-        // its job on the way out as well as on the way in.
+        // straining.
         printf("ik lock fast ticks %.6f\n", (double)fast_hold);
         printf("ik lock fast pins %.6f\n", (double)fast_pins);
         // Reported twice on purpose: metres are what a person judges, and the fraction
