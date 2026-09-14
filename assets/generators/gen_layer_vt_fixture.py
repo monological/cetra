@@ -57,7 +57,7 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import gen_layer_fixture as base  # noqa: E402  (the one source for shared constants)
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HALF = base.HALF          # the domain is [-HALF, HALF] on both axes, like the parent
 DOMAIN = 2.0 * HALF
@@ -335,17 +335,17 @@ assert _scene_order.index(1) < _scene_order.index(0), (
 
 CSCN = {
     "version": 1,
-    "models": [{"path": "layer_vt_fixture.gltf"}],
+    "models": [{"path": asset_ref("layer_vt_fixture.gltf")}],
     "materials": {
         "layered_vt_surface": {
-            "splat": SPLAT_NAME,
+            "splat": asset_ref(SPLAT_NAME),
             # Present = world-XZ addressing over this rectangle; the key IS the
             # space (spec 11.66).
             "splatDomain": [-HALF, -HALF, DOMAIN, DOMAIN],
             "layerBlend": base.LAYER_BLEND_SHARPNESS,
             "layers": [
-                {"albedo": name,
-                 "surface": base.RELIEF_NAME if i == 1 else base.SURFACE_NAME,
+                {"albedo": asset_ref(name),
+                 "surface": asset_ref(base.RELIEF_NAME if i == 1 else base.SURFACE_NAME),
                  "uvScale": base.UV_SCALE}
                 for i, (name, _) in enumerate(base.LAYERS)
             ],

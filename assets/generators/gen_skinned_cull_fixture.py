@@ -37,7 +37,7 @@ import json
 import math
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 FOV_DEG = 45.0
 ASPECT = 4.0 / 3.0  # the gate renders 400x300
@@ -200,7 +200,7 @@ POST = {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False,
 
 cscn = {
     "version": 1,
-    "models": [{"path": "skinned_cull_fixture.gltf"}],
+    "models": [{"path": asset_ref("skinned_cull_fixture.gltf")}],
     "lights": [LIGHT],
     "camera": CAMERA,
     "post": POST,

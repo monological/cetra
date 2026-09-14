@@ -40,7 +40,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gates import compare  # noqa: E402  (the (AE, PAE) shell-out, already written)
+from gates import asset, compare  # noqa: E402  (the shell-out, and the kind routing)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -72,6 +72,12 @@ GAMETEST = _bin("gametest")
 _FB_SCALE = None
 ASSETS = os.path.join(ROOT, "assets")
 
+# A recipe's `scene` is a repo-relative string handed to the binary, so it
+# carries its own kind directory (assets/scenes/foo.cscn) rather than going
+# through gates.py's asset() -- these are arguments, not paths this script
+# opens. The goldens themselves route through golden_path below.
+GOLDENS = os.path.join(ASSETS, "goldens")
+
 # Every recipe carries the frame size it was baked at. `size` is the size of the
 # STORED PNG, which is the framebuffer size -- double the requested -W/-H on a
 # HiDPI display. Recording it is what lets a 1x machine say "this environment
@@ -81,15 +87,15 @@ ASSETS = os.path.join(ROOT, "assets")
 # them identically.
 RECIPES = [
     # --- environment and atmosphere -------------------------------------------
-    {"name": "aerial_fixture", "scene": "assets/aerial_fixture.gltf", "size": (1600, 1000),
+    {"name": "aerial_fixture", "scene": "assets/scenes/aerial_fixture.cscn", "size": (1600, 1000),
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0"]},
     # cloud_fixture is NOT a file and never was: it is the aerial fixture with
     # clouds switched on. Recovered by measurement in 11.25 after three specs
     # recorded it as unreproducible.
-    {"name": "cloud_fixture", "scene": "assets/aerial_fixture.gltf", "size": (1600, 1000),
+    {"name": "cloud_fixture", "scene": "assets/scenes/aerial_fixture.cscn", "size": (1600, 1000),
      "flags": ["--clouds", "-f", "30", "-W", "800", "-H", "500",
                "--no-auto-exposure", "-E", "1.0"]},
-    {"name": "cloud_fixture_lowsun", "scene": "assets/aerial_fixture.gltf", "size": (1600, 1000),
+    {"name": "cloud_fixture_lowsun", "scene": "assets/scenes/aerial_fixture.cscn", "size": (1600, 1000),
      "flags": ["--clouds", "--sun-elevation", "5", "-f", "30", "-W", "800", "-H", "500",
                "--no-auto-exposure", "-E", "1.0"]},
     # --no-aerial is what keeps this a FOG golden rather than an atmosphere one.
@@ -106,7 +112,7 @@ RECIPES = [
     # sky_clouds.c always carried the >= 0 guard postfx.c lacked, so their frame
     # 30 is a stable, reproducible point rather than a wrong one. They are left
     # alone because nothing forced them and a golden's job is reproducibility.
-    {"name": "froxel_fog", "scene": "assets/contact_fixture.gltf", "size": (1280, 800),
+    {"name": "froxel_fog", "scene": "assets/scenes/contact_fixture.cscn", "size": (1280, 800),
      "flags": ["--fog", "--no-aerial", "-f", "60", "--no-auto-exposure", "-E", "1.0",
                "-W", "640", "-H", "400"]},
     # The water surface (spec 11.32). The surface and every one of its properties come
@@ -114,7 +120,7 @@ RECIPES = [
     # it -- which makes the golden the one thing that guards that authoring path across
     # builds. Exposure is pinned by the .cscn as well, but repeated here: a golden is
     # compared across BUILDS, where auto-exposure is the largest known source of drift.
-    {"name": "water_fixture", "scene": "assets/water_fixture.cscn", "size": (800, 600),
+    {"name": "water_fixture", "scene": "assets/scenes/water_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
     # The same fixture with the surface raised over the fixed eye at y 1.35, so the camera
     # is UNDER it (spec 11.40). The one thing the sibling above cannot see.
@@ -131,17 +137,17 @@ RECIPES = [
     # configuration renders; flags otherwise match the sibling, so the two differ in one
     # variable. Deterministic x2 at 30 frames, which is not automatic -- the submerged path
     # arms the froxel volume, and 11.39 found the volume-COUNT arming route unstable there.
-    {"name": "water_submerged", "scene": "assets/water_fixture.cscn", "size": (800, 600),
+    {"name": "water_submerged", "scene": "assets/scenes/water_fixture.cscn", "size": (800, 600),
      "flags": ["--water-level", "1.9", "-f", "30", "-W", "400", "-H", "300",
                "--no-auto-exposure", "-E", "1.0"]},
 
     # --- shadows and occlusion ------------------------------------------------
     # The --cs-debug term itself, so the image is independent of cs_strength.
     # Debug views return early from the tonemap, so this one carries no dither.
-    {"name": "contact_debug", "scene": "assets/contact_fixture.gltf", "size": (1280, 800),
+    {"name": "contact_debug", "scene": "assets/scenes/contact_fixture.cscn", "size": (1280, 800),
      "flags": ["-W", "640", "-H", "400", "-f", "120", "--no-auto-exposure", "-E", "1.0",
                "--cs-debug"]},
-    {"name": "ao_fixture", "scene": "assets/ao_fixture.gltf", "size": (1600, 1000),
+    {"name": "ao_fixture", "scene": "assets/scenes/ao_fixture.cscn", "size": (1600, 1000),
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0"]},
     # The gate arms sample lines and erode every band edge by construction. What
     # a scalar cannot see is two-dimensional: acne in the transmittance target,
@@ -150,7 +156,7 @@ RECIPES = [
     # found. Dither and vignette stay ON: this is a picture, not a data read.
     # --no-pcss because at a canopy height of 8 the default emitter smears the
     # bands into each other and the image stops being legible.
-    {"name": "translucent_shadow", "scene": "assets/translucent_shadow_fixture.cscn",
+    {"name": "translucent_shadow", "scene": "assets/scenes/translucent_shadow_fixture.cscn",
      "size": (1600, 1000),
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0",
                "--no-pcss", "--translucent-shadows"]},
@@ -167,7 +173,7 @@ RECIPES = [
     # cutoff. The three quads are an opaque reference, a MASK quad above the
     # cutoff and one below it, over a backdrop that makes wrong coverage visible
     # as occlusion rather than invisible.
-    {"name": "mask_fixture", "scene": "assets/mask_fixture.cscn", "size": (800, 600),
+    {"name": "mask_fixture", "scene": "assets/scenes/mask_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
 
     # The layered surface, LIT (spec 11.60). The gate arms all read the albedo
@@ -175,7 +181,7 @@ RECIPES = [
     # layered material actually being shaded: its world-space normal reaching the
     # lighting, its per-layer roughness, or the blend holding together across the
     # floor/wall seam where two projections meet.
-    {"name": "layer_fixture", "scene": "assets/layer_fixture.cscn", "size": (800, 600),
+    {"name": "layer_fixture", "scene": "assets/scenes/layer_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
 
     # The composite cache, LIT (spec 11.66). The vt gate arms read the albedo
@@ -184,16 +190,16 @@ RECIPES = [
     # whiteout on top of it, and per-layer roughness/AO arriving as deviations
     # from the baked means. Also the loudest nondeterminism trap for the bake --
     # cmd_rebake renders twice and refuses on any difference.
-    {"name": "layer_vt_fixture", "scene": "assets/layer_vt_fixture.cscn", "size": (800, 600),
+    {"name": "layer_vt_fixture", "scene": "assets/scenes/layer_vt_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0"]},
 
     # --- global illumination and punctual shadows -----------------------------
-    {"name": "cornell_box", "scene": "assets/cornell_box.gltf", "size": (1600, 1200),
+    {"name": "cornell_box", "scene": "assets/scenes/cornell_box.cscn", "size": (1600, 1200),
      "flags": ["--gi-volume", "-f", "30", "--no-auto-exposure", "-E", "1.0",
                "-W", "800", "-H", "600"]},
-    {"name": "cornell_leak", "scene": "assets/cornell_leak.gltf", "size": (1600, 1200),
+    {"name": "cornell_leak", "scene": "assets/scenes/cornell_leak.cscn", "size": (1600, 1200),
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]},
-    {"name": "cornell_point", "scene": "assets/cornell_point.gltf", "size": (1600, 1200),
+    {"name": "cornell_point", "scene": "assets/scenes/cornell_point.cscn", "size": (1600, 1200),
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]},
     # Two rooms over one polished floor, a probe in each (spec 11.70). The only
     # committed frame with more than one reflection probe in it, and the only
@@ -204,7 +210,7 @@ RECIPES = [
     # below the horizon supplies one without lighting the rooms. It is authored
     # there rather than passed here so that opening the file by hand renders
     # what the arms render.
-    {"name": "cornell_rooms", "scene": "assets/cornell_rooms.gltf", "size": (1600, 1200),
+    {"name": "cornell_rooms", "scene": "assets/scenes/cornell_rooms.cscn", "size": (1600, 1200),
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800",
                "-H", "600"]},
 
@@ -215,7 +221,7 @@ RECIPES = [
     # frame. This is the only stored reference it has across builds. Matches
     # _dir_render's flags so a golden failure and a gate failure describe the
     # same picture.
-    {"name": "dir_shadow", "scene": "assets/dir_shadow_fixture.cscn", "size": (1600, 1200),
+    {"name": "dir_shadow", "scene": "assets/scenes/dir_shadow_fixture.cscn", "size": (1600, 1200),
      "flags": ["-f", "30", "--no-auto-exposure", "-E", "1.0", "-W", "800", "-H", "600"]},
 
     # --- LTC area lights (prose: assets/area_light_goldens.md) ----------------
@@ -223,28 +229,28 @@ RECIPES = [
     # auto-load, which lights the scene with a second panel. No -e <hdr>: the
     # HDRs live outside the repo, so a golden needing one could not be
     # regenerated by anyone else.
-    {"name": "roughness_sweep", "scene": "assets/area_light_fixture.gltf", "size": (1280, 720),
+    {"name": "roughness_sweep", "scene": "assets/models/area_light_fixture.gltf", "size": (1280, 720),
      "flags": ["-W", "640", "-H", "360", "-f", "2", "--no-auto-exposure", "-E", "1.0",
                "--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0",
                "--area-light", "0,2.2,1.2,0,-0.6,-0.8,2.0,0.7,30"]},
     # The same panel with its normal negated: every sphere and the ground must
     # be pure black, since a panel lights only the half-space it points into.
-    {"name": "backface_dark", "scene": "assets/area_light_fixture.gltf", "size": (1280, 720),
+    {"name": "backface_dark", "scene": "assets/models/area_light_fixture.gltf", "size": (1280, 720),
      "flags": ["-W", "640", "-H", "360", "-f", "2", "--no-auto-exposure", "-E", "1.0",
                "--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0",
                "--area-light", "0,2.2,1.2,0,0.6,0.8,2.0,0.7,30"]},
     # The framing is load-bearing: dead-on the edge-singularity artifact is
     # faint, and the grazing offset is where it blows up.
-    {"name": "guard_thin_panel", "scene": "assets/area_light_guard.gltf", "size": (1600, 1200),
+    {"name": "guard_thin_panel", "scene": "assets/models/area_light_guard.gltf", "size": (1600, 1200),
      "flags": ["--no-scene-file", "-W", "800", "-H", "600", "--fov", "50.0", "-f", "2",
                "--no-auto-exposure", "-E", "1.0",
                "--cam-eye", "0.549,0.780,1.525", "--cam-target", "0.549,0.500,0.000",
                "--area-light", "0,2.2,1.2,0,-0.6,-0.8,0.25,1.8,30"]},
 
     # --- materials ------------------------------------------------------------
-    {"name": "sheen_fixture", "scene": "assets/sheen_fixture.gltf", "size": (1600, 900),
+    {"name": "sheen_fixture", "scene": "assets/models/sheen_fixture.gltf", "size": (1600, 900),
      "flags": ["-f", "30", "-W", "800", "-H", "450", "--no-auto-exposure", "-E", "1.0"]},
-    {"name": "specular_fixture", "scene": "assets/specular_fixture.gltf", "size": (1600, 900),
+    {"name": "specular_fixture", "scene": "assets/models/specular_fixture.gltf", "size": (1600, 900),
      "flags": ["-f", "30", "-W", "800", "-H", "450", "--no-auto-exposure", "-E", "1.0"]},
     # The third KHR material extension, and until now the only one of the three
     # with no stored reference at all -- sheen and specular above have had one
@@ -265,32 +271,32 @@ RECIPES = [
     # since a golden needing -e could not be regenerated (see roughness_sweep).
     # The coat lobe is legible either way -- the defect above measured PAE
     # 226/255 under exactly this lighting.
-    {"name": "clearcoat_fixture", "scene": "assets/clearcoat_fixture.gltf", "size": (1600, 900),
+    {"name": "clearcoat_fixture", "scene": "assets/models/clearcoat_fixture.gltf", "size": (1600, 900),
      "flags": ["-f", "30", "-W", "800", "-H", "450", "--no-auto-exposure", "-E", "1.0"]},
     # --no-sss pins the ANALYTIC falloff alone; its sibling below is the first
     # SSS-on golden and differs only in that flag.
-    {"name": "skin_curvature_fixture", "scene": "assets/skin_curvature_fixture.cscn",
+    {"name": "skin_curvature_fixture", "scene": "assets/scenes/skin_curvature_fixture.cscn",
      "size": (2400, 1500),
      "flags": ["-f", "30", "-W", "1200", "-H", "750", "--no-auto-exposure", "-E", "1.0",
                "--no-bloom", "--no-sss", "--no-shadows"]},
-    {"name": "skin_curvature_sss", "scene": "assets/skin_curvature_fixture.cscn",
+    {"name": "skin_curvature_sss", "scene": "assets/scenes/skin_curvature_fixture.cscn",
      "size": (2400, 1500),
      "flags": ["-f", "30", "-W", "1200", "-H", "750", "--no-auto-exposure", "-E", "1.0",
                "--no-bloom", "--no-shadows"]},
 
     # --- transparency and post ------------------------------------------------
     # -E 0.08 rather than 1.0: the sphere fixture is emissive and would clip.
-    {"name": "oit_sphere_moments", "scene": "assets/oit_sphere_fixture.gltf", "size": (1280, 800),
+    {"name": "oit_sphere_moments", "scene": "assets/models/oit_sphere_fixture.gltf", "size": (1280, 800),
      "flags": ["-f", "30", "-W", "640", "-H", "400", "--no-auto-exposure", "-E", "0.08",
                "--oit-moments"]},
     # --no-bloom because a bloom halo would mask the bokeh the golden exists for.
-    {"name": "dof_fixture", "scene": "assets/dof_fixture.gltf", "size": (1600, 1000),
+    {"name": "dof_fixture", "scene": "assets/scenes/dof_fixture.cscn", "size": (1600, 1000),
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0",
                "--no-bloom", "--dof", "--dof-focus", "6", "--dof-range", "1.5",
                "--dof-max-coc", "8", "--dof-blades", "6", "--dof-rotation", "15"]},
     # The one golden where flare and chromatic aberration are LIVE; every other
     # one asserts they are dormant.
-    {"name": "flare_fixture", "scene": "assets/flare_fixture.cscn", "size": (1600, 1000),
+    {"name": "flare_fixture", "scene": "assets/scenes/flare_fixture.cscn", "size": (1600, 1000),
      "flags": ["-f", "30", "-W", "800", "-H", "500", "--no-auto-exposure", "-E", "1.0",
                "--flare", "0.15", "--chromatic-aberration", "12"]},
     # The scotopic shift, on the one frame it is legible in (spec 11.83). The
@@ -306,7 +312,7 @@ RECIPES = [
     #
     # Exposure comes from the fixture, which authors it -- see its generator's
     # header for why that value is load-bearing rather than framing.
-    {"name": "purkinje_night", "scene": "assets/purkinje_fixture.cscn", "size": (1040, 800),
+    {"name": "purkinje_night", "scene": "assets/scenes/purkinje_fixture.cscn", "size": (1040, 800),
      "flags": ["-f", "30", "-W", "520", "-H", "400", "--no-auto-exposure", "--no-dither",
                "--no-vignette", "--no-bloom", "--no-ssao", "--purkinje"]},
     # The one orthographic reference (spec 11.104). Every other golden is a
@@ -315,7 +321,7 @@ RECIPES = [
     # proves each formula and this is the standing picture. GTAO, the
     # cascades, the catcher and the view vector are all live in it, which is
     # why nothing is switched off beyond the corpus's exposure pin.
-    {"name": "ortho_shadow", "scene": "assets/dir_shadow_fixture.cscn", "size": (800, 600),
+    {"name": "ortho_shadow", "scene": "assets/scenes/dir_shadow_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0",
                "--ortho", "12"]},
     # --- animation ------------------------------------------------------------
@@ -325,7 +331,7 @@ RECIPES = [
     # matrix -- because they compare the pose against itself. This is the one
     # picture in the corpus that goes through pbr_skinned_vert and skin.glsl, so
     # a rig that poses correctly and SKINS wrongly has somewhere to show it.
-    {"name": "puppet", "scene": "assets/puppet.cscn", "size": (800, 600),
+    {"name": "puppet", "scene": "assets/scenes/puppet.cscn", "size": (800, 600),
      "flags": ["--anim-clip", "run", "-f", "30", "-W", "400", "-H", "300",
                "--no-auto-exposure", "-E", "1.0"]},
 
@@ -347,7 +353,7 @@ RECIPES = [
 
 
 def golden_path(name):
-    return os.path.join(ASSETS, "goldens", f"{name}_golden.png")
+    return os.path.join(GOLDENS, f"{name}_golden.png")
 
 
 def _detect_fb_scale():
@@ -363,7 +369,7 @@ def _detect_fb_scale():
         return _FB_SCALE
     fd, probe = tempfile.mkstemp(suffix=".ppm")
     os.close(fd)
-    r = subprocess.run([RENDER, "-m", os.path.join(ROOT, "assets", "parallax_fixture.gltf"),
+    r = subprocess.run([RENDER, "-m", asset("parallax_fixture.gltf"),
                         "-x", "-f", "1", "-W", "100", "-H", "100", "-S", probe],
                        capture_output=True, text=True, cwd=ROOT)
     got = _dims(probe) if r.returncode == 0 else None

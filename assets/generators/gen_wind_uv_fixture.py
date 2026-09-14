@@ -46,7 +46,7 @@ import base64
 import json
 import os
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 HALF_W = 0.5
 HEIGHT = 2.0
@@ -184,7 +184,7 @@ WIND = {"direction": [1.0, 0.0, 0.0], "strength": 0.6, "speed": 3.14159,
 def _cscn(wind):
     return {
         "version": 1,
-        "models": [{"path": "wind_uv_fixture.gltf"}],
+        "models": [{"path": asset_ref("wind_uv_fixture.gltf")}],
         "lights": [LIGHT],
         "camera": CAMERA,
         "post": POST,

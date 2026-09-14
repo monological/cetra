@@ -52,7 +52,7 @@ import base64
 import json
 import math
 import struct
-from fixture_paths import asset_path
+from fixture_paths import asset_path, asset_ref
 
 # --- the fins -----------------------------------------------------------------------------
 
@@ -261,7 +261,7 @@ gltf = {
 # second source of edge behaviour.
 cscn = {
     "version": 1,
-    "models": [{"path": "varying_fixture.gltf"}],
+    "models": [{"path": asset_ref("varying_fixture.gltf")}],
     "lights": [{"name": "VarySun", "type": "directional", "direction": [0.0, -0.15, -0.99],
                 "color": [1.0, 1.0, 1.0], "intensity": 3.0, "cast_shadows": False}],
     # Frames the fins at about 60% of the frame height, with the backdrop filling the rest and
