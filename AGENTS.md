@@ -1351,7 +1351,7 @@ recipe with the six times it has moved. `scripts/gates.py` asserts analytic prop
 `scripts/goldens.py` compares 33 committed PNGs.
 
 **`assets/` is split by KIND since spec 12.8** — `scenes/`, `models/`, `textures/`, `goldens/`,
-`generators/`, `lut/`, `ies/`, `data/`, with `abandoned_window/`, `ivy_arcade/` and `raiden/` left
+`generators/`, `lut/`, `ies/`, `data/`, with `abandoned_window/` and `ivy_arcade/` left
 whole because each carries its own scenes and producers. **Nothing that names an asset spells a
 directory**: a generator says `asset_path("foo.gltf")` to write one and `asset_ref("foo.png")` to
 name one inside a file it emits, `gates.py` says `asset("foo.cscn")`, and all three route through
