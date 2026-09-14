@@ -608,8 +608,11 @@ person watching can settle:
   rig), which ik-drop now exercises; nobody has judged how the remainder reads.
 - **Two characters.** The chaser carries the same rig and nothing plants ITS feet, so the
   per-entity question `anim-two-rigs` had to ask of the animator goes unasked here.
-- **Nothing photographs it.** All nineteen arms read CPU numbers, so a solve that is correct in
+- **Nothing photographs it.** All twenty-one arms read CPU numbers, so a solve that is correct in
   model space but spliced into the wrong node or the wrong space would pass every one of them.
+  Spec 12.10's `ik-scale` closes the narrower half of that -- a rig node scaled 2 must change
+  nothing the solver decides, which is the shape of the live bug 12.9 shipped -- but a splice into
+  the wrong NODE is still unseen by any arm.
   A pixel arm was considered and dropped, for three reasons worth recording rather than
   rediscovering: on flat ground the solve is now an IDENTITY by design (0.0198 degrees), so
   IK against `--no-ik` at the default spawn measures nothing; standing the player on the ramp
@@ -654,18 +657,21 @@ doing at the time:
 - **`springbone.c` has no instrument of any kind.** No gate arm, no golden, and it is inert in
   the corpus: `render.c` registers chains only under the prefix `hair`, and no fixture rig has
   such a bone, so `spring_bone_update` returns at its first guard in every golden. 12.5 shares a
-  write-back between it and `ik.c`; the IK half is covered by nineteen arms and the spring half by
+  write-back between it and `ik.c`; the IK half is covered by twenty-one arms and the spring half by
   nothing. Closing that is its own piece of work.
 
 **What spec 12.9 added to this list, and what it did not.**
 
-- **The lock is live in the app and the demo cannot show it.** `gametest`'s player moves at
-  `PLAYER_SPEED` 10 m/s on a rig with an 0.82 m leg, against a clip implying 0.95 m/s. At
-  about ten times its animation's stride the contact label never fires, no lock forms, and the
-  frame is **0 px** against `--no-lock` -- the mechanism behaving correctly, since there is no
-  contact to hold. Walked at a stick deflection of 0.12, near the clip's own stride, the same
-  frame moves **52,244 px**. A game that wants the benefit has to match travel speed to stride
-  or carry root motion, and this engine does neither.
+- ~~**The lock is live in the app and the demo cannot show it.**~~ **Closed by spec 12.10.**
+  `gametest`'s player moved at `PLAYER_SPEED` 10 m/s against a clip implying 0.95, so no contact
+  was ever labelled and the frame was **0 px** against `--no-lock`. The travel speed now comes
+  from the clips: `animation_stride_speed` measures what a clip's feet imply, `animator_stride_speed`
+  blends it across a space, and `gametest` places its entries at the speeds they imply and derives
+  full stick from the fastest. On `--puppet assets/models/t_pose.fbx` that is 2.67 m/s and
+  `--no-lock` moves **2217 px**. The generated puppet still reads 0 px at any speed, and that is
+  also the mechanism working: its walk is a straight-leg pendulum with no stance, the measurement
+  REFUSES it by name, and the run says so at startup. Root motion remains the other answer and is
+  still not in this engine.
 - **A real character is still owed, and the reason is narrower than it first looked.**
   `--puppet assets/models/t_pose.fbx` does NOT work, and not for the reason first written here:
   `take_puppet_root` requires a node named exactly **`puppet`**, which only the generated rig
@@ -675,6 +681,19 @@ doing at the time:
   `--puppet` is therefore far less general than its name: it swaps one generated rig for
   another. Standing a real character in gametest is its own piece of work, and now a specific
   one -- a node-name convention and two missing clips, not a retarget.
+
+  **That is closed too**, by the same 12.9 commit that wrote it (`take_puppet_root` falls back to
+  the scene root, and a rig with no idle/walk/run takes the committed walk with its own rest pose
+  for standing) and finished by spec 12.10, which watched it. `--puppet assets/models/t_pose.fbx`
+  stands a 65-bone Mixamo humanoid in the world, walking on `strut_walk` with its feet locked, and
+  the two defects that look cost nothing to find: the walk played at **eighteen times speed** at
+  any stick short of full, because a two-tick rest pose phase-synced against an 86-tick walk turns
+  the shared clock 43 times too fast; and the right leg carries a standing correction of 0.45 of a
+  leg that no playback rate moves, which is the contact label opening during late swing. The first
+  is fixed. **The second is filed, not fixed**, and it is the clearest thing in this file about
+  what a one-sided instrument is worth: every measurement spec 12.9 built reads the LEFT foot, so
+  nineteen green arms never touched the leg that was wrong. Moving the label would move
+  `ik-contact`, `ik-slide` and `ik-hysteresis` with it.
 - **The menu goldens' instability reaches 48,886 px.** This section already warned that they
   cannot support single-measurement attribution. Spec 12.9 met a `menu` failure of 48,886 px --
   the Quit button focused, not a few edge pixels -- which survived a bisect across four commits,

@@ -30,10 +30,13 @@ slides, and a look at the plant fraction as a silhouette rather than a number),
 whose deferred review items spec 12.5 then closed, and foot LOCKING itself in spec 12.9
 (a runtime contact label, a world-space point held at the toe, hysteresis and an inertialized
 transition; the slide falls from 0.0783 m to 0.0034 m and the `ik` group goes from thirteen arms
-to nineteen). What 12.9 exposed is worth more than the feature: `gametest`'s player travels at
-about ten times the stride its own animation implies, so no contact is ever labelled and the
-demo shows nothing. Matching travel speed to clips -- stride matching, or root motion -- is
-now the nearest thing to a blocker in this list, and it is not an IK problem.
+to nineteen). What 12.9 exposed was worth more than the feature: `gametest`'s player travelled at
+about ten times the stride its own animation implies, so no contact was ever labelled and the
+demo showed nothing. **Spec 12.10 is the answer to that** -- the engine measures what a clip's
+feet imply about the ground, the blend space says what a mixture of them implies, and a game
+divides to get a playback rate; the demo's travel speed comes from its clips instead of a
+constant, and the `ik` group goes from nineteen arms to twenty-one. Root motion is the other
+answer to the same problem and is still not in this engine.
 11.109 was the pivot from the renderer era to the game-platform
 era, which is numbered from 12.0; it stays the last renderer-era spec, and the
 major bump marks the change in the *kind* of work, as every prior one did.
@@ -268,14 +271,22 @@ its own branch.
    lerp. A stance foot travels **0.0034 m** across the ground where planting left
    **0.0783 m**, over the same ticks with the body at the speed the clip's own feet imply.
    Six new arms take the `ik` group from thirteen to nineteen, among them `ik-drop`, which
-   exercises the pelvis cap that spec 12.5 found nothing had. Two things it did NOT do, both
-   deliberate and both written up in `docs/foot-locking.md`: the extension soft-clamp is
-   refused, because on a bind pose that is exactly straight 1 per cent of soft band costs 16.2
-   degrees of permanent bend; and the demo cannot show the feature, because `gametest`'s player
-   moves at about ten times the stride its animation implies, so no contact is ever labelled and
-   the frame is 0 px against `--no-lock`. **A game that wants this has to match travel speed to
-   its clips, or carry root motion** — which is now the nearest thing to a blocker in this
-   list, and is not an IK problem.
+   exercises the pelvis cap that spec 12.5 found nothing had. One thing it did NOT do,
+   deliberately and written up in `docs/foot-locking.md`: the extension soft-clamp is refused,
+   because on a bind pose that is exactly straight 1 per cent of soft band costs 16.2 degrees of
+   permanent bend. It also could not SHOW the feature — `gametest`'s player moved at about ten
+   times the stride its animation implies, so no contact was ever labelled and the frame was 0 px
+   against `--no-lock`.
+
+   **Spec 12.10 closed that**, which was the nearest thing to a blocker in this list.
+   `animation_stride_speed` measures the ground speed a clip's own feet imply and refuses when
+   the clip does not walk; `animator_stride_speed` blends it across a space, which no caller can
+   do from outside since the answer is not the weighted mean of the strides. `gametest`'s
+   locomotion entries sit at the speeds they imply, its knob is metres per second, and full stick
+   is derived from the fastest clip — 2.67 m/s on the committed humanoid, where `--no-lock` now
+   moves 2217 px. Three new arms; two defects found by watching it rather than by measuring, one
+   of them a walk playing at eighteen times speed at any stick short of full, true since 12.9.
+   Root motion remains the other answer to the same problem and is still not in this engine.
 7. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
 
 Fill in genre-specific systems (scripting, AI/navmesh, networking) only as the

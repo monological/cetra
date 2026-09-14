@@ -3461,7 +3461,7 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
 }
 
 // --ik-probe: the two-bone solver as a pure function (spec 12.4) and the lock above it
-// (spec 12.9). The nine rig-only cases here
+// (spec 12.9) and stride matching above that (spec 12.10). The eleven rig-only cases here
 // need no physics and no frame at all -- a solve is (hip, target, thigh, shin, pole)
 // and nothing else, so giving them a world would make exact arithmetic depend on
 // Jolt's contact slop for no gain. The cases that DO need a raycast are the ones that

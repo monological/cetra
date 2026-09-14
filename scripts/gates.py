@@ -15085,6 +15085,18 @@ def run_anim_gate(workdir):
                        and never from a clip carrying none.
       anim-clip-loads  the committed walk clip binds every one of the puppet's bones
                        by exact name.
+      anim-stride      the walk clip's own feet imply a ground speed, and the generated
+                       pendulum walk's REFUSE to. The number is crossed against the ik
+                       probe's independent fit, which is a different method for the same
+                       quantity -- a median over every sample the ankle spent low, against
+                       a least-squares fit over one contiguous window -- so agreeing is
+                       evidence rather than proof that one was copied from the other.
+      anim-rate        what a blend SPACE implies, which is not the weighted mean of its
+                       entries' strides: the space keeps one clock, so the pose lays down
+                       sum(w*stride*seconds) of ground per turn of the loop while the
+                       clock turns it at sum(w/seconds). The gate recomputes both from the
+                       inputs the probe printed. The mean is only wrong when the clips
+                       differ in LENGTH, which is why these two are 2.0 s and 0.5 s.
       anim-trace-idle  the LOOP ticks the component: a standing player's trace reports
                        the idle weight at 1, which stays 0 if update_all_animators is
                        never called from the pre-render hook.
@@ -22616,8 +22628,8 @@ def _ik_probe_run(case):
 
 @functools.cache
 def _ik_probe(case):
-    """_ik_probe_run memoised by case: the arms ask for ten distinct cases fifteen times,
-    and each spawn loads the rig -- three of them a Jolt world and the ground fixture too.
+    """_ik_probe_run memoised by case: the arms ask for twelve distinct cases seventeen
+    times, and each spawn loads the rig -- three a Jolt world and the ground fixture too.
 
     The returned dict is SHARED between callers. Every arm reads and none writes, which
     is what makes that safe; an arm needing to mutate one must copy it first.
@@ -22639,10 +22651,10 @@ def _ik_knee_bend_deg(a, b, c):
 
 
 def run_ik_gate(workdir):
-    """Two-bone IK and foot locking (specs 12.4 and 12.9), on the puppet whose limb
-    lengths the fixture generator states. Twelve arms drive the solver with SYNTHETIC
-    targets through gametest's --ik-probe and need no physics at all; six stand the rig
-    on real ground and raycast. Every expected angle is recomputed here in
+    """Two-bone IK, foot locking and stride matching (specs 12.4, 12.9 and 12.10), on the
+    puppet whose limb lengths the fixture generator states. Eighteen arms drive the solver
+    with SYNTHETIC targets through gametest's --ik-probe and need no physics at all; three
+    stand the rig on real ground and raycast. Every expected angle is recomputed here in
     Python from the segment lengths the probe reports, so nothing is a magic number
     copied from a run. The bind pose is the SINGULAR configuration -- hip to ankle is
     thigh plus shin exactly -- which is why the singular and identity arms are the two
@@ -22755,6 +22767,20 @@ def run_ik_gate(workdir):
                    other two halves -- the label is the ANKLE's lift and speed, the
                    window is the ankle's height against its own travel, so they are
                    different quantities and agreeing is evidence.
+      ik-slide-speeds  the same walk at both edges of the band a clip can be stretched
+                   over, each one walked TWICE -- once at rate 1, the way a game with no
+                   stride matching plays it, and once at the rate the engine works out.
+                   The A/B is the arm: a bar on the matched number alone encodes whatever
+                   else the solver is doing, and on this clip that includes a standing
+                   correction of 0.45 of a leg on the right foot which no playback rate
+                   moves. At the band's MIDDLE the two must be identical, which is the
+                   self-check -- at the clip's own speed the rate is 1 and matching has
+                   to be a no-op.
+      ik-scale     the same walk on a rig node scaled 1 and 2 comes out identical in
+                   model units. Every threshold the solver owns is in model space and a
+                   fraction of the leg, so a scale reaches the world matrix and nothing
+                   it decides. This is the gap spec 12.9 shipped a live bug through, and
+                   re-introducing that comparison moves the scale-2 slide 3.3x.
     """
     if not os.path.exists(GAMETEST):
         print("  ik           SKIP  (gametest not built)")
