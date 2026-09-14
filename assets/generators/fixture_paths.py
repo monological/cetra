@@ -96,4 +96,6 @@ def asset_path(filename, root=None):
     dropped would not fail, it would write over the committed asset and the arm
     would compare that file against itself, passing while testing nothing.
     """
+    if os.path.isabs(filename):
+        return filename
     return os.path.join(root or ASSETS, *asset_subpath(filename).split("/"))
