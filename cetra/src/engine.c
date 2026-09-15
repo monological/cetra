@@ -458,21 +458,31 @@ void free_engine(Engine* engine) {
  * failing: a player who unplugs the monitor they chose should get a window they
  * can see, not one placed somewhere that no longer exists.
  */
-static GLFWmonitor* _monitor_by_name(const char* name) {
+static int _monitor_index_by_name(const char* name) {
     int count = 0;
     GLFWmonitor** monitors = glfwGetMonitors(&count);
     if (!monitors || count <= 0) {
-        return NULL;
+        return -1;
     }
     if (name && name[0]) {
         for (int i = 0; i < count; i++) {
             const char* have = glfwGetMonitorName(monitors[i]);
             if (have && strcmp(have, name) == 0) {
-                return monitors[i];
+                return i;
             }
         }
     }
-    return monitors[0]; // GLFW puts the primary first
+    return 0; // GLFW puts the primary first
+}
+
+static GLFWmonitor* _monitor_by_name(const char* name) {
+    const int index = _monitor_index_by_name(name);
+    if (index < 0) {
+        return NULL;
+    }
+    int count = 0;
+    GLFWmonitor** monitors = glfwGetMonitors(&count);
+    return (monitors && index < count) ? monitors[index] : NULL;
 }
 
 // The one place the swap interval is set, so the value survives a mode change.
@@ -881,6 +891,13 @@ const char* engine_monitor_name(const Engine* engine, int index) {
         return NULL;
     }
     return glfwGetMonitorName(monitors[index]);
+}
+
+int engine_monitor_index(const Engine* engine, const char* name) {
+    if (!engine || !engine->window) {
+        return -1;
+    }
+    return _monitor_index_by_name(name);
 }
 
 void engine_set_vsync(Engine* engine, bool vsync) {
