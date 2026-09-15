@@ -103,8 +103,8 @@ typedef struct Engine {
     //
     // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
     // rebuilds the targets at the next frame top), window_mode (moves the
-    // window and latches the geometry it left), vsync (re-applied after a mode
-    // change drops it), screenshot_path (owned
+    // window, keeping the windowed rectangle current), vsync (re-applied when a
+    // mode change drops it), screenshot_path (owned
     // string), the five callbacks and user_data (installs), and the animation
     // clock (engine_set_render_clock samples a borrowed one each frame, and
     // the overlay, engine_set_overlay),
