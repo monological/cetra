@@ -825,6 +825,18 @@ Five things that leaves open, none of them reachable from this machine:
   holds. What is owed is a human watching a window go fullscreen and come back to the size it
   left with, on a machine with a SECOND display — this one has one, so `display-monitors`
   cannot tell a correct name lookup from one that always answers 0.
+
+  **The IDEMPOTENCE half of that is no longer owed, and was measured on a real window rather
+  than reasoned about.** `settings_apply` pushes every value on every edit and the UI fires it
+  once a frame while a slider is held, so a mode switch that re-applied itself moved the window
+  on each of those frames. A throwaway windowed probe placed a 640x480 window at (220, 180),
+  called `settings_apply` thirty times — half a second of holding a slider — and read the
+  position back: **unmoved, 220 180 640 480**. Falsified in the same session by restoring the
+  departure-only latch with no early-out, which moved it to **(0, 65)**, the top-left corner
+  with y clamped by the menu bar. Both halves of the fix are load-bearing: the windowed
+  rectangle is kept current so a replay lands where the window already is, and the early-out
+  returns when the mode and the monitor are both unchanged. The probe was removed after; it
+  needs a window, so it can never be an arm.
 - **`uTime` windowed.** The clock a custom element program is written against is
   `total_frames * ENGINE_FIXED_FRAME_DT`, which is exactly right headless and wrong windowed —
   it advances at sixty-over-refresh rather than in seconds, so a shader backdrop runs slow on a
