@@ -1,5 +1,21 @@
 # Animation Retargeting Analysis
 
+> **This is a working log from before the global-space retarget existed, and its code is no
+> longer the code.** Every snippet below predates `use_global_retarget`
+> (`animation.c`'s PASS 0/1) — there is no hardcoded identity source rest any more, the
+> composition is `keyframe * delta` rather than `delta * keyframe`, and the line references
+> name functions that have since moved. It is kept for **section 1**, which is still the best
+> written record of what a third-party rig's rest hierarchy actually looks like: the
+> consecutive 180° rotations under `root ground` are exactly the thing a retarget has to
+> reconcile, and the reason a clip played with no source rest pose does not lean but collapses.
+>
+> **What is current** is `specs/12.11-cross-rig-retargeting.md` ("What shipped") and the
+> comments at the two mechanisms themselves — `import.c`'s channel loop for how a delta is
+> derived, `animation.c`'s PASS 0 for how the source hierarchy is rebuilt from the channels
+> alone. Section 3's "fundamental bug" was answered by taking the motion in the source's
+> WORLD frame rather than by fixing the local delta; sections 4 onward are the search that
+> led there.
+
 ## Executive Summary
 
 The animation retargeting system has a **fundamental flaw**: it computes the rotation delta using **LOCAL** bone rest poses, but the `bone_matrix` formula uses **GLOBAL** inverse bind poses. This mismatch causes incorrect animation direction (backwards walking) and body part distortion.
