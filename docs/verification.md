@@ -797,7 +797,7 @@ values rather than a device. So navigation, hit-testing, capture, the stack, wra
 resolution and the settings round-trip are all checked with **no window and no GPU**, and the
 two menu goldens are the only place the layer's pixels are compared at all.
 
-Four things that leaves open, none of them reachable from this machine:
+Five things that leaves open, none of them reachable from this machine:
 
 - **Another display.** The layer works in window POINTS and is captured at framebuffer
   resolution, so a Retina panel doubles it and a 1x panel does not. Every golden here was baked
@@ -815,9 +815,16 @@ Four things that leaves open, none of them reachable from this machine:
   gate does not exercise the platform branches either — by design, since a hermetic test must
   not write to a real user directory, but it means the branches are untested rather than
   merely unasserted.
-- **Window mode.** It round-trips through the file and `settings_apply` does not act on it, so
-  nothing has ever gone fullscreen. That is a gap in the feature and not only in the testing:
-  GLFW needs a monitor choice and saved geometry the engine does not keep.
+- **A window actually moving.** Spec 12.15 closed the feature half of this — `settings_apply`
+  now reaches `engine_set_window_mode`, there are three modes, and a monitor is chosen by name
+  — but the EFFECT is still a look nobody has had, and structurally so. The switch is refused
+  under headless, because a suite that seized a display would be intolerable and a golden whose
+  frame size came from whatever monitor the machine has would not be a golden; so the `display`
+  group asserts the DECISION (`engine_window_placement`, a pure function of the mode, the
+  monitor rectangle and the saved geometry) and `display-headless` asserts that the refusal
+  holds. What is owed is a human watching a window go fullscreen and come back to the size it
+  left with, on a machine with a SECOND display — this one has one, so `display-monitors`
+  cannot tell a correct name lookup from one that always answers 0.
 - **`uTime` windowed.** The clock a custom element program is written against is
   `total_frames * ENGINE_FIXED_FRAME_DT`, which is exactly right headless and wrong windowed —
   it advances at sixty-over-refresh rather than in seconds, so a shader backdrop runs slow on a
