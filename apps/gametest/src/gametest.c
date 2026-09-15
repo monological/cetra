@@ -17,6 +17,8 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
+#include "cetra/internal/async_loader.h"
+#include "cetra/internal/rigging.h"
 #include "cetra/common.h"
 #include "cetra/mesh.h"
 #include "cetra/scene.h"
@@ -2026,10 +2028,13 @@ static float locomotion_rate(const Animator* animator, float want) {
 static float clip_world_stride(Skeleton* skeleton, const Animation* clip) {
     if (!skeleton || !clip)
         return 0.0f;
-    const int ankle[2] = {get_bone_index_by_name(skeleton, "cetra_rig:LeftFoot"),
-                          get_bone_index_by_name(skeleton, "cetra_rig:RightFoot")};
-    const int toe[2] = {get_bone_index_by_name(skeleton, "cetra_rig:LeftToeBase"),
-                        get_bone_index_by_name(skeleton, "cetra_rig:RightToeBase")};
+    // Resolved, not looked up: this app names bones one way and a rig it is pointed at
+    // may name them another. A model whose author called a foot `leg left ankle` measures
+    // here exactly as one that spells it `cetra_rig:LeftFoot`.
+    const int ankle[2] = {skeleton_resolve_bone(skeleton, "cetra_rig:LeftFoot"),
+                          skeleton_resolve_bone(skeleton, "cetra_rig:RightFoot")};
+    const int toe[2] = {skeleton_resolve_bone(skeleton, "cetra_rig:LeftToeBase"),
+                        skeleton_resolve_bone(skeleton, "cetra_rig:RightToeBase")};
     float model = 0.0f;
     if (!animation_stride_speed(clip, skeleton, ankle, toe, &model, NULL))
         return 0.0f;
@@ -2328,9 +2333,20 @@ static void on_init(Game* game) {
         scene = create_scene_from_model_path(puppet_path, NULL, engine->async_loader);
         if (scene) {
             puppet_root = take_puppet_root(scene);
-            if (!puppet_root || scene->skeleton_count == 0 || scene->animation_count == 0) {
-                fprintf(stderr, "gametest: '%s' has no rig with clips; keeping the box\n",
-                        puppet_path);
+            // A RIG is the requirement; clips are not. A model can ship a skeleton and no
+            // animation at all -- most rigged characters do -- and the shared set below is
+            // exactly what such a rig is for. Refusing it here meant the shared clips
+            // could never reach the models that needed them most.
+            if (!puppet_root || scene->skeleton_count == 0) {
+                fprintf(stderr, "gametest: '%s' has no rig; keeping the box\n", puppet_path);
+                // Let the textures already in flight LAND before the materials they were
+                // going to be set on are freed. The async callback holds a raw Material*
+                // and there is no way to cancel one, so freeing underneath it writes into
+                // released memory -- a byte-write fault far away in whatever now owns that
+                // address, with a stack that names the texture and not the free.
+                while (async_loader_is_busy(engine->async_loader) ||
+                       async_loader_pending_count(engine->async_loader) > 0)
+                    async_loader_process_pending(engine->async_loader, scene->tex_pool, 64);
                 free_scene(scene);
                 scene = NULL;
                 puppet_root = NULL;

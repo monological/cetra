@@ -1,4 +1,5 @@
 #include "animator.h"
+#include "rigging.h"
 #include "springbone.h"
 #include "ext/log.h"
 
@@ -381,7 +382,7 @@ int animator_mask_subtree(const Skeleton* skeleton, const char* root_bone, float
         return 0;
     size_t n = skeleton->bone_count;
     // The lookup reads the map and declares the skeleton non-const.
-    int root = get_bone_index_by_name((Skeleton*)skeleton, root_bone);
+    int root = skeleton_resolve_bone((Skeleton*)skeleton, root_bone);
     if (root < 0) {
         // Cleared even on refusal: a caller handed a mask it may not re-initialise, and
         // leaving last call's weights in it masks a different subtree than it asked for.

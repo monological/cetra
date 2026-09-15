@@ -1,4 +1,5 @@
 #include "springbone.h"
+#include "rigging.h"
 #include "ext/log.h"
 
 #include <stdlib.h>
@@ -66,7 +67,7 @@ int spring_bone_add_chain(SpringBoneSystem* system, const char* root_bone_name) 
         return -1;
 
     Skeleton* skeleton = system->skeleton;
-    int root_index = get_bone_index_by_name(skeleton, root_bone_name);
+    int root_index = skeleton_resolve_bone(skeleton, root_bone_name);
     if (root_index < 0) {
         return -1;
     }
