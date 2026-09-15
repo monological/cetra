@@ -799,11 +799,28 @@ needs.
 `--ui-probe <case>` is the headless probe the `ui` gate group reads, in the shape `--audio-probe`
 and `--anim-probe` established: it prints `ui <case> <label> <key> <numbers>` and exits. The cases
 are `layout`, `layout-resize`, `wrap`, `nav`, `hit`, `capture`, `stack`, `theme-identity` and
-`settings`. **It needs no window and no GPU** — layout is a pure function of (tree, width, height)
-and the input pass takes a struct of values rather than a device — and `settings` needs no engine
-at all, so it runs before one is created. `CETRA_SETTINGS_DIR` points the settings case, and any
-gametest run, at a directory of its own rather than the player's real one; the gate and the
-golden bake both set it.
+`settings`. **It draws no frame**, which is the claim worth making precisely, because this line
+used to say "no window and no GPU" and that is true of exactly one case: `settings` needs no
+engine at all and runs before one is created, while every other case needs a font — FIT sizing is
+made of measurement — so it takes a headless game and therefore a hidden GLFW window and a live
+GL context, exactly like `--save-probe` below. What is true of all of them is that layout is a
+pure function of (tree, width, height) and the input pass takes a struct of values rather than a
+device. `CETRA_SETTINGS_DIR` points the settings case, and any gametest run, at a directory of
+its own rather than the player's real one; the gate and the golden bake both set it.
+
+**Display modes (spec 12.15).** `--fullscreen` and `--borderless` start the run in that mode
+rather than switching into it after a windowed frame, and `--monitor <name>` says which display —
+`--list-monitors` prints the names this build can see and exits. Both non-windowed modes take the
+monitor at its CURRENT video mode: nothing here ever changes a display's resolution, so there is
+no mode to restore after a crash, and `--render-scale` remains the performance lever it already
+was. The same three modes are on the settings screen, where a Monitor row appears only when there
+is more than one display to choose between.
+
+`--display-probe <case>` is the headless probe the `display` gate group reads, in the same shape:
+it prints `display <case> <label> <key> <numbers>` and exits, with cases `placement`, `monitors`,
+`apply`, or `all`. An unrecognised case is a failed run rather than a silent one. It reads what a
+mode DECIDES rather than what it does — the switch is refused under headless, so that a suite can
+never seize a display and a golden's frame size can never come from the machine's monitor.
 
 **Saving (spec 12.3).** `F5` / right bumper quicksaves and `F9` / right stick click quickloads,
 both ordinary rows in the action table so they rebind like anything else. They are deliberately
