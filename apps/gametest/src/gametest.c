@@ -83,6 +83,19 @@ static bool load_pending = false;
 // stand in for it -- that swings thighs about a straight leg, so the foot traces an arc and
 // never dwells, and a contact phase is the thing locking holds.
 #define WALK_CLIP "assets/models/strut_walk.fbx"
+// The clips a rig with no locomotion of its own is given, all on the `cetra_rig:` names.
+// Each is looked up afterwards by its FILE STEM, which is what import.c names a clip
+// holding one animation -- so the name to ask for is the basename here and never
+// whatever take name the file was authored with.
+static const char* const SHARED_CLIPS[] = {
+    WALK_CLIP,
+    "assets/models/steady_run.fbx",
+    "assets/models/quiet_idle.fbx",
+    "assets/models/swim_cycle.fbx",
+    "assets/models/float_idle.fbx",
+    "assets/models/fall_cycle.fbx",
+    "assets/models/touch_down.fbx",
+};
 
 // What full stick is worth when the clips say nothing about it -- the fallback, not the
 // policy. When the locomotion clips can be measured (spec 12.10) `player_speed` is DERIVED
@@ -119,10 +132,26 @@ static bool speed_override = false;
 static Animation* clip_jump = NULL;
 static Animation* clip_wave = NULL;
 static Animation* clip_swim = NULL;
-// Which of the two sources each character is playing, so the crossfade fires on the
-// water's EDGE rather than every step -- re-issuing animator_play each frame would
-// restart the stroke continuously and it would never advance past its first tick.
-static bool player_in_swim_clip = false;
+static Animation* clip_float = NULL; // treading water: the swim space's standing end
+static Animation* clip_fall = NULL;  // airborne, looping
+static Animation* clip_land = NULL;  // the one-shot that ends a fall
+// The swim space, built like the locomotion one and on the same axis: metres per second,
+// entries at the speeds their clips imply.
+static AnimatorEntry aquatic[2];
+static int aquatic_count = 0;
+
+// What a character is IN, which is what decides which SOURCE plays. One value rather than
+// a flag per medium: the three are exclusive, and asking "did this change" once is what
+// makes the crossfade fire on an EDGE. Re-issuing a play every step restarts the clip
+// continuously and it never advances past its first tick.
+typedef enum PlayerMedium {
+    MEDIUM_GROUND = 0, // the locomotion space
+    MEDIUM_WATER,      // the swim space, or the one swim clip on a rig without a float
+    MEDIUM_AIR,        // falling, which before this was not handled at all: the jump
+                       // one-shot ended after a second and handed the rig back to the
+                       // locomotion space, so a character ran on the spot in mid-air
+} PlayerMedium;
+static PlayerMedium player_medium = MEDIUM_GROUND;
 static bool chaser_in_swim_clip = false;
 // A file static because the flag is parsed in main and read in on_pre_render, long after.
 // ON by default, with --no-follow-cam to opt out, which is the shape --no-puppet,
@@ -1260,10 +1289,26 @@ static void build_platform_skirt(Game* game) {
            (double)platform_half, (double)GROTTO_SKIRT_DROP);
 }
 
+// Where the water's surface is, asked of the WATER rather than repeated from the constant
+// that put it there -- so moving the ocean moves what counts as being in it, and the two
+// cannot drift. The fallback is that constant, for a scene with no water at all.
+//
+// What this deliberately does NOT claim is the wave displacement. The surface is an
+// inverse FFT evaluated in the shader into a texture, and `water.h` publishes the still
+// plane and the height VARIANCE but no point sample, so there is nothing on this side to
+// ask for the height under a given (x, z). `level` is the plane the waves ride on, which
+// is their mean and so the best single answer available; at this sea state -- 2.5 m/s over
+// 900 m of fetch -- they ride within a few centimetres of it, against a character four
+// units tall. A surface that actually heaved would need a CPU evaluation of the spectrum
+// or a readback, and neither exists yet.
+static float grotto_surface_y(const Scene* scene) {
+    return scene && scene->water ? scene->water->level : GROTTO_WATER_Y;
+}
+
 // Whether a capsule centre is under the surface. One predicate, so the player, the
 // chaser and the IK gate cannot disagree about what "in the water" means.
-static bool grotto_submerged(const vec3 p) {
-    return p[1] < GROTTO_WATER_Y;
+static bool grotto_submerged(const Scene* scene, const vec3 p) {
+    return p[1] < grotto_surface_y(scene);
 }
 
 // Tread water: drive the capsule toward the surface and damp it, rather than fall.
@@ -1970,6 +2015,39 @@ static float locomotion_rate(const Animator* animator, float want) {
 // A clip that REFUSES is only fatal for the moving entries. A standing clip lays down no
 // ground and 0 is the right stride for it; a walk that could not be measured is the reason
 // there is no axis, because only this function knows which entries were supposed to move.
+// The WORLD speed a clip's own feet imply on this rig, or 0 when they imply none. The
+// engine measures in model units and says so; the scale on the rig's node is the caller's
+// to apply, and this is the one place that applies it.
+static float clip_world_stride(Skeleton* skeleton, const Animation* clip) {
+    if (!skeleton || !clip)
+        return 0.0f;
+    const int ankle[2] = {get_bone_index_by_name(skeleton, "cetra_rig:LeftFoot"),
+                          get_bone_index_by_name(skeleton, "cetra_rig:RightFoot")};
+    const int toe[2] = {get_bone_index_by_name(skeleton, "cetra_rig:LeftToeBase"),
+                        get_bone_index_by_name(skeleton, "cetra_rig:RightToeBase")};
+    float model = 0.0f;
+    if (!animation_stride_speed(clip, skeleton, ankle, toe, &model, NULL))
+        return 0.0f;
+    return model * PLAYER_SCALE;
+}
+
+// The water's own space: a treading end and a stroking end, blended on the same knob the
+// ground uses. Its axis is STATED and not measured, and that is the difference between
+// the two media rather than an omission -- a stride is how fast the ground goes past a
+// foot that is pressing it, and a swimmer's feet press nothing. `animation_stride_speed`
+// refuses the stroke for exactly that reason, which is the right answer, so the top of
+// this axis is the speed the swimmer actually travels at and the playback rate stays 1.
+static void build_aquatic(Animation* float_clip, Animation* swim, float top_speed) {
+    aquatic_count = 0;
+    if (!float_clip || !swim || float_clip == swim || top_speed <= 0.0f)
+        return;
+    aquatic[0] = (AnimatorEntry){float_clip, 0.0f, 0.0f};
+    aquatic[1] = (AnimatorEntry){swim, top_speed, 0.0f};
+    aquatic_count = 2;
+    printf("Swim axis is 0 to %.2f m/s, stated: a stroke has no stride to measure\n",
+           (double)top_speed);
+}
+
 static void build_locomotion(Skeleton* skeleton, Animation* idle, Animation* walk, Animation* run) {
     locomotion[0] = (AnimatorEntry){idle, 0.0f, 0.0f};
     locomotion[1] = (AnimatorEntry){walk, 0.5f, 0.0f};
@@ -1978,22 +2056,18 @@ static void build_locomotion(Skeleton* skeleton, Animation* idle, Animation* wal
     if (!skeleton || !idle || !walk || !run)
         return;
 
-    const int ankle[2] = {get_bone_index_by_name(skeleton, "cetra_rig:LeftFoot"),
-                          get_bone_index_by_name(skeleton, "cetra_rig:RightFoot")};
-    const int toe[2] = {get_bone_index_by_name(skeleton, "cetra_rig:LeftToeBase"),
-                        get_bone_index_by_name(skeleton, "cetra_rig:RightToeBase")};
-    float model = 0.0f;
-    if (animation_stride_speed(idle, skeleton, ankle, toe, &model, NULL))
-        locomotion[0].stride = model * PLAYER_SCALE;
-    const bool walks = animation_stride_speed(walk, skeleton, ankle, toe, &model, NULL);
-    if (walks)
-        locomotion[1].stride = model * PLAYER_SCALE;
+    // The standing entry anchors the axis at ZERO and keeps no stride of its own, even
+    // though one can be measured off it: a breathing idle shifts its weight, which reads
+    // as 0.13 m/s here, and an axis starting there plays the idle at the rate floor while
+    // the character is standing perfectly still. What a standing clip lays down is no
+    // ground, by definition rather than by measurement.
+    locomotion[1].stride = clip_world_stride(skeleton, walk);
+    const bool walks = locomotion[1].stride > 0.0f;
     // The two moving entries are often ONE clip -- a rig with no run gets the walk for
     // both -- and two entries at one position is not a blend space. Drop to two.
-    const bool runs =
-        run == walk ? walks : animation_stride_speed(run, skeleton, ankle, toe, &model, NULL);
+    const bool runs = run == walk ? walks : clip_world_stride(skeleton, run) > 0.0f;
     if (runs && run != walk)
-        locomotion[2].stride = model * PLAYER_SCALE;
+        locomotion[2].stride = clip_world_stride(skeleton, run);
 
     if (!walks || !runs) {
         printf("Locomotion clips imply no stride (%s); travel stays a fraction of %.1f m/s "
@@ -2491,37 +2565,39 @@ static void on_init(Game* game) {
         // stands when you let go and one that walks on the spot forever. One clip filling
         // all three was tried and is exactly that bug.
         if (!idle || !walk || !run) {
-            Animation* rest = scene->animation_count > 0 ? scene->animations[0] : NULL;
-            if (load_animations_from_file(scene, skeleton, WALK_CLIP, true, NULL) > 0) {
-                Animation* strut = scene_find_animation(scene, "strut_walk");
-                if (strut) {
-                    walk = run = strut;
-                    idle = rest ? rest : strut;
-                    // A rest pose has no PHASE, and the blend space phase-syncs: every
-                    // entry runs off one clock, in the ticks of whichever carries weight
-                    // first, and the others are sampled at the same fraction of their own
-                    // length. A two-tick rest pose beside an 86-tick walk therefore turns
-                    // that clock 43 times too fast for the walk, and any stick short of
-                    // full -- the only range where both carry weight -- played the walk at
-                    // eighteen times speed. Held frames have no phase to lose, so the fix
-                    // is to give this one the walk's period and make the sync a no-op.
-                    if (idle != strut && idle->ticks_per_second > 0.0f) {
-                        idle->duration =
-                            strut->duration * idle->ticks_per_second / strut->ticks_per_second;
-                    }
-                    printf("Rig carries no idle/walk/run: standing on '%s', moving on '%s'\n",
-                           idle->name, strut->name);
-                }
-            }
+            // Before there was a set to give it, this loaded the walk alone and handed it
+            // to BOTH moving entries, standing the rig on whatever its own first clip
+            // happened to be -- usually the bind pose, so the character crossed the world
+            // with its arms out and had no gear above a walk.
+            for (size_t i = 0; i < sizeof SHARED_CLIPS / sizeof *SHARED_CLIPS; i++)
+                load_animations_from_file(scene, skeleton, SHARED_CLIPS[i], true, NULL);
+            idle = scene_find_animation(scene, "quiet_idle");
+            walk = scene_find_animation(scene, "strut_walk");
+            run = scene_find_animation(scene, "steady_run");
+            if (idle && walk && run)
+                printf("Rig carries no locomotion of its own: standing on '%s', moving on '%s' "
+                       "and '%s'\n",
+                       idle->name, walk->name, run->name);
         }
         clip_jump = scene_find_animation(scene, "jump");
         clip_wave = scene_find_animation(scene, "wave");
+        // The generated rig names its own stroke `swim`; a rig given the shared set gets
+        // the pair, and the pair is what makes treading water a state rather than a
+        // stroke performed on the spot.
         clip_swim = scene_find_animation(scene, "swim");
+        if (!clip_swim)
+            clip_swim = scene_find_animation(scene, "swim_cycle");
+        clip_float = scene_find_animation(scene, "float_idle");
+        clip_fall = scene_find_animation(scene, "fall_cycle");
+        clip_land = scene_find_animation(scene, "touch_down");
         add_footsteps(walk);
         if (run != walk)
             add_footsteps(run);
         animator_mask_subtree(skeleton, "cetra_rig:RightArm", wave_mask);
         build_locomotion(skeleton, idle, walk, run);
+        // After the locomotion axis, which is what sets player_speed: the water's top is
+        // the fraction of it a swimmer actually moves at.
+        build_aquatic(clip_float, clip_swim, player_speed * GROTTO_SWIM_FRACTION);
         player_animator = create_animator(skeleton);
         if (player_animator && idle && walk && run) {
             animator_play_space(player_animator, "locomotion", locomotion, locomotion_count, 0.0f,
@@ -2788,18 +2864,44 @@ static void on_update(Game* game, double dt) {
             player_animator->param = knob > 1.0f ? 1.0f : knob;
         }
 
-        // Swim is its own source, crossfaded on the edge, and deliberately NOT a fourth
-        // entry in the locomotion space: the trace gates its weight columns on a count of
-        // three, so a fourth would blank them and fail anim-trace-idle. It is also the
-        // wrong shape -- swim is not faster than run, it is a different medium.
-        if (clip_swim && player_swimming != player_in_swim_clip) {
-            if (player_swimming)
+        // Water and air are their own SOURCES rather than more entries in the locomotion
+        // space, and that is about shape and not about convenience: a swim is not a faster
+        // run and a fall is not a slower one, so neither belongs on an axis whose whole
+        // meaning is ground speed, and a fourth entry would blank the trace's three weight
+        // columns besides. Each is crossfaded on the EDGE of the medium changing.
+        // A rig with no airborne clip never enters that state, rather than entering it and
+        // playing the ground source anyway: the second shape re-issues the locomotion
+        // space twice in the first second, since the player spawns above the floor, and a
+        // crossfade restarts the clock a settling arm is reading.
+        const PlayerMedium want = player_swimming ? MEDIUM_WATER
+                                  : (clip_fall && !character_controller_is_grounded(cc))
+                                      ? MEDIUM_AIR
+                                      : MEDIUM_GROUND;
+        if (want != player_medium) {
+            const PlayerMedium was = player_medium;
+            player_medium = want;
+            if (want == MEDIUM_AIR) {
+                animator_play(player_animator, clip_fall, 0.15f, true);
+            } else if (want == MEDIUM_WATER && aquatic_count > 0) {
+                animator_play_space(player_animator, "swim", aquatic, aquatic_count, 0.25f, true);
+            } else if (want == MEDIUM_WATER && clip_swim) {
                 animator_play(player_animator, clip_swim, 0.25f, true);
-            else
+            } else {
                 animator_play_space(player_animator, "locomotion", locomotion, locomotion_count,
                                     0.25f, true);
-            player_in_swim_clip = player_swimming;
+                // The landing goes on AFTER the space, so the space is what it resumes to
+                // when it releases itself. Short fade: a landing that eases in has already
+                // missed the moment it exists for.
+                if (was == MEDIUM_AIR && clip_land)
+                    animator_play_once(player_animator, clip_land, 0.08f);
+            }
         }
+        // Off the ground there is no stride to match, so the clip plays at its own rate:
+        // the swim space carries no strides by design and the fall is a single clip. The
+        // knob still means metres per second, which is what lets the swim space read its
+        // own axis off the same param the ground uses.
+        if (player_medium != MEDIUM_GROUND)
+            player_animator->speed = 1.0f;
     }
     if (player_rig && ground_speed > 0.1f) {
         // The puppet faces +Z at yaw 0. Smoothed on sim time, so it is the
@@ -2842,7 +2944,7 @@ static void on_update(Game* game, double dt) {
     // float and cannot go under, which is impossible to get stuck in and reads clearly
     // at this camera distance.
     float gravity = 20.0f;
-    player_swimming = grotto_submerged(player_entity->position);
+    player_swimming = grotto_submerged(game->scene, player_entity->position);
     if (player_swimming) {
         vel[1] = grotto_float_velocity(player_entity->position[1], vel[1], (float)dt);
         // A swimmer is slower than a runner, and the stroke should read as effort.
@@ -2866,10 +2968,11 @@ static void on_update(Game* game, double dt) {
         printf("Jump!\n");
         if (jump_sound)
             audio_sound_play(jump_sound);
-        // The tuck is a one-shot: the airtime is one second at this
-        // velocity under this gravity, and the clip returns to the
-        // locomotion space by itself.
-        if (player_animator && clip_jump)
+        // The tuck is a one-shot: the airtime is one second at this velocity under this
+        // gravity, and the clip returns to the locomotion space by itself. Only on a rig
+        // with no airborne LOOP -- with one, leaving the ground switches the source a
+        // frame later and a one-shot fired here would be replaced before it read.
+        if (player_animator && clip_jump && !clip_fall)
             animator_play_once(player_animator, clip_jump, 0.25f);
     }
     if (player_animator && clip_wave && input_action_pressed(&game->input, "wave"))
@@ -2933,7 +3036,7 @@ static void on_update(Game* game, double dt) {
         // Its own handling, not the player's: this one never zeroes chase_vel[1] when
         // grounded, so it carries accumulated downward velocity into the water and would
         // sink through a clamp written for a character that does.
-        chaser_swimming = grotto_submerged(chaser_entity->position);
+        chaser_swimming = grotto_submerged(game->scene, chaser_entity->position);
         if (chaser_swimming) {
             chase_vel[1] =
                 grotto_float_velocity(chaser_entity->position[1], chase_vel[1], (float)dt);

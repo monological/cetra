@@ -685,8 +685,8 @@ doing at the time:
   **That is closed too**, by the same 12.9 commit that wrote it (`take_puppet_root` falls back to
   the scene root, and a rig with no idle/walk/run takes the committed walk with its own rest pose
   for standing) and finished by spec 12.10, which watched it. `--puppet assets/models/t_pose.fbx`
-  stands a 65-bone Mixamo humanoid in the world, walking on `strut_walk` with its feet locked, and
-  the two defects that look cost nothing to find: the walk played at **eighteen times speed** at
+  stands the committed 65-bone humanoid in the world, walking on `strut_walk` with its feet
+  locked, and the two defects that look cost nothing to find: the walk played at **eighteen times speed** at
   any stick short of full, because a two-tick rest pose phase-synced against an 86-tick walk turns
   the shared clock 43 times too fast; and the right leg carries a standing correction of 0.45 of a
   leg that no playback rate moves, which is the contact label opening during late swing. The first
