@@ -95,6 +95,7 @@ static const char* const SHARED_CLIPS[] = {
     "assets/models/float_idle.fbx",
     "assets/models/fall_cycle.fbx",
     "assets/models/touch_down.fbx",
+    "assets/models/jump_start.fbx",
 };
 
 // What full stick is worth when the clips say nothing about it -- the fallback, not the
@@ -152,6 +153,10 @@ typedef enum PlayerMedium {
                        // locomotion space, so a character ran on the spot in mid-air
 } PlayerMedium;
 static PlayerMedium player_medium = MEDIUM_GROUND;
+// HOW the ground was left, which is what picks the airborne pose: a jump rises and a step
+// off a ledge does not, and the two read completely differently. Set on the press and
+// cleared on the way back down, so a walk off the plate is a fall and not a leap.
+static bool player_jumped = false;
 static bool chaser_in_swim_clip = false;
 // A file static because the flag is parsed in main and read in on_pre_render, long after.
 // ON by default, with --no-follow-cam to opt out, which is the shape --no-puppet,
@@ -2579,7 +2584,12 @@ static void on_init(Game* game) {
                        "and '%s'\n",
                        idle->name, walk->name, run->name);
         }
+        // The generated rig's own tuck, or the rise from the shared set. One slot for
+        // both, because which one a rig gets decides nothing else: what changes is
+        // whether there is also a fall loop to hand over to.
         clip_jump = scene_find_animation(scene, "jump");
+        if (!clip_jump)
+            clip_jump = scene_find_animation(scene, "jump_start");
         clip_wave = scene_find_animation(scene, "wave");
         // The generated rig names its own stroke `swim`; a rig given the shared set gets
         // the pair, and the pair is what makes treading water a state rather than a
@@ -2881,12 +2891,19 @@ static void on_update(Game* game, double dt) {
             const PlayerMedium was = player_medium;
             player_medium = want;
             if (want == MEDIUM_AIR) {
-                animator_play(player_animator, clip_fall, 0.15f, true);
+                // The rise is a ONE-SHOT and the fall is a loop, which is the difference
+                // between the two ways of being in the air: a jump ends, and what it ends
+                // into is the fall. The hand-off is the finished edge just below.
+                if (player_jumped && clip_jump)
+                    animator_play(player_animator, clip_jump, 0.10f, false);
+                else
+                    animator_play(player_animator, clip_fall, 0.15f, true);
             } else if (want == MEDIUM_WATER && aquatic_count > 0) {
                 animator_play_space(player_animator, "swim", aquatic, aquatic_count, 0.25f, true);
             } else if (want == MEDIUM_WATER && clip_swim) {
                 animator_play(player_animator, clip_swim, 0.25f, true);
             } else {
+                player_jumped = false;
                 animator_play_space(player_animator, "locomotion", locomotion, locomotion_count,
                                     0.25f, true);
                 // The landing goes on AFTER the space, so the space is what it resumes to
@@ -2895,6 +2912,11 @@ static void on_update(Game* game, double dt) {
                 if (was == MEDIUM_AIR && clip_land)
                     animator_play_once(player_animator, clip_land, 0.08f);
             }
+        } else if (player_medium == MEDIUM_AIR && clip_fall && animator_finished(player_animator)) {
+            // The rise reached its end: from here the character is falling, whatever put
+            // it up there. animator_finished is an EDGE, so this fires once and the loop
+            // it starts does not re-trigger it.
+            animator_play(player_animator, clip_fall, 0.15f, true);
         }
         // Off the ground there is no stride to match, so the clip plays at its own rate:
         // the swim space carries no strides by design and the fall is a single clip. The
@@ -2968,10 +2990,11 @@ static void on_update(Game* game, double dt) {
         printf("Jump!\n");
         if (jump_sound)
             audio_sound_play(jump_sound);
-        // The tuck is a one-shot: the airtime is one second at this velocity under this
-        // gravity, and the clip returns to the locomotion space by itself. Only on a rig
-        // with no airborne LOOP -- with one, leaving the ground switches the source a
-        // frame later and a one-shot fired here would be replaced before it read.
+        player_jumped = true;
+        // On a rig with no airborne loop the tuck is a one-shot that returns to the
+        // locomotion space by itself, the airtime being one second at this velocity under
+        // this gravity. With a loop it is the AIR state that plays the rise instead, a
+        // frame later, and a one-shot fired here would be replaced before it read.
         if (player_animator && clip_jump && !clip_fall)
             animator_play_once(player_animator, clip_jump, 0.25f);
     }
