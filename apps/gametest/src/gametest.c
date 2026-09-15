@@ -85,6 +85,13 @@ static bool load_pending = false;
 // stand in for it -- that swings thighs about a straight leg, so the foot traces an arc and
 // never dwells, and a contact phase is the thing locking holds.
 #define WALK_CLIP "assets/models/strut_walk.fbx"
+// The rig the shared set below was authored on, and the reason a rig that rests
+// differently can wear those clips at all (spec 12.11). The loader derives its
+// correction from the difference between two rest poses, so with only one of them it
+// has nothing to reconcile and writes the clip's raw local rotations into bones whose
+// rest frame is nothing like the source's -- which is not a lean but a collapse. The
+// clips are exported without skin, so none of them carries the rig itself.
+#define SHARED_CLIP_RIG "assets/models/t_pose.fbx"
 // The clips a rig with no locomotion of its own is given, all on the `cetra_rig:` names.
 // Each is looked up afterwards by its FILE STEM, which is what import.c names a clip
 // holding one animation -- so the name to ask for is the basename here and never
@@ -2141,6 +2148,20 @@ static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float
     return inner;
 }
 
+// Let every texture already in flight LAND, before the scene holding the materials
+// they will be set on is freed, or before a second scene claims the loader.
+//
+// Two things need this and neither has an API. The async callback holds a raw
+// Material* and there is no way to cancel one, so freeing underneath it writes into
+// released memory -- a byte-write fault far away in whatever now owns that address,
+// with a stack naming the texture and not the free. And a loader has one texture
+// pool (async_loader.h), while embedded texture keys are "*0", "*1", ... per FILE --
+// so two imported scenes in flight at once would answer each other's lookups.
+static void drain_async_loader(AsyncLoader* loader, Scene* scene) {
+    while (async_loader_is_busy(loader) || async_loader_pending_count(loader) > 0)
+        async_loader_process_pending(loader, scene->tex_pool, 64);
+}
+
 // The imported model as a node that is NOT the scene root.
 //
 // create_scene_from_model_path makes the file's own node the root (spec 11.107),
@@ -2339,14 +2360,7 @@ static void on_init(Game* game) {
             // could never reach the models that needed them most.
             if (!puppet_root || scene->skeleton_count == 0) {
                 fprintf(stderr, "gametest: '%s' has no rig; keeping the box\n", puppet_path);
-                // Let the textures already in flight LAND before the materials they were
-                // going to be set on are freed. The async callback holds a raw Material*
-                // and there is no way to cancel one, so freeing underneath it writes into
-                // released memory -- a byte-write fault far away in whatever now owns that
-                // address, with a stack that names the texture and not the free.
-                while (async_loader_is_busy(engine->async_loader) ||
-                       async_loader_pending_count(engine->async_loader) > 0)
-                    async_loader_process_pending(engine->async_loader, scene->tex_pool, 64);
+                drain_async_loader(engine->async_loader, scene);
                 free_scene(scene);
                 scene = NULL;
                 puppet_root = NULL;
@@ -2590,8 +2604,25 @@ static void on_init(Game* game) {
             // to BOTH moving entries, standing the rig on whatever its own first clip
             // happened to be -- usually the bind pose, so the character crossed the world
             // with its arms out and had no gear above a walk.
+            //
+            // The source rig is imported as a whole scene because that is the only public
+            // way to a Skeleton, and freed as soon as the loads are done: a channel copies
+            // the source bone's index, its parent's and its local rest BY VALUE, and the
+            // sampler rebuilds the source hierarchy from those alone, so nothing points
+            // back here afterwards.
+            drain_async_loader(engine->async_loader, scene);
+            Scene* rig = create_scene_from_model_path(SHARED_CLIP_RIG, NULL, engine->async_loader);
+            Skeleton* source = (rig && rig->skeleton_count > 0) ? rig->skeletons[0] : NULL;
+            if (!source)
+                fprintf(stderr,
+                        "gametest: no rig in '%s'; the shared clips will play uncorrected\n",
+                        SHARED_CLIP_RIG);
             for (size_t i = 0; i < sizeof SHARED_CLIPS / sizeof *SHARED_CLIPS; i++)
-                load_animations_from_file(scene, skeleton, SHARED_CLIPS[i], true, NULL);
+                load_animations_from_file(scene, skeleton, SHARED_CLIPS[i], true, source);
+            if (rig) {
+                drain_async_loader(engine->async_loader, rig);
+                free_scene(rig);
+            }
             idle = scene_find_animation(scene, "quiet_idle");
             walk = scene_find_animation(scene, "strut_walk");
             run = scene_find_animation(scene, "steady_run");
