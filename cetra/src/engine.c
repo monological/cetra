@@ -452,11 +452,11 @@ void free_engine(Engine* engine) {
 }
 
 /*
- * The display a name selects, or NULL when this machine has none attached --
- * which a VM or a headless session genuinely reports, so no caller may assume
- * index 0 exists. An unmatched name falls back to the primary rather than
- * failing: a player who unplugs the monitor they chose should get a window they
- * can see, not one placed somewhere that no longer exists.
+ * The index of the display a name selects, or -1 when this machine has none
+ * attached -- which a VM or a headless session genuinely reports, so no caller
+ * may assume index 0 exists. An unmatched name falls back to the primary rather
+ * than failing: a player who unplugs the monitor they chose should get a window
+ * they can see, not one placed somewhere that no longer exists.
  */
 static int _monitor_index_by_name(const char* name) {
     int count = 0;
@@ -486,13 +486,17 @@ static GLFWmonitor* _monitor_by_name(const char* name) {
 }
 
 // The one place the swap interval is set, so the value survives a mode change.
-// Headless swaps without waiting whatever was asked, or a run's frame rate
-// would depend on a display it is not using.
+//
+// Headless swaps without waiting whatever was asked, or a run's frame rate would
+// depend on a display it is not using -- and it is set EXPLICITLY rather than
+// skipped, because skipping leaves the context's own default to decide, and a
+// default of 1 would put every golden and every timing arm behind a display's
+// refresh.
 static void _engine_apply_swap_interval(const Engine* engine) {
-    if (!engine || !engine->window || engine->headless) {
+    if (!engine || !engine->window) {
         return;
     }
-    glfwSwapInterval(engine->vsync ? 1 : 0);
+    glfwSwapInterval((engine->vsync && !engine->headless) ? 1 : 0);
 }
 
 /*
