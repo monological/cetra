@@ -14826,7 +14826,7 @@ def _gametest_probe_text(flag, case, env=None, extra=None):
     return r.stdout + r.stderr, r.returncode
 
 
-def _gametest_probe(flag, rx, case, env=None):
+def _gametest_probe(flag, rx, case, env=None, extra=None):
     """{(label, key): [floats]} from one gametest --<x>-probe run, or None if it failed
     or measured nothing.
 
@@ -14834,8 +14834,11 @@ def _gametest_probe(flag, rx, case, env=None):
     back through the caller's own compiled regex. Audio is the fifth probe and keeps its
     own reader: its grammar carries a literal rms token, no key, and a fixed pair of
     numbers, so it shares the spawn above and nothing else.
+
+    `extra` is forwarded to the spawn, which has always taken it; this only stopped being
+    the end of the line. It is how a caller runs a case against another rig.
     """
-    text, code = _gametest_probe_text(flag, case, env)
+    text, code = _gametest_probe_text(flag, case, env, extra)
     out = {(label, key): [float(v) for v in nums.split()]
            for c, label, key, nums in rx.findall(text) if c == case}
     if code != 0 or not out:
@@ -22705,6 +22708,20 @@ def _ik_probe_run(case):
     return _gametest_probe("--ik-probe", _IK_PROBE, case)
 
 
+def _ik_probe_on(case, model):
+    """The same, against a rig OTHER than the generated puppet.
+
+    Uncached and separate from _ik_probe rather than an argument threaded through it:
+    that one is memoised on the case alone and read by seventeen call sites, and widening
+    its key to buy one caller a second rig is a worse trade than a four-line runner.
+
+    `--puppet` is how the rig is chosen because --ik-probe dispatches after the parse
+    loop and the probe loads whatever `puppet_path` then holds -- so this needs no probe
+    case of its own and no C at all.
+    """
+    return _gametest_probe("--ik-probe", _IK_PROBE, case, extra=["--puppet", asset(model)])
+
+
 @functools.cache
 def _ik_probe(case):
     """_ik_probe_run memoised by case: the arms ask for twelve distinct cases seventeen
@@ -22730,8 +22747,10 @@ def _ik_knee_bend_deg(a, b, c):
 
 
 def run_ik_gate(workdir):
-    """Two-bone IK, foot locking and stride matching (specs 12.4, 12.9 and 12.10), on the
-    puppet whose limb lengths the fixture generator states. Eighteen arms drive the solver
+    """Two-bone IK, foot locking and stride matching (specs 12.4, 12.9, 12.10 and 12.14),
+    on the puppet whose limb lengths the fixture generator states -- except ik-pole-derived,
+    which needs a rig that binds BENT and takes the committed t_pose.fbx, the only arm here
+    whose input is imported rather than stated in a table. Nineteen arms drive the solver
     with SYNTHETIC targets through gametest's --ik-probe and need no physics at all; three
     stand the rig on real ground and raycast. Every expected angle is recomputed here in
     Python from the segment lengths the probe reports, so nothing is a magic number
@@ -22760,7 +22779,18 @@ def run_ik_gate(workdir):
                    it is held to a tolerance and the two are asserted apart.
       ik-pole      the knee goes the way the pole says, and reversing the pole reverses
                    it. The SPAN between the two is what proves the pole is read at all
-                   rather than defaulted, which a sign test alone would not catch.
+                   rather than defaulted, which a sign test alone would not catch. On
+                   this rig the CALLER's pole is what is read, the bind knee sitting
+                   exactly on the hip-ankle line -- which is what the next arm exists
+                   for.
+      ik-pole-derived the same case on t_pose.fbx, whose knee binds 4.4 degrees forward
+                   and whose hip binds ROTATED, and the answer inverts: both stated
+                   poles land the knee the SAME way and the span collapses, because the
+                   rig's own bind overrode the argument in each. Without it nothing here
+                   sees the derivation at all -- deleting it leaves every other arm in
+                   this group green, since the generated puppet can only take the
+                   fallback. The rotated hip is what also reaches the conversion into
+                   the hip's bind frame, which a rig binding upright cannot.
       ik-analytic  the closed form, the arm this group is anchored on: the bend at five
                    distances, against acos((a^2 + b^2 - c^2) / 2ab) computed here from
                    the segments and the distance the probe reports. The sweep stops
@@ -22978,6 +23008,42 @@ def run_ik_gate(workdir):
               f"(want > 0.10, or the pole was never read)")
         if not ok:
             failures.append("ik-pole")
+
+    # --- ik-pole-derived -------------------------------------------------------
+    # The SAME case on a rig that binds BENT, where the answer inverts (spec 12.14).
+    #
+    # ik-pole above runs on the generated puppet, whose three leg joints share one x and
+    # one z to the digit -- so its bind knee sits exactly on the hip-ankle line, the
+    # derivation finds no direction to take and falls back to the caller's vector. Every
+    # number it prints is the behaviour that existed before the pole came from the rig,
+    # and deleting that derivation leaves it green.
+    #
+    # t_pose.fbx binds its knee 4.4 degrees forward and its hip ROTATED, so it reaches
+    # both halves: the offset is read, AND it is rotated through a hip frame that is not
+    # the identity. No fixture was built for this -- the corpus already had one, the same
+    # way 12.11's Z-up fixture turned out unnecessary.
+    # Same case, so the same three keys ik-pole above already named.
+    pole_need = [("fwd", "kneez"), ("back", "kneez"), ("span", "delta")]
+    d = _ik_probe_on("pole", "t_pose.fbx")
+    if not d or any(k not in d for k in pole_need):
+        print("  ik-pole-derived FAIL  the probe failed or measured nothing on t_pose.fbx")
+        failures.append("ik-pole-derived")
+    else:
+        b_fwd = d[("fwd", "kneez")][0]
+        b_back = d[("back", "kneez")][0]
+        b_span = d[("span", "delta")][0]
+        # BOTH legs must land the same way and the span must collapse: the rig's own bind
+        # overrode the argument in each. `back` is the cell that carries it -- it is
+        # negative whenever the caller's vector wins, so a run against the old code reads
+        # two opposite knees and a wide span here.
+        ok = b_span < 0.02 and b_fwd > 0.05 and b_back > 0.05
+        print(f"  ik-pole-derived {'PASS' if ok else 'FAIL'}  on a rig that binds bent the "
+              f"knee lands at z {b_fwd:+.4f} and {b_back:+.4f} for OPPOSITE stated poles, "
+              f"{b_span:.4f} apart (want under 0.02 and both past +0.05: the bind beat the "
+              f"argument both times, where a caller-driven pole reads them opposite and "
+              f"about 0.36 apart, as ik-pole does above)")
+        if not ok:
+            failures.append("ik-pole-derived")
 
     # --- ik-analytic -----------------------------------------------------------
     d = _ik_probe("analytic")
