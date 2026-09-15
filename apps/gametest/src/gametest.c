@@ -1490,13 +1490,47 @@ static void build_lights(Scene* scene) {
     // across it, which is the difference between a lit stage and a visible pool of light.
     const float spot_y = 45.0f;
     const float inner_deg = 38.0f, outer_deg = 47.0f;
+    /*
+     * RAKED off vertical, and the lamp is MOVED rather than merely turned.
+     *
+     * Straight down is the one direction that lights a floor fully and a standing figure
+     * not at all: the plate's normal is +Y and takes N.L = 1, while a torso's normal is
+     * horizontal and takes nearly zero. Only shoulders and scalp caught the key, so an
+     * arbitrary --puppet read as a silhouette against its own brightly lit stage -- and
+     * auto-exposure compounded it, metering the plate and mapping the character wherever
+     * it fell. Nothing about that is specific to a metallic asset; a diffuse surface with
+     * a horizontal normal receives the same nothing.
+     *
+     * TURNING the light is not enough. At 44.5 above the plate, rotating the direction
+     * alone drags the pool `drop * tan(rake)` off centre -- 44.5 units here, on a plate
+     * whose half-extent is 25. So the lamp moves to an offset position and aims back at
+     * the plate's centre, and the throw grows from 44.5 to 62.9, which the intensity
+     * compensates by its square or the plate loses a stop and the meter re-opens.
+     *
+     * The cone is deliberately UNCHANGED. An oblique footprint is an ellipse, so the
+     * plate is no longer evenly lit -- 0.87 stops corner to corner against 0.10 hung
+     * straight down -- but that falloff is a gradient rather than a cutoff and still
+     * finishes off the plate, which is what the cutoffs above were sized for. The angle
+     * is 45 and not halfway because the two costs run opposite ways: nearly all of that
+     * spread is spent by 25 degrees, while the figure keeps gaining past 40. Past 55 the
+     * figure turns back over, the lamp having gone oblique enough to lose its top.
+     */
+    const float rake_deg = 45.0f, azimuth_deg = 35.0f;
+    const float drop = spot_y - GAMETEST_FLOOR_HALF_Y;
+    const float reach = drop * tanf(glm_rad(rake_deg));
+    const float key_x = reach * sinf(glm_rad(azimuth_deg));
+    const float key_z = reach * cosf(glm_rad(azimuth_deg));
     LightDesc spot = {
         .name = "platform_key",
         .type = LIGHT_SPOT,
-        .position = {0.0f, spot_y, 0.0f},
-        .direction = {0.0f, -1.0f, 0.0f},
+        .position = {key_x, spot_y, key_z},
+        // Not a unit vector: light_set_direction stores what it is handed and the cluster
+        // pack normalizes, which is why the rig in app.c passes non-unit vectors too.
+        .direction = {-key_x, -drop, -key_z},
         .color = {1.0f, 0.96f, 0.90f},
-        .intensity = 100000.0f, // CANDELA: a spot is punctual, where a panel is in nits
+        // CANDELA: a spot is punctual, where a panel is in nits. Scaled by the square of
+        // the throw so raking the lamp back does not dim the plate it still has to light.
+        .intensity = 100000.0f * (drop * drop + reach * reach) / (drop * drop),
         /*
          * Down past the rim, not just past the plate -- and unlike a panel's, a spot's
          * range genuinely windows the falloff, so this number is the look and not just a
