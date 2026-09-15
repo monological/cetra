@@ -15123,6 +15123,16 @@ def run_anim_gate(workdir):
                        CPU, where a process-global pose would still look right. With
                        one, both rigs would hold the same state and the two runs would
                        be identical.
+      anim-retarget    a clip authored on one rig, played on another that rests
+                       differently (spec 12.11). BOTH configurations are asserted,
+                       because only the pair says the mechanism is live: with no source
+                       rest pose a foot must sit ABOVE the hips and the loader must
+                       report 0 channels corrected -- the failure, pinned -- and with
+                       -s the feet must be below and every matched channel corrected.
+                       The count is not redundant with the posture: disarming the
+                       global path leaves the local-delta fallback correcting 15 of 22
+                       and the rig still standing, which the posture bar alone reads as
+                       a pass.
     """
     import math
 
