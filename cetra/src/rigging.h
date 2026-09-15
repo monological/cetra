@@ -48,4 +48,20 @@ int get_finger_id(const char* normalized_name);
 // Note: Requires compatible skeleton orientations for animations to work correctly
 int find_matching_bone_smart(Skeleton* skeleton, const char* anim_bone_name);
 
+// The bone a caller MEANS by `name`: the exact name where the skeleton carries it, the
+// semantic match otherwise. -1 when neither answers.
+//
+// Exact FIRST, and that order is the whole safety of it: every rig that already resolved
+// keeps the index it had, so nothing a caller does today can move. The fallback only runs
+// where the exact lookup has already failed -- which is where a caller was about to give
+// up anyway, and where the difference is a feature working at all rather than working
+// differently.
+//
+// This is what lets a subsystem name bones in ONE vocabulary and still reach a rig that
+// spells them another way. The import path has matched semantically since cross-rig
+// retargeting existed; everything downstream of it -- the IK chains, the layer masks,
+// the spring roots -- asked for literal strings and silently got nothing on a rig whose
+// author named a foot `leg left ankle`.
+int skeleton_resolve_bone(Skeleton* skeleton, const char* name);
+
 #endif // RIGGING_H

@@ -359,3 +359,12 @@ int find_matching_bone_smart(Skeleton* skeleton, const char* anim_bone_name) {
     free(best_name);
     return -1;
 }
+
+int skeleton_resolve_bone(Skeleton* skeleton, const char* name) {
+    if (!skeleton || !name)
+        return -1;
+    const int exact = get_bone_index_by_name(skeleton, name);
+    if (exact >= 0)
+        return exact;
+    return find_matching_bone_smart(skeleton, name);
+}

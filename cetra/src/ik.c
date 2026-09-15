@@ -1,4 +1,5 @@
 #include "ik.h"
+#include "rigging.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -102,9 +103,11 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
 
     Skeleton* skeleton = system->skeleton;
     // The lookup reads the map and declares the skeleton non-const.
-    const int hip = get_bone_index_by_name(skeleton, hip_bone);
-    const int knee = get_bone_index_by_name(skeleton, knee_bone);
-    const int ankle = get_bone_index_by_name(skeleton, ankle_bone);
+    // Resolved rather than looked up, so a chain can be named in one vocabulary and
+    // still find a rig that spells its joints another way (rigging.h).
+    const int hip = skeleton_resolve_bone(skeleton, hip_bone);
+    const int knee = skeleton_resolve_bone(skeleton, knee_bone);
+    const int ankle = skeleton_resolve_bone(skeleton, ankle_bone);
     if (hip < 0 || knee < 0 || ankle < 0) {
         log_error("ik_add_foot: '%s' has no bone named '%s'", skeleton->name,
                   hip < 0 ? hip_bone : (knee < 0 ? knee_bone : ankle_bone));
@@ -201,7 +204,7 @@ bool ik_foot_set_toe(IkSystem* system, int foot, const char* toe_bone) {
         return false;
     }
     Skeleton* skeleton = system->skeleton;
-    const int toe = get_bone_index_by_name(skeleton, toe_bone);
+    const int toe = skeleton_resolve_bone(skeleton, toe_bone);
     IkFoot* f = &system->feet[foot];
     if (toe < 0) {
         log_error("ik_foot_set_toe: '%s' has no bone named '%s'", skeleton->name, toe_bone);
@@ -232,7 +235,7 @@ bool ik_set_pelvis(IkSystem* system, const char* pelvis_bone) {
     }
 
     Skeleton* skeleton = system->skeleton;
-    const int pelvis = get_bone_index_by_name(skeleton, pelvis_bone);
+    const int pelvis = skeleton_resolve_bone(skeleton, pelvis_bone);
     if (pelvis < 0) {
         log_error("ik_set_pelvis: '%s' has no bone named '%s'", skeleton->name, pelvis_bone);
         return false;
