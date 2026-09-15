@@ -54,7 +54,7 @@
 static int _create_default_shaders_for_engine(Engine* engine);
 static Engine* _engine_alloc(const EngineConfig* cfg);
 static int _engine_init(Engine* engine, const EngineConfig* cfg);
-static int _setup_engine_glfw(Engine* engine, int window_mode, const char* monitor);
+static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, const char* monitor);
 static int _setup_engine_msaa(Engine* engine);
 static int _setup_engine_gui(Engine* engine);
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
@@ -174,10 +174,9 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     // windowed and then moves it through the same call a later switch uses, so
     // the mode logic exists once rather than once here and once there.
     engine->window_mode = ENGINE_WINDOW_WINDOWED;
-    engine->windowed_x = 0;
-    engine->windowed_y = 0;
-    engine->windowed_w = engine->win_width;
-    engine->windowed_h = engine->win_height;
+    engine->window_monitor = NULL;
+    engine->window_mode_refused = false;
+    engine->windowed = (EngineWindowRect){0, 0, engine->win_width, engine->win_height};
     engine->ss_scale = 1;             // Supersampling off by default (4x fragment cost);
                                       // opt in with --ssaa 2 for beauty shots
     engine->render_scale = 1.0f;      // Full render resolution by default; opt in
@@ -502,7 +501,7 @@ static void _engine_apply_swap_interval(const Engine* engine) {
 /*
  * Setup GLFW
  */
-static int _setup_engine_glfw(Engine* engine, int window_mode, const char* monitor) {
+static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, const char* monitor) {
     if (!engine) {
         return -1;
     }
@@ -573,10 +572,10 @@ static int _setup_engine_glfw(Engine* engine, int window_mode, const char* monit
     // Into the requested mode BEFORE the sizes are read, so what lands below is
     // the size the window will actually render at rather than the windowed one
     // it was created with. The callback is not registered yet, which is exactly
-    // why this has to precede the read rather than rely on it.
-    if (window_mode > ENGINE_WINDOW_WINDOWED && window_mode < ENGINE_WINDOW_MODE_COUNT) {
-        engine_set_window_mode(engine, (EngineWindowMode)window_mode, monitor);
-    }
+    // why this has to precede the read rather than rely on it. Unguarded: the
+    // window is windowed, so a windowed request is the switch's own no-op, and
+    // an out-of-range one is refused there by name rather than dropped here.
+    engine_set_window_mode(engine, window_mode, monitor);
     if (!engine->headless) {
         glfwShowWindow(engine->window);
     }
@@ -876,25 +875,32 @@ static void _engine_sync_render_targets(Engine* engine) {
     _engine_rebuild_render_targets(engine);
 }
 
-int engine_monitor_count(const Engine* engine) {
-    if (!engine || !engine->window) {
-        return 0;
-    }
+const char* const* engine_monitor_names(const Engine* engine, int* out_count) {
+    // Rebuilt per call rather than cached: GLFW owns the strings, a display can
+    // leave between two calls, and the list is asked for when a screen is built
+    // rather than per frame.
+    static const char* names[ENGINE_MAX_MONITORS];
     int count = 0;
-    GLFWmonitor** monitors = glfwGetMonitors(&count);
-    return monitors ? count : 0;
-}
-
-const char* engine_monitor_name(const Engine* engine, int index) {
-    if (!engine || !engine->window || index < 0) {
-        return NULL;
+    GLFWmonitor** monitors = (engine && engine->window) ? glfwGetMonitors(&count) : NULL;
+    if (!monitors || count < 0) {
+        count = 0;
     }
-    int count = 0;
-    GLFWmonitor** monitors = glfwGetMonitors(&count);
-    if (!monitors || index >= count) {
-        return NULL;
+    if (count > ENGINE_MAX_MONITORS) {
+        // The cap is the array's, and it is reported rather than hidden: a
+        // picker showing fewer displays than the window can be placed on is
+        // exactly the disagreement naming them was meant to prevent.
+        log_warn("engine_monitor_names: %d displays attached, reporting the first %d", count,
+                 ENGINE_MAX_MONITORS);
+        count = ENGINE_MAX_MONITORS;
     }
-    return glfwGetMonitorName(monitors[index]);
+    for (int i = 0; i < count; i++) {
+        const char* name = glfwGetMonitorName(monitors[i]);
+        names[i] = name ? name : "(unnamed)";
+    }
+    if (out_count) {
+        *out_count = count;
+    }
+    return names;
 }
 
 int engine_monitor_index(const Engine* engine, const char* name) {
@@ -913,34 +919,20 @@ void engine_set_vsync(Engine* engine, bool vsync) {
     _engine_apply_swap_interval(engine);
 }
 
-EngineWindowPlacement engine_window_placement(EngineWindowMode mode, int mon_x, int mon_y,
-                                              int mon_w, int mon_h, int saved_x, int saved_y,
-                                              int saved_w, int saved_h) {
-    switch (mode) {
-        case ENGINE_WINDOW_FULLSCREEN:
-            // Position is the monitor's own, not the desktop's: GLFW places a
-            // fullscreen window relative to the monitor it is given.
-            return (EngineWindowPlacement){
-                .fullscreen = true, .decorated = true, .x = 0, .y = 0, .w = mon_w, .h = mon_h};
-        case ENGINE_WINDOW_BORDERLESS:
-            // A WINDOW the size of a display rather than an exclusive mode, which is
-            // what keeps alt-tab immediate -- so the position is in desktop space
-            // and a second monitor does not start at the origin.
-            return (EngineWindowPlacement){.fullscreen = false,
-                                           .decorated = false,
-                                           .x = mon_x,
-                                           .y = mon_y,
-                                           .w = mon_w,
-                                           .h = mon_h};
-        case ENGINE_WINDOW_WINDOWED:
-        default:
-            return (EngineWindowPlacement){.fullscreen = false,
-                                           .decorated = true,
-                                           .x = saved_x,
-                                           .y = saved_y,
-                                           .w = saved_w,
-                                           .h = saved_h};
+EngineWindowPlacement engine_window_placement(EngineWindowMode mode, EngineWindowRect monitor,
+                                              EngineWindowRect saved) {
+    EngineWindowRect rect = (mode == ENGINE_WINDOW_WINDOWED) ? saved : monitor;
+    if (mode == ENGINE_WINDOW_FULLSCREEN) {
+        // GLFW places a fullscreen window relative to the monitor it is given,
+        // so the origin is the monitor's own rather than the desktop's. A
+        // borderless window is placed in desktop space and keeps the offset,
+        // which is what puts it on the right screen of two.
+        rect.x = 0;
+        rect.y = 0;
     }
+    return (EngineWindowPlacement){.fullscreen = mode == ENGINE_WINDOW_FULLSCREEN,
+                                   .decorated = mode != ENGINE_WINDOW_BORDERLESS,
+                                   .rect = rect};
 }
 
 void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* monitor) {
@@ -952,62 +944,68 @@ void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* m
         log_error("engine_set_window_mode: mode %d is not a window mode", (int)mode);
         return;
     }
-    // A hidden window has no display to fill, and moving one onto a monitor
-    // would make a headless run's frame size depend on the machine it runs on --
-    // which is the one thing every golden and every probe depends on it not
-    // doing.
+    // A hidden window has no display to fill, and putting one on a monitor
+    // would make the frame's size depend on the machine rather than on what was
+    // asked for. Said once, because a caller that pushes a whole settings
+    // struct will reach this on every edit.
     if (!engine->window || engine->headless) {
+        if (mode != ENGINE_WINDOW_WINDOWED && !engine->window_mode_refused) {
+            engine->window_mode_refused = true;
+            log_info("engine_set_window_mode: no window to move; staying windowed");
+        }
         return;
     }
 
     GLFWmonitor* target = NULL;
-    const GLFWvidmode* vm = NULL;
+    EngineWindowRect mon = {0, 0, 0, 0};
+    int refresh = 0;
     if (mode != ENGINE_WINDOW_WINDOWED) {
         target = _monitor_by_name(monitor);
-        vm = target ? glfwGetVideoMode(target) : NULL;
+        const GLFWvidmode* vm = target ? glfwGetVideoMode(target) : NULL;
         // No display, or one that will not say what mode it is in. Staying put
-        // is the only honest answer: sizing to a guess stranded the window at a
-        // size nothing chose, which is the failure this whole path exists to
-        // avoid.
+        // is the only honest answer: sizing to a guess strands the window at a
+        // size nothing chose, which is the failure this whole path avoids.
         if (!target || !vm) {
-            log_warn("engine_set_window_mode: no usable monitor; staying %s",
-                     engine->window_mode == ENGINE_WINDOW_WINDOWED ? "windowed" : "as it was");
+            log_warn("engine_set_window_mode: no usable monitor; leaving the window where it is");
             return;
         }
+        glfwGetMonitorPos(target, &mon.x, &mon.y);
+        mon.w = vm->width;
+        mon.h = vm->height;
+        refresh = vm->refreshRate;
     }
 
-    // Latched on DEPARTURE only, so a trip out through borderless and back
-    // through fullscreen returns to where the window started rather than to
-    // wherever the previous mode left it.
-    if (engine->window_mode == ENGINE_WINDOW_WINDOWED && mode != ENGINE_WINDOW_WINDOWED) {
-        glfwGetWindowPos(engine->window, &engine->windowed_x, &engine->windowed_y);
-        glfwGetWindowSize(engine->window, &engine->windowed_w, &engine->windowed_h);
+    // Kept current while the window IS windowed, rather than sampled on the way
+    // out. A mode change is not the only thing that moves a window -- the
+    // player drags it -- so a rectangle latched once would put the window back
+    // somewhere it had not been for hours. Recording it here also makes a
+    // windowed-to-windowed replay land exactly where the window already is,
+    // which is what keeps the early-out below an optimisation rather than the
+    // only thing standing between a caller and a window that jumps.
+    if (engine->window_mode == ENGINE_WINDOW_WINDOWED) {
+        glfwGetWindowPos(engine->window, &engine->windowed.x, &engine->windowed.y);
+        glfwGetWindowSize(engine->window, &engine->windowed.w, &engine->windowed.h);
     }
 
-    int mon_x = 0, mon_y = 0;
-    if (target) {
-        glfwGetMonitorPos(target, &mon_x, &mon_y);
+    // Already there: nothing to move, and nothing to tell GLFW.
+    if (mode == engine->window_mode && target == engine->window_monitor) {
+        return;
     }
-    const EngineWindowPlacement at = engine_window_placement(
-        mode, mon_x, mon_y, vm ? vm->width : 0, vm ? vm->height : 0, engine->windowed_x,
-        engine->windowed_y, engine->windowed_w, engine->windowed_h);
+
+    const EngineWindowPlacement at = engine_window_placement(mode, mon, engine->windowed);
 
     // Decoration before the move: a decorated window told to fill a monitor is
     // sized to the monitor and then given a title bar it has no room for, so
     // the frame lands one bar's height taller than the display.
     glfwSetWindowAttrib(engine->window, GLFW_DECORATED, at.decorated ? GLFW_TRUE : GLFW_FALSE);
-    glfwSetWindowMonitor(engine->window, at.fullscreen ? target : NULL, at.x, at.y, at.w, at.h,
-                         at.fullscreen ? vm->refreshRate : 0);
+    glfwSetWindowMonitor(engine->window, at.fullscreen ? target : NULL, at.rect.x, at.rect.y,
+                         at.rect.w, at.rect.h, at.fullscreen ? refresh : 0);
 
     engine->window_mode = mode;
-    // Taking a monitor can drop the swap interval, and it is set on the context
-    // rather than the window, so it survives nothing about this and has to be
-    // put back by hand.
+    engine->window_monitor = target;
+    // The swap interval is set on the context rather than the window, so taking
+    // a monitor can drop it and it has to be put back by hand.
     _engine_apply_swap_interval(engine);
-}
-
-EngineWindowMode engine_window_mode(const Engine* engine) {
-    return engine ? (EngineWindowMode)engine->window_mode : ENGINE_WINDOW_WINDOWED;
 }
 
 // Change the MSAA sample count. While the scene target does not exist yet

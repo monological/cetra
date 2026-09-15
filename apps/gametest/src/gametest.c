@@ -339,12 +339,10 @@ static char ui_settings_path[1024];
 static bool ui_settings_have_path = false;
 static bool ui_settings_dirty = false;
 static int ui_tonemap = POSTFX_TONEMAP_NEUTRAL;
-static int ui_window_mode = SETTINGS_WINDOW_WINDOWED;
 static int ui_monitor_index = 0;
-// Names borrowed from GLFW, which owns them until a monitor disconnects, plus
-// the pointer array a selector takes. Sized for more displays than anyone has.
-#define UI_MAX_MONITORS 8
-static const char* ui_monitor_names[UI_MAX_MONITORS];
+// Borrowed from the engine, which owns them until a monitor disconnects. The
+// selector borrows the array in turn, so it outlives ui_install.
+static const char* const* ui_monitor_names = NULL;
 static int ui_monitor_count = 0;
 
 // The HUD's two labels, rewritten from live state each frame.
@@ -5661,7 +5659,7 @@ static int run_ui_probe(const char* which) {
     written.music_volume = 0.5f;
     written.sfx_volume = 0.75f;
     written.ui_volume = 0.125f;
-    written.window_mode = SETTINGS_WINDOW_FULLSCREEN;
+    written.window_mode = ENGINE_WINDOW_FULLSCREEN;
     written.vsync = false;
     if (!settings_save(&written, path)) {
         fprintf(stderr, "ui-probe: save failed\n");
@@ -5722,10 +5720,10 @@ static void display_probe_placement(const char* label, EngineWindowMode mode) {
     // A monitor rectangle that is nobody's real display and an origin that is
     // not 0,0, so a placement which ignored the monitor's position (the
     // second-display bug) cannot pass by landing on it accidentally.
-    const EngineWindowPlacement at =
-        engine_window_placement(mode, 1600, 300, 2560, 1440, 40, 50, 640, 480);
+    const EngineWindowPlacement at = engine_window_placement(
+        mode, (EngineWindowRect){1600, 300, 2560, 1440}, (EngineWindowRect){40, 50, 640, 480});
     printf("display placement %s rect %d %d %d %d %d %d\n", label, at.fullscreen ? 1 : 0,
-           at.decorated ? 1 : 0, at.x, at.y, at.w, at.h);
+           at.decorated ? 1 : 0, at.rect.x, at.rect.y, at.rect.w, at.rect.h);
 }
 
 /*
@@ -5738,30 +5736,27 @@ static void display_probe_placement(const char* label, EngineWindowMode mode) {
  * name lookup, and the proof that the refusal holds -- the parts that can be
  * wrong in a way nobody would see.
  */
-static int run_display_probe(const char* which, Engine* engine) {
-    // An unrecognised case is a failed run rather than a silent one: a probe
-    // that prints nothing looks exactly like a feature with nothing to say, and
-    // an arm reading zero rows can pass on the strength of a typo.
+static int run_display_probe(Game* game, const char* which) {
+    Engine* engine = game ? game->engine : NULL;
     const bool all = !which || !strcmp(which, "all");
-    if (!all && strcmp(which, "placement") != 0 && strcmp(which, "monitors") != 0 &&
-        strcmp(which, "apply") != 0) {
-        fprintf(stderr, "display-probe: unknown case '%s'\n", which);
-        return 1;
-    }
+    bool ran = false;
     if (all || !strcmp(which, "placement")) {
+        ran = true;
         display_probe_placement("windowed", ENGINE_WINDOW_WINDOWED);
         display_probe_placement("fullscreen", ENGINE_WINDOW_FULLSCREEN);
         display_probe_placement("borderless", ENGINE_WINDOW_BORDERLESS);
     }
 
     if (all || !strcmp(which, "monitors")) {
-        const int count = engine_monitor_count(engine);
+        ran = true;
+        int count = 0;
+        const char* const* names = engine_monitor_names(engine, &count);
         printf("display monitors list count %d\n", count);
         // Resolving a display's OWN name must give its own index, or a settings
         // file would move the window every time it was read back.
         int self = 0;
         for (int i = 0; i < count; i++) {
-            if (engine_monitor_index(engine, engine_monitor_name(engine, i)) != i)
+            if (engine_monitor_index(engine, names[i]) != i)
                 self = 1;
         }
         printf("display monitors resolve misresolved %d\n", self);
@@ -5772,16 +5767,26 @@ static int run_display_probe(const char* which, Engine* engine) {
     }
 
     if (all || !strcmp(which, "apply")) {
+        ran = true;
         // The end of the path the old code did not have: a file's values
         // reaching live engine state. vsync is the half that lands headless;
         // the mode is the half that must NOT, and both are read back here.
         GameSettings s;
         settings_defaults(&s);
         s.vsync = false;
-        s.window_mode = SETTINGS_WINDOW_BORDERLESS;
+        s.window_mode = ENGINE_WINDOW_BORDERLESS;
         settings_apply(&s, NULL, engine);
         printf("display apply engine vsync %d\n", engine->vsync ? 1 : 0);
-        printf("display apply engine mode %d\n", (int)engine_window_mode(engine));
+        printf("display apply engine mode %d\n", (int)engine->window_mode);
+    }
+
+    // Unknown is the absence of a run rather than a list to keep in step with
+    // the dispatch above: a probe that prints nothing looks exactly like a
+    // feature with nothing to say, and an arm reading zero rows can pass on the
+    // strength of a typo.
+    if (!ran) {
+        fprintf(stderr, "display-probe: unknown case '%s'\n", which);
+        return 1;
     }
     return 0;
 }
@@ -5833,15 +5838,14 @@ static void ui_tonemap_changed(UIElement* el, void* user) {
         engine->postfx->tonemap_mode = ui_tonemap;
 }
 
-// The two display selectors bind ints; the struct holds a mode and a NAME. Both
-// are copied across here before the shared handler applies the struct, so the
-// one path that touches live subsystems stays the one path.
-static void ui_display_changed(UIElement* el, void* user) {
-    ui_settings.window_mode = ui_window_mode;
-    if (ui_monitor_index >= 0 && ui_monitor_index < ui_monitor_count &&
-        ui_monitor_names[ui_monitor_index]) {
-        snprintf(ui_settings.monitor, sizeof(ui_settings.monitor), "%s",
-                 ui_monitor_names[ui_monitor_index]);
+// The selector binds an index; the file holds a NAME. The copy happens here
+// before the shared handler applies the struct, so the one path that touches
+// live subsystems stays the one path.
+static void ui_monitor_changed(UIElement* el, void* user) {
+    int count = 0;
+    const char* const* names = engine_monitor_names(user, &count);
+    if (ui_monitor_index >= 0 && ui_monitor_index < count) {
+        snprintf(ui_settings.monitor, sizeof(ui_settings.monitor), "%s", names[ui_monitor_index]);
     }
     ui_settings_changed(el, user);
 }
@@ -6051,16 +6055,9 @@ static bool ui_install(Engine* engine) {
     // the engine falls back to -- so an unplugged monitor reads as "primary"
     // on the screen and behaves as primary in the window, rather than the two
     // disagreeing.
-    ui_monitor_count = engine_monitor_count(engine);
-    if (ui_monitor_count > UI_MAX_MONITORS)
-        ui_monitor_count = UI_MAX_MONITORS;
-    for (int i = 0; i < ui_monitor_count; i++) {
-        const char* name = engine_monitor_name(engine, i);
-        ui_monitor_names[i] = name ? name : "(unnamed)";
-    }
+    ui_monitor_names = engine_monitor_names(engine, &ui_monitor_count);
     const int chosen = engine_monitor_index(engine, ui_settings.monitor);
     ui_monitor_index = (chosen >= 0 && chosen < ui_monitor_count) ? chosen : 0;
-    ui_window_mode = ui_settings.window_mode;
 
     settings_apply(&ui_settings, NULL, engine);
 
@@ -6127,13 +6124,13 @@ static bool ui_install(Engine* engine) {
     // the same. Presenting a friendlier order would want a mapping between the
     // selector's index and the enum, and a mapping is a thing to get wrong.
     static const char* const display_modes[] = {"Windowed", "Fullscreen", "Borderless"};
-    ui_selector(set_panel, "Display", display_modes, SETTINGS_WINDOW_COUNT, &ui_window_mode,
-                ui_display_changed, engine);
+    ui_selector(set_panel, "Display", display_modes, ENGINE_WINDOW_MODE_COUNT,
+                &ui_settings.window_mode, ui_settings_changed, engine);
     // Offered only where there is a choice to make: one display is every laptop
     // on its own, and a selector with a single option is furniture.
     if (ui_monitor_count > 1)
         ui_selector(set_panel, "Monitor", ui_monitor_names, ui_monitor_count, &ui_monitor_index,
-                    ui_display_changed, engine);
+                    ui_monitor_changed, engine);
     static const char* const modes[] = {"Passthrough", "ACES", "Neutral", "AgX", "Linear"};
     ui_tonemap = engine->postfx ? engine->postfx->tonemap_mode : POSTFX_TONEMAP_NEUTRAL;
     ui_selector(set_panel, "Tonemap", modes, 5, &ui_tonemap, ui_tonemap_changed, engine);
@@ -6582,8 +6579,13 @@ int main(int argc, const char* argv[]) {
     if (ui_probe && !strcmp(ui_probe, "settings")) {
         return run_ui_probe(ui_probe);
     }
-    // Needs a window for the monitor list -- GLFW answers only once it is
-    // initialised -- and never draws a frame, the shape every probe here uses.
+    // The placement case is pure arithmetic and runs before any engine exists,
+    // the shape --ui-probe settings already established. The other two need
+    // GLFW initialised for the monitor list and a live Engine to apply onto, so
+    // they take a headless game and still never draw a frame.
+    if (display_probe && !strcmp(display_probe, "placement")) {
+        return run_display_probe(NULL, display_probe);
+    }
     if (display_probe) {
         GameConfig probe_config = {.engine = {.title = "display-probe", .headless = true}};
         Game* probe_game = create_game(&probe_config);
@@ -6591,7 +6593,7 @@ int main(int argc, const char* argv[]) {
             fprintf(stderr, "display-probe: could not create game\n");
             return -1;
         }
-        int rc = run_display_probe(display_probe, probe_game->engine);
+        int rc = run_display_probe(probe_game, display_probe);
         free_game(probe_game);
         return rc;
     }
@@ -6719,11 +6721,11 @@ int main(int argc, const char* argv[]) {
         // The names --monitor takes, printed from the engine's own view rather
         // than the platform's, so what a settings file should store and what
         // this build can actually find are the same list.
-        const int monitors = engine_monitor_count(game->engine);
+        int monitors = 0;
+        const char* const* names = engine_monitor_names(game->engine, &monitors);
         printf("monitors %d\n", monitors);
         for (int i = 0; i < monitors; i++) {
-            const char* name = engine_monitor_name(game->engine, i);
-            printf("monitor %d %s\n", i, name ? name : "(unnamed)");
+            printf("monitor %d %s\n", i, names[i]);
         }
         free_game(game);
         return 0;
