@@ -6,15 +6,17 @@ subsystem sweep. Companion to `rendering-roadmap.md` — **that** doc owns the
 graphics pipeline in depth; **this** doc owns everything else (physics, gameplay,
 assets, core, and the gaps between "engine" and "shippable game").
 
-_Last updated: 2026-09-14._
+_Last updated: 2026-09-15._
 
 ---
 
 ## Verdict
 
 The hard, specialized tech is done to a high standard. The renderer is
-AAA-caliber and the physics is best-in-class. What's left of the unglamorous but
-well-understood glue is Steamworks, near ship. Gamepad input
+AAA-caliber and the physics is best-in-class. Of the glue **this document set
+out to track**, what remains is Steamworks, near ship — but read the next
+paragraph before taking that as a statement about how much is left to build.
+Gamepad input
 landed in spec 11.109 (still owed a real-pad check), audio in spec 12.0 (heard
 on macOS, owed on Linux and Windows), animation blending in spec 12.1
 (gate-verified on a generated puppet; a real character is owed a look), the
@@ -55,6 +57,28 @@ over the name limit that had therefore cached nothing at all, and a Perlin
 permutation table whose one-deep memo cost eleven seconds of every launch to
 four interleaved seeds. A demo app that only ever shows what already works is
 not paying for itself.
+
+**What this document measures, and what it does not.** Part 2 is headed
+*"grep-confirmed absent"*, and a grep can only find a system somebody already
+thought to name. Part 3 is a path to a playable **vertical slice**, which is a
+much narrower thing than a finished engine. Read together the two have
+repeatedly been taken to mean "one week of Steamworks from done", and they do
+not mean that — the six rows Part 2 marks done are six rows it happened to list,
+not a census. A sweep in 2026-09 for what neither part covered found three kinds
+of gap, and Part 2 now carries all three:
+
+- **Authoring.** There is no editor of any kind, and nothing in this document
+  had ever said so. A scene is hand-written `.cscn` JSON or built in C.
+- **Shipping.** No packaging, no bundle, no signing, no installer, no crash
+  reporting, no fullscreen. `./build.sh` makes `out/bin/<app>` and nothing a
+  player could be handed — which gates Steamworks rather than following it.
+- **Depth behind a shipped seam.** A row reading "done" means the seam exists
+  and is verified, not that the feature is deep enough to ship a game on. The UI
+  has six element kinds and no text input; text is byte-indexed with no UTF-8
+  decoder anywhere, so a French menu is broken today; input has no rebinding;
+  audio has no reverb or occlusion.
+
+None of that changes the verdict on the hard parts. It changes the estimate.
 
 The graphics API (OpenGL 4.1, no Vulkan/Metal/DirectX, no compute shaders) is
 **not** a blocker for shipping on Steam. GL 4.1 runs on Windows/Linux/macOS and
@@ -110,8 +134,12 @@ Built on **Jolt Physics** via the JoltC C wrapper (`cetra/src/game/`).
   vectors. LERP/SLERP keyframe interpolation, playback speed, looping, multiple
   named clips.
 - **Retargeting** — semantic Mixamo→custom-rig bone matching with rest-pose
-  compensation (rotation-only; no root motion/scale/IK). Sophisticated for what
-  it is.
+  compensation (rotation-only; no root motion/scale/IK). Two modes since spec
+  12.11: a local delta, and a GLOBAL-space reconciliation that is the only one
+  which handles rigs whose rest orientations differ — it arms only when a source
+  skeleton is supplied, so an animation-only file still needs `-s <tpose>`. The
+  per-clip summary counts corrections actually computed rather than bones
+  matched, which it used to conflate.
 - **Blending** (spec 12.1) — a pose is a blendable value, and over it: a
   phase-synced 1D blend space, a crossfade when what plays changes, one
   bone-masked override layer, and clip events through a callback. Poses are
@@ -226,7 +254,19 @@ are rough and assume a single experienced dev.
 | **Animation blending** | **Done, spec 12.1** -- a blend layer over the single-clip animator: a pose became a blendable value, and over it a phase-synced 1D blend space, a crossfade whose settled pose is the incoming clip's own bit for bit, one bone-masked override layer that releases itself, and clip events dispatched after the pose is applied. Poses are per node, so two rigs animate independently; the `ANIMATOR` component ticks one once per rendered frame from the sim clock. Thirteen gate arms on a generated puppet (endpoints to the pixel, an analytic 21.60/45.00/68.40-degree nlerp midpoint, crossfade timing, mask and release, two rigs, one shared phase, event counts, and the committed walk clip binding all the rig's bones by name), plus the corpus's first skinned golden. Still owed: a real character, judged by eye (`docs/verification.md`). | Smooth locomotion (idle↔walk↔run), layered actions. Needed for believable characters. | done (~1 week) |
 | **Steamworks integration** | Absent | Achievements, cloud saves, overlay, input API. Needed near ship. | ~1 week |
 | **IK** | **Planting and LOCKING done, specs 12.4, 12.5 and 12.9; look-at/aim untouched** — two-bone foot PLANTING: a closed-form solver on 12.1's pose seam, writing globals only; a ramp of known slope and three steps always in the world, since flat ground is the one case where planting is correctly a no-op; and thirteen gate arms, of which the load-bearing one ticks a walk cycle and measures the ankle's travel, because every other arm poses the rig once and all of them passed while the feet were welded to the floor. Six feet land on their target to 0.00000000 m across flat ground and both fixtures. Spec 12.9 added the LOCK above it: a runtime contact label, a world-space point held at the toe, two thresholds with hysteresis, and an inertialized transition -- 0.0034 m of slide against planting's 0.0783 over the same ticks, and six more arms. What it does NOT do is rescue a character whose travel speed has nothing to do with its clips, which is what `gametest` is, and that is the next thing a game on this engine needs rather than more IK. Spec 12.5 closed the eight review items 12.4 deferred — a `sole_offset` derived once from the bind pose, so a caller states a GROUND rather than an ankle target and no call site re-derives the clearance; `max_pelvis_drop` as a FRACTION of leg length rather than metres, so it carries to a rig of another size; and the probe memoisation, whose stated hazard turned out not to exist. That was quality, not coverage: the five debts `docs/verification.md` records against this path all stand, and its verdict line stays Owed. Look-at/aim untouched. | Foot planting, look-at/aim. Quality-of-life, not blocking. | planting and locking done (~2 weeks); look-at still open |
-| **VFX authoring, scripting, navmesh/AI, networking** | Absent | Only needed depending on genre. The particle system exists but emitters are built in code — an authoring/preset layer would come before heavy VFX work. Scripting (Lua) speeds iteration; navmesh/AI for enemies; networking for multiplayer. | genre-dependent |
+| **Ragdoll, vehicles, soft body / cloth** | **Present in Jolt, UNBOUND in JoltC** — `cetra/src/ext/JoltC/JoltPhysics/Jolt/Physics/` carries `Ragdoll/`, `Vehicle/` and `SoftBody/`, all vendored and compiled. What is missing is the C binding: ragdoll appears nowhere in `JoltC/Functions.h`; vehicle appears only as the enum TAG `JPC_CONSTRAINT_SUB_TYPE_VEHICLE` with no constructor behind it; and every soft-body creation entry point is **commented out** (`Functions.h:1506-1524`), leaving `JPC_Body_IsSoftBody` as the one live symbol. The escape is precedented twice in this tree — `cluster_build.cpp` and `physics_cook.cpp` are C++ TUs that reach past JoltC, and `AGENTS.md` records the same shape for `JPH::Trace`. **So this is a binding job, not a solver job**, and the estimate below should be read that way; writing any of these three from scratch would be months. Ragdoll additionally wants a bridge from `animation.c`'s `Skeleton` to `JPH::Skeleton` + `RagdollSettings`, and that mapping is the real work — the solver is done. | Death animations and hit reactions (ragdoll), any driveable thing (vehicle), rope/banner/capes (soft body). Spring bones cover hair and straps already and do not collide. | ~2-4 days each to bind; the ragdoll-to-skeleton mapping is the larger half |
+| **Editor / scene authoring** | Absent, and never previously listed here. Ten apps, none of them an editor: a scene is hand-written `.cscn` JSON or built in C. No placement UI, no gizmo-driven authoring, no asset browser, no play-in-editor, no undo, no prefabs. The ~185 ImGui controls and the config snapshot (spec 11.71) TUNE what already exists, which is a different job from authoring what is there — the snapshot's own header says it cannot create a light, bind a texture or place a probe. | In most engines this is the single largest remaining line item. It decides whether anyone but the author can build a level, and it is what turns iteration time from a rebuild into a drag. | months; the largest single item in this table |
+| **Packaging and distribution** | Absent. No CPack, no install rule (the old one was removed deliberately — see the comment at the end of `cetra/CMakeLists.txt`), no `.app` bundle or `Info.plist`, no code signing or notarization, no installer, no crash reporting, no telemetry, no update path. | Nothing reaches a player without it. It **gates** Steamworks rather than following it: achievements on a build nobody can install is the wrong order. | ~1-2 weeks |
+| **Display and window modes** | Absent. Nothing outside vendored GLFW calls `glfwSetWindowMonitor` or `glfwGetPrimaryMonitor`. `settings.c` persists a window mode it cannot APPLY and its header says so, so a player who picks fullscreen gets a stored preference and a windowed game. Monitor choice, resolution selection and saved geometry are missing with it. | Table stakes on every platform, and the one settings row that currently lies to the player. | ~2-3 days |
+| **Text encoding and localization** | Absent, and the ceiling is structural rather than a missing feature. `text.c` treats every string as BYTES — `(unsigned char)charset[i]` (:106), `(unsigned char)mesh->text[i]` (:495), `(unsigned char)*p` (:667) — and there is no UTF-8 decode anywhere in the tree. A codepoint above 127 therefore renders as two or more wrong glyphs: a French or German menu is broken **today**, and CJK, RTL and combining marks are out of reach entirely. Closing it is three things: a decoder, an atlas that can page (a CJK face does not fit one sheet), and a string table. | Any market outside English, and the bug is live rather than pending. | ~1-2 weeks for the decoder and atlas paging; the string table is ongoing content |
+| **UI element vocabulary** | The closed list is six (`ui.h:248-257`): panel, label, button, toggle, slider, selector. Absent from it: **text input**, scroll view, list/grid, drag-and-drop, tabs, modal dialog, tooltip. The three escape hatches mean an app can draw any of them by hand, which is the deliberate design — but it means an inventory screen, a name-entry field, a key-rebinding row or a quest log is app code rather than an element, and every game re-writes them. | Real games are mostly these screens. The closed list was the right call for 12.2; what it does not yet say is which elements come next. | ~1 week per element family |
+| **Input rebinding** | Absent, and stated as such: `input_bind` takes a BORROWED const table, and `settings.c`'s header records that bindings are deliberately not carried because persisting them wants the remapping UI they would exist for. That UI needs a key-capture element the closed list above does not have, so these two rows are one gap approached from two sides. | Accessibility requirement on most platforms, and expected by any player on a non-QWERTY layout. | ~3-4 days, after a capture element |
+| **Camera framework** | Absent. Every app hand-rolls its own: `apps/render` the orbit drag controller, `apps/gametest` the follow camera and its four pose flags (specs 12.7 and 12.13). There is no shared camera system — no shake, no spline or rail, no blend between cameras, no sequencer or cutscene track, and no dialogue system to drive one. | Almost every game has a scripted camera moment, and today each would be written into the app beside the gameplay. | ~1 week for a camera system; a sequencer is its own project |
+| **Animation state machine** | Absent **by design** and still absent. `animator.h:27` — *"There is no state machine here. A game decides what plays and when; this fades and blends it"* — and spec 12.1 listed it as a stated non-goal. `gametest` then hand-rolled one across `player_medium`, the locomotion space, a jump one-shot and a swim source, which is the evidence that every game on this engine writes the same thing. Whether it belongs in the engine is a real question; that it is missing is not. | Locomotion, combat and reaction logic all want it. The demo is the proof it gets written either way. | ~1 week |
+| **Root motion** | Absent, and named as *"the other answer to the same problem"* in fifteen lines across seven files — `ik.h`, `docs/foot-locking.md`, `docs/verification.md`, this file, and specs 12.1, 12.9 and 12.10. Spec 12.10's stride matching is the answer this engine took instead; root motion inverts the relationship — the clip drives the character rather than the character driving playback rate — and is what an authored attack, dodge or turn-in-place needs. | Anything whose displacement is choreographed rather than steered. | ~1 week |
+| **Audio depth** | The seam shipped in 12.0 and is deep for what it covers. Absent behind it: reverb zones, occlusion and obstruction, a DSP/filter graph, interactive or stem-based music, voice and dialogue playback, ducking. miniaudio carries some of this already, so parts are configuration rather than construction. | A room that sounds like a room, and music that responds to play. | genre-dependent |
+| **Accessibility** | Absent. No subtitle or caption system, no colourblind palettes, no UI scaling beyond the per-element font size, no remapping (above), no hold-to-toggle, no motion-reduction switch for the camera and post stack. | Increasingly a platform requirement, and cheapest to design in rather than retrofit. | ~1 week for the basics, once rebinding and a caption element exist |
+| **VFX authoring, scripting, navmesh/AI, networking** | Absent | Only needed depending on genre — though **scripting is arguably mis-filed here**: iteration speed is not genre-dependent, and today every gameplay change is a C rebuild. The particle system exists but emitters are built in code, so an authoring/preset layer would come before heavy VFX work. Navmesh/AI for enemies; networking for multiplayer. | genre-dependent |
 
 Also worth noting (not "gaps" but design ceilings):
 
@@ -287,10 +327,46 @@ its own branch.
    moves 2217 px. Three new arms; two defects found by watching it rather than by measuring, one
    of them a walk playing at eighteen times speed at any stick short of full, true since 12.9.
    Root motion remains the other answer to the same problem and is still not in this engine.
-7. **Steamworks** (~week, near ship) — achievements, cloud, overlay.
+   **Specs 12.11 through 12.14 are the debt 12.1 booked, paid by pointing the
+   whole stack at a real character rather than the generated puppet.** 12.11 gave
+   the loader a second rest pose — global-space retargeting, and `gametest`'s shared
+   clips loaded with the rig they were authored on — which took a 122-bone
+   third-party humanoid from lying on its face at a measured 0.12 m/s stride to
+   walking at 5.53, and derived the IK bend pole from the RIG, since every caller in
+   this tree passes a `+Z` that folds a real thigh backwards. 12.12 raked the demo's
+   key light 45 degrees off vertical, because hung straight down it lit the plate at
+   `N.L` = 1 and a standing figure at nearly zero, so any imported character read as a
+   silhouette against its own brightly lit stage. 12.13 pulled the follow camera in
+   and found the larger defect behind it: movement was camera-relative, so forward
+   was always away from the camera and you could never see the character's front.
+   12.14 gave the derived pole an arm that FAILS against the code it replaced, the
+   existing one having run on a rig whose bind knee sits exactly on the hip-ankle
+   line and therefore never entering the new path at all. Every one of the four was
+   found by looking at the demo, none by a suite.
+7. **Steamworks** (~week, near ship) — achievements, cloud, overlay. **Do not
+   start here.** Packaging gates it: there is no bundle, no signing and no
+   installer, so there is nothing for an achievement to attach to. See Part 2.
 
-Fill in genre-specific systems (scripting, AI/navmesh, networking) only as the
-actual game design demands them (YAGNI).
+**Past the slice, the list stops being ordered**, because the order depends on a
+choice this document cannot make: whether the goal is a game shipped **on** this
+engine or an engine other people build **in**. The two diverge immediately.
+
+- **A game shipped on it** — packaging and display modes first, since a build
+  nobody can install or run fullscreen is the hard blocker; then the animation
+  state machine and root motion; then a camera system and whatever UI elements
+  the game's own screens need.
+- **An engine others build in** — the editor, scripting and an asset pipeline,
+  which is a far larger programme and changes what is worth doing to the runtime
+  underneath it.
+
+Either way the **platform debt is unconditional**: five rows in Part 2 marked
+done carry the same three owed items — the Linux paths, the Windows paths, and
+one run with a real controller. Nothing ships anywhere until those close, and
+none of them is new work, only work nobody has been able to do on this machine.
+
+Fill in genre-specific systems (AI/navmesh, networking, VFX authoring) only as the
+actual game design demands them (YAGNI). Scripting is listed with them and
+probably should not be: it buys iteration speed regardless of genre.
 
 ---
 
@@ -298,6 +374,23 @@ actual game design demands them (YAGNI).
 
 Cetra has the two hardest engine pieces — a high-end renderer and best-in-class
 physics with a working character controller and game loop — which is the 60% most
-solo engine projects never finish. Shipping a game on it is realistic. The
-deciding factors are scope discipline and finishing the well-understood glue
-above, not the graphics API.
+solo engine projects never finish. Shipping a game on it is realistic, and the
+graphics API is not what decides it.
+
+What is left is not hard in the way those two were; it is **wide**. It divides
+into three, and only the first was ever in this document:
+
+1. **The vertical-slice glue** — Part 3. One item left, and it is blocked on (2).
+2. **Shipping** — packaging, signing, an installer, fullscreen, crash reporting.
+   Weeks, not months, and nothing reaches a player before it.
+3. **Authoring** — an editor, and a scripting layer beside it. Months, and it is
+   the item that decides whether anyone but the author can make something here.
+
+The physics row is the pattern worth carrying to the rest of this table: ragdoll,
+vehicles and soft body read as absent for a year, and are in fact compiled into
+the binary already, missing only a C binding this tree has twice precedented how
+to write. **Check what a dependency already does before costing a gap** — the
+distance between "absent" and "unbound" was months of imagined work.
+
+The real risk remains scope: finishing an engine *and* building a game. This
+document now states the size of the first honestly, which it previously did not.
