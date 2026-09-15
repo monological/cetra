@@ -16,6 +16,11 @@
 #define IK_EPS       1e-6f // a length below which a segment has no direction
 #define IK_DIR_EPS   1e-8f // the same for a cross product, which squares the error
 #define IK_REACH_PAD 1e-4f // held off the inner limit, where the knee folds back on itself
+// How far off the hip-ankle line a bind knee has to sit before its offset is read as a
+// bend DIRECTION rather than as rounding, as a fraction of the limb's own length. A rig
+// that binds visibly bent clears this by an order of magnitude; one that binds straight
+// misses it by three, and there is nothing in between to tune for.
+#define IK_POLE_BEND 0.01f
 
 IkFootParams ik_default_params(void) {
     IkFootParams p;
@@ -148,48 +153,96 @@ int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
         if (mask[b])
             foot->below_ankle[foot->below_count++] = (uint8_t)b;
 
+    // The caller's pole, which stands only where the rig cannot answer for itself.
     glm_vec3_copy((float*)knee_forward, foot->pole_local);
     if (glm_vec3_norm(foot->pole_local) < IK_DIR_EPS)
         glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, foot->pole_local);
     glm_vec3_normalize(foot->pole_local);
 
-    // The axis a leg bends about when it is aimed straight ALONG the pole, which is
-    // the one direction the pole cannot resolve. Taken from the bind pose, where the
-    // chain's plane is whatever the rig author meant by it.
     glm_vec3_copy((vec3){1.0f, 0.0f, 0.0f}, foot->fallback_axis);
     bool axis_derived = false;
+    bool pole_derived = false;
     mat4* bind = calloc(skeleton->bone_count, sizeof(mat4));
-    if (bind) {
-        skeleton_compute_bind_globals(skeleton, bind);
-        vec3 a, c, limb, axis;
-        glm_vec3_copy(bind[hip][3], a);
-        glm_vec3_copy(bind[ankle][3], c);
-        // The ankle's own height at bind IS its clearance above the sole, on any rig
-        // whose bind sole rests at model y = 0. Free here: the bind globals are already
-        // built for the axis below.
-        foot->sole_offset = c[1];
-        glm_vec3_sub(c, a, limb);
-        if (glm_vec3_norm(limb) > IK_EPS) {
-            glm_vec3_normalize(limb);
-            glm_vec3_cross(limb, foot->pole_local, axis);
-            if (glm_vec3_norm(axis) > IK_DIR_EPS) {
-                glm_vec3_normalize(axis);
-                glm_vec3_copy(axis, foot->fallback_axis);
-                axis_derived = true;
-            }
-        }
-        free(bind);
-    } else {
+    if (!bind) {
         // Refused rather than half-registered. sole_offset comes from these globals too,
         // so a foot that survived this would plant into the floor by its own thickness
         // for the rest of the run -- under a log line that talks about the bend axis.
         log_error("ik_add_foot: out of memory");
         return -1;
     }
-    // Said out loud rather than guessed in silence. This axis decides WHICH WAY the
-    // knee bends in the one configuration the pole cannot resolve -- and on a rig whose
-    // bind pose is exactly that configuration, an arbitrary (1,0,0) is a knee bending
-    // sideways for no reason the caller can see.
+    skeleton_compute_bind_globals(skeleton, bind);
+
+    vec3 a, b, c, limb;
+    glm_vec3_copy(bind[hip][3], a);
+    glm_vec3_copy(bind[knee][3], b);
+    glm_vec3_copy(bind[ankle][3], c);
+    // The ankle's own height at bind IS its clearance above the sole, on any rig
+    // whose bind sole rests at model y = 0. Free here: the bind globals are already
+    // built for the pole below.
+    foot->sole_offset = c[1];
+
+    // The hip's own bind rotation, which is the frame pole_local is stored in. Through
+    // glm_mat4_quat rather than the matrix, so a rig carrying scale on the chain gives a
+    // direction and not a stretched one.
+    versor hip_rot;
+    glm_mat4_quat(bind[hip], hip_rot);
+    glm_quat_normalize(hip_rot);
+
+    glm_vec3_sub(c, a, limb);
+    const float span = glm_vec3_norm(limb);
+    if (span > IK_EPS) {
+        glm_vec3_scale(limb, 1.0f / span, limb);
+
+        // WHICH WAY THE KNEE BENDS, asked of the rig before the caller.
+        //
+        // A bind knee sits off the hip-ankle line by exactly the amount its author meant
+        // it to bend, in exactly that direction, so the perpendicular part of that offset
+        // IS the pole. The caller cannot know it: knee_forward is in the HIP's frame, and
+        // every caller in this tree writes the +Z that is right for the rig it was
+        // developed against. On a humanoid whose thigh binds 178 degrees away from that
+        // one -- an ordinary difference between two riggers, and what the retarget's own
+        // delta reports -- the same vector points backwards and the knee folds the wrong
+        // way while every chain resolves, every length is sane and nothing warns.
+        vec3 knee_off, along;
+        glm_vec3_sub(b, a, knee_off);
+        glm_vec3_scale(limb, glm_vec3_dot(knee_off, limb), along);
+        glm_vec3_sub(knee_off, along, knee_off);
+        if (glm_vec3_norm(knee_off) > IK_POLE_BEND * span) {
+            versor hip_inv;
+            glm_quat_inv(hip_rot, hip_inv);
+            glm_vec3_normalize(knee_off);
+            glm_quat_rotatev(hip_inv, knee_off, foot->pole_local);
+            pole_derived = true;
+        }
+
+        // The axis a leg bends about when it is aimed straight ALONG the pole, which is
+        // the one direction the pole cannot resolve.
+        //
+        // Both terms in MODEL space, the pole carried there through the same bind
+        // rotation it is stored against. Crossing the stored vector with a model-space
+        // limb was right only while every rig's hip bound unrotated, which the generated
+        // puppet's does and no imported one need.
+        vec3 pole_model, axis;
+        glm_quat_rotatev(hip_rot, foot->pole_local, pole_model);
+        glm_vec3_cross(limb, pole_model, axis);
+        if (glm_vec3_norm(axis) > IK_DIR_EPS) {
+            glm_vec3_normalize(axis);
+            glm_vec3_copy(axis, foot->fallback_axis);
+            axis_derived = true;
+        }
+    }
+    free(bind);
+
+    // Said out loud rather than guessed in silence, both of them. The pole decides which
+    // way the knee bends and the axis decides it in the one configuration the pole
+    // cannot; on a rig whose bind pose is exactly that configuration an arbitrary (1,0,0)
+    // is a knee bending sideways for no reason the caller can see. A straight bind leg is
+    // the ordinary reason for the first line and is not an error -- it is the case
+    // knee_forward exists for.
+    if (!pole_derived)
+        log_debug("ik_add_foot: '%s' binds straight; bending its knee toward the stated "
+                  "pole rather than the rig's own",
+                  hip_bone);
     if (!axis_derived)
         log_error("ik_add_foot: '%s' -> '%s' -> '%s' gives no bend axis at bind; "
                   "falling back to +X, which may bend the knee sideways",
