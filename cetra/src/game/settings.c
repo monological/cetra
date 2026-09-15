@@ -31,7 +31,7 @@
  * make an owner/member mismatch a compile error. There is one owner here, so
  * the mismatch it guards against cannot be written.
  */
-typedef enum { SET_FLOAT, SET_INT, SET_BOOL } SettingType;
+typedef enum { SET_FLOAT, SET_INT, SET_BOOL, SET_STRING } SettingType;
 
 typedef struct SettingField {
     SettingType type;
@@ -40,21 +40,47 @@ typedef struct SettingField {
     size_t offset;
     const char* const* labels; // an int written as a NAME rather than a number
     int label_count;
+    size_t cap; // SET_STRING only: the member's size, so the copy cannot run off it
 } SettingField;
 
 #define SET_ROW(type_, section_, key_, member_) \
-    {type_, section_, key_, offsetof(GameSettings, member_), NULL, 0}
-#define SET_ROW_ENUM(section_, key_, member_, labels_) \
-    {SET_INT, section_,                                \
-     key_,    offsetof(GameSettings, member_),         \
-     labels_, (int)(sizeof(labels_) / sizeof((labels_)[0]))}
+    {type_, section_, key_, offsetof(GameSettings, member_), NULL, 0, 0}
+#define SET_ROW_ENUM(section_, key_, member_, labels_)       \
+    {SET_INT, section_,                                      \
+     key_,    offsetof(GameSettings, member_),               \
+     labels_, (int)(sizeof(labels_) / sizeof((labels_)[0])), \
+     0}
+#define SET_ROW_STRING(section_, key_, member_) \
+    {SET_STRING,                                \
+     section_,                                  \
+     key_,                                      \
+     offsetof(GameSettings, member_),           \
+     NULL,                                      \
+     0,                                         \
+     sizeof(((GameSettings*)0)->member_)}
 
 // Index IS the enum value. A label inserted in the middle re-points every saved
 // file silently, so the static assert below is the thing that has to move first.
-static const char* const SETTINGS_WINDOW_MODES[] = {"windowed", "fullscreen"};
+static const char* const SETTINGS_WINDOW_MODES[] = {"windowed", "fullscreen", "borderless"};
 _Static_assert(sizeof(SETTINGS_WINDOW_MODES) / sizeof(*SETTINGS_WINDOW_MODES) ==
                    SETTINGS_WINDOW_COUNT,
                "SETTINGS_WINDOW_MODES must name every SettingsWindowMode");
+
+/*
+ * The two enums are one enum with two spellings, and this is what keeps them so.
+ * settings.h cannot include engine.h -- an app holding settings need not hold an
+ * Engine -- so the values are restated there and checked here, where both are
+ * visible. Without this a mode reordered on one side would silently send a
+ * player who chose borderless into exclusive fullscreen.
+ */
+_Static_assert((int)SETTINGS_WINDOW_WINDOWED == (int)ENGINE_WINDOW_WINDOWED,
+               "SettingsWindowMode must agree with EngineWindowMode");
+_Static_assert((int)SETTINGS_WINDOW_FULLSCREEN == (int)ENGINE_WINDOW_FULLSCREEN,
+               "SettingsWindowMode must agree with EngineWindowMode");
+_Static_assert((int)SETTINGS_WINDOW_BORDERLESS == (int)ENGINE_WINDOW_BORDERLESS,
+               "SettingsWindowMode must agree with EngineWindowMode");
+_Static_assert((int)SETTINGS_WINDOW_COUNT == (int)ENGINE_WINDOW_MODE_COUNT,
+               "SettingsWindowMode must agree with EngineWindowMode");
 
 static const SettingField SETTINGS_FIELDS[] = {
     SET_ROW(SET_FLOAT, "audio", "master", master_volume),
@@ -63,6 +89,7 @@ static const SettingField SETTINGS_FIELDS[] = {
     SET_ROW(SET_FLOAT, "audio", "ui", ui_volume),
     SET_ROW_ENUM("window", "mode", window_mode, SETTINGS_WINDOW_MODES),
     SET_ROW(SET_BOOL, "window", "vsync", vsync),
+    SET_ROW_STRING("window", "monitor", monitor),
 };
 #define SETTINGS_FIELD_COUNT (sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]))
 
@@ -91,7 +118,8 @@ void settings_defaults(GameSettings* out) {
                           .sfx_volume = 1.0f,
                           .ui_volume = 1.0f,
                           .window_mode = SETTINGS_WINDOW_WINDOWED,
-                          .vsync = true};
+                          .vsync = true,
+                          .monitor = ""}; // empty = primary, which is the first run's answer
 }
 
 // ------------------------------------------------------------------- path
@@ -192,6 +220,9 @@ bool settings_save(const GameSettings* settings, const char* path) {
                     cJSON_AddNumberToObject(obj, f->key, (double)v);
                 break;
             }
+            case SET_STRING:
+                cJSON_AddStringToObject(obj, f->key, (const char*)base);
+                break;
         }
     }
 
@@ -271,6 +302,14 @@ bool settings_load(GameSettings* out, const char* path) {
                     *(int*)base = item->valueint;
                 }
                 break;
+            case SET_STRING:
+                // Truncated rather than refused: an over-long name is one no
+                // display answers to, which already resolves to the primary
+                // monitor, so the worst case is the fallback the feature has.
+                if (cJSON_IsString(item) && item->valuestring && f->cap > 0) {
+                    snprintf((char*)base, f->cap, "%s", item->valuestring);
+                }
+                break;
         }
     }
 
@@ -291,17 +330,14 @@ void settings_apply(const GameSettings* settings, AudioSystem* audio, Engine* en
         audio_set_bus_volume(audio, AUDIO_BUS_UI, settings->ui_volume);
     }
 
-    if (engine && engine->window && !engine->headless) {
-        glfwSwapInterval(settings->vsync ? 1 : 0);
+    if (engine) {
+        // Through the engine rather than glfwSwapInterval directly: the value
+        // has to survive a mode change, which can drop it, and a second writer
+        // here would be a value the engine could not put back.
+        engine_set_vsync(engine, settings->vsync);
+        // Refused under headless and with no display attached, both inside the
+        // engine, so a settings file carried onto a machine with one monitor or
+        // none applies as much of itself as that machine can honour.
+        engine_set_window_mode(engine, (EngineWindowMode)settings->window_mode, settings->monitor);
     }
-
-    /*
-     * window_mode is PERSISTED and not applied, and that is a gap rather than a
-     * decision I am pleased with. Going fullscreen through GLFW means choosing a
-     * monitor and a video mode, and coming back means restoring a position and
-     * size saved beforehand -- state the engine does not keep, so doing it here
-     * would either guess the monitor or strand a window at the wrong size. The
-     * value round-trips so a settings screen can show and store it; making it
-     * take effect wants engine support that does not exist yet.
-     */
 }

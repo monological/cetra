@@ -30,11 +30,27 @@
  * remapping UI it would exist for. Owed, not forgotten.
  */
 
+/*
+ * Mirrors EngineWindowMode, which this header cannot name: the engine is the
+ * layer below and settings.h is included by apps that have no Engine in hand.
+ * settings.c static-asserts the two agree value for value, so a divergence is a
+ * compile error rather than a player's choice landing on the wrong mode.
+ *
+ * BORDERLESS is appended rather than slotted between the other two, and that is
+ * not taste: the file stores this as a NAME whose index is the enum value, so a
+ * label inserted in the middle re-points every settings file already written.
+ */
 typedef enum {
     SETTINGS_WINDOW_WINDOWED = 0,
     SETTINGS_WINDOW_FULLSCREEN,
+    SETTINGS_WINDOW_BORDERLESS,
     SETTINGS_WINDOW_COUNT
 } SettingsWindowMode;
+
+// The longest display name carried. GLFW's are short ("Built-in Retina
+// Display"); a longer one is truncated at save rather than refused, since a
+// truncated name simply fails to match and falls back to the primary monitor.
+#define SETTINGS_NAME_CAP 64
 
 /*
  * Every field's value at zero is NOT its default -- a zeroed GameSettings is
@@ -51,6 +67,11 @@ typedef struct GameSettings {
 
     int window_mode; // SettingsWindowMode
     bool vsync;
+    // The display a non-windowed mode goes to, by NAME. Empty = the primary,
+    // which is also what an unrecognised name resolves to -- an INDEX would
+    // renumber when a monitor is unplugged and silently move the game to a
+    // different screen than the one that was chosen.
+    char monitor[SETTINGS_NAME_CAP];
 } GameSettings;
 
 // Unity volumes, windowed, vsync on.
