@@ -15483,6 +15483,11 @@ def run_anim_gate(workdir):
     # could stand in -- an uncorrected clip does not lean, it folds the legs over the
     # head. A per-bone quaternion bar would need a rig-specific expectation and would
     # pass on exactly that.
+    #
+    # The COUNT is the other half and is not redundant: disarming use_global_retarget
+    # leaves the local-delta fallback correcting 15 of the 22 channels, and the rig
+    # still stands -- the higher foot lands 0.607 m below the hips against the whole
+    # path's 0.722. The posture test alone reads that regression as a pass.
     clip = ["-a", asset("strut_walk.fbx")]
     blind, blind_log = _anim_bone_probe(clip)
     fixed, fixed_log = _anim_bone_probe(clip + ["-s", asset("t_pose.fbx")])
