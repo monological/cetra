@@ -32,6 +32,27 @@ typedef enum CameraMode {
     CAMERA_MODE_ORBIT, // Orbit around a point
 } CameraMode;
 
+/*
+ * How the window relates to a display.
+ *
+ * Neither non-windowed mode CHANGES a video mode: both take the monitor at the
+ * mode it is already in, so nothing here can strand a display in a resolution
+ * the desktop did not choose, and there is no mode to restore after a crash.
+ * The performance lever is render_scale, which costs no display-mode change at
+ * all -- resolution switching would be a second lever fighting the first.
+ *
+ * The difference between the two is only whether the monitor is TAKEN:
+ * borderless is an undecorated window sized to the monitor, so alt-tab is
+ * immediate; fullscreen hands GLFW the monitor and may drop the swap interval,
+ * which is why engine_set_window_mode re-applies vsync on the way out.
+ */
+typedef enum EngineWindowMode {
+    ENGINE_WINDOW_WINDOWED = 0,
+    ENGINE_WINDOW_FULLSCREEN, // exclusive, at the monitor's current video mode
+    ENGINE_WINDOW_BORDERLESS, // undecorated window filling the monitor
+    ENGINE_WINDOW_MODE_COUNT,
+} EngineWindowMode;
+
 // Held by pointer and named only here, so their headers stay out of every
 // file that includes this one. An app that reaches into one includes it.
 struct Engine;
@@ -90,6 +111,15 @@ typedef struct Engine {
     int win_height;
     int fb_width;
     int fb_height;
+    int window_mode; // EngineWindowMode; engine_set_window_mode
+    bool vsync;      // false = swap without waiting for the display; engine_set_vsync
+    // Where the window sat before it last left windowed mode, replayed on the
+    // way back. Latched on DEPARTURE and not on every mode change, so a trip
+    // out through borderless and back through fullscreen still lands where the
+    // window started rather than where the previous mode left it. Valid only
+    // while window_mode is not ENGINE_WINDOW_WINDOWED.
+    int windowed_x, windowed_y;
+    int windowed_w, windowed_h;
     GLint max_texture_image_units;   // GL_MAX_TEXTURE_IMAGE_UNITS (queried at init)
     GLint max_array_texture_layers;  // GL_MAX_ARRAY_TEXTURE_LAYERS (mask array budget)
     GLint max_texture_size;          // GL_MAX_TEXTURE_SIZE (composite-cache bound)
@@ -549,6 +579,12 @@ typedef struct EngineConfig {
     int msaa_samples;     // scene target sample count; 0 = 4; 1 = off
     int ss_scale;         // supersampling factor, clamped to [1, 2]; 0 = 1
     float render_scale;   // render-resolution scale in [0.5, 1]; 0 = 1
+    // EngineWindowMode; 0 = windowed. Here rather than left to a call after
+    // create_engine because a window made on a monitor never shows as a window
+    // first -- switching afterwards costs a visible frame of the wrong shape on
+    // every launch by anyone who chose fullscreen.
+    int window_mode;
+    const char* monitor; // display name for a non-windowed mode; NULL = primary
 } EngineConfig;
 
 // Creates the window, the GL context, the scene target and the post chain, and
@@ -574,6 +610,62 @@ void engine_recentre_on_camera(const Engine* engine, float lattice);
 // MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
 // 1 disables MSAA. Rebuilds the multisample attachments.
 void engine_set_msaa_samples(Engine* engine, int samples);
+
+/*
+ * The displays this machine has, in GLFW's order, index 0 being the primary.
+ * The name is what a settings file should persist: an INDEX renumbers when a
+ * display is unplugged, which silently moves a game to a different screen than
+ * the one that was chosen. The returned string is GLFW's and is valid until
+ * that monitor disconnects, so a caller keeping it copies it.
+ *
+ * Counts 0 where no display is attached, which a headless session or a VM can
+ * genuinely report -- a caller must not assume index 0 exists.
+ */
+int engine_monitor_count(const Engine* engine);
+const char* engine_monitor_name(const Engine* engine, int index);
+
+/*
+ * Where a window goes for a mode: a PURE function of the mode, the monitor's
+ * rectangle and the geometry the window left windowed mode with. No GLFW, no
+ * Engine, no display.
+ *
+ * Split out because the effect cannot be tested and the decision must be. The
+ * mode switch itself is refused under headless -- a suite that seized a display
+ * would be intolerable, and a golden whose frame size depended on the machine's
+ * monitor would not be a golden -- so with the arithmetic inlined there was
+ * nothing any arm could reach. This is ui_layout's shape and it is here for
+ * ui_layout's reason.
+ */
+typedef struct EngineWindowPlacement {
+    bool fullscreen; // hand GLFW the monitor rather than placing a window
+    bool decorated;
+    int x, y, w, h;
+} EngineWindowPlacement;
+
+EngineWindowPlacement engine_window_placement(EngineWindowMode mode, int mon_x, int mon_y,
+                                              int mon_w, int mon_h, int saved_x, int saved_y,
+                                              int saved_w, int saved_h);
+
+/*
+ * Move the window between windowed, fullscreen and borderless. `monitor` names
+ * the display for the two non-windowed modes; NULL, "", or a name no display
+ * answers to all select the primary, which is what makes an unplugged monitor
+ * degrade instead of stranding the window somewhere invisible.
+ *
+ * Deliberately writes none of win_width/win_height/fb_width/fb_height: GLFW
+ * fires the framebuffer-size callback, which is their only writer after init,
+ * and the frame top rebuilds the targets from what it recorded. Anything that
+ * set them here would have two writers again and render at a size no target was
+ * built at.
+ */
+void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* monitor);
+
+/*
+ * The swap interval, held so it can be re-applied: taking a monitor can drop it
+ * on some drivers, and before this the value was consumed once at init and
+ * unrecoverable afterwards. Headless swaps without waiting whatever is asked.
+ */
+void engine_set_vsync(Engine* engine, bool vsync);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
 // exposure pins at unity with adaptation off, the tone curve is the identity,
