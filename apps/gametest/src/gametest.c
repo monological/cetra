@@ -6339,10 +6339,21 @@ int main(int argc, const char* argv[]) {
     // this display happens to be.
     int win_w = 0;
     int win_h = 0;
+    int display_mode = ENGINE_WINDOW_WINDOWED;
+    const char* display_monitor = NULL;
+    bool list_monitors = false;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless")) {
             headless = true;
+        } else if (!strcmp(a, "--fullscreen")) {
+            display_mode = ENGINE_WINDOW_FULLSCREEN;
+        } else if (!strcmp(a, "--borderless")) {
+            display_mode = ENGINE_WINDOW_BORDERLESS;
+        } else if (!strcmp(a, "--monitor") && i + 1 < argc) {
+            display_monitor = argv[++i];
+        } else if (!strcmp(a, "--list-monitors")) {
+            list_monitors = true;
         } else if (!strcmp(a, "--taa")) {
             force_taa = true;
         } else if ((!strcmp(a, "-f") || !strcmp(a, "--frames")) && i + 1 < argc) {
@@ -6541,7 +6552,9 @@ int main(int argc, const char* argv[]) {
     GameConfig config = {.engine = {.title = "Physics Test - JoltC Integration",
                                     .width = win_w > 0 ? win_w : 1280,
                                     .height = win_h > 0 ? win_h : 720,
-                                    .headless = headless}};
+                                    .headless = headless,
+                                    .window_mode = display_mode,
+                                    .monitor = display_monitor}};
 
     // TAA replaces MSAA rather than joining it. This app is rigid meshes on the
     // pbr program, so every surface writes a motion vector and the accumulator
@@ -6562,6 +6575,19 @@ int main(int argc, const char* argv[]) {
     if (!game) {
         fprintf(stderr, "Failed to create game\n");
         return -1;
+    }
+    if (list_monitors) {
+        // The names --monitor takes, printed from the engine's own view rather
+        // than the platform's, so what a settings file should store and what
+        // this build can actually find are the same list.
+        const int monitors = engine_monitor_count(game->engine);
+        printf("monitors %d\n", monitors);
+        for (int i = 0; i < monitors; i++) {
+            const char* name = engine_monitor_name(game->engine, i);
+            printf("monitor %d %s\n", i, name ? name : "(unnamed)");
+        }
+        free_game(game);
+        return 0;
     }
     if (ui_enabled && !ui_install(game->engine)) {
         free_game(game);
