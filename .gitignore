@@ -34,3 +34,8 @@ cetra_config.json
 # goldens never read this directory -- they isolate onto their own workdir via
 # CETRA_COOK_DIR.
 cooked/
+
+# Where the Playwright MCP browser drops downloads, screenshots and console logs
+# when it is driven from this directory. Nothing here is an input to anything --
+# a file that is wanted gets moved into assets/ and committed from there.
+.playwright-mcp/
