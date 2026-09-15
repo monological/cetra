@@ -14986,7 +14986,14 @@ _ANIM_PROBE = re.compile(r"^anim ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 # so everything after "name " is one.
 _ANIM_BONE = re.compile(r"^anim-probe frame (\d+) bone \d+ rot "
                         r"(-?[\d.eE+-]+) (-?[\d.eE+-]+) (-?[\d.eE+-]+) (-?[\d.eE+-]+) "
-                        r"pos \S+ \S+ \S+ name (.+)$", re.M)
+                        r"pos (-?[\d.eE+-]+) (-?[\d.eE+-]+) (-?[\d.eE+-]+) name (.+)$", re.M)
+
+# "(<n> channels, <n> matched, <n> retargeted)" from the loader's own per-clip
+# summary. The third number is the one that used to be a copy of the second: it
+# counted the flag that substitutes a bind-pose position rather than corrections
+# actually computed, so a load that reconciled nothing claimed it had.
+_ANIM_RETARGET = re.compile(r"Extracted animation '([\w-]+)':[^\n]*?"
+                            r"(\d+) matched, (\d+) retargeted")
 
 # The player trace's animation tail (spec 12.1), appended after `jump <d>`: the
 # knob, the locomotion space's three weights, the crossfade weight, the override
@@ -15006,8 +15013,10 @@ def _anim_probe_run(case):
     return _gametest_probe("--anim-probe", _ANIM_PROBE, case)
 
 
-def _anim_bone_pose(extra, frames=30):
-    """{bone name: (x, y, z, w)} for the LAST frame of a render --anim-probe run.
+def _anim_bone_probe(extra, frames=30):
+    """({bone name: ((x, y, z, w), (x, y, z))}, log) for the LAST frame of a render
+    --anim-probe run: each bone's global rotation, its global position, and the
+    run's own output, which carries the loader's account of what it did.
 
     No screenshot and no framebuffer scaling: this reads a POSE, which the window
     size cannot reach.
@@ -15015,12 +15024,20 @@ def _anim_bone_pose(extra, frames=30):
     cmd = [RENDER, "-m", PUPPET, "-x", "-f", str(frames), "-W", "400", "-H", "300",
            "--anim-probe"] + extra
     r = subprocess.run(cmd, capture_output=True, text=True)
-    hits = _ANIM_BONE.findall(r.stdout + r.stderr)
+    log = r.stdout + r.stderr
+    hits = _ANIM_BONE.findall(log)
     if r.returncode != 0 or not hits:
-        return None
+        return None, log
     last = max(int(h[0]) for h in hits)
-    return {name: (float(x), float(y), float(z), float(w))
-            for f, x, y, z, w, name in hits if int(f) == last}
+    return ({name: ((float(x), float(y), float(z), float(w)),
+                    (float(px), float(py), float(pz)))
+             for f, x, y, z, w, px, py, pz, name in hits if int(f) == last}, log)
+
+
+def _anim_bone_pose(extra, frames=30):
+    """{bone name: (x, y, z, w)} -- the rotation half of _anim_bone_probe."""
+    bones, _ = _anim_bone_probe(extra, frames)
+    return None if bones is None else {n: rot for n, (rot, _) in bones.items()}
 
 
 def _anim_render(workdir, tag, extra, frames=30):
@@ -15452,6 +15469,53 @@ def run_anim_gate(workdir):
               f"state and this would be 0")
         if not ok:
             failures.append("anim-twin")
+
+    # --- anim-retarget ---------------------------------------------------------
+    # A clip authored on one rig played on another whose rest pose differs -- which
+    # the committed corpus already is: strut_walk is authored on t_pose.fbx, and the
+    # generated puppet shares its bone NAMES while resting in pure translation. So
+    # every channel binds by exact name, and every one of them is wrong.
+    #
+    # Both halves are asserted, because only the pair says the mechanism is live:
+    # with no source rest pose the load must be visibly broken, and with one it must
+    # stand up. The measure is a foot's global height against the hips'. It is
+    # rig-agnostic, it is what a person sees, and it cannot be met by a pose nobody
+    # could stand in -- an uncorrected clip does not lean, it folds the legs over the
+    # head. A per-bone quaternion bar would need a rig-specific expectation and would
+    # pass on exactly that.
+    clip = ["-a", asset("strut_walk.fbx")]
+    blind, blind_log = _anim_bone_probe(clip)
+    fixed, fixed_log = _anim_bone_probe(clip + ["-s", asset("t_pose.fbx")])
+    feet = ("cetra_rig:LeftFoot", "cetra_rig:RightFoot")
+    hips = "cetra_rig:Hips"
+    need = feet + (hips,)
+    if not blind or not fixed or any(b not in blind or b not in fixed for b in need):
+        print("  anim-retarget FAIL  a probe failed or did not pose the legs")
+        failures.append("anim-retarget")
+    else:
+        def counted(log):
+            hit = [m for m in _ANIM_RETARGET.findall(log) if m[0] == "strut_walk"]
+            return (int(hit[0][1]), int(hit[0][2])) if hit else (0, 0)
+
+        def above_hips(bones):
+            """How far the HIGHER foot sits above the hips, in metres. Negative is
+            a rig standing on its feet."""
+            return max(bones[b][1][1] for b in feet) - bones[hips][1][1]
+
+        blind_matched, blind_corrected = counted(blind_log)
+        _, fixed_corrected = counted(fixed_log)
+        blind_high = above_hips(blind)
+        fixed_high = above_hips(fixed)
+        ok = (blind_high > 0.0 and fixed_high < 0.0
+              and blind_corrected == 0 and fixed_corrected == blind_matched > 0)
+        print(f"  anim-retarget {'PASS' if ok else 'FAIL'}  with no source rest pose the "
+              f"highest foot sits {blind_high:+.3f} m relative to the hips and the loader "
+              f"reports {blind_corrected} of {blind_matched} channels retargeted (want a "
+              f"foot ABOVE the hips and 0 -- the defect, pinned); with -s the same foot "
+              f"sits {fixed_high:+.3f} m and {fixed_corrected} are retargeted (want below, "
+              f"and all {blind_matched})")
+        if not ok:
+            failures.append("anim-retarget")
 
     return failures
 
