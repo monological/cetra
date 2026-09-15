@@ -17,9 +17,11 @@
 #define IK_DIR_EPS   1e-8f // the same for a cross product, which squares the error
 #define IK_REACH_PAD 1e-4f // held off the inner limit, where the knee folds back on itself
 // How far off the hip-ankle line a bind knee has to sit before its offset is read as a
-// bend DIRECTION rather than as rounding, as a fraction of the limb's own length. A rig
-// that binds visibly bent clears this by an order of magnitude; one that binds straight
-// misses it by three, and there is nothing in between to tune for.
+// bend DIRECTION rather than as rounding, as a fraction of the limb's own length. This is
+// a floor and not a tuning knob: a rig that binds its legs straight puts the knee on the
+// line EXACTLY -- the generated puppet's three leg joints share one x and one z to the
+// digit -- so the two populations are a hard zero and whatever the author drew, and
+// nothing sits between them to trade off.
 #define IK_POLE_BEND 0.01f
 
 IkFootParams ik_default_params(void) {
