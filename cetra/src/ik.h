@@ -255,7 +255,10 @@ void free_ik_system(IkSystem* system);
 IkFootParams ik_default_params(void);
 
 // Register one leg. The three bones must form a parent chain (hip -> knee -> ankle);
-// knee_forward is the direction the knee should bend, in the HIP's frame. Returns the
+// knee_forward is the direction the knee should bend, in the HIP's frame, and is the
+// FALLBACK: a rig whose bind knee sits off the hip-ankle line answers this for itself and
+// the argument goes unused. It is read on a rig that binds its legs straight, which has no
+// bend direction to offer. Returns the
 // foot's index, or -1 if a name is missing or the bones are not a chain.
 int ik_add_foot(IkSystem* system, const char* hip_bone, const char* knee_bone,
                 const char* ankle_bone, const vec3 knee_forward);
