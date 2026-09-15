@@ -5718,6 +5718,74 @@ static int run_ui_probe(const char* which) {
     return 0;
 }
 
+static void display_probe_placement(const char* label, EngineWindowMode mode) {
+    // A monitor rectangle that is nobody's real display and an origin that is
+    // not 0,0, so a placement which ignored the monitor's position (the
+    // second-display bug) cannot pass by landing on it accidentally.
+    const EngineWindowPlacement at =
+        engine_window_placement(mode, 1600, 300, 2560, 1440, 40, 50, 640, 480);
+    printf("display placement %s rect %d %d %d %d %d %d\n", label, at.fullscreen ? 1 : 0,
+           at.decorated ? 1 : 0, at.x, at.y, at.w, at.h);
+}
+
+/*
+ * What a display mode DECIDES, with no display involved (spec 12.15).
+ *
+ * The effect cannot be probed and deliberately so: engine_set_window_mode
+ * refuses under headless, because a suite that seized a monitor would be
+ * intolerable and a golden whose frame size came from the machine's display
+ * would not be a golden. So what runs here is the pure placement function, the
+ * name lookup, and the proof that the refusal holds -- the parts that can be
+ * wrong in a way nobody would see.
+ */
+static int run_display_probe(const char* which, Engine* engine) {
+    // An unrecognised case is a failed run rather than a silent one: a probe
+    // that prints nothing looks exactly like a feature with nothing to say, and
+    // an arm reading zero rows can pass on the strength of a typo.
+    const bool all = !which || !strcmp(which, "all");
+    if (!all && strcmp(which, "placement") != 0 && strcmp(which, "monitors") != 0 &&
+        strcmp(which, "apply") != 0) {
+        fprintf(stderr, "display-probe: unknown case '%s'\n", which);
+        return 1;
+    }
+    if (all || !strcmp(which, "placement")) {
+        display_probe_placement("windowed", ENGINE_WINDOW_WINDOWED);
+        display_probe_placement("fullscreen", ENGINE_WINDOW_FULLSCREEN);
+        display_probe_placement("borderless", ENGINE_WINDOW_BORDERLESS);
+    }
+
+    if (all || !strcmp(which, "monitors")) {
+        const int count = engine_monitor_count(engine);
+        printf("display monitors list count %d\n", count);
+        // Resolving a display's OWN name must give its own index, or a settings
+        // file would move the window every time it was read back.
+        int self = 0;
+        for (int i = 0; i < count; i++) {
+            if (engine_monitor_index(engine, engine_monitor_name(engine, i)) != i)
+                self = 1;
+        }
+        printf("display monitors resolve misresolved %d\n", self);
+        printf("display monitors resolve unknown %d\n",
+               engine_monitor_index(engine, "no display is called this"));
+        printf("display monitors resolve empty %d\n", engine_monitor_index(engine, ""));
+        printf("display monitors resolve null %d\n", engine_monitor_index(engine, NULL));
+    }
+
+    if (all || !strcmp(which, "apply")) {
+        // The end of the path the old code did not have: a file's values
+        // reaching live engine state. vsync is the half that lands headless;
+        // the mode is the half that must NOT, and both are read back here.
+        GameSettings s;
+        settings_defaults(&s);
+        s.vsync = false;
+        s.window_mode = SETTINGS_WINDOW_BORDERLESS;
+        settings_apply(&s, NULL, engine);
+        printf("display apply engine vsync %d\n", engine->vsync ? 1 : 0);
+        printf("display apply engine mode %d\n", (int)engine_window_mode(engine));
+    }
+    return 0;
+}
+
 /*
  * The screens (spec 12.2, phase 7): a main menu, a pause menu, a settings
  * screen and a HUD. They replace phase 2's --ui-smoke, whose job was to put the
@@ -5989,9 +6057,9 @@ static bool ui_install(Engine* engine) {
     for (int i = 0; i < ui_monitor_count; i++) {
         const char* name = engine_monitor_name(engine, i);
         ui_monitor_names[i] = name ? name : "(unnamed)";
-        if (ui_settings.monitor[0] && name && strcmp(name, ui_settings.monitor) == 0)
-            ui_monitor_index = i;
     }
+    const int chosen = engine_monitor_index(engine, ui_settings.monitor);
+    ui_monitor_index = (chosen >= 0 && chosen < ui_monitor_count) ? chosen : 0;
     ui_window_mode = ui_settings.window_mode;
 
     settings_apply(&ui_settings, NULL, engine);
@@ -6387,6 +6455,7 @@ int main(int argc, const char* argv[]) {
     const char* anim_probe = NULL;
     const char* ik_probe = NULL;
     const char* ui_probe = NULL;
+    const char* display_probe = NULL;
     const char* save_probe = NULL;
     bool ui_enabled = true;
     // 0 = the default below. A golden states the size it was baked at, so a
@@ -6477,6 +6546,8 @@ int main(int argc, const char* argv[]) {
             ik_probe = argv[++i];
         } else if (!strcmp(a, "--ui-probe") && i + 1 < argc) {
             ui_probe = argv[++i];
+        } else if (!strcmp(a, "--display-probe") && i + 1 < argc) {
+            display_probe = argv[++i];
         } else if (!strcmp(a, "--save-probe") && i + 1 < argc) {
             save_probe = argv[++i];
         } else if (!strcmp(a, "--no-ui")) {
@@ -6510,6 +6581,19 @@ int main(int argc, const char* argv[]) {
     // anim probes already established, and still never draws a frame.
     if (ui_probe && !strcmp(ui_probe, "settings")) {
         return run_ui_probe(ui_probe);
+    }
+    // Needs a window for the monitor list -- GLFW answers only once it is
+    // initialised -- and never draws a frame, the shape every probe here uses.
+    if (display_probe) {
+        GameConfig probe_config = {.engine = {.title = "display-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "display-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_display_probe(display_probe, probe_game->engine);
+        free_game(probe_game);
+        return rc;
     }
     if (ui_probe) {
         GameConfig probe_config = {.engine = {.title = "ui-probe", .headless = true}};

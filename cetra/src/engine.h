@@ -625,6 +625,17 @@ int engine_monitor_count(const Engine* engine);
 const char* engine_monitor_name(const Engine* engine, int index);
 
 /*
+ * What a stored name MEANS, in one place: the index of the display answering to
+ * it, or 0 -- the primary -- for NULL, "", and any name nothing answers to.
+ * Returns -1 only when no display is attached at all.
+ *
+ * One function rather than one here and one in whatever draws the picker, or a
+ * settings screen could show a display the window is not on: the fallback is
+ * the half that is easy to write differently twice.
+ */
+int engine_monitor_index(const Engine* engine, const char* name);
+
+/*
  * Where a window goes for a mode: a PURE function of the mode, the monitor's
  * rectangle and the geometry the window left windowed mode with. No GLFW, no
  * Engine, no display.
@@ -659,6 +670,10 @@ EngineWindowPlacement engine_window_placement(EngineWindowMode mode, int mon_x, 
  * built at.
  */
 void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* monitor);
+
+// Where the window IS, which under headless is always windowed however the
+// config or a settings file asked -- the refusal is reported, not hidden.
+EngineWindowMode engine_window_mode(const Engine* engine);
 
 /*
  * The swap interval, held so it can be re-applied: taking a monitor can drop it
