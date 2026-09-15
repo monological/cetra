@@ -122,8 +122,12 @@ typedef struct AnimationChannel {
     size_t scale_key_count;
 
     // Retargeting support
-    bool needs_retargeting; // True if smart matching was used with different rest poses
-    versor rotation_delta;  // Correction quaternion: target_rest * inv(source_rest)
+    // Set for every matched bone, not only a mismatched one: it is also what makes
+    // the sample take its POSITION from the bind pose rather than from the clip.
+    bool needs_retargeting;
+    versor rotation_delta; // Correction quaternion: inv(source_rest) * target_rest,
+                           // applied on the right, so keyframe * delta reads as
+                           // "pose, undo the source rest, apply the target's"
 
     // Global-space retargeting (when source skeleton is provided)
     bool use_global_retarget;     // True when source skeleton hierarchy is available

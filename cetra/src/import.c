@@ -1161,6 +1161,28 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
     log_info("Processed %u bones for mesh with %zu vertices", ai_mesh->mNumBones, vert_count);
 }
 
+// The rest-pose correction a channel carries, in degrees. Zero means the clip's
+// own rotations reach the target bone untouched. The clamp is not decoration:
+// glm_quat_normalize can leave |w| a rounding above 1, where acosf returns NaN.
+static float channel_delta_degrees(const AnimationChannel* channel) {
+    const float w = fminf(fabsf(channel->rotation_delta[3]), 1.0f);
+    return 2.0f * acosf(w) * 57.2958f;
+}
+
+// Whether a cross-rig correction was actually COMPUTED for this channel -- either
+// the global-space path armed, or a local delta came out non-identity.
+//
+// Deliberately not `needs_retargeting`, which answers a different question: that
+// flag is also what substitutes the bind-pose position, so it is set for every
+// matched bone, including one whose delta is identity by construction because no
+// source rest pose was available. Counting it made a load that reconciled nothing
+// report every channel retargeted, and the summary line was the first place a
+// reader looked. The degree floor is for float noise in inv(rest) * rest on an
+// exact same-rig match; a real rest-pose difference is degrees, not hundredths.
+static bool channel_was_retargeted(const AnimationChannel* channel) {
+    return channel->use_global_retarget || channel_delta_degrees(channel) > 0.05f;
+}
+
 /*
  * Extract animations from aiScene with optional retargeting support
  * source_skeleton: if provided, used to get source rest poses for proper delta computation
@@ -1294,9 +1316,10 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
                 // 1. Rotation delta is applied
                 // 2. Bind pose position is used instead of animation position
                 channel->needs_retargeting = true;
-                retargeted_channels++;
+                if (channel_was_retargeted(channel))
+                    retargeted_channels++;
 
-                float delta_angle = 2.0f * acosf(fabsf(channel->rotation_delta[3])) * 57.2958f;
+                float delta_angle = channel_delta_degrees(channel);
                 if (delta_angle > 5.0f) {
                     log_debug("Retarget '%s' -> '%s': delta=%.1f deg%s%s",
                               ai_channel->mNodeName.data, target_bone->name, delta_angle,
@@ -1320,7 +1343,10 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
         }
 
         scene_add_animation(scene, animation);
-        if (retargeted_channels > 0) {
+        // Keyed on whether retargeting was ASKED FOR rather than on whether any
+        // happened, so a load that reconciled nothing says `0 retargeted` instead
+        // of quietly dropping the column that would have said so.
+        if (enable_retargeting) {
             log_info("Extracted animation '%s': %.2f ticks @ %.2f tps (%zu channels, %d matched, "
                      "%d retargeted)",
                      animation->name, animation->duration, animation->ticks_per_second,
@@ -1335,16 +1361,15 @@ static void process_ai_animations_internal(const struct aiScene* ai_scene, Scene
         // Print bone mapping debug table
         if (enable_retargeting && animation->channel_count > 0) {
             printf("\n==================== BONE MAPPING TABLE ====================\n");
-            printf("%-45s -> %-25s %s\n", "SOURCE (Mixamo)", "TARGET", "DELTA");
+            printf("%-45s -> %-25s %s\n", "SOURCE", "TARGET", "DELTA");
             printf("-------------------------------------------------------------\n");
             for (size_t ch = 0; ch < animation->channel_count; ch++) {
                 AnimationChannel* chan = &animation->channels[ch];
                 if (chan->bone_index >= 0) {
                     const Bone* target_bone = &skeleton->bones[chan->bone_index];
-                    float delta_angle = 2.0f * acosf(fabsf(chan->rotation_delta[3])) * 57.2958f;
                     printf("%-45s -> %-25s %6.1f deg%s\n",
                            chan->bone_name ? chan->bone_name : "(unknown)", target_bone->name,
-                           delta_angle, chan->needs_retargeting ? " [R]" : "");
+                           channel_delta_degrees(chan), channel_was_retargeted(chan) ? " [R]" : "");
                 } else {
                     printf("%-45s -> (UNMAPPED)\n",
                            chan->bone_name ? chan->bone_name : "(unknown)");
@@ -1399,8 +1424,13 @@ int load_animations_from_file(Scene* scene, Skeleton* skeleton, const char* file
             log_info("Using skeleton embedded in '%s' as retarget source (%zu bones)", filepath,
                      own_source->bone_count);
         } else {
-            log_warn("No source skeleton in '%s' and none provided (-s); cross-rig "
-                     "retargeting will be incorrect",
+            // The clip's rest pose is the one thing a retarget cannot be derived
+            // without, so say what is about to happen instead of what is missing:
+            // every rotation reaches the target bone raw, and a rig whose rest
+            // orientation differs from the clip's collapses rather than degrades.
+            log_warn("'%s' carries no source rest pose and none was supplied (-s <rig>): its "
+                     "rotations will be played on the target rig UNCORRECTED, which is right "
+                     "only if the two rigs rest identically",
                      filepath);
         }
     }
