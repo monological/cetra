@@ -694,6 +694,13 @@ doing at the time:
   what a one-sided instrument is worth: every measurement spec 12.9 built reads the LEFT foot, so
   nineteen green arms never touched the leg that was wrong. Moving the label would move
   `ik-contact`, `ik-slide` and `ik-hysteresis` with it.
+
+  Six committed clips later the same rig runs, idles, swims, treads, falls and lands, and the
+  locomotion axis reads 0 to 5.01 m/s with full stick at 8.01. **None of that has an arm.** The
+  `anim` and `ik` groups assert the measurement and the blend; what nothing asserts is that the
+  medium state machine picks the right SOURCE -- the sequence was read off `--trace-player` by
+  eye and photographed, which is evidence and not a regression test. An arm here would read the
+  trace's source column the way `anim-trace-idle` already reads its weight column.
 - **The menu goldens' instability reaches 48,886 px.** This section already warned that they
   cannot support single-measurement attribution. Spec 12.9 met a `menu` failure of 48,886 px --
   the Quit button focused, not a few edge pixels -- which survived a bisect across four commits,
