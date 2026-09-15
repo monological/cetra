@@ -200,7 +200,14 @@ static bool parse_vec3_arg(const char* s, vec3 out) {
 // directions read as forward, and no sign change could fix it because there was no
 // backward to invert. A camera that only moves when you move it has none of that.
 static float cam_yaw = (float)M_PI;
-static float cam_pitch = -0.35f;
+// 10.2 degrees down, which with the near distance below is an authored framing rather than a
+// number picked off a slider: eye 1.411 above the look point and 7.841 back from it.
+static float cam_pitch = -0.178f;
+// 0 = tight on the player, 1 = the wide establishing shot (spec 12.13), and the height of
+// the last footing it is measured against. Seeded at the spawn height so the first frames
+// do not read as a fall from the origin.
+static float cam_wide = 0.0f;
+static float cam_ground_y = 0.0f;
 // forest's, in radians per second at full deflection, and the pitch clamped so the eye
 // cannot roll under the floor or over the top.
 #define LOOK_YAW_RATE   1.8f
@@ -515,9 +522,36 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 
 // The follow camera. forest's constants, scaled: this character is
 // PLAYER_SCALE 2, so forest's 14 and 1 would sit it half as far back as intended.
-#define FOLLOW_CAM_DISTANCE (9.0f * PLAYER_SCALE)
-#define FOLLOW_CAM_HEIGHT   (3.0f * PLAYER_SCALE)
-#define FOLLOW_CAM_LOOK_Y   (1.0f * PLAYER_SCALE)
+// The shot sits CLOSE while the player has footing and opens out as it falls away from it
+// (spec 12.13). One distance had to serve both walking a 50x50 plate and falling 180 units
+// down the shaft; the plate lost, and the character sat small in a large empty frame.
+//
+// FAR is what the single pair used to be, so the wide end is the framing that was here.
+// NEAR carries its whole rise in cam_pitch's default, so the height term is 0: the two are
+// redundant -- the eye is always aimed AT the look point, so a height offset and a pitch
+// offset move it the same way -- and putting it all in the angle leaves one number to read.
+#define FOLLOW_CAM_NEAR_DISTANCE (4.0f * PLAYER_SCALE)
+#define FOLLOW_CAM_NEAR_HEIGHT   0.0f
+#define FOLLOW_CAM_FAR_DISTANCE  (9.0f * PLAYER_SCALE)
+// Chosen so the wide shot keeps the elevation it had at the steeper pitch this replaced:
+// 4.5*2 - sin(-0.178)*18 = 12.19, against the old 3.0*2 - sin(-0.35)*18 = 12.18.
+#define FOLLOW_CAM_FAR_HEIGHT (4.5f * PLAYER_SCALE)
+// Below the player's own origin, and that is what keeps the FEET in frame. A 1.8 m rig at
+// PLAYER_SCALE spans y 0.5 to 4.1 about an origin at 2.0 -- the capsule's centre, which is
+// ABOVE the body's -- so aiming at the origin puts the head mid-shot and drops the soles
+// 0.135 below the bottom edge at the near distance and a 45.8 degree vertical fov. Aiming a
+// metre under it centres the figure instead and leaves the feet about a metre clear.
+#define FOLLOW_CAM_LOOK_Y (0.5f * PLAYER_SCALE)
+// The fall band, in WORLD units and not scaled by the rig: it is measured against the
+// world's own geometry, and the lower edge has to clear what the level legitimately steps
+// down -- the demo staircase's risers are 0.5 and the ramp climbs 0.25 per unit -- or
+// walking downstairs would pull the camera.
+#define FOLLOW_CAM_DROP_START 3.0f
+#define FOLLOW_CAM_DROP_FULL  18.0f
+// Per second, and asymmetric on purpose: a fall wants the shot open before the drop reads
+// as a mistake, while coming back in slowly is what keeps a landing from snapping.
+#define FOLLOW_CAM_WIDEN_RATE   4.0f
+#define FOLLOW_CAM_TIGHTEN_RATE 1.2f
 
 // The foot ray starts above the ankle and reaches below it. Up has to clear the
 // tallest thing a foot may already be standing on; down has to find ground the leg
@@ -2614,6 +2648,9 @@ static void on_init(Game* game) {
     // Create player entity with CharacterController
     player_entity = create_entity(em, "player");
     glm_vec3_copy((vec3){0, 2.0f * PLAYER_SCALE, 0}, player_entity->position);
+    // The follow camera measures its drop against the last footing, and the spawn is above
+    // the floor -- so seed it here or the first frames read as a fall from y = 0.
+    cam_ground_y = player_entity->position[1];
 
     if (puppet_root) {
         // The puppet, its feet a capsule's half-height plus radius below the
@@ -3023,25 +3060,23 @@ static void on_update(Game* game, double dt) {
         glm_scale_uni(player_rig->original_transform, PLAYER_SCALE);
     }
 
-    // Apply horizontal movement. Under the follow camera it is CAMERA-RELATIVE: W goes
-    // into the screen and S comes back toward the camera, whichever way the world is
-    // turned. World-aligned input stops making sense the moment the camera is not facing
-    // a fixed direction -- which is the whole point of a camera that follows.
+    // Apply horizontal movement. WORLD-ALIGNED, under either camera (spec 12.13): W is a
+    // fixed world direction and not "into the screen".
     //
-    // Without the flag it stays world-aligned, because the fixed orbit camera is what
-    // every gamepad script and trace displacement was written against.
-    if (follow_cam) {
-        // forward = (sin, 0, cos); right = forward x up = (-cos, 0, sin).
-        const float cf_x = sinf(cam_yaw), cf_z = cosf(cam_yaw);
-        // input_dir[2] is already negated by input_action_move, so W arrives as -1 --
-        // hence the minus, which puts W on +forward.
-        const float fwd = -input_dir[2], strafe = input_dir[0];
-        vel[0] = (cf_x * fwd + -cf_z * strafe) * player_speed;
-        vel[2] = (cf_z * fwd + cf_x * strafe) * player_speed;
-    } else {
-        vel[0] = input_dir[0] * player_speed;
-        vel[2] = input_dir[2] * player_speed;
-    }
+    // It was camera-relative under the follow camera, on the reasoning that world-aligned
+    // input stops making sense once the camera is not facing a fixed direction. This one
+    // IS facing a fixed direction -- `cam_yaw` moves only when the arrows move it -- so
+    // the premise did not hold, and what the rotation bought instead was that forward was
+    // always away from the camera. That reads as a camera welded behind the player even
+    // though it never turns: you can never see the character's front, or cross the frame.
+    //
+    // Note this is not a behaviour change anywhere the camera is left alone. At the
+    // default yaw of pi the rotation reduces to the identity -- sin is 0 and cos is -1,
+    // which cancels both the forward negation and the strafe sign -- so every gamepad
+    // script and trace displacement, none of which touch the arrows, reads exactly what
+    // it read before.
+    vel[0] = input_dir[0] * player_speed;
+    vel[2] = input_dir[2] * player_speed;
 
     // Gravity, or buoyancy where the water is. Swimming is surface-only by design: you
     // float and cannot go under, which is impossible to get stuck in and reads clearly
@@ -3435,12 +3470,46 @@ static void follow_camera_update(Game* game) {
     cam_pitch += input_action_value(&game->input, "look_y") * LOOK_PITCH_RATE * look_dt;
     cam_pitch = glm_clamp(cam_pitch, CAM_PITCH_MIN, CAM_PITCH_MAX);
 
+    /*
+     * How far back to sit: close while there is ground under the player, opening out as it
+     * falls away from the last ground there was.
+     *
+     * The signal is that DROP and not whether the player is airborne. A jump is airborne
+     * too, and it only ever goes up -- so measured against the last footing its drop is at
+     * or below zero for the whole rise and small on the landing, and hopping on the spot
+     * moves the shot not at all. Walking off the plate is the case this exists for, and it
+     * is the only one that puts real distance between the player and the last solid thing
+     * under it.
+     *
+     * Deliberately NOT player_medium, which looks made for this and is not: MEDIUM_AIR is
+     * only ever entered on a rig that ships a fall clip, so a camera keyed to it would
+     * frame the generated puppet differently from an imported one.
+     *
+     * Swimming counts as footing. Reaching the water at the bottom is the end of the fall,
+     * so the shot comes back in rather than staying wide because a controller that is
+     * swimming is not "grounded".
+     */
+    CharacterController* cam_cc = entity_get_character_controller(player_entity);
+    if ((cam_cc && character_controller_is_grounded(cam_cc)) || player_swimming)
+        cam_ground_y = player_entity->position[1];
+    const float drop = cam_ground_y - player_entity->position[1];
+    const float wide_target =
+        glm_clamp((drop - FOLLOW_CAM_DROP_START) / (FOLLOW_CAM_DROP_FULL - FOLLOW_CAM_DROP_START),
+                  0.0f, 1.0f);
+    const float rate = wide_target > cam_wide ? FOLLOW_CAM_WIDEN_RATE : FOLLOW_CAM_TIGHTEN_RATE;
+    cam_wide += (wide_target - cam_wide) * (1.0f - expf(-rate * look_dt));
+
+    const float distance =
+        FOLLOW_CAM_NEAR_DISTANCE + (FOLLOW_CAM_FAR_DISTANCE - FOLLOW_CAM_NEAR_DISTANCE) * cam_wide;
+    const float height =
+        FOLLOW_CAM_NEAR_HEIGHT + (FOLLOW_CAM_FAR_HEIGHT - FOLLOW_CAM_NEAR_HEIGHT) * cam_wide;
+
     // Orbit the player on that heading. The camera follows POSITION and never rotates on
     // its own: the arrows are the only thing that turns it.
     const float cp = cosf(cam_pitch);
-    vec3 eye = {focus[0] - sinf(cam_yaw) * cp * FOLLOW_CAM_DISTANCE,
-                focus[1] + FOLLOW_CAM_HEIGHT - sinf(cam_pitch) * FOLLOW_CAM_DISTANCE,
-                focus[2] - cosf(cam_yaw) * cp * FOLLOW_CAM_DISTANCE};
+    vec3 eye = {focus[0] - sinf(cam_yaw) * cp * distance,
+                focus[1] + height - sinf(cam_pitch) * distance,
+                focus[2] - cosf(cam_yaw) * cp * distance};
 
     /*
      * Keep the camera in front of the rock instead of inside it.
