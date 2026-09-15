@@ -323,16 +323,29 @@ static ShaderProgram* ui_backdrop_program = NULL;
  * ENGINE's own field, because since 11.108 that is a plain bool and a copy to
  * mediate it would only be a second place for the answer to live.
  *
- * Every control here moves something observable. window_mode is in the file and
- * deliberately NOT on the screen: settings_apply cannot make it take effect
- * yet, and a control that changes when clicked and does nothing is the defect
- * this app already shipped once.
+ * Every control here moves something observable, which is why the display mode
+ * only joined them in 12.15: until settings_apply could make it take effect, a
+ * control that changed when clicked and did nothing was the defect this app had
+ * already shipped once.
+ *
+ * The monitor selector is the one control that is not a view of its own stored
+ * value. The file holds a display NAME and a selector binds an int, so the
+ * index below is a view of the LIVE monitor list and the name is copied across
+ * on change -- an index in the file would renumber the day a display is
+ * unplugged.
  */
 static GameSettings ui_settings;
 static char ui_settings_path[1024];
 static bool ui_settings_have_path = false;
 static bool ui_settings_dirty = false;
 static int ui_tonemap = POSTFX_TONEMAP_NEUTRAL;
+static int ui_window_mode = SETTINGS_WINDOW_WINDOWED;
+static int ui_monitor_index = 0;
+// Names borrowed from GLFW, which owns them until a monitor disconnects, plus
+// the pointer array a selector takes. Sized for more displays than anyone has.
+#define UI_MAX_MONITORS 8
+static const char* ui_monitor_names[UI_MAX_MONITORS];
+static int ui_monitor_count = 0;
 
 // The HUD's two labels, rewritten from live state each frame.
 static UIElement* hud_speed_label = NULL;
@@ -5752,6 +5765,19 @@ static void ui_tonemap_changed(UIElement* el, void* user) {
         engine->postfx->tonemap_mode = ui_tonemap;
 }
 
+// The two display selectors bind ints; the struct holds a mode and a NAME. Both
+// are copied across here before the shared handler applies the struct, so the
+// one path that touches live subsystems stays the one path.
+static void ui_display_changed(UIElement* el, void* user) {
+    ui_settings.window_mode = ui_window_mode;
+    if (ui_monitor_index >= 0 && ui_monitor_index < ui_monitor_count &&
+        ui_monitor_names[ui_monitor_index]) {
+        snprintf(ui_settings.monitor, sizeof(ui_settings.monitor), "%s",
+                 ui_monitor_names[ui_monitor_index]);
+    }
+    ui_settings_changed(el, user);
+}
+
 // Resume and Back are the same act -- close the screen on top -- so they are
 // the same function under two labels. The frame-input pass then hands input and
 // the sim back on its own, because it reads ui_captures_input every frame
@@ -5951,6 +5977,23 @@ static bool ui_install(Engine* engine) {
     } else {
         settings_defaults(&ui_settings);
     }
+
+    // The live display list, and the stored NAME resolved back to an index in
+    // it. A name nothing answers to leaves index 0, which is the same primary
+    // the engine falls back to -- so an unplugged monitor reads as "primary"
+    // on the screen and behaves as primary in the window, rather than the two
+    // disagreeing.
+    ui_monitor_count = engine_monitor_count(engine);
+    if (ui_monitor_count > UI_MAX_MONITORS)
+        ui_monitor_count = UI_MAX_MONITORS;
+    for (int i = 0; i < ui_monitor_count; i++) {
+        const char* name = engine_monitor_name(engine, i);
+        ui_monitor_names[i] = name ? name : "(unnamed)";
+        if (ui_settings.monitor[0] && name && strcmp(name, ui_settings.monitor) == 0)
+            ui_monitor_index = i;
+    }
+    ui_window_mode = ui_settings.window_mode;
+
     settings_apply(&ui_settings, NULL, engine);
 
     // The app carries its own GLSL, the apps/network precedent. Registered with
@@ -6011,6 +6054,18 @@ static bool ui_install(Engine* engine) {
     if (engine->postfx)
         ui_toggle(set_panel, "Bloom", &engine->postfx->bloom_enabled, NULL, NULL);
     ui_toggle(set_panel, "VSync", &ui_settings.vsync, ui_settings_changed, engine);
+    // In SettingsWindowMode's own order, which is windowed / fullscreen /
+    // borderless because borderless was appended to keep saved files reading
+    // the same. Presenting a friendlier order would want a mapping between the
+    // selector's index and the enum, and a mapping is a thing to get wrong.
+    static const char* const display_modes[] = {"Windowed", "Fullscreen", "Borderless"};
+    ui_selector(set_panel, "Display", display_modes, SETTINGS_WINDOW_COUNT, &ui_window_mode,
+                ui_display_changed, engine);
+    // Offered only where there is a choice to make: one display is every laptop
+    // on its own, and a selector with a single option is furniture.
+    if (ui_monitor_count > 1)
+        ui_selector(set_panel, "Monitor", ui_monitor_names, ui_monitor_count, &ui_monitor_index,
+                    ui_display_changed, engine);
     static const char* const modes[] = {"Passthrough", "ACES", "Neutral", "AgX", "Linear"};
     ui_tonemap = engine->postfx ? engine->postfx->tonemap_mode : POSTFX_TONEMAP_NEUTRAL;
     ui_selector(set_panel, "Tonemap", modes, 5, &ui_tonemap, ui_tonemap_changed, engine);
