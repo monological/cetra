@@ -43,8 +43,11 @@ typedef enum CameraMode {
  *
  * The difference between the two is only whether the monitor is TAKEN:
  * borderless is an undecorated window sized to the monitor, so alt-tab is
- * immediate; fullscreen hands GLFW the monitor and may drop the swap interval,
- * which is why engine_set_window_mode re-applies vsync on the way out.
+ * immediate; fullscreen hands GLFW the monitor and may drop the swap interval.
+ *
+ * A mode may be APPENDED but never inserted. These are persisted by name at
+ * these indices, so a value slotted into the middle silently re-points every
+ * settings file already written.
  */
 typedef enum EngineWindowMode {
     ENGINE_WINDOW_WINDOWED = 0,
@@ -52,6 +55,12 @@ typedef enum EngineWindowMode {
     ENGINE_WINDOW_BORDERLESS, // undecorated window filling the monitor
     ENGINE_WINDOW_MODE_COUNT,
 } EngineWindowMode;
+
+// A window or monitor rectangle in SCREEN COORDINATES (points), which is the
+// space GLFW places windows in -- not the framebuffer pixels fb_width counts.
+typedef struct EngineWindowRect {
+    int x, y, w, h;
+} EngineWindowRect;
 
 // Held by pointer and named only here, so their headers stay out of every
 // file that includes this one. An app that reaches into one includes it.
@@ -93,7 +102,9 @@ typedef struct Engine {
     // engine_add_program.
     //
     // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
-    // rebuilds the targets at the next frame top), screenshot_path (owned
+    // rebuilds the targets at the next frame top), window_mode (moves the
+    // window and latches the geometry it left), vsync (re-applied after a mode
+    // change drops it), screenshot_path (owned
     // string), the five callbacks and user_data (installs), and the animation
     // clock (engine_set_render_clock samples a borrowed one each frame, and
     // the overlay, engine_set_overlay),
@@ -111,15 +122,19 @@ typedef struct Engine {
     int win_height;
     int fb_width;
     int fb_height;
-    int window_mode; // EngineWindowMode; engine_set_window_mode
-    bool vsync;      // false = swap without waiting for the display; engine_set_vsync
-    // Where the window sat before it last left windowed mode, replayed on the
-    // way back. Latched on DEPARTURE and not on every mode change, so a trip
-    // out through borderless and back through fullscreen still lands where the
-    // window started rather than where the previous mode left it. Valid only
-    // while window_mode is not ENGINE_WINDOW_WINDOWED.
-    int windowed_x, windowed_y;
-    int windowed_w, windowed_h;
+    EngineWindowMode window_mode; // engine_set_window_mode
+    bool vsync;                   // false = swap without waiting for the display; engine_set_vsync
+    // The display the window was last placed on, NULL while windowed. Held so a
+    // repeat of the mode it already has can be answered without moving it, and
+    // so a change of monitor WITHIN a mode is still a move -- borderless hands
+    // GLFW no monitor, so the mode alone cannot tell the two apart.
+    GLFWmonitor* window_monitor;
+    bool window_mode_refused; // a mode was asked for with no window to move; said once
+    // Where the window sits while it is windowed, replayed when it comes back.
+    // Seeded from the config and refreshed on every mode call made while
+    // windowed -- a player drags a window, so a rectangle sampled once on the
+    // way out would restore it to somewhere it left long ago.
+    EngineWindowRect windowed;
     GLint max_texture_image_units;   // GL_MAX_TEXTURE_IMAGE_UNITS (queried at init)
     GLint max_array_texture_layers;  // GL_MAX_ARRAY_TEXTURE_LAYERS (mask array budget)
     GLint max_texture_size;          // GL_MAX_TEXTURE_SIZE (composite-cache bound)
@@ -569,22 +584,18 @@ typedef void (*EngineOverlayFunc)(Engine* engine, void* user);
 // during init, the sample count sizes the first target -- and a struct that
 // init reads is an order nothing can violate from outside.
 typedef struct EngineConfig {
-    const char* title;    // window title; NULL = "Cetra"
-    int width, height;    // window size; 0 = 1280 x 720
-    bool headless;        // hidden window, vsync off, fixed frame clock
-    bool headless_jitter; // keep the TAA jitter under headless (non-deterministic frames)
-    bool no_vsync;        // swap without waiting for the display; headless implies it
-    bool profiler;        // build the per-pass profiler
-    bool taa;             // temporal anti-aliasing, applied once the post chain is up
-    int msaa_samples;     // scene target sample count; 0 = 4; 1 = off
-    int ss_scale;         // supersampling factor, clamped to [1, 2]; 0 = 1
-    float render_scale;   // render-resolution scale in [0.5, 1]; 0 = 1
-    // EngineWindowMode; 0 = windowed. Here rather than left to a call after
-    // create_engine because a window made on a monitor never shows as a window
-    // first -- switching afterwards costs a visible frame of the wrong shape on
-    // every launch by anyone who chose fullscreen.
-    int window_mode;
-    const char* monitor; // display name for a non-windowed mode; NULL = primary
+    const char* title;            // window title; NULL = "Cetra"
+    int width, height;            // window size; 0 = 1280 x 720
+    bool headless;                // hidden window, vsync off, fixed frame clock
+    bool headless_jitter;         // keep the TAA jitter under headless (non-deterministic frames)
+    bool no_vsync;                // swap without waiting for the display; headless implies it
+    bool profiler;                // build the per-pass profiler
+    bool taa;                     // temporal anti-aliasing, applied once the post chain is up
+    int msaa_samples;             // scene target sample count; 0 = 4; 1 = off
+    int ss_scale;                 // supersampling factor, clamped to [1, 2]; 0 = 1
+    float render_scale;           // render-resolution scale in [0.5, 1]; 0 = 1
+    EngineWindowMode window_mode; // 0 = windowed; the window is shown already in it
+    const char* monitor;          // display name for a non-windowed mode; NULL = primary
 } EngineConfig;
 
 // Creates the window, the GL context, the scene target and the post chain, and
@@ -611,23 +622,27 @@ void engine_recentre_on_camera(const Engine* engine, float lattice);
 // 1 disables MSAA. Rebuilds the multisample attachments.
 void engine_set_msaa_samples(Engine* engine, int samples);
 
-/*
- * The displays this machine has, in GLFW's order, index 0 being the primary.
- * The name is what a settings file should persist: an INDEX renumbers when a
- * display is unplugged, which silently moves a game to a different screen than
- * the one that was chosen. The returned string is GLFW's and is valid until
- * that monitor disconnects, so a caller keeping it copies it.
- *
- * Counts 0 where no display is attached, which a headless session or a VM can
- * genuinely report -- a caller must not assume index 0 exists.
- */
-int engine_monitor_count(const Engine* engine);
-const char* engine_monitor_name(const Engine* engine, int index);
+// More displays than anyone attaches; a machine with more is warned and sees
+// the first of them.
+#define ENGINE_MAX_MONITORS 8
 
 /*
- * What a stored name MEANS, in one place: the index of the display answering to
- * it, or 0 -- the primary -- for NULL, "", and any name nothing answers to.
- * Returns -1 only when no display is attached at all.
+ * The display names this machine has, in GLFW's order, index 0 being the
+ * primary. `out_count` receives the length, which is 0 where no display is
+ * attached -- a headless session or a VM genuinely reports that, so no caller
+ * may assume index 0 exists.
+ *
+ * Borrowed: the strings and the array are the engine's and stay valid until a
+ * monitor disconnects. A name, not an index, is what a caller persists -- an
+ * index renumbers the moment a display is unplugged, and the game silently
+ * opens on a different screen than the one that was chosen.
+ */
+const char* const* engine_monitor_names(const Engine* engine, int* out_count);
+
+/*
+ * What a stored name MEANS: the index of the display answering to it, or 0 --
+ * the primary -- for NULL, "", and any name nothing answers to. -1 only when no
+ * display is attached at all.
  *
  * One function rather than one here and one in whatever draws the picker, or a
  * settings screen could show a display the window is not on: the fallback is
@@ -640,22 +655,18 @@ int engine_monitor_index(const Engine* engine, const char* name);
  * rectangle and the geometry the window left windowed mode with. No GLFW, no
  * Engine, no display.
  *
- * Split out because the effect cannot be tested and the decision must be. The
- * mode switch itself is refused under headless -- a suite that seized a display
- * would be intolerable, and a golden whose frame size depended on the machine's
- * monitor would not be a golden -- so with the arithmetic inlined there was
- * nothing any arm could reach. This is ui_layout's shape and it is here for
- * ui_layout's reason.
+ * Separate from the move because the two answer different questions and only
+ * this one has an answer that can be stated: the move is whatever GLFW does
+ * with it.
  */
 typedef struct EngineWindowPlacement {
     bool fullscreen; // hand GLFW the monitor rather than placing a window
     bool decorated;
-    int x, y, w, h;
+    EngineWindowRect rect;
 } EngineWindowPlacement;
 
-EngineWindowPlacement engine_window_placement(EngineWindowMode mode, int mon_x, int mon_y,
-                                              int mon_w, int mon_h, int saved_x, int saved_y,
-                                              int saved_w, int saved_h);
+EngineWindowPlacement engine_window_placement(EngineWindowMode mode, EngineWindowRect monitor,
+                                              EngineWindowRect saved);
 
 /*
  * Move the window between windowed, fullscreen and borderless. `monitor` names
@@ -663,22 +674,27 @@ EngineWindowPlacement engine_window_placement(EngineWindowMode mode, int mon_x, 
  * answers to all select the primary, which is what makes an unplugged monitor
  * degrade instead of stranding the window somewhere invisible.
  *
- * Deliberately writes none of win_width/win_height/fb_width/fb_height: GLFW
- * fires the framebuffer-size callback, which is their only writer after init,
- * and the frame top rebuilds the targets from what it recorded. Anything that
- * set them here would have two writers again and render at a size no target was
+ * Idempotent: asking for the mode and monitor the window already has does
+ * nothing. That matters because the geometry replayed on a windowed call is
+ * what a DEPARTURE recorded, so a call that changes nothing would still move
+ * the window -- and a caller pushing a whole settings struct on every edit is
+ * the ordinary shape.
+ *
+ * Refused where there is no window to move: a hidden window has no display to
+ * fill, and putting one on a monitor would make a frame's size depend on the
+ * machine rather than on what was asked for.
+ *
+ * Writes none of win_width/win_height/fb_width/fb_height. GLFW fires the
+ * framebuffer-size callback, which is their only writer after init; setting
+ * them here would make that two writers and render at a size no target was
  * built at.
  */
 void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* monitor);
 
-// Where the window IS, which under headless is always windowed however the
-// config or a settings file asked -- the refusal is reported, not hidden.
-EngineWindowMode engine_window_mode(const Engine* engine);
-
 /*
- * The swap interval, held so it can be re-applied: taking a monitor can drop it
- * on some drivers, and before this the value was consumed once at init and
- * unrecoverable afterwards. Headless swaps without waiting whatever is asked.
+ * The swap interval. Held rather than passed straight to GLFW because taking a
+ * monitor can drop it, and a value nothing recorded cannot be put back.
+ * Headless swaps without waiting whatever is asked.
  */
 void engine_set_vsync(Engine* engine, bool vsync);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or

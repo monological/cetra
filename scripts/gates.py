@@ -23894,8 +23894,7 @@ def run_ui_gate(workdir):
 # prints a line this cannot match, the key vanishes, and the arm fails on absence.
 _DISPLAY_PROBE = re.compile(r"^display ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 
-_SETTINGS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "..", "cetra", "src", "game", "settings.c")
+_GAME_SRC_DIR = os.path.join(ROOT, "cetra", "src", "game")
 
 
 def _display_probe(case):
@@ -24002,20 +24001,31 @@ def run_display_gate(workdir):
     # Static, like ui-elements-closed: no process, and it holds a single-writer
     # rule that no runtime assertion can see. Two writers of the swap interval is
     # how the value became unrecoverable in the first place.
+    #
+    # The whole game layer rather than settings.c alone: the rule is that this
+    # layer does not set the interval, and engine.h publicly includes GLFW, so
+    # any file here can become the second writer. Scoping it to the one file
+    # that broke it once would cover the fix and not the rule.
     try:
-        with open(_SETTINGS_SRC, "r", encoding="utf-8") as fh:
-            src = fh.read()
-        # The open paren is what makes this a CALL and not prose: the comment at
-        # the apply site names the function to say it is deliberately not used,
-        # and an arm that failed on its own explanation would be read as noise
-        # and deleted rather than believed.
-        hits = src.count("glfwSwapInterval(")
-        ok = hits == 0
-        detail = (f"settings.c calls glfwSwapInterval {hits} time(s) (want 0: it goes "
+        offenders = []
+        for name in sorted(os.listdir(_GAME_SRC_DIR)):
+            if not name.endswith(".c"):
+                continue
+            with open(os.path.join(_GAME_SRC_DIR, name), "r", encoding="utf-8") as fh:
+                # The open paren is what makes this a CALL and not prose: the
+                # comment at the apply site names the function to say it is
+                # deliberately not used, and an arm that failed on its own
+                # explanation would be read as noise and deleted, not believed.
+                hits = fh.read().count("glfwSwapInterval(")
+            if hits:
+                offenders.append(f"{name} x{hits}")
+        ok = not offenders
+        detail = (f"no file in cetra/src/game calls glfwSwapInterval (want none: it goes "
                   f"through engine_set_vsync, so the engine can put the value back after "
-                  f"a mode change drops it)")
+                  f"a mode change drops it)"
+                  if ok else "called by " + ", ".join(offenders))
     except OSError as exc:
-        ok, detail = False, f"could not read settings.c: {exc}"
+        ok, detail = False, f"could not read cetra/src/game: {exc}"
     print(f"  display-vsync-writer {'PASS' if ok else 'FAIL'}  {detail}")
     note("display-vsync-writer", ok)
 

@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "../engine.h"
+
 /*
  * What a PLAYER chose, persisted across runs (spec 12.2).
  *
@@ -30,23 +32,6 @@
  * remapping UI it would exist for. Owed, not forgotten.
  */
 
-/*
- * Mirrors EngineWindowMode, which this header cannot name: the engine is the
- * layer below and settings.h is included by apps that have no Engine in hand.
- * settings.c static-asserts the two agree value for value, so a divergence is a
- * compile error rather than a player's choice landing on the wrong mode.
- *
- * BORDERLESS is appended rather than slotted between the other two, and that is
- * not taste: the file stores this as a NAME whose index is the enum value, so a
- * label inserted in the middle re-points every settings file already written.
- */
-typedef enum {
-    SETTINGS_WINDOW_WINDOWED = 0,
-    SETTINGS_WINDOW_FULLSCREEN,
-    SETTINGS_WINDOW_BORDERLESS,
-    SETTINGS_WINDOW_COUNT
-} SettingsWindowMode;
-
 // The longest display name carried. GLFW's are short ("Built-in Retina
 // Display"); a longer one is truncated at save rather than refused, since a
 // truncated name simply fails to match and falls back to the primary monitor.
@@ -65,7 +50,11 @@ typedef struct GameSettings {
     float sfx_volume;
     float ui_volume;
 
-    int window_mode; // SettingsWindowMode
+    // EngineWindowMode (engine.h); 0 = windowed. Held as an int, not as the
+    // enum, because the descriptor table reaches this through an int* and an
+    // enum's compatible integer type is implementation-defined -- the one
+    // portability question this file cannot answer for three platforms.
+    int window_mode;
     bool vsync;
     // The display a non-windowed mode goes to, by NAME. Empty = the primary,
     // which is also what an unrecognised name resolves to -- an INDEX would

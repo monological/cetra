@@ -59,28 +59,13 @@ typedef struct SettingField {
      0,                                         \
      sizeof(((GameSettings*)0)->member_)}
 
-// Index IS the enum value. A label inserted in the middle re-points every saved
-// file silently, so the static assert below is the thing that has to move first.
+// Index IS the enum value, which is why EngineWindowMode may be appended to and
+// never inserted into. This assert is what makes a mode added there without a
+// label here a compile error rather than a number in a player's file.
 static const char* const SETTINGS_WINDOW_MODES[] = {"windowed", "fullscreen", "borderless"};
 _Static_assert(sizeof(SETTINGS_WINDOW_MODES) / sizeof(*SETTINGS_WINDOW_MODES) ==
-                   SETTINGS_WINDOW_COUNT,
-               "SETTINGS_WINDOW_MODES must name every SettingsWindowMode");
-
-/*
- * The two enums are one enum with two spellings, and this is what keeps them so.
- * settings.h cannot include engine.h -- an app holding settings need not hold an
- * Engine -- so the values are restated there and checked here, where both are
- * visible. Without this a mode reordered on one side would silently send a
- * player who chose borderless into exclusive fullscreen.
- */
-_Static_assert((int)SETTINGS_WINDOW_WINDOWED == (int)ENGINE_WINDOW_WINDOWED,
-               "SettingsWindowMode must agree with EngineWindowMode");
-_Static_assert((int)SETTINGS_WINDOW_FULLSCREEN == (int)ENGINE_WINDOW_FULLSCREEN,
-               "SettingsWindowMode must agree with EngineWindowMode");
-_Static_assert((int)SETTINGS_WINDOW_BORDERLESS == (int)ENGINE_WINDOW_BORDERLESS,
-               "SettingsWindowMode must agree with EngineWindowMode");
-_Static_assert((int)SETTINGS_WINDOW_COUNT == (int)ENGINE_WINDOW_MODE_COUNT,
-               "SettingsWindowMode must agree with EngineWindowMode");
+                   ENGINE_WINDOW_MODE_COUNT,
+               "SETTINGS_WINDOW_MODES must name every EngineWindowMode");
 
 static const SettingField SETTINGS_FIELDS[] = {
     SET_ROW(SET_FLOAT, "audio", "master", master_volume),
@@ -117,7 +102,7 @@ void settings_defaults(GameSettings* out) {
                           .music_volume = 1.0f,
                           .sfx_volume = 1.0f,
                           .ui_volume = 1.0f,
-                          .window_mode = SETTINGS_WINDOW_WINDOWED,
+                          .window_mode = ENGINE_WINDOW_WINDOWED,
                           .vsync = true,
                           .monitor = ""}; // empty = primary, which is the first run's answer
 }
@@ -331,13 +316,12 @@ void settings_apply(const GameSettings* settings, AudioSystem* audio, Engine* en
     }
 
     if (engine) {
-        // Through the engine rather than glfwSwapInterval directly: the value
-        // has to survive a mode change, which can drop it, and a second writer
-        // here would be a value the engine could not put back.
+        // Through the engine, not GLFW: a second writer of the swap interval is
+        // a value the engine cannot put back once a mode change drops it.
         engine_set_vsync(engine, settings->vsync);
-        // Refused under headless and with no display attached, both inside the
-        // engine, so a settings file carried onto a machine with one monitor or
-        // none applies as much of itself as that machine can honour.
-        engine_set_window_mode(engine, (EngineWindowMode)settings->window_mode, settings->monitor);
+        // Pushed whole; what this machine cannot honour, the engine refuses. A
+        // file carried from a two-monitor desk applies as much of itself as it
+        // can here rather than being filtered by every caller in turn.
+        engine_set_window_mode(engine, settings->window_mode, settings->monitor);
     }
 }
