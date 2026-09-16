@@ -281,6 +281,14 @@ static void switch_source(Animator* a, const AnimatorSpace* incoming, float fade
     // rebases rather than differencing, so a switch costs one update's travel
     // instead of reading a clip's whole length as a step.
     space_measure_root(&a->base, a->state->skeleton, a->root_bone);
+    // And anything the last source laid down that nobody took is dropped here
+    // rather than handed to whoever takes next. A game that drains every step
+    // never has more than one step of it; a game that stops draining -- because
+    // the source it was reading stopped travelling, which is what walking off a
+    // ledge does -- would otherwise be handed the whole hoard on landing, in one
+    // step, as a lurch.
+    glm_vec3_zero(a->root_accum);
+    a->root_yaw_accum = 0.0f;
 }
 
 static void one_clip_space(AnimatorSpace* s, const Animation* clip, bool looping) {

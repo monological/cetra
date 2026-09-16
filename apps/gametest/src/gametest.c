@@ -150,9 +150,16 @@ static AnimatorEntry locomotion[3];
 static int locomotion_count = 3;
 // Whether the entries sit at the speeds they imply, so the knob is metres per second.
 static bool locomotion_speed_axis = false;
+// And whether those speeds are STATED by the clips rather than measured off their feet
+// (spec 12.18). It decides which way round the app and the animation are: with it the
+// stick steers and the clip carries the body, without it the stick carries the body and
+// the clip is played at whatever rate keeps up.
+static bool locomotion_root_motion = false;
 static bool speed_override = false;
 static Animation* clip_jump = NULL;
 static Animation* clip_wave = NULL;
+static Animation* clip_lunge = NULL; // a one-shot that travels a stated distance
+static Animation* clip_spin = NULL;  // and one that turns without travelling
 static Animation* clip_swim = NULL;
 static Animation* clip_float = NULL; // treading water: the swim space's standing end
 static Animation* clip_fall = NULL;  // airborne, looping
@@ -262,6 +269,11 @@ static bool no_ik = false;
 // tellable apart by watching, and a walk that still slides is what the difference looks
 // like.
 static bool no_lock = false;
+// Root motion off (spec 12.18): the locomotion pair goes back to the clips that stay
+// where they are, the stick carries the body again, and the one-shots that travel are
+// not offered. The A/B, and the only way to see what the feature is worth -- the two
+// look the same in a still frame and quite different in motion.
+static bool no_root_motion = false;
 static IkSystem* player_ik = NULL;
 static SceneNode* player_skel_root = NULL;
 static int ik_foot_left = -1;
@@ -384,6 +396,15 @@ static const InputAction actions[] = {
     {"raycast", {INPUT_KEY(R, 1), INPUT_PAD(Y, 1)}},
     {"ground", {INPUT_KEY(G, 1), INPUT_PAD(B, 1)}},
     {"wave", {INPUT_KEY(E, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
+
+    /*
+     * The two authored moves (spec 12.18): a step that carries a stated distance and a
+     * turn that carries none. Both on TRIGGERS rather than buttons, because every one
+     * of GLFW's fifteen is already spoken for above and the triggers are what is left
+     * -- which is its own small argument for the rebinding UI this app does not have.
+     */
+    {"lunge", {INPUT_KEY(Q, 1), INPUT_AXIS(RIGHT_TRIGGER, 1)}},
+    {"spin", {INPUT_KEY(C, 1), INPUT_AXIS(LEFT_TRIGGER, 1)}},
 
     /*
      * Quicksave and quickload, as ordinary game actions rather than keys read
@@ -2143,6 +2164,22 @@ static float clip_world_stride(Skeleton* skeleton, const Animation* clip) {
     return model * PLAYER_SCALE;
 }
 
+// The WORLD speed a clip STATES it travels at (spec 12.18), or 0 where it states
+// nothing. Same units, same scale, same division of labour as the stride above -- and
+// the opposite question: that one asks the feet what the ground must be doing, this
+// one reads what the animator wrote for the body.
+static float clip_world_travel(Skeleton* skeleton, const Animation* clip) {
+    if (!skeleton || !clip)
+        return 0.0f;
+    vec3 travel = {0.0f, 0.0f, 0.0f};
+    if (!animation_root_travel(clip, skeleton, animation_root_bone(skeleton), travel, NULL))
+        return 0.0f;
+    const float seconds = clip->duration / clip->ticks_per_second;
+    if (seconds <= 0.0f)
+        return 0.0f;
+    return hypotf(travel[0], travel[2]) / seconds * PLAYER_SCALE;
+}
+
 // The water's own space: a treading end and a stroking end, blended on the same knob the
 // ground uses. Its axis is STATED and not measured, and that is the difference between
 // the two media rather than an omission -- a stride is how fast the ground goes past a
@@ -2167,6 +2204,30 @@ static void build_locomotion(Skeleton* skeleton, Animation* idle, Animation* wal
     locomotion_count = 3;
     if (!skeleton || !idle || !walk || !run)
         return;
+
+    // What the clips STATE comes first, and where they state anything it is the whole
+    // answer: the character travels exactly as far as the animation says, the axis is
+    // the speeds the clips themselves reach, and playback stays at rate 1 because
+    // scaling it to hit a speed the player asked for is stride matching wearing this
+    // feature's coat. Nothing in the committed corpus states a travel except the four
+    // clips authored for it, so every imported rig falls through to the measurement
+    // below exactly as it did.
+    const float walk_travel = clip_world_travel(skeleton, walk);
+    const float run_travel = run == walk ? walk_travel : clip_world_travel(skeleton, run);
+    if (walk_travel > 0.0f && (run == walk || run_travel > walk_travel)) {
+        locomotion[1].position = walk_travel;
+        locomotion[2].position = run == walk ? walk_travel : run_travel;
+        if (run == walk)
+            locomotion_count = 2;
+        locomotion_speed_axis = true;
+        locomotion_root_motion = true;
+        if (!speed_override)
+            player_speed = locomotion[locomotion_count - 1].position;
+        printf("Locomotion travels 0 to %.2f m/s, stated by the clips themselves; the body "
+               "goes where the animation says\n",
+               (double)player_speed);
+        return;
+    }
 
     // The standing entry anchors the axis at ZERO and keeps no stride of its own, even
     // though one can be measured off it: a breathing idle shifts its weight, which reads
@@ -2710,6 +2771,20 @@ static void on_init(Game* game) {
         Animation* idle = scene_find_animation(scene, "idle");
         Animation* walk = scene_find_animation(scene, "walk");
         Animation* run = scene_find_animation(scene, "run");
+        // Where the rig carries clips that state their own travel, those are the pair
+        // (spec 12.18). Not a different feature bolted beside locomotion -- the same
+        // two entries, filled with clips that say how far they go, so everything
+        // downstream of the space is untouched.
+        if (!no_root_motion) {
+            Animation* carried_walk = scene_find_animation(scene, "travel_walk");
+            Animation* carried_run = scene_find_animation(scene, "travel_run");
+            if (carried_walk && carried_run) {
+                walk = carried_walk;
+                run = carried_run;
+            }
+            clip_lunge = scene_find_animation(scene, "lunge");
+            clip_spin = scene_find_animation(scene, "spin");
+        }
         // A rig that is not the generated puppet carries none of those three, and before
         // this that meant the red box: the locomotion space could not be built, so no
         // animator was added and the IK that hangs off it never was either.
@@ -3037,7 +3112,21 @@ static void on_update(Game* game, double dt) {
     float ground_speed = hypotf(vel[0], vel[2]);
     hud_ground_speed = ground_speed;
     if (player_animator && !player_ragdolled()) {
-        if (locomotion_speed_axis) {
+        if (locomotion_root_motion) {
+            // The knob is what the STICK asks for, not what the body achieved, and that
+            // is forced rather than chosen: under root motion the travel comes from the
+            // clip the knob selects, so a knob fed by the achieved speed would start at
+            // zero, select the standing clip, travel nothing and stay there. The
+            // feedback runs the other way now.
+            //
+            // What that costs is the wall: today's knob reads Jolt's post-solve speed,
+            // so walking into one stops the walk. Here the clip keeps walking while the
+            // sweep refuses to move the body, which is what inverting the ownership
+            // means and is left visible rather than papered over.
+            const float lean = hypotf(input_dir[0], input_dir[2]);
+            player_animator->param = (lean > 1.0f ? 1.0f : lean) * player_speed;
+            player_animator->speed = 1.0f;
+        } else if (locomotion_speed_axis) {
             // The axis IS metres per second, so the knob is the speed and the clamp is the
             // space's own (animator.h: param is clamped to its entries).
             player_animator->param = ground_speed;
@@ -3105,21 +3194,51 @@ static void on_update(Game* game, double dt) {
         if (player_medium != MEDIUM_GROUND)
             player_animator->speed = 1.0f;
     }
-    if (player_rig && ground_speed > 0.1f && !player_ragdolled()) {
+    // The direction the stick asks for, in the world, and how hard it is asking.
+    // Hoisted above the facing because under root motion the facing is what the stick
+    // sets and the velocity is what the facing gives -- see the block below and the one
+    // after it. The scheme itself is spec 12.17's, restated where it is computed.
+    const float cam_sin = sinf(cam_yaw), cam_cos = cosf(cam_yaw);
+    const vec3 want_dir = {-cam_cos * input_dir[0] - cam_sin * input_dir[2], 0.0f,
+                           cam_sin * input_dir[0] - cam_cos * input_dir[2]};
+    const float lean = hypotf(want_dir[0], want_dir[2]);
+
+    // What the clip laid down, taken once per step (spec 12.18). The query is LIVE
+    // rather than the startup flag: a fall loop and a stroke state no travel, so the
+    // air and the water fall back to the stick with nothing here to switch.
+    vec3 root_travel = {0.0f, 0.0f, 0.0f};
+    float root_yaw = 0.0f;
+    const bool rooted = locomotion_root_motion && player_animator && !player_ragdolled() &&
+                        animator_root_motion(player_animator) &&
+                        animator_take_root_motion(player_animator, root_travel, &root_yaw);
+
+    if (player_rig && !player_ragdolled()) {
         // The puppet faces +Z at yaw 0. Smoothed on sim time, so it is the
         // same turn headless and windowed.
-        float target = atan2f(vel[0], vel[2]);
-        float delta = target - player_yaw;
-        while (delta > (float)M_PI)
-            delta -= 2.0f * (float)M_PI;
-        while (delta < -(float)M_PI)
-            delta += 2.0f * (float)M_PI;
-        float k = (float)dt * 12.0f;
-        player_yaw += delta * (k > 1.0f ? 1.0f : k);
-        glm_mat4_identity(player_rig->original_transform);
-        glm_translate(player_rig->original_transform, (vec3){0.0f, PLAYER_RIG_DROP, 0.0f});
-        glm_rotate_y(player_rig->original_transform, player_yaw, player_rig->original_transform);
-        glm_scale_uni(player_rig->original_transform, PLAYER_SCALE);
+        //
+        // Where it turns TOWARD is the one thing root motion changes here: the body's
+        // velocity is derived from the facing, so reading the facing back out of the
+        // velocity would be a circle that never starts turning. The stick says where to
+        // point; the clip says how fast that gets you there.
+        player_yaw += root_yaw; // the clip's own turn, on top of the steering
+        const bool steering = rooted ? lean > 0.05f : ground_speed > 0.1f;
+        if (steering) {
+            float target = rooted ? atan2f(want_dir[0], want_dir[2]) : atan2f(vel[0], vel[2]);
+            float delta = target - player_yaw;
+            while (delta > (float)M_PI)
+                delta -= 2.0f * (float)M_PI;
+            while (delta < -(float)M_PI)
+                delta += 2.0f * (float)M_PI;
+            float k = (float)dt * 12.0f;
+            player_yaw += delta * (k > 1.0f ? 1.0f : k);
+        }
+        if (steering || root_yaw != 0.0f) {
+            glm_mat4_identity(player_rig->original_transform);
+            glm_translate(player_rig->original_transform, (vec3){0.0f, PLAYER_RIG_DROP, 0.0f});
+            glm_rotate_y(player_rig->original_transform, player_yaw,
+                         player_rig->original_transform);
+            glm_scale_uni(player_rig->original_transform, PLAYER_SCALE);
+        }
     }
 
     /*
@@ -3153,11 +3272,24 @@ static void on_update(Game* game, double dt) {
      * cancelling both the strafe sign and the forward negation -- which is what keeps
      * every gamepad script, trace displacement and menu golden byte-identical, none of
      * them touching an arrow. That property is also why the flip went unnoticed in 12.13,
-     * so `gamepad-camera-relative` now asserts which scheme is live.
+     * so `pad-camera-relative` now asserts which scheme is live.
+     *
+     * UNDER ROOT MOTION the stick has already been spent, on the facing rather than on
+     * the velocity (spec 12.18), and what moves the body is the distance the clip
+     * states: model units into world by the rig's own scale, turned by the facing the
+     * block above just set, and divided by this step's dt because a controller takes a
+     * velocity and a clip states a distance. The air and the water keep the scheme
+     * below, their clips stating no travel to spend.
      */
-    const float cam_sin = sinf(cam_yaw), cam_cos = cosf(cam_yaw);
-    vel[0] = (-cam_cos * input_dir[0] - cam_sin * input_dir[2]) * player_speed;
-    vel[2] = (cam_sin * input_dir[0] - cam_cos * input_dir[2]) * player_speed;
+    if (rooted) {
+        glm_vec3_scale(root_travel, PLAYER_SCALE, root_travel);
+        const float face_sin = sinf(player_yaw), face_cos = cosf(player_yaw);
+        vel[0] = (root_travel[0] * face_cos + root_travel[2] * face_sin) / (float)dt;
+        vel[2] = (-root_travel[0] * face_sin + root_travel[2] * face_cos) / (float)dt;
+    } else {
+        vel[0] = want_dir[0] * player_speed;
+        vel[2] = want_dir[2] * player_speed;
+    }
 
     // Gravity, or buoyancy where the water is. Swimming is surface-only by design: you
     // float and cannot go under, which is impossible to get stuck in and reads clearly
@@ -3197,6 +3329,21 @@ static void on_update(Game* game, double dt) {
     }
     if (player_animator && clip_wave && input_action_pressed(&game->input, "wave"))
         animator_play_layer(player_animator, clip_wave, wave_mask, 0.1f, 0.1f, false);
+
+    // The two authored moves (spec 12.18), and they are BASE one-shots where the wave is
+    // an override layer -- a wave happens on an arm while the body carries on, a lunge is
+    // what the body is doing. Each returns to the locomotion space by itself.
+    //
+    // Only on the ground, and only while the space they return to is the one that
+    // travels: firing a lunge mid-air would hand the character a metre of ground it has
+    // no contact with, and the medium machine above would take the source back on the
+    // next edge anyway.
+    if (player_animator && player_medium == MEDIUM_GROUND && !player_ragdolled()) {
+        if (clip_lunge && input_action_pressed(&game->input, "lunge"))
+            animator_play_once(player_animator, clip_lunge, 0.08f);
+        else if (clip_spin && input_action_pressed(&game->input, "spin"))
+            animator_play_once(player_animator, clip_spin, 0.08f);
+    }
 
     // Set velocity (CharacterController will handle collision response)
     character_controller_set_velocity(cc, vel);
@@ -3327,6 +3474,12 @@ static void on_update(Game* game, double dt) {
         // camera angle can see that the two disagree but not that they disagree by
         // exactly the amount the arrows asked for.
         printf(" cam %.4f", (double)cam_yaw);
+        // And the character's own heading, after it (spec 12.18), for the same reason
+        // and by the same rule: appended rather than inserted, since every regex reading
+        // this line counts its groups from the left. A clip that turns the body turns
+        // THIS and moves nothing else, so without it a spin and a stand are the same
+        // three columns.
+        printf(" yaw %.4f", (double)player_yaw);
         printf("\n");
     }
     trace_step++;
@@ -7052,6 +7205,8 @@ int main(int argc, const char* argv[]) {
             no_lock = true;
         } else if (!strcmp(a, "--no-ik")) {
             no_ik = true;
+        } else if (!strcmp(a, "--no-root-motion")) {
+            no_root_motion = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
             puppet_path = argv[++i];
         } else if (!strcmp(a, "--twin") && i + 1 < argc) {
