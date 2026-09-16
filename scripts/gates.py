@@ -24032,6 +24032,164 @@ def run_display_gate(workdir):
     return failed
 
 
+# "ragdoll <case> <label> <key> <numbers...>" from gametest --ragdoll-probe,
+# through the shared four-field reader.
+_RAGDOLL_PROBE = re.compile(r"^ragdoll ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+
+# The twelve the build names, in build order. Spelled out rather than counted so
+# a bone that stops resolving fails by NAME.
+_RAGDOLL_BONES = ["hips", "spine", "chest", "head", "arm_l", "forearm_l", "arm_r",
+                  "forearm_r", "thigh_l", "shin_l", "thigh_r", "shin_r"]
+
+
+def _ragdoll_probe(case, rig=None):
+    """{(label, key): [floats]} from one gametest --ragdoll-probe run, or None."""
+    extra = ["--puppet", asset(rig)] if rig else None
+    return _gametest_probe("--ragdoll-probe", _RAGDOLL_PROBE, case, extra=extra)
+
+
+def run_ragdoll_gate(workdir):
+    """A rig falling over (spec 12.16): what the ragdoll builds, and what it does.
+
+      ragdoll-build    every humanoid bone resolves on BOTH rigs, and the bodies and
+                       constraints agree -- structure first, since a rig's spine length
+                       decides the count and a single expected number would be wrong
+      ragdoll-shapes   capsules are DERIVED, not uniform: a thigh is thicker than a
+                       forearm and longer than a head, by ratio so it holds on any rig
+      ragdoll-scale    the same rig at node scale 1 and 2 gives capsules in exactly 1:2
+      ragdoll-settles  dropped from 3 m it falls, lands, and comes to rest rather than
+                       jittering or sliding forever
+      ragdoll-pose     while active a bone's global comes from its BODY and not the clip
+      ragdoll-frees    building and destroying leaves the world's body count where it
+                       started
+
+    Unlike the display group, the SIMULATION is reachable here: a headless game carries
+    a real physics world, so these arms step Jolt and read the bodies back rather than
+    asserting only the arithmetic.
+
+    ragdoll-frees is the one that looks like bookkeeping and is not. ~Ragdoll destroys
+    its bodies and does NOT remove them, so releasing a ragdoll still added to the world
+    destroys bodies the broadphase is still indexing -- which costs nothing visible
+    until the body pool runs out, some number of deaths later.
+
+    The counts are REPORTED and the structure is asserted, which is deliberate. The
+    first draft of this spec said thirteen bodies, the list was twelve, and a rig with a
+    one-segment spine yields eleven -- an arm pinned to a constant would have been
+    edited to match whatever came out, which is writing the arm against the code.
+    """
+    del workdir # the probe builds its own world; nothing is rendered or written
+    failed = []
+
+    def note(name, ok):
+        # Bookkeeping only; each verdict line names its arm as a literal, which
+        # is what gate-arm-docs reads.
+        if not ok:
+            failed.append(name)
+
+    rigs = [("puppet", None), ("t_pose", "t_pose.fbx")]
+    build = {}
+    for tag, rig in rigs:
+        p = _ragdoll_probe("build", rig)
+        if not p:
+            print(f"  ragdoll-build SKIP  no probe output for {tag}")
+            return ["ragdoll-build"]
+        build[tag] = p
+
+    ok, detail_bits = True, []
+    for tag, _ in rigs:
+        p = build[tag]
+        missing = [b for b in _RAGDOLL_BONES if p.get((b, "bone"), [-1])[0] < 0]
+        bodies = int(p[("count", "bodies")][0])
+        cons = int(p[("count", "constraints")][0])
+        if missing or cons != bodies - 1:
+            ok = False
+        detail_bits.append(f"{tag} {bodies} bodies / {cons} constraints"
+                           + (f", UNRESOLVED {missing}" if missing else ""))
+    print(f"  ragdoll-build {'PASS' if ok else 'FAIL'}  "
+          f"{'; '.join(detail_bits)} (want all twelve resolved and constraints == bodies - 1)")
+    note("ragdoll-build", ok)
+
+    # Its own run: the reader keeps only rows whose case matches what was asked
+    # for, so the shapes rows a build run also prints are dropped from it.
+    p = _ragdoll_probe("shapes", "t_pose.fbx")
+    if not p:
+        print("  ragdoll-shapes SKIP  no probe output")
+        note("ragdoll-shapes", False)
+        p = None
+    # Ratios, not absolute sizes: the two rigs are different heights and a bar in
+    # metres would hold on one of them by accident.
+    if p:
+        thigh_r = p[("thigh_l", "capsule")][0]
+        fore_r = p[("forearm_l", "capsule")][0]
+        thigh_h = p[("thigh_l", "capsule")][1]
+        head_h = p[("head", "capsule")][1]
+        ok = thigh_r > fore_r * 1.2 and thigh_h > head_h * 1.2
+        print(f"  ragdoll-shapes {'PASS' if ok else 'FAIL'}  thigh radius {thigh_r:.4f} vs "
+              f"forearm {fore_r:.4f}, thigh half-height {thigh_h:.4f} vs head {head_h:.4f} "
+              f"(want each at least 1.2x, or the capsules are not derived from the rig)")
+        note("ragdoll-shapes", ok)
+
+    p = _ragdoll_probe("scale", "t_pose.fbx")
+    if not p:
+        print("  ragdoll-scale SKIP  no probe output")
+        note("ragdoll-scale", False)
+    else:
+        worst = 0.0
+        for bone in _RAGDOLL_BONES:
+            row = p.get((bone, "ratio"))
+            if not row:
+                continue
+            worst = max(worst, abs(row[0] - 2.0), abs(row[1] - 2.0))
+        ok = worst < 1e-4
+        print(f"  ragdoll-scale {'PASS' if ok else 'FAIL'}  node scale 1 -> 2 moves every "
+              f"capsule by 2.0, worst error {worst:.6f} (want < 1e-4: everything is measured "
+              f"in model space and scaled once, and 12.10 shipped a live bug through exactly "
+              f"this gap)")
+        note("ragdoll-scale", ok)
+
+    sim = _ragdoll_probe("settles")
+    if not sim:
+        print("  ragdoll-settles SKIP  no probe output")
+        note("ragdoll-settles", False)
+    else:
+        drop = sim[("hips", "drop")][0]
+        speed = sim[("hips", "speed")][0]
+        ok = drop > 1.0 and speed < 0.2
+        print(f"  ragdoll-settles {'PASS' if ok else 'FAIL'}  the hips fell {drop:.4f} m "
+              f"(want > 1: it has to actually fall) and are moving {speed:.4f} m/s after 300 "
+              f"steps (want < 0.2: at rest rather than sliding)")
+        note("ragdoll-settles", ok)
+
+    # Their own runs, for the reason above: one probe process prints all three
+    # cases' rows, and the reader keeps only the case it asked for.
+    pose = _ragdoll_probe("pose")
+    if not pose:
+        print("  ragdoll-pose SKIP  no probe output")
+        note("ragdoll-pose", False)
+    else:
+        moved = pose[("hips", "moved")][0]
+        ok = moved > 0.5
+        print(f"  ragdoll-pose {'PASS' if ok else 'FAIL'}  applying the ragdoll moved the hips "
+              f"bone {moved:.4f} m from where the clip left it (want > 0.5: the body is the "
+              f"pose now, not a correction to it)")
+        note("ragdoll-pose", ok)
+
+    frees = _ragdoll_probe("frees")
+    if not frees:
+        print("  ragdoll-frees SKIP  no probe output")
+        note("ragdoll-frees", False)
+    else:
+        before, during, after = (int(v) for v in frees[("world", "bodies")])
+        ok = after == before and during > before
+        print(f"  ragdoll-frees {'PASS' if ok else 'FAIL'}  world bodies {before} -> {during} "
+              f"-> {after} (want it to rise and come back exactly: ~Ragdoll destroys bodies "
+              f"without removing them, so a missed removal is invisible until the pool runs "
+              f"out)")
+        note("ragdoll-frees", ok)
+
+    return failed
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -24148,6 +24306,8 @@ GATE_GROUPS = [
      run_ui_gate),
     ("display", "display modes (placement, monitors, what a settings file may do; spec 12.15):",
      run_display_gate),
+    ("ragdoll", "a rig falling over (build, shapes, scale, simulation; spec 12.16):",
+     run_ragdoll_gate),
     ("save", "save serialization (entities, spawners, drops, migrations; spec 12.3):",
      run_save_gate),
     ("ik", "two-bone IK (reach, clamp, the singular bind pose, the pole; spec 12.4):",

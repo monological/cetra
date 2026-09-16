@@ -82,6 +82,15 @@ bool jolt_ragdoll_get_world(const JoltRagdoll* ragdoll, int index, mat4 out);
 // An impulse on every body, which is what a death blow looks like from outside.
 void jolt_ragdoll_add_impulse(JoltRagdoll* ragdoll, const vec3 impulse);
 
+/*
+ * How many bodies the world holds. Not a ragdoll question, and here anyway:
+ * JoltC binds neither GetNumBodies nor anything equivalent, and this TU already
+ * holds the system. It exists because "destroying a ragdoll leaves the world as
+ * it found it" is otherwise unobservable -- ~Ragdoll destroys bodies without
+ * removing them, and a leak there is invisible until the pool runs out.
+ */
+int jolt_ragdoll_world_body_count(const JPC_PhysicsSystem* system);
+
 // JPH_VERSION_ID, evaluated where the C++ headers are visible -- physics_cook.h
 // exports the same value for the cook key, and this exists so a probe can
 // assert the two TUs were built against one Jolt.
