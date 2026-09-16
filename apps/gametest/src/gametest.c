@@ -41,6 +41,7 @@
 #include "cetra/game/settings.h"
 #include "cetra/game/save.h"
 #include "cetra/game/animator_component.h"
+#include "cetra/camera_rig.h"
 #include "cetra/animator.h"
 #include "cetra/import.h"
 #include "cetra/ibl.h"
@@ -6376,6 +6377,96 @@ static int run_ui_screens_probe(Game* game, const char* which) {
     return rc;
 }
 
+/*
+ * --cam-probe (spec 12.19): the camera rig, checked with no window and no GL.
+ *
+ * It runs BEFORE the engine is created, the way --ui-probe settings does, and
+ * for the same reason: camera_rig.c takes plain values and touches nothing. A
+ * camera that can be asserted without a frame is the whole argument for the rig
+ * being a pure function, so an arm that needed a window would be evidence the
+ * design had slipped.
+ */
+static void cam_probe_pose(const char* which, const char* label, const CameraRig* rig) {
+    printf("cam %s %s eye %.9g %.9g %.9g look %.9g %.9g %.9g yaw %.9g pitch %.9g\n", which, label,
+           (double)rig->pose.eye[0], (double)rig->pose.eye[1], (double)rig->pose.eye[2],
+           (double)rig->pose.look[0], (double)rig->pose.look[1], (double)rig->pose.look[2],
+           (double)rig->yaw, (double)rig->pitch);
+}
+
+static int run_cam_probe(const char* which) {
+    CameraRig* rig = create_camera_rig();
+    if (!rig)
+        return 1;
+
+    if (!strcmp(which, "orbit")) {
+        // An anchor away from the origin and a lift on each, so a term dropped
+        // from the closed form cannot hide behind a zero.
+        glm_vec3_copy((vec3){3.0f, 1.0f, -2.0f}, rig->anchor);
+        rig->dist = 4.0f;
+        rig->look_lift = 0.5f;
+        rig->eye_lift = 1.5f;
+        rig->yaw = 0.0f;
+        rig->pitch = 0.0f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "start", rig);
+        // 0.9 rad at full input over half a second, then the same 0.9 again at
+        // half the input over twice the time: a rate is a rate, so the second
+        // turn must equal the first exactly.
+        camera_rig_update(rig, 0.5f, -1.0f, 0.0f);
+        cam_probe_pose(which, "turned", rig);
+        camera_rig_update(rig, 1.0f, -0.5f, 0.0f);
+        cam_probe_pose(which, "again", rig);
+        // Nothing asked for: the pose is DERIVED from the aim, so it must not
+        // creep. An implementation that integrated the eye instead would.
+        camera_rig_update(rig, 1.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "held", rig);
+    } else if (!strcmp(which, "clamp")) {
+        rig->pitch_min = -1.25f;
+        rig->pitch_max = 0.2f;
+        rig->dist = 4.0f;
+        camera_rig_update(rig, 10.0f, 0.0f, 1.0f);
+        cam_probe_pose(which, "high", rig);
+        camera_rig_update(rig, 10.0f, 0.0f, -1.0f);
+        cam_probe_pose(which, "low", rig);
+        // Held against the stop: a clamp holds where a wrap would come round.
+        camera_rig_update(rig, 10.0f, 0.0f, -1.0f);
+        cam_probe_pose(which, "lower", rig);
+    } else if (!strcmp(which, "first-person")) {
+        glm_vec3_copy((vec3){3.0f, 1.0f, -2.0f}, rig->anchor);
+        rig->look_lift = 1.7f;
+        rig->dist = 0.0f;
+        rig->yaw = 0.3f;
+        rig->pitch = -0.2f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "eye", rig);
+    } else if (!strcmp(which, "pose")) {
+        // A stated pose, then an update that changes nothing: the second must
+        // reproduce the first, or a pinned camera drifts the moment it ticks.
+        vec3 eye = {1.0f, 2.0f, 3.0f}, look = {-4.0f, 0.5f, 6.0f};
+        rig->look_lift = 9.0f; // must be zeroed by the adopt, or the update moves
+        rig->eye_lift = 9.0f;
+        camera_rig_set_pose(rig, eye, look);
+        cam_probe_pose(which, "set", rig);
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "ticked", rig);
+    } else if (!strcmp(which, "basis")) {
+        rig->yaw = 0.75f;
+        float basis = -99.0f;
+        bool steers = camera_rig_move_basis(rig, &basis);
+        printf("cam basis off steers %d yaw %.9g\n", steers ? 1 : 0, (double)basis);
+        rig->steers_controls = true;
+        steers = camera_rig_move_basis(rig, &basis);
+        printf("cam basis on steers %d yaw %.9g\n", steers ? 1 : 0, (double)basis);
+    } else {
+        fprintf(stderr, "cam-probe: unknown case '%s'\n", which);
+        free_camera_rig(rig);
+        return 1;
+    }
+
+    free_camera_rig(rig);
+    return 0;
+}
+
 // --ui-probe (spec 12.2): the game-layer state a menu edits, checked with no
 // window, no GL and no audio device. It runs BEFORE the engine is created
 // rather than inside a headless game the way the audio and anim probes do,
@@ -7208,6 +7299,7 @@ int main(int argc, const char* argv[]) {
     const char* ik_probe = NULL;
     const char* ragdoll_probe = NULL;
     const char* ui_probe = NULL;
+    const char* cam_probe = NULL;
     const char* display_probe = NULL;
     const char* save_probe = NULL;
     bool ui_enabled = true;
@@ -7305,6 +7397,8 @@ int main(int argc, const char* argv[]) {
             ik_probe = argv[++i];
         } else if (!strcmp(a, "--ui-probe") && i + 1 < argc) {
             ui_probe = argv[++i];
+        } else if (!strcmp(a, "--cam-probe") && i + 1 < argc) {
+            cam_probe = argv[++i];
         } else if (!strcmp(a, "--display-probe") && i + 1 < argc) {
             display_probe = argv[++i];
         } else if (!strcmp(a, "--save-probe") && i + 1 < argc) {
@@ -7340,6 +7434,11 @@ int main(int argc, const char* argv[]) {
     // anim probes already established, and still never draws a frame.
     if (ui_probe && !strcmp(ui_probe, "settings")) {
         return run_ui_probe(ui_probe);
+    }
+    // Every case is pure arithmetic over camera_rig.c, so this needs no engine
+    // at all -- which is the rig's design asserted rather than described.
+    if (cam_probe) {
+        return run_cam_probe(cam_probe);
     }
     // The placement case is pure arithmetic and runs before any engine exists,
     // the shape --ui-probe settings already established. The other two need
