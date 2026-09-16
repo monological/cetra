@@ -55,10 +55,49 @@ typedef struct CameraRigPose {
     vec3 look;
 } CameraRigPose;
 
+/*
+ * How far along a ray from the aim point is clear, as a fraction of `want`.
+ * 1 is nothing in the way. The rig applies its own skin and minimum arm to the
+ * answer, so a probe reports geometry and decides no policy.
+ *
+ * A SEAM rather than a physics call, for `ui.h`'s reason and `GamepadReadFn`'s:
+ * this file must not know what a PhysicsWorld or a heightfield is, and the two
+ * apps that need one answer it in completely different ways -- a Jolt raycast
+ * filtered to static bodies, and a terrain height query.
+ *
+ * It shortens the ARM and never moves the eye sideways or down, which is the
+ * difference between a camera that tightens and one whose aim wanders. A
+ * floor-clamp on the eye does the second.
+ */
+typedef float (*CameraRigProbeFn)(void* user, const vec3 from, const vec3 to, float want);
+
+#define CAMERA_RIG_RAIL_MAX 16
+
 typedef struct CameraRig {
     // ENGINE-OWNED (by the rig): what it worked out. Read freely, never write.
     CameraRigPose pose; // where the last update put it
     bool posed;         // false until the first update, so a blend has a `from`
+    float wide;         // the smoothed arm response, 0..1
+    // DERIVED from the near/far pairs and `wide` every update, and shortened by
+    // the probe. They are here rather than under SETTINGS because the response
+    // is their only writer: a caller storing into one would be a second writer
+    // of a value the rig recomputes, which is a field that silently stops
+    // meaning what was written into it. camera_rig_set_distance is how a caller
+    // with no response says "just this far".
+    float dist;
+    float eye_lift;
+    float shake_left;  // seconds of shake still to run
+    float shake_secs;  // what it started at, so the decay is a fraction
+    float shake_amp;   // its amplitude at the moment it was fired
+    float shake_clock; // seconds since this rig started, the noise's argument
+    CameraRigPose blend_from;
+    float blend_left; // seconds of crossfade still to run
+    float blend_secs; // what it started at, so the fraction is recoverable
+    // The rail, copied in by camera_rig_set_rail so a caller's array need not
+    // outlive the call.
+    vec3 rail[CAMERA_RIG_RAIL_MAX];
+    int rail_count; // 0 = the arm places the eye; 2+ = the rail does
+    bool rail_loop;
 
     // BY FUNCTION: camera_rig_set_pose derives these three from an eye and a
     // target together, which is the only way to write them consistently; after
@@ -73,9 +112,7 @@ typedef struct CameraRig {
 
     // SETTINGS: plain stores. Write them directly, at any time.
     vec3 anchor;     // the point the rig is about; an app writes it each frame
-    float dist;      // eye to look point; 0 is first person
     float look_lift; // the aim point above the anchor
-    float eye_lift;  // the eye above the aim point -- a look-DOWN bias
     float pitch_min, pitch_max;
     // Radians per second per unit of input, so a caller passes -1..1 from an
     // action or a stick and the rate lives here rather than in each app.
@@ -90,7 +127,48 @@ typedef struct CameraRig {
     // rotate a player's controls is a worse surprise than a viewer camera
     // keeping the scheme it had. A rig that steers says so.
     bool steers_controls;
+
+    /*
+     * The arm response: a 0..1 SIGNAL the app writes each frame, smoothed here,
+     * lerping the distance and the eye lift between a near pair and a far one.
+     *
+     * The rig does not know what the signal MEANS, which is the whole of why it
+     * generalises: `apps/gametest` drives it from how far the player has fallen
+     * below the last ground there was, and the same field is what a framing that
+     * opens out with speed would use. Deciding here would have picked one.
+     *
+     * The rates are asymmetric because opening out and coming back in are not
+     * the same event: a shot that widens late reads as lag, and one that
+     * tightens fast reads as a snap.
+     */
+    float want_wide; // the signal, 0..1
+    float near_dist, near_eye_lift;
+    float far_dist, far_eye_lift;
+    float widen_rate, tighten_rate; // per second
+
+    // Where an arm may be shortened to, once a probe has reported. `skin` backs
+    // off from the hit; `min_dist` is the floor, because collapsing onto the
+    // anchor fills the frame with whatever the camera was following and starts
+    // clipping it through the near plane.
+    CameraRigProbeFn probe;
+    void* probe_user;
+    float probe_skin;
+    float min_dist;
+
+    // Shake: an offset added to the finished pose, scaled by this. 0 is the
+    // motion-reduction setting, and it is exactly the no-shake path rather than
+    // a very small one.
+    float shake_scale;
+    float shake_freq; // Hz
+
+    // Where along the rail the eye sits, 0..1. The app drives it; the rig owns
+    // no clock of its own for the same reason it owns no physics.
+    float rail_t;
 } CameraRig;
+
+// How far back to sit, with no response: sets the near and far ends and the
+// live distance together, which is the invariant a plain store cannot keep.
+void camera_rig_set_distance(CameraRig* rig, float dist);
 
 // A rig at the origin with a viewer's defaults: no lift, pitch free between
 // -1.5 and 1.5, rates of 1.8 and 1.2 radians a second (`apps/gametest`'s and
@@ -121,5 +199,47 @@ void camera_rig_apply(const CameraRig* rig, Camera* camera);
 // The yaw a steering rig reads the controls in; false, leaving `out_yaw`
 // untouched, for a rig that does not steer them.
 bool camera_rig_move_basis(const CameraRig* rig, float* out_yaw);
+
+// --- Behaviours over the form above ---
+
+// Install a probe, or NULL to stop shortening the arm.
+void camera_rig_set_probe(CameraRig* rig, CameraRigProbeFn probe, void* user);
+
+/*
+ * Ride an authored path instead of an arm: the eye is a Catmull-Rom sample of
+ * `points` at `rail_t` and the aim stays whatever the rig's anchor and lift say,
+ * which is what makes a dolly past a subject one call rather than a mode.
+ * `count` of 0 (or NULL) puts the arm back.
+ *
+ * Catmull-Rom rather than the polyline, because a camera is the one consumer
+ * where the corner matters more than the path: a piecewise-linear rail changes
+ * direction instantly at every authored point and that reads as a jolt. cglm's
+ * glm_smc with GLM_HERMITE_MAT is the evaluator -- Catmull-Rom IS Hermite with
+ * tangents taken from the neighbours, so this adds no spline arithmetic to the
+ * tree.
+ *
+ * Copied in, up to CAMERA_RIG_RAIL_MAX; a longer path is refused by name rather
+ * than truncated, since a rail silently missing its end is a shot that stops
+ * somewhere nobody chose. Under 2 points there is no curve and it is refused
+ * too.
+ */
+bool camera_rig_set_rail(CameraRig* rig, const vec3* points, int count, bool loop);
+
+/*
+ * Cross-fade from the pose the rig is in now to whatever it produces next, over
+ * `seconds`. Call it on the frame something changes -- the rig switched, the
+ * anchor jumped, a cut ended -- and the next `seconds` of updates interpolate
+ * out of the old pose.
+ *
+ * Over POSES and not parameters: two rigs can have different anchors, and
+ * blending a yaw against a yaw about a different point swings the camera
+ * through an arc nobody asked for.
+ */
+void camera_rig_blend_from_here(CameraRig* rig, float seconds);
+
+// Fire a shake of `amplitude` (world units) lasting `seconds`, decaying to
+// nothing. A second shake replaces the first rather than adding, so a burst of
+// events cannot stack into a camera nobody can read.
+void camera_rig_shake(CameraRig* rig, float amplitude, float seconds);
 
 #endif // _CAMERA_RIG_H_

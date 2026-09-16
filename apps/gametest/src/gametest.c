@@ -6393,6 +6393,29 @@ static void cam_probe_pose(const char* which, const char* label, const CameraRig
            (double)rig->yaw, (double)rig->pitch);
 }
 
+static void cam_probe_dist(const char* which, const char* label, const CameraRig* rig) {
+    printf("cam %s %s dist %.9g eye_lift %.9g wide %.9g\n", which, label, (double)rig->dist,
+           (double)rig->eye_lift, (double)rig->wide);
+}
+
+// Two probes with no world behind them: half the arm clear, and none of it. The
+// seam takes a fraction, so a fixture needs no physics to exercise it.
+static float cam_probe_half(void* user, const vec3 from, const vec3 to, float want) {
+    (void)user;
+    (void)from;
+    (void)to;
+    (void)want;
+    return 0.5f;
+}
+
+static float cam_probe_none(void* user, const vec3 from, const vec3 to, float want) {
+    (void)user;
+    (void)from;
+    (void)to;
+    (void)want;
+    return 0.0f;
+}
+
 static int run_cam_probe(const char* which) {
     CameraRig* rig = create_camera_rig();
     if (!rig)
@@ -6402,9 +6425,9 @@ static int run_cam_probe(const char* which) {
         // An anchor away from the origin and a lift on each, so a term dropped
         // from the closed form cannot hide behind a zero.
         glm_vec3_copy((vec3){3.0f, 1.0f, -2.0f}, rig->anchor);
-        rig->dist = 4.0f;
+        camera_rig_set_distance(rig, 4.0f);
         rig->look_lift = 0.5f;
-        rig->eye_lift = 1.5f;
+        rig->near_eye_lift = rig->far_eye_lift = 1.5f;
         rig->yaw = 0.0f;
         rig->pitch = 0.0f;
         camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
@@ -6423,7 +6446,7 @@ static int run_cam_probe(const char* which) {
     } else if (!strcmp(which, "clamp")) {
         rig->pitch_min = -1.25f;
         rig->pitch_max = 0.2f;
-        rig->dist = 4.0f;
+        camera_rig_set_distance(rig, 4.0f);
         camera_rig_update(rig, 10.0f, 0.0f, 1.0f);
         cam_probe_pose(which, "high", rig);
         camera_rig_update(rig, 10.0f, 0.0f, -1.0f);
@@ -6434,7 +6457,7 @@ static int run_cam_probe(const char* which) {
     } else if (!strcmp(which, "first-person")) {
         glm_vec3_copy((vec3){3.0f, 1.0f, -2.0f}, rig->anchor);
         rig->look_lift = 1.7f;
-        rig->dist = 0.0f;
+        camera_rig_set_distance(rig, 0.0f);
         rig->yaw = 0.3f;
         rig->pitch = -0.2f;
         camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
@@ -6444,11 +6467,109 @@ static int run_cam_probe(const char* which) {
         // reproduce the first, or a pinned camera drifts the moment it ticks.
         vec3 eye = {1.0f, 2.0f, 3.0f}, look = {-4.0f, 0.5f, 6.0f};
         rig->look_lift = 9.0f; // must be zeroed by the adopt, or the update moves
-        rig->eye_lift = 9.0f;
+        rig->near_eye_lift = rig->far_eye_lift = 9.0f;
         camera_rig_set_pose(rig, eye, look);
         cam_probe_pose(which, "set", rig);
         camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
         cam_probe_pose(which, "ticked", rig);
+    } else if (!strcmp(which, "response")) {
+        rig->near_dist = 4.0f;
+        rig->far_dist = 12.0f;
+        rig->near_eye_lift = 0.0f;
+        rig->far_eye_lift = 3.0f;
+        rig->widen_rate = 4.0f;
+        rig->tighten_rate = 1.2f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_dist(which, "tight", rig);
+        // The same elapsed time each way. The rates are asymmetric, so the two
+        // must NOT be mirror images -- that asymmetry is the behaviour.
+        rig->want_wide = 1.0f;
+        camera_rig_update(rig, 0.25f, 0.0f, 0.0f);
+        cam_probe_dist(which, "widening", rig);
+        rig->want_wide = 0.0f;
+        camera_rig_update(rig, 0.25f, 0.0f, 0.0f);
+        cam_probe_dist(which, "tightening", rig);
+        // Held at rest for long enough that an approach has converged.
+        for (int i = 0; i < 200; i++)
+            camera_rig_update(rig, 0.1f, 0.0f, 0.0f);
+        cam_probe_dist(which, "settled", rig);
+    } else if (!strcmp(which, "probe")) {
+        // A probe reporting half the arm clear. The aim must not move: that is
+        // what separates shortening the arm from clamping the eye.
+        glm_vec3_copy((vec3){3.0f, 1.0f, -2.0f}, rig->anchor);
+        camera_rig_set_distance(rig, 10.0f);
+        rig->look_lift = 0.5f;
+        rig->probe_skin = 0.6f;
+        rig->min_dist = 2.0f;
+        rig->pitch = -0.4f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "clear", rig);
+        camera_rig_set_probe(rig, cam_probe_half, NULL);
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "blocked", rig);
+        cam_probe_dist(which, "blocked", rig);
+        // Nothing clear at all: the floor holds, or the camera collapses into
+        // whatever it was following.
+        camera_rig_set_probe(rig, cam_probe_none, NULL);
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "flush", rig);
+        cam_probe_dist(which, "flush", rig);
+    } else if (!strcmp(which, "blend")) {
+        glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, rig->anchor);
+        camera_rig_set_distance(rig, 4.0f);
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "before", rig);
+        // Jump the anchor and blend out of where it was. Frame 0 of the blend
+        // must still be the OLD pose, or a cut shows for a frame.
+        camera_rig_blend_from_here(rig, 1.0f);
+        glm_vec3_copy((vec3){20.0f, 0.0f, 0.0f}, rig->anchor);
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "t0", rig);
+        camera_rig_update(rig, 0.5f, 0.0f, 0.0f);
+        cam_probe_pose(which, "half", rig);
+        camera_rig_update(rig, 0.5f, 0.0f, 0.0f);
+        cam_probe_pose(which, "t1", rig);
+        camera_rig_update(rig, 0.5f, 0.0f, 0.0f);
+        cam_probe_pose(which, "after", rig);
+    } else if (!strcmp(which, "shake")) {
+        camera_rig_set_distance(rig, 4.0f);
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "rest", rig);
+        camera_rig_shake(rig, 1.0f, 1.0f);
+        camera_rig_update(rig, 0.1f, 0.0f, 0.0f);
+        cam_probe_pose(which, "shaken", rig);
+        for (int i = 0; i < 20; i++)
+            camera_rig_update(rig, 0.1f, 0.0f, 0.0f);
+        cam_probe_pose(which, "spent", rig);
+        // Motion reduction: not a small shake, the SAME pose as no shake at all.
+        rig->shake_scale = 0.0f;
+        rig->shake_clock = 0.0f;
+        camera_rig_shake(rig, 1.0f, 1.0f);
+        camera_rig_update(rig, 0.1f, 0.0f, 0.0f);
+        cam_probe_pose(which, "reduced", rig);
+    } else if (!strcmp(which, "rail")) {
+        vec3 pts[4] = {
+            {0.0f, 0.0f, 0.0f}, {10.0f, 5.0f, 0.0f}, {20.0f, 0.0f, 10.0f}, {30.0f, 5.0f, 0.0f}};
+        if (!camera_rig_set_rail(rig, pts, 4, false)) {
+            free_camera_rig(rig);
+            return 1;
+        }
+        rig->rail_t = 0.0f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "start", rig);
+        rig->rail_t = 1.0f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "end", rig);
+        // A third of the way: on the curve, and between its neighbours, which a
+        // wrong basis matrix would not be.
+        rig->rail_t = 1.0f / 3.0f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "third", rig);
+        // Off the rail again: the arm places the eye, as it did before.
+        camera_rig_set_rail(rig, NULL, 0, false);
+        camera_rig_set_distance(rig, 4.0f);
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "off", rig);
     } else if (!strcmp(which, "basis")) {
         rig->yaw = 0.75f;
         float basis = -99.0f;
