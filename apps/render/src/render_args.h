@@ -405,6 +405,9 @@ typedef struct {
     float cam_target[3]; // Explicit look-at target (world)
     int cam_up_set;      // --cam-up given
     float cam_up[3];     // Explicit up vector (default 0,1,0)
+    // --pointer-script: replay a mouse from a file instead of reading one,
+    // which is how a drag reaches the camera in a headless run. Borrowed argv.
+    const char* pointer_script;
     int show_help;
 } RenderArgs;
 

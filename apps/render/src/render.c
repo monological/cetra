@@ -57,6 +57,10 @@
 
 const float CAM_ANGULAR_SPEED = 0.5f;
 
+// --trace-camera: the frame's camera pose on stdout, which is the instrument
+// the camera gate reads. A pose somebody watched is not a measurement.
+static bool trace_camera = false;
+
 // Total analytic key-light intensity split across the HDR's light lobes.
 // Studio flashes overpower ambient by a few stops; matching that is what
 // makes dark, rough materials (near-black armor) read instead of flattening
@@ -78,6 +82,8 @@ static void print_usage(const char* prog) {
         stderr,
         "      --cam-target x,y,z Explicit look-at target (overrides --yaw/--pitch/--distance)\n");
     fprintf(stderr, "      --cam-up x,y,z     Explicit up vector (default: 0,1,0)\n");
+    fprintf(stderr, "      --pointer-script F Replay a mouse from a text file (spec 12.19)\n");
+    fprintf(stderr, "      --trace-camera     Print the frame's camera pose on stdout\n");
     fprintf(stderr, "  -E, --exposure <f>     Fixed exposure: a linear multiplier, or an EV bias\n"
                     "                         (any sign) under a post.camera. Pins the frame\n");
     fprintf(stderr, "      --no-auto-exposure Fixed exposure instead of eye adaptation\n");
@@ -782,6 +788,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->cam_up_set = 1;
+        } else if (strcmp(argv[i], "--pointer-script") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->pointer_script = argv[i];
+        } else if (strcmp(argv[i], "--trace-camera") == 0) {
+            trace_camera = true;
         } else if (strcmp(argv[i], "-E") == 0 || strcmp(argv[i], "--exposure") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2606,6 +2620,19 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
         float cam_dist = glm_vec3_distance(engine->camera->position, engine->camera->look_at);
         engine->camera->near_clip = fmaxf(fminf(0.02f * cam_dist, clip_near_max), clip_near_floor);
     }
+
+    // The pose the frame will use: this hook is the last thing before the engine
+    // derives the matrices from it (spec 11.107), so what is printed here is what
+    // is drawn. %.9g because a textual diff of two runs is then a bit diff.
+    if (trace_camera && engine->camera) {
+        const Camera* c = engine->camera;
+        printf("cam %zu eye %.9g %.9g %.9g target %.9g %.9g %.9g dist %.9g theta %.9g phi %.9g "
+               "ortho %.9g\n",
+               engine->total_frames, (double)c->position[0], (double)c->position[1],
+               (double)c->position[2], (double)c->look_at[0], (double)c->look_at[1],
+               (double)c->look_at[2], (double)c->distance, (double)c->theta, (double)c->phi,
+               (double)camera_ortho_height(c));
+    }
 }
 
 void render_scene_callback(Engine* engine, Scene* current_scene) {
@@ -4149,6 +4176,13 @@ int main(int argc, char** argv) {
     } else if (args.cam_eye_set || args.cam_target_set) {
         fprintf(stderr,
                 "Warning: --cam-eye and --cam-target must both be given; ignoring camera pose.\n");
+    }
+
+    // After the framing above, so the script's first drag starts from the pose a
+    // run without it would have had.
+    if (args.pointer_script && !engine_set_pointer_script(engine, args.pointer_script)) {
+        free_engine(engine);
+        return 1;
     }
 
     scene_print(scene);

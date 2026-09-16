@@ -12,6 +12,7 @@
 #include "camera.h"
 #include "shader.h"
 #include "program.h"
+#include "frame_script.h"
 #include "util.h"
 #include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see _engine_init)
 #include "engine.h"
@@ -63,6 +64,8 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
 static void _engine_derive_camera(Engine* engine);
+static void _engine_pointer_script_frame(Engine* engine);
+static void _engine_pointer_script_free(Engine* engine);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 static void _destroy_msaa_attachments(Engine* engine);
 
@@ -389,6 +392,8 @@ void free_engine(Engine* engine) {
     if (engine->screenshot_path) {
         free(engine->screenshot_path);
     }
+
+    _engine_pointer_script_free(engine);
 
     // GL objects must be released while the context still exists, i.e. before
     // the window is destroyed; and there is a context to release them into
@@ -1333,6 +1338,28 @@ bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
     return _window_to_fb(engine, wx, wy, fb_x, fb_y);
 }
 
+/*
+ * The pointer, at a FRAMEBUFFER position with +Y up.
+ *
+ * Each of the three is the half of its GLFW callback below that a SCRIPTED
+ * pointer reaches as well (spec 12.19): everything after ImGui has seen the
+ * event and the position has been converted. Splitting there rather than
+ * writing InputState directly is what makes a replayed drag take the same path
+ * as a real one -- the drag state, the ray picking, and the app's own forwarded
+ * callback, in that order -- so an arm that asserts a scripted drag is
+ * asserting the code a hand reaches.
+ */
+static void _engine_pointer_move(Engine* engine, double fb_x, double fb_y) {
+    if (engine->input.is_dragging) {
+        engine->input.drag_fb_x = (float)(fb_x - engine->input.center_fb_x);
+        engine->input.drag_fb_y = (float)(fb_y - engine->input.center_fb_y);
+    }
+
+    if (engine->cursor_position_callback) {
+        engine->cursor_position_callback(engine, fb_x, fb_y);
+    }
+}
+
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     if (!window)
         return;
@@ -1350,13 +1377,35 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
     if (!_window_to_fb(engine, xpos, ypos, &xpos, &ypos))
         return;
 
-    if (engine->input.is_dragging) {
-        engine->input.drag_fb_x = xpos - engine->input.center_fb_x;
-        engine->input.drag_fb_y = ypos - engine->input.center_fb_y;
+    _engine_pointer_move(engine, xpos, ypos);
+}
+
+static void _engine_pointer_button(Engine* engine, int button, int action, int mods,
+                                   double mouse_fb_x, double mouse_fb_y) {
+    // A LEFT release always ends the drag and is forwarded, even over the GUI —
+    // otherwise a button-up that lands on a panel leaves the camera stuck
+    // orbiting. A press is acted on (drag-start, picking) only when the GUI
+    // doesn't want the pointer. Either way the app callback fires exactly once.
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
+        engine->input.is_dragging = false;
+        engine->input.shift_held = false;
+        engine->input.center_fb_x = (float)mouse_fb_x;
+        engine->input.center_fb_y = (float)mouse_fb_y;
+    } else if (engine_gui_wants_mouse()) {
+        return;
+    } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        engine->input.is_dragging = true;
+        engine->input.shift_held = (mods & GLFW_MOD_SHIFT) != 0;
+        engine->input.center_fb_x = (float)mouse_fb_x;
+        engine->input.center_fb_y = (float)mouse_fb_y;
+        engine->input.drag_fb_x = 0.0f;
+        engine->input.drag_fb_y = 0.0f;
+
+        engine->input.selected_node = _perform_engine_ray_picking(engine, mouse_fb_x, mouse_fb_y);
     }
 
-    if (engine->cursor_position_callback) {
-        engine->cursor_position_callback(engine, xpos, ypos);
+    if (engine->mouse_button_callback) {
+        engine->mouse_button_callback(engine, button, action, mods);
     }
 }
 
@@ -1375,29 +1424,7 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
     double mouse_fb_x = 0.0, mouse_fb_y = 0.0;
     engine_cursor_fb(engine, &mouse_fb_x, &mouse_fb_y);
 
-    // A LEFT release always ends the drag and is forwarded, even over the GUI —
-    // otherwise a button-up that lands on a panel leaves the camera stuck
-    // orbiting. A press is acted on (drag-start, picking) only when the GUI
-    // doesn't want the pointer. Either way the app callback fires exactly once.
-    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
-        engine->input.is_dragging = false;
-        engine->input.shift_held = false;
-        engine->input.center_fb_x = mouse_fb_x;
-        engine->input.center_fb_y = mouse_fb_y;
-    } else if (engine_gui_wants_mouse()) {
-        return;
-    } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        engine->input.is_dragging = true;
-        engine->input.shift_held = (mods & GLFW_MOD_SHIFT) != 0;
-        engine->input.center_fb_x = mouse_fb_x;
-        engine->input.center_fb_y = mouse_fb_y;
-
-        engine->input.selected_node = _perform_engine_ray_picking(engine, mouse_fb_x, mouse_fb_y);
-    }
-
-    if (engine->mouse_button_callback) {
-        engine->mouse_button_callback(engine, button, action, mods);
-    }
+    _engine_pointer_button(engine, button, action, mods, mouse_fb_x, mouse_fb_y);
 }
 
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -1422,11 +1449,8 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
 
 // Scroll feeds ImGui first; if the GUI isn't using the pointer, it forwards to
 // the app (e.g. camera zoom).
-static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
-    ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
-
-    Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine || engine_gui_wants_mouse())
+static void _engine_pointer_scroll(Engine* engine, double xoffset, double yoffset) {
+    if (engine_gui_wants_mouse())
         return;
 
     engine->input.scroll_dx += xoffset;
@@ -1434,6 +1458,172 @@ static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double y
     if (engine->scroll_callback) {
         engine->scroll_callback(engine, xoffset, yoffset);
     }
+}
+
+static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
+    ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
+
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (!engine)
+        return;
+
+    _engine_pointer_scroll(engine, xoffset, yoffset);
+}
+
+/*
+ * The scripted pointer (spec 12.19).
+ *
+ * The gamepad's seam, for the other device: --pad-script replaces the poll, this
+ * replaces the event batch, and both replay a frame-range script through the
+ * code a real device drives. It exists because the viewer camera -- the thing
+ * four apps move with a drag -- had never been asserted by anything, there being
+ * no way to press a mouse from a test.
+ *
+ * A range states the pointer's STATE over its frames, as the pad's does, and the
+ * EDGES are derived here: `down` appearing is a press and `down` going is a
+ * release. `shift` is read at the press only, because that is when GLFW's
+ * modifier reaches InputState and a real hand cannot add it mid-drag either.
+ */
+typedef struct PointerScriptRange {
+    FrameScriptRange range; // first, by frame_script.h's contract
+    bool has_at;
+    double at_x, at_y; // framebuffer pixels, +Y up: engine_cursor_fb's space
+    double by_x, by_y; // added each frame of the range, where `at` is absent
+    bool down;
+    bool shift;
+    double wheel;
+} PointerScriptRange;
+_Static_assert(offsetof(PointerScriptRange, range) == 0,
+               "frame_script.h reads the frame range off the front of this");
+
+typedef struct PointerScript {
+    PointerScriptRange* ranges;
+    size_t count;
+    int frame;
+    double x, y; // where the cursor has been walked to
+    bool down;   // as of the previous frame, so a change is an edge
+} PointerScript;
+
+static const PointerScriptRange k_pointer_idle = {0};
+
+static bool _pointer_pair(const char* value, double* a, double* b) {
+    char* end = NULL;
+    *a = strtod(value, &end);
+    if (end == value || *end != ',')
+        return false;
+    const char* second = end + 1;
+    *b = strtod(second, &end);
+    return end != second && *end == '\0';
+}
+
+static bool _pointer_token(void* range, const char* tok, const char* path, int line) {
+    PointerScriptRange* r = range;
+    if (strcmp(tok, "idle") == 0)
+        return true;
+    if (strcmp(tok, "down") == 0) {
+        r->down = true;
+        return true;
+    }
+    if (strcmp(tok, "shift") == 0) {
+        r->shift = true;
+        return true;
+    }
+    const char* eq = strchr(tok, '=');
+    if (eq) {
+        size_t n = (size_t)(eq - tok);
+        if (n == 2 && strncmp(tok, "at", 2) == 0) {
+            if (!_pointer_pair(eq + 1, &r->at_x, &r->at_y)) {
+                log_error("%s:%d: '%s' wants at=x,y in framebuffer pixels", path, line, tok);
+                return false;
+            }
+            r->has_at = true;
+            return true;
+        }
+        if (n == 2 && strncmp(tok, "by", 2) == 0) {
+            if (!_pointer_pair(eq + 1, &r->by_x, &r->by_y)) {
+                log_error("%s:%d: '%s' wants by=dx,dy in framebuffer pixels", path, line, tok);
+                return false;
+            }
+            return true;
+        }
+        if (n == 5 && strncmp(tok, "wheel", 5) == 0) {
+            char* end = NULL;
+            r->wheel = strtod(eq + 1, &end);
+            if (end == eq + 1 || *end != '\0') {
+                log_error("%s:%d: wheel '%s' has no number", path, line, tok);
+                return false;
+            }
+            return true;
+        }
+    }
+    log_error("%s:%d: unknown token '%s'", path, line, tok);
+    return false;
+}
+
+// One frame of the script, in the order a hand produces: the cursor moves,
+// then the button changes under it, then the wheel turns.
+static void _engine_pointer_script_frame(Engine* engine) {
+    PointerScript* s = engine->pointer_script;
+    if (!s)
+        return;
+    const PointerScriptRange* r =
+        frame_script_at(s->ranges, s->count, sizeof(*r), &k_pointer_idle, s->frame++);
+
+    double x = r->has_at ? r->at_x : s->x + r->by_x;
+    double y = r->has_at ? r->at_y : s->y + r->by_y;
+    if (x != s->x || y != s->y) {
+        s->x = x;
+        s->y = y;
+        _engine_pointer_move(engine, x, y);
+    }
+
+    if (r->down != s->down) {
+        s->down = r->down;
+        _engine_pointer_button(engine, GLFW_MOUSE_BUTTON_LEFT, r->down ? GLFW_PRESS : GLFW_RELEASE,
+                               r->shift ? GLFW_MOD_SHIFT : 0, x, y);
+    }
+
+    if (r->wheel != 0.0)
+        _engine_pointer_scroll(engine, 0.0, r->wheel);
+}
+
+static void _engine_pointer_script_free(Engine* engine) {
+    PointerScript* s = engine->pointer_script;
+    if (!s)
+        return;
+    free(s->ranges);
+    free(s);
+    engine->pointer_script = NULL;
+}
+
+bool engine_set_pointer_script(Engine* engine, const char* path) {
+    if (!engine || !path) {
+        log_error("engine_set_pointer_script: NULL engine or path");
+        return false;
+    }
+    char* text = read_entire_file(path, NULL);
+    if (!text) {
+        log_error("pointer script '%s': cannot read", path);
+        return false;
+    }
+    PointerScript* s = calloc(1, sizeof(PointerScript));
+    if (!s) {
+        free(text);
+        log_error("pointer script '%s': out of memory", path);
+        return false;
+    }
+    bool ok = frame_script_parse(text, path, sizeof(PointerScriptRange), &k_pointer_idle,
+                                 _pointer_token, (void**)&s->ranges, &s->count);
+    free(text);
+    if (!ok) {
+        free(s->ranges);
+        free(s);
+        return false;
+    }
+    _engine_pointer_script_free(engine);
+    engine->pointer_script = s;
+    log_info("pointer script '%s': %zu ranges", path, s->count);
+    return true;
 }
 
 /*
@@ -3013,6 +3203,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         engine->input.scroll_dx = 0.0;
         engine->input.scroll_dy = 0.0;
         glfwPollEvents();
+        // A scripted pointer's batch lands where the real one just did, so its
+        // wheel reaches the next frame's hooks on the same schedule.
+        _engine_pointer_script_frame(engine);
     }
 }
 
