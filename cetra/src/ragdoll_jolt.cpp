@@ -214,6 +214,13 @@ extern "C" void jolt_ragdoll_add_impulse(JoltRagdoll* ragdoll, const vec3 impuls
     ragdoll->ragdoll->AddImpulse(JPH::Vec3(impulse[0], impulse[1], impulse[2]));
 }
 
+extern "C" int jolt_ragdoll_world_body_count(const JPC_PhysicsSystem* system) {
+    if (!system) {
+        return 0;
+    }
+    return (int)reinterpret_cast<const JPH::PhysicsSystem*>(system)->GetNumBodies();
+}
+
 extern "C" uint64_t jolt_ragdoll_jolt_version(void) {
     using JPH::uint64; // JPH_VERSION_FEATURES spells the bare name
     return (uint64_t)JPH_VERSION_ID;

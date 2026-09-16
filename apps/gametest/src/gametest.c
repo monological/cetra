@@ -4322,6 +4322,75 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         free_ragdoll(two);
     }
 
+    if (all || !strcmp(which, "settles") || !strcmp(which, "pose") || !strcmp(which, "frees")) {
+        ran = true;
+        // A floor to land on, and a body count to compare against. The world is
+        // the ik probe's, which already stands a capsule on a plate for the
+        // same reason: an assertion against a world with nothing in it is
+        // vacuously true.
+        PhysicsWorld* physics = ik_probe_world(game, (vec3){0.0f, 0.0f, 0.0f});
+        if (!physics) {
+            fprintf(stderr, "ragdoll-probe: no physics world\n");
+            return 1;
+        }
+
+        AnimationState* state = create_animation_state(skel);
+        RagdollSystem* rd = create_ragdoll(skel, skinned, 1.0f);
+        if (!state || !rd) {
+            fprintf(stderr, "ragdoll-probe: could not build\n");
+            return 1;
+        }
+        state->ragdoll = rd; // the state owns it from here
+
+        // The bind pose, lifted clear of the floor so the fall is the thing
+        // being measured rather than the initial overlap.
+        compute_bind_pose_matrices(state);
+        mat4 to_world = GLM_MAT4_IDENTITY_INIT;
+        to_world[3][1] = 3.0f;
+
+        const int before_bodies = jolt_ragdoll_world_body_count(physics->physics_system);
+        if (!ragdoll_start(rd, physics, state->global_transforms, to_world)) {
+            fprintf(stderr, "ragdoll-probe: start refused\n");
+            return 1;
+        }
+        const int after_bodies = jolt_ragdoll_world_body_count(physics->physics_system);
+
+        const int hips_bone = ragdoll_bone_index(rd, RAGDOLL_HIPS);
+        vec3 hips0 = {0.0f, 0.0f, 0.0f};
+        ragdoll_hips_world(rd, hips0);
+        // The clip's own answer for a bone, kept so the pose case can show the
+        // body overrode it rather than merely differing from bind.
+        mat4 clip_pose;
+        glm_mat4_copy(state->global_transforms[hips_bone], clip_pose);
+
+        for (int step = 0; step < 300; step++) {
+            physics_world_update(physics, 1.0f / 60.0f, 4);
+        }
+
+        vec3 hips1 = {0.0f, 0.0f, 0.0f};
+        ragdoll_hips_world(rd, hips1);
+        // One more pair of steps to measure what is left moving, which is what
+        // separates settled from slowly sliding.
+        vec3 hips2 = {0.0f, 0.0f, 0.0f};
+        physics_world_update(physics, 1.0f / 60.0f, 4);
+        ragdoll_hips_world(rd, hips2);
+        const float residual = glm_vec3_distance(hips1, hips2) * 60.0f;
+
+        printf("ragdoll settles hips drop %.6f\n", (double)(hips0[1] - hips1[1]));
+        printf("ragdoll settles hips speed %.6f\n", (double)residual);
+
+        // The pose case: the bone's global now comes from its body. Applied
+        // here rather than through the animator, because the animator would
+        // re-sample a clip this rig may not have.
+        ragdoll_apply(rd, state->global_transforms, skel->bone_count);
+        const float moved = glm_vec3_distance(clip_pose[3], state->global_transforms[hips_bone][3]);
+        printf("ragdoll pose hips moved %.6f\n", (double)moved);
+
+        free_animation_state(state); // frees the ragdoll, which removes its bodies
+        const int freed_bodies = jolt_ragdoll_world_body_count(physics->physics_system);
+        printf("ragdoll frees world bodies %d %d %d\n", before_bodies, after_bodies, freed_bodies);
+    }
+
     if (!ran) {
         fprintf(stderr, "ragdoll-probe: unknown case '%s'\n", which ? which : "(null)");
         return 1;
