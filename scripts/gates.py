@@ -24754,6 +24754,9 @@ def run_camera_gate(workdir):
                      target where they were. The second half is what tells an
                      orbit from a pan: a pan moves the target and nothing else,
                      so an arm reading only the angle would pass on either.
+      cam-drag-release the pose stops changing the frame after the button comes
+                     up, and the drag's total is still there. Without it the arms
+                     either side of it would pass on a controller that never stopped.
       cam-drag-pan   a SHIFT-drag of (200, 100) pixels moves the target by
                      hypot(200, 100) x distance x 0.0005 and leaves phi, theta
                      and the distance alone. The displacement is read as a
@@ -24761,9 +24764,6 @@ def run_camera_gate(workdir):
                      not the world's: the up vector is cross(forward, right) and
                      the eye sits above the target, so a pan with a vertical
                      component correctly moves the target in z as well.
-      cam-drag-release the pose stops changing the frame after the button comes
-                     up, and the drag's total is still there. Without it the two
-                     arms above would pass on a controller that never stopped.
     """
     failed = []
 
