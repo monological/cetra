@@ -2429,24 +2429,27 @@ static SceneNode* clone_rig(SceneNode* puppet_root) {
     return rig;
 }
 
-// The first skinned mesh under a node, which is the one carrying the per-bone
-// bind boxes a capsule radius is measured from.
-static const Mesh* find_skinned_mesh(const SceneNode* node) {
+// EVERY skinned mesh under a node, because a capsule's radius comes from the
+// per-bone bind boxes and those are per mesh. The first one alone is what an
+// imported character will not survive: raiden arrives as fifteen meshes, the
+// first of them a 22-vertex accessory binding a handful of bones, so a capsule
+// asked to measure anything else finds an empty box and takes the fallback.
+// Eleven uniform sticks is a legal ragdoll and it melts.
+#define RD_MAX_SKINNED 64
+static size_t collect_skinned_meshes(const SceneNode* node, const Mesh** out, size_t cap) {
     if (!node) {
-        return NULL;
+        return 0;
     }
-    for (size_t i = 0; i < node->mesh_count; i++) {
+    size_t n = 0;
+    for (size_t i = 0; i < node->mesh_count && n < cap; i++) {
         if (node->meshes[i] && node->meshes[i]->is_skinned) {
-            return node->meshes[i];
+            out[n++] = node->meshes[i];
         }
     }
-    for (size_t i = 0; i < node->children_count; i++) {
-        const Mesh* found = find_skinned_mesh(node->children[i]);
-        if (found) {
-            return found;
-        }
+    for (size_t i = 0; i < node->children_count && n < cap; i++) {
+        n += collect_skinned_meshes(node->children[i], out + n, cap - n);
     }
-    return NULL;
+    return n;
 }
 
 static void on_init(Game* game) {
@@ -2827,8 +2830,11 @@ static void on_init(Game* game) {
             //
             // PLAYER_SCALE is the rig node's, which is the scale every capsule
             // is measured against.
+            const Mesh* skinned[RD_MAX_SKINNED];
+            const size_t skinned_count =
+                collect_skinned_meshes(puppet_root, skinned, RD_MAX_SKINNED);
             player_animator->state->ragdoll =
-                create_ragdoll(skeleton, find_skinned_mesh(puppet_root), PLAYER_SCALE);
+                create_ragdoll(skeleton, skinned, skinned_count, PLAYER_SCALE);
         }
         printf("Player is the puppet: %zu bones, %zu clips\n", skeleton->bone_count,
                scene->animation_count);
@@ -4205,11 +4211,13 @@ static int run_ragdoll_probe(Game* game, const char* which) {
 
     // The mesh whose per-bone boxes measure the capsules. NULL is legal and
     // takes the fallback radius, which is what a rig with no skin gets.
-    const Mesh* skinned = find_skinned_mesh(probe_scene->root_node);
+    const Mesh* skinned[RD_MAX_SKINNED];
+    const size_t skinned_count =
+        collect_skinned_meshes(probe_scene->root_node, skinned, RD_MAX_SKINNED);
 
     if (all || !strcmp(which, "build") || !strcmp(which, "shapes")) {
         ran = true;
-        RagdollSystem* rd = create_ragdoll(skel, skinned, 1.0f);
+        RagdollSystem* rd = create_ragdoll(skel, skinned, skinned_count, 1.0f);
         if (!rd) {
             fprintf(stderr, "ragdoll-probe: build refused\n");
             return 1;
@@ -4246,8 +4254,8 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         // The same rig at two node scales. Everything here is measured in MODEL
         // space and multiplied once, so the two must differ by exactly the
         // ratio -- 12.10 shipped a live bug through precisely this gap.
-        RagdollSystem* one = create_ragdoll(skel, skinned, 1.0f);
-        RagdollSystem* two = create_ragdoll(skel, skinned, 2.0f);
+        RagdollSystem* one = create_ragdoll(skel, skinned, skinned_count, 1.0f);
+        RagdollSystem* two = create_ragdoll(skel, skinned, skinned_count, 2.0f);
         if (!one || !two) {
             fprintf(stderr, "ragdoll-probe: scale build refused\n");
             return 1;
@@ -4278,7 +4286,7 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         }
 
         AnimationState* state = create_animation_state(skel);
-        RagdollSystem* rd = create_ragdoll(skel, skinned, 1.0f);
+        RagdollSystem* rd = create_ragdoll(skel, skinned, skinned_count, 1.0f);
         if (!state || !rd) {
             fprintf(stderr, "ragdoll-probe: could not build\n");
             return 1;
