@@ -37,8 +37,12 @@ about ten times the stride its own animation implies, so no contact was ever lab
 demo showed nothing. **Spec 12.10 is the answer to that** -- the engine measures what a clip's
 feet imply about the ground, the blend space says what a mixture of them implies, and a game
 divides to get a playback rate; the demo's travel speed comes from its clips instead of a
-constant, and the `ik` group goes from nineteen arms to twenty-one. Root motion is the other
-answer to the same problem and is still not in this engine.
+constant, and the `ik` group goes from nineteen arms to twenty-one. **Root motion is the other
+answer to the same problem, and spec 12.18 is it** -- the clip states its own displacement and
+the character goes exactly that far, where stride matching scales playback until the clip keeps
+up with the body. The two are complements rather than rivals and both are live: root motion
+wherever a clip states a travel, stride matching everywhere else, which today is every imported
+rig in the tree.
 11.109 was the pivot from the renderer era to the game-platform
 era, which is numbered from 12.0; it stays the last renderer-era spec, and the
 major bump marks the change in the *kind* of work, as every prior one did.
@@ -265,7 +269,7 @@ are rough and assume a single experienced dev.
 | **Input rebinding** | Absent, and stated as such: `input_bind` takes a BORROWED const table, and `settings.c`'s header records that bindings are deliberately not carried because persisting them wants the remapping UI they would exist for. That UI needs a key-capture element the closed list above does not have, so these two rows are one gap approached from two sides. | Accessibility requirement on most platforms, and expected by any player on a non-QWERTY layout. | ~3-4 days, after a capture element |
 | **Camera framework** | Absent. Every app hand-rolls its own: `apps/render` the orbit drag controller, `apps/gametest` the follow camera and its four pose flags (specs 12.7, 12.13 and 12.17). There is no shared camera system — no shake, no spline or rail, no blend between cameras, no sequencer or cutscene track, and no dialogue system to drive one. **A hand-rolled camera also decides what the CONTROLS mean**, and in this app that decision flipped twice: 12.13 made movement world-aligned, 12.17 made it camera-relative again, and for the four specs in between, the two documents describing it said the opposite of what shipped. Neither flip was visible to the suite — the `gamepad` group reads the MOVE column the app commanded rather than where the character went, since five boxes fall at `rand()` positions that differ per platform's libc — so `pad-camera-relative` was added to say which scheme is live. | Almost every game has a scripted camera moment, and today each would be written into the app beside the gameplay. | ~1 week for a camera system; a sequencer is its own project |
 | **Animation state machine** | Absent **by design** and still absent. `animator.h:27` — *"There is no state machine here. A game decides what plays and when; this fades and blends it"* — and spec 12.1 listed it as a stated non-goal. `gametest` then hand-rolled one across `player_medium`, the locomotion space, a jump one-shot and a swim source, which is the evidence that every game on this engine writes the same thing. Whether it belongs in the engine is a real question; that it is missing is not. | Locomotion, combat and reaction logic all want it. The demo is the proof it gets written either way. | ~1 week |
-| **Root motion** | Absent, and named as *"the other answer to the same problem"* in fifteen lines across seven files — `ik.h`, `docs/foot-locking.md`, `docs/verification.md`, this file, and specs 12.1, 12.9 and 12.10. Spec 12.10's stride matching is the answer this engine took instead; root motion inverts the relationship — the clip drives the character rather than the character driving playback rate — and is what an authored attack, dodge or turn-in-place needs. | Anything whose displacement is choreographed rather than steered. | ~1 week |
+| **Root motion** | **Done, spec 12.18.** A clip states how far its root travels, the animator hands that to the character, and the character goes exactly that far; `gametest` now travels at the speed its own clips carry rather than at a constant, and has two authored moves that stride matching cannot express. The estimate below was right. Three things it found are worth carrying. **Extraction is per ENTRY, never from the blended pose** — the weights and the fade move too, so differencing a blended root reads a knob turn or a crossfade as a stride across the room; `anim-root-fade` is the arm that tells the two designs apart, and the first draft was the wrong one. **The feedback runs the other way now**: the blend knob has to come from the STICK, because the travel comes from the clip the knob selects, so a knob fed by the achieved speed starts at zero, selects the standing clip, travels nothing and stays there — which also costs the wall-stops-the-walk behaviour stride matching gets for free. And **the benefit it is famous for is unmeasurable in this tree**: root motion's point is that a stance foot cannot slide, and the only clips carrying a root curve are the four authored for this spec, on a rig whose pendulum walk has no stance at all. Every committed FBX is in place — `strut_walk` states 0.000071 m over its whole loop, measured rather than assumed, which is itself the answer to a question three documents had been reasoning about. What is NOT done: a retargeted clip still takes its position from the bind pose, so an imported character can never carry root motion until the retarget carries translation with a proportion transfer. | Anything whose displacement is choreographed rather than steered. | done (~1 day; the docs took longer than the engine) |
 | **Audio depth** | The seam shipped in 12.0 and is deep for what it covers. Absent behind it: reverb zones, occlusion and obstruction, a DSP/filter graph, interactive or stem-based music, voice and dialogue playback, ducking. miniaudio carries some of this already, so parts are configuration rather than construction. | A room that sounds like a room, and music that responds to play. | genre-dependent |
 | **Accessibility** | Absent. No subtitle or caption system, no colourblind palettes, no UI scaling beyond the per-element font size, no remapping (above), no hold-to-toggle, no motion-reduction switch for the camera and post stack. | Increasingly a platform requirement, and cheapest to design in rather than retrofit. | ~1 week for the basics, once rebinding and a caption element exist |
 | **VFX authoring, scripting, navmesh/AI, networking** | Absent | Only needed depending on genre — though **scripting is arguably mis-filed here**: iteration speed is not genre-dependent, and today every gameplay change is a C rebuild. The particle system exists but emitters are built in code, so an authoring/preset layer would come before heavy VFX work. Navmesh/AI for enemies; networking for multiplayer. | genre-dependent |
@@ -328,7 +332,14 @@ its own branch.
    is derived from the fastest clip — 2.67 m/s on the committed humanoid, where `--no-lock` now
    moves 2217 px. Three new arms; two defects found by watching it rather than by measuring, one
    of them a walk playing at eighteen times speed at any stick short of full, true since 12.9.
-   Root motion remains the other answer to the same problem and is still not in this engine.
+   Root motion, the other answer to the same problem, arrived in **spec 12.18** and is the
+   inverse of this one: rather than scaling playback until the clip keeps up with the body, the
+   clip states how far it travels and the body goes exactly that far. It is what an authored
+   lunge, dodge or turn-in-place needs, since those are distances an animator chose and
+   rate-scaling one is exactly wrong. What it could NOT do is improve the numbers above: only
+   the four clips 12.18 authored carry a root curve, and they sit on the same stanceless
+   pendulum, while every committed FBX is in place -- `strut_walk` states 0.000071 m of travel
+   over its whole loop, which 12.18 measured rather than assumed.
    **Specs 12.11 through 12.14 are the debt 12.1 booked, paid by pointing the
    whole stack at a real character rather than the generated puppet.** 12.11 gave
    the loader a second rest pose — global-space retargeting, and `gametest`'s shared
@@ -367,10 +378,10 @@ its own branch.
 choice this document cannot make: whether the goal is a game shipped **on** this
 engine or an engine other people build **in**. The two diverge immediately.
 
-- **A game shipped on it** — packaging and display modes first, since a build
-  nobody can install or run fullscreen is the hard blocker; then the animation
-  state machine and root motion; then a camera system and whatever UI elements
-  the game's own screens need.
+- **A game shipped on it** — packaging first, since a build nobody can install is
+  the hard blocker (display modes closed in 12.15 and root motion in 12.18); then
+  the animation state machine; then a camera system and whatever UI elements the
+  game's own screens need.
 - **An engine others build in** — the editor, scripting and an asset pipeline,
   which is a far larger programme and changes what is worth doing to the runtime
   underneath it.

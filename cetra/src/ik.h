@@ -92,11 +92,17 @@ typedef struct IkFootParams {
     // carry across rigs.
     //
     // Holden's method labels contacts OFFLINE from toe speed and height, on clips that
-    // carry root motion. Ours do not: the character controller moves the entity, so a
-    // stance foot's model-space speed is the walk speed rather than zero and a
+    // carry root motion. Most of ours do not: the character controller moves the entity,
+    // so a stance foot's model-space speed is the walk speed rather than zero and a
     // horizontal threshold would label nothing. The vertical pair says the same thing
     // about a foot that has been set down and not yet picked up, needs no authored
     // data and no baking step, and is what the deviation costs.
+    //
+    // Spec 12.18 gave the engine root motion, which narrows that "most" without
+    // changing the choice: a clip that carries its own travel has a stance foot
+    // standing still in model space, so the horizontal term would work there -- and
+    // the vertical pair works on both kinds, which is what a solver that is handed
+    // arbitrary clips needs.
     //
     // contact_height must stay TIGHTER than plant_fraction; see there for why.
     float contact_height;
