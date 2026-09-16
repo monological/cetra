@@ -815,6 +815,17 @@ Five things that leaves open, none of them reachable from this machine:
   gate does not exercise the platform branches either — by design, since a hermetic test must
   not write to a real user directory, but it means the branches are untested rather than
   merely unasserted.
+- **A ragdoll that looks right, as opposed to one that behaves.** The `ragdoll` group (spec
+  12.16) steps Jolt 300 times and asserts the things a number can carry: that it falls, comes
+  to rest, takes its pose from its bodies, and leaves the world's body count where it found it.
+  What no arm can say is whether a heap of limbs looks like a person who fell over. The joint
+  LIMITS in particular are authored constants — a knee is given 5 degrees of cone and 75 of
+  plane, which is a hinge pretending to be symmetric, and Jolt's own sample says as much about
+  its equivalents. They were watched once, headless, at 60 and 240 frames after a scripted
+  kill: the figure collapses, collides with the plate and settles connected. Whether it settles
+  in a pose a person would believe is a look nobody has had at length, and the first thing to
+  re-measure if a character ever reads as rubbery.
+
 - **A window actually moving.** Spec 12.15 closed the feature half of this — `settings_apply`
   now reaches `engine_set_window_mode`, there are three modes, and a monitor is chosen by name
   — but the EFFECT is still a look nobody has had, and structurally so. The switch is refused
