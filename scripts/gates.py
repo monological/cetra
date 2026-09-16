@@ -24698,6 +24698,20 @@ def run_ragdoll_gate(workdir):
 
 CAM_PROBE_POSE = re.compile(
     r"^cam \S+ (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (\S+) yaw (\S+) pitch (\S+)$", re.M)
+CAM_PROBE_DIST = re.compile(
+    r"^cam \S+ (\S+) dist (\S+) eye_lift (\S+) wide (\S+)$", re.M)
+
+
+def _cam_probe_dist(case):
+    """The distance columns of a --cam-probe case: {label: {dist, eye_lift, wide}}."""
+    r = subprocess.run([GAMETEST, "--cam-probe", case], capture_output=True, text=True)
+    rows = CAM_PROBE_DIST.findall(r.stdout + r.stderr)
+    if r.returncode != 0 or not rows:
+        return None
+    return {row[0]: {"dist": float(row[1]), "eye_lift": float(row[2]), "wide": float(row[3])}
+            for row in rows}
+
+
 CAM_PROBE_BASIS = re.compile(r"^cam basis (\S+) steers (\d) yaw (\S+)$", re.M)
 
 
@@ -24799,6 +24813,32 @@ def run_camera_gate(workdir):
                      asks for nothing does not move them. Both halves: the rig
                      is given lifts of 9 first, so an adopt that failed to zero
                      them would displace the very pose it was handed.
+      cam-arm-response a 0..1 signal moves the distance between a near and a far
+                     end at 1 - e^(-rate*dt), and the two rates are DIFFERENT:
+                     opening out and coming back in are not the same event, so
+                     an arm checking only that it moved would pass on one shared
+                     rate. Held at rest it returns to the near end exactly.
+      cam-probe-shorten a probe reporting half a 10-unit arm clear shortens it to
+                     the hit less the skin, reporting none of it floors at the
+                     minimum rather than collapsing onto what the camera
+                     follows, and THE AIM POINT IS UNCHANGED THROUGHOUT -- which
+                     is the whole difference between shortening an arm and
+                     clamping an eye, and the reason forest's floor clamp
+                     becomes this rather than a second seam.
+      cam-blend      an anchor that jumps 20 units under a one-second blend reads
+                     the OLD pose at t=0, half way at half a second, the new one
+                     at t=1, and holds. The t=0 leg is the one that matters: a
+                     blend starting at the new pose shows the cut it exists to
+                     hide.
+      cam-shake      a shake moves the eye, decays to zero, and at shake_scale 0
+                     is BIT-IDENTICAL to no shake -- not merely small. A
+                     motion-reduction setting that leaves a millimetre in is one
+                     that does not work.
+      cam-rail       a four-point rail starts and ends on its authored ends and
+                     passes exactly THROUGH its interior control, which is
+                     Catmull-Rom's defining property and what a wrong basis
+                     matrix would miss; clearing it hands the eye back to the
+                     arm.
       cam-basis      a rig that does not steer answers false and leaves the
                      caller's yaw at its sentinel; one that does publishes its
                      own. This is the arm that turns 12.13 and 12.17's flip from
@@ -24910,6 +24950,108 @@ def run_camera_gate(workdir):
               f"the round trip through asin and atan2 is not exact, and the lifts the rig was "
               f"carrying must be zeroed by the adopt or the tick displaces it)")
         note("cam-pose-adopt", ok)
+
+    resp = _cam_probe_dist("response")
+    if not resp:
+        print("  cam-arm-response SKIP  no probe output")
+        note("cam-arm-response", False)
+    else:
+        # near 4 / far 12, widen 4/s and tighten 1.2/s, a quarter second each way.
+        # 1 - e^(-rate*dt) is the fraction covered, so the two are 0.6321 and
+        # 0.2592 of what was left -- the asymmetry IS the behaviour, and an arm
+        # that only checked "it moved" would pass on one shared rate.
+        widen = resp["widening"]["wide"]
+        tight = resp["tightening"]["wide"]
+        want_widen = 1.0 - math.exp(-4.0 * 0.25)
+        want_tight = widen * math.exp(-1.2 * 0.25)
+        lerped = abs(resp["widening"]["dist"] - (4.0 + 8.0 * widen)) < 1e-4
+        settled = abs(resp["settled"]["dist"] - 4.0) < 1e-4
+        ok = (abs(widen - want_widen) < 1e-5 and abs(tight - want_tight) < 1e-5
+              and lerped and settled)
+        print(f"  cam-arm-response {'PASS' if ok else 'FAIL'}  a quarter second of signal covers "
+              f"{widen:.6f} of the way out (want {want_widen:.6f}) and a quarter second back "
+              f"covers to {tight:.6f} (want {want_tight:.6f}) -- asymmetric on purpose, since a "
+              f"shot that widens late reads as lag and one that tightens fast reads as a snap; "
+              f"the distance is the lerp of the two ends and returns to "
+              f"{resp['settled']['dist']:.6f} (want 4)")
+        note("cam-arm-response", ok)
+
+    pr = _cam_probe("probe")
+    prd = _cam_probe_dist("probe")
+    if not pr or not prd:
+        print("  cam-probe-shorten SKIP  no probe output")
+        note("cam-probe-shorten", False)
+    else:
+        # A probe reporting half of a 10-unit arm clear, then none of it, with a
+        # skin of 0.6 and a floor of 2.
+        blocked, flush = prd["blocked"]["dist"], prd["flush"]["dist"]
+        # The AIM is what this arm is really about: shortening the arm leaves it
+        # alone where clamping the eye's height would swing it.
+        aims = [pr[k]["look"] for k in ("clear", "blocked", "flush")]
+        same_aim = all(max(abs(a - b) for a, b in zip(aims[0], other)) < 1e-6 for other in aims)
+        ok = abs(blocked - 4.4) < 1e-4 and abs(flush - 2.0) < 1e-4 and same_aim
+        print(f"  cam-probe-shorten {'PASS' if ok else 'FAIL'}  half of a 10-unit arm clear "
+              f"shortens it to {blocked:.4f} (want 5 - 0.6 skin), nothing clear floors at "
+              f"{flush:.4f} (want the 2 minimum, or the camera collapses into what it follows), "
+              f"and the aim point is {'identical throughout' if same_aim else 'MOVED'} -- which "
+              f"is the whole difference between shortening an arm and clamping an eye")
+        note("cam-probe-shorten", ok)
+
+    bl = _cam_probe("blend")
+    if not bl:
+        print("  cam-blend SKIP  no probe output")
+        note("cam-blend", False)
+    else:
+        # The anchor jumps 20 units and the blend runs a second. Frame 0 must
+        # still be the OLD pose: a blend that starts at the new one shows the
+        # cut it exists to hide.
+        at0 = max(abs(a - b) for a, b in zip(bl["t0"]["eye"], bl["before"]["eye"])) < 1e-6
+        half_x = bl["half"]["eye"][0]
+        at1 = abs(bl["t1"]["eye"][0] - 20.0) < 1e-5
+        after = max(abs(a - b) for a, b in zip(bl["after"]["eye"], bl["t1"]["eye"])) < 1e-6
+        ok = at0 and abs(half_x - 10.0) < 1e-5 and at1 and after
+        print(f"  cam-blend {'PASS' if ok else 'FAIL'}  an anchor that jumps 20 units under a "
+              f"1 s blend reads {bl['t0']['eye'][0]:.4f} at t=0 (want the OLD 0, or the cut "
+              f"shows), {half_x:.4f} halfway (want 10, smoothstep being symmetric there), "
+              f"{bl['t1']['eye'][0]:.4f} at t=1 and stays there afterwards")
+        note("cam-blend", ok)
+
+    sh = _cam_probe("shake")
+    if not sh:
+        print("  cam-shake SKIP  no probe output")
+        note("cam-shake", False)
+    else:
+        moved = math.dist(sh["shaken"]["eye"], sh["rest"]["eye"])
+        spent = math.dist(sh["spent"]["eye"], sh["rest"]["eye"])
+        # Not "a small shake": the SAME pose, to the bit. Motion reduction that
+        # leaves a millimetre in is a motion-reduction switch that does not work.
+        reduced = sh["reduced"]["eye"] == sh["rest"]["eye"]
+        ok = moved > 0.1 and spent < 1e-6 and reduced
+        print(f"  cam-shake {'PASS' if ok else 'FAIL'}  a shake moves the eye {moved:.4f} and "
+              f"decays to {spent:.2e} (want 0), and at shake_scale 0 the pose is "
+              f"{'bit-identical' if reduced else 'NOT identical'} to no shake at all -- which is "
+              f"what the motion-reduction setting has to mean")
+        note("cam-shake", ok)
+
+    rail = _cam_probe("rail")
+    if not rail:
+        print("  cam-rail SKIP  no probe output")
+        note("cam-rail", False)
+    else:
+        # Four authored points. Catmull-Rom passes THROUGH its control points,
+        # which a Bezier over the same four would not -- so hitting the interior
+        # one exactly is what says the basis and the tangents are right.
+        first = max(abs(a - b) for a, b in zip(rail["start"]["eye"], [0.0, 0.0, 0.0])) < 1e-5
+        last = max(abs(a - b) for a, b in zip(rail["end"]["eye"], [30.0, 5.0, 0.0])) < 1e-5
+        interior = max(abs(a - b) for a, b in zip(rail["third"]["eye"], [10.0, 5.0, 0.0])) < 1e-5
+        off = max(abs(a - b) for a, b in zip(rail["off"]["eye"], [0.0, 0.0, -4.0])) < 1e-5
+        ok = first and last and interior and off
+        print(f"  cam-rail {'PASS' if ok else 'FAIL'}  a four-point rail starts at its first "
+              f"point and ends at its last; a third of the way along it is at "
+              f"{rail['third']['eye']} (want the second authored point exactly, since "
+              f"Catmull-Rom passes THROUGH its controls where a Bezier over the same four would "
+              f"not); and clearing the rail hands the eye back to the arm")
+        note("cam-rail", ok)
 
     basis = _cam_probe_basis()
     if not basis:
