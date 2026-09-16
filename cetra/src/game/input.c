@@ -1,10 +1,12 @@
 #include "input.h"
 #include "../engine.h"
+#include "../frame_script.h"
 #include "../util.h"
 #include "../ext/log.h"
 
 #include <ctype.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -308,16 +310,16 @@ void input_set_pad_reader(GameInputState* input, GamepadReadFn read, void* ctx,
  */
 
 typedef struct PadScriptRange {
-    int from;
-    int to;
+    FrameScriptRange range; // first, by frame_script.h's contract
     bool off;
     GLFWgamepadstate state;
 } PadScriptRange;
+_Static_assert(offsetof(PadScriptRange, range) == 0,
+               "frame_script.h reads the frame range off the front of this");
 
 typedef struct PadScript {
     PadScriptRange* ranges;
     size_t count;
-    size_t cap;
     int frame; // The next input_update's frame number
 } PadScript;
 
@@ -335,7 +337,8 @@ static const PadScriptRange k_range_idle = {
 };
 
 // One token of a script line into the range; false with the reason logged.
-static bool _range_token(PadScriptRange* r, const char* tok, const char* path, int line) {
+static bool _range_token(void* range, const char* tok, const char* path, int line) {
+    PadScriptRange* r = range;
     if (strcmp(tok, "idle") == 0)
         return true;
     if (strcmp(tok, "off") == 0) {
@@ -380,87 +383,13 @@ static bool _range_token(PadScriptRange* r, const char* tok, const char* path, i
     return false;
 }
 
-// The next whitespace-delimited token of a line, NUL-terminated in place;
-// NULL at the end. A hand lexer, as lut.c's is: strtok's reentrant form is
-// strtok_r on two of the three platforms and strtok_s on the third.
-static char* _next_token(char** cursor) {
-    char* p = *cursor;
-    while (*p == ' ' || *p == '\t' || *p == '\r')
-        p++;
-    if (*p == '\0')
-        return NULL;
-    char* start = p;
-    while (*p && *p != ' ' && *p != '\t' && *p != '\r')
-        p++;
-    if (*p)
-        *p++ = '\0';
-    *cursor = p;
-    return start;
-}
-
-static bool _script_parse(PadScript* script, char* text, const char* path) {
-    int line = 0;
-    char* ln = text;
-    while (ln && *ln) {
-        char* next = strchr(ln, '\n');
-        if (next)
-            *next++ = '\0';
-        line++;
-        char* hash = strchr(ln, '#');
-        if (hash)
-            *hash = '\0';
-        char* p = ln;
-        while (isspace((unsigned char)*p))
-            p++;
-        if (*p == '\0') {
-            ln = next;
-            continue;
-        }
-
-        PadScriptRange r = k_range_idle;
-        char* end = NULL;
-        long from = strtol(p, &end, 10);
-        long to = from;
-        if (end == p || from < 0) {
-            log_error("%s:%d: a line starts with a frame or a range", path, line);
-            return false;
-        }
-        p = end;
-        if (*p == '-') {
-            to = strtol(p + 1, &end, 10);
-            if (end == p + 1 || to < from) {
-                log_error("%s:%d: bad range", path, line);
-                return false;
-            }
-            p = end;
-        }
-        r.from = (int)from;
-        r.to = (int)to;
-
-        for (const char* tok = _next_token(&p); tok; tok = _next_token(&p)) {
-            if (!_range_token(&r, tok, path, line))
-                return false;
-        }
-
-        if (!grow_array((void**)&script->ranges, &script->cap, script->count + 1, sizeof(r), 8))
-            return false;
-        script->ranges[script->count++] = r;
-        ln = next;
-    }
-    return true;
-}
-
 static bool _pad_read_script(void* ctx, int pad, GLFWgamepadstate* out) {
     PadScript* script = ctx;
     if (pad != 0)
         return false;
     int frame = script->frame++;
-    // A frame no line covers is connected and idle; the last matching line wins.
-    const PadScriptRange* r = &k_range_idle;
-    for (size_t i = 0; i < script->count; i++) {
-        if (frame >= script->ranges[i].from && frame <= script->ranges[i].to)
-            r = &script->ranges[i];
-    }
+    const PadScriptRange* r =
+        frame_script_at(script->ranges, script->count, sizeof(*r), &k_range_idle, frame);
     if (r->off)
         return false;
     *out = r->state;
@@ -491,7 +420,8 @@ bool input_set_pad_script(GameInputState* input, const char* path) {
         log_error("pad script '%s': out of memory", path);
         return false;
     }
-    bool ok = _script_parse(script, text, path);
+    bool ok = frame_script_parse(text, path, sizeof(PadScriptRange), &k_range_idle, _range_token,
+                                 (void**)&script->ranges, &script->count);
     free(text);
     if (!ok) {
         _script_free(script);
