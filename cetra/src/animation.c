@@ -1,5 +1,6 @@
 #include "animation.h"
 #include "ik.h"
+#include "ragdoll.h"
 #include "springbone.h"
 #include "util.h"
 #include "ext/log.h"
@@ -487,6 +488,8 @@ void free_animation_state(AnimationState* state) {
 
     if (state->ik)
         free_ik_system(state->ik);
+    if (state->ragdoll)
+        free_ragdoll(state->ragdoll);
 
     if (state->local_transforms)
         free(state->local_transforms);
@@ -1253,6 +1256,14 @@ void animation_state_apply_pose(AnimationState* state, const Pose* pose, float d
     // parent and would erase a solve written before it (see ik.h).
     if (state->ik)
         ik_solve(state->ik, state->global_transforms, delta_time);
+
+    // The ragdoll, LAST and for the opposite reason to the two above: they
+    // correct a pose the clip produced, and this replaces it. A foot planted on
+    // ground a falling body is no longer standing on is not a correction worth
+    // keeping, so nothing above this needs to run first -- it needs to have its
+    // result overwritten. A no-op while inactive.
+    if (state->ragdoll)
+        ragdoll_apply(state->ragdoll, state->global_transforms, skeleton->bone_count);
 
     // PASS 2: Compute final bone matrices (global * inverse bind pose)
     for (size_t i = 0; i < skeleton->bone_count; i++) {

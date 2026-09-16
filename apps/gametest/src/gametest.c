@@ -366,6 +366,16 @@ static const InputAction actions[] = {
       INPUT_PAD(DPAD_DOWN, -1)}},
     {"jump", {INPUT_KEY(SPACE, 1), INPUT_PAD(A, 1)}},
     {"spawn", {INPUT_KEY(F, 1), INPUT_PAD(X, 1)}},
+    // Kills the player. A key rather than a consequence because this app has no
+    // damage, no health and no death -- the only thing that happens TO the
+    // player is the chaser's proximity check, which prints and plays a sound.
+    // Inventing a health system to justify a ragdoll would be the larger
+    // feature wagging the smaller one.
+    // The left stick click, which is the last pad button this app has not
+    // spent. B and RB were both tried first and both are taken -- two actions
+    // on one button is legal, since every action evaluates independently, but
+    // it makes one press do two things and the printed controls a lie.
+    {"ragdoll", {INPUT_KEY(K, 1), INPUT_PAD(LEFT_THUMB, 1)}},
     {"pause", {INPUT_KEY(P, 1), INPUT_PAD(START, 1)}},
     {"raycast", {INPUT_KEY(R, 1), INPUT_PAD(Y, 1)}},
     {"ground", {INPUT_KEY(G, 1), INPUT_PAD(B, 1)}},
@@ -2416,6 +2426,26 @@ static SceneNode* clone_rig(SceneNode* puppet_root) {
 }
 
 // Game init callback
+// The first skinned mesh under a node, which is the one carrying the per-bone
+// bind boxes a capsule radius is measured from.
+static const Mesh* find_skinned_mesh(const SceneNode* node) {
+    if (!node) {
+        return NULL;
+    }
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        if (node->meshes[i] && node->meshes[i]->is_skinned) {
+            return node->meshes[i];
+        }
+    }
+    for (size_t i = 0; i < node->children_count; i++) {
+        const Mesh* found = find_skinned_mesh(node->children[i]);
+        if (found) {
+            return found;
+        }
+    }
+    return NULL;
+}
+
 /*
  * THROWAWAY (12.16 phase 2): a hand-written ragdoll with no rig behind it, so
  * the Jolt binding can be watched falling before anything animated depends on
@@ -2871,6 +2901,16 @@ static void on_init(Game* game) {
                     }
                 }
             }
+            // The ragdoll, built now and started only when something kills the
+            // player. Built here because the measurements come from the BIND
+            // pose, which does not change, and a build at the moment of death
+            // would put a rig walk and a dozen allocations in the frame the
+            // player most wants to be smooth.
+            //
+            // PLAYER_SCALE is the rig node's, which is the scale every capsule
+            // is measured against.
+            player_animator->state->ragdoll =
+                create_ragdoll(skeleton, find_skinned_mesh(puppet_root), PLAYER_SCALE);
         }
         printf("Player is the puppet: %zu bones, %zu clips\n", skeleton->bone_count,
                scene->animation_count);
@@ -3659,11 +3699,65 @@ static void follow_camera_update(Game* game) {
     camera_set_look_at(engine->camera, focus);
 }
 
+/*
+ * Hand the player over to physics. Three things move together and all three
+ * matter: the controller stops (so it neither steers nor pins the entity to its
+ * capsule), the bodies start from the pose the rig is in right now (so the heap
+ * continues the character's motion rather than snapping to bind), and the
+ * entity follows the hips from here (so the camera, which frames the entity,
+ * keeps framing the body).
+ */
+static void ragdoll_kill_player(Game* game) {
+    if (!player_animator || !player_skel_root || ragdoll_active(player_animator->state->ragdoll)) {
+        return;
+    }
+    PhysicsWorld* physics = game_get_physics_world(game);
+    if (!physics) {
+        return;
+    }
+    if (!ragdoll_start(player_animator->state->ragdoll, physics,
+                       player_animator->state->global_transforms,
+                       player_skel_root->global_transform)) {
+        return;
+    }
+    CharacterController* cc = entity_get_character_controller(player_entity);
+    if (cc) {
+        character_controller_set_enabled(cc, false);
+    }
+    printf("Ragdoll.\n");
+}
+
 static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
 
     if (rd_demo)
         ragdoll_demo_sync();
+
+    // Killing the player. Here rather than in on_update for the same reason the
+    // pause toggle is: the fixed step may run any number of times in a frame,
+    // and this wants to happen once.
+    if (player_animator && player_animator->state->ragdoll &&
+        input_action_pressed(&game->input, "ragdoll")) {
+        ragdoll_kill_player(game);
+    }
+    // The rig node moves with the character, so the ragdoll's model-to-world has
+    // to follow it -- while it is active nothing else writes the node, but the
+    // matrix was captured a frame before the bodies started moving.
+    if (player_animator && player_animator->state->ragdoll && player_skel_root) {
+        ragdoll_set_world(player_animator->state->ragdoll, player_skel_root->global_transform);
+        // The entity follows the hips, because the camera frames the ENTITY and
+        // a disabled controller stops writing it -- without this the shot stays
+        // where the character died while the body slides out of it.
+        //
+        // It looks circular (the node follows the entity, the ragdoll reads the
+        // node) and is not: the conversion is exact either way, so moving the
+        // node changes which model-space numbers come out and not where the
+        // bones land in the world.
+        vec3 hips;
+        if (ragdoll_hips_world(player_animator->state->ragdoll, hips)) {
+            glm_vec3_copy(hips, player_entity->position);
+        }
+    }
 
     // Here and not in on_update: the fixed step does not run while paused, so
     // a toggle read there could pause and never unpause.
@@ -4137,26 +4231,6 @@ static PhysicsWorld* ik_probe_world(Game* game, const vec3 stand) {
 
     physics_world_optimize(physics);
     return physics;
-}
-
-// The first skinned mesh under a node, which is the one carrying the per-bone
-// bind boxes a capsule radius is measured from.
-static const Mesh* find_skinned_mesh(const SceneNode* node) {
-    if (!node) {
-        return NULL;
-    }
-    for (size_t i = 0; i < node->mesh_count; i++) {
-        if (node->meshes[i] && node->meshes[i]->is_skinned) {
-            return node->meshes[i];
-        }
-    }
-    for (size_t i = 0; i < node->children_count; i++) {
-        const Mesh* found = find_skinned_mesh(node->children[i]);
-        if (found) {
-            return found;
-        }
-    }
-    return NULL;
 }
 
 // The bones the probe reports, named so a gate reads them rather than indices.
