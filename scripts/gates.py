@@ -24121,10 +24121,10 @@ def run_ragdoll_gate(workdir):
         if not ok:
             failed.append(name)
 
-    # Four spawns for six arms. A `build` run also prints the shapes rows and a
-    # `settles` run also prints pose and frees, so what decides the count is how
-    # many distinct (rig, world) setups the group needs and not how many arms
-    # read them.
+    # Four spawns for eight arms. A `build` run also prints the shapes rows and
+    # a `settles` run also prints pose, roundtrip, rigid and frees, so what
+    # decides the count is how many distinct (rig, world) setups the group needs
+    # and not how many arms read them.
     rigs = [("puppet", None), ("t_pose", "t_pose.fbx")]
     build = {}
     for tag, rig in rigs:
