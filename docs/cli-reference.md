@@ -769,11 +769,13 @@ through 12.0's audio. `--no-puppet` keeps the original red box (and the all-rigi
 `--puppet <path>` swaps the rig; `--twin <clip>` stands a second rig beside the player playing its
 own clip, which is what two independent poses in one frame look like. `--anim-probe <case>` is the
 headless probe the `anim` gate group reads -- `locomotion`, `crossfade`, `layer`, `two-rigs`,
-`phase`, `events` and `import` -- built like `--audio-probe`: a self-contained headless game with
+`phase`, `events`, `import`, `stride`, `rate`, and since 12.18 `root` and `rootmotion` -- built
+like `--audio-probe`: a self-contained headless game with
 no window that ticks ANIMATOR components through the loop's own `update_all_animators` at a fixed
 1/60, prints `anim <case> <label> <key> <numbers>` and exits. `--trace-player` gains a tail after
 `jump`: `anim <knob> <w_idle> <w_walk> <w_run> <fade> <layer> <source>`, APPENDED rather than
-inserted so the `gamepad` group's regex still matches the same line.
+inserted so the `gamepad` group's regex still matches the same line -- and since 12.18 a
+`yaw <radians>` column after the camera's, appended for the same reason.
 
 **It is frame-deterministic headless, and this paragraph said otherwise for six specs.** Two runs
 of one script trace byte-identically and their frames differ by **0 px** (measured, spec 11.109),
@@ -943,6 +945,32 @@ what sits between and beyond them.
 it is now a way to walk slower than full stick rather than the only way to see the feature. It no
 longer carries the old caveat about which constant the knob divides by: an absolute axis has no
 gear to re-normalise.
+
+**`--no-root-motion` (spec 12.18) is the other half of that story, from the opposite side.** On
+the generated puppet the locomotion pair is `travel_walk` and `travel_run` — clips that state how
+far they travel — so the character goes exactly as far as the animation says and full stick is
+**6.40 m/s** because the run clip carries 1.60 m per half second. The flag puts the in-place pair
+back, and the startup line tells you which way round you are:
+
+```bash
+./out/bin/gametest                    # "Locomotion travels 0 to 6.40 m/s, stated by the clips"
+./out/bin/gametest --no-root-motion   # "Locomotion clips imply no stride"; travel is the constant
+```
+
+**Two keys come with it**, and they are the thing stride matching cannot express: **Q** (or the
+right trigger) lunges a stated 1.20 m, and **C** (or the left trigger) spins half a turn on the
+spot. Both are distances an animator chose, so rate-scaling one is exactly wrong. The triggers
+rather than buttons because every one of GLFW's fifteen is already bound.
+
+Two behaviours invert with the ownership and are worth expecting before you meet them. Walking
+into a wall plays the walk ON THE SPOT, where the stride-matched path stops it — the blend knob
+has to come from the stick, since the travel comes from the clip the knob selects. And the
+character turns toward where you point and then travels forward, rather than travelling in the
+direction you point: the facing is what the stick sets.
+
+`--puppet` never enters any of this. No committed FBX clip carries a root curve — `strut_walk`
+states 0.000071 m of travel over its whole loop — so an imported rig measures its stride exactly
+as it did before.
 
 `--ik-probe <case>` is the headless probe the `ik` gate group reads, in the same shape as the
 four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,

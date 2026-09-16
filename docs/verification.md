@@ -42,6 +42,8 @@ up as a difference. The corpus must not be re-baked off macOS.
   cover: another display, a real pad through a menu, and the other two settings locations
 - [The save paths](#the-save-paths) — what the `save` group asserts, why a restored world is
   deliberately not bit-exact, and the migration nobody can test until time passes
+- [The root-motion path](#the-root-motion-path) — what the nine 12.18 arms assert, and why the
+  benefit root motion exists for cannot be measured on any asset in this tree
 - [The foot-planting path](#the-foot-planting-path) — what the `ik` group asserts about the
   solve, why eleven arms passed while the feet were welded to the floor, and why planting is
   not locking
@@ -570,6 +572,49 @@ reproducible, before reading anything into the number the arm prints.
 
 ---
 
+### The root-motion path
+
+Spec 12.18's nine arms are in the `anim` group. Seven measure the engine with no app: what a clip
+STATES (`anim-root-travel`), what the animator hands out over a loop seam (`anim-root-wrap`), a
+mixture (`anim-root-blend`), a crossfade (`anim-root-fade`), a turn (`anim-root-yaw`) and the
+pose it leaves behind (`anim-root-zeroed`), plus one pin (`anim-root-switch`). Two drive the
+demo with a scripted pad and read its own trace: `anim-root-lunge` and `anim-root-spin`, both
+two-sided against `--no-root-motion`.
+
+**The bars, and where they came from.** Every distance is a number
+`assets/generators/gen_puppet_fixture.py` declares and asserts — 1.20 m per walk loop, 1.60 per
+run loop, 1.20 for the lunge, half a turn for the spin — so the gate and the asset are two ends
+of one statement rather than two measurements that agree. The arms expect one UPDATE less than
+the whole distance, which is the contract: a source's first update has no previous reading to
+difference and rebases instead.
+
+**What it is NOT a claim about.** Root motion's textbook benefit is that a stance foot cannot
+slide, the body going exactly where the animation says. **That is unmeasurable on every asset in
+this tree, and no arm or doc line should say otherwise.** The generated puppet's `gait()` is a
+straight-leg pendulum with no stance phase, so its feet slide whatever the body does; and every
+committed FBX clip is in place, which spec 12.18 measured rather than assumed — `strut_walk`
+states **0.000071 m** of travel over its whole loop. So the two halves never meet. What the arms
+do assert is that the character travels exactly what the clip states, which is the half that can
+be checked here.
+
+**Three things only a person watching can settle:**
+
+- **Whether a wall reads as a bug.** Under root motion the blend knob is what the STICK asks
+  for, because the travel comes from the clip the knob selects and a knob fed by the achieved
+  speed would start at zero and stay there. So walking into a wall plays the walk on the spot,
+  where the stride-matched path stops it. That is inherent to inverting the ownership; whether
+  it looks wrong enough to want a blocked-detector is a judgement nobody has made yet.
+- **The lunge's opening.** It carries 2.192 m of the 2.40 it states, the 0.08 s crossfade
+  discounting the start. The number is right; whether the move reads as landing short is a look.
+- **A rig that is not the puppet.** No imported clip carries a root curve, so `--puppet` never
+  enters this path at all. A character with authored root motion would be the first real test,
+  and would immediately want the retarget to carry translation, which spec 12.18 left out.
+
+**Owed.** The arithmetic is exact and the demo travels what its clips state. Nobody has watched
+a character whose animation was authored to move it.
+
+---
+
 ## The foot-planting path
 
 Spec 12.4's thirteen arms assert two-bone IK where it is a pure function. Six drive the solver
@@ -670,8 +715,11 @@ doing at the time:
   full stick from the fastest. On `--puppet assets/models/t_pose.fbx` that is 2.67 m/s and
   `--no-lock` moves **2217 px**. The generated puppet still reads 0 px at any speed, and that is
   also the mechanism working: its walk is a straight-leg pendulum with no stance, the measurement
-  REFUSES it by name, and the run says so at startup. Root motion remains the other answer and is
-  still not in this engine.
+  REFUSES it by name, and the run says so at startup. **Root motion, the other answer, arrived in
+  spec 12.18** -- and it does not close this row from the other side, because the two features
+  meet on no asset in this tree: only the four clips 12.18 authored carry a root curve, and they
+  are on the same stanceless pendulum. `strut_walk` states **0.000071 m** of travel over its whole
+  loop, measured rather than assumed, so every clip a lock has ever been read on is in place.
 - **A real character is still owed, and the reason is narrower than it first looked.**
   `--puppet assets/models/t_pose.fbx` does NOT work, and not for the reason first written here:
   `take_puppet_root` requires a node named exactly **`puppet`**, which only the generated rig

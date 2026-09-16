@@ -143,10 +143,13 @@ body moving at the speed the clip's own feet imply.
 1. **The contact signal is derived at RUNTIME, from the pose at the solve seam, and judged at
    the ANKLE.** The method labels contacts offline from toe speed and height. Two deviations,
    both forced:
-   - Our clips carry no root motion — the character controller moves the entity — so a stance
-     foot's model-space horizontal speed is the walk speed rather than zero, and the horizontal
-     term thresholds to nothing. Height and vertical speed say the same thing about a foot set
-     down and not yet picked up, and need no authored data and no baking step.
+   - The clips a locked foot is measured on carry no root motion — the character controller
+     moves the entity — so a stance foot's model-space horizontal speed is the walk speed rather
+     than zero, and the horizontal term thresholds to nothing. Height and vertical speed say the
+     same thing about a foot set down and not yet picked up, and need no authored data and no
+     baking step. (Spec 12.18 gave the engine root motion; on a clip that carries one the
+     horizontal term would work, and the vertical pair works on both kinds, which is what a
+     solver handed arbitrary clips needs.)
    - Judged at the toe, as the method has it, the label found **6 contacts over 3 cycles**: on a
      clip retargeted onto a rig of other proportions the toe JOINT passes back through its own
      bind clearance in mid-swing (0.0390 against a stance 0.0137), slowly enough that the speed
@@ -228,4 +231,18 @@ Three things that spec learned about the feature, which belong here rather than 
   12.9 built reads the LEFT foot, which is why nineteen arms never saw it. Filed, not fixed:
   moving the label would move `ik-contact`, `ik-slide` and `ik-hysteresis` with it.
 
-Root motion is still not in this engine, and is the other answer to the same problem.
+**Spec 12.18 did the second.** Root motion is in this engine now: a clip states how far its
+root travels, the animator hands that to the character, and the character goes exactly that far.
+It is the other answer to the same problem and it arrives from the opposite side — stride
+matching scales playback until the clip keeps up with the body, root motion moves the body
+exactly as the clip says.
+
+**What it does NOT do is make this page's measurements better, and the reason is the corpus.**
+Root motion only reaches a clip that carries a root curve, and the only clips in this tree that
+do are the four spec 12.18 authored on the generated puppet — whose `gait()` swings a straight
+leg with no stance phase at all, so its feet slide whatever the body does. Every clip a locked
+foot has ever been measured on is in place: `strut_walk` states **0.000071 m** of travel over
+its whole loop, measured rather than assumed. So the two features do not meet on any asset here,
+and no number on this page moves. What would make them meet is a walk cycle authored with both
+a stance and a root curve, which is the next thing this fixture wants after the stance that
+12.10 already asked for.
