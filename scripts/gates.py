@@ -14661,6 +14661,13 @@ _GAMETEST_TRACE = re.compile(
     r"player step (\d+) t=\s*[\d.]+ pos(?:\s+-?[\d.]+){3}\s+vel(?:\s+-?[\d.]+){3}\s+"
     r"grounded (\d)\s+move\s+(-?[\d.]+)\s+-?[\d.]+ jump \d")
 _GAMETEST_BINDING = re.compile(r"^([a-z_]+)\s+(.*)$", re.M)
+# The same trace line's horizontal velocity (x and z, skipping y) and the follow
+# camera's heading, each read on its own so _GAMETEST_TRACE's group numbering --
+# which five arms index positionally -- stays where it is.
+_GAMETEST_VEL = re.compile(
+    r"player step (\d+) t=\s*[\d.]+ pos(?:\s+-?[\d.]+){3}\s+"
+    r"vel\s+(-?[\d.]+)\s+-?[\d.]+\s+(-?[\d.]+)")
+_GAMETEST_CAM = re.compile(r"player step (\d+) .* cam (-?[\d.]+)")
 GAMETEST_TRACE_EVERY = 10
 
 
@@ -14686,7 +14693,13 @@ def _gametest_pad_run(workdir, tag, script, frames):
     if r.returncode != 0 or not samples:
         return None
     steps = {int(step): (float(mx), g == "1") for step, g, mx in samples}
-    return {"steps": steps, "jumps": text.count("Jump!")}
+    # The velocity and the camera heading off the SAME line, through a second pass
+    # rather than by widening _GAMETEST_TRACE: five arms read that regex's three
+    # groups positionally, and adding captures to it would renumber every one of
+    # them to serve the one arm that wants these columns.
+    vel = {int(s): (float(vx), float(vz)) for s, vx, vz in _GAMETEST_VEL.findall(text)}
+    cam = {int(s): float(c) for s, c in _GAMETEST_CAM.findall(text)}
+    return {"steps": steps, "vel": vel, "cam": cam, "jumps": text.count("Jump!")}
 
 
 def _leg(run, first, last):
@@ -14715,9 +14728,22 @@ def run_gamepad_gate(workdir):
       pad-keys-alias every action in the app's table has a key AND a pad source, read
                      from --print-bindings -- keys cannot be scripted headless, so the
                      table is where a binding that lost one half is caught.
+      pad-camera-relative
+                     forward means away from the LENS: turn the camera with the right
+                     stick and the commanded velocity turns with it, by the angle the
+                     arrows asked for and not merely by something.
 
     The player spawns two units up and lands by step 20; every script waits until
     frame 60 before it does anything, since a jump needs the ground.
+
+    pad-camera-relative is the arm none of the five above could stand in for, and the
+    reason is in _gametest_pad_run's own docstring: they read the MOVE column -- the action
+    value the app commanded from -- and never displacement, because five boxes fall at
+    rand() positions that differ per platform's libc. The action value is identical
+    under both movement schemes. So when spec 12.13 changed movement from camera-
+    relative to world-aligned, and 12.17 changed it back, this group was green through
+    both and neither flip was visible to anything but a person playing it. Twice the
+    documentation went on describing the scheme that was no longer live.
     """
     if not os.path.exists(GAMETEST):
         print("  gamepad      SKIP  (gametest not built)")
@@ -14798,6 +14824,45 @@ def run_gamepad_gate(workdir):
           + (f", without both a key and a pad source: {halved}" if halved else ""))
     if not ok:
         failures.append("pad-keys-alias")
+
+    # --- pad-camera-relative -----------------------------------------------------
+    # Two runs holding the same forward. One turns the camera first with the right
+    # stick, which is what `look_x` binds beside the arrow keys -- a key cannot be
+    # scripted headless, so the pad axis is the only way in.
+    straight = _gametest_pad_run(workdir, "cam_straight", "0-60 idle\n61-200 ly=-1\n", 210)
+    turned = _gametest_pad_run(workdir, "cam_turned", "0-60 rx=1\n61-200 ly=-1\n", 210)
+    if not straight or not turned:
+        print("  pad-camera-relative SKIP  no trace")
+        failures.append("pad-camera-relative")
+    else:
+        # Sampled late, after the character has settled into a steady heading.
+        def heading(run):
+            step = max(s for s in run["vel"])
+            vx, vz = run["vel"][step]
+            return math.atan2(vx, vz), run["cam"][step]
+
+        h0, c0 = heading(straight)
+        h1, c1 = heading(turned)
+        # Wrapped into (-pi, pi] before comparing: a heading near the branch cut
+        # differs by 2pi from the same direction written the other way.
+        def wrap(a):
+            return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+        turn = wrap(c1 - c0)
+        got = wrap(h1 - h0)
+        err = abs(wrap(got - turn))
+        # The camera moved at all, or the arm is asserting nothing: a script that
+        # failed to reach look_x would give turn == 0, under which world-aligned and
+        # camera-relative are the same answer and this would pass on either.
+        ok = abs(turn) > 0.5 and err < 0.05
+        print(f"  pad-camera-relative {'PASS' if ok else 'FAIL'}  the camera turned "
+              f"{math.degrees(turn):.1f} deg and the commanded heading turned "
+              f"{math.degrees(got):.1f} deg, out by {math.degrees(err):.2f} (want under 3 "
+              f"deg, and the camera to have actually moved: forward is away from the LENS, "
+              f"so world-aligned movement reads 0 deg here while every other arm in this "
+              f"group stays green)")
+        if not ok:
+            failures.append("pad-camera-relative")
 
     return failures
 
