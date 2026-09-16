@@ -394,5 +394,12 @@ the binary already, missing only a C binding this tree has twice precedented how
 to write. **Check what a dependency already does before costing a gap** — the
 distance between "absent" and "unbound" was months of imagined work.
 
+Spec 12.16 shipped that row and returned the other half of the lesson, which is
+worth carrying with it so the first half is not read as "it was free": binding
+Jolt's ragdoll took a day, and making the twelve capsules it needs survive a rig
+nobody wrote them against took three times that. **The cost of a gap like this
+is rarely in the dependency — it is in meeting arbitrary content.** Both further
+rounds were found by watching a character fall over, with every gate arm green.
+
 The real risk remains scope: finishing an engine *and* building a game. This
 document now states the size of the first honestly, which it previously did not.
