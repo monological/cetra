@@ -18,6 +18,7 @@
 #include <cglm/cglm.h>
 
 #include "cetra/internal/async_loader.h"
+#include "cetra/internal/ragdoll_jolt.h"
 #include "cetra/internal/rigging.h"
 #include "cetra/common.h"
 #include "cetra/mesh.h"
@@ -2414,6 +2415,91 @@ static SceneNode* clone_rig(SceneNode* puppet_root) {
 }
 
 // Game init callback
+/*
+ * THROWAWAY (12.16 phase 2): a hand-written ragdoll with no rig behind it, so
+ * the Jolt binding can be watched falling before anything animated depends on
+ * it. Deleted once ragdoll.c builds these from a skeleton.
+ */
+#define RD_DEMO_MAX 16
+static bool ragdoll_demo = false;
+static JoltRagdoll* rd_demo = NULL;
+static SceneNode* rd_demo_nodes[RD_DEMO_MAX];
+static float rd_demo_half[RD_DEMO_MAX][3];
+static int rd_demo_count = 0;
+
+static void ragdoll_demo_init(Game* game, Scene* scene) {
+    PhysicsWorld* physics = game_get_physics_world(game);
+    if (!physics)
+        return;
+
+    // A standing figure in world space, roughly human at PLAYER_SCALE, dropped a
+    // little above the plate so the first thing seen is it falling.
+    const float y0 = 12.0f;
+    struct {
+        const char* name;
+        int parent;
+        float r, hh, x, y, z;
+    } rows[] = {
+        {"hips", -1, 0.16f, 0.10f, 0.0f, y0 + 1.90f, 0.0f},
+        {"spine", 0, 0.16f, 0.12f, 0.0f, y0 + 2.20f, 0.0f},
+        {"chest", 1, 0.18f, 0.16f, 0.0f, y0 + 2.60f, 0.0f},
+        {"head", 2, 0.15f, 0.10f, 0.0f, y0 + 3.10f, 0.0f},
+        {"upperarm.l", 2, 0.08f, 0.20f, 0.42f, y0 + 2.70f, 0.0f},
+        {"forearm.l", 4, 0.07f, 0.20f, 0.86f, y0 + 2.70f, 0.0f},
+        {"upperarm.r", 2, 0.08f, 0.20f, -0.42f, y0 + 2.70f, 0.0f},
+        {"forearm.r", 6, 0.07f, 0.20f, -0.86f, y0 + 2.70f, 0.0f},
+        {"thigh.l", 0, 0.12f, 0.28f, 0.20f, y0 + 1.30f, 0.0f},
+        {"shin.l", 8, 0.10f, 0.28f, 0.20f, y0 + 0.60f, 0.0f},
+        {"thigh.r", 0, 0.12f, 0.28f, -0.20f, y0 + 1.30f, 0.0f},
+        {"shin.r", 10, 0.10f, 0.28f, -0.20f, y0 + 0.60f, 0.0f},
+    };
+    const int count = (int)(sizeof(rows) / sizeof(rows[0]));
+
+    RagdollBuild build[RD_DEMO_MAX];
+    memset(build, 0, sizeof(build));
+    for (int i = 0; i < count; i++) {
+        build[i].name = rows[i].name;
+        build[i].parent = rows[i].parent;
+        build[i].capsule_radius = rows[i].r;
+        build[i].capsule_half_height = rows[i].hh;
+        glm_mat4_identity(build[i].world);
+        build[i].world[3][0] = rows[i].x;
+        build[i].world[3][1] = rows[i].y;
+        build[i].world[3][2] = rows[i].z;
+        build[i].cone_deg = 45.0f;
+        build[i].plane_deg = 45.0f;
+        build[i].twist_min_deg = -30.0f;
+        build[i].twist_max_deg = 30.0f;
+    }
+
+    rd_demo = jolt_ragdoll_create(physics->physics_system, build, count, 1);
+    if (!rd_demo) {
+        printf("ragdoll-demo: build refused\n");
+        return;
+    }
+    rd_demo_count = jolt_ragdoll_body_count(rd_demo);
+    printf("ragdoll-demo: %d bodies\n", rd_demo_count);
+
+    for (int i = 0; i < rd_demo_count && i < RD_DEMO_MAX; i++) {
+        // A box standing in for the capsule: the point is to see where the body
+        // IS and which way it points, not to draw it accurately.
+        vec3 half = {rows[i].r, rows[i].hh + rows[i].r, rows[i].r};
+        glm_vec3_copy(half, rd_demo_half[i]);
+        rd_demo_nodes[i] = create_box_node(scene, half, (vec3){0.9f, 0.3f, 0.2f}, false);
+        node_set_name(rd_demo_nodes[i], rows[i].name);
+    }
+}
+
+static void ragdoll_demo_sync(void) {
+    for (int i = 0; i < rd_demo_count && i < RD_DEMO_MAX; i++) {
+        if (!rd_demo_nodes[i])
+            continue;
+        mat4 world;
+        if (jolt_ragdoll_get_world(rd_demo, i, world))
+            glm_mat4_copy(world, rd_demo_nodes[i]->original_transform);
+    }
+}
+
 static void on_init(Game* game) {
     printf("Game initialized with physics!\n");
 
@@ -2881,6 +2967,8 @@ static void on_init(Game* game) {
     // keep it out of the two menu goldens, which photograph the world through a
     // backdrop that is only 77 percent opaque -- those now include it.
     build_ik_ground(game);
+    if (ragdoll_demo)
+        ragdoll_demo_init(game, scene);
     // The basin around it, and the platform's own lip. All before the optimize below,
     // which the comment there requires: every static body has to exist first. The shaft
     // goes first because build_ocean's bed callback reads the field it installs.
@@ -3572,6 +3660,9 @@ static void follow_camera_update(Game* game) {
 
 static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
+
+    if (rd_demo)
+        ragdoll_demo_sync();
 
     // Here and not in on_update: the fixed step does not run while paused, so
     // a toggle read there could pause and never unpause.
@@ -6475,6 +6566,8 @@ int main(int argc, const char* argv[]) {
             display_monitor = argv[++i];
         } else if (!strcmp(a, "--list-monitors")) {
             list_monitors = true;
+        } else if (!strcmp(a, "--ragdoll-demo")) {
+            ragdoll_demo = true;
         } else if (!strcmp(a, "--taa")) {
             force_taa = true;
         } else if ((!strcmp(a, "-f") || !strcmp(a, "--frames")) && i + 1 < argc) {
