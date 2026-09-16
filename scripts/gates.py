@@ -15201,6 +15201,13 @@ def run_anim_gate(workdir):
                        global path leaves the local-delta fallback correcting 15 of 22
                        and the rig still standing, which the posture bar alone reads as
                        a pass.
+      anim-root-travel what a clip STATES about its own displacement (spec 12.18): the
+                       travelling clips carry the distance the generator authored, spin
+                       carries half a turn and no distance, and every in-place clip --
+                       the generated pendulum walk and the committed strut_walk among
+                       them -- REFUSES. The refusals are the half that could not be had
+                       by inference, and strut_walk's is the measurement that replaced
+                       one.
     """
     import math
 
@@ -15599,6 +15606,43 @@ def run_anim_gate(workdir):
               f"and all {blind_matched})")
         if not ok:
             failures.append("anim-retarget")
+
+    # --- anim-root-travel ------------------------------------------------------
+    # What a clip STATES about its own displacement, against what the generator
+    # authored. The distances are declared in gen_puppet_fixture.py and asserted
+    # there; this arm is the other end of the same statement.
+    #
+    # The refusals are the half that could not be had by inference. Before this arm
+    # the claim that the committed FBX clips are in place rested on anim-stride
+    # passing at all -- a clip carrying root motion has a near-stationary stance toe
+    # and would be refused by the stride measurement -- which is a deduction from an
+    # absence. strut is the same question asked directly.
+    d = _anim_probe_run("root")
+    want_travel = {"travel_walk": 1.20, "travel_run": 1.60, "lunge": 1.20}
+    refuse = ("idle", "walk", "strut")
+    need = [(k, "travel") for k in list(want_travel) + ["spin"] + list(refuse)]
+    if not d or any(k not in d for k in need):
+        print("  anim-root-travel FAIL  the probe failed or measured nothing")
+        failures.append("anim-root-travel")
+    else:
+        # answered, dx, dy, dz, yaw
+        worst = max(abs(d[(k, "travel")][3] - v) for k, v in want_travel.items())
+        skew = max(max(abs(d[(k, "travel")][1]), abs(d[(k, "travel")][4]))
+                   for k in want_travel)
+        stated = all(d[(k, "travel")][0] == 1.0 for k in list(want_travel) + ["spin"])
+        spun = abs(abs(d[("spin", "travel")][4]) - math.pi)
+        spin_still = max(abs(d[("spin", "travel")][i]) for i in (1, 3))
+        refused = [k for k in refuse if d[(k, "travel")][0] != 0.0]
+        ok = (stated and not refused and worst < 1e-4 and skew < 1e-4
+              and spun < 1e-4 and spin_still < 1e-4)
+        print(f"  anim-root-travel {'PASS' if ok else 'FAIL'}  the travelling clips state "
+              f"their distance to {worst:.6f} m (want < 1e-4) with {skew:.6f} m of drift "
+              f"off the axis, spin states {d[('spin', 'travel')][4]:+.4f} rad "
+              f"(want +-pi) and travels {spin_still:.6f} m; "
+              f"{'every' if not refused else 'not every'} in-place clip refuses"
+              f"{'' if not refused else ' -- ' + ', '.join(refused) + ' claims a travel'}")
+        if not ok:
+            failures.append("anim-root-travel")
 
     return failures
 
