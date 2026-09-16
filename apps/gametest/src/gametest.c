@@ -5786,6 +5786,21 @@ static int run_anim_probe(Game* game, const char* which) {
         printf("anim rootmotion switch travelled %.6f %.6f %.6f\n", (double)got[0], (double)got[1],
                (double)got[2]);
 
+        // A crossfade between two clips that travel at DIFFERENT speeds. Over the
+        // fade the pose's own root is a lerp of two curves that are metres apart, so
+        // a reading taken from the blended pose hands the character that gap as
+        // travel; per-entry readings cannot see it. The bar is the integral of the
+        // two speeds under the fade envelope, which is a number the gate recomputes.
+        Animator* e = probe_rig(em, skel, "fade");
+        animator_play(e, strider, 0.0f, true);
+        probe_tick_rooted(em, e, 60, got, &turned);
+        animator_play(e, sprinter, 0.3f, true);
+        probe_tick_rooted(em, e, 60, got, &turned);
+        printf("anim rootmotion fade travelled %.6f %.6f %.6f\n", (double)got[0], (double)got[1],
+               (double)got[2]);
+        printf("anim rootmotion fade shape %.6f %.6f %.6f\n", 0.3, (double)(60 * PROBE_DT),
+               (double)PROBE_DT);
+
         // Half a turn, and the pose still standing where it was. The yaw goes to the
         // character; what the rig draws must not turn with it.
         Animator* d = probe_rig(em, skel, "spin");
