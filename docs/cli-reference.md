@@ -828,6 +828,11 @@ Unlike `--display-probe` the SIMULATION is reachable — a headless game carries
 world — so the last three step Jolt and read the bodies back. `--puppet <rig>` selects the
 skeleton, which is how the build cases run against both the generated puppet and `t_pose.fbx`.
 
+**A case is not one arm, and that is what keeps the group to four processes for eight arms**:
+`build` prints the shapes rows too, and `settles` prints pose, roundtrip, rigid and frees, since
+all five read the same stepped world. Asking for a case you did not name costs nothing; the
+group's reader keeps every row the process produced rather than filtering to what it asked for.
+
 `--display-probe <case>` is the headless probe the `display` gate group reads, in the same shape:
 it prints `display <case> <label> <key> <numbers>` and exits, with cases `placement`, `monitors`,
 `apply`, or `all`. An unrecognised case is a failed run rather than a silent one. It reads what a
