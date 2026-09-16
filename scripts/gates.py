@@ -15208,6 +15208,23 @@ def run_anim_gate(workdir):
                        them -- REFUSES. The refusals are the half that could not be had
                        by inference, and strut_walk's is the measurement that replaced
                        one.
+      anim-root-wrap   three loops of a travelling clip carry three loops of ground. The
+                       clock jumping back at the seam is not the character going
+                       backwards, and the correction that puts it right is out by a whole
+                       loop in either direction if it is missing or doubled.
+      anim-root-blend  what a MIXTURE lays down, which is not the mean of its clips'
+                       speeds: one clock, so the ground per turn is sum(w*loop) and the
+                       turns per second sum(w/seconds). The two part company only when
+                       the clips differ in length, which is why these are 1.0 s and 0.5 s.
+      anim-root-switch a cut to the start of a clip moves the pose by most of a loop and
+                       the character by nothing at all.
+      anim-root-yaw    a clip that turns the body half way round turns it half way round,
+                       and carries no travel while doing it.
+      anim-root-zeroed the pose the frame DRAWS stands at its bind position and heading
+                       however far the character has been sent -- the other half of every
+                       arm above, since a rig that kept the travel it gave away would move
+                       twice and no pixel would say which half was wrong. Its height still
+                       moves, that being the bob rather than travel.
     """
     import math
 
@@ -15643,6 +15660,102 @@ def run_anim_gate(workdir):
               f"{'' if not refused else ' -- ' + ', '.join(refused) + ' claims a travel'}")
         if not ok:
             failures.append("anim-root-travel")
+
+    # --- anim-root-wrap / blend / switch / yaw / zeroed -------------------------
+    # What the animator hands a character, against what the clips state.
+    #
+    # Every expectation below is one update short of the whole distance, and that is
+    # the contract rather than a fudge: a source's first update has no previous
+    # reading to difference, so it rebases. The alternative is reading a clip's
+    # whole length as a step the first time anything plays.
+    d = _anim_probe_run("rootmotion")
+    dt = 1.0 / 60.0
+    rows = [("wrap", "travelled"), ("blend", "travelled"), ("blend", "seconds"),
+            ("blend", "loops"), ("switch", "travelled"), ("spin", "turned"),
+            ("spin", "travelled"), ("pinned", "offset"), ("pinned", "yaw"), ("spun", "yaw")]
+    if not d or any(k not in d for k in rows):
+        for arm in ("anim-root-wrap", "anim-root-blend", "anim-root-switch", "anim-root-yaw",
+                    "anim-root-zeroed"):
+            print(f"  {arm} FAIL  the probe failed or measured nothing")
+            failures.append(arm)
+    else:
+        walk_s, run_s, blend_s = d[("blend", "seconds")]
+        walk_loop, run_loop = d[("blend", "loops")]
+
+        # --- anim-root-wrap ----------------------------------------------------
+        # Three loops. A missing wrap correction loses one loop per crossing; one
+        # applied twice gains one. Either is 1.2 m away from this bar, so the
+        # tolerance can be tight enough to also catch a drift of one tick.
+        loops, secs = 3.0, 3.0 * walk_s
+        want = walk_loop * loops * (secs - dt) / secs
+        got = d[("wrap", "travelled")]
+        err = abs(got[2] - want)
+        ok = err < 1e-3 and abs(got[0]) < 1e-4
+        print(f"  anim-root-wrap {'PASS' if ok else 'FAIL'}  three loops carried "
+              f"{got[2]:.4f} m against the {want:.4f} m stated (want within 1e-3; a dropped "
+              f"seam would read {want - walk_loop:.4f} and a doubled one "
+              f"{want + walk_loop:.4f})")
+        if not ok:
+            failures.append("anim-root-wrap")
+
+        # --- anim-root-blend ---------------------------------------------------
+        # A mixture's travel is not the mean of its clips' speeds. The space keeps
+        # ONE clock, so the pose lays down sum(w*loop) of ground per turn of it while
+        # the clock turns at sum(w/seconds) -- and the two part company exactly when
+        # the clips differ in LENGTH, which is why these are 1.0 s and 0.5 s.
+        ground = 0.5 * walk_loop + 0.5 * run_loop
+        rate = 0.5 / walk_s + 0.5 / run_s
+        want = ground * rate * (blend_s - dt)
+        mean = 0.5 * (walk_loop / walk_s) + 0.5 * (run_loop / run_s)
+        naive = mean * (blend_s - dt)
+        got = d[("blend", "travelled")]
+        ok = abs(got[2] - want) < 1e-3 and abs(got[2] - naive) > 1e-2
+        print(f"  anim-root-blend {'PASS' if ok else 'FAIL'}  half way between a {walk_s:.1f}s "
+              f"clip carrying {walk_loop:.2f} m and a {run_s:.1f}s one carrying {run_loop:.2f} m, "
+              f"{blend_s:.1f}s of it travelled {got[2]:.4f} m (want {want:.4f}, and NOT the mean "
+              f"of the two speeds at {naive:.4f})")
+        if not ok:
+            failures.append("anim-root-blend")
+
+        # --- anim-root-switch --------------------------------------------------
+        # A cut mid-loop back to the start of a clip moves the pose by most of a
+        # loop. None of that is the character going anywhere.
+        got = d[("switch", "travelled")]
+        moved = max(abs(v) for v in got)
+        ok = moved < 1e-4
+        print(f"  anim-root-switch {'PASS' if ok else 'FAIL'}  the update after a cut carried "
+              f"{moved:.6f} m (want < 1e-4; differencing the two poses across the cut would "
+              f"read most of a loop)")
+        if not ok:
+            failures.append("anim-root-switch")
+
+        # --- anim-root-yaw -----------------------------------------------------
+        turned = d[("spin", "turned")][0]
+        want = math.pi * (1.0 - dt / 1.0)
+        spun_travel = max(abs(v) for v in d[("spin", "travelled")])
+        ok = abs(turned - want) < 1e-3 and spun_travel < 1e-4
+        print(f"  anim-root-yaw {'PASS' if ok else 'FAIL'}  half a turn came out "
+              f"{turned:.4f} rad against {want:.4f} stated, carrying {spun_travel:.6f} m of "
+              f"travel (want none: a clip may turn without going anywhere)")
+        if not ok:
+            failures.append("anim-root-yaw")
+
+        # --- anim-root-zeroed --------------------------------------------------
+        # The pose the frame draws, after three loops that sent the character 3.6 m
+        # and a turn that sent it half way round. A rig that kept either would move
+        # twice -- once as a body and once as a mesh sliding off its own capsule --
+        # and nothing in the pixels would say which half was wrong.
+        off = d[("pinned", "offset")]
+        flat = math.hypot(off[0], off[2])
+        yaw = abs(d[("pinned", "yaw")][0])
+        spun_yaw = abs(d[("spun", "yaw")][0])
+        ok = flat < 1e-6 and yaw < 1e-6 and spun_yaw < 1e-6 and abs(off[1]) > 1e-6
+        print(f"  anim-root-zeroed {'PASS' if ok else 'FAIL'}  the drawn root stands "
+              f"{flat:.6f} m from its bind position at {yaw:.6f} rad, and the spun rig at "
+              f"{spun_yaw:.6f} rad (want 0 for all three); its height still moves by "
+              f"{off[1]:+.6f} m, which is the bob and not travel")
+        if not ok:
+            failures.append("anim-root-zeroed")
 
     return failures
 

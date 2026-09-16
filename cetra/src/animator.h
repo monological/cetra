@@ -67,6 +67,23 @@ typedef struct AnimatorSpace {
     bool ended;      // the last advance reached a non-looping end
     bool looping;
     bool finished; // non-looping and held at its end
+    // Root motion (spec 12.18), per ENTRY rather than per space. What each entry
+    // states over one loop is measured when the source starts; where each entry's
+    // own root stood last update is kept so this update can difference it.
+    //
+    // Per entry because the mixture's travel is the weighted sum of what each clip
+    // moved, and NOT the movement of the blended root: the weights and the fade
+    // move too, so differencing a blended position reads a knob turn or a crossfade
+    // as a stride across the room.
+    //
+    // On the space rather than the Animator so a source carries it, the outgoing
+    // half of a crossfade being a copy of this struct.
+    vec3 loop_travel[ANIMATOR_SPACE_MAX];
+    float loop_yaw[ANIMATOR_SPACE_MAX];
+    vec3 prev_root[ANIMATOR_SPACE_MAX];
+    float prev_root_yaw[ANIMATOR_SPACE_MAX];
+    bool root_read; // prev_root holds a reading; false until the first update
+    bool travels;   // any entry states a displacement, so this source drives the character
 } AnimatorSpace;
 
 typedef enum AnimatorLayerPhase {
@@ -114,6 +131,12 @@ typedef struct Animator {
     Pose base_pose;
     AnimatorEventFn on_event;
     void* event_user;
+    // Root motion (spec 12.18). The bone is resolved once at create; each source
+    // keeps its own per-entry readings, and what they add up to waits here to be
+    // taken.
+    int root_bone;
+    vec3 root_accum; // laid down and not yet taken
+    float root_yaw_accum;
 
     // Per-update scratch. Not state: nothing reads these between frames, and
     // they are members rather than locals because a Pose is ~6 KB and
@@ -181,6 +204,37 @@ const char* animator_source_name(const Animator* animator);
 // same length. A game that reaches for the mean is wrong the moment its walk
 // and run differ in duration, by an amount that reads as a tuning problem.
 float animator_stride_speed(const Animator* animator);
+
+// --- Root motion (spec 12.18) ---
+//
+// The opposite of the two calls above. Stride matching asks how fast the clip
+// wants the ground to move and lets a game scale playback to its own speed; root
+// motion takes the displacement the clip STATES and hands it to the character, so
+// the animation decides where the body goes. What each clip states is measured
+// when the source starts, and the mixture's is blended exactly as the pose is.
+
+// Whether the playing source states a displacement at all. A property of the
+// clips, so it does not flicker: a game asks once per step which way round it is
+// running, and an in-place source answers false for as long as it plays.
+bool animator_root_motion(const Animator* animator);
+
+// Take what the clip has laid down since this was last called -- MODEL units and
+// radians about Y, `out_travel` and `out_yaw` may each be NULL -- and reset it to
+// zero. False, writing zeroes, when the source states nothing.
+//
+// A DRAIN and not a speed, because the two clocks do not line up: this animator
+// ticks once per rendered frame over however many fixed steps that frame ran, and
+// a character controller consumes a velocity per step. Handing over a
+// displacement exactly once conserves the distance under any pacing; a published
+// velocity would double it on a frame that stepped twice and lose it on one that
+// stepped none. Divide by the step's own dt at the call site.
+//
+// One frame late, necessarily: what a frame lays down is known after that frame's
+// steps have already run.
+//
+// MODEL units, so a rig on a scaled node owes the scale -- animation_stride_speed's
+// note, and 12.9's bug.
+bool animator_take_root_motion(Animator* animator, vec3 out_travel, float* out_yaw);
 
 // --- Override layer ---
 

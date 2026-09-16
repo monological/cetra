@@ -33,6 +33,7 @@ Animator* create_animator(Skeleton* skeleton) {
     a->speed = 1.0f;
     a->fade_weight = 1.0f;
     a->playing = true;
+    a->root_bone = animation_root_bone(skeleton);
     return a;
 }
 
@@ -190,6 +191,64 @@ static bool clip_on_skeleton(const Animator* a, const Animation* clip) {
     return true;
 }
 
+// What each entry states about its own displacement, once, as the source starts.
+// Measuring here rather than per frame is what keeps the per-frame cost a
+// subtraction: a clip's travel is a property of the clip and the rig, and both
+// are fixed for as long as the source plays.
+static void space_measure_root(AnimatorSpace* s, const Skeleton* skeleton, int root_bone) {
+    s->travels = false;
+    s->root_read = false;
+    for (int i = 0; i < s->count; i++) {
+        glm_vec3_zero(s->loop_travel[i]);
+        s->loop_yaw[i] = 0.0f;
+        if (root_bone < 0)
+            continue;
+        if (animation_root_travel(s->entries[i].clip, skeleton, root_bone, s->loop_travel[i],
+                                  &s->loop_yaw[i]))
+            s->travels = true;
+    }
+}
+
+// What this source laid down since the last update: each entry's OWN root moved
+// against its own reading, weighted the way the pose is.
+//
+// A wrap adds one loop back, per entry. The clock is shared, so every entry
+// crosses its loop point together and `wrapped` is the whole signal; what each
+// entry lays down over that loop is what it stated. Algebraically the correction
+// is exact -- (end - prev) + (now - start) is (now - prev) + one loop.
+//
+// The yaw is summed across entries and wrapped ONCE by the caller, since a
+// per-entry wrap would fold a real half-turn back into the small angle.
+static void space_root_advance(AnimatorSpace* s, int root_bone, vec3 out_travel, float* out_yaw) {
+    glm_vec3_zero(out_travel);
+    *out_yaw = 0.0f;
+    if (root_bone < 0 || !s->travels)
+        return;
+
+    const bool had = s->root_read;
+    for (int i = 0; i < s->count; i++) {
+        vec3 now = {0.0f, 0.0f, 0.0f};
+        float yaw = 0.0f;
+        if (!animation_root_at(s->entries[i].clip, root_bone, entry_time_at(s, i, s->time), now,
+                               &yaw))
+            continue;
+        if (had && s->weights[i] > 0.0f) {
+            vec3 moved;
+            glm_vec3_sub(now, s->prev_root[i], moved);
+            float turned = yaw - s->prev_root_yaw[i];
+            if (s->wrapped) {
+                glm_vec3_add(moved, s->loop_travel[i], moved);
+                turned += s->loop_yaw[i];
+            }
+            glm_vec3_muladds(moved, s->weights[i], out_travel);
+            *out_yaw += s->weights[i] * turned;
+        }
+        glm_vec3_copy(now, s->prev_root[i]);
+        s->prev_root_yaw[i] = yaw;
+    }
+    s->root_read = true;
+}
+
 // `incoming` replaces the base. With a fade the current base keeps running as
 // the outgoing source until the fade completes; a switch that lands mid-fade
 // freezes what was on screen and fades from that instead, so any number of
@@ -218,6 +277,10 @@ static void switch_source(Animator* a, const AnimatorSpace* incoming, float fade
             spring_bone_reset(a->state->springs);
     }
     a->base = *incoming;
+    // What the new source states, and no reading of it yet: its first update
+    // rebases rather than differencing, so a switch costs one update's travel
+    // instead of reading a clip's whole length as a step.
+    space_measure_root(&a->base, a->state->skeleton, a->root_bone);
 }
 
 static void one_clip_space(AnimatorSpace* s, const Animation* clip, bool looping) {
@@ -340,6 +403,26 @@ float animator_stride_speed(const Animator* a) {
         any = any || a->base.entries[i].stride > 0.0f;
     }
     return any ? ground * phase_rate : 0.0f;
+}
+
+bool animator_root_motion(const Animator* a) {
+    return a && a->base.count > 0 && a->base.travels;
+}
+
+bool animator_take_root_motion(Animator* a, vec3 out_travel, float* out_yaw) {
+    if (out_travel)
+        glm_vec3_zero(out_travel);
+    if (out_yaw)
+        *out_yaw = 0.0f;
+    if (!animator_root_motion(a))
+        return false;
+    if (out_travel)
+        glm_vec3_copy(a->root_accum, out_travel);
+    if (out_yaw)
+        *out_yaw = a->root_yaw_accum;
+    glm_vec3_zero(a->root_accum);
+    a->root_yaw_accum = 0.0f;
+    return true;
 }
 
 // ============================================================================
@@ -494,6 +577,55 @@ static void collect_events(const Animation* clip, float prev, float now, bool wr
 // The frame
 // ============================================================================
 
+// What the clips laid down this update, and the pose put back where it rests so
+// nothing travels twice.
+//
+// Both sources contribute, each weighted the way its pose is: the incoming one by
+// the fade, the outgoing one by what is left of it. A frozen outgoing source has
+// stopped advancing, so it lays down nothing and is skipped.
+//
+// The override layer is deliberately not consulted. A masked clip is played over a
+// body already going somewhere -- a wave is not a step -- and nothing measures a
+// travel for it.
+//
+// PINNING is gated on a source stating a displacement, and that gate is what keeps
+// every rig in the tree unchanged. An in-place clip is free to swing its hips and
+// turn them; removing that would flatten a walk cycle's counter-rotation on every
+// character in the corpus, for a correction that is only owed when the travel is
+// going to the body instead.
+static void root_advance(Animator* a, const Skeleton* skeleton) {
+    const bool fading_live = a->fading && !a->outgoing_frozen && a->outgoing.travels;
+    if (a->root_bone < 0 || !(a->base.travels || fading_live))
+        return;
+
+    vec3 moved = {0.0f, 0.0f, 0.0f};
+    float turned = 0.0f;
+    space_root_advance(&a->base, a->root_bone, moved, &turned);
+    glm_vec3_scale(moved, a->fade_weight, moved);
+    turned *= a->fade_weight;
+
+    if (fading_live) {
+        vec3 out_moved = {0.0f, 0.0f, 0.0f};
+        float out_turned = 0.0f;
+        space_root_advance(&a->outgoing, a->root_bone, out_moved, &out_turned);
+        glm_vec3_muladds(out_moved, 1.0f - a->fade_weight, moved);
+        turned += (1.0f - a->fade_weight) * out_turned;
+    }
+
+    // The shorter way round, AFTER the wrap corrections: a clip that turns the body
+    // most of the way round in one update is a real turn, and wrapping before the
+    // correction would read it as the small one back.
+    while (turned > GLM_PIf)
+        turned -= 2.0f * GLM_PIf;
+    while (turned < -GLM_PIf)
+        turned += 2.0f * GLM_PIf;
+
+    glm_vec3_add(a->root_accum, moved, a->root_accum);
+    a->root_yaw_accum += turned;
+
+    animation_pose_pin_root(skeleton, &a->base_pose, a->root_bone);
+}
+
 void animator_update(Animator* a, float dt) {
     if (!a)
         return;
@@ -544,6 +676,8 @@ void animator_update(Animator* a, float dt) {
         animation_sample_pose(a->layer.clip, skeleton, a->layer.time, &a->scratch_a);
         pose_blend_masked(&a->base_pose, &a->scratch_a, a->layer_weights, &a->base_pose);
     }
+
+    root_advance(a, skeleton);
 
     animation_state_apply_pose(a->state, &a->base_pose, dt);
 

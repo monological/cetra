@@ -5424,6 +5424,25 @@ static void probe_tick(EntityManager* em, int ticks) {
         update_all_animators(em, PROBE_DT);
 }
 
+// Ticks, draining the root motion every tick the way a game's fixed step does, and
+// totals what the clips laid down. Draining per tick rather than once at the end is
+// the point: a drain that loses a tick's travel, or hands the same one out twice,
+// shows up here as a distance that is not the clip's.
+static void probe_tick_rooted(EntityManager* em, Animator* a, int ticks, vec3 out_travel,
+                              float* out_yaw) {
+    glm_vec3_zero(out_travel);
+    *out_yaw = 0.0f;
+    for (int i = 0; i < ticks; i++) {
+        update_all_animators(em, PROBE_DT);
+        vec3 step;
+        float turned = 0.0f;
+        if (animator_take_root_motion(a, step, &turned)) {
+            glm_vec3_add(out_travel, step, out_travel);
+            *out_yaw += turned;
+        }
+    }
+}
+
 // The events case's recorder: names, and the tick each fired on.
 static int probe_event_count = 0;
 static int probe_tick_index = 0;
@@ -5708,6 +5727,87 @@ static int run_anim_probe(Game* game, const char* which) {
                    !strcmp(names[i], "strut_walk") ? "strut" : names[i], states ? 1 : 0,
                    (double)travel[0], (double)travel[1], (double)travel[2], (double)yaw);
         }
+    } else if (!strcmp(which, "rootmotion")) {
+        // What the ANIMATOR hands a character, against what the clips state. Four
+        // things can be wrong between the two and each has a label here: the loop
+        // seam, the blend, a source switch, and whether the pose still carries the
+        // travel it gave away.
+        const int root = animation_root_bone(skel);
+        const Animation* strider = scene_find_animation(scene, "travel_walk");
+        const Animation* sprinter = scene_find_animation(scene, "travel_run");
+        const Animation* turner = scene_find_animation(scene, "spin");
+        if (root < 0 || !strider || !sprinter || !turner) {
+            fprintf(stderr, "anim-probe: the rig lacks a travelling clip\n");
+            return 1;
+        }
+        const float walk_s = strider->duration / strider->ticks_per_second;
+        const float run_s = sprinter->duration / sprinter->ticks_per_second;
+        vec3 got = {0.0f, 0.0f, 0.0f};
+        float turned = 0.0f;
+
+        // Three whole loops, so the seam is crossed three times. A wrap correction
+        // that is missing reads as a distance one loop short per crossing; one
+        // applied twice reads as one long.
+        Animator* a = probe_rig(em, skel, "wrap");
+        animator_play(a, strider, 0.0f, true);
+        probe_tick_rooted(em, a, (int)(walk_s * 3.0f / PROBE_DT + 0.5f), got, &turned);
+        printf("anim rootmotion wrap travelled %.6f %.6f %.6f\n", (double)got[0], (double)got[1],
+               (double)got[2]);
+
+        // The blend. Parked half way between two clips of DIFFERENT length, which is
+        // where a mixture's travel stops being the mean of the two: one clock turns
+        // both loops, so what the pair lays down per second is the weighted travel
+        // per loop times the weighted loop rate. The gate recomputes that from the
+        // numbers printed here rather than taking the engine's word for it.
+        AnimatorEntry pair[2] = {{strider, 0.0f, 0.0f}, {sprinter, 1.0f, 0.0f}};
+        Animator* b = probe_rig(em, skel, "blend");
+        animator_play_space(b, "pair", pair, 2, 0.0f, true);
+        b->param = 0.5f;
+        const int blend_ticks = 120;
+        probe_tick_rooted(em, b, blend_ticks, got, &turned);
+        printf("anim rootmotion blend travelled %.6f %.6f %.6f\n", (double)got[0], (double)got[1],
+               (double)got[2]);
+        printf("anim rootmotion blend seconds %.6f %.6f %.6f\n", (double)walk_s, (double)run_s,
+               (double)(blend_ticks * PROBE_DT));
+        vec3 walk_travel, run_travel;
+        animation_root_travel(strider, skel, root, walk_travel, NULL);
+        animation_root_travel(sprinter, skel, root, run_travel, NULL);
+        printf("anim rootmotion blend loops %.6f %.6f\n", (double)walk_travel[2],
+               (double)run_travel[2]);
+
+        // A switch is not travel. The clock jumps from wherever the walk had got to
+        // back to the start of a new clip, and a reading that differenced the two
+        // would hand the character most of a loop in one tick.
+        Animator* c = probe_rig(em, skel, "switch");
+        animator_play(c, strider, 0.0f, true);
+        probe_tick_rooted(em, c, 40, got, &turned);
+        animator_play(c, strider, 0.0f, true); // a CUT, mid-loop, to the same clip
+        probe_tick_rooted(em, c, 1, got, &turned);
+        printf("anim rootmotion switch travelled %.6f %.6f %.6f\n", (double)got[0], (double)got[1],
+               (double)got[2]);
+
+        // Half a turn, and the pose still standing where it was. The yaw goes to the
+        // character; what the rig draws must not turn with it.
+        Animator* d = probe_rig(em, skel, "spin");
+        animator_play(d, turner, 0.0f, false);
+        probe_tick_rooted(em, d, (int)(1.0f / PROBE_DT + 0.5f), got, &turned);
+        printf("anim rootmotion spin turned %.6f\n", (double)turned);
+        printf("anim rootmotion spin travelled %.6f %.6f %.6f\n", (double)got[0], (double)got[1],
+               (double)got[2]);
+
+        // And the pose the frame draws: the root pinned at its bind position and
+        // heading however far the character has been sent. Read off the walking rig
+        // after three loops, where the clip's own root is 3.6 m from where it began.
+        vec3 posed;
+        float posed_yaw = 0.0f;
+        animation_pose_root(skel, &a->base_pose, root, posed, &posed_yaw);
+        const float* bind = skel->bones[root].local_transform[3];
+        printf("anim rootmotion pinned offset %.6f %.6f %.6f\n", (double)(posed[0] - bind[0]),
+               (double)(posed[1] - bind[1]), (double)(posed[2] - bind[2]));
+        printf("anim rootmotion pinned yaw %.6f\n", (double)posed_yaw);
+        // The same rig, spun: a pose that kept the clip's yaw would read half a turn.
+        animation_pose_root(skel, &d->base_pose, root, posed, &posed_yaw);
+        printf("anim rootmotion spun yaw %.6f\n", (double)posed_yaw);
     } else {
         fprintf(stderr, "anim-probe: unknown case '%s'\n", which);
         rc = 1;

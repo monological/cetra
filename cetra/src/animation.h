@@ -304,6 +304,19 @@ void animation_sample_pose(const Animation* anim, const Skeleton* skeleton, floa
 bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, const int ankle[2],
                             const int toe[2], float* out_speed, vec3 out_dir);
 
+// Where the clip's own root channel puts `root_bone` at one tick: its LOCAL position and
+// the heading of its +Z axis. A root bone has no parent on any rig this reaches, so local
+// and model are the same frame; a rig that hangs its hips under an animated node is
+// outside what this claims.
+//
+// False -- the in-place answer -- when the clip does not drive the root, and also when
+// its root channel is RETARGETED, since the pose takes a retargeted bone's position from
+// the bind pose whatever the keys hold. Answering from the keys there would hand a
+// character a distance measured on another skeleton, in another rig's proportions, that
+// no frame of the animation shows.
+bool animation_root_at(const Animation* clip, int root_bone, float tick, vec3 out_pos,
+                       float* out_yaw);
+
 // What this clip's ROOT STATES about its own displacement: how far `root_bone` travels
 // from the clip's first tick to its last, and how far it turns about Y. MODEL units and
 // radians; `out_travel` and `out_yaw` may each be NULL.
@@ -323,6 +336,24 @@ bool animation_root_travel(const Animation* clip, const Skeleton* skeleton, int 
 // The bone a rig's root motion belongs to: the hips where the rig has them, and the
 // first bone with no parent otherwise. -1 for an empty skeleton.
 int animation_root_bone(Skeleton* skeleton);
+
+// Where `root_bone` stands in one pose: its MODEL-space position, composed through
+// whatever ancestors it has, and the heading of its +Z axis. False, leaving both
+// untouched, for a pose that does not carry the bone.
+bool animation_pose_root(const Skeleton* skeleton, const Pose* pose, int root_bone, vec3 out_pos,
+                         float* out_yaw);
+
+// Put the root back where it rests: its LOCAL horizontal translation to the bind
+// pose's and its local heading to zero, leaving height, pitch, roll and scale alone.
+//
+// What root motion hands to the character has to leave the pose, or the character
+// moves twice -- once as a body and once as a mesh sliding off its own capsule.
+//
+// Local where the reading above is model space, and the pair is exact while the bones
+// ABOVE the root are not themselves animated: an armature node holds a constant frame,
+// so pinning under it lands the model-space root on its bind position either way. A rig
+// that animates an ancestor of its own hips is outside what this claims.
+void animation_pose_pin_root(const Skeleton* skeleton, Pose* pose, int root_bone);
 
 // out = a at t = 0, b at t = 1: positions and scales lerped, rotations nlerped
 // along the shorter arc. Outside (0, 1) the nearer pose is copied, flags
