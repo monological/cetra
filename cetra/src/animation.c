@@ -1,6 +1,7 @@
 #include "animation.h"
 #include "ik.h"
 #include "ragdoll.h"
+#include "rigging.h"
 #include "springbone.h"
 #include "util.h"
 #include "ext/log.h"
@@ -1156,6 +1157,105 @@ bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, con
     free(ank);
     free(tip);
     return ok;
+}
+
+// Below this a root is standing still. Horizontal metres and radians, both of them
+// generous next to what any authored curve carries and tight next to the noise two
+// samples of the same keyframe can differ by.
+#define ROOT_MIN_TRAVEL 1e-4f
+#define ROOT_MIN_YAW    1e-4f
+
+// The heading of a model-space frame: where its +Z axis points, flattened onto the
+// ground. cglm is column-major, so m[2] IS that axis.
+static float heading_of(mat4 m) {
+    return atan2f(m[2][0], m[2][2]);
+}
+
+// The shorter way round, so a turn through the seam reads as the small angle it is.
+static float wrap_pi(float a) {
+    while (a > GLM_PIf)
+        a -= 2.0f * GLM_PIf;
+    while (a < -GLM_PIf)
+        a += 2.0f * GLM_PIf;
+    return a;
+}
+
+// The root's model-space frame at one tick of the clip.
+static bool root_frame_at(const Animation* clip, const Skeleton* skeleton, int root_bone,
+                          float tick, Pose* pose, mat4* locals, mat4* globals, vec3 out_pos,
+                          float* out_yaw) {
+    animation_sample_pose(clip, skeleton, tick, pose);
+    for (size_t b = 0; b < skeleton->bone_count; b++) {
+        pose_local(skeleton, pose, b, locals[b]);
+        accumulate_global(&skeleton->bones[b], b, skeleton->bone_count, locals, globals);
+    }
+    glm_vec3_copy(globals[root_bone][3], out_pos);
+    *out_yaw = heading_of(globals[root_bone]);
+    return pose->driven[root_bone] != 0;
+}
+
+int animation_root_bone(Skeleton* skeleton) {
+    if (!skeleton || skeleton->bone_count == 0)
+        return -1;
+    const int hips = skeleton_resolve_bone(skeleton, "hips");
+    if (hips >= 0)
+        return hips;
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        if (skeleton->bones[i].parent_index < 0)
+            return (int)i;
+    }
+    return -1;
+}
+
+bool animation_root_travel(const Animation* clip, const Skeleton* skeleton, int root_bone,
+                           vec3 out_travel, float* out_yaw) {
+    if (out_travel)
+        glm_vec3_zero(out_travel);
+    if (out_yaw)
+        *out_yaw = 0.0f;
+    if (!clip || !skeleton || root_bone < 0 || (size_t)root_bone >= skeleton->bone_count)
+        return false;
+    if (clip->duration <= 0.0f || clip->ticks_per_second <= 0.0f)
+        return false;
+
+    Pose* pose = malloc(sizeof(Pose));
+    mat4* locals = malloc(sizeof(mat4) * MAX_BONES);
+    mat4* globals = malloc(sizeof(mat4) * MAX_BONES);
+    bool ok = pose && locals && globals;
+
+    vec3 first = {0.0f, 0.0f, 0.0f}, last = {0.0f, 0.0f, 0.0f};
+    float yaw_first = 0.0f, yaw_last = 0.0f;
+    bool driven = false;
+    if (ok) {
+        driven = root_frame_at(clip, skeleton, root_bone, 0.0f, pose, locals, globals, first,
+                               &yaw_first);
+        driven = root_frame_at(clip, skeleton, root_bone, clip->duration, pose, locals, globals,
+                               last, &yaw_last) &&
+                 driven;
+    }
+
+    vec3 travel = {0.0f, 0.0f, 0.0f};
+    float yaw = 0.0f;
+    if (ok && driven) {
+        glm_vec3_sub(last, first, travel);
+        yaw = wrap_pi(yaw_last - yaw_first);
+    }
+
+    free(pose);
+    free(locals);
+    free(globals);
+    if (!ok || !driven)
+        return false;
+
+    // The vertical is reported and never decides: a clip whose root only bobs is in
+    // place, and what a rising root would mean for a character the ground is holding up
+    // is a question this does not answer.
+    const bool states = hypotf(travel[0], travel[2]) > ROOT_MIN_TRAVEL || fabsf(yaw) > ROOT_MIN_YAW;
+    if (out_travel)
+        glm_vec3_copy(travel, out_travel);
+    if (out_yaw)
+        *out_yaw = yaw;
+    return states;
 }
 
 static void blend_bone(const BoneTransform* a, const BoneTransform* b, float t,

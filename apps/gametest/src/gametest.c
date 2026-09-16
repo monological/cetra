@@ -5672,6 +5672,42 @@ static int run_anim_probe(Game* game, const char* which) {
         an->param = 0.5f;
         printf("anim rate blind engine %.6f\n", (double)animator_stride_speed(an));
         free_animator(an);
+    } else if (!strcmp(which, "root")) {
+        // What each clip STATES about its own displacement. The travelling clips carry a
+        // distance the generator authored; everything else in the corpus is in place and
+        // has to say so, which is the half of this that cannot be got by reasoning.
+        //
+        // strut_walk is loaded with retargeting OFF, so its own translation keys reach
+        // the pose. That is the only way to ask the question of it at all: a retargeted
+        // channel takes its position from the bind pose, so every clip loaded the way the
+        // game loads one answers "in place" whatever it holds.
+        const int root = animation_root_bone(skel);
+        if (root < 0) {
+            fprintf(stderr, "anim-probe: the rig has no root bone\n");
+            return 1;
+        }
+        if (load_animations_from_file(scene, skel, "assets/models/strut_walk.fbx", false, NULL) <=
+            0) {
+            fprintf(stderr, "anim-probe: assets/models/strut_walk.fbx did not load\n");
+            return 1;
+        }
+        static const char* const names[] = {"idle",  "walk", "travel_walk", "travel_run",
+                                            "lunge", "spin", "strut_walk"};
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            const Animation* clip = scene_find_animation(scene, names[i]);
+            if (!clip) {
+                fprintf(stderr, "anim-probe: no clip named '%s'\n", names[i]);
+                rc = 1;
+                continue;
+            }
+            vec3 travel = {0.0f, 0.0f, 0.0f};
+            float yaw = 0.0f;
+            const bool states = animation_root_travel(clip, skel, root, travel, &yaw);
+            // The label drops the file's own suffix so one word names the clip.
+            printf("anim root %s travel %d %.6f %.6f %.6f %.6f\n",
+                   !strcmp(names[i], "strut_walk") ? "strut" : names[i], states ? 1 : 0,
+                   (double)travel[0], (double)travel[1], (double)travel[2], (double)yaw);
+        }
     } else {
         fprintf(stderr, "anim-probe: unknown case '%s'\n", which);
         rc = 1;
