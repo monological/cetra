@@ -24080,6 +24080,12 @@ def run_ragdoll_gate(workdir):
       ragdoll-settles  dropped from 3 m it falls, lands, and comes to rest rather than
                        jittering or sliding forever
       ragdoll-pose     while active a bone's global comes from its BODY and not the clip
+      ragdoll-roundtrip the pose a ragdoll is STARTED from is the pose it reports back
+                       before a single step has run -- placing a body from a bone and
+                       reading a bone back from a body are inverses, and the pose goes
+                       through Jolt in between
+      ragdoll-rigid    after 300 steps every joint is still where it belongs: a bone
+                       sits its bind distance from the one it hangs from
       ragdoll-frees    building and destroying leaves the world's body count where it
                        started
 
@@ -24091,6 +24097,15 @@ def run_ragdoll_gate(workdir):
     its bodies and does NOT remove them, so releasing a ragdoll still added to the world
     destroys bodies the broadphase is still indexing -- which costs nothing visible
     until the body pool runs out, some number of deaths later.
+
+    ragdoll-roundtrip and ragdoll-rigid are here because the six arms above were all
+    green over a ragdoll that had never once held together. It fell, it settled, it took
+    its pose from its bodies and it freed cleanly, limb by limb, as a cloud of pieces
+    that never touched -- a left-handed capsule basis is a reflection, Jolt keeps an
+    orientation as a quaternion, no quaternion is a reflection, and the nearest rotation
+    came back instead: legs end for end, arms at right angles, every number in range.
+    Nothing that measures ONE body can see it. These two measure the relationship
+    between two, which is the only thing a ragdoll actually is.
 
     The counts are REPORTED and the structure is asserted, which is deliberate. The
     first draft of this spec said thirteen bodies, the list was twelve, and a rig with a
@@ -24201,6 +24216,28 @@ def run_ragdoll_gate(workdir):
           f"bone {moved:.4f} m from where the clip left it (want > 0.5: the body is the "
           f"pose now, not a correction to it)")
     note("ragdoll-pose", ok)
+
+    trips = {b: sim[("roundtrip", b, "off")][0] for b in _RAGDOLL_BONES
+             if ("roundtrip", b, "off") in sim}
+    worst_bone = max(trips, key=trips.get) if trips else None
+    worst = trips[worst_bone] if trips else 1.0
+    ok = len(trips) == len(_RAGDOLL_BONES) and worst < 1e-3
+    print(f"  ragdoll-roundtrip {'PASS' if ok else 'FAIL'}  before any step, the started pose "
+          f"comes back {worst:.6f} m out at worst ({worst_bone}), over {len(trips)} bodies "
+          f"(want < 1e-3 on all twelve: the two conversions are inverses, and the pose goes "
+          f"through a quaternion in between, which is where a reflected basis is lost)")
+    note("ragdoll-roundtrip", ok)
+
+    drifts = {b: sim[("rigid", b, "drift")][1] for b in _RAGDOLL_BONES
+              if ("rigid", b, "drift") in sim}
+    worst_bone = max(drifts, key=drifts.get) if drifts else None
+    worst = drifts[worst_bone] if drifts else 1.0
+    ok = len(drifts) == len(_RAGDOLL_BONES) - 1 and worst < 0.02
+    print(f"  ragdoll-rigid {'PASS' if ok else 'FAIL'}  after 300 steps the worst joint has "
+          f"drifted {worst:.6f} of its own limb ({worst_bone}), over {len(drifts)} joints "
+          f"(want < 0.02 on all eleven: a bone stays its bind distance from the one it hangs "
+          f"from, or the character has come apart while every other arm stayed green)")
+    note("ragdoll-rigid", ok)
 
     before, during, after = (int(v) for v in sim[("frees", "world", "bodies")])
     ok = after == before and during > before

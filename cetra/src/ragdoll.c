@@ -295,13 +295,21 @@ static void measure_capsules(const Skeleton* skeleton, const struct Mesh* mesh, 
         vec3 mid;
         glm_vec3_lerp(joint, tail, 0.5f, mid);
 
-        // A basis whose Y is the limb. The other two axes only have to be
-        // orthonormal -- a capsule is radially symmetric, so nothing downstream
-        // can tell which way they point.
+        // A basis whose Y is the limb, and it has to be RIGHT-handed: Z is X
+        // cross Y and not the other way round. A capsule is radially symmetric,
+        // so nothing about the SHAPE can tell which way X and Z point -- but the
+        // frame does not stay a matrix. Jolt stores a body's orientation as a
+        // QUATERNION, and a left-handed basis is a reflection, which no
+        // quaternion represents: the extraction returns the nearest rotation
+        // instead, silently. The C side never notices, because glm_mat4_inv
+        // inverts a reflection perfectly well and the round trip closes on this
+        // side of the wrapper. What comes back from Jolt is a limb rotated to
+        // somewhere else entirely -- a leg flipped end for end, an arm at right
+        // angles -- and the character reads as having exploded.
         vec3 x_axis, z_axis;
         glm_vec3_ortho(dir, x_axis);
         glm_vec3_normalize(x_axis);
-        glm_vec3_cross(dir, x_axis, z_axis);
+        glm_vec3_cross(x_axis, dir, z_axis);
         glm_vec3_normalize(z_axis);
 
         mat4 body_world;

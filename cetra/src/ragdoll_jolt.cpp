@@ -116,12 +116,29 @@ extern "C" JoltRagdoll* jolt_ragdoll_create(JPC_PhysicsSystem* system, const Rag
             // trips an assert there. Nothing here drives to a pose, but choosing
             // it now is what leaves a getting-up spec possible later.
             JPH::SwingTwistConstraintSettings* joint = new JPH::SwingTwistConstraintSettings();
-            // World space, so both frames are the joint itself -- the bodies are
-            // already posed where they belong.
-            const JPH::RVec3 anchor = JPH::RVec3(world.GetTranslation());
-            joint->mPosition1 = joint->mPosition2 = anchor;
             // The limb runs along its own local Y, which is also the twist axis.
-            joint->mTwistAxis1 = joint->mTwistAxis2 = world.GetAxisY().Normalized();
+            const JPH::Vec3 along = world.GetAxisY().Normalized();
+            /*
+             * The anchor is the limb's HEAD, not its centre, and the difference
+             * is the whole difference between a body and a heap.
+             *
+             * `world` places the MIDDLE of the capsule, because that is where a
+             * CapsuleShape's origin is; the joint this constraint stands for is
+             * at the end of it, half a limb back along the twist axis. Anchored
+             * at the centre the constraint is still perfectly rigid -- it just
+             * pivots the limb about its own middle, so a shoulder rotating 90
+             * degrees swings the arm's head half an arm away from the torso and
+             * the character comes apart into a cloud of limbs that never stop
+             * being constrained. It settles, it frees cleanly, every arm in the
+             * ragdoll group stays green, and it looks like an explosion.
+             *
+             * Half the limb is `half_height + radius`: the half height excludes
+             * the two caps, and the caps are what the rest of the length is.
+             */
+            const JPH::RVec3 anchor = JPH::RVec3(
+                world.GetTranslation() - along * (in.capsule_half_height + in.capsule_radius));
+            joint->mPosition1 = joint->mPosition2 = anchor;
+            joint->mTwistAxis1 = joint->mTwistAxis2 = along;
             joint->mPlaneAxis1 = joint->mPlaneAxis2 = world.GetAxisZ().Normalized();
             joint->mNormalHalfConeAngle = JPH::DegreesToRadians(in.cone_deg);
             joint->mPlaneHalfConeAngle = JPH::DegreesToRadians(in.plane_deg);
@@ -136,8 +153,17 @@ extern "C" JoltRagdoll* jolt_ragdoll_create(JPC_PhysicsSystem* system, const Rag
     // a rig whose capsule masses come from measured limb volumes, where a head
     // and a thigh can differ by an order of magnitude.
     settings->Stabilize();
-    // The collision group that stops a limb colliding with the parent it is
-    // bolted to. Without it every constraint fights a contact at its own joint.
+    /*
+     * The collision group that stops a limb colliding with what it is bolted
+     * to. Without it every constraint fights a contact at its own joint.
+     *
+     * It takes an optional POSE, which makes it disable every pair already
+     * interpenetrating rather than only parent and child -- and on capsules
+     * measured from a rig, sibling thighs both start inside the pelvis, so
+     * that looked like the fix for a character that came apart at the hips.
+     * It is not: passing it measured bit-identical, and the pairs were never
+     * the problem. Left off rather than kept as a plausible-sounding no-op.
+     */
     settings->DisableParentChildCollisions();
     settings->CalculateBodyIndexToConstraintIndex();
 

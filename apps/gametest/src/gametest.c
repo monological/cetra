@@ -4147,6 +4147,42 @@ static PhysicsWorld* ik_probe_world(Game* game, const vec3 stand) {
 }
 
 /*
+ * How far each joint has come apart, named, as a fraction of the limb hanging
+ * off it. The measurement is the distance from a bone to the one it hangs from
+ * against the same distance in the BIND pose: a chain joined at the bone heads
+ * preserves it exactly whatever the pose, so the drift is the whole answer.
+ *
+ * It is reported against the CHILD's own capsule length rather than against
+ * that bind distance, which is the trap this arm's first draft fell into -- a
+ * hip and a thigh begin almost on top of each other, so dividing by how far
+ * apart they belong turns a millimetre into a ratio of three and says the
+ * pelvis exploded. A joint's natural scale is the limb hanging off it.
+ *
+ * Called twice, which is what separates the two ways of coming apart: BUILT
+ * apart, before a single step has run, or pulled apart by a simulation whose
+ * constraints do not hold.
+ */
+static void rd_probe_rigid(RagdollSystem* rd, const mat4* bind, mat4* globals) {
+    ragdoll_apply(rd, globals);
+    for (int i = 0; i < RAGDOLL_BONE_COUNT; i++) {
+        const int bone = ragdoll_bone_index(rd, i);
+        const int parent_slot = ragdoll_bone_parent(rd, i);
+        if (bone < 0 || parent_slot < 0)
+            continue;
+        const int parent_bone = ragdoll_bone_index(rd, parent_slot);
+        float r = 0.0f, hh = 0.0f;
+        ragdoll_capsule(rd, i, &r, &hh);
+        const float limb = 2.0f * (r + hh);
+        if (limb < 1e-4f)
+            continue;
+        const float want = glm_vec3_distance((float*)bind[bone][3], (float*)bind[parent_bone][3]);
+        const float got = glm_vec3_distance(globals[bone][3], globals[parent_bone][3]);
+        printf("ragdoll rigid %s drift %.6f %.6f\n", ragdoll_bone_name(i),
+               (double)fabsf(got - want), (double)(fabsf(got - want) / limb));
+    }
+}
+
+/*
  * What a ragdoll BUILDS and what it DOES, with no window (spec 12.16).
  *
  * Unlike the display probe, the simulation itself is reachable here -- a
@@ -4272,6 +4308,35 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         mat4 clip_pose;
         glm_mat4_copy(state->global_transforms[hips_bone], clip_pose);
 
+        /*
+         * Before a single step: the pose that went in has to come straight back
+         * out. Placing a body from a bone and reading a bone back from a body
+         * are inverses by construction, so any offset here was BUILT in and
+         * nothing the simulation does afterwards can be read as physics.
+         *
+         * It is not a tautology over the same arithmetic, because the pose goes
+         * THROUGH Jolt in between -- and Jolt keeps an orientation as a
+         * quaternion, which is where 12.16's worst defect lived: a left-handed
+         * capsule basis is a reflection, no quaternion is one, and the nearest
+         * rotation came back instead. Every existing arm stayed green.
+         */
+        mat4* rigid_bind = calloc(skel->bone_count, sizeof(mat4));
+        mat4* scratch = calloc(skel->bone_count, sizeof(mat4));
+        if (rigid_bind && scratch) {
+            skeleton_compute_bind_globals(skel, rigid_bind);
+            memcpy(scratch, state->global_transforms, skel->bone_count * sizeof(mat4));
+            ragdoll_apply(rd, scratch);
+            for (int i = 0; i < RAGDOLL_BONE_COUNT; i++) {
+                const int bone = ragdoll_bone_index(rd, i);
+                if (bone < 0)
+                    continue;
+                printf(
+                    "ragdoll roundtrip %s off %.6f\n", ragdoll_bone_name(i),
+                    (double)glm_vec3_distance(state->global_transforms[bone][3], scratch[bone][3]));
+            }
+        }
+        free(scratch);
+
         for (int step = 0; step < 300; step++) {
             physics_world_update(physics, 1.0f / 60.0f, 4);
         }
@@ -4294,6 +4359,14 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         ragdoll_apply(rd, state->global_transforms);
         const float moved = glm_vec3_distance(clip_pose[3], state->global_transforms[hips_bone][3]);
         printf("ragdoll pose hips moved %.6f\n", (double)moved);
+
+        // Whether it is still a BODY, which is the one thing every arm above can
+        // be green without: settling, freeing and taking its pose from its
+        // bodies are all true of a cloud of limbs that never touch.
+        if (rigid_bind) {
+            rd_probe_rigid(rd, rigid_bind, state->global_transforms);
+            free(rigid_bind);
+        }
 
         free_animation_state(state); // frees the ragdoll, which removes its bodies
         const int freed_bodies = jolt_ragdoll_world_body_count(physics->physics_system);
