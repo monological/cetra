@@ -11,9 +11,13 @@
 // length. Thin enough to read as a limb and never zero, which CapsuleShape
 // asserts on.
 #define RAGDOLL_FALLBACK_RATIO 0.18f
-// And for a bone shorter than it is thick -- a head, usually -- where the
-// measured radius leaves no cylinder between the two caps.
+// And for a bone shorter than it is thick -- a head, usually -- where a GUESSED
+// radius leaves no cylinder between the two caps.
 #define RAGDOLL_STUBBY_RATIO 0.40f
+// Where the radius was measured instead, the half height gives way rather than
+// the width: this fraction of the radius, which is a squat capsule and not a
+// sphere, and keeps the mass the measurement found.
+#define RAGDOLL_STUBBY_FLOOR 0.15f
 // Below this a bone is not a limb. A zero-length bone is a rig's control or
 // twist joint; building a capsule for one is what the Jolt layer refuses.
 #define RAGDOLL_MIN_LENGTH 1e-4f
@@ -163,8 +167,8 @@ static int resolve_by_category(const Skeleton* skeleton, int ancestor, BoneCateg
 }
 
 // The child a limb points at, so a capsule can span the bone rather than sit on
-// its joint. The first child in the skeleton, which on a limb chain is the only
-// one; -1 for a tip like a head, whose own length has to be guessed.
+// its joint. The first child in the skeleton, which on a clean limb chain is
+// the only one; -1 for a tip, whose own length has to be guessed.
 static int first_child(const Skeleton* skeleton, int bone) {
     for (size_t i = 0; i < skeleton->bone_count; i++) {
         if (skeleton->bones[i].parent_index == bone) {
@@ -175,45 +179,115 @@ static int first_child(const Skeleton* skeleton, int bone) {
 }
 
 /*
- * The capsule for one bone, all three rules in one place.
+ * What a capsule should REACH toward: the bone of the next simulated joint
+ * below this one, and only failing that the skeleton's own first child.
  *
- * The radius is measured from the mesh's own per-bone bind box where there is
- * one: the limb runs along that box's LONGEST extent, so its cross-section is
- * the other two and the radius is their mean. Chosen by value rather than by
- * axis, because a bone's local axes are the rig author's and not a convention
- * this can rely on -- dropping the largest is the whole rule.
+ * The skeleton's child order is the wrong question and a rig answers it badly
+ * as soon as it carries anything but limbs. A pelvis bone parked on top of the
+ * hips makes the ROOT body a 2 cm capsule under a 42 cm thigh -- and mass goes
+ * as radius squared times length, so that is four orders of magnitude of
+ * inertia missing from the one body every leg and the whole spine hangs off.
+ * What it looks like is not a small pelvis: it is a character that melts.
+ * A sword or a knife parented into a shoulder does the same thing to one arm
+ * and leaves the other correct, which reads as a rig authoring error rather
+ * than as a bug here.
  *
- * Two fallbacks, and each answers a different failure. A bone the mesh cannot
- * measure takes a fraction of its own length. A bone shorter than it is thick
- * is thinned until a cylinder fits between the two caps, because the caps alone
- * are a sphere and CapsuleShape wants a positive half height.
+ * The ragdoll's own topology already answers it. A capsule spans from its
+ * joint to the next joint down, which is exactly where that child's constraint
+ * is anchored, so asking the table rather than the skeleton makes the shape
+ * agree with the thing holding it. Slot order settles the branches: the first
+ * child of the hips is the spine and of the chest is the head, so a torso
+ * segment reaches up the body rather than out along whichever limb the
+ * exporter happened to write first.
  */
-static void capsule_for_bone(const struct Mesh* mesh, int bone, float length, float* out_radius,
-                             float* out_half_height) {
-    float radius = 0.0f;
-    if (mesh && mesh->bone_aabb && bone >= 0 && (size_t)bone < mesh->bone_aabb_count) {
-        const AABB box = mesh->bone_aabb[bone];
-        if (!aabb_is_empty(&box)) {
-            const float ex = (box.max[0] - box.min[0]) * 0.5f;
-            const float ey = (box.max[1] - box.min[1]) * 0.5f;
-            const float ez = (box.max[2] - box.min[2]) * 0.5f;
-            float longest = ex;
-            if (ey > longest) {
-                longest = ey;
-            }
-            if (ez > longest) {
-                longest = ez;
-            }
-            radius = (ex + ey + ez - longest) * 0.5f;
+static int reach_toward(const Skeleton* skeleton, const RagdollPart* parts, int slot) {
+    for (int i = slot + 1; i < RAGDOLL_BONE_COUNT; i++) {
+        if (parts[i].bone >= 0 && parts[i].parent == slot) {
+            return parts[i].bone;
         }
     }
-    if (!(radius > 0.0f)) {
+    return first_child(skeleton, parts[slot].bone);
+}
+
+/*
+ * The capsule for one bone, all three rules in one place.
+ *
+ * The radius is measured from the per-bone bind box UNIONED over every mesh
+ * skinned to this rig: the limb runs along that box's LONGEST extent, so its
+ * cross-section is the other two and the radius is their mean. Chosen by value
+ * rather than by axis, because a bone's local axes are the rig author's and not
+ * a convention this can rely on -- dropping the largest is the whole rule.
+ *
+ * The union is what makes it work on an imported character. Those boxes are
+ * per MESH, and a rig split across fifteen of them has each mesh binding a
+ * handful of bones and leaving the rest empty, so measuring one mesh finds
+ * nothing for most of the body and silently produces the fallback everywhere.
+ *
+ * Two fallbacks, and each answers a different failure. A bone no mesh measures
+ * takes a fraction of its own length. A bone shorter than it is thick is
+ * thinned until a cylinder fits between the two caps, because the caps alone
+ * are a sphere and CapsuleShape wants a positive half height.
+ */
+static void capsule_for_bone(const struct Mesh* const* meshes, size_t mesh_count,
+                             const uint8_t* carried, size_t bone_count, float length,
+                             float* out_radius, float* out_half_height) {
+    AABB box;
+    aabb_empty(&box);
+    for (size_t m = 0; meshes && m < mesh_count; m++) {
+        const struct Mesh* mesh = meshes[m];
+        if (!mesh || !mesh->bone_aabb) {
+            continue;
+        }
+        for (size_t b = 0; b < bone_count && b < mesh->bone_aabb_count; b++) {
+            if (carried[b] && !aabb_is_empty(&mesh->bone_aabb[b])) {
+                aabb_union(&box, &mesh->bone_aabb[b]);
+            }
+        }
+    }
+
+    float radius = 0.0f;
+    if (!aabb_is_empty(&box)) {
+        const float ex = (box.max[0] - box.min[0]) * 0.5f;
+        const float ey = (box.max[1] - box.min[1]) * 0.5f;
+        const float ez = (box.max[2] - box.min[2]) * 0.5f;
+        float longest = ex;
+        if (ey > longest) {
+            longest = ey;
+        }
+        if (ez > longest) {
+            longest = ez;
+        }
+        radius = (ex + ey + ez - longest) * 0.5f;
+    }
+    const bool measured = radius > 0.0f;
+    if (!measured) {
         radius = length * RAGDOLL_FALLBACK_RATIO;
     }
+
+    /*
+     * A bone shorter than it is thick leaves no cylinder between the two caps,
+     * and CapsuleShape wants a positive half height. Which of the two numbers
+     * gives way depends on which of them was MEASURED.
+     *
+     * A GUESSED radius is a fraction of the same length the half height came
+     * from, so there is nothing to lose by thinning it until it fits.
+     *
+     * A measured one is the only real information here and thinning it throws
+     * that away -- which is what a pelvis is. Hips whose bone sits a few
+     * centimetres above the first spine joint measure a wide box and a short
+     * span, and shrinking the radius to fit the span turns the body every leg
+     * and the whole spine hangs from into a pea. Mass goes as radius squared,
+     * so that costs an order of magnitude of inertia to satisfy a constraint
+     * a short half height satisfies for free. Keep the width, floor the length.
+     */
     float half_height = length * 0.5f - radius;
     if (half_height < RAGDOLL_MIN_LENGTH) {
-        radius = length * RAGDOLL_STUBBY_RATIO;
-        half_height = length * 0.5f - radius;
+        if (measured) {
+            half_height = radius * RAGDOLL_STUBBY_FLOOR;
+        } else {
+            radius = length * RAGDOLL_STUBBY_RATIO;
+            half_height = length * 0.5f - radius;
+        }
     }
     *out_radius = radius;
     *out_half_height = half_height;
@@ -241,18 +315,50 @@ static void resolve_bones(Skeleton* skeleton, int* out_bone) {
 }
 
 // The capsule and the two frame transforms for every resolved row.
-static void measure_capsules(const Skeleton* skeleton, const struct Mesh* mesh, const mat4* bind,
-                             float node_scale, RagdollPart* parts) {
+static void measure_capsules(const Skeleton* skeleton, const struct Mesh* const* meshes,
+                             size_t mesh_count, const mat4* bind, float node_scale,
+                             RagdollPart* parts) {
+    uint8_t carried[MAX_BONES], below[MAX_BONES];
     for (int i = 0; i < RAGDOLL_BONE_COUNT; i++) {
         const int bone = parts[i].bone;
         if (bone < 0) {
             continue;
         }
 
-        // The limb's own length, from its bind head to its child's. A tip bone
-        // has no child and takes its parent's separation instead, which is the
-        // only measurement of it the rig carries.
-        const int child = first_child(skeleton, bone);
+        /*
+         * Which bones this body actually CARRIES: its own, plus every
+         * descendant down to the next simulated joint. Those are exactly the
+         * bones ragdoll_apply re-accumulates rigidly off this one, so their
+         * vertices ride this capsule and belong in its measurement.
+         *
+         * Without it a bone that carries no skin of its own measures nothing
+         * and takes the fallback. That is not the rare case it sounds like:
+         * a rig's hips are commonly an organisational parent with a separate
+         * `pelvis` beneath holding all the weights, and the fallback then
+         * gives the ROOT of the ragdoll -- what both legs and the whole spine
+         * hang from -- a radius of 0.18 times the few centimetres to the next
+         * joint. Mass goes as radius squared times length, so the body that
+         * needs the most inertia ends up with a thousandth of a thigh's, and
+         * the character melts.
+         */
+        skeleton_mark_subtree(skeleton, bone, carried);
+        for (int j = 0; j < RAGDOLL_BONE_COUNT; j++) {
+            if (j == i || parts[j].bone < 0 || !carried[parts[j].bone]) {
+                continue;
+            }
+            skeleton_mark_subtree(skeleton, parts[j].bone, below);
+            for (size_t b = 0; b < skeleton->bone_count; b++) {
+                if (below[b]) {
+                    carried[b] = 0;
+                }
+            }
+        }
+
+        // The limb's own length, from its bind head to the next joint's. A tip
+        // bone has neither a simulated child nor a skeleton one and takes its
+        // parent's separation instead, which is the only measurement of it the
+        // rig carries.
+        const int child = reach_toward(skeleton, parts, i);
         vec3 joint, tail;
         glm_vec3_copy((float*)bind[bone][3], joint);
         if (child >= 0) {
@@ -283,7 +389,8 @@ static void measure_capsules(const Skeleton* skeleton, const struct Mesh* mesh, 
         }
 
         float radius = 0.0f, half_height = 0.0f;
-        capsule_for_bone(mesh, bone, length, &radius, &half_height);
+        capsule_for_bone(meshes, mesh_count, carried, skeleton->bone_count, length, &radius,
+                         &half_height);
         parts[i].radius = radius * node_scale;
         parts[i].half_height = half_height * node_scale;
 
@@ -343,7 +450,8 @@ static void link_parents(RagdollPart* parts) {
     }
 }
 
-RagdollSystem* create_ragdoll(Skeleton* skeleton, const struct Mesh* mesh, float node_scale) {
+RagdollSystem* create_ragdoll(Skeleton* skeleton, const struct Mesh* const* meshes,
+                              size_t mesh_count, float node_scale) {
     if (!skeleton || skeleton->bone_count == 0) {
         log_error("ragdoll: no skeleton");
         return NULL;
@@ -381,7 +489,15 @@ RagdollSystem* create_ragdoll(Skeleton* skeleton, const struct Mesh* mesh, float
         return NULL;
     }
     skeleton_compute_bind_globals(skeleton, bind);
-    measure_capsules(skeleton, mesh, bind, node_scale, rd->parts);
+    // Linked TWICE, on purpose. The measurement needs the parent links, because
+    // a capsule reaches toward the next simulated joint and which slot that is
+    // depends on what collapsed out; and the measurement can itself drop a row,
+    // when a bone a rig spells like a limb turns out to have no length. So the
+    // links are settled from what RESOLVED, used, then settled again from what
+    // survived. Idempotent given the bone column, so the second call is free
+    // where nothing was dropped.
+    link_parents(rd->parts);
+    measure_capsules(skeleton, meshes, mesh_count, bind, node_scale, rd->parts);
     free(bind);
 
     link_parents(rd->parts);

@@ -59,8 +59,16 @@ typedef struct RagdollSystem RagdollSystem;
  * physics and no allocation beyond the system itself: this is the half that can
  * be asked what it would build.
  *
- * `mesh` may be NULL, in which case every radius falls back to a fraction of
- * its own bone's length -- thinner than measured limbs and never zero, so a
+ * `meshes` is EVERY mesh skinned to this skeleton, not one of them, and that
+ * plural is load-bearing on an imported character: a limb's thickness is
+ * whatever geometry is weighted to it, and the per-bone boxes are per MESH, so
+ * a rig split across fifteen of them leaves each one's boxes empty almost
+ * everywhere. Handed a single accessory mesh the measurement silently finds
+ * nothing and every capsule takes the fallback below -- a legal ragdoll made
+ * of uniformly thin sticks, which is a plausible picture and the wrong one.
+ *
+ * It may be NULL or empty, in which case every radius falls back to a fraction
+ * of its own bone's length -- thinner than measured limbs and never zero, so a
  * skeleton with no skin still produces a legal ragdoll.
  *
  * A row this rig does not answer COLLAPSES rather than leaving a hole -- a
@@ -70,7 +78,8 @@ typedef struct RagdollSystem RagdollSystem;
  * this can build, and a ragdoll assembled around that gap simulates perfectly
  * and looks like a bug in the solver.
  */
-RagdollSystem* create_ragdoll(Skeleton* skeleton, const struct Mesh* mesh, float node_scale);
+RagdollSystem* create_ragdoll(Skeleton* skeleton, const struct Mesh* const* meshes,
+                              size_t mesh_count, float node_scale);
 void free_ragdoll(RagdollSystem* ragdoll);
 
 // The slot's own name -- a property of the humanoid this describes rather than

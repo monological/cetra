@@ -24076,6 +24076,9 @@ def run_ragdoll_gate(workdir):
                        expected number would be wrong on one of the two
       ragdoll-shapes   capsules are DERIVED, not uniform: a thigh is thicker than a
                        forearm and longer than a head, by ratio so it holds on any rig
+      ragdoll-mass     no body is orders of magnitude lighter than the heaviest, by the
+                       r^2*L a capsule's mass goes as -- the root especially, since every
+                       limb and the whole spine hang off it
       ragdoll-scale    the same rig at node scale 1 and 2 gives capsules in exactly 1:2
       ragdoll-settles  dropped from 3 m it falls, lands, and comes to rest rather than
                        jittering or sliding forever
@@ -24174,6 +24177,38 @@ def run_ragdoll_gate(workdir):
           f"forearm {fore_r:.4f}, thigh half-height {thigh_h:.4f} vs head {head_h:.4f} "
           f"(want each at least 1.2x, or the capsules are not derived from the rig)")
     note("ragdoll-shapes", ok)
+
+    # A capsule's mass goes as r^2 * L, and the SPREAD is what decides whether the
+    # thing reads as a body. ragdoll-shapes compares a thigh against a forearm and a
+    # head and cannot see this: on an imported character those three were all sane
+    # while the hips -- the root everything hangs off -- came out at a eleven
+    # thousandth of a shin, because the bone carried no skin of its own and the
+    # fallback sized it off the few centimetres to the next joint. Every arm was
+    # green and the character melted.
+    ok, bits = True, []
+    for tag, _ in rigs:
+        p = build[tag]
+        mass = {}
+        for b in _RAGDOLL_BONES:
+            row = p.get(("shapes", b, "capsule"))
+            if row:
+                r, h = row
+                mass[b] = r * r * 2.0 * (r + h)
+        if not mass:
+            ok = False
+            bits.append(f"{tag} NO CAPSULES")
+            continue
+        lo = min(mass, key=mass.get)
+        hi = max(mass, key=mass.get)
+        spread = mass[hi] / mass[lo]
+        if spread > 100.0:
+            ok = False
+        bits.append(f"{tag} {spread:.1f}x ({lo} to {hi})")
+    print(f"  ragdoll-mass {'PASS' if ok else 'FAIL'}  heaviest body over lightest: "
+          f"{'; '.join(bits)} (want under 100x; a body four orders of magnitude light is "
+          f"not a small limb, it is a joint with no inertia, and what that looks like is a "
+          f"character that melts)")
+    note("ragdoll-mass", ok)
 
     p = _ragdoll_probe("scale", "t_pose.fbx")
     if not p:
