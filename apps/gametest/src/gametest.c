@@ -2429,7 +2429,6 @@ static SceneNode* clone_rig(SceneNode* puppet_root) {
     return rig;
 }
 
-// Game init callback
 // The first skinned mesh under a node, which is the one carrying the per-bone
 // bind boxes a capsule radius is measured from.
 static const Mesh* find_skinned_mesh(const SceneNode* node) {
