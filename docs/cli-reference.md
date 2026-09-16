@@ -880,6 +880,16 @@ stick too, on a pad. It orbits the player's position at a fixed distance, pitch 
 eye cannot roll under the floor. Movement under the flag is camera-relative: W into the screen,
 S back toward the lens, whichever way you have aimed it.
 
+**That sentence was false for four specs and is worth keeping as a warning rather than quietly
+repairing.** Spec 12.13 made movement WORLD-ALIGNED — W a fixed world direction, so turning the
+camera left the character walking across the frame — and updated its own code comment and
+neither document. 12.17 put it back, and the reason it went back is as much that the code and
+the docs disagreed as that the scheme was wrong: the behaviour a player meets should be the one
+written down. **`cam_yaw` is the FOLLOW camera's state and nothing else writes it**, so this
+applies to that camera only; `--no-follow-cam`'s drag orbit and a `--cam-eye` pinned framing
+both leave movement world-aligned, deliberately, since pinning a camera states a POSE and should
+not silently rotate the controls.
+
 It shipped first as a camera that trailed the player's facing automatically, which was wrong in
 a way worth recording because two sign changes failed to fix it. `player_yaw` follows the
 velocity, so a camera chasing it can never be in front of you: pressing back turned the

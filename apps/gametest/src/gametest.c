@@ -3122,23 +3122,42 @@ static void on_update(Game* game, double dt) {
         glm_scale_uni(player_rig->original_transform, PLAYER_SCALE);
     }
 
-    // Apply horizontal movement. WORLD-ALIGNED, under either camera (spec 12.13): W is a
-    // fixed world direction and not "into the screen".
-    //
-    // It was camera-relative under the follow camera, on the reasoning that world-aligned
-    // input stops making sense once the camera is not facing a fixed direction. This one
-    // IS facing a fixed direction -- `cam_yaw` moves only when the arrows move it -- so
-    // the premise did not hold, and what the rotation bought instead was that forward was
-    // always away from the camera. That reads as a camera welded behind the player even
-    // though it never turns: you can never see the character's front, or cross the frame.
-    //
-    // Note this is not a behaviour change anywhere the camera is left alone. At the
-    // default yaw of pi the rotation reduces to the identity -- sin is 0 and cos is -1,
-    // which cancels both the forward negation and the strafe sign -- so every gamepad
-    // script and trace displacement, none of which touch the arrows, reads exactly what
-    // it read before.
-    vel[0] = input_dir[0] * player_speed;
-    vel[2] = input_dir[2] * player_speed;
+    /*
+     * Apply horizontal movement, CAMERA-RELATIVE under the follow camera (spec 12.17):
+     * W goes away from the lens, whichever way the arrows have aimed it.
+     *
+     * This has now been both ways and the record matters more than the choice, because
+     * each direction has a comment that sounds conclusive. 12.13 made it WORLD-ALIGNED,
+     * arguing that forward-away-from-camera welds the character's facing to the camera's,
+     * so you only ever see its back and can never cross the frame. That cost is real and
+     * the conclusion still does not follow: `cam_yaw` moves ONLY when the player presses
+     * an arrow -- the camera chasing facing was tried in 12.6 and abandoned -- so orbiting
+     * round to see the character's front is a thing the player can simply do. World
+     * alignment trades that momentary inconvenience for a permanent one, in which turning
+     * the camera ninety degrees leaves W walking across the screen.
+     *
+     * What settled it is that 12.13 changed the code and neither document: `cli-reference`
+     * and `AGENTS.md` both went on describing camera-relative movement for four specs. The
+     * behaviour a player meets should be the one written down, and when they disagree the
+     * documented one has at least been read by somebody.
+     *
+     * SCOPE, since `cam_yaw` is the FOLLOW camera's own state and nothing else writes it:
+     * under `--no-follow-cam` the drag controller owns the camera and this stays at pi, so
+     * movement there is world-aligned as before, and the same holds under the `--cam-eye`
+     * pinning that exists to freeze a framing for A/B captures. Deriving the heading back
+     * out of the live camera would cover every camera with one rule and is the wrong
+     * trade: `--cam-eye` states a POSE, and letting it silently rotate the controls is a
+     * worse surprise than the debug orbit keeping the scheme it has.
+     *
+     * At the default yaw of pi this is exactly the IDENTITY -- sin is 0 and cos is -1,
+     * cancelling both the strafe sign and the forward negation -- which is what keeps
+     * every gamepad script, trace displacement and menu golden byte-identical, none of
+     * them touching an arrow. That property is also why the flip went unnoticed in 12.13,
+     * so `gamepad-camera-relative` now asserts which scheme is live.
+     */
+    const float cam_sin = sinf(cam_yaw), cam_cos = cosf(cam_yaw);
+    vel[0] = (-cam_cos * input_dir[0] - cam_sin * input_dir[2]) * player_speed;
+    vel[2] = (cam_sin * input_dir[0] - cam_cos * input_dir[2]) * player_speed;
 
     // Gravity, or buoyancy where the water is. Swimming is surface-only by design: you
     // float and cannot go under, which is impossible to get stuck in and reads clearly
