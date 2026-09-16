@@ -1180,18 +1180,33 @@ static float wrap_pi(float a) {
     return a;
 }
 
-// The root's model-space frame at one tick of the clip.
-static bool root_frame_at(const Animation* clip, const Skeleton* skeleton, int root_bone,
-                          float tick, Pose* pose, mat4* locals, mat4* globals, vec3 out_pos,
-                          float* out_yaw) {
-    animation_sample_pose(clip, skeleton, tick, pose);
-    for (size_t b = 0; b < skeleton->bone_count; b++) {
-        pose_local(skeleton, pose, b, locals[b]);
-        accumulate_global(&skeleton->bones[b], b, skeleton->bone_count, locals, globals);
+bool animation_root_at(const Animation* clip, int root_bone, float tick, vec3 out_pos,
+                       float* out_yaw) {
+    if (!clip || root_bone < 0)
+        return false;
+    const AnimationChannel* channel = NULL;
+    for (size_t i = 0; i < clip->channel_count; i++) {
+        if (clip->channels[i].bone_index == root_bone) {
+            channel = &clip->channels[i];
+            break;
+        }
     }
-    glm_vec3_copy(globals[root_bone][3], out_pos);
-    *out_yaw = heading_of(globals[root_bone]);
-    return pose->driven[root_bone] != 0;
+    // A retargeted channel takes its position from the BIND pose, whatever its keys
+    // hold (see animation_sample_pose), so the pose this clip produces is in place
+    // however far the rig it was authored on travelled. Answering from the keys here
+    // would hand a character a distance measured on somebody else's skeleton, in
+    // somebody else's proportions, that no frame of the animation shows.
+    if (!channel || channel->needs_retargeting || channel->position_key_count == 0)
+        return false;
+
+    interpolate_position(channel->position_keys, channel->position_key_count, tick, out_pos);
+    versor rot = GLM_QUAT_IDENTITY_INIT;
+    interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, tick, rot);
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    glm_quat_mat4(rot, m);
+    if (out_yaw)
+        *out_yaw = heading_of(m);
+    return true;
 }
 
 int animation_root_bone(Skeleton* skeleton) {
@@ -1207,6 +1222,44 @@ int animation_root_bone(Skeleton* skeleton) {
     return -1;
 }
 
+bool animation_pose_root(const Skeleton* skeleton, const Pose* pose, int root_bone, vec3 out_pos,
+                         float* out_yaw) {
+    if (!skeleton || !pose || root_bone < 0 || (size_t)root_bone >= skeleton->bone_count)
+        return false;
+
+    // Up the parent chain rather than over every bone: a root is at most a node or two
+    // below the skeleton's, and this runs every frame where animation_root_travel runs
+    // twice in a clip's life.
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    pose_local(skeleton, pose, (size_t)root_bone, m);
+    for (int p = skeleton->bones[root_bone].parent_index; p >= 0;
+         p = skeleton->bones[p].parent_index) {
+        mat4 up = GLM_MAT4_IDENTITY_INIT;
+        pose_local(skeleton, pose, (size_t)p, up);
+        glm_mat4_mul(up, m, m);
+    }
+    if (out_pos)
+        glm_vec3_copy(m[3], out_pos);
+    if (out_yaw)
+        *out_yaw = heading_of(m);
+    return true;
+}
+
+void animation_pose_pin_root(const Skeleton* skeleton, Pose* pose, int root_bone) {
+    if (!skeleton || !pose || root_bone < 0 || (size_t)root_bone >= skeleton->bone_count)
+        return;
+    BoneTransform* bt = &pose->bones[root_bone];
+    const float* bind = skeleton->bones[root_bone].local_transform[3];
+    bt->position[0] = bind[0];
+    bt->position[2] = bind[2];
+
+    mat4 local;
+    glm_quat_mat4(bt->rotation, local);
+    versor undo;
+    glm_quatv(undo, -heading_of(local), (vec3){0.0f, 1.0f, 0.0f});
+    glm_quat_mul(undo, bt->rotation, bt->rotation);
+}
+
 bool animation_root_travel(const Animation* clip, const Skeleton* skeleton, int root_bone,
                            vec3 out_travel, float* out_yaw) {
     if (out_travel)
@@ -1218,34 +1271,15 @@ bool animation_root_travel(const Animation* clip, const Skeleton* skeleton, int 
     if (clip->duration <= 0.0f || clip->ticks_per_second <= 0.0f)
         return false;
 
-    Pose* pose = malloc(sizeof(Pose));
-    mat4* locals = malloc(sizeof(mat4) * MAX_BONES);
-    mat4* globals = malloc(sizeof(mat4) * MAX_BONES);
-    bool ok = pose && locals && globals;
-
     vec3 first = {0.0f, 0.0f, 0.0f}, last = {0.0f, 0.0f, 0.0f};
     float yaw_first = 0.0f, yaw_last = 0.0f;
-    bool driven = false;
-    if (ok) {
-        driven = root_frame_at(clip, skeleton, root_bone, 0.0f, pose, locals, globals, first,
-                               &yaw_first);
-        driven = root_frame_at(clip, skeleton, root_bone, clip->duration, pose, locals, globals,
-                               last, &yaw_last) &&
-                 driven;
-    }
-
-    vec3 travel = {0.0f, 0.0f, 0.0f};
-    float yaw = 0.0f;
-    if (ok && driven) {
-        glm_vec3_sub(last, first, travel);
-        yaw = wrap_pi(yaw_last - yaw_first);
-    }
-
-    free(pose);
-    free(locals);
-    free(globals);
-    if (!ok || !driven)
+    if (!animation_root_at(clip, root_bone, 0.0f, first, &yaw_first) ||
+        !animation_root_at(clip, root_bone, clip->duration, last, &yaw_last))
         return false;
+
+    vec3 travel;
+    glm_vec3_sub(last, first, travel);
+    const float yaw = wrap_pi(yaw_last - yaw_first);
 
     // The vertical is reported and never decides: a clip whose root only bobs is in
     // place, and what a rising root would mean for a character the ground is holding up
