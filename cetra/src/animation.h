@@ -304,6 +304,26 @@ void animation_sample_pose(const Animation* anim, const Skeleton* skeleton, floa
 bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, const int ankle[2],
                             const int toe[2], float* out_speed, vec3 out_dir);
 
+// What this clip's ROOT STATES about its own displacement: how far `root_bone` travels
+// from the clip's first tick to its last, and how far it turns about Y. MODEL units and
+// radians; `out_travel` and `out_yaw` may each be NULL.
+//
+// The counterpart to the measurement above and its opposite in kind -- a stride is
+// INFERRED from where the feet are, this is READ from what the animator wrote. So it
+// needs no stance, no window and no median, and two samples answer it.
+//
+// False when the root states nothing: no channel drives it, or it ends the clip where it
+// began. Only the HORIZONTAL travel and the yaw decide that -- a clip whose root only
+// rises and falls is in place, and `out_travel` still reports the vertical.
+//
+// `animation_stride_speed`'s note about scale applies here word for word.
+bool animation_root_travel(const Animation* clip, const Skeleton* skeleton, int root_bone,
+                           vec3 out_travel, float* out_yaw);
+
+// The bone a rig's root motion belongs to: the hips where the rig has them, and the
+// first bone with no parent otherwise. -1 for an empty skeleton.
+int animation_root_bone(Skeleton* skeleton);
+
 // out = a at t = 0, b at t = 1: positions and scales lerped, rotations nlerped
 // along the shorter arc. Outside (0, 1) the nearer pose is copied, flags
 // included. A bone undriven in both stays undriven. out may alias a or b.
