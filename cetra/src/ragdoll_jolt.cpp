@@ -29,13 +29,6 @@ inline JPH::PhysicsSystem* to_jph(JPC_PhysicsSystem* system) {
     return reinterpret_cast<JPH::PhysicsSystem*>(system);
 }
 
-// The object layer a ragdoll body takes. OBJ_LAYER_DYNAMIC in physics.h's enum,
-// restated as a number because that header is the game layer's and this file is
-// the engine's -- including it here would point the dependency the wrong way.
-// If that enum is reordered this must move with it, which is what the static
-// check in the C half is for.
-constexpr JPH::ObjectLayer kRagdollLayer = 1;
-
 } // namespace
 
 struct JoltRagdoll {
@@ -47,7 +40,7 @@ struct JoltRagdoll {
 };
 
 extern "C" JoltRagdoll* jolt_ragdoll_create(JPC_PhysicsSystem* system, const RagdollBuild* parts,
-                                            int count, uint32_t group_id) {
+                                            int count, uint32_t object_layer, uint32_t group_id) {
     if (!system || !parts || count <= 0) {
         log_error("ragdoll: nothing to build (%d part(s))", count);
         return nullptr;
@@ -114,7 +107,7 @@ extern "C" JoltRagdoll* jolt_ragdoll_create(JPC_PhysicsSystem* system, const Rag
         part.mPosition = JPH::RVec3(world.GetTranslation());
         part.mRotation = world.GetQuaternion().Normalized();
         part.mMotionType = JPH::EMotionType::Dynamic;
-        part.mObjectLayer = kRagdollLayer;
+        part.mObjectLayer = (JPH::ObjectLayer)object_layer;
 
         if (in.parent >= 0) {
             // SwingTwist and not one of the other eleven constraint types: Jolt
@@ -182,13 +175,6 @@ extern "C" void jolt_ragdoll_destroy(JoltRagdoll* ragdoll) {
     delete ragdoll; // the Refs release here, and ~Ragdoll destroys the bodies
 }
 
-extern "C" int jolt_ragdoll_body_count(const JoltRagdoll* ragdoll) {
-    if (!ragdoll || ragdoll->ragdoll == nullptr) {
-        return 0;
-    }
-    return (int)ragdoll->ragdoll->GetBodyCount();
-}
-
 extern "C" bool jolt_ragdoll_get_world(const JoltRagdoll* ragdoll, int index, mat4 out) {
     if (!ragdoll || ragdoll->ragdoll == nullptr || !ragdoll->system || !out || index < 0 ||
         index >= (int)ragdoll->ragdoll->GetBodyCount()) {
@@ -207,21 +193,9 @@ extern "C" bool jolt_ragdoll_get_world(const JoltRagdoll* ragdoll, int index, ma
     return true;
 }
 
-extern "C" void jolt_ragdoll_add_impulse(JoltRagdoll* ragdoll, const vec3 impulse) {
-    if (!ragdoll || ragdoll->ragdoll == nullptr || !impulse) {
-        return;
-    }
-    ragdoll->ragdoll->AddImpulse(JPH::Vec3(impulse[0], impulse[1], impulse[2]));
-}
-
 extern "C" int jolt_ragdoll_world_body_count(const JPC_PhysicsSystem* system) {
     if (!system) {
         return 0;
     }
     return (int)reinterpret_cast<const JPH::PhysicsSystem*>(system)->GetNumBodies();
-}
-
-extern "C" uint64_t jolt_ragdoll_jolt_version(void) {
-    using JPH::uint64; // JPH_VERSION_FEATURES spells the bare name
-    return (uint64_t)JPH_VERSION_ID;
 }

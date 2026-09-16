@@ -824,8 +824,8 @@ Five things that leaves open, none of them reachable from this machine:
   its equivalents. They were watched once, headless, at 60 and 240 frames after a scripted
   kill: the figure collapses, collides with the plate and settles connected. Whether it settles
   in a pose a person would believe is a look nobody has had at length, and the first thing to
-  re-measure if a character ever reads as rubbery.
-
+  re-measure if a character ever reads as rubbery — they sit in `RAGDOLL_HUMANOID[]` in
+  `ragdoll.c`, beside the bones they bend.
 - **A window actually moving.** Spec 12.15 closed the feature half of this — `settings_apply`
   now reaches `engine_set_window_mode`, there are three modes, and a monitor is chosen by name
   — but the EFFECT is still a look nobody has had, and structurally so. The switch is refused

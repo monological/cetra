@@ -1244,26 +1244,29 @@ void animation_state_apply_pose(AnimationState* state, const Pose* pose, float d
                           state->global_transforms);
     }
 
-    // Spring-bone secondary motion: simulate un-animated chains (scabbard,
-    // hair) on top of the animated pose before skinning matrices are built
-    if (state->springs) {
-        spring_bone_update(state->springs, state->local_transforms, state->global_transforms,
-                           delta_time);
+    // A ragdoll REPLACES the pose where the two above correct it, so it is an
+    // alternative to them and not a fourth stage. Running them first is not
+    // merely wasted: both are stateful integrators, so a spring would build up
+    // velocity against a pose nothing ever draws and a foot lock would hold a
+    // contact from ground the body stopped standing on -- and both would then
+    // hand that accumulated state back at the moment the ragdoll ended.
+    if (ragdoll_active(state->ragdoll)) {
+        ragdoll_apply(state->ragdoll, state->global_transforms);
+    } else {
+        // Spring-bone secondary motion: simulate un-animated chains (scabbard,
+        // hair) on top of the animated pose before skinning matrices are built
+        if (state->springs) {
+            spring_bone_update(state->springs, state->local_transforms, state->global_transforms,
+                               delta_time);
+        }
+
+        // Two-bone IK: plant a foot on ground the clip knew nothing about. AFTER
+        // the springs, because their pass re-accumulates every unsimulated bone
+        // from its parent and would erase a solve written before it (see ik.h).
+        if (state->ik) {
+            ik_solve(state->ik, state->global_transforms, delta_time);
+        }
     }
-
-    // Two-bone IK: plant a foot on ground the clip knew nothing about. AFTER the
-    // springs, because their pass re-accumulates every unsimulated bone from its
-    // parent and would erase a solve written before it (see ik.h).
-    if (state->ik)
-        ik_solve(state->ik, state->global_transforms, delta_time);
-
-    // The ragdoll, LAST and for the opposite reason to the two above: they
-    // correct a pose the clip produced, and this replaces it. A foot planted on
-    // ground a falling body is no longer standing on is not a correction worth
-    // keeping, so nothing above this needs to run first -- it needs to have its
-    // result overwritten. A no-op while inactive.
-    if (state->ragdoll)
-        ragdoll_apply(state->ragdoll, state->global_transforms, skeleton->bone_count);
 
     // PASS 2: Compute final bone matrices (global * inverse bind pose)
     for (size_t i = 0; i < skeleton->bone_count; i++) {

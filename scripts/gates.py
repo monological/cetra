@@ -24043,17 +24043,37 @@ _RAGDOLL_BONES = ["hips", "spine", "chest", "head", "arm_l", "forearm_l", "arm_r
 
 
 def _ragdoll_probe(case, rig=None):
-    """{(label, key): [floats]} from one gametest --ragdoll-probe run, or None."""
-    extra = ["--puppet", asset(rig)] if rig else None
-    return _gametest_probe("--ragdoll-probe", _RAGDOLL_PROBE, case, extra=extra)
+    """{(case, label, key): [floats]} from one gametest --ragdoll-probe run, or None.
+
+    Keyed by CASE as well, which is what keeps the spawn count down: several cases
+    share one block in the probe -- asking for `build` also prints the shapes rows,
+    asking for `settles` also prints pose and frees -- so the shared reader's
+    case filter was throwing away rows this had already paid a whole process for.
+    Four spawns where there were seven, and every arm reads the same numbers.
+    """
+    extra = ["--ragdoll-probe", case]
+    if rig:
+        extra += ["--puppet", asset(rig)]
+    try:
+        r = subprocess.run([GAMETEST] + extra, capture_output=True, text=True,
+                           timeout=_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None
+    out = {(c, label, key): [float(v) for v in nums.split()]
+           for c, label, key, nums in _RAGDOLL_PROBE.findall(r.stdout + r.stderr)}
+    if r.returncode != 0 or not out:
+        return None
+    return out
 
 
 def run_ragdoll_gate(workdir):
     """A rig falling over (spec 12.16): what the ragdoll builds, and what it does.
 
-      ragdoll-build    every humanoid bone resolves on BOTH rigs, and the bodies and
-                       constraints agree -- structure first, since a rig's spine length
-                       decides the count and a single expected number would be wrong
+      ragdoll-build    every humanoid bone resolves on BOTH rigs, and the tree the build
+                       produced is a tree: one root, every parent earlier in build order
+                       than its child, one constraint per body but the root -- structure
+                       first, since a rig's spine length decides the COUNT and a single
+                       expected number would be wrong on one of the two
       ragdoll-shapes   capsules are DERIVED, not uniform: a thigh is thicker than a
                        forearm and longer than a head, by ratio so it holds on any rig
       ragdoll-scale    the same rig at node scale 1 and 2 gives capsules in exactly 1:2
@@ -24086,6 +24106,10 @@ def run_ragdoll_gate(workdir):
         if not ok:
             failed.append(name)
 
+    # Four spawns for six arms. A `build` run also prints the shapes rows and a
+    # `settles` run also prints pose and frees, so what decides the count is how
+    # many distinct (rig, world) setups the group needs and not how many arms
+    # read them.
     rigs = [("puppet", None), ("t_pose", "t_pose.fbx")]
     build = {}
     for tag, rig in rigs:
@@ -24098,36 +24122,43 @@ def run_ragdoll_gate(workdir):
     ok, detail_bits = True, []
     for tag, _ in rigs:
         p = build[tag]
-        missing = [b for b in _RAGDOLL_BONES if p.get((b, "bone"), [-1])[0] < 0]
-        bodies = int(p[("count", "bodies")][0])
-        cons = int(p[("count", "constraints")][0])
-        if missing or cons != bodies - 1:
+        missing = [b for b in _RAGDOLL_BONES if p.get(("build", b, "bone"), [-1])[0] < 0]
+        # The structure, read back from the system rather than restated: which
+        # slot each body ended up hanging from. Constraints are counted from that
+        # column, so this is an assertion about what the build produced and not
+        # the arithmetic identity "bodies - 1 == bodies - 1" it used to be.
+        parents = {b: int(p[("build", b, "bone")][1])
+                   for b in _RAGDOLL_BONES if p.get(("build", b, "bone"), [-1])[0] >= 0}
+        roots = [b for b, par in parents.items() if par < 0]
+        # Parent-first, which is the ordering CreateRagdoll indexes on: a slot's
+        # parent must sit earlier in the build order than the slot itself.
+        unordered = [b for b, par in parents.items()
+                     if par >= 0 and par >= _RAGDOLL_BONES.index(b)]
+        bodies = int(p[("build", "count", "bodies")][0])
+        cons = int(p[("build", "count", "constraints")][0])
+        if missing or len(roots) != 1 or unordered or cons != bodies - 1:
             ok = False
         detail_bits.append(f"{tag} {bodies} bodies / {cons} constraints"
-                           + (f", UNRESOLVED {missing}" if missing else ""))
+                           + (f", UNRESOLVED {missing}" if missing else "")
+                           + (f", ROOTS {roots}" if len(roots) != 1 else "")
+                           + (f", OUT OF ORDER {unordered}" if unordered else ""))
     print(f"  ragdoll-build {'PASS' if ok else 'FAIL'}  "
-          f"{'; '.join(detail_bits)} (want all twelve resolved and constraints == bodies - 1)")
+          f"{'; '.join(detail_bits)} (want all twelve resolved, exactly one root, every "
+          f"parent earlier than its child, and constraints == bodies - 1)")
     note("ragdoll-build", ok)
 
-    # Its own run: the reader keeps only rows whose case matches what was asked
-    # for, so the shapes rows a build run also prints are dropped from it.
-    p = _ragdoll_probe("shapes", "t_pose.fbx")
-    if not p:
-        print("  ragdoll-shapes SKIP  no probe output")
-        note("ragdoll-shapes", False)
-        p = None
     # Ratios, not absolute sizes: the two rigs are different heights and a bar in
     # metres would hold on one of them by accident.
-    if p:
-        thigh_r = p[("thigh_l", "capsule")][0]
-        fore_r = p[("forearm_l", "capsule")][0]
-        thigh_h = p[("thigh_l", "capsule")][1]
-        head_h = p[("head", "capsule")][1]
-        ok = thigh_r > fore_r * 1.2 and thigh_h > head_h * 1.2
-        print(f"  ragdoll-shapes {'PASS' if ok else 'FAIL'}  thigh radius {thigh_r:.4f} vs "
-              f"forearm {fore_r:.4f}, thigh half-height {thigh_h:.4f} vs head {head_h:.4f} "
-              f"(want each at least 1.2x, or the capsules are not derived from the rig)")
-        note("ragdoll-shapes", ok)
+    p = build["t_pose"]
+    thigh_r = p[("shapes", "thigh_l", "capsule")][0]
+    fore_r = p[("shapes", "forearm_l", "capsule")][0]
+    thigh_h = p[("shapes", "thigh_l", "capsule")][1]
+    head_h = p[("shapes", "head", "capsule")][1]
+    ok = thigh_r > fore_r * 1.2 and thigh_h > head_h * 1.2
+    print(f"  ragdoll-shapes {'PASS' if ok else 'FAIL'}  thigh radius {thigh_r:.4f} vs "
+          f"forearm {fore_r:.4f}, thigh half-height {thigh_h:.4f} vs head {head_h:.4f} "
+          f"(want each at least 1.2x, or the capsules are not derived from the rig)")
+    note("ragdoll-shapes", ok)
 
     p = _ragdoll_probe("scale", "t_pose.fbx")
     if not p:
@@ -24136,7 +24167,7 @@ def run_ragdoll_gate(workdir):
     else:
         worst = 0.0
         for bone in _RAGDOLL_BONES:
-            row = p.get((bone, "ratio"))
+            row = p.get(("scale", bone, "ratio"))
             if not row:
                 continue
             worst = max(worst, abs(row[0] - 2.0), abs(row[1] - 2.0))
@@ -24147,45 +24178,37 @@ def run_ragdoll_gate(workdir):
               f"this gap)")
         note("ragdoll-scale", ok)
 
+    # One run for the last three arms: they are one fall, measured at three
+    # points, and the probe prints all of it from the same stepped world.
     sim = _ragdoll_probe("settles")
     if not sim:
         print("  ragdoll-settles SKIP  no probe output")
-        note("ragdoll-settles", False)
-    else:
-        drop = sim[("hips", "drop")][0]
-        speed = sim[("hips", "speed")][0]
-        ok = drop > 1.0 and speed < 0.2
-        print(f"  ragdoll-settles {'PASS' if ok else 'FAIL'}  the hips fell {drop:.4f} m "
-              f"(want > 1: it has to actually fall) and are moving {speed:.4f} m/s after 300 "
-              f"steps (want < 0.2: at rest rather than sliding)")
-        note("ragdoll-settles", ok)
+        for name in ("ragdoll-settles", "ragdoll-pose", "ragdoll-frees"):
+            note(name, False)
+        return failed
 
-    # Their own runs, for the reason above: one probe process prints all three
-    # cases' rows, and the reader keeps only the case it asked for.
-    pose = _ragdoll_probe("pose")
-    if not pose:
-        print("  ragdoll-pose SKIP  no probe output")
-        note("ragdoll-pose", False)
-    else:
-        moved = pose[("hips", "moved")][0]
-        ok = moved > 0.5
-        print(f"  ragdoll-pose {'PASS' if ok else 'FAIL'}  applying the ragdoll moved the hips "
-              f"bone {moved:.4f} m from where the clip left it (want > 0.5: the body is the "
-              f"pose now, not a correction to it)")
-        note("ragdoll-pose", ok)
+    drop = sim[("settles", "hips", "drop")][0]
+    speed = sim[("settles", "hips", "speed")][0]
+    ok = drop > 1.0 and speed < 0.2
+    print(f"  ragdoll-settles {'PASS' if ok else 'FAIL'}  the hips fell {drop:.4f} m "
+          f"(want > 1: it has to actually fall) and are moving {speed:.4f} m/s after 300 "
+          f"steps (want < 0.2: at rest rather than sliding)")
+    note("ragdoll-settles", ok)
 
-    frees = _ragdoll_probe("frees")
-    if not frees:
-        print("  ragdoll-frees SKIP  no probe output")
-        note("ragdoll-frees", False)
-    else:
-        before, during, after = (int(v) for v in frees[("world", "bodies")])
-        ok = after == before and during > before
-        print(f"  ragdoll-frees {'PASS' if ok else 'FAIL'}  world bodies {before} -> {during} "
-              f"-> {after} (want it to rise and come back exactly: ~Ragdoll destroys bodies "
-              f"without removing them, so a missed removal is invisible until the pool runs "
-              f"out)")
-        note("ragdoll-frees", ok)
+    moved = sim[("pose", "hips", "moved")][0]
+    ok = moved > 0.5
+    print(f"  ragdoll-pose {'PASS' if ok else 'FAIL'}  applying the ragdoll moved the hips "
+          f"bone {moved:.4f} m from where the clip left it (want > 0.5: the body is the "
+          f"pose now, not a correction to it)")
+    note("ragdoll-pose", ok)
+
+    before, during, after = (int(v) for v in sim[("frees", "world", "bodies")])
+    ok = after == before and during > before
+    print(f"  ragdoll-frees {'PASS' if ok else 'FAIL'}  world bodies {before} -> {during} "
+          f"-> {after} (want it to rise and come back exactly: ~Ragdoll destroys bodies "
+          f"without removing them, so a missed removal is invisible until the pool runs "
+          f"out)")
+    note("ragdoll-frees", ok)
 
     return failed
 
