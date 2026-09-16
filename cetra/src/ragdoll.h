@@ -20,7 +20,7 @@ struct Mesh;
  * global_transforms and nothing else, because nothing re-accumulates after the
  * point it is spliced in -- so a local written here would have no reader, and
  * writing the Pose instead would be discarded outright for every bone no clip
- * drives (ik.h:29-33 states that at length).
+ * drives, which ik.h states at length.
  *
  * Everything measured here is MODEL space, in the units the skeleton's bind
  * pose is in, and the owning node's scale is applied exactly once at build.
@@ -63,9 +63,12 @@ typedef struct RagdollSystem RagdollSystem;
  * its own bone's length -- thinner than measured limbs and never zero, so a
  * skeleton with no skin still produces a legal ragdoll.
  *
- * A skeleton missing a bone the set needs is REFUSED by name rather than built
- * with a hole: a ragdoll with no chest has arms attached to nothing, which
- * simulates perfectly and looks like a bug in the solver.
+ * A row this rig does not answer COLLAPSES rather than leaving a hole -- a
+ * missing chest re-points the arms and the head at the spine -- which is what
+ * makes the body count a property of the rig instead of a constant. What
+ * cannot collapse is REFUSED by name: no hips, or no thigh, is not a humanoid
+ * this can build, and a ragdoll assembled around that gap simulates perfectly
+ * and looks like a bug in the solver.
  */
 RagdollSystem* create_ragdoll(Skeleton* skeleton, const struct Mesh* mesh, float node_scale);
 void free_ragdoll(RagdollSystem* ragdoll);
