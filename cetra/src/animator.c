@@ -414,7 +414,7 @@ float animator_stride_speed(const Animator* a) {
 }
 
 bool animator_root_motion(const Animator* a) {
-    return a && a->base.count > 0 && a->base.travels;
+    return a && a->root_motion && a->base.count > 0 && a->base.travels;
 }
 
 bool animator_take_root_motion(Animator* a, vec3 out_travel, float* out_yaw) {
@@ -603,7 +603,7 @@ static void collect_events(const Animation* clip, float prev, float now, bool wr
 // going to the body instead.
 static void root_advance(Animator* a, const Skeleton* skeleton) {
     const bool fading_live = a->fading && !a->outgoing_frozen && a->outgoing.travels;
-    if (a->root_bone < 0 || !(a->base.travels || fading_live))
+    if (!a->root_motion || a->root_bone < 0 || !(a->base.travels || fading_live))
         return;
 
     vec3 moved = {0.0f, 0.0f, 0.0f};

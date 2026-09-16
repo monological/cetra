@@ -152,6 +152,14 @@ typedef struct Animator {
     bool playing;
     float speed; // multiplies every clock's advance; fades are not scaled
     float param; // the blend space's position; clamped to its entries
+    // Take the travel a clip states OUT of the pose and hold it for the caller
+    // (spec 12.18). OFF, and opt-in rather than automatic, because it is a
+    // decision about who moves the character and not a property of the clip: an
+    // animator whose caller never drains would otherwise have the displacement
+    // removed from the pose and applied nowhere, which is a caster that silently
+    // stops moving. That is not hypothetical -- it is what shipped for an hour
+    // and what `shadow-lag-tracks` caught.
+    bool root_motion;
 } Animator;
 
 // Owns a fresh AnimationState on the skeleton; NULL (logged) when the state
@@ -213,9 +221,10 @@ float animator_stride_speed(const Animator* animator);
 // the animation decides where the body goes. What each clip states is measured
 // when the source starts, and the mixture's is blended exactly as the pose is.
 
-// Whether the playing source states a displacement at all. A property of the
-// clips, so it does not flicker: a game asks once per step which way round it is
-// running, and an in-place source answers false for as long as it plays.
+// Whether root motion is LIVE: `root_motion` is set and the playing source states
+// a displacement. A property of the clips and one switch, so it does not flicker --
+// a game asks once per step which way round it is running, and an in-place source
+// answers false for as long as it plays.
 bool animator_root_motion(const Animator* animator);
 
 // Take what the clip has laid down since this was last called -- MODEL units and
