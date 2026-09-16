@@ -78,10 +78,11 @@ typedef struct CharacterController {
     // without the two fighting over it every step. A plain write at any time:
     // the step reads it, and so does the sync that follows.
     //
-    // BOTH halves, and for a spec they were not: the update was gated and the
-    // sync was not, so a disabled controller stopped walking and went on
-    // pinning its entity to the frozen capsule every step -- which is
-    // indistinguishable from the entity being stuck.
+    // BOTH halves, which they were not for as long as this field existed with
+    // only one reader: the update was gated and the sync was not, so a disabled
+    // controller stopped walking and went on pinning its entity to the frozen
+    // capsule every step -- indistinguishable from the entity being stuck, and
+    // latent until something else wanted to drive that entity.
     bool enabled;
 } CharacterController;
 
