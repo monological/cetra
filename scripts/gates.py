@@ -15717,6 +15717,10 @@ def run_anim_gate(workdir):
     # whole length as a step the first time anything plays.
     d = _anim_probe_run("rootmotion")
     dt = 1.0 / 60.0
+    # Seeded before the branch that fills them, because the two arms AFTER this block
+    # read them: a probe failure there would otherwise raise NameError and take the
+    # whole group down instead of failing the arms it belongs to.
+    walk_s = run_s = walk_loop = run_loop = None
     rows = [("wrap", "travelled"), ("blend", "travelled"), ("blend", "seconds"),
             ("blend", "loops"), ("switch", "travelled"), ("fade", "travelled"),
             ("fade", "shape"), ("spin", "turned"), ("spin", "travelled"),
@@ -15851,7 +15855,8 @@ def run_anim_gate(workdir):
     rooted = _gametest_moves(workdir, "rooted", [])
     inplace = _gametest_moves(workdir, "inplace", ["--no-root-motion"])
     lunge_row = stated.get(("lunge", "travel")) if stated else None
-    if not rooted or not inplace or not lunge_row or rooted["axis"] <= 0.0:
+    if (not rooted or not inplace or not lunge_row or run_loop is None
+            or rooted["axis"] <= 0.0):
         for arm in ("anim-root-lunge", "anim-root-spin"):
             print(f"  {arm} FAIL  a run failed or the probe measured nothing")
             failures.append(arm)

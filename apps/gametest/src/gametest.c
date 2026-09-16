@@ -2851,6 +2851,12 @@ static void on_init(Game* game) {
         // the fraction of it a swimmer actually moves at.
         build_aquatic(clip_float, clip_swim, player_speed * GROTTO_SWIM_FRACTION);
         player_animator = create_animator(skeleton);
+        // Ask for the clips' travel, which is opt-in: an animator whose caller does
+        // not drain would have it taken out of the pose and applied nowhere. Set
+        // whatever the clips turn out to state, since the loop reads
+        // animator_root_motion per step and an in-place source answers false.
+        if (player_animator)
+            player_animator->root_motion = !no_root_motion;
         if (player_animator && idle && walk && run) {
             animator_play_space(player_animator, "locomotion", locomotion, locomotion_count, 0.0f,
                                 true);
@@ -5585,6 +5591,7 @@ static void probe_tick_rooted(EntityManager* em, Animator* a, int ticks, vec3 ou
                               float* out_yaw) {
     glm_vec3_zero(out_travel);
     *out_yaw = 0.0f;
+    a->root_motion = true; // opt-in, like the app's
     for (int i = 0; i < ticks; i++) {
         update_all_animators(em, PROBE_DT);
         vec3 step;
