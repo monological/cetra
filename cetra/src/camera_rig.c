@@ -261,11 +261,16 @@ void camera_rig_set_pose(CameraRig* rig, const vec3 eye, const vec3 look) {
 }
 
 void camera_rig_apply(const CameraRig* rig, Camera* camera) {
-    if (!rig || !camera) {
-        log_error("camera_rig_apply: NULL rig or camera");
+    if (!camera) {
+        log_error("camera_rig_apply: NULL camera");
         return;
     }
-    if (!rig->posed)
+    // A NULL rig is silent, and that is a contract rather than leniency: "no rig
+    // installed" is the normal state of an app that poses its own camera, and it
+    // is what the engine's frame loop passes every frame in one. Making it an
+    // error would have put a guard back at the one call site this exists to take
+    // a guard away from. An unposed rig is the same statement one step later.
+    if (!rig || !rig->posed)
         return;
     camera_set_position(camera, (float*)rig->pose.eye);
     camera_set_look_at(camera, (float*)rig->pose.look);
