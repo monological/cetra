@@ -24,6 +24,17 @@ THE CLIPS, and what each is for:
   hold90  4.0 s once   the left forearm to +90 deg about Z by 0.25 s, then HELD
   rest    4.0 s once   the bind pose as a clip (one channel), the other
                        endpoint of the analytic midpoint blend
+  swim    1.6 s loop   a breaststroke: arms sweeping in the frontal plane
+  travel_walk 1.0 s loop  walk's shape, and 1.20 m of +Z per loop
+  travel_run  0.5 s loop  run's shape, and 1.60 m
+  lunge   0.6 s once   one stride carrying 1.20 m, ending on the bind pose
+  spin    1.0 s once   half a turn about Y on the spot, in 45-degree steps
+
+The last four are what ROOT MOTION reads (spec 12.18): a clip states how far it
+travels and the engine gives that to the character, where every other clip here
+is in place and a game has to decide for itself how fast to move. walk and run
+keep their own shape and stand beside them rather than being replaced, because a
+golden plays run by name and half the anim arms expect the pose those two hold.
 
 The loops are in COS phase: t = 0 and t = T/2 are the extremes, so frame 30 of
 the render app's fixed 1/60 clock (t = 0.5 s) reads a full stride on walk and
@@ -165,7 +176,14 @@ for pos in BIND:
 
 # ---------------------------------------------------------------------------
 # Clips. A clip is {joint name: [(time, quat), ...]} plus an optional Hips
-# height curve; every animated joint gets its bind translation as a track.
+# TRANSLATION curve; every animated joint gets its bind translation as a track.
+#
+# That curve used to be a height alone, which is all a bob needs. It carries all
+# three components since spec 12.18, because a root that moves horizontally is
+# what root motion reads: the engine takes the displacement between the clip's
+# first tick and its last and gives it to the character, so a clip states how
+# far it travels instead of a game guessing. A clip whose curve only rises and
+# falls is still in place, and the engine says so.
 # ---------------------------------------------------------------------------
 
 KEYS_PER_LOOP = 8
@@ -182,17 +200,34 @@ def loop_keys(period, fn):
     return out
 
 
-def gait(period, thigh_deg, arm_deg, bob):
+def hips_curve(period, bob, travel=0.0, keys=KEYS_PER_LOOP, phase=2.0):
+    """The Hips' own translation track: a vertical bob, and `travel` metres of +Z.
+
+    The forward part is LINEAR in time, which is not what a real walk's root does
+    -- a foot pushing off drives the hips in surges. It is what makes the number
+    exact: the engine samples the clip's ends and subtracts, and a linear ramp
+    between them travels its stated distance under any interpolation, so a clip
+    says 1.20 m and the character moves 1.20 m with nothing to round.
+    """
+    out = []
+    for k in range(keys + 1):
+        f = k / keys
+        out.append((period * f,
+                    (LOCAL[0][0],
+                     BIND[0][1] + bob * math.cos(phase * 2.0 * math.pi * f),
+                     LOCAL[0][2] + travel * f)))
+    return out
+
+
+def gait(period, thigh_deg, arm_deg, bob, travel=0.0):
     rot = {
         "LeftUpLeg": loop_keys(period, lambda p: quat_axis(X, thigh_deg * math.cos(p))),
         "RightUpLeg": loop_keys(period, lambda p: quat_axis(X, -thigh_deg * math.cos(p))),
         "LeftArm": loop_keys(period, lambda p: quat_axis(Y, -arm_deg * math.cos(p))),
         "RightArm": loop_keys(period, lambda p: quat_axis(Y, arm_deg * math.cos(p))),
     }
-    hips = [(period * k / KEYS_PER_LOOP,
-             BIND[0][1] + bob * math.cos(2.0 * 2.0 * math.pi * k / KEYS_PER_LOOP))
-            for k in range(KEYS_PER_LOOP + 1)]
-    return {"loop": True, "length": period, "rot": rot, "hips_y": hips}
+    return {"loop": True, "length": period, "rot": rot,
+            "hips": hips_curve(period, bob, travel)}
 
 
 def idle():
@@ -201,10 +236,13 @@ def idle():
         "Spine2": loop_keys(period, lambda p: quat_axis(X, 3.0 * math.sin(p))),
         "Head": loop_keys(period, lambda p: quat_axis(X, 2.0 * math.sin(p + math.pi * 0.5))),
     }
+    # A quarter turn of phase, so the breath rises and falls once rather than twice,
+    # and the curve is a sine where a gait's is a cosine.
     hips = [(period * k / KEYS_PER_LOOP,
-             BIND[0][1] + 0.01 * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP))
+             (LOCAL[0][0], BIND[0][1] + 0.01 * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP),
+              LOCAL[0][2]))
             for k in range(KEYS_PER_LOOP + 1)]
-    return {"loop": True, "length": period, "rot": rot, "hips_y": hips}
+    return {"loop": True, "length": period, "rot": rot, "hips": hips}
 
 
 def jump():
@@ -218,7 +256,7 @@ def jump():
         "RightArm": [(0.0, IDENT), (0.2, quat_axis(Z, -60.0)), (0.7, quat_axis(Z, -60.0)),
                      (1.0, IDENT)],
     }
-    return {"loop": False, "length": 1.0, "rot": rot, "hips_y": None}
+    return {"loop": False, "length": 1.0, "rot": rot, "hips": None}
 
 
 def wave():
@@ -232,7 +270,7 @@ def wave():
         t += 0.125
     fore.append((1.0, IDENT))
     return {"loop": False, "length": 1.0, "rot": {"RightArm": arm, "RightForeArm": fore},
-            "hips_y": None}
+            "hips": None}
 
 
 def swim(period=1.6, arm_deg=55.0, knee_deg=40.0, thigh_deg=18.0, bob=0.015):
@@ -260,19 +298,67 @@ def swim(period=1.6, arm_deg=55.0, knee_deg=40.0, thigh_deg=18.0, bob=0.015):
         "RightUpLeg": loop_keys(period, lambda p: quat_axis(X, -thigh_deg * math.sin(p))),
     }
     hips = [(period * k / KEYS_PER_LOOP,
-             BIND[0][1] + bob * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP))
+             (LOCAL[0][0], BIND[0][1] + bob * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP),
+              LOCAL[0][2]))
             for k in range(KEYS_PER_LOOP + 1)]
-    return {"loop": True, "length": period, "rot": rot, "hips_y": hips}
+    return {"loop": True, "length": period, "rot": rot, "hips": hips}
+
+
+# What the travelling clips state, in metres of +Z per play. The rig faces +Z, so
+# these are forward. They are the whole of what spec 12.18 asserts: the engine reads
+# them off the clip and the character moves exactly this far, so a gate compares a
+# distance walked against a number declared here.
+#
+# The pair is chosen so a blend between them is not their mean at either end and the
+# run is not a multiple of the walk: 1.20 m per 1.0 s and 1.60 m per 0.5 s, which is
+# 1.20 and 3.20 m/s. A run that merely doubled the walk would let a weighted-mean
+# blend pass by coincidence.
+TRAVEL_WALK = 1.20
+TRAVEL_RUN = 1.60
+TRAVEL_LUNGE = 1.20
+SPIN_DEG = 180.0
+
+
+def lunge():
+    """A one-shot that travels a fixed distance -- what stride matching cannot do.
+
+    Its legs are a single stride rather than a loop, and it ends on the bind pose so
+    the animator's return to the locomotion space has nothing to cover.
+    """
+    step = [(0.0, IDENT), (0.25, quat_axis(X, 45.0)), (0.6, IDENT)]
+    back = [(0.0, IDENT), (0.25, quat_axis(X, -30.0)), (0.6, IDENT)]
+    rot = {
+        "LeftUpLeg": step, "RightUpLeg": back,
+        "LeftArm": [(0.0, IDENT), (0.25, quat_axis(Y, -35.0)), (0.6, IDENT)],
+        "RightArm": [(0.0, IDENT), (0.25, quat_axis(Y, 35.0)), (0.6, IDENT)],
+    }
+    return {"loop": False, "length": 0.6, "rot": rot,
+            "hips": hips_curve(0.6, 0.03, TRAVEL_LUNGE, keys=6, phase=1.0)}
+
+
+def spin():
+    """Half a turn on the spot: the yaw half of root motion with no travel at all.
+
+    Authored in 45-degree steps rather than one key to 180. A single hop of exactly
+    half a turn has no shorter arc -- the two directions are the same length -- so
+    which way it goes is whatever the interpolator decides, and a clip that states a
+    turn should state its direction too.
+    """
+    keys = [(0.0, IDENT)]
+    for k in range(1, 5):
+        keys.append((k * 0.25, quat_axis(Y, SPIN_DEG * k / 4.0)))
+    return {"loop": False, "length": 1.0, "rot": {"Hips": keys},
+            "hips": hips_curve(1.0, 0.0, 0.0, keys=4, phase=1.0)}
 
 
 def hold90():
     keys = [(0.0, IDENT), (0.25, quat_axis(Z, 90.0)), (4.0, quat_axis(Z, 90.0))]
-    return {"loop": False, "length": 4.0, "rot": {"LeftForeArm": keys}, "hips_y": None}
+    return {"loop": False, "length": 4.0, "rot": {"LeftForeArm": keys}, "hips": None}
 
 
 def rest():
     return {"loop": False, "length": 4.0, "rot": {"Hips": [(0.0, IDENT), (4.0, IDENT)]},
-            "hips_y": None}
+            "hips": None}
 
 
 CLIPS = [
@@ -288,6 +374,13 @@ CLIPS = [
     # and animation index untouched. Every consumer binds by NAME through accessor
     # indirection, so no existing clip's sampled values move either.
     ("swim", swim()),
+    # Spec 12.18, appended for the same reason. walk and run are left exactly as they
+    # are and these stand beside them rather than replacing them: a golden plays run by
+    # name, and half the anim arms expect the pose those two hold.
+    ("travel_walk", gait(1.0, 30.0, 20.0, 0.02, TRAVEL_WALK)),
+    ("travel_run", gait(0.5, 50.0, 35.0, 0.04, TRAVEL_RUN)),
+    ("lunge", lunge()),
+    ("spin", spin()),
 ]
 
 READ_FRAME_T = 0.5  # frame 30 at 1/60
@@ -300,6 +393,25 @@ for name, clip in CLIPS:
         assert READ_FRAME_T < clip["length"], "a one-shot must still be going at the read frame"
 assert CLIPS[0][0] == "idle", "the render app plays index 0"
 assert abs(hold90()["rot"]["LeftForeArm"][-1][0] - 4.0) < 1e-9
+
+# What each clip STATES about its own displacement, which is what the engine reads off
+# it: the hips' last key minus its first. Asserted here so the distance a gate expects
+# and the distance the file carries are the same statement rather than two.
+#
+# Everything not listed travels 0, and that is the load-bearing half -- an in-place clip
+# has to stay in place, or a character playing it would drift with nothing to see.
+TRAVELS = {"travel_walk": TRAVEL_WALK, "travel_run": TRAVEL_RUN, "lunge": TRAVEL_LUNGE}
+for name, clip in CLIPS:
+    curve = clip["hips"]
+    moved = (0.0, 0.0, 0.0) if curve is None else tuple(
+        curve[-1][1][k] - curve[0][1][k] for k in range(3))
+    want = TRAVELS.get(name, 0.0)
+    assert abs(moved[2] - want) < 1e-9, (name, moved[2], want)
+    assert abs(moved[0]) < 1e-9, ("a clip may only travel forward", name, moved[0])
+    # The vertical returns to where it started even on a one-shot: a bob is not travel,
+    # and a clip that ended higher than it began would state a climb nothing supports.
+    assert abs(moved[1]) < 1e-9, ("a hips curve may not end at another height", name)
+assert abs(spin()["rot"]["Hips"][-1][1][1] - math.sin(math.radians(SPIN_DEG) * 0.5)) < 1e-9
 
 # ---------------------------------------------------------------------------
 # Pack.
@@ -361,7 +473,7 @@ animations = []
 for name, clip in CLIPS:
     samplers, channels = [], []
     animated = set(clip["rot"].keys())
-    if clip["hips_y"] is not None:
+    if clip["hips"] is not None:
         animated.add("Hips")
     for joint in sorted(animated, key=lambda j: INDEX[PREFIX + j]):
         node = JOINT_NODE0 + INDEX[PREFIX + joint]
@@ -375,11 +487,11 @@ for name, clip in CLIPS:
             samplers.append({"input": t_acc, "output": r_acc, "interpolation": "LINEAR"})
             channels.append({"sampler": len(samplers) - 1,
                              "target": {"node": node, "path": "rotation"}})
-        # The translation track: the bind offset held, or the hips' height curve.
-        if joint == "Hips" and clip["hips_y"] is not None:
-            curve = clip["hips_y"]
+        # The translation track: the bind offset held, or the hips' own curve.
+        if joint == "Hips" and clip["hips"] is not None:
+            curve = clip["hips"]
             times = [k[0] for k in curve]
-            local_pos = [(LOCAL[0][0], y, LOCAL[0][2]) for _, y in curve]
+            local_pos = [p for _, p in curve]
         else:
             times = [0.0, clip["length"]]
             local_pos = [LOCAL[INDEX[PREFIX + joint]]] * 2
