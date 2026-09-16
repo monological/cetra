@@ -3321,6 +3321,12 @@ static void on_update(Game* game, double dt) {
                    player_animator->layer.weight, player_animator->speed,
                    animator_source_name(player_animator));
         }
+        // The follow camera's heading, LAST, so appending it cannot disturb either
+        // regex already reading this line -- neither anchors its end. It is here
+        // because `vel` above is camera-relative since 12.17, and a reader with no
+        // camera angle can see that the two disagree but not that they disagree by
+        // exactly the amount the arrows asked for.
+        printf(" cam %.4f", (double)cam_yaw);
         printf("\n");
     }
     trace_step++;
