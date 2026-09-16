@@ -1,7 +1,6 @@
 #include "animation.h"
 #include "ik.h"
 #include "ragdoll.h"
-#include "rigging.h"
 #include "springbone.h"
 #include "util.h"
 #include "ext/log.h"
@@ -1165,71 +1164,50 @@ bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, con
 #define ROOT_MIN_TRAVEL 1e-4f
 #define ROOT_MIN_YAW    1e-4f
 
-// The heading of a model-space frame: where its +Z axis points, flattened onto the
-// ground. cglm is column-major, so m[2] IS that axis.
+// The heading of a frame: where its +Z axis points, flattened onto the ground. cglm
+// is column-major, so m[2] IS that axis.
 static float heading_of(mat4 m) {
     return atan2f(m[2][0], m[2][2]);
 }
 
-// The shorter way round, so a turn through the seam reads as the small angle it is.
-static float wrap_pi(float a) {
-    while (a > GLM_PIf)
-        a -= 2.0f * GLM_PIf;
-    while (a < -GLM_PIf)
-        a += 2.0f * GLM_PIf;
-    return a;
-}
-
 bool animation_root_at(const Animation* clip, int root_bone, float tick, vec3 out_pos,
                        float* out_yaw) {
-    if (!clip || root_bone < 0)
+    const AnimationChannel* channel = get_channel_for_bone((Animation*)clip, root_bone);
+    // A retargeted channel takes its position from the BIND pose whatever its keys
+    // hold, so the pose this clip produces is in place however far the rig it was
+    // authored on travelled -- see the two sites in animation_sample_pose that copy
+    // `bone->local_transform[3]` over a sampled one.
+    if (!channel || channel->needs_retargeting)
         return false;
-    const AnimationChannel* channel = NULL;
-    for (size_t i = 0; i < clip->channel_count; i++) {
-        if (clip->channels[i].bone_index == root_bone) {
-            channel = &clip->channels[i];
-            break;
-        }
-    }
-    // A retargeted channel takes its position from the BIND pose, whatever its keys
-    // hold (see animation_sample_pose), so the pose this clip produces is in place
-    // however far the rig it was authored on travelled. Answering from the keys here
-    // would hand a character a distance measured on somebody else's skeleton, in
-    // somebody else's proportions, that no frame of the animation shows.
-    if (!channel || channel->needs_retargeting || channel->position_key_count == 0)
+    // Position and rotation gate independently: a turn-in-place authored as rotation
+    // keys alone states a yaw and no travel, and refusing it for want of a position
+    // track would refuse the clearest case this measurement exists for.
+    if (channel->position_key_count == 0 && channel->rotation_key_count == 0)
         return false;
 
-    interpolate_position(channel->position_keys, channel->position_key_count, tick, out_pos);
-    versor rot = GLM_QUAT_IDENTITY_INIT;
-    interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, tick, rot);
-    mat4 m = GLM_MAT4_IDENTITY_INIT;
-    glm_quat_mat4(rot, m);
-    if (out_yaw)
+    if (channel->position_key_count > 0)
+        interpolate_position(channel->position_keys, channel->position_key_count, tick, out_pos);
+    else
+        glm_vec3_zero(out_pos); // what the sampler reads for a channel with no position track
+    if (out_yaw) {
+        versor rot = GLM_QUAT_IDENTITY_INIT;
+        interpolate_rotation(channel->rotation_keys, channel->rotation_key_count, tick, rot);
+        mat4 m = GLM_MAT4_IDENTITY_INIT;
+        glm_quat_mat4(rot, m);
         *out_yaw = heading_of(m);
+    }
     return true;
 }
 
-int animation_root_bone(Skeleton* skeleton) {
-    if (!skeleton || skeleton->bone_count == 0)
-        return -1;
-    const int hips = skeleton_resolve_bone(skeleton, "hips");
-    if (hips >= 0)
-        return hips;
-    for (size_t i = 0; i < skeleton->bone_count; i++) {
-        if (skeleton->bones[i].parent_index < 0)
-            return (int)i;
-    }
-    return -1;
-}
-
-bool animation_pose_root(const Skeleton* skeleton, const Pose* pose, int root_bone, vec3 out_pos,
-                         float* out_yaw) {
-    if (!skeleton || !pose || root_bone < 0 || (size_t)root_bone >= skeleton->bone_count)
+bool animation_pose_root(const Pose* pose, int root_bone, vec3 out_pos, float* out_yaw) {
+    if (!pose || !pose->skeleton || root_bone < 0 ||
+        (size_t)root_bone >= pose->skeleton->bone_count)
         return false;
+    const Skeleton* skeleton = pose->skeleton;
 
-    // Up the parent chain rather than over every bone: a root is at most a node or two
-    // below the skeleton's, and this runs every frame where animation_root_travel runs
-    // twice in a clip's life.
+    // Up the parent chain rather than over every bone: a root sits at most a node or
+    // two below the skeleton's, so this walks two matrices where accumulate_global
+    // wants a filled locals[MAX_BONES] to walk them all.
     mat4 m = GLM_MAT4_IDENTITY_INIT;
     pose_local(skeleton, pose, (size_t)root_bone, m);
     for (int p = skeleton->bones[root_bone].parent_index; p >= 0;
@@ -1245,30 +1223,38 @@ bool animation_pose_root(const Skeleton* skeleton, const Pose* pose, int root_bo
     return true;
 }
 
-void animation_pose_pin_root(const Skeleton* skeleton, Pose* pose, int root_bone) {
-    if (!skeleton || !pose || root_bone < 0 || (size_t)root_bone >= skeleton->bone_count)
+void animation_pose_pin_root(Pose* pose, int root_bone, float amount) {
+    if (!pose || !pose->skeleton || root_bone < 0 ||
+        (size_t)root_bone >= pose->skeleton->bone_count || amount <= 0.0f)
         return;
     BoneTransform* bt = &pose->bones[root_bone];
-    const float* bind = skeleton->bones[root_bone].local_transform[3];
-    bt->position[0] = bind[0];
-    bt->position[2] = bind[2];
+    mat4* bind = &pose->skeleton->bones[root_bone].local_transform;
+    const float w = amount > 1.0f ? 1.0f : amount;
 
-    mat4 local;
+    // Toward the BIND pose, both halves. Sending the position to bind and the heading
+    // to ZERO reads as one operation and is two: on a rig whose hips bind with a
+    // heading of their own -- routine on an imported FBX -- the second yaws the whole
+    // character by that heading on every frame this runs.
+    bt->position[0] += w * ((*bind)[3][0] - bt->position[0]);
+    bt->position[2] += w * ((*bind)[3][2] - bt->position[2]);
+
+    mat4 local = GLM_MAT4_IDENTITY_INIT;
     glm_quat_mat4(bt->rotation, local);
-    versor undo;
-    glm_quatv(undo, -heading_of(local), (vec3){0.0f, 1.0f, 0.0f});
-    glm_quat_mul(undo, bt->rotation, bt->rotation);
+    versor undo = GLM_QUAT_IDENTITY_INIT, pinned = GLM_QUAT_IDENTITY_INIT;
+    glm_quatv(undo, w * wrap_pi(heading_of(*bind) - heading_of(local)), (vec3){0.0f, 1.0f, 0.0f});
+    // Through a temp: glm_quat_mul's scalar fallback writes dest[0] before reading
+    // q[0], so aliasing dest with an operand corrupts it wherever cglm is not
+    // compiled to SIMD. The same call 300 lines up already routes through one.
+    glm_quat_mul(undo, bt->rotation, pinned);
+    glm_quat_copy(pinned, bt->rotation);
 }
 
-bool animation_root_travel(const Animation* clip, const Skeleton* skeleton, int root_bone,
-                           vec3 out_travel, float* out_yaw) {
+bool animation_root_travel(const Animation* clip, int root_bone, vec3 out_travel, float* out_yaw) {
     if (out_travel)
         glm_vec3_zero(out_travel);
     if (out_yaw)
         *out_yaw = 0.0f;
-    if (!clip || !skeleton || root_bone < 0 || (size_t)root_bone >= skeleton->bone_count)
-        return false;
-    if (clip->duration <= 0.0f || clip->ticks_per_second <= 0.0f)
+    if (!clip || clip->duration <= 0.0f || clip->ticks_per_second <= 0.0f)
         return false;
 
     vec3 first = {0.0f, 0.0f, 0.0f}, last = {0.0f, 0.0f, 0.0f};

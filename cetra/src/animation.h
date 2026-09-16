@@ -304,16 +304,34 @@ void animation_sample_pose(const Animation* anim, const Skeleton* skeleton, floa
 bool animation_stride_speed(const Animation* clip, const Skeleton* skeleton, const int ankle[2],
                             const int toe[2], float* out_speed, vec3 out_dir);
 
-// Where the clip's own root channel puts `root_bone` at one tick: its LOCAL position and
-// the heading of its +Z axis. A root bone has no parent on any rig this reaches, so local
-// and model are the same frame; a rig that hangs its hips under an animated node is
-// outside what this claims.
+// The shorter way round: an angle folded into (-pi, pi], so a turn through the seam
+// reads as the small angle it is rather than the long way round.
 //
-// False -- the in-place answer -- when the clip does not drive the root, and also when
-// its root channel is RETARGETED, since the pose takes a retargeted bone's position from
-// the bind pose whatever the keys hold. Answering from the keys there would hand a
-// character a distance measured on another skeleton, in another rig's proportions, that
-// no frame of the animation shows.
+// Inline and here because four call sites had hand-rolled these two loops -- the same
+// argument mesh.h's aabb_* helpers were hoisted on, and the same failure it prevents:
+// an operation nobody can grep for.
+static inline float wrap_pi(float a) {
+    while (a > GLM_PIf)
+        a -= 2.0f * GLM_PIf;
+    while (a < -GLM_PIf)
+        a += 2.0f * GLM_PIf;
+    return a;
+}
+
+// Where the clip's own root channel puts `root_bone` at one tick: its LOCAL position and
+// the heading of its +Z axis. `out_pos` reads zero for a channel carrying rotation keys
+// alone, which is what the sampler reads for one too -- so a difference of two ticks is
+// still the travel either way.
+//
+// LOCAL, and a rig whose root hangs under an animated ancestor is outside what this
+// claims: the numbers would be in that ancestor's frame. An armature node holding a
+// CONSTANT frame is fine, since a constant cancels out of every difference taken here.
+//
+// False -- the in-place answer -- when no channel drives the root, when the channel
+// carries neither position nor rotation keys, and when it is RETARGETED, since the pose
+// takes a retargeted bone's position from the bind pose whatever the keys hold.
+// Answering from the keys there would hand a character a distance measured on another
+// skeleton, in another rig's proportions, that no frame of the animation shows.
 bool animation_root_at(const Animation* clip, int root_bone, float tick, vec3 out_pos,
                        float* out_yaw);
 
@@ -325,35 +343,38 @@ bool animation_root_at(const Animation* clip, int root_bone, float tick, vec3 ou
 // INFERRED from where the feet are, this is READ from what the animator wrote. So it
 // needs no stance, no window and no median, and two samples answer it.
 //
-// False when the root states nothing: no channel drives it, or it ends the clip where it
-// began. Only the HORIZONTAL travel and the yaw decide that -- a clip whose root only
+// False when the root states nothing: it ends the clip where it began, or the read above
+// refuses. Only the HORIZONTAL travel and the yaw decide that -- a clip whose root only
 // rises and falls is in place, and `out_travel` still reports the vertical.
 //
+// TWO LIMITS, both in the endpoints rather than the arithmetic. A turn is folded into
+// (-pi, pi], so a clip stating a full revolution reads as none and a three-quarter turn
+// reads as a quarter the other way. And a LOOP whose last key duplicates its first --
+// the convention `animation_stride_speed` relies on 100 lines above, and the one a
+// rotation track must follow to loop at all -- states no travel by construction: a
+// travelling loop's translation track has to END where the next loop begins.
+//
 // `animation_stride_speed`'s note about scale applies here word for word.
-bool animation_root_travel(const Animation* clip, const Skeleton* skeleton, int root_bone,
-                           vec3 out_travel, float* out_yaw);
-
-// The bone a rig's root motion belongs to: the hips where the rig has them, and the
-// first bone with no parent otherwise. -1 for an empty skeleton.
-int animation_root_bone(Skeleton* skeleton);
+bool animation_root_travel(const Animation* clip, int root_bone, vec3 out_travel, float* out_yaw);
 
 // Where `root_bone` stands in one pose: its MODEL-space position, composed through
 // whatever ancestors it has, and the heading of its +Z axis. False, leaving both
 // untouched, for a pose that does not carry the bone.
-bool animation_pose_root(const Skeleton* skeleton, const Pose* pose, int root_bone, vec3 out_pos,
-                         float* out_yaw);
+bool animation_pose_root(const Pose* pose, int root_bone, vec3 out_pos, float* out_yaw);
 
-// Put the root back where it rests: its LOCAL horizontal translation to the bind
-// pose's and its local heading to zero, leaving height, pitch, roll and scale alone.
+// Move the root `amount` of the way back to where it RESTS: its local horizontal
+// translation toward the bind pose's and its local heading toward the bind pose's,
+// leaving height, pitch, roll and scale alone. 0 does nothing, 1 pins it.
 //
-// What root motion hands to the character has to leave the pose, or the character
-// moves twice -- once as a body and once as a mesh sliding off its own capsule.
+// What root motion hands to the character has to leave the pose, or the character moves
+// twice -- once as a body and once as a mesh sliding off its own capsule. The AMOUNT is
+// what makes that true across a crossfade: the body takes that fraction of the travel,
+// so the mesh keeps the rest, and a source fading out does not snap when the fade ends.
 //
-// Local where the reading above is model space, and the pair is exact while the bones
-// ABOVE the root are not themselves animated: an armature node holds a constant frame,
-// so pinning under it lands the model-space root on its bind position either way. A rig
-// that animates an ancestor of its own hips is outside what this claims.
-void animation_pose_pin_root(const Skeleton* skeleton, Pose* pose, int root_bone);
+// Toward the bind pose in BOTH halves. Sending the position to bind and the heading to
+// zero reads as one operation and is two, and on a rig whose hips bind with a heading of
+// their own the second yaws the whole character by it on every frame.
+void animation_pose_pin_root(Pose* pose, int root_bone, float amount);
 
 // out = a at t = 0, b at t = 1: positions and scales lerped, rotations nlerped
 // along the shorter arc. Outside (0, 1) the nearer pose is copied, flags

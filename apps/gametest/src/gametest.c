@@ -148,13 +148,23 @@ static bool player_ragdolled(void) {
 
 static AnimatorEntry locomotion[3];
 static int locomotion_count = 3;
-// Whether the entries sit at the speeds they imply, so the knob is metres per second.
-static bool locomotion_speed_axis = false;
-// And whether those speeds are STATED by the clips rather than measured off their feet
-// (spec 12.18). It decides which way round the app and the animation are: with it the
-// stick steers and the clip carries the body, without it the stick carries the body and
-// the clip is played at whatever rate keeps up.
-static bool locomotion_root_motion = false;
+// What the locomotion knob MEANS, which is the one question three different answers
+// hang off: the axis units, whether playback is rate-scaled, and which way round the app
+// and the animation are. One value rather than two booleans, because two of the four
+// combinations they spell cannot happen -- and the pair shipped with the root path
+// setting both and the second one unreadable underneath the first.
+typedef enum LocomotionAxis {
+    LOCO_FRACTION, // no clip could be measured: the knob is a fraction of PLAYER_SPEED
+    LOCO_STRIDE,   // the entries sit at the speeds their FEET imply (spec 12.10)
+    LOCO_TRAVEL,   // the entries sit at the speeds they STATE, and carry the body (12.18)
+} LocomotionAxis;
+static LocomotionAxis locomotion_axis = LOCO_FRACTION;
+// The chaser's own entries, and it needs its own because root motion is a property of
+// the ANIMATOR while the clips are a property of an array. It is stick-driven -- nothing
+// drains it -- so handing it clips that carry a displacement would leave that
+// displacement in its pose, which is a body sliding a metre off its own capsule per loop
+// and snapping back. It gets the clips that stay where they are.
+static AnimatorEntry chaser_locomotion[3];
 static bool speed_override = false;
 static Animation* clip_jump = NULL;
 static Animation* clip_wave = NULL;
@@ -274,6 +284,10 @@ static bool no_lock = false;
 // not offered. The A/B, and the only way to see what the feature is worth -- the two
 // look the same in a still frame and quite different in motion.
 static bool no_root_motion = false;
+// Spawn no falling crates. For an arm that reads where the player ENDED UP: the crates
+// land at rand() positions that differ per platform, so one of them on the character is a
+// failure in one place and nowhere else.
+static bool no_crates = false;
 static IkSystem* player_ik = NULL;
 static SceneNode* player_skel_root = NULL;
 static int ik_foot_left = -1;
@@ -2168,11 +2182,9 @@ static float clip_world_stride(Skeleton* skeleton, const Animation* clip) {
 // nothing. Same units, same scale, same division of labour as the stride above -- and
 // the opposite question: that one asks the feet what the ground must be doing, this
 // one reads what the animator wrote for the body.
-static float clip_world_travel(Skeleton* skeleton, const Animation* clip) {
-    if (!skeleton || !clip)
-        return 0.0f;
+static float clip_world_travel(int root, const Animation* clip) {
     vec3 travel = {0.0f, 0.0f, 0.0f};
-    if (!animation_root_travel(clip, skeleton, animation_root_bone(skeleton), travel, NULL))
+    if (!animation_root_travel(clip, root, travel, NULL))
         return 0.0f;
     const float seconds = clip->duration / clip->ticks_per_second;
     if (seconds <= 0.0f)
@@ -2212,15 +2224,16 @@ static void build_locomotion(Skeleton* skeleton, Animation* idle, Animation* wal
     // feature's coat. Nothing in the committed corpus states a travel except the four
     // clips authored for it, so every imported rig falls through to the measurement
     // below exactly as it did.
-    const float walk_travel = clip_world_travel(skeleton, walk);
-    const float run_travel = run == walk ? walk_travel : clip_world_travel(skeleton, run);
-    if (walk_travel > 0.0f && (run == walk || run_travel > walk_travel)) {
+    const bool one_clip = run == walk;
+    const int root = skeleton_root_bone(skeleton);
+    const float walk_travel = clip_world_travel(root, walk);
+    const float run_travel = one_clip ? walk_travel : clip_world_travel(root, run);
+    if (walk_travel > 0.0f && (one_clip || run_travel > walk_travel)) {
         locomotion[1].position = walk_travel;
-        locomotion[2].position = run == walk ? walk_travel : run_travel;
-        if (run == walk)
+        locomotion[2].position = run_travel;
+        if (one_clip)
             locomotion_count = 2;
-        locomotion_speed_axis = true;
-        locomotion_root_motion = true;
+        locomotion_axis = LOCO_TRAVEL;
         if (!speed_override)
             player_speed = locomotion[locomotion_count - 1].position;
         printf("Locomotion travels 0 to %.2f m/s, stated by the clips themselves; the body "
@@ -2260,7 +2273,7 @@ static void build_locomotion(Skeleton* skeleton, Animation* idle, Animation* wal
     // the knob is the speed itself.
     for (int i = 0; i < locomotion_count; i++)
         locomotion[i].position = locomotion[i].stride;
-    locomotion_speed_axis = true;
+    locomotion_axis = LOCO_STRIDE;
     if (!speed_override)
         player_speed = locomotion[locomotion_count - 1].stride * ANIM_RATE_MAX;
     printf("Locomotion axis is %.2f to %.2f m/s from the clips themselves; full stick is "
@@ -2775,6 +2788,8 @@ static void on_init(Game* game) {
         // (spec 12.18). Not a different feature bolted beside locomotion -- the same
         // two entries, filled with clips that say how far they go, so everything
         // downstream of the space is untouched.
+        Animation* in_place_walk = walk;
+        Animation* in_place_run = run;
         if (!no_root_motion) {
             Animation* carried_walk = scene_find_animation(scene, "travel_walk");
             Animation* carried_run = scene_find_animation(scene, "travel_run");
@@ -2847,16 +2862,22 @@ static void on_init(Game* game) {
             add_footsteps(run);
         animator_mask_subtree(skeleton, "cetra_rig:RightArm", wave_mask);
         build_locomotion(skeleton, idle, walk, run);
+        // The chaser's entries are the same shape on the clips that stay put, so its
+        // positions come off the built space rather than being derived a second way.
+        for (int i = 0; i < locomotion_count; i++)
+            chaser_locomotion[i] = locomotion[i];
+        chaser_locomotion[1].clip = in_place_walk;
+        chaser_locomotion[2].clip = in_place_run;
         // After the locomotion axis, which is what sets player_speed: the water's top is
         // the fraction of it a swimmer actually moves at.
         build_aquatic(clip_float, clip_swim, player_speed * GROTTO_SWIM_FRACTION);
         player_animator = create_animator(skeleton);
-        // Ask for the clips' travel, which is opt-in: an animator whose caller does
-        // not drain would have it taken out of the pose and applied nowhere. Set
-        // whatever the clips turn out to state, since the loop reads
-        // animator_root_motion per step and an in-place source answers false.
+        // Ask for the clips' travel, and ask for it from what the clips turned out to
+        // STATE rather than from the flag: opt-in, because an animator whose caller does
+        // not drain has the displacement taken out of its pose and applied nowhere --
+        // which is what the chaser above would get, and why it plays its own entries.
         if (player_animator)
-            player_animator->root_motion = !no_root_motion;
+            player_animator->root_motion = locomotion_axis == LOCO_TRAVEL;
         if (player_animator && idle && walk && run) {
             animator_play_space(player_animator, "locomotion", locomotion, locomotion_count, 0.0f,
                                 true);
@@ -2962,7 +2983,8 @@ static void on_init(Game* game) {
 
             chaser_animator = create_animator(scene->skeletons[0]);
             if (chaser_animator) {
-                animator_play_space(chaser_animator, "locomotion", locomotion, 3, 0.0f, true);
+                animator_play_space(chaser_animator, "locomotion", chaser_locomotion,
+                                    locomotion_count, 0.0f, true);
                 entity_add_animator(chaser_entity, chaser_animator);
             }
             printf("Chaser created -- run!\n");
@@ -3058,9 +3080,16 @@ static void on_init(Game* game) {
     // A rig brings twenty-two joint nodes, each of which would wear a gizmo.
     engine->show_xyz = puppet_root == NULL;
 
-    // Spawn a few initial boxes
-    for (int i = 0; i < 5; i++) {
-        spawn_falling_box(game);
+    // Spawn a few initial boxes, unless somebody is about to measure where the player
+    // ENDED UP. They fall at rand() positions in a 20-unit box centred on the spawn,
+    // and rand() differs per platform's libc -- so a crate that lands beside the
+    // player here lands on him elsewhere, and an arm reading his displacement fails on
+    // one machine and nowhere else. That is why the gamepad group reads the commanded
+    // move and never the position; the two arms that must read position ask for this.
+    if (!no_crates) {
+        for (int i = 0; i < 5; i++) {
+            spawn_falling_box(game);
+        }
     }
 }
 
@@ -3108,6 +3137,23 @@ static void on_update(Game* game, double dt) {
     vec3 input_dir;
     input_action_move(&game->input, "move_x", "move_y", input_dir);
 
+    /*
+     * What the stick is asking for, in the WORLD, computed once: the direction and how
+     * hard. Camera-relative under the follow camera (spec 12.17) -- W goes away from the
+     * lens, whichever way the arrows have aimed it -- and the argument for that, which
+     * has been settled in both directions, is at the velocity below.
+     *
+     * Here rather than beside the velocity because three blocks read it: the knob (when
+     * the clips carry the body, the knob is the stick's), the facing, and the velocity
+     * itself. `lean` is a rotation-invariant magnitude, so computing it from either
+     * vector gives the same number -- which is exactly why it should be computed from
+     * one of them, once, rather than twice under one name in two scopes.
+     */
+    const float cam_sin = sinf(cam_yaw), cam_cos = cosf(cam_yaw);
+    const vec3 want_dir = {-cam_cos * input_dir[0] - cam_sin * input_dir[2], 0.0f,
+                           cam_sin * input_dir[0] - cam_cos * input_dir[2]};
+    const float lean = hypotf(want_dir[0], want_dir[2]);
+
     // Get current velocity
     vec3 vel;
     character_controller_get_velocity(cc, vel);
@@ -3118,7 +3164,7 @@ static void on_update(Game* game, double dt) {
     float ground_speed = hypotf(vel[0], vel[2]);
     hud_ground_speed = ground_speed;
     if (player_animator && !player_ragdolled()) {
-        if (locomotion_root_motion) {
+        if (locomotion_axis == LOCO_TRAVEL && player_medium == MEDIUM_GROUND) {
             // The knob is what the STICK asks for, not what the body achieved, and that
             // is forced rather than chosen: under root motion the travel comes from the
             // clip the knob selects, so a knob fed by the achieved speed would start at
@@ -3129,10 +3175,15 @@ static void on_update(Game* game, double dt) {
             // so walking into one stops the walk. Here the clip keeps walking while the
             // sweep refuses to move the body, which is what inverting the ownership
             // means and is left visible rather than papered over.
-            const float lean = hypotf(input_dir[0], input_dir[2]);
+            //
+            // ON THE GROUND ONLY, because only the ground source carries the body. The
+            // water and the air are stick-driven whatever the locomotion clips state,
+            // and their axes are their own -- the swim space tops out at a fraction of
+            // this one, so a stick reading meant for the ground reads as a full stroke
+            // at 40 per cent of it.
             player_animator->param = (lean > 1.0f ? 1.0f : lean) * player_speed;
             player_animator->speed = 1.0f;
-        } else if (locomotion_speed_axis) {
+        } else if (locomotion_axis != LOCO_FRACTION) {
             // The axis IS metres per second, so the knob is the speed and the clamp is the
             // space's own (animator.h: param is clamped to its entries).
             player_animator->param = ground_speed;
@@ -3200,23 +3251,29 @@ static void on_update(Game* game, double dt) {
         if (player_medium != MEDIUM_GROUND)
             player_animator->speed = 1.0f;
     }
-    // The direction the stick asks for, in the world, and how hard it is asking.
-    // Hoisted above the facing because under root motion the facing is what the stick
-    // sets and the velocity is what the facing gives -- see the block below and the one
-    // after it. The scheme itself is spec 12.17's, restated where it is computed.
-    const float cam_sin = sinf(cam_yaw), cam_cos = cosf(cam_yaw);
-    const vec3 want_dir = {-cam_cos * input_dir[0] - cam_sin * input_dir[2], 0.0f,
-                           cam_sin * input_dir[0] - cam_cos * input_dir[2]};
-    const float lean = hypotf(want_dir[0], want_dir[2]);
-
-    // What the clip laid down, taken once per step (spec 12.18). The query is LIVE
-    // rather than the startup flag: a fall loop and a stroke state no travel, so the
-    // air and the water fall back to the stick with nothing here to switch.
+    /*
+     * What the clip laid down, taken once per step (spec 12.18).
+     *
+     * A statement rather than a term in a condition. The drain has a SIDE EFFECT --
+     * it hands the accumulator over and zeroes it -- so hiding it behind && makes
+     * every guard in front of it a silent decision to stop draining while the
+     * animator keeps accumulating, and the next successful drain then delivers the
+     * hoard in one step. That is the lurch `switch_source` exists to prevent,
+     * recreated at the call site by anyone who adds a fourth condition.
+     *
+     * WHERE it sits is load-bearing and is not obvious from reading it: BELOW the
+     * medium machine above, which is what makes the step you walk off a ledge
+     * stick-driven. Hoisted -- and it reads like input-gathering, so it invites
+     * hoisting -- that step is driven by the walk clip the character has just left.
+     *
+     * The query is live rather than the startup axis, so a fall loop and a stroke
+     * fall back to the stick with nothing here to switch.
+     */
     vec3 root_travel = {0.0f, 0.0f, 0.0f};
     float root_yaw = 0.0f;
-    const bool rooted = locomotion_root_motion && player_animator && !player_ragdolled() &&
-                        animator_root_motion(player_animator) &&
-                        animator_take_root_motion(player_animator, root_travel, &root_yaw);
+    bool rooted = false;
+    if (player_animator && !player_ragdolled())
+        rooted = animator_take_root_motion(player_animator, root_travel, &root_yaw);
 
     if (player_rig && !player_ragdolled()) {
         // The puppet faces +Z at yaw 0. Smoothed on sim time, so it is the
@@ -3376,7 +3433,8 @@ static void on_update(Game* game, double dt) {
                 if (chaser_swimming)
                     animator_play(chaser_animator, clip_swim, 0.25f, true);
                 else
-                    animator_play_space(chaser_animator, "locomotion", locomotion, 3, 0.25f, true);
+                    animator_play_space(chaser_animator, "locomotion", chaser_locomotion,
+                                        locomotion_count, 0.25f, true);
                 chaser_in_swim_clip = chaser_swimming;
             }
         }
@@ -5573,8 +5631,13 @@ static float pose_maxdiff(const AnimationState* a, const AnimationState* b, int 
 static Animator* probe_rig(EntityManager* em, Skeleton* skeleton, const char* name) {
     Entity* e = create_entity(em, name);
     Animator* a = create_animator(skeleton);
-    if (a)
+    if (a) {
+        // Asked for here rather than by the tick below, so that a function called
+        // `tick` does not also configure. Harmless on a rig playing in-place clips,
+        // which answer false whatever this says.
+        a->root_motion = true;
         entity_add_animator(e, a);
+    }
     return a;
 }
 
@@ -5591,7 +5654,6 @@ static void probe_tick_rooted(EntityManager* em, Animator* a, int ticks, vec3 ou
                               float* out_yaw) {
     glm_vec3_zero(out_travel);
     *out_yaw = 0.0f;
-    a->root_motion = true; // opt-in, like the app's
     for (int i = 0; i < ticks; i++) {
         update_all_animators(em, PROBE_DT);
         vec3 step;
@@ -5856,22 +5918,30 @@ static int run_anim_probe(Game* game, const char* which) {
         // distance the generator authored; everything else in the corpus is in place and
         // has to say so, which is the half of this that cannot be got by reasoning.
         //
-        // strut_walk is loaded with retargeting OFF, so its own translation keys reach
-        // the pose. That is the only way to ask the question of it at all: a retargeted
-        // channel takes its position from the bind pose, so every clip loaded the way the
+        // EVERY shared clip, not just the walk. Four documents say the committed corpus
+        // is in place, and one measurement is not a survey -- a single travelling clip
+        // among the eight would put a character somewhere its animation never went, and
+        // the sentence claiming otherwise would still be in four files.
+        //
+        // They are loaded with retargeting OFF, so their own translation keys reach the
+        // pose. That is the only way to ask the question of them at all: a retargeted
+        // channel takes its position from the bind pose, so a clip loaded the way the
         // game loads one answers "in place" whatever it holds.
-        const int root = animation_root_bone(skel);
+        const int root = skeleton_root_bone(skel);
         if (root < 0) {
             fprintf(stderr, "anim-probe: the rig has no root bone\n");
             return 1;
         }
-        if (load_animations_from_file(scene, skel, "assets/models/strut_walk.fbx", false, NULL) <=
-            0) {
-            fprintf(stderr, "anim-probe: assets/models/strut_walk.fbx did not load\n");
-            return 1;
+        for (size_t i = 0; i < sizeof SHARED_CLIPS / sizeof *SHARED_CLIPS; i++) {
+            if (load_animations_from_file(scene, skel, SHARED_CLIPS[i], false, NULL) <= 0) {
+                fprintf(stderr, "anim-probe: %s did not load\n", SHARED_CLIPS[i]);
+                return 1;
+            }
         }
-        static const char* const names[] = {"idle",  "walk", "travel_walk", "travel_run",
-                                            "lunge", "spin", "strut_walk"};
+        static const char* const names[] = {"idle",       "walk",       "travel_walk", "travel_run",
+                                            "lunge",      "spin",       "strut_walk",  "steady_run",
+                                            "quiet_idle", "swim_cycle", "float_idle",  "fall_cycle",
+                                            "touch_down", "jump_start"};
         for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
             const Animation* clip = scene_find_animation(scene, names[i]);
             if (!clip) {
@@ -5881,10 +5951,8 @@ static int run_anim_probe(Game* game, const char* which) {
             }
             vec3 travel = {0.0f, 0.0f, 0.0f};
             float yaw = 0.0f;
-            const bool states = animation_root_travel(clip, skel, root, travel, &yaw);
-            // The label drops the file's own suffix so one word names the clip.
-            printf("anim root %s travel %d %.6f %.6f %.6f %.6f\n",
-                   !strcmp(names[i], "strut_walk") ? "strut" : names[i], states ? 1 : 0,
+            const bool states = animation_root_travel(clip, root, travel, &yaw);
+            printf("anim root %s travel %d %.6f %.6f %.6f %.6f\n", names[i], states ? 1 : 0,
                    (double)travel[0], (double)travel[1], (double)travel[2], (double)yaw);
         }
     } else if (!strcmp(which, "rootmotion")) {
@@ -5892,7 +5960,7 @@ static int run_anim_probe(Game* game, const char* which) {
         // things can be wrong between the two and each has a label here: the loop
         // seam, the blend, a source switch, and whether the pose still carries the
         // travel it gave away.
-        const int root = animation_root_bone(skel);
+        const int root = skeleton_root_bone(skel);
         const Animation* strider = scene_find_animation(scene, "travel_walk");
         const Animation* sprinter = scene_find_animation(scene, "travel_run");
         const Animation* turner = scene_find_animation(scene, "spin");
@@ -5930,8 +5998,8 @@ static int run_anim_probe(Game* game, const char* which) {
         printf("anim rootmotion blend seconds %.6f %.6f %.6f\n", (double)walk_s, (double)run_s,
                (double)(blend_ticks * PROBE_DT));
         vec3 walk_travel, run_travel;
-        animation_root_travel(strider, skel, root, walk_travel, NULL);
-        animation_root_travel(sprinter, skel, root, run_travel, NULL);
+        animation_root_travel(strider, root, walk_travel, NULL);
+        animation_root_travel(sprinter, root, run_travel, NULL);
         printf("anim rootmotion blend loops %.6f %.6f\n", (double)walk_travel[2],
                (double)run_travel[2]);
 
@@ -5951,15 +6019,20 @@ static int run_anim_probe(Game* game, const char* which) {
         // a reading taken from the blended pose hands the character that gap as
         // travel; per-entry readings cannot see it. The bar is the integral of the
         // two speeds under the fade envelope, which is a number the gate recomputes.
-        Animator* e = probe_rig(em, skel, "fade");
-        animator_play(e, strider, 0.0f, true);
-        probe_tick_rooted(em, e, 60, got, &turned);
-        animator_play(e, sprinter, 0.3f, true);
-        probe_tick_rooted(em, e, 60, got, &turned);
+        // ONE spelling of each, because the gate recomputes the envelope from what is
+        // printed: a second copy of a shape constant is the one thing a probe whose
+        // whole contract is "recompute from this" must not carry.
+        const float fade_seconds = 0.3f;
+        const int fade_ticks = 60;
+        Animator* fader = probe_rig(em, skel, "fade");
+        animator_play(fader, strider, 0.0f, true);
+        probe_tick_rooted(em, fader, fade_ticks, got, &turned); // settle; this window is dropped
+        animator_play(fader, sprinter, fade_seconds, true);
+        probe_tick_rooted(em, fader, fade_ticks, got, &turned);
         printf("anim rootmotion fade travelled %.6f %.6f %.6f\n", (double)got[0], (double)got[1],
                (double)got[2]);
-        printf("anim rootmotion fade shape %.6f %.6f %.6f\n", 0.3, (double)(60 * PROBE_DT),
-               (double)PROBE_DT);
+        printf("anim rootmotion fade shape %.6f %.6f %.6f\n", (double)fade_seconds,
+               (double)(fade_ticks * PROBE_DT), (double)PROBE_DT);
 
         // Half a turn, and the pose still standing where it was. The yaw goes to the
         // character; what the rig draws must not turn with it.
@@ -5971,17 +6044,23 @@ static int run_anim_probe(Game* game, const char* which) {
                (double)got[2]);
 
         // And the pose the frame draws: the root pinned at its bind position and
-        // heading however far the character has been sent. Read off the walking rig
-        // after three loops, where the clip's own root is 3.6 m from where it began.
+        // heading however far the character has been sent.
+        //
+        // Read off the WRAP rig, which has been ticked by every window since -- each
+        // probe_tick_rooted advances the whole entity manager, not the animator it
+        // was handed. That is what makes this bar strong rather than incidental: it
+        // lands the walk mid-loop, where an unpinned root stands 0.82 m downrange.
+        // Read at a loop boundary instead and pinned and unpinned would differ by
+        // float residue, and the bar would pass over a pin that never ran.
         vec3 posed;
         float posed_yaw = 0.0f;
-        animation_pose_root(skel, &a->base_pose, root, posed, &posed_yaw);
+        animation_pose_root(&a->base_pose, root, posed, &posed_yaw);
         const float* bind = skel->bones[root].local_transform[3];
         printf("anim rootmotion pinned offset %.6f %.6f %.6f\n", (double)(posed[0] - bind[0]),
                (double)(posed[1] - bind[1]), (double)(posed[2] - bind[2]));
         printf("anim rootmotion pinned yaw %.6f\n", (double)posed_yaw);
         // The same rig, spun: a pose that kept the clip's yaw would read half a turn.
-        animation_pose_root(skel, &d->base_pose, root, posed, &posed_yaw);
+        animation_pose_root(&d->base_pose, root, posed, &posed_yaw);
         printf("anim rootmotion spun yaw %.6f\n", (double)posed_yaw);
     } else {
         fprintf(stderr, "anim-probe: unknown case '%s'\n", which);
@@ -7214,6 +7293,8 @@ int main(int argc, const char* argv[]) {
             no_ik = true;
         } else if (!strcmp(a, "--no-root-motion")) {
             no_root_motion = true;
+        } else if (!strcmp(a, "--no-crates")) {
+            no_crates = true;
         } else if (!strcmp(a, "--puppet") && i + 1 < argc) {
             puppet_path = argv[++i];
         } else if (!strcmp(a, "--twin") && i + 1 < argc) {
@@ -7366,6 +7447,10 @@ int main(int argc, const char* argv[]) {
     printf("  WASD / left stick, dpad - Move the player (idle -> walk -> run as it speeds up)\n");
     printf("  Space / A - Jump\n");
     printf("  E / LB - Wave (the right arm, over whatever the legs are doing)\n");
+    if (clip_lunge)
+        printf("  Q / RT - Lunge (the clip carries you a stated distance)\n");
+    if (clip_spin)
+        printf("  C / LT - Spin (half a turn on the spot, carrying nothing)\n");
     printf("A second puppet chases you. Let it catch you (--no-chaser to turn it off).\n");
     printf("  F / X - Spawn falling box\n");
     printf("  R / Y - Raycast downward from player\n");

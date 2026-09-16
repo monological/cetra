@@ -200,8 +200,14 @@ def loop_keys(period, fn):
     return out
 
 
-def hips_curve(period, bob, travel=0.0, keys=KEYS_PER_LOOP, phase=2.0):
+def hips_curve(period, bob, travel=0.0, keys=KEYS_PER_LOOP, cycles=2.0, wave=math.cos):
     """The Hips' own translation track: a vertical bob, and `travel` metres of +Z.
+
+    `cycles` is how many times the bob rises and falls per loop -- two for a gait,
+    one for a breath -- and `wave` picks where in that cycle the clip starts. It
+    takes the FUNCTION rather than a phase offset because cos(x - pi/2) and sin(x)
+    are the same curve to a mathematician and different floats to a packer, and
+    every emitted byte here is a number a gate expects.
 
     The forward part is LINEAR in time, which is not what a real walk's root does
     -- a foot pushing off drives the hips in surges. It is what makes the number
@@ -209,13 +215,11 @@ def hips_curve(period, bob, travel=0.0, keys=KEYS_PER_LOOP, phase=2.0):
     between them travels its stated distance under any interpolation, so a clip
     says 1.20 m and the character moves 1.20 m with nothing to round.
     """
+    hx, hy, hz = LOCAL[0][0], BIND[0][1], LOCAL[0][2]
     out = []
     for k in range(keys + 1):
         f = k / keys
-        out.append((period * f,
-                    (LOCAL[0][0],
-                     BIND[0][1] + bob * math.cos(phase * 2.0 * math.pi * f),
-                     LOCAL[0][2] + travel * f)))
+        out.append((period * f, (hx, hy + bob * wave(cycles * 2.0 * math.pi * f), hz + travel * f)))
     return out
 
 
@@ -236,13 +240,9 @@ def idle():
         "Spine2": loop_keys(period, lambda p: quat_axis(X, 3.0 * math.sin(p))),
         "Head": loop_keys(period, lambda p: quat_axis(X, 2.0 * math.sin(p + math.pi * 0.5))),
     }
-    # A quarter turn of phase, so the breath rises and falls once rather than twice,
-    # and the curve is a sine where a gait's is a cosine.
-    hips = [(period * k / KEYS_PER_LOOP,
-             (LOCAL[0][0], BIND[0][1] + 0.01 * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP),
-              LOCAL[0][2]))
-            for k in range(KEYS_PER_LOOP + 1)]
-    return {"loop": True, "length": period, "rot": rot, "hips": hips}
+    # ONE cycle per loop, where a gait's bob is two: a breath rises and falls once.
+    return {"loop": True, "length": period, "rot": rot,
+            "hips": hips_curve(period, 0.01, cycles=1.0, wave=math.sin)}
 
 
 def jump():
@@ -297,11 +297,8 @@ def swim(period=1.6, arm_deg=55.0, knee_deg=40.0, thigh_deg=18.0, bob=0.015):
         "LeftUpLeg": loop_keys(period, lambda p: quat_axis(X, -thigh_deg * math.sin(p))),
         "RightUpLeg": loop_keys(period, lambda p: quat_axis(X, -thigh_deg * math.sin(p))),
     }
-    hips = [(period * k / KEYS_PER_LOOP,
-             (LOCAL[0][0], BIND[0][1] + bob * math.sin(2.0 * math.pi * k / KEYS_PER_LOOP),
-              LOCAL[0][2]))
-            for k in range(KEYS_PER_LOOP + 1)]
-    return {"loop": True, "length": period, "rot": rot, "hips": hips}
+    return {"loop": True, "length": period, "rot": rot,
+            "hips": hips_curve(period, bob, cycles=1.0, wave=math.sin)}
 
 
 # What the travelling clips state, in metres of +Z per play. The rig faces +Z, so
@@ -322,8 +319,11 @@ SPIN_DEG = 180.0
 def lunge():
     """A one-shot that travels a fixed distance -- what stride matching cannot do.
 
-    Its legs are a single stride rather than a loop, and it ends on the bind pose so
-    the animator's return to the locomotion space has nothing to cover.
+    Its legs are a single stride rather than a loop, and its rotations end on the
+    bind pose so the animator's return to the locomotion space has nothing to cover.
+    The hips do not: they end 1.20 m downrange, which is the whole point of it, and
+    `wave=math.sin` keeps the bob's own ends at the bind height so the only thing
+    that moved between the first tick and the last is the distance travelled.
     """
     step = [(0.0, IDENT), (0.25, quat_axis(X, 45.0)), (0.6, IDENT)]
     back = [(0.0, IDENT), (0.25, quat_axis(X, -30.0)), (0.6, IDENT)]
@@ -333,7 +333,7 @@ def lunge():
         "RightArm": [(0.0, IDENT), (0.25, quat_axis(Y, 35.0)), (0.6, IDENT)],
     }
     return {"loop": False, "length": 0.6, "rot": rot,
-            "hips": hips_curve(0.6, 0.03, TRAVEL_LUNGE, keys=6, phase=1.0)}
+            "hips": hips_curve(0.6, 0.03, TRAVEL_LUNGE, keys=6, cycles=1.0, wave=math.sin)}
 
 
 def spin():
@@ -348,7 +348,7 @@ def spin():
     for k in range(1, 5):
         keys.append((k * 0.25, quat_axis(Y, SPIN_DEG * k / 4.0)))
     return {"loop": False, "length": 1.0, "rot": {"Hips": keys},
-            "hips": hips_curve(1.0, 0.0, 0.0, keys=4, phase=1.0)}
+            "hips": None}
 
 
 def hold90():
@@ -412,6 +412,10 @@ for name, clip in CLIPS:
     # and a clip that ended higher than it began would state a climb nothing supports.
     assert abs(moved[1]) < 1e-9, ("a hips curve may not end at another height", name)
 assert abs(spin()["rot"]["Hips"][-1][1][1] - math.sin(math.radians(SPIN_DEG) * 0.5)) < 1e-9
+# And that it turns one WAY, which is what the 45-degree steps are for: a single hop of
+# exactly half a turn has no shorter arc, so the interpolator picks the direction. The
+# last key alone cannot see that -- it is identical whether the steps are there or not.
+assert abs(spin()["rot"]["Hips"][1][1][1] - math.sin(math.radians(SPIN_DEG / 4.0) * 0.5)) < 1e-9
 
 # ---------------------------------------------------------------------------
 # Pack.

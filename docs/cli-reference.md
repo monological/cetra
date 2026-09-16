@@ -949,7 +949,8 @@ gear to re-normalise.
 **`--no-root-motion` (spec 12.18) is the other half of that story, from the opposite side.** On
 the generated puppet the locomotion pair is `travel_walk` and `travel_run` — clips that state how
 far they travel — so the character goes exactly as far as the animation says and full stick is
-**6.40 m/s** because the run clip carries 1.60 m per half second. The flag puts the in-place pair
+**6.40 m/s**: the run clip carries 1.60 m per half second, which is 3.20 in the rig's own
+units, and the demo stands its player on a node scaled 2. The flag puts the in-place pair
 back, and the startup line tells you which way round you are:
 
 ```bash
@@ -958,8 +959,8 @@ back, and the startup line tells you which way round you are:
 ```
 
 **Two keys come with it**, and they are the thing stride matching cannot express: **Q** (or the
-right trigger) lunges a stated 1.20 m, and **C** (or the left trigger) spins half a turn on the
-spot. Both are distances an animator chose, so rate-scaling one is exactly wrong. The triggers
+right trigger) lunges a stated 1.20 m -- 2.40 on the ground, the rig being scaled 2 -- and **C**
+(or the left trigger) spins half a turn on the spot. Both are distances an animator chose, so rate-scaling one is exactly wrong. The triggers
 rather than buttons because every one of GLFW's fifteen is already bound.
 
 Two behaviours invert with the ownership and are worth expecting before you meet them. Walking
