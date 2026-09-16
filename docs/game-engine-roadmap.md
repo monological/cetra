@@ -6,7 +6,7 @@ subsystem sweep. Companion to `rendering-roadmap.md` — **that** doc owns the
 graphics pipeline in depth; **this** doc owns everything else (physics, gameplay,
 assets, core, and the gaps between "engine" and "shippable game").
 
-_Last updated: 2026-09-15._
+_Last updated: 2026-09-16._
 
 ---
 
@@ -263,7 +263,7 @@ are rough and assume a single experienced dev.
 | **Text encoding and localization** | Absent, and the ceiling is structural rather than a missing feature. `text.c` treats every string as BYTES — `(unsigned char)charset[i]` (:106), `(unsigned char)mesh->text[i]` (:495), `(unsigned char)*p` (:667) — and there is no UTF-8 decode anywhere in the tree. A codepoint above 127 therefore renders as two or more wrong glyphs: a French or German menu is broken **today**, and CJK, RTL and combining marks are out of reach entirely. Closing it is three things: a decoder, an atlas that can page (a CJK face does not fit one sheet), and a string table. | Any market outside English, and the bug is live rather than pending. | ~1-2 weeks for the decoder and atlas paging; the string table is ongoing content |
 | **UI element vocabulary** | The closed list is six (`ui.h:248-257`): panel, label, button, toggle, slider, selector. Absent from it: **text input**, scroll view, list/grid, drag-and-drop, tabs, modal dialog, tooltip. The three escape hatches mean an app can draw any of them by hand, which is the deliberate design — but it means an inventory screen, a name-entry field, a key-rebinding row or a quest log is app code rather than an element, and every game re-writes them. | Real games are mostly these screens. The closed list was the right call for 12.2; what it does not yet say is which elements come next. | ~1 week per element family |
 | **Input rebinding** | Absent, and stated as such: `input_bind` takes a BORROWED const table, and `settings.c`'s header records that bindings are deliberately not carried because persisting them wants the remapping UI they would exist for. That UI needs a key-capture element the closed list above does not have, so these two rows are one gap approached from two sides. | Accessibility requirement on most platforms, and expected by any player on a non-QWERTY layout. | ~3-4 days, after a capture element |
-| **Camera framework** | Absent. Every app hand-rolls its own: `apps/render` the orbit drag controller, `apps/gametest` the follow camera and its four pose flags (specs 12.7 and 12.13). There is no shared camera system — no shake, no spline or rail, no blend between cameras, no sequencer or cutscene track, and no dialogue system to drive one. | Almost every game has a scripted camera moment, and today each would be written into the app beside the gameplay. | ~1 week for a camera system; a sequencer is its own project |
+| **Camera framework** | Absent. Every app hand-rolls its own: `apps/render` the orbit drag controller, `apps/gametest` the follow camera and its four pose flags (specs 12.7, 12.13 and 12.17). There is no shared camera system — no shake, no spline or rail, no blend between cameras, no sequencer or cutscene track, and no dialogue system to drive one. **A hand-rolled camera also decides what the CONTROLS mean**, and in this app that decision flipped twice: 12.13 made movement world-aligned, 12.17 made it camera-relative again, and for the four specs in between, the two documents describing it said the opposite of what shipped. Neither flip was visible to the suite — the `gamepad` group reads the MOVE column the app commanded rather than where the character went, since five boxes fall at `rand()` positions that differ per platform's libc — so `pad-camera-relative` was added to say which scheme is live. | Almost every game has a scripted camera moment, and today each would be written into the app beside the gameplay. | ~1 week for a camera system; a sequencer is its own project |
 | **Animation state machine** | Absent **by design** and still absent. `animator.h:27` — *"There is no state machine here. A game decides what plays and when; this fades and blends it"* — and spec 12.1 listed it as a stated non-goal. `gametest` then hand-rolled one across `player_medium`, the locomotion space, a jump one-shot and a swim source, which is the evidence that every game on this engine writes the same thing. Whether it belongs in the engine is a real question; that it is missing is not. | Locomotion, combat and reaction logic all want it. The demo is the proof it gets written either way. | ~1 week |
 | **Root motion** | Absent, and named as *"the other answer to the same problem"* in fifteen lines across seven files — `ik.h`, `docs/foot-locking.md`, `docs/verification.md`, this file, and specs 12.1, 12.9 and 12.10. Spec 12.10's stride matching is the answer this engine took instead; root motion inverts the relationship — the clip drives the character rather than the character driving playback rate — and is what an authored attack, dodge or turn-in-place needs. | Anything whose displacement is choreographed rather than steered. | ~1 week |
 | **Audio depth** | The seam shipped in 12.0 and is deep for what it covers. Absent behind it: reverb zones, occlusion and obstruction, a DSP/filter graph, interactive or stem-based music, voice and dialogue playback, ducking. miniaudio carries some of this already, so parts are configuration rather than construction. | A room that sounds like a room, and music that responds to play. | genre-dependent |
@@ -339,12 +339,26 @@ its own branch.
    key light 45 degrees off vertical, because hung straight down it lit the plate at
    `N.L` = 1 and a standing figure at nearly zero, so any imported character read as a
    silhouette against its own brightly lit stage. 12.13 pulled the follow camera in
-   and found the larger defect behind it: movement was camera-relative, so forward
+   and argued a larger defect behind it: movement was camera-relative, so forward
    was always away from the camera and you could never see the character's front.
    12.14 gave the derived pole an arm that FAILS against the code it replaced, the
    existing one having run on a rig whose bind knee sits exactly on the hip-ankle
    line and therefore never entering the new path at all. Every one of the four was
    found by looking at the demo, none by a suite.
+
+   **Spec 12.17 reversed 12.13's half of that**, and was found the same way — turning
+   the camera and pressing W walked the character across the frame rather than up it,
+   reported by the person playing it as *"the wasd keys don't work from the new camera
+   reference"*. `cam_yaw` moves only when the player turns the camera — an arrow key
+   or the right stick — and never chases the character's facing, that design having
+   been tried in 12.6 and abandoned, so orbiting round to see the character's front
+   is a thing the player can simply do. That is what 12.13's argument had assumed was
+   unreachable. The larger finding is that **12.13 changed the behaviour and told
+   nobody**: `cli-reference.md` and `AGENTS.md` both went on describing camera-relative
+   movement for the four specs the code was world-aligned, so anyone checking the
+   documentation before reporting this would have been told they were right. And
+   nothing in the suite reads displacement, so neither flip could be contradicted by
+   any arm; `pad-camera-relative` now says which scheme is live.
 7. **Steamworks** (~week, near ship) — achievements, cloud, overlay. **Do not
    start here.** Packaging gates it: there is no bundle, no signing and no
    installer, so there is nothing for an achievement to attach to. See Part 2.
