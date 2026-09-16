@@ -816,6 +816,18 @@ no mode to restore after a crash, and `--render-scale` remains the performance l
 was. The same three modes are on the settings screen, where a Monitor row appears only when there
 is more than one display to choose between.
 
+**Ragdoll (spec 12.16).** `K` or the left stick click drops the player into a physically
+simulated heap: the controller stops steering, the bodies take over, and the camera keeps
+following because the entity tracks the hips. There is no way back up — getting up is a
+different problem and a different spec. A key rather than a consequence because this app has no
+damage, no health and no death to hang it on.
+
+`--ragdoll-probe <case>` is the headless probe the `ragdoll` gate group reads, in the same shape
+as the four above: cases `build`, `shapes`, `scale`, `settles`, `pose`, `frees`, or `all`.
+Unlike `--display-probe` the SIMULATION is reachable — a headless game carries a real physics
+world — so the last three step Jolt and read the bodies back. `--puppet <rig>` selects the
+skeleton, which is how the build cases run against both the generated puppet and `t_pose.fbx`.
+
 `--display-probe <case>` is the headless probe the `display` gate group reads, in the same shape:
 it prints `display <case> <label> <key> <numbers>` and exits, with cases `placement`, `monitors`,
 `apply`, or `all`. An unrecognised case is a failed run rather than a silent one. It reads what a
