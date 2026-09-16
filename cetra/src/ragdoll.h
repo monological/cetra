@@ -2,10 +2,12 @@
 #define _RAGDOLL_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <cglm/cglm.h>
 
 #include "animation.h"
+#include "ragdoll_jolt.h"
 
 struct Mesh;
 
@@ -22,9 +24,13 @@ struct Mesh;
  *
  * Everything measured here is MODEL space, in the units the skeleton's bind
  * pose is in, and the owning node's scale is applied exactly once at build.
- * That is spec 12.10's lesson rather than a preference: 12.9 shipped a world
- * distance compared against a model threshold, which halved at the demo's own
- * PLAYER_SCALE 2 and no arm could see.
+ *
+ * LIFETIME. A live ragdoll holds bodies inside a JPH::PhysicsSystem and cannot
+ * be destroyed without one, so whatever owns a ragdoll must free it before the
+ * physics world. An AnimationState owning one is safe under the game framework,
+ * where free_game tears the entity manager down before the world -- it is not
+ * safe for a caller that frees a physics world first, and nothing here can
+ * check that.
  */
 
 // The bones a humanoid ragdoll simulates. Order is the BUILD order and is
@@ -64,8 +70,16 @@ typedef struct RagdollSystem RagdollSystem;
 RagdollSystem* create_ragdoll(Skeleton* skeleton, const struct Mesh* mesh, float node_scale);
 void free_ragdoll(RagdollSystem* ragdoll);
 
+// The slot's own name -- a property of the humanoid this describes rather than
+// of any rig, so it answers without one.
+const char* ragdoll_bone_name(RagdollBone which);
+
 // Which skeleton bone a ragdoll body came from, or -1. Diagnostics and arms.
 int ragdoll_bone_index(const RagdollSystem* ragdoll, RagdollBone which);
+// Which SLOT this one's body hangs from, after the rows this rig did not answer
+// have collapsed out -- a missing chest re-points the arms and the head at the
+// spine. -1 for the root and for a slot with no body.
+int ragdoll_bone_parent(const RagdollSystem* ragdoll, RagdollBone which);
 // The capsule measured for one body, in MODEL units times the node scale.
 bool ragdoll_capsule(const RagdollSystem* ragdoll, RagdollBone which, float* out_radius,
                      float* out_half_height);
@@ -75,11 +89,14 @@ bool ragdoll_capsule(const RagdollSystem* ragdoll, RagdollBone which, float* out
  * owning node's world matrix -- the same matrix ik_set_world takes, and for the
  * same reason: bone globals are model space and bodies are world space.
  *
+ * Takes the opaque physics handle and the object layer rather than a game-layer
+ * world, so the engine half names nothing from the layer above it. The caller
+ * already holds both.
+ *
  * False, logged, if the bodies could not be built; the caller stays animated.
  */
-struct PhysicsWorld;
-bool ragdoll_start(RagdollSystem* ragdoll, struct PhysicsWorld* physics, const mat4* globals,
-                   const mat4 to_world);
+bool ragdoll_start(RagdollSystem* ragdoll, JPC_PhysicsSystem* system, uint32_t object_layer,
+                   const mat4* globals, const mat4 to_world);
 bool ragdoll_active(const RagdollSystem* ragdoll);
 
 // The owning node's world matrix, which moves while the character does. Read at
@@ -94,7 +111,7 @@ void ragdoll_set_world(RagdollSystem* ragdoll, const mat4 to_world);
  * A no-op while inactive, which is what lets the caller splice it in
  * unconditionally.
  */
-void ragdoll_apply(RagdollSystem* ragdoll, mat4* global_transforms, size_t bone_count);
+void ragdoll_apply(RagdollSystem* ragdoll, mat4* global_transforms);
 
 // Where the body is, for a camera or a controller to follow. False while
 // inactive.

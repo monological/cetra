@@ -210,8 +210,9 @@ typedef struct AnimationState {
     // Optional two-bone IK, applied after the springs (see ik.h)
     struct IkSystem* ik;
 
-    // Optional ragdoll, applied after the IK and REPLACING the pose rather than
-    // correcting it (see ragdoll.h). Owned from assignment, like the two above.
+    // Optional ragdoll (see ragdoll.h). Owned from assignment, like the two
+    // above, and an ALTERNATIVE to them: while one is simulating it replaces the
+    // pose those two correct, so neither runs.
     struct RagdollSystem* ragdoll;
 
     // Dump the first animated pose to stdout: per bone, whether the clip drives

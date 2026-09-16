@@ -136,6 +136,16 @@ static const char* puppet_path = "assets/models/puppet.gltf";
 static const char* twin_clip = NULL;
 static SceneNode* player_rig = NULL; // the puppet under the entity's node: drop + yaw
 static Animator* player_animator = NULL;
+
+// Whether physics owns the player rather than the clips. Everything that STEERS is
+// gated on it, and that is not thrift: with the controller disabled its velocity and
+// its grounded bit are frozen at the instant of death, so a locomotion axis reading
+// them holds one gear forever and the foot planter, whose weight eases toward that
+// frozen bit, pins at 1 and keeps forming ground contacts under a body that is falling.
+static bool player_ragdolled(void) {
+    return player_animator && ragdoll_active(player_animator->state->ragdoll);
+}
+
 static AnimatorEntry locomotion[3];
 static int locomotion_count = 3;
 // Whether the entries sit at the speeds they imply, so the knob is metres per second.
@@ -367,14 +377,8 @@ static const InputAction actions[] = {
     {"jump", {INPUT_KEY(SPACE, 1), INPUT_PAD(A, 1)}},
     {"spawn", {INPUT_KEY(F, 1), INPUT_PAD(X, 1)}},
     // Kills the player. A key rather than a consequence because this app has no
-    // damage, no health and no death -- the only thing that happens TO the
-    // player is the chaser's proximity check, which prints and plays a sound.
-    // Inventing a health system to justify a ragdoll would be the larger
-    // feature wagging the smaller one.
-    // The left stick click, which is the last pad button this app has not
-    // spent. B and RB were both tried first and both are taken -- two actions
-    // on one button is legal, since every action evaluates independently, but
-    // it makes one press do two things and the printed controls a lie.
+    // damage, no health and no death -- inventing one to justify a ragdoll
+    // would be the larger feature wagging the smaller one.
     {"ragdoll", {INPUT_KEY(K, 1), INPUT_PAD(LEFT_THUMB, 1)}},
     {"pause", {INPUT_KEY(P, 1), INPUT_PAD(START, 1)}},
     {"raycast", {INPUT_KEY(R, 1), INPUT_PAD(Y, 1)}},
@@ -3027,7 +3031,7 @@ static void on_update(Game* game, double dt) {
     // a wall stops the walk rather than running on the spot.
     float ground_speed = hypotf(vel[0], vel[2]);
     hud_ground_speed = ground_speed;
-    if (player_animator) {
+    if (player_animator && !player_ragdolled()) {
         if (locomotion_speed_axis) {
             // The axis IS metres per second, so the knob is the speed and the clamp is the
             // space's own (animator.h: param is clamped to its entries).
@@ -3096,7 +3100,7 @@ static void on_update(Game* game, double dt) {
         if (player_medium != MEDIUM_GROUND)
             player_animator->speed = 1.0f;
     }
-    if (player_rig && ground_speed > 0.1f) {
+    if (player_rig && ground_speed > 0.1f && !player_ragdolled()) {
         // The puppet faces +Z at yaw 0. Smoothed on sim time, so it is the
         // same turn headless and windowed.
         float target = atan2f(vel[0], vel[2]);
@@ -3411,7 +3415,7 @@ static void ik_update_targets(Game* game) {
     // in the same block as player_ik, which is NULLed on every failure path there, so
     // a non-null player_ik already implies the rest. Testing them separately would
     // suggest they can disagree and invite someone to set player_ik somewhere else.
-    if (!player_ik)
+    if (!player_ik || player_ragdolled())
         return;
     PhysicsWorld* physics = game_get_physics_world(game);
     if (!physics)
@@ -3621,21 +3625,21 @@ static void follow_camera_update(Game* game) {
  * keeps framing the body).
  */
 static void ragdoll_kill_player(Game* game) {
-    if (!player_animator || !player_skel_root || ragdoll_active(player_animator->state->ragdoll)) {
+    if (!player_animator || !player_skel_root || player_ragdolled()) {
         return;
     }
     PhysicsWorld* physics = game_get_physics_world(game);
     if (!physics) {
         return;
     }
-    if (!ragdoll_start(player_animator->state->ragdoll, physics,
+    if (!ragdoll_start(player_animator->state->ragdoll, physics->physics_system, OBJ_LAYER_DYNAMIC,
                        player_animator->state->global_transforms,
                        player_skel_root->global_transform)) {
         return;
     }
     CharacterController* cc = entity_get_character_controller(player_entity);
     if (cc) {
-        character_controller_set_enabled(cc, false);
+        cc->enabled = false;
     }
     printf("Ragdoll.\n");
 }
@@ -3646,14 +3650,13 @@ static void on_pre_render(Game* game, double alpha) {
     // Killing the player. Here rather than in on_update for the same reason the
     // pause toggle is: the fixed step may run any number of times in a frame,
     // and this wants to happen once.
-    if (player_animator && player_animator->state->ragdoll &&
-        input_action_pressed(&game->input, "ragdoll")) {
+    if (input_action_pressed(&game->input, "ragdoll")) {
         ragdoll_kill_player(game);
     }
     // The rig node moves with the character, so the ragdoll's model-to-world has
     // to follow it -- while it is active nothing else writes the node, but the
     // matrix was captured a frame before the bodies started moving.
-    if (player_animator && player_animator->state->ragdoll && player_skel_root) {
+    if (player_ragdolled() && player_skel_root) {
         ragdoll_set_world(player_animator->state->ragdoll, player_skel_root->global_transform);
         // The entity follows the hips, because the camera frames the ENTITY and
         // a disabled controller stops writing it -- without this the shot stays
@@ -4143,20 +4146,6 @@ static PhysicsWorld* ik_probe_world(Game* game, const vec3 stand) {
     return physics;
 }
 
-// The bones the probe reports, named so a gate reads them rather than indices.
-static const struct {
-    RagdollBone slot;
-    const char* name;
-} RD_PROBE_BONES[] = {
-    {RAGDOLL_HIPS, "hips"},         {RAGDOLL_SPINE, "spine"},
-    {RAGDOLL_CHEST, "chest"},       {RAGDOLL_HEAD, "head"},
-    {RAGDOLL_UPPER_ARM_L, "arm_l"}, {RAGDOLL_LOWER_ARM_L, "forearm_l"},
-    {RAGDOLL_UPPER_ARM_R, "arm_r"}, {RAGDOLL_LOWER_ARM_R, "forearm_r"},
-    {RAGDOLL_THIGH_L, "thigh_l"},   {RAGDOLL_SHIN_L, "shin_l"},
-    {RAGDOLL_THIGH_R, "thigh_r"},   {RAGDOLL_SHIN_R, "shin_r"},
-};
-#define RD_PROBE_BONE_COUNT ((int)(sizeof(RD_PROBE_BONES) / sizeof(RD_PROBE_BONES[0])))
-
 /*
  * What a ragdoll BUILDS and what it DOES, with no window (spec 12.16).
  *
@@ -4191,18 +4180,27 @@ static int run_ragdoll_probe(Game* game, const char* which) {
             return 1;
         }
         int bodies = 0, parented = 0;
-        for (int i = 0; i < RD_PROBE_BONE_COUNT; i++) {
-            const int bone = ragdoll_bone_index(rd, RD_PROBE_BONES[i].slot);
-            float r = 0.0f, hh = 0.0f;
-            ragdoll_capsule(rd, RD_PROBE_BONES[i].slot, &r, &hh);
-            printf("ragdoll build %s bone %d\n", RD_PROBE_BONES[i].name, bone);
-            if (bone >= 0) {
-                bodies++;
-                printf("ragdoll shapes %s capsule %.6f %.6f\n", RD_PROBE_BONES[i].name, (double)r,
-                       (double)hh);
+        for (int i = 0; i < RAGDOLL_BONE_COUNT; i++) {
+            const char* slot = ragdoll_bone_name(i);
+            const int bone = ragdoll_bone_index(rd, i);
+            // Two numbers: the skeleton bone, and the parent SLOT the build
+            // settled on. The second is what makes the constraint count an
+            // assertion instead of an identity -- read back from the system
+            // rather than restated as bodies minus one -- and it carries the
+            // parent-first ordering CreateRagdoll depends on with it, since a
+            // parent slot below its child's is the whole rule.
+            printf("ragdoll build %s bone %d %d\n", slot, bone, ragdoll_bone_parent(rd, i));
+            if (bone < 0) {
+                continue;
             }
+            bodies++;
+            if (ragdoll_bone_parent(rd, i) >= 0) {
+                parented++;
+            }
+            float r = 0.0f, hh = 0.0f;
+            ragdoll_capsule(rd, i, &r, &hh);
+            printf("ragdoll shapes %s capsule %.6f %.6f\n", slot, (double)r, (double)hh);
         }
-        parented = bodies > 0 ? bodies - 1 : 0;
         printf("ragdoll build count bodies %d\n", bodies);
         printf("ragdoll build count constraints %d\n", parented);
         free_ragdoll(rd);
@@ -4219,14 +4217,14 @@ static int run_ragdoll_probe(Game* game, const char* which) {
             fprintf(stderr, "ragdoll-probe: scale build refused\n");
             return 1;
         }
-        for (int i = 0; i < RD_PROBE_BONE_COUNT; i++) {
+        for (int i = 0; i < RAGDOLL_BONE_COUNT; i++) {
             float r1 = 0.0f, h1 = 0.0f, r2 = 0.0f, h2 = 0.0f;
-            if (!ragdoll_capsule(one, RD_PROBE_BONES[i].slot, &r1, &h1))
+            if (!ragdoll_capsule(one, i, &r1, &h1))
                 continue;
-            ragdoll_capsule(two, RD_PROBE_BONES[i].slot, &r2, &h2);
+            ragdoll_capsule(two, i, &r2, &h2);
             const double rr = (r1 > 0.0f) ? (double)r2 / (double)r1 : 0.0;
             const double hr = (h1 > 0.0f) ? (double)h2 / (double)h1 : 0.0;
-            printf("ragdoll scale %s ratio %.6f %.6f\n", RD_PROBE_BONES[i].name, rr, hr);
+            printf("ragdoll scale %s ratio %.6f %.6f\n", ragdoll_bone_name(i), rr, hr);
         }
         free_ragdoll(one);
         free_ragdoll(two);
@@ -4259,7 +4257,8 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         to_world[3][1] = 3.0f;
 
         const int before_bodies = jolt_ragdoll_world_body_count(physics->physics_system);
-        if (!ragdoll_start(rd, physics, state->global_transforms, to_world)) {
+        if (!ragdoll_start(rd, physics->physics_system, OBJ_LAYER_DYNAMIC, state->global_transforms,
+                           to_world)) {
             fprintf(stderr, "ragdoll-probe: start refused\n");
             return 1;
         }
@@ -4292,7 +4291,7 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         // The pose case: the bone's global now comes from its body. Applied
         // here rather than through the animator, because the animator would
         // re-sample a clip this rig may not have.
-        ragdoll_apply(rd, state->global_transforms, skel->bone_count);
+        ragdoll_apply(rd, state->global_transforms);
         const float moved = glm_vec3_distance(clip_pose[3], state->global_transforms[hips_bone][3]);
         printf("ragdoll pose hips moved %.6f\n", (double)moved);
 
