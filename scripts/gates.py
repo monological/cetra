@@ -15048,6 +15048,37 @@ PUPPET = "assets/scenes/puppet.cscn"
 # case also prints a non-numeric "fired <name> <tick>" line, which this
 # deliberately does not match: the counts are what the arms read.
 _ANIM_PROBE = re.compile(r"^anim ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+# The trace's POSITION and the character's own heading, for the two arms that ask where
+# the player actually went (spec 12.18). Separate passes over the same line, the rule
+# this file already follows for vel and cam: five arms index _GAMETEST_TRACE's three
+# groups positionally and adding captures would renumber every one of them.
+_GAMETEST_POS = re.compile(r"player step (\d+) .*? pos\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)")
+_GAMETEST_YAW = re.compile(r"player step (\d+) .* yaw (-?[\d.]+)")
+# Land first: the player spawns above the floor and a move fired in the air is a move
+# the medium machine takes the source back from. Then the lunge, settle, then the spin.
+_MOVES_SCRIPT = "0-79 idle\n80-82 rt=1\n83-159 idle\n160-162 lt=1\n163-250 idle\n"
+
+
+_LOCO_AXIS = re.compile(r"Locomotion travels 0 to ([\d.]+) m/s")
+
+
+def _gametest_moves(workdir, tag, extra):
+    """{step: (x, z)}, {step: yaw} and the app's own axis top from one run of the
+    authored-move script."""
+    path = os.path.join(workdir, f"moves_{tag}.txt")
+    with open(path, "w") as f:
+        f.write(_MOVES_SCRIPT)
+    r = subprocess.run(
+        [GAMETEST, "-x", "-f", "260", "--trace-player", "--trace-every", "10",
+         "--pad-script", path] + extra,
+        capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    pos = {int(s): (float(x), float(z)) for s, x, _y, z in _GAMETEST_POS.findall(text)}
+    yaw = {int(s): float(v) for s, v in _GAMETEST_YAW.findall(text)}
+    axis = _LOCO_AXIS.findall(text)
+    if r.returncode != 0 or not pos or not yaw:
+        return None
+    return {"pos": pos, "yaw": yaw, "axis": float(axis[0]) if axis else 0.0}
 
 # "anim-probe frame <n> bone <i> rot <x y z w> pos <x y z> name <name>" from
 # render --anim-probe. The NAME is last because a rig may space its bone names,
@@ -15232,6 +15263,14 @@ def run_anim_gate(workdir):
                        arm above, since a rig that kept the travel it gave away would move
                        twice and no pixel would say which half was wrong. Its height still
                        moves, that being the bob rather than travel.
+      anim-root-lunge  the PLAYER travels what the clip states, at a rig scale this gate
+                       DERIVES rather than knows -- and travels nothing at all under
+                       --no-root-motion, where the clips that state a travel are not
+                       loaded. The first arm here to drive the demo rather than the
+                       engine, so a distance that never reaches the character, or reaches
+                       it unscaled, is caught here and in no arm above.
+      anim-root-spin   and a clip that turns the player half way round while carrying him
+                       nowhere. Two-sided the same way.
     """
     import math
 
@@ -15641,27 +15680,28 @@ def run_anim_gate(workdir):
     # passing at all -- a clip carrying root motion has a near-stationary stance toe
     # and would be refused by the stride measurement -- which is a deduction from an
     # absence. strut is the same question asked directly.
-    d = _anim_probe_run("root")
+    stated = _anim_probe_run("root")
     want_travel = {"travel_walk": 1.20, "travel_run": 1.60, "lunge": 1.20}
     refuse = ("idle", "walk", "strut")
     need = [(k, "travel") for k in list(want_travel) + ["spin"] + list(refuse)]
-    if not d or any(k not in d for k in need):
+    if not stated or any(k not in stated for k in need):
         print("  anim-root-travel FAIL  the probe failed or measured nothing")
         failures.append("anim-root-travel")
     else:
         # answered, dx, dy, dz, yaw
-        worst = max(abs(d[(k, "travel")][3] - v) for k, v in want_travel.items())
-        skew = max(max(abs(d[(k, "travel")][1]), abs(d[(k, "travel")][4]))
+        worst = max(abs(stated[(k, "travel")][3] - v) for k, v in want_travel.items())
+        skew = max(max(abs(stated[(k, "travel")][1]), abs(stated[(k, "travel")][4]))
                    for k in want_travel)
-        stated = all(d[(k, "travel")][0] == 1.0 for k in list(want_travel) + ["spin"])
-        spun = abs(abs(d[("spin", "travel")][4]) - math.pi)
-        spin_still = max(abs(d[("spin", "travel")][i]) for i in (1, 3))
-        refused = [k for k in refuse if d[(k, "travel")][0] != 0.0]
-        ok = (stated and not refused and worst < 1e-4 and skew < 1e-4
+        answered = all(stated[(k, "travel")][0] == 1.0
+                       for k in list(want_travel) + ["spin"])
+        spun = abs(abs(stated[("spin", "travel")][4]) - math.pi)
+        spin_still = max(abs(stated[("spin", "travel")][i]) for i in (1, 3))
+        refused = [k for k in refuse if stated[(k, "travel")][0] != 0.0]
+        ok = (answered and not refused and worst < 1e-4 and skew < 1e-4
               and spun < 1e-4 and spin_still < 1e-4)
         print(f"  anim-root-travel {'PASS' if ok else 'FAIL'}  the travelling clips state "
               f"their distance to {worst:.6f} m (want < 1e-4) with {skew:.6f} m of drift "
-              f"off the axis, spin states {d[('spin', 'travel')][4]:+.4f} rad "
+              f"off the axis, spin states {stated[('spin', 'travel')][4]:+.4f} rad "
               f"(want +-pi) and travels {spin_still:.6f} m; "
               f"{'every' if not refused else 'not every'} in-place clip refuses"
               f"{'' if not refused else ' -- ' + ', '.join(refused) + ' claims a travel'}")
@@ -15797,6 +15837,61 @@ def run_anim_gate(workdir):
               f"{off[1]:+.6f} m, which is the bob and not travel")
         if not ok:
             failures.append("anim-root-zeroed")
+
+    # --- anim-root-lunge / anim-root-spin --------------------------------------
+    # The two arms that ask where the PLAYER went, rather than what the animator
+    # handed out. Everything above measures the engine with the app absent; these
+    # drive the demo with a scripted pad and read its own trace, so a travel that
+    # never reaches the character -- drained and dropped, scaled wrong, turned by
+    # the wrong yaw -- is caught here and nowhere else.
+    #
+    # Both are two-sided against --no-root-motion, where the clips that state a
+    # travel are not loaded at all: the same script then presses the same triggers
+    # and the character neither moves nor turns.
+    rooted = _gametest_moves(workdir, "rooted", [])
+    inplace = _gametest_moves(workdir, "inplace", ["--no-root-motion"])
+    lunge_row = stated.get(("lunge", "travel")) if stated else None
+    if not rooted or not inplace or not lunge_row or rooted["axis"] <= 0.0:
+        for arm in ("anim-root-lunge", "anim-root-spin"):
+            print(f"  {arm} FAIL  a run failed or the probe measured nothing")
+            failures.append(arm)
+    else:
+        def moved(run, a, b):
+            (x0, z0), (x1, z1) = run["pos"][a], run["pos"][b]
+            return math.hypot(x1 - x0, z1 - z0)
+
+        # --- anim-root-lunge ---------------------------------------------------
+        # The world distance the clip states, DERIVED rather than written down. The
+        # app prints its axis top in world metres per second and the probe states the
+        # run's travel in model units, so the ratio of the two is the rig's scale and
+        # this gate never has to know PLAYER_SCALE. It also means a scale applied on
+        # one path and not the other -- 12.9's live bug, and what 12.10's fourth phase
+        # exists for -- comes out here as a distance that is not the clip's.
+        scale = rooted["axis"] / (run_loop / run_s)
+        want = lunge_row[3] * scale
+        got = moved(rooted, 80, 150)
+        still = moved(inplace, 80, 150)
+        ok = 0.85 * want < got < want and still < 1e-3
+        print(f"  anim-root-lunge {'PASS' if ok else 'FAIL'}  the lunge carried the player "
+              f"{got:.3f} m against the {want:.2f} it states at this rig's scale of "
+              f"{scale:.1f} (want 85 to 100 per cent: the crossfade discounts its opening "
+              f"and the first update rebases), and {still:.3f} m under --no-root-motion "
+              f"(want 0)")
+        if not ok:
+            failures.append("anim-root-lunge")
+
+        # --- anim-root-spin ----------------------------------------------------
+        # A turn that carries no ground. The position bar is half the arm: a spin that
+        # moved the character would still turn it by the right angle.
+        turned = abs(rooted["yaw"][250] - rooted["yaw"][150])
+        held = abs(inplace["yaw"][250] - inplace["yaw"][150])
+        drifted = moved(rooted, 160, 250)
+        ok = 0.85 * math.pi < turned < math.pi + 1e-3 and drifted < 1e-3 and held < 1e-3
+        print(f"  anim-root-spin {'PASS' if ok else 'FAIL'}  the spin turned the player "
+              f"{turned:.3f} rad of the {math.pi:.3f} it states, carrying {drifted:.3f} m "
+              f"(want none), and turned {held:.3f} under --no-root-motion (want 0)")
+        if not ok:
+            failures.append("anim-root-spin")
 
     return failures
 
