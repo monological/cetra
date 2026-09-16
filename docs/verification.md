@@ -38,12 +38,12 @@ up as a difference. The corpus must not be re-baked off macOS.
   and how to hear it on real hardware
 - [The real-character path](#the-real-character-path) — what the `anim` group asserts about
   the math, and what only watching a real rig can settle
+- [The root-motion path](#the-root-motion-path) — what the nine 12.18 arms assert, and why the
+  benefit root motion exists for cannot be measured on any asset in this tree
 - [The UI paths](#the-ui-paths) — what the `ui` group and the two menu goldens do not
   cover: another display, a real pad through a menu, and the other two settings locations
 - [The save paths](#the-save-paths) — what the `save` group asserts, why a restored world is
   deliberately not bit-exact, and the migration nobody can test until time passes
-- [The root-motion path](#the-root-motion-path) — what the nine 12.18 arms assert, and why the
-  benefit root motion exists for cannot be measured on any asset in this tree
 - [The foot-planting path](#the-foot-planting-path) — what the `ik` group asserts about the
   solve, why eleven arms passed while the feet were welded to the floor, and why planting is
   not locking
@@ -714,12 +714,15 @@ doing at the time:
   blends it across a space, and `gametest` places its entries at the speeds they imply and derives
   full stick from the fastest. On `--puppet assets/models/t_pose.fbx` that is 2.67 m/s and
   `--no-lock` moves **2217 px**. The generated puppet still reads 0 px at any speed, and that is
-  also the mechanism working: its walk is a straight-leg pendulum with no stance, the measurement
-  REFUSES it by name, and the run says so at startup. **Root motion, the other answer, arrived in
-  spec 12.18** -- and it does not close this row from the other side, because the two features
-  meet on no asset in this tree: only the four clips 12.18 authored carry a root curve, and they
-  are on the same stanceless pendulum. `strut_walk` states **0.000071 m** of travel over its whole
-  loop, measured rather than assumed, so every clip a lock has ever been read on is in place.
+  also the mechanism working: its walk is a straight-leg pendulum with no stance, and the stride
+  measurement REFUSES it by name. **Under `--no-root-motion` the run still says so at startup**;
+  by default it no longer reaches that measurement at all, since spec 12.18 gave the puppet clips
+  that state their own travel and `build_locomotion` answers from those first. **Root motion, the
+  other answer, arrived in that spec** -- and it does not close this row from the other side,
+  because the two features meet on no asset in this tree: only the four clips 12.18 authored carry
+  a root curve, and they are on the same stanceless pendulum. `strut_walk` states **0.000071 m** of
+  travel over its whole loop, measured rather than assumed, so every clip a lock has ever been read
+  on is in place.
 - **A real character is still owed, and the reason is narrower than it first looked.**
   `--puppet assets/models/t_pose.fbx` does NOT work, and not for the reason first written here:
   `take_puppet_root` requires a node named exactly **`puppet`**, which only the generated rig

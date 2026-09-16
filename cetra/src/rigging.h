@@ -64,4 +64,14 @@ int find_matching_bone_smart(Skeleton* skeleton, const char* anim_bone_name);
 // author named a foot `leg left ankle`.
 int skeleton_resolve_bone(Skeleton* skeleton, const char* name);
 
+// The bone a rig's ROOT MOTION belongs to: the hips where the rig has them, resolved
+// the way everything else here resolves, and the first bone with no parent otherwise.
+// -1 for an empty skeleton.
+//
+// The fallback is what makes every rig answer, and it is also why a clip translating
+// that bone cannot be taken as root motion on its own -- a one-bone rig sliding
+// sideways is a legitimate animation and not a character walking. Whether the travel
+// belongs to the character is the caller's to state (`Animator.root_motion`).
+int skeleton_root_bone(Skeleton* skeleton);
+
 #endif // RIGGING_H

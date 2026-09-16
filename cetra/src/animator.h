@@ -67,23 +67,25 @@ typedef struct AnimatorSpace {
     bool ended;      // the last advance reached a non-looping end
     bool looping;
     bool finished; // non-looping and held at its end
-    // Root motion (spec 12.18), per ENTRY rather than per space. What each entry
-    // states over one loop is measured when the source starts; where each entry's
-    // own root stood last update is kept so this update can difference it.
+    // Root motion (spec 12.18): what each entry states over one LOOP, measured when
+    // the source starts, which is the correction owed at a wrap.
     //
-    // Per entry because the mixture's travel is the weighted sum of what each clip
-    // moved, and NOT the movement of the blended root: the weights and the fade
-    // move too, so differencing a blended position reads a knob turn or a crossfade
-    // as a stride across the room.
+    // No previous reading is kept beside it, because `prev_time` above already is
+    // one: an entry's root at the last update is `animation_root_at` at
+    // `entry_time_at(s, i, s->prev_time)`, which is what `collect_events` already
+    // trusts for the same purpose. Storing it instead cost four arrays, a flag, a
+    // first-update branch and one update's travel at every switch.
     //
-    // On the space rather than the Animator so a source carries it, the outgoing
-    // half of a crossfade being a copy of this struct.
+    // Per ENTRY because a mixture's travel is the weighted sum of what each clip
+    // moved, and NOT the movement of the blended root: the weights and the fade move
+    // too, so differencing a blended position reads a knob turn or a crossfade as a
+    // stride across the room.
+    //
+    // On the space rather than the Animator so a source carries it, the outgoing half
+    // of a crossfade being a copy of this struct.
     vec3 loop_travel[ANIMATOR_SPACE_MAX];
     float loop_yaw[ANIMATOR_SPACE_MAX];
-    vec3 prev_root[ANIMATOR_SPACE_MAX];
-    float prev_root_yaw[ANIMATOR_SPACE_MAX];
-    bool root_read; // prev_root holds a reading; false until the first update
-    bool travels;   // any entry states a displacement, so this source drives the character
+    bool travels; // any entry states a displacement, so this source drives the character
 } AnimatorSpace;
 
 typedef enum AnimatorLayerPhase {

@@ -15057,6 +15057,12 @@ _GAMETEST_YAW = re.compile(r"player step (\d+) .* yaw (-?[\d.]+)")
 # Land first: the player spawns above the floor and a move fired in the air is a move
 # the medium machine takes the source back from. Then the lunge, settle, then the spin.
 _MOVES_SCRIPT = "0-79 idle\n80-82 rt=1\n83-159 idle\n160-162 lt=1\n163-250 idle\n"
+# The steps the two arms read: before and after each move, on the trace's own cadence.
+_MOVES_STEPS = (80, 150, 160, 250)
+# The lunge's own shape, from gametest.c's animator_play_once call and the generator's
+# clip. Here so the shortfall the arm allows is derived from the fade rather than chosen.
+_LUNGE_FADE = 0.08
+_LUNGE_SECONDS = 0.6
 
 
 _LOCO_AXIS = re.compile(r"Locomotion travels 0 to ([\d.]+) m/s")
@@ -15068,15 +15074,23 @@ def _gametest_moves(workdir, tag, extra):
     path = os.path.join(workdir, f"moves_{tag}.txt")
     with open(path, "w") as f:
         f.write(_MOVES_SCRIPT)
+    # --no-crates, and it is what lets these two arms read POSITION at all. The five
+    # falling boxes land at rand() positions inside a 20-unit box centred on the
+    # player, and rand() differs per platform's libc -- so one that lands beside him
+    # here lands on him elsewhere, which is exactly why _gametest_pad_run's own
+    # docstring reads the commanded move instead. Without the crates the scene is the
+    # plate, and a displacement is a portable number.
     r = subprocess.run(
-        [GAMETEST, "-x", "-f", "260", "--trace-player", "--trace-every", "10",
-         "--pad-script", path] + extra,
+        [GAMETEST, "-x", "-f", "260", "--no-crates", "--trace-player", "--trace-every",
+         str(GAMETEST_TRACE_EVERY), "--pad-script", path] + extra,
         capture_output=True, text=True)
     text = r.stdout + r.stderr
     pos = {int(s): (float(x), float(z)) for s, x, _y, z in _GAMETEST_POS.findall(text)}
     yaw = {int(s): float(v) for s, v in _GAMETEST_YAW.findall(text)}
     axis = _LOCO_AXIS.findall(text)
-    if r.returncode != 0 or not pos or not yaw:
+    # Every step the arms index, checked here rather than at the read: a KeyError in an
+    # arm takes the whole group down, where a None fails the two arms it belongs to.
+    if r.returncode != 0 or any(s not in pos or s not in yaw for s in _MOVES_STEPS):
         return None
     return {"pos": pos, "yaw": yaw, "axis": float(axis[0]) if axis else 0.0}
 
@@ -15267,8 +15281,11 @@ def run_anim_gate(workdir):
                        DERIVES rather than knows -- and travels nothing at all under
                        --no-root-motion, where the clips that state a travel are not
                        loaded. The first arm here to drive the demo rather than the
-                       engine, so a distance that never reaches the character, or reaches
-                       it unscaled, is caught here and in no arm above.
+                       engine, so a distance that never reaches the character is caught
+                       here and in no arm above. What it does NOT catch is a scale
+                       dropped from both the axis and the velocity, since it reads the
+                       scale off that same axis; what it catches is one applied on one
+                       path and not the other, which is the shape 12.9's bug had.
       anim-root-spin   and a clip that turns the player half way round while carrying him
                        nowhere. Two-sided the same way.
     """
@@ -15682,8 +15699,16 @@ def run_anim_gate(workdir):
     # absence. strut is the same question asked directly.
     stated = _anim_probe_run("root")
     want_travel = {"travel_walk": 1.20, "travel_run": 1.60, "lunge": 1.20}
-    refuse = ("idle", "walk", "strut")
-    need = [(k, "travel") for k in list(want_travel) + ["spin"] + list(refuse)]
+    # Every committed FBX clip the app can load, not one of them. Four documents said
+    # the committed corpus is in place; asking all eight found that two are not --
+    # touch_down and jump_start each carry about 9 cm of hip displacement and a small
+    # turn, a crouch and a rise rather than a character going anywhere. The game never
+    # sees it (they load RETARGETED, which the read refuses), but the sentence in four
+    # files was wrong and one measurement could not have said so.
+    refuse = ("idle", "walk", "strut_walk", "steady_run", "quiet_idle", "swim_cycle",
+              "float_idle", "fall_cycle")
+    posed = ("touch_down", "jump_start")
+    need = [(k, "travel") for k in list(want_travel) + ["spin"] + list(refuse) + list(posed)]
     if not stated or any(k not in stated for k in need):
         print("  anim-root-travel FAIL  the probe failed or measured nothing")
         failures.append("anim-root-travel")
@@ -15697,24 +15722,30 @@ def run_anim_gate(workdir):
         spun = abs(abs(stated[("spin", "travel")][4]) - math.pi)
         spin_still = max(abs(stated[("spin", "travel")][i]) for i in (1, 3))
         refused = [k for k in refuse if stated[(k, "travel")][0] != 0.0]
+        # The two that do state something state a POSE difference, not a stride: a
+        # bound on it is what keeps this an observation rather than a licence.
+        posed_far = max(math.hypot(stated[(k, "travel")][1], stated[(k, "travel")][3])
+                        for k in posed)
         ok = (answered and not refused and worst < 1e-4 and skew < 1e-4
-              and spun < 1e-4 and spin_still < 1e-4)
+              and spun < 1e-4 and spin_still < 1e-4 and posed_far < 0.15)
         print(f"  anim-root-travel {'PASS' if ok else 'FAIL'}  the travelling clips state "
               f"their distance to {worst:.6f} m (want < 1e-4) with {skew:.6f} m of drift "
               f"off the axis, spin states {stated[('spin', 'travel')][4]:+.4f} rad "
-              f"(want +-pi) and travels {spin_still:.6f} m; "
-              f"{'every' if not refused else 'not every'} in-place clip refuses"
-              f"{'' if not refused else ' -- ' + ', '.join(refused) + ' claims a travel'}")
+              f"(want +-pi) and travels {spin_still:.6f} m; {len(refuse)} committed clips "
+              f"refuse{'' if not refused else ' -- except ' + ', '.join(refused)}, and the "
+              f"landing and the rise carry {posed_far:.3f} m of hip between their ends "
+              f"(want < 0.15: a crouch, not a stride, and retargeting hides it from the game)")
         if not ok:
             failures.append("anim-root-travel")
 
-    # --- anim-root-wrap / blend / switch / yaw / zeroed -------------------------
+    # --- anim-root-wrap / blend / switch / fade / yaw / zeroed ------------------
     # What the animator hands a character, against what the clips state.
     #
-    # Every expectation below is one update short of the whole distance, and that is
-    # the contract rather than a fudge: a source's first update has no previous
-    # reading to difference, so it rebases. The alternative is reading a clip's
-    # whole length as a step the first time anything plays.
+    # Every expectation below is the WHOLE distance, exactly. It was one update short
+    # for a while, because the extraction stored each entry's previous reading and a
+    # new source had none -- until that reading turned out to be computable from the
+    # clock the space already keeps. The arithmetic here is what noticed: an arm
+    # carrying a "- dt" it cannot explain is an arm describing an artefact.
     d = _anim_probe_run("rootmotion")
     dt = 1.0 / 60.0
     # Seeded before the branch that fills them, because the two arms AFTER this block
@@ -15735,11 +15766,11 @@ def run_anim_gate(workdir):
         walk_loop, run_loop = d[("blend", "loops")]
 
         # --- anim-root-wrap ----------------------------------------------------
-        # Three loops. A missing wrap correction loses one loop per crossing; one
-        # applied twice gains one. Either is 1.2 m away from this bar, so the
-        # tolerance can be tight enough to also catch a drift of one tick.
-        loops, secs = 3.0, 3.0 * walk_s
-        want = walk_loop * loops * (secs - dt) / secs
+        # Three loops carry three loops of ground, to the millimetre. A missing wrap
+        # correction loses one loop per crossing; one applied twice gains one. Either
+        # is 1.2 m away from this bar, so the tolerance is tight enough to also catch
+        # a single dropped update.
+        want = walk_loop * 3.0
         got = d[("wrap", "travelled")]
         err = abs(got[2] - want)
         ok = err < 1e-3 and abs(got[0]) < 1e-4
@@ -15757,9 +15788,9 @@ def run_anim_gate(workdir):
         # the clips differ in LENGTH, which is why these are 1.0 s and 0.5 s.
         ground = 0.5 * walk_loop + 0.5 * run_loop
         rate = 0.5 / walk_s + 0.5 / run_s
-        want = ground * rate * (blend_s - dt)
+        want = ground * rate * blend_s
         mean = 0.5 * (walk_loop / walk_s) + 0.5 * (run_loop / run_s)
-        naive = mean * (blend_s - dt)
+        naive = mean * blend_s
         got = d[("blend", "travelled")]
         ok = abs(got[2] - want) < 1e-3 and abs(got[2] - naive) > 1e-2
         print(f"  anim-root-blend {'PASS' if ok else 'FAIL'}  half way between a {walk_s:.1f}s "
@@ -15770,20 +15801,20 @@ def run_anim_gate(workdir):
             failures.append("anim-root-blend")
 
         # --- anim-root-switch --------------------------------------------------
-        # A cut mid-loop back to the start of a clip moves the pose by most of a
-        # loop. None of that is the character going anywhere.
+        # A cut mid-loop back to the start of a clip moves the POSE by most of a loop
+        # and the character by one update's walk. This arm reads that one update.
         #
-        # This one PINS rather than measures, and the difference is worth stating: a
-        # fresh source carries no reading to difference against, so the property
-        # holds structurally and no single change to the extraction makes this arm
-        # red. It is here to catch a design that reads travel off the pose, which
-        # the next arm is what actually measures.
+        # It used to expect zero and could not fail: a fresh source carried no reading
+        # to difference, so the property held structurally. Computing both ends from
+        # the clock made it a measurement -- the update after a cut is now a real
+        # quantity, and a reading that leaked the jump reads sixty times it.
+        want = (walk_loop / walk_s) * dt
         got = d[("switch", "travelled")]
-        moved = max(abs(v) for v in got)
-        ok = moved < 1e-4
+        ok = abs(got[2] - want) < 1e-4 and abs(got[0]) < 1e-4
         print(f"  anim-root-switch {'PASS' if ok else 'FAIL'}  the update after a cut carried "
-              f"{moved:.6f} m (want < 1e-4; differencing the two poses across the cut would "
-              f"read most of a loop)")
+              f"{got[2]:.6f} m against the {want:.6f} one update of this clip is worth (want "
+              f"within 1e-4; a reading that differenced the poses across the cut would carry "
+              f"most of a loop)")
         if not ok:
             failures.append("anim-root-switch")
 
@@ -15795,16 +15826,16 @@ def run_anim_gate(workdir):
         # cannot see it.
         #
         # The bar is the discrete sum the animator actually walks -- the envelope
-        # sampled once per update, the incoming source silent for its first one --
-        # rather than the integral, which is 0.014 m away and would need a tolerance
-        # wide enough to hide a real error.
+        # sampled once per update, including the +1e-6 the engine settles the fade
+        # with -- rather than the integral, which is 0.017 m away and would need a
+        # tolerance wide enough to hide a real error.
         fade_s, win_s, tick = d[("fade", "shape")]
         v_walk, v_run = walk_loop / walk_s, run_loop / run_s
         want = 0.0
         for i in range(1, int(round(win_s / tick)) + 1):
             elapsed = i * tick
             w = 1.0 if elapsed + 1e-6 >= fade_s else elapsed / fade_s
-            want += tick * ((1.0 - w) * v_walk + (w * v_run if i > 1 else 0.0))
+            want += tick * ((1.0 - w) * v_walk + w * v_run)
         got = d[("fade", "travelled")]
         lo, hi = v_walk * win_s, v_run * win_s
         ok = abs(got[2] - want) < 1e-3 and lo < got[2] < hi
@@ -15816,12 +15847,11 @@ def run_anim_gate(workdir):
 
         # --- anim-root-yaw -----------------------------------------------------
         turned = d[("spin", "turned")][0]
-        want = math.pi * (1.0 - dt / 1.0)
         spun_travel = max(abs(v) for v in d[("spin", "travelled")])
-        ok = abs(turned - want) < 1e-3 and spun_travel < 1e-4
+        ok = abs(turned - math.pi) < 1e-4 and spun_travel < 1e-4
         print(f"  anim-root-yaw {'PASS' if ok else 'FAIL'}  half a turn came out "
-              f"{turned:.4f} rad against {want:.4f} stated, carrying {spun_travel:.6f} m of "
-              f"travel (want none: a clip may turn without going anywhere)")
+              f"{turned:.6f} rad against pi, carrying {spun_travel:.6f} m of travel (want "
+              f"none: a clip may turn without going anywhere)")
         if not ok:
             failures.append("anim-root-yaw")
 
@@ -15876,12 +15906,28 @@ def run_anim_gate(workdir):
         want = lunge_row[3] * scale
         got = moved(rooted, 80, 150)
         still = moved(inplace, 80, 150)
-        ok = 0.85 * want < got < want and still < 1e-3
+        # The shortfall is DERIVED and has exactly two terms, both of them the engine's
+        # stated behaviour rather than slack:
+        #
+        #   the FADE -- the one-shot fades in over _LUNGE_FADE, and across it the pose
+        #   is a blend, so the clip lays down only the envelope's share of its own
+        #   speed: a triangle, half the fade at the lunge's metres per second;
+        #
+        #   the RESUME -- a source switch drops whatever the caller has not yet taken,
+        #   which is what stops a character that stopped draining being handed its
+        #   whole hoard in one step on landing. The drain runs once per fixed step, so
+        #   at most one update of travel is pending when the one-shot ends.
+        #
+        # Anything more than those two is travel that went missing, and the bar says so.
+        speed = (lunge_row[3] / _LUNGE_SECONDS) * scale
+        lost = (0.5 * _LUNGE_FADE + dt) * speed
+        floor = want - lost
+        ok = floor < got < want and still < 1e-3
         print(f"  anim-root-lunge {'PASS' if ok else 'FAIL'}  the lunge carried the player "
-              f"{got:.3f} m against the {want:.2f} it states at this rig's scale of "
-              f"{scale:.1f} (want 85 to 100 per cent: the crossfade discounts its opening "
-              f"and the first update rebases), and {still:.3f} m under --no-root-motion "
-              f"(want 0)")
+              f"{got:.3f} m of the {want:.2f} it states at this rig's derived scale of "
+              f"{scale:.1f} (want above {floor:.3f}: the {_LUNGE_FADE:.2f}s fade-in and one "
+              f"undrained update account for {lost:.3f} m and nothing else may go missing), "
+              f"and {still:.3f} m under --no-root-motion (want 0)")
         if not ok:
             failures.append("anim-root-lunge")
 
@@ -15891,7 +15937,9 @@ def run_anim_gate(workdir):
         turned = abs(rooted["yaw"][250] - rooted["yaw"][150])
         held = abs(inplace["yaw"][250] - inplace["yaw"][150])
         drifted = moved(rooted, 160, 250)
-        ok = 0.85 * math.pi < turned < math.pi + 1e-3 and drifted < 1e-3 and held < 1e-3
+        # The same two terms in radians, at the spin's own rate of pi per second.
+        spin_lost = (0.5 * _LUNGE_FADE + dt) * math.pi
+        ok = math.pi - spin_lost < turned < math.pi + 1e-3 and drifted < 1e-3 and held < 1e-3
         print(f"  anim-root-spin {'PASS' if ok else 'FAIL'}  the spin turned the player "
               f"{turned:.3f} rad of the {math.pi:.3f} it states, carrying {drifted:.3f} m "
               f"(want none), and turned {held:.3f} under --no-root-motion (want 0)")

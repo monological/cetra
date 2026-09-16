@@ -368,3 +368,16 @@ int skeleton_resolve_bone(Skeleton* skeleton, const char* name) {
         return exact;
     return find_matching_bone_smart(skeleton, name);
 }
+
+int skeleton_root_bone(Skeleton* skeleton) {
+    if (!skeleton || skeleton->bone_count == 0)
+        return -1;
+    const int hips = skeleton_resolve_bone(skeleton, "hips");
+    if (hips >= 0)
+        return hips;
+    for (size_t i = 0; i < skeleton->bone_count; i++) {
+        if (skeleton->bones[i].parent_index < 0)
+            return (int)i;
+    }
+    return -1;
+}
