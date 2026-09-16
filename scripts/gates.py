@@ -24698,6 +24698,22 @@ def run_ragdoll_gate(workdir):
 
 CAM_PROBE_POSE = re.compile(
     r"^cam \S+ (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (\S+) yaw (\S+) pitch (\S+)$", re.M)
+CAM_SEAM = re.compile(r"^cam seam (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (\S+)$", re.M)
+
+
+def _cam_probe_seam():
+    """gametest --cam-probe seam: {label: {eye, look}} off a HEADLESS engine.
+
+    The one camera case that needs an engine, because it is about the engine
+    running the rig rather than about the rig. It still draws no frame."""
+    r = subprocess.run([GAMETEST, "--cam-probe", "seam"], capture_output=True, text=True)
+    rows = CAM_SEAM.findall(r.stdout + r.stderr)
+    if r.returncode != 0 or not rows:
+        return None
+    return {row[0]: {"eye": [float(x) for x in row[1:4]], "look": [float(x) for x in row[4:7]]}
+            for row in rows}
+
+
 CAM_PROBE_DIST = re.compile(
     r"^cam \S+ (\S+) dist (\S+) eye_lift (\S+) wide (\S+)$", re.M)
 
@@ -24813,6 +24829,13 @@ def run_camera_gate(workdir):
                      asks for nothing does not move them. Both halves: the rig
                      is given lifts of 9 first, so an adopt that failed to zero
                      them would displace the very pose it was handed.
+      cam-engine-seam the ENGINE running the rig, the one case here that needs
+                     one: no rig leaves the camera exactly alone (so an app that
+                     poses its own is untouched), one rig writes its pose, and a
+                     second REPLACES it -- the first is then moved and updated
+                     and must not reach the camera. One slot is what makes the
+                     five hand-rolled stand-down guards unnecessary rather than
+                     uniform.
       cam-arm-response a 0..1 signal moves the distance between a near and a far
                      end at 1 - e^(-rate*dt), and the two rates are DIFFERENT:
                      opening out and coming back in are not the same event, so
@@ -24950,6 +24973,30 @@ def run_camera_gate(workdir):
               f"the round trip through asin and atan2 is not exact, and the lifts the rig was "
               f"carrying must be zeroed by the adopt or the tick displaces it)")
         note("cam-pose-adopt", ok)
+
+    seam = _cam_probe_seam()
+    if not seam:
+        print("  cam-engine-seam SKIP  no probe output")
+        note("cam-engine-seam", False)
+    else:
+        # An app that poses its own camera must be untouched by a seam it never
+        # opted into, or this could not have landed before any app converted.
+        untouched = max(abs(a - b) for a, b in zip(seam["none"]["eye"],
+                                                   seam["before"]["eye"])) < 1e-9
+        first = max(abs(a - b) for a, b in zip(seam["first"]["eye"], [5.0, 0.0, -2.0])) < 1e-5
+        # The second rig replaced the first, and the FIRST was then moved to
+        # (99, 99, 99) and updated. If it still reached the camera there would be
+        # two live writers -- which is the condition five apps each hand-rolled a
+        # guard against.
+        second = max(abs(a - b) for a, b in zip(seam["second"]["eye"], [-7.0, 0.0, -3.0])) < 1e-5
+        ok = untouched and first and second
+        print(f"  cam-engine-seam {'PASS' if ok else 'FAIL'}  with no rig installed the camera "
+              f"is {'left exactly alone' if untouched else 'MOVED'}; one rig puts it at "
+              f"{seam['first']['eye']} (want [5, 0, -2]); and after a second replaces it the "
+              f"camera is at {seam['second']['eye']} (want [-7, 0, -3]) with the first rig moved "
+              f"to 99 and updated -- so one slot is what makes the five hand-rolled stand-down "
+              f"guards unnecessary rather than uniform")
+        note("cam-engine-seam", ok)
 
     resp = _cam_probe_dist("response")
     if not resp:

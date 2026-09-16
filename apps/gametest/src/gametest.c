@@ -6588,6 +6588,67 @@ static int run_cam_probe(const char* which) {
     return 0;
 }
 
+/*
+ * --cam-probe seam: the ENGINE running the rig, which is the one thing about
+ * this that cannot be checked without one.
+ *
+ * It asserts the property the conversion rests on -- an app writes a rig and
+ * never touches the camera -- and the property that makes the five hand-rolled
+ * stand-down guards unnecessary: installing a second rig means the first stops
+ * moving the camera, with no guard anywhere saying so.
+ */
+static void cam_seam_print(const char* label, const Camera* c) {
+    printf("cam seam %s eye %.9g %.9g %.9g look %.9g %.9g %.9g\n", label, (double)c->position[0],
+           (double)c->position[1], (double)c->position[2], (double)c->look_at[0],
+           (double)c->look_at[1], (double)c->look_at[2]);
+}
+
+static int run_cam_seam_probe(const Game* game) {
+    Engine* engine = game->engine;
+    CameraDesc desc = {.position = {0.0f, 0.0f, 1.0f}};
+    Camera* camera = create_camera(&desc);
+    if (!camera)
+        return 1;
+    engine_set_camera(engine, camera);
+    cam_seam_print("before", camera);
+
+    CameraRig* a = create_camera_rig();
+    CameraRig* b = create_camera_rig();
+    if (!a || !b) {
+        free_camera_rig(a);
+        free_camera_rig(b);
+        return 1;
+    }
+    glm_vec3_copy((vec3){5.0f, 0.0f, 0.0f}, a->anchor);
+    camera_rig_set_distance(a, 2.0f);
+    camera_rig_update(a, 0.0f, 0.0f, 0.0f);
+    glm_vec3_copy((vec3){-7.0f, 0.0f, 0.0f}, b->anchor);
+    camera_rig_set_distance(b, 3.0f);
+    camera_rig_update(b, 0.0f, 0.0f, 0.0f);
+
+    // Nothing installed: the engine must leave the camera exactly alone, which
+    // is what lets an app that poses its own camera keep working untouched.
+    engine_set_camera_rig(engine, NULL);
+    camera_rig_apply(engine->camera_rig, camera);
+    cam_seam_print("none", camera);
+
+    engine_set_camera_rig(engine, a);
+    camera_rig_apply(engine->camera_rig, camera);
+    cam_seam_print("first", camera);
+
+    // The second replaces the first. Then the FIRST is updated again: if it
+    // still reached the camera, two writers would be live at once.
+    engine_set_camera_rig(engine, b);
+    glm_vec3_copy((vec3){99.0f, 99.0f, 99.0f}, a->anchor);
+    camera_rig_update(a, 0.0f, 0.0f, 0.0f);
+    camera_rig_apply(engine->camera_rig, camera);
+    cam_seam_print("second", camera);
+
+    free_camera_rig(a);
+    free_camera_rig(b);
+    return 0;
+}
+
 // --ui-probe (spec 12.2): the game-layer state a menu edits, checked with no
 // window, no GL and no audio device. It runs BEFORE the engine is created
 // rather than inside a headless game the way the audio and anim probes do,
@@ -7556,10 +7617,23 @@ int main(int argc, const char* argv[]) {
     if (ui_probe && !strcmp(ui_probe, "settings")) {
         return run_ui_probe(ui_probe);
     }
-    // Every case is pure arithmetic over camera_rig.c, so this needs no engine
-    // at all -- which is the rig's design asserted rather than described.
-    if (cam_probe) {
+    // Every case but `seam` is pure arithmetic over camera_rig.c, so it needs no
+    // engine at all -- which is the rig's design asserted rather than described.
+    // `seam` is the exception by definition: it is about the ENGINE running the
+    // rig, so it takes a headless one and still never draws a frame.
+    if (cam_probe && strcmp(cam_probe, "seam") != 0) {
         return run_cam_probe(cam_probe);
+    }
+    if (cam_probe) {
+        GameConfig probe_config = {.engine = {.title = "cam-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "cam-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_cam_seam_probe(probe_game);
+        free_game(probe_game);
+        return rc;
     }
     // The placement case is pure arithmetic and runs before any engine exists,
     // the shape --ui-probe settings already established. The other two need

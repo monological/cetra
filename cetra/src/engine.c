@@ -12,6 +12,7 @@
 #include "camera.h"
 #include "shader.h"
 #include "program.h"
+#include "camera_rig.h"
 #include "frame_script.h"
 #include "util.h"
 #include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see _engine_init)
@@ -1596,6 +1597,20 @@ static void _engine_pointer_script_free(Engine* engine) {
     engine->pointer_script = NULL;
 }
 
+void engine_set_camera_rig(Engine* engine, CameraRig* rig) {
+    if (!engine) {
+        log_error("engine_set_camera_rig: NULL engine");
+        return;
+    }
+    if (engine->camera_rig && rig && engine->camera_rig != rig) {
+        // Said rather than done silently: five apps hand-rolled a guard against
+        // two things writing the camera, and a swap nobody announced is how the
+        // sixth would have found out.
+        log_info("camera rig replaced; the previous one no longer moves the camera");
+    }
+    engine->camera_rig = rig;
+}
+
 bool engine_set_pointer_script(Engine* engine, const char* path) {
     if (!engine || !path) {
         log_error("engine_set_pointer_script: NULL engine or path");
@@ -3040,10 +3055,21 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             profiler_cpu_scope_end(engine->profiler);
         }
 
-        // The camera as the hook left it, before the shadow pass reads it. Every
-        // app used to rebuild both matrices at the end of its own hook, and the
-        // three that did so only through the drag controller skipped it whenever
-        // the GUI held the pointer.
+        // The rig, then the camera as the hook left it, before the shadow pass
+        // reads it. Every app used to rebuild both matrices at the end of its
+        // own hook, and the three that did so only through the drag controller
+        // skipped it whenever the GUI held the pointer.
+        //
+        // The rig's POSE lands here rather than inside the hook because that is
+        // what makes the ordering the engine's to get right instead of each
+        // app's: the hook turns input into a rig pose, this writes it to the
+        // camera, and the derive turns that into matrices. The update itself
+        // stays with the app, which is where the input is -- an action table, a
+        // mouse or a script, and the rig is not allowed to know which. An app
+        // with no rig is untouched, which is what let this arrive before any app
+        // converted.
+        if (engine->camera)
+            camera_rig_apply(engine->camera_rig, engine->camera);
         _engine_derive_camera(engine);
 
         // GI probe captures, while the volume is dirty. Deliberately BEFORE the

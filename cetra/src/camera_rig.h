@@ -194,6 +194,12 @@ void camera_rig_set_pose(CameraRig* rig, const vec3 eye, const vec3 look);
 
 // Write the rig's pose to a camera. Separate from the update because the update
 // is pure and this is the one line that touches something else.
+//
+// A NULL rig, or one that has not been updated yet, writes nothing and says
+// nothing: "no rig installed" is the normal state of an app that poses its own
+// camera, and it is what the engine's frame loop hands this every frame in one
+// of those apps. Treating it as an error would put a guard back at the very
+// call site this exists to remove one from.
 void camera_rig_apply(const CameraRig* rig, Camera* camera);
 
 // The yaw a steering rig reads the controls in; false, leaving `out_yaw`

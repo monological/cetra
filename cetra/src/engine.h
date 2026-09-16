@@ -519,6 +519,9 @@ typedef struct Engine {
     InputState input;
     // The scripted pointer, or NULL for the real one (engine_set_pointer_script).
     struct PointerScript* pointer_script;
+    // What moves the camera, or NULL for an app that poses it itself
+    // (engine_set_camera_rig); borrowed.
+    struct CameraRig* camera_rig;
 
     // FPS tracking
     double last_frame_time;
@@ -814,6 +817,26 @@ bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y);
  * does -- which is what lets an arm assert a camera nothing could press before.
  */
 bool engine_set_pointer_script(Engine* engine, const char* path);
+
+/*
+ * What moves the camera this frame (spec 12.19). Borrowed: the app owns the rig
+ * and must outlive the engine's use of it. NULL puts the camera back under the
+ * app's own hand.
+ *
+ * The engine runs the installed rig immediately BEFORE it derives the view and
+ * projection matrices, which is spec 11.107's rule extended rather than
+ * replaced: an app writes the rig's anchor and its input in the pre-render hook
+ * and nothing else, and the engine turns that into a pose and then into
+ * matrices. An app that posed the camera in its hook still works -- there is
+ * simply no rig to run.
+ *
+ * ONE rig, deliberately. Five apps each hand-rolled a guard to stop two things
+ * writing the camera in the same frame, every one of them reasoned out
+ * independently, and a single slot is what makes those guards unnecessary
+ * rather than uniform. Installing a second rig replaces the first and says so,
+ * because a silent swap is how two writers start fighting.
+ */
+void engine_set_camera_rig(Engine* engine, struct CameraRig* rig);
 
 // The world point under a framebuffer position, on the plane through the
 // press's pick at the eye's distance from it: where a dragged node goes.
