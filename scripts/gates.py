@@ -15217,7 +15217,14 @@ def run_anim_gate(workdir):
                        turns per second sum(w/seconds). The two part company only when
                        the clips differ in length, which is why these are 1.0 s and 0.5 s.
       anim-root-switch a cut to the start of a clip moves the pose by most of a loop and
-                       the character by nothing at all.
+                       the character by nothing at all. A PIN rather than a measurement:
+                       a fresh source carries no reading, so the property is structural
+                       and the arm below is what can go red.
+      anim-root-fade   a crossfade between clips travelling at different speeds carries
+                       the envelope's own integral and not a metre more. This is where
+                       reading the POSE and reading the CLIPS part company -- the blended
+                       root is a lerp of two curves metres apart, so a pose difference
+                       hands the character that gap as if it had run.
       anim-root-yaw    a clip that turns the body half way round turns it half way round,
                        and carries no travel while doing it.
       anim-root-zeroed the pose the frame DRAWS stands at its bind position and heading
@@ -15671,11 +15678,12 @@ def run_anim_gate(workdir):
     d = _anim_probe_run("rootmotion")
     dt = 1.0 / 60.0
     rows = [("wrap", "travelled"), ("blend", "travelled"), ("blend", "seconds"),
-            ("blend", "loops"), ("switch", "travelled"), ("spin", "turned"),
-            ("spin", "travelled"), ("pinned", "offset"), ("pinned", "yaw"), ("spun", "yaw")]
+            ("blend", "loops"), ("switch", "travelled"), ("fade", "travelled"),
+            ("fade", "shape"), ("spin", "turned"), ("spin", "travelled"),
+            ("pinned", "offset"), ("pinned", "yaw"), ("spun", "yaw")]
     if not d or any(k not in d for k in rows):
-        for arm in ("anim-root-wrap", "anim-root-blend", "anim-root-switch", "anim-root-yaw",
-                    "anim-root-zeroed"):
+        for arm in ("anim-root-wrap", "anim-root-blend", "anim-root-switch", "anim-root-fade",
+                    "anim-root-yaw", "anim-root-zeroed"):
             print(f"  {arm} FAIL  the probe failed or measured nothing")
             failures.append(arm)
     else:
@@ -15720,6 +15728,12 @@ def run_anim_gate(workdir):
         # --- anim-root-switch --------------------------------------------------
         # A cut mid-loop back to the start of a clip moves the pose by most of a
         # loop. None of that is the character going anywhere.
+        #
+        # This one PINS rather than measures, and the difference is worth stating: a
+        # fresh source carries no reading to difference against, so the property
+        # holds structurally and no single change to the extraction makes this arm
+        # red. It is here to catch a design that reads travel off the pose, which
+        # the next arm is what actually measures.
         got = d[("switch", "travelled")]
         moved = max(abs(v) for v in got)
         ok = moved < 1e-4
@@ -15728,6 +15742,33 @@ def run_anim_gate(workdir):
               f"read most of a loop)")
         if not ok:
             failures.append("anim-root-switch")
+
+        # --- anim-root-fade ----------------------------------------------------
+        # A crossfade between clips that travel at different speeds, which is where
+        # reading the POSE and reading the clips part company: over the fade the
+        # blended root is a lerp of two curves metres apart, so a pose difference
+        # hands the character that gap on top of the travel. Per-entry readings
+        # cannot see it.
+        #
+        # The bar is the discrete sum the animator actually walks -- the envelope
+        # sampled once per update, the incoming source silent for its first one --
+        # rather than the integral, which is 0.014 m away and would need a tolerance
+        # wide enough to hide a real error.
+        fade_s, win_s, tick = d[("fade", "shape")]
+        v_walk, v_run = walk_loop / walk_s, run_loop / run_s
+        want = 0.0
+        for i in range(1, int(round(win_s / tick)) + 1):
+            elapsed = i * tick
+            w = 1.0 if elapsed + 1e-6 >= fade_s else elapsed / fade_s
+            want += tick * ((1.0 - w) * v_walk + (w * v_run if i > 1 else 0.0))
+        got = d[("fade", "travelled")]
+        lo, hi = v_walk * win_s, v_run * win_s
+        ok = abs(got[2] - want) < 1e-3 and lo < got[2] < hi
+        print(f"  anim-root-fade {'PASS' if ok else 'FAIL'}  {win_s:.1f}s across a {fade_s:.1f}s "
+              f"fade from {v_walk:.2f} to {v_run:.2f} m/s carried {got[2]:.4f} m (want "
+              f"{want:.4f}, and strictly between {lo:.2f} and {hi:.2f})")
+        if not ok:
+            failures.append("anim-root-fade")
 
         # --- anim-root-yaw -----------------------------------------------------
         turned = d[("spin", "turned")][0]
