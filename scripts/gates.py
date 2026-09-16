@@ -24696,6 +24696,34 @@ def run_ragdoll_gate(workdir):
     return failed
 
 
+CAM_PROBE_POSE = re.compile(
+    r"^cam \S+ (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (\S+) yaw (\S+) pitch (\S+)$", re.M)
+CAM_PROBE_BASIS = re.compile(r"^cam basis (\S+) steers (\d) yaw (\S+)$", re.M)
+
+
+def _cam_probe(case):
+    """gametest --cam-probe <case>: {label: pose}. No window, no GL, no engine --
+    camera_rig.c takes plain values and touches nothing, so an arm that needed a
+    frame would be evidence the design had slipped."""
+    r = subprocess.run([GAMETEST, "--cam-probe", case], capture_output=True, text=True)
+    rows = CAM_PROBE_POSE.findall(r.stdout + r.stderr)
+    if r.returncode != 0 or not rows:
+        return None
+    out = {}
+    for row in rows:
+        v = [float(x) for x in row[1:]]
+        out[row[0]] = {"eye": v[0:3], "look": v[3:6], "yaw": v[6], "pitch": v[7]}
+    return out
+
+
+def _cam_probe_basis():
+    r = subprocess.run([GAMETEST, "--cam-probe", "basis"], capture_output=True, text=True)
+    rows = CAM_PROBE_BASIS.findall(r.stdout + r.stderr)
+    if r.returncode != 0 or not rows:
+        return None
+    return {label: (int(steers), float(yaw)) for label, steers, yaw in rows}
+
+
 RENDER_CAM = re.compile(
     r"^cam (\d+) eye (\S+) (\S+) (\S+) target (\S+) (\S+) (\S+) "
     r"dist (\S+) theta (\S+) phi (\S+) ortho (\S+)$", re.M)
@@ -24749,6 +24777,33 @@ def run_camera_gate(workdir):
     point: a recording says the camera does what it used to, where a closed form
     says what it should do and a person can check the arithmetic by reading it.
 
+    The first five need no window at all, the way `ui_layout`'s do: the rig takes
+    plain values and touches no GL, no physics and no clock, so an arm that
+    needed a frame would be evidence that design had slipped.
+
+      cam-orbit-closed the eye lands on anchor + look_lift + eye_lift - dir*dist
+                     with every term non-zero, so a dropped one cannot hide
+                     behind a default; the turn is a RATE (full input for half a
+                     second equals half input for one); and an update asking for
+                     nothing does not move the eye, because the pose is derived
+                     from the aim rather than integrated.
+      cam-pitch-clamp 12 radians of demand into a band of [-1.25, 0.2] saturates
+                     at each end and HOLDS when asked again -- which is what
+                     tells a clamp from a wrap that came round the other side.
+      cam-first-person at distance 0 the eye sits on the anchor and the target is
+                     one unit along the aim. A first-person camera has an aim
+                     DIRECTION and no aim point, and eye-to-target is read
+                     downstream as a focus distance, so the token unit is load
+                     bearing rather than arbitrary.
+      cam-pose-adopt a stated eye and target are adopted exactly, and a tick that
+                     asks for nothing does not move them. Both halves: the rig
+                     is given lifts of 9 first, so an adopt that failed to zero
+                     them would displace the very pose it was handed.
+      cam-basis      a rig that does not steer answers false and leaves the
+                     caller's yaw at its sentinel; one that does publishes its
+                     own. This is the arm that turns 12.13 and 12.17's flip from
+                     a consequence of which branch wrote the pose into a field
+                     with a name and a default.
       cam-drag-orbit a 200-pixel horizontal drag turns phi by exactly
                      200 x sensitivity and leaves theta, the distance and the
                      target where they were. The second half is what tells an
@@ -24770,6 +24825,108 @@ def run_camera_gate(workdir):
     def note(name, ok):
         if not ok:
             failed.append(name)
+
+    # ---- the rig itself, with no window at all
+    orbit = _cam_probe("orbit")
+    if not orbit:
+        print("  cam-orbit-closed SKIP  no probe output")
+        note("cam-orbit-closed", False)
+    else:
+        # anchor (3, 1, -2), look_lift 0.5, eye_lift 1.5, dist 4, yaw 0, pitch 0.
+        # Every term is non-zero so a dropped one cannot hide.
+        s = orbit["start"]
+        want_look = [3.0, 1.5, -2.0]
+        want_eye = [3.0, 3.0, -6.0]
+        placed = (max(abs(a - b) for a, b in zip(s["look"], want_look)) < 1e-5
+                  and max(abs(a - b) for a, b in zip(s["eye"], want_eye)) < 1e-5)
+        # 1.8 rad/s: full input for 0.5 s, then half input for 1.0 s, must be
+        # the same turn twice.
+        first = orbit["turned"]["yaw"] - s["yaw"]
+        second = orbit["again"]["yaw"] - orbit["turned"]["yaw"]
+        rate_law = abs(first - 0.9) < 1e-5 and abs(second - first) < 1e-5
+        held = orbit["held"]
+        derived = max(abs(a - b) for a, b in zip(held["eye"], orbit["again"]["eye"])) < 1e-9
+        ok = placed and rate_law and derived
+        print(f"  cam-orbit-closed {'PASS' if ok else 'FAIL'}  eye {s['eye']} look {s['look']} "
+              f"(want {want_eye} / {want_look}); a turn of {first:.6f} rad at full input over "
+              f"0.5 s and {second:.6f} at half over 1.0 s (a rate is a rate); an update asking "
+              f"for nothing moved the eye by "
+              f"{max(abs(a - b) for a, b in zip(held['eye'], orbit['again']['eye'])):.2e} "
+              f"(the pose is derived from the aim, so it must not creep)")
+        note("cam-orbit-closed", ok)
+
+    clamp = _cam_probe("clamp")
+    if not clamp:
+        print("  cam-pitch-clamp SKIP  no probe output")
+        note("cam-pitch-clamp", False)
+    else:
+        # 12 radians of demand into a band of [-1.25, 0.2], three times over.
+        hi, lo, lower = clamp["high"]["pitch"], clamp["low"]["pitch"], clamp["lower"]["pitch"]
+        ok = abs(hi - 0.2) < 1e-6 and abs(lo + 1.25) < 1e-6 and abs(lower - lo) < 1e-9
+        print(f"  cam-pitch-clamp {'PASS' if ok else 'FAIL'}  12 rad of demand saturates at "
+              f"{hi:.6f} and {lo:.6f} (want 0.2 and -1.25), and holds at {lower:.6f} when asked "
+              f"again -- a clamp holds where a wrap would come round the other side")
+        note("cam-pitch-clamp", ok)
+
+    fp = _cam_probe("first-person")
+    if not fp:
+        print("  cam-first-person SKIP  no probe output")
+        note("cam-first-person", False)
+    else:
+        e = fp["eye"]
+        # dist 0: the eye sits ON the anchor plus its lift, and the target is one
+        # unit along the aim -- there being no aim POINT at all in first person.
+        want_eye = [3.0, 2.7, -2.0]
+        at_anchor = max(abs(a - b) for a, b in zip(e["eye"], want_eye)) < 1e-5
+        span = math.dist(e["look"], e["eye"])
+        yaw, pitch = e["yaw"], e["pitch"]
+        cp = math.cos(pitch)
+        want_dir = [math.sin(yaw) * cp, math.sin(pitch), math.cos(yaw) * cp]
+        got_dir = [(a - b) for a, b in zip(e["look"], e["eye"])]
+        aimed = max(abs(a - b) for a, b in zip(got_dir, want_dir)) < 1e-5
+        ok = at_anchor and abs(span - 1.0) < 1e-5 and aimed
+        print(f"  cam-first-person {'PASS' if ok else 'FAIL'}  at distance 0 the eye is "
+              f"{e['eye']} (want {want_eye}) and the target is {span:.6f} out along the aim "
+              f"(want 1, since a first-person camera has an aim DIRECTION and no aim point, and "
+              f"everything downstream reads eye-to-target as a distance)")
+        note("cam-first-person", ok)
+
+    pose = _cam_probe("pose")
+    if not pose:
+        print("  cam-pose-adopt SKIP  no probe output")
+        note("cam-pose-adopt", False)
+    else:
+        # A stated eye and target, adopted onto a rig carrying lifts of 9, then
+        # ticked. Both halves matter: the adopt must reproduce the pose, and the
+        # tick must not move it, or a pinned camera drifts the moment it runs.
+        s, t = pose["set"], pose["ticked"]
+        want_eye, want_look = [1.0, 2.0, 3.0], [-4.0, 0.5, 6.0]
+        adopted = (max(abs(a - b) for a, b in zip(s["eye"], want_eye)) < 1e-6
+                   and max(abs(a - b) for a, b in zip(s["look"], want_look)) < 1e-6)
+        drift = max(abs(a - b) for a, b in zip(t["eye"], s["eye"]))
+        ok = adopted and drift < 1e-5
+        print(f"  cam-pose-adopt {'PASS' if ok else 'FAIL'}  a stated pose is adopted exactly "
+              f"and an update that asks for nothing moves the eye {drift:.2e} (want under 1e-5: "
+              f"the round trip through asin and atan2 is not exact, and the lifts the rig was "
+              f"carrying must be zeroed by the adopt or the tick displaces it)")
+        note("cam-pose-adopt", ok)
+
+    basis = _cam_probe_basis()
+    if not basis:
+        print("  cam-basis SKIP  no probe output")
+        note("cam-basis", False)
+    else:
+        off_steers, off_yaw = basis["off"]
+        on_steers, on_yaw = basis["on"]
+        # The sentinel is what makes the false leg mean something: a rig that
+        # does not steer must leave the caller's variable ALONE, not zero it,
+        # or a game reading it would silently face east.
+        ok = (off_steers == 0 and off_yaw == -99.0 and on_steers == 1 and abs(on_yaw - 0.75) < 1e-6)
+        print(f"  cam-basis {'PASS' if ok else 'FAIL'}  a rig that does not steer answers "
+              f"{off_steers} and leaves the caller's yaw at its sentinel {off_yaw:g}; one that "
+              f"does answers {on_steers} with {on_yaw:g} (want 0/-99 then 1/0.75). This is the "
+              f"arm that makes 12.13 and 12.17's flip a named field rather than a consequence")
+        note("cam-basis", ok)
 
     # A press with no movement, then 20 frames of 10 pixels: the press frame is
     # separated from the motion so a stale drag offset would show as a jump.
