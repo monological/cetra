@@ -18,6 +18,7 @@
 #include <cglm/cglm.h>
 
 #include "cetra/internal/async_loader.h"
+#include "cetra/internal/ragdoll.h"
 #include "cetra/internal/ragdoll_jolt.h"
 #include "cetra/internal/rigging.h"
 #include "cetra/common.h"
@@ -4138,6 +4139,122 @@ static PhysicsWorld* ik_probe_world(Game* game, const vec3 stand) {
     return physics;
 }
 
+// The first skinned mesh under a node, which is the one carrying the per-bone
+// bind boxes a capsule radius is measured from.
+static const Mesh* find_skinned_mesh(const SceneNode* node) {
+    if (!node) {
+        return NULL;
+    }
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        if (node->meshes[i] && node->meshes[i]->is_skinned) {
+            return node->meshes[i];
+        }
+    }
+    for (size_t i = 0; i < node->children_count; i++) {
+        const Mesh* found = find_skinned_mesh(node->children[i]);
+        if (found) {
+            return found;
+        }
+    }
+    return NULL;
+}
+
+// The bones the probe reports, named so a gate reads them rather than indices.
+static const struct {
+    RagdollBone slot;
+    const char* name;
+} RD_PROBE_BONES[] = {
+    {RAGDOLL_HIPS, "hips"},         {RAGDOLL_SPINE, "spine"},
+    {RAGDOLL_CHEST, "chest"},       {RAGDOLL_HEAD, "head"},
+    {RAGDOLL_UPPER_ARM_L, "arm_l"}, {RAGDOLL_LOWER_ARM_L, "forearm_l"},
+    {RAGDOLL_UPPER_ARM_R, "arm_r"}, {RAGDOLL_LOWER_ARM_R, "forearm_r"},
+    {RAGDOLL_THIGH_L, "thigh_l"},   {RAGDOLL_SHIN_L, "shin_l"},
+    {RAGDOLL_THIGH_R, "thigh_r"},   {RAGDOLL_SHIN_R, "shin_r"},
+};
+#define RD_PROBE_BONE_COUNT ((int)(sizeof(RD_PROBE_BONES) / sizeof(RD_PROBE_BONES[0])))
+
+/*
+ * What a ragdoll BUILDS and what it DOES, with no window (spec 12.16).
+ *
+ * Unlike the display probe, the simulation itself is reachable here -- a
+ * headless game carries a real physics world -- so these cases step Jolt and
+ * read the bodies back rather than asserting only the arithmetic.
+ */
+static int run_ragdoll_probe(Game* game, const char* which) {
+    const bool all = !which || !strcmp(which, "all");
+    bool ran = false;
+
+    Scene* probe_scene =
+        create_scene_from_model_path(puppet_path, NULL, game->engine->async_loader);
+    if (!probe_scene || probe_scene->skeleton_count == 0) {
+        fprintf(stderr, "ragdoll-probe: could not load a rig from '%s'\n", puppet_path);
+        if (probe_scene)
+            free_scene(probe_scene);
+        return 1;
+    }
+    game_set_scene(game, probe_scene);
+    Skeleton* skel = probe_scene->skeletons[0];
+
+    // The mesh whose per-bone boxes measure the capsules. NULL is legal and
+    // takes the fallback radius, which is what a rig with no skin gets.
+    const Mesh* skinned = find_skinned_mesh(probe_scene->root_node);
+
+    if (all || !strcmp(which, "build") || !strcmp(which, "shapes")) {
+        ran = true;
+        RagdollSystem* rd = create_ragdoll(skel, skinned, 1.0f);
+        if (!rd) {
+            fprintf(stderr, "ragdoll-probe: build refused\n");
+            return 1;
+        }
+        int bodies = 0, parented = 0;
+        for (int i = 0; i < RD_PROBE_BONE_COUNT; i++) {
+            const int bone = ragdoll_bone_index(rd, RD_PROBE_BONES[i].slot);
+            float r = 0.0f, hh = 0.0f;
+            ragdoll_capsule(rd, RD_PROBE_BONES[i].slot, &r, &hh);
+            printf("ragdoll build %s bone %d\n", RD_PROBE_BONES[i].name, bone);
+            if (bone >= 0) {
+                bodies++;
+                printf("ragdoll shapes %s capsule %.6f %.6f\n", RD_PROBE_BONES[i].name, (double)r,
+                       (double)hh);
+            }
+        }
+        parented = bodies > 0 ? bodies - 1 : 0;
+        printf("ragdoll build count bodies %d\n", bodies);
+        printf("ragdoll build count constraints %d\n", parented);
+        free_ragdoll(rd);
+    }
+
+    if (all || !strcmp(which, "scale")) {
+        ran = true;
+        // The same rig at two node scales. Everything here is measured in MODEL
+        // space and multiplied once, so the two must differ by exactly the
+        // ratio -- 12.10 shipped a live bug through precisely this gap.
+        RagdollSystem* one = create_ragdoll(skel, skinned, 1.0f);
+        RagdollSystem* two = create_ragdoll(skel, skinned, 2.0f);
+        if (!one || !two) {
+            fprintf(stderr, "ragdoll-probe: scale build refused\n");
+            return 1;
+        }
+        for (int i = 0; i < RD_PROBE_BONE_COUNT; i++) {
+            float r1 = 0.0f, h1 = 0.0f, r2 = 0.0f, h2 = 0.0f;
+            if (!ragdoll_capsule(one, RD_PROBE_BONES[i].slot, &r1, &h1))
+                continue;
+            ragdoll_capsule(two, RD_PROBE_BONES[i].slot, &r2, &h2);
+            const double rr = (r1 > 0.0f) ? (double)r2 / (double)r1 : 0.0;
+            const double hr = (h1 > 0.0f) ? (double)h2 / (double)h1 : 0.0;
+            printf("ragdoll scale %s ratio %.6f %.6f\n", RD_PROBE_BONES[i].name, rr, hr);
+        }
+        free_ragdoll(one);
+        free_ragdoll(two);
+    }
+
+    if (!ran) {
+        fprintf(stderr, "ragdoll-probe: unknown case '%s'\n", which ? which : "(null)");
+        return 1;
+    }
+    return 0;
+}
+
 static int run_ik_probe(Game* game, const char* which) {
     Scene* probe_scene =
         create_scene_from_model_path(puppet_path, NULL, game->engine->async_loader);
@@ -6542,6 +6659,7 @@ int main(int argc, const char* argv[]) {
     const char* audio_file = NULL;
     const char* anim_probe = NULL;
     const char* ik_probe = NULL;
+    const char* ragdoll_probe = NULL;
     const char* ui_probe = NULL;
     const char* display_probe = NULL;
     const char* save_probe = NULL;
@@ -6568,6 +6686,8 @@ int main(int argc, const char* argv[]) {
             list_monitors = true;
         } else if (!strcmp(a, "--ragdoll-demo")) {
             ragdoll_demo = true;
+        } else if (!strcmp(a, "--ragdoll-probe") && i + 1 < argc) {
+            ragdoll_probe = argv[++i];
         } else if (!strcmp(a, "--taa")) {
             force_taa = true;
         } else if ((!strcmp(a, "-f") || !strcmp(a, "--frames")) && i + 1 < argc) {
@@ -6730,6 +6850,20 @@ int main(int argc, const char* argv[]) {
             return -1;
         }
         int rc = run_ik_probe(probe_game, ik_probe);
+        free_game(probe_game);
+        return rc;
+    }
+
+    // Unlike the four above, this one wants the physics world too: the build
+    // cases are arithmetic, but the simulation cases step Jolt.
+    if (ragdoll_probe) {
+        GameConfig probe_config = {.engine = {.title = "ragdoll-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "ragdoll-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_ragdoll_probe(probe_game, ragdoll_probe);
         free_game(probe_game);
         return rc;
     }
