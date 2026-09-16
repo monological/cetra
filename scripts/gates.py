@@ -24696,6 +24696,141 @@ def run_ragdoll_gate(workdir):
     return failed
 
 
+RENDER_CAM = re.compile(
+    r"^cam (\d+) eye (\S+) (\S+) (\S+) target (\S+) (\S+) (\S+) "
+    r"dist (\S+) theta (\S+) phi (\S+) ortho (\S+)$", re.M)
+
+# create_mouse_drag_controller's defaults, restated because a gate cannot ask the
+# binary for them. If a rewrite changes either, these arms fail -- which is right:
+# a changed drag rate IS a behaviour change, and the whole reason this group
+# exists is that nothing could see one before.
+DRAG_SENSITIVITY = 0.002   # radians of orbit per framebuffer pixel
+DRAG_PAN_PER_UNIT = 0.0005 # world units per pixel, per unit of camera distance
+
+
+def _render_pointer_run(workdir, tag, script, frames):
+    """One scripted-pointer render run: {frame: pose} from --trace-camera, or None.
+
+    A pose is (eye, target, dist, theta, phi, ortho). The puppet is the model
+    because it is committed, small and has a fixture's stable bounds, so the
+    framing these arms start from is a constant rather than whatever an asset
+    happened to measure.
+    """
+    path = os.path.join(workdir, f"pointer_{tag}.txt")
+    with open(path, "w") as f:
+        f.write(script)
+    r = subprocess.run(
+        [RENDER, "-m", asset("puppet.gltf"), "-x", "-W", "320", "-H", "200",
+         "-f", str(frames), "--no-scene-file", "--pointer-script", path, "--trace-camera"],
+        capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    rows = RENDER_CAM.findall(text)
+    if r.returncode != 0 or not rows:
+        return None
+    out = {}
+    for row in rows:
+        f_no = int(row[0])
+        v = [float(x) for x in row[1:]]
+        out[f_no] = {"eye": v[0:3], "target": v[3:6], "dist": v[6],
+                     "theta": v[7], "phi": v[8], "ortho": v[9]}
+    return out
+
+
+def run_camera_gate(workdir):
+    """The camera, asserted through a SCRIPTED POINTER (spec 12.19).
+
+    Until this group existed nothing in the suite had ever pressed a mouse, so
+    the camera four apps move with a drag was covered by no arm and no golden --
+    `docs/verification.md` recorded the hole for the follow camera's rotation and
+    it was wider than that. --pointer-script replays a drag through the engine's
+    own pointer path, so what these arms read is the code a hand reaches.
+
+    Every arm below is a CLOSED FORM rather than a recorded pose, and that is the
+    point: a recording says the camera does what it used to, where a closed form
+    says what it should do and a person can check the arithmetic by reading it.
+
+      cam-drag-orbit a 200-pixel horizontal drag turns phi by exactly
+                     200 x sensitivity and leaves theta, the distance and the
+                     target where they were. The second half is what tells an
+                     orbit from a pan: a pan moves the target and nothing else,
+                     so an arm reading only the angle would pass on either.
+      cam-drag-pan   a SHIFT-drag of (200, 100) pixels moves the target by
+                     hypot(200, 100) x distance x 0.0005 and leaves phi, theta
+                     and the distance alone. The displacement is read as a
+                     MAGNITUDE because the pan runs in the camera's own plane,
+                     not the world's: the up vector is cross(forward, right) and
+                     the eye sits above the target, so a pan with a vertical
+                     component correctly moves the target in z as well.
+      cam-drag-release the pose stops changing the frame after the button comes
+                     up, and the drag's total is still there. Without it the two
+                     arms above would pass on a controller that never stopped.
+    """
+    failed = []
+
+    def note(name, ok):
+        if not ok:
+            failed.append(name)
+
+    # A press with no movement, then 20 frames of 10 pixels: the press frame is
+    # separated from the motion so a stale drag offset would show as a jump.
+    orbit = _render_pointer_run(workdir, "orbit", (
+        "0-4    at=320,200\n"
+        "5-24   at=320,200 down\n"
+        "25-44  by=10,0 down\n"
+        "45-60  idle\n"), 62)
+
+    if not orbit:
+        print("  cam-drag-orbit SKIP  no trace")
+        note("cam-drag-orbit", False)
+    else:
+        before, after = orbit[24], orbit[45]
+        want = 200.0 * DRAG_SENSITIVITY
+        got = before["phi"] - after["phi"]
+        still = (abs(after["theta"] - before["theta"]) < 1e-6
+                 and abs(after["dist"] - before["dist"]) < 1e-6
+                 and max(abs(a - b) for a, b in zip(after["target"], before["target"])) < 1e-6)
+        ok = abs(got - want) < 1e-4 and still
+        print(f"  cam-drag-orbit {'PASS' if ok else 'FAIL'}  200 px of drag turned phi "
+              f"{got:.6f} rad (want {want:.6f}), with theta, distance and the target "
+              f"{'unmoved' if still else 'MOVED, so this is not an orbit'}")
+        note("cam-drag-orbit", ok)
+
+        last = max(orbit)
+        held = orbit[45]
+        settled = all(abs(orbit[f]["phi"] - held["phi"]) < 1e-9 for f in range(46, last + 1))
+        moved = abs(held["phi"] - orbit[0]["phi"]) > 0.1
+        ok = settled and moved
+        print(f"  cam-drag-release {'PASS' if ok else 'FAIL'}  phi is "
+              f"{'constant' if settled else 'STILL MOVING'} over the {last - 45} frames after "
+              f"the release, having turned {held['phi'] - orbit[0]['phi']:.4f} rad in total "
+              f"(a controller that never stopped would pass every other arm here)")
+        note("cam-drag-release", ok)
+
+    pan = _render_pointer_run(workdir, "pan", (
+        "0-4    at=320,200\n"
+        "5-24   at=320,200 down shift\n"
+        "25-44  by=10,5 down shift\n"
+        "45-50  idle\n"), 52)
+
+    if not pan:
+        print("  cam-drag-pan SKIP  no trace")
+        note("cam-drag-pan", False)
+    else:
+        before, after = pan[24], pan[45]
+        want = math.hypot(200.0, 100.0) * before["dist"] * DRAG_PAN_PER_UNIT
+        got = math.dist(after["target"], before["target"])
+        still = (abs(after["phi"] - before["phi"]) < 1e-6
+                 and abs(after["theta"] - before["theta"]) < 1e-6
+                 and abs(after["dist"] - before["dist"]) < 1e-6)
+        ok = abs(got - want) < 1e-3 and still
+        print(f"  cam-drag-pan {'PASS' if ok else 'FAIL'}  a shift-drag of (200, 100) px moved "
+              f"the target {got:.6f} (want {want:.6f} = hypot x dist x {DRAG_PAN_PER_UNIT}), "
+              f"with phi, theta and the distance "
+              f"{'unmoved' if still else 'MOVED, so this is not a pan'}")
+        note("cam-drag-pan", ok)
+
+    return failed
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -24814,6 +24949,8 @@ GATE_GROUPS = [
      run_display_gate),
     ("ragdoll", "a rig falling over (build, shapes, scale, simulation; spec 12.16):",
      run_ragdoll_gate),
+    ("camera", "the camera through a scripted pointer (drag, pan, release; spec 12.19):",
+     run_camera_gate),
     ("save", "save serialization (entities, spawners, drops, migrations; spec 12.3):",
      run_save_gate),
     ("ik", "two-bone IK (reach, clamp, the singular bind pose, the pole; spec 12.4):",

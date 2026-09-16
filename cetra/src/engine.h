@@ -517,6 +517,8 @@ typedef struct Engine {
     Exposure exposure;
 
     InputState input;
+    // The scripted pointer, or NULL for the real one (engine_set_pointer_script).
+    struct PointerScript* pointer_script;
 
     // FPS tracking
     double last_frame_time;
@@ -793,6 +795,25 @@ void engine_set_render_time(Engine* engine, double time, double delta);
 // position and the engine's stored sizes. False, with the outputs untouched,
 // while the window has no area.
 bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y);
+
+/*
+ * Replay a POINTER from a text file instead of reading the mouse (spec 12.19),
+ * the way input_set_pad_script replays a gamepad. False, logged, when the file
+ * cannot be read or a line does not parse; installing a second script frees the
+ * first.
+ *
+ * The grammar is frame_script's, shared with the pad: one line per frame or
+ * `from-to` range, `#` comments, the last matching line winning. Tokens are
+ * `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy` (per frame, where `at` is
+ * absent), `down`, `shift` and `wheel=<f>`. A range states the pointer's STATE,
+ * so a press is `down` appearing and a release is it going; `shift` is read at
+ * the press, which is the only moment GLFW's modifier reaches the input state.
+ *
+ * It drives the engine's own pointer path, so a replayed drag reaches the drag
+ * state, the ray picking and the app's forwarded callback exactly as a hand
+ * does -- which is what lets an arm assert a camera nothing could press before.
+ */
+bool engine_set_pointer_script(Engine* engine, const char* path);
 
 // The world point under a framebuffer position, on the plane through the
 // press's pick at the eye's distance from it: where a dragged node goes.
