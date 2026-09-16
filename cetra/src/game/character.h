@@ -73,7 +73,12 @@ typedef struct CharacterController {
     CharacterContactCallback contact_callback;
     void* contact_user_data;
 
-    // State flags
+    // false = this controller neither steers nor reports. BY FUNCTION,
+    // character_controller_set_enabled: both halves have to move together, and
+    // for one spec they did not -- the update was gated and the sync was not,
+    // so a disabled controller stopped walking and went on pinning its entity
+    // to the frozen capsule every step, which is indistinguishable from the
+    // entity being stuck.
     bool enabled;
 } CharacterController;
 
@@ -90,6 +95,11 @@ CharacterController* entity_get_character_controller(struct Entity* entity);
 
 /// Remove character controller from entity
 void entity_remove_character_controller(struct Entity* entity);
+
+/// Stop or resume this controller. A disabled controller neither steers nor
+/// writes its entity's pose, which is what lets something else -- a ragdoll --
+/// drive the same entity without the two fighting over it every step.
+void character_controller_set_enabled(CharacterController* cc, bool enabled);
 
 /// Set linear velocity
 void character_controller_set_velocity(CharacterController* cc, vec3 velocity);

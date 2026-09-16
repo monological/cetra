@@ -2,6 +2,7 @@
 #include "entity.h"
 #include "physics.h"
 #include "component.h"
+#include "../ext/log.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -259,6 +260,14 @@ CharacterController* entity_get_character_controller(Entity* entity) {
     return (CharacterController*)entity_get_component(entity, COMPONENT_CHARACTER);
 }
 
+void character_controller_set_enabled(CharacterController* cc, bool enabled) {
+    if (!cc) {
+        log_error("character_controller_set_enabled: NULL controller");
+        return;
+    }
+    cc->enabled = enabled;
+}
+
 void entity_remove_character_controller(Entity* entity) {
     if (!entity)
         return;
@@ -443,7 +452,7 @@ void sync_character_controllers_to_entities(EntityManager* em) {
             continue;
 
         CharacterController* cc = entity_get_character_controller(e);
-        if (!cc || !cc->jolt_character)
+        if (!cc || !cc->jolt_character || !cc->enabled)
             continue;
 
         // Get position from Jolt character

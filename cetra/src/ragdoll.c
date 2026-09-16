@@ -514,6 +514,16 @@ void ragdoll_apply(RagdollSystem* ragdoll, mat4* global_transforms, size_t bone_
             mat4 bone_world, bone_model;
             glm_mat4_mul(body_world, (vec4*)part->body_from_bone, bone_world);
             glm_mat4_mul(ragdoll->to_model, bone_world, bone_model);
+            // The node scale has to come back OUT of the basis. to_model
+            // carries 1/scale and a Jolt body's transform carries none, so
+            // their product is a bone global shrunk by the node's scale --
+            // which skins a character at half size with its limbs at half their
+            // offsets, and reads as the ragdoll having exploded into confetti
+            // rather than as a scale bug. The translation keeps the division,
+            // because that one is a real change of units.
+            for (int c = 0; c < 3; c++) {
+                glm_vec3_normalize(bone_model[c]);
+            }
             if ((size_t)part->bone < bone_count) {
                 glm_mat4_copy(bone_model, global_transforms[part->bone]);
             }
