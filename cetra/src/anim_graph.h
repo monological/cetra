@@ -250,6 +250,15 @@ void free_anim_graph(AnimGraph* graph);
  *
  * A single clip is a one-entry source. Refused by name past the maximum, or
  * outside the entry count `animator_play_space` accepts.
+ *
+ * AN ENTRY WITH NO CLIP REFUSES THE SOURCE, and that is the feature rather than
+ * a guard: an app finds its clips by name on whatever rig it was handed, so a
+ * missing one arrives here as a NULL, and refusing is what turns "this rig has
+ * no stroke" into "this state is unreachable" into "every row into it is
+ * pruned". Decided once, where the alternative is a clip-presence test on every
+ * row that mentions it and an asymmetry between two of them that nobody
+ * notices. The caller need not check the return for that reason -- it is told
+ * at bind, by name, along with everything else the rig cannot do.
  */
 bool anim_graph_add_source(AnimGraph* graph, const char* name, const AnimatorEntry* entries,
                            int count);

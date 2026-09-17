@@ -24150,6 +24150,21 @@ def run_graph_gate(workdir):
       graph-instances   Two graphs over ONE borrowed const table hold different
                         states and different clocks. The table is data; the
                         instance is where everything that moves lives.
+      graph-unreachable A state whose source never registered is named at bind
+                        and every row into it is PRUNED, so the row below fires
+                        instead -- two-sided against the same table with nothing
+                        missing. And the path a real rig takes to get there: a
+                        clip it does not carry arrives as a NULL entry, which
+                        refuses the whole source rather than registering one that
+                        cannot play.
+      graph-authoring   Six ways a table can be wrong, each refused BY NAME and
+                        refusing the graph whole: a row to nowhere, a row reading
+                        a parameter that does not exist, a row from a state to
+                        itself, an op a parameter's kind cannot answer, two
+                        states of one name, and a finished row out of a state
+                        that returns by itself. And one that is a warning
+                        instead -- a state that can be entered and not left is a
+                        thing a caller may mean.
     """
     failed = []
 
@@ -24284,6 +24299,37 @@ def run_graph_gate(workdir):
                   f"{xt:.4f} and {yt:.4f} s")
     print(f"  graph-instances   {'PASS' if ok else 'FAIL'}  {detail}")
     note("graph-instances", ok)
+
+    # ---- graph-unreachable
+    d = read("unreachable", [("pruned", "state"), ("live", "state"), ("noclip", "registered")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        pruned, live = one(d, "pruned", "state"), one(d, "live", "state")
+        noclip = one(d, "noclip", "registered")
+        ok = pruned == 2 and live == 1 and noclip == 0
+        detail = (f"a row into a state this rig cannot play is pruned and the one below it fires "
+                  f"({pruned:.0f}, want 2) where the same table with nothing missing takes the "
+                  f"first ({live:.0f}, want 1); a source whose clip is absent does not register "
+                  f"({noclip:.0f}, want 0)")
+    print(f"  graph-unreachable {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-unreachable", ok)
+
+    # ---- graph-authoring
+    refusals = ["unknownstate", "unknownparam", "selfrow", "wrongkind", "duplicate",
+                "returnfinish"]
+    d = read("authoring", [(c, "bound") for c in refusals] + [("trap", "bound")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        refused = [c for c in refusals if one(d, c, "bound") == 0]
+        trap = one(d, "trap", "bound")
+        ok = len(refused) == len(refusals) and trap == 1
+        detail = (f"{len(refused)} of {len(refusals)} bad tables refused whole "
+                  f"({', '.join(c for c in refusals if c not in refused) or 'none missed'}), and "
+                  f"a state with no way out warns rather than refusing ({trap:.0f}, want 1)")
+    print(f"  graph-authoring   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-authoring", ok)
 
     return failed
 
