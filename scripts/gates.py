@@ -24117,10 +24117,39 @@ def run_graph_gate(workdir):
     over a closed condition vocabulary, and a bind that resolves every state
     against the rig actually loaded.
 
-      graph-order    Two rows out of one state, both satisfied: the EARLIER row
-                     wins, and swapping the two swaps the answer. Priority is row
-                     order and nothing else, so the fade is read too -- a row that
-                     fires with its neighbour's fade is not a pass.
+    Every arm here binds a graph to a NULL animator over states that play
+    nothing, so what is under test is the TABLE and nothing else -- no window, no
+    GL, no rig, no clip. An arm that needed a frame would be evidence the design
+    had slipped, which is `ui_layout`'s rule and `camera_rig`'s after it.
+
+      graph-order       Two rows out of one state, both satisfied: the EARLIER
+                        row wins, and swapping the two swaps the answer. Priority
+                        is row order and nothing else.
+      graph-any         from == NULL fires from any state -- and a SPECIFIC row
+                        above it beats it, because there is one table and one
+                        order with no separate any-state pass.
+      graph-and         Two conditions on a row are ANDed. Two-sided: either
+                        alone fires nothing, or an implementation that ORs passes
+                        the both-true leg unnoticed.
+      graph-trigger     Four legs. A trigger fires once, does not re-fire, is
+                        GONE at the end of a tick that consumed nothing -- and a
+                        BOOL under the identical table persists. The last leg is
+                        what tells the two apart.
+      graph-elapsed     Time IN STATE: zero on the entry tick, 30 ticks of 1/60
+                        to cross half a second, and reset by entering elsewhere.
+      graph-hysteresis  What a bool cannot say. A value bobbing either side of a
+                        threshold settles in ONE state under two bands and flips
+                        on nearly every tick under one -- which is the live
+                        defect in the machine this replaces, as an arm.
+      graph-reenter     A row into the state already current is never taken, so
+                        an interrupt that STAYS true does not re-issue its own
+                        play every tick and hold the clip at its first frame.
+      graph-disabled    A stood-down graph freezes -- no row, no clock, nothing
+                        consumed -- and coming back resumes where it was rather
+                        than at the start. A ragdoll is that case.
+      graph-instances   Two graphs over ONE borrowed const table hold different
+                        states and different clocks. The table is data; the
+                        instance is where everything that moves lives.
     """
     failed = []
 
@@ -24128,19 +24157,133 @@ def run_graph_gate(workdir):
         if not ok:
             failed.append(name)
 
+    def read(case, need):
+        """One probe case and the keys it must carry, or None. The verdict line is
+        each arm's own, with its name as a LITERAL -- `gate-arm-docs` reads the
+        source for those, so a helper that printed them would document a group
+        nothing could verify."""
+        d = _graph_probe(case)
+        if not d or any(k not in d for k in need):
+            return None
+        return d
+
+    def one(d, label, key):
+        return d[(label, key)][0]
+
     # ---- graph-order
-    d = _graph_probe("order")
-    need = [("first", "state"), ("first", "fade"), ("swapped", "state"), ("swapped", "fade")]
-    if not d or any(k not in d for k in need):
-        print("  graph-order           FAIL  the probe failed or measured nothing")
-        note("graph-order", False)
+    d = read("order", [("first", "state"), ("first", "fade"), ("swapped", "state")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
     else:
-        a = d[("first", "state")][0]
-        b = d[("swapped", "state")][0]
-        ok = a == 1.0 and b == 2.0 and d[("first", "fade")][0] == 0.25
-        print(f"  graph-order           {'PASS' if ok else 'FAIL'}  first row wins "
-              f"({a:.0f}, want 1) and swapping the rows swaps it ({b:.0f}, want 2)")
-        note("graph-order", ok)
+        a, b = one(d, "first", "state"), one(d, "swapped", "state")
+        ok = a == 1 and b == 2 and one(d, "first", "fade") == 0.25
+        detail = (f"the earlier row wins ({a:.0f}, want 1) and swapping the two swaps it "
+                  f"({b:.0f}, want 2), at the row's own fade")
+    print(f"  graph-order       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-order", ok)
+
+    # ---- graph-any
+    d = read("any", [("froma", "state"), ("fromb", "state"), ("fromc", "state")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        a, b, c = one(d, "froma", "state"), one(d, "fromb", "state"), one(d, "fromc", "state")
+        ok = a == 2 and b == 0 and c == 2
+        detail = (f"an any row fires from a ({a:.0f}, want 2) and from c ({c:.0f}, want 2), and a "
+                  f"specific row above it beats it from b ({b:.0f}, want 0)")
+    print(f"  graph-any         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-any", ok)
+
+    # ---- graph-and
+    d = read("and", [("speedonly", "state"), ("groundonly", "state"), ("both", "state")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        s1, g1 = one(d, "speedonly", "state"), one(d, "groundonly", "state")
+        both = one(d, "both", "state")
+        ok = s1 == 0 and g1 == 0 and both == 1
+        detail = (f"either condition alone fires nothing ({s1:.0f}, {g1:.0f}, want 0 and 0) and "
+                  f"both together fire ({both:.0f}, want 1)")
+    print(f"  graph-and         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-and", ok)
+
+    # ---- graph-trigger
+    d = read("trigger", [("fired", "state"), ("again", "state"), ("stale", "state"),
+                         ("bool", "state")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        f1, again = one(d, "fired", "state"), one(d, "again", "state")
+        stale, boolean = one(d, "stale", "state"), one(d, "bool", "state")
+        ok = f1 == 1 and again == 1 and stale == 0 and boolean == 2
+        detail = (f"fires once ({f1:.0f}, want 1) and not twice ({again:.0f}, want 1); a trigger "
+                  f"nothing consumed is gone ({stale:.0f}, want 0) where a bool persists "
+                  f"({boolean:.0f}, want 2)")
+    print(f"  graph-trigger     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-trigger", ok)
+
+    # ---- graph-elapsed
+    d = read("elapsed", [("entry", "secs"), ("cross", "ticks"), ("reset", "secs")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        entry, ticks = one(d, "entry", "secs"), one(d, "cross", "ticks")
+        reset = one(d, "reset", "secs")
+        ok = entry == 0.0 and ticks == 30 and reset == 0.0
+        detail = (f"zero on the entry tick ({entry:.3f}), thirty ticks of 1/60 to cross half a "
+                  f"second ({ticks:.0f}, want 30), and zero again in the next state ({reset:.3f})")
+    print(f"  graph-elapsed     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-elapsed", ok)
+
+    # ---- graph-hysteresis
+    d = read("hysteresis", [("banded", "flips"), ("hard", "flips")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        banded, hard = one(d, "banded", "flips"), one(d, "hard", "flips")
+        ok = banded == 0 and hard > 30
+        detail = (f"two bands settle in one state ({banded:.0f} flips, want 0) where one "
+                  f"threshold flips on nearly every tick ({hard:.0f} of 40)")
+    print(f"  graph-hysteresis  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-hysteresis", ok)
+
+    # ---- graph-reenter
+    d = read("reenter", [("loop", "entries"), ("loop", "secs")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        entries, secs = one(d, "loop", "entries"), one(d, "loop", "secs")
+        ok = entries == 1 and secs > 0.4
+        detail = (f"an any row that stays true enters once ({entries:.0f}, want 1) and the "
+                  f"state's clock keeps running ({secs:.3f} s, want > 0.4)")
+    print(f"  graph-reenter     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-reenter", ok)
+
+    # ---- graph-disabled
+    d = read("disabled", [("held", "state"), ("held", "secs"), ("resumed", "state")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        held, secs = one(d, "held", "state"), one(d, "held", "secs")
+        resumed = one(d, "resumed", "state")
+        ok = held == 0 and secs == 0.0 and resumed == 1
+        detail = (f"sixty ticks stood down move nothing ({held:.0f}, {secs:.3f} s) and twenty "
+                  f"after it do ({resumed:.0f}, want 1)")
+    print(f"  graph-disabled    {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-disabled", ok)
+
+    # ---- graph-instances
+    d = read("instances", [("x", "state"), ("y", "state"), ("x", "secs"), ("y", "secs")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        xs, ys = one(d, "x", "state"), one(d, "y", "state")
+        xt, yt = one(d, "x", "secs"), one(d, "y", "secs")
+        ok = xs == 1 and ys == 0 and xt == 0.0 and yt > 0.03
+        detail = (f"one table, two graphs: states {xs:.0f} and {ys:.0f} (want 1 and 0), clocks "
+                  f"{xt:.4f} and {yt:.4f} s")
+    print(f"  graph-instances   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-instances", ok)
 
     return failed
 

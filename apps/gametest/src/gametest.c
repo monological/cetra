@@ -42,6 +42,7 @@
 #include "cetra/game/save.h"
 #include "cetra/game/animator_component.h"
 #include "cetra/camera_rig.h"
+#include "cetra/anim_graph.h"
 #include "cetra/animator.h"
 #include "cetra/import.h"
 #include "cetra/ibl.h"
@@ -6643,6 +6644,326 @@ static int run_cam_probe(const char* which) {
 }
 
 /*
+ * --graph-probe (spec 12.20): the animation state machine, checked with no
+ * window, no GL and -- for every case here -- no animator either.
+ *
+ * A graph bound to a NULL animator decides, reports and refuses exactly as a
+ * bound one does and plays nothing, and a state with no source is resolvable,
+ * so the whole table is exercisable as the pure function over named values it
+ * is. An arm here that needed a rig would be evidence the design had slipped.
+ *
+ * Every case prints `graph <case> <label> <key> <numbers>`, the four-field shape
+ * the audio, anim, ui and camera probes already share. States are reported as
+ * their INDEX rather than their name, because the probe grammar carries numbers
+ * and an index is what an arm can compare.
+ */
+static int graph_state_index(const AnimGraph* g, const AnimGraphState* states, int count) {
+    const char* now = anim_graph_state_name(g);
+    for (int i = 0; i < count; i++) {
+        if (!strcmp(states[i].name, now))
+            return i;
+    }
+    return -1;
+}
+
+static int run_graph_probe(const char* which) {
+    // Every state plays nothing, so the table is the only thing under test.
+    static const AnimGraphParam PARAMS[] = {
+        {"speed", ANIM_GRAPH_FLOAT},
+        {"depth", ANIM_GRAPH_FLOAT},
+        {"grounded", ANIM_GRAPH_BOOL},
+        {"hit", ANIM_GRAPH_TRIGGER},
+    };
+    static const AnimGraphState STATES[] = {
+        {"a", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+        {"b", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+        {"c", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+    };
+    const int PARAM_N = (int)(sizeof PARAMS / sizeof *PARAMS);
+    const int STATE_N = (int)(sizeof STATES / sizeof *STATES);
+
+    if (!strcmp(which, "order")) {
+        // Two rows out of one state, both satisfied at once. Priority is row
+        // order and nothing else, so the same two rows swapped must swap the
+        // answer -- an implementation that sorted, or that preferred the more
+        // specific row, passes the first leg and fails the second.
+        static const AnimGraphTransition FIRST[] = {
+            {"a", "b", {ANIM_GT("speed", 1.0f)}, 0.25f},
+            {"a", "c", {ANIM_GT("speed", 1.0f)}, 0.50f},
+        };
+        static const AnimGraphTransition SWAPPED[] = {
+            {"a", "c", {ANIM_GT("speed", 1.0f)}, 0.50f},
+            {"a", "b", {ANIM_GT("speed", 1.0f)}, 0.25f},
+        };
+        const AnimGraphTransition* tables[2] = {FIRST, SWAPPED};
+        const char* labels[2] = {"first", "swapped"};
+        for (int t = 0; t < 2; t++) {
+            AnimGraph* g = create_anim_graph();
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, STATES, STATE_N);
+            anim_graph_set_transitions(g, tables[t], 2);
+            anim_graph_bind(g, NULL, "a");
+            anim_graph_set_float(g, "speed", 2.0f);
+            anim_graph_update(g, 1.0f / 60.0f);
+            printf("graph order %s state %d\n", labels[t], graph_state_index(g, STATES, STATE_N));
+            printf("graph order %s fade %.9g\n", labels[t], (double)tables[t][0].fade);
+            free_anim_graph(g);
+        }
+        return 0;
+    }
+
+    if (!strcmp(which, "any")) {
+        // from == NULL fires from every state. And the interaction that is the
+        // real hazard: a specific row ABOVE an any row beats it, one below does
+        // not -- there is one table and one order, with no separate any pass.
+        static const AnimGraphTransition ROWS[] = {
+            {"b", "a", {ANIM_ON("grounded")}, 0.1f},  // specific, above
+            {NULL, "c", {ANIM_ON("grounded")}, 0.2f}, // the any row
+        };
+        const char* starts[3] = {"a", "b", "c"};
+        for (int s = 0; s < 3; s++) {
+            AnimGraph* g = create_anim_graph();
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, STATES, STATE_N);
+            anim_graph_set_transitions(g, ROWS, 2);
+            anim_graph_bind(g, NULL, starts[s]);
+            anim_graph_set_bool(g, "grounded", true);
+            anim_graph_update(g, 1.0f / 60.0f);
+            printf("graph any from%s state %d\n", starts[s], graph_state_index(g, STATES, STATE_N));
+            free_anim_graph(g);
+        }
+        return 0;
+    }
+
+    if (!strcmp(which, "and")) {
+        // Two conditions on one row are ANDed. Two-sided: satisfying either
+        // alone must fire nothing, or an implementation that ORs passes the
+        // both-true leg and nothing else would catch it.
+        static const AnimGraphTransition ROWS[] = {
+            {"a", "b", {ANIM_GT("speed", 1.0f), ANIM_ON("grounded")}, 0.1f},
+        };
+        const float speeds[3] = {2.0f, 0.0f, 2.0f};
+        const bool grounds[3] = {false, true, true};
+        const char* labels[3] = {"speedonly", "groundonly", "both"};
+        for (int i = 0; i < 3; i++) {
+            AnimGraph* g = create_anim_graph();
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, STATES, STATE_N);
+            anim_graph_set_transitions(g, ROWS, 1);
+            anim_graph_bind(g, NULL, "a");
+            anim_graph_set_float(g, "speed", speeds[i]);
+            anim_graph_set_bool(g, "grounded", grounds[i]);
+            anim_graph_update(g, 1.0f / 60.0f);
+            printf("graph and %s state %d\n", labels[i], graph_state_index(g, STATES, STATE_N));
+            free_anim_graph(g);
+        }
+        return 0;
+    }
+
+    if (!strcmp(which, "trigger")) {
+        // Four legs, and the last is what tells a trigger from a bool: a bool
+        // under the identical table persists across ticks where a trigger,
+        // visible in a tick that consumed nothing, is gone at the end of it.
+        static const AnimGraphTransition FIRED[] = {
+            {"a", "b", {ANIM_FIRED("hit")}, 0.1f},
+            {"b", "c", {ANIM_FIRED("hit")}, 0.1f},
+        };
+        static const AnimGraphTransition BOOLED[] = {
+            {"a", "b", {ANIM_ON("grounded")}, 0.1f},
+            {"b", "c", {ANIM_ON("grounded")}, 0.1f},
+        };
+        AnimGraph* g = create_anim_graph();
+        anim_graph_set_params(g, PARAMS, PARAM_N);
+        anim_graph_set_states(g, STATES, STATE_N);
+        anim_graph_set_transitions(g, FIRED, 2);
+        anim_graph_bind(g, NULL, "a");
+        anim_graph_fire(g, "hit");
+        anim_graph_update(g, 1.0f / 60.0f);
+        printf("graph trigger fired state %d\n", graph_state_index(g, STATES, STATE_N));
+        anim_graph_update(g, 1.0f / 60.0f);
+        printf("graph trigger again state %d\n", graph_state_index(g, STATES, STATE_N));
+        free_anim_graph(g);
+
+        // Fired while nothing can consume it: gone by the next tick.
+        AnimGraph* h = create_anim_graph();
+        static const AnimGraphTransition LATE[] = {
+            {"a", "b", {ANIM_FIRED("hit"), ANIM_ON("grounded")}, 0.1f},
+        };
+        anim_graph_set_params(h, PARAMS, PARAM_N);
+        anim_graph_set_states(h, STATES, STATE_N);
+        anim_graph_set_transitions(h, LATE, 1);
+        anim_graph_bind(h, NULL, "a");
+        anim_graph_fire(h, "hit"); // grounded is still false, so nothing fires
+        anim_graph_update(h, 1.0f / 60.0f);
+        anim_graph_set_bool(h, "grounded", true); // the trigger is already gone
+        anim_graph_update(h, 1.0f / 60.0f);
+        printf("graph trigger stale state %d\n", graph_state_index(h, STATES, STATE_N));
+        free_anim_graph(h);
+
+        AnimGraph* b = create_anim_graph();
+        anim_graph_set_params(b, PARAMS, PARAM_N);
+        anim_graph_set_states(b, STATES, STATE_N);
+        anim_graph_set_transitions(b, BOOLED, 2);
+        anim_graph_bind(b, NULL, "a");
+        anim_graph_set_bool(b, "grounded", true);
+        anim_graph_update(b, 1.0f / 60.0f);
+        anim_graph_update(b, 1.0f / 60.0f);
+        printf("graph trigger bool state %d\n", graph_state_index(b, STATES, STATE_N));
+        free_anim_graph(b);
+        return 0;
+    }
+
+    if (!strcmp(which, "elapsed")) {
+        // Time IN STATE: zero on the entry tick, advancing by the tick's dt,
+        // and reset by entering somewhere else.
+        static const AnimGraphTransition ROWS[] = {
+            {"a", "b", {ANIM_AFTER(0.5f)}, 0.1f},
+            {"b", "c", {ANIM_AFTER(0.5f)}, 0.1f},
+        };
+        AnimGraph* g = create_anim_graph();
+        anim_graph_set_params(g, PARAMS, PARAM_N);
+        anim_graph_set_states(g, STATES, STATE_N);
+        anim_graph_set_transitions(g, ROWS, 2);
+        anim_graph_bind(g, NULL, "a");
+        printf("graph elapsed entry secs %.9g\n", (double)anim_graph_state_seconds(g));
+        int ticks = 0;
+        while (graph_state_index(g, STATES, STATE_N) == 0 && ticks < 120) {
+            anim_graph_update(g, 1.0f / 60.0f);
+            ticks++;
+        }
+        printf("graph elapsed cross ticks %d\n", ticks);
+        printf("graph elapsed reset secs %.9g\n", (double)anim_graph_state_seconds(g));
+        free_anim_graph(g);
+        return 0;
+    }
+
+    if (!strcmp(which, "hysteresis")) {
+        // The thing a bool cannot say. A depth in metres with two thresholds
+        // rides a value that crosses the surface repeatedly and settles in ONE
+        // state; the same fixture on a bool flips with every crossing, which is
+        // the live defect in the machine this replaces.
+        static const AnimGraphTransition BANDED[] = {
+            {"a", "b", {ANIM_GT("depth", 0.35f)}, 0.1f},
+            {"b", "a", {ANIM_LT("depth", -0.05f)}, 0.1f},
+        };
+        static const AnimGraphTransition HARD[] = {
+            {"a", "b", {ANIM_GT("depth", 0.0f)}, 0.1f},
+            {"b", "a", {ANIM_LT("depth", 0.0f)}, 0.1f},
+        };
+        const AnimGraphTransition* tables[2] = {BANDED, HARD};
+        const char* labels[2] = {"banded", "hard"};
+        for (int t = 0; t < 2; t++) {
+            AnimGraph* g = create_anim_graph();
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, STATES, STATE_N);
+            anim_graph_set_transitions(g, tables[t], 2);
+            anim_graph_bind(g, NULL, "a");
+            // A float bobbing 0.2 either side of the surface, which is what the
+            // buoyancy drive measured in the app actually does.
+            int flips = 0;
+            int last = graph_state_index(g, STATES, STATE_N);
+            for (int i = 0; i < 40; i++) {
+                anim_graph_set_float(g, "depth", (i % 2) ? 0.2f : -0.2f);
+                anim_graph_update(g, 1.0f / 60.0f);
+                const int now = graph_state_index(g, STATES, STATE_N);
+                if (now != last)
+                    flips++;
+                last = now;
+            }
+            printf("graph hysteresis %s flips %d\n", labels[t], flips);
+            free_anim_graph(g);
+        }
+        return 0;
+    }
+
+    if (!strcmp(which, "disabled")) {
+        // A stood-down graph freezes: no row fires, the clock in state does not
+        // advance, and no trigger is consumed -- so an exit-time row does not
+        // fire under a body somebody else is posing, and coming back resumes
+        // where it was rather than at the start.
+        static const AnimGraphTransition ROWS[] = {
+            {"a", "b", {ANIM_AFTER(0.1f)}, 0.1f},
+            {"b", "c", {ANIM_FIRED("hit")}, 0.1f},
+        };
+        AnimGraph* g = create_anim_graph();
+        anim_graph_set_params(g, PARAMS, PARAM_N);
+        anim_graph_set_states(g, STATES, STATE_N);
+        anim_graph_set_transitions(g, ROWS, 2);
+        anim_graph_bind(g, NULL, "a");
+        anim_graph_set_enabled(g, false);
+        for (int i = 0; i < 60; i++)
+            anim_graph_update(g, 1.0f / 60.0f);
+        printf("graph disabled held state %d\n", graph_state_index(g, STATES, STATE_N));
+        printf("graph disabled held secs %.9g\n", (double)anim_graph_state_seconds(g));
+        anim_graph_set_enabled(g, true);
+        // Enough ticks to cross the same threshold the frozen sixty did not:
+        // the freeze has to be a freeze and not a break.
+        for (int i = 0; i < 20; i++)
+            anim_graph_update(g, 1.0f / 60.0f);
+        printf("graph disabled resumed state %d\n", graph_state_index(g, STATES, STATE_N));
+        free_anim_graph(g);
+        return 0;
+    }
+
+    if (!strcmp(which, "instances")) {
+        // Two graphs over ONE borrowed const table hold different states and
+        // different clocks from different parameter blocks. The table is data;
+        // the instance is where everything that moves lives.
+        static const AnimGraphTransition ROWS[] = {
+            {"a", "b", {ANIM_ON("grounded")}, 0.1f},
+        };
+        AnimGraph* x = create_anim_graph();
+        AnimGraph* y = create_anim_graph();
+        AnimGraph* both[2] = {x, y};
+        for (int i = 0; i < 2; i++) {
+            anim_graph_set_params(both[i], PARAMS, PARAM_N);
+            anim_graph_set_states(both[i], STATES, STATE_N);
+            anim_graph_set_transitions(both[i], ROWS, 1);
+            anim_graph_bind(both[i], NULL, "a");
+        }
+        anim_graph_set_bool(x, "grounded", true);
+        anim_graph_update(x, 1.0f / 60.0f);
+        anim_graph_update(y, 2.0f / 60.0f);
+        printf("graph instances x state %d\n", graph_state_index(x, STATES, STATE_N));
+        printf("graph instances y state %d\n", graph_state_index(y, STATES, STATE_N));
+        printf("graph instances x secs %.9g\n", (double)anim_graph_state_seconds(x));
+        printf("graph instances y secs %.9g\n", (double)anim_graph_state_seconds(y));
+        free_anim_graph(x);
+        free_anim_graph(y);
+        return 0;
+    }
+
+    if (!strcmp(which, "reenter")) {
+        // A row into the state we are already in is never taken, which is what
+        // keeps an interrupt that STAYS true from re-issuing its own play every
+        // tick and holding the clip at its first frame forever.
+        static const AnimGraphTransition ROWS[] = {
+            {NULL, "b", {ANIM_ON("grounded")}, 0.1f},
+        };
+        AnimGraph* g = create_anim_graph();
+        anim_graph_set_params(g, PARAMS, PARAM_N);
+        anim_graph_set_states(g, STATES, STATE_N);
+        anim_graph_set_transitions(g, ROWS, 1);
+        anim_graph_bind(g, NULL, "a");
+        anim_graph_set_bool(g, "grounded", true);
+        int entries = 0;
+        for (int i = 0; i < 30; i++) {
+            const char* was = anim_graph_state_name(g);
+            anim_graph_update(g, 1.0f / 60.0f);
+            if (strcmp(was, anim_graph_state_name(g)) != 0)
+                entries++;
+        }
+        printf("graph reenter loop entries %d\n", entries);
+        printf("graph reenter loop secs %.9g\n", (double)anim_graph_state_seconds(g));
+        free_anim_graph(g);
+        return 0;
+    }
+
+    fprintf(stderr, "graph-probe: unknown case '%s'\n", which);
+    return 1;
+}
+
+/*
  * --cam-probe seam: the ENGINE running the rig, which is the one thing about
  * this that cannot be checked without one.
  *
@@ -7614,6 +7935,7 @@ int main(int argc, const char* argv[]) {
     const char* ragdoll_probe = NULL;
     const char* ui_probe = NULL;
     const char* cam_probe = NULL;
+    const char* graph_probe = NULL;
     const char* display_probe = NULL;
     const char* save_probe = NULL;
     bool ui_enabled = true;
@@ -7713,6 +8035,8 @@ int main(int argc, const char* argv[]) {
             ui_probe = argv[++i];
         } else if (!strcmp(a, "--cam-probe") && i + 1 < argc) {
             cam_probe = argv[++i];
+        } else if (!strcmp(a, "--graph-probe") && i + 1 < argc) {
+            graph_probe = argv[++i];
         } else if (!strcmp(a, "--display-probe") && i + 1 < argc) {
             display_probe = argv[++i];
         } else if (!strcmp(a, "--save-probe") && i + 1 < argc) {
@@ -7755,6 +8079,11 @@ int main(int argc, const char* argv[]) {
     // the other about settings reaching a live one -- and both take a headless
     // game that still never draws a frame. Stated as the positive list, so a
     // third does not have to be remembered in two places.
+    // Every graph case is the table alone -- a graph bound to no animator, over
+    // states that play nothing -- so none of them creates an engine at all.
+    if (graph_probe) {
+        return run_graph_probe(graph_probe);
+    }
     const bool cam_probe_needs_engine =
         cam_probe && (!strcmp(cam_probe, "seam") || !strcmp(cam_probe, "settings"));
     if (cam_probe && !cam_probe_needs_engine) {
