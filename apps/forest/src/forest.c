@@ -255,9 +255,14 @@ static Material* g_mat_rock;
 // The look: a yaw about +Y and the elevation of the look direction, positive
 // up. First person puts the eye at the character's head; V swaps in an orbit
 // CAM_DISTANCE behind it along the same look, for watching what the character
-// does. There is no follow-camera helper in cetra -- app.h offers only the
-// mouse-drag orbit controller, which orbits a fixed point rather than a moving
-// one.
+// does -- one rig either way, since a first-person camera is the same camera
+// with the arm taken away.
+//
+// This block used to say "there is no follow-camera helper in cetra -- app.h
+// offers only the mouse-drag orbit controller, which orbits a fixed point rather
+// than a moving one", and that sentence is worth keeping as the diagnosis it
+// was: it is exactly why three apps wrote three follow cameras, and it is what
+// spec 12.19 answered with camera_rig.h.
 static CameraRig* g_cam_rig = NULL;
 static float g_cam_yaw = 0.6f;
 static float g_cam_pitch = 0.0f;

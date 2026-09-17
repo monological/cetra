@@ -298,6 +298,16 @@ probe, and the camera teleport; all but `--cam-at` in `forest` too),
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this
 is the one headless way to change one after the first bake),
+`--pointer-script <path>` / `--trace-camera` (spec 12.19 — replay a MOUSE from a text file, and
+print the pose the frame draws from. The pointer script is `--pad-script`'s grammar through the
+same parser: one line per frame or `from-to` range, `#` comments, the last matching line winning,
+with tokens `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift` and `wheel=<f>`. A
+range states the pointer's STATE, so a press is `down` appearing and a release is it going. It
+drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
+and the app's forwarded callback exactly as a hand does — which is what let the `camera` group
+assert a viewer camera that nothing could press before. `apps/tree` and `apps/shapes` take both
+too, and shapes gained `-x` and `-f` with them: it is `CanvasController`'s only caller, so the 2D
+camera had no automated coverage at all until it could run headless),
 `--config-dump <path>` / `--config <path>` (spec 11.71 — dump the whole tuned session to JSON on
 exit, and restore one. **See "Reproducing a session" below for when to reach for it**; the one thing
 to know here is that the apply lands AFTER the scene-radius derivation at `render.c:3349`, which is
@@ -713,7 +723,7 @@ trade whose direction depends on the framing.
 
 **AGENTS.md used to claim apps/tree is 0 px headless across two runs. It is
 not** -- measured 31,034 px between two runs of one unmodified build, and 5,655
-px at frame 1, so it is not accumulation. `mouse_drag_update` at `tree.c:749`
+px at frame 1, so it is not accumulation. `camera_drag_update` at `tree.c:761`
 takes `glfwGetTime()`, deliberately, for drag damping. Anything comparing tree
 frames has to measure that floor first.
 
@@ -887,10 +897,13 @@ repairing.** Spec 12.13 made movement WORLD-ALIGNED — W a fixed world directio
 camera left the character walking across the frame — and updated its own code comment and
 neither document. 12.17 put it back, and the reason it went back is as much that the code and
 the docs disagreed as that the scheme was wrong: the behaviour a player meets should be the one
-written down. **`cam_yaw` is the FOLLOW camera's state and nothing else writes it**, so this
-applies to that camera only; `--no-follow-cam`'s drag orbit and a `--cam-eye` pinned framing
-both leave movement world-aligned, deliberately, since pinning a camera states a POSE and should
-not silently rotate the controls.
+written down. **Since spec 12.19 that is a FIELD with a name rather than a
+file static somebody read**: a camera rig publishes `steers_controls`, defaulting to false, and
+the game asks the camera what its input means. The follow rig sets it; `--no-follow-cam`'s drag
+orbit and a `--cam-eye` pinned framing leave it false and movement world-aligned, deliberately,
+since pinning a camera states a POSE and should not silently rotate the controls. Turning it off
+on the follow rig reddens `pad-camera-relative` by 104.85 degrees -- to the second decimal the
+error 12.17 measured for the scheme it was reverting -- so a third silent flip is not available.
 
 It shipped first as a camera that trailed the player's facing automatically, which was wrong in
 a way worth recording because two sign changes failed to fix it. `player_yaw` follows the
@@ -899,7 +912,7 @@ character round and the camera swung in behind, both directions read as forward,
 no backward left to invert. A heading the player controls has none of that.
 
 It is mutually exclusive with mouse-drag orbit, the way `apps/tree`'s walker is: both own the
-camera, and `mouse_drag_update` rewrites the eye from the orbit parameters every frame. The
+camera, and the camera rig rewrites the eye from its anchor, arm and aim every frame. The
 arrows are shared with menu navigation, which is safe rather than the collision the action
 table warns about — `ui_up`/`ui_down` carry the `ui` flag, so a menu suppresses the camera
 actions and the arrows navigate it, while with no menu open the UI ignores them.
