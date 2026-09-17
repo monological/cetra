@@ -28,10 +28,7 @@ typedef struct Camera Camera;
  *
  * This is an input adapter and not a camera: a drag becomes an aim, a
  * shift-drag becomes an anchor, the wheel and the keys become a distance, and
- * `camera_rig.h` decides what any of that does to the eye. It replaced
- * `MouseDragController`, which was a camera named after a mouse -- and being
- * named for its input rather than its job is why three apps wrote their own
- * follow cameras instead of extending it.
+ * `camera_rig.h` decides what any of that does to the eye.
  *
  * Everything it keeps is POINTER state: where the aim was when the button went
  * down, so an offset from the press is an absolute angle rather than an
@@ -67,13 +64,16 @@ void free_camera_drag(CameraDrag* drag);
 void camera_drag_on_button(CameraDrag* drag, int button, int action, int mods);
 
 // Once a frame: the auto-orbit, then the drag in flight as an offset from the
-// latched aim (orbit, or pan with shift). `time` is a wall clock, for the
-// auto-orbit alone.
+// latched aim (orbit, or pan with shift), then the rig placed from it. `time`
+// is a wall clock, for the auto-orbit alone.
+//
+// It UPDATES the rig, so nothing else may update the same rig in the same
+// frame: a second update advances the blend and the shake twice.
 void camera_drag_update(CameraDrag* drag, float time);
 
 // Forwarded from the app's scroll callback: the wheel zooms by zoom_step per
-// notch. The 3D viewer had NO scroll handling at all before this -- zoom was
-// arrow-keys-only, and nothing noticed because nothing could turn a wheel.
+// notch, down to min_dist. An app that does not install a scroll callback has
+// no wheel zoom -- wiring it is the app's call, as the other callbacks are.
 void camera_drag_on_scroll(CameraDrag* drag, double xoffset, double yoffset);
 
 // Keyboard camera control (WASD walks, arrows orbit/pan/zoom). True if the key

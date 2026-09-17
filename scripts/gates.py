@@ -24875,9 +24875,11 @@ def run_camera_gate(workdir):
     point: a recording says the camera does what it used to, where a closed form
     says what it should do and a person can check the arithmetic by reading it.
 
-    The first five need no window at all, the way `ui_layout`'s do: the rig takes
-    plain values and touches no GL, no physics and no clock, so an arm that
-    needed a frame would be evidence that design had slipped.
+    Most need no window at all, the way `ui_layout`'s do: the rig takes plain
+    values and touches no GL, no physics and no clock, so an arm that needed a
+    frame would be evidence that design had slipped. `cam-settings` and
+    `cam-engine-seam` are the two that take a headless engine, because what they
+    assert is an engine reaching a rig; neither draws a frame.
 
       cam-orbit-closed the eye lands on anchor + look_lift + eye_lift - dir*dist
                      with every term non-zero, so a dropped one cannot hide

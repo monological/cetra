@@ -58,8 +58,8 @@
 
 const float CAM_ANGULAR_SPEED = 0.5f;
 
-// --trace-camera: the frame's camera pose on stdout, which is the instrument
-// the camera gate reads. A pose somebody watched is not a measurement.
+// --trace-camera: the frame's camera pose on stdout, at a width that makes a
+// textual diff of two runs a bit diff.
 static bool trace_camera = false;
 
 // Total analytic key-light intensity split across the HDR's light lobes.
@@ -1993,14 +1993,11 @@ static CameraDrag* view_drag = NULL;
 
 /*
  * Adopt an explicit camera pose (--cam-eye at startup, --cam-at mid-run). The
- * pose setters re-derive the orbit bookkeeping, so a mouse drag continues from
- * this exact view. Auto-orbit is killed (it rewrites the camera from theta/phi
- * every frame, clobbering the pose), keeping the controller's own stored
- * limits, and the mode goes FREE (mirrored by the GUI radio): a pinned pose is
- * a free camera, and switching the radio to Orbit picks up the derived angles.
+ * rig derives its anchor, arm and aim from the pair, so a drag continues from
+ * this exact view; the auto-orbit is stood down because it rewrites both every
+ * frame and would walk off a pose somebody stated.
  */
-static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
-    (void)engine;
+static void apply_explicit_pose(vec3 eye, vec3 target) {
     camera_rig_set_pose(view_rig, eye, target);
     if (view_drag)
         view_drag->auto_orbit_enabled = false;
@@ -2298,9 +2295,8 @@ void mouse_button_callback(Engine* engine, int button, int action, int mods) {
     }
 }
 
-// The wheel zooms. This app had NO scroll handling at all before spec 12.19 --
-// zoom was arrow-keys-only in a 3D viewer -- and nothing noticed because nothing
-// in the suite could turn a wheel until the pointer seam existed.
+// The wheel zooms, which a 3D viewer is expected to do and this one did not
+// until spec 12.19; the arrow keys pitch.
 void scroll_callback(Engine* engine, double xoffset, double yoffset) {
     (void)engine;
     camera_drag_on_scroll(view_drag, xoffset, yoffset);
@@ -2436,7 +2432,7 @@ static void render_frame_update(Engine* engine, float dt) {
                     frame_schedule->cam_at[2]};
         vec3 target = {frame_schedule->cam_at[3], frame_schedule->cam_at[4],
                        frame_schedule->cam_at[5]};
-        apply_explicit_pose(engine, eye, target);
+        apply_explicit_pose(eye, target);
         fprintf(stderr, "frame %d: camera teleported\n", frame_schedule->cam_at_frame);
     }
     // The composite cache's by-value invalidation is unreachable from a fresh
@@ -2606,8 +2602,8 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     }
 
     // Sync the camera zoom limit with the ground-projection fade start every
-    // frame so GUI changes to Dome Radius take effect (enforcement lives in
-    // camera_enforce_max_distance, applied by mouse_drag_update).
+    // frame so GUI changes to Dome Radius take effect; the rig clamps its arm
+    // to it before placing the eye.
     if (view_rig) {
         view_rig->max_dist =
             (current_scene->render_skybox && current_scene->skybox_ground_projection)
@@ -4048,9 +4044,8 @@ int main(int argc, char** argv) {
     vec3 auto_cam_pos = {scene_center[0] + camera_distance * cosf(pitch) * sinf(yaw),
                          scene_center[1] + scene_radius * 0.3f + camera_distance * sinf(pitch),
                          scene_center[2] + camera_distance * cosf(pitch) * cosf(yaw)};
-    // Through the rig, which derives its own anchor, arm and aim from the pose:
-    // the framing arithmetic above is untouched, so this is the same eye to the
-    // bit and the 33 goldens say so.
+    // Through the rig, which derives its own anchor, arm and aim from the pose.
+    // The framing arithmetic above is untouched, so the eye is the same one.
     camera_rig_set_pose(view_rig, auto_cam_pos, scene_center);
 
     // Depth of field focuses on the subject (camera-to-model distance) unless
@@ -4191,7 +4186,7 @@ int main(int argc, char** argv) {
         if (args.cam_up_set)
             glm_vec3_copy(args.cam_up, up);
         glm_vec3_copy(up, camera->up_vector);
-        apply_explicit_pose(engine, args.cam_eye, args.cam_target);
+        apply_explicit_pose(args.cam_eye, args.cam_target);
     } else if (args.cam_eye_set || args.cam_target_set) {
         fprintf(stderr,
                 "Warning: --cam-eye and --cam-target must both be given; ignoring camera pose.\n");

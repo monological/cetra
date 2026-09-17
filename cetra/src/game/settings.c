@@ -350,8 +350,8 @@ void settings_apply(const GameSettings* settings, AudioSystem* audio, Engine* en
             rig->look_scale = settings->look_sensitivity;
             rig->invert_pitch = settings->invert_look_y;
             // The PLAYER's half, never the authored amplitude: this runs on
-            // every settings edit, so writing shake_scale here would take an
-            // app's own choice with it the first time any control moved.
+            // every settings edit, so writing the authored field here would take
+            // an app's own choice with it the first time any control moved.
             rig->shake_player_scale = settings->reduce_motion ? 0.0f : 1.0f;
         }
     }
