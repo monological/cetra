@@ -24083,6 +24083,68 @@ def run_save_gate(workdir):
     return failed
 
 
+_GRAPH_PROBE = re.compile(r"^graph ([\w-]+) ([\w-]+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+
+
+@functools.cache
+def _graph_probe_text(case):
+    """One gametest --graph-probe run, cached by case.
+
+    Cached rather than plain, because several arms read different columns of one
+    case's output -- `_cam_probe_text`'s reason, and the shape `_anim_probe_run`
+    deliberately does not have because no two of its arms share a case.
+    """
+    text, rc = _gametest_probe_text("--graph-probe", case)
+    return None if rc != 0 else text
+
+
+def _graph_probe(case):
+    """{(label, key): [floats]} from a --graph-probe case.
+
+    No window, no GL and for most cases no engine either: a graph is a table over
+    named values, so an arm that needed a frame would be evidence the design had
+    slipped -- `camera_rig`'s rule, and `ui_layout`'s before it.
+    """
+    text = _graph_probe_text(case)
+    if not text:
+        return None
+    return {(label, key): [float(v) for v in nums.split()]
+            for c, label, key, nums in _GRAPH_PROBE.findall(text) if c == case}
+
+
+def run_graph_gate(workdir):
+    """What PLAYS and WHEN (spec 12.20): a table of states, a table of transitions
+    over a closed condition vocabulary, and a bind that resolves every state
+    against the rig actually loaded.
+
+      graph-order    Two rows out of one state, both satisfied: the EARLIER row
+                     wins, and swapping the two swaps the answer. Priority is row
+                     order and nothing else, so the fade is read too -- a row that
+                     fires with its neighbour's fade is not a pass.
+    """
+    failed = []
+
+    def note(name, ok):
+        if not ok:
+            failed.append(name)
+
+    # ---- graph-order
+    d = _graph_probe("order")
+    need = [("first", "state"), ("first", "fade"), ("swapped", "state"), ("swapped", "fade")]
+    if not d or any(k not in d for k in need):
+        print("  graph-order           FAIL  the probe failed or measured nothing")
+        note("graph-order", False)
+    else:
+        a = d[("first", "state")][0]
+        b = d[("swapped", "state")][0]
+        ok = a == 1.0 and b == 2.0 and d[("first", "fade")][0] == 0.25
+        print(f"  graph-order           {'PASS' if ok else 'FAIL'}  first row wins "
+              f"({a:.0f}, want 1) and swapping the rows swaps it ({b:.0f}, want 2)")
+        note("graph-order", ok)
+
+    return failed
+
+
 def run_ui_gate(workdir):
     """The game UI layer (spec 12.2), asserted where it is a pure function: layout
     is (tree, width, height) with no GL and no clock, the input pass takes a
@@ -25520,6 +25582,8 @@ GATE_GROUPS = [
     ("audio", "audio (offline PCM through the spatializer, spec 12.0):", run_audio_gate),
     ("anim", "animation blending (a blend space, a crossfade, a masked layer, spec 12.1):",
      run_anim_gate),
+    ("graph", "the animation state machine (states, transitions, binding; spec 12.20):",
+     run_graph_gate),
     ("ui", "the game UI layer (layout, navigation, capture, settings; spec 12.2):",
      run_ui_gate),
     ("display", "display modes (placement, monitors, what a settings file may do; spec 12.15):",
