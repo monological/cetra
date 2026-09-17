@@ -6959,6 +6959,114 @@ static int run_graph_probe(const char* which) {
         return 0;
     }
 
+    if (!strcmp(which, "unreachable")) {
+        // What a rig cannot do, decided once. `b` names a source nobody
+        // registered, so every row into it is pruned and the row below it --
+        // into a state that plays nothing, which is always resolvable -- is what
+        // fires instead. Two-sided against the identical table whose rows both
+        // lead somewhere live.
+        static const AnimGraphState HAS_MISSING[] = {
+            {"a", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+            {"b", "nothing_registered_under_this_name", NULL, NULL, ANIM_GRAPH_LOOP},
+            {"c", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+        };
+        static const AnimGraphTransition ROWS[] = {
+            {"a", "b", {ANIM_ON("grounded")}, 0.1f},
+            {"a", "c", {ANIM_ON("grounded")}, 0.2f},
+        };
+        AnimGraph* g = create_anim_graph();
+        anim_graph_set_params(g, PARAMS, PARAM_N);
+        anim_graph_set_states(g, HAS_MISSING, 3);
+        anim_graph_set_transitions(g, ROWS, 2);
+        anim_graph_bind(g, NULL, "a");
+        anim_graph_set_bool(g, "grounded", true);
+        anim_graph_update(g, 1.0f / 60.0f);
+        printf("graph unreachable pruned state %d\n", graph_state_index(g, HAS_MISSING, 3));
+        free_anim_graph(g);
+
+        // The same table with nothing missing: the first row is live and wins.
+        AnimGraph* h = create_anim_graph();
+        anim_graph_set_params(h, PARAMS, PARAM_N);
+        anim_graph_set_states(h, STATES, STATE_N);
+        anim_graph_set_transitions(h, ROWS, 2);
+        anim_graph_bind(h, NULL, "a");
+        anim_graph_set_bool(h, "grounded", true);
+        anim_graph_update(h, 1.0f / 60.0f);
+        printf("graph unreachable live state %d\n", graph_state_index(h, STATES, STATE_N));
+        free_anim_graph(h);
+
+        // And the path a real rig takes to get there: a clip the rig does not
+        // carry arrives as a NULL entry, which refuses the whole source rather
+        // than registering something that cannot play.
+        AnimGraph* k = create_anim_graph();
+        AnimatorEntry no_clip[1] = {{0}};
+        const bool registered = anim_graph_add_source(k, "swim", no_clip, 1);
+        printf("graph unreachable noclip registered %d\n", registered ? 1 : 0);
+        free_anim_graph(k);
+        return 0;
+    }
+
+    if (!strcmp(which, "authoring")) {
+        // Every way a table can be wrong, each refused by name, and one that is
+        // a warning instead. A graph is refused WHOLE: half a machine is a
+        // character that behaves almost right, which is worse than one that
+        // refuses to start.
+        static const AnimGraphState DUPLICATE[] = {
+            {"a", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+            {"a", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+        };
+        static const AnimGraphState RETURNER[] = {
+            {"a", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+            {"b", NULL, NULL, NULL, ANIM_GRAPH_RETURN},
+        };
+        static const AnimGraphTransition UNKNOWN_STATE[] = {
+            {"a", "nowhere", {ANIM_ON("grounded")}, 0.1f},
+        };
+        static const AnimGraphTransition UNKNOWN_PARAM[] = {
+            {"a", "b", {ANIM_ON("no_such_parameter")}, 0.1f},
+        };
+        static const AnimGraphTransition SELF[] = {
+            {"a", "a", {ANIM_ON("grounded")}, 0.1f},
+        };
+        static const AnimGraphTransition WRONG_KIND[] = {
+            {"a", "b", {ANIM_GT("grounded", 1.0f)}, 0.1f}, // GT on a bool
+        };
+        static const AnimGraphTransition FINISH_A_RETURN[] = {
+            {"a", "b", {ANIM_ON("grounded")}, 0.1f},
+            {"b", "a", {ANIM_DONE()}, 0.1f},
+        };
+        static const AnimGraphTransition TRAP[] = {
+            {"a", "b", {ANIM_ON("grounded")}, 0.1f},
+        };
+        struct {
+            const char* label;
+            const AnimGraphState* states;
+            int state_count;
+            const AnimGraphTransition* rows;
+            int row_count;
+        } cases[] = {
+            {"unknownstate", STATES, STATE_N, UNKNOWN_STATE, 1},
+            {"unknownparam", STATES, STATE_N, UNKNOWN_PARAM, 1},
+            {"selfrow", STATES, STATE_N, SELF, 1},
+            {"wrongkind", STATES, STATE_N, WRONG_KIND, 1},
+            {"duplicate", DUPLICATE, 2, UNKNOWN_PARAM, 1},
+            {"returnfinish", RETURNER, 2, FINISH_A_RETURN, 2},
+            // Refused by nothing: `b` can be entered and never left, which is a
+            // thing a caller may mean. A warning, and bind succeeds.
+            {"trap", STATES, STATE_N, TRAP, 1},
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+            AnimGraph* g = create_anim_graph();
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, cases[i].states, cases[i].state_count);
+            anim_graph_set_transitions(g, cases[i].rows, cases[i].row_count);
+            const bool bound = anim_graph_bind(g, NULL, "a");
+            printf("graph authoring %s bound %d\n", cases[i].label, bound ? 1 : 0);
+            free_anim_graph(g);
+        }
+        return 0;
+    }
+
     fprintf(stderr, "graph-probe: unknown case '%s'\n", which);
     return 1;
 }

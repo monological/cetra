@@ -125,6 +125,23 @@ bool anim_graph_add_source(AnimGraph* graph, const char* name, const AnimatorEnt
                   ANIMATOR_SPACE_MAX, count);
         return false;
     }
+    /*
+     * An entry with no clip REFUSES the whole source, by name, and that refusal
+     * is the feature rather than a guard against a caller's mistake.
+     *
+     * An app finds its clips by name on whatever rig it was handed, so a missing
+     * one arrives here as a NULL. Refusing the source is what turns "this rig has
+     * no stroke" into "this state is unreachable" into "every row into it is
+     * pruned" -- one path, decided once, where the alternative is a clip-presence
+     * test on every transition that mentions it and an asymmetry nobody notices.
+     */
+    for (int i = 0; i < count; i++) {
+        if (!entries[i].clip) {
+            log_info("anim_graph: '%s' needs a clip entry %d does not carry; not registered", name,
+                     i);
+            return false;
+        }
+    }
     if (_source_index(graph, name) >= 0) {
         log_error("anim_graph_add_source: '%s' is already registered", name);
         return false;
