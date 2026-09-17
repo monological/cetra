@@ -24832,6 +24832,28 @@ def _render_pointer_run(workdir, tag, script, frames):
     return out
 
 
+def _shapes_pointer_run(workdir, tag, script, frames):
+    """One scripted-pointer shapes run: {frame: pose} from --trace-camera.
+
+    The 2D canvas, which until spec 12.19 no automated run could reach at all --
+    shapes had no headless mode and it is the only caller of CanvasController."""
+    path = os.path.join(workdir, f"canvas_{tag}.txt")
+    with open(path, "w") as f:
+        f.write(script)
+    r = subprocess.run([_bin("shapes"), "-x", "-f", str(frames),
+                        "--pointer-script", path, "--trace-camera"],
+                       capture_output=True, text=True)
+    rows = RENDER_CAM.findall(r.stdout + r.stderr)
+    if r.returncode != 0 or not rows:
+        return None
+    out = {}
+    for row in rows:
+        v = [float(x) for x in row[1:]]
+        out[int(row[0])] = {"eye": v[0:3], "target": v[3:6], "dist": v[6],
+                            "theta": v[7], "phi": v[8], "ortho": v[9]}
+    return out
+
+
 def run_camera_gate(workdir):
     """The camera, asserted through a SCRIPTED POINTER (spec 12.19).
 
@@ -24921,6 +24943,18 @@ def run_camera_gate(workdir):
       cam-drag-release the pose stops changing the frame after the button comes
                      up, and the drag's total is still there. Without it the arms
                      either side of it would pass on a controller that never stopped.
+      cam-canvas     the 2D canvas, which no automated run could reach before
+                     this: a drag pans the target in the drag's own ratio with z
+                     and the ortho height unmoved, the wheel takes the ORTHO
+                     HEIGHT to 0.9 squared with the distance untouched (a 2D zoom
+                     is a projection field where a 3D one is a pose field), and
+                     the view stays square-on throughout -- rotation being
+                     forbidden under a parallel projection rather than unused.
+      cam-drag-zoom  three wheel notches take the distance to 0.9 cubed of what
+                     it was, and the aim does not move. The viewer had NO scroll
+                     handling at all until spec 12.19 -- zoom was arrow-keys-only
+                     -- and nothing noticed, because nothing in the suite could
+                     turn a wheel.
       cam-drag-pan   a SHIFT-drag of (200, 100) pixels moves the target by
                      hypot(200, 100) x distance x 0.0005 and leaves phi, theta
                      and the distance alone. The displacement is read as a
@@ -25230,6 +25264,73 @@ def run_camera_gate(workdir):
               f"the release, having turned {held['phi'] - orbit[0]['phi']:.4f} rad in total "
               f"(a controller that never stopped would pass every other arm here)")
         note("cam-drag-release", ok)
+
+    canvas = _shapes_pointer_run(workdir, "pan", (
+        "0-4    at=200,400\n"
+        "5-24   at=200,400 down\n"
+        "25-44  by=5,-2.5 down\n"
+        "45     idle\n"
+        "50     at=200,400 wheel=1\n"
+        "60     at=200,400 wheel=1\n"), 70)
+
+    if not canvas:
+        print("  cam-canvas SKIP  no trace")
+        note("cam-canvas", False)
+    else:
+        start, panned = canvas[24], canvas[45]
+        dx = panned["target"][0] - start["target"][0]
+        dy = panned["target"][1] - start["target"][1]
+        # The drag was (100, -50) framebuffer pixels, so the pan must carry that
+        # RATIO exactly. Read as a ratio and not as world units because the units
+        # per pixel depend on the framebuffer scale, which differs per display.
+        ratio = dx / dy if dy != 0.0 else 0.0
+        flat = (abs(panned["eye"][2] - start["eye"][2]) < 1e-6
+                and abs(panned["ortho"] - start["ortho"]) < 1e-6)
+        # Two wheel notches at 0.9: a 2D zoom is ortho_height, where a 3D zoom is
+        # a distance, and the distance must not move at all.
+        zoomed = canvas[max(canvas)]
+        factor = zoomed["ortho"] / panned["ortho"]
+        held = abs(zoomed["dist"] - panned["dist"]) < 1e-6
+        # Rotation is not merely unused in 2D -- it is forbidden, since any
+        # rotation shears flat geometry under a parallel projection.
+        square = all(abs(canvas[f]["phi"] - start["phi"]) < 1e-6
+                     and abs(canvas[f]["theta"] - start["theta"]) < 1e-6 for f in canvas)
+        ok = (abs(ratio + 2.0) < 1e-3 and abs(dx) > 1.0 and flat
+              and abs(factor - 0.81) < 1e-4 and held and square)
+        print(f"  cam-canvas {'PASS' if ok else 'FAIL'}  a (100, -50) px drag pans the target "
+              f"{dx:.4f}, {dy:.4f} -- a ratio of {ratio:.4f} (want -2 exactly, the drag's own), "
+              f"with z and the ortho height unmoved; two wheel notches take the ortho height to "
+              f"{factor:.6f} of it (want 0.81) with the DISTANCE untouched, a 2D zoom being a "
+              f"projection field where a 3D one is a pose field; and the view stays square-on "
+              f"throughout ({'yes' if square else 'NO'}), rotation being forbidden here rather "
+              f"than unused")
+        note("cam-canvas", ok)
+
+    zoom = _render_pointer_run(workdir, "zoom", (
+        "0-9    at=320,200\n"
+        "10     at=320,200 wheel=1\n"
+        "20     at=320,200 wheel=1\n"
+        "30     at=320,200 wheel=1\n"), 40)
+
+    if not zoom:
+        print("  cam-drag-zoom SKIP  no trace")
+        note("cam-drag-zoom", False)
+    else:
+        # Three notches at 0.9 each. Before spec 12.19 this app had no scroll
+        # handling at all -- the wheel did nothing in a 3D viewer, and nothing
+        # noticed, because nothing in the suite could turn one.
+        before, after = zoom[10], max(zoom)
+        got = zoom[after]["dist"] / before["dist"]
+        want = 0.9 ** 3
+        # The aim is untouched: a wheel zooms, it does not steer.
+        still = (abs(zoom[after]["phi"] - before["phi"]) < 1e-6
+                 and abs(zoom[after]["theta"] - before["theta"]) < 1e-6)
+        ok = abs(got - want) < 1e-4 and still
+        print(f"  cam-drag-zoom {'PASS' if ok else 'FAIL'}  three wheel notches took the distance "
+              f"to {got:.6f} of what it was (want {want:.6f} = 0.9 cubed), with the aim "
+              f"{'unmoved' if still else 'MOVED'} -- this app had no scroll handling at all "
+              f"before the pointer seam existed to notice")
+        note("cam-drag-zoom", ok)
 
     pan = _render_pointer_run(workdir, "pan", (
         "0-4    at=320,200\n"
