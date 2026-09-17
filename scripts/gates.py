@@ -24165,6 +24165,33 @@ def run_graph_gate(workdir):
                         that returns by itself. And one that is a warning
                         instead -- a state that can be entered and not left is a
                         thing a caller may mean.
+
+    The five below are the ones where the question IS the seam, so they take a
+    headless game for a real rig -- and still draw no frame.
+
+      graph-finished    An EXIT state leaves on the animator's finished EDGE,
+                        once. The identical table with the state looping never
+                        leaves at all, which is the falsification: a level read
+                        rather than an edge passes the first leg and fails this.
+      graph-fade        The row's fade reaches playback verbatim, read off the
+                        animator's own envelope at three points of a half-second
+                        row. A graph that rounded one or substituted a default is
+                        red here.
+      graph-guard       The escape hatch is ANDed AFTER the conditions, and is
+                        not called at all for a row whose conditions already
+                        failed -- so a guard with a side effect is not a hidden
+                        per-frame call. That third leg is the one a naive
+                        implementation fails.
+      graph-return      Why RETURN is a kind and not a spelling of EXIT. A
+                        returning state resumes the outgoing source at the clock
+                        it LEFT; an exiting one is left by a row, which re-issues
+                        the space from zero. On a locomotion space that
+                        difference is the walk phase, and every foot lock rides
+                        it.
+      graph-identity    A one-state graph is BIT-IDENTICAL to calling the
+                        animator directly: every bone matrix over 120 ticks, max
+                        diff 0 exactly, not to a tolerance. A machine that
+                        decides what plays may add no arithmetic to what plays.
     """
     failed = []
 
@@ -24184,6 +24211,9 @@ def run_graph_gate(workdir):
 
     def one(d, label, key):
         return d[(label, key)][0]
+
+    def close(a, b, tol=1e-4):
+        return abs(a - b) < tol
 
     # ---- graph-order
     d = read("order", [("first", "state"), ("first", "fade"), ("swapped", "state")])
@@ -24330,6 +24360,76 @@ def run_graph_gate(workdir):
                   f"a state with no way out warns rather than refusing ({trap:.0f}, want 1)")
     print(f"  graph-authoring   {'PASS' if ok else 'FAIL'}  {detail}")
     note("graph-authoring", ok)
+
+    # ---- graph-finished
+    d = read("finished", [("exit", "ticks"), ("loop", "ticks")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        ex, lo = one(d, "exit", "ticks"), one(d, "loop", "ticks")
+        # 240 is the probe's cap: a looping state never raising the edge is what
+        # reaching it means.
+        ok = 30 < ex < 200 and lo == 240
+        detail = (f"a non-looping state leaves on its own end ({ex:.0f} ticks) and the same "
+                  f"table looping never leaves ({lo:.0f}, the cap)")
+    print(f"  graph-finished    {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-finished", ok)
+
+    # ---- graph-fade
+    d = read("fade", [("t0", "weight"), ("thalf", "weight"), ("tfull", "weight"),
+                      ("tfull", "fading")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        t0, th = one(d, "t0", "weight"), one(d, "thalf", "weight")
+        tf, fading = one(d, "tfull", "weight"), one(d, "tfull", "fading")
+        ok = close(t0, 1.0 / 30.0) and close(th, 0.5) and tf == 1.0 and fading == 0
+        detail = (f"a half-second row fades on its own envelope ({t0:.3f}/{th:.3f}/{tf:.3f}, want "
+                  f"1/30, 0.5 and 1) and has settled by its end ({fading:.0f}, want 0)")
+    print(f"  graph-fade        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-fade", ok)
+
+    # ---- graph-guard
+    d = read("guard", [("blocked", "moved"), ("blocked", "calls"), ("allowed", "moved"),
+                       ("allowed", "calls"), ("unarmed", "moved"), ("unarmed", "calls")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        bm, bc = one(d, "blocked", "moved"), one(d, "blocked", "calls")
+        am, ac = one(d, "allowed", "moved"), one(d, "allowed", "calls")
+        um, uc = one(d, "unarmed", "moved"), one(d, "unarmed", "calls")
+        ok = bm == 0 and bc == 1 and am == 1 and ac == 1 and um == 0 and uc == 0
+        detail = (f"a false guard blocks a row whose conditions hold ({bm:.0f}, want 0) and a "
+                  f"true one does not ({am:.0f}, want 1); a row whose conditions already failed "
+                  f"never reaches it ({uc:.0f} calls, want 0)")
+    print(f"  graph-guard       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-guard", ok)
+
+    # ---- graph-return
+    d = read("return", [("returned", "before"), ("returned", "after"), ("exited", "before"),
+                        ("exited", "after")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        rb, ra = one(d, "returned", "before"), one(d, "returned", "after")
+        eb, ea = one(d, "exited", "before"), one(d, "exited", "after")
+        ok = rb == ra and ea < eb / 10.0 and rb > 0
+        detail = (f"a returning state resumes the clock it left ({rb:.2f} -> {ra:.2f}, the same "
+                  f"tick) where an exiting one restarts it ({eb:.2f} -> {ea:.2f})")
+    print(f"  graph-return      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-return", ok)
+
+    # ---- graph-identity
+    d = read("identity", [("pose", "maxdiff"), ("clock", "diff")])
+    if not d:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        pose, clock = one(d, "pose", "maxdiff"), one(d, "clock", "diff")
+        ok = pose == 0.0 and clock == 0.0
+        detail = (f"a one-state graph is the animator called directly, to the bit: pose {pose:.9g} "
+                  f"and clock {clock:.9g} over 120 ticks (want 0 exactly)")
+    print(f"  graph-identity    {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-identity", ok)
 
     return failed
 
