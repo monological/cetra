@@ -18,6 +18,7 @@
 - Written in C11, on OpenGL 4.1 core.
 - No system dependencies — glfw, glew, cglm, assimp, Jolt and Dear ImGui are vendored and built from source.
 - Forward renderer with an HDR G-buffer and a full screen-space post stack.
+- An optional game framework over it: fixed timestep, physics, animation, audio, UI and saves.
 - macOS, Linux and Windows.
 
 ---
@@ -41,6 +42,10 @@
   every level indexing the original vertex buffer, so cracks are structurally impossible
 - Front-to-back opaque ordering, optional depth prepass, frustum culling — including conservative
   bounds for wind and skinning, which displace vertices past the mesh's authored box
+- Occlusion culling: authored occluders rasterised on the CPU into a masked depth buffer from this
+  frame's camera, so there is no query, no readback and nothing to pop
+- Per-material shader variants: every lit surface compiles to a program carrying only the features
+  that material uses, with the uber-shader as the fallback rather than the exception
 - Clustered decals projected through an oriented box, selected by a per-froxel mask
 - Soft particles, shadow catcher, procedural skybox and HDR ground projection
 
@@ -143,19 +148,59 @@
 ### Animation
 
 - Skeletal animation, GPU skinning up to 128 bones, prev-pose motion vectors
-- Cross-rig retargeting by semantic bone matching
+- Cross-rig retargeting by semantic bone matching, told the rig a clip was authored on so a
+  third-party character reconciles rather than taking the rotations raw
+- A phase-synced 1D blend space on one clock, so a foot planted 40% through the walk is planted 40%
+  through the run; a crossfade whose settled pose is the incoming clip's own; one bone-masked
+  override layer that releases itself; clip events dispatched after the pose is applied
+- An animation state machine: a table of states over registered playback sources and a table of
+  transitions over a closed condition vocabulary, resolved at bind against the rig actually loaded,
+  so a state whose clip the character lacks is unreachable and every transition into it is pruned
+- Stride matching — the ground speed a clip's own feet imply, measured from the clip and blended
+  across the space, so a character can travel at the speed its animation shows
+- Root motion — a clip states how far its root travels and the character goes exactly that far;
+  the complement of stride matching rather than its rival, and both are live
+- Two-bone IK: foot planting on what a ray finds, with the bend plane derived from how the rig
+  binds its own knee, and foot locking above it — a contact pinned in world space and held until
+  the clip walks away from it
+- Ragdoll: twelve capsules derived from the bind pose with no authored asset, driven by Jolt and
+  written back at the pose seam, replacing the pose rather than correcting it
 - Verlet spring bones for secondary motion
 - Directional wind driving foliage, grass and cloth
+
+### Game framework
+
+Optional, and layered over the engine rather than under it — a rendering-only app never meets any
+of it.
+
+- Fixed-timestep loop with Jolt physics: rigid bodies, raycasts and sweeps, five constraint types
+  with motors, and a `CharacterVirtual` controller
+- ECS-lite entities with rigid-body, character, animator and audio-source components
+- Audio: one device wrapping miniaudio, 2D one-shots and music, mixer buses, and 3D positional
+  sound with the camera as listener. A headless run opens no device and renders offline instead
+- A UI layer: a retained element tree over a two-pass layout, a geometric focus model, and a theme
+  whose every zero means inherit, drawn after tone mapping so a menu is never graded or rescaled
+- Save games: entities by name, components by name, spawned objects carrying the recipe that made
+  them, per-section versions with a migration chain, and an atomic write
+- Player settings persisted in the platform's own per-user location, including window mode —
+  windowed, exclusive fullscreen or borderless, on a monitor stored by name
+- Input as named actions over keys, mouse buttons, pad buttons and axes, so a stick and a key pair
+  are one action; gamepads through GLFW's standard layout with hot-plug and a loadable mapping file
+- Camera rigs: an anchor, an arm and an aim, with no mode enum — a follow is an anchor that moves,
+  a viewer orbit one that does not, first person a distance of zero. Arm response, an occlusion
+  probe seam, a pose blend, a decaying shake and a Catmull-Rom rail
 
 ### Systems
 
 - Scene graph with hierarchical transforms; lights, cameras and particle systems are scene citizens
 - Particle system: composable spawn/init/update modules, CPU and transform-feedback backends, curl noise, colliders
-- Optional game framework: fixed-timestep loop, Jolt physics, character controller, ECS-lite entities
 - `.cscn` scene format with a Blender exporter that bakes material graphs glTF cannot carry
 - A JSON config snapshot: ~230 tuned settings dumped and restored, so a session can be handed to
   someone else instead of described
 - A world origin shift, for worlds too large to measure from one point in fp32
+- A derived-data cook: a content-addressed cache over the deterministic startup bakes — cluster
+  DAGs, Jolt shapes, eroded fields, mip chains — keyed on the identity of its inputs, so a stale
+  artefact is unfindable rather than detected
 - FBX / glTF / GLB / OBJ import, SDF text rendering, Dear ImGui debug panels
 - GPU profiler: per-pass GPU and CPU time with submission counts, in a HUD table and on stdout
 - A golden-image corpus and a gate suite of fixtures whose answer is known in advance
@@ -211,6 +256,7 @@ Example apps are built in the `out/bin` directory.
 ./out/bin/render -m assets/models/c64.fbx -t assets/models/c64.fbm
 ./out/bin/tree --player
 ./out/bin/forest
+./out/bin/gametest
 ```
 
 `render --help` lists the full set of rendering, lighting and post-processing
@@ -322,7 +368,7 @@ Or let CMake fetch it:
 include(FetchContent)
 FetchContent_Declare(cetra
     GIT_REPOSITORY https://github.com/monological/cetra
-    GIT_TAG        v0.16.0)
+    GIT_TAG        v0.23.0)
 FetchContent_MakeAvailable(cetra)
 ```
 
