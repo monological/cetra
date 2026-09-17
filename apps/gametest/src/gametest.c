@@ -198,6 +198,7 @@ static int aquatic_count = 0;
  * where air was guarded on its clip and water was not.
  */
 static AnimGraph* player_graph = NULL;
+static AnimGraph* chaser_graph = NULL;
 
 /*
  * The waterline needs a BAND and not a plane, and both numbers come from a
@@ -292,7 +293,6 @@ static const AnimGraphTransition PLAYER_ROWS[] = {
     {"ground", "spin", {ANIM_FIRED("spin")}, 0.08f},
 };
 
-static bool chaser_in_swim_clip = false;
 // A file static because the flag is parsed in main and read in on_pre_render, long after.
 // ON by default, with --no-follow-cam to opt out, which is the shape --no-puppet,
 // --no-chaser and --no-ik already use. It was off while the camera was being settled; a
@@ -3144,9 +3144,39 @@ static void on_init(Game* game) {
 
             chaser_animator = create_animator(scene->skeletons[0]);
             if (chaser_animator) {
-                animator_play_space(chaser_animator, "locomotion", chaser_locomotion,
-                                    locomotion_count, 0.0f, true);
                 entity_add_animator(chaser_entity, chaser_animator);
+                /*
+                 * A SECOND graph over the same three const tables, with its own
+                 * sources: the chaser plays the clips that stay where they are,
+                 * because root motion is a property of the animator while the clips
+                 * are a property of an array, and nothing drains this one.
+                 *
+                 * The tables are borrowed and hold nothing that moves, which is the
+                 * property `graph-two-instances` asserts and this is the consumer
+                 * that makes it worth asserting.
+                 */
+                chaser_graph = create_anim_graph();
+                if (chaser_graph) {
+                    AnimatorEntry one[1];
+                    anim_graph_add_source(chaser_graph, "locomotion", chaser_locomotion,
+                                          locomotion_count);
+                    one[0] = (AnimatorEntry){no_swim ? NULL : clip_swim, 0.0f, 0.0f};
+                    anim_graph_add_source(chaser_graph, "swim", one, 1);
+                    anim_graph_set_params(chaser_graph, PLAYER_PARAMS,
+                                          (int)(sizeof PLAYER_PARAMS / sizeof *PLAYER_PARAMS));
+                    anim_graph_set_states(chaser_graph, PLAYER_STATES,
+                                          (int)(sizeof PLAYER_STATES / sizeof *PLAYER_STATES));
+                    anim_graph_set_transitions(chaser_graph, PLAYER_ROWS,
+                                               (int)(sizeof PLAYER_ROWS / sizeof *PLAYER_ROWS));
+                    if (!anim_graph_bind(chaser_graph, chaser_animator, "ground")) {
+                        free_anim_graph(chaser_graph);
+                        chaser_graph = NULL;
+                    }
+                }
+                if (!chaser_graph) {
+                    animator_play_space(chaser_animator, "locomotion", chaser_locomotion,
+                                        locomotion_count, 0.0f, true);
+                }
             }
             printf("Chaser created -- run!\n");
         }
@@ -3587,20 +3617,24 @@ static void on_update(Game* game, double dt) {
 
         vec3 chase_vel;
         character_controller_get_velocity(chase_cc, chase_vel);
-        if (chaser_animator) {
-            float speed = hypotf(chase_vel[0], chase_vel[2]) / player_speed;
-            chaser_animator->param = speed > 1.0f ? 1.0f : speed;
-
-            // The same edge for the chaser, which is what makes chaser_swimming more than
-            // bookkeeping: it swims after you rather than walking along the bottom.
-            if (clip_swim && chaser_swimming != chaser_in_swim_clip) {
-                if (chaser_swimming)
-                    animator_play(chaser_animator, clip_swim, 0.25f, true);
-                else
-                    animator_play_space(chaser_animator, "locomotion", chaser_locomotion,
-                                        locomotion_count, 0.25f, true);
-                chaser_in_swim_clip = chaser_swimming;
-            }
+        if (chaser_graph) {
+            // The same two facts the player's graph is handed, on the chaser's own
+            // instance of the SAME const tables. What proves the table is data and
+            // not state is that these two machines hold different current states
+            // and different clocks while sharing every row.
+            //
+            // It swims after you rather than walking along the bottom, which is what
+            // makes the chaser's submersion more than bookkeeping.
+            const float speed = hypotf(chase_vel[0], chase_vel[2]) / player_speed;
+            anim_graph_set_float(chaser_graph, "ground_knob", speed > 1.0f ? 1.0f : speed);
+            anim_graph_set_float(chaser_graph, "ground_rate", 1.0f);
+            anim_graph_set_float(chaser_graph, "swim_knob", speed > 1.0f ? 1.0f : speed);
+            anim_graph_set_float(chaser_graph, "depth",
+                                 grotto_surface_y(game->scene) - chaser_entity->position[1]);
+            // The chaser never leaves the ground in a way the airborne states are
+            // about, has no ragdoll and fires no moves, so the rest of the table is
+            // simply never satisfied. Nothing here has to say so.
+            anim_graph_set_bool(chaser_graph, "grounded", true);
         }
         if (chaser_rig && hypotf(chase_vel[0], chase_vel[2]) > 0.1f) {
             float target = atan2f(chase_vel[0], chase_vel[2]);
@@ -4139,6 +4173,8 @@ static void on_shutdown(Game* game) {
     // one and the animator holds the pointer back.
     free_anim_graph(player_graph);
     player_graph = NULL;
+    free_anim_graph(chaser_graph);
+    chaser_graph = NULL;
 }
 
 // Mouse callback for camera control
