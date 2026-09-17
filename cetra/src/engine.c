@@ -67,6 +67,7 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
 static void _engine_derive_camera(Engine* engine);
 static void _engine_pointer_script_frame(Engine* engine);
 static void _engine_pointer_script_free(Engine* engine);
+static bool _engine_pointer_script_cursor(const Engine* engine, double* fb_x, double* fb_y);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 static void _destroy_msaa_attachments(Engine* engine);
 
@@ -1331,7 +1332,15 @@ static bool _window_to_fb(const Engine* engine, double wx, double wy, double* fb
 }
 
 bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
-    if (!engine || !engine->window || !fb_x || !fb_y)
+    if (!engine || !fb_x || !fb_y)
+        return false;
+    // A scripted pointer answers this too, or a caller that asks where the
+    // cursor is gets the real one while everything else gets the script: the
+    // 2D canvas zooms about the point under the cursor, and read the window
+    // corner instead.
+    if (engine->pointer_script)
+        return _engine_pointer_script_cursor(engine, fb_x, fb_y);
+    if (!engine->window)
         return false;
     double wx = 0.0, wy = 0.0;
     glfwGetCursorPos(engine->window, &wx, &wy);
@@ -1370,7 +1379,10 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
 
     ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
 
-    if (engine_gui_wants_mouse()) {
+    // A script REPLACES the mouse, as --pad-script replaces the pad. ImGui still
+    // sees the event above, or the debug GUI goes deaf under a script; nothing
+    // below it does, or the two pointers fight over one InputState.
+    if (engine->pointer_script || engine_gui_wants_mouse()) {
         return;
     }
 
@@ -1419,6 +1431,9 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
 
+    if (engine->pointer_script)
+        return;
+
     // Not an early return on a zero-area window: it must still be able to end
     // a drag and reach the app's own callback below, at (0, 0).
     double mouse_fb_x = 0.0, mouse_fb_y = 0.0;
@@ -1464,7 +1479,7 @@ static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double y
     ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine)
+    if (!engine || engine->pointer_script)
         return;
 
     _engine_pointer_scroll(engine, xoffset, yoffset);
@@ -1585,6 +1600,15 @@ static void _engine_pointer_script_frame(Engine* engine) {
 
     if (r->wheel != 0.0)
         _engine_pointer_scroll(engine, 0.0, r->wheel);
+}
+
+static bool _engine_pointer_script_cursor(const Engine* engine, double* fb_x, double* fb_y) {
+    const PointerScript* s = engine->pointer_script;
+    if (!s)
+        return false;
+    *fb_x = s->x;
+    *fb_y = s->y;
+    return true;
 }
 
 static void _engine_pointer_script_free(Engine* engine) {

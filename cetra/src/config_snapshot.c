@@ -9,6 +9,7 @@
 
 #include "cJSON.h"
 #include "camera.h"
+#include "camera_rig.h"
 #include "engine.h"
 #include "exposure.h"
 #include "gi_volume.h"
@@ -1640,6 +1641,17 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
     for (size_t a = 0; a < CFG_ARRAY_COUNT; a++)
         written += _apply_array(&ctx, root, &CFG_ARRAYS[a]);
     cJSON_Delete(root);
+
+    /*
+     * The restored pose into the rig that owns it, or the rig writes its own
+     * over the top on the very next frame and the snapshot restores a camera
+     * nobody sees. Here rather than in each app for the reason the sun chain
+     * above is here: the second app to need it did not have it, and `apps/tree
+     * --config` rendered a different frame from the one its JSON described with
+     * nothing saying so.
+     */
+    if (engine && engine->camera && engine->camera_rig)
+        camera_rig_set_pose(engine->camera_rig, engine->camera->position, engine->camera->look_at);
 
     printf("config snapshot applied: %s (%d fields)\n", path, written);
     fflush(stdout);

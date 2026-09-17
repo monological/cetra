@@ -24957,7 +24957,12 @@ def run_camera_gate(workdir):
                      HEIGHT to 0.9 squared with the distance untouched (a 2D zoom
                      is a projection field where a 3D one is a pose field), and
                      the view stays square-on throughout -- rotation being
-                     forbidden under a parallel projection rather than unused.
+                     forbidden under a parallel projection rather than unused --
+                     and a notch at opposite corners pulls the target opposite
+                     ways, which is the zoom being anchored on the CURSOR. That
+                     last is the property the 2D camera keeps its own maths for,
+                     and it was green over a path anchoring at the window corner
+                     until engine_cursor_fb learned about the scripted pointer.
       cam-drag-zoom  three wheel notches take the distance to 0.9 cubed of what
                      it was, and the aim does not move. The viewer had NO scroll
                      handling at all until spec 12.19 -- zoom was arrow-keys-only
@@ -25328,15 +25333,32 @@ def run_camera_gate(workdir):
         # rotation shears flat geometry under a parallel projection.
         square = all(abs(canvas[f]["phi"] - start["phi"]) < 1e-6
                      and abs(canvas[f]["theta"] - start["theta"]) < 1e-6 for f in canvas)
+        # The zoom is ANCHORED on the cursor, which is the one property the 2D
+        # camera keeps its own maths for. A notch at opposite corners must pull
+        # the target opposite ways; before engine_cursor_fb answered for the
+        # scripted pointer it read the real mouse and anchored both at the window
+        # corner, with every other leg here green over it.
+        # Framebuffer pixels, so genuinely either side of the centre: shapes is
+        # 375x812 points on a 2x display, which is 750x1624 with its middle at
+        # (375, 812).
+        left = _shapes_pointer_run(workdir, "zoomL", "0-4 at=100,812\n5 at=100,812 wheel=1\n", 12)
+        right = _shapes_pointer_run(workdir, "zoomR", "0-4 at=650,812\n5 at=650,812 wheel=1\n", 12)
+        anchored = False
+        if left and right:
+            lx = left[max(left)]["target"][0] - left[4]["target"][0]
+            rx = right[max(right)]["target"][0] - right[4]["target"][0]
+            anchored = lx * rx < 0.0 and abs(lx) > 1e-4 and abs(rx) > 1e-4
         ok = (abs(ratio + 2.0) < 1e-3 and abs(dx) > 1.0 and flat
-              and abs(factor - 0.81) < 1e-4 and held and square)
+              and abs(factor - 0.81) < 1e-4 and held and square and anchored)
         print(f"  cam-canvas {'PASS' if ok else 'FAIL'}  a (100, -50) px drag pans the target "
               f"{dx:.4f}, {dy:.4f} -- a ratio of {ratio:.4f} (want -2 exactly, the drag's own), "
               f"with z and the ortho height unmoved; two wheel notches take the ortho height to "
               f"{factor:.6f} of it (want 0.81) with the DISTANCE untouched, a 2D zoom being a "
-              f"projection field where a 3D one is a pose field; and the view stays square-on "
+              f"projection field where a 3D one is a pose field; the view stays square-on "
               f"throughout ({'yes' if square else 'NO'}), rotation being forbidden here rather "
-              f"than unused")
+              f"than unused; and a notch at opposite corners pulls the target "
+              f"{'opposite ways' if anchored else 'THE SAME WAY'}, which is the zoom being "
+              f"anchored on the cursor rather than on the window")
         note("cam-canvas", ok)
 
     zoom = _render_pointer_run(workdir, "zoom", (
