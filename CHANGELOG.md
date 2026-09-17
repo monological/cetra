@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.23.0 — 2026-09-17
+
+- **An animation state machine** — a table of states, each naming a playback source and the parameters that drive its blend axis and its rate, and a table of transitions over a closed condition vocabulary: one table, one order, first match wins. Binding resolves every state against the rig actually loaded, so a clip a character does not have makes its state unreachable and prunes every transition into it.
+- **Ragdoll** — twelve capsules derived from the bind pose with no authored asset, sized from the per-bone boxes the culler already measures, started from the live pose so the heap continues the character's motion, and written back at the pose seam. It replaces the pose rather than correcting it, so the spring bones and the IK stand down while it runs.
+- **Root motion** — a clip states how far its root travels, the animator extracts that per blend entry rather than from the blended pose, and the character goes exactly that far. Four authored clips carry it, including a lunge that crosses a stated 1.20 m and a spin that turns half a turn and carries nothing.
+- **A camera framework** — a rig is an anchor, an arm and an aim, with no mode enum: a follow is an anchor that moves, a viewer orbit one that does not, first person a distance of zero, and a pinned pose derives all three. Arm response, an occlusion probe seam, a pose blend, a decaying shake and a Catmull-Rom rail, with every camera in every app behind it.
+- **The controls know where the camera is pointing** — whether a rig steers movement is a named field on the rig rather than a convention each app remembers, so camera-relative and world-aligned are both stated rather than inherited.
+- **A scripted pointer** — a mouse a test can press, mirroring the scripted pad, so a drag, a wheel and a camera orbit can be driven with no hand on the machine.
+
+## v0.22.0 — 2026-09-15
+
+- **Stride matching** — the ground speed a clip's own feet imply, from the median velocity of the toe over the samples where it is standing, blended across a space that keeps one clock; a game divides by it to get a playback rate, so a character travels at the speed its animation implies rather than at a constant. It refuses a clip that does not walk, which is an answer rather than a gap.
+- **Cross-rig retargeting says when it did not happen** — a clip is loaded with the rig it was authored on, so a third-party character reconciles 51 of its 52 channels instead of taking the rotations raw and lying on its face; the per-clip summary counts corrections actually computed rather than repeating the matched count.
+- **A knee bends the way its rig binds it** — the IK pole derived from the bind pose's own hip-to-ankle offset rather than from a direction the caller passes, since a vector that suits one rig points backwards on another and folds the knee under on every stance frame.
+- **Display and window modes** — windowed, exclusive fullscreen and borderless, chosen from the settings screen, persisted and restored, with the monitor stored by NAME so unplugging a display cannot silently move the game. Neither non-windowed mode changes a video mode, so there is nothing to restore after a crash.
+- **A camera that pulls back when the ground goes** — the follow camera sits close behind the player at a fixed angle and lengthens its arm as the drop underneath opens, so a fall reads as a fall.
+- **A key light that lights a figure** — the platform lamp raked 45 degrees off vertical and moved rather than turned, because a lamp hung straight down lights the floor at full and a standing character at nearly nothing.
+
+## v0.21.0 — 2026-09-14
+
+- **Two-bone IK and foot planting** — a closed-form solver spliced between the pose's globals being accumulated and the skinning matrices being built, with the bend plane taken from a pole in the hip's own frame, and whether a foot is planted decided in the solver rather than by the caller.
+- **Ground worth planting on** — a ramp of known slope and three steps standing in the world at all times, since flat ground is the one case where planting is correctly a no-op and a scene without a slope demonstrates nothing. The sole clearance is derived once from the bind pose, so a caller states a GROUND rather than an ankle target, and the pelvis drop is a fraction of a leg rather than a number of metres, so it carries to a rig of another size.
+- **Foot locking** — a contact labelled from the ankle's lift and vertical speed, pinned at the toe in world space, and held until the label ends or the clip has carried the foot past its unlock distance, which is the larger of the two thresholds and is the whole of the hysteresis.
+- **A grotto to fall into** — a plate hanging 180 units above an eroded crater with a luminous pool at the bottom of it, where walking off the edge drops you into water you swim in. The terrain stack, the erosion, the water surface and the cook driven from a game for the first time.
+- **A swim stroke, and characters who float** — the swim clip is its own animator source crossfaded at the water's edge rather than a fourth gear in the locomotion space, since swimming is a different medium and not a faster walk; both characters ride a damped drive toward the surface, because Jolt's buoyancy is not bound and the gravity handed to a character controller is world-wide.
+- **A follow camera** — trailing the player and turned with the arrow keys, with movement read against where the lens points.
+- **The assets split by kind** — scenes, models, textures, goldens, generators, LUTs and data, with one statement of that taxonomy imported by every generator, fixture and gate rather than restated in each.
+
+## v0.20.0 — 2026-09-12
+
+- **Audio** — one output device wrapping miniaudio as a game subsystem: 2D one-shots and music, mixer buses, held voices from a file or a procedural tone, and 3D positional sound whose listener is the camera and whose sources are components synced from their entities. A headless run opens no device at all and renders offline instead, so everything above the device is deterministic.
+- **Animation blending** — a pose becomes a value, and over it: a phase-synced 1D blend space (every entry on one clock, so a foot planted 40% through the walk is planted 40% through the run), a crossfade that drops the outgoing source on completion so the settled pose is the incoming clip's own, one bone-masked override layer that releases itself, and clip events dispatched after the pose is applied, so a handler may play something.
+- **An animator component** — an animator the entity owns, its pose bound to the entity's node, ticked once per rendered frame from the sim clock, so two rigs animate independently and a paused world holds its pose.
+- **A game UI** — a retained tree of elements over a two-pass box layout, a geometric focus model, and a theme whose every zero means inherit, drawn through a general post-tonemap overlay hook so a menu is never graded, bloomed or rescaled and IS captured by a headless screenshot. Six element kinds, with three escape hatches under them, each keeping strictly more than the last.
+- **Menus, a pause screen and a HUD** — Escape opens a menu in every app instead of quitting, and a menu takes input away from the game with one switch rather than a guard at every call site.
+- **Settings that persist** — bus volumes, window mode and vsync as one descriptor table walked in both directions, written to the platform's own per-user location.
+- **Save games** — entities matched by name and components keyed by name, a get/set row pair for state that lives inside Jolt, spawned objects carrying the recipe that made them, per-section versions with a migration chain that runs on the parsed tree, and an atomic write. A file-level problem refuses the file; a record-level problem drops the record and counts it, so one unbuildable crate never costs a player the rest.
+
+## v0.19.0 — 2026-09-09
+
+- **The orthographic camera past the jitter** — six shader formulas and four CPU sites that assumed a perspective divide now branch on the projection matrix: the depth inverse, the view-position reconstruction, the near-plane recovery, screen-space lengths, the view ray and the per-fragment view vector, plus the cluster wedge, LOD selection, the occluder backface test and the cascade fit.
+- **A 2D preset** — bloom, GTAO, SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, an identity tone curve and a white ambient in one call, so a flat authored colour arrives on screen as itself. The flat primitives gained a normal and a tangent on the way, so a light can reach them at all.
+- **A public API surface** — 43 headers allowlisted public and every other one forwarded to an internal tree a consumer cannot name; one naming convention, subject first; objects created from description structs where zero means the default, so there is no init call and no before/after ordering to get wrong.
+- **Nothing fails silently** — the engine derives the camera, attaching a mesh uploads it and measures its bound, the draw list says by name what it will not draw and why, a material registers itself, a scene with no light at all warns once, and a run with no render hook draws the scene instead of nothing.
+- **Fields rather than setters** — every public struct's fields play one of three roles and the header says which: engine-owned, by function, or a plain setting written directly at any time. No plain-store setter survives, and the 2D apps get a canvas controller in place of the thirty lines each carried.
+- **Gamepads, and actions instead of key codes** — GLFW's standard layout with dead zones, hot-plug and a loadable mapping file behind a reader seam, and a table of named actions each reading one float from whichever of six sources is largest, so a stick and a key pair are the same action rather than two code paths. `apps/forest` walks in first person on it.
+- **Every app states its AA mode** — the sample count and the temporal filter are engine-config fields resolved before the targets they size, and the apps that had never chosen now each carry a decision: one sample where a temporal filter runs, four where 2D line art or motion-vector-less particles want them.
+- **The engine as a submodule** — `add_subdirectory` on a checkout, or FetchContent, with the outputs, the include tree and the app switch all scoped to the engine's own project; documented with a consumer's CMakeLists and a lit box in `main.c`.
+- **Two sketches ported onto the engine** — `sprites`, the 2023 particle globe, and `network`, the 2024 wireframe sphere, each behaving as it did.
+
+## v0.18.0 — 2026-09-02
+
+- **Occlusion culling** — authored occluders rasterised on the CPU into a masked depth buffer from this frame's camera, one conservative test per item per frame, opt-in through a `.cscn` field or a call. No query, no readback and no popping, since the buffer is built from the frame it culls; the off state for a scene with no occluders is two integer compares.
+- **A derived-data cook** — a transparent content-addressed cache over the deterministic startup bakes: cluster DAGs, Jolt shapes, eroded fields, mip chains, the moon surface and the cloud noise, plus a `--cook` pre-warm verb. The key is the identity, so a stale artefact is unfindable rather than detected, a miss always bakes live, and a corrupt entry is refused by name. The header carries the charter of what may not be cooked.
+- **Alpha distribution** — Floyd-Steinberg error diffusion placing the coverage a mip chain's scale cannot reach, gated on the rescale's own miss so a chain that already carries its coverage is untouched.
+- **A jittered alpha lookup** — a per-frame texcoord offset on the alpha fetch, so the temporal accumulator averages a dithered chain instead of freezing its pattern, and the Moire a lattice cutout prints at distance dissolves.
+
+## v0.17.0 — 2026-08-30
+
+- **Shader variants for the lit surface** — every material resolves to a program compiled for the features it actually uses, spliced in as a mask both languages read. No defines at all is the uber-shader, so a resolver that fails to run yields the slow program rather than a fast one missing a feature its material needed.
+- **Sampler units come back** — a lean variant declares 12 of the 16 texture units where the uber-shader declares all 16, because gating a read with the preprocessor lets the declaration go with it. The first mechanism here that leaves the unit ledger emptier than it found it rather than routing around it, and skinned programs get the same variants for a builder argument.
+- **The engine walks the scene graph** — one walk a frame, in the one statement of the frame that can hold it, so shadows are no longer drawn from last frame's transforms and LOD levels no longer chosen from stale positions. Apps get a pre-render hook for anything the frame's geometry depends on, and the previous-pose latch is split out of the walk so a late graph change can walk again safely.
+- **A shadow distance** — a view distance for the cascade fit separate from the camera's far clip, so a near cascade stops being fitted against a box the size of the whole scene; the depth pass builds its own caster order, since a depth map resolves by comparison and cannot see what order it was drawn in.
+- **Degenerate LOD bands alias** — a band whose cut is identical to its predecessor's shares that range instead of copying it, so a duplicate costs no index memory and no distinct batch key, compared by content rather than by triangle count.
+- **A profiler that can be believed** — every row divides by the same count, so a pass entered once and a pass entered every frame are addable; the frame clock brackets itself and publishes both its own work and its begin-to-begin period; and GPU rows that read 0.000 because their results were never collected read real time.
+
 ## v0.16.0 — 2026-08-28
 
 - **Stars** — a procedural night field on two octahedral lattices gathered 3x3, hashed with its own PCG because the sin-fract hash correlates on an integer lattice and renders visible strings of stars.
