@@ -396,6 +396,23 @@ void anim_graph_update(AnimGraph* graph, float dt) {
     if (graph->animator && animator_finished(graph->animator))
         graph->source_finished = true;
 
+    /*
+     * A RETURN state leaves BY ITSELF, following the animator rather than a row.
+     *
+     * The animator resumes the outgoing source on the frame its one-shot ends,
+     * inside its own update and with the graph standing still. Without this the
+     * graph would still name the one-shot while the animator had already gone
+     * back to the walk -- the two records of one fact this design exists to
+     * avoid, and undetectable precisely because there is no second record to
+     * disagree. Nothing is PLAYED here: the animator has already done it.
+     */
+    if (graph->states[graph->state].kind == ANIM_GRAPH_RETURN && graph->source_finished &&
+        graph->previous >= 0 && graph->previous != graph->state) {
+        graph->state = graph->previous;
+        graph->seconds = 0.0f;
+        graph->source_finished = false;
+    }
+
     int fired = -1;
     for (int i = 0; i < graph->row_count; i++) {
         if (!graph->row_live[i])
@@ -629,6 +646,9 @@ bool anim_graph_bind(AnimGraph* graph, Animator* animator, const char* start) {
     // never leave reads as a character that stops responding.
     for (int i = 0; i < graph->state_count; i++) {
         if (graph->state_source[i] == -2)
+            continue;
+        // A returning state's way out is the animator's resume, not a row.
+        if (graph->states[i].kind == ANIM_GRAPH_RETURN)
             continue;
         bool exit_exists = false;
         for (int r = 0; r < graph->row_count && !exit_exists; r++) {

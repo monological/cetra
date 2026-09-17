@@ -158,6 +158,13 @@ typedef enum AnimGraphStateKind {
      * the outgoing space INCLUDING its time, and that is the only path that
      * keeps the phase. What this adds over calling it directly is that the
      * return is NAMED in the table instead of implied by a stack of depth one.
+     *
+     * It needs NO row out and must not be given one: the graph follows the
+     * animator back to the state it came from when the clip ends, because the
+     * animator resumes inside its own update with the graph standing still, and
+     * a graph that did not follow would name the one-shot while the walk was
+     * already playing -- undetectable, because there is no second record to
+     * disagree with.
      */
     ANIM_GRAPH_RETURN,
 } AnimGraphStateKind;
