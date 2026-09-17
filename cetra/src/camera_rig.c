@@ -18,8 +18,10 @@ CameraRig* create_camera_rig(void) {
     camera_rig_set_distance(rig, 5.0f);
     rig->pitch_min = -1.5f;
     rig->pitch_max = 1.5f;
-    // apps/gametest's LOOK_YAW_RATE and LOOK_PITCH_RATE, which were apps/forest's
-    // written a second time.
+    // Radians a second at full deflection. A comfortable turn for a stick or a
+    // held key, which is slower than a hand on a mouse would want -- a key
+    // cannot modulate its own rate, so the rate has to suit a whole turn rather
+    // than a glance.
     rig->yaw_rate = 1.8f;
     rig->pitch_rate = 1.2f;
     rig->look_scale = 1.0f;

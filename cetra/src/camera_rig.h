@@ -10,7 +10,7 @@
  * one camera becomes another. Four apps hand-rolled that four times before this
  * existed, and the roadmap's complaint was not the duplication but its
  * consequence -- a hand-rolled camera also decides what the CONTROLS mean, and
- * in `apps/gametest` that decision flipped twice with nothing able to see it.
+ * that decision is the one a game is most likely to get wrong twice.
  *
  * WHAT A RIG IS: an anchor, an arm and an aim.
  *
@@ -25,9 +25,9 @@
  * caller writes, not which branch runs.
  *
  * `eye_lift` raises the eye WITHOUT raising the point it looks at, so the view
- * tilts down by an amount the pitch does not state. That is not a quirk to be
- * tidied away: it is `apps/gametest`'s follow camera, whose two menu goldens
- * frame the player through exactly that bias.
+ * tilts down by an amount the pitch does not state. That is a framing choice
+ * rather than a quirk to be tidied away, and a third-person camera that reads
+ * right is usually carrying one.
  *
  * FIRST PERSON has no aim POINT, only an aim direction, and the header says so
  * rather than the code smoothing it over: at `dist` 0 the eye and the look
@@ -61,9 +61,8 @@ typedef struct CameraRigPose {
  * answer, so a probe reports geometry and decides no policy.
  *
  * A SEAM rather than a physics call, for `ui.h`'s reason and `GamepadReadFn`'s:
- * this file must not know what a PhysicsWorld or a heightfield is, and the two
- * apps that need one answer it in completely different ways -- a Jolt raycast
- * filtered to static bodies, and a terrain height query.
+ * this file must not know what a PhysicsWorld or a heightfield is, and a rigid
+ * body cast and a height-field query are not the same question asked twice.
  *
  * It shortens the ARM and never moves the eye sideways or down, which is the
  * difference between a camera that tightens and one whose aim wanders. A
@@ -85,10 +84,10 @@ typedef struct CameraRig {
      * still agrees with it.
      *
      * A pose decomposed into an angle and an arm and put back together is not
-     * the pose it started as: the error is proportional to the arm, and at a
-     * 20,000-unit framing it reaches 0.002 world units -- enough that a restored
-     * session does not reproduce the session it came from. Keeping what was
-     * stated is what makes --cam-eye and a config restore exact.
+     * the pose it started as: the error is proportional to the arm, so a distant
+     * framing loses enough that a restored session does not reproduce the one it
+     * came from. Keeping what was stated is what makes --cam-eye and a config
+     * restore exact rather than nearly exact.
      *
      * `stated_derive` is what the derivation produced at the moment the pose was
      * stated, and the update compares against it. Comparing the ANSWER rather
@@ -148,9 +147,8 @@ typedef struct CameraRig {
      * Separate from the rates rather than folded into them, because settings are
      * applied on EVERY edit -- holding a sensitivity slider reaches this once a
      * frame -- and scaling a rate in place compounds until the camera spins.
-     * Measured at 9.11 rad/s where 4.05 was wanted, two applies in. The same
-     * idempotence engine_set_window_mode needed in spec 12.15, for the same
-     * reason and found the same way.
+     * The same idempotence engine_set_window_mode needed in spec 12.15, for the
+     * same reason.
      */
     float look_scale;  // 1 = as authored
     bool invert_pitch; // up on the stick looks down

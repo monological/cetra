@@ -223,25 +223,24 @@ static float cam_pose_fov_deg = 0.0f; // 0 = leave the camera's own default
 static bool parse_vec3_arg(const char* s, vec3 out) {
     return s && sscanf(s, "%f,%f,%f", &out[0], &out[1], &out[2]) == 3;
 }
-// The camera's heading, moved by the arrow keys and by NOTHING else.
-//
-// Every automatic version of this was wrong, and in the same way each time: player_yaw
-// follows the velocity, so a camera that chased it could never be in front of you.
-// Pressing back turned the character round and the camera swung in behind -- both
-// directions read as forward, and no sign change could fix it because there was no
-// backward to invert. A camera that only moves when you move it has none of that.
+/*
+ * The follow camera. Its heading moves on the arrow keys and the right stick and
+ * by NOTHING else.
+ *
+ * Every automatic version of that was wrong, and in the same way each time:
+ * player_yaw follows the velocity, so a camera that chased it could never be in
+ * front of you. Pressing back turned the character round and the camera swung in
+ * behind -- both directions read as forward, and no sign change could fix it
+ * because there was no backward to invert. A camera that only moves when you
+ * move it has none of that.
+ */
 static CameraRig* follow_rig = NULL;
 static float follow_cam_probe(void* user, const vec3 from, const vec3 to, float want);
 // Which of the two rigs the engine runs; settled once, in on_init. Two sites
 // deciding it separately is two statements that have to agree.
 static bool follow_cam_live = false;
-// 10.2 degrees down, which with the near distance below is an authored framing rather than a
-// number picked off a slider: eye 1.411 above the look point and 7.841 back from it.
-
-// 0 = tight on the player, 1 = the wide establishing shot (spec 12.13), and the height of
-// the last footing it is measured against. Seeded at the spawn height so the first frames
-// do not read as a fall from the origin.
-
+// The height of the last footing the shot's width is measured against. Seeded at
+// the spawn height so the first frames do not read as a fall from the origin.
 static float cam_ground_y = 0.0f;
 // forest's, in radians per second at full deflection, and the pitch clamped so the eye
 // cannot roll under the floor or over the top.
@@ -595,7 +594,7 @@ static SceneNode* create_box_node(Scene* scene, vec3 size, vec3 color, bool glas
 // down the shaft; the plate lost, and the character sat small in a large empty frame.
 //
 // FAR is what the single pair used to be, so the wide end is the framing that was here.
-// NEAR carries its whole rise in cam_pitch's default, so the height term is 0: the two are
+// NEAR carries its whole rise in the rig's initial pitch, so the height term is 0: the two are
 // redundant -- the eye is always aimed AT the look point, so a height offset and a pitch
 // offset move it the same way -- and putting it all in the angle leaves one number to read.
 #define FOLLOW_CAM_NEAR_DISTANCE (4.0f * PLAYER_SCALE)
@@ -3092,6 +3091,9 @@ static void on_init(Game* game) {
 
     follow_rig = create_camera_rig();
     follow_rig->steers_controls = true;
+    // Facing the player from +Z, and 10.2 degrees down: with the near distance
+    // below that is an authored framing rather than a number off a slider --
+    // eye 1.411 above the look point and 7.841 back from it.
     camera_rig_aim(follow_rig, (float)M_PI, -0.178f);
     follow_rig->look_lift = FOLLOW_CAM_LOOK_Y;
     follow_rig->pitch_min = CAM_PITCH_MIN;
@@ -3363,8 +3365,8 @@ static void on_update(Game* game, double dt) {
      * each direction has a comment that sounds conclusive. 12.13 made it WORLD-ALIGNED,
      * arguing that forward-away-from-camera welds the character's facing to the camera's,
      * so you only ever see its back and can never cross the frame. That cost is real and
-     * the conclusion still does not follow: `cam_yaw` moves ONLY when the player presses
-     * an arrow -- the camera chasing facing was tried in 12.6 and abandoned -- so orbiting
+     * the conclusion still does not follow: the follow camera's yaw moves ONLY when the player
+     * presses an arrow -- the camera chasing facing was tried in 12.6 and abandoned -- so orbiting
      * round to see the character's front is a thing the player can simply do. World
      * alignment trades that momentary inconvenience for a permanent one, in which turning
      * the camera ninety degrees leaves W walking across the screen.
@@ -3374,7 +3376,7 @@ static void on_update(Game* game, double dt) {
      * behaviour a player meets should be the one written down, and when they disagree the
      * documented one has at least been read by somebody.
      *
-     * SCOPE, since `cam_yaw` is the FOLLOW camera's own state and nothing else writes it:
+     * SCOPE, since the yaw is the FOLLOW rig's own and nothing else writes it:
      * under `--no-follow-cam` the drag controller owns the camera and this stays at pi, so
      * movement there is world-aligned as before, and the same holds under the `--cam-eye`
      * pinning that exists to freeze a framing for A/B captures. Deriving the heading back
@@ -6588,8 +6590,7 @@ static int run_cam_probe(const char* which) {
             camera_rig_update(rig, 0.1f, 0.0f, 0.0f);
         cam_probe_pose(which, "spent", rig);
         // Motion reduction: not a small shake, the SAME pose as no shake at all.
-        rig->shake_scale = 0.0f;
-        rig->shake_clock = 0.0f;
+        rig->shake_player_scale = 0.0f;
         camera_rig_shake(rig, 1.0f, 1.0f);
         camera_rig_update(rig, 0.1f, 0.0f, 0.0f);
         cam_probe_pose(which, "reduced", rig);
@@ -7748,14 +7749,18 @@ int main(int argc, const char* argv[]) {
     if (ui_probe && !strcmp(ui_probe, "settings")) {
         return run_ui_probe(ui_probe);
     }
-    // Every case but `seam` is pure arithmetic over camera_rig.c, so it needs no
-    // engine at all -- which is the rig's design asserted rather than described.
-    // `seam` is the exception by definition: it is about the ENGINE running the
-    // rig, so it takes a headless one and still never draws a frame.
-    if (cam_probe && strcmp(cam_probe, "seam") != 0 && strcmp(cam_probe, "settings") != 0) {
+    // Most cases are pure arithmetic over camera_rig.c and need no engine at all,
+    // which is the rig's design asserted rather than described. `seam` and
+    // `settings` are the two that do -- one is about the ENGINE running the rig,
+    // the other about settings reaching a live one -- and both take a headless
+    // game that still never draws a frame. Stated as the positive list, so a
+    // third does not have to be remembered in two places.
+    const bool cam_probe_needs_engine =
+        cam_probe && (!strcmp(cam_probe, "seam") || !strcmp(cam_probe, "settings"));
+    if (cam_probe && !cam_probe_needs_engine) {
         return run_cam_probe(cam_probe);
     }
-    if (cam_probe) {
+    if (cam_probe_needs_engine) {
         GameConfig probe_config = {.engine = {.title = "cam-probe", .headless = true}};
         Game* probe_game = create_game(&probe_config);
         if (!probe_game) {

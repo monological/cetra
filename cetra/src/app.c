@@ -61,10 +61,10 @@ void camera_drag_on_button(CameraDrag* drag, int button, int action, int mods) {
 /*
  * The pointer into the rig, then the rig into a pose.
  *
- * The recompute is HERE and not the caller's, because three of the four apps
- * converted in spec 12.19 forgot it in the space of one edit and their drags
- * went inert -- no error, no warning, a camera that simply stops. "Deliver the
- * input and work out what it means" is one operation, so it is one call.
+ * The recompute is HERE and not the caller's: "deliver the input and work out
+ * what it means" is one operation, and a caller that does the first and forgets
+ * the second gets a camera that silently stops rather than an error. Nothing
+ * else may update the same rig in the same frame -- this advances its clock.
  *
  * Every input this adapter produces is ABSOLUTE -- a drag states an aim, the
  * wheel and the keys state a distance -- so the rate arguments are always zero:
@@ -122,9 +122,7 @@ void camera_drag_update(CameraDrag* drag, float time) {
     // and that is a conversion rather than a preference: a rig's yaw and a
     // Camera's phi run in opposite senses (phi = -yaw + k, since the rig places
     // the eye along -dir while phi measures the eye's own bearing), and so do
-    // pitch and theta. Writing the old signs onto the new field silently
-    // reverses every drag in the viewer -- which is what it did, until
-    // cam-drag-orbit read -0.38 where it wanted +0.40.
+    // pitch and theta. Carrying the old signs across reverses every drag.
     camera_rig_aim(rig, drag->start_yaw + in->drag_fb_x * drag->sensitivity,
                    drag->start_pitch - in->drag_fb_y * drag->sensitivity);
     camera_rig_update(rig, dt, 0.0f, 0.0f);

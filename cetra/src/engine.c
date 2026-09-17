@@ -1462,8 +1462,6 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
     }
 }
 
-// Scroll feeds ImGui first; if the GUI isn't using the pointer, it forwards to
-// the app (e.g. camera zoom).
 static void _engine_pointer_scroll(Engine* engine, double xoffset, double yoffset) {
     if (engine_gui_wants_mouse())
         return;
@@ -1475,6 +1473,8 @@ static void _engine_pointer_scroll(Engine* engine, double xoffset, double yoffse
     }
 }
 
+// Scroll feeds ImGui first; if the GUI isn't using the pointer, it forwards to
+// the app (e.g. camera zoom).
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
 
@@ -1625,12 +1625,8 @@ void engine_set_camera_rig(Engine* engine, CameraRig* rig) {
         log_error("engine_set_camera_rig: NULL engine");
         return;
     }
-    if (engine->camera_rig && rig && engine->camera_rig != rig) {
-        // Said rather than done silently: five apps hand-rolled a guard against
-        // two things writing the camera, and a swap nobody announced is how the
-        // sixth would have found out.
+    if (engine->camera_rig && rig && engine->camera_rig != rig)
         log_info("camera rig replaced; the previous one no longer moves the camera");
-    }
     engine->camera_rig = rig;
 }
 
