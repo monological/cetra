@@ -24726,13 +24726,10 @@ CAM_SET_RIG = re.compile(
 def _cam_probe_settings(workdir):
     """gametest --cam-probe settings, against a per-run settings dir so a real
     player's file is never touched (settings.h's CETRA_SETTINGS_DIR)."""
-    env = dict(os.environ, CETRA_SETTINGS_DIR=os.path.join(workdir, "cam_settings"))
-    r = subprocess.run([GAMETEST, "--cam-probe", "settings"], capture_output=True, text=True,
-                       env=env)
-    text = r.stdout + r.stderr
-    f = CAM_SET_FILE.findall(text)
-    rows = CAM_SET_RIG.findall(text)
-    if r.returncode != 0 or not f or not rows:
+    text = _cam_probe_text("settings", os.path.join(workdir, "cam_settings"))
+    f = CAM_SET_FILE.findall(text) if text else []
+    rows = CAM_SET_RIG.findall(text) if text else []
+    if not f or not rows:
         return None
     fov = CAM_SET_FOV.findall(text)
     if not fov:
@@ -24748,13 +24745,11 @@ CAM_SEAM = re.compile(r"^cam seam (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (
 
 
 def _cam_probe_seam():
-    """gametest --cam-probe seam: {label: {eye, look}} off a HEADLESS engine.
-
-    The one camera case that needs an engine, because it is about the engine
-    running the rig rather than about the rig. It still draws no frame."""
-    r = subprocess.run([GAMETEST, "--cam-probe", "seam"], capture_output=True, text=True)
-    rows = CAM_SEAM.findall(r.stdout + r.stderr)
-    if r.returncode != 0 or not rows:
+    """--cam-probe seam: {label: {eye, look}} off a HEADLESS engine, since what it
+    asserts is the engine reaching a rig. It still draws no frame."""
+    text = _cam_probe_text("seam")
+    rows = CAM_SEAM.findall(text) if text else []
+    if not rows:
         return None
     return {row[0]: {"eye": [float(x) for x in row[1:4]], "look": [float(x) for x in row[4:7]]}
             for row in rows}
@@ -24765,10 +24760,10 @@ CAM_PROBE_DIST = re.compile(
 
 
 def _cam_probe_dist(case):
-    """The distance columns of a --cam-probe case: {label: {dist, eye_lift, wide}}."""
-    r = subprocess.run([GAMETEST, "--cam-probe", case], capture_output=True, text=True)
-    rows = CAM_PROBE_DIST.findall(r.stdout + r.stderr)
-    if r.returncode != 0 or not rows:
+    """The distance columns of a --cam-probe case. Same run as _cam_probe's."""
+    text = _cam_probe_text(case)
+    rows = CAM_PROBE_DIST.findall(text) if text else []
+    if not rows:
         return None
     return {row[0]: {"dist": float(row[1]), "arm": float(row[2]), "eye_lift": float(row[3]),
                      "wide": float(row[4])} for row in rows}
@@ -24777,13 +24772,26 @@ def _cam_probe_dist(case):
 CAM_PROBE_BASIS = re.compile(r"^cam basis (\S+) steers (\d) yaw (\S+)$", re.M)
 
 
+@functools.cache
+def _cam_probe_text(case, settings_dir=None):
+    """One gametest --cam-probe run, cached by case.
+
+    Through the shared runner, which carries the timeout -- a probe that wedges
+    should fail its group, not hang the suite. Cached because several arms read
+    different columns of one case's output and a spawn per column is a process
+    per regex."""
+    env = dict(os.environ, CETRA_SETTINGS_DIR=settings_dir) if settings_dir else None
+    text, rc = _gametest_probe_text("--cam-probe", case, env=env)
+    return None if rc != 0 else text
+
+
 def _cam_probe(case):
-    """gametest --cam-probe <case>: {label: pose}. No window, no GL, no engine --
-    camera_rig.c takes plain values and touches nothing, so an arm that needed a
-    frame would be evidence the design had slipped."""
-    r = subprocess.run([GAMETEST, "--cam-probe", case], capture_output=True, text=True)
-    rows = CAM_PROBE_POSE.findall(r.stdout + r.stderr)
-    if r.returncode != 0 or not rows:
+    """{label: pose} from a --cam-probe case. No window, no GL, no engine: the rig
+    takes plain values and touches nothing, so an arm that needed a frame would be
+    evidence the design had slipped."""
+    text = _cam_probe_text(case)
+    rows = CAM_PROBE_POSE.findall(text) if text else []
+    if not rows:
         return None
     out = {}
     for row in rows:
@@ -24793,9 +24801,9 @@ def _cam_probe(case):
 
 
 def _cam_probe_basis():
-    r = subprocess.run([GAMETEST, "--cam-probe", "basis"], capture_output=True, text=True)
-    rows = CAM_PROBE_BASIS.findall(r.stdout + r.stderr)
-    if r.returncode != 0 or not rows:
+    text = _cam_probe_text("basis")
+    rows = CAM_PROBE_BASIS.findall(text) if text else []
+    if not rows:
         return None
     return {label: (int(steers), float(yaw)) for label, steers, yaw in rows}
 
@@ -24812,54 +24820,40 @@ DRAG_SENSITIVITY = 0.002   # radians of orbit per framebuffer pixel
 DRAG_PAN_PER_UNIT = 0.0005 # world units per pixel, per unit of camera distance
 
 
-def _render_pointer_run(workdir, tag, script, frames):
-    """One scripted-pointer render run: {frame: pose} from --trace-camera, or None.
+def _pointer_run(workdir, binary, tag, script, frames, extra=()):
+    """One scripted-pointer run of `binary`: {frame: pose} from --trace-camera.
 
-    A pose is (eye, target, dist, theta, phi, ortho). The puppet is the model
-    because it is committed, small and has a fixture's stable bounds, so the
-    framing these arms start from is a constant rather than whatever an asset
-    happened to measure.
-    """
+    A pose is (eye, target, dist, theta, phi, ortho), off the line both apps
+    print through app_trace_camera -- one format, so the two cannot drift apart
+    under one regex."""
     path = os.path.join(workdir, f"pointer_{tag}.txt")
     with open(path, "w") as f:
         f.write(script)
-    r = subprocess.run(
-        [RENDER, "-m", asset("puppet.gltf"), "-x", "-W", "320", "-H", "200",
-         "-f", str(frames), "--no-scene-file", "--pointer-script", path, "--trace-camera"],
-        capture_output=True, text=True)
-    text = r.stdout + r.stderr
-    rows = RENDER_CAM.findall(text)
-    if r.returncode != 0 or not rows:
-        return None
-    out = {}
-    for row in rows:
-        f_no = int(row[0])
-        v = [float(x) for x in row[1:]]
-        out[f_no] = {"eye": v[0:3], "target": v[3:6], "dist": v[6],
-                     "theta": v[7], "phi": v[8], "ortho": v[9]}
-    return out
-
-
-def _shapes_pointer_run(workdir, tag, script, frames):
-    """One scripted-pointer shapes run: {frame: pose} from --trace-camera.
-
-    The 2D canvas, which until spec 12.19 no automated run could reach at all --
-    shapes had no headless mode and it is the only caller of CanvasController."""
-    path = os.path.join(workdir, f"canvas_{tag}.txt")
-    with open(path, "w") as f:
-        f.write(script)
-    r = subprocess.run([_bin("shapes"), "-x", "-f", str(frames),
+    r = subprocess.run([binary, "-x", "-f", str(frames), *extra,
                         "--pointer-script", path, "--trace-camera"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
     rows = RENDER_CAM.findall(r.stdout + r.stderr)
     if r.returncode != 0 or not rows:
         return None
-    out = {}
-    for row in rows:
-        v = [float(x) for x in row[1:]]
-        out[int(row[0])] = {"eye": v[0:3], "target": v[3:6], "dist": v[6],
-                            "theta": v[7], "phi": v[8], "ortho": v[9]}
-    return out
+    return {int(row[0]): {"eye": [float(x) for x in row[1:4]],
+                          "target": [float(x) for x in row[4:7]],
+                          "dist": float(row[7]), "theta": float(row[8]),
+                          "phi": float(row[9]), "ortho": float(row[10])} for row in rows}
+
+
+def _render_pointer_run(workdir, tag, script, frames):
+    """The viewer camera. The puppet is the model because it is committed, small
+    and has a fixture's stable bounds, so the framing these arms start from is a
+    constant rather than whatever an asset happened to measure."""
+    return _pointer_run(workdir, RENDER, tag, script, frames,
+                        ("-m", asset("puppet.gltf"), "-W", "320", "-H", "200",
+                         "--no-scene-file"))
+
+
+def _shapes_pointer_run(workdir, tag, script, frames):
+    """The 2D canvas, which no automated run could reach at all until shapes
+    gained a headless mode: it is the only caller of CanvasController."""
+    return _pointer_run(workdir, _bin("shapes"), f"canvas_{tag}", script, frames)
 
 
 def run_camera_gate(workdir):
