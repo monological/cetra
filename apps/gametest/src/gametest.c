@@ -230,14 +230,14 @@ static bool parse_vec3_arg(const char* s, vec3 out) {
 // Pressing back turned the character round and the camera swung in behind -- both
 // directions read as forward, and no sign change could fix it because there was no
 // backward to invert. A camera that only moves when you move it has none of that.
-static float cam_yaw = (float)M_PI;
+static CameraRig* follow_rig = NULL;
 // 10.2 degrees down, which with the near distance below is an authored framing rather than a
 // number picked off a slider: eye 1.411 above the look point and 7.841 back from it.
-static float cam_pitch = -0.178f;
+
 // 0 = tight on the player, 1 = the wide establishing shot (spec 12.13), and the height of
 // the last footing it is measured against. Seeded at the spawn height so the first frames
 // do not read as a fall from the origin.
-static float cam_wide = 0.0f;
+
 static float cam_ground_y = 0.0f;
 // forest's, in radians per second at full deflection, and the pitch clamped so the eye
 // cannot roll under the floor or over the top.
@@ -3070,17 +3070,42 @@ static void on_init(Game* game) {
         fprintf(stderr, "--cam-eye and --cam-target must both be given; ignoring the pose\n");
     }
 
-    // Create drag controller
+    /*
+     * Two rigs, and the one installed is the camera the run has.
+     *
+     * The follow camera trails the player and STEERS the controls; the viewer
+     * orbits a fixed point on a drag and leaves them in world axes. That
+     * asymmetry is spec 12.17's and it survives here as a field rather than as
+     * which branch happened to write the camera -- which is what let the scheme
+     * flip twice with nothing able to say which was live.
+     *
+     * A PINNED pose (--cam-eye) takes the viewer rig with no input reaching it,
+     * because pinning states a pose and should not silently rotate the controls.
+     */
     view_rig = create_camera_rig();
     camera_rig_set_pose(view_rig, camera->position, camera->look_at);
     drag_controller = create_camera_drag(engine, view_rig);
-    // Installed only where the VIEWER camera is the live one. The follow camera
-    // still writes the camera itself until spec 12.19 phase 5 converts it, and
-    // installing a rig beside it makes two writers -- which the engine's one
-    // slot turns into a visible 305k-pixel golden failure rather than a subtle
-    // one. Phase 5 deletes this condition along with the last direct writer.
-    if (!follow_cam || (cam_eye_set && cam_target_set))
-        engine_set_camera_rig(engine, view_rig);
+
+    follow_rig = create_camera_rig();
+    follow_rig->steers_controls = true;
+    camera_rig_aim(follow_rig, (float)M_PI, -0.178f);
+    follow_rig->look_lift = FOLLOW_CAM_LOOK_Y;
+    follow_rig->pitch_min = CAM_PITCH_MIN;
+    follow_rig->pitch_max = CAM_PITCH_MAX;
+    follow_rig->yaw_rate = LOOK_YAW_RATE;
+    follow_rig->pitch_rate = LOOK_PITCH_RATE;
+    follow_rig->near_dist = FOLLOW_CAM_NEAR_DISTANCE;
+    follow_rig->far_dist = FOLLOW_CAM_FAR_DISTANCE;
+    follow_rig->near_eye_lift = FOLLOW_CAM_NEAR_HEIGHT;
+    follow_rig->far_eye_lift = FOLLOW_CAM_FAR_HEIGHT;
+    follow_rig->widen_rate = FOLLOW_CAM_WIDEN_RATE;
+    follow_rig->tighten_rate = FOLLOW_CAM_TIGHTEN_RATE;
+    // Never collapse onto the player: inside its own capsule the rig fills the
+    // frame and the near plane starts clipping the puppet instead of the rock.
+    follow_rig->min_dist = 2.0f * PLAYER_SCALE;
+
+    const bool pinned = cam_eye_set && cam_target_set;
+    engine_set_camera_rig(engine, (follow_cam && !pinned) ? follow_rig : view_rig);
 
     // No GUI or FPS overlay headless, as the other apps: the FPS digits are
     // wall clock and land in the screenshot, which is what made two identical
@@ -3159,7 +3184,15 @@ static void on_update(Game* game, double dt) {
      * vector gives the same number -- which is exactly why it should be computed from
      * one of them, once, rather than twice under one name in two scopes.
      */
-    const float cam_sin = sinf(cam_yaw), cam_cos = cosf(cam_yaw);
+    // What the controls MEAN is asked of the camera rather than assumed: a rig
+    // that steers publishes the frame its input is read in, and one that does
+    // not leaves the input in world axes. Before spec 12.19 this read a file
+    // static belonging to the follow camera, which is why the scheme could flip
+    // in 12.13 and back in 12.17 with nothing able to contradict either.
+    float basis_yaw = 0.0f;
+    const bool camera_steers = camera_rig_move_basis(follow_rig, &basis_yaw);
+    const float cam_sin = camera_steers ? sinf(basis_yaw) : 0.0f;
+    const float cam_cos = camera_steers ? cosf(basis_yaw) : -1.0f;
     const vec3 want_dir = {-cam_cos * input_dir[0] - cam_sin * input_dir[2], 0.0f,
                            cam_sin * input_dir[0] - cam_cos * input_dir[2]};
     const float lean = hypotf(want_dir[0], want_dir[2]);
@@ -3547,7 +3580,7 @@ static void on_update(Game* game, double dt) {
         // because `vel` above is camera-relative since 12.17, and a reader with no
         // camera angle can see that the two disagree but not that they disagree by
         // exactly the amount the arrows asked for.
-        printf(" cam %.4f", (double)cam_yaw);
+        printf(" cam %.4f", (double)(follow_rig ? follow_rig->yaw : 0.0f));
         // And the character's own heading, after it (spec 12.18), for the same reason
         // and by the same rule: appended rather than inserted, since every regex reading
         // this line counts its groups from the left. A clip that turns the body turns
@@ -3768,109 +3801,88 @@ static void ik_update_targets(Game* game) {
 // Yaw comes from player_yaw, the smoothed facing the locomotion block already maintains,
 // so there is nothing to drive and nothing to learn -- and world-aligned WASD stays
 // coherent, because the camera ends up behind whatever direction you walked.
+/*
+ * Keep the camera in front of the rock instead of inside it.
+ *
+ * A rig places the eye as a pure function of yaw, pitch and the player, so
+ * nothing in it knows the basin exists: stand near a wall and the eye is simply
+ * placed behind it, and the shot becomes the far side of the world seen through
+ * the near side. This answers how much of the arm is clear, and the rig shortens
+ * it -- so the shot tightens rather than breaking, and the AIM is untouched.
+ *
+ * Filtered to STATIC on purpose. Crates and the door are things you walk around,
+ * not things the camera should be shoved by, and letting a physics prop drive
+ * the camera is how a follow cam starts lurching for reasons the player cannot
+ * see.
+ *
+ * This is a RAY, and that is a stated limit rather than an oversight: a
+ * zero-radius probe can pass beside an edge the frustum still straddles, so a
+ * corner can clip the near plane even when the ray is clear. The rig's skin buys
+ * most of that back, and physics_world_sweep_body is the honest fix if it turns
+ * out not to be enough -- which the seam now makes a one-function change.
+ */
+static float follow_cam_probe(void* user, const vec3 from, const vec3 to, float want) {
+    PhysicsWorld* physics = user;
+    if (!physics || want <= 1e-4f)
+        return 1.0f;
+    vec3 dir;
+    glm_vec3_sub((float*)to, (float*)from, dir);
+    glm_vec3_divs(dir, want, dir);
+    RaycastHit hit;
+    if (!physics_world_raycast_filtered(physics, (float*)from, dir, want, 1u << OBJ_LAYER_STATIC,
+                                        &hit) ||
+        !hit.hit)
+        return 1.0f;
+    return hit.distance / want;
+}
+
 static void follow_camera_update(Game* game) {
-    Engine* engine = game ? game->engine : NULL;
-    if (!engine || !engine->camera || !player_entity)
+    const Engine* engine = game ? game->engine : NULL;
+    if (!engine || !engine->camera || !player_entity || !follow_rig)
         return;
 
-    vec3 focus;
-    glm_vec3_copy(player_entity->position, focus);
-    focus[1] += FOLLOW_CAM_LOOK_Y;
-
-    // On the sim clock rather than the frame's, so the turn is the same headless and
-    // windowed -- this hook is handed an interpolant, not a delta.
-    const float look_dt = (float)game->sim_clock.delta;
-    cam_yaw -= input_action_value(&game->input, "look_x") * LOOK_YAW_RATE * look_dt;
-    cam_pitch += input_action_value(&game->input, "look_y") * LOOK_PITCH_RATE * look_dt;
-    cam_pitch = glm_clamp(cam_pitch, CAM_PITCH_MIN, CAM_PITCH_MAX);
+    // The rig is anchored on the ENTITY rather than the rig node's global
+    // transform, because the graph walk runs after this hook and a node's global
+    // is one frame old here.
+    glm_vec3_copy(player_entity->position, follow_rig->anchor);
 
     /*
-     * How far back to sit: close while there is ground under the player, opening out as it
-     * falls away from the last ground there was.
+     * How far back to sit: close while there is ground under the player, opening
+     * out as it falls away from the last ground there was. The rig owns the
+     * smoothing and the two ends; what is decided here is only the SIGNAL, which
+     * is the half that knows what this game is about.
      *
-     * The signal is that DROP and not whether the player is airborne. A jump is airborne
-     * too, and it only ever goes up -- so measured against the last footing its drop is at
-     * or below zero for the whole rise and small on the landing, and hopping on the spot
-     * moves the shot not at all. Walking off the plate is the case this exists for, and it
-     * is the only one that puts real distance between the player and the last solid thing
-     * under it.
+     * The signal is that DROP and not whether the player is airborne. A jump is
+     * airborne too, and it only ever goes up -- so measured against the last
+     * footing its drop is at or below zero for the whole rise and small on the
+     * landing, and hopping on the spot moves the shot not at all. Walking off
+     * the plate is the case this exists for, and it is the only one that puts
+     * real distance between the player and the last solid thing under it.
      *
-     * Deliberately NOT player_medium, which looks made for this and is not: MEDIUM_AIR is
-     * only ever entered on a rig that ships a fall clip, so a camera keyed to it would
-     * frame the generated puppet differently from an imported one.
+     * Deliberately NOT player_medium, which looks made for this and is not:
+     * MEDIUM_AIR is only ever entered on a rig that ships a fall clip, so a
+     * camera keyed to it would frame the generated puppet differently from an
+     * imported one.
      *
-     * Swimming counts as footing. Reaching the water at the bottom is the end of the fall,
-     * so the shot comes back in rather than staying wide because a controller that is
-     * swimming is not "grounded".
+     * Swimming counts as footing. Reaching the water at the bottom is the end of
+     * the fall, so the shot comes back in rather than staying wide because a
+     * controller that is swimming is not "grounded".
      */
     CharacterController* cam_cc = entity_get_character_controller(player_entity);
     if ((cam_cc && character_controller_is_grounded(cam_cc)) || player_swimming)
         cam_ground_y = player_entity->position[1];
     const float drop = cam_ground_y - player_entity->position[1];
-    const float wide_target =
+    follow_rig->want_wide =
         glm_clamp((drop - FOLLOW_CAM_DROP_START) / (FOLLOW_CAM_DROP_FULL - FOLLOW_CAM_DROP_START),
                   0.0f, 1.0f);
-    const float rate = wide_target > cam_wide ? FOLLOW_CAM_WIDEN_RATE : FOLLOW_CAM_TIGHTEN_RATE;
-    cam_wide += (wide_target - cam_wide) * (1.0f - expf(-rate * look_dt));
 
-    const float distance =
-        FOLLOW_CAM_NEAR_DISTANCE + (FOLLOW_CAM_FAR_DISTANCE - FOLLOW_CAM_NEAR_DISTANCE) * cam_wide;
-    const float height =
-        FOLLOW_CAM_NEAR_HEIGHT + (FOLLOW_CAM_FAR_HEIGHT - FOLLOW_CAM_NEAR_HEIGHT) * cam_wide;
+    camera_rig_set_probe(follow_rig, follow_cam_probe, game_get_physics_world(game));
 
-    // Orbit the player on that heading. The camera follows POSITION and never rotates on
-    // its own: the arrows are the only thing that turns it.
-    const float cp = cosf(cam_pitch);
-    vec3 eye = {focus[0] - sinf(cam_yaw) * cp * distance,
-                focus[1] + height - sinf(cam_pitch) * distance,
-                focus[2] - cosf(cam_yaw) * cp * distance};
-
-    /*
-     * Keep the camera in front of the rock instead of inside it.
-     *
-     * The orbit above is a pure function of yaw, pitch and the player, so nothing in it
-     * knows the basin exists: stand near a wall and the eye is simply placed behind it,
-     * and the shot becomes the far side of the world seen through the near side. A ray
-     * from the player to where the eye WANTS to be answers that directly -- if rock is in
-     * the way the arm is shortened to just short of the hit, so the shot tightens rather
-     * than breaking.
-     *
-     * Filtered to STATIC on purpose. Crates and the door are things you walk around, not
-     * things the camera should be shoved by, and letting a physics prop drive the camera
-     * is how a follow cam starts lurching for reasons the player cannot see.
-     *
-     * This is a RAY, and that is a stated limit rather than an oversight: a zero-radius
-     * probe can pass beside an edge the frustum still straddles, so a corner can clip the
-     * near plane even when the ray is clear. The skin below buys most of that back, and
-     * physics_world_sweep_body is the honest fix if it turns out not to be enough.
-     */
-    PhysicsWorld* physics = game_get_physics_world(game);
-    if (physics) {
-        vec3 arm;
-        glm_vec3_sub(eye, focus, arm);
-        const float want = glm_vec3_norm(arm);
-        if (want > 1e-4f) {
-            vec3 dir;
-            glm_vec3_divs(arm, want, dir);
-            RaycastHit hit;
-            if (physics_world_raycast_filtered(physics, focus, dir, want, 1u << OBJ_LAYER_STATIC,
-                                               &hit) &&
-                hit.hit) {
-                // Never collapse onto the player: inside its own capsule the rig fills the
-                // frame and the near plane starts clipping the puppet instead of the rock.
-                const float min_arm = 2.0f * PLAYER_SCALE;
-                const float skin = 0.6f;
-                float len = hit.distance - skin;
-                if (len < min_arm)
-                    len = min_arm;
-                glm_vec3_scale(dir, len, arm);
-                glm_vec3_add(focus, arm, eye);
-            }
-        }
-    }
-
-    camera_set_position(engine->camera, eye);
-    camera_set_look_at(engine->camera, focus);
+    // On the sim clock rather than the frame's, so the turn is the same headless
+    // and windowed -- this hook is handed an interpolant, not a delta.
+    camera_rig_update(follow_rig, (float)game->sim_clock.delta,
+                      input_action_value(&game->input, "look_x"),
+                      input_action_value(&game->input, "look_y"));
 }
 
 /*
@@ -3985,9 +3997,12 @@ static void on_shutdown(Game* game) {
 
     if (drag_controller) {
         free_camera_drag(drag_controller);
-        free_camera_rig(view_rig);
         drag_controller = NULL;
     }
+    free_camera_rig(view_rig);
+    view_rig = NULL;
+    free_camera_rig(follow_rig);
+    follow_rig = NULL;
 
     free_save_system(save_system);
     save_system = NULL;
