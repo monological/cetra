@@ -209,6 +209,18 @@ bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods) {
     }
 }
 
+void app_trace_camera(const Engine* engine) {
+    if (!engine || !engine->camera)
+        return;
+    const Camera* c = engine->camera;
+    printf("cam %zu eye %.9g %.9g %.9g target %.9g %.9g %.9g dist %.9g theta %.9g phi %.9g "
+           "ortho %.9g\n",
+           engine->total_frames, (double)c->position[0], (double)c->position[1],
+           (double)c->position[2], (double)c->look_at[0], (double)c->look_at[1],
+           (double)c->look_at[2], (double)c->distance, (double)c->theta, (double)c->phi,
+           (double)camera_ortho_height(c));
+}
+
 /*
  * Canvas Controller Implementation
  */

@@ -2639,15 +2639,8 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     // spec 12.19 the engine applies the camera rig after that hook returns, so a
     // trace taken there reads last frame's camera and reports every drag one
     // frame short. %.9g because a textual diff of two runs is then a bit diff.
-    if (trace_camera && engine->camera) {
-        const Camera* c = engine->camera;
-        printf("cam %zu eye %.9g %.9g %.9g target %.9g %.9g %.9g dist %.9g theta %.9g phi %.9g "
-               "ortho %.9g\n",
-               engine->total_frames, (double)c->position[0], (double)c->position[1],
-               (double)c->position[2], (double)c->look_at[0], (double)c->look_at[1],
-               (double)c->look_at[2], (double)c->distance, (double)c->theta, (double)c->phi,
-               (double)camera_ortho_height(c));
-    }
+    if (trace_camera)
+        app_trace_camera(engine);
 
     engine_render_scene(engine, current_scene);
 

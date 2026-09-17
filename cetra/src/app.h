@@ -126,6 +126,16 @@ void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y);
 // zoom_step^yoffset about the point under the cursor, within the range.
 void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset);
 
+// The camera pose a frame draws from, on stdout, at a width that makes a textual
+// diff of two runs a bit diff.
+//
+// Here because two apps print it and one regex parses both: a format spelled
+// twice is two places for the contract to drift, and the drift would keep
+// matching. Call it from the RENDER callback, not the pre-render hook -- the
+// engine applies the camera rig after that hook returns, so a trace taken there
+// reports last frame's camera.
+void app_trace_camera(const Engine* engine);
+
 /*
  * Light Rigs
  */
