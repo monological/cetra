@@ -672,8 +672,23 @@ void animator_update(Animator* a, float dt) {
      * that forgets is a game whose corpse plays footsteps -- which is what
      * shipped, and what no arm could see.
      */
-    if (ragdoll_active(a->state->ragdoll))
+    if (ragdoll_active(a->state->ragdoll)) {
+        // Still APPLY, though, and that distinction is the whole of it:
+        // `animation_state_apply_pose` is where `ragdoll_apply` lives and where
+        // the skinning matrices are rebuilt, so returning outright leaves the
+        // rig holding whatever matrices were last built -- its bind pose -- while
+        // physics carries the node away. A T-pose sinking through the floor,
+        // which is what the first version of this did.
+        //
+        // The pose handed over is ignored for the globals -- the ragdoll replaces
+        // them -- but it still has to BE one, since apply refuses a pose bound to
+        // another skeleton, and an animator ragdolled before anything ever played
+        // has none yet.
+        if (!a->base_pose.skeleton)
+            pose_bind(a->state->skeleton, &a->base_pose);
+        animation_state_apply_pose(a->state, &a->base_pose, dt);
         return;
+    }
 
     if (!a->playing || a->base.count == 0)
         return;

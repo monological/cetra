@@ -24999,6 +24999,10 @@ def run_ragdoll_gate(workdir):
                        sits its bind distance from the one it hangs from
       ragdoll-frees    building and destroying leaves the world's body count where it
                        started
+      ragdoll-animator the path a ragdolled character is actually DRAWN through: an
+                       animator ticked while a ragdoll owns the pose still writes the
+                       bones, and writes exactly what applying the ragdoll by hand
+                       would
 
     Unlike the display group, the SIMULATION is reachable here: a headless game carries
     a real physics world, so these arms step Jolt and read the bodies back rather than
@@ -25189,6 +25193,26 @@ def run_ragdoll_gate(workdir):
           f"without removing them, so a missed removal is invisible until the pool runs "
           f"out)")
     note("ragdoll-frees", ok)
+
+    # ---- ragdoll-animator
+    #
+    # Every arm above calls ragdoll_apply ITSELF. The game reaches it through
+    # animator_update -> animation_state_apply_pose, and spec 12.20 stood the
+    # animator down while a ragdoll owns the pose without noticing that the apply
+    # it returned before was where the ragdoll got written. Nine green arms and a
+    # character T-posing through the floor, found by looking at it.
+    p = _ragdoll_probe("animator")
+    moved = p.get(("animator", "hips", "moved")) if p else None
+    agrees = p.get(("animator", "bones", "agrees")) if p else None
+    if moved is None or agrees is None:
+        ok, detail = False, "the probe failed or measured nothing"
+    else:
+        ok = moved[0] > 0.5 and agrees[0] < 1e-5
+        detail = (f"through animator_update alone the hips left bind by {moved[0]:.4f} m "
+                  f"(want > 0.5: a return before the apply leaves the rig at bind) and every "
+                  f"bone matches applying the ragdoll directly to {agrees[0]:.6f} (want 0)")
+    print(f"  ragdoll-animator {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ragdoll-animator", ok)
 
     return failed
 

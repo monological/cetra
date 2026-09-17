@@ -4896,6 +4896,68 @@ static int run_ragdoll_probe(Game* game, const char* which) {
         printf("ragdoll frees world bodies %d %d %d\n", before_bodies, after_bodies, freed_bodies);
     }
 
+    if (all || !strcmp(which, "animator")) {
+        ran = true;
+        /*
+         * The path a ragdolled character is actually DRAWN through, which every
+         * arm above misses: they call `ragdoll_apply` themselves, and the game
+         * reaches it through `animator_update` -> `animation_state_apply_pose`.
+         *
+         * Spec 12.20 stood the animator down while a ragdoll owns the pose so a
+         * corpse stops firing its clip's footstep events -- and returned before
+         * the apply, so the ragdoll was never written to the bones at all. The
+         * rig held its last matrices, which is a T-pose, while physics carried
+         * the node away. Nine green arms and a demo sinking through the floor,
+         * found by looking at it.
+         */
+        PhysicsWorld* physics = ik_probe_world(game, (vec3){0.0f, 0.0f, 0.0f});
+        Animator* a = physics ? create_animator(skel) : NULL;
+        RagdollSystem* rd = a ? create_ragdoll(skel, skinned, skinned_count, 1.0f) : NULL;
+        if (!rd) {
+            fprintf(stderr, "ragdoll-probe: could not build an animator and a ragdoll\n");
+            return 1;
+        }
+        a->state->ragdoll = rd;
+        compute_bind_pose_matrices(a->state);
+
+        const int hips = ragdoll_bone_index(rd, RAGDOLL_HIPS);
+        vec3 bind_hips;
+        glm_vec3_copy(a->state->global_transforms[hips][3], bind_hips);
+
+        mat4 to_world = GLM_MAT4_IDENTITY_INIT;
+        to_world[3][1] = 3.0f;
+        if (!ragdoll_start(rd, physics->physics_system, OBJ_LAYER_DYNAMIC,
+                           a->state->global_transforms, to_world)) {
+            fprintf(stderr, "ragdoll-probe: start refused\n");
+            return 1;
+        }
+        // Fall, and drive the rig ONLY through the animator -- no ragdoll_apply
+        // here, which is the whole point.
+        for (int i = 0; i < 120; i++) {
+            physics_world_update(physics, 1.0f / 60.0f, 4);
+            animator_update(a, 1.0f / 60.0f);
+        }
+        printf("ragdoll animator hips moved %.6f\n",
+               (double)glm_vec3_distance(bind_hips, a->state->global_transforms[hips][3]));
+        // And it must be the SAME pose a caller gets by applying the ragdoll
+        // itself -- which is what every other arm here does, and what the broken
+        // version silently stopped doing. Worst bone over the whole skeleton.
+        mat4* direct = calloc(skel->bone_count, sizeof(mat4));
+        if (direct) {
+            skeleton_compute_bind_globals(skel, direct);
+            ragdoll_apply(rd, direct);
+            float worst = 0.0f;
+            for (size_t i = 0; i < skel->bone_count; i++) {
+                const float d = glm_vec3_distance(direct[i][3], a->state->global_transforms[i][3]);
+                if (d > worst)
+                    worst = d;
+            }
+            printf("ragdoll animator bones agrees %.6f\n", (double)worst);
+            free(direct);
+        }
+        free_animator(a); // frees the state, which frees the ragdoll
+    }
+
     if (!ran) {
         fprintf(stderr, "ragdoll-probe: unknown case '%s'\n", which ? which : "(null)");
         return 1;
