@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -27,6 +28,24 @@ const unsigned int WIDTH = 375;
 // World-space height of the 2D view volume. Matches the framing the old perspective camera
 // gave at its 300-unit distance (2 * 300 * tan(0.37 / 2)).
 #define ORTHO_HEIGHT 112.3f
+
+// --trace-camera: the pose the frame draws from, which is the instrument the
+// camera gate reads. Printed in the RENDER callback and not the pre-render hook,
+// because the engine applies the camera rig after that hook returns.
+static bool trace_camera = false;
+
+static void canvas_trace(Engine* engine, Scene* scene) {
+    engine_render_scene(engine, scene);
+    if (!trace_camera || !engine->camera)
+        return;
+    const Camera* c = engine->camera;
+    printf("cam %zu eye %.9g %.9g %.9g target %.9g %.9g %.9g dist %.9g theta %.9g phi %.9g "
+           "ortho %.9g\n",
+           engine->total_frames, (double)c->position[0], (double)c->position[1],
+           (double)c->position[2], (double)c->look_at[0], (double)c->look_at[1],
+           (double)c->look_at[2], (double)c->distance, (double)c->theta, (double)c->phi,
+           (double)camera_ortho_height(c));
+}
 
 // A drag on a shape moves it, a drag on empty canvas pans, the wheel zooms.
 static CanvasController* canvas = NULL;
@@ -79,7 +98,29 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 /*
  * CETRA MAIN
  */
-int main() {
+int main(int argc, char** argv) {
+    /*
+     * Headless, a frame limit and a scripted pointer (spec 12.19).
+     *
+     * This app had none of them, which made the 2D canvas the one camera in the
+     * tree no automated run could reach: it is the only caller of
+     * CanvasController, and a conversion nothing can check is a conversion
+     * verified by hand or not at all.
+     */
+    bool headless = false;
+    int frames = 0;
+    const char* pointer_script = NULL;
+    for (int i = 1; i < argc; i++) {
+        const char* a = argv[i];
+        if (!strcmp(a, "-x") || !strcmp(a, "--headless"))
+            headless = true;
+        else if ((!strcmp(a, "-f") || !strcmp(a, "--frames")) && i + 1 < argc)
+            frames = atoi(argv[++i]);
+        else if (!strcmp(a, "--pointer-script") && i + 1 < argc)
+            pointer_script = argv[++i];
+        else if (!strcmp(a, "--trace-camera"))
+            trace_camera = true;
+    }
 
     // NO AA POLICY HERE, DELIBERATELY: the config's msaa_samples and taa are
     // left at their defaults. This app keeps the engine's 4x MSAA and no
@@ -88,7 +129,8 @@ int main() {
     // scene moves, so a temporal accumulator would have only its own jitter to
     // integrate while switching on the aux G-buffer, the resolve, and the
     // eight passes keyed off taa_resolving.
-    EngineConfig cfg = {.title = "Cetra Engine", .width = WIDTH, .height = HEIGHT};
+    EngineConfig cfg = {
+        .title = "Cetra Engine", .width = WIDTH, .height = HEIGHT, .headless = headless};
     Engine* engine = create_engine(&cfg);
     if (!engine) {
         fprintf(stderr, "Failed to initialize engine\n");
@@ -193,7 +235,12 @@ int main() {
 
     scene_print(scene);
 
-    engine_run(engine, NULL, NULL, NULL);
+    engine->exit_after_frames = frames;
+    if (pointer_script && !engine_set_pointer_script(engine, pointer_script)) {
+        free_engine(engine);
+        return 1;
+    }
+    engine_run(engine, NULL, NULL, canvas_trace);
 
     printf("Cleaning up...\n");
     free_canvas_controller(canvas);
