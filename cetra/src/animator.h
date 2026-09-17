@@ -26,7 +26,9 @@
  *
  * There is no state machine here. A game decides what plays and when; this
  * fades, blends and reports. A clip's own clock is in its ticks; fades and dt
- * are in seconds, unscaled by `speed`.
+ * are in seconds, unscaled by `speed`. Since spec 12.20 a game may make that
+ * decision as DATA instead of as code -- `anim_graph.h` -- which is a layer over
+ * this file and not a change to it: the sentence above is still true here.
  */
 
 #include "animation.h"
@@ -195,8 +197,24 @@ void animator_play_once(Animator* animator, const Animation* clip, float fade_se
 // Nothing plays: the skeleton returns to bind, springs reset.
 void animator_stop(Animator* animator);
 
-// A per-frame EDGE, like input's pressed(): true only on the frame a
-// non-looping base source reached its end.
+/*
+ * A per-frame EDGE, like input's pressed(): true only on the frame a
+ * non-looping base source reached its end.
+ *
+ * AN EDGE IS THE HAZARD HERE, and the asymmetry with `animator_layer_finished`
+ * below -- which is a LATCH, held until the next play -- is an accident rather
+ * than a design. This one is cleared unconditionally at the top of every update
+ * and never re-arms, so a reader that runs at any cadence but once per update
+ * drops it or reads it twice. That is exactly what shipped in the one game that
+ * read it: from a fixed step running zero, one or several times a frame, the
+ * jump-to-fall hand-off was lost or doubled, and no headless arm could see it
+ * because headless is always one step per frame.
+ *
+ * `anim_graph.c` therefore LATCHES it on entry to a state rather than reading it
+ * live, and any other consumer wants the same. Making this a latch cleared on
+ * the next play -- the shape the layer already has -- would delete the need, and
+ * is a change to spec 12.1's published contract rather than 12.20's to make.
+ */
 bool animator_finished(const Animator* animator);
 
 // The base source's name: a space's given one, a clip's own, "" when nothing

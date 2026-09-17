@@ -1,4 +1,5 @@
 #include "animator.h"
+#include "ragdoll.h"
 #include "rigging.h"
 #include "springbone.h"
 #include "ext/log.h"
@@ -656,6 +657,23 @@ void animator_update(Animator* a, float dt) {
     // rather than a frozen nonzero one.
     animation_snapshot_prev_pose(a->state);
     a->finished = false;
+
+    /*
+     * A ragdoll owns the pose, so nothing here has anything to contribute.
+     *
+     * `animation_state_apply_pose` already REPLACES what this file produces
+     * while one is active, and argues there that a ragdoll is an alternative to
+     * the stateful stages rather than a fourth one after them. This is that same
+     * argument applied to the stage that FEEDS it: left running, the clock keeps
+     * advancing, the clip's own events keep firing from a body nobody is
+     * drawing, and root motion accumulates with nobody draining it.
+     *
+     * In the engine rather than in each game's own state table, because a game
+     * that forgets is a game whose corpse plays footsteps -- which is what
+     * shipped, and what no arm could see.
+     */
+    if (ragdoll_active(a->state->ragdoll))
+        return;
 
     if (!a->playing || a->base.count == 0)
         return;

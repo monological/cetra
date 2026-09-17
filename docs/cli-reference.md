@@ -787,6 +787,30 @@ no window that ticks ANIMATOR components through the loop's own `update_all_anim
 inserted so the `gamepad` group's regex still matches the same line -- and since 12.18 a
 `yaw <radians>` column after the camera's, appended for the same reason.
 
+**Since 12.20 the rig plays what a TABLE says.** `cetra/src/anim_graph.h` carries the states and
+the transitions; what the app writes each frame is what is true (a ground knob, a rate, a depth in
+metres, grounded, vertical speed, ragdolled) and the graph decides the rest. Three consequences a
+driver of this app will meet. **`--graph-probe <case>`** is the headless probe the `graph` gate
+group reads -- `order`, `any`, `and`, `trigger`, `elapsed`, `hysteresis`, `reenter`, `disabled`,
+`instances`, `unreachable`, `authoring`, and the four that need a rig: `finished`, `fade`, `guard`,
+`return`, `identity`. Most create **no engine at all**, because a graph binds to a NULL animator
+and a state may name no source, so the table is exercisable as the pure function over named values
+it is. **`--trace-player` gains a third tail**, `graph <state> <seconds>`, after `yaw` and by the
+same append-never-insert rule -- and no state may be named containing `" yaw "`, since that
+regex is greedy. The source column above says what is PLAYING, which a state and its resume can
+share; this says which state chose it. **`--no-swim`** withholds the stroke clips, which makes the
+water state unreachable: the run says so once by name at startup and prunes every row into it.
+It exists because no committed rig reaches that configuration -- the generated puppet carries a
+stroke and a rig with no locomotion of its own is given the shared set, which carries one too --
+while a downloaded humanoid with its own walk and no swim is the ordinary case `--puppet` is for.
+Before the graph, that character was labelled as swimming while its walk cycle played, had its
+playback rate pinned and its root-motion branch skipped, and decayed to a standstill.
+
+Two states on the committed default are **unreachable and say so**: it carries no `fall_cycle` and
+no `touch_down`, so `air` and `land` are pruned and a jump is the rise alone. The full airborne
+path needs a rig with no locomotion of its own -- `--puppet assets/models/t_pose.fbx`, which takes
+the shared set -- and that is what `graph-parity-air` runs on.
+
 **It is frame-deterministic headless, and this paragraph said otherwise for six specs.** Two runs
 of one script trace byte-identically and their frames differ by **0 px** (measured, spec 11.109),
 because headless the engine hands the loop its FIXED frame dt, the seed is `srand(42)` and Jolt

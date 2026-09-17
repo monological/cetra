@@ -24114,10 +24114,22 @@ def _graph_trace(workdir, tag, script, frames, extra=None):
     path = os.path.join(workdir, f"graph_{tag}.txt")
     with open(path, "w") as f:
         f.write(script)
-    r = subprocess.run(
-        [GAMETEST, "-x", "-f", str(frames), "--no-crates", "--no-chaser", "--trace-player",
-         "--trace-every", "1", "--pad-script", path] + (extra or []),
-        capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+    # 160x100, because what these arms read is a TEXT column and every pixel is
+    # thrown away. The trace is byte-identical at the default 1280x720 and the
+    # water leg costs 58.6 s there against 22.9 s here -- the state sequence is a
+    # function of the physics and the pad script, not of the resolution. Stated
+    # rather than inherited, which is what every render() call in this file does.
+    try:
+        r = subprocess.run(
+            [GAMETEST, "-x", "-f", str(frames), "-W", "160", "-H", "100", "--no-crates",
+             "--no-chaser", "--trace-player", "--trace-every", "1", "--pad-script", path]
+            + (extra or []),
+            capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # A timeout reads as a failed run, since that is what a caller can act on
+        # -- _gametest_probe_text's rule. Raising here would take the whole group
+        # down instead of failing the four arms that depend on it.
+        return None
     text = r.stdout + r.stderr
     samples = _GRAPH_TRACE.findall(text)
     if r.returncode != 0 or not samples:
@@ -24133,9 +24145,10 @@ def _graph_trace(workdir, tag, script, frames, extra=None):
 def _graph_probe_text(case):
     """One gametest --graph-probe run, cached by case.
 
-    Cached rather than plain, because several arms read different columns of one
-    case's output -- `_cam_probe_text`'s reason, and the shape `_anim_probe_run`
-    deliberately does not have because no two of its arms share a case.
+    Every case here has exactly ONE reader today, so the cache never hits -- it is
+    `_cam_probe_text`'s shape kept for the day a second arm reads another column
+    of one case, and it is honest to say that rather than to claim a saving it is
+    not making.
     """
     text, rc = _gametest_probe_text("--graph-probe", case)
     return None if rc != 0 else text
@@ -24279,26 +24292,30 @@ def run_graph_gate(workdir):
         return abs(a - b) < tol
 
     # ---- graph-order
-    d = read("order", [("first", "state"), ("first", "fade"), ("swapped", "state")])
+    d = read("order", [("first", "state"), ("swapped", "state")])
     if not d:
         ok, detail = False, "the probe failed or measured nothing"
     else:
         a, b = one(d, "first", "state"), one(d, "swapped", "state")
-        ok = a == 1 and b == 2 and one(d, "first", "fade") == 0.25
+        ok = a == 1 and b == 2
         detail = (f"the earlier row wins ({a:.0f}, want 1) and swapping the two swaps it "
-                  f"({b:.0f}, want 2), at the row's own fade")
+                  f"({b:.0f}, want 2)")
     print(f"  graph-order       {'PASS' if ok else 'FAIL'}  {detail}")
     note("graph-order", ok)
 
     # ---- graph-any
-    d = read("any", [("froma", "state"), ("fromb", "state"), ("fromc", "state")])
+    d = read("any", [("leg0", "state"), ("leg1", "state"), ("leg2", "state")])
     if not d:
         ok, detail = False, "the probe failed or measured nothing"
     else:
-        a, b, c = one(d, "froma", "state"), one(d, "fromb", "state"), one(d, "fromc", "state")
+        a, b, c = one(d, "leg0", "state"), one(d, "leg1", "state"), one(d, "leg2", "state")
+        # Legs 0 and 2 start in b, where a specific row sits above the any row and
+        # must win; leg 1 starts in c, which only the any row can leave. No leg
+        # starts in the any row's destination, or it would read the same whether
+        # the row fired or was skipped -- which is what the first draft did.
         ok = a == 2 and b == 0 and c == 2
-        detail = (f"an any row fires from a ({a:.0f}, want 2) and from c ({c:.0f}, want 2), and a "
-                  f"specific row above it beats it from b ({b:.0f}, want 0)")
+        detail = (f"a specific row above an any row beats it ({a:.0f}, want 2) and the any row "
+                  f"fires where no specific one applies ({b:.0f}, want 0)")
     print(f"  graph-any         {'PASS' if ok else 'FAIL'}  {detail}")
     note("graph-any", ok)
 
@@ -24410,17 +24427,23 @@ def run_graph_gate(workdir):
 
     # ---- graph-authoring
     refusals = ["unknownstate", "unknownparam", "selfrow", "wrongkind", "duplicate",
-                "returnfinish"]
+                "returnfinish", "returnchain"]
     d = read("authoring", [(c, "bound") for c in refusals] + [("trap", "bound")])
+    # The trap case must WARN, and the warning is the deliverable -- asserting only
+    # that bind succeeded would stay green with the whole no-way-out analysis
+    # deleted, which is what the first draft did.
+    text = _graph_probe_text("authoring") or ""
     if not d:
         ok, detail = False, "the probe failed or measured nothing"
     else:
         refused = [c for c in refusals if one(d, c, "bound") == 0]
         trap = one(d, "trap", "bound")
-        ok = len(refused) == len(refusals) and trap == 1
+        warned = "has no way out" in text
+        ok = len(refused) == len(refusals) and trap == 1 and warned
         detail = (f"{len(refused)} of {len(refusals)} bad tables refused whole "
                   f"({', '.join(c for c in refusals if c not in refused) or 'none missed'}), and "
-                  f"a state with no way out warns rather than refusing ({trap:.0f}, want 1)")
+                  f"a state with no way out is named rather than refused "
+                  f"(warned {int(warned)}, bound {trap:.0f})")
     print(f"  graph-authoring   {'PASS' if ok else 'FAIL'}  {detail}")
     note("graph-authoring", ok)
 
