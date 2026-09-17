@@ -2673,8 +2673,13 @@ static void on_init(Game* game) {
     // Movement here is camera-relative, and saying so is what keeps the
     // scheme a field rather than a consequence of which yaw was read.
     g_cam_rig->steers_controls = true;
+    // The ANCHOR and the AIM, not a pose. Seeding from the camera's initial
+    // framing derives a yaw from where that eye happened to sit -- about pi
+    // here, against the 0.6 this app means -- and the movement basis reads the
+    // same yaw, so W and A come out rotated by the difference.
+    glm_vec3_copy(camera->look_at, g_cam_rig->anchor);
+    camera_rig_set_distance(g_cam_rig, glm_vec3_distance(camera->position, camera->look_at));
     camera_rig_aim(g_cam_rig, 0.6f, 0.0f);
-    camera_rig_set_pose(g_cam_rig, camera->position, camera->look_at);
     engine_set_camera_rig(engine, g_cam_rig);
 
     // Pinned rather than adaptive: auto-exposure is the top determinism hazard

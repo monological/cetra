@@ -132,7 +132,13 @@ void player_update(Player* p, struct Engine* engine, float dt) {
         p->rig->pitch_min = -PLAYER_PITCH_LIMIT;
         p->rig->pitch_max = PLAYER_PITCH_LIMIT;
         camera_rig_set_distance(p->rig, 0.0f);
-        camera_rig_aim(p->rig, p->yaw, p->pitch);
+        // + pi because the two files measure yaw from opposite axes: this one
+        // from -Z (see player.h) and camera_rig.h from +Z. Handing the rig this
+        // yaw raw points the camera exactly backwards from `forward` above, so
+        // W walks toward what the eye is turned away from and both axes read
+        // reversed. The conversion belongs here, at the one boundary between
+        // the two conventions.
+        camera_rig_aim(p->rig, p->yaw + GLM_PIf, p->pitch);
         camera_rig_update(p->rig, 0.0f, 0.0f, 0.0f);
     }
     glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, engine->camera->up_vector);
