@@ -132,8 +132,22 @@ typedef struct CameraRig {
     float look_lift; // the aim point above the anchor
     float pitch_min, pitch_max;
     // Radians per second per unit of input, so a caller passes -1..1 from an
-    // action or a stick and the rate lives here rather than in each app.
+    // action or a stick and the rate lives here rather than in each app. These
+    // are what the APP authored; a player setting never overwrites them.
     float yaw_rate, pitch_rate;
+    /*
+     * What a PLAYER chose about looking: a multiplier on the rates above, and
+     * whether up on the stick looks down.
+     *
+     * Separate from the rates rather than folded into them, because settings are
+     * applied on EVERY edit -- holding a sensitivity slider reaches this once a
+     * frame -- and scaling a rate in place compounds until the camera spins.
+     * Measured at 9.11 rad/s where 4.05 was wanted, two applies in. The same
+     * idempotence engine_set_window_mode needed in spec 12.15, for the same
+     * reason and found the same way.
+     */
+    float look_scale;  // 1 = as authored
+    bool invert_pitch; // up on the stick looks down
     // What the CONTROLS mean. False -- the default -- is a camera that does not
     // touch them, and a game reads its input in world axes. True publishes this
     // rig's yaw through camera_rig_move_basis, and a game reads its input in

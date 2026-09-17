@@ -61,6 +61,23 @@ typedef struct GameSettings {
     // renumber when a monitor is unplugged and silently move the game to a
     // different screen than the one that was chosen.
     char monitor[SETTINGS_NAME_CAP];
+
+    /*
+     * The camera, as a PLAYER states it (spec 12.19).
+     *
+     * FOV is here as well as in the config snapshot, and the two are not the
+     * same question: the snapshot is a renderer tuning value for reproducing a
+     * frame, this is what somebody chose in a menu. The precedence is stated so
+     * it is not discovered -- defaults, then this file, then the CLI, then a
+     * snapshot -- which is the chain a .cscn already sits in.
+     */
+    float fov_degrees;      // vertical; 0 = leave the app's own
+    float look_sensitivity; // multiplies a rig's turn rates; 1 = as authored
+    bool invert_look_y;     // up on the stick looks down
+    // Motion reduction: camera shake off. The camera half of the roadmap's
+    // accessibility row; the post stack's motion blur is NOT covered by this and
+    // is named as still open.
+    bool reduce_motion;
 } GameSettings;
 
 // Unity volumes, windowed, vsync on.

@@ -6638,6 +6638,69 @@ static void cam_seam_print(const char* label, const Camera* c) {
            (double)c->look_at[1], (double)c->look_at[2]);
 }
 
+/*
+ * --cam-probe settings: the four camera values a player states, through the file
+ * and then onto a live rig.
+ *
+ * Both halves, because they fail differently: a row that does not survive the
+ * file is a setting that forgets itself between runs, and a value that survives
+ * but reaches no rig is a menu control that does nothing.
+ */
+static int run_cam_settings_probe(const Game* game) {
+    char dir[512];
+    if (!settings_default_path(dir, sizeof(dir)))
+        return 1;
+
+    GameSettings want;
+    settings_defaults(&want);
+    want.fov_degrees = 71.5f;
+    want.look_sensitivity = 2.25f;
+    want.invert_look_y = true;
+    want.reduce_motion = true;
+    if (!settings_save(&want, dir))
+        return 1;
+
+    // Into a ZEROED struct, so a field the reader never touches reads 0 rather
+    // than the value that happened to be there.
+    GameSettings got;
+    memset(&got, 0, sizeof(got));
+    if (!settings_load(&got, dir))
+        return 1;
+    printf("cam settings file fov %.9g sens %.9g invert %d reduce %d\n", (double)got.fov_degrees,
+           (double)got.look_sensitivity, got.invert_look_y ? 1 : 0, got.reduce_motion ? 1 : 0);
+
+    Engine* engine = game->engine;
+    CameraRig* rig = create_camera_rig();
+    if (!rig)
+        return 1;
+    const float authored_yaw = rig->yaw_rate, authored_pitch = rig->pitch_rate;
+    engine_set_camera_rig(engine, rig);
+
+    settings_apply(&got, NULL, engine);
+    printf("cam settings applied scale %.9g invert %d shake %.9g authored %.9g %.9g\n",
+           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_scale,
+           (double)authored_yaw, (double)authored_pitch);
+    // Again, unchanged: settings are applied on every edit, so a second apply
+    // that differs from the first is a slider that runs away while it is held.
+    settings_apply(&got, NULL, engine);
+    printf("cam settings twice scale %.9g invert %d shake %.9g authored %.9g %.9g\n",
+           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_scale,
+           (double)rig->yaw_rate, (double)rig->pitch_rate);
+
+    // The other side of invert: the same sensitivity with the switch off must
+    // give the same magnitude and the opposite sign.
+    got.invert_look_y = false;
+    got.reduce_motion = false;
+    settings_apply(&got, NULL, engine);
+    printf("cam settings upright scale %.9g invert %d shake %.9g authored %.9g %.9g\n",
+           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_scale,
+           (double)rig->yaw_rate, (double)rig->pitch_rate);
+
+    engine_set_camera_rig(engine, NULL);
+    free_camera_rig(rig);
+    return 0;
+}
+
 static int run_cam_seam_probe(const Game* game) {
     Engine* engine = game->engine;
     CameraDesc desc = {.position = {0.0f, 0.0f, 1.0f}};
@@ -7182,6 +7245,16 @@ static bool ui_install(Engine* engine) {
     if (engine->postfx)
         ui_toggle(set_panel, "Bloom", &engine->postfx->bloom_enabled, NULL, NULL);
     ui_toggle(set_panel, "VSync", &ui_settings.vsync, ui_settings_changed, engine);
+    // The camera, as a player states it (spec 12.19). Sensitivity scales the
+    // rates the rig was authored with rather than replacing them, so a slow pan
+    // and a fast look keep their relationship at any setting.
+    ui_slider(set_panel, "Look Speed", 0.25f, 3.0f, &ui_settings.look_sensitivity,
+              ui_settings_changed, engine);
+    ui_toggle(set_panel, "Invert Look Y", &ui_settings.invert_look_y, ui_settings_changed, engine);
+    // Motion reduction is the camera half of the roadmap's accessibility row.
+    // It is exactly the no-shake path rather than a quieter one; the post
+    // stack's motion blur is NOT covered and stays open.
+    ui_toggle(set_panel, "Reduce Motion", &ui_settings.reduce_motion, ui_settings_changed, engine);
     // In SettingsWindowMode's own order, which is windowed / fullscreen /
     // borderless because borderless was appended to keep saved files reading
     // the same. Presenting a friendlier order would want a mapping between the
@@ -7656,7 +7729,7 @@ int main(int argc, const char* argv[]) {
     // engine at all -- which is the rig's design asserted rather than described.
     // `seam` is the exception by definition: it is about the ENGINE running the
     // rig, so it takes a headless one and still never draws a frame.
-    if (cam_probe && strcmp(cam_probe, "seam") != 0) {
+    if (cam_probe && strcmp(cam_probe, "seam") != 0 && strcmp(cam_probe, "settings") != 0) {
         return run_cam_probe(cam_probe);
     }
     if (cam_probe) {
@@ -7666,7 +7739,8 @@ int main(int argc, const char* argv[]) {
             fprintf(stderr, "cam-probe: could not create game\n");
             return -1;
         }
-        int rc = run_cam_seam_probe(probe_game);
+        int rc = !strcmp(cam_probe, "settings") ? run_cam_settings_probe(probe_game)
+                                                : run_cam_seam_probe(probe_game);
         free_game(probe_game);
         return rc;
     }

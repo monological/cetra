@@ -24714,6 +24714,28 @@ def run_ragdoll_gate(workdir):
 
 CAM_PROBE_POSE = re.compile(
     r"^cam \S+ (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (\S+) yaw (\S+) pitch (\S+)$", re.M)
+CAM_SET_FILE = re.compile(r"^cam settings file fov (\S+) sens (\S+) invert (\d) reduce (\d)$", re.M)
+CAM_SET_RIG = re.compile(
+    r"^cam settings (\S+) scale (\S+) invert (\d) shake (\S+) authored (\S+) (\S+)$", re.M)
+
+
+def _cam_probe_settings(workdir):
+    """gametest --cam-probe settings, against a per-run settings dir so a real
+    player's file is never touched (settings.h's CETRA_SETTINGS_DIR)."""
+    env = dict(os.environ, CETRA_SETTINGS_DIR=os.path.join(workdir, "cam_settings"))
+    r = subprocess.run([GAMETEST, "--cam-probe", "settings"], capture_output=True, text=True,
+                       env=env)
+    text = r.stdout + r.stderr
+    f = CAM_SET_FILE.findall(text)
+    rows = CAM_SET_RIG.findall(text)
+    if r.returncode != 0 or not f or not rows:
+        return None
+    return {"file": [float(f[0][0]), float(f[0][1]), int(f[0][2]), int(f[0][3])],
+            "rig": {row[0]: {"scale": float(row[1]), "invert": int(row[2]),
+                             "shake": float(row[3]),
+                             "authored": (float(row[4]), float(row[5]))} for row in rows}}
+
+
 CAM_SEAM = re.compile(r"^cam seam (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (\S+)$", re.M)
 
 
@@ -24845,6 +24867,14 @@ def run_camera_gate(workdir):
                      asks for nothing does not move them. Both halves: the rig
                      is given lifts of 9 first, so an adopt that failed to zero
                      them would displace the very pose it was handed.
+      cam-settings   the four values a player states -- FOV, look sensitivity,
+                     invert-Y and motion reduction -- survive the file and reach
+                     a live rig. IDEMPOTENT is the half that bites: settings are
+                     applied on every edit, so a slider held for a second reaches
+                     apply sixty times, and scaling a rate in place read 9.11
+                     rad/s where 4.05 was wanted two applies in. The authored
+                     rates must come back untouched, which is what makes that
+                     true; invert and shake are read two-sided.
       cam-engine-seam the ENGINE running the rig, the one case here that needs
                      one: no rig leaves the camera exactly alone (so an app that
                      poses its own is untouched), one rig writes its pose, and a
@@ -24996,6 +25026,32 @@ def run_camera_gate(workdir):
               f"by the adopt, and the pose must be KEPT rather than re-derived through asin and "
               f"atan2, whose error grows with the arm)")
         note("cam-pose-adopt", ok)
+
+    setg = _cam_probe_settings(workdir)
+    if not setg:
+        print("  cam-settings SKIP  no probe output")
+        note("cam-settings", False)
+    else:
+        fov, sens, invert, reduce_m = setg["file"]
+        survived = (abs(fov - 71.5) < 1e-4 and abs(sens - 2.25) < 1e-6
+                    and invert == 1 and reduce_m == 1)
+        on, twice, off = setg["rig"]["applied"], setg["rig"]["twice"], setg["rig"]["upright"]
+        # IDEMPOTENT, which is the half that bites: settings are applied on every
+        # edit, so a slider held for a second reaches this sixty times. Scaling a
+        # rate in place read 9.11 rad/s where 4.05 was wanted, two applies in.
+        idempotent = (on["scale"] == twice["scale"] and on["invert"] == twice["invert"]
+                      and on["shake"] == twice["shake"])
+        # The authored rates are never overwritten, which is what makes that true.
+        authored = (abs(twice["authored"][0] - 1.8) < 1e-6
+                    and abs(twice["authored"][1] - 1.2) < 1e-6)
+        two_sided = off["invert"] == 0 and off["shake"] == 1.0 and on["shake"] == 0.0
+        ok = survived and idempotent and authored and two_sided
+        print(f"  cam-settings {'PASS' if ok else 'FAIL'}  fov {fov:g}, sensitivity {sens:g}, "
+              f"invert {invert} and reduce-motion {reduce_m} survive the file; applying twice "
+              f"leaves scale {twice['scale']:g} (want the same as one apply, since a held slider "
+              f"applies once a frame) with the authored rates {twice['authored']} untouched; and "
+              f"invert and shake are two-sided ({off['invert']} / {off['shake']:g} with them off)")
+        note("cam-settings", ok)
 
     seam = _cam_probe_seam()
     if not seam:

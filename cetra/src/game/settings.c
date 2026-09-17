@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "../camera_rig.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +76,10 @@ static const SettingField SETTINGS_FIELDS[] = {
     SET_ROW_ENUM("window", "mode", window_mode, SETTINGS_WINDOW_MODES),
     SET_ROW(SET_BOOL, "window", "vsync", vsync),
     SET_ROW_STRING("window", "monitor", monitor),
+    SET_ROW(SET_FLOAT, "camera", "fov_degrees", fov_degrees),
+    SET_ROW(SET_FLOAT, "camera", "look_sensitivity", look_sensitivity),
+    SET_ROW(SET_BOOL, "camera", "invert_look_y", invert_look_y),
+    SET_ROW(SET_BOOL, "camera", "reduce_motion", reduce_motion),
 };
 #define SETTINGS_FIELD_COUNT (sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]))
 
@@ -104,7 +109,14 @@ void settings_defaults(GameSettings* out) {
                           .ui_volume = 1.0f,
                           .window_mode = ENGINE_WINDOW_WINDOWED,
                           .vsync = true,
-                          .monitor = ""}; // empty = primary, which is the first run's answer
+                          .monitor = "", // empty = primary, which is the first run's answer
+                          // 0 leaves whatever the app framed with: a default FOV
+                          // here would override every app's own choice on a
+                          // first run, which is the opposite of a preference.
+                          .fov_degrees = 0.0f,
+                          .look_sensitivity = 1.0f,
+                          .invert_look_y = false,
+                          .reduce_motion = false};
 }
 
 // ------------------------------------------------------------------- path
@@ -323,5 +335,23 @@ void settings_apply(const GameSettings* settings, AudioSystem* audio, Engine* en
         // file carried from a two-monitor desk applies as much of itself as it
         // can here rather than being filtered by every caller in turn.
         engine_set_window_mode(engine, settings->window_mode, settings->monitor);
+
+        // The FOV is the camera's; the rest is whatever rig is live. Nothing
+        // here reaches for a rig the app did not install -- an app that poses
+        // its own camera keeps every one of these as its own business.
+        if (engine->camera && settings->fov_degrees > 0.0f)
+            engine->camera->fov_radians = glm_rad(settings->fov_degrees);
+
+        CameraRig* rig = engine->camera_rig;
+        if (rig) {
+            // Stored beside the authored rates, never onto them. This runs on
+            // every settings edit -- once a frame while a slider is held -- so
+            // anything that scaled a rate in place would compound.
+            rig->look_scale = settings->look_sensitivity;
+            rig->invert_pitch = settings->invert_look_y;
+            // Motion reduction is EXACTLY the no-shake path, not a small shake:
+            // the rig asserts that its zero scale is bit-identical.
+            rig->shake_scale = settings->reduce_motion ? 0.0f : 1.0f;
+        }
     }
 }
