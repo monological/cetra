@@ -30,6 +30,7 @@ CameraDrag* create_camera_drag(Engine* engine, CameraRig* rig) {
     drag->sensitivity = 0.002f;
     drag->pan_per_unit = 0.0005f;
     drag->zoom_step = 0.9f;
+    drag->min_dist = 0.05f;
     drag->auto_orbit_speed = 0.5f;
     drag->auto_orbit_min_dist = 2000.0f;
     drag->auto_orbit_max_dist = 3000.0f;
@@ -133,7 +134,11 @@ void camera_drag_on_scroll(CameraDrag* drag, double xoffset, double yoffset) {
     (void)xoffset;
     if (!drag || !drag->rig || yoffset == 0.0)
         return;
-    camera_rig_set_distance(drag->rig, drag->rig->dist * powf(drag->zoom_step, (float)yoffset));
+    // Floored: below the rig's first-person threshold the aim point becomes one
+    // unit along the view, and the DoF focus, the near clip and the distance cap
+    // all start reading a one-unit subject. Reachable on a trackpad.
+    const float want = drag->rig->dist * powf(drag->zoom_step, (float)yoffset);
+    camera_rig_set_distance(drag->rig, glm_max(want, drag->min_dist));
 }
 
 bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods) {
@@ -149,11 +154,16 @@ bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods) {
     const float pan_speed = base * 0.05f;
     static const float ORBIT_STEP = 0.1f;
 
-    vec3 dir;
-    glm_vec3_sub(rig->pose.look, rig->pose.eye, dir);
-    glm_vec3_normalize(dir);
+    // The aim, from the rig rather than re-derived from its own output: under a
+    // rail or a shortened arm the eye is not on the aim ray and the subtraction
+    // gives a different vector.
+    vec3 dir = {0.0f, 0.0f, 0.0f};
+    camera_rig_direction(rig, dir);
+    // cross(up, forward), which is the convention the shift-drag pan above
+    // uses. Taking cross(forward, up) here gave the opposite vector and turned
+    // shift-left and shift-right into each other.
     vec3 right;
-    glm_vec3_crossn(dir, (float*)GLM_YUP, right);
+    glm_vec3_crossn((float*)GLM_YUP, dir, right);
 
     switch (key) {
         case GLFW_KEY_W:

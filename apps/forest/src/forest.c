@@ -264,8 +264,6 @@ static Material* g_mat_rock;
 // was: it is exactly why three apps wrote three follow cameras, and it is what
 // spec 12.19 answered with camera_rig.h.
 static CameraRig* g_cam_rig = NULL;
-static float g_cam_yaw = 0.6f;
-static float g_cam_pitch = 0.0f;
 static bool g_orbit_camera = false;
 static const float CAM_DISTANCE = 14.0f;
 // The old floor clamp's +1: how far above the ground the eye may come.
@@ -296,8 +294,6 @@ static const InputAction g_actions[] = {
 };
 // The stick and the arrows, in radians per second at full deflection; the
 // mouse in radians per pixel, which no frame delta scales.
-static const float LOOK_YAW_RATE = 1.8f;
-static const float LOOK_PITCH_RATE = 1.2f;
 static const float MOUSE_LOOK_RATE = 0.0025f;
 
 // The cursor is captured on a click in the window and released on Tab (Escape
@@ -2676,6 +2672,14 @@ static void on_init(Game* game) {
     // is the orbit behind. The pitch band changes with the mode, which is the
     // only thing that does.
     g_cam_rig = create_camera_rig();
+    // Or a probe answering 'nothing is clear' -- a hollow, or the character
+    // in water -- takes the arm to zero, which is the rig's first-person
+    // case and reads as the shot snapping to the eyes.
+    g_cam_rig->min_dist = 1.0f;
+    // Movement here is camera-relative, and saying so is what keeps the
+    // scheme a field rather than a consequence of which yaw was read.
+    g_cam_rig->steers_controls = true;
+    camera_rig_aim(g_cam_rig, 0.6f, 0.0f);
     camera_rig_set_pose(g_cam_rig, camera->position, camera->look_at);
     engine_set_camera_rig(engine, g_cam_rig);
 
@@ -2790,10 +2794,14 @@ static void on_update(Game* game, double dt) {
             input_dir[2] = 1.0f;
     }
 
-    // Rotated into the camera's yaw. gametest's is world-axis-aligned, which
-    // stops making sense the moment the camera is not facing -Z.
-    vec3 fwd = {sinf(g_cam_yaw), 0.0f, cosf(g_cam_yaw)};
-    vec3 right = {-cosf(g_cam_yaw), 0.0f, sinf(g_cam_yaw)};
+    // Rotated into the frame the CAMERA says its controls are read in, which it
+    // publishes rather than the app reading a yaw off whichever object it
+    // happens to hold. This camera steers; one that does not would leave the
+    // input in world axes.
+    float basis_yaw = 0.0f;
+    camera_rig_move_basis(g_cam_rig, &basis_yaw);
+    vec3 fwd = {sinf(basis_yaw), 0.0f, cosf(basis_yaw)};
+    vec3 right = {-cosf(basis_yaw), 0.0f, sinf(basis_yaw)};
 
     vec3 vel;
     character_controller_get_velocity(cc, vel);
@@ -2915,10 +2923,13 @@ static void on_pre_render(Game* game, double alpha) {
             if (g_cursor_captured && g_cursor_captured_this_frame) {
                 g_cursor_captured_this_frame = false;
             } else if (g_cursor_captured) {
+                // A mouse states an ANGLE per pixel, not a rate per second, so
+                // it goes through the absolute path. The stick below is the
+                // rate one. Both land on the same aim through the same clamp.
                 double dx = 0.0, dy = 0.0;
                 input_mouse_delta(&game->input, &dx, &dy);
-                g_cam_yaw -= (float)dx * MOUSE_LOOK_RATE;
-                g_cam_pitch -= (float)dy * MOUSE_LOOK_RATE;
+                camera_rig_aim(g_cam_rig, g_cam_rig->yaw - (float)dx * MOUSE_LOOK_RATE,
+                               g_cam_rig->pitch - (float)dy * MOUSE_LOOK_RATE);
             }
             // A click in the window takes the cursor while the GUI does not
             // want it; Tab gives it back. After the read, so the delta skipped
@@ -2930,26 +2941,27 @@ static void on_pre_render(Game* game, double alpha) {
                 set_cursor_captured(engine, false);
             if (input_action_pressed(&game->input, "orbit"))
                 g_orbit_camera = !g_orbit_camera;
-            // The stick and the arrows, at a rate per second over the sim's
-            // own frame delta: exact headless, where the engine's dt is wall
-            // clock and this hook is handed an interpolant rather than a dt.
-            float look_dt = (float)game->sim_clock.delta;
-            g_cam_yaw -= input_action_value(&game->input, "look_x") * LOOK_YAW_RATE * look_dt;
-            g_cam_pitch += input_action_value(&game->input, "look_y") * LOOK_PITCH_RATE * look_dt;
-            g_cam_pitch = g_orbit_camera ? glm_clamp(g_cam_pitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
-                                         : glm_clamp(g_cam_pitch, -FIRST_PERSON_PITCH_LIMIT,
-                                                     FIRST_PERSON_PITCH_LIMIT);
-
             // The rig: an anchor at the head, and a distance that says which
             // mode this is. First person is not a second code path -- it is the
             // same camera with the arm taken away, which is what let two blocks
-            // become one.
+            // become one. The pitch BAND is the only other thing the modes
+            // differ by, and the rig holds it so there is one clamp rather than
+            // one here and a second inside the rig that never fires.
             glm_vec3_copy(g_player->position, g_cam_rig->anchor);
             g_cam_rig->look_lift = EYE_HEIGHT;
+            g_cam_rig->pitch_min = g_orbit_camera ? ORBIT_PITCH_MIN : -FIRST_PERSON_PITCH_LIMIT;
+            g_cam_rig->pitch_max = g_orbit_camera ? ORBIT_PITCH_MAX : FIRST_PERSON_PITCH_LIMIT;
             camera_rig_set_distance(g_cam_rig, g_orbit_camera ? CAM_DISTANCE : 0.0f);
             camera_rig_set_probe(g_cam_rig, g_orbit_camera ? forest_cam_probe : NULL, NULL);
-            camera_rig_aim(g_cam_rig, g_cam_yaw, g_cam_pitch);
-            camera_rig_update(g_cam_rig, 0.0f, 0.0f, 0.0f);
+            // The stick and the arrows through the rig's own rate path, at the
+            // rig's own rates: exact headless, where the engine's dt is wall
+            // clock and this hook is handed an interpolant rather than a dt.
+            // Going through it is also what puts the player's look sensitivity
+            // and invert-Y on this camera, which a hand-rolled integration here
+            // could not reach.
+            camera_rig_update(g_cam_rig, (float)game->sim_clock.delta,
+                              input_action_value(&game->input, "look_x"),
+                              input_action_value(&game->input, "look_y"));
         }
     }
 
@@ -2963,10 +2975,15 @@ static void on_pre_render(Game* game, double alpha) {
         // own and does not care, but a region that loads here has to be in the
         // graph before the transform walk reaches it.
         vec3 focus;
-        glm_vec3_copy(g_player ? g_player->position : camera->position, focus);
-        regions_update(camera->position, focus);
+        // The RIG's eye, not the camera's: the engine applies the rig after this
+        // hook returns, so the camera still holds last frame's pose here and
+        // residency would select against a view one frame stale.
+        vec3 eye;
+        glm_vec3_copy(g_cam_rig && g_cam_rig->posed ? g_cam_rig->pose.eye : camera->position, eye);
+        glm_vec3_copy(g_player ? g_player->position : eye, focus);
+        regions_update(eye, focus);
         if (g_terrain_qt) {
-            terrain_quadtree_update(g_terrain_qt, camera->position);
+            terrain_quadtree_update(g_terrain_qt, eye);
             if (g_args.quadtree_probe && engine->total_frames + 1 == (size_t)g_args.frames)
                 terrain_quadtree_probe(g_terrain_qt);
         }
@@ -2981,6 +2998,8 @@ static void on_pre_render(Game* game, double alpha) {
 }
 
 static void on_shutdown(Game* game) {
+    if (game && game->engine)
+        engine_set_camera_rig(game->engine, NULL);
     free_camera_rig(g_cam_rig);
     g_cam_rig = NULL;
     // game_run does not report; the render app does this at its own exit. Here

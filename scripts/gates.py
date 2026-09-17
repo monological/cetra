@@ -24715,6 +24715,7 @@ def run_ragdoll_gate(workdir):
 CAM_PROBE_POSE = re.compile(
     r"^cam \S+ (\S+) eye (\S+) (\S+) (\S+) look (\S+) (\S+) (\S+) yaw (\S+) pitch (\S+)$", re.M)
 CAM_SET_FILE = re.compile(r"^cam settings file fov (\S+) sens (\S+) invert (\d) reduce (\d)$", re.M)
+CAM_SET_FOV = re.compile(r"^cam settings fov (\S+)$", re.M)
 CAM_SET_RIG = re.compile(
     r"^cam settings (\S+) scale (\S+) invert (\d) shake (\S+) authored (\S+) (\S+)$", re.M)
 
@@ -24730,7 +24731,11 @@ def _cam_probe_settings(workdir):
     rows = CAM_SET_RIG.findall(text)
     if r.returncode != 0 or not f or not rows:
         return None
+    fov = CAM_SET_FOV.findall(text)
+    if not fov:
+        return None
     return {"file": [float(f[0][0]), float(f[0][1]), int(f[0][2]), int(f[0][3])],
+            "fov": float(fov[0]),
             "rig": {row[0]: {"scale": float(row[1]), "invert": int(row[2]),
                              "shake": float(row[3]),
                              "authored": (float(row[4]), float(row[5]))} for row in rows}}
@@ -24753,7 +24758,7 @@ def _cam_probe_seam():
 
 
 CAM_PROBE_DIST = re.compile(
-    r"^cam \S+ (\S+) dist (\S+) eye_lift (\S+) wide (\S+)$", re.M)
+    r"^cam \S+ (\S+) dist (\S+) arm (\S+) eye_lift (\S+) wide (\S+)$", re.M)
 
 
 def _cam_probe_dist(case):
@@ -24762,8 +24767,8 @@ def _cam_probe_dist(case):
     rows = CAM_PROBE_DIST.findall(r.stdout + r.stderr)
     if r.returncode != 0 or not rows:
         return None
-    return {row[0]: {"dist": float(row[1]), "eye_lift": float(row[2]), "wide": float(row[3])}
-            for row in rows}
+    return {row[0]: {"dist": float(row[1]), "arm": float(row[2]), "eye_lift": float(row[3]),
+                     "wide": float(row[4])} for row in rows}
 
 
 CAM_PROBE_BASIS = re.compile(r"^cam basis (\S+) steers (\d) yaw (\S+)$", re.M)
@@ -25070,6 +25075,12 @@ def run_camera_gate(workdir):
         survived = (abs(fov - 71.5) < 1e-4 and abs(sens - 2.25) < 1e-6
                     and invert == 1 and reduce_m == 1)
         on, twice, off = setg["rig"]["applied"], setg["rig"]["twice"], setg["rig"]["upright"]
+        # That they ARRIVED. Without this the arm passes with the two lines that
+        # apply them deleted, because 1.0 == 1.0 across all three rows -- which
+        # is what it did.
+        reached = (abs(on["scale"] - 2.25) < 1e-6 and on["invert"] == 1
+                   and abs(off["scale"] - 2.25) < 1e-6
+                   and abs(setg["fov"] - 71.5) < 1e-3)
         # IDEMPOTENT, which is the half that bites: settings are applied on every
         # edit, so a slider held for a second reaches this sixty times. Scaling a
         # rate in place read 9.11 rad/s where 4.05 was wanted, two applies in.
@@ -25079,12 +25090,13 @@ def run_camera_gate(workdir):
         authored = (abs(twice["authored"][0] - 1.8) < 1e-6
                     and abs(twice["authored"][1] - 1.2) < 1e-6)
         two_sided = off["invert"] == 0 and off["shake"] == 1.0 and on["shake"] == 0.0
-        ok = survived and idempotent and authored and two_sided
+        ok = survived and reached and idempotent and authored and two_sided
         print(f"  cam-settings {'PASS' if ok else 'FAIL'}  fov {fov:g}, sensitivity {sens:g}, "
               f"invert {invert} and reduce-motion {reduce_m} survive the file; applying twice "
               f"leaves scale {twice['scale']:g} (want the same as one apply, since a held slider "
-              f"applies once a frame) with the authored rates {twice['authored']} untouched; and "
-              f"invert and shake are two-sided ({off['invert']} / {off['shake']:g} with them off)")
+              f"applies once a frame) with the authored rates {twice['authored']} untouched; the "
+              f"scale ARRIVES at {on['scale']:g} and the FOV at {setg['fov']:g} deg; and invert "
+              f"and shake are two-sided ({off['invert']} / {off['shake']:g} with them off)")
         note("cam-settings", ok)
 
     seam = _cam_probe_seam()
@@ -25144,17 +25156,27 @@ def run_camera_gate(workdir):
     else:
         # A probe reporting half of a 10-unit arm clear, then none of it, with a
         # skin of 0.6 and a floor of 2.
-        blocked, flush = prd["blocked"]["dist"], prd["flush"]["dist"]
-        # The AIM is what this arm is really about: shortening the arm leaves it
-        # alone where clamping the eye's height would swing it.
-        aims = [pr[k]["look"] for k in ("clear", "blocked", "flush")]
-        same_aim = all(max(abs(a - b) for a, b in zip(aims[0], other)) < 1e-6 for other in aims)
-        ok = abs(blocked - 4.4) < 1e-4 and abs(flush - 2.0) < 1e-4 and same_aim
+        blocked, flush = prd["blocked"]["arm"], prd["flush"]["arm"]
+        # The eye stays ON the arm, which is the property a height clamp breaks
+        # and an identical aim POINT does not: the look point is written from the
+        # anchor either way, so comparing it is true by construction.
+        def _dir(p):
+            d = [a - b for a, b in zip(p["look"], p["eye"])]
+            n = math.dist(p["look"], p["eye"])
+            return [c / n for c in d] if n > 0 else d
+        rays = [_dir(pr[k]) for k in ("clear", "blocked", "flush")]
+        on_arm = all(max(abs(a - b) for a, b in zip(rays[0], r)) < 1e-5 for r in rays)
+        # And the WANTED distance is untouched by the probe: it is what the
+        # response asked for, and a probe writing into it would bake one frame's
+        # occlusion into the arm permanently.
+        wanted = all(abs(prd[k]["dist"] - 10.0) < 1e-4 for k in ("blocked", "flush"))
+        ok = abs(blocked - 4.4) < 1e-4 and abs(flush - 2.0) < 1e-4 and on_arm and wanted
         print(f"  cam-probe-shorten {'PASS' if ok else 'FAIL'}  half of a 10-unit arm clear "
               f"shortens it to {blocked:.4f} (want 5 - 0.6 skin), nothing clear floors at "
               f"{flush:.4f} (want the 2 minimum, or the camera collapses into what it follows), "
-              f"and the aim point is {'identical throughout' if same_aim else 'MOVED'} -- which "
-              f"is the whole difference between shortening an arm and clamping an eye")
+              f"the eye stays {'on the arm' if on_arm else 'OFF the arm'} throughout -- which is "
+              f"what a height clamp breaks and an identical aim point would not see -- and the "
+              f"WANTED distance is {'untouched' if wanted else 'OVERWRITTEN'} at 10")
         note("cam-probe-shorten", ok)
 
     bl = _cam_probe("blend")
@@ -25204,13 +25226,21 @@ def run_camera_gate(workdir):
         first = max(abs(a - b) for a, b in zip(rail["start"]["eye"], [0.0, 0.0, 0.0])) < 1e-5
         last = max(abs(a - b) for a, b in zip(rail["end"]["eye"], [30.0, 5.0, 0.0])) < 1e-5
         interior = max(abs(a - b) for a, b in zip(rail["third"]["eye"], [10.0, 5.0, 0.0])) < 1e-5
+        # The MIDDLE of a segment, the only sample where the tangents matter.
+        # Catmull-Rom gives z = 5.625 here; a straight polyline gives 5.0 and a
+        # wrong tangent coefficient 5.3125, so this separates all three by
+        # thousands of times the tolerance. Every node lands on its control point
+        # whatever the basis, so the three legs above cannot tell them apart.
+        mid = max(abs(a - b) for a, b in zip(rail["mid"]["eye"], [15.0, 2.5, 5.625])) < 1e-4
         off = max(abs(a - b) for a, b in zip(rail["off"]["eye"], [0.0, 0.0, -4.0])) < 1e-5
-        ok = first and last and interior and off
+        ok = first and last and interior and mid and off
         print(f"  cam-rail {'PASS' if ok else 'FAIL'}  a four-point rail starts at its first "
               f"point and ends at its last; a third of the way along it is at "
               f"{rail['third']['eye']} (want the second authored point exactly, since "
-              f"Catmull-Rom passes THROUGH its controls where a Bezier over the same four would "
-              f"not); and clearing the rail hands the eye back to the arm")
+              f"Catmull-Rom passes THROUGH its controls); the middle of a segment is at "
+              f"{rail['mid']['eye']} (want [15, 2.5, 5.625] -- a polyline would give 5.0 there, "
+              f"which is the only sample that evaluates the tangents at all); and clearing the "
+              f"rail hands the eye back to the arm")
         note("cam-rail", ok)
 
     basis = _cam_probe_basis()
@@ -25258,7 +25288,7 @@ def run_camera_gate(workdir):
         held = orbit[45]
         settled = all(abs(orbit[f]["phi"] - held["phi"]) < 1e-9 for f in range(46, last + 1))
         moved = abs(held["phi"] - orbit[0]["phi"]) > 0.1
-        ok = settled and moved
+        ok = settled and moved and last >= 55
         print(f"  cam-drag-release {'PASS' if ok else 'FAIL'}  phi is "
               f"{'constant' if settled else 'STILL MOVING'} over the {last - 45} frames after "
               f"the release, having turned {held['phi'] - orbit[0]['phi']:.4f} rad in total "

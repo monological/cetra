@@ -1822,6 +1822,7 @@ int main(int argc, char** argv) {
     engine_run(engine, NULL, pre_render_callback, NULL);
 
     printf("Cleaning up...\n");
+    engine_set_camera_rig(engine, NULL);
     free_camera_drag(drag_controller);
     free_camera_rig(view_rig);
     // The scene owns the wind, sky, and IBL; free_engine takes them with it.

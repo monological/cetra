@@ -27,6 +27,7 @@ CameraRig* create_camera_rig(void) {
     rig->tighten_rate = 1.2f;
     rig->probe_skin = 0.6f;
     rig->shake_scale = 1.0f;
+    rig->shake_player_scale = 1.0f;
     rig->shake_freq = 22.0f;
     return rig;
 }
@@ -44,11 +45,10 @@ void camera_rig_set_distance(CameraRig* rig, float dist) {
     // of this and leaves it where the caller put it. Setting `dist` alone would
     // be overwritten on the next tick by ends nobody moved.
     rig->near_dist = rig->far_dist = rig->dist = dist;
-    rig->pose_stated = false;
 }
 
 // The aim direction. One derivation, where there were three.
-static void _rig_dir(const CameraRig* rig, vec3 out) {
+void camera_rig_direction(const CameraRig* rig, vec3 out) {
     const float cp = cosf(rig->pitch);
     out[0] = sinf(rig->yaw) * cp;
     out[1] = sinf(rig->pitch);
@@ -88,28 +88,91 @@ static void _rig_rail_at(const CameraRig* rig, float t, vec3 out) {
     }
 }
 
+/*
+ * The ONE writer of the aim under a change: the player's preference, then the
+ * clamp, in that order.
+ *
+ * Every way of turning goes through here -- a rate over dt, an absolute aim, a
+ * drag's pixels -- which is what makes "a pitch being CHANGED is clamped" one
+ * rule rather than three sites that must agree. It is also what puts the look
+ * preference on every path: before this existed it reached the rate path alone,
+ * which is one of three ways a camera in this tree is turned.
+ *
+ * camera_rig_set_pose is the one entry that writes the aim WITHOUT coming
+ * through here, and that is the exception the header states: a stated pose is
+ * stated, and pulling it into a steering band would make an exact framing
+ * impossible to ask for.
+ */
+static void _rig_turn(CameraRig* rig, float dyaw, float dpitch) {
+    if (dyaw == 0.0f && dpitch == 0.0f)
+        return;
+    rig->yaw += dyaw * rig->look_scale;
+    rig->pitch += (rig->invert_pitch ? -dpitch : dpitch) * rig->look_scale;
+    rig->pitch = glm_clamp(rig->pitch, rig->pitch_min, rig->pitch_max);
+    rig->pose_stated = false;
+}
+
+// Where the eye and the aim point go, from the rig's fields alone. PURE: it
+// reads, and writes only through `out`. That is what lets the caller compare a
+// derivation against a stated pose instead of enumerating everything that could
+// have invalidated one.
+static void _rig_derive(const CameraRig* rig, CameraRigPose* out) {
+    vec3 dir = {0.0f, 0.0f, 0.0f};
+    camera_rig_direction(rig, dir);
+
+    vec3 look;
+    glm_vec3_copy((float*)rig->anchor, look);
+    look[1] += rig->look_lift;
+
+    if (rig->rail_count >= 2) {
+        // The rail states where the eye IS, so the arm, its response and the
+        // probe have nothing to say about it; the aim is unchanged, which is
+        // what makes a dolly past a subject one call and not a mode.
+        _rig_rail_at(rig, rig->rail_t, out->eye);
+        glm_vec3_copy(look, out->look);
+        return;
+    }
+
+    /*
+     * The arm is probed as an ARM -- from the aim point, along `dir`, for
+     * exactly `dist` -- and the lift is added afterwards.
+     *
+     * Probing the lifted segment instead makes its length not equal the `want`
+     * handed to the probe, so a probe answering a fraction of what it was told
+     * is answering a fraction of the wrong thing: at a lift of 9 over an arm of
+     * 18 the segment is 21.5, and every hit reads 19% nearer than it is. On the
+     * ground the lift is 0 and the two agree, which is why nothing that walks
+     * can see it.
+     */
+    float arm = rig->dist;
+    if (rig->probe && arm > RIG_FIRST_PERSON_EPS) {
+        vec3 want_eye;
+        glm_vec3_copy(look, want_eye);
+        glm_vec3_mulsubs(dir, arm, want_eye);
+        const float clear = glm_clamp(rig->probe(rig->probe_user, look, want_eye, arm), 0.0f, 1.0f);
+        if (clear * arm < arm)
+            arm = glm_max(clear * arm - rig->probe_skin, rig->min_dist);
+    }
+
+    glm_vec3_copy(look, out->eye);
+    out->eye[1] += rig->eye_lift;
+    glm_vec3_mulsubs(dir, arm, out->eye);
+
+    if (arm < RIG_FIRST_PERSON_EPS) {
+        // First person has no aim POINT, only an aim direction. See the header.
+        glm_vec3_add(out->eye, dir, out->look);
+    } else {
+        glm_vec3_copy(look, out->look);
+    }
+}
+
 void camera_rig_update(CameraRig* rig, float dt, float yaw_in, float pitch_in) {
     if (!rig) {
         log_error("camera_rig_update: NULL rig");
         return;
     }
 
-    // Anything asked for, or an anchor written directly, retires a stated pose.
-    if (yaw_in != 0.0f || pitch_in != 0.0f || !glm_vec3_eqv(rig->anchor, rig->stated_anchor))
-        rig->pose_stated = false;
-
-    // The player's preference multiplies the authored rate at the point of USE,
-    // so applying a setting twice is the same as applying it once.
-    if (rig->invert_pitch)
-        pitch_in = -pitch_in;
-    rig->yaw -= yaw_in * rig->yaw_rate * rig->look_scale * dt;
-    rig->pitch += pitch_in * rig->pitch_rate * rig->look_scale * dt;
-    // Clamped only where the aim was actually asked to MOVE. An adopted pose
-    // outside the band keeps the pitch it was given until something steers it,
-    // which is what makes --cam-eye an exact instrument rather than an
-    // approximate one.
-    if (pitch_in != 0.0f)
-        rig->pitch = glm_clamp(rig->pitch, rig->pitch_min, rig->pitch_max);
+    _rig_turn(rig, -yaw_in * rig->yaw_rate * dt, pitch_in * rig->pitch_rate * dt);
     rig->shake_clock += dt;
 
     rig->wide = _rig_approach(rig->wide, glm_clamp(rig->want_wide, 0.0f, 1.0f),
@@ -119,67 +182,57 @@ void camera_rig_update(CameraRig* rig, float dt, float yaw_in, float pitch_in) {
     if (rig->max_dist > 0.0f)
         rig->dist = glm_min(rig->dist, rig->max_dist);
 
-    vec3 dir = {0.0f, 0.0f, 0.0f};
-    _rig_dir(rig, dir);
-
-    vec3 look;
-    glm_vec3_copy(rig->anchor, look);
-    look[1] += rig->look_lift;
-
-    vec3 eye = {0.0f, 0.0f, 0.0f};
-    if (rig->rail_count >= 2) {
-        // The rail states where the eye IS, so the arm, its response and the
-        // probe have nothing to say about it; the aim below is unchanged, which
-        // is what makes a dolly past a subject one call and not a mode.
-        _rig_rail_at(rig, rig->rail_t, eye);
+    /*
+     * A pose that was STATED is kept verbatim while the derivation still agrees
+     * with it, and the test is the derivation's own OUTPUT rather than a list of
+     * everything that could have changed.
+     *
+     * The list is what this was first: a flag cleared by five setters plus an
+     * anchor comparison. It was already incomplete -- a write to look_lift, to
+     * either end of the response, to max_dist or to the probe went silently
+     * ignored while a pose was held -- and every field added later would have
+     * had to remember to join it. Comparing the answer cannot fall behind the
+     * fields.
+     *
+     * Bitwise equality is the right test and not a tolerance: the same code over
+     * the same unchanged floats gives the same bits, and set_pose pins near_dist
+     * to far_dist and both lifts to zero, so the response cannot perturb the
+     * derivation of a held pose.
+     */
+    CameraRigPose derived;
+    _rig_derive(rig, &derived);
+    if (rig->pose_stated && glm_vec3_eqv(derived.eye, rig->stated_derive)) {
+        rig->base = rig->stated;
     } else {
-        glm_vec3_copy(look, eye);
-        eye[1] += rig->eye_lift;
-        if (rig->probe && rig->dist > RIG_FIRST_PERSON_EPS) {
-            vec3 want_eye;
-            glm_vec3_copy(eye, want_eye);
-            glm_vec3_mulsubs(dir, rig->dist, want_eye);
-            const float clear = rig->probe(rig->probe_user, look, want_eye, rig->dist);
-            const float hit = glm_clamp(clear, 0.0f, 1.0f) * rig->dist;
-            if (hit < rig->dist)
-                rig->dist = glm_max(hit - rig->probe_skin, rig->min_dist);
-        }
-        glm_vec3_mulsubs(dir, rig->dist, eye);
+        rig->base = derived;
+        rig->pose_stated = false;
     }
 
-    // A pose nothing has moved since it was STATED is kept exactly as stated.
-    // Re-deriving it here is what turns --cam-eye and a config restore into
-    // approximations, by an amount that grows with the arm.
-    if (!rig->pose_stated) {
-        glm_vec3_copy(eye, rig->pose.eye);
-        if (rig->rail_count < 2 && rig->dist < RIG_FIRST_PERSON_EPS) {
-            glm_vec3_add(eye, dir, rig->pose.look);
-        } else {
-            glm_vec3_copy(look, rig->pose.look);
-        }
-    }
+    /*
+     * The modifiers ride on `base` and are written into `pose`, which is what
+     * keeps them off their own output: writing a blend back into the thing being
+     * blended FROM makes the second frame interpolate toward last frame's
+     * interpolation, and the camera converges on a pose neither end asked for.
+     */
+    rig->pose = rig->base;
 
-    // The blend and the shake ride on the finished pose, in that order: a blend
-    // is where the camera is, and a shake is the camera being jostled there.
-    if (rig->blend_left > 0.0f && rig->blend_secs > 0.0f) {
+    if (rig->blend_left > 0.0f) {
         rig->blend_left = glm_max(rig->blend_left - dt, 0.0f);
         const float t = glm_smoothstep(0.0f, 1.0f, 1.0f - rig->blend_left / rig->blend_secs);
-        glm_vec3_lerp(rig->blend_from.eye, rig->pose.eye, t, rig->pose.eye);
-        glm_vec3_lerp(rig->blend_from.look, rig->pose.look, t, rig->pose.look);
+        glm_vec3_lerp(rig->blend_from.eye, rig->base.eye, t, rig->pose.eye);
+        glm_vec3_lerp(rig->blend_from.look, rig->base.look, t, rig->pose.look);
     }
 
-    if (rig->shake_left > 0.0f && rig->shake_scale > 0.0f) {
+    if (rig->shake_left > 0.0f) {
         rig->shake_left = glm_max(rig->shake_left - dt, 0.0f);
-        const float fade = rig->shake_left / glm_max(rig->shake_secs, 1e-6f);
-        const float a = rig->shake_amp * rig->shake_scale * fade * fade;
+        const float a = rig->shake_amp * rig->shake_scale * rig->shake_player_scale *
+                        (rig->shake_left / rig->shake_secs) * (rig->shake_left / rig->shake_secs);
         const float w = rig->shake_clock * rig->shake_freq;
-        // Three incommensurable frequencies, so the offset does not return to
-        // where it started on a period the eye can find.
+        // Ratios chosen so the common period is far longer than a shake lasts,
+        // rather than short enough for the eye to find the repeat.
         rig->pose.eye[0] += a * sinf(w);
         rig->pose.eye[1] += a * sinf(w * 1.37f + 1.7f);
         rig->pose.eye[2] += a * sinf(w * 0.83f + 4.1f);
-    } else if (rig->shake_left > 0.0f) {
-        rig->shake_left = glm_max(rig->shake_left - dt, 0.0f);
     }
 
     rig->posed = true;
@@ -190,9 +243,9 @@ void camera_rig_aim(CameraRig* rig, float yaw, float pitch) {
         log_error("camera_rig_aim: NULL rig");
         return;
     }
-    rig->yaw = yaw;
-    rig->pitch = glm_clamp(pitch, rig->pitch_min, rig->pitch_max);
-    rig->pose_stated = false;
+    // Through the one writer, as a delta, so an absolute aim gets the same
+    // preference and the same clamp a rate does.
+    _rig_turn(rig, yaw - rig->yaw, pitch - rig->pitch);
 }
 
 void camera_rig_frame_sphere(CameraRig* rig, const vec3 centre, float radius, float fit) {
@@ -240,7 +293,6 @@ bool camera_rig_set_rail(CameraRig* rig, const vec3* points, int count, bool loo
         glm_vec3_copy((float*)points[i], rig->rail[i]);
     rig->rail_count = count;
     rig->rail_loop = loop;
-    rig->pose_stated = false;
     return true;
 }
 
@@ -258,9 +310,6 @@ void camera_rig_blend_from_here(CameraRig* rig, float seconds) {
     rig->blend_from = rig->pose;
     rig->blend_secs = seconds;
     rig->blend_left = seconds;
-    // A blend writes the pose in place, so a HELD pose would take the blend's
-    // own output as the thing it was holding and compound it every frame.
-    rig->pose_stated = false;
 }
 
 void camera_rig_shake(CameraRig* rig, float amplitude, float seconds) {
@@ -275,7 +324,6 @@ void camera_rig_shake(CameraRig* rig, float amplitude, float seconds) {
     rig->shake_amp = amplitude;
     rig->shake_secs = seconds;
     rig->shake_left = seconds;
-    rig->pose_stated = false;
 }
 
 void camera_rig_set_pose(CameraRig* rig, const vec3 eye, const vec3 look) {
@@ -310,9 +358,13 @@ void camera_rig_set_pose(CameraRig* rig, const vec3 eye, const vec3 look) {
         camera_rig_set_distance(rig, 0.0f);
     }
 
-    glm_vec3_copy((float*)eye, rig->pose.eye);
-    glm_vec3_copy((float*)look, rig->pose.look);
-    glm_vec3_copy(rig->anchor, rig->stated_anchor);
+    glm_vec3_copy((float*)eye, rig->stated.eye);
+    glm_vec3_copy((float*)look, rig->stated.look);
+    rig->base = rig->stated;
+    rig->pose = rig->stated;
+    CameraRigPose derived;
+    _rig_derive(rig, &derived);
+    glm_vec3_copy(derived.eye, rig->stated_derive);
     rig->pose_stated = true;
     rig->posed = true;
 }

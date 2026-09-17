@@ -126,6 +126,11 @@ void player_update(Player* p, struct Engine* engine, float dt) {
     if (p->rig) {
         glm_vec3_copy(p->feet, p->rig->anchor);
         p->rig->look_lift = PLAYER_EYE_HEIGHT;
+        // The band is the rig's, or it clamps a second time to a default this
+        // app never set -- which quietly narrowed the look from 89 degrees to
+        // the rig's own 86.
+        p->rig->pitch_min = -PLAYER_PITCH_LIMIT;
+        p->rig->pitch_max = PLAYER_PITCH_LIMIT;
         camera_rig_set_distance(p->rig, 0.0f);
         camera_rig_aim(p->rig, p->yaw, p->pitch);
         camera_rig_update(p->rig, 0.0f, 0.0f, 0.0f);
