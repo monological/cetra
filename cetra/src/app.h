@@ -49,6 +49,7 @@ typedef struct CameraDrag {
     float sensitivity;         // Radians of aim per framebuffer pixel of drag
     float pan_per_unit;        // World units per pixel, per unit of distance
     float zoom_step;           // Distance factor per wheel notch
+    float min_dist;            // The wheel will not zoom closer than this
     bool auto_orbit_enabled;   // Spin the camera on its own until the user takes it
     float auto_orbit_speed;    // Radians per second
     float auto_orbit_min_dist; // The distance breathes between these two

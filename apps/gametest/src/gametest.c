@@ -231,6 +231,10 @@ static bool parse_vec3_arg(const char* s, vec3 out) {
 // directions read as forward, and no sign change could fix it because there was no
 // backward to invert. A camera that only moves when you move it has none of that.
 static CameraRig* follow_rig = NULL;
+static float follow_cam_probe(void* user, const vec3 from, const vec3 to, float want);
+// Which of the two rigs the engine runs; settled once, in on_init. Two sites
+// deciding it separately is two statements that have to agree.
+static bool follow_cam_live = false;
 // 10.2 degrees down, which with the near distance below is an authored framing rather than a
 // number picked off a slider: eye 1.411 above the look point and 7.841 back from it.
 
@@ -3103,9 +3107,10 @@ static void on_init(Game* game) {
     // Never collapse onto the player: inside its own capsule the rig fills the
     // frame and the near plane starts clipping the puppet instead of the rock.
     follow_rig->min_dist = 2.0f * PLAYER_SCALE;
+    camera_rig_set_probe(follow_rig, follow_cam_probe, game_get_physics_world(game));
 
-    const bool pinned = cam_eye_set && cam_target_set;
-    engine_set_camera_rig(engine, (follow_cam && !pinned) ? follow_rig : view_rig);
+    follow_cam_live = follow_cam && !(cam_eye_set && cam_target_set);
+    engine_set_camera_rig(engine, follow_cam_live ? follow_rig : view_rig);
 
     // No GUI or FPS overlay headless, as the other apps: the FPS digits are
     // wall clock and land in the screenshot, which is what made two identical
@@ -3189,10 +3194,13 @@ static void on_update(Game* game, double dt) {
     // not leaves the input in world axes. Before spec 12.19 this read a file
     // static belonging to the follow camera, which is why the scheme could flip
     // in 12.13 and back in 12.17 with nothing able to contradict either.
-    float basis_yaw = 0.0f;
-    const bool camera_steers = camera_rig_move_basis(follow_rig, &basis_yaw);
-    const float cam_sin = camera_steers ? sinf(basis_yaw) : 0.0f;
-    const float cam_cos = camera_steers ? cosf(basis_yaw) : -1.0f;
+    // Asked of the rig the ENGINE is running. Asking `follow_rig` by name gave
+    // the right answer only by accident: it is not installed under
+    // --no-follow-cam or a pinned pose, and the yaw it happens to be seeded with
+    // is the one whose sin and cos are the world-aligned identity.
+    float basis_yaw = (float)M_PI;
+    camera_rig_move_basis(game->engine->camera_rig, &basis_yaw);
+    const float cam_sin = sinf(basis_yaw), cam_cos = cosf(basis_yaw);
     const vec3 want_dir = {-cam_cos * input_dir[0] - cam_sin * input_dir[2], 0.0f,
                            cam_sin * input_dir[0] - cam_cos * input_dir[2]};
     const float lean = hypotf(want_dir[0], want_dir[2]);
@@ -3837,8 +3845,7 @@ static float follow_cam_probe(void* user, const vec3 from, const vec3 to, float 
 }
 
 static void follow_camera_update(Game* game) {
-    const Engine* engine = game ? game->engine : NULL;
-    if (!engine || !engine->camera || !player_entity || !follow_rig)
+    if (!game || !player_entity || !follow_rig)
         return;
 
     // The rig is anchored on the ENTITY rather than the rig node's global
@@ -3875,8 +3882,6 @@ static void follow_camera_update(Game* game) {
     follow_rig->want_wide =
         glm_clamp((drop - FOLLOW_CAM_DROP_START) / (FOLLOW_CAM_DROP_FULL - FOLLOW_CAM_DROP_START),
                   0.0f, 1.0f);
-
-    camera_rig_set_probe(follow_rig, follow_cam_probe, game_get_physics_world(game));
 
     // On the sim clock rather than the frame's, so the turn is the same headless
     // and windowed -- this hook is handed an interpolant, not a delta.
@@ -3957,11 +3962,11 @@ static void on_pre_render(Game* game, double alpha) {
     // rather than of the UI, which is a layer this callback should not need to
     // know about. It also composes: anything that suppresses input, menu or
     // not, gates the camera for free.
-    // Either/or, the way apps/tree resolves the same collision: both the follower and
-    // the orbit want to own the camera, and mouse_drag_update rewrites the eye from the
-    // orbit parameters every frame, so leaving both live means the follow pose is
-    // overwritten the moment the pointer moves.
-    if (follow_cam && !(cam_eye_set && cam_target_set)) {
+    // Only the rig the engine is running is updated. The engine's one slot means
+    // running both would no longer fight over the camera -- but the follow
+    // camera's update costs a raycast, and spending it on a rig nobody reads is
+    // the kind of thing that survives because it is invisible.
+    if (follow_cam_live) {
         follow_camera_update(game);
     } else if (drag_controller && app_can_process_3d_input(engine) &&
                !input_is_suppressed(&game->input)) {
@@ -3999,6 +4004,8 @@ static void on_shutdown(Game* game) {
         free_camera_drag(drag_controller);
         drag_controller = NULL;
     }
+    if (game && game->engine)
+        engine_set_camera_rig(game->engine, NULL);
     free_camera_rig(view_rig);
     view_rig = NULL;
     free_camera_rig(follow_rig);
@@ -6419,7 +6426,11 @@ static void cam_probe_pose(const char* which, const char* label, const CameraRig
 }
 
 static void cam_probe_dist(const char* which, const char* label, const CameraRig* rig) {
-    printf("cam %s %s dist %.9g eye_lift %.9g wide %.9g\n", which, label, (double)rig->dist,
+    // `dist` is what the response asked for; `arm` is what the probe allowed,
+    // which is a property of the POSE and not of any field.
+    printf("cam %s %s dist %.9g arm %.9g eye_lift %.9g wide %.9g\n", which, label,
+           (double)rig->dist,
+           (double)glm_vec3_distance((float*)rig->pose.eye, (float*)rig->pose.look),
            (double)rig->eye_lift, (double)rig->wide);
 }
 
@@ -6595,11 +6606,18 @@ static int run_cam_probe(const char* which) {
         rig->rail_t = 1.0f;
         camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
         cam_probe_pose(which, "end", rig);
-        // A third of the way: on the curve, and between its neighbours, which a
-        // wrong basis matrix would not be.
+        // A third of the way lands exactly ON the second authored point, which
+        // is Catmull-Rom passing through its controls.
         rig->rail_t = 1.0f / 3.0f;
         camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
         cam_probe_pose(which, "third", rig);
+        // And the MIDDLE of a segment, which is the only sample where the
+        // tangents are evaluated at all: every node lands on its control point
+        // whatever the basis, so a rail asserted only at nodes cannot tell
+        // Catmull-Rom from a straight polyline.
+        rig->rail_t = 0.5f;
+        camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
+        cam_probe_pose(which, "mid", rig);
         // Off the rail again: the arm places the eye, as it did before.
         camera_rig_set_rail(rig, NULL, 0, false);
         camera_rig_set_distance(rig, 4.0f);
@@ -6670,6 +6688,10 @@ static int run_cam_settings_probe(const Game* game) {
            (double)got.look_sensitivity, got.invert_look_y ? 1 : 0, got.reduce_motion ? 1 : 0);
 
     Engine* engine = game->engine;
+    // A camera, or the FOV half of settings_apply is guarded out and the arm
+    // asserts a line that never runs.
+    CameraDesc probe_cam = {.fov = glm_rad(40.0f)};
+    engine_set_camera(engine, create_camera(&probe_cam));
     CameraRig* rig = create_camera_rig();
     if (!rig)
         return 1;
@@ -6677,14 +6699,15 @@ static int run_cam_settings_probe(const Game* game) {
     engine_set_camera_rig(engine, rig);
 
     settings_apply(&got, NULL, engine);
+    printf("cam settings fov %.9g\n", (double)glm_deg(engine->camera->fov_radians));
     printf("cam settings applied scale %.9g invert %d shake %.9g authored %.9g %.9g\n",
-           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_scale,
+           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_player_scale,
            (double)authored_yaw, (double)authored_pitch);
     // Again, unchanged: settings are applied on every edit, so a second apply
     // that differs from the first is a slider that runs away while it is held.
     settings_apply(&got, NULL, engine);
     printf("cam settings twice scale %.9g invert %d shake %.9g authored %.9g %.9g\n",
-           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_scale,
+           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_player_scale,
            (double)rig->yaw_rate, (double)rig->pitch_rate);
 
     // The other side of invert: the same sensitivity with the switch off must
@@ -6693,7 +6716,7 @@ static int run_cam_settings_probe(const Game* game) {
     got.reduce_motion = false;
     settings_apply(&got, NULL, engine);
     printf("cam settings upright scale %.9g invert %d shake %.9g authored %.9g %.9g\n",
-           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_scale,
+           (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_player_scale,
            (double)rig->yaw_rate, (double)rig->pitch_rate);
 
     engine_set_camera_rig(engine, NULL);

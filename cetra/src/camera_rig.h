@@ -77,23 +77,29 @@ typedef struct CameraRig {
     // ENGINE-OWNED (by the rig): what it worked out. Read freely, never write.
     CameraRigPose pose; // where the last update put it
     bool posed;         // false until the first update, so a blend has a `from`
+    // The pose before the blend and the shake. They are written into `pose`
+    // and read from here, which is what keeps a modifier off its own output.
+    CameraRigPose base;
     /*
-     * The stored pose came from camera_rig_set_pose and nothing has moved the
-     * rig since, so the update keeps it VERBATIM rather than re-deriving it.
+     * A pose camera_rig_set_pose was given, kept VERBATIM while the derivation
+     * still agrees with it.
      *
      * A pose decomposed into an angle and an arm and put back together is not
-     * the pose it started as: the error is proportional to the arm, and at the
-     * 20,196-unit framing of `aerial_fixture` it reaches 0.002 world units --
-     * 885 pixels, which is a restored session not reproducing the session it
-     * came from. Keeping what was stated costs one flag and one vector and makes
-     * --cam-eye and a config restore exact instead of nearly exact.
+     * the pose it started as: the error is proportional to the arm, and at a
+     * 20,000-unit framing it reaches 0.002 world units -- enough that a restored
+     * session does not reproduce the session it came from. Keeping what was
+     * stated is what makes --cam-eye and a config restore exact.
      *
-     * Cleared by every call that moves the aim or the arm, and by an anchor a
-     * caller wrote directly -- which is why the anchor is remembered rather than
-     * trusted to a flag.
+     * `stated_derive` is what the derivation produced at the moment the pose was
+     * stated, and the update compares against it. Comparing the ANSWER rather
+     * than enumerating what could have changed it is deliberate: the enumeration
+     * was tried and was already incomplete, since a write to look_lift, to
+     * either end of the response, to max_dist or to the probe left a held pose
+     * silently ignoring it.
      */
     bool pose_stated;
-    vec3 stated_anchor;
+    CameraRigPose stated;
+    vec3 stated_derive;
     float wide; // the smoothed arm response, 0..1
     // DERIVED from the near/far pairs and `wide` every update, and shortened by
     // the probe. They are here rather than under SETTINGS because the response
@@ -195,6 +201,12 @@ typedef struct CameraRig {
     // motion-reduction setting, and it is exactly the no-shake path rather than
     // a very small one.
     float shake_scale;
+    // The PLAYER's half of the same, kept apart for the reason look_scale is:
+    // settings are applied on every edit, so a motion-reduction toggle writing
+    // the authored amplitude would take an app's own choice with it the first
+    // time any control was touched. 1 = as authored, 0 = no shake at all, and
+    // the zero is exactly the no-shake path rather than a quiet one.
+    float shake_player_scale;
     float shake_freq; // Hz
 
     // Where along the rail the eye sits, 0..1. The app drives it; the rig owns
@@ -244,6 +256,11 @@ void camera_rig_set_pose(CameraRig* rig, const vec3 eye, const vec3 look);
 // of those apps. Treating it as an error would put a guard back at the very
 // call site this exists to remove one from.
 void camera_rig_apply(const CameraRig* rig, Camera* camera);
+
+// The unit aim direction. One derivation of the formula the struct states, so
+// an adapter that needs a forward vector does not subtract two poses -- which
+// is a different vector under a rail or a shortened arm.
+void camera_rig_direction(const CameraRig* rig, vec3 out);
 
 // The yaw a steering rig reads the controls in; false, leaving `out_yaw`
 // untouched, for a rig that does not steer them.

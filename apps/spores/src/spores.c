@@ -320,14 +320,13 @@ static void on_render(Game* game, double alpha) {
 }
 
 static void on_shutdown(Game* game) {
-    (void)game;
     // The particle system is owned by the scene (freed in free_scene).
-    if (g_drag) {
-        free_camera_drag(g_drag);
-        free_camera_rig(g_rig);
-        g_drag = NULL;
-        g_rig = NULL;
-    }
+    // Unnested: create_camera_drag can fail, and the rig must free either way.
+    engine_set_camera_rig(game->engine, NULL);
+    free_camera_drag(g_drag);
+    free_camera_rig(g_rig);
+    g_drag = NULL;
+    g_rig = NULL;
 }
 
 static void mouse_button_callback(Engine* engine, int button, int action, int mods) {

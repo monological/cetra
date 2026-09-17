@@ -349,9 +349,10 @@ void settings_apply(const GameSettings* settings, AudioSystem* audio, Engine* en
             // anything that scaled a rate in place would compound.
             rig->look_scale = settings->look_sensitivity;
             rig->invert_pitch = settings->invert_look_y;
-            // Motion reduction is EXACTLY the no-shake path, not a small shake:
-            // the rig asserts that its zero scale is bit-identical.
-            rig->shake_scale = settings->reduce_motion ? 0.0f : 1.0f;
+            // The PLAYER's half, never the authored amplitude: this runs on
+            // every settings edit, so writing shake_scale here would take an
+            // app's own choice with it the first time any control moved.
+            rig->shake_player_scale = settings->reduce_motion ? 0.0f : 1.0f;
         }
     }
 }
