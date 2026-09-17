@@ -53,9 +53,10 @@ struct AnimGraph {
 };
 
 // Once per name: a typo is written every frame and the first line says it all.
-// input.c carries the same eight-slot table for the same reason -- a shared
-// helper would have to live in util.h, which drags GL into a file whose whole
-// claim is that it has none.
+// input.c carries the same eight-slot table for the same reason. The third copy
+// should hoist into a header of its own, json_util.h's precedent -- and NOT into
+// util.h, which pulls GL in and would contradict this file's own claim. Two
+// copies is where that rule says to leave it.
 static void _log_unknown(const char* what, const char* name) {
     static char logged[8][48];
     static int logged_count;
@@ -110,7 +111,28 @@ AnimGraph* create_anim_graph(void) {
     return g;
 }
 
+/*
+ * Sever the two-way link, from whichever end is being let go.
+ *
+ * The animator holds a pointer back so a second graph can stand the first down,
+ * and `update_all_animators` follows it to decide before it plays. Either use
+ * means a freed graph, or one re-bound elsewhere, leaves an animator
+ * dereferencing it once a frame forever. Reproduced under Guard Malloc as a
+ * SIGSEGV in two probe cases that free a graph and then tick the entity it was
+ * bound to; it survives ordinarily only because the next calloc hands back the
+ * same block.
+ */
+static void _detach(AnimGraph* g) {
+    if (!g)
+        return;
+    if (g->animator && g->animator->graph == g)
+        g->animator->graph = NULL;
+    g->animator = NULL;
+    g->bound = false;
+}
+
 void free_anim_graph(AnimGraph* graph) {
+    _detach(graph);
     free(graph);
 }
 
@@ -159,8 +181,21 @@ bool anim_graph_add_source(AnimGraph* graph, const char* name, const AnimatorEnt
     return true;
 }
 
+// True, logged, when a table may not be replaced.
+static bool _table_locked(const AnimGraph* graph, const char* who) {
+    // Refused after bind, because everything bind settled -- the current state,
+    // the parallel value block, every pruned row -- is an INDEX into these
+    // tables. A shorter table read through an older index is a silent walk off
+    // the end; rebinding is the supported way to change one.
+    if (graph->bound) {
+        log_error("%s: refused, this graph is already bound", who);
+        return true;
+    }
+    return false;
+}
+
 void anim_graph_set_params(AnimGraph* graph, const AnimGraphParam* params, int count) {
-    if (!graph)
+    if (!graph || _table_locked(graph, "anim_graph_set_params"))
         return;
     if (count > ANIM_GRAPH_PARAM_MAX) {
         log_error("anim_graph_set_params: %d is past the %d-parameter maximum; refused", count,
@@ -172,7 +207,7 @@ void anim_graph_set_params(AnimGraph* graph, const AnimGraphParam* params, int c
 }
 
 void anim_graph_set_states(AnimGraph* graph, const AnimGraphState* states, int count) {
-    if (!graph)
+    if (!graph || _table_locked(graph, "anim_graph_set_states"))
         return;
     if (count > ANIM_GRAPH_STATE_MAX) {
         log_error("anim_graph_set_states: %d is past the %d-state maximum; refused", count,
@@ -184,7 +219,7 @@ void anim_graph_set_states(AnimGraph* graph, const AnimGraphState* states, int c
 }
 
 void anim_graph_set_transitions(AnimGraph* graph, const AnimGraphTransition* rows, int count) {
-    if (!graph)
+    if (!graph || _table_locked(graph, "anim_graph_set_transitions"))
         return;
     if (count > ANIM_GRAPH_TRANSITION_MAX) {
         log_error("anim_graph_set_transitions: %d is past the %d-row maximum; refused", count,
@@ -340,10 +375,6 @@ float anim_graph_float(const AnimGraph* graph, const char* name) {
     return p < 0 ? 0.0f : graph->values[p];
 }
 
-bool anim_graph_bool(const AnimGraph* graph, const char* name) {
-    return anim_graph_float(graph, name) != 0.0f;
-}
-
 const char* anim_graph_state_name(const AnimGraph* graph) {
     if (!graph || graph->state < 0)
         return "";
@@ -354,34 +385,9 @@ float anim_graph_state_seconds(const AnimGraph* graph) {
     return graph ? graph->seconds : 0.0f;
 }
 
-const char* anim_graph_previous_state(const AnimGraph* graph) {
-    if (!graph || graph->previous < 0)
-        return "";
-    return graph->states[graph->previous].name;
-}
-
 void anim_graph_set_enabled(AnimGraph* graph, bool enabled) {
     if (graph)
         graph->enabled = enabled;
-}
-
-bool anim_graph_enabled(const AnimGraph* graph) {
-    return graph ? graph->enabled : false;
-}
-
-void anim_graph_enter(AnimGraph* graph, const char* state, float fade) {
-    if (!graph || !graph->bound)
-        return;
-    const int s = _state_index(graph, state);
-    if (s < 0) {
-        _log_unknown("state", state ? state : "(null)");
-        return;
-    }
-    if (graph->state_source[s] == -2) {
-        log_error("anim_graph_enter: '%s' plays a source this rig does not carry", state);
-        return;
-    }
-    _enter(graph, s, fade);
 }
 
 /*
@@ -554,6 +560,22 @@ static bool _check_row(const AnimGraph* g, int i) {
                     return false;
                 }
             }
+            /*
+             * And a row from one returning state into another is refused
+             * outright, because the two layers would then disagree about where
+             * it goes back to. `animator_play_once` keeps the FIRST return
+             * point, so the animator resumes what played before the first of
+             * the pair; this graph follows `previous`, which by then names that
+             * first one-shot. The animator plays the walk while the graph names
+             * a clip that has ended -- the two records of one fact this design
+             * exists to prevent, and undetectable for the reason stated there.
+             */
+            if (g->states[to].kind == ANIM_GRAPH_RETURN) {
+                log_error("anim_graph_bind: row %d goes from '%s' to '%s' and both return by "
+                          "themselves; there is one return point between them",
+                          i, r->from, r->to);
+                return false;
+            }
         }
     }
     for (int c = 0; c < ANIM_GRAPH_COND_MAX; c++) {
@@ -651,11 +673,18 @@ bool anim_graph_bind(AnimGraph* graph, Animator* animator, const char* start) {
         if (graph->states[i].kind == ANIM_GRAPH_RETURN)
             continue;
         bool exit_exists = false;
-        for (int r = 0; r < graph->row_count && !exit_exists; r++) {
+        for (int r = 0; r < graph->row_count; r++) {
             if (!graph->row_live[r])
                 continue;
-            if (!graph->rows[r].from || strcmp(graph->rows[r].from, graph->states[i].name) == 0)
-                exit_exists = _state_index(graph, graph->rows[r].to) != i;
+            if (graph->rows[r].from && strcmp(graph->rows[r].from, graph->states[i].name) != 0)
+                continue;
+            // An assignment here rather than a break was wrong twice over: a
+            // later row leading back to this state would clear a true already
+            // found, and the loop guard was the only thing hiding it.
+            if (_state_index(graph, graph->rows[r].to) != i) {
+                exit_exists = true;
+                break;
+            }
         }
         if (!exit_exists)
             log_warn("anim_graph: '%s' has no way out on this rig", graph->states[i].name);
@@ -669,9 +698,12 @@ bool anim_graph_bind(AnimGraph* graph, Animator* animator, const char* start) {
 
     if (animator && animator->graph && animator->graph != graph) {
         log_warn("anim_graph_bind: an animator drives one graph; the previous one stands down");
-        animator->graph->animator = NULL;
-        animator->graph->bound = false;
+        _detach(animator->graph);
     }
+    // And this graph lets go of whatever it was bound to before, or re-binding
+    // leaves the OLD animator pointing at a graph that no longer points back --
+    // still ticked every frame, now driving nothing.
+    _detach(graph);
     graph->animator = animator;
     if (animator)
         animator->graph = graph;
@@ -703,14 +735,29 @@ void anim_graph_print(const AnimGraph* graph) {
     }
     for (int i = 0; i < graph->row_count; i++) {
         const AnimGraphTransition* r = &graph->rows[i];
-        printf("  %s %-12s -> %-12s fade %.2f", graph->bound && !graph->row_live[i] ? "x" : " ",
-               r->from ? r->from : "(any)", r->to, (double)r->fade);
+        // Dead if EITHER end is unplayable: a row out of a state this rig cannot
+        // enter can never fire, even though only its destination is what pruning
+        // tests.
+        const int from = r->from ? _state_index(graph, r->from) : -1;
+        const bool dead =
+            graph->bound && (!graph->row_live[i] || (from >= 0 && graph->state_source[from] == -2));
+        printf("  %s %-12s -> %-12s fade %.2f", dead ? "x" : " ", r->from ? r->from : "(any)",
+               r->to, (double)r->fade);
         for (int c = 0; c < ANIM_GRAPH_COND_MAX; c++) {
             const AnimGraphCondition* cond = &r->conditions[c];
             if (cond->op == ANIM_GRAPH_OP_NONE)
                 continue;
-            printf("  [%s %s %g]", cond->param ? cond->param : "", _op_name(cond->op),
-                   (double)cond->value);
+            // Only the comparisons carry an operand; printing one for the rest
+            // reads as a threshold nobody wrote.
+            const bool has_value = cond->op == ANIM_GRAPH_GT || cond->op == ANIM_GRAPH_GTE ||
+                                   cond->op == ANIM_GRAPH_LT || cond->op == ANIM_GRAPH_LTE ||
+                                   cond->op == ANIM_GRAPH_EQ || cond->op == ANIM_GRAPH_NEQ ||
+                                   cond->op == ANIM_GRAPH_ELAPSED;
+            printf("  [%s%s%s", cond->param ? cond->param : "", cond->param ? " " : "",
+                   _op_name(cond->op));
+            if (has_value)
+                printf(" %g", (double)cond->value);
+            printf("]");
         }
         printf("%s\n", r->guard ? "  +guard" : "");
     }

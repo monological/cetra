@@ -192,6 +192,7 @@ first.
 | **Particles** (falling leaves, spores) | YES in headless (spec 11.2) -- ticked from the frame clock; game-loop step count is exactly one per frame | (automatic) |
 | **Skeletal animation** | YES in headless -- the frame clock steps a fixed 1/60 per frame so frame N is always pose N | (automatic) |
 | **Animation blending** (`animator.c`, spec 12.1) | YES in headless -- every clock in it (the blend space's, the crossfade's envelope, the override layer's) advances by the same fixed dt, so frame N is blend state N. In the game framework the dt is the SIM clock's, a whole number of fixed steps, so a paused sim holds the pose and reads zero deformation velocity | (automatic); `--anim-probe` prints the weights and every bone's pose, `%.9g`, so a textual diff is a bit diff |
+| **The animation state machine** (`anim_graph.c`, spec 12.20) | YES in headless, and for a reason worth stating rather than inheriting: the graph ticks ONCE PER RENDERED FRAME, immediately before the animator it drives, and headless a frame is exactly one fixed step -- so state N is state N. **Windowed it is not**, and that is the one place this differs from the rows above: a frame that runs three steps or none still decides once, where the machine it replaced decided three times or zero. The time-in-state a row compares against is in seconds off the sim clock, which is a whole number of fixed steps headless and is not, windowed | (automatic); `--graph-probe` prints states and clocks at `%.9g`, and most of its cases create no engine at all; `--trace-player` appends the live state and its clock as the LAST two columns |
 | **The game UI** (`ui.c`, spec 12.2) | YES in headless -- every clock it has (hover, focus, a toggle's travel, a screen's entrance) advances by the FIXED frame dt rather than the wall clock, so frame N is transition state N. It draws AFTER tone mapping, so no post pass can move it and nothing in the chain needs pinning for it | (automatic); `--ui-probe` prints layout, navigation, capture and settings as numbers, and is the one probe that needs no window at all |
 | **TAA jitter** | YES -- disabled in headless unless `--headless-jitter` | (automatic) |
 | **Orbit camera** | YES -- auto-rotation disabled in headless | `--cam-eye`/`--cam-target` for exact repro |
@@ -756,11 +757,26 @@ doing at the time:
   `ik-contact`, `ik-slide` and `ik-hysteresis` with it.
 
   Six committed clips later the same rig runs, idles, swims, treads, falls and lands, and the
-  locomotion axis reads 0 to 5.01 m/s with full stick at 8.01. **None of that has an arm.** The
-  `anim` and `ik` groups assert the measurement and the blend; what nothing asserts is that the
-  medium state machine picks the right SOURCE -- the sequence was read off `--trace-player` by
-  eye and photographed, which is evidence and not a regression test. An arm here would read the
-  trace's source column the way `anim-trace-idle` already reads its weight column.
+  locomotion axis reads 0 to 5.01 m/s with full stick at 8.01. That paragraph used to end
+  **"None of that has an arm"**, and said what one would look like: *"An arm here would read the
+  trace's source column the way `anim-trace-idle` already reads its weight column."* **Spec 12.20
+  wrote four of them**, and they read exactly that column -- `graph-parity-ground`,
+  `graph-parity-air`, `graph-parity-water` and `graph-no-swim`, each asserting a state sequence
+  spelled out in `gates.py` rather than a recording, so a reviewer can disagree with it. The
+  sequence was still LEARNED by recording the old machine first; what ships is the literal list.
+
+  **Two things about that coverage are worth knowing before trusting it.** The arms prove the new
+  machine is the SAME, not that it is right: if the sequence read off a trace by eye in 12.6 was
+  wrong, it is wrong identically now and every arm is green. And **the re-cadencing they pass over
+  is the largest behaviour change in that spec** -- the decision moved from the fixed step to the
+  rendered frame, and headless the two are identical, one step per frame, which is the property
+  every gametest arm in this suite rests on. So no arm here can see it. Windowed, on a frame that
+  runs three steps or none, the machine now decides once where it used to decide three times or
+  zero; that wants a human at an uncapped frame rate and at a throttled one, and has not had one.
+
+  **What still has no arm** is how a transition READS: whether a fade is the right length for the
+  move it covers, whether the landing lands on the beat, and what a swim looks like. Four state
+  sequences and a pose diff say nothing about any of it.
 - **The menu goldens' instability reaches 48,886 px.** This section already warned that they
   cannot support single-measurement attribution. Spec 12.9 met a `menu` failure of 48,886 px --
   the Quit button focused, not a few edge pixels -- which survived a bisect across four commits,

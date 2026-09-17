@@ -199,6 +199,21 @@ static int aquatic_count = 0;
  */
 static AnimGraph* player_graph = NULL;
 static AnimGraph* chaser_graph = NULL;
+// Print the player's table and what bind made of it, then carry on -- the
+// counterpart of --print-bindings, and the first thing anybody debugging a graph
+// wants. A file static because the flag is parsed in main and read in on_init.
+static bool print_graph = false;
+// What the fixed step measured, waiting to be published to the graph once a
+// frame. See the latch's own comment in on_update for why it is not written
+// straight through.
+static struct {
+    float ground_knob;
+    float ground_rate;
+    float swim_knob;
+    float rise;
+    bool grounded;
+    bool rise_seen; // cleared at each publish, so the peak is this frame's
+} player_graph_in;
 
 /*
  * The waterline needs a BAND and not a plane, and both numbers come from a
@@ -212,12 +227,23 @@ static AnimGraph* chaser_graph = NULL;
  * parameter is a DEPTH in metres and not a submerged bool.
  *
  * The band is wide because the bob is: sampled every step once settled, the
- * capsule centre swings between 0.83 under and 0.80 over. That is its own
- * defect and it is named here rather than fixed -- `grotto_float_velocity` calls
- * itself critically damped and is not, its drag of 6 against a buoyancy of 18
- * needing 2*sqrt(18) = 8.49 to be. Retuning it changes how the water FEELS,
- * which is a different spec's decision; sizing a band from what it actually does
- * is this one's.
+ * capsule centre swings between 0.83 under and 0.80 over. That is its own defect
+ * and it is named here rather than fixed.
+ *
+ * The cause is the DISCONTINUITY and not the damping, and the first version of
+ * this comment said otherwise. Underdamping was the obvious suspect and the
+ * arithmetic refutes it: a drag of 6 against a buoyancy of 18 is a damping ratio
+ * of 6/(2*sqrt(18)) = 0.707, whose overshoot is exp(-pi) -- four per cent per
+ * half cycle, which cannot hold an amplitude up for ever. What holds it up is
+ * that below the plane the capsule is a spring and above it there is no
+ * restoring term at all, so it is thrown clear at `rise_max` and coasts:
+ * 4.0^2 / (2 * 9.81) = 0.815 m, against the 0.80 measured. Raising the drag
+ * would not touch that number.
+ *
+ * The fix is to make the response continuous across the surface, which would let
+ * every consumer share one threshold again -- and it changes how the water
+ * FEELS, so it is a different spec's decision. Sizing a band from what the
+ * oscillator actually does is this one's.
  */
 #define PLAYER_SUBMERGE_DEPTH 1.0f  // metres under before the stroke starts
 #define PLAYER_SURFACE_DEPTH  -1.0f // and above before it stops
@@ -235,7 +261,6 @@ static const AnimGraphParam PLAYER_PARAMS[] = {
     // reads as a leap and `player_jumped` stops existing. A rise is a rise
     // whatever set it going.
     {"rise", ANIM_GRAPH_FLOAT},
-    {"ragdolled", ANIM_GRAPH_BOOL},
     {"lunge", ANIM_GRAPH_TRIGGER},
     {"spin", ANIM_GRAPH_TRIGGER},
 };
@@ -257,18 +282,18 @@ static const AnimGraphState PLAYER_STATES[] = {
     // restart the clock and drag every foot lock with it.
     {"lunge", "lunge", NULL, NULL, ANIM_GRAPH_RETURN},
     {"spin", "spin", NULL, NULL, ANIM_GRAPH_RETURN},
-    // A ragdoll REPLACES the pose downstream, so what this state has to do is
-    // stop the animator rather than play something quieter. Before it, a killed
-    // player kept its last source running: the clock advancing, the clip's own
-    // footstep events firing from a body nobody was drawing, and root motion
-    // accumulating with nobody draining it.
-    {"dead", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
 };
 
 static const AnimGraphTransition PLAYER_ROWS[] = {
     // INTERRUPTS first, and they are the only any-state rows: an any row's
     // condition is a superset of the specific rows below it and would eat them.
-    {NULL, "dead", {ANIM_ON("ragdolled")}, 0.0f},
+    //
+    // There is no row for the ragdoll. A ragdoll owns the pose and the ANIMATOR
+    // stands itself down while one is active, so a corpse needs no state here to
+    // play nothing in -- which is the version every app gets rather than the one
+    // each has to remember to author. The first draft had a `dead` state reached
+    // by an any row, and the two any rows then ping-ponged a sinking corpse
+    // between death and the swim clip, once per frame.
     {NULL, "water", {ANIM_GT("depth", PLAYER_SUBMERGE_DEPTH)}, 0.25f},
     {"water", "ground", {ANIM_LT("depth", PLAYER_SURFACE_DEPTH)}, 0.25f},
 
@@ -411,11 +436,11 @@ static int ik_foot_right = -1;
 // Smoothed rather than switched: grounded is a bool, and planting a foot the instant
 // it becomes true snaps the leg into place at the end of a jump.
 static float ik_weight = 0.0f;
-// Whether each character is in the water, settled once per fixed step in on_update and
-// read by ik_update_targets in the pre-render hook. File statics because the two live in
-// different hooks, the same reason ik_weight is one.
+// Whether the player is in the water, settled once per fixed step in on_update and read
+// by ik_update_targets in the pre-render hook. A file static because the two live in
+// different hooks, the same reason ik_weight is one. The chaser's own answer is a local:
+// its only cross-frame reader was the swim edge the graph replaced.
 static bool player_swimming = false;
-static bool chaser_swimming = false;
 
 static SceneNode* heart_node = NULL;
 static ParticleModule* heart_spawn = NULL;
@@ -1531,10 +1556,20 @@ static float grotto_surface_y(const Scene* scene) {
     return scene && scene->water ? scene->water->level : GROTTO_WATER_Y;
 }
 
-// Whether a capsule centre is under the surface. One predicate, so the player, the
-// chaser and the IK gate cannot disagree about what "in the water" means.
+// How far a capsule centre is under the surface, positive when under. ONE
+// subtraction, so the buoyancy, the speed scale, the IK gate, the camera's
+// footing and the animation cannot disagree about where the water is -- they
+// differ only in the threshold each puts on it, which is a thing each is
+// allowed to choose and none is allowed to spell its own way.
+static float grotto_depth(const Scene* scene, const vec3 p) {
+    return grotto_surface_y(scene) - p[1];
+}
+
+// Whether a capsule centre is under the surface, at the plane itself. The
+// animation asks with a BAND instead (see PLAYER_SUBMERGE_DEPTH), because what
+// it must not do is change its mind once a second while somebody floats.
 static bool grotto_submerged(const Scene* scene, const vec3 p) {
-    return p[1] < grotto_surface_y(scene);
+    return grotto_depth(scene, p) > 0.0f;
 }
 
 // Tread water: drive the capsule toward the surface and damp it, rather than fall.
@@ -2970,6 +3005,15 @@ static void on_init(Game* game) {
         clip_swim = scene_find_animation(scene, "swim");
         if (!clip_swim)
             clip_swim = scene_find_animation(scene, "swim_cycle");
+        // Withheld ONCE, where the rig is read, so everything downstream follows:
+        // build_aquatic refuses, aquatic_count is 0, and both graphs register a
+        // source with no clip. Applied at either registration instead, it reached
+        // the single-clip shape and not the space -- so on a rig given the shared
+        // set, which carries both a stroke and a float, the flag did nothing at
+        // all. That is the same one-of-two asymmetry this spec deleted from the
+        // medium test, re-created two screens below the claim.
+        if (no_swim)
+            clip_swim = NULL;
         clip_float = scene_find_animation(scene, "float_idle");
         clip_fall = scene_find_animation(scene, "fall_cycle");
         clip_land = scene_find_animation(scene, "touch_down");
@@ -3016,17 +3060,20 @@ static void on_init(Game* game) {
                 if (aquatic_count > 0) {
                     anim_graph_add_source(player_graph, "swim", aquatic, aquatic_count);
                 } else {
-                    one[0] = (AnimatorEntry){no_swim ? NULL : clip_swim, 0.0f, 0.0f};
+                    one[0] = (AnimatorEntry){clip_swim, 0.0f, 0.0f};
                     anim_graph_add_source(player_graph, "swim", one, 1);
                 }
-                const Animation* singles[4] = {clip_fall, clip_jump, clip_land, clip_lunge};
-                const char* names[4] = {"fall", "jump", "land", "lunge"};
-                for (int i = 0; i < 4; i++) {
-                    one[0] = (AnimatorEntry){singles[i], 0.0f, 0.0f};
-                    anim_graph_add_source(player_graph, names[i], one, 1);
+                const struct {
+                    const char* name;
+                    const Animation* clip;
+                } singles[] = {
+                    {"fall", clip_fall},   {"jump", clip_jump}, {"land", clip_land},
+                    {"lunge", clip_lunge}, {"spin", clip_spin},
+                };
+                for (size_t i = 0; i < sizeof singles / sizeof *singles; i++) {
+                    one[0] = (AnimatorEntry){singles[i].clip, 0.0f, 0.0f};
+                    anim_graph_add_source(player_graph, singles[i].name, one, 1);
                 }
-                one[0] = (AnimatorEntry){clip_spin, 0.0f, 0.0f};
-                anim_graph_add_source(player_graph, "spin", one, 1);
                 anim_graph_set_params(player_graph, PLAYER_PARAMS,
                                       (int)(sizeof PLAYER_PARAMS / sizeof *PLAYER_PARAMS));
                 anim_graph_set_states(player_graph, PLAYER_STATES,
@@ -3036,6 +3083,8 @@ static void on_init(Game* game) {
                 if (!anim_graph_bind(player_graph, player_animator, "ground")) {
                     free_anim_graph(player_graph);
                     player_graph = NULL;
+                } else if (print_graph) {
+                    anim_graph_print(player_graph);
                 }
             }
             if (!player_graph) {
@@ -3151,16 +3200,16 @@ static void on_init(Game* game) {
                  * because root motion is a property of the animator while the clips
                  * are a property of an array, and nothing drains this one.
                  *
-                 * The tables are borrowed and hold nothing that moves, which is the
-                 * property `graph-two-instances` asserts and this is the consumer
-                 * that makes it worth asserting.
+                 * The tables are borrowed and hold nothing that moves; two
+                 * machines sharing every row while holding different states and
+                 * different clocks is what says so.
                  */
                 chaser_graph = create_anim_graph();
                 if (chaser_graph) {
                     AnimatorEntry one[1];
                     anim_graph_add_source(chaser_graph, "locomotion", chaser_locomotion,
                                           locomotion_count);
-                    one[0] = (AnimatorEntry){no_swim ? NULL : clip_swim, 0.0f, 0.0f};
+                    one[0] = (AnimatorEntry){clip_swim, 0.0f, 0.0f};
                     anim_graph_add_source(chaser_graph, "swim", one, 1);
                     anim_graph_set_params(chaser_graph, PLAYER_PARAMS,
                                           (int)(sizeof PLAYER_PARAMS / sizeof *PLAYER_PARAMS));
@@ -3404,13 +3453,22 @@ static void on_update(Game* game, double dt) {
     hud_ground_speed = ground_speed;
     if (player_graph) {
         /*
-         * What the app owes the graph each frame: what is true, and nothing about
-         * what should therefore play.
+         * What the app MEASURED this step, latched rather than written straight
+         * through -- published to the graph once, in on_pre_render.
          *
-         * Every one of these is computed unconditionally, whatever is playing,
-         * because a state names the parameter that drives it and the app no
-         * longer has to ask which state that is. The branch that used to decide
-         * the knob's MEANING from the medium is gone with it.
+         * The values have to be read here: `vel` is Jolt's POST-SOLVE velocity,
+         * before the input below overwrites it, which is what makes walking into
+         * a wall stop the walk. But the fixed step runs zero, one or several
+         * times a frame while the graph decides exactly once, so writing from
+         * here hands the decider whatever the LAST step happened to leave, or on
+         * a frame that ran none, nothing at all. That is defect 1's own shape --
+         * a per-frame consumer fed from a per-step producer -- and moving the
+         * decision to the frame without moving the publish would have left half
+         * of it in place.
+         *
+         * `rise` takes the frame's PEAK rather than its last, because what it is
+         * for is telling a leap from a step off a ledge, and a jump's velocity is
+         * spent over the steps that follow it.
          */
         // The ground axis. Under root motion the knob is what the STICK asks for
         // and not what the body achieved, and that is forced rather than chosen:
@@ -3437,17 +3495,17 @@ static void on_update(Game* game, double dt) {
             const float knob = ground_speed / PLAYER_SPEED;
             ground_knob = knob > 1.0f ? 1.0f : knob;
         }
-        anim_graph_set_float(player_graph, "ground_knob", ground_knob);
-        anim_graph_set_float(player_graph, "ground_rate", ground_rate);
+        player_graph_in.ground_knob = ground_knob;
+        player_graph_in.ground_rate = ground_rate;
         // The swim axis is its own and tops out at a fraction of the ground's, so a
         // stick reading meant for the ground reads as a full stroke at 40 per cent
         // of it.
-        anim_graph_set_float(player_graph, "swim_knob", ground_speed);
-        anim_graph_set_float(player_graph, "depth",
-                             grotto_surface_y(game->scene) - player_entity->position[1]);
-        anim_graph_set_bool(player_graph, "grounded", character_controller_is_grounded(cc));
-        anim_graph_set_float(player_graph, "rise", vel[1]);
-        anim_graph_set_bool(player_graph, "ragdolled", player_ragdolled());
+        player_graph_in.swim_knob = ground_speed;
+        player_graph_in.grounded = character_controller_is_grounded(cc);
+        if (!player_graph_in.rise_seen || vel[1] > player_graph_in.rise) {
+            player_graph_in.rise = vel[1];
+            player_graph_in.rise_seen = true;
+        }
     }
     /*
      * What the clip laid down, taken once per step (spec 12.18).
@@ -3587,21 +3645,6 @@ static void on_update(Game* game, double dt) {
     if (player_animator && clip_wave && input_action_pressed(&game->input, "wave"))
         animator_play_layer(player_animator, clip_wave, wave_mask, 0.1f, 0.1f, false);
 
-    // The two authored moves (spec 12.18), and they are BASE one-shots where the wave
-    // is an override layer -- a wave happens on an arm while the body carries on, a
-    // lunge is what the body is doing.
-    //
-    // Fired rather than played: the table decides they are ground-only and that being
-    // ragdolled rules them out, and it decides it in one place instead of in a
-    // condition here that has to be kept in step with one over there. A press with
-    // nothing to consume it is an edge that expired, which is what a trigger is.
-    if (player_graph) {
-        if (input_action_pressed(&game->input, "lunge"))
-            anim_graph_fire(player_graph, "lunge");
-        else if (input_action_pressed(&game->input, "spin"))
-            anim_graph_fire(player_graph, "spin");
-    }
-
     // Set velocity (CharacterController will handle collision response)
     character_controller_set_velocity(cc, vel);
 
@@ -3629,8 +3672,6 @@ static void on_update(Game* game, double dt) {
             anim_graph_set_float(chaser_graph, "ground_knob", speed > 1.0f ? 1.0f : speed);
             anim_graph_set_float(chaser_graph, "ground_rate", 1.0f);
             anim_graph_set_float(chaser_graph, "swim_knob", speed > 1.0f ? 1.0f : speed);
-            anim_graph_set_float(chaser_graph, "depth",
-                                 grotto_surface_y(game->scene) - chaser_entity->position[1]);
             // The chaser never leaves the ground in a way the airborne states are
             // about, has no ragdoll and fires no moves, so the rest of the table is
             // simply never satisfied. Nothing here has to say so.
@@ -3665,7 +3706,7 @@ static void on_update(Game* game, double dt) {
         // Its own handling, not the player's: this one never zeroes chase_vel[1] when
         // grounded, so it carries accumulated downward velocity into the water and would
         // sink through a clamp written for a character that does.
-        chaser_swimming = grotto_submerged(game->scene, chaser_entity->position);
+        const bool chaser_swimming = grotto_submerged(game->scene, chaser_entity->position);
         if (chaser_swimming) {
             chase_vel[1] =
                 grotto_float_velocity(chaser_entity->position[1], chase_vel[1], (float)dt);
@@ -3728,7 +3769,11 @@ static void on_update(Game* game, double dt) {
                    loco ? base->weights[0] : 0.0f, loco ? base->weights[1] : 0.0f,
                    loco ? base->weights[2] : 0.0f, player_animator->fade_weight,
                    player_animator->layer.weight, player_animator->speed,
-                   animator_source_name(player_animator));
+                   // A stopped animator names nothing, and an empty field would
+                   // collapse this line by one column rather than reading as empty
+                   // -- which every regex over it counts from the left.
+                   *animator_source_name(player_animator) ? animator_source_name(player_animator)
+                                                          : "(none)");
         }
         // The follow camera's heading, LAST, so appending it cannot disturb either
         // regex already reading this line -- neither anchors its end. It is here
@@ -4022,7 +4067,7 @@ static void follow_camera_update(Game* game) {
      * real distance between the player and the last solid thing under it.
      *
      * Deliberately NOT player_medium, which looks made for this and is not:
-     * MEDIUM_AIR is only ever entered on a rig that ships a fall clip, so a
+     * `air` is only ever entered on a rig that ships a fall clip, so a
      * camera keyed to it would frame the generated puppet differently from an
      * imported one.
      *
@@ -4082,6 +4127,40 @@ static void on_pre_render(Game* game, double alpha) {
     if (input_action_pressed(&game->input, "ragdoll")) {
         ragdoll_kill_player(game);
     }
+
+    /*
+     * Publish to the graph, ONCE, immediately before update_all_animators runs
+     * it -- and for exactly the reason the kill above sits here.
+     *
+     * The levels are what the fixed step latched. `depth` is read fresh, since
+     * the entity's position is current either way. And the two moves are fired
+     * from a per-FRAME input edge: fired from the step instead, a frame that ran
+     * no step never saw the press at all and the edge was gone by the next poll,
+     * so a lunge was silently dropped at any frame rate above the fixed one.
+     */
+    if (player_graph) {
+        anim_graph_set_float(player_graph, "ground_knob", player_graph_in.ground_knob);
+        anim_graph_set_float(player_graph, "ground_rate", player_graph_in.ground_rate);
+        anim_graph_set_float(player_graph, "swim_knob", player_graph_in.swim_knob);
+        anim_graph_set_bool(player_graph, "grounded", player_graph_in.grounded);
+        anim_graph_set_float(player_graph, "rise", player_graph_in.rise);
+        player_graph_in.rise_seen = false;
+        if (player_entity)
+            anim_graph_set_float(player_graph, "depth",
+                                 grotto_depth(game->scene, player_entity->position));
+        // The two authored moves (spec 12.18), BASE one-shots where the wave is an
+        // override layer -- a wave happens on an arm while the body carries on, a
+        // lunge is what the body is doing. Fired rather than played: the table
+        // decides they are ground-only, in one place, instead of in a condition
+        // here that has to be kept in step with one over there.
+        if (input_action_pressed(&game->input, "lunge"))
+            anim_graph_fire(player_graph, "lunge");
+        else if (input_action_pressed(&game->input, "spin"))
+            anim_graph_fire(player_graph, "spin");
+    }
+    if (chaser_graph && chaser_entity)
+        anim_graph_set_float(chaser_graph, "depth",
+                             grotto_depth(game->scene, chaser_entity->position));
     // The rig node moves with the character, so the ragdoll's model-to-world has
     // to follow it -- while it is active nothing else writes the node, but the
     // matrix was captured a frame before the bodies started moving.
@@ -6274,20 +6353,21 @@ static int run_anim_probe(Game* game, const char* which) {
  * the same thing as calling the animator directly. A headless game, and still no
  * frame is drawn.
  */
-static int graph_probe_guard_calls = 0;
+// The guard's answer comes through its USER pointer rather than from a file
+// static, so what `graph-guard` asserts includes the half of the seam an app
+// actually uses: a predicate needs its own context to decide anything.
+typedef struct GraphProbeGuard {
+    int calls;
+    bool answer;
+} GraphProbeGuard;
 
-static bool graph_probe_guard_no(const AnimGraph* graph, void* user) {
+static bool graph_probe_guard(const AnimGraph* graph, void* user) {
     (void)graph;
-    (void)user;
-    graph_probe_guard_calls++;
-    return false;
-}
-
-static bool graph_probe_guard_yes(const AnimGraph* graph, void* user) {
-    (void)graph;
-    (void)user;
-    graph_probe_guard_calls++;
-    return true;
+    GraphProbeGuard* g = user;
+    if (!g)
+        return false;
+    g->calls++;
+    return g->answer;
 }
 
 static int run_graph_rig_probe(Game* game, const char* which) {
@@ -6351,7 +6431,6 @@ static int run_graph_rig_probe(Game* game, const char* which) {
             anim_graph_fire(g, "go");
             int ticks = 0;
             while (ticks < 240) {
-                anim_graph_update(g, PROBE_DT);
                 probe_tick(em, 1);
                 ticks++;
                 if (!strcmp(anim_graph_state_name(g), "ground") && ticks > 1)
@@ -6381,7 +6460,6 @@ static int run_graph_rig_probe(Game* game, const char* which) {
         anim_graph_set_transitions(g, ROWS, 1);
         anim_graph_bind(g, a, "ground");
         anim_graph_fire(g, "go");
-        anim_graph_update(g, PROBE_DT);
         probe_tick(em, 1);
         printf("graph fade t0 weight %.6f\n", (double)a->fade_weight);
         probe_tick(em, 14); // fifteen ticks of sixty is a quarter second
@@ -6399,30 +6477,32 @@ static int run_graph_rig_probe(Game* game, const char* which) {
             {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
             {"other", "shot", NULL, NULL, ANIM_GRAPH_LOOP},
         };
-        static const AnimGraphTransition BLOCKED[] = {
-            {"ground", "other", {ANIM_ON("armed")}, 0.0f, graph_probe_guard_no},
+        static const AnimGraphTransition GUARDED[] = {
+            {"ground", "other", {ANIM_ON("armed")}, 0.0f, graph_probe_guard},
         };
-        static const AnimGraphTransition ALLOWED[] = {
-            {"ground", "other", {ANIM_ON("armed")}, 0.0f, graph_probe_guard_yes},
-        };
-        const AnimGraphTransition* tables[3] = {BLOCKED, ALLOWED, BLOCKED};
         const char* labels[3] = {"blocked", "allowed", "unarmed"};
         const bool armed[3] = {true, true, false};
+        const bool answers[3] = {false, true, false};
         for (int t = 0; t < 3; t++) {
+            GraphProbeGuard guard = {.answer = answers[t]};
             Animator* a = probe_rig(em, skel, labels[t]);
             AnimGraph* g = create_anim_graph();
             anim_graph_add_source(g, "loco", loco, 3);
             anim_graph_add_source(g, "shot", one_shot, 1);
             anim_graph_set_params(g, PARAMS, PARAM_N);
             anim_graph_set_states(g, STATES, 2);
-            anim_graph_set_transitions(g, tables[t], 1);
+            anim_graph_set_transitions(g, GUARDED, 1);
+            anim_graph_set_guard_user(g, &guard);
             anim_graph_bind(g, a, "ground");
             anim_graph_set_bool(g, "armed", armed[t]);
-            graph_probe_guard_calls = 0;
-            anim_graph_update(g, PROBE_DT);
+            // Through the component, like every other rig case: the seam under
+            // test is update_all_animators deciding before it plays, and a probe
+            // that also ticked the graph itself would run it at twice the cadence
+            // its own header specifies.
+            probe_tick(em, 1);
             printf("graph guard %s moved %d\n", labels[t],
                    strcmp(anim_graph_state_name(g), "ground") ? 1 : 0);
-            printf("graph guard %s calls %d\n", labels[t], graph_probe_guard_calls);
+            printf("graph guard %s calls %d\n", labels[t], guard.calls);
             free_anim_graph(g);
         }
     } else if (!strcmp(which, "return")) {
@@ -6463,13 +6543,11 @@ static int run_graph_rig_probe(Game* game, const char* which) {
             anim_graph_bind(g, a, "ground");
             // Let the walk get well past its start, so a restart is unmistakable.
             for (int i = 0; i < 25; i++) {
-                anim_graph_update(g, PROBE_DT);
                 probe_tick(em, 1);
             }
             const float before = a->base.time;
             anim_graph_fire(g, "go");
             for (int i = 0; i < 200; i++) {
-                anim_graph_update(g, PROBE_DT);
                 probe_tick(em, 1);
                 if (!strcmp(animator_source_name(a), "loco") && i > 2)
                     break;
@@ -6503,7 +6581,6 @@ static int run_graph_rig_probe(Game* game, const char* which) {
         animator_play_space(b, "loco", loco, 3, 0.0f, true);
         b->param = 0.5f;
         for (int i = 0; i < 120; i++) {
-            anim_graph_update(g, PROBE_DT);
             probe_tick(em, 1);
         }
         printf("graph identity pose maxdiff %.9g\n", pose_maxdiff(a->state, b->state, -1));
@@ -7117,7 +7194,6 @@ static int run_graph_probe(const char* which) {
             anim_graph_set_float(g, "speed", 2.0f);
             anim_graph_update(g, 1.0f / 60.0f);
             printf("graph order %s state %d\n", labels[t], graph_state_index(g, STATES, STATE_N));
-            printf("graph order %s fade %.9g\n", labels[t], (double)tables[t][0].fade);
             free_anim_graph(g);
         }
         return 0;
@@ -7128,10 +7204,14 @@ static int run_graph_probe(const char* which) {
         // real hazard: a specific row ABOVE an any row beats it, one below does
         // not -- there is one table and one order, with no separate any pass.
         static const AnimGraphTransition ROWS[] = {
-            {"b", "a", {ANIM_ON("grounded")}, 0.1f},  // specific, above
-            {NULL, "c", {ANIM_ON("grounded")}, 0.2f}, // the any row
+            {"b", "c", {ANIM_ON("grounded")}, 0.1f},  // specific, above
+            {NULL, "a", {ANIM_ON("grounded")}, 0.2f}, // the any row
         };
-        const char* starts[3] = {"a", "b", "c"};
+        // The any row goes to `a`, so no leg starts there: a leg starting in the
+        // any row's destination reads "did not move" whether the row fired or
+        // was skipped as a re-entry, and would pass with the row deleted. Each
+        // leg here OBSERVES a transition.
+        const char* starts[3] = {"b", "c", "b"};
         for (int s = 0; s < 3; s++) {
             AnimGraph* g = create_anim_graph();
             anim_graph_set_params(g, PARAMS, PARAM_N);
@@ -7140,7 +7220,7 @@ static int run_graph_probe(const char* which) {
             anim_graph_bind(g, NULL, starts[s]);
             anim_graph_set_bool(g, "grounded", true);
             anim_graph_update(g, 1.0f / 60.0f);
-            printf("graph any from%s state %d\n", starts[s], graph_state_index(g, STATES, STATE_N));
+            printf("graph any leg%d state %d\n", s, graph_state_index(g, STATES, STATE_N));
             free_anim_graph(g);
         }
         return 0;
@@ -7446,6 +7526,15 @@ static int run_graph_probe(const char* which) {
             {"a", "b", {ANIM_ON("grounded")}, 0.1f},
             {"b", "a", {ANIM_DONE()}, 0.1f},
         };
+        // Two returning states with a row between them: the animator keeps ONE
+        // return point, so the two layers would disagree about where it leads.
+        static const AnimGraphState TWO_RETURNS[] = {
+            {"a", NULL, NULL, NULL, ANIM_GRAPH_RETURN},
+            {"b", NULL, NULL, NULL, ANIM_GRAPH_RETURN},
+        };
+        static const AnimGraphTransition RETURN_CHAIN[] = {
+            {"a", "b", {ANIM_ON("grounded")}, 0.1f},
+        };
         static const AnimGraphTransition TRAP[] = {
             {"a", "b", {ANIM_ON("grounded")}, 0.1f},
         };
@@ -7462,6 +7551,7 @@ static int run_graph_probe(const char* which) {
             {"wrongkind", STATES, STATE_N, WRONG_KIND, 1},
             {"duplicate", DUPLICATE, 2, UNKNOWN_PARAM, 1},
             {"returnfinish", RETURNER, 2, FINISH_A_RETURN, 2},
+            {"returnchain", TWO_RETURNS, 2, RETURN_CHAIN, 1},
             // Refused by nothing: `b` can be entered and never left, which is a
             // thing a caller may mean. A warning, and bind succeeds.
             {"trap", STATES, STATE_N, TRAP, 1},
@@ -8558,6 +8648,8 @@ int main(int argc, const char* argv[]) {
             cam_probe = argv[++i];
         } else if (!strcmp(a, "--graph-probe") && i + 1 < argc) {
             graph_probe = argv[++i];
+        } else if (!strcmp(a, "--print-graph")) {
+            print_graph = true;
         } else if (!strcmp(a, "--display-probe") && i + 1 < argc) {
             display_probe = argv[++i];
         } else if (!strcmp(a, "--save-probe") && i + 1 < argc) {
@@ -8602,10 +8694,10 @@ int main(int argc, const char* argv[]) {
     // third does not have to be remembered in two places.
     /*
      * Most graph cases are the table alone -- a graph bound to no animator, over
-     * states that play nothing -- and create no engine at all. Four of them ask
-     * what the table MEANS to an animator, so they take a headless game for a
-     * rig and still never draw a frame. Stated as the positive list, so a fifth
-     * does not have to be remembered in two places.
+     * states that play nothing -- and create no engine at all. The five below ask
+     * what the table MEANS to an animator, so they take a headless game for a rig
+     * and still never draw a frame. Stated as the positive list, so a sixth does
+     * not have to be remembered in two places.
      */
     const bool graph_probe_needs_rig =
         graph_probe && (!strcmp(graph_probe, "finished") || !strcmp(graph_probe, "fade") ||

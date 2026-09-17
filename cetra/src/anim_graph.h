@@ -318,15 +318,14 @@ bool anim_graph_bind(AnimGraph* graph, Animator* animator, const char* start);
 void anim_graph_set_float(AnimGraph* graph, const char* name, float value);
 void anim_graph_set_bool(AnimGraph* graph, const char* name, bool value);
 void anim_graph_fire(AnimGraph* graph, const char* name);
+// Reads are NOT kind-checked where writes are: a parameter is one float either
+// way, and the kind is re-erected at bind, where an op that cannot answer it is
+// refused. Ask for a bool by comparing against zero.
 float anim_graph_float(const AnimGraph* graph, const char* name);
-bool anim_graph_bool(const AnimGraph* graph, const char* name);
 
 // What it is doing. The name is borrowed from the table; "" when unbound.
 const char* anim_graph_state_name(const AnimGraph* graph);
 float anim_graph_state_seconds(const AnimGraph* graph);
-// The state the last transition LEFT, and "" until one has been taken: what a
-// trace column and an arm read to SEE a transition rather than infer it.
-const char* anim_graph_previous_state(const AnimGraph* graph);
 
 /*
  * Stand the graph down, or bring it back.
@@ -337,18 +336,6 @@ const char* anim_graph_previous_state(const AnimGraph* graph);
  * it was in rather than the initial one. A ragdoll is that case.
  */
 void anim_graph_set_enabled(AnimGraph* graph, bool enabled);
-bool anim_graph_enabled(const AnimGraph* graph);
-
-/*
- * Enter a state directly, bypassing the table.
- *
- * The escape hatch a SAVE needs: a restore puts the animator back by source
- * name and knows nothing about a graph, so a loaded session would otherwise
- * have the animator playing one thing and the graph believing another, with no
- * row able to notice. Not a general-purpose "just play this" -- a machine
- * driven from outside its own table is not a machine.
- */
-void anim_graph_enter(AnimGraph* graph, const char* state, float fade);
 
 /*
  * Evaluate once, take AT MOST ONE transition, and write the state's param and
