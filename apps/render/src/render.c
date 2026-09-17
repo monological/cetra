@@ -4517,11 +4517,6 @@ int main(int argc, char** argv) {
             return -1;
         if (view_drag)
             view_drag->auto_orbit_enabled = false;
-        // The snapshot restores a POSE onto the camera, and the rig would
-        // overwrite it on the very next frame with the one it still holds.
-        // Adopting is what makes a restored camera survive its first tick.
-        if (view_rig && engine->camera)
-            camera_rig_set_pose(view_rig, engine->camera->position, engine->camera->look_at);
     }
 
     frame_schedule = &args;
