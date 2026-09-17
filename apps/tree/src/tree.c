@@ -1218,6 +1218,10 @@ int main(int argc, char** argv) {
             spawn_z = args.cam_eye[2];
         }
         static Player walker;
+        view_rig = create_camera_rig();
+        camera_rig_set_pose(view_rig, engine->camera->position, engine->camera->look_at);
+        engine_set_camera_rig(engine, view_rig);
+        walker.rig = view_rig;
         player = &walker;
         // Yaw 0 looks down -Z, so facing the origin from `bearing` is that same angle: the
         // spawn point and the direction home are the same bearing, one negated in Z.

@@ -215,10 +215,29 @@ CanvasController* create_canvas_controller(Engine* engine) {
     }
     ctrl->engine = engine;
     ctrl->zoom_step = 0.9f;
+    /*
+     * A rig of its own, and the arithmetic above it is UNCHANGED (spec 12.19).
+     *
+     * A 2D camera is not a 3D camera with the angles zeroed: zoom is
+     * ortho_height, which is a projection field where a 3D zoom is a pose field;
+     * a 2D zoom is anchored on the cursor and has no 3D analogue; and rotation
+     * is not merely unused but forbidden, since any camera rotation shears flat
+     * geometry under a parallel projection. So this keeps its own maths.
+     *
+     * What it joins is the OWNERSHIP rule: it writes its pose through a rig like
+     * every other camera, so "one thing moves the camera, and the engine knows
+     * which" has no exception on the day it ships.
+     */
+    ctrl->rig = create_camera_rig();
+    if (ctrl->rig && engine->camera)
+        camera_rig_set_pose(ctrl->rig, engine->camera->position, engine->camera->look_at);
+    engine_set_camera_rig(engine, ctrl->rig);
     return ctrl;
 }
 
 void free_canvas_controller(CanvasController* ctrl) {
+    if (ctrl)
+        free_camera_rig(ctrl->rig);
     free(ctrl);
 }
 
@@ -270,6 +289,7 @@ static void _canvas_pan(CanvasController* ctrl) {
     glm_vec3_add(ctrl->pan_start_look_at, offset, delta);
     glm_vec3_sub(delta, camera->look_at, delta);
     camera_translate(camera, delta);
+    camera_rig_set_pose(ctrl->rig, camera->position, camera->look_at);
 }
 
 void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y) {
@@ -326,6 +346,7 @@ void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset) {
     vec3 shift = {(anchor[0] - camera->look_at[0]) * k, (anchor[1] - camera->look_at[1]) * k, 0.0f};
     camera_translate(camera, shift);
     camera->ortho_height = h_new;
+    camera_rig_set_pose(ctrl->rig, camera->position, camera->look_at);
 }
 
 /*

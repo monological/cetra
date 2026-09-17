@@ -3,11 +3,16 @@
 #define _APP_H_
 
 /*
- * App helpers: the two input controllers an app forwards its callbacks to,
- * one for a 3D viewer and one for a 2D canvas, a three-point light rig, and
- * the input gate. Neither controller owns the drag; the engine's input state
- * does, and both read it from there. Each is created with defaults and tuned
- * by writing its fields.
+ * App helpers: the two input adapters an app forwards its callbacks to, one for
+ * a 3D viewer and one for a 2D canvas, a three-point light rig, and the input
+ * gate. Neither owns the drag; the engine's input state does, and both read it
+ * from there. Each is created with defaults and tuned by writing its fields.
+ *
+ * NEITHER IS A CAMERA, since spec 12.19. Both turn a pointer into what a
+ * `camera_rig.h` rig is told, and the rig decides where the eye goes. The one
+ * that used to be a camera was called `MouseDragController` -- named for its
+ * input rather than its job, which is why three apps wrote their own follow
+ * cameras rather than finding it.
  */
 
 #include <stdbool.h>
@@ -86,6 +91,11 @@ bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods);
 typedef struct CanvasController {
     // ENGINE-OWNED (by the controller): the pan in flight.
     Engine* engine;
+    // The rig it writes its pose through; owned. Its ARITHMETIC is this file's
+    // and always was -- a 2D camera pans and zooms an ortho height and never
+    // rotates, which a 3D rig has nothing to say about. What it shares is who is
+    // allowed to move the camera, so that rule has no exception (spec 12.19).
+    struct CameraRig* rig;
     bool panning;           // A drag that started on empty space
     vec3 pan_start_look_at; // The target as the drag began
 
