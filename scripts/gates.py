@@ -17120,6 +17120,14 @@ CONFIG_GUI_LOCALS = {
     # generic name silently captures the next local that shares it.
     "tod_hour": "cycle_hour",
     "interp": "lut_interp",
+    # The camera panel edits the RIG since spec 12.19, and the rig's aim and arm
+    # are what produce the pose the snapshot carries as camera.eye/target. So
+    # these three land on the pose by the only route there is; there is no
+    # separate row for them and carrying one would carry the same fact twice,
+    # which is what the deleted camera.orbit block was.
+    "dist": "position",
+    "yaw": "position",
+    "pitch": "position",
     "mode": "meter_mode",
     "msaa": "msaa_samples",
     "msm_size_idx": "msm_size",
@@ -17134,6 +17142,12 @@ CONFIG_GUI_LOCALS = {
 CONFIG_GUI_UNCARRIED = {
     "sss_profiles": "profile SLOTS are assigned in material-block order at load, and "
                     "material->subsurface_profile indexes them",
+    # A rig's anchor is whatever the app points it at -- a player's position, a
+    # scene centre -- and it is rewritten every frame by the app that owns it, so
+    # a restored value would not survive to the first draw. Same for the lift
+    # above it. The pose they produce IS carried, as camera.eye and camera.target.
+    "anchor": "the app writes it every frame; the pose it produces is carried instead",
+    "look_lift": "the app writes it every frame; the pose it produces is carried instead",
 }
 
 
@@ -17159,17 +17173,6 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "engine.msaa_samples": "engine_set_msaa_samples validates; 5 is not a sample count",
     "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
     "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
-    # Since spec 12.19 the camera rig owns the pose and the Camera's own orbit
-    # block is DERIVED from it -- camera_set_position and camera_set_look_at
-    # re-derive all three on every apply. They are still dumped, because they
-    # still describe the session; they are simply no longer an input, in exactly
-    # the sense camera.near_clip has not been one for longer. The way to state a
-    # pose in a snapshot is camera.eye and camera.target, which config-camera
-    # asserts end to end -- so this is one way to say a thing where there were
-    # two, rather than a way that has been lost.
-    "camera.orbit.distance": "derived from the rig's pose; camera.eye and camera.target state it",
-    "camera.orbit.theta": "derived from the rig's pose; camera.eye and camera.target state it",
-    "camera.orbit.phi": "derived from the rig's pose; camera.eye and camera.target state it",
     # This fixture runs without --clouds, so flipping the switch asks for a layer
     # whose noise bake -- a one-shot at startup -- never ran. Refused by name, and
     # config-clouds is the arm that reads both halves of that.

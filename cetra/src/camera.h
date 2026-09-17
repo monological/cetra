@@ -27,8 +27,10 @@ typedef struct Camera {
     // BY FUNCTION: through, or followed by, the function named.
     vec3 position; // camera_set_position
     vec3 look_at;  // camera_set_look_at
-    // The pose as an orbit about look_at. Written directly, then
-    // camera_orbit(c, 0, 0) places the eye from them; the orbit moves do both.
+    // The pose as an orbit about look_at, DERIVED from it by both setters. They
+    // are here because a reader wants them -- the GUI's pose readout, a gate's
+    // trace -- and they are no longer an input: writing one moves nothing, since
+    // spec 12.19 left the pose itself as the only way in.
     float theta;
     float phi;
     float distance;
@@ -41,9 +43,6 @@ typedef struct Camera {
     bool is_orthographic; // true = parallel projection; fov_radians is then unused
     float ortho_height;   // World-space height of the ortho view volume; width is
                           // ortho_height * aspect_ratio
-    float max_distance;   // Max distance from look_at (0 = unlimited)
-    float zoom_speed;     // Distance per unit of camera_zoom's delta
-    float orbit_speed;    // Radians of phi per frame under an auto-orbit
 } Camera;
 
 // What a camera is created from. Fill the fields you mean with designated
@@ -94,21 +93,15 @@ static inline float camera_ortho_height(const Camera* camera) {
     return camera->is_orthographic ? camera->ortho_height : 0.0f;
 }
 
-// The moves. camera_translate slides eye and target by one world vector, which
-// leaves the orbit as it is; the others are built on it or on camera_orbit.
+// Slide eye and target by one world vector, which leaves the orbit as it is.
+//
+// The one move left. An orbit, a pan, a walk, a strafe and a distance clamp all
+// lived here and all had exactly one caller -- the viewer camera deleted in
+// spec 12.19 -- so what the camera offered was a movement API that only one
+// thing in the tree ever drove. Moving a camera OVER TIME is camera_rig.h's
+// subject now; this file holds a pose, a projection, and the one operation that
+// does not need to know which of those it is changing.
 void camera_translate(Camera* camera, const vec3 offset);
-void camera_orbit(Camera* camera, float delta_theta, float delta_phi);
-void camera_pan(Camera* camera, float delta_x, float delta_y);
-void camera_zoom(Camera* camera, float delta);
-void camera_move_forward(Camera* camera, float distance);
-void camera_strafe(Camera* camera, float distance);
-void camera_move_up(Camera* camera, float distance);
-void camera_zoom_toward_target(Camera* camera, float factor, float min_distance);
-
-// Pull the camera back to max_distance along its own view ray (no-op when
-// max_distance is 0). Clamping toward the origin instead would make the
-// camera slide around the boundary sphere.
-void camera_enforce_max_distance(Camera* camera);
 
 // Matrix computation
 void camera_view_matrix(Camera* camera, mat4 view);

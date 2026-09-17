@@ -7,6 +7,7 @@
 #include <cglm/cglm.h>
 
 #include "gui.h"
+#include "camera_rig.h"
 
 #include "config_snapshot.h"
 #include "engine.h"
@@ -1078,21 +1079,35 @@ static void _engine_gui_panel(Engine* engine) {
     }
 
     if (camera && igCollapsingHeader_TreeNodeFlags("Camera Transform", 0)) {
-        // Through the setter and the orbit move, so the pose and the orbit
-        // parameters keep describing each other whichever side is dragged.
-        vec3 look_at;
-        glm_vec3_copy(camera->look_at, look_at);
-        if (igDragFloat3("Look At", look_at, 0.1f, -100.0f, 100.0f, "%.2f", 0))
-            camera_set_look_at(camera, look_at);
+        /*
+         * The POSE is the rig's since spec 12.19, so these edit the rig. Writing
+         * the camera here still looked live -- the setters re-derive the orbit
+         * triple, so a slider moved and snapped back a frame later when the rig
+         * was applied over it -- which is a worse control than a disabled one.
+         *
+         * A rig with an anchor, an arm and an aim is also what there is to edit:
+         * the camera's own orbit triple is derived from the rig now, and offering
+         * it would be offering a value nothing reads.
+         */
+        CameraRig* rig = engine->camera_rig;
+        if (rig) {
+            igDragFloat3("Anchor", rig->anchor, 0.1f, -1000.0f, 1000.0f, "%.2f", 0);
+            float dist = rig->dist, yaw = rig->yaw, pitch = rig->pitch;
+            if (igSliderFloat("Distance", &dist, 0.0f, 3000.0f, "%.2f", 0))
+                camera_rig_set_distance(rig, dist);
+            bool aimed = igSliderFloat("Yaw", &yaw, -GLM_PI, GLM_PI, "%.3f", 0);
+            aimed |= igSliderFloat("Pitch", &pitch, -GLM_PI_2, GLM_PI_2, "%.3f", 0);
+            if (aimed)
+                camera_rig_aim(rig, yaw, pitch);
+            igSliderFloat("Look Lift", &rig->look_lift, -10.0f, 10.0f, "%.2f", 0);
+        } else {
+            vec3 look_at;
+            glm_vec3_copy(camera->look_at, look_at);
+            if (igDragFloat3("Look At", look_at, 0.1f, -100.0f, 100.0f, "%.2f", 0))
+                camera_set_look_at(camera, look_at);
+        }
         igDragFloat3("Up", camera->up_vector, 0.1f, -25.0f, 25.0f, "%.2f", 0);
-        bool orbit_moved = igSliderFloat("Distance", &camera->distance, 0.0f, 3000.0f, "%.2f", 0);
-        orbit_moved |= igSliderFloat("Theta", &camera->theta, 0.0f, GLM_PI_2, "%.3f", 0);
-        orbit_moved |= igSliderFloat("Phi", &camera->phi, 0.0f, GLM_PI_2, "%.3f", 0);
-        if (orbit_moved)
-            camera_orbit(camera, 0.0f, 0.0f);
         igSliderFloat("FOV", &camera->fov_radians, 0.1f, GLM_PI, "%.3f", 0);
-        igSliderFloat("Zoom Speed", &camera->zoom_speed, 0.0f, 2.0f, "%.3f", 0);
-        igSliderFloat("Orbit Speed", &camera->orbit_speed, 0.0f, 0.1f, "%.4f", 0);
         igSliderFloat("Near Clip", &camera->near_clip, 0.01f, 100.0f, "%.3f", 0);
         igSliderFloat("Far Clip", &camera->far_clip, 0.1f, 10000.0f, "%.1f", 0);
         // Camera diagnostic: overlay the live pose next to the FPS, and print an
