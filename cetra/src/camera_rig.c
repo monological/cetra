@@ -22,6 +22,7 @@ CameraRig* create_camera_rig(void) {
     // written a second time.
     rig->yaw_rate = 1.8f;
     rig->pitch_rate = 1.2f;
+    rig->look_scale = 1.0f;
     rig->widen_rate = 4.0f;
     rig->tighten_rate = 1.2f;
     rig->probe_skin = 0.6f;
@@ -97,8 +98,12 @@ void camera_rig_update(CameraRig* rig, float dt, float yaw_in, float pitch_in) {
     if (yaw_in != 0.0f || pitch_in != 0.0f || !glm_vec3_eqv(rig->anchor, rig->stated_anchor))
         rig->pose_stated = false;
 
-    rig->yaw -= yaw_in * rig->yaw_rate * dt;
-    rig->pitch += pitch_in * rig->pitch_rate * dt;
+    // The player's preference multiplies the authored rate at the point of USE,
+    // so applying a setting twice is the same as applying it once.
+    if (rig->invert_pitch)
+        pitch_in = -pitch_in;
+    rig->yaw -= yaw_in * rig->yaw_rate * rig->look_scale * dt;
+    rig->pitch += pitch_in * rig->pitch_rate * rig->look_scale * dt;
     // Clamped only where the aim was actually asked to MOVE. An adopted pose
     // outside the band keeps the pitch it was given until something steers it,
     // which is what makes --cam-eye an exact instrument rather than an
