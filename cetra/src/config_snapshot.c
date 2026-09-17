@@ -580,12 +580,14 @@ static const ConfigField CFG_FIELDS[] = {
 
     // --- camera. Radians, not the degrees Print Camera emits: this file is read
     // back by the loader, and a unit conversion is a second place to disagree.
-    // The pose is stored by offset, NOT through camera_set_position and
-    // camera_set_look_at, which re-derive distance/theta/phi from it and would
-    // overwrite the three camera.orbit rows restored below. The snapshot carries
-    // those itself, written in the same breath as the pose; re-deriving them
-    // once discarded a hand-edited orbit block and made three rows unreachable
-    // from outside the process.
+    //
+    // The POSE is the whole of it. A camera.orbit block was carried here as well
+    // until spec 12.19, on the argument that re-deriving those three from the
+    // pose made them unreachable from outside the process -- which was true
+    // while they were an input. They are output now: the camera rig owns the
+    // pose and both setters derive the orbit triple from it, so a restored
+    // orbit block was overwritten by the rig's first frame. Carrying a row a
+    // restore cannot honour is what sky.clouds.enabled was refused for.
     CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "eye", position),
     CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "target", look_at),
     CFG_ROW(CFG_CAMERA, CFG_VEC3, "camera", "up", up_vector),
@@ -598,11 +600,6 @@ static const ConfigField CFG_FIELDS[] = {
     // height it happened to have.
     CFG_ROW(CFG_CAMERA, CFG_BOOL, "camera", "orthographic", is_orthographic),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "ortho_height", ortho_height),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "distance", distance),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "theta", theta),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "phi", phi),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "zoom_speed", zoom_speed),
-    CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera.orbit", "orbit_speed", orbit_speed),
 
     // --- shadows. The map SIZE is not here and cannot be: create_shadow_system
     // takes it once and no flag, key or slider reaches it either.
