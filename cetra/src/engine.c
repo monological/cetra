@@ -240,7 +240,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->alpha_jitter_enabled = true;
 
     engine->camera = NULL;
-    engine->camera_mode = CAMERA_MODE_ORBIT;
 
     engine->scenes = NULL;
     engine->scene_count = 0;

@@ -40,6 +40,7 @@
 #include "cetra/internal/shore_chain.h"
 #include "cetra/procedural/water_waves.h"
 #include "cetra/app.h"
+#include "cetra/camera_rig.h"
 
 #include "cscene_apply.h"
 #include "render_args.h"
@@ -1985,7 +1986,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
 /*
  * Mouse drag controller
  */
-static MouseDragController* drag_controller = NULL;
+// The viewer camera: the rig decides where the eye goes, the adapter turns a
+// pointer into what the rig is told.
+static CameraRig* view_rig = NULL;
+static CameraDrag* view_drag = NULL;
 
 /*
  * Adopt an explicit camera pose (--cam-eye at startup, --cam-at mid-run). The
@@ -1996,12 +2000,10 @@ static MouseDragController* drag_controller = NULL;
  * a free camera, and switching the radio to Orbit picks up the derived angles.
  */
 static void apply_explicit_pose(Engine* engine, vec3 eye, vec3 target) {
-    Camera* camera = engine->camera;
-    camera_set_position(camera, eye);
-    camera_set_look_at(camera, target);
-    if (drag_controller)
-        drag_controller->auto_orbit_enabled = false;
-    engine->camera_mode = CAMERA_MODE_FREE;
+    (void)engine;
+    camera_rig_set_pose(view_rig, eye, target);
+    if (view_drag)
+        view_drag->auto_orbit_enabled = false;
 }
 
 /*
@@ -2291,16 +2293,24 @@ static void report_skinning_stretch(SceneNode* node, const AnimationState* state
  */
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
     (void)engine;
-    if (drag_controller) {
-        mouse_drag_on_button(drag_controller, button, action, mods);
+    if (view_drag) {
+        camera_drag_on_button(view_drag, button, action, mods);
     }
+}
+
+// The wheel zooms. This app had NO scroll handling at all before spec 12.19 --
+// zoom was arrow-keys-only in a 3D viewer -- and nothing noticed because nothing
+// in the suite could turn a wheel until the pointer seam existed.
+void scroll_callback(Engine* engine, double xoffset, double yoffset) {
+    (void)engine;
+    camera_drag_on_scroll(view_drag, xoffset, yoffset);
 }
 
 void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     (void)scancode;
 
     // Camera movement (WASD, arrows, etc.)
-    if (drag_controller && mouse_drag_on_key(drag_controller, key, action, mods)) {
+    if (view_drag && camera_drag_on_key(view_drag, key, action, mods)) {
         return;
     }
 
@@ -2598,8 +2608,8 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // Sync the camera zoom limit with the ground-projection fade start every
     // frame so GUI changes to Dome Radius take effect (enforcement lives in
     // camera_enforce_max_distance, applied by mouse_drag_update).
-    if (engine->camera) {
-        engine->camera->max_distance =
+    if (view_rig) {
+        view_rig->max_dist =
             (current_scene->render_skybox && current_scene->skybox_ground_projection)
                 ? SKYBOX_GP_FADE_START * current_scene->skybox_gp_radius
                 : 0.0f;
@@ -2608,22 +2618,31 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // Update camera via drag controller. Deliberately the wall clock, not the
     // frame clock: drag damping is input response, and it must stay smooth
     // even when an embedder's sim clock is paused.
-    if (drag_controller) {
-        mouse_drag_update(drag_controller, glfwGetTime());
+    if (view_drag) {
+        camera_drag_update(view_drag, (float)glfwGetTime());
     }
 
     // Distance-adaptive near plane: 0.02 x camera-to-target distance equals the
     // load-time near at the default 2.5x-radius framing (so nothing changes
     // until the user zooms), then shrinks with the camera so close-ups don't
     // clip into the model.
-    if (engine->camera && clip_near_max > 0.0f) {
-        float cam_dist = glm_vec3_distance(engine->camera->position, engine->camera->look_at);
-        engine->camera->near_clip = fmaxf(fminf(0.02f * cam_dist, clip_near_max), clip_near_floor);
+    if (engine->camera && view_rig && clip_near_max > 0.0f) {
+        // The RIG's arm, not the camera's: the engine applies the rig after this
+        // hook returns, so the camera still holds last frame's pose here. Same
+        // quantity, read from the thing that has already worked it out.
+        engine->camera->near_clip =
+            fmaxf(fminf(0.02f * view_rig->dist, clip_near_max), clip_near_floor);
     }
+}
 
-    // The pose the frame will use: this hook is the last thing before the engine
-    // derives the matrices from it (spec 11.107), so what is printed here is what
-    // is drawn. %.9g because a textual diff of two runs is then a bit diff.
+void render_scene_callback(Engine* engine, Scene* current_scene) {
+    if (!engine || !current_scene->root_node)
+        return;
+
+    // The pose the frame is ACTUALLY drawn from. Not the pre-render hook: since
+    // spec 12.19 the engine applies the camera rig after that hook returns, so a
+    // trace taken there reads last frame's camera and reports every drag one
+    // frame short. %.9g because a textual diff of two runs is then a bit diff.
     if (trace_camera && engine->camera) {
         const Camera* c = engine->camera;
         printf("cam %zu eye %.9g %.9g %.9g target %.9g %.9g %.9g dist %.9g theta %.9g phi %.9g "
@@ -2633,11 +2652,6 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
                (double)c->look_at[2], (double)c->distance, (double)c->theta, (double)c->phi,
                (double)camera_ortho_height(c));
     }
-}
-
-void render_scene_callback(Engine* engine, Scene* current_scene) {
-    if (!engine || !current_scene->root_node)
-        return;
 
     engine_render_scene(engine, current_scene);
 
@@ -3392,6 +3406,7 @@ int main(int argc, char** argv) {
     engine_set_error_callback(engine, app_error_callback);
     engine_set_mouse_button_callback(engine, mouse_button_callback);
     engine_set_key_callback(engine, key_callback);
+    engine_set_scroll_callback(engine, scroll_callback);
 
     /*
      * Set up shaders.
@@ -3427,9 +3442,13 @@ int main(int argc, char** argv) {
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
 
-    // The drag controller; its auto-orbit is tuned once the model's framing is
-    // known, below.
-    drag_controller = create_mouse_drag_controller(engine);
+    // The viewer rig and the pointer that drives it; the auto-orbit is tuned
+    // once the model's framing is known, below. Installing the rig is what makes
+    // the engine, rather than this app, responsible for getting the pose into
+    // the camera before the matrices are derived.
+    view_rig = create_camera_rig();
+    view_drag = create_camera_drag(engine, view_rig);
+    engine_set_camera_rig(engine, view_rig);
 
     /*
      * Import model with async texture loading.
@@ -4029,8 +4048,10 @@ int main(int argc, char** argv) {
     vec3 auto_cam_pos = {scene_center[0] + camera_distance * cosf(pitch) * sinf(yaw),
                          scene_center[1] + scene_radius * 0.3f + camera_distance * sinf(pitch),
                          scene_center[2] + camera_distance * cosf(pitch) * cosf(yaw)};
-    camera_set_position(camera, auto_cam_pos);
-    camera_set_look_at(camera, scene_center);
+    // Through the rig, which derives its own anchor, arm and aim from the pose:
+    // the framing arithmetic above is untouched, so this is the same eye to the
+    // bit and the 33 goldens say so.
+    camera_rig_set_pose(view_rig, auto_cam_pos, scene_center);
 
     // Depth of field focuses on the subject (camera-to-model distance) unless
     // overridden. --film turns it on too; --no-dof forces it off. Range scales
@@ -4147,20 +4168,18 @@ int main(int argc, char** argv) {
         // Keep the camera where the ground projection renders at full
         // strength; no reachable view ever shows the blend toward the
         // infinite skybox. Raising Dome Radius extends the zoom range.
-        camera->max_distance = SKYBOX_GP_FADE_START * scene->skybox_gp_radius;
-        orbit_max = fminf(orbit_max, camera->max_distance);
+        view_rig->max_dist = SKYBOX_GP_FADE_START * scene->skybox_gp_radius;
+        orbit_max = fminf(orbit_max, view_rig->max_dist);
     }
-    drag_controller->auto_orbit_enabled = !args.headless;
-    drag_controller->auto_orbit_speed = CAM_ANGULAR_SPEED;
-    drag_controller->auto_orbit_min_dist = fminf(camera_distance * 0.5f, orbit_max);
-    drag_controller->auto_orbit_max_dist = orbit_max;
-    // The auto-orbit runs at an elevation of its own, not the framed pitch, and
-    // it reads theta without ever writing it: move the eye there under the same
-    // gate that arms it, so headless keeps the framed pose.
-    if (!args.headless) {
-        camera->theta = 0.60f;
-        camera_orbit(camera, 0.0f, 0.0f);
-    }
+    view_drag->auto_orbit_enabled = !args.headless;
+    view_drag->auto_orbit_speed = CAM_ANGULAR_SPEED;
+    view_drag->auto_orbit_min_dist = fminf(camera_distance * 0.5f, orbit_max);
+    view_drag->auto_orbit_max_dist = orbit_max;
+    // The auto-orbit runs at an elevation of its own, not the framed pitch:
+    // move the eye there under the same gate that arms it, so headless keeps
+    // the framed pose.
+    if (!args.headless)
+        camera_rig_aim(view_rig, view_rig->yaw, -0.60f);
 
     // Explicit camera pose override (--cam-eye/--cam-target): reproduce any
     // interactive view exactly, bypassing the yaw/pitch/distance orbit framing
@@ -4496,8 +4515,13 @@ int main(int argc, char** argv) {
     if (args.config_path) {
         if (config_snapshot_apply_file(engine, scene, args.config_path) < 0)
             return -1;
-        if (drag_controller)
-            drag_controller->auto_orbit_enabled = false;
+        if (view_drag)
+            view_drag->auto_orbit_enabled = false;
+        // The snapshot restores a POSE onto the camera, and the rig would
+        // overwrite it on the very next frame with the one it still holds.
+        // Adopting is what makes a restored camera survive its first tick.
+        if (view_rig && engine->camera)
+            camera_rig_set_pose(view_rig, engine->camera->position, engine->camera->look_at);
     }
 
     frame_schedule = &args;
@@ -4663,7 +4687,8 @@ int main(int argc, char** argv) {
     if (cscn) {
         cscene_free(cscn);
     }
-    free_mouse_drag_controller(drag_controller);
+    free_camera_drag(view_drag);
+    free_camera_rig(view_rig);
     free_engine(engine);
     cook_shutdown();
 

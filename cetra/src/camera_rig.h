@@ -77,7 +77,24 @@ typedef struct CameraRig {
     // ENGINE-OWNED (by the rig): what it worked out. Read freely, never write.
     CameraRigPose pose; // where the last update put it
     bool posed;         // false until the first update, so a blend has a `from`
-    float wide;         // the smoothed arm response, 0..1
+    /*
+     * The stored pose came from camera_rig_set_pose and nothing has moved the
+     * rig since, so the update keeps it VERBATIM rather than re-deriving it.
+     *
+     * A pose decomposed into an angle and an arm and put back together is not
+     * the pose it started as: the error is proportional to the arm, and at the
+     * 20,196-unit framing of `aerial_fixture` it reaches 0.002 world units --
+     * 885 pixels, which is a restored session not reproducing the session it
+     * came from. Keeping what was stated costs one flag and one vector and makes
+     * --cam-eye and a config restore exact instead of nearly exact.
+     *
+     * Cleared by every call that moves the aim or the arm, and by an anchor a
+     * caller wrote directly -- which is why the anchor is remembered rather than
+     * trusted to a flag.
+     */
+    bool pose_stated;
+    vec3 stated_anchor;
+    float wide; // the smoothed arm response, 0..1
     // DERIVED from the near/far pairs and `wide` every update, and shortened by
     // the probe. They are here rather than under SETTINGS because the response
     // is their only writer: a caller storing into one would be a second writer
@@ -145,6 +162,11 @@ typedef struct CameraRig {
     float near_dist, near_eye_lift;
     float far_dist, far_eye_lift;
     float widen_rate, tighten_rate; // per second
+    // A ceiling on the arm, 0 = none. Where camera_enforce_max_distance pulled a
+    // camera back along its own view ray, this is the same statement made before
+    // the eye is placed rather than after -- which is what keeps it from being
+    // undone by the next update.
+    float max_dist;
 
     // Where an arm may be shortened to, once a probe has reported. `skin` backs
     // off from the hit; `min_dist` is the floor, because collapsing onto the
@@ -181,6 +203,13 @@ void free_camera_rig(CameraRig* rig);
 // eye. A dt of 0 holds the aim and still places the eye, which is what lets an
 // app move the anchor on a paused clock and keep the framing.
 void camera_rig_update(CameraRig* rig, float dt, float yaw_in, float pitch_in);
+
+// Aim exactly here, clamping the pitch. The companion to the rates above, and
+// the two are different KINDS of input rather than the same one twice: a stick
+// states how fast to turn, and a mouse drag states where to be looking. A drag
+// computed from a latched angle and a pixel offset is the second, and rounding
+// it into a rate would make a 200-pixel drag depend on the frame rate.
+void camera_rig_aim(CameraRig* rig, float yaw, float pitch);
 
 // Adopt an eye and a target: the anchor, distance and aim are derived so the
 // next update reproduces this pose exactly. What `--cam-eye` does, and what a
@@ -247,5 +276,18 @@ void camera_rig_blend_from_here(CameraRig* rig, float seconds);
 // nothing. A second shake replaces the first rather than adding, so a burst of
 // events cannot stack into a camera nobody can read.
 void camera_rig_shake(CameraRig* rig, float amplitude, float seconds);
+
+/*
+ * Frame a bounding sphere: the anchor goes to its centre and the distance to
+ * `radius * fit`, leaving the aim alone so a framed subject is seen from
+ * wherever the camera already was.
+ *
+ * Here rather than in each app because every app that frames anything wrote its
+ * own, and the engine offered bounds (`scene_bounding_sphere`) and nothing that
+ * used them. A `fit` of 0 takes 2.5, which is what `apps/render` has always
+ * used; a radius of 0 is a degenerate scene and leaves the rig alone rather than
+ * putting the eye on top of it.
+ */
+void camera_rig_frame_sphere(CameraRig* rig, const vec3 centre, float radius, float fit);
 
 #endif // _CAMERA_RIG_H_

@@ -26,13 +26,15 @@
 #include "cetra/light.h"
 #include "cetra/camera.h"
 #include "cetra/app.h"
+#include "cetra/camera_rig.h"
 #include "cetra/game/game.h"
 #include "cetra/noise.h"
 #include "cetra/particle_system.h"
 #include "cetra/particle_module.h"
 
 static ShaderProgram* g_pbr = NULL;
-static MouseDragController* g_drag = NULL;
+static CameraRig* g_rig = NULL;
+static CameraDrag* g_drag = NULL;
 static bool g_use_cpu = false; // --cpu: use the CPU sim backend instead of GPU transform feedback
 
 // A glass sphere that wanders through the cloud, pushing the dust (keep-OUT
@@ -219,9 +221,11 @@ static void on_init(Game* game) {
                            .far = 200.0f};
     Camera* cam = create_camera(&cam_desc);
     engine_set_camera(engine, cam);
-    engine->camera_mode = CAMERA_MODE_ORBIT;
 
-    g_drag = create_mouse_drag_controller(engine);
+    g_rig = create_camera_rig();
+    camera_rig_set_pose(g_rig, cam->position, cam->look_at);
+    g_drag = create_camera_drag(engine, g_rig);
+    engine_set_camera_rig(engine, g_rig);
 
     // The wandering glass sphere (moved each fixed step in on_update).
     g_sphere_node = add_glass_sphere(root, SPHERE_RADIUS);
@@ -294,7 +298,7 @@ static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
     Engine* engine = game->engine;
     if (g_drag && app_can_process_3d_input(engine)) {
-        mouse_drag_update(g_drag, glfwGetTime());
+        camera_drag_update(g_drag, (float)glfwGetTime());
     }
 }
 
@@ -319,15 +323,17 @@ static void on_shutdown(Game* game) {
     (void)game;
     // The particle system is owned by the scene (freed in free_scene).
     if (g_drag) {
-        free_mouse_drag_controller(g_drag);
+        free_camera_drag(g_drag);
+        free_camera_rig(g_rig);
         g_drag = NULL;
+        g_rig = NULL;
     }
 }
 
 static void mouse_button_callback(Engine* engine, int button, int action, int mods) {
     (void)engine;
     if (g_drag) {
-        mouse_drag_on_button(g_drag, button, action, mods);
+        camera_drag_on_button(g_drag, button, action, mods);
     }
 }
 

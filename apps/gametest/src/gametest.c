@@ -58,7 +58,8 @@
 #include "cetra/particle_sim.h"
 #include "cetra/texture.h"
 
-static MouseDragController* drag_controller = NULL;
+static CameraRig* view_rig = NULL;
+static CameraDrag* drag_controller = NULL;
 static Entity* player_entity = NULL;
 static Entity* door_entity = NULL;
 static Constraint* door_hinge = NULL;
@@ -3055,7 +3056,6 @@ static void on_init(Game* game) {
         camera_desc.fov = glm_rad(cam_pose_fov_deg);
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
-    engine->camera_mode = CAMERA_MODE_ORBIT;
 
     // Both halves, or neither: an eye with no target is a direction nobody stated, and
     // silently keeping half of a pose is worse than ignoring it.
@@ -3071,7 +3071,16 @@ static void on_init(Game* game) {
     }
 
     // Create drag controller
-    drag_controller = create_mouse_drag_controller(engine);
+    view_rig = create_camera_rig();
+    camera_rig_set_pose(view_rig, camera->position, camera->look_at);
+    drag_controller = create_camera_drag(engine, view_rig);
+    // Installed only where the VIEWER camera is the live one. The follow camera
+    // still writes the camera itself until spec 12.19 phase 5 converts it, and
+    // installing a rig beside it makes two writers -- which the engine's one
+    // slot turns into a visible 305k-pixel golden failure rather than a subtle
+    // one. Phase 5 deletes this condition along with the last direct writer.
+    if (!follow_cam || (cam_eye_set && cam_target_set))
+        engine_set_camera_rig(engine, view_rig);
 
     // No GUI or FPS overlay headless, as the other apps: the FPS digits are
     // wall clock and land in the screenshot, which is what made two identical
@@ -3944,7 +3953,7 @@ static void on_pre_render(Game* game, double alpha) {
         follow_camera_update(game);
     } else if (drag_controller && app_can_process_3d_input(engine) &&
                !input_is_suppressed(&game->input)) {
-        mouse_drag_update(drag_controller, glfwGetTime());
+        camera_drag_update(drag_controller, (float)glfwGetTime());
     }
 }
 
@@ -3975,7 +3984,8 @@ static void on_shutdown(Game* game) {
     printf("Game shutting down...\n");
 
     if (drag_controller) {
-        free_mouse_drag_controller(drag_controller);
+        free_camera_drag(drag_controller);
+        free_camera_rig(view_rig);
         drag_controller = NULL;
     }
 
@@ -3987,7 +3997,7 @@ static void on_shutdown(Game* game) {
 static void mouse_button_callback(Engine* engine, int button, int action, int mods) {
     (void)engine;
     if (drag_controller) {
-        mouse_drag_on_button(drag_controller, button, action, mods);
+        camera_drag_on_button(drag_controller, button, action, mods);
     }
 }
 
@@ -6472,6 +6482,16 @@ static int run_cam_probe(const char* which) {
         cam_probe_pose(which, "set", rig);
         camera_rig_update(rig, 0.0f, 0.0f, 0.0f);
         cam_probe_pose(which, "ticked", rig);
+        // A LONG arm, where decomposing a pose into an angle and a distance and
+        // putting it back together loses the most: aerial_fixture frames from
+        // 20,196 units and lost 0.002 there, which was 885 pixels of a restored
+        // session not reproducing the session it came from.
+        vec3 far_eye = {-0.00301991589f, 400.000122f, 499.99884f};
+        vec3 far_look = {0.0f, 3211.0f, -19500.0f};
+        camera_rig_set_pose(rig, far_eye, far_look);
+        cam_probe_pose(which, "far", rig);
+        camera_rig_update(rig, 0.016f, 0.0f, 0.0f);
+        cam_probe_pose(which, "far_ticked", rig);
     } else if (!strcmp(which, "response")) {
         rig->near_dist = 4.0f;
         rig->far_dist = 12.0f;

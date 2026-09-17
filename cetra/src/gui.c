@@ -285,12 +285,6 @@ static void _engine_gui_panel(Engine* engine) {
     igSameLine(0, -1);
     igCheckbox("Lights", &engine->show_lights);
 
-    if (igRadioButton_Bool("Free", engine->camera_mode == CAMERA_MODE_FREE))
-        engine->camera_mode = CAMERA_MODE_FREE;
-    igSameLine(0, -1);
-    if (igRadioButton_Bool("Orbit", engine->camera_mode == CAMERA_MODE_ORBIT))
-        engine->camera_mode = CAMERA_MODE_ORBIT;
-
     // Animation has no section here: the pose is the app's, on the node it
     // chose (node_set_pose), and the app that owns the clock draws its own
     // window for it (apps/render does).

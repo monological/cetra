@@ -18,6 +18,7 @@
 #include "cetra/light.h"
 #include "cetra/texture.h"
 #include "cetra/app.h"
+#include "cetra/camera_rig.h"
 #include "cetra/config_snapshot.h"
 #include "cetra/sky.h"
 #include "cetra/water.h"
@@ -245,7 +246,8 @@ static float sun_azimuth = 193.0f;
 /*
  * Mouse drag controller
  */
-static MouseDragController* drag_controller = NULL;
+static CameraRig* view_rig = NULL;
+static CameraDrag* drag_controller = NULL;
 // Non-NULL only under --player; the orbit controller and the walker both own the camera, so
 // exactly one of them exists at a time.
 static Player* player = NULL;
@@ -682,7 +684,7 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
     (void)engine;
     if (drag_controller) {
-        mouse_drag_on_button(drag_controller, button, action, mods);
+        camera_drag_on_button(drag_controller, button, action, mods);
     }
 }
 
@@ -693,7 +695,7 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
     // of events is not a velocity. It polls in player_update instead.
 
     // Camera movement
-    if (drag_controller && mouse_drag_on_key(drag_controller, key, action, mods)) {
+    if (drag_controller && camera_drag_on_key(drag_controller, key, action, mods)) {
         return;
     }
 
@@ -756,7 +758,7 @@ void pre_render_callback(Engine* engine, Scene* scene) {
     } else if (drag_controller && app_can_process_3d_input(engine)) {
         // Update camera - only if not hovering over GUI. Deliberately the wall
         // clock, not the frame clock: drag damping is input response.
-        mouse_drag_update(drag_controller, glfwGetTime());
+        camera_drag_update(drag_controller, (float)glfwGetTime());
     }
 }
 
@@ -1228,7 +1230,10 @@ int main(int argc, char** argv) {
         if (args.arrows_upright)
             player->invert_pitch = false;
     } else {
-        drag_controller = create_mouse_drag_controller(engine);
+        view_rig = create_camera_rig();
+        camera_rig_set_pose(view_rig, engine->camera->position, engine->camera->look_at);
+        drag_controller = create_camera_drag(engine, view_rig);
+        engine_set_camera_rig(engine, view_rig);
     }
 
     Scene* scene = create_scene();
@@ -1813,7 +1818,8 @@ int main(int argc, char** argv) {
     engine_run(engine, NULL, pre_render_callback, NULL);
 
     printf("Cleaning up...\n");
-    free_mouse_drag_controller(drag_controller);
+    free_camera_drag(drag_controller);
+    free_camera_rig(view_rig);
     // The scene owns the wind, sky, and IBL; free_engine takes them with it.
     free_engine(engine);
 
