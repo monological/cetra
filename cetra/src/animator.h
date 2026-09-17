@@ -139,6 +139,11 @@ typedef struct Animator {
     int root_bone;
     vec3 root_accum; // laid down and not yet taken
     float root_yaw_accum;
+    // The state machine driving this animator, if one is bound (spec 12.20;
+    // anim_graph.h). Borrowed, and here only so that binding a second one can
+    // stand the first down -- one thing decides what plays, and five apps each
+    // hand-rolling that guard is what the camera framework already deleted once.
+    struct AnimGraph* graph;
 
     // Per-update scratch. Not state: nothing reads these between frames, and
     // they are members rather than locals because a Pose is ~6 KB and
