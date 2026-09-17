@@ -1,5 +1,6 @@
 #include "animator_component.h"
 #include "entity.h"
+#include "../anim_graph.h"
 #include "../scene.h"
 #include "../ext/log.h"
 
@@ -59,8 +60,28 @@ Animator* entity_get_animator(struct Entity* entity) {
 
 static void animator_tick_cb(Entity* entity, void* user_data) {
     AnimatorComponent* c = (AnimatorComponent*)entity_get_component(entity, COMPONENT_ANIMATOR);
-    if (c && c->animator)
-        animator_update(c->animator, *(const float*)user_data);
+    if (!c || !c->animator)
+        return;
+    const float dt = *(const float*)user_data;
+    /*
+     * The state machine decides, then the animator plays (spec 12.20).
+     *
+     * Here rather than in each app's own hook so the ordering is settled once,
+     * and the order is load-bearing three ways: this is the one cadence the
+     * animator's clocks agree with, it reads the finished edge on the frame that
+     * produced it, and it sits after the fixed steps have drained root motion and
+     * before the next accumulation -- so a switch costs at most one rendered
+     * frame of travel, where a switch from an app's own fixed step costs however
+     * many steps that frame happened to run.
+     *
+     * A graph reaches this through the animator it bound to rather than through a
+     * field of its own: that pointer already exists so a second graph can stand
+     * the first down, and a second copy of the same relationship is a second
+     * place for the two to disagree.
+     */
+    if (c->animator->graph)
+        anim_graph_update(c->animator->graph, dt);
+    animator_update(c->animator, dt);
 }
 
 void update_all_animators(struct EntityManager* em, float dt) {

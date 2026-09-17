@@ -182,22 +182,116 @@ static Animation* clip_land = NULL;  // the one-shot that ends a fall
 static AnimatorEntry aquatic[2];
 static int aquatic_count = 0;
 
-// What a character is IN, which is what decides which SOURCE plays. One value rather than
-// a flag per medium: the three are exclusive, and asking "did this change" once is what
-// makes the crossfade fire on an EDGE. Re-issuing a play every step restarts the clip
-// continuously and it never advances past its first tick.
-typedef enum PlayerMedium {
-    MEDIUM_GROUND = 0, // the locomotion space
-    MEDIUM_WATER,      // the swim space, or the one swim clip on a rig without a float
-    MEDIUM_AIR,        // falling, which before this was not handled at all: the jump
-                       // one-shot ended after a second and handed the rig back to the
-                       // locomotion space, so a character ran on the spot in mid-air
-} PlayerMedium;
-static PlayerMedium player_medium = MEDIUM_GROUND;
-// HOW the ground was left, which is what picks the airborne pose: a jump rises and a step
-// off a ledge does not, and the two read completely differently. Set on the press and
-// cleared on the way back down, so a walk off the plate is a fall and not a leap.
-static bool player_jumped = false;
+/*
+ * What the player's rig plays, and when (spec 12.20).
+ *
+ * This was a three-value enum, an if/else chain and four file statics, spread
+ * across ninety lines that nothing could read, print or assert. The tables below
+ * are the same decision as data: what the app owes each frame is the parameters,
+ * and `anim_graph.c` owes the rest.
+ *
+ * Nothing here is guarded on a clip existing. `--puppet` takes an arbitrary
+ * humanoid and the committed default carries no fall, landing or float, so most
+ * of this graph is unreachable on most rigs -- which bind says once, by name,
+ * having pruned every row into what it cannot play. The twelve hand-written
+ * presence guards that used to do that are gone, and with them the asymmetry
+ * where air was guarded on its clip and water was not.
+ */
+static AnimGraph* player_graph = NULL;
+
+/*
+ * The waterline needs a BAND and not a plane, and both numbers come from a
+ * measurement rather than from taste.
+ *
+ * `grotto_submerged` is a hard compare against the surface and the buoyancy
+ * drive aims at that same surface, so a floating character crosses it forever.
+ * Before this it flipped medium every ~50 steps for as long as anybody floated,
+ * which is a quarter-second crossfade between the stroke and the walk cycle, on
+ * repeat. Two thresholds is what a hard compare cannot express, and is why the
+ * parameter is a DEPTH in metres and not a submerged bool.
+ *
+ * The band is wide because the bob is: sampled every step once settled, the
+ * capsule centre swings between 0.83 under and 0.80 over. That is its own
+ * defect and it is named here rather than fixed -- `grotto_float_velocity` calls
+ * itself critically damped and is not, its drag of 6 against a buoyancy of 18
+ * needing 2*sqrt(18) = 8.49 to be. Retuning it changes how the water FEELS,
+ * which is a different spec's decision; sizing a band from what it actually does
+ * is this one's.
+ */
+#define PLAYER_SUBMERGE_DEPTH 1.0f  // metres under before the stroke starts
+#define PLAYER_SURFACE_DEPTH  -1.0f // and above before it stops
+
+static const AnimGraphParam PLAYER_PARAMS[] = {
+    // The ground axis and its playback rate, both computed every frame whatever
+    // is playing, because a state names the parameter that drives it and the app
+    // no longer asks which state that is.
+    {"ground_knob", ANIM_GRAPH_FLOAT},
+    {"ground_rate", ANIM_GRAPH_FLOAT},
+    {"swim_knob", ANIM_GRAPH_FLOAT},
+    {"depth", ANIM_GRAPH_FLOAT},
+    {"grounded", ANIM_GRAPH_BOOL},
+    // Vertical speed, so a jump is MEASURED rather than remembered: a launch pad
+    // reads as a leap and `player_jumped` stops existing. A rise is a rise
+    // whatever set it going.
+    {"rise", ANIM_GRAPH_FLOAT},
+    {"ragdolled", ANIM_GRAPH_BOOL},
+    {"lunge", ANIM_GRAPH_TRIGGER},
+    {"spin", ANIM_GRAPH_TRIGGER},
+};
+
+static const AnimGraphState PLAYER_STATES[] = {
+    {"ground", "locomotion", "ground_knob", "ground_rate", ANIM_GRAPH_LOOP},
+    // Off the ground there is no stride to match, so the clip plays at its own
+    // rate -- a state with no rate parameter pins speed to 1 on entry, which is
+    // the branch that used to re-assert it every step.
+    {"water", "swim", "swim_knob", NULL, ANIM_GRAPH_LOOP},
+    {"air", "fall", NULL, NULL, ANIM_GRAPH_LOOP},
+    // The rise is a one-shot and the fall is a loop, which is the difference
+    // between the two ways of being in the air: a jump ends, and what it ends
+    // into is the fall.
+    {"rise", "jump", NULL, NULL, ANIM_GRAPH_EXIT},
+    {"land", "land", NULL, NULL, ANIM_GRAPH_EXIT},
+    // The two authored moves (spec 12.18) RETURN, and that is load-bearing:
+    // they resume the walk at the phase it left, where a row back into it would
+    // restart the clock and drag every foot lock with it.
+    {"lunge", "lunge", NULL, NULL, ANIM_GRAPH_RETURN},
+    {"spin", "spin", NULL, NULL, ANIM_GRAPH_RETURN},
+    // A ragdoll REPLACES the pose downstream, so what this state has to do is
+    // stop the animator rather than play something quieter. Before it, a killed
+    // player kept its last source running: the clock advancing, the clip's own
+    // footstep events firing from a body nobody was drawing, and root motion
+    // accumulating with nobody draining it.
+    {"dead", NULL, NULL, NULL, ANIM_GRAPH_LOOP},
+};
+
+static const AnimGraphTransition PLAYER_ROWS[] = {
+    // INTERRUPTS first, and they are the only any-state rows: an any row's
+    // condition is a superset of the specific rows below it and would eat them.
+    {NULL, "dead", {ANIM_ON("ragdolled")}, 0.0f},
+    {NULL, "water", {ANIM_GT("depth", PLAYER_SUBMERGE_DEPTH)}, 0.25f},
+    {"water", "ground", {ANIM_LT("depth", PLAYER_SURFACE_DEPTH)}, 0.25f},
+
+    // Leaving the ground. The rise is picked by vertical speed, so stepping off
+    // a ledge falls and a jump leaps, with nothing remembered between them.
+    {"ground", "rise", {ANIM_OFF("grounded"), ANIM_GT("rise", 0.5f)}, 0.10f},
+    {"ground", "air", {ANIM_OFF("grounded")}, 0.15f},
+    {"land", "air", {ANIM_OFF("grounded")}, 0.15f},
+    {"rise", "air", {ANIM_DONE()}, 0.15f},
+    // A rig with no fall loop never reaches `air` at all, since bind prunes it:
+    // this is the row that still gets such a character back on its feet.
+    {"rise", "ground", {ANIM_ON("grounded")}, 0.25f},
+
+    // Arriving. Short fade: a landing that eases in has already missed the
+    // moment it exists for.
+    {"air", "land", {ANIM_ON("grounded")}, 0.08f},
+    {"land", "ground", {ANIM_DONE()}, 0.08f},
+
+    // The two moves, from the ground only -- which carries both of the guards
+    // the old block spelled out, since being ragdolled is a state now.
+    {"ground", "lunge", {ANIM_FIRED("lunge")}, 0.08f},
+    {"ground", "spin", {ANIM_FIRED("spin")}, 0.08f},
+};
+
 static bool chaser_in_swim_clip = false;
 // A file static because the flag is parsed in main and read in on_pre_render, long after.
 // ON by default, with --no-follow-cam to opt out, which is the shape --no-puppet,
@@ -275,6 +369,22 @@ static Animator* chaser_animator = NULL;
 static SceneNode* chaser_rig = NULL;
 static float chaser_yaw = 0.0f;
 static bool no_chaser = false;
+/*
+ * Withhold the swim clips, which makes the water state unreachable (spec 12.20).
+ *
+ * It exists because the failure it reproduces has no committed rig that reaches
+ * it: the generated puppet carries a stroke, and a rig with no locomotion of its
+ * own is given the shared set, which carries one too. What is left over is a
+ * third-party character with its own walk and no swim -- the ordinary case for
+ * anything downloaded, and the exact shape `--puppet` is for.
+ *
+ * Before the graph, that configuration walked into the water, was labelled as
+ * swimming, kept playing its walk cycle, had its playback rate pinned and its
+ * root-motion branch skipped, and decelerated to a standstill on a feedback loop
+ * whose only fixed point was zero -- silently, for as long as it was submerged.
+ * Now bind names the state it cannot reach and prunes every row into it.
+ */
+static bool no_swim = false;
 
 // Foot planting (spec 12.4). player_skel_root is the node the pose hangs under, and
 // inverting its global transform is what turns a world-space raycast hit into the
@@ -2885,10 +2995,55 @@ static void on_init(Game* game) {
         if (player_animator)
             player_animator->root_motion = locomotion_axis == LOCO_TRAVEL;
         if (player_animator && idle && walk && run) {
-            animator_play_space(player_animator, "locomotion", locomotion, locomotion_count, 0.0f,
-                                true);
             animator_set_event_callback(player_animator, on_anim_event, game);
             entity_add_animator(player_entity, player_animator);
+
+            /*
+             * The graph, and what it is handed is exactly what the rig turned out
+             * to carry: a source whose clip is missing refuses to register, which
+             * is what makes the states that name it unreachable and prunes every
+             * row into them. So there is no presence check here and none in the
+             * table -- `--no-swim` is the same path reached on purpose.
+             *
+             * Entering the initial state is a hard CUT, which is what the direct
+             * animator_play_space call it replaces did, and what the two menu
+             * goldens photograph.
+             */
+            player_graph = create_anim_graph();
+            if (player_graph) {
+                AnimatorEntry one[1];
+                anim_graph_add_source(player_graph, "locomotion", locomotion, locomotion_count);
+                if (aquatic_count > 0) {
+                    anim_graph_add_source(player_graph, "swim", aquatic, aquatic_count);
+                } else {
+                    one[0] = (AnimatorEntry){no_swim ? NULL : clip_swim, 0.0f, 0.0f};
+                    anim_graph_add_source(player_graph, "swim", one, 1);
+                }
+                const Animation* singles[4] = {clip_fall, clip_jump, clip_land, clip_lunge};
+                const char* names[4] = {"fall", "jump", "land", "lunge"};
+                for (int i = 0; i < 4; i++) {
+                    one[0] = (AnimatorEntry){singles[i], 0.0f, 0.0f};
+                    anim_graph_add_source(player_graph, names[i], one, 1);
+                }
+                one[0] = (AnimatorEntry){clip_spin, 0.0f, 0.0f};
+                anim_graph_add_source(player_graph, "spin", one, 1);
+                anim_graph_set_params(player_graph, PLAYER_PARAMS,
+                                      (int)(sizeof PLAYER_PARAMS / sizeof *PLAYER_PARAMS));
+                anim_graph_set_states(player_graph, PLAYER_STATES,
+                                      (int)(sizeof PLAYER_STATES / sizeof *PLAYER_STATES));
+                anim_graph_set_transitions(player_graph, PLAYER_ROWS,
+                                           (int)(sizeof PLAYER_ROWS / sizeof *PLAYER_ROWS));
+                if (!anim_graph_bind(player_graph, player_animator, "ground")) {
+                    free_anim_graph(player_graph);
+                    player_graph = NULL;
+                }
+            }
+            if (!player_graph) {
+                // The graph is what plays anything at all now, so a refusal is not
+                // something to carry on past quietly.
+                animator_play_space(player_animator, "locomotion", locomotion, locomotion_count,
+                                    0.0f, true);
+            }
 
             // Both legs, and Hips as the pelvis a foot that cannot reach asks down.
             // ik_set_pelvis refuses a bone that is not an ancestor of every foot, so
@@ -3217,93 +3372,52 @@ static void on_update(Game* game, double dt) {
     // a wall stops the walk rather than running on the spot.
     float ground_speed = hypotf(vel[0], vel[2]);
     hud_ground_speed = ground_speed;
-    if (player_animator && !player_ragdolled()) {
-        if (locomotion_axis == LOCO_TRAVEL && player_medium == MEDIUM_GROUND) {
-            // The knob is what the STICK asks for, not what the body achieved, and that
-            // is forced rather than chosen: under root motion the travel comes from the
-            // clip the knob selects, so a knob fed by the achieved speed would start at
-            // zero, select the standing clip, travel nothing and stay there. The
-            // feedback runs the other way now.
-            //
-            // What that costs is the wall: today's knob reads Jolt's post-solve speed,
-            // so walking into one stops the walk. Here the clip keeps walking while the
-            // sweep refuses to move the body, which is what inverting the ownership
-            // means and is left visible rather than papered over.
-            //
-            // ON THE GROUND ONLY, because only the ground source carries the body. The
-            // water and the air are stick-driven whatever the locomotion clips state,
-            // and their axes are their own -- the swim space tops out at a fraction of
-            // this one, so a stick reading meant for the ground reads as a full stroke
-            // at 40 per cent of it.
-            player_animator->param = (lean > 1.0f ? 1.0f : lean) * player_speed;
-            player_animator->speed = 1.0f;
-        } else if (locomotion_axis != LOCO_FRACTION) {
-            // The axis IS metres per second, so the knob is the speed and the clamp is the
-            // space's own (animator.h: param is clamped to its entries).
-            player_animator->param = ground_speed;
-            // And what the clips cannot reach by standing where they are, they reach by
-            // playing faster or slower. Inside the covered range this is close to 1 and
-            // does almost nothing, which is the point: past the last entry it is the only
-            // thing keeping a foot on the ground.
-            player_animator->speed = locomotion_rate(player_animator, ground_speed);
+    if (player_graph) {
+        /*
+         * What the app owes the graph each frame: what is true, and nothing about
+         * what should therefore play.
+         *
+         * Every one of these is computed unconditionally, whatever is playing,
+         * because a state names the parameter that drives it and the app no
+         * longer has to ask which state that is. The branch that used to decide
+         * the knob's MEANING from the medium is gone with it.
+         */
+        // The ground axis. Under root motion the knob is what the STICK asks for
+        // and not what the body achieved, and that is forced rather than chosen:
+        // the travel comes from the clip the knob selects, so a knob fed by the
+        // achieved speed would start at zero, select the standing clip, travel
+        // nothing and stay there. What it costs is the wall -- the clip keeps
+        // walking while the sweep refuses to move the body -- and that is left
+        // visible rather than papered over.
+        float ground_knob = ground_speed;
+        float ground_rate = 1.0f;
+        if (locomotion_axis == LOCO_TRAVEL) {
+            ground_knob = (lean > 1.0f ? 1.0f : lean) * player_speed;
+        } else if (locomotion_axis == LOCO_STRIDE) {
+            // The axis IS metres per second, so the knob is the speed and the clamp
+            // is the space's own. What the clips cannot reach by standing where they
+            // are, they reach by playing faster or slower: inside the covered range
+            // this is close to 1 and does almost nothing, which is the point.
+            ground_rate = locomotion_rate(player_animator, ground_speed);
         } else {
-            // No measured stride, so the knob is a fraction of the compile-time constant
-            // and never of whatever --speed capped travel at: dividing by the cap
-            // re-normalises the gear, so full stick would be the run clip at any speed.
+            // No measured stride, so the knob is a fraction of the compile-time
+            // constant and never of whatever --speed capped travel at: dividing by
+            // the cap re-normalises the gear, so full stick would be the run clip at
+            // any speed.
             const float knob = ground_speed / PLAYER_SPEED;
-            player_animator->param = knob > 1.0f ? 1.0f : knob;
+            ground_knob = knob > 1.0f ? 1.0f : knob;
         }
-
-        // Water and air are their own SOURCES rather than more entries in the locomotion
-        // space, and that is about shape and not about convenience: a swim is not a faster
-        // run and a fall is not a slower one, so neither belongs on an axis whose whole
-        // meaning is ground speed, and a fourth entry would blank the trace's three weight
-        // columns besides. Each is crossfaded on the EDGE of the medium changing.
-        // A rig with no airborne clip never enters that state, rather than entering it and
-        // playing the ground source anyway: the second shape re-issues the locomotion
-        // space twice in the first second, since the player spawns above the floor, and a
-        // crossfade restarts the clock a settling arm is reading.
-        const PlayerMedium want = player_swimming ? MEDIUM_WATER
-                                  : (clip_fall && !character_controller_is_grounded(cc))
-                                      ? MEDIUM_AIR
-                                      : MEDIUM_GROUND;
-        if (want != player_medium) {
-            const PlayerMedium was = player_medium;
-            player_medium = want;
-            if (want == MEDIUM_AIR) {
-                // The rise is a ONE-SHOT and the fall is a loop, which is the difference
-                // between the two ways of being in the air: a jump ends, and what it ends
-                // into is the fall. The hand-off is the finished edge just below.
-                if (player_jumped && clip_jump)
-                    animator_play(player_animator, clip_jump, 0.10f, false);
-                else
-                    animator_play(player_animator, clip_fall, 0.15f, true);
-            } else if (want == MEDIUM_WATER && aquatic_count > 0) {
-                animator_play_space(player_animator, "swim", aquatic, aquatic_count, 0.25f, true);
-            } else if (want == MEDIUM_WATER && clip_swim) {
-                animator_play(player_animator, clip_swim, 0.25f, true);
-            } else {
-                player_jumped = false;
-                animator_play_space(player_animator, "locomotion", locomotion, locomotion_count,
-                                    0.25f, true);
-                // The landing goes on AFTER the space, so the space is what it resumes to
-                // when it releases itself. Short fade: a landing that eases in has already
-                // missed the moment it exists for.
-                if (was == MEDIUM_AIR && clip_land)
-                    animator_play_once(player_animator, clip_land, 0.08f);
-            }
-        } else if (player_medium == MEDIUM_AIR && clip_fall && animator_finished(player_animator)) {
-            // The rise reached its end: from here the character is falling, whatever put
-            // it up there. animator_finished is an EDGE, so this fires once and the loop
-            // it starts does not re-trigger it.
-            animator_play(player_animator, clip_fall, 0.15f, true);
-        }
-        // Off the ground there is no stride to match, so the clip plays at its own rate:
-        // the swim space carries no strides by design and the fall is a single clip. The
-        // knob still means metres per second, which is what lets the swim space read its
-        // own axis off the same param the ground uses.
-        if (player_medium != MEDIUM_GROUND)
-            player_animator->speed = 1.0f;
+        anim_graph_set_float(player_graph, "ground_knob", ground_knob);
+        anim_graph_set_float(player_graph, "ground_rate", ground_rate);
+        // The swim axis is its own and tops out at a fraction of the ground's, so a
+        // stick reading meant for the ground reads as a full stroke at 40 per cent
+        // of it.
+        anim_graph_set_float(player_graph, "swim_knob", ground_speed);
+        anim_graph_set_float(player_graph, "depth",
+                             grotto_surface_y(game->scene) - player_entity->position[1]);
+        anim_graph_set_bool(player_graph, "grounded", character_controller_is_grounded(cc));
+        anim_graph_set_float(player_graph, "rise", vel[1]);
+        anim_graph_set_bool(player_graph, "ragdolled", player_ragdolled());
     }
     /*
      * What the clip laid down, taken once per step (spec 12.18).
@@ -3436,30 +3550,26 @@ static void on_update(Game* game, double dt) {
         printf("Jump!\n");
         if (jump_sound)
             audio_sound_play(jump_sound);
-        player_jumped = true;
-        // On a rig with no airborne loop the tuck is a one-shot that returns to the
-        // locomotion space by itself, the airtime being one second at this velocity under
-        // this gravity. With a loop it is the AIR state that plays the rise instead, a
-        // frame later, and a one-shot fired here would be replaced before it read.
-        if (player_animator && clip_jump && !clip_fall)
-            animator_play_once(player_animator, clip_jump, 0.25f);
+        // Nothing is remembered about HOW the ground was left: the graph picks the
+        // rise off vertical speed on the next step, which is the same frame the old
+        // flag was read on and is true of a launch pad as well as a jump.
     }
     if (player_animator && clip_wave && input_action_pressed(&game->input, "wave"))
         animator_play_layer(player_animator, clip_wave, wave_mask, 0.1f, 0.1f, false);
 
-    // The two authored moves (spec 12.18), and they are BASE one-shots where the wave is
-    // an override layer -- a wave happens on an arm while the body carries on, a lunge is
-    // what the body is doing. Each returns to the locomotion space by itself.
+    // The two authored moves (spec 12.18), and they are BASE one-shots where the wave
+    // is an override layer -- a wave happens on an arm while the body carries on, a
+    // lunge is what the body is doing.
     //
-    // Only on the ground, and only while the space they return to is the one that
-    // travels: firing a lunge mid-air would hand the character a metre of ground it has
-    // no contact with, and the medium machine above would take the source back on the
-    // next edge anyway.
-    if (player_animator && player_medium == MEDIUM_GROUND && !player_ragdolled()) {
-        if (clip_lunge && input_action_pressed(&game->input, "lunge"))
-            animator_play_once(player_animator, clip_lunge, 0.08f);
-        else if (clip_spin && input_action_pressed(&game->input, "spin"))
-            animator_play_once(player_animator, clip_spin, 0.08f);
+    // Fired rather than played: the table decides they are ground-only and that being
+    // ragdolled rules them out, and it decides it in one place instead of in a
+    // condition here that has to be kept in step with one over there. A press with
+    // nothing to consume it is an edge that expired, which is what a trigger is.
+    if (player_graph) {
+        if (input_action_pressed(&game->input, "lunge"))
+            anim_graph_fire(player_graph, "lunge");
+        else if (input_action_pressed(&game->input, "spin"))
+            anim_graph_fire(player_graph, "spin");
     }
 
     // Set velocity (CharacterController will handle collision response)
@@ -3598,6 +3708,14 @@ static void on_update(Game* game, double dt) {
         // THIS and moves nothing else, so without it a spin and a stand are the same
         // three columns.
         printf(" yaw %.4f", (double)player_yaw);
+        // And what the machine says it is doing (spec 12.20), appended for the third
+        // time by the same rule. The source name above says what is PLAYING, which a
+        // state and its resume can share; this says which state chose it, and the two
+        // together are what tells a landing from a walk that happens to be starting.
+        // No state may be named containing " yaw ", since the yaw regex is greedy.
+        if (player_graph)
+            printf(" graph %s %.3f", anim_graph_state_name(player_graph),
+                   (double)anim_graph_state_seconds(player_graph));
         printf("\n");
     }
     trace_step++;
@@ -4016,6 +4134,11 @@ static void on_shutdown(Game* game) {
 
     free_save_system(save_system);
     save_system = NULL;
+
+    // Before the entity manager takes the animators with it: the graph borrows
+    // one and the animator holds the pointer back.
+    free_anim_graph(player_graph);
+    player_graph = NULL;
 }
 
 // Mouse callback for camera control
@@ -8355,6 +8478,8 @@ int main(int argc, const char* argv[]) {
             no_puppet = true;
         } else if (!strcmp(a, "--no-chaser")) {
             no_chaser = true;
+        } else if (!strcmp(a, "--no-swim")) {
+            no_swim = true;
         } else if (!strcmp(a, "--no-follow-cam")) {
             follow_cam = false;
         } else if (!strcmp(a, "--fov") && i + 1 < argc) {

@@ -24084,6 +24084,49 @@ def run_save_gate(workdir):
 
 
 _GRAPH_PROBE = re.compile(r"^graph ([\w-]+) ([\w-]+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
+# The state column --trace-player appends LAST, after the camera and the character
+# heading, by the rule that block states three times: appended, never inserted,
+# because every regex reading the line counts its groups from the left.
+_GRAPH_TRACE = re.compile(r"player step (\d+) .* graph (\w+) ([\d.]+)")
+
+# The three scripts the parity arms drive, and every frame index in them was
+# MEASURED rather than predicted -- the plate lip, the drop and the pool are all
+# functions of an eroded height field with two noise warps, and two of the plan's
+# predictions about this app were wrong.
+#
+# Read at every step rather than every tenth: the landing's fade is 0.08 s and the
+# rise is under a second, so a ten-step cadence steps over both.
+_GRAPH_GROUND = "0-59 idle\n60-179 ly=-1\n180-182 rt=1\n183-259 idle\n260-262 lt=1\n263-330 idle\n"
+_GRAPH_AIR = "0-59 idle\n60-119 ly=-1\n120-122 a\n123-300 idle\n"
+# Walk forward and never stop: the plate's lip is about 500 steps out and the fall
+# to the water is another 260.
+_GRAPH_WATER = "0-59 idle\n60-900 ly=-1\n"
+
+
+def _graph_trace(workdir, tag, script, frames, extra=None):
+    """The RLE state sequence from one scripted run: [(step, state), ...] at each
+    change, or None if the run failed or traced nothing.
+
+    The sequence is what ships in the arm, spelled out. A recording is how the
+    sequence was LEARNED -- 12.19's Phase 0 pattern -- but a literal list is what a
+    reviewer can read and disagree with, where a blob is not.
+    """
+    path = os.path.join(workdir, f"graph_{tag}.txt")
+    with open(path, "w") as f:
+        f.write(script)
+    r = subprocess.run(
+        [GAMETEST, "-x", "-f", str(frames), "--no-crates", "--no-chaser", "--trace-player",
+         "--trace-every", "1", "--pad-script", path] + (extra or []),
+        capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+    text = r.stdout + r.stderr
+    samples = _GRAPH_TRACE.findall(text)
+    if r.returncode != 0 or not samples:
+        return None
+    seq = []
+    for step, state, _secs in samples:
+        if not seq or seq[-1][1] != state:
+            seq.append((int(step), state))
+    return seq
 
 
 @functools.cache
@@ -24192,6 +24235,26 @@ def run_graph_gate(workdir):
                         animator directly: every bone matrix over 120 ticks, max
                         diff 0 exactly, not to a tolerance. A machine that
                         decides what plays may add no arithmetic to what plays.
+
+    And four that drive the app, headless, through a scripted pad -- the arm
+    `docs/verification.md` booked six specs ago, when what the medium machine
+    picked was read off a trace by eye and photographed.
+
+      graph-parity-ground   Walk, lunge, spin: the state sequence the hand-rolled
+                            machine produced, spelled out rather than recorded.
+      graph-parity-air      The same for the full airborne path, which needs a rig
+                            carrying a fall loop and a landing -- the committed
+                            default has neither, so this runs on t_pose.fbx and the
+                            shared clip set. It reads the jump-to-fall hand-off
+                            end to end, which nothing else does.
+      graph-parity-water    Walking off the plate into the water enters the stroke
+                            ONCE and stays. Before the band it flipped every ~50
+                            steps for as long as anybody floated.
+      graph-no-swim         A rig with no stroke never enters the state it cannot
+                            play, and keeps moving -- where the machine this
+                            replaces labelled it as swimming, kept its walk cycle
+                            playing, pinned the rate and decayed to a standstill on
+                            a loop whose only fixed point was zero.
     """
     failed = []
 
@@ -24430,6 +24493,47 @@ def run_graph_gate(workdir):
                   f"and clock {clock:.9g} over 120 ticks (want 0 exactly)")
     print(f"  graph-identity    {'PASS' if ok else 'FAIL'}  {detail}")
     note("graph-identity", ok)
+
+    def states_of(seq):
+        return [s for _step, s in seq] if seq else []
+
+    # ---- graph-parity-ground
+    seq = _graph_trace(workdir, "ground", _GRAPH_GROUND, 331)
+    want = ["ground", "lunge", "ground", "spin", "ground"]
+    got = states_of(seq)
+    ok = got == want
+    detail = (f"{' -> '.join(got) if got else 'nothing traced'} (want {' -> '.join(want)})")
+    print(f"  graph-parity-ground {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-parity-ground", ok)
+
+    # ---- graph-parity-air
+    seq = _graph_trace(workdir, "air", _GRAPH_AIR, 301,
+                       ["--puppet", "assets/models/t_pose.fbx"])
+    want = ["ground", "air", "land", "ground", "rise", "air", "land", "ground"]
+    got = states_of(seq)
+    ok = got == want
+    detail = (f"{' -> '.join(got) if got else 'nothing traced'} (want {' -> '.join(want)})")
+    print(f"  graph-parity-air  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-parity-air", ok)
+
+    # ---- graph-parity-water
+    seq = _graph_trace(workdir, "water", _GRAPH_WATER, 901)
+    got = states_of(seq)
+    entries = got.count("water")
+    ok = got == ["ground", "water"]
+    detail = (f"{' -> '.join(got) if got else 'nothing traced'}: the stroke is entered "
+              f"{entries} time(s) and not left (want exactly one, and no flip back)")
+    print(f"  graph-parity-water {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-parity-water", ok)
+
+    # ---- graph-no-swim
+    seq = _graph_trace(workdir, "noswim", _GRAPH_WATER, 901, ["--no-swim"])
+    got = states_of(seq)
+    ok = got == ["ground"]
+    detail = (f"{' -> '.join(got) if got else 'nothing traced'} (want ground alone: a state "
+              f"whose source this rig cannot play is pruned, not entered)")
+    print(f"  graph-no-swim     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("graph-no-swim", ok)
 
     return failed
 
