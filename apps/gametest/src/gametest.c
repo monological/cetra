@@ -6105,6 +6105,258 @@ static int run_anim_probe(Game* game, const char* which) {
     return rc;
 }
 
+/*
+ * --graph-probe, the four cases that need a real Animator on a real rig.
+ *
+ * Everything else about a graph is a table over named values and runs with no
+ * engine at all; these are the ones where the question IS the seam -- what the
+ * animator's finished edge means to a row, what a row's fade reaches, what a
+ * returning state does to the outgoing clock, and whether a one-state graph is
+ * the same thing as calling the animator directly. A headless game, and still no
+ * frame is drawn.
+ */
+static int graph_probe_guard_calls = 0;
+
+static bool graph_probe_guard_no(const AnimGraph* graph, void* user) {
+    (void)graph;
+    (void)user;
+    graph_probe_guard_calls++;
+    return false;
+}
+
+static bool graph_probe_guard_yes(const AnimGraph* graph, void* user) {
+    (void)graph;
+    (void)user;
+    graph_probe_guard_calls++;
+    return true;
+}
+
+static int run_graph_rig_probe(Game* game, const char* which) {
+    Scene* scene = create_scene_from_model_path(puppet_path, NULL, game->engine->async_loader);
+    if (!scene || scene->skeleton_count == 0) {
+        fprintf(stderr, "graph-probe: could not load a rig from '%s'\n", puppet_path);
+        if (scene)
+            free_scene(scene);
+        return 1;
+    }
+    game_set_scene(game, scene);
+    EntityManager* em = create_entity_manager(game);
+    game_set_entity_manager(game, em);
+    Skeleton* skel = scene->skeletons[0];
+    Animation* idle = scene_find_animation(scene, "idle");
+    Animation* walk = scene_find_animation(scene, "walk");
+    Animation* run = scene_find_animation(scene, "run");
+    Animation* wave = scene_find_animation(scene, "wave");
+    if (!idle || !walk || !run || !wave) {
+        fprintf(stderr, "graph-probe: the rig lacks one of idle/walk/run/wave\n");
+        return 1;
+    }
+    AnimatorEntry loco[3] = {{idle, 0.0f}, {walk, 0.5f}, {run, 1.0f}};
+    AnimatorEntry one_shot[1] = {{wave, 0.0f}};
+
+    static const AnimGraphParam PARAMS[] = {
+        {"speed", ANIM_GRAPH_FLOAT},
+        {"go", ANIM_GRAPH_TRIGGER},
+        {"armed", ANIM_GRAPH_BOOL},
+    };
+    const int PARAM_N = (int)(sizeof PARAMS / sizeof *PARAMS);
+
+    if (!strcmp(which, "finished")) {
+        // An EXIT state leaves on the animator's finished edge, once. The same
+        // table with the state looping never leaves at all, which is the
+        // falsification: an implementation reading a level rather than an edge
+        // passes the first leg and fails this one.
+        static const AnimGraphState EXITS[] = {
+            {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
+            {"once", "shot", NULL, NULL, ANIM_GRAPH_EXIT},
+        };
+        static const AnimGraphState LOOPS[] = {
+            {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
+            {"once", "shot", NULL, NULL, ANIM_GRAPH_LOOP},
+        };
+        static const AnimGraphTransition ROWS[] = {
+            {"ground", "once", {ANIM_FIRED("go")}, 0.0f},
+            {"once", "ground", {ANIM_DONE()}, 0.0f},
+        };
+        const AnimGraphState* tables[2] = {EXITS, LOOPS};
+        const char* labels[2] = {"exit", "loop"};
+        for (int t = 0; t < 2; t++) {
+            Animator* a = probe_rig(em, skel, t ? "b" : "a");
+            AnimGraph* g = create_anim_graph();
+            anim_graph_add_source(g, "loco", loco, 3);
+            anim_graph_add_source(g, "shot", one_shot, 1);
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, tables[t], 2);
+            anim_graph_set_transitions(g, ROWS, 2);
+            anim_graph_bind(g, a, "ground");
+            anim_graph_fire(g, "go");
+            int ticks = 0;
+            while (ticks < 240) {
+                anim_graph_update(g, PROBE_DT);
+                probe_tick(em, 1);
+                ticks++;
+                if (!strcmp(anim_graph_state_name(g), "ground") && ticks > 1)
+                    break;
+            }
+            printf("graph finished %s ticks %d\n", labels[t], ticks);
+            free_anim_graph(g);
+        }
+    } else if (!strcmp(which, "fade")) {
+        // The row's fade reaches playback verbatim. Read off the animator's own
+        // envelope at three points of a half-second row, the shape anim-fade
+        // already uses: a graph that rounded a fade or substituted a default is
+        // red here.
+        static const AnimGraphState STATES[] = {
+            {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
+            {"other", "shot", NULL, NULL, ANIM_GRAPH_LOOP},
+        };
+        static const AnimGraphTransition ROWS[] = {
+            {"ground", "other", {ANIM_FIRED("go")}, 0.5f},
+        };
+        Animator* a = probe_rig(em, skel, "a");
+        AnimGraph* g = create_anim_graph();
+        anim_graph_add_source(g, "loco", loco, 3);
+        anim_graph_add_source(g, "shot", one_shot, 1);
+        anim_graph_set_params(g, PARAMS, PARAM_N);
+        anim_graph_set_states(g, STATES, 2);
+        anim_graph_set_transitions(g, ROWS, 1);
+        anim_graph_bind(g, a, "ground");
+        anim_graph_fire(g, "go");
+        anim_graph_update(g, PROBE_DT);
+        probe_tick(em, 1);
+        printf("graph fade t0 weight %.6f\n", (double)a->fade_weight);
+        probe_tick(em, 14); // fifteen ticks of sixty is a quarter second
+        printf("graph fade thalf weight %.6f\n", (double)a->fade_weight);
+        probe_tick(em, 15);
+        printf("graph fade tfull weight %.6f\n", (double)a->fade_weight);
+        printf("graph fade tfull fading %d\n", a->fading ? 1 : 0);
+        free_anim_graph(g);
+    } else if (!strcmp(which, "guard")) {
+        // ANDed after the conditions, and not reached at all by a row whose
+        // conditions already failed -- so a guard with a side effect is not a
+        // hidden per-frame call. The third leg is the one a naive
+        // implementation fails.
+        static const AnimGraphState STATES[] = {
+            {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
+            {"other", "shot", NULL, NULL, ANIM_GRAPH_LOOP},
+        };
+        static const AnimGraphTransition BLOCKED[] = {
+            {"ground", "other", {ANIM_ON("armed")}, 0.0f, graph_probe_guard_no},
+        };
+        static const AnimGraphTransition ALLOWED[] = {
+            {"ground", "other", {ANIM_ON("armed")}, 0.0f, graph_probe_guard_yes},
+        };
+        const AnimGraphTransition* tables[3] = {BLOCKED, ALLOWED, BLOCKED};
+        const char* labels[3] = {"blocked", "allowed", "unarmed"};
+        const bool armed[3] = {true, true, false};
+        for (int t = 0; t < 3; t++) {
+            Animator* a = probe_rig(em, skel, labels[t]);
+            AnimGraph* g = create_anim_graph();
+            anim_graph_add_source(g, "loco", loco, 3);
+            anim_graph_add_source(g, "shot", one_shot, 1);
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, STATES, 2);
+            anim_graph_set_transitions(g, tables[t], 1);
+            anim_graph_bind(g, a, "ground");
+            anim_graph_set_bool(g, "armed", armed[t]);
+            graph_probe_guard_calls = 0;
+            anim_graph_update(g, PROBE_DT);
+            printf("graph guard %s moved %d\n", labels[t],
+                   strcmp(anim_graph_state_name(g), "ground") ? 1 : 0);
+            printf("graph guard %s calls %d\n", labels[t], graph_probe_guard_calls);
+            free_anim_graph(g);
+        }
+    } else if (!strcmp(which, "return")) {
+        // The whole reason RETURN is a kind rather than a spelling of EXIT.
+        //
+        // A returning state resumes the outgoing source AT THE CLOCK IT LEFT;
+        // an exiting one is left by a row, which re-issues the space and starts
+        // it from zero. On a locomotion space that difference is the walk phase,
+        // and every foot lock rides it. Both legs run the same clip for the same
+        // ticks, so what is read is the RESUMED clock and nothing else.
+        static const AnimGraphState RETURNS[] = {
+            {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
+            {"once", "shot", NULL, NULL, ANIM_GRAPH_RETURN},
+        };
+        static const AnimGraphState EXITS[] = {
+            {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
+            {"once", "shot", NULL, NULL, ANIM_GRAPH_EXIT},
+        };
+        static const AnimGraphTransition RETURN_ROWS[] = {
+            {"ground", "once", {ANIM_FIRED("go")}, 0.0f},
+        };
+        static const AnimGraphTransition EXIT_ROWS[] = {
+            {"ground", "once", {ANIM_FIRED("go")}, 0.0f},
+            {"once", "ground", {ANIM_DONE()}, 0.0f},
+        };
+        const AnimGraphState* states[2] = {RETURNS, EXITS};
+        const AnimGraphTransition* rows[2] = {RETURN_ROWS, EXIT_ROWS};
+        const int counts[2] = {1, 2};
+        const char* labels[2] = {"returned", "exited"};
+        for (int t = 0; t < 2; t++) {
+            Animator* a = probe_rig(em, skel, labels[t]);
+            AnimGraph* g = create_anim_graph();
+            anim_graph_add_source(g, "loco", loco, 3);
+            anim_graph_add_source(g, "shot", one_shot, 1);
+            anim_graph_set_params(g, PARAMS, PARAM_N);
+            anim_graph_set_states(g, states[t], 2);
+            anim_graph_set_transitions(g, rows[t], counts[t]);
+            anim_graph_bind(g, a, "ground");
+            // Let the walk get well past its start, so a restart is unmistakable.
+            for (int i = 0; i < 25; i++) {
+                anim_graph_update(g, PROBE_DT);
+                probe_tick(em, 1);
+            }
+            const float before = a->base.time;
+            anim_graph_fire(g, "go");
+            for (int i = 0; i < 200; i++) {
+                anim_graph_update(g, PROBE_DT);
+                probe_tick(em, 1);
+                if (!strcmp(animator_source_name(a), "loco") && i > 2)
+                    break;
+            }
+            printf("graph return %s before %.6f\n", labels[t], (double)before);
+            printf("graph return %s after %.6f\n", labels[t], (double)a->base.time);
+            free_anim_graph(g);
+        }
+    } else if (!strcmp(which, "identity")) {
+        // A one-state graph must be the same thing as calling the animator
+        // directly -- bit for bit, over 120 ticks, not to a tolerance. A machine
+        // that decides what plays may add no arithmetic to what plays, and
+        // `shake_scale = 0` and `ui-theme-identity` are the precedent.
+        static const AnimGraphState STATES[] = {
+            {"ground", "loco", "speed", NULL, ANIM_GRAPH_LOOP},
+            {"unused", "shot", NULL, NULL, ANIM_GRAPH_LOOP},
+        };
+        static const AnimGraphTransition ROWS[] = {
+            {"ground", "unused", {ANIM_FIRED("go")}, 0.0f}, // never fired
+        };
+        Animator* a = probe_rig(em, skel, "graphed");
+        Animator* b = probe_rig(em, skel, "direct");
+        AnimGraph* g = create_anim_graph();
+        anim_graph_add_source(g, "loco", loco, 3);
+        anim_graph_add_source(g, "shot", one_shot, 1);
+        anim_graph_set_params(g, PARAMS, PARAM_N);
+        anim_graph_set_states(g, STATES, 2);
+        anim_graph_set_transitions(g, ROWS, 1);
+        anim_graph_bind(g, a, "ground");
+        anim_graph_set_float(g, "speed", 0.5f);
+        animator_play_space(b, "loco", loco, 3, 0.0f, true);
+        b->param = 0.5f;
+        for (int i = 0; i < 120; i++) {
+            anim_graph_update(g, PROBE_DT);
+            probe_tick(em, 1);
+        }
+        printf("graph identity pose maxdiff %.9g\n", pose_maxdiff(a->state, b->state, -1));
+        printf("graph identity clock diff %.9g\n", (double)(a->base.time - b->base.time));
+        free_anim_graph(g);
+    } else {
+        fprintf(stderr, "graph-probe: unknown rig case '%s'\n", which);
+        return 1;
+    }
+    return 0;
+}
+
 // A pad held at full left deflection with A down, through the same reader seam
 // the `gamepad` group scripts. No file and no device: it exists so the capture
 // arm can assert what suppression DOES to a real source, rather than asking the
@@ -8187,10 +8439,30 @@ int main(int argc, const char* argv[]) {
     // the other about settings reaching a live one -- and both take a headless
     // game that still never draws a frame. Stated as the positive list, so a
     // third does not have to be remembered in two places.
-    // Every graph case is the table alone -- a graph bound to no animator, over
-    // states that play nothing -- so none of them creates an engine at all.
-    if (graph_probe) {
+    /*
+     * Most graph cases are the table alone -- a graph bound to no animator, over
+     * states that play nothing -- and create no engine at all. Four of them ask
+     * what the table MEANS to an animator, so they take a headless game for a
+     * rig and still never draw a frame. Stated as the positive list, so a fifth
+     * does not have to be remembered in two places.
+     */
+    const bool graph_probe_needs_rig =
+        graph_probe && (!strcmp(graph_probe, "finished") || !strcmp(graph_probe, "fade") ||
+                        !strcmp(graph_probe, "guard") || !strcmp(graph_probe, "return") ||
+                        !strcmp(graph_probe, "identity"));
+    if (graph_probe && !graph_probe_needs_rig) {
         return run_graph_probe(graph_probe);
+    }
+    if (graph_probe_needs_rig) {
+        GameConfig probe_config = {.engine = {.title = "graph-probe", .headless = true}};
+        Game* probe_game = create_game(&probe_config);
+        if (!probe_game) {
+            fprintf(stderr, "graph-probe: could not create game\n");
+            return -1;
+        }
+        int rc = run_graph_rig_probe(probe_game, graph_probe);
+        free_game(probe_game);
+        return rc;
     }
     const bool cam_probe_needs_engine =
         cam_probe && (!strcmp(cam_probe, "seam") || !strcmp(cam_probe, "settings"));
