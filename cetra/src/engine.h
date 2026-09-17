@@ -27,11 +27,6 @@
 #include "input.h"
 #include "postfx.h"
 
-typedef enum CameraMode {
-    CAMERA_MODE_FREE,  // Free movement mode
-    CAMERA_MODE_ORBIT, // Orbit around a point
-} CameraMode;
-
 /*
  * How the window relates to a display.
  *
@@ -112,7 +107,7 @@ typedef struct Engine {
     // engine_run).
     //
     // Everything else -- the feature toggles, the draw levers, the overlays,
-    // the run's counts, clear_color, camera_mode, current_render_mode -- is
+    // the run's counts, clear_color, current_render_mode -- is
     // written directly and read at the frame top. The exposure block has
     // banners of its own.
     GLFWwindow* window;
@@ -335,8 +330,7 @@ typedef struct Engine {
     // records what happened the last time a caller wrote its own.
     bool capturing_irradiance;
 
-    Camera* camera;         // The camera the frame renders (engine_set_camera); borrowed
-    CameraMode camera_mode; // Free or orbit
+    Camera* camera; // The camera the frame renders (engine_set_camera); borrowed
 
     Scene** scenes;             // Array of scenes managed by the engine
     size_t scene_count;         // Number of scenes

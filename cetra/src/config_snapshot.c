@@ -173,7 +173,6 @@ static const char* const CFG_RENDER_MODES[] = {
     "pbr",          "normals",      "world_pos",       "tex_coords",     "tangent_space",
     "flat",         "albedo",       "simple_lighting", "metallic_rough", "velocity",
     "hdr_hotspots", "sss_hotspots", "extrapolation"};
-static const char* const CFG_CAMERA_MODES[] = {"free", "orbit"};
 static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "agx", "linear"};
 // 6 is a hole: the half-res fog buffer retired with the screen-space march,
 // and the values are the shader's own debugView dispatch, so it cannot be closed.
@@ -200,8 +199,6 @@ static const char* const CFG_LIGHT_UNITS[] = {"default", "candela", "lumens", "l
 _Static_assert(sizeof(CFG_RENDER_MODES) / sizeof(*CFG_RENDER_MODES) ==
                    RENDER_MODE_EXTRAPOLATION + 1,
                "CFG_RENDER_MODES must name every RenderMode");
-_Static_assert(sizeof(CFG_CAMERA_MODES) / sizeof(*CFG_CAMERA_MODES) == CAMERA_MODE_ORBIT + 1,
-               "CFG_CAMERA_MODES must name every CameraMode");
 _Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_LINEAR + 1,
                "CFG_TONEMAPS must name every PostFXTonemapMode");
 _Static_assert(sizeof(CFG_DEBUG_VIEWS) / sizeof(*CFG_DEBUG_VIEWS) == POSTFX_DEBUG_COUNT,
@@ -223,7 +220,6 @@ _Static_assert(sizeof(CFG_LIGHT_UNITS) / sizeof(*CFG_LIGHT_UNITS) == LIGHT_UNITS
  * alternative -- a per-type read -- would put the type list in a second place.
  */
 _Static_assert(sizeof(RenderMode) == sizeof(int), "CFG_ENUM addresses enums as int");
-_Static_assert(sizeof(CameraMode) == sizeof(int), "CFG_ENUM addresses enums as int");
 _Static_assert(sizeof(PostFXTonemapMode) == sizeof(int), "CFG_ENUM addresses enums as int");
 _Static_assert(sizeof(PostFXDebugView) == sizeof(int), "CFG_ENUM addresses enums as int");
 _Static_assert(sizeof(PostFXSpecOccMode) == sizeof(int), "CFG_ENUM addresses enums as int");
@@ -389,7 +385,6 @@ static void _apply_cloud_enabled(ConfigApplyCtx* ctx, void* base, const ConfigFi
 static const ConfigField CFG_FIELDS[] = {
     // --- engine
     CFG_ROW_ENUM(CFG_ENGINE, "engine", "render_mode", current_render_mode, CFG_RENDER_MODES),
-    CFG_ROW_ENUM(CFG_ENGINE, "engine", "camera_mode", camera_mode, CFG_CAMERA_MODES),
     CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", msaa_samples, _apply_msaa),
     // A bool that changes frames only on the live TAA path at one sample, but
     // it is a GUI control, and a session that turned it off is a session this

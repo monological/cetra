@@ -17159,6 +17159,17 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "engine.msaa_samples": "engine_set_msaa_samples validates; 5 is not a sample count",
     "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
     "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
+    # Since spec 12.19 the camera rig owns the pose and the Camera's own orbit
+    # block is DERIVED from it -- camera_set_position and camera_set_look_at
+    # re-derive all three on every apply. They are still dumped, because they
+    # still describe the session; they are simply no longer an input, in exactly
+    # the sense camera.near_clip has not been one for longer. The way to state a
+    # pose in a snapshot is camera.eye and camera.target, which config-camera
+    # asserts end to end -- so this is one way to say a thing where there were
+    # two, rather than a way that has been lost.
+    "camera.orbit.distance": "derived from the rig's pose; camera.eye and camera.target state it",
+    "camera.orbit.theta": "derived from the rig's pose; camera.eye and camera.target state it",
+    "camera.orbit.phi": "derived from the rig's pose; camera.eye and camera.target state it",
     # This fixture runs without --clouds, so flipping the switch asks for a layer
     # whose noise bake -- a one-shot at startup -- never ran. Refused by name, and
     # config-clouds is the arm that reads both halves of that.
@@ -17656,9 +17667,14 @@ def run_config_gate(workdir):
     cam_json = _config_variant(orig_json, os.path.join(workdir, "config_camera_in.json"),
                                lambda d: d["camera"].update(eye=eye))
     cam_cfg, _, _ = _config_run(workdir, "camera_cfg", ["--config", cam_json], model=None)
+    # %.9g and not %.6f, which is the width the snapshot itself carries: the two
+    # legs must be handed the SAME pose or this measures a truncation rather than
+    # a restore. Six decimals was enough while a Camera stored a pose verbatim;
+    # since spec 12.19 the pose round-trips through the rig's asin/atan2, and a
+    # 1e-6 difference in the input comes back as 17 pixels.
     cam_flag, _, _ = _config_run(workdir, "camera_flag", pinned + CONFIG_LOOK + [
-        "--cam-eye", ",".join(f"{v:.6f}" for v in eye),
-        "--cam-target", ",".join(f"{v:.6f}" for v in target)])
+        "--cam-eye", ",".join(f"{v:.9g}" for v in eye),
+        "--cam-target", ",".join(f"{v:.9g}" for v in target)])
     agree = _config_px(cam_cfg, cam_flag)
     moved = _config_px(cam_cfg, orig_ppm)
     ok = agree >= 0 and agree <= floor_px and moved > 1000
@@ -24966,12 +24982,19 @@ def run_camera_gate(workdir):
         want_eye, want_look = [1.0, 2.0, 3.0], [-4.0, 0.5, 6.0]
         adopted = (max(abs(a - b) for a, b in zip(s["eye"], want_eye)) < 1e-6
                    and max(abs(a - b) for a, b in zip(s["look"], want_look)) < 1e-6)
+        # EXACT, not close. A stated pose that a tick moves at all is --cam-eye
+        # and a config restore reproducing a session approximately, and the error
+        # grows with the arm: the far leg below frames from 20,196 units, where
+        # re-deriving the pose lost 0.002 and 885 pixels of a restored frame.
         drift = max(abs(a - b) for a, b in zip(t["eye"], s["eye"]))
-        ok = adopted and drift < 1e-5
-        print(f"  cam-pose-adopt {'PASS' if ok else 'FAIL'}  a stated pose is adopted exactly "
-              f"and an update that asks for nothing moves the eye {drift:.2e} (want under 1e-5: "
-              f"the round trip through asin and atan2 is not exact, and the lifts the rig was "
-              f"carrying must be zeroed by the adopt or the tick displaces it)")
+        far_drift = max(abs(a - b) for a, b in zip(pose["far_ticked"]["eye"],
+                                                   pose["far"]["eye"]))
+        ok = adopted and drift == 0.0 and far_drift == 0.0
+        print(f"  cam-pose-adopt {'PASS' if ok else 'FAIL'}  a stated pose is adopted exactly, "
+              f"and a tick that asks for nothing moves the eye {drift:.2e} at a 5-unit arm and "
+              f"{far_drift:.2e} at a 20,196-unit one (want 0 at both: the lifts must be zeroed "
+              f"by the adopt, and the pose must be KEPT rather than re-derived through asin and "
+              f"atan2, whose error grows with the arm)")
         note("cam-pose-adopt", ok)
 
     seam = _cam_probe_seam()

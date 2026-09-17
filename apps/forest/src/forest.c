@@ -2662,7 +2662,6 @@ static void on_init(Game* game) {
                               .far = 2000.0f};
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
-    engine->camera_mode = CAMERA_MODE_FREE;
 
     // Pinned rather than adaptive: auto-exposure is the top determinism hazard
     // for anything compared across builds, and every arm here reads a frame or a

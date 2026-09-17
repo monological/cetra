@@ -19,46 +19,60 @@ typedef struct Scene Scene;
 typedef struct Camera Camera;
 
 /*
- * Mouse Drag Camera Controller
+ * A POINTER driving a camera rig, for a 3D viewer (spec 12.19).
  *
- * For a 3D viewer: a drag orbits the camera about its target, a shift-drag
- * pans, the keys walk and zoom, and an auto-orbit spins the view until the
- * user takes it. The two camera modes drag the same way and differ in what
- * happens when nothing is dragged.
+ * This is an input adapter and not a camera: a drag becomes an aim, a
+ * shift-drag becomes an anchor, the wheel and the keys become a distance, and
+ * `camera_rig.h` decides what any of that does to the eye. It replaced
+ * `MouseDragController`, which was a camera named after a mouse -- and being
+ * named for its input rather than its job is why three apps wrote their own
+ * follow cameras instead of extending it.
+ *
+ * Everything it keeps is POINTER state: where the aim was when the button went
+ * down, so an offset from the press is an absolute angle rather than an
+ * accumulation. The drag itself lives in engine->input.
  */
-typedef struct MouseDragController {
-    // ENGINE-OWNED (by the controller): the camera as the drag started; a
-    // drag is a delta from here. The drag itself lives in engine->input.
+typedef struct CameraDrag {
+    // ENGINE-OWNED (by the adapter): the rig as the drag started.
     Engine* engine;
-    float start_theta;
-    float start_phi;
-    float start_distance;
-    vec3 start_look_at;
-    vec3 start_position;
+    struct CameraRig* rig; // borrowed; the app owns it
+    float start_yaw;
+    float start_pitch;
+    vec3 start_anchor;
 
     // SETTINGS: plain stores. Write them directly, at any time.
-    float sensitivity;         // Radians of orbit per framebuffer pixel of drag
+    float sensitivity;         // Radians of aim per framebuffer pixel of drag
+    float pan_per_unit;        // World units per pixel, per unit of distance
+    float zoom_step;           // Distance factor per wheel notch
     bool auto_orbit_enabled;   // Spin the camera on its own until the user takes it
     float auto_orbit_speed;    // Radians per second
     float auto_orbit_min_dist; // The distance breathes between these two
     float auto_orbit_max_dist;
-} MouseDragController;
+} CameraDrag;
 
-// Created with a windowed viewer's defaults: sensitivity 0.002, auto-orbit off.
-MouseDragController* create_mouse_drag_controller(Engine* engine);
-void free_mouse_drag_controller(MouseDragController* ctrl);
+// Created with a windowed viewer's defaults: sensitivity 0.002, pan 0.0005 per
+// unit of distance, a zoom step of 0.9, auto-orbit off. The rig is borrowed and
+// must outlive this.
+CameraDrag* create_camera_drag(Engine* engine, struct CameraRig* rig);
+void free_camera_drag(CameraDrag* drag);
 
-// Forwarded from the app's mouse-button callback: latches the camera pose a drag
-// starts from.
-void mouse_drag_on_button(MouseDragController* ctrl, int button, int action, int mods);
+// Forwarded from the app's mouse-button callback: latches the aim a drag starts
+// from.
+void camera_drag_on_button(CameraDrag* drag, int button, int action, int mods);
 
-// Once a frame: the auto-orbit, then the drag in flight as a delta from the
-// latched pose (orbit, or pan with shift), then the max-distance clamp.
-void mouse_drag_update(MouseDragController* ctrl, float time);
+// Once a frame: the auto-orbit, then the drag in flight as an offset from the
+// latched aim (orbit, or pan with shift). `time` is a wall clock, for the
+// auto-orbit alone.
+void camera_drag_update(CameraDrag* drag, float time);
 
-// Keyboard input for camera control (WASD movement, arrows for orbit/pan/zoom)
-// Returns true if the key was handled
-bool mouse_drag_on_key(MouseDragController* ctrl, int key, int action, int mods);
+// Forwarded from the app's scroll callback: the wheel zooms by zoom_step per
+// notch. The 3D viewer had NO scroll handling at all before this -- zoom was
+// arrow-keys-only, and nothing noticed because nothing could turn a wheel.
+void camera_drag_on_scroll(CameraDrag* drag, double xoffset, double yoffset);
+
+// Keyboard camera control (WASD walks, arrows orbit/pan/zoom). True if the key
+// was handled.
+bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods);
 
 /*
  * Canvas Controller
