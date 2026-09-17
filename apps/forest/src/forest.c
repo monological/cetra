@@ -30,6 +30,7 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
+#include "cetra/camera_rig.h"
 #include "cetra/camera.h"
 #include "cetra/cook.h"
 #include "cetra/engine.h"
@@ -257,10 +258,13 @@ static Material* g_mat_rock;
 // does. There is no follow-camera helper in cetra -- app.h offers only the
 // mouse-drag orbit controller, which orbits a fixed point rather than a moving
 // one.
+static CameraRig* g_cam_rig = NULL;
 static float g_cam_yaw = 0.6f;
 static float g_cam_pitch = 0.0f;
 static bool g_orbit_camera = false;
 static const float CAM_DISTANCE = 14.0f;
+// The old floor clamp's +1: how far above the ground the eye may come.
+static const float CAM_GROUND_CLEARANCE = 1.0f;
 static const float EYE_HEIGHT = 1.0f; // Above the capsule's origin, which spans 1.3 either way
 static const float FIRST_PERSON_PITCH_LIMIT = 1.4f;
 // The orbit's old range (the eye's height above the head), in the look's sign
@@ -2663,6 +2667,13 @@ static void on_init(Game* game) {
     Camera* camera = create_camera(&camera_desc);
     engine_set_camera(engine, camera);
 
+    // One rig for both modes: a distance of zero is first person and CAM_DISTANCE
+    // is the orbit behind. The pitch band changes with the mode, which is the
+    // only thing that does.
+    g_cam_rig = create_camera_rig();
+    camera_rig_set_pose(g_cam_rig, camera->position, camera->look_at);
+    engine_set_camera_rig(engine, g_cam_rig);
+
     // Pinned rather than adaptive: auto-exposure is the top determinism hazard
     // for anything compared across builds, and every arm here reads a frame or a
     // counter from this app.
@@ -2837,6 +2848,39 @@ static void on_update(Game* game, double dt) {
     }
 }
 
+/*
+ * How much of the arm is clear of the ground.
+ *
+ * Forest's version of gametest's raycast, and the same seam: the rig shortens
+ * the arm and the aim is untouched. It replaced a clamp on the eye's HEIGHT,
+ * which kept the camera above the terrain by moving it -- so the shot silently
+ * tilted as it rose, where shortening keeps the framing and only tightens it.
+ *
+ * Bisected rather than marched, because the height field is cheap to sample and
+ * a fixed twelve steps is a bound a frame budget can rely on where a march's
+ * step count depends on the slope it meets.
+ */
+static float forest_cam_probe(void* user, const vec3 from, const vec3 to, float want) {
+    (void)user;
+    (void)want;
+    vec3 end;
+    glm_vec3_copy((float*)to, end);
+    if (end[1] >= terrain_height_at(&g_terrain, end[0], end[2]) + CAM_GROUND_CLEARANCE)
+        return 1.0f;
+
+    float lo = 0.0f, hi = 1.0f;
+    for (int i = 0; i < 12; i++) {
+        const float mid = 0.5f * (lo + hi);
+        vec3 p;
+        glm_vec3_lerp((float*)from, (float*)to, mid, p);
+        if (p[1] >= terrain_height_at(&g_terrain, p[0], p[2]) + CAM_GROUND_CLEARANCE)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
 // The camera, then residency, then the engine's walk. All three in that order
 // and none of them in the fixed-step update -- see the descent's own comment
 // below for why it needs exactly this eye.
@@ -2858,8 +2902,7 @@ static void on_pre_render(Game* game, double alpha) {
             vec3 eye, target;
             glm_vec3_sub(g_args.cam_eye, g_scene->world_origin, eye);
             glm_vec3_sub(g_args.cam_target, g_scene->world_origin, target);
-            camera_set_position(camera, eye);
-            camera_set_look_at(camera, target);
+            camera_rig_set_pose(g_cam_rig, eye, target);
         } else if (g_player) {
             // The mouse, per pixel. Not the first delta after a capture: the
             // virtual position starts wherever the platform puts it, and that
@@ -2892,27 +2935,16 @@ static void on_pre_render(Game* game, double alpha) {
                                          : glm_clamp(g_cam_pitch, -FIRST_PERSON_PITCH_LIMIT,
                                                      FIRST_PERSON_PITCH_LIMIT);
 
-            vec3 head;
-            glm_vec3_copy(g_player->position, head);
-            head[1] += EYE_HEIGHT;
-            float cp = cosf(g_cam_pitch);
-            vec3 look = {sinf(g_cam_yaw) * cp, sinf(g_cam_pitch), cosf(g_cam_yaw) * cp};
-
-            vec3 eye, target;
-            if (g_orbit_camera) {
-                glm_vec3_scale(look, -CAM_DISTANCE, eye);
-                glm_vec3_add(head, eye, eye);
-                // Never below the ground the character is standing on.
-                float floor_y = terrain_height_at(&g_terrain, eye[0], eye[2]) + 1.0f;
-                if (eye[1] < floor_y)
-                    eye[1] = floor_y;
-                glm_vec3_copy(head, target);
-            } else {
-                glm_vec3_copy(head, eye);
-                glm_vec3_add(head, look, target);
-            }
-            camera_set_position(camera, eye);
-            camera_set_look_at(camera, target);
+            // The rig: an anchor at the head, and a distance that says which
+            // mode this is. First person is not a second code path -- it is the
+            // same camera with the arm taken away, which is what let two blocks
+            // become one.
+            glm_vec3_copy(g_player->position, g_cam_rig->anchor);
+            g_cam_rig->look_lift = EYE_HEIGHT;
+            camera_rig_set_distance(g_cam_rig, g_orbit_camera ? CAM_DISTANCE : 0.0f);
+            camera_rig_set_probe(g_cam_rig, g_orbit_camera ? forest_cam_probe : NULL, NULL);
+            camera_rig_aim(g_cam_rig, g_cam_yaw, g_cam_pitch);
+            camera_rig_update(g_cam_rig, 0.0f, 0.0f, 0.0f);
         }
     }
 
@@ -2944,6 +2976,8 @@ static void on_pre_render(Game* game, double alpha) {
 }
 
 static void on_shutdown(Game* game) {
+    free_camera_rig(g_cam_rig);
+    g_cam_rig = NULL;
     // game_run does not report; the render app does this at its own exit. Here
     // because the whole app exists to be read off these tables.
     if (game && game->engine)

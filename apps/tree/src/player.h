@@ -66,7 +66,12 @@ struct Engine;
  */
 #define PLAYER_LOOK_RATE 1.0f
 
+struct CameraRig;
+
 typedef struct Player {
+    // Where the camera goes; borrowed, and the caller installs it on the engine.
+    // This file walks; camera_rig.h frames.
+    struct CameraRig* rig;
     vec3 feet;   // world position of the soles; the camera sits PLAYER_EYE_HEIGHT above
     float yaw;   // radians, 0 = -Z
     float pitch; // radians, clamped short of straight up/down

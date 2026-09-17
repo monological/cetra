@@ -7,6 +7,7 @@
 
 #include "ground.h"
 #include "player.h"
+#include "cetra/camera_rig.h"
 
 // Just short of straight up and down, so the forward vector never degenerates against the up
 // axis and the look-at matrix stays defined.
@@ -117,12 +118,17 @@ void player_update(Player* p, struct Engine* engine, float dt) {
         p->grounded = false;
     }
 
-    // Drive the camera as a look-AT pair rather than a direction: that is the only camera the
-    // engine has, and the pose is what DoF autofocus measures.
-    vec3 eye = {p->feet[0], p->feet[1] + PLAYER_EYE_HEIGHT, p->feet[2]};
-    const float cp = cosf(p->pitch);
-    vec3 look = {eye[0] + forward[0] * cp, eye[1] + sinf(p->pitch), eye[2] + forward[2] * cp};
-    camera_set_position(engine->camera, eye);
-    camera_set_look_at(engine->camera, look);
+    // The WALKING is this file's; where the camera goes is the rig's (spec
+    // 12.19). A first-person camera is an anchor at the feet, a lift to the
+    // eyes and no arm at all, so what used to be a hand-rolled eye-and-look pair
+    // is three fields and the same closed form every other camera in the tree
+    // runs through.
+    if (p->rig) {
+        glm_vec3_copy(p->feet, p->rig->anchor);
+        p->rig->look_lift = PLAYER_EYE_HEIGHT;
+        camera_rig_set_distance(p->rig, 0.0f);
+        camera_rig_aim(p->rig, p->yaw, p->pitch);
+        camera_rig_update(p->rig, 0.0f, 0.0f, 0.0f);
+    }
     glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, engine->camera->up_vector);
 }
