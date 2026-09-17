@@ -792,13 +792,15 @@ the transitions; what the app writes each frame is what is true (a ground knob, 
 metres, grounded, vertical speed, ragdolled) and the graph decides the rest. Three consequences a
 driver of this app will meet. **`--graph-probe <case>`** is the headless probe the `graph` gate
 group reads -- `order`, `any`, `and`, `trigger`, `elapsed`, `hysteresis`, `reenter`, `disabled`,
-`instances`, `unreachable`, `authoring`, and the four that need a rig: `finished`, `fade`, `guard`,
+`instances`, `unreachable`, `authoring`, and the five that need a rig: `finished`, `fade`, `guard`,
 `return`, `identity`. Most create **no engine at all**, because a graph binds to a NULL animator
 and a state may name no source, so the table is exercisable as the pure function over named values
 it is. **`--trace-player` gains a third tail**, `graph <state> <seconds>`, after `yaw` and by the
 same append-never-insert rule -- and no state may be named containing `" yaw "`, since that
 regex is greedy. The source column above says what is PLAYING, which a state and its resume can
-share; this says which state chose it. **`--no-swim`** withholds the stroke clips, which makes the
+share; this says which state chose it. **`--print-graph`** prints the table and what bind made of
+it -- the states, the rows in evaluation order, and an `x` against everything this rig cannot reach
+-- then carries on, the counterpart of `--print-bindings`. **`--no-swim`** withholds the stroke clips, which makes the
 water state unreachable: the run says so once by name at startup and prunes every row into it.
 It exists because no committed rig reaches that configuration -- the generated puppet carries a
 stroke and a rig with no locomotion of its own is given the shared set, which carries one too --
