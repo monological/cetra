@@ -8548,6 +8548,13 @@ WATER_PROBE_MAX_RESIDUAL = 0.01
 # four falling octaves (0.106 is the analytic ceiling either side of the level).
 WATER_PROBE_MIN_SPREAD = 0.03
 
+# How far the GPU probe may sit from the CPU query on the GERSTNER path (spec 13.1).
+# Both evaluate the same four-octave train and invert the same horizontal map, so what
+# separates them is float precision and the two solvers' own tolerances -- this is a
+# correctness bar rather than a quality one and belongs tight. Provisional until phase 2
+# measures it; raising it needs a reason written beside the number.
+WATER_GPU_MAX_GAP = 0.001
+
 # Shoaling, over the analytic dome --water-bed installs (spec 11.33 phase 6). The two
 # real Tier 3 consumers cannot measure this: apps/forest is not pixel-deterministic and
 # apps/tree's floor is tens of thousands of pixels. This config is 0 px twice.
@@ -9930,6 +9937,12 @@ def run_water_gate(workdir):
                       evaluates a real train rather than a plane, and DECLINES on the
                       spectral model instead of returning a flat surface a caller would
                       trust.
+      water-gpu       the GPU probe reproduces the CPU query: same fixture, same sixteen
+                      points, same clock, on the GERSTNER path -- the only path with a
+                      closed form to be wrong against. That comparison is what proves the
+                      pass, the pack-buffer ring, its latency and the inversion, BEFORE
+                      any of it is pointed at a spectral sea that has no reference answer
+                      of its own.
       water-shoal     waves shorten over a rising bed, and ONLY over it. Needs
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
@@ -10532,6 +10545,25 @@ def run_water_gate(workdir):
               f"{upright}, spectral declines {fft_flat}")
         if not ok:
             failures.append("water-cpu")
+
+    # The GPU twin of the query above (spec 13.1), printed on the same rows so the two
+    # answers can be read side by side. Checked on GERSTNER, where water_surface_at is an
+    # exact reference: agreeing with a closed form on sixteen points is what proves the
+    # pass, the ring and the inversion before the spectral sea -- which has no reference
+    # answer at all -- is asked anything.
+    if not rows:
+        print("  water-gpu    SKIP  (the CPU query this compares against printed nothing)")
+    elif "gpu_h" not in rows[0]:
+        print("  water-gpu    FAIL  --water-probe printed no gpu_h; there is no GPU query yet")
+        failures.append("water-gpu")
+    else:
+        gap = max(abs(float(r["gpu_h"]) - float(r["h"])) for r in rows)
+        ok = gap <= WATER_GPU_MAX_GAP
+        print(f"  water-gpu    {'PASS' if ok else 'FAIL'}  GPU probe against the CPU query "
+              f"over {len(rows)} points, worst gap {gap:.8f} "
+              f"(want <={WATER_GPU_MAX_GAP})")
+        if not ok:
+            failures.append("water-gpu")
 
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.
