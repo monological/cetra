@@ -531,9 +531,12 @@ typedef struct Water {
      */
     GLuint probe_tex;
     GLuint probe_fbo;
+    GLuint probe_vao, probe_vbo;
     GLuint probe_pbo[WATER_PROBE_LATENCY];
     float probe_issued_t[WATER_PROBE_LATENCY];
-    bool probe_enabled;                     // false = no pass, no readback
+    float probe_points[WATER_PROBE_MAX][2]; // world (x, z) per slot
+    int probe_count;                        // slots [0, probe_count) are live; 0 = no pass
+    bool probe_failed;                      // the target could not be made; never retried
     long probe_passes;                      // readbacks issued
     float probe_result[WATER_PROBE_MAX][4]; // the answer from WATER_PROBE_LATENCY passes ago
     float probe_result_t;                   // the clock that answer was rendered at
@@ -656,7 +659,11 @@ void water_update(Water* water, const struct Scene* scene, float t, float dt);
  */
 void water_fft_probe(const Water* water, struct Engine* engine);
 
-// Spec 13.1 phase 1: print whether the probe ring's last retired readback is bit-exact.
-void water_probe_ring_report(const Water* water);
+/*
+ * Ask about the surface over world (x, z) in `slot`. Answered from the next pass onward,
+ * WATER_PROBE_LATENCY passes late, on either wave model. Slots are dense: setting slot n
+ * makes [0, n] live. false for a slot outside [0, WATER_PROBE_MAX).
+ */
+bool water_probe_set(Water* water, int slot, float x, float z);
 
 #endif // _WATER_H_

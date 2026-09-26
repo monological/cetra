@@ -8817,7 +8817,10 @@ def _water_probe(extra, scene=None):
     bare coordinate, so anything that does not is a header of some kind and a third one
     added later needs no change here.
     """
-    cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "2",
+    # Four frames, because the GPU query answers WATER_PROBE_LATENCY (2) passes late and the
+    # first answer retires on the third. The probe prints `gpu_latency` so a change to the
+    # constant shows up as gpu_available=0 here rather than as a silent skip.
+    cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "4",
            "-W", "200", "-H", "150", "--water-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
     head, rows = {}, []

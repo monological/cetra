@@ -34,12 +34,9 @@
  * is no contraction at all and a fixed step count would silently return a point on the
  * surface that is not the one over the query. So it runs until the step it just took is
  * small against the wave amplitude, with a cap. The last step size IS the residual, so
- * the loop knows exactly how well it converged.
+ * the loop knows exactly how well it converged. The step cap and the tolerance are in
+ * water_waves.h, because the GPU query runs the same loop.
  */
-#define WAVES_INVERSE_MAX_STEPS 8
-// As a fraction of the longest octave's amplitude: below this the parameter has stopped
-// moving by anything the surface can express.
-#define WAVES_INVERSE_EPS_FRAC 0.002f
 
 // One octave's direction, fanned off the wind and alternating sides so the set stays
 // centred on it -- ocean.glsl's own construction.
@@ -189,9 +186,9 @@ static void _waves_solve(const Water* water, float x, float z, float t, bool wan
     float px = x;
     float pz = z;
     float prev_ux = 0.0f, prev_uz = 0.0f;
-    const float eps = fmaxf(water->amplitude, 1e-4f) * WAVES_INVERSE_EPS_FRAC;
+    const float eps = fmaxf(water->amplitude, 1e-4f) * WATER_WAVES_INVERSE_EPS_FRAC;
 
-    for (int step = 0; step < WAVES_INVERSE_MAX_STEPS; step++) {
+    for (int step = 0; step < WATER_WAVES_INVERSE_MAX_STEPS; step++) {
         const float shoal = _waves_shoal(water, px, pz, NULL);
         float disp[3];
         _waves_eval(water, px, pz, t, disp, NULL, NULL);

@@ -4431,7 +4431,6 @@ int main(int argc, char** argv) {
      * whether the parameter it found pushes forward onto the point that was asked for.
      */
     if (args.water_probe && scene->water) {
-        scene->water->probe_enabled = true;
         const Water* w = scene->water;
         printf("water-probe model=%s available=%d level=%.4f\n",
                w->wave_model == WATER_WAVES_FFT ? "fft" : "gerstner",
@@ -4457,16 +4456,13 @@ int main(int argc, char** argv) {
                key ? (double)key->direction[0] : 0.0, key ? (double)key->direction[1] : 0.0,
                key ? (double)key->direction[2] : 0.0, (double)incident[0], (double)incident[1],
                (double)incident[2]);
+        // The grid is registered with the GPU query here and printed after the loop, since
+        // the GPU answer needs frames to have run.
         const float span = w->extent * 0.5f;
         for (int iz = 0; iz < 4; iz++) {
             for (int ix = 0; ix < 4; ix++) {
-                const float x = -span + span * 2.0f * (float)ix / 3.0f;
-                const float z = -span + span * 2.0f * (float)iz / 3.0f;
-                vec3 n;
-                const float h = water_surface_at(w, x, z, 0.0f, n);
-                printf("water-probe %.4f %.4f h=%.6f n=%.4f,%.4f,%.4f residual=%.8f\n", (double)x,
-                       (double)z, (double)h, (double)n[0], (double)n[1], (double)n[2],
-                       (double)water_waves_inverse_residual(w, x, z, 0.0f));
+                water_probe_set(scene->water, iz * 4 + ix, -span + span * 2.0f * (float)ix / 3.0f,
+                                -span + span * 2.0f * (float)iz / 3.0f);
             }
         }
     }
@@ -4530,8 +4526,33 @@ int main(int argc, char** argv) {
     // --water-probe -- there is nothing to measure until a frame has run one.
     if (args.water_fft_probe)
         water_fft_probe(scene->water, engine);
-    if (args.water_probe && scene->water)
-        water_probe_ring_report(scene->water);
+    /*
+     * --water-probe's grid: the CPU query, and beside it the GPU one (spec 13.1). Both at the
+     * instant the GPU answer describes, which is WATER_PROBE_LATENCY passes before the last
+     * frame -- comparing it against the CPU at the current clock would measure the waves
+     * moving, not the query. Before the ring has filled there is no GPU answer and the CPU
+     * one is taken at t = 0.
+     */
+    if (args.water_probe && scene->water) {
+        const Water* w = scene->water;
+        const bool gpu = w->probe_result_pass >= 0;
+        const float t = gpu ? w->probe_result_t : 0.0f;
+        printf("water-probe gpu_available=%d gpu_latency=%d t=%.9g\n", gpu ? 1 : 0,
+               WATER_PROBE_LATENCY, (double)t);
+        for (int i = 0; i < w->probe_count; i++) {
+            const float x = w->probe_points[i][0];
+            const float z = w->probe_points[i][1];
+            vec3 n;
+            const float h = water_surface_at(w, x, z, t, n);
+            printf("water-probe %.4f %.4f h=%.6f n=%.4f,%.4f,%.4f residual=%.8f", (double)x,
+                   (double)z, (double)h, (double)n[0], (double)n[1], (double)n[2],
+                   (double)water_waves_inverse_residual(w, x, z, t));
+            if (gpu)
+                printf(" gpu_h=%.6f gpu_residual=%.8f", (double)w->probe_result[i][0],
+                       (double)w->probe_result[i][3]);
+            printf("\n");
+        }
+    }
 
     // The per-probe block, after the loop for the same reason: the froxel masks
     // are built by the frames, so the digest and the bit count only mean

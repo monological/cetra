@@ -1952,6 +1952,10 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     if (water_foam_program) {
         engine_add_program(engine, water_foam_program);
     }
+    ShaderProgram* water_probe_program = create_water_probe_program();
+    if (water_probe_program) {
+        engine_add_program(engine, water_probe_program);
+    }
 
     // GI probe volume. Lives on the engine rather than on PostFX -- despite
     // being a fullscreen pass -- because the volume is a Scene citizen and the
