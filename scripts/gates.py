@@ -9946,6 +9946,8 @@ def run_water_gate(workdir):
                       pass, the pack-buffer ring, its latency and the inversion, BEFORE
                       any of it is pointed at a spectral sea that has no reference answer
                       of its own.
+      water-still     a spectral sea with no energy answers exactly its still level: any
+                      remainder is an offset every spectral sea carries.
       water-shoal     waves shorten over a rising bed, and ONLY over it. Needs
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
@@ -10569,6 +10571,29 @@ def run_water_gate(workdir):
               f"(want <={WATER_GPU_MAX_GAP})")
         if not ok:
             failures.append("water-gpu")
+
+    # A spectral sea with no energy must answer exactly its still level (spec 13.1). Every
+    # term of the displacement is a product of the spectrum, so anything left over is an
+    # offset the surface carries on every sea -- which is what the bound-harmonic mean
+    # removal was, subtracting a constant variance instead of the sea's own.
+    variant = os.path.join(workdir, "water_still.cscn")
+    _water_cscn_variant(scene, variant, {"waves": "fft", "windSea": {"scale": 0.0},
+                                         "swell": {"scale": 0.0}})
+    still_head, still_rows = _water_probe(WATER_PIN, scene=variant)
+    still_h = [float(r["h"]) for r in still_rows if "h" in r]
+    if still_head.get("available") != "1" or len(still_h) != len(still_rows) or not still_h:
+        print(f"  water-still  FAIL  a zero-energy sea did not answer "
+              f"(available={still_head.get('available')} reason={still_head.get('reason')})")
+        failures.append("water-still")
+    else:
+        level = float(still_head["level"])
+        off = max(abs(h - level) for h in still_h)
+        ok = off < 1e-6
+        print(f"  water-still  {'PASS' if ok else 'FAIL'}  zero-energy sea over "
+              f"{len(still_h)} points, worst distance from the still level {off:.8f} "
+              f"(want 0)")
+        if not ok:
+            failures.append("water-still")
 
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.
