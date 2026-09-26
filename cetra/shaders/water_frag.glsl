@@ -555,6 +555,41 @@ float waterCausticSample(vec2 cuv, int level, float blur) {
 }
 
 /*
+ * How much of the key reaches a point on the bed, with its shadow edge as soft as the water makes
+ * it (spec 13.3).
+ *
+ * The map holds the shadow the key would cast through still water, and under a sea there is no such
+ * sharp edge: the surface refracts the key through every slope the waves carry, so the light
+ * reaching a point arrives from a cone about (1 - 1/n) times the RMS slope wide, and an edge blurs
+ * by that angle times how far the light has come through the water. Averaged over a disc of that
+ * radius across the key -- zero on still water, and growing with depth, which is what makes the
+ * caustics fade out across a shelf's shadow on the bed below it rather than stop on a line.
+ *
+ * The path from the SURFACE, not from whatever casts the shadow, since the occluder is unknown here:
+ * an upper bound on the blur, and exact for a shadow cast by something at the surface.
+ */
+float waterCausticKeyVisibility(vec3 pos, vec3 keyInWater, float column) {
+    float slopeVar =
+        cascadeSlopeVar[0] + cascadeSlopeVar[1] + cascadeSlopeVar[2] + rippleSlopeVarLod[0];
+    float spread = (1.0 - 1.0 / waterIor) * sqrt(max(slopeVar, 0.0));
+    float radius = spread * column / max(-keyInWater.y, 0.1);
+    // Across the key as the map sees it, so every tap sits at the receiver's own light-space depth.
+    vec3 a = normalize(cross(sunDir, abs(sunDir.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
+                                                          : vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(sunDir, a);
+    const int TAPS = 8;
+    float lit = 0.0;
+    for (int i = 0; i < TAPS; i++) {
+        // A Vogel disc: even coverage for any tap count, with no ring for the eye to find.
+        float r = radius * sqrt((float(i) + 0.5) / float(TAPS));
+        float angle = float(i) * 2.39996323;
+        lit += 1.0 - csmFinestOcclusion(pos + (a * cos(angle) + b * sin(angle)) * r,
+                                        sunShadowSlot);
+    }
+    return lit / float(TAPS);
+}
+
+/*
  * CAUSTICS (spec 13.2): what to multiply the refracted `bed` by, 1 for no change.
  *
  * The target holds how much the key light is concentrated where it lands, 1 where the water is
@@ -656,7 +691,7 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      * one light's direction, so its shear only describes the light it was built for -- and water
      * picks the brightest directional, which is the moon at night.
      */
-    float keyVis = (1.0 - csmFinestOcclusion(pos, sunShadowSlot)) *
+    float keyVis = waterCausticKeyVisibility(pos, keyInWater, column) *
                    cloudSunForSlot(pos, sunShadowSlot);
     vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis;
     vec3 keyShare = keyIrr / max(keyIrr + causticSkyIrradiance, vec3(1.0e-6));
