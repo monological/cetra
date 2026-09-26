@@ -20,10 +20,11 @@
 
 layout(location = 0) out vec4 Answer;
 
-uniform vec2 probePoints[16];
+#include "water_probe_constants.glsl"
+
+uniform vec2 probePoints[WATER_PROBE_MAX];
 uniform int probeCount;
 uniform float time;
-uniform int probeMaxSteps;
 uniform float probeEps; // world units
 
 #include "ocean.glsl"
@@ -38,7 +39,7 @@ void main() {
     vec2 p = q;
     vec2 prevU = vec2(0.0);
     float residual = 0.0;
-    for (int step = 0; step < probeMaxSteps; step++) {
+    for (int step = 0; step < WATER_WAVES_INVERSE_MAX_STEPS; step++) {
         OceanBed bed = oceanBed(p);
         vec2 u = oceanEvaluateAt(p, time, bed, 0.0).world.xz - p;
         p = q - u;

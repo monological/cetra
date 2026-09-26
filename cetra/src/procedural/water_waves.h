@@ -30,13 +30,6 @@
  * Here the spectral model still gets the still level, and water_waves_available says so.
  */
 
-// The horizontal map's inversion: a step cap, and a tolerance as a fraction of the longest
-// wave's amplitude, below which the parameter has stopped moving by anything the surface can
-// express. Shared by the CPU solve here and the GPU surface query in water.c, which run the
-// same fixed-point loop.
-#define WATER_WAVES_INVERSE_MAX_STEPS 8
-#define WATER_WAVES_INVERSE_EPS_FRAC  0.002f
-
 // Whether water_surface_at returns a displaced surface or just the still level.
 bool water_waves_available(const Water* water);
 

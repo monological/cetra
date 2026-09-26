@@ -134,8 +134,8 @@ _Static_assert(SKY_CLOUD_SHADOW_UNIT < 16,
 #define WATER_SPECTRUM_LOG  7 // log2(WATER_SPECTRUM_RES)
 #define WATER_CASCADE_COUNT 3
 
-// Surface query slots, one texel each (spec 13.1): the render app's probe grid is 4x4.
-#define WATER_PROBE_MAX 16
+// WATER_PROBE_MAX and the inversion's step cap and tolerance, shared with the query shader.
+#include "../shaders/include/water_probe_constants.glsl"
 // Passes between a query's render and its read. The pack-buffer ring holds this many.
 #define WATER_PROBE_LATENCY 2
 
@@ -393,7 +393,7 @@ typedef struct Water {
     GLuint cascade_array[2];                    // [buffer]
     GLuint cascade_fbo[WATER_CASCADE_COUNT][2]; // one per buffer, both targets attached
     GLuint twiddle_tex;
-    GLuint fft_vao, fft_vbo; // fullscreen quad for the spectral passes
+    GLuint quad_vao, quad_vbo; // fullscreen quad for every offscreen water pass; made on first use
     bool spectra_ready;
 
     /*
@@ -526,21 +526,26 @@ typedef struct Water {
      * WATER_PROBE_LATENCY passes ago, never whichever fence signalled, so what a caller reads
      * is a pure function of frame history and a headless run stays bit-equal to itself.
      *
-     * `probe_issued_t` is the clock each slot was rendered at, so an answer carries the
-     * instant it describes rather than the one it arrived in.
+     * Each ring slot keeps the points and the clock it was rendered with, because the answer
+     * arrives passes after the question: a slot registered or moved in between must be refused
+     * rather than handed the answer to a point it no longer names.
+     *
+     * Engine-owned; read through water_probe_result.
      */
     GLuint probe_tex;
     GLuint probe_fbo;
-    GLuint probe_vao, probe_vbo;
     GLuint probe_pbo[WATER_PROBE_LATENCY];
     float probe_issued_t[WATER_PROBE_LATENCY];
-    float probe_points[WATER_PROBE_MAX][2]; // world (x, z) per slot
-    int probe_count;                        // slots [0, probe_count) are live; 0 = no pass
-    bool probe_failed;                      // the target could not be made; never retried
-    long probe_passes;                      // readbacks issued
-    float probe_result[WATER_PROBE_MAX][4]; // the answer from WATER_PROBE_LATENCY passes ago
-    float probe_result_t;                   // the clock that answer was rendered at
-    long probe_result_pass;                 // which pass produced it; -1 = none yet
+    float probe_issued_points[WATER_PROBE_LATENCY][WATER_PROBE_MAX][2];
+    int probe_issued_count[WATER_PROBE_LATENCY];
+    float probe_points[WATER_PROBE_MAX][2];        // world (x, z) per slot, as registered
+    int probe_count;                               // slots [0, probe_count) are live; 0 = no pass
+    bool probe_failed;                             // no program or target; never retried
+    long probe_passes;                             // readbacks issued
+    float probe_result[WATER_PROBE_MAX][4];        // (height, normal.x, normal.z, residual)
+    float probe_result_points[WATER_PROBE_MAX][2]; // the points that answer is about
+    int probe_answered;                            // slots in that answer; 0 = none yet
+    float probe_result_t;                          // the clock it was rendered at
 } Water;
 
 /*
@@ -663,9 +668,10 @@ void water_fft_probe(const Water* water, struct Engine* engine);
  * The surface query (spec 13.1): where the water is over a world (x, z), on either wave model,
  * through one call so nothing downstream branches on which sea it was handed.
  *
- * Register a point with water_probe_set, then read it each frame with water_probe_result.
- * Slots are dense: setting slot n makes [0, n] live. A registered slot costs a GPU pass
- * whichever model runs, because the pass is what answers the spectral sea.
+ * Register a point with water_probe_set, then read it each frame with water_probe_result. Slots
+ * are dense: setting slot n makes [0, n] live. Both models answer from the same GPU pass, so
+ * both are WATER_PROBE_LATENCY passes old; a caller that wants the Gerstner train at exactly
+ * now has water_surface_at, its closed form.
  */
 bool water_probe_set(Water* water, int slot, float x, float z);
 
@@ -673,20 +679,18 @@ typedef struct WaterSample {
     float height; // world Y of the surface over the query
     vec3 normal;
     float residual; // how far the recovered parameter lands from the query, world units
-    float t;        // the instant this describes: the caller's own on Gerstner, older on spectral
+    float t;        // the clock this answer describes
 } WaterSample;
 
 /*
- * Answer `slot` as of clock `t`. Gerstner is evaluated at exactly `t`; the spectral sea is
- * WATER_PROBE_LATENCY passes old, and `out->t` says which instant that was.
- *
- * false, with `out` untouched, whenever there is no real answer -- never a silent still level.
- * water_probe_refusal names the reason.
+ * The latest answer for `slot`. false, with `out` untouched, whenever there is no real answer
+ * -- never a silent still level. water_probe_refusal names the reason.
  */
-bool water_probe_result(const Water* water, int slot, float t, WaterSample* out);
+bool water_probe_result(const Water* water, int slot, WaterSample* out);
 
 // Why water_probe_result would refuse `slot`, as the probe grammar's reason token -- nowater,
-// unset, failed or unfilled -- or NULL when it would answer.
+// unset, failed, unfilled, or stale for a slot registered or moved since its answer was
+// rendered -- or NULL when it would answer.
 const char* water_probe_refusal(const Water* water, int slot);
 
 #endif // _WATER_H_
