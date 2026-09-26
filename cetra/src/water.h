@@ -89,8 +89,9 @@
 // Only the long and medium bands reach the mesh; the short one shades the interface
 // and never displaces, so it has no previous position to remember.
 #define WATER_PREV_CASCADES 2
-// The refracted-grid caustics (spec 13.2), one of the units the cascade consolidation freed.
-// 3 is TEXUNIT_CLEARCOAT_NORMAL, the same 2D binding point, and water declares nothing else there.
+// The refracted-grid caustics (spec 13.2), one of the units the cascade consolidation freed. An
+// ARRAY since 13.3, one layer per level; 3 is TEXUNIT_CLEARCOAT_NORMAL, a 2D binding point, and
+// water declares nothing else there.
 #define WATER_CAUSTIC_UNIT 3
 _Static_assert(WATER_CAUSTIC_UNIT != WATER_CASCADE_UNIT && WATER_CAUSTIC_UNIT != WATER_PREV_UNIT &&
                    WATER_CAUSTIC_UNIT != WATER_DEPTH_UNIT && WATER_CAUSTIC_UNIT != WATER_BED_UNIT &&
@@ -592,20 +593,23 @@ typedef struct Water {
     float probe_result_t;                          // the clock it was rendered at
 
     /*
-     * The caustics target (spec 13.2): how much the key light is concentrated on the floor,
-     * 1 where the water is flat, over a window that moves with the camera. `caustic_origin` is
-     * where THIS frame's target lies, which the surface needs to look it up; its size and the
-     * depth it was traced to are fixed (water_caustic_constants.glsl). Engine-owned.
+     * The caustics targets (specs 13.2 and 13.3): how much the key light is concentrated on the
+     * floor, 1 where the water is flat, over windows that move with the camera -- one layer per
+     * LEVEL, each a quarter of the one before. `caustic_origin` is where THIS frame's targets lie,
+     * which the surface needs to look them up; their sizes and the depth they were traced to are
+     * fixed (water_caustic_constants.glsl). Engine-owned.
      */
-    GLuint caustic_tex; // R16F, mipped
-    GLuint caustic_fbo;
-    GLuint caustic_land_tex; // (G+1)^2 RGBA32F: each lattice corner's landed and source point
+    GLuint caustic_tex; // R16F 2D array, one layer per level, mipped
+    GLuint caustic_fbo[WATER_CAUSTIC_LEVELS];
+    // (G+1)^2 RGBA32F: each lattice corner's landed and source point. One for every level, which
+    // trace and draw in turn.
+    GLuint caustic_land_tex;
     GLuint caustic_land_fbo;
     GLuint caustic_vao;
     GLuint caustic_ebo;
-    float caustic_origin[2]; // world xz of the target's corner
-    bool caustic_ready;      // rendered this frame; false = the surface reads no caustics
-    bool caustic_failed;     // no program or target; never retried
+    float caustic_origin[WATER_CAUSTIC_LEVELS][2]; // world xz of each target's corner
+    bool caustic_ready;  // rendered this frame; false = the surface reads no caustics
+    bool caustic_failed; // no program or target; never retried
 
     // Settings. 0 off; 1 draws what the caustics multiplied the bed by, 2 the raw target on the
     // surface -- both half grey where nothing is concentrated.
@@ -729,10 +733,10 @@ void water_update(Water* water, const struct Scene* scene, float t, float dt);
 void water_fft_probe(const Water* water, struct Engine* engine);
 
 /*
- * Read the caustics target back and print its statistics over the inner 80% of the window
- * (spec 13.2) -- mean, min and max. The mean is the energy check: the target conserves light,
- * so it sits at 1 for any sea. Stalls the pipeline once, so a diagnostic rather than something
- * the render loop may call.
+ * Read the caustics targets back and print each level's statistics over the inner 80% of its
+ * window (spec 13.2) -- mean, min and max, one line per level. The mean is the energy check: a
+ * target conserves light, so it sits at 1 for any sea. Stalls the pipeline once, so a diagnostic
+ * rather than something the render loop may call.
  */
 void water_caustic_probe(const Water* water);
 

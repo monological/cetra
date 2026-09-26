@@ -98,14 +98,14 @@ uniform float foamPatternTile;
 // So the "0 binds as no pattern" the C side documents is only true if the shader is told.
 uniform int foamPatternAvailable;
 uniform int cameraSubmerged;
-// The refracted-grid caustics target (spec 13.2): how much the key light is concentrated on the
-// floor, 1 where the water is flat, over a square whose corner is at `causticOrigin` and whose
-// size and traced depth are water_caustic_constants.glsl's. 0 = not rendered this frame, and
-// nothing reads it.
+// The refracted-grid caustics targets (specs 13.2 and 13.3): how much the key light is
+// concentrated on the floor, 1 where the water is flat, one layer per level over a square whose
+// corner is at `causticOrigin[level]` and whose size and traced depth are
+// water_caustic_constants.glsl's. 0 = not rendered this frame, and nothing reads it.
 #include "water_caustic_constants.glsl"
-uniform sampler2D causticTex;
+uniform sampler2DArray causticTex;
 uniform int causticAvailable;
-uniform vec2 causticOrigin;
+uniform vec2 causticOrigin[WATER_CAUSTIC_LEVELS];
 // The sky's irradiance on a horizontal bed, absolute, for the key light's share of what lights it.
 uniform vec3 causticSkyIrradiance;
 // 0 = shade normally; 1 = what the caustics multiplied the bed by; 2 = the raw caustics target
@@ -559,6 +559,26 @@ float waterSunGlitter(vec3 N, vec3 V, vec3 L, vec3 windV, float mss) {
  *
  * Takes screen derivatives, so it must be called in uniform control flow.
  */
+
+// Where a world point falls in one level's target, 0..1 across it.
+vec2 waterCausticUv(vec2 at, int level) {
+    float side = WATER_CAUSTIC_TARGET_M * waterUnitsPerMetre /
+                 pow(WATER_CAUSTIC_LEVEL_DIV, float(level));
+    return (at - causticOrigin[level]) / side;
+}
+
+// 1 inside a level's window, falling to 0 over its outer WATER_CAUSTIC_EDGE_FADE.
+float waterCausticEdge(vec2 cuv) {
+    vec2 edge = abs(cuv * 2.0 - 1.0);
+    return 1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y));
+}
+
+// One level's concentration at a point. The gradients are in the level's own uv, so one pixel
+// footprint and one defocus blur the same WORLD distance at every level.
+float waterCausticSample(vec2 cuv, int level, float blur) {
+    return textureGrad(causticTex, vec3(cuv, float(level)), dFdx(cuv) * blur, dFdy(cuv) * blur).r;
+}
+
 vec3 waterCaustics(vec2 uv, vec3 refrDir) {
     float bedNdc = texture(sceneDepthTex, uv).r;
     mat3 viewToWorld = transpose(mat3(view));
@@ -585,7 +605,8 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
         floorY = onBed ? bedY : planeY;
     }
     vec2 at = pos.xz + keyInWater.xz * ((floorY - pos.y) / keyDown);
-    vec2 cuv = (at - causticOrigin) / (WATER_CAUSTIC_TARGET_M * waterUnitsPerMetre);
+    vec2 coarseUv = waterCausticUv(at, 0);
+    vec2 fineUv = waterCausticUv(at, 1);
     float traced = max(waterLevel - floorY, 1.0e-6);
     float column = waterLevel - pos.y;
     /*
@@ -598,9 +619,17 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      * this the sharpness.
      */
     float defocus = exp2(clamp(log2(traced / max(column, 1.0e-6)), 0.0, 3.0));
-    float c = textureGrad(causticTex, cuv, dFdx(cuv) * 2.0 * defocus, dFdy(cuv) * 2.0 * defocus).r;
+    float coarse = waterCausticSample(coarseUv, 0, 2.0 * defocus);
+    float fine = waterCausticSample(fineUv, 1, 2.0 * defocus);
     if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
         return vec3(1.0);
+    /*
+     * The fine level where its window reaches, the coarse one around it, each faded to flat at
+     * its own edge. Both average 1 over any sea, so handing one to the other moves where the
+     * light is drawn and not how much of it there is.
+     */
+    float c = mix(1.0 + waterCausticEdge(coarseUv) * (coarse - 1.0), fine,
+                  waterCausticEdge(fineUv));
 
     /*
      * The pattern was traced for a floor `traced` deep. Shallower than that the light has not
@@ -611,12 +640,10 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      * The deep fade is the plane's alone: its pattern is right only near the depth it assumed,
      * where a pattern traced to the bed is right at the bed's own depth, however deep.
      */
-    vec2 edge = abs(cuv * 2.0 - 1.0);
     float deep = onBed ? 1.0
                        : 1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
                                           WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, column);
-    float weight = (1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y))) *
-                   clamp(column / traced, 0.0, 1.0) * deep;
+    float weight = clamp(column / traced, 0.0, 1.0) * deep;
     /*
      * The key's share of the light on this point, per channel: its irradiance on a horizontal
      * surface where the maps say it arrives, against the sky's.
@@ -1389,14 +1416,18 @@ void main() {
     // What the caustics multiplied the bed by, half grey where they changed nothing.
     if (waterCausticDebug == 1)
         FragColor = vec4(0.5 * causticFactor, coverage);
-    // The raw caustics target laid on the surface at the point above it: the pattern itself,
-    // before any registration or lighting touches it. Flat water is half grey; outside the
-    // window, or with no target, black.
+    // The raw caustics targets laid on the surface at the point above them: the pattern itself,
+    // before any registration or lighting touches it -- the finest level whose window holds the
+    // point. Flat water is half grey; outside every window, or with no target, black.
     if (waterCausticDebug == 2) {
-        vec2 cuv = (WorldPos.xz - causticOrigin) / (WATER_CAUSTIC_TARGET_M * waterUnitsPerMetre);
-        bool inside = causticAvailable == 1 && all(greaterThanEqual(cuv, vec2(0.0))) &&
-                      all(lessThanEqual(cuv, vec2(1.0)));
-        float c = inside ? textureLod(causticTex, cuv, 0.0).r : 0.0;
+        float c = 0.0;
+        for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+            vec2 cuv = waterCausticUv(WorldPos.xz, level);
+            bool inside = causticAvailable == 1 && all(greaterThanEqual(cuv, vec2(0.0))) &&
+                          all(lessThanEqual(cuv, vec2(1.0)));
+            if (inside)
+                c = textureLod(causticTex, vec3(cuv, float(level)), 0.0).r;
+        }
         FragColor = vec4(vec3(0.5 * c), coverage);
     }
 }

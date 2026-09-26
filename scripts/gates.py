@@ -8782,6 +8782,8 @@ WATER_CAUSTIC_CALM_TOL = 5e-3
 # ceiling and cells smaller than a texel both drop light), and 1.032 over the dome, traced to its
 # baked bed.
 WATER_CAUSTIC_MEAN_TOL = {"gerstner": 0.02, "spectral": 0.03, "dome": 0.05}
+# Mirrors WATER_CAUSTIC_LEVELS (water_caustic_constants.glsl): the probe prints one line per level.
+WATER_CAUSTIC_LEVELS = 2
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -8822,18 +8824,21 @@ def _water_closest_to_background(pix, bg, w, h, box):
 
 
 def _water_caustic_probe(extra, scene=None):
-    """Run --water-caustic-probe and return its fields as floats, or {} with no target.
+    """Run --water-caustic-probe and return one dict of floats per level, or [] with no target.
 
-    The target conserves light, so its mean over the window is the energy check: 1 on any sea,
-    and exactly 1 at every texel on a calm one.
+    Each target conserves light, so its mean over the window is the energy check: 1 on any sea,
+    and exactly 1 at every texel on a calm one. A list in level order rather than the first
+    line, since there is one line per level (spec 13.3) and reading the first alone would pass
+    a broken fine level unseen.
     """
     cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "10",
            "-W", "200", "-H", "150", "--water-caustic-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
+    levels = []
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("water-caustic-probe ") and "available=1" in line:
-            return {k: float(v) for k, v in (p.split("=", 1) for p in line.split()[2:])}
-    return {}
+            levels.append({k: float(v) for k, v in (p.split("=", 1) for p in line.split()[2:])})
+    return sorted(levels, key=lambda lv: lv["level"])
 
 
 def _water_probe(extra, scene=None):
@@ -10677,24 +10682,28 @@ def run_water_gate(workdir):
     # from, so the target averages 1 over any sea and is exactly 1 over a calm one. A pixel count
     # cannot tell this from the brighten-only heuristic it replaced; a mean can. Calm reuses
     # water-still's zero-energy sea; the dome leg traces onto a baked bed rather than the plane.
+    # Every leg is held at every level (spec 13.3): the fine level is a separate trace with its
+    # own window and cell, and an energy defect in it would not show in the coarse one.
     calm = _water_caustic_probe(WATER_PIN, scene=variant)
-    gerstner = _water_caustic_probe(WATER_PIN)
-    spectral = _water_caustic_probe(WATER_PIN + ["--water-waves", "fft"])
-    dome = _water_caustic_probe(BEACH_BED, scene=asset(BEACH_FIXTURE))
-    if not (calm and gerstner and spectral and dome):
-        print("  water-caustic-energy FAIL  a leg rendered no caustics target")
+    seas = {"gerstner": _water_caustic_probe(WATER_PIN),
+            "spectral": _water_caustic_probe(WATER_PIN + ["--water-waves", "fft"]),
+            "dome": _water_caustic_probe(BEACH_BED, scene=asset(BEACH_FIXTURE))}
+    if any(len(lv) != WATER_CAUSTIC_LEVELS for lv in [calm] + list(seas.values())):
+        print(f"  water-caustic-energy FAIL  a leg rendered "
+              f"{min(len(lv) for lv in [calm] + list(seas.values()))} of "
+              f"{WATER_CAUSTIC_LEVELS} caustics levels")
         failures.append("water-caustic-energy")
     else:
-        calm_off = max(abs(calm["min"] - 1.0), abs(calm["max"] - 1.0))
-        legs = [(abs(gerstner["mean"] - 1.0), WATER_CAUSTIC_MEAN_TOL["gerstner"]),
-                (abs(spectral["mean"] - 1.0), WATER_CAUSTIC_MEAN_TOL["spectral"]),
-                (abs(dome["mean"] - 1.0), WATER_CAUSTIC_MEAN_TOL["dome"])]
-        ok = calm_off <= WATER_CAUSTIC_CALM_TOL and all(off <= tol for off, tol in legs)
+        calm_off = max(max(abs(lv["min"] - 1.0), abs(lv["max"] - 1.0)) for lv in calm)
+        ok = calm_off <= WATER_CAUSTIC_CALM_TOL and all(
+            abs(lv["mean"] - 1.0) <= WATER_CAUSTIC_MEAN_TOL[name]
+            for name, levels in seas.items() for lv in levels)
+        means = ", ".join("/".join(f"{lv['mean']:.4f}" for lv in levels) + " " + name
+                          for name, levels in seas.items())
         print(f"  water-caustic-energy {'PASS' if ok else 'FAIL'}  calm within "
-              f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); mean "
-              f"{gerstner['mean']:.4f} Gerstner, {spectral['mean']:.4f} spectral, "
-              f"{dome['mean']:.4f} dome (want within "
-              f"{'/'.join(str(t) for _, t in legs)} of 1)")
+              f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); mean by "
+              f"level {means} (want within "
+              f"{'/'.join(str(WATER_CAUSTIC_MEAN_TOL[n]) for n in seas)} of 1)")
         if not ok:
             failures.append("water-caustic-energy")
 

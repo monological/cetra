@@ -590,7 +590,7 @@ void free_water(Water* water) {
     glDeleteFramebuffers(1, &water->probe_fbo);
     glDeleteBuffers(WATER_PROBE_LATENCY, water->probe_pbo);
     glDeleteTextures(1, &water->caustic_tex);
-    glDeleteFramebuffers(1, &water->caustic_fbo);
+    glDeleteFramebuffers(WATER_CAUSTIC_LEVELS, water->caustic_fbo);
     glDeleteTextures(1, &water->caustic_land_tex);
     glDeleteFramebuffers(1, &water->caustic_land_fbo);
     glDeleteVertexArrays(1, &water->caustic_vao);
@@ -2334,7 +2334,7 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
         water->caustic_failed = true;
         return false;
     }
-    if (water->caustic_fbo)
+    if (water->caustic_fbo[0])
         return true;
 
     // One texel per lattice corner, fp32 because the next pass differences neighbours a cell
@@ -2346,15 +2346,30 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
         _water_attach_colour(&water->caustic_land_fbo, water->caustic_land_tex);
 
     // One scalar per texel, mipped: the surface's lookup takes a coarser level the shallower
-    // the bed it lands on.
+    // the bed it lands on. A layer per window level, each with its own framebuffer. CLAMP,
+    // since a window is not a tile and its edge is faded out rather than wrapped.
     const int res = WATER_CAUSTIC_TARGET_RES;
-    water->caustic_tex = create_texture_2d_float(res, res, GL_R16F, GL_RED, NULL);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, water->caustic_tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    const GLenum status = _water_attach_colour(&water->caustic_fbo, water->caustic_tex);
+    glGenTextures(1, &water->caustic_tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_tex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_R16F, res, res, WATER_CAUSTIC_LEVELS, 0, GL_RED,
+                 GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    GLenum status = GL_FRAMEBUFFER_COMPLETE;
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        glGenFramebuffers(1, &water->caustic_fbo[level]);
+        glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo[level]);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, water->caustic_tex, 0,
+                                  level);
+        const GLenum level_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (level_status != GL_FRAMEBUFFER_COMPLETE)
+            status = level_status;
+    }
 
     // The lattice has no attributes -- a vertex is its index -- so the VAO holds nothing but
     // the index buffer that stitches (N+1)^2 vertices into 2 N^2 triangles.
@@ -2393,28 +2408,17 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
 }
 
 /*
- * Refract the key light through a lattice over the water onto the floor, into the caustics
- * target (spec 13.2). Runs inside the caller's _water_pass_begin/_end, which clears
- * caustic_ready first.
- *
- * Skipped -- leaving caustic_ready false, so the surface reads no caustics -- when there is no
- * key light or it is at or below the horizon. That is what keeps a dark night exactly dark:
- * no pass, rather than a pass that happens to add nothing.
+ * One level of the caustics (spec 13.3): place its window, trace its lattice, draw it into its
+ * layer. `scale` divides every length of level 0's, which is the whole difference between levels.
  */
-static void _water_run_caustics(Water* water, const struct Scene* scene,
-                                const struct Engine* engine, ShaderProgram* land,
-                                ShaderProgram* draw, bool fft) {
-    const Light* key = water_key_light(scene);
-    if (!key)
-        return;
-    vec3 travel;
-    glm_vec3_normalize_to((float*)key->direction, travel);
-    if (travel[1] > -1.0e-3f)
-        return;
-
+static void _water_run_caustic_level(Water* water, const struct Scene* scene,
+                                     const struct Engine* engine, ShaderProgram* land,
+                                     ShaderProgram* draw, bool fft, vec3 travel, int level,
+                                     float scale) {
+    // The window and its cell scale with the level; the floor they are traced to does not.
     const float upm = _water_units_per_metre(scene);
-    const float size = WATER_CAUSTIC_TARGET_M * upm;
-    const float cell = WATER_CAUSTIC_CELL_M * upm;
+    const float size = WATER_CAUSTIC_TARGET_M * upm / scale;
+    const float cell = WATER_CAUSTIC_CELL_M * upm / scale;
     const int n = WATER_CAUSTIC_GRID_N;
 
     /*
@@ -2449,11 +2453,22 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
      * Flat water bends the light to one place: the lattice is shifted upstream by where that is,
      * so the rays that land on the target left the surface over the lattice rather than beside
      * it. The remainder of the lattice's overhang covers what the waves bend further.
+     *
+     * Where that is depends on how deep the light goes, so the shift is taken at the floor under
+     * the window's centre -- the baked bed inside its domain, as the trace sees it, else the plane.
+     * Taken at the plane over a bed three times deeper, the fine level's metre of overhang was
+     * short by metres and a third of its window received no light at all.
      */
     const float floor_y = water->level - WATER_CAUSTIC_PLANE_M * upm;
+    const float centre[2] = {origin[0] + 0.5f * size, origin[1] + 0.5f * size};
+    float centre_floor = floor_y;
+    if (water->height_at && water->bed_tex && fabsf(centre[0]) <= water->extent &&
+        fabsf(centre[1]) <= water->extent)
+        centre_floor =
+            fminf(water->height_at(water->height_ctx, centre[0], centre[1]), water->level);
     vec3 bent;
     glm_vec3_refract(travel, (vec3){0.0f, 1.0f, 0.0f}, 1.0f / water->ior, bent);
-    const float reach = (floor_y - water->level) / bent[1];
+    const float reach = (centre_floor - water->level) / bent[1];
     const float pad = 0.5f * ((float)n * cell - size);
     const float grid[2] = {floorf((origin[0] - bent[0] * reach - pad) / cell) * cell,
                            floorf((origin[1] - bent[2] * reach - pad) / cell) * cell};
@@ -2472,11 +2487,21 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     uniform_set_float(lu, "causticFloorY", floor_y);
     uniform_set_float(lu, "waterIor", water->ior);
     draw_fullscreen_quad(_water_quad(water));
+    /*
+     * Submitted before the lattice below reads it, which GL says should not be needed and this
+     * driver says is. The lattice reads the landed points by texelFetch in the VERTEX stage, and
+     * on Apple's GL over Metal that read saw the texture as it was BEFORE the pass that just
+     * rendered it -- measured, not inferred: with one level every frame's caustics were the
+     * previous frame's trace, invisible in a still; with two, each level drew the other's. A
+     * flush splits the two passes into separate submissions, which is what makes the render
+     * visible to the vertex fetch; glFinish did the same and stalls the CPU as well.
+     */
+    glFlush();
 
     // Then the lattice drawn where they landed. Additive, and the bracket leaves culling off: a
     // folded cell lands wound the other way and still delivers its light.
     const int res = WATER_CAUSTIC_TARGET_RES;
-    glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo[level]);
     glViewport(0, 0, res, res);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -2486,16 +2511,48 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
     uniform_set_int(draw->uniforms, "causticLanded", 0);
+    uniform_set_float(draw->uniforms, "causticTargetM", WATER_CAUSTIC_TARGET_M / scale);
     glBindVertexArray(water->caustic_vao);
     glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
+    glDisable(GL_BLEND);
 
-    glBindTexture(GL_TEXTURE_2D, water->caustic_tex);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    water->caustic_origin[level][0] = origin[0];
+    water->caustic_origin[level][1] = origin[1];
+}
 
-    water->caustic_origin[0] = origin[0];
-    water->caustic_origin[1] = origin[1];
+/*
+ * Refract the key light through a lattice over the water onto the floor, into the caustics
+ * targets (spec 13.2), one per level (spec 13.3). Runs inside the caller's
+ * _water_pass_begin/_end, which clears caustic_ready first.
+ *
+ * Skipped -- leaving caustic_ready false, so the surface reads no caustics -- when there is no
+ * key light or it is at or below the horizon. That is what keeps a dark night exactly dark:
+ * no pass, rather than a pass that happens to add nothing.
+ */
+static void _water_run_caustics(Water* water, const struct Scene* scene,
+                                const struct Engine* engine, ShaderProgram* land,
+                                ShaderProgram* draw, bool fft) {
+    const Light* key = water_key_light(scene);
+    if (!key)
+        return;
+    vec3 travel;
+    glm_vec3_normalize_to((float*)key->direction, travel);
+    if (travel[1] > -1.0e-3f)
+        return;
+
+    float scale = 1.0f;
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        _water_run_caustic_level(water, scene, engine, land, draw, fft, travel, level, scale);
+        scale *= WATER_CAUSTIC_LEVEL_DIV;
+    }
+    // Every layer's chain in one call, once every layer is drawn -- and unbound from the
+    // framebuffer that still holds the last layer, as the foam's own chain is.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_tex);
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     water->caustic_ready = true;
 }
 
@@ -2652,10 +2709,14 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // The caustics target, pointed at its unit whether or not it rendered this frame: a sampler
     // left on the default unit is a type mismatch against the cascade array there.
     glActiveTexture(GL_TEXTURE0 + WATER_CAUSTIC_UNIT);
-    glBindTexture(GL_TEXTURE_2D, water->caustic_ready ? water->caustic_tex : 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_ready ? water->caustic_tex : 0);
     uniform_set_int(u, "causticTex", WATER_CAUSTIC_UNIT);
     uniform_set_int(u, "causticAvailable", water->caustic_ready ? 1 : 0);
-    uniform_set_vec2(u, "causticOrigin", water->caustic_origin);
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        char name[32];
+        snprintf(name, sizeof(name), "causticOrigin[%d]", level);
+        uniform_set_vec2(u, name, water->caustic_origin[level]);
+    }
     uniform_set_int(u, "waterCausticDebug", water->caustic_debug);
     /*
      * The sky's irradiance on a horizontal bed, for the caustics' key share: pi times the sky
@@ -2893,35 +2954,40 @@ void water_caustic_probe(const Water* water) {
         return;
     }
     const int res = WATER_CAUSTIC_TARGET_RES;
-    float* px = malloc((size_t)res * res * sizeof(float));
+    const size_t layer = (size_t)res * res;
+    // The whole array, which is what one glGetTexImage of it returns.
+    float* px = malloc(layer * WATER_CAUSTIC_LEVELS * sizeof(float));
     if (!px) {
         printf("water-caustic-probe available=0 reason=alloc\n");
         return;
     }
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, water->caustic_tex);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT, px);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_tex);
+    glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RED, GL_FLOAT, px);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
     // The inner 80%: the lattice overhangs the target by a few metres, and a wave that bends
     // light further than that leaves the edge texels short of what they would have received.
     const int lo = res / 10;
     const int hi = res - res / 10;
-    double sum = 0.0;
-    float mn = 1.0e30f, mx = 0.0f;
-    long count = 0;
-    for (int y = lo; y < hi; y++) {
-        for (int x = lo; x < hi; x++) {
-            const float c = px[(size_t)y * res + x];
-            sum += c;
-            mn = fminf(mn, c);
-            mx = fmaxf(mx, c);
-            count++;
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        const float* target = px + layer * (size_t)level;
+        double sum = 0.0;
+        float mn = 1.0e30f, mx = 0.0f;
+        long count = 0;
+        for (int y = lo; y < hi; y++) {
+            for (int x = lo; x < hi; x++) {
+                const float c = target[(size_t)y * res + x];
+                sum += c;
+                mn = fminf(mn, c);
+                mx = fmaxf(mx, c);
+                count++;
+            }
         }
+        printf("water-caustic-probe available=1 level=%d mean=%.6f min=%.6f max=%.4f\n", level,
+               sum / (double)count, (double)mn, (double)mx);
     }
     free(px);
-    printf("water-caustic-probe available=1 mean=%.6f min=%.6f max=%.4f\n", sum / (double)count,
-           (double)mn, (double)mx);
 }
 
 /*
