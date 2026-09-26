@@ -347,6 +347,9 @@ const float WATER_CAUSTIC_DEEP_OFF_M = 20.0;
 // The fraction of the caustic window's half-width over which it fades back to no caustics,
 // so the window's edge never prints as a line on the bed.
 const float WATER_CAUSTIC_EDGE_FADE = 0.2;
+// Metres of shadow blur at which the caustics' key visibility has handed from the shadow map's own
+// kernel to the wave-spread disc.
+const float WATER_CAUSTIC_KERNEL_M = 0.5;
 
 /*
  * COX-MUNK SUN GLITTER (spec 11.42).
@@ -577,16 +580,25 @@ float waterCausticKeyVisibility(vec3 pos, vec3 keyInWater, float column) {
     vec3 a = normalize(cross(sunDir, abs(sunDir.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
                                                           : vec3(1.0, 0.0, 0.0)));
     vec3 b = cross(sunDir, a);
+    /*
+     * One depth compare per tap: the disc is the filter, and a kernel under each tap cost 6 ms of
+     * the water pass at 1080p. The map's own kernel is kept at the centre for a blur narrower than
+     * it -- still water has none, and eight coincident compares would be a harder edge than the
+     * kernel gives -- and handed over to the disc by about half a metre, roughly the kernel's own
+     * width on the finest cascade.
+     */
     const int TAPS = 8;
     float lit = 0.0;
     for (int i = 0; i < TAPS; i++) {
         // A Vogel disc: even coverage for any tap count, with no ring for the eye to find.
         float r = radius * sqrt((float(i) + 0.5) / float(TAPS));
         float angle = float(i) * 2.39996323;
-        lit += 1.0 - csmFinestOcclusion(pos + (a * cos(angle) + b * sin(angle)) * r,
-                                        sunShadowSlot);
+        lit += 1.0 - csmFinestOcclusionTap(pos + (a * cos(angle) + b * sin(angle)) * r,
+                                           sunShadowSlot);
     }
-    return lit / float(TAPS);
+    float kernel = 1.0 - csmFinestOcclusion(pos, sunShadowSlot);
+    return mix(kernel, lit / float(TAPS),
+               smoothstep(0.0, WATER_CAUSTIC_KERNEL_M * waterUnitsPerMetre, radius));
 }
 
 /*
