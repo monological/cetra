@@ -567,10 +567,26 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
     vec3 refrWorld = viewToWorld * refrDir;
     vec3 pos = WorldPos + refrWorld * ((sightBed.y - WorldPos.y) / min(refrWorld.y, -1.0e-4));
 
-    float traced = WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre;
+    /*
+     * Where the light that reaches this point was traced to: the baked bed, which the trace landed
+     * on exactly, else the reference plane. The lookup point depends on that height and the height
+     * on the point, so two fixed-point steps -- the trace's own shape. For a fragment that IS the
+     * bed the slide comes out zero, and the defocus and contrast below both fall away, since the
+     * column is the traced depth.
+     */
+    float planeY = waterLevel - WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre;
     vec3 keyInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
-    vec2 at = pos.xz + keyInWater.xz * ((waterLevel - traced - pos.y) / min(keyInWater.y, -1.0e-4));
+    float keyDown = min(keyInWater.y, -1.0e-4);
+    float floorY = planeY;
+    bool onBed = false;
+    for (int i = 0; i < 2; i++) {
+        float bedY;
+        onBed = oceanBedHeight(pos.xz + keyInWater.xz * ((floorY - pos.y) / keyDown), bedY);
+        floorY = onBed ? bedY : planeY;
+    }
+    vec2 at = pos.xz + keyInWater.xz * ((floorY - pos.y) / keyDown);
     vec2 cuv = (at - causticOrigin) / (WATER_CAUSTIC_TARGET_M * waterUnitsPerMetre);
+    float traced = max(waterLevel - floorY, 1.0e-6);
     float column = waterLevel - pos.y;
     /*
      * One mip softer than the texel footprint: a focused line is narrower than a texel is worth
@@ -591,12 +607,16 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      * converged yet: to first order a lens's contrast grows linearly with the distance behind it,
      * so a floor at a tenth of the traced depth sees a tenth of the pattern's contrast. Applied at
      * full contrast, centimetres of water over sand printed the focused pattern of three metres.
+     *
+     * The deep fade is the plane's alone: its pattern is right only near the depth it assumed,
+     * where a pattern traced to the bed is right at the bed's own depth, however deep.
      */
     vec2 edge = abs(cuv * 2.0 - 1.0);
+    float deep = onBed ? 1.0
+                       : 1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
+                                          WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, column);
     float weight = (1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y))) *
-                   clamp(column / traced, 0.0, 1.0) *
-                   (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
-                                     WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, column));
+                   clamp(column / traced, 0.0, 1.0) * deep;
     /*
      * The key's share of the light on this point, per channel: its irradiance on a horizontal
      * surface where the maps say it arrives, against the sky's.
