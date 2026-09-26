@@ -143,6 +143,17 @@ float csmLayerOcclusion(int layer, vec3 proj)
     return 1.0 - (1.0 - occlusion) * csmTransmittance(layer, proj.xy, proj.z);
 }
 
+// The same at one depth compare and no kernel, for a caller that filters by spreading the points
+// it asks about.
+float csmLayerOcclusionTap(int layer, vec3 proj)
+{
+    if (msmEnabled == 1)
+        return csmMomentOcclusion(layer, proj.xy, proj.z);
+    float depth = texture(shadowMaps, vec3(proj.xy, float(layer))).r;
+    float occlusion = proj.z - shadowBias > depth ? 1.0 : 0.0;
+    return 1.0 - (1.0 - occlusion) * csmTransmittance(layer, proj.xy, proj.z);
+}
+
 // Occlusion from the OUTERMOST cascade, which is the classic
 // camera-independent scene-fit map (complete for every caster in the scene by
 // construction). One map means no per-fragment selection, no seams, and no
@@ -176,20 +187,41 @@ float csmOutermostOcclusion(vec3 worldPos, int slot)
  * bias was tuned on the outermost map, whose receivers are never in it, and a bed is -- it has
  * held on the fixtures looked at, and a finer cascade is where it would first give way.
  */
-float csmFinestOcclusion(vec3 worldPos, int slot)
+// The finest cascade layer that holds the point with the kernel's margin, and the point projected
+// into it; the outermost layer when none does, and -1 when the point is outside every map.
+int csmFinestLayer(vec3 worldPos, int slot, out vec3 proj)
 {
+    proj = vec3(0.0);
     if (slot < 0 || slot >= numShadowLights)
-        return 0.0;
+        return -1;
     vec2 margin = shadowTexelSize * (1.5 * float(CSM_PCF_HALF_KERNEL) + 1.0);
     for (int c = 0; c < cascadeCount; c++) {
         int layer = slot * cascadeCount + c;
         vec4 lightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
-        vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
+        proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
         if (proj.z <= 1.0 && all(greaterThanEqual(proj.xy, margin)) &&
             all(lessThanEqual(proj.xy, vec2(1.0) - margin)))
-            return csmLayerOcclusion(layer, proj);
+            return layer;
     }
-    return csmOutermostOcclusion(worldPos, slot);
+    // The last iteration projected into the outermost layer; that is the fallback's map.
+    if (proj.z > 1.0 || any(lessThan(proj.xy, vec2(0.0))) || any(greaterThan(proj.xy, vec2(1.0))))
+        return -1;
+    return slot * cascadeCount + (cascadeCount - 1);
+}
+
+float csmFinestOcclusion(vec3 worldPos, int slot)
+{
+    vec3 proj;
+    int layer = csmFinestLayer(worldPos, slot, proj);
+    return layer < 0 ? 0.0 : csmLayerOcclusion(layer, proj);
+}
+
+// csmFinestOcclusion at one depth compare, for a caller averaging over points of its own.
+float csmFinestOcclusionTap(vec3 worldPos, int slot)
+{
+    vec3 proj;
+    int layer = csmFinestLayer(worldPos, slot, proj);
+    return layer < 0 ? 0.0 : csmLayerOcclusionTap(layer, proj);
 }
 
 #endif // CSM_OUTERMOST_PCF
