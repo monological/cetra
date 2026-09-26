@@ -16,6 +16,7 @@
 #include "water_caustic_constants.glsl"
 
 uniform sampler2D causticLanded; // .xy landed, .zw source, metres from the target corner
+uniform float causticTargetM;    // this level's target side, metres
 
 out vec2 vLanded;
 out vec2 vSource;
@@ -47,6 +48,6 @@ void main() {
     vLanded = here.xy;
     vSource = here.zw;
 
-    vec2 uv = here.xy / WATER_CAUSTIC_TARGET_M;
+    vec2 uv = here.xy / causticTargetM;
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
 }
