@@ -195,6 +195,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
     fprintf(stderr, "      --water-foam-debug N  Foam as a binary mask: 1 the crest band after\n");
     fprintf(stderr, "                         the erosion, 2 before it, 3 breaking alone.\n");
+    fprintf(stderr,
+            "      --water-caustic-debug N  2 draws the raw caustics target on the surface\n");
+    fprintf(stderr, "      --water-caustic-probe  Print the caustics target's statistics\n");
     fprintf(stderr, "      --no-water-surf    No incident wave at the shore: no run-up, no bore\n");
     fprintf(stderr, "      --no-water-foam-history  Foam from this frame's fold only\n");
     fprintf(stderr, "      --no-water-coverage  Hard shoreline cutoff, no coverage\n");
@@ -1174,6 +1177,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             // Does NOT imply --water: this is a view mode for a surface something else
             // already asked for, the same reason the negative flags above do not either.
             args->water_foam_debug = (int)mode;
+        } else if (strcmp(argv[i], "--water-caustic-debug") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            char* end = NULL;
+            long mode = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || (mode != 0 && mode != 2)) {
+                fprintf(stderr, "Error: --water-caustic-debug wants 0 or 2, got '%s'\n", argv[i]);
+                return -1;
+            }
+            args->water_caustic_debug = (int)mode;
+        } else if (strcmp(argv[i], "--water-caustic-probe") == 0) {
+            args->water_caustic_probe = 1;
         } else if (strcmp(argv[i], "--no-water-surf") == 0) {
             args->no_water_surf = 1;
         } else if (strcmp(argv[i], "--no-water-foam-history") == 0) {
@@ -4393,6 +4410,7 @@ int main(int argc, char** argv) {
         if (args.no_water_glitter)
             water->glitter = false;
         water->foam_debug = args.water_foam_debug;
+        water->caustic_debug = args.water_caustic_debug;
         if (args.no_water_surf)
             water->surf = false;
         if (args.no_water_foam_history)
@@ -4523,6 +4541,8 @@ int main(int argc, char** argv) {
     // --water-probe -- there is nothing to measure until a frame has run one.
     if (args.water_fft_probe)
         water_fft_probe(scene->water, engine);
+    if (args.water_caustic_probe)
+        water_caustic_probe(scene->water);
     /*
      * --water-probe's grid, after the loop because the query answers passes late. `h=` is
      * water_probe_result on either model. On Gerstner `cpu_h=` sits beside it: the closed form,
