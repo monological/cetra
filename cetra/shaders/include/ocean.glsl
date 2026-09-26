@@ -582,16 +582,6 @@ float oceanCascadeLod(float footprint, int band) {
  * derivatives -- so the normal below is analytic and costs nothing extra. That
  * packing is the reason to spend two RGBA targets per cascade.
  */
-// A linear random sea is vertically symmetric, and a real one is not: crests are
-// sharper than troughs are deep. These are the low-order bound-harmonic correction
-// for that, kept small deliberately -- pushed harder the surface folds, which is what
-// the choppy-wave literature bounds. Each band's own mean square is subtracted, so the
-// correction reshapes the surface without raising its mean level -- cascadeHeightVar, the
-// seeded variance of THIS sea. It was a pair of constants until spec 13.1, right for one sea
-// state: water_fixture's long band carries 0.80 m^2 against a constant 0.080, which stood
-// that sea 0.1 m above its own still level everywhere and a calm one 0.02 m below it.
-const float OCEAN_BOUND_LONG = 0.14;
-const float OCEAN_BOUND_MED = 0.32;
 
 /*
  * One band's tiling lookup. Written out eleven times before this existed, twice per band
@@ -684,25 +674,21 @@ float oceanCrestGate(float elevationM, float heightVar) {
 
 /*
  * The UNSHOALED displacement of the two bands that reach the mesh: horizontal in .xz,
- * height in .y, crest term included.
+ * height in .y. The crest term is already in the height, applied in the transform's last
+ * stage (water_fft_frag) where the field is still full resolution.
  *
  * The one place the height model is written. The previous frame's position comes from
- * retained copies of exactly these two samples and has to be the same arithmetic, and the
- * derivative rows below multiply the same value -- so a second copy is a second place for
- * the bound-harmonic term to drift, which is the failure this file exists to prevent.
+ * retained copies of exactly these two samples and has to be the same arithmetic.
  */
 vec3 oceanSpectralDisplacement(vec4 long0, vec4 med0) {
     vec2 h = long0.rg * cascadeChoppiness[0] + med0.rg * cascadeChoppiness[1];
-    float y = long0.b + med0.b +
-              OCEAN_BOUND_LONG * (long0.b * long0.b - cascadeHeightVar[0]) +
-              OCEAN_BOUND_MED * (med0.b * med0.b - cascadeHeightVar[1]);
+    float y = long0.b + med0.b;
     /*
      * METRES to world units, here and nowhere else (spec 11.44).
      *
      * The cascades are seeded from a JONSWAP spectrum in real units -- gravity in m/s^2,
      * wind in m/s, fetch in metres -- so every value in them is metres of displacement over
-     * metres of ocean. The crest terms above are part of that arithmetic and their variances
-     * are in m^2, which is why the conversion lands after them rather than on the samples.
+     * metres of ocean, which is why the conversion lands here rather than on the samples.
      *
      * Only the displacement converts. The DERIVATIVE rows do not: they are metres of
      * displacement per metre of ocean, which is the same number as world units per world
@@ -930,11 +916,8 @@ OceanSurface oceanEvaluateSpectral(vec2 p, float t, OceanBed bed, float footprin
 
     // Not named `cross`: that is a builtin oceanAssemble calls.
     float crossDeriv = long0.a * q0 + med0.a * q1;
-    // The crest-sharpening term changes the height, so its derivative has to be in the
-    // slope or the normal is the normal of a DIFFERENT surface than the one rasterized.
-    // d/dp of b*(h*h - c) is 2*b*h*dh, per band.
-    vec2 slope = long1.rg * (1.0 + 2.0 * OCEAN_BOUND_LONG * long0.b) +
-                 med1.rg * (1.0 + 2.0 * OCEAN_BOUND_MED * med0.b);
+    // The crest term's share of the slope arrived with the height, in the transform.
+    vec2 slope = long1.rg + med1.rg;
     vec2 dHoriz = long1.ba * q0 + med1.ba * q1;
 
     OceanSurface s = oceanAssemble(p, oceanSpectralDisplacement(long0, med0),

@@ -644,7 +644,8 @@ void main() {
          *
          * WorldPos.y - waterLevel is the assembled elevation the mesh actually drew -- the
          * long and medium bands, their crest terms, the depth clamp, AND THE SURF, where the
-         * birth site's per-band elevation is not -- so this numerator opens more readily in
+         * birth site's per-band elevation is one band with its own crest term and none of the
+         * rest -- so this numerator opens more readily in
          * the surf zone than the gate's stated z-score alone would predict. Intentional
          * rather than an oversight: a breaking shore needs the vertex Jacobian selectable at
          * all, which is what the comment two blocks down says of the accumulator here too.
