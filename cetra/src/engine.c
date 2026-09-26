@@ -1956,6 +1956,10 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     if (water_probe_program) {
         engine_add_program(engine, water_probe_program);
     }
+    ShaderProgram* water_caustic_program = create_water_caustic_program();
+    if (water_caustic_program) {
+        engine_add_program(engine, water_caustic_program);
+    }
 
     // GI probe volume. Lives on the engine rather than on PostFX -- despite
     // being a fullscreen pass -- because the volume is a Scene citizen and the

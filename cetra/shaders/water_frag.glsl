@@ -99,6 +99,15 @@ uniform float foamPatternTile;
 uniform int foamPatternAvailable;
 uniform int cameraSubmerged;
 uniform int causticsEnabled;
+// The refracted-grid caustics target (spec 13.2): how much the key light is concentrated on the
+// floor, 1 where the water is flat, over a square of `causticSize` world units whose corner is
+// at `causticOrigin`. 0 = not rendered this frame, and nothing reads it.
+uniform sampler2D causticTex;
+uniform int causticAvailable;
+uniform vec2 causticOrigin;
+uniform float causticSize;
+// 0 = shade normally; 2 = the raw caustics target drawn on the surface, half grey where flat.
+uniform int waterCausticDebug;
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
 // binary cutoff, which is all a single-sample target can express.
 uniform int alphaToCoverage;
@@ -1319,5 +1328,15 @@ void main() {
         // instrument is measuring, not of the debug write, and hardcoding it here would
         // make this shoreline read harder-edged than the shipped one.
         FragColor = vec4(shown > 0.5 ? 1.0 : 0.0, 1.0, 0.0, coverage);
+    }
+    // The raw caustics target laid on the surface at the point above it: the pattern itself,
+    // before any registration or lighting touches it. Flat water is half grey; outside the
+    // window, or with no target, black.
+    if (waterCausticDebug == 2) {
+        vec2 cuv = (WorldPos.xz - causticOrigin) / max(causticSize, 1.0e-6);
+        bool inside = causticAvailable == 1 && all(greaterThanEqual(cuv, vec2(0.0))) &&
+                      all(lessThanEqual(cuv, vec2(1.0)));
+        float c = inside ? textureLod(causticTex, cuv, 0.0).r : 0.0;
+        FragColor = vec4(vec3(0.5 * c), coverage);
     }
 }

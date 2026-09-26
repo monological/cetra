@@ -804,6 +804,14 @@ ShaderProgram* create_water_probe_program() {
     return create_post_program("water_probe", water_probe_frag_shader_str);
 }
 
+ShaderProgram* create_water_caustic_program() {
+    ShaderProgram* program = create_program_from_source(
+        "water_caustic", water_caustic_vert_shader_str, water_caustic_frag_shader_str, NULL);
+    if (!program)
+        log_error("Failed to initialize water_caustic shader program");
+    return program;
+}
+
 ShaderProgram* create_skybox_program() {
     ShaderProgram* program = NULL;
 

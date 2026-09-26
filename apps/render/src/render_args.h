@@ -140,6 +140,8 @@ typedef struct {
     int no_water;                 // Drop a water surface a scene file asked for
     int water_probe;              // Print the CPU wave query over a grid, then continue
     int water_fft_probe;          // Print the transformed spectrum's measured statistics
+    int water_caustic_debug;      // Water.caustic_debug: 2 = the raw caustics target
+    int water_caustic_probe;      // Print the caustics target's statistics after the loop
     int wind_bound_probe;         // Print the measured wind displacement beside its cull bound
     int ies_probe;                // Print every loaded IES profile and a sweep of its angles
     int emissive_lights;          // Derive an LTC area panel from every emissive mesh

@@ -89,6 +89,14 @@
 // Only the long and medium bands reach the mesh; the short one shades the interface
 // and never displaces, so it has no previous position to remember.
 #define WATER_PREV_CASCADES 2
+// The refracted-grid caustics (spec 13.2), one of the units the cascade consolidation freed.
+// 3 is TEXUNIT_CLEARCOAT_NORMAL, the same 2D binding point, and water declares nothing else there.
+#define WATER_CAUSTIC_UNIT 3
+_Static_assert(WATER_CAUSTIC_UNIT != WATER_CASCADE_UNIT && WATER_CAUSTIC_UNIT != WATER_PREV_UNIT &&
+                   WATER_CAUSTIC_UNIT != WATER_DEPTH_UNIT && WATER_CAUSTIC_UNIT != WATER_BED_UNIT &&
+                   WATER_CAUSTIC_UNIT != WATER_FOAM_PATTERN_UNIT &&
+                   WATER_CAUSTIC_UNIT != WATER_SHADOW_UNIT && WATER_CAUSTIC_UNIT != WATER_FOAM_UNIT,
+               "the caustic unit collides with one water already binds");
 // The cloud deck's sun transmittance is SKY_CLOUD_SHADOW_UNIT (sky.h), shared with the
 // catcher rather than allocated here: it is the sky's resource and neither consumer has a
 // reason to disagree about where it lands.
@@ -138,6 +146,24 @@ _Static_assert(SKY_CLOUD_SHADOW_UNIT < 16,
 #include "../shaders/include/water_probe_constants.glsl"
 // Passes between a query's render and its read. The pack-buffer ring holds this many.
 #define WATER_PROBE_LATENCY 2
+
+/*
+ * The caustics window (spec 13.2), in METRES. A square ahead of the camera rather than a
+ * periodic patch, because the three bands tile at 240, 64 and 12 m and share no period.
+ *
+ * The lattice cell is the short band's own texel -- 12 m over 128 -- so the lattice samples
+ * the band that does most of the focusing at its resolution and no coarser. The target is
+ * finer than that, since a focused line is much narrower than the wave that focused it. The
+ * lattice overhangs the target on every side, because the rays that land on a target edge
+ * left the surface upstream of it.
+ */
+#define WATER_CAUSTIC_TARGET_M   40.0f
+#define WATER_CAUSTIC_TARGET_RES 1024
+#define WATER_CAUSTIC_CELL_M     0.09375f
+#define WATER_CAUSTIC_GRID_N     512
+// Where the rays land when there is no baked bed: the focal length of the short band's
+// ripples, n / ((n - 1) a k^2) for a centimetre over half a metre to a metre, is 2.5 to 5 m.
+#define WATER_CAUSTIC_PLANE_M 3.0f
 
 typedef enum WaterWaveModel {
     WATER_WAVES_GERSTNER = 0, // closed-form octaves; lake scale, no GPU state
@@ -546,6 +572,24 @@ typedef struct Water {
     float probe_result_points[WATER_PROBE_MAX][2]; // the points that answer is about
     int probe_answered;                            // slots in that answer; 0 = none yet
     float probe_result_t;                          // the clock it was rendered at
+
+    /*
+     * The caustics target (spec 13.2): how much the key light is concentrated on the floor,
+     * 1 where the water is flat, over a window that moves with the camera. `caustic_origin`
+     * and `caustic_size` are where THIS frame's target lies, which the surface needs to look
+     * it up. Engine-owned.
+     */
+    GLuint caustic_tex;
+    GLuint caustic_fbo;
+    GLuint caustic_vao;
+    GLuint caustic_ebo;
+    float caustic_origin[2]; // world xz of the target's corner
+    float caustic_size;      // world units the target spans
+    bool caustic_ready;      // rendered this frame; false = the surface reads no caustics
+    bool caustic_failed;     // no program or target; never retried
+
+    // Settings. 0 off; 2 draws the raw target on the surface, grey where the water is flat.
+    int caustic_debug;
 } Water;
 
 /*
@@ -663,6 +707,14 @@ void water_update(Water* water, const struct Scene* scene, float t, float dt);
  * failure this exists to prevent.
  */
 void water_fft_probe(const Water* water, struct Engine* engine);
+
+/*
+ * Read the caustics target back and print its statistics over the inner 80% of the window
+ * (spec 13.2) -- mean, min, max, and the fraction of texels at the per-cell ceiling. The mean
+ * is the energy check: the target conserves light, so it sits at 1 for any sea. Stalls the
+ * pipeline once, so a diagnostic rather than something the render loop may call.
+ */
+void water_caustic_probe(const Water* water);
 
 /*
  * The surface query (spec 13.1): where the water is over a world (x, z), on either wave model,

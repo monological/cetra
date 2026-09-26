@@ -523,6 +523,10 @@ void free_water(Water* water) {
     glDeleteTextures(1, &water->probe_tex);
     glDeleteFramebuffers(1, &water->probe_fbo);
     glDeleteBuffers(WATER_PROBE_LATENCY, water->probe_pbo);
+    glDeleteTextures(1, &water->caustic_tex);
+    glDeleteFramebuffers(1, &water->caustic_fbo);
+    glDeleteVertexArrays(1, &water->caustic_vao);
+    glDeleteBuffers(1, &water->caustic_ebo);
     free(water);
 }
 
@@ -2127,6 +2131,181 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
 }
 
 /*
+ * The caustics program, when the pass should run: caustics are on and nothing has failed. The
+ * first call also makes the target and the lattice; a missing program or an incomplete target
+ * is reported once and latches the pass off.
+ */
+static ShaderProgram* _water_caustic_ready(Water* water, struct Engine* engine) {
+    if (!water->caustics || water->caustic_failed)
+        return NULL;
+    ShaderProgram* prog = engine_find_program(engine, "water_caustic");
+    if (!prog) {
+        log_error("Water: caustic program missing; caustics disabled");
+        water->caustic_failed = true;
+        return NULL;
+    }
+    if (water->caustic_fbo)
+        return prog;
+
+    const int res = WATER_CAUSTIC_TARGET_RES;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &water->caustic_tex);
+    glBindTexture(GL_TEXTURE_2D, water->caustic_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, res, res, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &water->caustic_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, water->caustic_tex,
+                           0);
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+
+    // The lattice has no attributes -- a vertex is its index -- so the VAO holds nothing but
+    // the index buffer that stitches (N+1)^2 vertices into 2 N^2 triangles.
+    const int n = WATER_CAUSTIC_GRID_N;
+    const size_t count = (size_t)n * n * 6;
+    GLuint* idx = malloc(count * sizeof(GLuint));
+    if (!idx || status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Water: caustic target %s; caustics disabled",
+                  idx ? "incomplete" : "index allocation failed");
+        free(idx);
+        water->caustic_failed = true;
+        return NULL;
+    }
+    size_t o = 0;
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < n; i++) {
+            const GLuint a = (GLuint)(j * (n + 1) + i);
+            const GLuint c = a + (GLuint)(n + 1);
+            idx[o++] = a;
+            idx[o++] = a + 1;
+            idx[o++] = c;
+            idx[o++] = a + 1;
+            idx[o++] = c + 1;
+            idx[o++] = c;
+        }
+    }
+    glGenVertexArrays(1, &water->caustic_vao);
+    glBindVertexArray(water->caustic_vao);
+    glGenBuffers(1, &water->caustic_ebo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, water->caustic_ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(count * sizeof(GLuint)), idx,
+                 GL_STATIC_DRAW);
+    glBindVertexArray(0);
+    free(idx);
+    return prog;
+}
+
+/*
+ * Refract the key light through a lattice over the water onto the floor, into the caustics
+ * target (spec 13.2). Runs inside the caller's _water_pass_begin/_end.
+ *
+ * Skipped -- leaving caustic_ready false, so the surface reads no caustics -- when there is no
+ * key light or it is at or below the horizon. That is what keeps a dark night exactly dark:
+ * no pass, rather than a pass that happens to add nothing.
+ */
+static void _water_run_caustics(Water* water, const struct Scene* scene,
+                                const struct Engine* engine, ShaderProgram* prog, bool fft) {
+    water->caustic_ready = false;
+    const Light* key = water_key_light(scene);
+    if (!key)
+        return;
+    vec3 travel;
+    glm_vec3_normalize_to((float*)key->direction, travel);
+    if (travel[1] > -1.0e-3f)
+        return;
+
+    const float upm = _water_units_per_metre(scene);
+    const float size = WATER_CAUSTIC_TARGET_M * upm;
+    const float cell = WATER_CAUSTIC_CELL_M * upm;
+    const int n = WATER_CAUSTIC_GRID_N;
+
+    /*
+     * The window sits a quarter of its size ahead of the camera, where a view looking down into
+     * the water spends most of its pixels, and moves only in steps of five cells -- exactly
+     * twelve target texels -- so the lattice and the target both land on the same points from
+     * one frame to the next and the pattern does not swim.
+     */
+    const float* eye = engine->camera->position;
+    const float fwd[2] = {-engine->view_matrix[0][2], -engine->view_matrix[2][2]};
+    const float fwd_len = sqrtf(fwd[0] * fwd[0] + fwd[1] * fwd[1]);
+    const float ahead = fwd_len > 1.0e-4f ? 0.25f * size / fwd_len : 0.0f;
+    const float snap = 5.0f * cell;
+    float origin[2];
+    for (int k = 0; k < 2; k++) {
+        const float centre = eye[k * 2] + fwd[k] * ahead;
+        origin[k] = floorf((centre - 0.5f * size) / snap) * snap;
+    }
+
+    /*
+     * Flat water bends the light to one place: the lattice is shifted upstream by where that is,
+     * so the rays that land on the target left the surface over the lattice rather than beside
+     * it. The remainder of the lattice's overhang covers what the waves bend further.
+     */
+    const float floor_y = water->level - WATER_CAUSTIC_PLANE_M * upm;
+    const float eta = 1.0f / 1.3335f;
+    const float cos_i = -travel[1];
+    const float k_t = 1.0f - eta * eta * (1.0f - cos_i * cos_i);
+    const float scale_n = eta * cos_i - sqrtf(fmaxf(k_t, 0.0f));
+    const vec3 bent = {eta * travel[0], eta * travel[1] + scale_n, eta * travel[2]};
+    const float reach = (floor_y - water->level) / bent[1];
+    const float pad = 0.5f * ((float)n * cell - size);
+    const float grid[2] = {floorf((origin[0] - bent[0] * reach - pad) / cell) * cell,
+                           floorf((origin[1] - bent[2] * reach - pad) / cell) * cell};
+
+    const int res = WATER_CAUSTIC_TARGET_RES;
+    glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo);
+    glViewport(0, 0, res, res);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Additive, and no culling: a folded cell lands wound the other way and still delivers
+    // its light. Blend function and cull are saved here, as the pass bracket does not own them.
+    GLint blend_src = 0, blend_dst = 0;
+    glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src);
+    glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst);
+    const GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+
+    glUseProgram(prog->id);
+    UniformManager* u = prog->uniforms;
+    _water_bind_ocean(water, scene, engine, u, fft);
+    uniform_set_float(u, "time", (float)engine->render_time);
+    uniform_set_vec2(u, "causticGridOrigin", grid);
+    uniform_set_float(u, "causticCell", cell);
+    uniform_set_int(u, "causticGridN", n);
+    uniform_set_vec2(u, "causticTargetOrigin", origin);
+    uniform_set_float(u, "causticTargetSize", size);
+    uniform_set_vec3(u, "causticKeyDir", travel);
+    uniform_set_float(u, "causticFloorY", floor_y);
+    const float texel_m = WATER_CAUSTIC_TARGET_M / (float)res;
+    uniform_set_float(u, "causticTexelArea", texel_m * texel_m);
+    glBindVertexArray(water->caustic_vao);
+    glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+
+    glBlendFunc((GLenum)blend_src, (GLenum)blend_dst);
+    glDisable(GL_BLEND);
+    if (cull_was_enabled)
+        glEnable(GL_CULL_FACE);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, water->caustic_tex);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    water->caustic_origin[0] = origin[0];
+    water->caustic_origin[1] = origin[1];
+    water->caustic_size = size;
+    water->caustic_ready = true;
+}
+
+/*
  * Advance the water's SIMULATION for the frame, before anything draws.
  *
  * Separate from water_render, and the separation is the point: the film's tips are read by the
@@ -2165,8 +2344,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     const bool fft = water->wave_model == WATER_WAVES_FFT;
     if (fft && !_water_ensure_spectra(water))
         return;
-    // Then the surface query, which reads those bands complete, on either model. One bracket
-    // for both, since they run back to back and change the same state.
+    // Then the surface query and the caustics, which read those bands complete, on either
+    // model. One bracket for all three, since they run back to back and change the same state.
     const WaterPassState pass = _water_pass_begin();
     if (fft)
         _water_run_spectral(water, scene, engine, (float)engine->render_time);
@@ -2174,6 +2353,12 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     if (probe_prog) {
         _water_probe_pass(water, scene, engine, probe_prog, fft, (float)engine->render_time);
         check_gl_error("water probe");
+    }
+    ShaderProgram* caustic_prog = _water_caustic_ready(water, engine);
+    water->caustic_ready = false;
+    if (caustic_prog) {
+        _water_run_caustics(water, scene, engine, caustic_prog, fft);
+        check_gl_error("water caustics");
     }
     _water_pass_end(&pass);
 
@@ -2271,6 +2456,15 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_int(u, "causticsEnabled", water->caustics ? 1 : 0);
     uniform_set_int(u, "glitterEnabled", water->glitter ? 1 : 0);
     uniform_set_int(u, "waterFoamDebug", water->foam_debug);
+    // The caustics target, pointed at its unit whether or not it rendered this frame: a sampler
+    // left on the default unit is a type mismatch against the cascade array there.
+    glActiveTexture(GL_TEXTURE0 + WATER_CAUSTIC_UNIT);
+    glBindTexture(GL_TEXTURE_2D, water->caustic_ready ? water->caustic_tex : 0);
+    uniform_set_int(u, "causticTex", WATER_CAUSTIC_UNIT);
+    uniform_set_int(u, "causticAvailable", water->caustic_ready ? 1 : 0);
+    uniform_set_vec2(u, "causticOrigin", water->caustic_origin);
+    uniform_set_float(u, "causticSize", water->caustic_size);
+    uniform_set_int(u, "waterCausticDebug", water->caustic_debug);
     // The deck dims the caustics it focuses (spec 11.41) and the sun lobe it lights
     // (spec 11.42). Not the reflection, which is an environment lookup already carrying it.
     sky_bind_cloud_shadow(scene->sky, program, SKY_CLOUD_SHADOW_UNIT);
@@ -2499,6 +2693,56 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
  * Costs a full pipeline stall per cascade. That is fine here and would not be per frame,
  * which is why nothing calls this from the render loop.
  */
+void water_caustic_probe(const Water* water) {
+    const char* declined = NULL;
+    if (!water_active(water))
+        declined = "nowater";
+    else if (!water->caustics)
+        declined = "off";
+    else if (water->caustic_failed)
+        declined = "failed";
+    else if (!water->caustic_ready)
+        declined = "unrendered";
+    if (declined) {
+        printf("water-caustic-probe available=0 reason=%s\n", declined);
+        return;
+    }
+    const int res = WATER_CAUSTIC_TARGET_RES;
+    float* px = malloc((size_t)res * res * 4 * sizeof(float));
+    if (!px) {
+        printf("water-caustic-probe available=0 reason=alloc\n");
+        return;
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, water->caustic_tex);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, px);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // The inner 80%: the lattice overhangs the target by a few metres, and a wave that bends
+    // light further than that leaves the edge texels short of what they would have received.
+    const int lo = res / 10;
+    const int hi = res - res / 10;
+    double sum = 0.0;
+    float mn = 1.0e30f, mx = 0.0f;
+    long clamped = 0, count = 0;
+    for (int y = lo; y < hi; y++) {
+        for (int x = lo; x < hi; x++) {
+            const float c = px[((size_t)y * res + x) * 4];
+            sum += c;
+            mn = fminf(mn, c);
+            mx = fmaxf(mx, c);
+            // One cell at the ceiling, give or take the half-float rounding of 40.
+            if (c >= 39.9f)
+                clamped++;
+            count++;
+        }
+    }
+    free(px);
+    printf("water-caustic-probe available=1 mean=%.6f min=%.6f max=%.4f clamped=%.6f size=%.4f\n",
+           sum / (double)count, (double)mn, (double)mx, (double)clamped / (double)count,
+           (double)water->caustic_size);
+}
+
 void water_fft_probe(const Water* water, struct Engine* engine) {
     /*
      * Declining is a result, not a failure: the Gerstner path has no spectrum to measure,
