@@ -623,9 +623,10 @@ entry there before changing anything marked with a dagger.
   `include/ocean.glsl`, and `water_probe_frag` -- the surface query (spec 13.1), one texel per
   point through the same `oceanEvaluateAt`, read back through a pack-buffer ring at FIXED
   latency and never a fence, which is what keeps a headless run equal to itself. It is
-  `water_probe_set` / `water_probe_result` in `water.h`, one call on either wave model: Gerstner
-  answers in closed form at the caller's clock, the spectral sea from the ring, and the sample
-  says which instant it describes
+  `water_probe_set` / `water_probe_result` in `water.h`, one path for either wave model -- both
+  answer from the ring, the sample says which instant it describes, and a slot registered or
+  moved since its answer was rendered is refused as `stale` rather than answered for the point
+  it used to name. `water_surface_at` stays the Gerstner closed form and the query's reference
 - **OIT:** `oit_resolve_frag` + `include/mboit.glsl` (the absorbance moments and their
   reconstruction, shared by the generation and accumulate sub-passes)
 - **Atmosphere †:** `froxel_inject/integrate/composite_frag` + `include/froxel.glsl`, and

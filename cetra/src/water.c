@@ -9,7 +9,6 @@
 #include "engine.h"
 #include "engine_internal.h"
 #include "procedural/foam_pattern.h"
-#include "procedural/water_waves.h" // the inversion's step cap and tolerance, for the query
 #include "shore_chain.h"
 #include "ubo.h"
 #include "ext/log.h"
@@ -483,7 +482,6 @@ Water* create_water(void) {
     water->far_lod = true;
     water->wetness = true;
     water->film = true;
-    water->probe_result_pass = -1;
     return water;
 }
 
@@ -499,8 +497,8 @@ void free_water(Water* water) {
     glDeleteVertexArrays(1, &water->grid_vao);
     glDeleteBuffers(1, &water->grid_vbo);
     glDeleteBuffers(1, &water->grid_ebo);
-    glDeleteVertexArrays(1, &water->fft_vao);
-    glDeleteBuffers(1, &water->fft_vbo);
+    glDeleteVertexArrays(1, &water->quad_vao);
+    glDeleteBuffers(1, &water->quad_vbo);
     glDeleteTextures(1, &water->twiddle_tex);
     glDeleteTextures(1, &water->bed_tex);
     glDeleteTextures(WATER_CASCADE_COUNT, water->cascade_initial);
@@ -513,8 +511,6 @@ void free_water(Water* water) {
     glDeleteFramebuffers(2, water->foam_fbo);
     glDeleteTextures(1, &water->probe_tex);
     glDeleteFramebuffers(1, &water->probe_fbo);
-    glDeleteVertexArrays(1, &water->probe_vao);
-    glDeleteBuffers(1, &water->probe_vbo);
     glDeleteBuffers(WATER_PROBE_LATENCY, water->probe_pbo);
     free(water);
 }
@@ -1320,7 +1316,6 @@ static bool _water_ensure_spectra(Water* water) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
 
-    create_fullscreen_quad_vao(&water->fft_vao, &water->fft_vbo);
     water->spectra_ready = true;
     log_info("Water: %d spectral cascades at %d^2, %d passes/frame", WATER_CASCADE_COUNT, size,
              WATER_CASCADE_COUNT * (1 + WATER_SPECTRUM_LOG * 2));
@@ -1727,8 +1722,8 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
 /*
  * Everything ocean.glsl reads to evaluate the surface: the wave model and its train, the
  * cascades, the bed, the shore scalars and the eye the cascade lookup is taken relative to.
- * One publisher for the drawn surface and the surface query (spec 13.1), so the query cannot
- * be handed a different sea from the one the raster drew.
+ * Every program that evaluates the surface takes it from here, so no two of them can be handed
+ * different seas.
  *
  * All three samplers the chunk declares are pointed at their own units whatever is bound,
  * since one left at the default 0 is a type mismatch against the cascade array there.
@@ -1790,6 +1785,49 @@ static void _water_bind_ocean(const Water* water, const struct Scene* scene,
     uniform_set_int(u, "prevAvailable", prev_ready ? 1 : 0);
 }
 
+/*
+ * The state an offscreen water pass changes and must hand back: the framebuffer, the viewport,
+ * and the depth test and blend every such pass wants off. Begin saves and disables; end
+ * restores, on every exit including the failure ones, so a pass never leaves the pipeline in
+ * a state its caller did not put it in.
+ */
+typedef struct WaterPassState {
+    GLint viewport[4];
+    GLint fbo;
+    GLboolean depth;
+    GLboolean blend;
+} WaterPassState;
+
+static WaterPassState _water_pass_begin(void) {
+    WaterPassState s;
+    glGetIntegerv(GL_VIEWPORT, s.viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.fbo);
+    s.depth = glIsEnabled(GL_DEPTH_TEST);
+    s.blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    return s;
+}
+
+static void _water_pass_end(const WaterPassState* s) {
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)s->fbo);
+    glViewport(s->viewport[0], s->viewport[1], s->viewport[2], s->viewport[3]);
+    if (s->depth)
+        glEnable(GL_DEPTH_TEST);
+    if (s->blend)
+        glEnable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+// The fullscreen quad every offscreen water pass draws, made on first use by whichever needs it
+// -- the spectral chain on one model, the surface query on either.
+static GLuint _water_quad(Water* water) {
+    if (!water->quad_vao)
+        create_fullscreen_quad_vao(&water->quad_vao, &water->quad_vbo);
+    return water->quad_vao;
+}
+
+// Runs inside the caller's _water_pass_begin/_end.
 static void _water_run_spectral(Water* water, const struct Scene* scene, struct Engine* engine,
                                 float time) {
     ShaderProgram* evolve = engine_get_program(engine, "water_spectrum");
@@ -1800,14 +1838,6 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         return;
     }
 
-    GLint saved_viewport[4];
-    GLint saved_fbo = 0;
-    glGetIntegerv(GL_VIEWPORT, saved_viewport);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-    const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
-    const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
     glViewport(0, 0, WATER_SPECTRUM_RES, WATER_SPECTRUM_RES);
 
     // Keep the frame that is about to be overwritten. Buffer 0 holds the completed
@@ -1835,7 +1865,7 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     }
 
-    glBindVertexArray(water->fft_vao);
+    glBindVertexArray(_water_quad(water));
 
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         glUseProgram(evolve->id);
@@ -1890,7 +1920,7 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         const int dst = 1 - src;
         glUseProgram(foam->id);
         glBindFramebuffer(GL_FRAMEBUFFER, water->foam_fbo[dst]);
-        glBindVertexArray(water->fft_vao);
+        glBindVertexArray(_water_quad(water));
         _water_bind_cascades(water, foam->uniforms, true);
         glActiveTexture(GL_TEXTURE0 + WATER_FOAM_UNIT);
         glBindTexture(GL_TEXTURE_2D, water->foam_tex[src]);
@@ -1936,26 +1966,27 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
     }
 
     water->spectral_frames++;
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
-    if (depth_was_enabled)
-        glEnable(GL_DEPTH_TEST);
-    if (blend_was_enabled)
-        glEnable(GL_BLEND);
-    glActiveTexture(GL_TEXTURE0);
     check_gl_error("water spectral");
 }
 
-static bool _water_probe_alloc(Water* water) {
+/*
+ * The query's program, when a pass should run this frame: points are registered and nothing
+ * has failed. The first call also makes the target and the ring; a missing program or an
+ * incomplete target is reported once and latches the query off, since neither recovers.
+ */
+static ShaderProgram* _water_probe_ready(Water* water, struct Engine* engine) {
+    if (water->probe_count == 0 || water->probe_failed)
+        return NULL;
+    ShaderProgram* prog = engine_find_program(engine, "water_probe");
+    if (!prog) {
+        log_error("Water: probe program missing; surface query disabled");
+        water->probe_failed = true;
+        return NULL;
+    }
     if (water->probe_fbo)
-        return true;
-    glActiveTexture(GL_TEXTURE0);
-    glGenTextures(1, &water->probe_tex);
-    glBindTexture(GL_TEXTURE_2D, water->probe_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WATER_PROBE_MAX, 1, 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
+        return prog;
+    // Never sampled, only read back, so the helper's LINEAR filtering is immaterial.
+    water->probe_tex = create_texture_2d_float(WATER_PROBE_MAX, 1, GL_RGBA32F, GL_RGBA, NULL);
     glGenFramebuffers(1, &water->probe_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, water->probe_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, water->probe_tex,
@@ -1967,17 +1998,12 @@ static bool _water_probe_alloc(Water* water) {
         glBufferData(GL_PIXEL_PACK_BUFFER, sizeof(water->probe_result), NULL, GL_STREAM_READ);
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    // Its own quad rather than fft_vao, which exists only once a spectrum is seeded -- and the
-    // Gerstner path, which never seeds one, is the path this query is checked on.
-    create_fullscreen_quad_vao(&water->probe_vao, &water->probe_vbo);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         log_error("Water: probe target incomplete (0x%x); surface query disabled", status);
         water->probe_failed = true;
-        return false;
+        return NULL;
     }
-    water->probe_passes = 0;
-    water->probe_result_pass = -1;
-    return true;
+    return prog;
 }
 
 bool water_probe_set(Water* water, int slot, float x, float z) {
@@ -1995,28 +2021,22 @@ const char* water_probe_refusal(const Water* water, int slot) {
         return "nowater";
     if (slot < 0 || slot >= water->probe_count)
         return "unset";
-    if (water->wave_model != WATER_WAVES_FFT)
-        return NULL;
     if (water->probe_failed)
         return "failed";
-    if (water->probe_result_pass < 0)
+    if (water->probe_answered == 0)
         return "unfilled";
+    // The answer was rendered passes ago: a slot added since was not in it, and a slot moved
+    // since is answered for the point it used to name.
+    if (slot >= water->probe_answered ||
+        water->probe_result_points[slot][0] != water->probe_points[slot][0] ||
+        water->probe_result_points[slot][1] != water->probe_points[slot][1])
+        return "stale";
     return NULL;
 }
 
-bool water_probe_result(const Water* water, int slot, float t, WaterSample* out) {
+bool water_probe_result(const Water* water, int slot, WaterSample* out) {
     if (!out || water_probe_refusal(water, slot))
         return false;
-    // Gerstner has a closed form, so it answers now rather than from the ring: the GPU pass
-    // agrees with it (water-gpu), and a caller gains nothing by waiting for the same number.
-    if (water->wave_model != WATER_WAVES_FFT) {
-        const float x = water->probe_points[slot][0];
-        const float z = water->probe_points[slot][1];
-        out->height = water_surface_at(water, x, z, t, out->normal);
-        out->residual = water_waves_inverse_residual(water, x, z, t);
-        out->t = t;
-        return true;
-    }
     const float* a = water->probe_result[slot];
     out->height = a[0];
     // Unit length, so y is the positive root: a surface normal never points down.
@@ -2031,8 +2051,8 @@ bool water_probe_result(const Water* water, int slot, float t, WaterSample* out)
 
 /*
  * Retire the slot issued WATER_PROBE_LATENCY passes ago, then render this pass's answers and
- * queue their readback into the slot just freed. Called with the caller's framebuffer,
- * viewport, depth test and blend already saved; leaves the probe FBO bound.
+ * queue their readback into the slot just freed. Runs inside the caller's
+ * _water_pass_begin/_end.
  *
  * No fence, deliberately: mapping a slot whose read has not landed STALLS rather than
  * returning early, so the latency is a correctness-free choice about how often that happens
@@ -2048,16 +2068,20 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
         if (px) {
             memcpy(water->probe_result, px, sizeof(water->probe_result));
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            memcpy(water->probe_result_points, water->probe_issued_points[slot],
+                   sizeof(water->probe_result_points));
+            water->probe_answered = water->probe_issued_count[slot];
             water->probe_result_t = water->probe_issued_t[slot];
-            water->probe_result_pass = water->probe_passes - WATER_PROBE_LATENCY;
+        } else {
+            // Keeping the previous answer would hand it out again as though it were this one.
+            log_error("Water: probe readback failed to map; surface query disabled");
+            water->probe_failed = true;
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, water->probe_fbo);
     glViewport(0, 0, WATER_PROBE_MAX, 1);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
     glUseProgram(prog->id);
     UniformManager* u = prog->uniforms;
     _water_bind_ocean(water, scene, engine, u, fft);
@@ -2068,7 +2092,6 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
         uniform_set_vec2(u, name, water->probe_points[i]);
     }
     uniform_set_int(u, "probeCount", water->probe_count);
-    uniform_set_int(u, "probeMaxSteps", WATER_WAVES_INVERSE_MAX_STEPS);
     // The CPU solve's tolerance on Gerstner, where the longest wave's amplitude is authored.
     // A spectral sea authors none, so its scale is half the significant height -- the same
     // quantity, a characteristic crest -- converted from metres like every spectral length.
@@ -2076,15 +2099,14 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
         fft ? 0.5f * _water_significant_height(water) * _water_units_per_metre(scene)
             : water->amplitude;
     uniform_set_float(u, "probeEps", fmaxf(scale, 1e-4f) * WATER_WAVES_INVERSE_EPS_FRAC);
-    glBindVertexArray(water->probe_vao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glBindVertexArray(0);
-    glActiveTexture(GL_TEXTURE0);
+    draw_fullscreen_quad(_water_quad(water));
 
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, water->probe_pbo[slot]);
     glReadPixels(0, 0, WATER_PROBE_MAX, 1, GL_RGBA, GL_FLOAT, NULL);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    memcpy(water->probe_issued_points[slot], water->probe_points, sizeof(water->probe_points));
+    water->probe_issued_count[slot] = water->probe_count;
     water->probe_issued_t[slot] = t;
     water->probe_passes++;
 }
@@ -2126,36 +2148,19 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // its own: it would have to nest inside the caller's, and the simulation is
     // part of what water costs anyway.
     const bool fft = water->wave_model == WATER_WAVES_FFT;
-    if (fft) {
-        if (!_water_ensure_spectra(water))
-            return;
+    if (fft && !_water_ensure_spectra(water))
+        return;
+    // Then the surface query, which reads those bands complete, on either model. One bracket
+    // for both, since they run back to back and change the same state.
+    const WaterPassState pass = _water_pass_begin();
+    if (fft)
         _water_run_spectral(water, scene, engine, (float)engine->render_time);
-    }
-
-    // The surface query, after the cascades it will read are complete, on either model.
-    ShaderProgram* probe_prog = water->probe_count > 0 && !water->probe_failed
-                                    ? engine_get_program(engine, "water_probe")
-                                    : NULL;
-    if (water->probe_count > 0 && !water->probe_failed && !probe_prog) {
-        log_error("Water: probe program missing; surface query disabled");
-        water->probe_failed = true;
-    }
-    if (probe_prog && _water_probe_alloc(water)) {
-        GLint saved_viewport[4];
-        GLint saved_fbo = 0;
-        glGetIntegerv(GL_VIEWPORT, saved_viewport);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-        const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
-        const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+    ShaderProgram* probe_prog = _water_probe_ready(water, engine);
+    if (probe_prog) {
         _water_probe_pass(water, scene, engine, probe_prog, fft, (float)engine->render_time);
-        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-        glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
-        if (depth_was_enabled)
-            glEnable(GL_DEPTH_TEST);
-        if (blend_was_enabled)
-            glEnable(GL_BLEND);
         check_gl_error("water probe");
     }
+    _water_pass_end(&pass);
 
     ShaderProgram* program = engine_get_program(engine, "water");
     if (!program) {
@@ -2376,7 +2381,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
 static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx, int fy,
                                double* out_max_err) {
     ShaderProgram* fft = engine_get_program(engine, "water_fft");
-    if (!fft || !water->twiddle_tex || !water->fft_vao)
+    if (!fft || !water->twiddle_tex || !water->quad_vao)
         return false;
 
     const int size = WATER_SPECTRUM_RES;
@@ -2388,10 +2393,10 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
     // along, which is also a check that the two halves do not leak into each other.
     data[(((size_t)(size / 2 + fy) * size) + (size_t)(size / 2 + fx)) * 4 + 0] = 1.0f;
 
-    GLint saved_viewport[4];
-    GLint saved_fbo = 0;
-    glGetIntegerv(GL_VIEWPORT, saved_viewport);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+    // Restored on every exit including the failure ones. The only caller runs after the loop
+    // has stopped, so nothing downstream would notice -- but a diagnostic that leaves the
+    // pipeline in a different state than it found it cannot later be called from anywhere else.
+    const WaterPassState pass = _water_pass_begin();
 
     // Scratch shaped exactly like the real thing -- two ping-pong ARRAYS of two layers, the
     // pair one cascade occupies. The transform under test indexes layers, so a scratch built
@@ -2420,14 +2425,9 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     free(data);
 
-    const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
-    const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
-
     if (complete) {
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_BLEND);
         glViewport(0, 0, size, size);
-        glBindVertexArray(water->fft_vao);
+        glBindVertexArray(water->quad_vao);
         // The sea's OWN transform, not a copy of it -- which is what makes this test's
         // result a statement about the shipping path rather than about a sibling that
         // happens to agree today.
@@ -2462,17 +2462,7 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
 
     glDeleteFramebuffers(2, fbo);
     glDeleteTextures(2, arr);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
-    // Restored on every exit including the failure ones, matching _water_run_spectral. The
-    // only caller today runs after the loop has stopped, so nothing downstream would notice
-    // -- but a diagnostic that leaves the pipeline in a different state than it found it
-    // cannot later be called from anywhere else, and nothing in the signature says so.
-    if (depth_was_enabled)
-        glEnable(GL_DEPTH_TEST);
-    if (blend_was_enabled)
-        glEnable(GL_BLEND);
-    glActiveTexture(GL_TEXTURE0);
+    _water_pass_end(&pass);
     glBindTexture(GL_TEXTURE_2D, 0);
     return complete;
 }

@@ -35,7 +35,7 @@
  * surface that is not the one over the query. So it runs until the step it just took is
  * small against the wave amplitude, with a cap. The last step size IS the residual, so
  * the loop knows exactly how well it converged. The step cap and the tolerance are in
- * water_waves.h, because the GPU query runs the same loop.
+ * water_probe_constants.glsl, because the GPU query runs the same loop.
  */
 
 // One octave's direction, fanned off the wind and alternating sides so the set stays

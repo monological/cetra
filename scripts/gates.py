@@ -8817,9 +8817,9 @@ def _water_probe(extra, scene=None):
     bare coordinate, so anything that does not is a header of some kind and a third one
     added later needs no change here.
     """
-    # Four frames, because the GPU query answers WATER_PROBE_LATENCY (2) passes late and the
-    # first answer retires on the third. The probe prints `gpu_latency` so a change to the
-    # constant shows up as gpu_available=0 here rather than as a silent skip.
+    # Four frames, because the query answers WATER_PROBE_LATENCY (2) passes late and the
+    # first answer retires on the third. The header prints `latency` and a `reason`, so a
+    # larger constant fails here as reason=unfilled rather than as a missing field.
     cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "4",
            "-W", "200", "-H", "150", "--water-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
@@ -9940,8 +9940,8 @@ def run_water_gate(workdir):
                       evaluates a real train rather than a plane, and ANSWERS on the
                       spectral model through the GPU query (spec 13.1) with a surface
                       rather than the still plane it used to hand back.
-      water-gpu       the GPU probe reproduces the CPU query: same fixture, same sixteen
-                      points, same clock, on the GERSTNER path -- the only path with a
+      water-gpu       the surface query reproduces the closed form: same fixture, same
+                      sixteen points, same clock, on the GERSTNER path -- the only path with a
                       closed form to be wrong against. That comparison is what proves the
                       pass, the pack-buffer ring, its latency and the inversion, BEFORE
                       any of it is pointed at a spectral sea that has no reference answer
@@ -10553,20 +10553,21 @@ def run_water_gate(workdir):
         if not ok:
             failures.append("water-cpu")
 
-    # The GPU twin of the query above (spec 13.1), printed on the same rows so the two
-    # answers can be read side by side. Checked on GERSTNER, where water_surface_at is an
-    # exact reference: agreeing with a closed form on sixteen points is what proves the
-    # pass, the ring and the inversion before the spectral sea -- which has no reference
-    # answer at all -- is asked anything.
+    # The query against the closed form it must reproduce (spec 13.1), printed on the same
+    # rows. Checked on GERSTNER, where water_surface_at is an exact reference: agreeing with
+    # it on sixteen points is what proves the pass, the ring and the inversion -- the same
+    # machinery that answers the spectral sea, which has no reference answer at all.
     if not rows:
-        print("  water-gpu    SKIP  (the CPU query this compares against printed nothing)")
-    elif "gpu_h" not in rows[0]:
-        print("  water-gpu    FAIL  --water-probe printed no gpu_h; there is no GPU query yet")
+        print("  water-gpu    SKIP  (--water-probe printed no grid)")
+    elif not all("cpu_h" in r for r in rows):
+        print(f"  water-gpu    FAIL  the query did not answer every point "
+              f"(available={head.get('available')} reason={head.get('reason')}, "
+              f"latency={head.get('latency')})")
         failures.append("water-gpu")
     else:
-        gap = max(abs(float(r["gpu_h"]) - float(r["h"])) for r in rows)
+        gap = max(abs(float(r["h"]) - float(r["cpu_h"])) for r in rows)
         ok = gap <= WATER_GPU_MAX_GAP
-        print(f"  water-gpu    {'PASS' if ok else 'FAIL'}  GPU probe against the CPU query "
+        print(f"  water-gpu    {'PASS' if ok else 'FAIL'}  the query against the closed form "
               f"over {len(rows)} points, worst gap {gap:.8f} "
               f"(want <={WATER_GPU_MAX_GAP})")
         if not ok:

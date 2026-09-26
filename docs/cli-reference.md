@@ -155,8 +155,8 @@ corduroy a single-direction Gerstner train gives, and the FFT path's directional
 not have it.
 `--water-bed dome` installs an analytic bed so shoaling has a deterministic fixture at all;
 `--water-probe` prints the surface query over a 4x4 grid after the last frame, which is otherwise
-invisible from outside the process: `h=` is `water_probe_result` on either wave model and `gpu_h=`
-the GPU pass beside it, both at the instant the GPU answer describes (spec 13.1). It answers
+invisible from outside the process: `h=` is `water_probe_result` on either wave model, and on
+Gerstner `cpu_h=` is the closed form beside it at the instant that answer describes (spec 13.1). It answers
 `WATER_PROBE_LATENCY` (2) passes late, so fewer than three frames prints `available=0
 reason=unfilled`. `--no-water-coverage` is the bisect lever for the shoreline's derivative coverage
 and reaches the pre-11.33 frame),
