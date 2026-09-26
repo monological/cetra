@@ -12,6 +12,6 @@
  * 512 over 6 m is a 1.17 cm texel -- an eighth of the short band's, so every short-band texel
  * is a whole number of these and the two stay commensurate.
  */
-#define WATER_RIPPLE_RES  512
-#define WATER_RIPPLE_LOG  9  // log2(WATER_RIPPLE_RES)
-#define WATER_RIPPLE_LODS 10 // levels in the mip chain, WATER_RIPPLE_LOG + 1
+#define WATER_RIPPLE_LOG  9
+#define WATER_RIPPLE_RES  (1 << WATER_RIPPLE_LOG)
+#define WATER_RIPPLE_LODS (WATER_RIPPLE_LOG + 1) // levels in the mip chain

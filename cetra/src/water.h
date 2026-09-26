@@ -96,7 +96,9 @@
 _Static_assert(WATER_CAUSTIC_UNIT != WATER_CASCADE_UNIT && WATER_CAUSTIC_UNIT != WATER_PREV_UNIT &&
                    WATER_CAUSTIC_UNIT != WATER_DEPTH_UNIT && WATER_CAUSTIC_UNIT != WATER_BED_UNIT &&
                    WATER_CAUSTIC_UNIT != WATER_FOAM_PATTERN_UNIT &&
-                   WATER_CAUSTIC_UNIT != WATER_SHADOW_UNIT && WATER_CAUSTIC_UNIT != WATER_FOAM_UNIT,
+                   WATER_CAUSTIC_UNIT != WATER_SHADOW_UNIT &&
+                   WATER_CAUSTIC_UNIT != WATER_FOAM_UNIT &&
+                   WATER_CAUSTIC_UNIT != SKY_CLOUD_SHADOW_UNIT,
                "the caustic unit collides with one water already binds");
 // The ripple band's transformed fields (spec 13.3), a 2D_ARRAY of its own because an array has
 // one size for every layer and this band's is not the cascades'. 4 is TEXUNIT_HEIGHT, a 2D

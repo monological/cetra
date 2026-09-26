@@ -103,7 +103,7 @@ uniform int prevAvailable;
  * own because an array has one size and this band's is 512 where the cascades' is 128.
  *
  * `rippleSlopeVarLod[L]` is the mean square slope mip level L of the band carries, [0] the whole
- * of it: measured off the spectrum at seeding, so what a footprint filters out is a difference
+ * of it: predicted from the spectrum at seeding, so what a footprint filters out is a difference
  * of two numbers rather than a guess about how much of the band a level keeps.
  */
 uniform sampler2DArray rippleFields;
@@ -599,9 +599,14 @@ float oceanRemovedMss(float kept, float variance) {
     return max(0.0, 1.0 - kept * kept) * variance;
 }
 
+// The mip level of a tile `period` across at `res` texels whose texel is `footprint`.
+float oceanTileLod(float footprint, float period, float res) {
+    float texel = period / max(res, 1.0);
+    return clamp(log2(max(footprint / max(texel, 1e-6), 1.0)), 0.0, log2(max(res, 2.0)));
+}
+
 float oceanCascadeLod(float footprint, int band) {
-    float texel = cascadeLength[band] / max(cascadeRes, 1.0);
-    return clamp(log2(max(footprint / max(texel, 1e-6), 1.0)), 0.0, oceanCascadeTopLod());
+    return oceanTileLod(footprint, cascadeLength[band], cascadeRes);
 }
 
 /*
@@ -676,8 +681,7 @@ const float OCEAN_SHORT_SLOPE_GAIN = 0.42;
 
 // The ripple band's mip level at a world footprint: the level whose texel is the footprint.
 float oceanRippleLod(float footprint) {
-    float texel = rippleLength / float(WATER_RIPPLE_RES);
-    return clamp(log2(max(footprint / max(texel, 1e-6), 1.0)), 0.0, float(WATER_RIPPLE_LOG));
+    return oceanTileLod(footprint, rippleLength, float(WATER_RIPPLE_RES));
 }
 
 // The ripple slope variance a read at `lod` does not carry, for roughness to take over.
