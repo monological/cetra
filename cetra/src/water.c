@@ -2246,21 +2246,32 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     const int n = WATER_CAUSTIC_GRID_N;
 
     /*
-     * The window sits a quarter of its size ahead of the camera, where a view looking down into
-     * the water spends most of its pixels, and moves only in steps of five cells -- exactly
-     * twelve target texels -- so the lattice and the target both land on the same points from
-     * one frame to the next and the pattern does not swim.
+     * The window is centred where the view looks: where the camera's forward ray meets the
+     * still plane, no nearer than a quarter of the window ahead and no further than four
+     * windows. Centred on the camera's own position, a camera high above the sea looking out
+     * put the whole window underneath itself and out of the frame. Looking level, up, or from
+     * below the surface there is no meeting point, and the window sits the near distance
+     * ahead.
+     *
+     * It moves only in steps of five cells -- exactly twelve target texels -- so the lattice
+     * and the target land on the same points from one frame to the next and the pattern does
+     * not swim.
      */
     const float* eye = engine->camera->position;
-    const float fwd[2] = {-engine->view_matrix[0][2], -engine->view_matrix[2][2]};
-    const float fwd_len = sqrtf(fwd[0] * fwd[0] + fwd[1] * fwd[1]);
-    const float ahead = fwd_len > 1.0e-4f ? 0.25f * size / fwd_len : 0.0f;
-    const float snap = 5.0f * cell;
-    float origin[2];
-    for (int k = 0; k < 2; k++) {
-        const float centre = eye[k * 2] + fwd[k] * ahead;
-        origin[k] = floorf((centre - 0.5f * size) / snap) * snap;
+    const float fwd[3] = {-engine->view_matrix[0][2], -engine->view_matrix[1][2],
+                          -engine->view_matrix[2][2]};
+    const float flat_len = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+    float reach_h = 0.25f * size;
+    if (fwd[1] < -1.0e-4f && eye[1] > water->level) {
+        const float along = (water->level - eye[1]) / fwd[1];
+        reach_h = fminf(fmaxf(along * flat_len, 0.25f * size), 4.0f * size);
     }
+    const float ahead = flat_len > 1.0e-4f ? reach_h / flat_len : 0.0f;
+    const float snap = 5.0f * cell;
+    const float centre_xz[2] = {eye[0] + fwd[0] * ahead, eye[2] + fwd[2] * ahead};
+    float origin[2];
+    for (int k = 0; k < 2; k++)
+        origin[k] = floorf((centre_xz[k] - 0.5f * size) / snap) * snap;
 
     /*
      * Flat water bends the light to one place: the lattice is shifted upstream by where that is,
