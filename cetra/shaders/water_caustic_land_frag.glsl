@@ -32,7 +32,7 @@ void main() {
     // water is shaded with, short band included, or the lens is not the water that is drawn.
     // The footprint is the lattice cell: what a cell cannot resolve it cannot focus either.
     OceanSurface s = oceanEvaluateAt(p, time, oceanBed(p), causticCell);
-    vec3 n = oceanShadingNormal(s.normal, s.world.xz, 1.0);
+    vec3 n = oceanShadingNormal(s.normal, s.world.xz, 1.0, causticCell);
     vec3 r = refract(causticKeyDir, n, 1.0 / waterIor);
 
     /*

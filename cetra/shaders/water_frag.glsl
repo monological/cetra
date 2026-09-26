@@ -675,7 +675,10 @@ void main() {
         float fadeDist = projectionIsOrtho() ? 2.0 / projection[1][1] : length(ViewPos);
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
                                       WATER_SHORT_FAR_M * waterUnitsPerMetre, fadeDist);
-        N = oceanShadingNormal(N, WorldPos.xz, fade);
+        // The pixel's world footprint, from the smooth parameterisation's derivatives for the
+        // reason those are taken above.
+        float footprint = max(length(surfDdx), length(surfDdy));
+        N = oceanShadingNormal(N, WorldPos.xz, fade, footprint);
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a
         // handover rather than two channels dimming together. Driving it from the faded
         // slope instead sent distant water toward the calm value in both, so the horizon
@@ -694,6 +697,9 @@ void main() {
         // physical attenuation whose remainder is owed back -- and it wants an A/B rather
         // than being smuggled in behind a correctness fix.
         removedMss += oceanRemovedMss(fade, cascadeSlopeVar[2]);
+        // The ripples are filtered by footprint rather than faded by distance, so what they
+        // hand over is what the level they were read at does not carry.
+        removedMss += oceanRippleRemovedMss(oceanRippleLod(footprint));
 
         /*
          * Foam where the horizontal map COMPRESSES, AND where the surface stands tall against

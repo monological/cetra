@@ -8359,6 +8359,13 @@ WATER_FFT_VAR_MAX = 1.5
 # Mirrors WATER_CASCADE_COUNT (water.h). Asserted rather than assumed: a probe that
 # printed two rows would otherwise be read as two passing cascades.
 WATER_CASCADES = 3
+# The cascades plus the ripple band (spec 13.3), each one variance row.
+WATER_FFT_BANDS = WATER_CASCADES + 1
+# The ripple mip levels water-ripple-mips holds to the variance bounds: those carrying at least
+# this fraction of the whole band's slope variance, which is levels 1-4. Measured 0.94-0.98
+# through level 6 and 0.90 at level 7; levels 8 and 9 carry under 1e-5 of the band and read 2.25
+# and 0.64, a ratio of two numbers too small to mean anything.
+WATER_RIPPLE_MIP_FLOOR = 0.01
 
 # The transform against its closed form (spec 11.42). Measured 0.0 and 1.9e-7 on the two
 # modes -- fp32 scratch, so this is round-off over 14 stages and nothing else.
@@ -9083,7 +9090,7 @@ def _cscn_wave_train_apply_fields():
 
 
 def _water_fft_probe(extra, scene=None):
-    """Run --water-fft-probe and return (header, per-cascade rows, impulse dict).
+    """Run --water-fft-probe and return (header, per-band rows, impulse dict, ripple mip rows).
 
     The header is the probe's own account of what it measured: whether it ran, why not
     when it did not, and how many cascades this build has. Returning it is the difference
@@ -9097,7 +9104,7 @@ def _water_fft_probe(extra, scene=None):
     cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "4",
            "-W", "200", "-H", "150", "--water-fft-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
-    head, rows, impulse = {}, [], {}
+    head, rows, impulse, mips = {}, [], {}, []
     for line in (r.stdout + r.stderr).splitlines():
         if not line.startswith("water-fft-probe "):
             continue
@@ -9108,11 +9115,15 @@ def _water_fft_probe(extra, scene=None):
         fields = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
         if tag == "header":
             head = fields
-        elif tag == "cascade":
+        elif tag in ("cascade", "ripple"):
+            # The ripple band (spec 13.3) is measured the same way at its own size, so it
+            # is one more row of the same shape; the header says how many there are.
             rows.append({k: float(v) for k, v in fields.items()})
         elif tag == "impulse":
             impulse = {k: float(v) for k, v in fields.items() if k != "available"}
-    return head, rows, impulse
+        elif tag == "ripple-lod":
+            mips.append({k: float(v) for k, v in fields.items()})
+    return head, rows, impulse, mips
 
 
 def _water_glitter_variant(src, dst):
@@ -9923,16 +9934,23 @@ def run_water_gate(workdir):
                       exactly. Nothing else in this suite checks the sea against a number
                       that came from outside it.
       water-fft-var   the transformed field carries the variance the SEEDING predicted,
-                      per band and in both height and slope. The first arm here that
+                      per band -- the three cascades and the ripple band -- and in both
+                      height and slope. The first arm here that
                       reads the spectrum rather than a picture of it, and the only one
                       that can fail on a transform which is deterministic, differs from
                       Gerstner, and is still wrong. Blind to a missed fftshift, which
                       moves the field in space and not in variance -- that is
                       water-fft-impulse's half.
+      water-ripple-mips the ripple band's mip chain carries, level by level, the slope
+                      variance seeding predicted for it -- the number roughness takes the
+                      ripples' filtered-out share from, and a model of glGenerateMipmap
+                      rather than a reading of it. Held on the levels carrying at least
+                      WATER_RIPPLE_MIP_FLOOR of the band (spec 13.3).
       water-fft-impulse the transform matches its CLOSED FORM on two single modes: a
                       centred impulse must come back constant, and its neighbour as one
-                      cycle across the grid. Run through the same 14 stages and the same
-                      twiddle table the sea uses, so it tests this transform rather than
+                      cycle across the grid. Run through the same stages and the same
+                      twiddle tables the sea uses -- 14 at 128 and 18 at the ripple band's
+                      512, reporting the worse -- so it tests this transform rather than
                       a copy. Verified by breaking the shader -- see
                       WATER_FFT_IMPULSE_MAX for what the rest of the suite did then.
       water-horizon   the surface reaches the horizon, asserted as REACH INVARIANCE:
@@ -10356,19 +10374,23 @@ def run_water_gate(workdir):
 
     # The transform carries the variance the seeding predicted. The first arm in this
     # suite that reads the SPECTRUM rather than a picture of it.
-    probe_head, var_rows, impulse = _water_fft_probe(WATER_PIN + ["--water-waves", "fft"])
+    probe_head, var_rows, impulse, ripple_mips = _water_fft_probe(
+        WATER_PIN + ["--water-waves", "fft"])
     probe_cascades = int(probe_head.get("cascades", 0))
+    probe_bands = probe_cascades + (1 if "ripple_res" in probe_head else 0)
     if probe_head.get("available") != "1":
         # The probe's own reason, not this arm's guess at one. Without it a Gerstner
         # surface, an unseeded spectrum and a failed readback are the same empty list.
         print("  water-fft-var FAIL  --water-fft-probe declined: reason="
               f"{probe_head.get('reason', 'it printed no header at all')}")
         failures.append("water-fft-var")
-    elif probe_cascades != WATER_CASCADES or len(var_rows) != probe_cascades:
-        # Two questions: the build has the cascade count this suite is written against,
-        # and the probe printed a row for each of the cascades it says it has.
+    elif (probe_cascades != WATER_CASCADES or probe_bands != WATER_FFT_BANDS
+          or len(var_rows) != probe_bands):
+        # Two questions: the build has the bands this suite is written against -- the
+        # cascades and the ripple band -- and the probe printed a row for each of them.
         print(f"  water-fft-var FAIL  --water-fft-probe reports {probe_cascades} cascades "
-              f"(want {WATER_CASCADES}) and printed {len(var_rows)} rows")
+              f"and {probe_bands} bands (want {WATER_CASCADES} and {WATER_FFT_BANDS}) and "
+              f"printed {len(var_rows)} rows")
         failures.append("water-fft-var")
     else:
         # NOT `hr`/`sr`: `hr` is this function's name for a frame HEIGHT in the width/height
@@ -10381,9 +10403,32 @@ def run_water_gate(workdir):
         print(f"  water-fft-var {'PASS' if ok else 'FAIL'}  measured/predicted height "
               f"{'/'.join(f'{v:.2f}' for v in height_ratios)} slope "
               f"{'/'.join(f'{v:.2f}' for v in slope_ratios)} "
-              f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX} on all six)")
+              f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX} on all "
+              f"{2 * WATER_FFT_BANDS})")
         if not ok:
             failures.append("water-fft-var")
+
+    # The ripple band's mip chain against the slope variance seeding predicted for each level
+    # (spec 13.3). That prediction is the whole of what roughness takes over from ripples a
+    # footprint filtered away, and it is a model of glGenerateMipmap rather than a measurement
+    # of it -- so the levels that carry the band are held to the variance arm's bounds.
+    # Levels below WATER_RIPPLE_MIP_FLOOR of the whole band are where fp16 and the aliasing
+    # the model ignores dominate a quantity nothing can see.
+    carried = [m for m in ripple_mips
+               if m.get("slope_pred", 0.0) >= WATER_RIPPLE_MIP_FLOOR * var_rows[-1]["slope_pred"]] \
+        if var_rows else []
+    if not carried:
+        print(f"  water-ripple-mips FAIL  no ripple mip rows ({len(ripple_mips)} printed)")
+        failures.append("water-ripple-mips")
+    else:
+        ratios = [m["slope_ratio"] for m in carried]
+        ok = all(WATER_FFT_VAR_MIN <= v <= WATER_FFT_VAR_MAX for v in ratios)
+        print(f"  water-ripple-mips {'PASS' if ok else 'FAIL'}  measured/predicted slope at "
+              f"levels 1-{len(carried)} "
+              f"{'/'.join(f'{v:.2f}' for v in ratios)} "
+              f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX})")
+        if not ok:
+            failures.append("water-ripple-mips")
 
     # The transform against its closed form. The only arm in this suite that can fail on
     # a transform which is deterministic, differs from Gerstner, and is still wrong.
