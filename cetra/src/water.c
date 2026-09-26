@@ -525,6 +525,8 @@ void free_water(Water* water) {
     glDeleteBuffers(WATER_PROBE_LATENCY, water->probe_pbo);
     glDeleteTextures(1, &water->caustic_tex);
     glDeleteFramebuffers(1, &water->caustic_fbo);
+    glDeleteTextures(1, &water->caustic_land_tex);
+    glDeleteFramebuffers(1, &water->caustic_land_fbo);
     glDeleteVertexArrays(1, &water->caustic_vao);
     glDeleteBuffers(1, &water->caustic_ebo);
     free(water);
@@ -2131,21 +2133,39 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
 }
 
 /*
- * The caustics program, when the pass should run: caustics are on and nothing has failed. The
- * first call also makes the target and the lattice; a missing program or an incomplete target
- * is reported once and latches the pass off.
+ * The two caustics programs, when the pass should run: caustics are on and nothing has failed.
+ * The first call also makes the targets and the lattice; a missing program or an incomplete
+ * target is reported once and latches the pass off.
  */
-static ShaderProgram* _water_caustic_ready(Water* water, struct Engine* engine) {
+static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProgram** land,
+                                 ShaderProgram** draw) {
     if (!water->caustics || water->caustic_failed)
-        return NULL;
-    ShaderProgram* prog = engine_find_program(engine, "water_caustic");
-    if (!prog) {
-        log_error("Water: caustic program missing; caustics disabled");
+        return false;
+    *land = engine_find_program(engine, "water_caustic_land");
+    *draw = engine_find_program(engine, "water_caustic");
+    if (!*land || !*draw) {
+        log_error("Water: caustic programs missing; caustics disabled");
         water->caustic_failed = true;
-        return NULL;
+        return false;
     }
     if (water->caustic_fbo)
-        return prog;
+        return true;
+
+    // One texel per lattice corner, fp32 because the next pass differences neighbours a cell
+    // apart and half precision at a few tens of metres has millimetres to offer.
+    const int corners = WATER_CAUSTIC_GRID_N + 1;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &water->caustic_land_tex);
+    glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, corners, corners, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &water->caustic_land_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_land_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           water->caustic_land_tex, 0);
+    const GLenum land_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 
     const int res = WATER_CAUSTIC_TARGET_RES;
     glActiveTexture(GL_TEXTURE0);
@@ -2169,12 +2189,12 @@ static ShaderProgram* _water_caustic_ready(Water* water, struct Engine* engine) 
     const int n = WATER_CAUSTIC_GRID_N;
     const size_t count = (size_t)n * n * 6;
     GLuint* idx = malloc(count * sizeof(GLuint));
-    if (!idx || status != GL_FRAMEBUFFER_COMPLETE) {
+    if (!idx || status != GL_FRAMEBUFFER_COMPLETE || land_status != GL_FRAMEBUFFER_COMPLETE) {
         log_error("Water: caustic target %s; caustics disabled",
                   idx ? "incomplete" : "index allocation failed");
         free(idx);
         water->caustic_failed = true;
-        return NULL;
+        return false;
     }
     size_t o = 0;
     for (int j = 0; j < n; j++) {
@@ -2197,7 +2217,7 @@ static ShaderProgram* _water_caustic_ready(Water* water, struct Engine* engine) 
                  GL_STATIC_DRAW);
     glBindVertexArray(0);
     free(idx);
-    return prog;
+    return true;
 }
 
 /*
@@ -2209,7 +2229,8 @@ static ShaderProgram* _water_caustic_ready(Water* water, struct Engine* engine) 
  * no pass, rather than a pass that happens to add nothing.
  */
 static void _water_run_caustics(Water* water, const struct Scene* scene,
-                                const struct Engine* engine, ShaderProgram* prog, bool fft) {
+                                const struct Engine* engine, ShaderProgram* land,
+                                ShaderProgram* draw, bool fft) {
     water->caustic_ready = false;
     const Light* key = water_key_light(scene);
     if (!key)
@@ -2257,14 +2278,28 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     const float grid[2] = {floorf((origin[0] - bent[0] * reach - pad) / cell) * cell,
                            floorf((origin[1] - bent[2] * reach - pad) / cell) * cell};
 
+    // Every lattice corner traced once, into one texel each.
+    glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_land_fbo);
+    glViewport(0, 0, n + 1, n + 1);
+    glUseProgram(land->id);
+    UniformManager* lu = land->uniforms;
+    _water_bind_ocean(water, scene, engine, lu, fft);
+    uniform_set_float(lu, "time", (float)engine->render_time);
+    uniform_set_vec2(lu, "causticGridOrigin", grid);
+    uniform_set_float(lu, "causticCell", cell);
+    uniform_set_vec2(lu, "causticTargetOrigin", origin);
+    uniform_set_vec3(lu, "causticKeyDir", travel);
+    uniform_set_float(lu, "causticFloorY", floor_y);
+    draw_fullscreen_quad(_water_quad(water));
+
+    // Then the lattice drawn where they landed. Additive, and no culling: a folded cell lands
+    // wound the other way and still delivers its light. Blend function and cull are saved here,
+    // as the pass bracket does not own them.
     const int res = WATER_CAUSTIC_TARGET_RES;
     glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo);
     glViewport(0, 0, res, res);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-
-    // Additive, and no culling: a folded cell lands wound the other way and still delivers
-    // its light. Blend function and cull are saved here, as the pass bracket does not own them.
     GLint blend_src = 0, blend_dst = 0;
     glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src);
     glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst);
@@ -2273,19 +2308,13 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
 
-    glUseProgram(prog->id);
-    UniformManager* u = prog->uniforms;
-    _water_bind_ocean(water, scene, engine, u, fft);
-    uniform_set_float(u, "time", (float)engine->render_time);
-    uniform_set_vec2(u, "causticGridOrigin", grid);
-    uniform_set_float(u, "causticCell", cell);
+    glUseProgram(draw->id);
+    UniformManager* u = draw->uniforms;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
+    uniform_set_int(u, "causticLanded", 0);
     uniform_set_int(u, "causticGridN", n);
-    uniform_set_vec2(u, "causticTargetOrigin", origin);
-    uniform_set_float(u, "causticTargetSize", size);
-    uniform_set_vec3(u, "causticKeyDir", travel);
-    uniform_set_float(u, "causticFloorY", floor_y);
-    const float texel_m = WATER_CAUSTIC_TARGET_M / (float)res;
-    uniform_set_float(u, "causticTexelArea", texel_m * texel_m);
+    uniform_set_float(u, "causticTargetM", WATER_CAUSTIC_TARGET_M);
     glBindVertexArray(water->caustic_vao);
     glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
@@ -2354,10 +2383,10 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         _water_probe_pass(water, scene, engine, probe_prog, fft, (float)engine->render_time);
         check_gl_error("water probe");
     }
-    ShaderProgram* caustic_prog = _water_caustic_ready(water, engine);
+    ShaderProgram *caustic_land = NULL, *caustic_draw = NULL;
     water->caustic_ready = false;
-    if (caustic_prog) {
-        _water_run_caustics(water, scene, engine, caustic_prog, fft);
+    if (_water_caustic_ready(water, engine, &caustic_land, &caustic_draw)) {
+        _water_run_caustics(water, scene, engine, caustic_land, caustic_draw, fft);
         check_gl_error("water caustics");
     }
     _water_pass_end(&pass);
