@@ -44,6 +44,17 @@
 #define WATER_CAUSTIC_LEVELS    2
 #define WATER_CAUSTIC_LEVEL_DIV 4.0f
 
+/*
+ * The finer levels are for SHALLOW water: fully used down to FINE_FULL metres of traced depth and
+ * gone by FINE_OFF, the coarse level alone below that. What only a fine cell resolves is ripple
+ * focus, and a ripple's focal length -- n / ((n - 1) a k^2), a millimetre at a few hundred rad/m
+ * -- is well under a metre, so by several metres its light has crossed and spread and there is no
+ * finer pattern to draw. Over a 9 m bed the fine level was also measured losing a quarter of its
+ * light, cause unresolved, which this keeps out of every frame.
+ */
+#define WATER_CAUSTIC_FINE_FULL_M 4.0f
+#define WATER_CAUSTIC_FINE_OFF_M  8.0f
+
 // Where the rays land when there is no baked bed: the focal length of the short band's ripples,
 // n / ((n - 1) a k^2) for a centimetre over half a metre to a metre, is 2.5 to 5 m.
 #define WATER_CAUSTIC_PLANE_M 3.0f

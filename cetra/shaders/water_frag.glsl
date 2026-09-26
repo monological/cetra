@@ -107,6 +107,7 @@ uniform sampler2DArray causticTex;
 uniform int causticAvailable;
 uniform vec2 causticOrigin[WATER_CAUSTIC_LEVELS];
 uniform float causticSide[WATER_CAUSTIC_LEVELS]; // world units
+uniform int causticDrawn[WATER_CAUSTIC_LEVELS];   // 0 = skipped this frame; the level is not read
 // The sky's irradiance on a horizontal bed, absolute, for the key light's share of what lights it.
 uniform vec3 causticSkyIrradiance;
 // 0 = shade normally; 1 = what the caustics multiplied the bed by; 2 = the raw caustics target
@@ -618,13 +619,18 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
     float defocus = exp2(clamp(log2(traced / max(column, 1.0e-6)), 0.0, 3.0));
     /*
      * Each finer level over the coarser ones, where its window reaches, each faded to flat at its
-     * own edge. Every level averages 1 over any sea, so handing one to the next moves where the
-     * light is drawn and not how much of it there is.
+     * own edge -- and, the finer ones, to nothing over water deeper than they are for
+     * (WATER_CAUSTIC_FINE_FULL_M to _OFF_M of traced depth), where the coarse level alone shows.
+     * Every level averages 1 over any sea, so handing one to the next moves where the light is
+     * drawn and not how much of it there is.
      */
+    float fineKeep = 1.0 - smoothstep(WATER_CAUSTIC_FINE_FULL_M * waterUnitsPerMetre,
+                                      WATER_CAUSTIC_FINE_OFF_M * waterUnitsPerMetre, traced);
     float c = 1.0;
     for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
         vec2 cuv = waterCausticUv(at, level);
-        c = mix(c, waterCausticSample(cuv, level, 2.0 * defocus), waterCausticEdge(cuv));
+        float keep = level == 0 ? 1.0 : fineKeep * float(causticDrawn[level]);
+        c = mix(c, waterCausticSample(cuv, level, 2.0 * defocus), waterCausticEdge(cuv) * keep);
     }
     if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
         return vec3(1.0);

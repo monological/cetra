@@ -610,6 +610,7 @@ typedef struct Water {
     GLuint caustic_vao;
     GLuint caustic_ebo;
     float caustic_origin[WATER_CAUSTIC_LEVELS][2]; // world xz of each target's corner
+    bool caustic_drawn[WATER_CAUSTIC_LEVELS]; // false = skipped this frame, its window too deep
     bool caustic_ready;  // rendered this frame; false = the surface reads no caustics
     bool caustic_failed; // no program or target; never retried
 

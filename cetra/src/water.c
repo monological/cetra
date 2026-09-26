@@ -2497,6 +2497,15 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
      */
     const float centre_floor =
         _water_caustic_floor(water, origin[0] + 0.5f * size, origin[1] + 0.5f * size, floor_y);
+    water->caustic_origin[level][0] = origin[0];
+    water->caustic_origin[level][1] = origin[1];
+    // A finer level over water too deep for it to be used (WATER_CAUSTIC_FINE_OFF_M) is not
+    // traced at all: the surface would weigh it at nothing, and the coarse level is there.
+    water->caustic_drawn[level] =
+        level == 0 ||
+        water->level - centre_floor < WATER_CAUSTIC_FINE_OFF_M * _water_units_per_metre(scene);
+    if (!water->caustic_drawn[level])
+        return;
     vec3 bent;
     glm_vec3_refract(travel, (vec3){0.0f, 1.0f, 0.0f}, 1.0f / water->ior, bent);
     const float reach = (centre_floor - water->level) / bent[1];
@@ -2543,9 +2552,6 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
     glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
     glDisable(GL_BLEND);
-
-    water->caustic_origin[level][0] = origin[0];
-    water->caustic_origin[level][1] = origin[1];
 }
 
 /*
@@ -2752,6 +2758,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         uniform_set_vec2(u, name, water->caustic_origin[level]);
         snprintf(name, sizeof(name), "causticSide[%d]", level);
         uniform_set_float(u, name, _water_caustic_side(scene, level));
+        snprintf(name, sizeof(name), "causticDrawn[%d]", level);
+        uniform_set_int(u, name, water->caustic_drawn[level] ? 1 : 0);
     }
     uniform_set_int(u, "waterCausticDebug", water->caustic_debug);
     /*
@@ -3002,6 +3010,11 @@ void water_caustic_probe(const Water* water) {
     const int lo = res / 10;
     const int hi = res - res / 10;
     for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        // A level skipped for depth holds an older frame's pattern, which nothing reads.
+        if (!water->caustic_drawn[level]) {
+            printf("water-caustic-probe available=1 level=%d drawn=0\n", level);
+            continue;
+        }
         const float* target = px + layer * (size_t)level;
         double sum = 0.0;
         float mn = 1.0e30f, mx = 0.0f;
@@ -3015,8 +3028,8 @@ void water_caustic_probe(const Water* water) {
                 count++;
             }
         }
-        printf("water-caustic-probe available=1 level=%d mean=%.6f min=%.6f max=%.4f\n", level,
-               sum / (double)count, (double)mn, (double)mx);
+        printf("water-caustic-probe available=1 level=%d drawn=1 mean=%.6f min=%.6f max=%.4f\n",
+               level, sum / (double)count, (double)mn, (double)mx);
     }
     free(px);
 }
