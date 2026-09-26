@@ -357,6 +357,23 @@ OceanBed oceanBed(vec2 p) {
     return b;
 }
 
+/*
+ * The world y of the baked bed under `p`, and whether there is one there: false with no bed or
+ * outside its domain, for oceanBed's reasons. One definition for the caustics' trace and the
+ * surface's lookup of it, so the two agree about which floor the light landed on. Explicit LOD,
+ * since the trace calls it from a pass with no screen derivatives worth having.
+ */
+bool oceanBedHeight(vec2 p, out float y) {
+    y = 0.0;
+    if (bedAvailable == 0)
+        return false;
+    vec2 uv = p / (waterExtent * 2.0) + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return false;
+    y = textureLod(bedTex, uv, 0.0).r;
+    return true;
+}
+
 struct OceanSurface {
     vec3 world;  // displaced world position
     vec3 normal; // unit normal from the analytic derivatives

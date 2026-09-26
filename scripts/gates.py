@@ -8768,6 +8768,13 @@ WATER_SHORE_FALL_RATIO = 0.92
 # 12,509. Half the smaller: a floor far below the signal passes a regression that loses most
 # of the effect.
 WATER_CAUSTIC_MIN_PX = 110000
+# Calm water is exactly 1 at every texel, give or take the half float the target is stored in:
+# measured 0.9995 to 1.0000.
+WATER_CAUSTIC_CALM_TOL = 5e-3
+# How far a sea's mean may sit from 1. Measured 0.994 Gerstner, 0.979 spectral (the per-cell
+# ceiling and cells smaller than a texel both drop light), and 1.032 over the dome, traced to its
+# baked bed.
+WATER_CAUSTIC_MEAN_TOL = {"gerstner": 0.02, "spectral": 0.03, "dome": 0.05}
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -8805,6 +8812,21 @@ def _water_closest_to_background(pix, bg, w, h, box):
                                    abs(_SRGB_TO_LINEAR[pix[o + 1]] - _SRGB_TO_LINEAR[bg[o + 1]]),
                                    abs(_SRGB_TO_LINEAR[pix[o + 2]] - _SRGB_TO_LINEAR[bg[o + 2]])))
     return worst
+
+
+def _water_caustic_probe(extra, scene=None):
+    """Run --water-caustic-probe and return its fields as floats, or {} with no target.
+
+    The target conserves light, so its mean over the window is the energy check: 1 on any sea,
+    and exactly 1 at every texel on a calm one.
+    """
+    cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "10",
+           "-W", "200", "-H", "150", "--water-caustic-probe"] + extra
+    r = _run(cmd, capture_output=True, text=True)
+    for line in (r.stdout + r.stderr).splitlines():
+        if line.startswith("water-caustic-probe ") and "available=1" in line:
+            return {k: float(v) for k, v in (p.split("=", 1) for p in line.split()[2:])}
+    return {}
 
 
 def _water_probe(extra, scene=None):
@@ -9950,6 +9972,9 @@ def run_water_gate(workdir):
                       of its own.
       water-still     a spectral sea with no energy answers exactly its still level: any
                       remainder is an offset every spectral sea carries.
+      water-caustic-energy  the caustics conserve light: the target is exactly 1 over a
+                      calm sea and averages 1 over Gerstner, spectral and a baked dome bed,
+                      which a pixel count cannot tell from a brighten-only effect.
       water-shoal     waves shorten over a rising bed, and ONLY over it. Needs
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
@@ -10603,6 +10628,31 @@ def run_water_gate(workdir):
         if not ok:
             failures.append("water-still")
 
+    # The caustics conserve light (spec 13.2): each landed cell carries the beam area it came
+    # from, so the target averages 1 over any sea and is exactly 1 over a calm one. A pixel count
+    # cannot tell this from the brighten-only heuristic it replaced; a mean can. Calm reuses
+    # water-still's zero-energy sea; the dome leg traces onto a baked bed rather than the plane.
+    calm = _water_caustic_probe(WATER_PIN, scene=variant)
+    gerstner = _water_caustic_probe(WATER_PIN)
+    spectral = _water_caustic_probe(WATER_PIN + ["--water-waves", "fft"])
+    dome = _water_caustic_probe(BEACH_BED, scene=asset(BEACH_FIXTURE))
+    if not (calm and gerstner and spectral and dome):
+        print("  water-caustic-energy FAIL  a leg rendered no caustics target")
+        failures.append("water-caustic-energy")
+    else:
+        calm_off = max(abs(calm["min"] - 1.0), abs(calm["max"] - 1.0))
+        legs = [(abs(gerstner["mean"] - 1.0), WATER_CAUSTIC_MEAN_TOL["gerstner"]),
+                (abs(spectral["mean"] - 1.0), WATER_CAUSTIC_MEAN_TOL["spectral"]),
+                (abs(dome["mean"] - 1.0), WATER_CAUSTIC_MEAN_TOL["dome"])]
+        ok = calm_off <= WATER_CAUSTIC_CALM_TOL and all(off <= tol for off, tol in legs)
+        print(f"  water-caustic-energy {'PASS' if ok else 'FAIL'}  calm within "
+              f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); mean "
+              f"{gerstner['mean']:.4f} Gerstner, {spectral['mean']:.4f} spectral, "
+              f"{dome['mean']:.4f} dome (want within "
+              f"{'/'.join(str(t) for _, t in legs)} of 1)")
+        if not ok:
+            failures.append("water-caustic-energy")
+
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.
     # The no-bed reference is `fa`, already on disk: no bed IS the default, so
@@ -10869,7 +10919,12 @@ BEACH_BED = ["--water-bed", "dome"]
 # which accumulates per CASCADE texel and therefore tiles the world: with the spectral sea
 # the bed's effect is measurable out to the horizon, which would make beach-surf-zone read
 # as a failure of a claim it is not making.
-BEACH_GERSTNER = ["--water-waves", "gerstner"]
+#
+# And no caustics, for the same isolation. Since spec 13.2 they run on Gerstner and trace onto
+# the baked bed, so the bed changes them too -- and a caustic line is a bigger luma change than
+# the shore band, which put beach-shoreline's argmax on the pattern rather than the waterline at
+# half the azimuths. Caustics have their own arms in the water group.
+BEACH_GERSTNER = ["--water-waves", "gerstner", "--no-water-caustics"]
 # All the way round at 20 degrees. A ring asked about on one aspect is not a ring, and
 # asking about every aspect at once is the one thing this fixture can do that the ramp
 # cannot -- water_fixture has a single shoreline facing a single way.
