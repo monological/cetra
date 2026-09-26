@@ -134,6 +134,11 @@ _Static_assert(SKY_CLOUD_SHADOW_UNIT < 16,
 #define WATER_SPECTRUM_LOG  7 // log2(WATER_SPECTRUM_RES)
 #define WATER_CASCADE_COUNT 3
 
+// Surface query slots, one texel each (spec 13.1): the render app's probe grid is 4x4.
+#define WATER_PROBE_MAX 16
+// Passes between a query's render and its read. The pack-buffer ring holds this many.
+#define WATER_PROBE_LATENCY 2
+
 typedef enum WaterWaveModel {
     WATER_WAVES_GERSTNER = 0, // closed-form octaves; lake scale, no GPU state
     WATER_WAVES_FFT,          // spectral cascades; ocean scale
@@ -514,6 +519,25 @@ typedef struct Water {
      * crest as a comb of humps at the wobble's period. One number for the whole shore.
      */
     float bed_foreshore_slope;
+
+    /*
+     * The surface query's readback (spec 13.1): one RGBA32F texel per query slot, read into a
+     * ring of pack buffers and consumed at FIXED latency -- always the slot issued
+     * WATER_PROBE_LATENCY passes ago, never whichever fence signalled, so what a caller reads
+     * is a pure function of frame history and a headless run stays bit-equal to itself.
+     *
+     * `probe_issued_t` is the clock each slot was rendered at, so an answer carries the
+     * instant it describes rather than the one it arrived in.
+     */
+    GLuint probe_tex;
+    GLuint probe_fbo;
+    GLuint probe_pbo[WATER_PROBE_LATENCY];
+    float probe_issued_t[WATER_PROBE_LATENCY];
+    bool probe_enabled;                     // false = no pass, no readback
+    long probe_passes;                      // readbacks issued
+    float probe_result[WATER_PROBE_MAX][4]; // the answer from WATER_PROBE_LATENCY passes ago
+    float probe_result_t;                   // the clock that answer was rendered at
+    long probe_result_pass;                 // which pass produced it; -1 = none yet
 } Water;
 
 /*
@@ -631,5 +655,8 @@ void water_update(Water* water, const struct Scene* scene, float t, float dt);
  * failure this exists to prevent.
  */
 void water_fft_probe(const Water* water, struct Engine* engine);
+
+// Spec 13.1 phase 1: print whether the probe ring's last retired readback is bit-exact.
+void water_probe_ring_report(const Water* water);
 
 #endif // _WATER_H_

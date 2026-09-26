@@ -4431,6 +4431,7 @@ int main(int argc, char** argv) {
      * whether the parameter it found pushes forward onto the point that was asked for.
      */
     if (args.water_probe && scene->water) {
+        scene->water->probe_enabled = true;
         const Water* w = scene->water;
         printf("water-probe model=%s available=%d level=%.4f\n",
                w->wave_model == WATER_WAVES_FFT ? "fft" : "gerstner",
@@ -4529,6 +4530,8 @@ int main(int argc, char** argv) {
     // --water-probe -- there is nothing to measure until a frame has run one.
     if (args.water_fft_probe)
         water_fft_probe(scene->water, engine);
+    if (args.water_probe && scene->water)
+        water_probe_ring_report(scene->water);
 
     // The per-probe block, after the loop for the same reason: the froxel masks
     // are built by the frames, so the digest and the bit count only mean

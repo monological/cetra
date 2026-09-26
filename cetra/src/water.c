@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h> // water_fft_probe prints to stdout, like the CPU wave query
 #include <stdlib.h>
+#include <string.h>
 
 #include "water.h"
 
@@ -481,6 +482,7 @@ Water* create_water(void) {
     water->far_lod = true;
     water->wetness = true;
     water->film = true;
+    water->probe_result_pass = -1;
     return water;
 }
 
@@ -508,6 +510,9 @@ void free_water(Water* water) {
     glDeleteTextures(1, &water->foam_pattern_tex);
     glDeleteTextures(2, water->foam_tex);
     glDeleteFramebuffers(2, water->foam_fbo);
+    glDeleteTextures(1, &water->probe_tex);
+    glDeleteFramebuffers(1, &water->probe_fbo);
+    glDeleteBuffers(WATER_PROBE_LATENCY, water->probe_pbo);
     free(water);
 }
 
@@ -1872,6 +1877,111 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
     check_gl_error("water spectral");
 }
 
+static bool _water_probe_alloc(Water* water) {
+    if (water->probe_fbo)
+        return true;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &water->probe_tex);
+    glBindTexture(GL_TEXTURE_2D, water->probe_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WATER_PROBE_MAX, 1, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &water->probe_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, water->probe_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, water->probe_tex,
+                           0);
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glGenBuffers(WATER_PROBE_LATENCY, water->probe_pbo);
+    for (int i = 0; i < WATER_PROBE_LATENCY; i++) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, water->probe_pbo[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER, sizeof(water->probe_result), NULL, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Water: probe target incomplete (0x%x); surface query disabled", status);
+        water->probe_enabled = false;
+        return false;
+    }
+    water->probe_passes = 0;
+    water->probe_result_pass = -1;
+    return true;
+}
+
+/*
+ * Retire the slot issued WATER_PROBE_LATENCY passes ago, then render this pass's answers and
+ * queue their readback into the slot just freed. Called with the caller's framebuffer and
+ * viewport already saved; leaves the probe FBO bound.
+ *
+ * No fence, deliberately: mapping a slot whose read has not landed STALLS rather than
+ * returning early, so the latency is a correctness-free choice about how often that happens
+ * and the answer never depends on GPU timing.
+ */
+static void _water_probe_pass(Water* water, float t) {
+    const int slot = (int)(water->probe_passes % WATER_PROBE_LATENCY);
+    if (water->probe_passes >= WATER_PROBE_LATENCY) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, water->probe_pbo[slot]);
+        const float* px =
+            glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, sizeof(water->probe_result), GL_MAP_READ_BIT);
+        if (px) {
+            memcpy(water->probe_result, px, sizeof(water->probe_result));
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            water->probe_result_t = water->probe_issued_t[slot];
+            water->probe_result_pass = water->probe_passes - WATER_PROBE_LATENCY;
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, water->probe_fbo);
+    glViewport(0, 0, WATER_PROBE_MAX, 1);
+    // PHASE 1 PATTERN: a value per texel that encodes the pass and the slot, with components
+    // fp16 cannot hold, so an exact readback proves the format, the texel order and the
+    // latency together. Replaced by the query pass in phase 2.
+    const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
+    GLint saved_scissor[4];
+    glGetIntegerv(GL_SCISSOR_BOX, saved_scissor);
+    glEnable(GL_SCISSOR_TEST);
+    for (int i = 0; i < WATER_PROBE_MAX; i++) {
+        glScissor(i, 0, 1, 1);
+        const float v[4] = {(float)water->probe_passes, (float)i,
+                            (float)water->probe_passes + 1.0f / 3.0f, -(float)(i + 1) / 7.0f};
+        glClearBufferfv(GL_COLOR, 0, v);
+    }
+    glScissor(saved_scissor[0], saved_scissor[1], saved_scissor[2], saved_scissor[3]);
+    if (!scissor_was_enabled)
+        glDisable(GL_SCISSOR_TEST);
+
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, water->probe_pbo[slot]);
+    glReadPixels(0, 0, WATER_PROBE_MAX, 1, GL_RGBA, GL_FLOAT, NULL);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    water->probe_issued_t[slot] = t;
+    water->probe_passes++;
+}
+
+// PHASE 1: check the retired answer against the pattern the pass that produced it wrote.
+void water_probe_ring_report(const Water* water) {
+    if (!water || !water->probe_enabled) {
+        printf("water-probe-ring available=0 reason=%s\n", water ? "off" : "nowater");
+        return;
+    }
+    if (water->probe_result_pass < 0) {
+        printf("water-probe-ring available=0 reason=unfilled latency=%d passes=%ld\n",
+               WATER_PROBE_LATENCY, water->probe_passes);
+        return;
+    }
+    const long p = water->probe_result_pass;
+    int exact = 0;
+    for (int i = 0; i < WATER_PROBE_MAX; i++) {
+        const float want[4] = {(float)p, (float)i, (float)p + 1.0f / 3.0f, -(float)(i + 1) / 7.0f};
+        if (memcmp(want, water->probe_result[i], sizeof(want)) == 0)
+            exact++;
+    }
+    printf("water-probe-ring available=1 latency=%d passes=%ld answered=%ld t=%.9g exact=%d/%d\n",
+           WATER_PROBE_LATENCY, water->probe_passes, p, (double)water->probe_result_t, exact,
+           WATER_PROBE_MAX);
+}
+
 /*
  * Advance the water's SIMULATION for the frame, before anything draws.
  *
@@ -1913,6 +2023,18 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         if (!_water_ensure_spectra(water))
             return;
         _water_run_spectral(water, scene, engine, (float)engine->render_time);
+    }
+
+    // The surface query, after the cascades it will read are complete, on either model.
+    if (water->probe_enabled && _water_probe_alloc(water)) {
+        GLint saved_viewport[4];
+        GLint saved_fbo = 0;
+        glGetIntegerv(GL_VIEWPORT, saved_viewport);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+        _water_probe_pass(water, (float)engine->render_time);
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+        glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+        check_gl_error("water probe");
     }
 
     ShaderProgram* program = engine_get_program(engine, "water");
