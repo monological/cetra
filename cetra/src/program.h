@@ -220,7 +220,9 @@ ShaderProgram* create_water_fft_program();
 ShaderProgram* create_water_foam_program();
 // The surface query (spec 13.1): one texel per query point, the surface height over it.
 ShaderProgram* create_water_probe_program();
-// Refracted-grid caustics (spec 13.2): a lattice refracted onto the floor, rasterised additively.
+// Refracted-grid caustics (spec 13.2): where each lattice corner's light lands, then the lattice
+// drawn there additively.
+ShaderProgram* create_water_caustic_land_program();
 ShaderProgram* create_water_caustic_program();
 // Resolves the depth cascades into the filterable moment cascades (--msm)
 ShaderProgram* create_msm_resolve_program();

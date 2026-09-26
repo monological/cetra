@@ -1,58 +1,54 @@
 #version 330 core
 
 /*
- * Refracted-grid caustics (spec 13.2), after Evan Wallace: a lattice laid over the water,
- * each vertex refracting the key light through the surface normal and landing on the floor.
- * The displaced lattice is rasterised into the caustics target, where the fragment stage
- * turns how much each cell shrank or spread into how much light it concentrates.
+ * Refracted-grid caustics (spec 13.2), second half: draw the lattice where its light landed.
  *
- * No attributes: the vertex is its index into a (G+1)^2 lattice, which the index buffer
- * stitches into triangles.
+ * No attributes: the vertex is its index into the (G+1)^2 lattice, which the index buffer
+ * stitches into triangles, and where it landed is a texel of the first half's output.
+ *
+ * The concentration is measured HERE, per corner, from the neighbouring corners -- the same
+ * ratio, beam area over landed area, taken over the corner's own neighbourhood -- and handed to
+ * the geometry stage as the SHAPE of the light across each cell. Measured per triangle alone it
+ * is one flat value per cell, and a focused line reads as a staircase of squares wherever a
+ * cell is larger than a few pixels.
  */
 
-uniform vec2 causticGridOrigin;   // world xz of lattice vertex (0, 0)
-uniform float causticCell;        // world units between lattice vertices
-uniform int causticGridN;         // cells per side
-uniform vec2 causticTargetOrigin; // world xz of the target's corner
-uniform float causticTargetSize;  // world units the target spans
-uniform vec3 causticKeyDir;       // the direction the key light TRAVELS, unit, y < 0
-uniform float causticFloorY;      // world y the rays land on
-uniform float time;
+uniform sampler2D causticLanded; // .xy landed, .zw source, metres from the target corner
+uniform int causticGridN;        // cells per side
+uniform float causticTargetM;    // metres the target spans
 
-// Where this ray's light came from, in METRES from the target's corner -- small numbers,
-// because the fragment stage differentiates it and an absolute world position of a few
-// thousand units leaves a derivative with no precision left.
-out vec2 vSrc;
+out vec2 vLanded;
+out vec2 vSource;
+out float vCorner;
 
-#include "ocean.glsl"
+// The ceiling on one corner's value. Only the SHAPE is taken from the corners -- the geometry
+// stage rescales them to the triangle's exact ratio -- so this bounds how sharp a peak can be
+// within a cell, not how much light it holds.
+const float WATER_CAUSTIC_CORNER_MAX = 40.0;
 
-const float WATER_IOR = 1.3335;
+vec4 corner(ivec2 ij) {
+    return texelFetch(causticLanded, clamp(ij, ivec2(0), ivec2(causticGridN)), 0);
+}
 
 void main() {
     int side = causticGridN + 1;
-    vec2 ij = vec2(float(gl_VertexID % side), float(gl_VertexID / side));
-    vec2 p = causticGridOrigin + ij * causticCell;
+    ivec2 ij = ivec2(gl_VertexID % side, gl_VertexID / side);
+    vec4 here = corner(ij);
 
-    // The surface through which the light enters, and the normal it meets -- the same one the
-    // water is shaded with, short band included, or the lens is not the water that is drawn.
-    // The footprint is the lattice cell: what a cell cannot resolve it cannot focus either.
-    OceanSurface s = oceanEvaluateAt(p, time, oceanBed(p), causticCell);
-    vec3 n = oceanShadingNormal(s.normal, s.world.xz, 1.0);
-    vec3 r = refract(causticKeyDir, n, 1.0 / WATER_IOR);
+    // Central differences, one-sided at the lattice's own edge. The edge lies well outside the
+    // target, so how it is closed there does not reach anything that is read.
+    ivec2 lo = max(ij - 1, ivec2(0));
+    ivec2 hi = min(ij + 1, ivec2(causticGridN));
+    vec4 di = (corner(ivec2(hi.x, ij.y)) - corner(ivec2(lo.x, ij.y))) / float(hi.x - lo.x);
+    vec4 dj = (corner(ivec2(ij.x, hi.y)) - corner(ivec2(ij.x, lo.y))) / float(hi.y - lo.y);
+    float landedArea = abs(di.x * dj.y - di.y * dj.x);
+    float sourceArea = abs(di.z * dj.w - di.w * dj.z);
+    // The floor on the divisor IS the ceiling: a landed area below source / MAX reads as MAX.
+    // The 1e-12 keeps a degenerate corner with no source area from dividing zero by zero.
+    vCorner = sourceArea / max(landedArea, max(sourceArea / WATER_CAUSTIC_CORNER_MAX, 1.0e-12));
+    vLanded = here.xy;
+    vSource = here.zw;
 
-    // Past the critical angle there is no transmitted ray; land it far off the target.
-    float down = min(r.y, -1.0e-4);
-    vec3 landed = s.world + r * ((causticFloorY - s.world.y) / down);
-
-    /*
-     * The SOURCE is the entry point carried back along the incoming beam to the still plane,
-     * not the lattice parameter. A choppy or Gerstner surface moves its points sideways, so the
-     * parameter does not say where in the beam's cross-section this light was; the beam does.
-     * Over flat water the two are the same point, which is what makes the flat answer 1.
-     */
-    vec2 src = s.world.xz + causticKeyDir.xz * ((waterLevel - s.world.y) / causticKeyDir.y);
-    vSrc = (src - causticTargetOrigin) / waterUnitsPerMetre;
-
-    vec2 uv = (landed.xz - causticTargetOrigin) / causticTargetSize;
+    vec2 uv = here.xy / causticTargetM;
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
 }

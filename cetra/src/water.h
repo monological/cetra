@@ -581,6 +581,8 @@ typedef struct Water {
      */
     GLuint caustic_tex;
     GLuint caustic_fbo;
+    GLuint caustic_land_tex; // (G+1)^2 RGBA32F: each lattice corner's landed and source point
+    GLuint caustic_land_fbo;
     GLuint caustic_vao;
     GLuint caustic_ebo;
     float caustic_origin[2]; // world xz of the target's corner

@@ -804,9 +804,14 @@ ShaderProgram* create_water_probe_program() {
     return create_post_program("water_probe", water_probe_frag_shader_str);
 }
 
+ShaderProgram* create_water_caustic_land_program() {
+    return create_post_program("water_caustic_land", water_caustic_land_frag_shader_str);
+}
+
 ShaderProgram* create_water_caustic_program() {
-    ShaderProgram* program = create_program_from_source(
-        "water_caustic", water_caustic_vert_shader_str, water_caustic_frag_shader_str, NULL);
+    ShaderProgram* program =
+        create_program_from_source("water_caustic", water_caustic_vert_shader_str,
+                                   water_caustic_frag_shader_str, water_caustic_geo_shader_str);
     if (!program)
         log_error("Failed to initialize water_caustic shader program");
     return program;
