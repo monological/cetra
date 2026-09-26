@@ -637,6 +637,30 @@ float oceanBandJacobian(vec4 field0, vec4 field1, float choppiness) {
     return (1.0 + d.x) * (1.0 + d.y) - c * c;
 }
 
+// How much of the short band's slope reaches the shading normal.
+const float OCEAN_SHORT_SLOPE_GAIN = 0.42;
+
+/*
+ * The normal the light actually meets: the mesh's, plus the short band's slope, which shades
+ * but never displaces. One function because the surface shades with it and the caustics refract
+ * through it -- a lens made of a different surface from the one drawn focuses light somewhere
+ * the water is not.
+ *
+ * Sampled at the DISPLACED position, since this band belongs to the surface where it ended up.
+ * `shortKeep` scales the band's slope, 1 for all of it. The Gerstner path has no short band and
+ * gets its mesh normal back unchanged.
+ *
+ * LOD 0 explicitly: oceanCascadeUv wraps with fract, so an implicit screen derivative reads a
+ * whole period across every tile seam.
+ */
+vec3 oceanShadingNormal(vec3 meshN, vec2 displacedXZ, float shortKeep) {
+    if (waveModel != 1)
+        return meshN;
+    vec4 short1 = oceanCascadeAt(2, 1, oceanCascadeUv(displacedXZ, 2), 0.0);
+    vec2 shortSlope = short1.rg * shortKeep;
+    return normalize(meshN + vec3(-shortSlope.x, 0.0, -shortSlope.y) * OCEAN_SHORT_SLOPE_GAIN);
+}
+
 /*
  * THE CREST-HEIGHT GATE (spec 11.47): a second physical condition alongside compression,
  * so a fold only reads as a whitecap when it is also near a crest -- selecting on
