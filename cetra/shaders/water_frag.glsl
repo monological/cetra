@@ -1056,25 +1056,52 @@ void main() {
          * estimated for a flat, unshadowed-by-anything-but-the-maps bed, since the resolve holds
          * the finished colour and not its parts.
          *
-         * The world point comes from the depth under the REFRACTED sample, since that is what
-         * `bed` shows. The target was traced to one height, and a point above or below it is
-         * reached by the same light further along or further back, so the lookup slides along the
-         * refracted key ray to where the ray met the target's height.
+         * The world point is where the REFRACTED view ray meets the bed's height, not the depth
+         * under the refracted screen sample. That sample is a screen-space estimate of the bend,
+         * and where the bend squeezes many rows onto a few -- low in the frame, over a slope --
+         * every one of those rows reads the same depth, and the pattern smeared down the screen
+         * in long streaks. The ray has no rows to squeeze.
+         *
+         * The bed's height is taken from the depth under this fragment's OWN pixel, the unbent
+         * sight line. Not by walking `path` along the refracted ray: `path` is measured along
+         * the unbent one, which at a grazing angle is metres long for a bed a metre down, and the
+         * refracted ray is steep -- the same length along it ends metres under the bed.
+         *
+         * The target was traced to one height, and a point above or below it is reached by the
+         * same light further along or further back, so the lookup slides along the refracted key
+         * ray to where the ray met the target's height.
          *
          * The lookup and its derivatives are taken here, in uniform flow, whatever the depth
          * says; only the application is conditional.
          */
-        float causticNdc = texture(sceneDepthTex, refrUV).r;
-        vec3 causticView = viewPosFromLinZ(refrUV, viewZFromNdcZ(causticNdc * 2.0 - 1.0));
-        vec3 causticPos = mat3(transpose(view)) * (causticView - view[3].xyz);
+        float causticNdc = texture(sceneDepthTex, uv).r;
+        mat3 viewToWorld = transpose(mat3(view));
+        vec3 sightBed = viewToWorld * (viewPosFromLinZ(uv, viewZFromNdcZ(causticNdc * 2.0 - 1.0)) -
+                                       view[3].xyz);
+        vec3 refrWorld = viewToWorld * refrDir;
+        vec3 causticPos =
+            WorldPos + refrWorld * ((sightBed.y - WorldPos.y) / min(refrWorld.y, -1.0e-4));
         vec3 keyInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
         vec2 causticAt = causticPos.xz + keyInWater.xz *
                                              ((causticFloorY - causticPos.y) / min(keyInWater.y, -1.0e-4));
         vec2 causticUv = (causticAt - causticOrigin) / max(causticSize, 1.0e-6);
-        // One mip softer than the texel footprint: a focused line is narrower than a texel is
-        // worth trusting, and sharper than that it crawls as the camera moves.
-        vec3 causticSample = textureGrad(causticTex, causticUv, dFdx(causticUv) * 2.0,
-                                         dFdy(causticUv) * 2.0).rgb;
+        /*
+         * One mip softer than the texel footprint: a focused line is narrower than a texel is
+         * worth trusting, and sharper than that it crawls as the camera moves.
+         *
+         * And softer again the shallower the point is than the depth the pattern was traced to.
+         * Light that has travelled a fraction of the way to its focus has not narrowed into lines
+         * yet, so the traced pattern is DEFOCUSED there as well as fainter -- the weight below
+         * takes the contrast, this the sharpness. Sharp lines at full focus on sand centimetres
+         * deep drew long regular streaks down a submerged slope.
+         */
+        float causticTraced = max(waterLevel - causticFloorY, 1.0e-6);
+        float causticDefocus =
+            exp2(clamp(log2(causticTraced / max(waterLevel - causticPos.y, 1.0e-6)), 0.0, 3.0));
+        vec3 causticSample =
+            textureGrad(causticTex, causticUv, dFdx(causticUv) * 2.0 * causticDefocus,
+                        dFdy(causticUv) * 2.0 * causticDefocus)
+                .rgb;
         if (causticAvailable == 1 && causticsEnabled == 1 && sunAvailable == 1 &&
             sceneDepthAvailable == 1 && causticNdc < WATER_DEPTH_EMPTY) {
             float column = waterLevel - causticPos.y;
@@ -1086,10 +1113,9 @@ void main() {
              * the pattern's contrast. Applied at full contrast, centimetres of water over sand
              * printed the focused pattern of three metres.
              */
-            float traced = max(waterLevel - causticFloorY, 1.0e-6);
             float weight =
                 (1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y))) *
-                clamp(column / traced, 0.0, 1.0) *
+                clamp(column / causticTraced, 0.0, 1.0) *
                 (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
                                   WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, column));
             /*

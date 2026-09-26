@@ -8762,9 +8762,11 @@ WATER_SHORE_MIN_PX = 700
 # 0.823x, so this ceiling sits above the effect while still failing a wash, an offset,
 # or a coverage value that came out constant.
 WATER_SHORE_FALL_RATIO = 0.92
-# Caustics move 12,509 px of a 480,000 px frame on this fixture -- a small share,
-# because only the submerged part of the ramp is inside the focusing depth window.
-# A quarter of that is well clear of nothing and well under the signal.
+# Caustics move 221,316 px of a 480,000 px frame on this fixture since spec 13.2 -- the
+# refracted-grid pattern darkens the gaps as well as lighting the lines, so it reaches the
+# whole shallow bed where the Jacobian heuristic before it moved 12,509. The floor is kept
+# where that one set it: clear of nothing, and it is the Gerstner leg that needed one at all,
+# since until 13.2 that path had no caustics to measure.
 WATER_CAUSTIC_MIN_PX = 3000
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
@@ -9855,7 +9857,7 @@ def run_water_gate(workdir):
                       camera is static, so motion blur can only move a pixel whose
                       velocity is the wave's own -- it moved 0 px before the previous
                       cascades were retained.
-      water-caustic   light focusing moves the frame; one flag apart.
+      water-caustic   light focusing moves the frame on both wave models; one flag apart.
       water-submerged absorption is monotone along the submerged INTERFACE, which only
                       that branch produces. A pixel count here would pass on a surface
                       that drew nothing, since raising the level moves 91% of the frame
@@ -10121,9 +10123,14 @@ def run_water_gate(workdir):
             failures.append("water-caustic")
         else:
             ae_c, _ = compare(fa, nc)
-            ok = ae_c >= WATER_CAUSTIC_MIN_PX
-            print(f"  water-caustic {'PASS' if ok else 'FAIL'}  {ae_c} px vs no caustics, "
-                  f"want >={WATER_CAUSTIC_MIN_PX}")
+            # And on Gerstner, which has had caustics since spec 13.2: refracting through a
+            # surface normal needs no spectrum, where the heuristic before it needed a fold.
+            gnc = os.path.join(workdir, "water_gerstner_nocaustic.ppm")
+            err = render(scene, gnc, WATER_FLAGS + ["--no-water-caustics"])
+            ae_g = -1 if err else compare(a, gnc)[0]
+            ok = ae_c >= WATER_CAUSTIC_MIN_PX and ae_g >= WATER_CAUSTIC_MIN_PX
+            print(f"  water-caustic {'PASS' if ok else 'FAIL'}  {ae_c} px spectral and {ae_g} "
+                  f"Gerstner vs no caustics, want >={WATER_CAUSTIC_MIN_PX} on both")
             if not ok:
                 failures.append("water-caustic")
 
@@ -10588,10 +10595,10 @@ def run_water_gate(workdir):
         failures.append("water-still")
     else:
         level = float(still_head["level"])
-        off = max(abs(h - level) for h in still_h)
-        ok = off < 1e-6
+        still_off = max(abs(h - level) for h in still_h)
+        ok = still_off < 1e-6
         print(f"  water-still  {'PASS' if ok else 'FAIL'}  zero-energy sea over "
-              f"{len(still_h)} points, worst distance from the still level {off:.8f} "
+              f"{len(still_h)} points, worst distance from the still level {still_off:.8f} "
               f"(want 0)")
         if not ok:
             failures.append("water-still")
