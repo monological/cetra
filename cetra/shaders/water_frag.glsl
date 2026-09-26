@@ -106,7 +106,11 @@ uniform sampler2D causticTex;
 uniform int causticAvailable;
 uniform vec2 causticOrigin;
 uniform float causticSize;
-// 0 = shade normally; 2 = the raw caustics target drawn on the surface, half grey where flat.
+// The world y the target was traced to. The bed a fragment sees is rarely at that height, so its
+// lookup slides along the refracted key ray to where that ray crossed it.
+uniform float causticFloorY;
+// 0 = shade normally; 1 = what the caustics multiplied the bed by; 2 = the raw caustics target
+// drawn on the surface. Both half grey where nothing is concentrated.
 uniform int waterCausticDebug;
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
 // binary cutoff, which is all a single-sample target can express.
@@ -138,6 +142,41 @@ uniform float maxReflectionLOD;
 #define CSM_OUTERMOST_PCF
 #define CSM_PCF_HALF_KERNEL 2
 #include "csm.glsl"
+
+/*
+ * Key-light occlusion at a point BELOW the water, for the caustics' key share (spec 13.2): the
+ * finest cascade that holds the point, where the surface's own glitter reads the outermost.
+ *
+ * The outermost map is scene-fit, so its texels are large, and the bed's own shading -- which
+ * chose from the finer cascades -- draws a sharper shadow than it can see. Read from there, the
+ * caustics stopped at a staircase of shadow texels that did not match the shadow drawn beneath
+ * them. The margin keeps the kernel inside the chosen cascade.
+ */
+float waterBedOcclusion(vec3 worldPos, int slot) {
+    if (slot < 0 || slot >= numShadowLights)
+        return 0.0;
+    for (int c = 0; c < cascadeCount; c++) {
+        int layer = slot * cascadeCount + c;
+        vec4 lightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
+        vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
+        vec2 margin = shadowTexelSize * 3.0;
+        if (proj.z > 1.0 || any(lessThan(proj.xy, margin)) ||
+            any(greaterThan(proj.xy, vec2(1.0) - margin)))
+            continue;
+        if (msmEnabled == 1)
+            return csmMomentOcclusion(layer, proj.xy, proj.z);
+        float shadow = 0.0;
+        for (int x = -1; x <= 1; x++) {
+            for (int y = -1; y <= 1; y++) {
+                vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
+                float depth = texture(shadowMaps, vec3(proj.xy + offset, float(layer))).r;
+                shadow += proj.z - shadowBias > depth ? 1.0 : 0.0;
+            }
+        }
+        return 1.0 - (1.0 - shadow / 9.0) * csmTransmittance(layer, proj.xy, proj.z);
+    }
+    return csmOutermostOcclusion(worldPos, slot);
+}
 
 // Coarsest mip the transmission may select. The resolve stops generating there.
 const float WATER_TRANSMISSION_MAX_LOD = 6.0;
@@ -334,23 +373,15 @@ const float WATER_FOAM_DRIFT_M_PER_S = 0.12;
 const float WATER_FOAM_ERODE_HI = 1.05;
 const float WATER_FOAM_ERODE_SPAN = 1.15;
 const float WATER_FOAM_ERODE_EDGE = 0.15;
-/*
- * Caustics. Light crossing the surface is focused by the surface's own curvature,
- * so the brightness on the bed is a property of the WAVES above the point being
- * lit -- not of a texture pasted onto the floor. Sampling the cascade derivatives
- * where the refracted sun ray CROSSED the surface is what ties the two together;
- * the reference study rejected cellular caustics for exactly this reason and then
- * WATER_CAUSTIC_GAIN sets the strength.
- */
-const float WATER_CAUSTIC_ON = 0.060;
-const float WATER_CAUSTIC_FULL = 0.27;
-const float WATER_CAUSTIC_GAIN = 1.35;
-// Caustics need water above them to focus through, and lose coherence with depth. Path
-// lengths, so METRES: a window written in world units puts the whole effect in the first
-// centimetre of a world at 22 units to the metre.
-const float WATER_CAUSTIC_SHALLOW_M = 0.35;
+// The reference plane's pattern is only right near the depth it was traced at, so it fades out
+// over a deep column. Depths, so METRES: a window written in world units puts the whole effect in
+// the first centimetre of a world at 22 units to the metre.
 const float WATER_CAUSTIC_DEEP_ON_M = 9.0;
 const float WATER_CAUSTIC_DEEP_OFF_M = 20.0;
+// The fraction of the caustic window's half-width over which it fades back to no caustics,
+// so the window's edge never prints as a line on the bed.
+const float WATER_CAUSTIC_EDGE_FADE = 0.2;
+const float WATER_PI = 3.14159265359;
 
 /*
  * COX-MUNK SUN GLITTER (spec 11.42).
@@ -985,6 +1016,8 @@ void main() {
     // where the absorption is not.
     vec3 refrDir = refract(-V, Nv, 1.0 / waterIor);
     vec3 bed;
+    // What the caustics multiplied the bed by, kept for the debug view.
+    vec3 causticFactor = vec3(1.0);
     if (sceneColorAvailable == 1) {
         vec3 exitView = ViewPos + refrDir * min(path, WATER_MAX_BEND_M * waterUnitsPerMetre);
         vec4 refrClip = projection * vec4(exitView, 1.0);
@@ -1012,53 +1045,72 @@ void main() {
         }
         bed = textureLod(sceneColorTex, refrUV, roughness * WATER_TRANSMISSION_MAX_LOD).rgb;
 
-        // Caustics, on whatever the surface is refracting -- the bed, a rock, a
-        // hull. Walk back along the refracted sun ray to where it crossed the
-        // surface, and read the compression of the cascades THERE: a converging
-        // patch of surface is a lens, and its focus is what brightens the floor.
-        //
-        // FFT only, and that is a CHOICE rather than an inability. Caustics come from
-        // compression, and a Gerstner map does compress -- the bunching is what
-        // sharpens its crests. What its steepness clamp buys is injectivity: the map
-        // never FOLDS. ocean.glsl then declines to report the determinant it computed
-        // on that path, so the gate here reads a flat 1 and finds no lens. Same
-        // reasoning gates its foam, and the same line would undo both.
-        if (waveModel == 1 && sunAvailable == 1 && causticsEnabled == 1) {
-            vec2 crossing = WorldPos.xz - sunDir.xz / max(sunDir.y, 0.12) * path * 0.18;
-            vec2 uvMed = oceanCascadeUv(crossing, 1);
-            vec2 uvShort = oceanCascadeUv(crossing, 2);
-            // LOD 0: `crossing` walks with the sun ray and the path length, so its screen
-            // derivative describes neither the surface nor a footprint, and the medium band
-            // IS mipped. Caustics are a near-field effect anyway -- WATER_CAUSTIC_DEEP_OFF
-            // closes them well before a cell covers a period.
-            float mj = oceanBandJacobian(oceanCascadeAt(1, 0, uvMed, 0.0),
-                                         oceanCascadeAt(1, 1, uvMed, 0.0),
-                                         cascadeChoppiness[1]);
-            float sj = oceanBandJacobian(oceanCascadeAt(2, 0, uvShort, 0.0),
-                                         oceanCascadeAt(2, 1, uvShort, 0.0),
-                                         cascadeChoppiness[2]);
-            float focus = max(0.0, 1.0 - mj) * 0.48 + max(0.0, 1.0 - sj) * 0.52;
-            float window = smoothstep(0.0, WATER_CAUSTIC_SHALLOW_M * waterUnitsPerMetre, path) *
-                           (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
-                                             WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, path));
-            float focused =
-                pow(smoothstep(WATER_CAUSTIC_ON, WATER_CAUSTIC_FULL, focus), 2.0) * window;
-            // A caustic is focused SUNLIGHT, so a deck over the crossing point dims it
-            // (spec 11.41). Read at the crossing rather than at the fragment for the same
-            // reason the Jacobian is: this is a property of the ray, not of the pixel.
-            //
-            // One of the two places cloud shadow enters this shader; the other is the sun
-            // lobe below, which spec 11.42 gave it. The reflection is still not a third:
-            // it is the split-sum environment lookup, which carries the deck through the
-            // sky bake already.
-            //
-            // Through the SLOT, like its neighbour: the deck is marched along one light's
-            // direction, so its shear only describes the light it was built for. Water
-            // picks the brightest directional and that is the moon at night, whose shadow
-            // this deck is not.
-            bed *= 1.0 + focused * WATER_CAUSTIC_GAIN *
-                             cloudSunForSlot(vec3(crossing.x, WorldPos.y, crossing.y),
-                                             sunShadowSlot);
+        /*
+         * CAUSTICS (spec 13.2), on whatever the surface is refracting -- the bed, a rock, a hull.
+         *
+         * The target holds how much the key light is concentrated where it lands, 1 where the
+         * water is flat and averaging 1 over any sea, so lines are bright only because the gaps
+         * beside them are dark. It says nothing about light the key does not deliver, so it
+         * scales only the KEY's share of what lights this point: `bed` is everything the point
+         * received, and the sky's share and anything in shadow carry no pattern. That share is
+         * estimated for a flat, unshadowed-by-anything-but-the-maps bed, since the resolve holds
+         * the finished colour and not its parts.
+         *
+         * The world point comes from the depth under the REFRACTED sample, since that is what
+         * `bed` shows. The target was traced to one height, and a point above or below it is
+         * reached by the same light further along or further back, so the lookup slides along the
+         * refracted key ray to where the ray met the target's height.
+         *
+         * The lookup and its derivatives are taken here, in uniform flow, whatever the depth
+         * says; only the application is conditional.
+         */
+        float causticNdc = texture(sceneDepthTex, refrUV).r;
+        vec3 causticView = viewPosFromLinZ(refrUV, viewZFromNdcZ(causticNdc * 2.0 - 1.0));
+        vec3 causticPos = mat3(transpose(view)) * (causticView - view[3].xyz);
+        vec3 keyInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
+        vec2 causticAt = causticPos.xz + keyInWater.xz *
+                                             ((causticFloorY - causticPos.y) / min(keyInWater.y, -1.0e-4));
+        vec2 causticUv = (causticAt - causticOrigin) / max(causticSize, 1.0e-6);
+        // One mip softer than the texel footprint: a focused line is narrower than a texel is
+        // worth trusting, and sharper than that it crawls as the camera moves.
+        vec3 causticSample = textureGrad(causticTex, causticUv, dFdx(causticUv) * 2.0,
+                                         dFdy(causticUv) * 2.0).rgb;
+        if (causticAvailable == 1 && causticsEnabled == 1 && sunAvailable == 1 &&
+            sceneDepthAvailable == 1 && causticNdc < WATER_DEPTH_EMPTY) {
+            float column = waterLevel - causticPos.y;
+            vec2 edge = abs(causticUv * 2.0 - 1.0);
+            /*
+             * The pattern was traced for a floor at causticFloorY. Shallower than that the
+             * light has not converged yet: to first order a lens's contrast grows linearly with
+             * the distance behind it, so a floor at a tenth of the traced depth sees a tenth of
+             * the pattern's contrast. Applied at full contrast, centimetres of water over sand
+             * printed the focused pattern of three metres.
+             */
+            float traced = max(waterLevel - causticFloorY, 1.0e-6);
+            float weight =
+                (1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y))) *
+                clamp(column / traced, 0.0, 1.0) *
+                (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
+                                  WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, column));
+            /*
+             * The key's share of the light on this point, per channel: its irradiance on a
+             * horizontal surface where the maps say it arrives, against the sky's. The sky's is
+             * pi times the environment's average radiance, which the top mip is.
+             *
+             * Through the SLOT for the shadow and the deck, like the sun lobe below: the deck is
+             * marched along one light's direction, so its shear only describes the light it was
+             * built for -- and water picks the brightest directional, which is the moon at night.
+             */
+            float keyVis = (1.0 - waterBedOcclusion(causticPos, sunShadowSlot)) *
+                           cloudSunForSlot(causticPos, sunShadowSlot);
+            vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis;
+            vec3 skyIrr = iblEnabled > 0 ? textureLod(prefilteredMap, vec3(0.0, 1.0, 0.0),
+                                                      maxReflectionLOD).rgb *
+                                               iblIntensity * WATER_PI
+                                         : vec3(0.0);
+            vec3 keyShare = keyIrr / max(keyIrr + skyIrr, vec3(1.0e-6));
+            causticFactor = 1.0 + keyShare * weight * (causticSample - 1.0);
+            bed *= causticFactor;
         }
     } else {
         bed = vec3(0.0);
@@ -1332,6 +1384,9 @@ void main() {
     // The raw caustics target laid on the surface at the point above it: the pattern itself,
     // before any registration or lighting touches it. Flat water is half grey; outside the
     // window, or with no target, black.
+    // What the caustics multiplied the bed by, half grey where they changed nothing.
+    if (waterCausticDebug == 1)
+        FragColor = vec4(0.5 * causticFactor, coverage);
     if (waterCausticDebug == 2) {
         vec2 cuv = (WorldPos.xz - causticOrigin) / max(causticSize, 1.0e-6);
         bool inside = causticAvailable == 1 && all(greaterThanEqual(cuv, vec2(0.0))) &&
