@@ -35,7 +35,11 @@ uniform int inLayer;
 uniform int axis;     // 0 = transform along x, 1 = along y
 uniform int stage;    // 0 .. log2(size) - 1
 uniform int size;
-uniform int finalize; // 1 on the last stage only; folds in the fftshift
+uniform int finalize; // 1 on the last stage only; folds in the fftshift and the crest term
+// The band's bound-harmonic crest term, h + boundGain * (h^2 - boundVar), with boundVar its
+// seeded height variance in m^2. 0 = the linear field, exactly.
+uniform float boundGain;
+uniform float boundVar;
 
 vec2 complexMul(vec2 a, vec2 b) {
     return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
@@ -82,6 +86,21 @@ void main() {
         float checker = 1.0 - 2.0 * float((id.x + id.y) % 2);
         v0 *= checker;
         v1 *= checker;
+        /*
+         * The crest term, here and not where the surface samples the band: this is the one
+         * place the field exists per texel at full resolution, before the mip chain. A mip
+         * keeps only part of the band's variance, so subtracting the whole of it after
+         * filtering moved the far field below the still level, and every consumer of the
+         * field -- the surface, its previous-frame copy, the query, the foam -- reads it
+         * corrected from here without a copy of the arithmetic.
+         *
+         * .b of target 0 is the height and .rg of target 1 its two slopes, both real parts by
+         * now. The slope takes the product rule, d/dp of g*(h*h - c) being 2*g*h*dh, or the
+         * normal belongs to a different surface from the one drawn.
+         */
+        float h = v0.b;
+        v0.b = h + boundGain * (h * h - boundVar);
+        v1.rg *= 1.0 + 2.0 * boundGain * h;
     }
 
     Out0 = v0;

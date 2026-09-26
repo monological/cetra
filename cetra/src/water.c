@@ -47,11 +47,22 @@ static const struct WaterCascadeConfig {
     // How hard this band's horizontal displacement pulls. The short band is damped: it
     // exists to shade, and choppiness there sharpens nothing the mesh resolves.
     float choppiness;
+    /*
+     * The bound-harmonic crest term, h + gain * (h^2 - var): a linear random sea is vertically
+     * symmetric and a real one is not, crests sharper than troughs are deep. Kept small, since
+     * pushed harder the surface folds. Zero on the short band, which never reaches the mesh.
+     *
+     * Applied in the transform's last stage, per texel at full resolution, and NOT where the
+     * surface samples the band: there the height comes from whatever mip the footprint picked,
+     * which keeps only part of the band's variance, so subtracting the whole of it left the far
+     * field that much below the still level -- 0.12 m on water_fixture.
+     */
+    float bound_gain;
     uint32_t seed;
 } WATER_CASCADE_CFG[WATER_CASCADE_COUNT] = {
-    {240.0f, 0.024f, 0.30f, 0.45f, 0.22f, 1.18f, 0x51f15eu},
-    {64.0f, 0.30f, 1.22f, 0.45f, 0.08f, 1.05f, 0x72a93bu},
-    {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0.40f, 0x19ce47u},
+    {240.0f, 0.024f, 0.30f, 0.45f, 0.22f, 1.18f, 0.14f, 0x51f15eu},
+    {64.0f, 0.30f, 1.22f, 0.45f, 0.08f, 1.05f, 0.32f, 0x72a93bu},
+    {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0.40f, 0.0f, 0x19ce47u},
 };
 
 // The default sea state, in the units WaterWaveTrain documents. A moderate wind sea --
@@ -1346,12 +1357,15 @@ static bool _water_ensure_spectra(Water* water) {
  * error -- the same shape of green-over-wrong the probe exists to catch.
  */
 static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuint fbo[2],
-                                 const GLuint array[2], int cascade) {
+                                 const GLuint array[2], int cascade, float bound_gain,
+                                 float bound_var) {
     glUseProgram(fft->id);
     uniform_set_int(fft->uniforms, "twiddleTex", 0);
     uniform_set_int(fft->uniforms, "inFields", 1);
     uniform_set_int(fft->uniforms, "inLayer", cascade * 2);
     uniform_set_int(fft->uniforms, "size", WATER_SPECTRUM_RES);
+    uniform_set_float(fft->uniforms, "boundGain", bound_gain);
+    uniform_set_float(fft->uniforms, "boundVar", bound_var);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, twiddle);
 
@@ -1880,7 +1894,8 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         _water_fft_transform(fft, water->twiddle_tex, water->cascade_fbo[c], water->cascade_array,
-                             c);
+                             c, WATER_CASCADE_CFG[c].bound_gain,
+                             fmaxf(water->cascade_height_var[c], 0.0f));
     }
 
     glBindVertexArray(0);
@@ -2431,7 +2446,9 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
         // The sea's OWN transform, not a copy of it -- which is what makes this test's
         // result a statement about the shipping path rather than about a sibling that
         // happens to agree today.
-        _water_fft_transform(fft, water->twiddle_tex, fbo, arr, 0);
+        // No crest term: an exact identity at zero gain, so the impulse still tests the
+        // linear transform alone.
+        _water_fft_transform(fft, water->twiddle_tex, fbo, arr, 0, 0.0f, 0.0f);
         glBindVertexArray(0);
 
         float* out = malloc(texels * 4 * sizeof(float));
@@ -2547,11 +2564,13 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
 
         const double hp = water->cascade_height_var[c];
         const double sp = water->cascade_slope_var[c];
+        // `mean` is where the band's top mip sits, so it is where the far field sits: the crest
+        // term has to leave it at zero or the distant sea stands off its own level.
         printf("water-fft-probe cascade index=%d height_pred=%.6f height_meas=%.6f "
                "height_ratio=%.4f peak=%.4f slope_pred=%.6f slope_meas=%.6f "
-               "slope_ratio=%.4f\n",
+               "slope_ratio=%.4f mean=%.6f\n",
                c, hp, height_var, height_var / fmax(hp, 1e-12), peak, sp, slope_var,
-               slope_var / fmax(sp, 1e-12));
+               slope_var / fmax(sp, 1e-12), mean);
     }
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     free(buf);
