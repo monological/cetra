@@ -147,23 +147,9 @@ _Static_assert(SKY_CLOUD_SHADOW_UNIT < 16,
 // Passes between a query's render and its read. The pack-buffer ring holds this many.
 #define WATER_PROBE_LATENCY 2
 
-/*
- * The caustics window (spec 13.2), in METRES. A square ahead of the camera rather than a
- * periodic patch, because the three bands tile at 240, 64 and 12 m and share no period.
- *
- * The lattice cell is the short band's own texel -- 12 m over 128 -- so the lattice samples
- * the band that does most of the focusing at its resolution and no coarser. The target is
- * finer than that, since a focused line is much narrower than the wave that focused it. The
- * lattice overhangs the target on every side, because the rays that land on a target edge
- * left the surface upstream of it.
- */
-#define WATER_CAUSTIC_TARGET_M   40.0f
-#define WATER_CAUSTIC_TARGET_RES 1024
-#define WATER_CAUSTIC_CELL_M     0.09375f
-#define WATER_CAUSTIC_GRID_N     512
-// Where the rays land when there is no baked bed: the focal length of the short band's
-// ripples, n / ((n - 1) a k^2) for a centimetre over half a metre to a metre, is 2.5 to 5 m.
-#define WATER_CAUSTIC_PLANE_M 3.0f
+// The caustics window, lattice and ceiling (spec 13.2), shared with the shaders that draw and
+// read them.
+#include "../shaders/include/water_caustic_constants.glsl"
 
 typedef enum WaterWaveModel {
     WATER_WAVES_GERSTNER = 0, // closed-form octaves; lake scale, no GPU state
@@ -337,8 +323,7 @@ typedef struct Water {
     void* height_ctx;
 
     WaterWaveModel wave_model;
-    // Caustics on refracted geometry. Inert on the Gerstner path, which reports no
-    // compression for this to focus from -- deliberately, not because it has none.
+    // Refracted-grid caustics on what the surface refracts, on either wave model (spec 13.2).
     bool caustics;
     // false = no analytic sun lobe, which is every frame before spec 11.42. Live on both
     // wave models: its width comes from the slope the surface stopped resolving, and the
@@ -575,23 +560,22 @@ typedef struct Water {
 
     /*
      * The caustics target (spec 13.2): how much the key light is concentrated on the floor,
-     * 1 where the water is flat, over a window that moves with the camera. `caustic_origin`
-     * and `caustic_size` are where THIS frame's target lies, which the surface needs to look
-     * it up. Engine-owned.
+     * 1 where the water is flat, over a window that moves with the camera. `caustic_origin` is
+     * where THIS frame's target lies, which the surface needs to look it up; its size and the
+     * depth it was traced to are fixed (water_caustic_constants.glsl). Engine-owned.
      */
-    GLuint caustic_tex;
+    GLuint caustic_tex; // R16F, mipped
     GLuint caustic_fbo;
     GLuint caustic_land_tex; // (G+1)^2 RGBA32F: each lattice corner's landed and source point
     GLuint caustic_land_fbo;
     GLuint caustic_vao;
     GLuint caustic_ebo;
     float caustic_origin[2]; // world xz of the target's corner
-    float caustic_size;      // world units the target spans
-    float caustic_floor_y;   // world y the rays were traced to
     bool caustic_ready;      // rendered this frame; false = the surface reads no caustics
     bool caustic_failed;     // no program or target; never retried
 
-    // Settings. 0 off; 2 draws the raw target on the surface, grey where the water is flat.
+    // Settings. 0 off; 1 draws what the caustics multiplied the bed by, 2 the raw target on the
+    // surface -- both half grey where nothing is concentrated.
     int caustic_debug;
 } Water;
 
@@ -713,9 +697,9 @@ void water_fft_probe(const Water* water, struct Engine* engine);
 
 /*
  * Read the caustics target back and print its statistics over the inner 80% of the window
- * (spec 13.2) -- mean, min, max, and the fraction of texels at the per-cell ceiling. The mean
- * is the energy check: the target conserves light, so it sits at 1 for any sea. Stalls the
- * pipeline once, so a diagnostic rather than something the render loop may call.
+ * (spec 13.2) -- mean, min and max. The mean is the energy check: the target conserves light,
+ * so it sits at 1 for any sea. Stalls the pipeline once, so a diagnostic rather than something
+ * the render loop may call.
  */
 void water_caustic_probe(const Water* water);
 

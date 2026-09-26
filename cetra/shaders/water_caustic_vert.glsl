@@ -13,42 +13,40 @@
  * cell is larger than a few pixels.
  */
 
+#include "water_caustic_constants.glsl"
+
 uniform sampler2D causticLanded; // .xy landed, .zw source, metres from the target corner
-uniform int causticGridN;        // cells per side
-uniform float causticTargetM;    // metres the target spans
 
 out vec2 vLanded;
 out vec2 vSource;
 out float vCorner;
 
-// The ceiling on one corner's value. Only the SHAPE is taken from the corners -- the geometry
-// stage rescales them to the triangle's exact ratio -- so this bounds how sharp a peak can be
-// within a cell, not how much light it holds.
-const float WATER_CAUSTIC_CORNER_MAX = 40.0;
-
 vec4 corner(ivec2 ij) {
-    return texelFetch(causticLanded, clamp(ij, ivec2(0), ivec2(causticGridN)), 0);
+    return texelFetch(causticLanded, clamp(ij, ivec2(0), ivec2(WATER_CAUSTIC_GRID_N)), 0);
 }
 
 void main() {
-    int side = causticGridN + 1;
+    int side = WATER_CAUSTIC_GRID_N + 1;
     ivec2 ij = ivec2(gl_VertexID % side, gl_VertexID / side);
     vec4 here = corner(ij);
 
     // Central differences, one-sided at the lattice's own edge. The edge lies well outside the
     // target, so how it is closed there does not reach anything that is read.
     ivec2 lo = max(ij - 1, ivec2(0));
-    ivec2 hi = min(ij + 1, ivec2(causticGridN));
+    ivec2 hi = min(ij + 1, ivec2(WATER_CAUSTIC_GRID_N));
     vec4 di = (corner(ivec2(hi.x, ij.y)) - corner(ivec2(lo.x, ij.y))) / float(hi.x - lo.x);
     vec4 dj = (corner(ivec2(ij.x, hi.y)) - corner(ivec2(ij.x, lo.y))) / float(hi.y - lo.y);
     float landedArea = abs(di.x * dj.y - di.y * dj.x);
     float sourceArea = abs(di.z * dj.w - di.w * dj.z);
     // The floor on the divisor IS the ceiling: a landed area below source / MAX reads as MAX.
-    // The 1e-12 keeps a degenerate corner with no source area from dividing zero by zero.
-    vCorner = sourceArea / max(landedArea, max(sourceArea / WATER_CAUSTIC_CORNER_MAX, 1.0e-12));
+    // Only the SHAPE is taken from the corners -- the geometry stage rescales them to the
+    // triangle's exact ratio -- so here the ceiling bounds how sharp a peak can be within a
+    // cell, not how much light it holds. The 1e-12 keeps a degenerate corner with no source area
+    // from dividing zero by zero.
+    vCorner = sourceArea / max(landedArea, max(sourceArea / WATER_CAUSTIC_MAX, 1.0e-12));
     vLanded = here.xy;
     vSource = here.zw;
 
-    vec2 uv = here.xy / causticTargetM;
+    vec2 uv = here.xy / WATER_CAUSTIC_TARGET_M;
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
 }

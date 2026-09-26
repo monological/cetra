@@ -98,17 +98,16 @@ uniform float foamPatternTile;
 // So the "0 binds as no pattern" the C side documents is only true if the shader is told.
 uniform int foamPatternAvailable;
 uniform int cameraSubmerged;
-uniform int causticsEnabled;
 // The refracted-grid caustics target (spec 13.2): how much the key light is concentrated on the
-// floor, 1 where the water is flat, over a square of `causticSize` world units whose corner is
-// at `causticOrigin`. 0 = not rendered this frame, and nothing reads it.
+// floor, 1 where the water is flat, over a square whose corner is at `causticOrigin` and whose
+// size and traced depth are water_caustic_constants.glsl's. 0 = not rendered this frame, and
+// nothing reads it.
+#include "water_caustic_constants.glsl"
 uniform sampler2D causticTex;
 uniform int causticAvailable;
 uniform vec2 causticOrigin;
-uniform float causticSize;
-// The world y the target was traced to. The bed a fragment sees is rarely at that height, so its
-// lookup slides along the refracted key ray to where that ray crossed it.
-uniform float causticFloorY;
+// The sky's irradiance on a horizontal bed, absolute, for the key light's share of what lights it.
+uniform vec3 causticSkyIrradiance;
 // 0 = shade normally; 1 = what the caustics multiplied the bed by; 2 = the raw caustics target
 // drawn on the surface. Both half grey where nothing is concentrated.
 uniform int waterCausticDebug;
@@ -142,41 +141,6 @@ uniform float maxReflectionLOD;
 #define CSM_OUTERMOST_PCF
 #define CSM_PCF_HALF_KERNEL 2
 #include "csm.glsl"
-
-/*
- * Key-light occlusion at a point BELOW the water, for the caustics' key share (spec 13.2): the
- * finest cascade that holds the point, where the surface's own glitter reads the outermost.
- *
- * The outermost map is scene-fit, so its texels are large, and the bed's own shading -- which
- * chose from the finer cascades -- draws a sharper shadow than it can see. Read from there, the
- * caustics stopped at a staircase of shadow texels that did not match the shadow drawn beneath
- * them. The margin keeps the kernel inside the chosen cascade.
- */
-float waterBedOcclusion(vec3 worldPos, int slot) {
-    if (slot < 0 || slot >= numShadowLights)
-        return 0.0;
-    for (int c = 0; c < cascadeCount; c++) {
-        int layer = slot * cascadeCount + c;
-        vec4 lightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
-        vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
-        vec2 margin = shadowTexelSize * 3.0;
-        if (proj.z > 1.0 || any(lessThan(proj.xy, margin)) ||
-            any(greaterThan(proj.xy, vec2(1.0) - margin)))
-            continue;
-        if (msmEnabled == 1)
-            return csmMomentOcclusion(layer, proj.xy, proj.z);
-        float shadow = 0.0;
-        for (int x = -1; x <= 1; x++) {
-            for (int y = -1; y <= 1; y++) {
-                vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-                float depth = texture(shadowMaps, vec3(proj.xy + offset, float(layer))).r;
-                shadow += proj.z - shadowBias > depth ? 1.0 : 0.0;
-            }
-        }
-        return 1.0 - (1.0 - shadow / 9.0) * csmTransmittance(layer, proj.xy, proj.z);
-    }
-    return csmOutermostOcclusion(worldPos, slot);
-}
 
 // Coarsest mip the transmission may select. The resolve stops generating there.
 const float WATER_TRANSMISSION_MAX_LOD = 6.0;
@@ -381,7 +345,6 @@ const float WATER_CAUSTIC_DEEP_OFF_M = 20.0;
 // The fraction of the caustic window's half-width over which it fades back to no caustics,
 // so the window's edge never prints as a line on the bed.
 const float WATER_CAUSTIC_EDGE_FADE = 0.2;
-const float WATER_PI = 3.14159265359;
 
 /*
  * COX-MUNK SUN GLITTER (spec 11.42).
@@ -569,6 +532,84 @@ float waterSunGlitter(vec3 N, vec3 V, vec3 L, vec3 windV, float mss) {
     // microfacet denominator, so this is the whole reflectance and the caller multiplies
     // by radiance alone.
     return D * G / max(4.0 * ndv, 1.0e-3);
+}
+
+/*
+ * CAUSTICS (spec 13.2): what to multiply the refracted `bed` by, 1 for no change.
+ *
+ * The target holds how much the key light is concentrated where it lands, 1 where the water is
+ * flat and averaging 1 over any sea, so lines are bright only because the gaps beside them are
+ * dark. It says nothing about light the key does not deliver, so it scales only the KEY's share of
+ * what lights this point: `bed` is everything the point received, and the sky's share and anything
+ * in shadow carry no pattern. That share is estimated for a flat bed, shadowed only by what the
+ * maps hold, since the resolve holds the finished colour and not its parts.
+ *
+ * The world point is where the REFRACTED view ray meets the bed's height, not the depth under the
+ * refracted screen sample. That sample is a screen-space estimate of the bend, and where the bend
+ * squeezes many rows onto a few -- low in the frame, over a slope -- every one of those rows reads
+ * the same depth, and the pattern smeared down the screen in long streaks. The ray has no rows to
+ * squeeze. The bed's height is taken from the depth under this fragment's OWN pixel, the unbent
+ * sight line. Not by walking the optical path along the refracted ray: that path is measured along
+ * the unbent one, which at a grazing angle is metres long for a bed a metre down, and the refracted
+ * ray is steep -- the same length along it ends metres under the bed.
+ *
+ * The target was traced to one height, and a point above or below it is reached by the same light
+ * further along or further back, so the lookup slides along the refracted key ray to where the ray
+ * met the traced height.
+ *
+ * Takes screen derivatives, so it must be called in uniform control flow.
+ */
+vec3 waterCaustics(vec2 uv, vec3 refrDir) {
+    float bedNdc = texture(sceneDepthTex, uv).r;
+    mat3 viewToWorld = transpose(mat3(view));
+    vec3 sightBed = viewToWorld * (viewPosFromLinZ(uv, viewZFromNdcZ(bedNdc * 2.0 - 1.0)) -
+                                   view[3].xyz);
+    vec3 refrWorld = viewToWorld * refrDir;
+    vec3 pos = WorldPos + refrWorld * ((sightBed.y - WorldPos.y) / min(refrWorld.y, -1.0e-4));
+
+    float traced = WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre;
+    vec3 keyInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
+    vec2 at = pos.xz + keyInWater.xz * ((waterLevel - traced - pos.y) / min(keyInWater.y, -1.0e-4));
+    vec2 cuv = (at - causticOrigin) / (WATER_CAUSTIC_TARGET_M * waterUnitsPerMetre);
+    float column = waterLevel - pos.y;
+    /*
+     * One mip softer than the texel footprint: a focused line is narrower than a texel is worth
+     * trusting, and sharper than that it crawls as the camera moves.
+     *
+     * And softer again the shallower the point is than the depth the pattern was traced to. Light
+     * that has travelled a fraction of the way to its focus has not narrowed into lines yet, so the
+     * traced pattern is DEFOCUSED there as well as fainter -- the weight below takes the contrast,
+     * this the sharpness.
+     */
+    float defocus = exp2(clamp(log2(traced / max(column, 1.0e-6)), 0.0, 3.0));
+    float c = textureGrad(causticTex, cuv, dFdx(cuv) * 2.0 * defocus, dFdy(cuv) * 2.0 * defocus).r;
+    if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
+        return vec3(1.0);
+
+    /*
+     * The pattern was traced for a floor `traced` deep. Shallower than that the light has not
+     * converged yet: to first order a lens's contrast grows linearly with the distance behind it,
+     * so a floor at a tenth of the traced depth sees a tenth of the pattern's contrast. Applied at
+     * full contrast, centimetres of water over sand printed the focused pattern of three metres.
+     */
+    vec2 edge = abs(cuv * 2.0 - 1.0);
+    float weight = (1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y))) *
+                   clamp(column / traced, 0.0, 1.0) *
+                   (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
+                                     WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, column));
+    /*
+     * The key's share of the light on this point, per channel: its irradiance on a horizontal
+     * surface where the maps say it arrives, against the sky's.
+     *
+     * Through the SLOT for the shadow and the deck, like the sun lobe: the deck is marched along
+     * one light's direction, so its shear only describes the light it was built for -- and water
+     * picks the brightest directional, which is the moon at night.
+     */
+    float keyVis = (1.0 - csmFinestOcclusion(pos, sunShadowSlot)) *
+                   cloudSunForSlot(pos, sunShadowSlot);
+    vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis;
+    vec3 keyShare = keyIrr / max(keyIrr + causticSkyIrradiance, vec3(1.0e-6));
+    return 1.0 + keyShare * weight * (c - 1.0);
 }
 
 void main() {
@@ -1045,97 +1086,9 @@ void main() {
         }
         bed = textureLod(sceneColorTex, refrUV, roughness * WATER_TRANSMISSION_MAX_LOD).rgb;
 
-        /*
-         * CAUSTICS (spec 13.2), on whatever the surface is refracting -- the bed, a rock, a hull.
-         *
-         * The target holds how much the key light is concentrated where it lands, 1 where the
-         * water is flat and averaging 1 over any sea, so lines are bright only because the gaps
-         * beside them are dark. It says nothing about light the key does not deliver, so it
-         * scales only the KEY's share of what lights this point: `bed` is everything the point
-         * received, and the sky's share and anything in shadow carry no pattern. That share is
-         * estimated for a flat, unshadowed-by-anything-but-the-maps bed, since the resolve holds
-         * the finished colour and not its parts.
-         *
-         * The world point is where the REFRACTED view ray meets the bed's height, not the depth
-         * under the refracted screen sample. That sample is a screen-space estimate of the bend,
-         * and where the bend squeezes many rows onto a few -- low in the frame, over a slope --
-         * every one of those rows reads the same depth, and the pattern smeared down the screen
-         * in long streaks. The ray has no rows to squeeze.
-         *
-         * The bed's height is taken from the depth under this fragment's OWN pixel, the unbent
-         * sight line. Not by walking `path` along the refracted ray: `path` is measured along
-         * the unbent one, which at a grazing angle is metres long for a bed a metre down, and the
-         * refracted ray is steep -- the same length along it ends metres under the bed.
-         *
-         * The target was traced to one height, and a point above or below it is reached by the
-         * same light further along or further back, so the lookup slides along the refracted key
-         * ray to where the ray met the target's height.
-         *
-         * The lookup and its derivatives are taken here, in uniform flow, whatever the depth
-         * says; only the application is conditional.
-         */
-        float causticNdc = texture(sceneDepthTex, uv).r;
-        mat3 viewToWorld = transpose(mat3(view));
-        vec3 sightBed = viewToWorld * (viewPosFromLinZ(uv, viewZFromNdcZ(causticNdc * 2.0 - 1.0)) -
-                                       view[3].xyz);
-        vec3 refrWorld = viewToWorld * refrDir;
-        vec3 causticPos =
-            WorldPos + refrWorld * ((sightBed.y - WorldPos.y) / min(refrWorld.y, -1.0e-4));
-        vec3 keyInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
-        vec2 causticAt = causticPos.xz + keyInWater.xz *
-                                             ((causticFloorY - causticPos.y) / min(keyInWater.y, -1.0e-4));
-        vec2 causticUv = (causticAt - causticOrigin) / max(causticSize, 1.0e-6);
-        /*
-         * One mip softer than the texel footprint: a focused line is narrower than a texel is
-         * worth trusting, and sharper than that it crawls as the camera moves.
-         *
-         * And softer again the shallower the point is than the depth the pattern was traced to.
-         * Light that has travelled a fraction of the way to its focus has not narrowed into lines
-         * yet, so the traced pattern is DEFOCUSED there as well as fainter -- the weight below
-         * takes the contrast, this the sharpness. Sharp lines at full focus on sand centimetres
-         * deep drew long regular streaks down a submerged slope.
-         */
-        float causticTraced = max(waterLevel - causticFloorY, 1.0e-6);
-        float causticDefocus =
-            exp2(clamp(log2(causticTraced / max(waterLevel - causticPos.y, 1.0e-6)), 0.0, 3.0));
-        vec3 causticSample =
-            textureGrad(causticTex, causticUv, dFdx(causticUv) * 2.0 * causticDefocus,
-                        dFdy(causticUv) * 2.0 * causticDefocus)
-                .rgb;
-        if (causticAvailable == 1 && causticsEnabled == 1 && sunAvailable == 1 &&
-            sceneDepthAvailable == 1 && causticNdc < WATER_DEPTH_EMPTY) {
-            float column = waterLevel - causticPos.y;
-            vec2 edge = abs(causticUv * 2.0 - 1.0);
-            /*
-             * The pattern was traced for a floor at causticFloorY. Shallower than that the
-             * light has not converged yet: to first order a lens's contrast grows linearly with
-             * the distance behind it, so a floor at a tenth of the traced depth sees a tenth of
-             * the pattern's contrast. Applied at full contrast, centimetres of water over sand
-             * printed the focused pattern of three metres.
-             */
-            float weight =
-                (1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y))) *
-                clamp(column / causticTraced, 0.0, 1.0) *
-                (1.0 - smoothstep(WATER_CAUSTIC_DEEP_ON_M * waterUnitsPerMetre,
-                                  WATER_CAUSTIC_DEEP_OFF_M * waterUnitsPerMetre, column));
-            /*
-             * The key's share of the light on this point, per channel: its irradiance on a
-             * horizontal surface where the maps say it arrives, against the sky's. The sky's is
-             * pi times the environment's average radiance, which the top mip is.
-             *
-             * Through the SLOT for the shadow and the deck, like the sun lobe below: the deck is
-             * marched along one light's direction, so its shear only describes the light it was
-             * built for -- and water picks the brightest directional, which is the moon at night.
-             */
-            float keyVis = (1.0 - waterBedOcclusion(causticPos, sunShadowSlot)) *
-                           cloudSunForSlot(causticPos, sunShadowSlot);
-            vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis;
-            vec3 skyIrr = iblEnabled > 0 ? textureLod(prefilteredMap, vec3(0.0, 1.0, 0.0),
-                                                      maxReflectionLOD).rgb *
-                                               iblIntensity * WATER_PI
-                                         : vec3(0.0);
-            vec3 keyShare = keyIrr / max(keyIrr + skyIrr, vec3(1.0e-6));
-            causticFactor = 1.0 + keyShare * weight * (causticSample - 1.0);
+        // Gated on a uniform, so the screen derivatives the lookup takes stay in uniform flow.
+        if (causticAvailable == 1) {
+            causticFactor = waterCaustics(uv, refrDir);
             bed *= causticFactor;
         }
     } else {
@@ -1407,14 +1360,14 @@ void main() {
         // make this shoreline read harder-edged than the shipped one.
         FragColor = vec4(shown > 0.5 ? 1.0 : 0.0, 1.0, 0.0, coverage);
     }
-    // The raw caustics target laid on the surface at the point above it: the pattern itself,
-    // before any registration or lighting touches it. Flat water is half grey; outside the
-    // window, or with no target, black.
     // What the caustics multiplied the bed by, half grey where they changed nothing.
     if (waterCausticDebug == 1)
         FragColor = vec4(0.5 * causticFactor, coverage);
+    // The raw caustics target laid on the surface at the point above it: the pattern itself,
+    // before any registration or lighting touches it. Flat water is half grey; outside the
+    // window, or with no target, black.
     if (waterCausticDebug == 2) {
-        vec2 cuv = (WorldPos.xz - causticOrigin) / max(causticSize, 1.0e-6);
+        vec2 cuv = (WorldPos.xz - causticOrigin) / (WATER_CAUSTIC_TARGET_M * waterUnitsPerMetre);
         bool inside = causticAvailable == 1 && all(greaterThanEqual(cuv, vec2(0.0))) &&
                       all(lessThanEqual(cuv, vec2(1.0)));
         float c = inside ? textureLod(causticTex, cuv, 0.0).r : 0.0;
