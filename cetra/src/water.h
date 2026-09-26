@@ -587,6 +587,7 @@ typedef struct Water {
     GLuint caustic_ebo;
     float caustic_origin[2]; // world xz of the target's corner
     float caustic_size;      // world units the target spans
+    float caustic_floor_y;   // world y the rays were traced to
     bool caustic_ready;      // rendered this frame; false = the surface reads no caustics
     bool caustic_failed;     // no program or target; never retried
 

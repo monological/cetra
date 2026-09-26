@@ -2331,6 +2331,7 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     water->caustic_origin[0] = origin[0];
     water->caustic_origin[1] = origin[1];
     water->caustic_size = size;
+    water->caustic_floor_y = floor_y;
     water->caustic_ready = true;
 }
 
@@ -2493,6 +2494,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_int(u, "causticAvailable", water->caustic_ready ? 1 : 0);
     uniform_set_vec2(u, "causticOrigin", water->caustic_origin);
     uniform_set_float(u, "causticSize", water->caustic_size);
+    uniform_set_float(u, "causticFloorY", water->caustic_floor_y);
     uniform_set_int(u, "waterCausticDebug", water->caustic_debug);
     // The deck dims the caustics it focuses (spec 11.41) and the sun lobe it lights
     // (spec 11.42). Not the reflection, which is an environment lookup already carrying it.

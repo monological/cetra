@@ -196,7 +196,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-foam-debug N  Foam as a binary mask: 1 the crest band after\n");
     fprintf(stderr, "                         the erosion, 2 before it, 3 breaking alone.\n");
     fprintf(stderr,
-            "      --water-caustic-debug N  2 draws the raw caustics target on the surface\n");
+            "      --water-caustic-debug N  1 the caustic factor on the bed, 2 the raw target\n");
     fprintf(stderr, "      --water-caustic-probe  Print the caustics target's statistics\n");
     fprintf(stderr, "      --no-water-surf    No incident wave at the shore: no run-up, no bore\n");
     fprintf(stderr, "      --no-water-foam-history  Foam from this frame's fold only\n");
@@ -1184,8 +1184,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             char* end = NULL;
             long mode = strtol(argv[i], &end, 10);
-            if (end == argv[i] || *end != '\0' || (mode != 0 && mode != 2)) {
-                fprintf(stderr, "Error: --water-caustic-debug wants 0 or 2, got '%s'\n", argv[i]);
+            if (end == argv[i] || *end != '\0' || (mode < 0 || mode > 2)) {
+                fprintf(stderr, "Error: --water-caustic-debug wants 0, 1 or 2, got '%s'\n",
+                        argv[i]);
                 return -1;
             }
             args->water_caustic_debug = (int)mode;
