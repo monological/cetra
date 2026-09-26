@@ -20,11 +20,14 @@
  * terrain.h's height query, and consumed the same way. water.c owns GPU resources and a
  * render pass; this owns neither.
  *
- * THE SPECTRAL PATH IS NOT ANSWERED HERE, and cannot be. An FFT cascade's displacement
- * exists only as a texture the transform just wrote, so reproducing it on the CPU means
- * running the transform on the CPU -- a second implementation of the thing whose whole
- * point is that it runs on the GPU. Callers get the still level for that model, and
- * water_waves_available says so rather than leaving them to discover a flat answer.
+ * THE SPECTRAL PATH IS NOT ANSWERED HERE. An FFT cascade's displacement exists only as a
+ * texture the transform just wrote, so reproducing it on the CPU would mean running the
+ * transform on the CPU -- a second implementation of the thing whose whole point is that it
+ * runs on the GPU. It IS answered, by water.h's surface query (spec 13.1), which evaluates
+ * on the GPU where the cascades already are and reads a texel per point back at fixed
+ * latency. That query is the entry point for a caller that does not know which sea it has;
+ * this file is its closed-form half and the reference the GPU half is checked against.
+ * Here the spectral model still gets the still level, and water_waves_available says so.
  */
 
 // The horizontal map's inversion: a step cap, and a tolerance as a fraction of the longest
