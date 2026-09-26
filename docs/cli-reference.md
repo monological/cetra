@@ -154,8 +154,11 @@ the longest octave alone, which at grazing incidence reads as regular swell line
 corduroy a single-direction Gerstner train gives, and the FFT path's directional spectrum does
 not have it.
 `--water-bed dome` installs an analytic bed so shoaling has a deterministic fixture at all;
-`--water-probe` prints the CPU wave query, which is otherwise invisible from outside the
-process. `--no-water-coverage` is the bisect lever for the shoreline's derivative coverage
+`--water-probe` prints the surface query over a 4x4 grid after the last frame, which is otherwise
+invisible from outside the process: `h=` is `water_probe_result` on either wave model and `gpu_h=`
+the GPU pass beside it, both at the instant the GPU answer describes (spec 13.1). It answers
+`WATER_PROBE_LATENCY` (2) passes late, so fewer than three frames prints `available=0
+reason=unfilled`. `--no-water-coverage` is the bisect lever for the shoreline's derivative coverage
 and reaches the pre-11.33 frame),
 `--film`, `--sky` (`--sun-elevation`, `--sun-azimuth`, `--sky-debug`), `-e/--env <hdr>`,
 `--world-scale <units-per-km>` (atmosphere scale; 1000 = 1 unit is 1 metre), `--no-aerial`,

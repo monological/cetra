@@ -27,8 +27,10 @@ struct Water;
  * "surface flat" uniquely.
  *
  * The seaward node is driven by shoreRunup's own edge rather than by the wave field: it keeps
- * ONE forcing model across both wave paths, and the spectral cascades exist only on the GPU so
- * there is nothing on this side to sample them with.
+ * ONE forcing model across both wave paths. The spectral field IS readable on this side since
+ * spec 13.1 -- water.h's surface query, WATER_PROBE_LATENCY frames late -- so driving the
+ * film off a real sample is now a choice about the forcing model rather than an impossibility,
+ * and one that changes both paths at once.
  *
  * What leaves here is the TIP of each column -- how far up the beach the water reached -- kept
  * for the last few frames so a lit surface can ask what the beach remembers. That is a few
