@@ -636,7 +636,16 @@ entry there before changing anything marked with a dagger.
   applies it to the KEY light's share of what lights the refracted point only, at the point where
   the refracted view ray meets the bed -- not at the refracted screen sample, whose rows squeeze
   together low in the frame and smeared the pattern into streaks. Sizes, depth and the ceiling are
-  `water_caustic_constants.glsl`, read by both languages
+  `water_caustic_constants.glsl`, read by both languages. **Two LEVELS since 13.3**, one array
+  layer each: the 40 m window and a 10 m one of 2.34 cm cells over it, for shallow water only
+  (full to 4 m of traced depth, gone by 8, not traced at all deeper), and the key's shadow on the
+  bed softened by how far the waves spread the refracted light. **The `glFlush` between each
+  level's trace and its lattice draw is load-bearing**: the lattice reads the trace by vertex
+  `texelFetch`, and on this driver that saw the texture from before the pass that rendered it.
+  **The ripple band (13.3)** is the fourth spectral band, 512² over 6 m past the short band's
+  24 rad/m (`water_ripple_constants.glsl`), shading the surface and the caustic trace through
+  `oceanShadingNormal` at the mip its footprint asks for, with what that mip drops handed to
+  roughness from a per-level variance predicted at seeding
 - **OIT:** `oit_resolve_frag` + `include/mboit.glsl` (the absorbance moments and their
   reconstruction, shared by the generation and accumulate sub-passes)
 - **Atmosphere †:** `froxel_inject/integrate/composite_frag` + `include/froxel.glsl`, and
@@ -968,7 +977,7 @@ feature needs before asking for a unit, ask what is already DECLARED before aski
 program, and ask whether the data belongs on the VERTEX at all before asking for either.**
 
 **`water_frag` reached the same ceiling in 11.42, and 11.45 took it back off** — it declares
-**12** since 13.2's caustics target took unit 3, not 16, and this paragraph claimed the ceiling
+**13** -- 13.2's caustics targets on unit 3, 13.3's ripple band on 4 -- not 16, and this paragraph claimed the ceiling
 for three specs after it was freed. It is a
 separate ledger — a program gets sixteen, not the engine — so its units alias `pbr_frag`'s freely,
 and its tenants are chosen around a rule the material ledger never has to think about: **two sampler

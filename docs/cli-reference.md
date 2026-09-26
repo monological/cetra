@@ -58,8 +58,8 @@ half grey where nothing is concentrated), `--water-caustic-probe` (the target's 
 over its inner 80%, and the mean is the energy check: 1 for any sea); `--no-water`, `--no-water-caustics`,
 `--no-water-glitter`, `--no-water-foam-history`,
 `--no-water-coverage`, `--no-water-lod`; specs 11.32 to 11.35 and 11.42 — suppresses the shadow catcher,
-see the pass order above. Gerstner is the default and allocates nothing; `fft` is an OCEAN and adds 45
-passes plus 24 textures. **Crest foam is FFT-only**, and that is by construction rather than an
+see the pass order above. Gerstner is the default and allocates nothing; `fft` is an OCEAN and adds 64
+passes a frame: three cascades at 128² and, since spec 13.3, a ripple band at 512². **Crest foam is FFT-only**, and that is by construction rather than an
 omission: it is selected from Jacobian compression, and the Gerstner path's steepness is clamped
 so its mapping cannot compress. **Caustics run on both** since spec 13.2: they refract the key
 light through the surface normal onto the floor, which needs a normal and not a fold. The SHORE foam band is

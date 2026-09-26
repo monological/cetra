@@ -673,10 +673,9 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat3("Scatter Albedo", water->scatter_albedo, 0.0f, 0.2f, "%.4f", 0);
             igColorEdit3("Scatter Glow", water->scatter_glow,
                          ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-            // Spectral cascades allocate 24 textures and 45 passes a frame, so the
-            // switch is offered rather than assumed. Caustics and foam ride on it:
-            // both are selected from Jacobian compression, which the Gerstner path
-            // does not compute.
+            // The spectral bands cost 64 passes a frame, so the switch is offered rather
+            // than assumed. Crest foam rides on it: it is selected from Jacobian
+            // compression, which the Gerstner path does not compute.
             bool fft = water->wave_model == WATER_WAVES_FFT;
             if (igCheckbox("Spectral cascades (FFT)", &fft))
                 water->wave_model = fft ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;
