@@ -585,12 +585,13 @@ float oceanCascadeLod(float footprint, int band) {
 // A linear random sea is vertically symmetric, and a real one is not: crests are
 // sharper than troughs are deep. These are the low-order bound-harmonic correction
 // for that, kept small deliberately -- pushed harder the surface folds, which is what
-// the choppy-wave literature bounds. The subtracted constants are each band's mean
-// square, so the correction reshapes the surface without raising its mean level.
+// the choppy-wave literature bounds. Each band's own mean square is subtracted, so the
+// correction reshapes the surface without raising its mean level -- cascadeHeightVar, the
+// seeded variance of THIS sea. It was a pair of constants until spec 13.1, right for one sea
+// state: water_fixture's long band carries 0.80 m^2 against a constant 0.080, which stood
+// that sea 0.1 m above its own still level everywhere and a calm one 0.02 m below it.
 const float OCEAN_BOUND_LONG = 0.14;
 const float OCEAN_BOUND_MED = 0.32;
-const float OCEAN_BOUND_LONG_VAR = 0.080;
-const float OCEAN_BOUND_MED_VAR = 0.030;
 
 /*
  * One band's tiling lookup. Written out eleven times before this existed, twice per band
@@ -693,8 +694,8 @@ float oceanCrestGate(float elevationM, float heightVar) {
 vec3 oceanSpectralDisplacement(vec4 long0, vec4 med0) {
     vec2 h = long0.rg * cascadeChoppiness[0] + med0.rg * cascadeChoppiness[1];
     float y = long0.b + med0.b +
-              OCEAN_BOUND_LONG * (long0.b * long0.b - OCEAN_BOUND_LONG_VAR) +
-              OCEAN_BOUND_MED * (med0.b * med0.b - OCEAN_BOUND_MED_VAR);
+              OCEAN_BOUND_LONG * (long0.b * long0.b - cascadeHeightVar[0]) +
+              OCEAN_BOUND_MED * (med0.b * med0.b - cascadeHeightVar[1]);
     /*
      * METRES to world units, here and nowhere else (spec 11.44).
      *
