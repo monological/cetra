@@ -350,6 +350,25 @@ shadow, 15 foam (`water.h:47-90`). Two separate arrays rather than more layers o
 the two have different LIFETIMES -- the fields are this frame's render targets and the previous
 are a copy taken before they are overwritten. 11 is deliberately not `SHADOW_MAP_TEXTURE_UNIT`
 10, because two sampler TYPES against one image unit is an `INVALID_OPERATION` at draw.
+**It declares 13 since spec 13.3**: 13.2 put the caustics targets on 3 (an ARRAY since 13.3, a
+layer per level), and 13.3 put the ripple band's own array on 4.
+
+**The ripple band (spec 13.3)** is a fourth spectral band, past the short band's 24 rad/m, in
+its own 512² transform over 6 m -- 19 more draws, 64 a frame -- because a 128 over a tile short
+enough for centimetre waves repeats every metre or two. It shades and never displaces, and it is
+sampled at the mip its FOOTPRINT asks for rather than faded by distance: the slope variance each
+level keeps is predicted at seeding, so what a footprint filters out is a known number handed to
+roughness, and `water-ripple-mips` holds that prediction against what `glGenerateMipmap` built.
+
+**The caustics have LEVELS since 13.3**: the 40 m window of 9.4 cm cells, and a 10 m window of
+2.34 cm cells -- two ripple texels -- blended over it where it reaches, used only in water
+shallower than 8 m of traced depth (ripple focus does not survive further, and over a 9 m bed
+the fine level lost a quarter of its light for a reason still open). The lattice reads its
+traced points by vertex-stage `texelFetch`, and **a `glFlush` between the trace and the draw is
+load-bearing**: on Apple's GL the fetch otherwise sees the texture from before the pass that
+rendered it -- the caustics were a frame late for all of 13.2. And the key's visibility at the
+bed is averaged over a disc as wide as the waves spread the refracted key over the path down,
+so a shadow falling on the bed fades the caustics out rather than stopping them on a line.
 
 ## Atmosphere
 

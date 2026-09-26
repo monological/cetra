@@ -537,7 +537,7 @@ Water* create_water(void) {
     water->sea.swell = WATER_DEFAULT_SWELL;
     // Gerstner by default: it allocates no GPU state, costs no passes, and is the
     // right model at the scale most scenes put water at. The spectral path is an
-    // ocean, and asks for 45 passes and 24 textures to say so.
+    // ocean, and asks for 64 passes a frame to say so.
     water->wave_model = WATER_WAVES_GERSTNER;
     water->caustics = true;
     water->glitter = true;
