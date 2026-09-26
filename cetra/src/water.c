@@ -65,6 +65,17 @@ static const struct WaterCascadeConfig {
     {12.0f, 1.22f, 24.0f, 0.82f, 0.0f, 0.40f, 0.0f, 0x19ce47u},
 };
 
+/*
+ * The ripple band (spec 13.3): the next window up, abutting the short band's 24 rad/m exactly,
+ * at the same amplitude scale so the spectrum does not step where one band hands to the other.
+ *
+ * Its top is set by the TEXEL, not by the sea: 260 rad/m is a 2.4 cm wave, a hair over two
+ * texels of 6 m / 512, and the spectrum's own short-wave roll-off has taken nearly all of the
+ * energy by then anyway. No choppiness and no crest term, because it never reaches the mesh.
+ */
+static const struct WaterCascadeConfig WATER_RIPPLE_CFG = {6.0f, 24.0f, 260.0f, 0.82f,
+                                                           0.0f, 0.0f,  0.0f,   0x3d7a91u};
+
 // The default sea state, in the units WaterWaveTrain documents. A moderate wind sea --
 // force 6 over a long fetch, deep enough that the TMA correction barely bites -- with an
 // older swell crossing it.
@@ -85,6 +96,9 @@ static const struct WaterCascadeConfig {
 // address dangles and it cannot initialise a static -- neither bites at two direct
 // assignments, which is exactly why it would bite whoever adds a third train.
 #define WATER_DEFAULT_SEA_DEPTH 54.0f
+// Where surface tension matches gravity in the dispersion relation, rad/m: sqrt(rho g / sigma)
+// for clean seawater, a 1.7 cm wave -- the slowest a ripple can travel.
+#define WATER_CAPILLARY_K 370.0f
 static const WaterWaveTrain WATER_DEFAULT_WIND_SEA = {
     .wind_speed = 11.5f,
     .fetch = 120000.0f,
@@ -258,9 +272,10 @@ static float _water_train_density(WaterTrainSpectrum s, float omega, float mode_
 }
 
 // Significant wave height of the seeded sea, metres: 4 sigma, with the variance summed over
-// the cascades since they own disjoint wavenumber windows. Meaningful once seeded.
+// the cascades and the ripple band since they own disjoint wavenumber windows. Meaningful once
+// seeded.
 static float _water_significant_height(const Water* water) {
-    float var = 0.0f;
+    float var = water->ripple_height_var;
     for (int c = 0; c < WATER_CASCADE_COUNT; c++)
         var += water->cascade_height_var[c];
     return 4.0f * sqrtf(fmaxf(var, 0.0f));
@@ -273,10 +288,14 @@ static float _water_significant_height(const Water* water) {
  * initial holds h0(k) in .xy and conj(h0(-k)) in .zw, which is what lets the
  * evolution step produce a REAL surface from one complex multiply per mode
  * instead of enforcing symmetry afterwards.
+ *
+ * `out_slope_var_lod`, when given, receives the slope variance each of the transform's
+ * log2(size) + 1 mip levels carries -- see the accumulation below.
  */
 static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg,
                                   const WaterSeaState* sea, float wind_angle, float* initial,
-                                  float* wave_data, float* out_height_var, float* out_slope_var) {
+                                  float* wave_data, float* out_height_var, float* out_slope_var,
+                                  float* out_slope_var_lod) {
     const float g = 9.81f;
     const float delta_k = 6.28318530718f / cfg->length_scale;
     // Guarded for the same reason the trains' wind and fetch are: authored, and dividing
@@ -302,6 +321,10 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
     // dominated by the swell loses exactly the half the roughness handover reads.
     double sum_a2 = 0.0;
     double sum_k2_a2 = 0.0;
+    int lod_count = 0;
+    while ((1 << lod_count) <= size)
+        lod_count++;
+    double sum_k2_a2_lod[16] = {0.0};
 
     for (int y = 0; y < size; y++) {
         for (int x = 0; x < size; x++) {
@@ -323,12 +346,24 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
 
             const float kh = fminf(k_len * sea_depth, 20.0f);
             const float tanh_kh = tanhf(kh);
-            const float omega = sqrtf(g * k_len * tanh_kh);
+            /*
+             * Gravity-capillary dispersion, w^2 = g k tanh(kh) (1 + (k/km)^2), with km the
+             * wavenumber where surface tension matches gravity. Invisible below the short band's
+             * top -- 0.2% of w at 24 rad/m -- and the difference between a ripple travelling
+             * at its own speed and 20% slow at 200.
+             */
+            const float capillary =
+                1.0f + (k_len / WATER_CAPILLARY_K) * (k_len / WATER_CAPILLARY_K);
+            const float omega = sqrtf(g * k_len * tanh_kh * capillary);
             const float sech2 = 1.0f - tanh_kh * tanh_kh;
             // d(omega)/dk, which converts a spectral density in frequency to one
-            // in wavenumber. Getting this wrong scales the whole sea state.
+            // in wavenumber. Getting this wrong scales the whole sea state. The product rule
+            // over the capillary factor, whose own derivative is 2k / km^2.
             const float domega =
-                g * (sea_depth * k_len * sech2 + tanh_kh) / fmaxf(omega * 2.0f, 1e-5f);
+                g *
+                ((sea_depth * k_len * sech2 + tanh_kh) * capillary +
+                 k_len * tanh_kh * 2.0f * k_len / (WATER_CAPILLARY_K * WATER_CAPILLARY_K)) /
+                fmaxf(omega * 2.0f, 1e-5f);
             const float omega_h = omega * sqrtf(sea_depth / g);
             const float tma = omega_h <= 1.0f  ? 0.5f * omega_h * omega_h
                               : omega_h < 2.0f ? 1.0f - 0.5f * (2.0f - omega_h) * (2.0f - omega_h)
@@ -363,6 +398,28 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
             // realisation would move with it.
             sum_a2 += (double)amplitude * (double)amplitude;
             sum_k2_a2 += (double)k_len * (double)k_len * (double)amplitude * (double)amplitude;
+            /*
+             * What each mip level keeps of this mode's slope. A level is its predecessor
+             * averaged over 2x2, and averaging two samples d texels apart passes a wave of
+             * phase step w per texel at cos(w d / 2) -- so level L carries the product of
+             * those over d = 1, 2, ..., 2^(L-1), per axis, squared for a variance. w is the
+             * mode's phase per TEXEL, which depends on its grid index and not on the tile's
+             * length. Aliasing folded back by the downsample is ignored: it moves variance
+             * between wavenumbers rather than creating it.
+             */
+            if (out_slope_var_lod) {
+                const float wx = 6.28318530718f * (float)(x - size / 2) / (float)size;
+                const float wz = 6.28318530718f * (float)(y - size / 2) / (float)size;
+                double pass = 1.0;
+                for (int lod = 0; lod < lod_count; lod++) {
+                    sum_k2_a2_lod[lod] += pass * (double)k_len * (double)k_len * (double)amplitude *
+                                          (double)amplitude;
+                    const float step = (float)(1 << lod) * 0.5f;
+                    const double cx = cosf(wx * step);
+                    const double cz = cosf(wz * step);
+                    pass *= cx * cx * cz * cz;
+                }
+            }
 
             wd[0] = kx;
             wd[1] = 1.0f / k_len;
@@ -401,6 +458,9 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
         *out_height_var = (float)(4.0 * sum_a2);
     if (out_slope_var)
         *out_slope_var = (float)(4.0 * sum_k2_a2);
+    if (out_slope_var_lod)
+        for (int lod = 0; lod < lod_count; lod++)
+            out_slope_var_lod[lod] = (float)(4.0 * sum_k2_a2_lod[lod]);
 
     return true;
 }
@@ -518,6 +578,11 @@ void free_water(Water* water) {
     glDeleteTextures(2, water->cascade_array);
     glDeleteFramebuffers(WATER_CASCADE_COUNT * 2, &water->cascade_fbo[0][0]);
     glDeleteTextures(1, &water->cascade_prev_array);
+    glDeleteTextures(1, &water->ripple_initial);
+    glDeleteTextures(1, &water->ripple_wave);
+    glDeleteTextures(1, &water->ripple_twiddle_tex);
+    glDeleteTextures(2, water->ripple_array);
+    glDeleteFramebuffers(2, water->ripple_fbo);
     glDeleteTextures(1, &water->foam_pattern_tex);
     glDeleteTextures(2, water->foam_tex);
     glDeleteFramebuffers(2, water->foam_fbo);
@@ -1184,6 +1249,27 @@ static void _water_record_seed(Water* water) {
  * that is not the one asked for. The caller decides what a failure MEANS -- fatal on the
  * first build, survivable on a re-seed -- so this one only reports which cascade.
  */
+// The ripple band's seed pair, on the same terms as a cascade's: built whole or not at all.
+static bool _water_seed_ripple(Water* water, float wind_angle) {
+    const int size = WATER_RIPPLE_RES;
+    float* initial = calloc((size_t)size * size * 4, sizeof(float));
+    float* wave = calloc((size_t)size * size * 4, sizeof(float));
+    bool ok = initial && wave &&
+              _water_build_spectrum(size, &WATER_RIPPLE_CFG, &water->sea, wind_angle, initial, wave,
+                                    &water->ripple_height_var, NULL, water->ripple_slope_var_lod);
+    if (ok) {
+        glDeleteTextures(1, &water->ripple_initial);
+        glDeleteTextures(1, &water->ripple_wave);
+        water->ripple_initial = _water_make_data_tex(size, size, initial);
+        water->ripple_wave = _water_make_data_tex(size, size, wave);
+    } else {
+        log_error("Water ripple band seeding failed");
+    }
+    free(initial);
+    free(wave);
+    return ok;
+}
+
 static bool _water_seed_cascades(Water* water) {
     const int size = WATER_SPECTRUM_RES;
     float* initial = calloc((size_t)size * size * 4, sizeof(float));
@@ -1198,7 +1284,7 @@ static bool _water_seed_cascades(Water* water) {
     for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
         if (!_water_build_spectrum(size, &WATER_CASCADE_CFG[c], &water->sea, wind_angle, initial,
                                    wave, &water->cascade_height_var[c],
-                                   &water->cascade_slope_var[c])) {
+                                   &water->cascade_slope_var[c], NULL)) {
             log_error("Water cascade %d seeding failed", c);
             free(initial);
             free(wave);
@@ -1211,8 +1297,10 @@ static bool _water_seed_cascades(Water* water) {
     }
     free(initial);
     free(wave);
+    if (!_water_seed_ripple(water, wind_angle))
+        return false;
     _water_record_seed(water);
-    float carried = 0.0f;
+    float carried = water->ripple_slope_var_lod[0];
     for (int c = 0; c < WATER_CASCADE_COUNT; c++)
         carried += water->cascade_slope_var[c];
     // Tp and the Cox-Munk reference are the WIND SEA's: the peak is the one the surf runs
@@ -1275,6 +1363,17 @@ static bool _water_ensure_spectra(Water* water) {
     water->twiddle_tex = _water_make_data_tex(size, WATER_SPECTRUM_LOG, twiddle);
     free(twiddle);
 
+    float* ripple_twiddle = calloc((size_t)WATER_RIPPLE_RES * WATER_RIPPLE_LOG * 4, sizeof(float));
+    if (!ripple_twiddle) {
+        log_error("Water ripple twiddle allocation failed; disabling water");
+        water->failed = true;
+        return false;
+    }
+    _water_build_twiddle(WATER_RIPPLE_RES, WATER_RIPPLE_LOG, ripple_twiddle);
+    water->ripple_twiddle_tex =
+        _water_make_data_tex(WATER_RIPPLE_RES, WATER_RIPPLE_LOG, ripple_twiddle);
+    free(ripple_twiddle);
+
     // Restored on every exit past this point, including the failure ones. Binding 0 and
     // returning would leave the WINDOW framebuffer current, and every pass after water --
     // the transparent lane, the OIT accumulate, the particle depth resolve --
@@ -1307,6 +1406,25 @@ static bool _water_ensure_spectra(Water* water) {
             }
         }
     }
+
+    // The ripple band's pair: the same layout as one cascade, in an array of its own size.
+    for (int b = 0; b < 2; b++) {
+        water->ripple_array[b] = _water_make_field_array(WATER_RIPPLE_RES, 2, GL_RGBA16F);
+        glGenFramebuffers(1, &water->ripple_fbo[b]);
+        glBindFramebuffer(GL_FRAMEBUFFER, water->ripple_fbo[b]);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, water->ripple_array[b], 0,
+                                  0);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, water->ripple_array[b], 0,
+                                  1);
+        const GLenum targets[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+        glDrawBuffers(2, targets);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log_error("Water ripple framebuffer incomplete; disabling water");
+            glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+            water->failed = true;
+            return false;
+        }
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
 
     // Same format and filtering as the fields they hold a copy of, because that is
@@ -1335,8 +1453,9 @@ static bool _water_ensure_spectra(Water* water) {
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
 
     water->spectra_ready = true;
-    log_info("Water: %d spectral cascades at %d^2, %d passes/frame", WATER_CASCADE_COUNT, size,
-             WATER_CASCADE_COUNT * (1 + WATER_SPECTRUM_LOG * 2));
+    log_info("Water: %d spectral cascades at %d^2 and a ripple band at %d^2, %d passes/frame",
+             WATER_CASCADE_COUNT, size, WATER_RIPPLE_RES,
+             WATER_CASCADE_COUNT * (1 + WATER_SPECTRUM_LOG * 2) + 1 + WATER_RIPPLE_LOG * 2);
     return true;
 }
 
@@ -1806,6 +1925,19 @@ static void _water_bind_ocean(const Water* water, const struct Scene* scene,
         uniform_set_float(u, svar, fft ? water->cascade_slope_var[c] : 0.0f);
     }
 
+    // The ripple band. Bound to 0 and its variances zeroed on Gerstner for the cascades'
+    // reasons: the sampler is declared unconditionally, and a stale variance would widen a
+    // lobe for ripples this sea never carried.
+    glActiveTexture(GL_TEXTURE0 + WATER_RIPPLE_UNIT);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, fft ? water->ripple_array[0] : 0);
+    uniform_set_int(u, "rippleFields", WATER_RIPPLE_UNIT);
+    uniform_set_float(u, "rippleLength", WATER_RIPPLE_CFG.length_scale * units_per_metre);
+    for (int lod = 0; lod < WATER_RIPPLE_LODS; lod++) {
+        char name[40];
+        snprintf(name, sizeof(name), "rippleSlopeVarLod[%d]", lod);
+        uniform_set_float(u, name, fft ? water->ripple_slope_var_lod[lod] : 0.0f);
+    }
+
     // Last frame's displacement, for the spectral path's motion vectors. Only usable
     // from the third frame on: the first has nothing to copy from and the second holds
     // a copy of the first, so the count has to reach 2 before this is a real previous
@@ -1934,6 +2066,23 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
                              fmaxf(water->cascade_height_var[c], 0.0f));
     }
 
+    // The ripple band, at its own size and then back: the foam pass below draws at the
+    // cascades' resolution and inherits whatever viewport is left.
+    glViewport(0, 0, WATER_RIPPLE_RES, WATER_RIPPLE_RES);
+    glUseProgram(evolve->id);
+    glBindFramebuffer(GL_FRAMEBUFFER, water->ripple_fbo[0]);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, water->ripple_initial);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, water->ripple_wave);
+    uniform_set_int(evolve->uniforms, "initialSpectrum", 0);
+    uniform_set_int(evolve->uniforms, "waveData", 1);
+    uniform_set_float(evolve->uniforms, "time", time);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    _water_fft_transform(fft, water->ripple_twiddle_tex, WATER_RIPPLE_RES, WATER_RIPPLE_LOG,
+                         water->ripple_fbo, water->ripple_array, 0, 0.0f, 0.0f);
+    glViewport(0, 0, WATER_SPECTRUM_RES, WATER_SPECTRUM_RES);
+
     glBindVertexArray(0);
 
     // Mip chains for the bands that displace, AFTER the ping-pong: these textures are the
@@ -1942,6 +2091,9 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
     // the same reason the previous-frame copy above reads it.
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, water->cascade_array[0]);
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    // The ripple band's chain is what it is sampled through: a footprint picks its level.
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->ripple_array[0]);
     glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
@@ -2636,13 +2788,12 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
  * indexing, the twiddles and the shift, none of which depend on the format, and fp16 would
  * put its own 1e-3 floor exactly where the tolerance sits.
  */
-static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx, int fy,
-                               double* out_max_err) {
+static bool _water_fft_impulse(const Water* water, struct Engine* engine, int size, int log2_size,
+                               GLuint twiddle, int fx, int fy, double* out_max_err) {
     ShaderProgram* fft = engine_get_program(engine, "water_fft");
-    if (!fft || !water->twiddle_tex || !water->quad_vao)
+    if (!fft || !twiddle || !water->quad_vao)
         return false;
 
-    const int size = WATER_SPECTRUM_RES;
     const size_t texels = (size_t)size * size;
     float* data = calloc(texels * 4, sizeof(float));
     if (!data)
@@ -2691,8 +2842,7 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
         // happens to agree today.
         // No crest term: an exact identity at zero gain, so the impulse still tests the
         // linear transform alone.
-        _water_fft_transform(fft, water->twiddle_tex, WATER_SPECTRUM_RES, WATER_SPECTRUM_LOG, fbo,
-                             arr, 0, 0.0f, 0.0f);
+        _water_fft_transform(fft, twiddle, size, log2_size, fbo, arr, 0, 0.0f, 0.0f);
         glBindVertexArray(0);
 
         float* out = malloc(texels * 4 * sizeof(float));
@@ -2789,6 +2939,43 @@ void water_caustic_probe(const Water* water) {
  * Costs a full pipeline stall per cascade. That is fine here and would not be per frame,
  * which is why nothing calls this from the render loop.
  */
+/*
+ * One band's measured variances beside the predicted ones, as one probe line of kind `kind`.
+ *
+ * Target 0 channel b is the height, target 1 channels r,g are the two slopes -- the same packing
+ * ocean.glsl samples, so this measures what the surface reads rather than an intermediate nothing
+ * consumes.
+ */
+static void _water_fft_probe_band(const char* kind, int index, const float* t0, const float* t1,
+                                  size_t texels, double hp, double sp) {
+    double mean = 0.0, sq = 0.0, peak = 0.0;
+    for (size_t i = 0; i < texels; i++) {
+        const double h = t0[i * 4 + 2];
+        mean += h;
+        sq += h * h;
+        if (fabs(h) > peak)
+            peak = fabs(h);
+    }
+    mean /= (double)texels;
+    const double height_var = sq / (double)texels - mean * mean;
+
+    double slope_sq = 0.0;
+    for (size_t i = 0; i < texels; i++) {
+        const double sx = t1[i * 4 + 0];
+        const double sz = t1[i * 4 + 1];
+        slope_sq += sx * sx + sz * sz;
+    }
+    const double slope_var = slope_sq / (double)texels;
+
+    // `mean` is where the band's top mip sits, so it is where the far field sits: the crest
+    // term has to leave it at zero or the distant sea stands off its own level.
+    printf("water-fft-probe %s index=%d height_pred=%.6f height_meas=%.6f "
+           "height_ratio=%.4f peak=%.4f slope_pred=%.6f slope_meas=%.6f "
+           "slope_ratio=%.4f mean=%.6f\n",
+           kind, index, hp, height_var, height_var / fmax(hp, 1e-12), peak, sp, slope_var,
+           slope_var / fmax(sp, 1e-12), mean);
+}
+
 void water_fft_probe(const Water* water, struct Engine* engine) {
     /*
      * Declining is a result, not a failure: the Gerstner path has no spectrum to measure,
@@ -2821,58 +3008,67 @@ void water_fft_probe(const Water* water, struct Engine* engine) {
 
     // Every line leads with its kind. The reader used to tell them apart by whether the
     // first field parsed as a number, which makes any new header key a parse change.
-    printf("water-fft-probe header available=1 cascades=%d res=%d\n", WATER_CASCADE_COUNT, size);
+    printf("water-fft-probe header available=1 cascades=%d res=%d ripple_res=%d\n",
+           WATER_CASCADE_COUNT, size, WATER_RIPPLE_RES);
     // ONE read for the whole array: glGetTexImage on a 2D_ARRAY returns every layer, so the
     // six that were six fetches are one, and a layer is an offset into what came back.
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, water->cascade_array[0]);
     glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, GL_FLOAT, buf);
-    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-        // Target 0 channel b is the height, target 1 channels r,g are the two slopes --
-        // the same packing ocean.glsl samples, so this measures what the surface reads
-        // rather than an intermediate nothing consumes.
-        const float* t0 = buf + (size_t)(c * 2 + 0) * texels * 4;
-        const float* t1 = buf + (size_t)(c * 2 + 1) * texels * 4;
-        double mean = 0.0, sq = 0.0, peak = 0.0;
-        for (size_t i = 0; i < texels; i++) {
-            const double h = t0[i * 4 + 2];
-            mean += h;
-            sq += h * h;
-            if (fabs(h) > peak)
-                peak = fabs(h);
-        }
-        mean /= (double)texels;
-        const double height_var = sq / (double)texels - mean * mean;
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++)
+        _water_fft_probe_band("cascade", c, buf + (size_t)(c * 2 + 0) * texels * 4,
+                              buf + (size_t)(c * 2 + 1) * texels * 4, texels,
+                              water->cascade_height_var[c], water->cascade_slope_var[c]);
+    free(buf);
 
-        double slope_sq = 0.0;
-        for (size_t i = 0; i < texels; i++) {
-            const double sx = t1[i * 4 + 0];
-            const double sz = t1[i * 4 + 1];
-            slope_sq += sx * sx + sz * sz;
+    // The ripple band, from its own array, whose two layers are one band's two targets.
+    const size_t ripple_texels = (size_t)WATER_RIPPLE_RES * WATER_RIPPLE_RES;
+    float* ripple = malloc(ripple_texels * 4 * sizeof(float) * 2);
+    if (ripple) {
+        glBindTexture(GL_TEXTURE_2D_ARRAY, water->ripple_array[0]);
+        glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, GL_FLOAT, ripple);
+        _water_fft_probe_band("ripple", 0, ripple, ripple + ripple_texels * 4, ripple_texels,
+                              water->ripple_height_var, water->ripple_slope_var_lod[0]);
+        /*
+         * Each mip level's slope variance beside the one seeding predicted for it. That
+         * prediction is what roughness takes the ripples' filtered-out share from, and it is a
+         * model of what glGenerateMipmap does -- so it is checked against what the chain holds.
+         */
+        for (int lod = 1; lod < WATER_RIPPLE_LODS; lod++) {
+            const int side = WATER_RIPPLE_RES >> lod;
+            const size_t level_texels = (size_t)side * side;
+            glGetTexImage(GL_TEXTURE_2D_ARRAY, lod, GL_RGBA, GL_FLOAT, ripple);
+            const float* t1 = ripple + level_texels * 4;
+            double slope_sq = 0.0;
+            for (size_t i = 0; i < level_texels; i++)
+                slope_sq +=
+                    (double)t1[i * 4 + 0] * t1[i * 4 + 0] + (double)t1[i * 4 + 1] * t1[i * 4 + 1];
+            const double meas = slope_sq / (double)level_texels;
+            const double pred = water->ripple_slope_var_lod[lod];
+            printf("water-fft-probe ripple-lod level=%d slope_pred=%.8f slope_meas=%.8f "
+                   "slope_ratio=%.4f\n",
+                   lod, pred, meas, meas / fmax(pred, 1e-12));
         }
-        const double slope_var = slope_sq / (double)texels;
-
-        const double hp = water->cascade_height_var[c];
-        const double sp = water->cascade_slope_var[c];
-        // `mean` is where the band's top mip sits, so it is where the far field sits: the crest
-        // term has to leave it at zero or the distant sea stands off its own level.
-        printf("water-fft-probe cascade index=%d height_pred=%.6f height_meas=%.6f "
-               "height_ratio=%.4f peak=%.4f slope_pred=%.6f slope_meas=%.6f "
-               "slope_ratio=%.4f mean=%.6f\n",
-               c, hp, height_var, height_var / fmax(hp, 1e-12), peak, sp, slope_var,
-               slope_var / fmax(sp, 1e-12), mean);
+        free(ripple);
     }
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-    free(buf);
 
     // Two modes, because one is not enough. The centred impulse checks the shift and the
     // overall scale; the neighbouring one checks that a mode lands at the wavenumber it
     // was given, which is what an off-by-one butterfly partner breaks and what a constant
-    // field cannot distinguish.
-    double err_dc = 0.0;
-    double err_one = 0.0;
-    const bool ran = _water_fft_impulse(water, engine, 0, 0, &err_dc) &&
-                     _water_fft_impulse(water, engine, 1, 0, &err_one);
+    // field cannot distinguish. At both transform sizes the sea runs, reporting the worse:
+    // the ripple band's 512 is a different twiddle table and nine stages rather than seven.
+    double err_dc = 0.0, err_one = 0.0, ripple_dc = 0.0, ripple_one = 0.0;
+    const bool ran = _water_fft_impulse(water, engine, size, WATER_SPECTRUM_LOG, water->twiddle_tex,
+                                        0, 0, &err_dc) &&
+                     _water_fft_impulse(water, engine, size, WATER_SPECTRUM_LOG, water->twiddle_tex,
+                                        1, 0, &err_one) &&
+                     _water_fft_impulse(water, engine, WATER_RIPPLE_RES, WATER_RIPPLE_LOG,
+                                        water->ripple_twiddle_tex, 0, 0, &ripple_dc) &&
+                     _water_fft_impulse(water, engine, WATER_RIPPLE_RES, WATER_RIPPLE_LOG,
+                                        water->ripple_twiddle_tex, 1, 0, &ripple_one);
+    err_dc = fmax(err_dc, ripple_dc);
+    err_one = fmax(err_one, ripple_one);
     if (ran)
         printf("water-fft-probe impulse dc_err=%.8f mode_err=%.8f\n", err_dc, err_one);
     else

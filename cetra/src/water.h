@@ -97,6 +97,17 @@ _Static_assert(WATER_CAUSTIC_UNIT != WATER_CASCADE_UNIT && WATER_CAUSTIC_UNIT !=
                    WATER_CAUSTIC_UNIT != WATER_FOAM_PATTERN_UNIT &&
                    WATER_CAUSTIC_UNIT != WATER_SHADOW_UNIT && WATER_CAUSTIC_UNIT != WATER_FOAM_UNIT,
                "the caustic unit collides with one water already binds");
+// The ripple band's transformed fields (spec 13.3), a 2D_ARRAY of its own because an array has
+// one size for every layer and this band's is not the cascades'. 4 is TEXUNIT_HEIGHT, a 2D
+// binding point; this is the ARRAY one, and water declares nothing else on the unit.
+#define WATER_RIPPLE_UNIT 4
+_Static_assert(WATER_RIPPLE_UNIT != WATER_CASCADE_UNIT && WATER_RIPPLE_UNIT != WATER_PREV_UNIT &&
+                   WATER_RIPPLE_UNIT != WATER_DEPTH_UNIT && WATER_RIPPLE_UNIT != WATER_BED_UNIT &&
+                   WATER_RIPPLE_UNIT != WATER_FOAM_PATTERN_UNIT &&
+                   WATER_RIPPLE_UNIT != WATER_SHADOW_UNIT && WATER_RIPPLE_UNIT != WATER_FOAM_UNIT &&
+                   WATER_RIPPLE_UNIT != WATER_CAUSTIC_UNIT &&
+                   WATER_RIPPLE_UNIT != SKY_CLOUD_SHADOW_UNIT,
+               "the ripple unit collides with one water already binds");
 // The cloud deck's sun transmittance is SKY_CLOUD_SHADOW_UNIT (sky.h), shared with the
 // catcher rather than allocated here: it is the sky's resource and neither consumer has a
 // reason to disagree about where it lands.
@@ -141,6 +152,9 @@ _Static_assert(SKY_CLOUD_SHADOW_UNIT < 16,
 #define WATER_SPECTRUM_RES  128
 #define WATER_SPECTRUM_LOG  7 // log2(WATER_SPECTRUM_RES)
 #define WATER_CASCADE_COUNT 3
+
+// The ripple band's transform size, shared with ocean.glsl (spec 13.3).
+#include "../shaders/include/water_ripple_constants.glsl"
 
 // WATER_PROBE_MAX and the inversion's step cap and tolerance, shared with the query shader.
 #include "../shaders/include/water_probe_constants.glsl"
@@ -453,6 +467,25 @@ typedef struct Water {
      */
     float cascade_height_var[WATER_CASCADE_COUNT];
     float cascade_slope_var[WATER_CASCADE_COUNT];
+
+    /*
+     * The ripple band (spec 13.3): the band past the short one, at its own 512 over 6 m. Its own
+     * seed pair, ping-pong pair and twiddle table, since every one of those is sized by the
+     * transform and this transform is not the cascades'. It shades and never displaces, like the
+     * short band, so it has no previous copy and no foam.
+     *
+     * `ripple_slope_var_lod` is the band's mean square slope as each MIP LEVEL of it carries it,
+     * [0] being the whole band. The band is sampled at the level the footprint asks for, so what
+     * a footprint removes is [0] minus the level it read -- a property of the spectrum, computed
+     * once at seeding rather than guessed per pixel.
+     */
+    GLuint ripple_initial;
+    GLuint ripple_wave;
+    GLuint ripple_array[2]; // [buffer], two layers each: the transform's two targets
+    GLuint ripple_fbo[2];
+    GLuint ripple_twiddle_tex;
+    float ripple_height_var;
+    float ripple_slope_var_lod[WATER_RIPPLE_LODS];
 
     /*
      * Accumulated foam, ping-ponged (spec 11.42).

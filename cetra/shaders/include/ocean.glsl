@@ -96,6 +96,20 @@ uniform float cascadeHeightVar[3];
 uniform sampler2DArray cascadePrevFields;
 uniform int prevAvailable;
 
+#include "water_ripple_constants.glsl"
+/*
+ * The ripple band (spec 13.3): the centimetre waves past the short band, which shade and never
+ * displace. The transform's two targets as layers 0 and 1, like one cascade, in an array of its
+ * own because an array has one size and this band's is 512 where the cascades' is 128.
+ *
+ * `rippleSlopeVarLod[L]` is the mean square slope mip level L of the band carries, [0] the whole
+ * of it: measured off the spectrum at seeding, so what a footprint filters out is a difference
+ * of two numbers rather than a guess about how much of the band a level keeps.
+ */
+uniform sampler2DArray rippleFields;
+uniform float rippleLength; // the band's tile, world units
+uniform float rippleSlopeVarLod[WATER_RIPPLE_LODS];
+
 /*
  * The array's packing, in one place.
  *
@@ -622,10 +636,13 @@ float oceanCascadeLod(float footprint, int band) {
  * Nothing in this tree is further than about a thousand units out, where all of this is far
  * below a last bit.
  */
-vec2 oceanCascadeUv(vec2 p, int band) {
-    float period = cascadeLength[band];
+vec2 oceanTileUv(vec2 p, float period) {
     vec2 origin = floor(waterCamPos.xz / period) * period;
     return fract((p - origin) / period + 0.5);
+}
+
+vec2 oceanCascadeUv(vec2 p, int band) {
+    return oceanTileUv(p, cascadeLength[band]);
 }
 
 // Its screen derivative, for a caller that needs textureGrad rather than an implicit fetch
@@ -654,28 +671,47 @@ float oceanBandJacobian(vec4 field0, vec4 field1, float choppiness) {
     return (1.0 + d.x) * (1.0 + d.y) - c * c;
 }
 
-// How much of the short band's slope reaches the shading normal.
+// How much of the short and ripple bands' slope reaches the shading normal.
 const float OCEAN_SHORT_SLOPE_GAIN = 0.42;
 
+// The ripple band's mip level at a world footprint: the level whose texel is the footprint.
+float oceanRippleLod(float footprint) {
+    float texel = rippleLength / float(WATER_RIPPLE_RES);
+    return clamp(log2(max(footprint / max(texel, 1e-6), 1.0)), 0.0, float(WATER_RIPPLE_LOG));
+}
+
+// The ripple slope variance a read at `lod` does not carry, for roughness to take over.
+float oceanRippleRemovedMss(float lod) {
+    int lo = int(floor(lod));
+    int hi = min(lo + 1, WATER_RIPPLE_LOG);
+    float kept = mix(rippleSlopeVarLod[lo], rippleSlopeVarLod[hi], lod - float(lo));
+    return max(rippleSlopeVarLod[0] - kept, 0.0);
+}
+
 /*
- * The normal the light actually meets: the mesh's, plus the short band's slope, which shades
- * but never displaces. One function because the surface shades with it and the caustics refract
- * through it -- a lens made of a different surface from the one drawn focuses light somewhere
- * the water is not.
+ * The normal the light actually meets: the mesh's, plus the slopes of the two bands that shade
+ * but never displace -- the short band and the ripples past it. One function because the surface
+ * shades with it and the caustics refract through it -- a lens made of a different surface from
+ * the one drawn focuses light somewhere the water is not.
  *
- * Sampled at the DISPLACED position, since this band belongs to the surface where it ended up.
- * `shortKeep` scales the band's slope, 1 for all of it. The Gerstner path has no short band and
- * gets its mesh normal back unchanged.
+ * Sampled at the DISPLACED position, since these bands belong to the surface where it ended up.
+ * `shortKeep` scales the short band's slope, 1 for all of it. `footprint` is the world size of
+ * whatever is asking -- a pixel, a lattice cell -- and picks the ripples' mip, so what it cannot
+ * resolve arrives averaged rather than aliased; oceanRippleRemovedMss says how much that was.
+ * Both at the one gain, so the spectrum does not step where one band hands to the other. The
+ * Gerstner path has neither band and gets its mesh normal back unchanged.
  *
- * LOD 0 explicitly: oceanCascadeUv wraps with fract, so an implicit screen derivative reads a
- * whole period across every tile seam.
+ * Explicit levels throughout: the tile lookups wrap with fract, so an implicit screen derivative
+ * reads a whole period across every tile seam.
  */
-vec3 oceanShadingNormal(vec3 meshN, vec2 displacedXZ, float shortKeep) {
+vec3 oceanShadingNormal(vec3 meshN, vec2 displacedXZ, float shortKeep, float footprint) {
     if (waveModel != 1)
         return meshN;
     vec4 short1 = oceanCascadeAt(2, 1, oceanCascadeUv(displacedXZ, 2), 0.0);
-    vec2 shortSlope = short1.rg * shortKeep;
-    return normalize(meshN + vec3(-shortSlope.x, 0.0, -shortSlope.y) * OCEAN_SHORT_SLOPE_GAIN);
+    vec4 ripple1 = textureLod(rippleFields, vec3(oceanTileUv(displacedXZ, rippleLength), 1.0),
+                              oceanRippleLod(footprint));
+    vec2 slope = short1.rg * shortKeep + ripple1.rg;
+    return normalize(meshN + vec3(-slope.x, 0.0, -slope.y) * OCEAN_SHORT_SLOPE_GAIN);
 }
 
 /*
