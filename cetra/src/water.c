@@ -1990,6 +1990,45 @@ bool water_probe_set(Water* water, int slot, float x, float z) {
     return true;
 }
 
+const char* water_probe_refusal(const Water* water, int slot) {
+    if (!water_active(water))
+        return "nowater";
+    if (slot < 0 || slot >= water->probe_count)
+        return "unset";
+    if (water->wave_model != WATER_WAVES_FFT)
+        return NULL;
+    if (water->probe_failed)
+        return "failed";
+    if (water->probe_result_pass < 0)
+        return "unfilled";
+    return NULL;
+}
+
+bool water_probe_result(const Water* water, int slot, float t, WaterSample* out) {
+    if (!out || water_probe_refusal(water, slot))
+        return false;
+    // Gerstner has a closed form, so it answers now rather than from the ring: the GPU pass
+    // agrees with it (water-gpu), and a caller gains nothing by waiting for the same number.
+    if (water->wave_model != WATER_WAVES_FFT) {
+        const float x = water->probe_points[slot][0];
+        const float z = water->probe_points[slot][1];
+        out->height = water_surface_at(water, x, z, t, out->normal);
+        out->residual = water_waves_inverse_residual(water, x, z, t);
+        out->t = t;
+        return true;
+    }
+    const float* a = water->probe_result[slot];
+    out->height = a[0];
+    // Unit length, so y is the positive root: a surface normal never points down.
+    const float y2 = 1.0f - a[1] * a[1] - a[2] * a[2];
+    out->normal[0] = a[1];
+    out->normal[1] = sqrtf(fmaxf(y2, 0.0f));
+    out->normal[2] = a[2];
+    out->residual = a[3];
+    out->t = water->probe_result_t;
+    return true;
+}
+
 /*
  * Retire the slot issued WATER_PROBE_LATENCY passes ago, then render this pass's answers and
  * queue their readback into the slot just freed. Called with the caller's framebuffer,

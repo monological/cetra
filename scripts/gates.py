@@ -9937,9 +9937,9 @@ def run_water_gate(workdir):
                       every case here was a silent defect no rendered frame could show.
       water-cpu       the CPU wave query inverts the horizontal map (an unconverged
                       inversion answers about the wrong point while looking correct),
-                      evaluates a real train rather than a plane, and DECLINES on the
-                      spectral model instead of returning a flat surface a caller would
-                      trust.
+                      evaluates a real train rather than a plane, and ANSWERS on the
+                      spectral model through the GPU query (spec 13.1) with a surface
+                      rather than the still plane it used to hand back.
       water-gpu       the GPU probe reproduces the CPU query: same fixture, same sixteen
                       points, same clock, on the GERSTNER path -- the only path with a
                       closed form to be wrong against. That comparison is what proves the
@@ -10536,16 +10536,18 @@ def run_water_gate(workdir):
         heights = [float(r["h"]) for r in rows]
         spread = max(heights) - min(heights)
         upright = all(float(r["n"].split(",")[1]) > 0.5 for r in rows)
-        # The spectral model has no CPU answer and must SAY so rather than return a
-        # plausible flat surface that a caller would trust.
-        fft_flat = (fft_head.get("available") == "0" and
-                    all(abs(float(r["h"]) - float(fft_head["level"])) < 1e-6 for r in fft_rows))
+        # The spectral model ANSWERS since spec 13.1, through the GPU query, and the claim
+        # this clause carries is the same one with the sign flipped: until then it had to
+        # say it could not, and now its answer must be a real surface rather than the plane.
+        fft_heights = [float(r["h"]) for r in fft_rows if "h" in r]
+        fft_real = (fft_head.get("available") == "1" and len(fft_heights) == len(fft_rows) and
+                    max(fft_heights) - min(fft_heights) >= WATER_PROBE_MIN_SPREAD)
         ok = (head.get("available") == "1" and worst <= WATER_PROBE_MAX_RESIDUAL and
-              spread >= WATER_PROBE_MIN_SPREAD and upright and fft_flat)
+              spread >= WATER_PROBE_MIN_SPREAD and upright and fft_real)
         print(f"  water-cpu    {'PASS' if ok else 'FAIL'}  inverse residual <= "
               f"{worst:.5f} (want <={WATER_PROBE_MAX_RESIDUAL}), height spread "
               f"{spread:.4f} (want >={WATER_PROBE_MIN_SPREAD}), normals upright "
-              f"{upright}, spectral declines {fft_flat}")
+              f"{upright}, spectral answers {fft_real}")
         if not ok:
             failures.append("water-cpu")
 

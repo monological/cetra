@@ -660,10 +660,33 @@ void water_update(Water* water, const struct Scene* scene, float t, float dt);
 void water_fft_probe(const Water* water, struct Engine* engine);
 
 /*
- * Ask about the surface over world (x, z) in `slot`. Answered from the next pass onward,
- * WATER_PROBE_LATENCY passes late, on either wave model. Slots are dense: setting slot n
- * makes [0, n] live. false for a slot outside [0, WATER_PROBE_MAX).
+ * The surface query (spec 13.1): where the water is over a world (x, z), on either wave model,
+ * through one call so nothing downstream branches on which sea it was handed.
+ *
+ * Register a point with water_probe_set, then read it each frame with water_probe_result.
+ * Slots are dense: setting slot n makes [0, n] live. A registered slot costs a GPU pass
+ * whichever model runs, because the pass is what answers the spectral sea.
  */
 bool water_probe_set(Water* water, int slot, float x, float z);
+
+typedef struct WaterSample {
+    float height; // world Y of the surface over the query
+    vec3 normal;
+    float residual; // how far the recovered parameter lands from the query, world units
+    float t;        // the instant this describes: the caller's own on Gerstner, older on spectral
+} WaterSample;
+
+/*
+ * Answer `slot` as of clock `t`. Gerstner is evaluated at exactly `t`; the spectral sea is
+ * WATER_PROBE_LATENCY passes old, and `out->t` says which instant that was.
+ *
+ * false, with `out` untouched, whenever there is no real answer -- never a silent still level.
+ * water_probe_refusal names the reason.
+ */
+bool water_probe_result(const Water* water, int slot, float t, WaterSample* out);
+
+// Why water_probe_result would refuse `slot`, as the probe grammar's reason token -- nowater,
+// unset, failed or unfilled -- or NULL when it would answer.
+const char* water_probe_refusal(const Water* water, int slot);
 
 #endif // _WATER_H_
