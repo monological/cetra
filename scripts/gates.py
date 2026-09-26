@@ -10695,8 +10695,13 @@ def run_water_gate(workdir):
             "dome": _water_caustic_probe(BEACH_BED, scene=asset(BEACH_FIXTURE))}
     short = {name: f"{len(levels)} of {announced}" for name, (announced, levels) in legs.items()
              if announced == 0 or len(levels) != announced}
-    calm = legs["calm"][1]
-    seas = {name: levels for name, (_, levels) in legs.items() if name != "calm"}
+    # A finer level over water too deep for it is skipped rather than drawn (spec 13.3), and the
+    # surface does not read it; there is no light to account for.
+    drawn = {name: [lv for lv in levels if lv["drawn"]] for name, (_, levels) in legs.items()}
+    skipped = [f"{name} level {int(lv['level'])}" for name, (_, levels) in legs.items()
+               for lv in levels if not lv["drawn"]]
+    calm = drawn["calm"]
+    seas = {name: levels for name, levels in drawn.items() if name != "calm"}
     if short:
         print("  water-caustic-energy FAIL  levels rendered against levels announced: " +
               ", ".join(f"{name} {n}" for name, n in short.items()))
@@ -10711,7 +10716,8 @@ def run_water_gate(workdir):
         print(f"  water-caustic-energy {'PASS' if ok else 'FAIL'}  calm within "
               f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); mean by "
               f"level {means} (want within "
-              f"{'/'.join(str(WATER_CAUSTIC_MEAN_TOL[n]) for n in seas)} of 1)")
+              f"{'/'.join(str(WATER_CAUSTIC_MEAN_TOL[n]) for n in seas)} of 1); skipped for "
+              f"depth: {', '.join(skipped) or 'none'}")
         if not ok:
             failures.append("water-caustic-energy")
 
