@@ -9,6 +9,7 @@
 #include "engine.h"
 #include "engine_internal.h"
 #include "procedural/foam_pattern.h"
+#include "procedural/water_waves.h" // the inversion's step cap and tolerance, for the query
 #include "shore_chain.h"
 #include "ubo.h"
 #include "ext/log.h"
@@ -512,6 +513,8 @@ void free_water(Water* water) {
     glDeleteFramebuffers(2, water->foam_fbo);
     glDeleteTextures(1, &water->probe_tex);
     glDeleteFramebuffers(1, &water->probe_fbo);
+    glDeleteVertexArrays(1, &water->probe_vao);
+    glDeleteBuffers(1, &water->probe_vbo);
     glDeleteBuffers(WATER_PROBE_LATENCY, water->probe_pbo);
     free(water);
 }
@@ -1721,6 +1724,72 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
     }
 }
 
+/*
+ * Everything ocean.glsl reads to evaluate the surface: the wave model and its train, the
+ * cascades, the bed, the shore scalars and the eye the cascade lookup is taken relative to.
+ * One publisher for the drawn surface and the surface query (spec 13.1), so the query cannot
+ * be handed a different sea from the one the raster drew.
+ *
+ * All three samplers the chunk declares are pointed at their own units whatever is bound,
+ * since one left at the default 0 is a type mismatch against the cascade array there.
+ */
+static void _water_bind_ocean(const Water* water, const struct Scene* scene,
+                              const struct Engine* engine, UniformManager* u, bool fft) {
+    // shore.glsl's scalars, through the one publisher. Ungated: the surface itself is drawn
+    // whatever the wetness switch says, which is the only thing the two callers differ on.
+    _water_publish_shore(water, scene, u, false);
+    // The projector's origin, and the origin every cascade lookup is taken relative to.
+    uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);
+    // The cascades' resolution, which is how a cell size becomes a mip level.
+    uniform_set_float(u, "cascadeRes", (float)WATER_SPECTRUM_RES);
+    uniform_set_float(u, "waterAmplitude", water->amplitude);
+    uniform_set_float(u, "waterWavelength", water->wavelength);
+    uniform_set_float(u, "waterSteepness", water_effective_steepness(water));
+    uniform_set_float(u, "waterSpread", water->spread);
+
+    // The baked bed, for vertex-stage shoaling. Absent is the normal case and not
+    // a degraded one: the per-fragment water column still comes from the depth
+    // resolve, which is exact and works against geometry a heightfield
+    // cannot describe. What the bed buys is the one thing screen depth cannot
+    // answer in the vertex stage -- how much to shorten a wave that is running out
+    // of water underneath it.
+    glActiveTexture(GL_TEXTURE0 + WATER_BED_UNIT);
+    glBindTexture(GL_TEXTURE_2D, water->bed_tex);
+    uniform_set_int(u, "bedTex", WATER_BED_UNIT);
+    uniform_set_int(u, "bedAvailable", water->bed_tex ? 1 : 0);
+
+    uniform_set_int(u, "waveModel", fft ? 1 : 0);
+    _water_bind_cascades(water, u, fft);
+    // The two the foam pass does not read: it works in cascade texel space, so it needs no
+    // tiling period, and it selects folds rather than shading them, so it needs no variance.
+    const float units_per_metre = _water_units_per_metre(scene);
+    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
+        char len[32], svar[32];
+        snprintf(len, sizeof(len), "cascadeLength[%d]", c);
+        snprintf(svar, sizeof(svar), "cascadeSlopeVar[%d]", c);
+        // In WORLD UNITS, where the table holds metres (spec 11.44). The tile a band repeats
+        // over is a physical length -- 240 m of swell -- and uploading it raw made the sea
+        // repeat every 240 UNITS, which in a world at 22 units to the metre is a swell
+        // pattern restarting every eleven metres. The seeding stays in metres, where its
+        // gravity and its wind speed already are.
+        uniform_set_float(u, len, WATER_CASCADE_CFG[c].length_scale * units_per_metre);
+        // Zero on the Gerstner path, whose octaves report the slope they dropped directly
+        // -- it has no seeded spectrum to have measured, and a stale variance from a
+        // previous spectral scene would widen its lobe for waves it never carried.
+        uniform_set_float(u, svar, fft ? water->cascade_slope_var[c] : 0.0f);
+    }
+
+    // Last frame's displacement, for the spectral path's motion vectors. Only usable
+    // from the third frame on: the first has nothing to copy from and the second holds
+    // a copy of the first, so the count has to reach 2 before this is a real previous
+    // surface rather than the current one under a different name.
+    const bool prev_ready = fft && water->spectral_frames >= 2;
+    glActiveTexture(GL_TEXTURE0 + WATER_PREV_UNIT);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, prev_ready ? water->cascade_prev_array : 0);
+    uniform_set_int(u, "cascadePrevFields", WATER_PREV_UNIT);
+    uniform_set_int(u, "prevAvailable", prev_ready ? 1 : 0);
+}
+
 static void _water_run_spectral(Water* water, const struct Scene* scene, struct Engine* engine,
                                 float time) {
     ShaderProgram* evolve = engine_get_program(engine, "water_spectrum");
@@ -1898,9 +1967,12 @@ static bool _water_probe_alloc(Water* water) {
         glBufferData(GL_PIXEL_PACK_BUFFER, sizeof(water->probe_result), NULL, GL_STREAM_READ);
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    // Its own quad rather than fft_vao, which exists only once a spectrum is seeded -- and the
+    // Gerstner path, which never seeds one, is the path this query is checked on.
+    create_fullscreen_quad_vao(&water->probe_vao, &water->probe_vbo);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         log_error("Water: probe target incomplete (0x%x); surface query disabled", status);
-        water->probe_enabled = false;
+        water->probe_failed = true;
         return false;
     }
     water->probe_passes = 0;
@@ -1908,16 +1980,27 @@ static bool _water_probe_alloc(Water* water) {
     return true;
 }
 
+bool water_probe_set(Water* water, int slot, float x, float z) {
+    if (!water || slot < 0 || slot >= WATER_PROBE_MAX)
+        return false;
+    water->probe_points[slot][0] = x;
+    water->probe_points[slot][1] = z;
+    if (slot >= water->probe_count)
+        water->probe_count = slot + 1;
+    return true;
+}
+
 /*
  * Retire the slot issued WATER_PROBE_LATENCY passes ago, then render this pass's answers and
- * queue their readback into the slot just freed. Called with the caller's framebuffer and
- * viewport already saved; leaves the probe FBO bound.
+ * queue their readback into the slot just freed. Called with the caller's framebuffer,
+ * viewport, depth test and blend already saved; leaves the probe FBO bound.
  *
  * No fence, deliberately: mapping a slot whose read has not landed STALLS rather than
  * returning early, so the latency is a correctness-free choice about how often that happens
  * and the answer never depends on GPU timing.
  */
-static void _water_probe_pass(Water* water, float t) {
+static void _water_probe_pass(Water* water, const struct Scene* scene, const struct Engine* engine,
+                              ShaderProgram* prog, bool fft, float t) {
     const int slot = (int)(water->probe_passes % WATER_PROBE_LATENCY);
     if (water->probe_passes >= WATER_PROBE_LATENCY) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, water->probe_pbo[slot]);
@@ -1934,22 +2017,30 @@ static void _water_probe_pass(Water* water, float t) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, water->probe_fbo);
     glViewport(0, 0, WATER_PROBE_MAX, 1);
-    // PHASE 1 PATTERN: a value per texel that encodes the pass and the slot, with components
-    // fp16 cannot hold, so an exact readback proves the format, the texel order and the
-    // latency together. Replaced by the query pass in phase 2.
-    const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
-    GLint saved_scissor[4];
-    glGetIntegerv(GL_SCISSOR_BOX, saved_scissor);
-    glEnable(GL_SCISSOR_TEST);
-    for (int i = 0; i < WATER_PROBE_MAX; i++) {
-        glScissor(i, 0, 1, 1);
-        const float v[4] = {(float)water->probe_passes, (float)i,
-                            (float)water->probe_passes + 1.0f / 3.0f, -(float)(i + 1) / 7.0f};
-        glClearBufferfv(GL_COLOR, 0, v);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glUseProgram(prog->id);
+    UniformManager* u = prog->uniforms;
+    _water_bind_ocean(water, scene, engine, u, fft);
+    uniform_set_float(u, "time", t);
+    for (int i = 0; i < water->probe_count; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "probePoints[%d]", i);
+        uniform_set_vec2(u, name, water->probe_points[i]);
     }
-    glScissor(saved_scissor[0], saved_scissor[1], saved_scissor[2], saved_scissor[3]);
-    if (!scissor_was_enabled)
-        glDisable(GL_SCISSOR_TEST);
+    uniform_set_int(u, "probeCount", water->probe_count);
+    uniform_set_int(u, "probeMaxSteps", WATER_WAVES_INVERSE_MAX_STEPS);
+    // The CPU solve's tolerance on Gerstner, where the longest wave's amplitude is authored.
+    // A spectral sea authors none, so its scale is half the significant height -- the same
+    // quantity, a characteristic crest -- converted from metres like every spectral length.
+    const float scale =
+        fft ? 0.5f * _water_significant_height(water) * _water_units_per_metre(scene)
+            : water->amplitude;
+    uniform_set_float(u, "probeEps", fmaxf(scale, 1e-4f) * WATER_WAVES_INVERSE_EPS_FRAC);
+    glBindVertexArray(water->probe_vao);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE0);
 
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, water->probe_pbo[slot]);
@@ -1957,29 +2048,6 @@ static void _water_probe_pass(Water* water, float t) {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     water->probe_issued_t[slot] = t;
     water->probe_passes++;
-}
-
-// PHASE 1: check the retired answer against the pattern the pass that produced it wrote.
-void water_probe_ring_report(const Water* water) {
-    if (!water || !water->probe_enabled) {
-        printf("water-probe-ring available=0 reason=%s\n", water ? "off" : "nowater");
-        return;
-    }
-    if (water->probe_result_pass < 0) {
-        printf("water-probe-ring available=0 reason=unfilled latency=%d passes=%ld\n",
-               WATER_PROBE_LATENCY, water->probe_passes);
-        return;
-    }
-    const long p = water->probe_result_pass;
-    int exact = 0;
-    for (int i = 0; i < WATER_PROBE_MAX; i++) {
-        const float want[4] = {(float)p, (float)i, (float)p + 1.0f / 3.0f, -(float)(i + 1) / 7.0f};
-        if (memcmp(want, water->probe_result[i], sizeof(want)) == 0)
-            exact++;
-    }
-    printf("water-probe-ring available=1 latency=%d passes=%ld answered=%ld t=%.9g exact=%d/%d\n",
-           WATER_PROBE_LATENCY, water->probe_passes, p, (double)water->probe_result_t, exact,
-           WATER_PROBE_MAX);
 }
 
 /*
@@ -2026,14 +2094,27 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     }
 
     // The surface query, after the cascades it will read are complete, on either model.
-    if (water->probe_enabled && _water_probe_alloc(water)) {
+    ShaderProgram* probe_prog = water->probe_count > 0 && !water->probe_failed
+                                    ? engine_get_program(engine, "water_probe")
+                                    : NULL;
+    if (water->probe_count > 0 && !water->probe_failed && !probe_prog) {
+        log_error("Water: probe program missing; surface query disabled");
+        water->probe_failed = true;
+    }
+    if (probe_prog && _water_probe_alloc(water)) {
         GLint saved_viewport[4];
         GLint saved_fbo = 0;
         glGetIntegerv(GL_VIEWPORT, saved_viewport);
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-        _water_probe_pass(water, (float)engine->render_time);
+        const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
+        const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+        _water_probe_pass(water, scene, engine, probe_prog, fft, (float)engine->render_time);
         glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
         glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+        if (depth_was_enabled)
+            glEnable(GL_DEPTH_TEST);
+        if (blend_was_enabled)
+            glEnable(GL_BLEND);
         check_gl_error("water probe");
     }
 
@@ -2068,26 +2149,15 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
     uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
 
-    // shore.glsl's scalars, through the one publisher. Ungated: the surface itself is drawn
-    // whatever the wetness switch says, which is the only thing the two callers differ on.
-    _water_publish_shore(water, scene, u, false);
-    // The projector's origin. Every lattice vertex is a ray from here through its own
-    // screen position, so this is the surface's whole placement input.
-    uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);
-    // The lattice's own resolution, which is how the vertex stage sizes a cell, and the
-    // cascades', which is how a cell size becomes a mip level.
+    _water_bind_ocean(water, scene, engine, u, fft);
+    // The lattice's own resolution, which is how the vertex stage sizes a cell.
     uniform_set_int(u, "waterGridRes", WATER_GRID_RES);
-    uniform_set_float(u, "cascadeRes", (float)WATER_SPECTRUM_RES);
     uniform_set_int(u, "waterFarLod", water->far_lod ? 1 : 0);
     uniform_set_float(u, "waterRoughness", water->roughness);
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
     uniform_set_vec3(u, "waterScatterAlbedo", (const float*)&water->scatter_albedo);
     uniform_set_vec3(u, "waterScatterGlow", (const float*)&water->scatter_glow);
-    uniform_set_float(u, "waterAmplitude", water->amplitude);
-    uniform_set_float(u, "waterWavelength", water->wavelength);
-    uniform_set_float(u, "waterSteepness", water_effective_steepness(water));
-    uniform_set_float(u, "waterSpread", water->spread);
     // The animation clock, not the wall clock: frame N must be phase N or a
     // headless run stops being comparable to itself.
     uniform_set_float(u, "time", (float)engine->render_time);
@@ -2175,17 +2245,6 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_int(u, "sceneDepthTex", WATER_DEPTH_UNIT);
     uniform_set_int(u, "sceneDepthAvailable", scene_depth ? 1 : 0);
 
-    // The baked bed, for vertex-stage shoaling. Absent is the normal case and not
-    // a degraded one: the per-fragment water column still comes from the depth
-    // resolve above, which is exact and works against geometry a heightfield
-    // cannot describe. What the bed buys is the one thing screen depth cannot
-    // answer in the vertex stage -- how much to shorten a wave that is running out
-    // of water underneath it.
-    glActiveTexture(GL_TEXTURE0 + WATER_BED_UNIT);
-    glBindTexture(GL_TEXTURE_2D, water->bed_tex);
-    uniform_set_int(u, "bedTex", WATER_BED_UNIT);
-    uniform_set_int(u, "bedAvailable", water->bed_tex ? 1 : 0);
-
     // The split-sum BRDF table is engine-owned and bound for every scene,
     // environment or not, so the Fresnel lobe's lookup is always valid.
     glActiveTexture(GL_TEXTURE0 + IBL_BRDF_LUT_TEXTURE_UNIT);
@@ -2207,41 +2266,6 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         uniform_set_float(u, "iblIntensity", 1.0f);
         uniform_set_float(u, "maxReflectionLOD", 0.0f);
     }
-
-    // The transformed cascades. Bound whichever model is running, and the units
-    // are pointed at unconditionally for the same reason the samplerCube above
-    // is: a sampler left at the default 0 is a type mismatch against whatever 2D
-    // texture happens to live there.
-    uniform_set_int(u, "waveModel", fft ? 1 : 0);
-    _water_bind_cascades(water, u, fft);
-    // The two the foam pass does not read: it works in cascade texel space, so it needs no
-    // tiling period, and it selects folds rather than shading them, so it needs no variance.
-    const float units_per_metre = _water_units_per_metre(scene);
-    for (int c = 0; c < WATER_CASCADE_COUNT; c++) {
-        char len[32], svar[32];
-        snprintf(len, sizeof(len), "cascadeLength[%d]", c);
-        snprintf(svar, sizeof(svar), "cascadeSlopeVar[%d]", c);
-        // In WORLD UNITS, where the table holds metres (spec 11.44). The tile a band repeats
-        // over is a physical length -- 240 m of swell -- and uploading it raw made the sea
-        // repeat every 240 UNITS, which in a world at 22 units to the metre is a swell
-        // pattern restarting every eleven metres. The seeding stays in metres, where its
-        // gravity and its wind speed already are.
-        uniform_set_float(u, len, WATER_CASCADE_CFG[c].length_scale * units_per_metre);
-        // Zero on the Gerstner path, whose octaves report the slope they dropped directly
-        // -- it has no seeded spectrum to have measured, and a stale variance from a
-        // previous spectral scene would widen its lobe for waves it never carried.
-        uniform_set_float(u, svar, fft ? water->cascade_slope_var[c] : 0.0f);
-    }
-
-    // Last frame's displacement, for the spectral path's motion vectors. Only usable
-    // from the third frame on: the first has nothing to copy from and the second holds
-    // a copy of the first, so the count has to reach 2 before this is a real previous
-    // surface rather than the current one under a different name.
-    const bool prev_ready = fft && water->spectral_frames >= 2;
-    glActiveTexture(GL_TEXTURE0 + WATER_PREV_UNIT);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, prev_ready ? water->cascade_prev_array : 0);
-    uniform_set_int(u, "cascadePrevFields", WATER_PREV_UNIT);
-    uniform_set_int(u, "prevAvailable", prev_ready ? 1 : 0);
 
     // The accumulated foam. Live only once the pass has actually run a frame: before that
     // the pair holds whatever the allocation left, and reading it as whitewater would put

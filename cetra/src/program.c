@@ -800,6 +800,10 @@ ShaderProgram* create_water_foam_program() {
     return create_post_program("water_foam", water_foam_frag_shader_str);
 }
 
+ShaderProgram* create_water_probe_program() {
+    return create_post_program("water_probe", water_probe_frag_shader_str);
+}
+
 ShaderProgram* create_skybox_program() {
     ShaderProgram* program = NULL;
 

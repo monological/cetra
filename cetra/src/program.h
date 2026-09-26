@@ -218,6 +218,8 @@ ShaderProgram* create_water_fft_program();
 // Foam accumulation (spec 11.42): one pass a frame over the transformed cascades, holding
 // whitewater on the surface after the crest that made it has passed.
 ShaderProgram* create_water_foam_program();
+// The surface query (spec 13.1): one texel per query point, the surface height over it.
+ShaderProgram* create_water_probe_program();
 // Resolves the depth cascades into the filterable moment cascades (--msm)
 ShaderProgram* create_msm_resolve_program();
 ShaderProgram* create_shadow_absorb_program();
