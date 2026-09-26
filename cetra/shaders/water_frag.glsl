@@ -191,7 +191,6 @@ const float WATER_BEND_FADE_M = 0.40;
 // already -- and why they were wrong by the world's scale everywhere a unit was not one.
 const float WATER_SHORT_NEAR_M = 42.0;
 const float WATER_SHORT_FAR_M = 118.0;
-const float WATER_SHORT_SLOPE_GAIN = 0.42;
 // How close to grazing the SHADING normal may get before it is bent back toward the eye. A
 // normal pointing away describes a surface you could not be looking at, and both ways of
 // leaving it that way print as artifacts -- see the bend in main().
@@ -568,19 +567,6 @@ void main() {
         // with distance and its remaining energy moved into roughness instead --
         // the geometry-to-BRDF transition, which is what keeps the horizon stable
         // without throwing the simulated detail away.
-        // Sampled at the DISPLACED position, where the vertex stage samples at the
-        // undisplaced grid parameter. The two lattices are offset by the long and medium
-        // horizontal displacement, and that is deliberate: this band shades the surface
-        // the eye sees, so its detail belongs where that surface ended up.
-        // LOD 0 explicitly. oceanCascadeUv wraps with fract, so the implicit screen
-        // derivative reads a whole period across every tile seam -- which, the moment this
-        // band's texture carries mips, prints as a blurred line through each of them. The
-        // short band is not mipped today and this still states the intent rather than
-        // relying on it.
-        // Target 1 only: target 0 was fetched here solely to give oceanBandJacobian the
-        // short band's displacement, and the short band no longer selects foam.
-        vec2 shortUv = oceanCascadeUv(WorldPos.xz, 2);
-        vec4 short1 = oceanCascadeAt(2, 1, shortUv, 0.0);
         // The distance the band fades over: from the eye under perspective. An
         // orthographic camera has no eye distance and its minification is set
         // by the view height alone, so that height stands in -- what a
@@ -588,8 +574,7 @@ void main() {
         float fadeDist = projectionIsOrtho() ? 2.0 / projection[1][1] : length(ViewPos);
         float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
                                       WATER_SHORT_FAR_M * waterUnitsPerMetre, fadeDist);
-        vec2 shortSlope = short1.rg * fade;
-        N = normalize(N + vec3(-shortSlope.x, 0.0, -shortSlope.y) * WATER_SHORT_SLOPE_GAIN);
+        N = oceanShadingNormal(N, WorldPos.xz, fade);
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a
         // handover rather than two channels dimming together. Driving it from the faded
         // slope instead sent distant water toward the calm value in both, so the horizon
@@ -599,7 +584,7 @@ void main() {
         // per-texel read would make the lobe width depend on where in the wave the pixel
         // happened to land, where the removed detail is a property of the whole band.
         //
-        // The kept scale is the FADE ONLY, deliberately. WATER_SHORT_SLOPE_GAIN also scales
+        // The kept scale is the FADE ONLY, deliberately. OCEAN_SHORT_SLOPE_GAIN also scales
         // the slope reaching the normal, so a strict accounting would fold it in here too --
         // but the gain is 0.42, so that hands 82% of this band to roughness even in the
         // fully resolved near field, where this expression currently hands over nothing.
