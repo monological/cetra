@@ -21,10 +21,9 @@ uniform vec2 causticTargetOrigin; // world xz of the target's corner
 uniform vec3 causticKeyDir;       // the direction the key light TRAVELS, unit, y < 0
 uniform float causticFloorY;      // world y the rays land on
 uniform float time;
+uniform float waterIor;           // the surface's own, so the trace bends as the lookup does
 
 #include "ocean.glsl"
-
-const float WATER_IOR = 1.3335;
 
 void main() {
     vec2 p = causticGridOrigin + floor(gl_FragCoord.xy) * causticCell;
@@ -34,7 +33,7 @@ void main() {
     // The footprint is the lattice cell: what a cell cannot resolve it cannot focus either.
     OceanSurface s = oceanEvaluateAt(p, time, oceanBed(p), causticCell);
     vec3 n = oceanShadingNormal(s.normal, s.world.xz, 1.0);
-    vec3 r = refract(causticKeyDir, n, 1.0 / WATER_IOR);
+    vec3 r = refract(causticKeyDir, n, 1.0 / waterIor);
 
     // Past the critical angle there is no transmitted ray; land it far off the target.
     float down = min(r.y, -1.0e-4);

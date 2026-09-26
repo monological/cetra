@@ -8762,12 +8762,12 @@ WATER_SHORE_MIN_PX = 700
 # 0.823x, so this ceiling sits above the effect while still failing a wash, an offset,
 # or a coverage value that came out constant.
 WATER_SHORE_FALL_RATIO = 0.92
-# Caustics move 221,316 px of a 480,000 px frame on this fixture since spec 13.2 -- the
-# refracted-grid pattern darkens the gaps as well as lighting the lines, so it reaches the
-# whole shallow bed where the Jacobian heuristic before it moved 12,509. The floor is kept
-# where that one set it: clear of nothing, and it is the Gerstner leg that needed one at all,
-# since until 13.2 that path had no caustics to measure.
-WATER_CAUSTIC_MIN_PX = 3000
+# Caustics move 221,316 px (spectral) and 241,330 (Gerstner) of a 480,000 px frame on this
+# fixture since spec 13.2 -- the refracted-grid pattern darkens the gaps as well as lighting
+# the lines, so it reaches the whole shallow bed where the Jacobian heuristic before it moved
+# 12,509. Half the smaller: a floor far below the signal passes a regression that loses most
+# of the effect.
+WATER_CAUSTIC_MIN_PX = 110000
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),

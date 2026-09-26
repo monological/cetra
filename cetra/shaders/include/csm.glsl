@@ -111,26 +111,11 @@ float csmTransmittance(int layer, vec2 uv, float depth01) {
 
 uniform int numShadowLights;
 
-// Occlusion from the OUTERMOST cascade, which is the classic
-// camera-independent scene-fit map (complete for every caster in the scene by
-// construction). One map means no per-fragment selection, no seams, and no
-// boundary that can move with the camera -- exactly the pre-cascade floor
-// behaviour, and exactly right for volumetric motes. At cascadeCount 1 the
-// layer is the classic slot index.
-//
-// Flat shadowBias on purpose: the receivers here are a virtual plane
-// (catcher) or air (motes), never surfaces stored in the map, so a flat
-// delay of occlusion onset is all a bias has to do. The kernel step is 1.5
-// texels of the scene-fit map the constant was tuned against -- which is the
-// map this function always samples.
-float csmOutermostOcclusion(vec3 worldPos, int slot)
+// Occlusion at one layer, for a point already projected into it: the kernel, the moments and
+// the translucent casters, shared by every lookup under this define so they cannot disagree
+// about any of the three.
+float csmLayerOcclusion(int layer, vec3 proj)
 {
-    int layer = slot * cascadeCount + (cascadeCount - 1);
-    vec4 lightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
-    vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
-    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
-        return 0.0;
-
     // The moment map is already prefiltered, so the kernel below would be
     // blurring a blur -- and these consumers ask for softness, which is exactly
     // what the resolve's own blur radius sets.
@@ -156,6 +141,55 @@ float csmOutermostOcclusion(vec3 worldPos, int slot)
     // this function returns occlusion where csmTransmittance returns
     // visibility.
     return 1.0 - (1.0 - occlusion) * csmTransmittance(layer, proj.xy, proj.z);
+}
+
+// Occlusion from the OUTERMOST cascade, which is the classic
+// camera-independent scene-fit map (complete for every caster in the scene by
+// construction). One map means no per-fragment selection, no seams, and no
+// boundary that can move with the camera -- exactly the pre-cascade floor
+// behaviour, and exactly right for volumetric motes. At cascadeCount 1 the
+// layer is the classic slot index.
+//
+// Flat shadowBias on purpose: the receivers here are a virtual plane
+// (catcher) or air (motes), never surfaces stored in the map, so a flat
+// delay of occlusion onset is all a bias has to do. The kernel step is 1.5
+// texels of the scene-fit map the constant was tuned against -- which is the
+// map this function always samples.
+float csmOutermostOcclusion(vec3 worldPos, int slot)
+{
+    int layer = slot * cascadeCount + (cascadeCount - 1);
+    vec4 lightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
+    vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
+    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
+        return 0.0;
+    return csmLayerOcclusion(layer, proj);
+}
+
+/*
+ * Occlusion from the FINEST cascade that holds the point, falling back to the outermost. For a
+ * consumer on this path whose receiver is a real surface drawn with the finer cascades -- a bed
+ * seen through water -- the outermost map's large texels draw a staircase where that surface's
+ * own shadow has an edge. The margin keeps the kernel inside the cascade it chose.
+ *
+ * The first cascade that CONTAINS the point, not pbr_frag's choice by view depth, so the two can
+ * pick differently near a split; both are the finest map that covers the point there. The flat
+ * bias was tuned on the outermost map, whose receivers are never in it, and a bed is -- it has
+ * held on the fixtures looked at, and a finer cascade is where it would first give way.
+ */
+float csmFinestOcclusion(vec3 worldPos, int slot)
+{
+    if (slot < 0 || slot >= numShadowLights)
+        return 0.0;
+    vec2 margin = shadowTexelSize * (1.5 * float(CSM_PCF_HALF_KERNEL) + 1.0);
+    for (int c = 0; c < cascadeCount; c++) {
+        int layer = slot * cascadeCount + c;
+        vec4 lightSpace = lightSpaceMatrix[layer] * vec4(worldPos, 1.0);
+        vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
+        if (proj.z <= 1.0 && all(greaterThanEqual(proj.xy, margin)) &&
+            all(lessThanEqual(proj.xy, vec2(1.0) - margin)))
+            return csmLayerOcclusion(layer, proj);
+    }
+    return csmOutermostOcclusion(worldPos, slot);
 }
 
 #endif // CSM_OUTERMOST_PCF

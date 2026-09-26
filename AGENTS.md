@@ -626,7 +626,17 @@ entry there before changing anything marked with a dagger.
   `water_probe_set` / `water_probe_result` in `water.h`, one path for either wave model -- both
   answer from the ring, the sample says which instant it describes, and a slot registered or
   moved since its answer was rendered is refused as `stale` rather than answered for the point
-  it used to name. `water_surface_at` stays the Gerstner closed form and the query's reference
+  it used to name. `water_surface_at` stays the Gerstner closed form and the query's reference.
+  And `water_caustic_land_frag` / `_vert` / `_geo` / `_frag` -- the refracted-grid caustics (spec
+  13.2), on either wave model: every lattice corner traced once through the SHADING normal
+  (`oceanShadingNormal`, the same one the surface is lit by) onto the floor, then the lattice
+  drawn where it landed, additively, each cell carrying beam area over landed area so flat water
+  is exactly 1 and any sea averages 1. The geometry stage rescales each triangle's corners to its
+  exact ratio, which is what keeps per-corner smoothing from adding light at folds. `water_frag`
+  applies it to the KEY light's share of what lights the refracted point only, at the point where
+  the refracted view ray meets the bed -- not at the refracted screen sample, whose rows squeeze
+  together low in the frame and smeared the pattern into streaks. Sizes, depth and the ceiling are
+  `water_caustic_constants.glsl`, read by both languages
 - **OIT:** `oit_resolve_frag` + `include/mboit.glsl` (the absorbance moments and their
   reconstruction, shared by the generation and accumulate sub-passes)
 - **Atmosphere †:** `froxel_inject/integrate/composite_frag` + `include/froxel.glsl`, and
@@ -958,7 +968,8 @@ feature needs before asking for a unit, ask what is already DECLARED before aski
 program, and ask whether the data belongs on the VERTEX at all before asking for either.**
 
 **`water_frag` reached the same ceiling in 11.42, and 11.45 took it back off** — it declares
-**11**, not 16, and this paragraph claimed the ceiling for three specs after it was freed. It is a
+**12** since 13.2's caustics target took unit 3, not 16, and this paragraph claimed the ceiling
+for three specs after it was freed. It is a
 separate ledger — a program gets sixteen, not the engine — so its units alias `pbr_frag`'s freely,
 and its tenants are chosen around a rule the material ledger never has to think about: **two sampler
 TYPES against one image unit is an `INVALID_OPERATION` at draw**, so the cascade array cannot go on

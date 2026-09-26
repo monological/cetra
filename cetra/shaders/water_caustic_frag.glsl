@@ -7,8 +7,8 @@
  */
 
 in float gIntensity;
-out vec4 Caustic;
+out float Caustic;
 
 void main() {
-    Caustic = vec4(gIntensity);
+    Caustic = gIntensity;
 }

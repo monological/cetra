@@ -24,9 +24,8 @@ in float vCorner[];  // the corner's own concentration
 
 out float gIntensity;
 
-// A true focus is a singularity; this is the ceiling on one cell's ratio, and the one place
-// the pass knowingly loses energy.
-const float WATER_CAUSTIC_MAX = 40.0;
+// WATER_CAUSTIC_MAX, the ceiling on one cell's ratio.
+#include "water_caustic_constants.glsl"
 
 float triangleArea(vec2 a, vec2 b, vec2 c) {
     vec2 u = b - a;

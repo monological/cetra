@@ -52,13 +52,17 @@ selects for a flat-colour scene; **not** `passthrough`: `render_args.h` notes th
 with `POSTFX_TONEMAP_PASSTHROUGH = 0`, so it is unreachable from the CLI by design — any
 gate needing a linear read has to be written as a ratio instead, spec 11.32),
 `--water` (`--water-level <f>`, `--water-extent <f>`, `--water-waves <gerstner|fft>`,
-`--water-bed <none|dome>`, `--water-probe`, `--water-fft-probe`; `--no-water`, `--no-water-caustics`,
+`--water-bed <none|dome>`, `--water-probe`, `--water-fft-probe`, `--water-caustic-debug <1|2>`
+(1 the factor the caustics multiplied the bed by, 2 the raw caustics target laid on the surface;
+half grey where nothing is concentrated), `--water-caustic-probe` (the target's mean, min and max
+over its inner 80%, and the mean is the energy check: 1 for any sea); `--no-water`, `--no-water-caustics`,
 `--no-water-glitter`, `--no-water-foam-history`,
 `--no-water-coverage`, `--no-water-lod`; specs 11.32 to 11.35 and 11.42 — suppresses the shadow catcher,
 see the pass order above. Gerstner is the default and allocates nothing; `fft` is an OCEAN and adds 45
-passes plus 24 textures. **Crest foam and caustics are FFT-only**, and that is by
-construction rather than an omission: both are selected from Jacobian compression, and the
-Gerstner path's steepness is clamped so its mapping cannot compress. The SHORE foam band is
+passes plus 24 textures. **Crest foam is FFT-only**, and that is by construction rather than an
+omission: it is selected from Jacobian compression, and the Gerstner path's steepness is clamped
+so its mapping cannot compress. **Caustics run on both** since spec 13.2: they refract the key
+light through the surface normal onto the floor, which needs a normal and not a fold. The SHORE foam band is
 not — it is selected from the shoal factor and runs on both models, which is what makes
 Gerstner the way to isolate it.
 **A scene file can author the whole surface** (`water{}`, 20 keys plus 8 in each of two nested
@@ -122,7 +126,7 @@ extinction lengths (`WATER_MAX_OPTICAL_DEPTH`) rather than a length in units, wi
 `WATER_MAX_PATH` kept as a floor so the change can only lengthen a clamp. Truncation at the clamp
 leaves at most 2.15%, which is the bound to quote — grazing sight lines to a deep bed DO get
 clamped. Note the shader still has no idea how big a world unit is, so `WATER_MAX_BEND`,
-`WATER_SHORT_NEAR/FAR`, the caustic depth window and `OCEAN_SHOAL_*` remain mis-scaled by the same
+`WATER_SHORT_NEAR/FAR` and `OCEAN_SHOAL_*` remain mis-scaled by the same
 factor in tree; `Sky.world_units_per_km` is the number the engine already has and tree never sets.
 **Below the surface is finished too** since 11.33 phase 2: submerging the camera arms the
 froxel volume for that frame and the body becomes a second medium, so submerged geometry is
