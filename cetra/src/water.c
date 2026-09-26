@@ -411,10 +411,11 @@ static bool _water_build_spectrum(int size, const struct WaterCascadeConfig* cfg
  * pure gather with no bit-reversal pass of its own.
  *
  * A function of the transform SIZE alone -- no cascade, no sea state -- which is why
- * one table serves every cascade and why a re-seed leaves it standing.
+ * one table serves every cascade of that size and why a re-seed leaves it standing.
+ * `log2_size` rows, one per stage.
  */
-static void _water_build_twiddle(int size, float* twiddle) {
-    for (int stage = 0; stage < WATER_SPECTRUM_LOG; stage++) {
+static void _water_build_twiddle(int size, int log2_size, float* twiddle) {
+    for (int stage = 0; stage < log2_size; stage++) {
         const int block = size >> (stage + 1);
         for (int out = 0; out < size / 2; out++) {
             const int first = (2 * block * (out / block) + out % block) % size;
@@ -1270,7 +1271,7 @@ static bool _water_ensure_spectra(Water* water) {
         water->failed = true;
         return false;
     }
-    _water_build_twiddle(size, twiddle);
+    _water_build_twiddle(size, WATER_SPECTRUM_LOG, twiddle);
     water->twiddle_tex = _water_make_data_tex(size, WATER_SPECTRUM_LOG, twiddle);
     free(twiddle);
 
@@ -1353,8 +1354,9 @@ static bool _water_ensure_spectra(Water* water) {
 /*
  * One complete inverse transform over a ping-pong pair, in place.
  *
- * 2 * WATER_SPECTRUM_LOG stages, so the result lands back in buffer 0 and no caller needs a
- * parity. The caller supplies the pair and has already bound the fullscreen quad.
+ * 2 * log2_size stages, an even count for any size, so the result lands back in buffer 0 and
+ * no caller needs a parity. The caller supplies the pair, the twiddle table built for that
+ * size, a viewport of that size, and has already bound the fullscreen quad.
  *
  * SHARED with the impulse probe, and that is the whole point rather than tidiness. The
  * probe's claim is that it exercises the transform the sea runs; a second copy of this loop
@@ -1362,30 +1364,30 @@ static bool _water_ensure_spectra(Water* water) {
  * stages here would leave the probe testing the old order and still reporting near-zero
  * error -- the same shape of green-over-wrong the probe exists to catch.
  */
-static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, const GLuint fbo[2],
-                                 const GLuint array[2], int cascade, float bound_gain,
-                                 float bound_var) {
+static void _water_fft_transform(ShaderProgram* fft, GLuint twiddle, int size, int log2_size,
+                                 const GLuint fbo[2], const GLuint array[2], int cascade,
+                                 float bound_gain, float bound_var) {
     glUseProgram(fft->id);
     uniform_set_int(fft->uniforms, "twiddleTex", 0);
     uniform_set_int(fft->uniforms, "inFields", 1);
     uniform_set_int(fft->uniforms, "inLayer", cascade * 2);
-    uniform_set_int(fft->uniforms, "size", WATER_SPECTRUM_RES);
+    uniform_set_int(fft->uniforms, "size", size);
     uniform_set_float(fft->uniforms, "boundGain", bound_gain);
     uniform_set_float(fft->uniforms, "boundVar", bound_var);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, twiddle);
 
-    for (int pass = 0; pass < WATER_SPECTRUM_LOG * 2; pass++) {
+    for (int pass = 0; pass < log2_size * 2; pass++) {
         const int src = pass % 2;
         const int dst = 1 - src;
         glBindFramebuffer(GL_FRAMEBUFFER, fbo[dst]);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D_ARRAY, array[src]);
-        uniform_set_int(fft->uniforms, "axis", pass < WATER_SPECTRUM_LOG ? 0 : 1);
-        uniform_set_int(fft->uniforms, "stage", pass % WATER_SPECTRUM_LOG);
+        uniform_set_int(fft->uniforms, "axis", pass < log2_size ? 0 : 1);
+        uniform_set_int(fft->uniforms, "stage", pass % log2_size);
         // The fftshift folds into the LAST stage as a checkerboard sign, which
         // is why it is a uniform rather than a separate pass.
-        uniform_set_int(fft->uniforms, "finalize", pass == WATER_SPECTRUM_LOG * 2 - 1 ? 1 : 0);
+        uniform_set_int(fft->uniforms, "finalize", pass == log2_size * 2 - 1 ? 1 : 0);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 }
@@ -1926,8 +1928,9 @@ static void _water_run_spectral(Water* water, const struct Scene* scene, struct 
         uniform_set_float(evolve->uniforms, "time", time);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        _water_fft_transform(fft, water->twiddle_tex, water->cascade_fbo[c], water->cascade_array,
-                             c, WATER_CASCADE_CFG[c].bound_gain,
+        _water_fft_transform(fft, water->twiddle_tex, WATER_SPECTRUM_RES, WATER_SPECTRUM_LOG,
+                             water->cascade_fbo[c], water->cascade_array, c,
+                             WATER_CASCADE_CFG[c].bound_gain,
                              fmaxf(water->cascade_height_var[c], 0.0f));
     }
 
@@ -2688,7 +2691,8 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int fx
         // happens to agree today.
         // No crest term: an exact identity at zero gain, so the impulse still tests the
         // linear transform alone.
-        _water_fft_transform(fft, water->twiddle_tex, fbo, arr, 0, 0.0f, 0.0f);
+        _water_fft_transform(fft, water->twiddle_tex, WATER_SPECTRUM_RES, WATER_SPECTRUM_LOG, fbo,
+                             arr, 0, 0.0f, 0.0f);
         glBindVertexArray(0);
 
         float* out = malloc(texels * 4 * sizeof(float));
