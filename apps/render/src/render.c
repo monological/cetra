@@ -4422,19 +4422,13 @@ int main(int argc, char** argv) {
         scene_clear_decals(scene);
 
     /*
-     * --water-probe: the CPU wave query, printed. It is the only way anything outside
-     * this process can see water_surface_at at all -- the GPU surface leaves no number
-     * behind, so without this the seam buoyancy is meant to consume would ship untested.
-     *
-     * `residual` is the whole point of printing it: the query has to INVERT the Gerstner
-     * horizontal map to answer about a world position, so the check that matters is
-     * whether the parameter it found pushes forward onto the point that was asked for.
+     * --water-probe: the surface query, printed. It is the only way anything outside this
+     * process can see water_probe_result at all -- the GPU surface leaves no number behind,
+     * so without this the seam buoyancy is meant to consume would ship untested. The grid is
+     * printed after the loop; see there.
      */
     if (args.water_probe && scene->water) {
         const Water* w = scene->water;
-        printf("water-probe model=%s available=%d level=%.4f\n",
-               w->wave_model == WATER_WAVES_FFT ? "fft" : "gerstner",
-               water_waves_available(w) ? 1 : 0, (double)w->level);
         /*
          * Which directional the surface lights itself from, named, and how much light
          * that adds up to. Nothing in a frame reports either: a sea lit by the wrong
@@ -4527,26 +4521,37 @@ int main(int argc, char** argv) {
     if (args.water_fft_probe)
         water_fft_probe(scene->water, engine);
     /*
-     * --water-probe's grid: the CPU query, and beside it the GPU one (spec 13.1). Both at the
-     * instant the GPU answer describes, which is WATER_PROBE_LATENCY passes before the last
-     * frame -- comparing it against the CPU at the current clock would measure the waves
-     * moving, not the query. Before the ring has filled there is no GPU answer and the CPU
-     * one is taken at t = 0.
+     * --water-probe's grid, after the loop because the spectral answer needs frames to have
+     * run. `h=` is the public answer, water_probe_result, on either model; `gpu_h=` is the
+     * GPU pass's raw output beside it, which on Gerstner is the closed form's independent
+     * twin and on spectral the same number.
+     *
+     * Both at the instant the GPU answer describes, WATER_PROBE_LATENCY passes before the
+     * last frame -- comparing against the closed form at the current clock would measure the
+     * waves moving, not the query. Before the ring has filled that is t = 0.
+     *
+     * `residual` is the whole point of printing either: the query has to INVERT the
+     * horizontal map to answer about a world position, so the check that matters is whether
+     * the parameter it found pushes forward onto the point that was asked for.
      */
     if (args.water_probe && scene->water) {
         const Water* w = scene->water;
         const bool gpu = w->probe_result_pass >= 0;
         const float t = gpu ? w->probe_result_t : 0.0f;
+        const char* refused = water_probe_refusal(w, 0);
+        printf("water-probe model=%s available=%d reason=%s level=%.4f\n",
+               w->wave_model == WATER_WAVES_FFT ? "fft" : "gerstner", refused ? 0 : 1,
+               refused ? refused : "none", (double)w->level);
         printf("water-probe gpu_available=%d gpu_latency=%d t=%.9g\n", gpu ? 1 : 0,
                WATER_PROBE_LATENCY, (double)t);
         for (int i = 0; i < w->probe_count; i++) {
-            const float x = w->probe_points[i][0];
-            const float z = w->probe_points[i][1];
-            vec3 n;
-            const float h = water_surface_at(w, x, z, t, n);
-            printf("water-probe %.4f %.4f h=%.6f n=%.4f,%.4f,%.4f residual=%.8f", (double)x,
-                   (double)z, (double)h, (double)n[0], (double)n[1], (double)n[2],
-                   (double)water_waves_inverse_residual(w, x, z, t));
+            printf("water-probe %.4f %.4f", (double)w->probe_points[i][0],
+                   (double)w->probe_points[i][1]);
+            WaterSample s;
+            if (water_probe_result(w, i, t, &s))
+                printf(" h=%.6f n=%.4f,%.4f,%.4f residual=%.8f", (double)s.height,
+                       (double)s.normal[0], (double)s.normal[1], (double)s.normal[2],
+                       (double)s.residual);
             if (gpu)
                 printf(" gpu_h=%.6f gpu_residual=%.8f", (double)w->probe_result[i][0],
                        (double)w->probe_result[i][3]);
