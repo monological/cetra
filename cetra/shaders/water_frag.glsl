@@ -106,6 +106,7 @@ uniform int cameraSubmerged;
 uniform sampler2DArray causticTex;
 uniform int causticAvailable;
 uniform vec2 causticOrigin[WATER_CAUSTIC_LEVELS];
+uniform float causticSide[WATER_CAUSTIC_LEVELS]; // world units
 // The sky's irradiance on a horizontal bed, absolute, for the key light's share of what lights it.
 uniform vec3 causticSkyIrradiance;
 // 0 = shade normally; 1 = what the caustics multiplied the bed by; 2 = the raw caustics target
@@ -534,6 +535,24 @@ float waterSunGlitter(vec3 N, vec3 V, vec3 L, vec3 windV, float mss) {
     return D * G / max(4.0 * ndv, 1.0e-3);
 }
 
+// Where a world point falls in one caustics level's target, 0..1 across it.
+vec2 waterCausticUv(vec2 at, int level) {
+    return (at - causticOrigin[level]) / causticSide[level];
+}
+
+// 1 inside a level's window, falling to 0 over its outer WATER_CAUSTIC_EDGE_FADE.
+float waterCausticEdge(vec2 cuv) {
+    vec2 edge = abs(cuv * 2.0 - 1.0);
+    return 1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y));
+}
+
+// One level's concentration at a point. The gradients are in the level's own uv, so one pixel
+// footprint and one defocus blur the same WORLD distance at every level. Takes screen
+// derivatives, so it must be called in uniform control flow.
+float waterCausticSample(vec2 cuv, int level, float blur) {
+    return textureGrad(causticTex, vec3(cuv, float(level)), dFdx(cuv) * blur, dFdy(cuv) * blur).r;
+}
+
 /*
  * CAUSTICS (spec 13.2): what to multiply the refracted `bed` by, 1 for no change.
  *
@@ -559,26 +578,6 @@ float waterSunGlitter(vec3 N, vec3 V, vec3 L, vec3 windV, float mss) {
  *
  * Takes screen derivatives, so it must be called in uniform control flow.
  */
-
-// Where a world point falls in one level's target, 0..1 across it.
-vec2 waterCausticUv(vec2 at, int level) {
-    float side = WATER_CAUSTIC_TARGET_M * waterUnitsPerMetre /
-                 pow(WATER_CAUSTIC_LEVEL_DIV, float(level));
-    return (at - causticOrigin[level]) / side;
-}
-
-// 1 inside a level's window, falling to 0 over its outer WATER_CAUSTIC_EDGE_FADE.
-float waterCausticEdge(vec2 cuv) {
-    vec2 edge = abs(cuv * 2.0 - 1.0);
-    return 1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y));
-}
-
-// One level's concentration at a point. The gradients are in the level's own uv, so one pixel
-// footprint and one defocus blur the same WORLD distance at every level.
-float waterCausticSample(vec2 cuv, int level, float blur) {
-    return textureGrad(causticTex, vec3(cuv, float(level)), dFdx(cuv) * blur, dFdy(cuv) * blur).r;
-}
-
 vec3 waterCaustics(vec2 uv, vec3 refrDir) {
     float bedNdc = texture(sceneDepthTex, uv).r;
     mat3 viewToWorld = transpose(mat3(view));
@@ -605,8 +604,6 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
         floorY = onBed ? bedY : planeY;
     }
     vec2 at = pos.xz + keyInWater.xz * ((floorY - pos.y) / keyDown);
-    vec2 coarseUv = waterCausticUv(at, 0);
-    vec2 fineUv = waterCausticUv(at, 1);
     float traced = max(waterLevel - floorY, 1.0e-6);
     float column = waterLevel - pos.y;
     /*
@@ -619,17 +616,18 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      * this the sharpness.
      */
     float defocus = exp2(clamp(log2(traced / max(column, 1.0e-6)), 0.0, 3.0));
-    float coarse = waterCausticSample(coarseUv, 0, 2.0 * defocus);
-    float fine = waterCausticSample(fineUv, 1, 2.0 * defocus);
-    if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
-        return vec3(1.0);
     /*
-     * The fine level where its window reaches, the coarse one around it, each faded to flat at
-     * its own edge. Both average 1 over any sea, so handing one to the other moves where the
+     * Each finer level over the coarser ones, where its window reaches, each faded to flat at its
+     * own edge. Every level averages 1 over any sea, so handing one to the next moves where the
      * light is drawn and not how much of it there is.
      */
-    float c = mix(1.0 + waterCausticEdge(coarseUv) * (coarse - 1.0), fine,
-                  waterCausticEdge(fineUv));
+    float c = 1.0;
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        vec2 cuv = waterCausticUv(at, level);
+        c = mix(c, waterCausticSample(cuv, level, 2.0 * defocus), waterCausticEdge(cuv));
+    }
+    if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
+        return vec3(1.0);
 
     /*
      * The pattern was traced for a floor `traced` deep. Shallower than that the light has not

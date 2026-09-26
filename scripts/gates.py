@@ -8359,8 +8359,6 @@ WATER_FFT_VAR_MAX = 1.5
 # Mirrors WATER_CASCADE_COUNT (water.h). Asserted rather than assumed: a probe that
 # printed two rows would otherwise be read as two passing cascades.
 WATER_CASCADES = 3
-# The cascades plus the ripple band (spec 13.3), each one variance row.
-WATER_FFT_BANDS = WATER_CASCADES + 1
 # The ripple mip levels water-ripple-mips holds to the variance bounds: those carrying at least
 # this fraction of the whole band's slope variance, which is levels 1-4. Measured 0.94-0.98
 # through level 6 and 0.90 at level 7; levels 8 and 9 carry under 1e-5 of the band and read 2.25
@@ -8782,8 +8780,6 @@ WATER_CAUSTIC_CALM_TOL = 5e-3
 # ceiling and cells smaller than a texel both drop light), and 1.032 over the dome, traced to its
 # baked bed.
 WATER_CAUSTIC_MEAN_TOL = {"gerstner": 0.02, "spectral": 0.03, "dome": 0.05}
-# Mirrors WATER_CAUSTIC_LEVELS (water_caustic_constants.glsl): the probe prints one line per level.
-WATER_CAUSTIC_LEVELS = 2
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -8824,21 +8820,26 @@ def _water_closest_to_background(pix, bg, w, h, box):
 
 
 def _water_caustic_probe(extra, scene=None):
-    """Run --water-caustic-probe and return one dict of floats per level, or [] with no target.
+    """Run --water-caustic-probe and return (levels announced, one dict of floats per level).
 
     Each target conserves light, so its mean over the window is the energy check: 1 on any sea,
-    and exactly 1 at every texel on a calm one. A list in level order rather than the first
-    line, since there is one line per level (spec 13.3) and reading the first alone would pass
-    a broken fine level unseen.
+    and exactly 1 at every texel on a calm one. Every level rather than the first line, since
+    there is one line per level (spec 13.3) and reading the first alone would pass a broken fine
+    level unseen; the header says how many there are, so a missing one is caught too.
     """
     cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", "10",
            "-W", "200", "-H", "150", "--water-caustic-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
-    levels = []
+    announced, levels = 0, []
     for line in (r.stdout + r.stderr).splitlines():
-        if line.startswith("water-caustic-probe ") and "available=1" in line:
-            levels.append({k: float(v) for k, v in (p.split("=", 1) for p in line.split()[2:])})
-    return sorted(levels, key=lambda lv: lv["level"])
+        if not line.startswith("water-caustic-probe ") or "available=1" not in line:
+            continue
+        parts = line.split()[1:]
+        if parts[0] == "header":
+            announced = int(dict(p.split("=", 1) for p in parts[1:])["levels"])
+        else:
+            levels.append({k: float(v) for k, v in (p.split("=", 1) for p in parts[1:])})
+    return announced, sorted(levels, key=lambda lv: lv["level"])
 
 
 def _water_probe(extra, scene=None):
@@ -9122,8 +9123,8 @@ def _water_fft_probe(extra, scene=None):
             head = fields
         elif tag in ("cascade", "ripple"):
             # The ripple band (spec 13.3) is measured the same way at its own size, so it
-            # is one more row of the same shape; the header says how many there are.
-            rows.append({k: float(v) for k, v in fields.items()})
+            # is one more row of the same shape, told apart by its kind.
+            rows.append({"kind": tag, **{k: float(v) for k, v in fields.items()}})
         elif tag == "impulse":
             impulse = {k: float(v) for k, v in fields.items() if k != "available"}
         elif tag == "ripple-lod":
@@ -10382,20 +10383,21 @@ def run_water_gate(workdir):
     probe_head, var_rows, impulse, ripple_mips = _water_fft_probe(
         WATER_PIN + ["--water-waves", "fft"])
     probe_cascades = int(probe_head.get("cascades", 0))
-    probe_bands = probe_cascades + (1 if "ripple_res" in probe_head else 0)
+    cascade_rows = [row for row in var_rows if row["kind"] == "cascade"]
+    ripple_rows = [row for row in var_rows if row["kind"] == "ripple"]
     if probe_head.get("available") != "1":
         # The probe's own reason, not this arm's guess at one. Without it a Gerstner
         # surface, an unseeded spectrum and a failed readback are the same empty list.
         print("  water-fft-var FAIL  --water-fft-probe declined: reason="
               f"{probe_head.get('reason', 'it printed no header at all')}")
         failures.append("water-fft-var")
-    elif (probe_cascades != WATER_CASCADES or probe_bands != WATER_FFT_BANDS
-          or len(var_rows) != probe_bands):
-        # Two questions: the build has the bands this suite is written against -- the
-        # cascades and the ripple band -- and the probe printed a row for each of them.
+    elif (probe_cascades != WATER_CASCADES or len(cascade_rows) != probe_cascades
+          or len(ripple_rows) != 1):
+        # Two questions: the build has the cascades this suite is written against, and the
+        # probe printed a row for each of them and one for the ripple band.
         print(f"  water-fft-var FAIL  --water-fft-probe reports {probe_cascades} cascades "
-              f"and {probe_bands} bands (want {WATER_CASCADES} and {WATER_FFT_BANDS}) and "
-              f"printed {len(var_rows)} rows")
+              f"(want {WATER_CASCADES}) and printed {len(cascade_rows)} cascade rows and "
+              f"{len(ripple_rows)} ripple rows (want one)")
         failures.append("water-fft-var")
     else:
         # NOT `hr`/`sr`: `hr` is this function's name for a frame HEIGHT in the width/height
@@ -10408,8 +10410,7 @@ def run_water_gate(workdir):
         print(f"  water-fft-var {'PASS' if ok else 'FAIL'}  measured/predicted height "
               f"{'/'.join(f'{v:.2f}' for v in height_ratios)} slope "
               f"{'/'.join(f'{v:.2f}' for v in slope_ratios)} "
-              f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX} on all "
-              f"{2 * WATER_FFT_BANDS})")
+              f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX} on all {2 * len(var_rows)})")
         if not ok:
             failures.append("water-fft-var")
 
@@ -10419,19 +10420,23 @@ def run_water_gate(workdir):
     # of it -- so the levels that carry the band are held to the variance arm's bounds.
     # Levels below WATER_RIPPLE_MIP_FLOOR of the whole band are where fp16 and the aliasing
     # the model ignores dominate a quantity nothing can see.
+    band_slope = ripple_rows[0]["slope_pred"] if ripple_rows else 0.0
     carried = [m for m in ripple_mips
-               if m.get("slope_pred", 0.0) >= WATER_RIPPLE_MIP_FLOOR * var_rows[-1]["slope_pred"]] \
-        if var_rows else []
-    if not carried:
-        print(f"  water-ripple-mips FAIL  no ripple mip rows ({len(ripple_mips)} printed)")
+               if m.get("slope_pred", 0.0) >= WATER_RIPPLE_MIP_FLOOR * band_slope]
+    if probe_head.get("available") != "1":
+        print("  water-ripple-mips FAIL  --water-fft-probe declined: reason="
+              f"{probe_head.get('reason', 'it printed no header at all')}")
+        failures.append("water-ripple-mips")
+    elif not ripple_rows or not carried:
+        print(f"  water-ripple-mips FAIL  {len(ripple_rows)} ripple rows and "
+              f"{len(ripple_mips)} mip rows printed, {len(carried)} of them carrying the band")
         failures.append("water-ripple-mips")
     else:
-        ratios = [m["slope_ratio"] for m in carried]
-        ok = all(WATER_FFT_VAR_MIN <= v <= WATER_FFT_VAR_MAX for v in ratios)
+        ok = all(WATER_FFT_VAR_MIN <= m["slope_ratio"] <= WATER_FFT_VAR_MAX for m in carried)
         print(f"  water-ripple-mips {'PASS' if ok else 'FAIL'}  measured/predicted slope at "
-              f"levels 1-{len(carried)} "
-              f"{'/'.join(f'{v:.2f}' for v in ratios)} "
-              f"(want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX})")
+              f"level " + ", ".join(f"{int(m['level'])} {m['slope_ratio']:.2f}"
+                                    for m in carried) +
+              f" (want {WATER_FFT_VAR_MIN}-{WATER_FFT_VAR_MAX})")
         if not ok:
             failures.append("water-ripple-mips")
 
@@ -10684,14 +10689,17 @@ def run_water_gate(workdir):
     # water-still's zero-energy sea; the dome leg traces onto a baked bed rather than the plane.
     # Every leg is held at every level (spec 13.3): the fine level is a separate trace with its
     # own window and cell, and an energy defect in it would not show in the coarse one.
-    calm = _water_caustic_probe(WATER_PIN, scene=variant)
-    seas = {"gerstner": _water_caustic_probe(WATER_PIN),
+    legs = {"calm": _water_caustic_probe(WATER_PIN, scene=variant),
+            "gerstner": _water_caustic_probe(WATER_PIN),
             "spectral": _water_caustic_probe(WATER_PIN + ["--water-waves", "fft"]),
             "dome": _water_caustic_probe(BEACH_BED, scene=asset(BEACH_FIXTURE))}
-    if any(len(lv) != WATER_CAUSTIC_LEVELS for lv in [calm] + list(seas.values())):
-        print(f"  water-caustic-energy FAIL  a leg rendered "
-              f"{min(len(lv) for lv in [calm] + list(seas.values()))} of "
-              f"{WATER_CAUSTIC_LEVELS} caustics levels")
+    short = {name: f"{len(levels)} of {announced}" for name, (announced, levels) in legs.items()
+             if announced == 0 or len(levels) != announced}
+    calm = legs["calm"][1]
+    seas = {name: levels for name, (_, levels) in legs.items() if name != "calm"}
+    if short:
+        print("  water-caustic-energy FAIL  levels rendered against levels announced: " +
+              ", ".join(f"{name} {n}" for name, n in short.items()))
         failures.append("water-caustic-energy")
     else:
         calm_off = max(max(abs(lv["min"] - 1.0), abs(lv["max"] - 1.0)) for lv in calm)
