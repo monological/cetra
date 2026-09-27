@@ -346,6 +346,9 @@ typedef struct Water {
     // wave models: its width comes from the slope the surface stopped resolving, and the
     // Gerstner path reports that from its dropped octaves.
     bool glitter;
+    // false = a surface under the sea is lit as though it stood in air, which is every frame
+    // before spec 13.4. On, the key and the sky both weaken with the depth of water above.
+    bool downwell;
     // false = whitewater is selected from THIS frame's fold and forgotten, which is the
     // pre-11.42 foam exactly. Spectral only: the accumulator is a cascade texture, and the
     // Gerstner path reports no compression to accumulate.

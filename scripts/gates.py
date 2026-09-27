@@ -8210,6 +8210,31 @@ WATER_FIXTURE = "water_fixture.cscn"
 # only difference.
 WATER_NO_CATCHER = ["--no-shadows"]
 WATER_PIN = ["--no-auto-exposure", "-E", "1.0"]
+# water-downwell (spec 13.4). The fixture's lit floor under still water, read through the
+# identity tone curve so a ratio of two frames is a ratio of radiance, with bloom and AO off
+# because each spreads light between pixels at different depths. The key and the water
+# numbers mirror the fixture's own and are what the ratio is solved against.
+WATER_DOWNWELL_FIXTURE = "water_downwell_fixture.cscn"
+WATER_DOWNWELL_FLAGS = WATER_PIN + WATER_NO_CATCHER + ["--tonemap", "linear", "--no-bloom",
+                                                       "--no-ssao"]
+WATER_DOWNWELL_KEY = (-0.3, -0.85, -0.43)
+# The same scene under a key 33 degrees up rather than 58. The depth a row implies must not
+# depend on which: charged the vertical depth rather than the refracted path, it comes out
+# 15% shallower under the low key.
+WATER_DOWNWELL_LOW_KEY = (-0.6, -0.55, -0.58)
+WATER_DOWNWELL_ANGLE_TOL = 0.05
+WATER_DOWNWELL_IOR = 1.333
+WATER_DOWNWELL_ABSORB = (0.4, 0.2, 0.1)
+# The dry box sits on the wedge above the waterline, the wet box on its submerged face.
+WATER_DOWNWELL_DRY_BOX = (0.42, 0.31, 0.58, 0.42)
+WATER_DOWNWELL_WET_BOX = (0.42, 0.55, 0.58, 0.95)
+# Rows too dim to divide, or dimmed by less than this in red, are not read.
+WATER_DOWNWELL_MIN_LINEAR = 0.01
+WATER_DOWNWELL_WET_RATIO = 0.97
+# The three channels' depths, per row, as (max - min) / mean. The same depth solved three
+# ways from three extinctions a factor of four apart: a tint, a vertical path or a lost
+# Fresnel term pulls them apart by far more than 8-bit rounding does.
+WATER_DOWNWELL_SPREAD_MAX = 0.08
 # The surface itself comes from the fixture's own `water` block since spec 11.33 phase
 # 5, so nothing here asks for water on the command line -- only for the properties an
 # individual arm needs to differ. The photometric arms keep the default lighting: their
@@ -9251,6 +9276,45 @@ def _water_box_max_delta(a, b, w, h, box):
     return worst
 
 
+def _water_downwell_depths(on, off, w, h, box, key):
+    """The depth each channel implies, by row of a fractional box, for water-downwell.
+
+    A row of the fixture's wedge is one depth, so each row is averaged before anything is
+    solved: a single pixel's blue channel moves a few per cent in one 8-bit code, which at
+    blue's small extinction is a fifth of the depth. Rows whose light is too dim to divide,
+    or not dimmed enough to be under the water, are left out. `key` is the direction the
+    light shines, as the scene file states it.
+    """
+    lx, ly, lz = key
+    norm = math.sqrt(lx * lx + ly * ly + lz * lz)
+    cosi = -ly / norm
+    n = WATER_DOWNWELL_IOR
+    sint2 = (1.0 - cosi * cosi) / (n * n)
+    cost = math.sqrt(1.0 - sint2)
+    rs = (cosi - n * cost) / (cosi + n * cost)
+    rp = (n * cosi - cost) / (n * cosi + cost)
+    transmitted = 1.0 - 0.5 * (rs * rs + rp * rp)
+    x0, y0, x1, y1 = box
+    rows = {}
+    for py in range(int(y0 * h), int(y1 * h)):
+        sums_on, sums_off = [0.0] * 3, [0.0] * 3
+        for px in range(int(x0 * w), int(x1 * w)):
+            a = _linear_rgb(on, w, h, px, py)
+            b = _linear_rgb(off, w, h, px, py)
+            for c in range(3):
+                sums_on[c] += a[c]
+                sums_off[c] += b[c]
+        if min(sums_off) <= 0.0:
+            continue
+        ratios = [sums_on[c] / sums_off[c] for c in range(3)]
+        if min(sums_off) / (int(x1 * w) - int(x0 * w)) < WATER_DOWNWELL_MIN_LINEAR or \
+                ratios[0] > WATER_DOWNWELL_WET_RATIO:
+            continue
+        rows[py] = [-math.log(max(ratios[c], 1e-6) / transmitted) * cost /
+                    WATER_DOWNWELL_ABSORB[c] for c in range(3)]
+    return rows
+
+
 def _water_box_luma(pix, w, h, box):
     """Mean linear luma over a fractional box."""
     x0, y0, x1, y1 = box
@@ -9999,6 +10063,14 @@ def run_water_gate(workdir):
       water-caustic-energy  the caustics conserve light: the target is exactly 1 over a
                       calm sea and averages 1 over Gerstner, spectral and a baked dome bed,
                       which a pixel count cannot tell from a brighten-only effect.
+      water-downwell  a submerged surface is lit through the water (spec 13.4): with and
+                      without --no-water-downwell, dry pixels are identical, and every
+                      submerged row's per-channel ratio is (1 - F) exp(-sigma d / cos)
+                      for ONE depth d -- the three channels, solved separately, agree,
+                      which a tint or a missing Fresnel term breaks -- and d is the same
+                      under a key at two elevations, which a vertical rather than refracted
+                      path breaks. On water_downwell_fixture, whose floor is lit and whose
+                      key is the only light.
       water-shoal     waves shorten over a rising bed, and ONLY over it. Needs
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
@@ -10720,6 +10792,49 @@ def run_water_gate(workdir):
               f"depth: {', '.join(skipped) or 'none'}")
         if not ok:
             failures.append("water-caustic-energy")
+
+    # A submerged surface is lit through the water (spec 13.4). Dry pixels must not move at
+    # all, each submerged row's three channels must imply one depth, and that depth must not
+    # change with the key's elevation.
+    dw_high = asset(WATER_DOWNWELL_FIXTURE)
+    dw_low = os.path.join(workdir, "water_downwell_low.cscn")
+    cscn_copy(dw_high, dw_low,
+              lambda d: d["lights"][0].update(direction=list(WATER_DOWNWELL_LOW_KEY)))
+    dw_frames, err = {}, None
+    for name, dw_scene in (("high", dw_high), ("low", dw_low)):
+        for side, extra in (("on", []), ("off", ["--no-water-downwell"])):
+            path = os.path.join(workdir, f"water_downwell_{name}_{side}.ppm")
+            err = err or render(dw_scene, path, WATER_DOWNWELL_FLAGS + extra)
+            dw_frames[name, side] = path
+    if err:
+        print(f"  water-downwell ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-downwell")
+    else:
+        pix = {k: _read_ppm(p) for k, p in dw_frames.items()}
+        dw, dh = pix["high", "on"][0], pix["high", "on"][1]
+        dry_delta = _water_box_max_delta(pix["high", "on"][2], pix["high", "off"][2], dw, dh,
+                                         WATER_DOWNWELL_DRY_BOX)
+        depths = {name: _water_downwell_depths(pix[name, "on"][2], pix[name, "off"][2], dw, dh,
+                                               WATER_DOWNWELL_WET_BOX, key)
+                  for name, key in (("high", WATER_DOWNWELL_KEY),
+                                    ("low", WATER_DOWNWELL_LOW_KEY))}
+        spreads = [(max(d) - min(d)) / max(sum(d) / 3.0, 1e-6)
+                   for rows in depths.values() for d in rows.values()]
+        worst = max(spreads) if spreads else float("inf")
+        shared = sorted(set(depths["high"]) & set(depths["low"]))
+        angle = [abs(sum(depths["low"][r]) / max(sum(depths["high"][r]), 1e-6) - 1.0)
+                 for r in shared]
+        worst_angle = max(angle) if angle else float("inf")
+        ok = (dry_delta == 0 and len(shared) >= 10 and worst <= WATER_DOWNWELL_SPREAD_MAX and
+              worst_angle <= WATER_DOWNWELL_ANGLE_TOL)
+        high = [sum(depths["high"][r]) / 3.0 for r in shared]
+        span = f"{min(high):.3f}..{max(high):.3f}" if high else "none"
+        print(f"  water-downwell {'PASS' if ok else 'FAIL'}  dry wedge moves {dry_delta} "
+              f"(want 0); {len(shared)} submerged rows (want >=10) at depths {span}; channels "
+              f"agree within {worst:.3f} (want <={WATER_DOWNWELL_SPREAD_MAX}); the two key "
+              f"angles within {worst_angle:.3f} (want <={WATER_DOWNWELL_ANGLE_TOL})")
+        if not ok:
+            failures.append("water-downwell")
 
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.

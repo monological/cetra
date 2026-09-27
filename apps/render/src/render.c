@@ -193,6 +193,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
+    fprintf(stderr, "      --no-water-downwell Light submerged surfaces as though in air\n");
     fprintf(stderr, "      --water-foam-debug N  Foam as a binary mask: 1 the crest band after\n");
     fprintf(stderr, "                         the erosion, 2 before it, 3 breaking alone.\n");
     fprintf(stderr,
@@ -1161,6 +1162,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_caustics = 1;
         } else if (strcmp(argv[i], "--no-water-glitter") == 0) {
             args->no_water_glitter = 1;
+        } else if (strcmp(argv[i], "--no-water-downwell") == 0) {
+            args->no_water_downwell = 1;
         } else if (strcmp(argv[i], "--water-foam-debug") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -4410,6 +4413,8 @@ int main(int argc, char** argv) {
             water->caustics = false;
         if (args.no_water_glitter)
             water->glitter = false;
+        if (args.no_water_downwell)
+            water->downwell = false;
         water->foam_debug = args.water_foam_debug;
         water->caustic_debug = args.water_caustic_debug;
         if (args.no_water_surf)

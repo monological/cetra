@@ -237,6 +237,8 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
  * the sea is drawn at.
  */
 #include "shore.glsl"
+// The light a submerged surface receives through the sea above it (spec 13.4).
+#include "water_light.glsl"
 uniform float time;
 // 0 = this material is never wetted, whatever the sea does. See Material.shore_wetness.
 uniform float uShoreWetness;
@@ -1852,6 +1854,10 @@ void main() {
     uint clusterOffset = clusterList.x;
     int clusterCount = int(clusterList.y);
     int numDir = lightCounts.x;
+    // How far under the sea this surface lies (spec 13.4): 0 in air, where every term below
+    // that reads it is an exact 1. Local lights are left alone -- one sitting in the water is
+    // as close to the surface it lights as it ever was.
+    float submerged = waterDepthBelow(WorldPos.y);
 
     // LTC tables (spec 9.2). Both lookups depend only on this fragment's
     // roughness and view angle, so they hoist out of the light loop: the
@@ -1927,6 +1933,8 @@ void main() {
             L = normalize(-dirLights[k].dirShadow.xyz);
             attenuation = 1.0;
             lightCI = dirLights[k].colorIntensity.xyz;
+            if (submerged > 0.0)
+                lightCI *= waterDownwellKey(L, submerged);
             lightSize = dirLights[k].sizeMisc.xy;
             dirShadowSlot = int(dirLights[k].dirShadow.w);
         } else {
@@ -2456,6 +2464,13 @@ void main() {
         // radiance -- chased it (spec 10.1 phase 5). No constant satisfies both,
         // because the term was never physical. A real emitter is.
         ambient = ambientRadiance * albedoMap * aoMap * (1.0 - transmissionEff);
+    }
+    // The sky's light, weakened by the water over this surface (spec 13.4). Both halves of the
+    // environment arrive from above it, so both pay for the same column.
+    if (submerged > 0.0) {
+        vec3 skyDown = waterDownwellSky(submerged);
+        ambient *= skyDown;
+        ambSpec *= skyDown;
     }
 
     // Screen-space transmission (KHR_materials_transmission): the diffuse

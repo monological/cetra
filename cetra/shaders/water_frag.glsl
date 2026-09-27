@@ -58,8 +58,7 @@ uniform vec2 screenSize;
 uniform float time;
 
 uniform float waterRoughness;
-uniform float waterIor;
-uniform vec3 waterAbsorption; // extinction per world unit, per channel
+// waterIor and waterAbsorption are declared by water_light.glsl, which lit surfaces share.
 uniform vec3 waterScatterAlbedo; // fraction of incident light the body sends back
 uniform vec3 waterScatterGlow;   // added regardless, absolute scene radiance
 
@@ -135,6 +134,7 @@ uniform float maxReflectionLOD;
 // and normal are interpolated in -- but it reads the SHORT band, which by design
 // never reaches the mesh.
 #include "ocean.glsl"
+#include "water_light.glsl"
 #include "cloud_shadow.glsl"
 // The cascades, for the glitter. The OUTERMOST-cascade lookup rather than pbr_frag's
 // per-fragment PCSS selection, and that is the right one here rather than the cheap one:
@@ -705,8 +705,12 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      */
     float keyVis = waterCausticKeyVisibility(pos, keyInWater, column) *
                    cloudSunForSlot(pos, sunShadowSlot);
-    vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis;
-    vec3 keyShare = keyIrr / max(keyIrr + causticSkyIrradiance, vec3(1.0e-6));
+    // Both halves as they arrive at the bed, which is how pbr_frag lit it: the key's longer
+    // refracted path weakens it faster than the sky with depth, so its share shrinks too.
+    float bedDepth = waterDepthBelow(pos.y);
+    vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis * waterDownwellKey(sunDir, bedDepth);
+    vec3 skyIrr = causticSkyIrradiance * waterDownwellSky(bedDepth);
+    vec3 keyShare = keyIrr / max(keyIrr + skyIrr, vec3(1.0e-6));
     return 1.0 + keyShare * weight * (c - 1.0);
 }
 

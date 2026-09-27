@@ -541,6 +541,7 @@ Water* create_water(void) {
     water->wave_model = WATER_WAVES_GERSTNER;
     water->caustics = true;
     water->glitter = true;
+    water->downwell = true;
     water->foam_history = true;
     // Slow enough that a crest leaves a visible trail behind it and fast enough that open
     // water is not permanently white. The reference this is ported from calls the same
@@ -1771,7 +1772,7 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene,
 }
 
 /*
- * The seven scalars shore.glsl stands on, published in ONE place.
+ * The scalars shore.glsl and water_light.glsl stand on, published in ONE place.
  *
  * Both the water's own program and every lit surface read that file, and each used to publish
  * the full set from its own site two hundred lines apart -- so renaming or adding a shore
@@ -1794,6 +1795,12 @@ static void _water_publish_shore(const Water* water, const struct Scene* scene, 
     uniform_set_float(u, "waterSurfHeight", (gate_wetness && !water->wetness) ? 0.0f : hs);
     uniform_set_float(u, "waterSurfOmega", omega);
     uniform_set_float(u, "waterBeachSlope", water->bed_foreshore_slope);
+    // What the sea does to the light passing down through it (spec 13.4): a surface under
+    // the level is lit through the water, and the water judges its caustics against that.
+    // Only while the sea is drawn -- switched off, there is nothing over the surface.
+    uniform_set_int(u, "waterPresent", water_active(water) && water->downwell ? 1 : 0);
+    uniform_set_float(u, "waterIor", water->ior);
+    uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
 }
 
 /*
@@ -1804,8 +1811,9 @@ static void _water_publish_shore(const Water* water, const struct Scene* scene, 
  * switch alongside the cloud shadow, so a material that opted into wetness gets the same sea
  * the water surface is drawing at the same instant.
  *
- * With no water in the scene nothing calls this, waterSurfHeight stays at its zero default,
- * and the shader early-outs -- which is why no fallback publication is needed here.
+ * With no water in the scene nothing calls this, and waterSurfHeight and waterPresent stay at
+ * their zero defaults, which the shader reads as dry land -- which is why no fallback
+ * publication is needed here.
  */
 void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program) {
     if (!water || !program || !program->uniforms)
@@ -2689,8 +2697,6 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_int(u, "waterGridRes", WATER_GRID_RES);
     uniform_set_int(u, "waterFarLod", water->far_lod ? 1 : 0);
     uniform_set_float(u, "waterRoughness", water->roughness);
-    uniform_set_float(u, "waterIor", water->ior);
-    uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
     uniform_set_vec3(u, "waterScatterAlbedo", (const float*)&water->scatter_albedo);
     uniform_set_vec3(u, "waterScatterGlow", (const float*)&water->scatter_glow);
     // The animation clock, not the wall clock: frame N must be phase N or a

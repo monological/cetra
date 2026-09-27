@@ -1,0 +1,82 @@
+{
+ "version": 1,
+ "_comment": "Spec 13.4: water_fixture's floor and wedge LIT rather than emissive, under still water, by one directional and nothing else -- no sky, no caustics, no in-scatter -- so a submerged pixel is its lit colour times what the view path keeps, and the ratio of two renders with and without --no-water-downwell is exactly what the water lets down to it. The key comes from behind the eye, so no glint lands in the frame, and is bright enough that red, which the water takes first, stays well clear of the 8-bit floor -- at a quarter of it rounding bias alone pulled red's implied depth 7% off the other channels'.",
+ "models": [
+  {
+   "path": "../models/water_fixture.gltf"
+  }
+ ],
+ "materials": {
+  "bed": { "emissive": [0.0, 0.0, 0.0], "albedo": [0.6, 0.6, 0.6], "roughness": 1.0 },
+  "ramp": { "emissive": [0.0, 0.0, 0.0], "albedo": [0.6, 0.6, 0.6], "roughness": 1.0 }
+ },
+ "lights": [
+  {
+   "name": "DownwellKey",
+   "type": "directional",
+   "direction": [
+    -0.3,
+    -0.85,
+    -0.43
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 4.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   1.35,
+   6.4
+  ],
+  "target": [
+   0.0,
+   -0.25,
+   -1.19
+  ],
+  "fov": 42
+ },
+ "water": {
+  "enabled": true,
+  "level": 0.0,
+  "extent": 14.0,
+  "waves": "gerstner",
+  "wavelength": 6.0,
+  "amplitude": 0.0,
+  "steepness": 0.0,
+  "spread": 0.42,
+  "windDirection": [
+   0.86,
+   0.51
+  ],
+  "roughness": 0.04,
+  "ior": 1.333,
+  "absorption": [
+   0.4,
+   0.2,
+   0.1
+  ],
+  "scatterAlbedo": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "scatterGlow": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "caustics": false,
+  "shoreCoverage": true
+ },
+ "post": {
+  "tonemap": "linear",
+  "exposure": 1.0,
+  "auto_exposure": false
+ }
+}

@@ -705,6 +705,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW_ENUM(CFG_WATER, "water", "waves", wave_model, CFG_WAVE_MODELS),
     CFG_ROW(CFG_WATER, CFG_BOOL, "water", "caustics", caustics),
     CFG_ROW(CFG_WATER, CFG_BOOL, "water", "glitter", glitter),
+    CFG_ROW(CFG_WATER, CFG_BOOL, "water", "downwell", downwell),
     CFG_ROW(CFG_WATER, CFG_BOOL, "water", "foam_history", foam_history),
     CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "foam_decay", foam_decay),
     CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "foam_drift", foam_drift),
