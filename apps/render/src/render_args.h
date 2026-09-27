@@ -126,6 +126,7 @@ typedef struct {
     int water_waves;       // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
     int no_water_caustics; // Bisect lever: drop the surface's light focusing
     int no_water_glitter;  // Bisect lever: drop the analytic sun lobe
+    int no_water_downwell; // Bisect lever: light submerged surfaces as though in air
     // WaterFoamDebug (water.h), as an int since args structs here don't carry engine
     // headers. The instrument whitecap coverage is measured with; see Water.foam_debug.
     int water_foam_debug;
