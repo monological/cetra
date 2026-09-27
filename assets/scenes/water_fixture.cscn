@@ -95,6 +95,7 @@
    0.0,
    0.0
   ],
+  "scatterG": 0.8,
   "caustics": true,
   "shoreCoverage": true,
   "farLod": true

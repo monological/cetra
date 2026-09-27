@@ -281,6 +281,8 @@ scene_desc = {
         # but the key still has to appear here, because a key the parser reads and the
         # fixture never authors is a key the corpus has no coverage of at all.
         "scatterGlow": [0.0, 0.0, 0.0],
+        # The library default, authored for the reason scatterGlow is (spec 13.4).
+        "scatterG": 0.8,
         "caustics": True,
         "shoreCoverage": True,
         "farLod": True,

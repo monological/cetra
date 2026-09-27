@@ -520,6 +520,9 @@ Water* create_water(void) {
     // The glow stays zero -- a sea that lights itself is something a scene has to ask
     // for, and the calloc already zeroed it.
     glm_vec3_copy((vec3){0.0038f, 0.0219f, 0.0321f}, water->scatter_albedo);
+    // Clearwater's, and inside the 0.8-0.95 measured for ocean water, whose particles
+    // scatter mostly forward.
+    water->scatter_g = 0.8f;
     water->roughness = 0.04f;
     water->ior = 1.333f;
     // Lake-scale defaults: a 6 m longest wave at 6 cm, which is a light breeze
@@ -2699,6 +2702,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_float(u, "waterRoughness", water->roughness);
     uniform_set_vec3(u, "waterScatterAlbedo", (const float*)&water->scatter_albedo);
     uniform_set_vec3(u, "waterScatterGlow", (const float*)&water->scatter_glow);
+    // Kept off the poles: at |g| = 1 the lobe is a delta and its peak an infinity.
+    uniform_set_float(u, "waterScatterG", fmaxf(-0.95f, fminf(water->scatter_g, 0.95f)));
     // The animation clock, not the wall clock: frame N must be phase N or a
     // headless run stops being comparable to itself.
     uniform_set_float(u, "time", (float)engine->render_time);

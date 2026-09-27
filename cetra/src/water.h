@@ -314,6 +314,9 @@ typedef struct Water {
     // something a few times too large.
     vec3 scatter_albedo;
     vec3 scatter_glow;
+    // Henyey-Greenstein asymmetry of the sun's in-scatter, -1..1 (spec 13.4): 0 sends it
+    // every way alike, toward 1 on along the beam, so water seen toward the sun glows.
+    float scatter_g;
 
     float roughness; // interface roughness; picks the environment lobe's mip
     float ior;       // 1.333 for water -> F0 0.020
