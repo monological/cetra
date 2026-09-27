@@ -3,8 +3,8 @@
 /*
  * Water surface shading (spec 11.32).
  *
- * A single-layer water interface: Schlick-approximated dielectric Fresnel, with F0
- * taken from the IOR rather than authored, splits the view into
+ * A single-layer water interface: the exact dielectric Fresnel of the IOR (spec 13.4),
+ * rather than an authored reflectance, splits the view into
  * a reflected share taken from the environment cubemap and a transmitted share
  * taken from the resolved opaque scene, attenuated through the body by
  * Beer-Lambert over the real path length the depth buffer gives.
@@ -1227,14 +1227,19 @@ void main() {
     vec3 inscatter = waterScatterAlbedo * incident + waterScatterGlow;
     vec3 body = bed * T + inscatter * preExposure * (1.0 - T);
 
-    // Reflected share: the split-sum environment lobe, the same lookup every
-    // other material makes. F0 0.020 falls out of IOR 1.333 rather than being
-    // authored.
-    float f0s = (waterIor - 1.0) / (waterIor + 1.0);
-    vec3 F0 = vec3(f0s * f0s);
-    vec3 F = fresnelSchlickRoughness(NdotV, F0, roughness);
+    /*
+     * Reflected share: the split-sum environment lobe, weighted by the exact Fresnel of the
+     * IOR (spec 13.4) rather than Schlick's, which runs low toward grazing -- where a sea
+     * reflects most. The LUT's scale and bias are a Schlick integral and cannot take another
+     * curve, so the exact reflectance at the view angle scales their sum instead: the lobe's
+     * directional albedo at F = 1. Water is near a mirror, where that is the exact answer.
+     *
+     * One index for both sides of the interface. From below the exact form would close
+     * Snell's window, and what lies outside it is the underwater scene reflected, which the
+     * environment lookup cannot supply -- it would paint the sky there instead.
+     */
     vec2 ab = texture(brdfLUT, vec2(NdotV, roughness)).rg;
-    vec3 specWeight = F * ab.x + ab.y;
+    vec3 specWeight = vec3(fresnelDielectric(NdotV, waterIor) * (ab.x + ab.y));
     vec3 reflected = vec3(0.0);
     if (iblEnabled > 0) {
         vec3 R = reflect(-V, Nv);
@@ -1282,7 +1287,7 @@ void main() {
         // Fresnel at the FACET rather than at the surface normal, which is what makes the
         // glitter brighten toward grazing along with the rest of the interface.
         vec3 Hv = normalize(V + Lv);
-        vec3 Fs = fresnelSchlick(max(dot(V, Hv), 0.0), F0);
+        float Fs = fresnelDielectric(dot(V, Hv), waterIor);
         color += Fs * glitter * sunVis * sunRadiance * preExposure;
     }
 
