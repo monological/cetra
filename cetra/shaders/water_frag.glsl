@@ -61,6 +61,7 @@ uniform float waterRoughness;
 // waterIor and waterAbsorption are declared by water_light.glsl, which lit surfaces share.
 uniform vec3 waterScatterAlbedo; // fraction of incident light the body sends back
 uniform vec3 waterScatterGlow;   // added regardless, absolute scene radiance
+uniform float waterScatterG;     // Henyey-Greenstein asymmetry of the sun's in-scatter
 
 // Mipped resolve of the opaque scene (colour + skybox), already pre-exposed.
 uniform sampler2D sceneColorTex;
@@ -350,6 +351,19 @@ const float WATER_CAUSTIC_EDGE_FADE = 0.2;
 // Metres of shadow blur at which the caustics' key visibility has handed from the shadow map's own
 // kernel to the wave-spread disc.
 const float WATER_CAUSTIC_KERNEL_M = 0.5;
+
+const float PI = 3.14159265359;
+// The share of the sun's in-scatter that goes every way at once, under the forward lobe --
+// Clearwater's floor, in the phase function's own units (1 / 4 pi is isotropic).
+const float WATER_SCATTER_FLOOR = 0.02;
+
+// Henyey-Greenstein at the cosine between the sun's refracted beam and the scattered ray,
+// with the isotropic floor added.
+float waterScatterPhase(float cosS) {
+    float g = waterScatterG;
+    float denom = max(1.0 + g * g - 2.0 * g * cosS, 1.0e-4);
+    return (1.0 - g * g) / (4.0 * PI * denom * sqrt(denom)) + WATER_SCATTER_FLOOR;
+}
 
 /*
  * COX-MUNK SUN GLITTER (spec 11.42).
@@ -1222,14 +1236,61 @@ void main() {
      * vec3(1.0). That fallback is right there because it MULTIPLIES a shading term; here
      * it would reinstate the constant this replaces, under a different name.
      */
-    vec3 incident = vec3(0.0);
+    vec3 skyIncident = vec3(0.0);
     if (iblEnabled > 0)
-        incident = textureLod(prefilteredMap, vec3(0.0, 1.0, 0.0), maxReflectionLOD).rgb *
-                   iblIntensity;
-    if (sunAvailable == 1)
-        incident += sunRadiance * max(sunDir.y, 0.0);
-    vec3 inscatter = waterScatterAlbedo * incident + waterScatterGlow;
-    vec3 body = bed * T + inscatter * preExposure * (1.0 - T);
+        skyIncident = textureLod(prefilteredMap, vec3(0.0, 1.0, 0.0), maxReflectionLOD).rgb *
+                      iblIntensity;
+    vec3 sunIncident = sunAvailable == 1 ? sunRadiance * max(sunDir.y, 0.0) : vec3(0.0);
+    /*
+     * How much of each source the column along the sight line sends back (spec 13.4).
+     *
+     * Both weaken with depth as they come down, so the water nearer the surface glows more
+     * than the water under it. A point `s` along the refracted ray is `s |ry|` deep, where
+     * the sun reaches it through exp(-sigma s |ry| / cos) and the eye sees it through
+     * exp(-sigma s); integrated over the path that is
+     *
+     *     (1 - exp(-sigma L (1 + k))) / (1 + k),   k = |ry| / cos,
+     *
+     * and the sky's the same with its own diffuse coefficient. At k = 0 this is the uniform
+     * source's 1 - T exactly. Clearwater takes the sun at mid-depth instead, an estimate of
+     * this integral, and one that sends the glow of bottomless water to nothing.
+     *
+     * The sun's share is weighted by where it is going: Henyey-Greenstein about the angle
+     * between its refracted beam and the ray back to the eye, forward-peaked, with
+     * Clearwater's isotropic floor under it, so water seen toward the sun lights up and water
+     * seen down-sun goes quieter.
+     *
+     * Scaled against the view straight DOWN, not averaged over the sphere. Both the refracted
+     * sight line and the refracted beam point down, so an eye above the water only ever sees
+     * light turned through more than about ninety degrees -- the back half of a lobe whose
+     * mass is in front. Normalised over the sphere, that dimmed every sea seen from above to
+     * a third, which Clearwater answers with a constant of 3.2. Against the nadir, water under
+     * the eye keeps the brightness its authored albedo gives it, and the lobe decides only
+     * how much more there is toward the sun.
+     *
+     * From below the sight line runs between the eye and the surface, not down into the
+     * column, and the uniform source it had before stands.
+     */
+    vec3 sunColumn = 1.0 - T;
+    vec3 skyColumn = 1.0 - T;
+    float sunPhase = 1.0;
+    if (!seenFromBelow) {
+        vec3 rayWorld = normalize(mat3(transpose(view)) * refrDir);
+        vec3 sunInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
+        float cosT = max(-sunInWater.y, 0.05);
+        float kSun = abs(rayWorld.y) / cosT;
+        float kSky = abs(rayWorld.y) * WATER_SKY_DOWNWELL_PER_EXTINCTION;
+        sunColumn = (1.0 - exp(-waterAbsorption * path * (1.0 + kSun))) / (1.0 + kSun);
+        skyColumn = (1.0 - exp(-waterAbsorption * path * (1.0 + kSky))) / (1.0 + kSky);
+        // Straight down the ray back to the eye is +y, so the nadir's angle is the beam's own.
+        sunPhase = waterScatterPhase(dot(sunInWater, -rayWorld)) /
+                   waterScatterPhase(sunInWater.y);
+        sunIncident *= 1.0 - fresnelDielectric(max(sunDir.y, 0.0), waterIor);
+    }
+    vec3 inscatter = waterScatterAlbedo * (sunIncident * sunPhase * sunColumn +
+                                           skyIncident * skyColumn) +
+                     waterScatterGlow * (1.0 - T);
+    vec3 body = bed * T + inscatter * preExposure;
 
     /*
      * Reflected share: the split-sum environment lobe, weighted by the exact Fresnel of the

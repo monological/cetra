@@ -297,6 +297,8 @@ typedef struct CSceneWater {
     float scatter_albedo[3]; // fraction of incident light the body sends back
     bool has_scatter_glow;
     float scatter_glow[3]; // absolute radiance added regardless; a look, not a measurement
+    bool has_scatter_g;
+    float scatter_g; // Henyey-Greenstein asymmetry of the sun's in-scatter
     bool has_caustics;
     bool caustics;
     bool has_shore_coverage;

@@ -885,6 +885,7 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
     out->has_absorption = get_vec3(water, "absorption", out->absorption);
     out->has_scatter_albedo = get_vec3(water, "scatterAlbedo", out->scatter_albedo);
     out->has_scatter_glow = get_vec3(water, "scatterGlow", out->scatter_glow);
+    out->has_scatter_g = get_float(water, "scatterG", &out->scatter_g);
     /*
      * The old `scatter` is refused BY NAME rather than accepted (spec 11.84), which is
      * the 11.48 precedent and the only detectable option here. Its UNITS changed: it was
@@ -941,10 +942,10 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
      * authors all agree, rather than trusting anyone to keep them so.
      */
     static const char* const known[] = {
-        "enabled",       "level",       "extent",        "wavelength",    "amplitude",
-        "steepness",     "spread",      "windDirection", "waves",         "seaDepth",
-        "windSea",       "swell",       "roughness",     "ior",           "absorption",
-        "scatterAlbedo", "scatterGlow", "caustics",      "shoreCoverage", "farLod",
+        "enabled",       "level",         "extent",     "wavelength",    "amplitude",   "steepness",
+        "spread",        "windDirection", "waves",      "seaDepth",      "windSea",     "swell",
+        "roughness",     "ior",           "absorption", "scatterAlbedo", "scatterGlow", "caustics",
+        "shoreCoverage", "farLod",        "scatterG",
     };
     warn_unknown_keys(water, known, sizeof(known) / sizeof(known[0]), "water");
 }
