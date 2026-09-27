@@ -353,6 +353,9 @@ const float WATER_CAUSTIC_EDGE_FADE = 0.2;
 const float WATER_CAUSTIC_KERNEL_M = 0.5;
 
 const float PI = 3.14159265359;
+// The key's angular radius, radians: the sun's and the moon's are both about a quarter of a
+// degree, so one number serves whichever is the key.
+const float WATER_KEY_DISC_RADIUS = 0.00465;
 // The share of the sun's in-scatter that goes every way at once, under the forward lobe --
 // Clearwater's floor, in the phase function's own units (1 / 4 pi is isotropic).
 const float WATER_SCATTER_FLOOR = 0.02;
@@ -564,13 +567,26 @@ float waterCausticEdge(vec2 cuv) {
     return 1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y));
 }
 
-// One level's concentration at a point, per channel: each was traced at its own index (spec
-// 13.4), so a focused line splits into colours at its edges. The gradients are in the level's
-// own uv, so one pixel footprint and one defocus blur the same WORLD distance at every level.
-// Takes screen derivatives, so it must be called in uniform control flow.
-vec3 waterCausticSample(vec2 cuv, int level, float blur) {
-    return textureGrad(causticTex, vec3(cuv, float(level)), dFdx(cuv) * blur, dFdy(cuv) * blur)
-        .rgb;
+/*
+ * One level's concentration at a point, per channel: each was traced at its own index (spec
+ * 13.4), so a focused line splits into colours at its edges. The gradients are in the level's
+ * own uv, so one pixel footprint and one defocus blur the same WORLD distance at every level.
+ *
+ * And never sharper than the key's own disc makes it (spec 13.4). The trace is a point source,
+ * and a real sun is half a degree across, so light reaching a floor `depth` below arrives
+ * smeared over depth times that angle -- a centimetre and a half at three metres, which is as
+ * wide as water's dispersion shifts red against blue there. Without it the trace keeps lines a
+ * texel wide with concentrations in the hundreds, where a millimetre's shift between channels
+ * swings each one wildly, and the dispersion reads as coloured speckle rather than as fringes.
+ *
+ * Takes screen derivatives, so it must be called in uniform control flow.
+ */
+vec3 waterCausticSample(vec2 cuv, int level, float blur, float discUv) {
+    vec2 gx = dFdx(cuv) * blur;
+    vec2 gy = dFdy(cuv) * blur;
+    gx *= max(1.0, discUv / max(length(gx), 1.0e-9));
+    gy *= max(1.0, discUv / max(length(gy), 1.0e-9));
+    return textureGrad(causticTex, vec3(cuv, float(level)), gx, gy).rgb;
 }
 
 /*
@@ -689,11 +705,18 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      */
     float fineKeep = 1.0 - smoothstep(WATER_CAUSTIC_FINE_FULL_M * waterUnitsPerMetre,
                                       WATER_CAUSTIC_FINE_OFF_M * waterUnitsPerMetre, traced);
+    // The width the key's disc spreads light over at the depth the pattern was TRACED to: that
+    // is where its lines and its colour split were made, and the defocus above already widens
+    // it for a point shallower than that.
+    // Its DIAMETER, since the gradients below are a footprint, not a radius.
+    float discWorld = 2.0 * traced * WATER_KEY_DISC_RADIUS;
     vec3 c = vec3(1.0);
     for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
         vec2 cuv = waterCausticUv(at, level);
         float keep = level == 0 ? 1.0 : fineKeep * float(causticDrawn[level]);
-        c = mix(c, waterCausticSample(cuv, level, 2.0 * defocus), waterCausticEdge(cuv) * keep);
+        c = mix(c,
+                waterCausticSample(cuv, level, 2.0 * defocus, discWorld / causticSide[level]),
+                waterCausticEdge(cuv) * keep);
     }
     if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
         return vec3(1.0);
