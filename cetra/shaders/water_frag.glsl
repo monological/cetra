@@ -564,11 +564,13 @@ float waterCausticEdge(vec2 cuv) {
     return 1.0 - smoothstep(1.0 - WATER_CAUSTIC_EDGE_FADE, 1.0, max(edge.x, edge.y));
 }
 
-// One level's concentration at a point. The gradients are in the level's own uv, so one pixel
-// footprint and one defocus blur the same WORLD distance at every level. Takes screen
-// derivatives, so it must be called in uniform control flow.
-float waterCausticSample(vec2 cuv, int level, float blur) {
-    return textureGrad(causticTex, vec3(cuv, float(level)), dFdx(cuv) * blur, dFdy(cuv) * blur).r;
+// One level's concentration at a point, per channel: each was traced at its own index (spec
+// 13.4), so a focused line splits into colours at its edges. The gradients are in the level's
+// own uv, so one pixel footprint and one defocus blur the same WORLD distance at every level.
+// Takes screen derivatives, so it must be called in uniform control flow.
+vec3 waterCausticSample(vec2 cuv, int level, float blur) {
+    return textureGrad(causticTex, vec3(cuv, float(level)), dFdx(cuv) * blur, dFdy(cuv) * blur)
+        .rgb;
 }
 
 /*
@@ -687,7 +689,7 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
      */
     float fineKeep = 1.0 - smoothstep(WATER_CAUSTIC_FINE_FULL_M * waterUnitsPerMetre,
                                       WATER_CAUSTIC_FINE_OFF_M * waterUnitsPerMetre, traced);
-    float c = 1.0;
+    vec3 c = vec3(1.0);
     for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
         vec2 cuv = waterCausticUv(at, level);
         float keep = level == 0 ? 1.0 : fineKeep * float(causticDrawn[level]);
@@ -1541,14 +1543,14 @@ void main() {
     // before any registration or lighting touches it -- the finest level whose window holds the
     // point. Flat water is half grey; outside every window, or with no target, black.
     if (waterCausticDebug == 2) {
-        float c = 0.0;
+        vec3 c = vec3(0.0);
         for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
             vec2 cuv = waterCausticUv(WorldPos.xz, level);
             bool inside = causticAvailable == 1 && all(greaterThanEqual(cuv, vec2(0.0))) &&
                           all(lessThanEqual(cuv, vec2(1.0)));
             if (inside)
-                c = textureLod(causticTex, vec3(cuv, float(level)), 0.0).r;
+                c = textureLod(causticTex, vec3(cuv, float(level)), 0.0).rgb;
         }
-        FragColor = vec4(vec3(0.5 * c), coverage);
+        FragColor = vec4(0.5 * c, coverage);
     }
 }

@@ -8805,6 +8805,8 @@ WATER_CAUSTIC_CALM_TOL = 5e-3
 # ceiling and cells smaller than a texel both drop light), and 1.032 over the dome, traced to its
 # baked bed.
 WATER_CAUSTIC_MEAN_TOL = {"gerstner": 0.02, "spectral": 0.03, "dome": 0.05}
+# The probe's per-channel means, red to blue: one trace each (spec 13.4).
+WATER_CAUSTIC_CHANNELS = ("mean_r", "mean_g", "mean_b")
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -10062,7 +10064,8 @@ def run_water_gate(workdir):
                       remainder is an offset every spectral sea carries.
       water-caustic-energy  the caustics conserve light: the target is exactly 1 over a
                       calm sea and averages 1 over Gerstner, spectral and a baked dome bed,
-                      which a pixel count cannot tell from a brighten-only effect.
+                      which a pixel count cannot tell from a brighten-only effect -- in each
+                      colour channel on its own, since each is traced at its own index.
       water-downwell  a submerged surface is lit through the water (spec 13.4): with and
                       without --no-water-downwell, dry pixels are identical, and every
                       submerged row's per-channel ratio is (1 - F) exp(-sigma d / cos)
@@ -10779,14 +10782,17 @@ def run_water_gate(workdir):
               ", ".join(f"{name} {n}" for name, n in short.items()))
         failures.append("water-caustic-energy")
     else:
+        # Per colour channel (spec 13.4): each is its own trace at its own index, and a channel
+        # that lost or gained light would hide under an average of three.
         calm_off = max(max(abs(lv["min"] - 1.0), abs(lv["max"] - 1.0)) for lv in calm)
         ok = calm_off <= WATER_CAUSTIC_CALM_TOL and all(
-            abs(lv["mean"] - 1.0) <= WATER_CAUSTIC_MEAN_TOL[name]
-            for name, levels in seas.items() for lv in levels)
-        means = ", ".join("/".join(f"{lv['mean']:.4f}" for lv in levels) + " " + name
-                          for name, levels in seas.items())
+            abs(lv[ch] - 1.0) <= WATER_CAUSTIC_MEAN_TOL[name]
+            for name, levels in seas.items() for lv in levels for ch in WATER_CAUSTIC_CHANNELS)
+        means = ", ".join(
+            "/".join(",".join(f"{lv[ch]:.4f}" for ch in WATER_CAUSTIC_CHANNELS) for lv in levels) +
+            " " + name for name, levels in seas.items())
         print(f"  water-caustic-energy {'PASS' if ok else 'FAIL'}  calm within "
-              f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); mean by "
+              f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); r,g,b means by "
               f"level {means} (want within "
               f"{'/'.join(str(WATER_CAUSTIC_MEAN_TOL[n]) for n in seas)} of 1); skipped for "
               f"depth: {', '.join(skipped) or 'none'}")
