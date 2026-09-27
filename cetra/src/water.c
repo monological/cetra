@@ -2371,12 +2371,13 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
     const GLenum land_status =
         _water_attach_colour(&water->caustic_land_fbo, water->caustic_land_tex);
 
-    // One scalar per texel, mipped: the surface's lookup takes a coarser level the shallower
-    // the bed it lands on. A layer per window level, each with its own framebuffer.
+    // One concentration per colour channel per texel (spec 13.4), mipped: the surface's lookup
+    // takes a coarser level the shallower the bed it lands on. A layer per window level, each
+    // with its own framebuffer. Alpha is carried for a renderable format and never written.
     const int res = WATER_CAUSTIC_TARGET_RES;
     glActiveTexture(GL_TEXTURE0);
     water->caustic_tex =
-        create_texture_2d_array_float(res, res, WATER_CAUSTIC_LEVELS, GL_R16F, GL_RED);
+        create_texture_2d_array_float(res, res, WATER_CAUSTIC_LEVELS, GL_RGBA16F, GL_RGBA);
     glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_tex);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
@@ -2427,6 +2428,13 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
     free(idx);
     return true;
 }
+
+/*
+ * Each colour channel's index against the authored one, red to blue (spec 13.4): Clearwater's
+ * 1.3315, 1.3335 and 1.3365, taken as offsets so a scene that authors another IOR keeps its
+ * own. Water's measured dispersion runs 1.331 at 650 nm to 1.337 at 450, the same spread.
+ */
+static const float WATER_CAUSTIC_IOR_SPREAD[3] = {-0.002f, 0.0f, 0.003f};
 
 /*
  * How much smaller than level 0's every length of `level` is (spec 13.3) -- window, cell and
@@ -2524,45 +2532,60 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
     const float grid[2] = {floorf((origin[0] - bent[0] * reach - pad) / cell) * cell,
                            floorf((origin[1] - bent[2] * reach - pad) / cell) * cell};
 
-    // Every lattice corner traced once, into one texel each.
-    glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_land_fbo);
-    glViewport(0, 0, n + 1, n + 1);
-    glUseProgram(land->id);
-    UniformManager* lu = land->uniforms;
-    uniform_set_vec2(lu, "causticGridOrigin", grid);
-    uniform_set_float(lu, "causticCell", cell);
-    uniform_set_vec2(lu, "causticTargetOrigin", origin);
-    draw_fullscreen_quad(_water_quad(water));
-    /*
-     * Submitted before the lattice below reads it, which GL says should not be needed and this
-     * driver says is. The lattice reads the landed points by texelFetch in the VERTEX stage, and
-     * on Apple's GL over Metal that read saw the texture as it was BEFORE the pass that just
-     * rendered it -- measured, not inferred: with one level every frame's caustics were the
-     * previous frame's trace, invisible in a still; with two, each level drew the other's. A
-     * flush splits the two passes into separate submissions, which is what makes the render
-     * visible to the vertex fetch; glFinish did the same and stalls the CPU as well.
-     */
-    glFlush();
-
-    // Then the lattice drawn where they landed. Additive, and the bracket leaves culling off: a
-    // folded cell lands wound the other way and still delivers its light.
     const int res = WATER_CAUSTIC_TARGET_RES;
     glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo[level]);
     glViewport(0, 0, res, res);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE);
-    glUseProgram(draw->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
-    uniform_set_int(draw->uniforms, "causticLanded", 0);
-    uniform_set_float(draw->uniforms, "causticTargetM",
-                      WATER_CAUSTIC_TARGET_M / _water_caustic_level_scale(level));
-    glBindVertexArray(water->caustic_vao);
-    glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
-    glBindVertexArray(0);
-    glDisable(GL_BLEND);
+
+    /*
+     * Once per colour channel, each at its own index (spec 13.4): water bends blue more than
+     * red, so a line the green light focuses on lands a little either side of it in the other
+     * two, and its edges split into colour. Every channel carries the whole beam, so each
+     * averages 1 on its own and the split moves light between colours and never adds any.
+     */
+    for (int ch = 0; ch < 3; ch++) {
+        // Every lattice corner traced once, into one texel each.
+        glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_land_fbo);
+        glViewport(0, 0, n + 1, n + 1);
+        glUseProgram(land->id);
+        UniformManager* lu = land->uniforms;
+        uniform_set_vec2(lu, "causticGridOrigin", grid);
+        uniform_set_float(lu, "causticCell", cell);
+        uniform_set_vec2(lu, "causticTargetOrigin", origin);
+        uniform_set_float(lu, "waterIor", water->ior + WATER_CAUSTIC_IOR_SPREAD[ch]);
+        draw_fullscreen_quad(_water_quad(water));
+        /*
+         * Submitted before the lattice below reads it, which GL says should not be needed and
+         * this driver says is. The lattice reads the landed points by texelFetch in the VERTEX
+         * stage, and on Apple's GL over Metal that read saw the texture as it was BEFORE the pass
+         * that just rendered it -- measured, not inferred: with one level every frame's caustics
+         * were the previous frame's trace, invisible in a still; with two, each level drew the
+         * other's. A flush splits the two passes into separate submissions, which is what makes
+         * the render visible to the vertex fetch; glFinish did the same and stalls the CPU too.
+         */
+        glFlush();
+
+        // Then the lattice drawn where they landed, into this channel alone. Additive, and the
+        // bracket leaves culling off: a folded cell lands wound the other way and still
+        // delivers its light.
+        glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo[level]);
+        glViewport(0, 0, res, res);
+        glColorMask(ch == 0, ch == 1, ch == 2, GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);
+        glUseProgram(draw->id);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
+        uniform_set_int(draw->uniforms, "causticLanded", 0);
+        uniform_set_float(draw->uniforms, "causticTargetM",
+                          WATER_CAUSTIC_TARGET_M / _water_caustic_level_scale(level));
+        glBindVertexArray(water->caustic_vao);
+        glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+        glDisable(GL_BLEND);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    }
 }
 
 /*
@@ -2593,7 +2616,6 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     uniform_set_float(lu, "time", (float)engine->render_time);
     uniform_set_vec3(lu, "causticKeyDir", travel);
     uniform_set_float(lu, "causticFloorY", floor_y);
-    uniform_set_float(lu, "waterIor", water->ior);
 
     for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++)
         _water_run_caustic_level(water, scene, engine, land, draw, travel, floor_y, level);
@@ -3002,8 +3024,9 @@ void water_caustic_probe(const Water* water) {
         return;
     }
     const int res = WATER_CAUSTIC_TARGET_RES;
-    const size_t layer = (size_t)res * res;
-    // The whole array, which is what one glGetTexImage of it returns.
+    const size_t layer = (size_t)res * res * 4;
+    // The whole array, which is what one glGetTexImage of it returns: RGBA, one channel per
+    // colour's trace and an alpha nothing writes.
     float* px = malloc(layer * WATER_CAUSTIC_LEVELS * sizeof(float));
     if (!px) {
         printf("water-caustic-probe available=0 reason=alloc\n");
@@ -3011,7 +3034,7 @@ void water_caustic_probe(const Water* water) {
     }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_tex);
-    glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RED, GL_FLOAT, px);
+    glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, GL_FLOAT, px);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     // How many level lines follow, so a reader checks the count against the probe itself.
     printf("water-caustic-probe header available=1 levels=%d\n", WATER_CAUSTIC_LEVELS);
@@ -3026,21 +3049,27 @@ void water_caustic_probe(const Water* water) {
             printf("water-caustic-probe available=1 level=%d drawn=0\n", level);
             continue;
         }
+        // Each channel is its own trace (spec 13.4) and conserves light on its own, so each is
+        // reported; the extremes are over all three.
         const float* target = px + layer * (size_t)level;
-        double sum = 0.0;
+        double sum[3] = {0.0, 0.0, 0.0};
         float mn = 1.0e30f, mx = 0.0f;
         long count = 0;
         for (int y = lo; y < hi; y++) {
             for (int x = lo; x < hi; x++) {
-                const float c = target[(size_t)y * res + x];
-                sum += c;
-                mn = fminf(mn, c);
-                mx = fmaxf(mx, c);
+                const float* texel = target + ((size_t)y * res + x) * 4;
+                for (int ch = 0; ch < 3; ch++) {
+                    sum[ch] += texel[ch];
+                    mn = fminf(mn, texel[ch]);
+                    mx = fmaxf(mx, texel[ch]);
+                }
                 count++;
             }
         }
-        printf("water-caustic-probe available=1 level=%d drawn=1 mean=%.6f min=%.6f max=%.4f\n",
-               level, sum / (double)count, (double)mn, (double)mx);
+        printf("water-caustic-probe available=1 level=%d drawn=1 mean_r=%.6f mean_g=%.6f "
+               "mean_b=%.6f min=%.6f max=%.4f\n",
+               level, sum[0] / (double)count, sum[1] / (double)count, sum[2] / (double)count,
+               (double)mn, (double)mx);
     }
     free(px);
 }
