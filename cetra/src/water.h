@@ -616,7 +616,6 @@ typedef struct Water {
     // (G+1)^2 RGBA32F: each lattice corner's landed and source point. One for every level, which
     // trace and draw in turn.
     GLuint caustic_land_tex;
-    GLuint caustic_land_per_index_tex; // how each corner's landing moves with the index
     GLuint caustic_land_fbo;
     GLuint caustic_vao;
     GLuint caustic_ebo;

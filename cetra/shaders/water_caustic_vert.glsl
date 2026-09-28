@@ -16,13 +16,11 @@
 #include "water_caustic_constants.glsl"
 
 uniform sampler2D causticLanded; // .xy landed, .zw source, metres from the target corner
-uniform sampler2D causticLandedPerIndex; // .xy how the landing moves per unit index, metres
 uniform float causticTargetM;    // this level's target side, metres
 
 out vec2 vLanded;
 out vec2 vSource;
 out float vCorner;
-out vec2 vPerIndex;
 
 vec4 corner(ivec2 ij) {
     return texelFetch(causticLanded, clamp(ij, ivec2(0), ivec2(WATER_CAUSTIC_GRID_N)), 0);
@@ -49,7 +47,6 @@ void main() {
     vCorner = sourceArea / max(landedArea, max(sourceArea / WATER_CAUSTIC_MAX, 1.0e-12));
     vLanded = here.xy;
     vSource = here.zw;
-    vPerIndex = texelFetch(causticLandedPerIndex, ij, 0).xy;
 
     vec2 uv = here.xy / causticTargetM;
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);

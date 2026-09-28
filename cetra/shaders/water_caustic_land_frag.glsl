@@ -14,9 +14,6 @@
  */
 
 layout(location = 0) out vec4 Landed;
-// How far the landing moves per unit of refractive index, metres, .xy (spec 13.4): the whole
-// dispersion of this corner's light, to first order, including what the facet's slope adds.
-layout(location = 1) out vec2 LandedPerIndex;
 
 uniform vec2 causticGridOrigin;   // world xz of lattice corner (0, 0)
 uniform float causticCell;        // world units between lattice corners
@@ -28,33 +25,6 @@ uniform float waterIor;           // the surface's own, so the trace bends as th
 
 #include "ocean.glsl"
 
-// The step in index the dispersion is differenced over: water's whole visible spread is about
-// 0.012, and the landing is smooth in n across it.
-const float LAND_INDEX_STEP = 0.002;
-
-/*
- * Where light entering at `entry` through normal `n` lands, at index `ior`.
- *
- * The floor: the baked bed where there is one, which is exact at every depth, and the reference
- * plane elsewhere. From the plane's hit, fixed-point steps along the ray onto the bed's height; a
- * step moves the hit by |grad bed| tan(refracted angle), and the refracted angle is under 41
- * degrees, so this closes on any bed shallower than about 48 degrees. A bed standing above the
- * entry point, a dry shoal, holds the light at the entry.
- *
- * Past the critical angle there is no transmitted ray, and `down` lands it far off the target.
- */
-vec3 landAt(vec3 entry, vec3 n, float ior) {
-    vec3 r = refract(causticKeyDir, n, 1.0 / ior);
-    float down = min(r.y, -1.0e-4);
-    float t = (causticFloorY - entry.y) / down;
-    for (int i = 0; i < 4; i++) {
-        float bedY;
-        float floorY = oceanBedHeight(entry.xz + r.xz * t, bedY) ? bedY : causticFloorY;
-        t = max((floorY - entry.y) / down, 0.0);
-    }
-    return entry + r * t;
-}
-
 void main() {
     vec2 p = causticGridOrigin + floor(gl_FragCoord.xy) * causticCell;
 
@@ -63,11 +33,25 @@ void main() {
     // The footprint is the lattice cell: what a cell cannot resolve it cannot focus either.
     OceanSurface s = oceanEvaluateAt(p, time, oceanBed(p), causticCell);
     vec3 n = oceanShadingNormal(s.normal, s.world.xz, 1.0, causticCell);
-    vec3 landed = landAt(s.world, n, waterIor);
-    // The same corner at a slightly higher index, through the same facet: the difference is
-    // this light's own dispersion, which the surface's lookup spreads the spectrum along.
-    vec3 landedHigher = landAt(s.world, n, waterIor + LAND_INDEX_STEP);
-    LandedPerIndex = (landedHigher.xz - landed.xz) / (LAND_INDEX_STEP * waterUnitsPerMetre);
+    vec3 r = refract(causticKeyDir, n, 1.0 / waterIor);
+
+    /*
+     * The floor: the baked bed where there is one, which is exact at every depth, and the
+     * reference plane elsewhere. From the plane's hit, fixed-point steps along the ray onto the
+     * bed's height; a step moves the hit by |grad bed| tan(refracted angle), and the refracted
+     * angle is under 41 degrees, so this closes on any bed shallower than about 48 degrees. A
+     * bed standing above the entry point, a dry shoal, holds the light at the entry.
+     *
+     * Past the critical angle there is no transmitted ray, and `down` lands it far off the target.
+     */
+    float down = min(r.y, -1.0e-4);
+    float t = (causticFloorY - s.world.y) / down;
+    for (int i = 0; i < 4; i++) {
+        float bedY;
+        float floorY = oceanBedHeight(s.world.xz + r.xz * t, bedY) ? bedY : causticFloorY;
+        t = max((floorY - s.world.y) / down, 0.0);
+    }
+    vec3 landed = s.world + r * t;
 
     /*
      * The SOURCE is the entry point carried back along the incoming beam to the still plane,
