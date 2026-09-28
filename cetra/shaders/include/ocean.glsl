@@ -126,6 +126,38 @@ vec4 oceanCascadeAt(int cascade, int target, vec2 uv, float lod) {
     return textureLod(cascadeFields, vec3(uv, float(oceanCascadeLayer(cascade, target))), lod);
 }
 
+/*
+ * A cubic B-spline read of one layer at its full resolution, from four bilinear taps (spec 13.4,
+ * after Clearwater and Sigg-Hadwiger).
+ *
+ * Bilinear filtering is continuous in value but not in slope, and these textures ARE slopes: a
+ * normal built from them kinks at every texel edge, and a sharp highlight on close, calm water
+ * draws the kink as a faint grid of creases. The cubic B-spline is continuous through its second
+ * derivative, so the normal is smooth wherever the texture is magnified. Only where it is
+ * magnified -- minified, the mips already average far more than a cubic kernel spans.
+ *
+ * The layer must wrap (REPEAT): the outer taps reach a texel past the tile.
+ */
+vec4 oceanArrayBSpline(sampler2DArray tex, vec2 uv, float layer, float res) {
+    vec2 p = uv * res - 0.5;
+    vec2 f = fract(p);
+    p = floor(p);
+    vec2 f2 = f * f;
+    vec2 f3 = f2 * f;
+    vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+    vec2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+    vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+    vec2 w3 = f3 / 6.0;
+    vec2 g0 = w0 + w1;
+    vec2 g1 = w2 + w3;
+    vec2 h0 = (w1 / g0 - 0.5 + p) / res;
+    vec2 h1 = (w3 / g1 + 1.5 + p) / res;
+    return (textureLod(tex, vec3(h0.x, h0.y, layer), 0.0) * g0.x +
+            textureLod(tex, vec3(h1.x, h0.y, layer), 0.0) * g1.x) * g0.y +
+           (textureLod(tex, vec3(h0.x, h1.y, layer), 0.0) * g0.x +
+            textureLod(tex, vec3(h1.x, h1.y, layer), 0.0) * g1.x) * g1.y;
+}
+
 vec4 oceanCascadeTexel(int cascade, int target, ivec2 coord) {
     return texelFetch(cascadeFields, ivec3(coord, oceanCascadeLayer(cascade, target)), 0);
 }
@@ -711,9 +743,18 @@ float oceanRippleRemovedMss(float lod) {
 vec3 oceanShadingNormal(vec3 meshN, vec2 displacedXZ, float shortKeep, float footprint) {
     if (waveModel != 1)
         return meshN;
-    vec4 short1 = oceanCascadeAt(2, 1, oceanCascadeUv(displacedXZ, 2), 0.0);
-    vec4 ripple1 = textureLod(rippleFields, vec3(oceanTileUv(displacedXZ, rippleLength), 1.0),
-                              oceanRippleLod(footprint));
+    // Through the cubic where each is magnified (spec 13.4): the short band always, being read
+    // at its full resolution and faded by distance rather than mipped; the ripples until their
+    // footprint reaches a texel, handed to the mip chain over the first level so the two reads
+    // never meet at a seam.
+    vec4 short1 = oceanArrayBSpline(cascadeFields, oceanCascadeUv(displacedXZ, 2),
+                                    float(oceanCascadeLayer(2, 1)), cascadeRes);
+    vec2 rippleUv = oceanTileUv(displacedXZ, rippleLength);
+    float rippleLod = oceanRippleLod(footprint);
+    vec4 ripple1 = textureLod(rippleFields, vec3(rippleUv, 1.0), rippleLod);
+    if (rippleLod < 1.0)
+        ripple1 = mix(oceanArrayBSpline(rippleFields, rippleUv, 1.0, float(WATER_RIPPLE_RES)),
+                      ripple1, rippleLod);
     vec2 slope = short1.rg * shortKeep + ripple1.rg;
     return normalize(meshN + vec3(-slope.x, 0.0, -slope.y) * OCEAN_SHORT_SLOPE_GAIN);
 }
