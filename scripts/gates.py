@@ -8831,6 +8831,14 @@ WATER_CAUSTIC_SPECTRUM_CHROMA = (0.7, 1.4)
 WATER_CAUSTIC_RELIEF_FLAT_BOX = (0.40, 0.62, 0.60, 0.90)
 WATER_CAUSTIC_RELIEF_FLAT_MAX = 1
 WATER_CAUSTIC_RELIEF_EDGE_MIN_PX = 2000
+# water-specks (spec 13.4). Motes in the column, one lattice cell in 83 at three depths, under
+# the 13.3 close framing: present, and SPARSE -- 2,770 px when measured, 0.58% of the frame. The
+# ceiling is what catches a hash or a density gone wrong, which fills the water rather than
+# dotting it and would pass a liveness count.
+WATER_SPECKS_FLAGS = WATER_PIN + WATER_NO_CATCHER + ["--water-waves", "fft", "--cam-eye",
+                                                     "-5,1.5,5", "--cam-target", "-5,-1,1"]
+WATER_SPECKS_MIN_PX = 500
+WATER_SPECKS_MAX_FRACTION = 0.03
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -10116,6 +10124,9 @@ def run_water_gate(workdir):
       water-caustic-relief the bed's relief, read off its brightness, shapes the caustics only
                       where the bed has some: against --no-water-caustic-relief, a uniform patch
                       of the fixture's flat bed does not move and its material edges do.
+      water-specks    sunlit motes in the column (spec 13.4) are there and SPARSE: a floor
+                      on the pixels they touch against --no-water-specks, and a ceiling on
+                      the fraction, which is what a broken hash or density would blow.
       water-downwell  a submerged surface is lit through the water (spec 13.4): with and
                       without --no-water-downwell, dry pixels are identical, and every
                       submerged row's per-channel ratio is (1 - F) exp(-sigma d / cos)
@@ -10898,6 +10909,26 @@ def run_water_gate(workdir):
               f"(want >={WATER_CAUSTIC_RELIEF_EDGE_MIN_PX})")
         if not ok:
             failures.append("water-caustic-relief")
+
+    # Specks in the water (spec 13.4): there, and sparse.
+    specks_on = os.path.join(workdir, "water_specks_on.ppm")
+    specks_off = os.path.join(workdir, "water_specks_off.ppm")
+    err = render(scene, specks_on, WATER_SPECKS_FLAGS)
+    if not err:
+        err = render(scene, specks_off, WATER_SPECKS_FLAGS + ["--no-water-specks"])
+    if err:
+        print(f"  water-specks ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-specks")
+    else:
+        dotted, _ = compare(specks_on, specks_off)
+        sw, sh, _ = _read_ppm(specks_on)
+        fraction = dotted / float(sw * sh)
+        ok = dotted >= WATER_SPECKS_MIN_PX and fraction <= WATER_SPECKS_MAX_FRACTION
+        print(f"  water-specks {'PASS' if ok else 'FAIL'}  {dotted} px of motes "
+              f"(want >={WATER_SPECKS_MIN_PX}), {fraction:.4f} of the frame "
+              f"(want <={WATER_SPECKS_MAX_FRACTION})")
+        if not ok:
+            failures.append("water-specks")
 
     # A submerged surface is lit through the water (spec 13.4). Dry pixels must not move at
     # all, each submerged row's three channels must imply one depth, and that depth must not

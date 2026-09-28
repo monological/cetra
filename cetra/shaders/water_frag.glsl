@@ -119,6 +119,7 @@ uniform float causticSpectrumDn[WATER_CAUSTIC_SPECTRAL_TAPS];
 uniform vec3 causticSpectrumWeight[WATER_CAUSTIC_SPECTRAL_TAPS];
 uniform int causticReference;
 uniform int causticRelief; // 1 = the bed's relief, read off its colour, shapes the caustics
+uniform int waterSpecks;   // 1 = sunlit motes suspended in the water
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
 // binary cutoff, which is all a single-sample target can express.
 uniform int alphaToCoverage;
@@ -366,6 +367,16 @@ const float PI = 3.14159265359;
  * the key a gap at the darkest keeps. Clearwater's, whose own relief shading reaches 0.83 of the
  * key at the bottom of a gap: its ambient occlusion, 0.55 to 1, through a quarter of the key.
  */
+/*
+ * The specks (spec 13.4), Clearwater's numbers: a lattice of 48 cells to the metre, one cell in
+ * 83 holding a mote and a third of those a dark grain, each returning 2.2% of the key's radiance
+ * -- in the same units the bed's lit radiance is, where a pale bed returns about a tenth.
+ */
+const float WATER_SPECK_PER_M = 48.0;
+const float WATER_SPECK_DENSITY = 0.012;
+const float WATER_SPECK_DARK = 0.008;
+const float WATER_SPECK_GAIN = 0.022;
+
 const float WATER_RELIEF_FINE_LOD = 1.0;
 const float WATER_RELIEF_COARSE_LOD = 4.0;
 const float WATER_RELIEF_HEIGHT_M = 0.02;
@@ -447,6 +458,48 @@ float waterValueNoise(vec2 p) {
     return mix(mix(waterHash21(cell), waterHash21(cell + vec2(1.0, 0.0)), f.x),
                mix(waterHash21(cell + vec2(0.0, 1.0)), waterHash21(cell + vec2(1.0, 1.0)), f.x),
                f.y);
+}
+
+/*
+ * Specks in the water (spec 13.4, after Clearwater): motes suspended in the column, caught by the
+ * sun at three depths along the refracted sight line, which is what gives clear water a volume
+ * rather than a tinted sheet over a floor.
+ *
+ * Each depth is a lattice WATER_SPECK_PER_M cells to the metre, drifting slowly, where one cell
+ * in WATER_SPECK_DENSITY holds a mote at a random place in it -- the same hash the foam's value
+ * noise stands on. A mote is lit by the key as it arrives at that depth and seen through the
+ * water between it and the eye; one lies past the bed only if the sight line is longer than its
+ * depth. Every length is in METRES and converted, so a world at another scale gets the same
+ * motes.
+ *
+ * `footprint` is the pixel's world width, which widens a mote into what the pixel can hold and
+ * fades the lattice out before its cells shrink under a pixel -- the screen derivative taken at
+ * the top of main, not here, since this is called after the shoreline's discard.
+ */
+vec3 waterSpeckLight(vec3 rayWorld, float path, float footprint) {
+    float down = max(-rayWorld.y, 0.05);
+    float cellsPerUnit = WATER_SPECK_PER_M / waterUnitsPerMetre;
+    float cellFoot = footprint * cellsPerUnit;
+    vec3 sum = vec3(0.0);
+    for (int k = 0; k < 3; k++) {
+        float depth = (0.22 + 0.38 * float(k)) * waterUnitsPerMetre;
+        float along = depth / down;
+        vec2 q = (WorldPos.xz + rayWorld.xz * along) * cellsPerUnit +
+                 vec2(time * (0.05 + 0.03 * float(k)), time * 0.02) + float(k) * 17.0;
+        vec2 id = floor(q);
+        vec2 f = fract(q) - 0.5;
+        float r = waterHash21(id + float(k) * 13.1);
+        vec2 at = vec2(waterHash21(id + 3.1), waterHash21(id + 7.7)) - 0.5;
+        float mote = smoothstep(0.10 + cellFoot, 0.0, length(f - at * 0.6)) *
+                     step(1.0 - WATER_SPECK_DENSITY, r) * step(along, path);
+        float resolved = smoothstep(1.2, 0.3, cellFoot);
+        // A few are dark grains rather than bright motes, as Clearwater has them.
+        vec3 tint = mix(vec3(0.9, 1.0, 0.95), vec3(0.4, 0.35, 0.3),
+                        step(1.0 - WATER_SPECK_DARK, r));
+        sum += mote * resolved * tint * exp(-waterAbsorption * along) *
+               waterDownwellKey(sunDir, depth);
+    }
+    return sum * sunRadiance * WATER_SPECK_GAIN;
 }
 
 /*
@@ -1382,6 +1435,10 @@ void main() {
                                            skyIncident * skyColumn) +
                      waterScatterGlow * (1.0 - T);
     vec3 body = bed * T + inscatter * preExposure;
+    if (waterSpecks == 1 && sunAvailable == 1 && !seenFromBelow)
+        body += waterSpeckLight(normalize(mat3(transpose(view)) * refrDir), path,
+                                max(length(surfDdx), length(surfDdy))) *
+                preExposure;
 
     /*
      * Reflected share: the split-sum environment lobe, weighted by the exact Fresnel of the

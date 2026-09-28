@@ -353,6 +353,9 @@ typedef struct Water {
     // neighbourhood stands in for its height (spec 13.4): proud points shift the pattern and gaps
     // take less of the key.
     bool caustic_relief;
+    // false = clear water carries nothing in it. On, sunlit motes at three depths along the
+    // sight line give the column a volume (spec 13.4).
+    bool specks;
     // false = no analytic sun lobe, which is every frame before spec 11.42. Live on both
     // wave models: its width comes from the slope the surface stopped resolving, and the
     // Gerstner path reports that from its dropped octaves.
