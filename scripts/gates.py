@@ -8807,6 +8807,23 @@ WATER_CAUSTIC_CALM_TOL = 5e-3
 WATER_CAUSTIC_MEAN_TOL = {"gerstner": 0.02, "spectral": 0.03, "dome": 0.05}
 # The probe's per-channel means, red to blue: one trace each (spec 13.4).
 WATER_CAUSTIC_CHANNELS = ("mean_r", "mean_g", "mean_b")
+# water-caustic-spectrum (spec 13.4). The bare caustic pattern at the reference plane's depth
+# (--water-caustic-debug 3), on the fixture's spectral sea under the 13.3 close framing, once
+# spread from one trace and once traced in 16 bands of the spectrum.
+#
+# What is held is what the spread gets RIGHT: every channel carries the same light as the
+# traced spectrum's, and about as much colour. Not where the colour sits: at a few metres the
+# ripples' light has crossed itself before the floor, the colour lands as specks that move with
+# every wavelength, and 8 traced bands against 16 still disagree by 0.7 of the signal -- no
+# single trace reaches that, and spec 13.4 chose not to pay for more.
+WATER_CAUSTIC_SPECTRUM_FLAGS = WATER_PIN + ["--water-waves", "fft", "--cam-eye", "-5,1.5,5",
+                                            "--cam-target", "-5,-1,1", "--tonemap", "linear",
+                                            "--no-bloom", "--water-caustic-debug", "3"]
+WATER_CAUSTIC_SPECTRUM_BOX = (0.31, 0.54, 0.59, 0.83)
+WATER_CAUSTIC_SPECTRUM_MEAN_TOL = 0.02  # relative, per channel
+# The spread's colour RMS over the traced spectrum's: measured 1.08 on this sea and 0.91 on a
+# calm one, and 0 with no dispersion at all.
+WATER_CAUSTIC_SPECTRUM_CHROMA = (0.7, 1.4)
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -9315,6 +9332,25 @@ def _water_downwell_depths(on, off, w, h, box, key):
         rows[py] = [-math.log(max(ratios[c], 1e-6) / transmitted) * cost /
                     WATER_DOWNWELL_ABSORB[c] for c in range(3)]
     return rows
+
+
+def _water_chroma_stats(pix, w, h, box):
+    """Mean linear R, G, B over a fractional box, and the RMS of (R - G, B - G) across it.
+
+    The second is how much colour a frame carries, wherever it sits: water-caustic-spectrum
+    holds the caustics' spread to the traced spectrum's amount, not its placement.
+    """
+    x0, y0, x1, y1 = box
+    sums, sq, n = [0.0, 0.0, 0.0], 0.0, 0
+    for py in range(int(y0 * h), int(y1 * h)):
+        for px in range(int(x0 * w), int(x1 * w)):
+            r, g, b = _linear_rgb(pix, w, h, px, py)
+            sums[0] += r
+            sums[1] += g
+            sums[2] += b
+            sq += (r - g) ** 2 + (b - g) ** 2
+            n += 1
+    return [s / n for s in sums], math.sqrt(sq / (2 * n))
 
 
 def _water_box_luma(pix, w, h, box):
@@ -10066,6 +10102,10 @@ def run_water_gate(workdir):
                       calm sea and averages 1 over Gerstner, spectral and a baked dome bed,
                       which a pixel count cannot tell from a brighten-only effect -- in each
                       colour channel on its own, since each is traced at its own index.
+      water-caustic-spectrum the caustics' dispersion (spec 13.4): one trace spread across the
+                      spectrum carries the same light per channel as 16 traced bands, and about
+                      as much colour. Not where the colour sits, which no single trace matches
+                      at these depths -- see WATER_CAUSTIC_SPECTRUM_FLAGS.
       water-downwell  a submerged surface is lit through the water (spec 13.4): with and
                       without --no-water-downwell, dry pixels are identical, and every
                       submerged row's per-channel ratio is (1 - F) exp(-sigma d / cos)
@@ -10798,6 +10838,34 @@ def run_water_gate(workdir):
               f"depth: {', '.join(skipped) or 'none'}")
         if not ok:
             failures.append("water-caustic-energy")
+
+    # The caustics' colour (spec 13.4): the spread of one trace against 16 traced bands.
+    spec_spread = os.path.join(workdir, "water_caustic_spread.ppm")
+    spec_bands = os.path.join(workdir, "water_caustic_bands.ppm")
+    err = render(scene, spec_spread, WATER_CAUSTIC_SPECTRUM_FLAGS)
+    if not err:
+        err = render(scene, spec_bands,
+                     WATER_CAUSTIC_SPECTRUM_FLAGS + ["--water-caustic-bands", "16"])
+    if err:
+        print(f"  water-caustic-spectrum ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-caustic-spectrum")
+    else:
+        sw, sh, spread_pix = _read_ppm(spec_spread)
+        _, _, bands_pix = _read_ppm(spec_bands)
+        spread_means, spread_chroma = _water_chroma_stats(spread_pix, sw, sh,
+                                                          WATER_CAUSTIC_SPECTRUM_BOX)
+        bands_means, bands_chroma = _water_chroma_stats(bands_pix, sw, sh,
+                                                        WATER_CAUSTIC_SPECTRUM_BOX)
+        mean_off = max(abs(a / max(b, 1e-6) - 1.0) for a, b in zip(spread_means, bands_means))
+        chroma_ratio = spread_chroma / max(bands_chroma, 1e-6)
+        lo, hi = WATER_CAUSTIC_SPECTRUM_CHROMA
+        ok = mean_off <= WATER_CAUSTIC_SPECTRUM_MEAN_TOL and lo <= chroma_ratio <= hi
+        print(f"  water-caustic-spectrum {'PASS' if ok else 'FAIL'}  channels within "
+              f"{mean_off:.4f} of the traced spectrum's (want <={WATER_CAUSTIC_SPECTRUM_MEAN_TOL}); "
+              f"colour {spread_chroma:.4f} against {bands_chroma:.4f} = {chroma_ratio:.2f}x "
+              f"(want {lo}..{hi})")
+        if not ok:
+            failures.append("water-caustic-spectrum")
 
     # A submerged surface is lit through the water (spec 13.4). Dry pixels must not move at
     # all, each submerged row's three channels must imply one depth, and that depth must not
