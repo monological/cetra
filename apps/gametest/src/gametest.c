@@ -1566,37 +1566,20 @@ static float grotto_depth(const Scene* scene, const vec3 p) {
 }
 
 /*
- * A character's wake (spec 13.4): a ripple pressed in where it stands every pace it moves while
- * the surface crosses its capsule -- wading or floating alike, since both break the surface and
- * the animation's own band says nothing about the water. By distance rather than by time, so a
- * character standing still leaves the water to settle.
+ * A character's wake (spec 13.4), laid every pace it moves while the surface crosses its capsule
+ * -- wading or floating alike, since both break the surface and the animation's own band says
+ * nothing about the water.
  */
-typedef struct {
-    float last[2];
-    bool placed;
-} GrottoWake;
+#define GROTTO_WAKE_PACE (0.5f * PLAYER_SCALE) // world units between ripples
 
-#define GROTTO_WAKE_PACE     (0.5f * PLAYER_SCALE) // world units between ripples
-#define GROTTO_WAKE_RADIUS_M 0.12f
-#define GROTTO_WAKE_DEPTH_M  0.03f
+static WaterWake player_wake, chaser_wake;
 
-static GrottoWake player_wake, chaser_wake;
-
-static void grotto_wake(const Scene* scene, const vec3 p, GrottoWake* w) {
+static void grotto_wake(const Scene* scene, const vec3 p, WaterWake* w) {
+    if (!scene)
+        return;
     const float depth = grotto_depth(scene, p);
     const float reach = PLAYER_RADIUS + PLAYER_HALF_H;
-    if (!scene || !scene->water || depth <= -reach || depth >= reach) {
-        w->placed = false;
-        return;
-    }
-    const float dx = p[0] - w->last[0];
-    const float dz = p[2] - w->last[1];
-    if (w->placed && dx * dx + dz * dz < GROTTO_WAKE_PACE * GROTTO_WAKE_PACE)
-        return;
-    water_ripple_drop(scene->water, p[0], p[2], GROTTO_WAKE_RADIUS_M, GROTTO_WAKE_DEPTH_M);
-    w->last[0] = p[0];
-    w->last[1] = p[2];
-    w->placed = true;
+    water_wake(scene->water, w, p[0], p[2], GROTTO_WAKE_PACE, depth > -reach && depth < reach);
 }
 
 // Whether a capsule centre is under the surface, at the plane itself. The

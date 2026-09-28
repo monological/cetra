@@ -27,9 +27,10 @@ void free_glare(Glare* glare);
 /*
  * Star everything in `hdr_tex` brighter than `threshold` (working space, the same units the
  * tonemap reads), for a frame `frame_w` by `frame_h`. Returns the glare image to add, which
- * covers the whole frame, or 0 when the pass could not run. `probe` prints the light the source
- * held against the light the glare carries, per channel -- the pattern is normalised, so the two
- * differ only by what spills past the frame's edge.
+ * covers the whole frame, or 0 when the pass could not run -- its targets could not be made, which
+ * a later frame of the same shape would not change. `probe` prints the light the source held
+ * against the light the glare carries, per channel -- the pattern is normalised, so the two differ
+ * only by what spills past the frame's edge.
  */
 GLuint glare_run(Glare* glare, GLuint hdr_tex, int frame_w, int frame_h, float threshold,
                  GLuint quad_vao, bool probe);

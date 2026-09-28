@@ -22,9 +22,7 @@ uniform int glareHoriz;  // 1 = along x
 uniform int glareHalf;   // half the axis length
 uniform float glareSign;
 
-vec2 cmul(vec2 a, vec2 b) {
-    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
+#include "complex.glsl"
 
 void main() {
     ivec2 id = ivec2(gl_FragCoord.xy);
@@ -38,6 +36,6 @@ void main() {
     vec4 x1 = texelFetch(glareSrc, b, 0);
     float angle = glareSign * 3.14159265359 * float(k) / float(glareSpan);
     vec2 w = vec2(cos(angle), sin(angle));
-    vec4 wx = vec4(cmul(w, x1.xy), cmul(w, x1.zw));
+    vec4 wx = vec4(complexMul(w, x1.xy), complexMul(w, x1.zw));
     Stage = odd ? x0 - wx : x0 + wx;
 }

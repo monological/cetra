@@ -123,12 +123,12 @@ _Static_assert(WATER_TOUCH_UNIT != WATER_CASCADE_UNIT && WATER_TOUCH_UNIT != WAT
                    WATER_TOUCH_UNIT != TEXUNIT_SCENE_COLOR &&
                    WATER_TOUCH_UNIT != SKY_CLOUD_SHADOW_UNIT,
                "the touch unit collides with one water already binds");
-// The touch simulation's square: texels a side, metres a side, steps a second, and how many
-// drops one step presses in. 7 m at 256 is 2.7 cm a texel, Clearwater's.
-#define WATER_TOUCH_RES       256
-#define WATER_TOUCH_SIZE_M    7.0f
-#define WATER_TOUCH_STEP_HZ   60.0f
-#define WATER_TOUCH_MAX_DROPS 4
+// The touch simulation's square: texels a side and how many drops one step presses in, shared
+// with the step shader; then metres a side and steps a second. 7 m at 256 is 2.7 cm a texel,
+// Clearwater's.
+#include "../shaders/include/water_touch_constants.glsl"
+#define WATER_TOUCH_SIZE_M  7.0f
+#define WATER_TOUCH_STEP_HZ 60.0f
 // Steps with nothing new pressed in before the simulation stops running; about fifteen seconds,
 // by which Clearwater's damping has left nothing a pixel could show.
 #define WATER_TOUCH_CALM_STEPS 900
@@ -640,7 +640,7 @@ typedef struct Water {
      * which the surface needs to look them up; their sizes and the depth they were traced to are
      * fixed (water_caustic_constants.glsl). Engine-owned.
      */
-    GLuint caustic_tex; // RGBA16F 2D array, one layer per level, mipped
+    GLuint caustic_tex; // 2D array, one layer per level, mipped; R16F, RGBA16F when banded
     GLuint caustic_fbo[WATER_CAUSTIC_LEVELS];
     // (G+1)^2 RGBA32F: each lattice corner's landed and source point. One for every level, which
     // trace and draw in turn.
@@ -652,6 +652,11 @@ typedef struct Water {
     bool caustic_drawn[WATER_CAUSTIC_LEVELS]; // false = skipped this frame, its window too deep
     bool caustic_ready;  // rendered this frame; false = the surface reads no caustics
     bool caustic_failed; // no program or target; never retried
+    // The spectrum the lookup spreads the one trace across (spec 13.4): each band's index against
+    // 550 nm's and its share of R, G and B. Constant, set at creation.
+    float caustic_spectrum_dn[WATER_CAUSTIC_SPECTRAL_TAPS];
+    vec3 caustic_spectrum_w[WATER_CAUSTIC_SPECTRAL_TAPS];
+    int caustic_target_bands; // the band count the target was made for; its format follows it
 
     /*
      * Touch ripples (spec 13.4): a height field over WATER_TOUCH_SIZE_M round where the camera
@@ -688,11 +693,11 @@ typedef struct Water {
 void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine);
 
 /*
- * Publish the scalars shore.glsl stands on to a program that is not the water, so a lit
- * surface can ask where the swash has been. Costs no sampler unit: the run-up is a closed
- * form over these seven floats and nothing else.
+ * Publish the sea to a program that is not the water: where the swash has been (shore.glsl)
+ * and what the water does to light reaching a surface under it (water_light.glsl). Scalars
+ * only, no sampler unit. A NULL water publishes the off state.
  */
-void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program);
+void water_bind_sea(const Water* water, const struct Scene* scene, ShaderProgram* program);
 
 /*
  * The sea state the run-up runs at, for a caller that wants to evaluate the CPU twin.
@@ -808,6 +813,26 @@ void water_caustic_probe(const Water* water);
  * the square round the view is dropped too, since nothing there is simulated.
  */
 void water_ripple_drop(Water* water, float x, float z, float radius_m, float depth_m);
+
+/*
+ * A body's wake (spec 13.4): what water_wake remembers between calls, one per body. Zero is a
+ * wake that has laid nothing yet.
+ */
+typedef struct WaterWake {
+    float last[2]; // world xz of the last ripple
+    bool placed;   // a ripple has been laid since the body last left the water
+} WaterWake;
+
+// The ripple a wake lays: a hand's width across and a few centimetres deep.
+#define WATER_WAKE_RADIUS_M 0.12f
+#define WATER_WAKE_DEPTH_M  0.03f
+
+/*
+ * Lay a body's wake: a ripple at world (x, z) every `pace` world units it moves while
+ * `in_water`, and the first as soon as it enters. By distance rather than by time, so a body
+ * standing still leaves the water to settle. Out of the water, or with no sea, the wake resets.
+ */
+void water_wake(Water* water, WaterWake* wake, float x, float z, float pace, bool in_water);
 
 /*
  * Read the touch ripples back and print their deepest point and how far it lies from `(x, z)`,

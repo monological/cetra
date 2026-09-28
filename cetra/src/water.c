@@ -497,6 +497,53 @@ static void _water_build_twiddle(int size, int log2_size, float* twiddle) {
     }
 }
 
+/*
+ * The visible spectrum in `count` equal bands over 400-700 nm (spec 13.4): for each, how far
+ * water's index there sits from its index at 550 nm, and how much of each of R, G and B it
+ * carries, normalised so every channel's weights sum to 1 -- so each channel of a pattern that
+ * averages 1 still does.
+ *
+ * The index is Cauchy's form, n = A + B / lambda^2, through water's measured 1.3371 at 486.1 nm
+ * and 1.3311 at 656.3 nm, which puts 404.7 nm at 1.3430 against a measured 1.3428. Offsets from
+ * 550 nm rather than absolute values, so a scene that authors another IOR keeps its own.
+ *
+ * The colour is the CIE 1931 observer by Wyman, Sloan and Shirley's multi-lobe fit, taken to
+ * linear sRGB and clamped at zero: the sRGB primaries cannot reach the spectral colours between
+ * blue and green, whose negative red is dropped rather than subtracted. An equal-energy source,
+ * since the key's own colour is applied where the pattern is used.
+ */
+static float _water_cie_lobe(float x, float mu, float s_lo, float s_hi) {
+    const float t = (x - mu) / (x < mu ? s_lo : s_hi);
+    return expf(-0.5f * t * t);
+}
+
+static void _water_caustic_spectrum(int count, float* dn, vec3* weight) {
+    const float cauchy_b =
+        (1.3371f - 1.3311f) / (1.0f / (0.4861f * 0.4861f) - 1.0f / (0.6563f * 0.6563f));
+    vec3 sum = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < count; i++) {
+        const float nm = 400.0f + ((float)i + 0.5f) * 300.0f / (float)count;
+        const float um = nm / 1000.0f;
+        dn[i] = cauchy_b * (1.0f / (um * um) - 1.0f / (0.55f * 0.55f));
+        const float x = 1.056f * _water_cie_lobe(nm, 599.8f, 37.9f, 31.0f) +
+                        0.362f * _water_cie_lobe(nm, 442.0f, 16.0f, 26.7f) -
+                        0.065f * _water_cie_lobe(nm, 501.1f, 20.4f, 26.2f);
+        const float y = 0.821f * _water_cie_lobe(nm, 568.8f, 46.9f, 40.5f) +
+                        0.286f * _water_cie_lobe(nm, 530.9f, 16.3f, 31.1f);
+        const float z = 1.217f * _water_cie_lobe(nm, 437.0f, 11.8f, 36.0f) +
+                        0.681f * _water_cie_lobe(nm, 459.0f, 26.0f, 13.8f);
+        weight[i][0] = fmaxf(0.0f, 3.2406f * x - 1.5372f * y - 0.4986f * z);
+        weight[i][1] = fmaxf(0.0f, -0.9689f * x + 1.8758f * y + 0.0415f * z);
+        weight[i][2] = fmaxf(0.0f, 0.0557f * x - 0.2040f * y + 1.0570f * z);
+        glm_vec3_add(sum, weight[i], sum);
+    }
+    // A channel no band reaches -- blue, with a single band at 550 nm -- takes every band
+    // equally rather than a division by zero.
+    for (int i = 0; i < count; i++)
+        for (int c = 0; c < 3; c++)
+            weight[i][c] = sum[c] > 0.0f ? weight[i][c] / sum[c] : 1.0f / (float)count;
+}
+
 Water* create_water(void) {
     Water* water = calloc(1, sizeof(Water));
     if (!water) {
@@ -547,6 +594,12 @@ Water* create_water(void) {
     water->downwell = true;
     water->caustic_relief = true;
     water->specks = true;
+    // Constant: what the caustic lookup spreads its one trace across, worked out once.
+    _water_caustic_spectrum(WATER_CAUSTIC_SPECTRAL_TAPS, water->caustic_spectrum_dn,
+                            water->caustic_spectrum_w);
+    // Nothing has touched the water yet, so the ripple simulation starts at rest and runs no
+    // pass until something does.
+    water->touch_calm_steps = WATER_TOUCH_CALM_STEPS;
     water->foam_history = true;
     // Slow enough that a crest leaves a visible trail behind it and fast enough that open
     // water is not permanently white. The reference this is ported from calls the same
@@ -1564,7 +1617,7 @@ static void _water_set_units_per_metre(UniformManager* u, const struct Scene* sc
  * dispersion runs g against world-unit k and is not corrected here, since that is the train's
  * look and this is the surf's.
  *
- * Its own function because the SAND reads it too, through water_bind_shore. Two copies of
+ * Its own function because the SAND reads it too, through water_bind_sea. Two copies of
  * this would let the beach dry against a different sea from the one running up it.
  */
 static void _water_surf_state(const Water* water, float units_per_metre, bool fft, float* out_hs,
@@ -1781,9 +1834,10 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene,
 }
 
 /*
- * The scalars shore.glsl and water_light.glsl stand on, published in ONE place.
+ * What the sea tells every program that stands in or beside it, published in ONE place: the
+ * scalars shore.glsl's swash stands on, and water_light.glsl's light through the water.
  *
- * Both the water's own program and every lit surface read that file, and each used to publish
+ * Both the water's own program and every lit surface read those files, and each used to publish
  * the full set from its own site two hundred lines apart -- so renaming or adding a shore
  * uniform meant finding both, and missing one put the sand and the sea on different data. That
  * is the drift this whole split exists to prevent, reintroduced a layer down.
@@ -1791,8 +1845,8 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene,
  * `gate_wetness` is the only thing that differed and is now the parameter it always was: a lit
  * surface reads the surf height through the global wetness switch, and the sea never does.
  */
-static void _water_publish_shore(const Water* water, const struct Scene* scene, UniformManager* u,
-                                 bool gate_wetness) {
+static void _water_publish_sea(const Water* water, const struct Scene* scene, UniformManager* u,
+                               bool gate_wetness) {
     const float upm = _water_units_per_metre(scene);
     const bool fft = water->wave_model == WATER_WAVES_FFT;
     float hs, omega;
@@ -1807,27 +1861,60 @@ static void _water_publish_shore(const Water* water, const struct Scene* scene, 
     // What the sea does to the light passing down through it (spec 13.4): a surface under
     // the level is lit through the water, and the water judges its caustics against that.
     // Only while the sea is drawn -- switched off, there is nothing over the surface.
-    uniform_set_int(u, "waterPresent", water_active(water) && water->downwell ? 1 : 0);
+    uniform_set_int(u, "waterDownwell", water_active(water) && water->downwell ? 1 : 0);
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
 }
 
+// The Fresnel reflectance of a dielectric at incidence cosine `cosi` into index `n`, the same
+// form as fresnelDielectric in fresnel.glsl.
+static float _water_fresnel_dielectric(float cosi, float n) {
+    cosi = fminf(fmaxf(cosi, 0.0f), 1.0f);
+    const float sint2 = (1.0f - cosi * cosi) / (n * n);
+    if (sint2 >= 1.0f)
+        return 1.0f;
+    const float cost = sqrtf(1.0f - sint2);
+    const float rs = (cosi - n * cost) / (cosi + n * cost);
+    const float rp = (n * cosi - cost) / (n * cosi + cost);
+    return 0.5f * (rs * rs + rp * rp);
+}
+
 /*
- * The scalars shore.glsl stands on, for a program that is NOT the water.
- *
- * Everything the run-up needs and nothing else -- no cascades, no bed, no samplers at all,
- * which is the property that lets a lit surface ask where the swash is. Called per program
- * switch alongside the cloud shadow, so a material that opted into wetness gets the same sea
- * the water surface is drawing at the same instant.
- *
- * With no water in the scene nothing calls this, and waterSurfHeight and waterPresent stay at
- * their zero defaults, which the shader reads as dry land -- which is why no fallback
- * publication is needed here.
+ * The key's beam once through a flat surface (spec 13.4): its direction in the water, the cosine
+ * of that from vertical, and the share the surface lets through. Constant over the frame, so the
+ * surface reads it rather than refracting the key again in every fragment and every helper.
  */
-void water_bind_shore(const Water* water, const struct Scene* scene, ShaderProgram* program) {
-    if (!water || !program || !program->uniforms)
+static void _water_publish_key_in_water(const Water* water, const vec3 to_key, UniformManager* u) {
+    vec3 travel, in_water;
+    glm_vec3_negate_to((float*)to_key, travel);
+    glm_vec3_refract(travel, (vec3){0.0f, 1.0f, 0.0f}, 1.0f / water->ior, in_water);
+    uniform_set_vec3(u, "keyInWater", in_water);
+    // Floored for a key at the horizon, where nothing reaches the water anyway.
+    uniform_set_float(u, "keyCosT", fmaxf(-in_water[1], 0.05f));
+    uniform_set_float(u, "keyTransmit", 1.0f - _water_fresnel_dielectric(to_key[1], water->ior));
+}
+
+/*
+ * The sea, for a program that is NOT the water: where its swash runs and what it does to the
+ * light reaching what lies under it.
+ *
+ * Scalars only -- no cascades, no bed, no samplers at all, which is the property that lets a lit
+ * surface ask. Called per program switch alongside the cloud shadow, so a material gets the same
+ * sea the water surface is drawing at the same instant.
+ *
+ * With no sea, the off state is PUBLISHED rather than left to the uniforms' defaults: programs
+ * are cached across scenes, and one that last saw a sea would otherwise go on wetting and
+ * darkening everything below a level that no longer exists.
+ */
+void water_bind_sea(const Water* water, const struct Scene* scene, ShaderProgram* program) {
+    if (!program || !program->uniforms)
         return;
-    _water_publish_shore(water, scene, program->uniforms, true);
+    if (!water) {
+        uniform_set_float(program->uniforms, "waterSurfHeight", 0.0f);
+        uniform_set_int(program->uniforms, "waterDownwell", 0);
+        return;
+    }
+    _water_publish_sea(water, scene, program->uniforms, true);
 }
 
 static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft) {
@@ -1894,7 +1981,7 @@ static void _water_bind_ocean(const Water* water, const struct Scene* scene,
                               const struct Engine* engine, UniformManager* u, bool fft) {
     // shore.glsl's scalars, through the one publisher. Ungated: the surface itself is drawn
     // whatever the wetness switch says, which is the only thing the two callers differ on.
-    _water_publish_shore(water, scene, u, false);
+    _water_publish_sea(water, scene, u, false);
     // The projector's origin, and the origin every cascade lookup is taken relative to.
     uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);
     // The cascades' resolution, which is how a cell size becomes a mip level.
@@ -2360,9 +2447,47 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
 }
 
 /*
+ * The concentration target: one layer per window level, each with its own framebuffer, mipped --
+ * the surface's lookup takes a coarser level the shallower the bed it lands on.
+ *
+ * ONE channel for the one trace the surface spreads across the spectrum, and four only when the
+ * caustics are traced band by band (spec 13.4), since that is the only time the channels differ:
+ * a quarter of the memory, the blend and the mip chain on every frame that does not ask for the
+ * reference. Remade when the band count crosses between the two.
+ */
+static bool _water_caustic_target(Water* water) {
+    const bool colour = water->caustic_bands > 0;
+    if (water->caustic_fbo[0] && colour == (water->caustic_target_bands > 0))
+        return true;
+    gl_delete_texture(&water->caustic_tex);
+    glDeleteFramebuffers(WATER_CAUSTIC_LEVELS, water->caustic_fbo);
+    memset(water->caustic_fbo, 0, sizeof(water->caustic_fbo));
+
+    const int res = WATER_CAUSTIC_TARGET_RES;
+    glActiveTexture(GL_TEXTURE0);
+    water->caustic_tex = create_texture_2d_array_float(
+        res, res, WATER_CAUSTIC_LEVELS, colour ? GL_RGBA16F : GL_R16F, colour ? GL_RGBA : GL_RED);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_tex);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    bool complete = true;
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        glGenFramebuffers(1, &water->caustic_fbo[level]);
+        glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo[level]);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, water->caustic_tex, 0,
+                                  level);
+        complete = complete && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    }
+    water->caustic_target_bands = water->caustic_bands;
+    return complete;
+}
+
+/*
  * The two caustics programs, when the pass should run: caustics are on and nothing has failed.
- * The first call also makes the targets and the lattice; a missing program or an incomplete
- * target is reported once and latches the pass off.
+ * The first call also makes the trace target and the lattice, and every call keeps the
+ * concentration target the right shape; a missing program or an incomplete target is reported
+ * once and latches the pass off.
  */
 static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProgram** land,
                                  ShaderProgram** draw) {
@@ -2375,7 +2500,12 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
         water->caustic_failed = true;
         return false;
     }
-    if (water->caustic_fbo[0])
+    if (!_water_caustic_target(water)) {
+        log_error("Water: caustic target incomplete; caustics disabled");
+        water->caustic_failed = true;
+        return false;
+    }
+    if (water->caustic_land_fbo)
         return true;
 
     // One texel per lattice corner, fp32 because the next pass differences neighbours a cell
@@ -2386,35 +2516,13 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
     const GLenum land_status =
         _water_attach_colour(&water->caustic_land_fbo, water->caustic_land_tex);
 
-    // One concentration per colour channel per texel (spec 13.4), mipped: the surface's lookup
-    // takes a coarser level the shallower the bed it lands on. A layer per window level, each
-    // with its own framebuffer. Alpha is carried for a renderable format and never written.
-    const int res = WATER_CAUSTIC_TARGET_RES;
-    glActiveTexture(GL_TEXTURE0);
-    water->caustic_tex =
-        create_texture_2d_array_float(res, res, WATER_CAUSTIC_LEVELS, GL_RGBA16F, GL_RGBA);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, water->caustic_tex);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-    GLenum status = GL_FRAMEBUFFER_COMPLETE;
-    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
-        glGenFramebuffers(1, &water->caustic_fbo[level]);
-        glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo[level]);
-        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, water->caustic_tex, 0,
-                                  level);
-        const GLenum level_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (level_status != GL_FRAMEBUFFER_COMPLETE)
-            status = level_status;
-    }
-
     // The lattice has no attributes -- a vertex is its index -- so the VAO holds nothing but
     // the index buffer that stitches (N+1)^2 vertices into 2 N^2 triangles.
     const int n = WATER_CAUSTIC_GRID_N;
     const size_t count = (size_t)n * n * 6;
     GLuint* idx = malloc(count * sizeof(GLuint));
-    if (!idx || status != GL_FRAMEBUFFER_COMPLETE || land_status != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Water: caustic target %s; caustics disabled",
+    if (!idx || land_status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Water: caustic trace target %s; caustics disabled",
                   idx ? "incomplete" : "index allocation failed");
         free(idx);
         water->caustic_failed = true;
@@ -2442,53 +2550,6 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
     glBindVertexArray(0);
     free(idx);
     return true;
-}
-
-/*
- * The visible spectrum in `count` equal bands over 400-700 nm (spec 13.4): for each, how far
- * water's index there sits from its index at 550 nm, and how much of each of R, G and B it
- * carries, normalised so every channel's weights sum to 1 -- so each channel of a pattern that
- * averages 1 still does.
- *
- * The index is Cauchy's form, n = A + B / lambda^2, through water's measured 1.3371 at 486.1 nm
- * and 1.3311 at 656.3 nm, which puts 404.7 nm at 1.3430 against a measured 1.3428. Offsets from
- * 550 nm rather than absolute values, so a scene that authors another IOR keeps its own.
- *
- * The colour is the CIE 1931 observer by Wyman, Sloan and Shirley's multi-lobe fit, taken to
- * linear sRGB and clamped at zero: the sRGB primaries cannot reach the spectral colours between
- * blue and green, whose negative red is dropped rather than subtracted. An equal-energy source,
- * since the key's own colour is applied where the pattern is used.
- */
-static float _water_cie_lobe(float x, float mu, float s_lo, float s_hi) {
-    const float t = (x - mu) / (x < mu ? s_lo : s_hi);
-    return expf(-0.5f * t * t);
-}
-
-static void _water_caustic_spectrum(int count, float* dn, vec3* weight) {
-    const float cauchy_b =
-        (1.3371f - 1.3311f) / (1.0f / (0.4861f * 0.4861f) - 1.0f / (0.6563f * 0.6563f));
-    vec3 sum = {0.0f, 0.0f, 0.0f};
-    for (int i = 0; i < count; i++) {
-        const float nm = 400.0f + ((float)i + 0.5f) * 300.0f / (float)count;
-        const float um = nm / 1000.0f;
-        dn[i] = cauchy_b * (1.0f / (um * um) - 1.0f / (0.55f * 0.55f));
-        const float x = 1.056f * _water_cie_lobe(nm, 599.8f, 37.9f, 31.0f) +
-                        0.362f * _water_cie_lobe(nm, 442.0f, 16.0f, 26.7f) -
-                        0.065f * _water_cie_lobe(nm, 501.1f, 20.4f, 26.2f);
-        const float y = 0.821f * _water_cie_lobe(nm, 568.8f, 46.9f, 40.5f) +
-                        0.286f * _water_cie_lobe(nm, 530.9f, 16.3f, 31.1f);
-        const float z = 1.217f * _water_cie_lobe(nm, 437.0f, 11.8f, 36.0f) +
-                        0.681f * _water_cie_lobe(nm, 459.0f, 26.0f, 13.8f);
-        weight[i][0] = fmaxf(0.0f, 3.2406f * x - 1.5372f * y - 0.4986f * z);
-        weight[i][1] = fmaxf(0.0f, -0.9689f * x + 1.8758f * y + 0.0415f * z);
-        weight[i][2] = fmaxf(0.0f, 0.0557f * x - 0.2040f * y + 1.0570f * z);
-        glm_vec3_add(sum, weight[i], sum);
-    }
-    // A channel no band reaches -- blue, with a single band at 550 nm -- takes every band
-    // equally rather than a division by zero.
-    for (int i = 0; i < count; i++)
-        for (int c = 0; c < 3; c++)
-            weight[i][c] = sum[c] > 0.0f ? weight[i][c] / sum[c] : 1.0f / (float)count;
 }
 
 /*
@@ -2520,6 +2581,28 @@ static float _water_caustic_floor(const Water* water, float x, float z, float pl
 }
 
 /*
+ * Where a window over the water should centre, in world xz: along the camera's forward ray to
+ * where it meets the still plane, with the horizontal reach clamped to [near, far]. Looking level,
+ * up, or from below the surface there is no meeting point, and the window sits `near` ahead.
+ * The caustics and the touch ripples both place their windows by it, each with its own reach.
+ */
+static void _water_view_window(const Water* water, const struct Engine* engine, float near,
+                               float far, float centre_xz[2]) {
+    const float* eye = engine->camera->position;
+    const float fwd[3] = {-engine->view_matrix[0][2], -engine->view_matrix[1][2],
+                          -engine->view_matrix[2][2]};
+    const float flat_len = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+    float reach = near;
+    if (fwd[1] < -1.0e-4f && eye[1] > water->level) {
+        const float along = (water->level - eye[1]) / fwd[1];
+        reach = fminf(fmaxf(along * flat_len, near), far);
+    }
+    const float ahead = flat_len > 1.0e-4f ? reach / flat_len : 0.0f;
+    centre_xz[0] = eye[0] + fwd[0] * ahead;
+    centre_xz[1] = eye[2] + fwd[2] * ahead;
+}
+
+/*
  * One level of the caustics (spec 13.3): place its window, trace its lattice, draw it into its
  * layer. The level-invariant half of the trace's inputs is the caller's, bound once.
  */
@@ -2543,18 +2626,9 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
      * so the lattice and the target land on the same points from one frame to the next and the
      * pattern does not swim.
      */
-    const float* eye = engine->camera->position;
-    const float fwd[3] = {-engine->view_matrix[0][2], -engine->view_matrix[1][2],
-                          -engine->view_matrix[2][2]};
-    const float flat_len = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
-    float reach_h = 0.25f * size;
-    if (fwd[1] < -1.0e-4f && eye[1] > water->level) {
-        const float along = (water->level - eye[1]) / fwd[1];
-        reach_h = fminf(fmaxf(along * flat_len, 0.25f * size), 4.0f * size);
-    }
-    const float ahead = flat_len > 1.0e-4f ? reach_h / flat_len : 0.0f;
     const float snap = (float)WATER_CAUSTIC_SNAP_CELLS * cell;
-    const float centre_xz[2] = {eye[0] + fwd[0] * ahead, eye[2] + fwd[2] * ahead};
+    float centre_xz[2];
+    _water_view_window(water, engine, 0.25f * size, 4.0f * size, centre_xz);
     float origin[2];
     for (int k = 0; k < 2; k++)
         origin[k] = floorf((centre_xz[k] - 0.5f * size) / snap) * snap;
@@ -2609,15 +2683,22 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
     vec3 colour[WATER_CAUSTIC_REFERENCE_SAMPLES] = {{1.0f, 1.0f, 1.0f}};
     if (bands > 0)
         _water_caustic_spectrum(samples, dn, colour);
+    // What does not change from band to band.
+    glUseProgram(land->id);
+    UniformManager* lu = land->uniforms;
+    uniform_set_vec2(lu, "causticGridOrigin", grid);
+    uniform_set_float(lu, "causticCell", cell);
+    uniform_set_vec2(lu, "causticTargetOrigin", origin);
+    glUseProgram(draw->id);
+    uniform_set_int(draw->uniforms, "causticLanded", 0);
+    uniform_set_float(draw->uniforms, "causticTargetM",
+                      WATER_CAUSTIC_TARGET_M / _water_caustic_level_scale(level));
+    glBlendFunc(GL_CONSTANT_COLOR, GL_ONE);
     for (int s = 0; s < samples; s++) {
         // Every lattice corner traced once, into one texel each.
         glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_land_fbo);
         glViewport(0, 0, n + 1, n + 1);
         glUseProgram(land->id);
-        UniformManager* lu = land->uniforms;
-        uniform_set_vec2(lu, "causticGridOrigin", grid);
-        uniform_set_float(lu, "causticCell", cell);
-        uniform_set_vec2(lu, "causticTargetOrigin", origin);
         uniform_set_float(lu, "waterIor", water->ior + dn[s]);
         draw_fullscreen_quad(_water_quad(water));
         /*
@@ -2638,13 +2719,9 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
         glViewport(0, 0, res, res);
         glEnable(GL_BLEND);
         glBlendColor(colour[s][0], colour[s][1], colour[s][2], 0.0f);
-        glBlendFunc(GL_CONSTANT_COLOR, GL_ONE);
         glUseProgram(draw->id);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
-        uniform_set_int(draw->uniforms, "causticLanded", 0);
-        uniform_set_float(draw->uniforms, "causticTargetM",
-                          WATER_CAUSTIC_TARGET_M / _water_caustic_level_scale(level));
         glBindVertexArray(water->caustic_vao);
         glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
@@ -2744,19 +2821,41 @@ void water_ripple_drop(Water* water, float x, float z, float radius_m, float dep
     d[3] = depth_m;
 }
 
+void water_wake(Water* water, WaterWake* wake, float x, float z, float pace, bool in_water) {
+    if (!wake)
+        return;
+    if (!in_water || !water_active(water)) {
+        wake->placed = false;
+        return;
+    }
+    const float dx = x - wake->last[0];
+    const float dz = z - wake->last[1];
+    if (wake->placed && dx * dx + dz * dz < pace * pace)
+        return;
+    water_ripple_drop(water, x, z, WATER_WAKE_RADIUS_M, WATER_WAKE_DEPTH_M);
+    wake->last[0] = x;
+    wake->last[1] = z;
+    wake->placed = true;
+}
+
 /*
  * Step the touch ripples up to the frame's clock (spec 13.4). Runs inside the caller's pass
- * bracket, before anything that reads the water's shading normal -- the probe and the caustics
- * both do.
+ * bracket, before the caustics, whose trace reads the shading normal the ripples tilt. The
+ * surface query does not read them: it answers the waves, and the ripples' height is added only
+ * where the surface is drawn.
  *
  * FIXED steps of 1 / WATER_TOUCH_STEP_HZ from the frame clock, not one per frame: Clearwater's
  * constants are per step, so stepping per frame would run its rings at the frame rate's speed,
  * and a headless run -- a fixed clock per frame -- takes the same steps every time. A frame that
- * falls further behind than a few steps skips ahead rather than paying for all of them.
+ * falls further behind than a few steps skips ahead rather than paying for all of them. A drop
+ * pressed in on a frame with no step due takes the next step early, and the clock is advanced by
+ * it, so pressing does not speed the rings up.
  *
  * The square sits ahead of the camera where the view meets the water, no further than a third of
- * itself, so a body in the frame below the eye is inside it; it moves in whole texels, and the
- * first step reads the field shifted by as many so the rings stay where they are in the world.
+ * itself, so a body in the frame below the eye is inside it; it moves in whole texels, and only
+ * when a step is taken -- that step reads the field shifted by as many, so the rings stay where
+ * they are in the world. A frame with no step leaves the field, its square and its slopes as the
+ * last step made them.
  * After WATER_TOUCH_CALM_STEPS with nothing pressed in, it stops stepping and the surface stops
  * reading it -- there is nothing left in it a pixel could show.
  */
@@ -2766,43 +2865,43 @@ static void _water_run_touch(Water* water, const struct Scene* scene, const stru
     const float size = WATER_TOUCH_SIZE_M * upm;
     const float texel = size / (float)WATER_TOUCH_RES;
 
-    const float* eye = engine->camera->position;
-    const float fwd[3] = {-engine->view_matrix[0][2], -engine->view_matrix[1][2],
-                          -engine->view_matrix[2][2]};
-    const float flat_len = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
-    float reach = 0.0f;
-    if (fwd[1] < -1.0e-4f && eye[1] > water->level)
-        reach = fminf((water->level - eye[1]) / fwd[1] * flat_len, size / 3.0f);
-    const float ahead = flat_len > 1.0e-4f ? reach / flat_len : 0.0f;
-    float origin[2];
-    int shift[2] = {0, 0};
-    for (int k = 0; k < 2; k++) {
-        const float centre = eye[k * 2] + fwd[k * 2] * ahead;
-        origin[k] = floorf((centre - 0.5f * size) / texel) * texel;
-        if (water->touch_placed)
-            shift[k] = (int)lroundf((origin[k] - water->touch_origin[k]) / texel);
-    }
-
     const double now = engine->render_time;
     if (!water->touch_placed)
         water->touch_clock = now;
+    // Negative after an early step, until the clock catches up with it.
     int steps = (int)floor((now - water->touch_clock) * WATER_TOUCH_STEP_HZ);
-    water->touch_clock += (double)steps / WATER_TOUCH_STEP_HZ;
     if (steps > 4) {
         steps = 4;
         water->touch_clock = now;
+    } else if (steps > 0) {
+        water->touch_clock += (double)steps / WATER_TOUCH_STEP_HZ;
     }
-    if (water->touch_drop_count > 0 && steps == 0)
-        steps = 1;
-    if (water->touch_drop_count > 0)
+    if (water->touch_drop_count > 0) {
         water->touch_calm_steps = 0;
-    water->touch_placed = true;
-    water->touch_origin[0] = origin[0];
-    water->touch_origin[1] = origin[1];
+        if (steps <= 0) {
+            steps = 1;
+            water->touch_clock += 1.0 / WATER_TOUCH_STEP_HZ;
+        }
+    }
     if (water->touch_calm_steps >= WATER_TOUCH_CALM_STEPS) {
         water->touch_ready = false;
         return;
     }
+    if (steps <= 0)
+        return;
+
+    float centre_xz[2];
+    _water_view_window(water, engine, 0.0f, size / 3.0f, centre_xz);
+    float origin[2];
+    int shift[2] = {0, 0};
+    for (int k = 0; k < 2; k++) {
+        origin[k] = floorf((centre_xz[k] - 0.5f * size) / texel) * texel;
+        if (water->touch_placed)
+            shift[k] = (int)lroundf((origin[k] - water->touch_origin[k]) / texel);
+    }
+    water->touch_placed = true;
+    water->touch_origin[0] = origin[0];
+    water->touch_origin[1] = origin[1];
 
     glViewport(0, 0, WATER_TOUCH_RES, WATER_TOUCH_RES);
     for (int s = 0; s < steps; s++) {
@@ -3012,6 +3111,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         glm_vec3_scale((float*)sun->color, sun->intensity, sun_radiance);
     }
     uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
+    _water_publish_key_in_water(water, sun_dir, u);
     uniform_set_int(u, "sunAvailable", sun ? 1 : 0);
     uniform_set_vec3(u, "sunRadiance", (const float*)&sun_radiance);
 
@@ -3055,15 +3155,12 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // already holds it and is read as it stands.
     uniform_set_int(u, "causticReference", water->caustic_bands > 0 ? 1 : 0);
     uniform_set_int(u, "causticRelief", water->caustic_relief ? 1 : 0);
-    float spectrum_dn[WATER_CAUSTIC_SPECTRAL_TAPS];
-    vec3 spectrum_w[WATER_CAUSTIC_SPECTRAL_TAPS];
-    _water_caustic_spectrum(WATER_CAUSTIC_SPECTRAL_TAPS, spectrum_dn, spectrum_w);
     for (int i = 0; i < WATER_CAUSTIC_SPECTRAL_TAPS; i++) {
         char name[40];
         snprintf(name, sizeof(name), "causticSpectrumDn[%d]", i);
-        uniform_set_float(u, name, spectrum_dn[i]);
+        uniform_set_float(u, name, water->caustic_spectrum_dn[i]);
         snprintf(name, sizeof(name), "causticSpectrumWeight[%d]", i);
-        uniform_set_vec3(u, name, spectrum_w[i]);
+        uniform_set_vec3(u, name, water->caustic_spectrum_w[i]);
     }
     /*
      * The sky's irradiance on a horizontal bed, for the caustics' key share: pi times the sky
@@ -3295,8 +3392,10 @@ void water_caustic_probe(const Water* water) {
     }
     const int res = WATER_CAUSTIC_TARGET_RES;
     const size_t layer = (size_t)res * res * 4;
-    // The whole array, which is what one glGetTexImage of it returns: RGBA, one channel per
-    // colour's trace and an alpha nothing writes.
+    // The whole array, which is what one glGetTexImage of it returns, read as RGBA whatever it
+    // stores. One channel carries the pattern unless the caustics were traced band by band, when
+    // each of three carries its own colour's share (spec 13.4).
+    const int channels = water->caustic_target_bands > 0 ? 3 : 1;
     float* px = malloc(layer * WATER_CAUSTIC_LEVELS * sizeof(float));
     if (!px) {
         printf("water-caustic-probe available=0 reason=alloc\n");
@@ -3319,27 +3418,25 @@ void water_caustic_probe(const Water* water) {
             printf("water-caustic-probe available=1 level=%d drawn=0\n", level);
             continue;
         }
-        // Each channel is its own trace (spec 13.4) and conserves light on its own, so each is
-        // reported; the extremes are over all three.
+        // Every channel carried conserves light on its own; the mean and the extremes are over
+        // all of them.
         const float* target = px + layer * (size_t)level;
-        double sum[3] = {0.0, 0.0, 0.0};
+        double sum = 0.0;
         float mn = 1.0e30f, mx = 0.0f;
         long count = 0;
         for (int y = lo; y < hi; y++) {
             for (int x = lo; x < hi; x++) {
                 const float* texel = target + ((size_t)y * res + x) * 4;
-                for (int ch = 0; ch < 3; ch++) {
-                    sum[ch] += texel[ch];
+                for (int ch = 0; ch < channels; ch++) {
+                    sum += texel[ch];
                     mn = fminf(mn, texel[ch]);
                     mx = fmaxf(mx, texel[ch]);
                 }
-                count++;
+                count += channels;
             }
         }
-        printf("water-caustic-probe available=1 level=%d drawn=1 mean_r=%.6f mean_g=%.6f "
-               "mean_b=%.6f min=%.6f max=%.4f\n",
-               level, sum[0] / (double)count, sum[1] / (double)count, sum[2] / (double)count,
-               (double)mn, (double)mx);
+        printf("water-caustic-probe available=1 level=%d drawn=1 mean=%.6f min=%.6f max=%.4f\n",
+               level, sum / (double)count, (double)mn, (double)mx);
     }
     free(px);
 }

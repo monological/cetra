@@ -5,12 +5,13 @@
  *
  * The frame, shrunk into the corner of the transform's grid, keeping only what exceeds the
  * threshold -- the sun and its glints, which is what a lens's aperture diffracts visibly. Four
- * bilinear taps cover the downscale. Scaled down by GLARE_SOURCE_SCALE on the way in and back up
+ * bilinear taps cover the downscale. Scaled down by `glareSourceScale` on the way in, and back up
  * on the way out, so a glint of thousands keeps its fraction bits through the transform's many
  * additions.
  *
- * Packed as the transform wants it: `glareChannels` 0 puts red and green in as two complex
- * signals, real parts only, 1 puts blue in alone.
+ * Packed as the transform wants it: red and green as the real and imaginary parts of ONE complex
+ * signal in .xy, blue alone in .zw. Both inputs are real, so the multiply can separate red's
+ * spectrum from green's again, and one transform carries all three channels.
  */
 
 in vec2 TexCoords;
@@ -18,9 +19,7 @@ out vec4 Packed;
 
 uniform sampler2D hdrTex;
 uniform float glareThreshold;
-uniform int glareChannels;
-
-const float GLARE_SOURCE_SCALE = 1.0e-3;
+uniform float glareSourceScale;
 
 void main() {
     vec2 px = 1.0 / vec2(textureSize(hdrTex, 0));
@@ -33,6 +32,6 @@ void main() {
     c *= 0.25;
     float l = max(max(c.r, c.g), c.b);
     c *= max(l - glareThreshold, 0.0) / max(l, 1.0e-4);
-    c = min(c, vec3(80000.0)) * GLARE_SOURCE_SCALE;
-    Packed = glareChannels == 0 ? vec4(c.r, 0.0, c.g, 0.0) : vec4(c.b, 0.0, 0.0, 0.0);
+    c = min(c, vec3(80000.0)) * glareSourceScale;
+    Packed = vec4(c.r, c.g, c.b, 0.0);
 }

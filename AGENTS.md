@@ -655,7 +655,7 @@ entry there before changing anything marked with a dagger.
   better halves across**, each behind its own switch and arm:
   - **Light reaching a submerged surface** (`include/water_light.glsl`, read by `pbr_frag` too):
     every directional scaled by `1 - F` and Beer-Lambert along its REFRACTED path, the ambient
-    by the sky's diffuse weakening, published through `_water_publish_shore`. `water_fixture`'s
+    by the sky's diffuse weakening, published through `_water_publish_sea`. `water_fixture`'s
     bed is EMISSIVE and cannot see this; `water_downwell_fixture.cscn` is the lit one.
   - **In-scatter** as the column integral of a sun weakened with depth, Henyey-Greenstein at
     `Water.scatter_g`, normalised against the NADIR -- an eye above water only sees the back

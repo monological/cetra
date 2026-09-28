@@ -3763,15 +3763,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
         // The aperture's star (spec 13.4), from the frame itself rather than the bloom pyramid:
         // it is a convolution of the light as it is, and the pyramid is already blurred.
+        // A glare that cannot be built or run is latched off here, the one place that asks.
         GLuint glare_tex = 0;
         if (fx->glare_enabled && fx->glare_strength > 0.0f && !fx->glare_failed) {
-            if (!fx->glare && !(fx->glare = create_glare()))
-                fx->glare_failed = true;
+            if (!fx->glare)
+                fx->glare = create_glare();
             if (fx->glare) {
                 profiler_scope_begin(fx->profiler, "glare");
                 glare_tex = glare_run(fx->glare, scene_tex, fx->out_width, fx->out_height,
                                       fx->glare_threshold, fx->quad_vao, fx->glare_probe);
                 profiler_scope_end(fx->profiler);
+            }
+            if (!glare_tex) {
+                log_error("Glare: unavailable; glare disabled");
+                fx->glare_failed = true;
             }
         }
 

@@ -16,13 +16,15 @@
  * Every drop queued since the last step is pressed in as a cosine dimple.
  */
 
+#include "water_touch_constants.glsl"
+
 in vec2 TexCoords;
 out vec4 Field;
 
 uniform sampler2D touchPrev;
 uniform vec2 touchShift; // the window's move this step, in uv
 uniform int touchDropCount;
-uniform vec4 touchDrops[4]; // .xy centre in uv, .z radius in uv, .w depth in world units
+uniform vec4 touchDrops[WATER_TOUCH_MAX_DROPS]; // .xy centre in uv, .z radius in uv, .w depth in world units
 
 void main() {
     vec2 px = 1.0 / vec2(textureSize(touchPrev, 0));

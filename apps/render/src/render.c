@@ -1188,8 +1188,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             char* end = NULL;
             long bands = strtol(argv[i], &end, 10);
-            if (end == argv[i] || *end != '\0' || bands < 0 || bands > 16) {
-                fprintf(stderr, "Error: --water-caustic-bands wants 0 to 16, got '%s'\n", argv[i]);
+            if (end == argv[i] || *end != '\0' || bands < 0 ||
+                bands > WATER_CAUSTIC_REFERENCE_SAMPLES) {
+                fprintf(stderr, "Error: --water-caustic-bands wants 0 to %d, got '%s'\n",
+                        WATER_CAUSTIC_REFERENCE_SAMPLES, argv[i]);
                 return -1;
             }
             args->water_caustic_bands = (int)bands;

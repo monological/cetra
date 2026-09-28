@@ -71,6 +71,12 @@ uniform sampler2D sceneDepthTex;
 uniform int sceneDepthAvailable;
 
 uniform vec3 sunDir; // toward the sun, world space
+// The key's beam once through a flat surface, worked out on the CPU once a frame (spec 13.4):
+// its direction in the water, the cosine of that from vertical, and the share of it the
+// surface lets through.
+uniform vec3 keyInWater;
+uniform float keyCosT;
+uniform float keyTransmit;
 uniform int sunAvailable;
 // Scene radiance, NOT pre-exposed, with the atmosphere's transmittance already folded into
 // it by the sky. Multiplied by preExposure where it is used; view.glsl is the authority.
@@ -111,7 +117,8 @@ uniform int causticDrawn[WATER_CAUSTIC_LEVELS];   // 0 = skipped this frame; the
 // The sky's irradiance on a horizontal bed, absolute, for the key light's share of what lights it.
 uniform vec3 causticSkyIrradiance;
 // 0 = shade normally; 1 = what the caustics multiplied the bed by; 2 = the raw caustics target
-// drawn on the surface. Both half grey where nothing is concentrated.
+// drawn on the surface; 3 = that target spread across the spectrum and the key's disc at the
+// reference plane's depth. All half grey where nothing is concentrated.
 uniform int waterCausticDebug;
 // The spectrum the one caustic trace is spread across (spec 13.4): each band's index against
 // 550 nm's and its share of R, G and B. 1 = the target already holds it, traced band by band.
@@ -360,27 +367,30 @@ const float WATER_CAUSTIC_EDGE_FADE = 0.2;
 const float WATER_CAUSTIC_KERNEL_M = 0.5;
 
 const float PI = 3.14159265359;
+#include "phase.glsl"
+
 /*
  * The bed's relief for the caustics (spec 13.4). The two screen mips its brightness is compared
  * across -- a stone against the ground round it; how far, in metres, a point one neighbourhood's
  * brightness above its surroundings is taken to stand, which is about a pebble; and how much of
- * the key a gap at the darkest keeps. Clearwater's, whose own relief shading reaches 0.83 of the
+ * the key a gap at the darkest keeps. Clearwater's, whose own relief shading reaches 0.89 of the
  * key at the bottom of a gap: its ambient occlusion, 0.55 to 1, through a quarter of the key.
  */
+const float WATER_RELIEF_FINE_LOD = 1.0;
+const float WATER_RELIEF_COARSE_LOD = 4.0;
+const float WATER_RELIEF_HEIGHT_M = 0.02;
+const float WATER_RELIEF_GAP_SHADE = 0.8875;
+
 /*
  * The specks (spec 13.4), Clearwater's numbers: a lattice of 48 cells to the metre, one cell in
- * 83 holding a mote and a third of those a dark grain, each returning 2.2% of the key's radiance
- * -- in the same units the bed's lit radiance is, where a pale bed returns about a tenth.
+ * 83 holding a mote and two thirds of those a dark grain, each returning 2.2% of the key's
+ * radiance -- in the same units the bed's lit radiance is, where a pale bed returns about a tenth.
  */
 const float WATER_SPECK_PER_M = 48.0;
 const float WATER_SPECK_DENSITY = 0.012;
 const float WATER_SPECK_DARK = 0.008;
 const float WATER_SPECK_GAIN = 0.022;
 
-const float WATER_RELIEF_FINE_LOD = 1.0;
-const float WATER_RELIEF_COARSE_LOD = 4.0;
-const float WATER_RELIEF_HEIGHT_M = 0.02;
-const float WATER_RELIEF_GAP_SHADE = 0.8875;
 // The key's angular radius, radians: the sun's and the moon's are both about a quarter of a
 // degree, so one number serves whichever is the key.
 const float WATER_KEY_DISC_RADIUS = 0.00465;
@@ -391,9 +401,24 @@ const float WATER_SCATTER_FLOOR = 0.02;
 // Henyey-Greenstein at the cosine between the sun's refracted beam and the scattered ray,
 // with the isotropic floor added.
 float waterScatterPhase(float cosS) {
-    float g = waterScatterG;
-    float denom = max(1.0 + g * g - 2.0 * g * cosS, 1.0e-4);
-    return (1.0 - g * g) / (4.0 * PI * denom * sqrt(denom)) + WATER_SCATTER_FLOOR;
+    return phaseHG(cosS, waterScatterG) + WATER_SCATTER_FLOOR;
+}
+
+// What of the key's irradiance reaches `depth` below the surface: waterDownwellKey for the one
+// light whose refracted direction and transmission the CPU hands over each frame.
+vec3 waterKeyDownwell(float depth) {
+    return depth > 0.0 ? keyTransmit * exp(-waterAbsorption * depth / keyCosT) : vec3(1.0);
+}
+
+/*
+ * How far the spectrum spreads the caustic light, and how wide the key's disc smears it, by the
+ * time it has come `depth` down the key's refracted path. The beam lands depth tan theta_t along
+ * the key's horizontal travel, which moves with the index as -depth sin theta_t / (n cos^3
+ * theta_t); the disc's half-degree narrows by n going in and spreads over the slanted path.
+ */
+void waterCausticSpread(float depth, out vec2 spread, out float discR) {
+    spread = keyInWater.xz * (-depth / (waterIor * keyCosT * keyCosT * keyCosT));
+    discR = depth / keyCosT * WATER_KEY_DISC_RADIUS / waterIor;
 }
 
 /*
@@ -480,6 +505,9 @@ vec3 waterSpeckLight(vec3 rayWorld, float path, float footprint) {
     float down = max(-rayWorld.y, 0.05);
     float cellsPerUnit = WATER_SPECK_PER_M / waterUnitsPerMetre;
     float cellFoot = footprint * cellsPerUnit;
+    // Past a cell and a fifth to the pixel the fade below is exactly zero: most of a sea.
+    if (cellFoot >= 1.2)
+        return vec3(0.0);
     vec3 sum = vec3(0.0);
     for (int k = 0; k < 3; k++) {
         float depth = (0.22 + 0.38 * float(k)) * waterUnitsPerMetre;
@@ -496,8 +524,7 @@ vec3 waterSpeckLight(vec3 rayWorld, float path, float footprint) {
         // A few are dark grains rather than bright motes, as Clearwater has them.
         vec3 tint = mix(vec3(0.9, 1.0, 0.95), vec3(0.4, 0.35, 0.3),
                         step(1.0 - WATER_SPECK_DARK, r));
-        sum += mote * resolved * tint * exp(-waterAbsorption * along) *
-               waterDownwellKey(sunDir, depth);
+        sum += mote * resolved * tint * exp(-waterAbsorption * along) * waterKeyDownwell(depth);
     }
     return sum * sunRadiance * WATER_SPECK_GAIN;
 }
@@ -670,7 +697,7 @@ vec3 waterCausticSpectral(vec2 at, int level, vec2 gx, vec2 gy, vec2 spread, flo
     vec3 sum = vec3(0.0);
     for (int i = 0; i < WATER_CAUSTIC_SPECTRAL_TAPS; i++) {
         vec2 cuv = waterCausticUv(at + spread * causticSpectrumDn[i], level);
-        sum += causticSpectrumWeight[i] * textureGrad(causticTex, vec3(cuv, float(level)), gx, gy).g;
+        sum += causticSpectrumWeight[i] * textureGrad(causticTex, vec3(cuv, float(level)), gx, gy).r;
     }
     return sum;
 }
@@ -689,11 +716,11 @@ vec3 waterCausticSpectral(vec2 at, int level, vec2 gx, vec2 gy, vec2 spread, flo
  * The path from the SURFACE, not from whatever casts the shadow, since the occluder is unknown here:
  * an upper bound on the blur, and exact for a shadow cast by something at the surface.
  */
-float waterCausticKeyVisibility(vec3 pos, vec3 keyInWater, float column) {
+float waterCausticKeyVisibility(vec3 pos, float column) {
     float slopeVar =
         cascadeSlopeVar[0] + cascadeSlopeVar[1] + cascadeSlopeVar[2] + rippleSlopeVarLod[0];
     float spread = (1.0 - 1.0 / waterIor) * sqrt(max(slopeVar, 0.0));
-    float radius = spread * column / max(-keyInWater.y, 0.1);
+    float radius = spread * column / keyCosT;
     // Across the key as the map sees it, so every tap sits at the receiver's own light-space depth.
     vec3 a = normalize(cross(sunDir, abs(sunDir.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
                                                           : vec3(1.0, 0.0, 0.0)));
@@ -760,8 +787,7 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
      * column is the traced depth.
      */
     float planeY = waterLevel - WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre;
-    vec3 keyInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
-    float keyDown = min(keyInWater.y, -1.0e-4);
+    float keyDown = -keyCosT;
     float floorY = planeY;
     bool onBed = false;
     for (int i = 0; i < 2; i++) {
@@ -787,7 +813,7 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
         float fine = dot(textureLod(sceneColorTex, refrUV, WATER_RELIEF_FINE_LOD).rgb, luma);
         float coarse = dot(textureLod(sceneColorTex, refrUV, WATER_RELIEF_COARSE_LOD).rgb, luma);
         relief = clamp(fine / max(coarse, 1.0e-6), 0.0, 2.0);
-        at += keyInWater.xz / -keyDown * (relief - 1.0) * WATER_RELIEF_HEIGHT_M *
+        at += keyInWater.xz / keyCosT * (relief - 1.0) * WATER_RELIEF_HEIGHT_M *
               waterUnitsPerMetre;
     }
     // Full light from the neighbourhood's own brightness up, so a featureless bed is untouched.
@@ -813,27 +839,35 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
      */
     float fineKeep = 1.0 - smoothstep(WATER_CAUSTIC_FINE_FULL_M * waterUnitsPerMetre,
                                       WATER_CAUSTIC_FINE_OFF_M * waterUnitsPerMetre, traced);
-    /*
-     * Where the spectrum and the key's disc put the light at THIS point's depth (spec 13.4), not
-     * at the depth the pattern was traced to: both are properties of the path the light takes to
-     * get here, and a point half a metre down gets half a metre's worth of each.
-     *
-     * The refracted beam leaves the surface at theta_t from vertical, so it lands depth tan
-     * theta_t along the key's horizontal travel, and that moves with the index as
-     * -depth sin theta_t / (n cos^3 theta_t) per unit n. The disc's half-degree narrows by n
-     * going into the water and spreads over the slanted path, depth / cos theta_t long.
-     */
-    float cosT = max(-keyInWater.y, 0.05);
-    vec2 spread = keyInWater.xz * (-column / (waterIor * cosT * cosT * cosT));
-    float discR = column / cosT * WATER_KEY_DISC_RADIUS / waterIor;
-    vec3 c = vec3(1.0);
+    // Where the spectrum and the key's disc put the light at THIS point's depth (spec 13.4), not
+    // at the depth the pattern was traced to: both are properties of the path the light takes to
+    // get here, and a point half a metre down gets half a metre's worth of each.
+    vec2 spread;
+    float discR;
+    waterCausticSpread(column, spread, discR);
+    // Each level's weight first, so a level is only read where it shows: not where its weight is
+    // nothing, and not where a finer one covers it completely. The gradients are taken before any
+    // of that branches, in uniform flow.
+    float weights[WATER_CAUSTIC_LEVELS];
+    vec2 grads[WATER_CAUSTIC_LEVELS * 2];
     for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
         vec2 cuv = waterCausticUv(at, level);
         float keep = level == 0 ? 1.0 : fineKeep * float(causticDrawn[level]);
-        vec2 gx = dFdx(cuv) * 2.0 * defocus;
-        vec2 gy = dFdy(cuv) * 2.0 * defocus;
-        c = mix(c, waterCausticSpectral(at, level, gx, gy, spread, discR),
-                waterCausticEdge(cuv) * keep);
+        weights[level] = waterCausticEdge(cuv) * keep;
+        grads[level * 2] = dFdx(cuv) * 2.0 * defocus;
+        grads[level * 2 + 1] = dFdy(cuv) * 2.0 * defocus;
+    }
+    vec3 c = vec3(1.0);
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
+        // Hidden entirely when any finer level stands over it at full weight.
+        bool covered = false;
+        for (int finer = level + 1; finer < WATER_CAUSTIC_LEVELS; finer++)
+            covered = covered || weights[finer] >= 1.0;
+        if (weights[level] > 0.0 && !covered)
+            c = mix(c,
+                    waterCausticSpectral(at, level, grads[level * 2], grads[level * 2 + 1], spread,
+                                         discR),
+                    weights[level]);
     }
     if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
         return vec3(1.0);
@@ -859,12 +893,11 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
      * one light's direction, so its shear only describes the light it was built for -- and water
      * picks the brightest directional, which is the moon at night.
      */
-    float keyVis = waterCausticKeyVisibility(pos, keyInWater, column) *
-                   cloudSunForSlot(pos, sunShadowSlot);
+    float keyVis = waterCausticKeyVisibility(pos, column) * cloudSunForSlot(pos, sunShadowSlot);
     // Both halves as they arrive at the bed, which is how pbr_frag lit it: the key's longer
     // refracted path weakens it faster than the sky with depth, so its share shrinks too.
     float bedDepth = waterDepthBelow(pos.y);
-    vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis * waterDownwellKey(sunDir, bedDepth);
+    vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis * waterKeyDownwell(bedDepth);
     vec3 skyIrr = causticSkyIrradiance * waterDownwellSky(bedDepth);
     vec3 keyShare = keyIrr / max(keyIrr + skyIrr, vec3(1.0e-6));
     // The key's share scaled by the pattern and by how much of the key a gap sees; the sky's
@@ -901,24 +934,26 @@ void main() {
      */
     float removedMss = FilteredMss;
     float foam = 0.0;
+    // The short cascade shades but never displaces. Carried into the mesh it
+    // would alias into a ridged texture; carried into the NORMAL alone it
+    // shimmers as the waves recede past a pixel. So its slope is faded out
+    // with distance and its remaining energy moved into roughness instead --
+    // the geometry-to-BRDF transition, which is what keeps the horizon stable
+    // without throwing the simulated detail away.
+    // The distance the band fades over: from the eye under perspective. An
+    // orthographic camera has no eye distance and its minification is set
+    // by the view height alone, so that height stands in -- what a
+    // perspective camera frames from about that far with a natural lens.
+    float fadeDist = projectionIsOrtho() ? 2.0 / projection[1][1] : length(ViewPos);
+    float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
+                                  WATER_SHORT_FAR_M * waterUnitsPerMetre, fadeDist);
+    // The pixel's world footprint, from the smooth parameterisation's derivatives for the
+    // reason those are taken above.
+    float footprint = max(length(surfDdx), length(surfDdy));
+    // On both models: the touch ripples tilt a Gerstner sea too (spec 13.4), and with none
+    // simulated its mesh normal comes back unchanged.
+    N = oceanShadingNormal(N, WorldPos.xz, fade, footprint);
     if (waveModel == 1) {
-        // The short cascade shades but never displaces. Carried into the mesh it
-        // would alias into a ridged texture; carried into the NORMAL alone it
-        // shimmers as the waves recede past a pixel. So its slope is faded out
-        // with distance and its remaining energy moved into roughness instead --
-        // the geometry-to-BRDF transition, which is what keeps the horizon stable
-        // without throwing the simulated detail away.
-        // The distance the band fades over: from the eye under perspective. An
-        // orthographic camera has no eye distance and its minification is set
-        // by the view height alone, so that height stands in -- what a
-        // perspective camera frames from about that far with a natural lens.
-        float fadeDist = projectionIsOrtho() ? 2.0 / projection[1][1] : length(ViewPos);
-        float fade = 1.0 - smoothstep(WATER_SHORT_NEAR_M * waterUnitsPerMetre,
-                                      WATER_SHORT_FAR_M * waterUnitsPerMetre, fadeDist);
-        // The pixel's world footprint, from the smooth parameterisation's derivatives for the
-        // reason those are taken above.
-        float footprint = max(length(surfDdx), length(surfDdy));
-        N = oceanShadingNormal(N, WorldPos.xz, fade, footprint);
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a
         // handover rather than two channels dimming together. Driving it from the faded
         // slope instead sent distant water toward the calm value in both, so the horizon
@@ -1418,27 +1453,23 @@ void main() {
     vec3 sunColumn = 1.0 - T;
     vec3 skyColumn = 1.0 - T;
     float sunPhase = 1.0;
+    vec3 rayWorld = normalize(mat3(transpose(view)) * refrDir);
     if (!seenFromBelow) {
-        vec3 rayWorld = normalize(mat3(transpose(view)) * refrDir);
-        vec3 sunInWater = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
-        float cosT = max(-sunInWater.y, 0.05);
-        float kSun = abs(rayWorld.y) / cosT;
+        float kSun = abs(rayWorld.y) / keyCosT;
         float kSky = abs(rayWorld.y) * WATER_SKY_DOWNWELL_PER_EXTINCTION;
         sunColumn = (1.0 - exp(-waterAbsorption * path * (1.0 + kSun))) / (1.0 + kSun);
         skyColumn = (1.0 - exp(-waterAbsorption * path * (1.0 + kSky))) / (1.0 + kSky);
         // Straight down the ray back to the eye is +y, so the nadir's angle is the beam's own.
-        sunPhase = waterScatterPhase(dot(sunInWater, -rayWorld)) /
-                   waterScatterPhase(sunInWater.y);
-        sunIncident *= 1.0 - fresnelDielectric(max(sunDir.y, 0.0), waterIor);
+        sunPhase = waterScatterPhase(dot(keyInWater, -rayWorld)) /
+                   waterScatterPhase(keyInWater.y);
+        sunIncident *= keyTransmit;
     }
     vec3 inscatter = waterScatterAlbedo * (sunIncident * sunPhase * sunColumn +
                                            skyIncident * skyColumn) +
                      waterScatterGlow * (1.0 - T);
     vec3 body = bed * T + inscatter * preExposure;
     if (waterSpecks == 1 && sunAvailable == 1 && !seenFromBelow)
-        body += waterSpeckLight(normalize(mat3(transpose(view)) * refrDir), path,
-                                max(length(surfDdx), length(surfDdy))) *
-                preExposure;
+        body += waterSpeckLight(rayWorld, path, footprint) * preExposure;
 
     /*
      * Reflected share: the split-sum environment lobe, weighted by the exact Fresnel of the
@@ -1705,11 +1736,9 @@ void main() {
     // meaningful where no bed is baked. Sampled at every level whatever the branch, for the
     // gradients.
     if (waterCausticDebug == 3) {
-        vec3 keyDown = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
-        float cosT = max(-keyDown.y, 0.05);
-        float depth = WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre;
-        vec2 spread = keyDown.xz * (-depth / (waterIor * cosT * cosT * cosT));
-        float discR = depth / cosT * WATER_KEY_DISC_RADIUS / waterIor;
+        vec2 spread;
+        float discR;
+        waterCausticSpread(WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre, spread, discR);
         vec3 c = vec3(0.0);
         for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
             vec2 cuv = waterCausticUv(WorldPos.xz, level);

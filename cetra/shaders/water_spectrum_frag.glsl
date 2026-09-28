@@ -22,9 +22,7 @@ uniform sampler2D initialSpectrum; // h0(k) in .xy, conj(h0(-k)) in .zw
 uniform sampler2D waveData;        // kx, 1/|k|, kz, omega
 uniform float time;
 
-vec2 complexMul(vec2 a, vec2 b) {
-    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
+#include "complex.glsl"
 
 void main() {
     ivec2 coord = ivec2(gl_FragCoord.xy);
