@@ -1964,6 +1964,14 @@ static int _create_default_shaders_for_engine(Engine* engine) {
     if (water_caustic_program) {
         engine_add_program(engine, water_caustic_program);
     }
+    ShaderProgram* water_touch_program = create_water_touch_program();
+    if (water_touch_program) {
+        engine_add_program(engine, water_touch_program);
+    }
+    ShaderProgram* water_touch_normals_program = create_water_touch_normals_program();
+    if (water_touch_normals_program) {
+        engine_add_program(engine, water_touch_normals_program);
+    }
 
     // GI probe volume. Lives on the engine rather than on PostFX -- despite
     // being a fullscreen pass -- because the volume is a Scene citizen and the

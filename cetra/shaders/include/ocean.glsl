@@ -111,6 +111,27 @@ uniform float rippleLength; // the band's tile, world units
 uniform float rippleSlopeVarLod[WATER_RIPPLE_LODS];
 
 /*
+ * Touch ripples (spec 13.4): the rings a body leaves in the water, simulated on a square that
+ * follows the view. .r height, .gb its two slopes, all world units; `touchOrigin` the square's
+ * corner in world xz. On either wave model -- a ring is not part of either sea.
+ */
+uniform sampler2D touchField;
+uniform vec2 touchOrigin;
+uniform float touchSize;
+uniform int touchAvailable; // 0 = nothing simulated; the water is untouched
+
+// Height and slopes of the touch ripples at a world point, zero outside the square. An explicit
+// level, so the vertex stage can ask too.
+vec3 oceanTouch(vec2 xz) {
+    if (touchAvailable == 0)
+        return vec3(0.0);
+    vec2 uv = (xz - touchOrigin) / touchSize;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return vec3(0.0);
+    return textureLod(touchField, uv, 0.0).rgb;
+}
+
+/*
  * The array's packing, in one place.
  *
  * Every read of a cascade goes through these three, so the layer arithmetic exists once. The
@@ -741,8 +762,11 @@ float oceanRippleRemovedMss(float lod) {
  * reads a whole period across every tile seam.
  */
 vec3 oceanShadingNormal(vec3 meshN, vec2 displacedXZ, float shortKeep, float footprint) {
+    // The touch ripples tilt it on either model (spec 13.4); with none simulated, a Gerstner
+    // sea gets its mesh normal back exactly as it always has.
+    vec2 touch = oceanTouch(displacedXZ).yz;
     if (waveModel != 1)
-        return meshN;
+        return touchAvailable == 0 ? meshN : normalize(meshN + vec3(-touch.x, 0.0, -touch.y));
     // Through the cubic where each is magnified (spec 13.4): the short band always, being read
     // at its full resolution and faded by distance rather than mipped; the ripples until their
     // footprint reaches a texel, handed to the mip chain over the first level so the two reads
@@ -755,8 +779,8 @@ vec3 oceanShadingNormal(vec3 meshN, vec2 displacedXZ, float shortKeep, float foo
     if (rippleLod < 1.0)
         ripple1 = mix(oceanArrayBSpline(rippleFields, rippleUv, 1.0, float(WATER_RIPPLE_RES)),
                       ripple1, rippleLod);
-    vec2 slope = short1.rg * shortKeep + ripple1.rg;
-    return normalize(meshN + vec3(-slope.x, 0.0, -slope.y) * OCEAN_SHORT_SLOPE_GAIN);
+    vec2 slope = (short1.rg * shortKeep + ripple1.rg) * OCEAN_SHORT_SLOPE_GAIN + touch;
+    return normalize(meshN + vec3(-slope.x, 0.0, -slope.y));
 }
 
 /*

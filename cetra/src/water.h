@@ -111,6 +111,28 @@ _Static_assert(WATER_RIPPLE_UNIT != WATER_CASCADE_UNIT && WATER_RIPPLE_UNIT != W
                    WATER_RIPPLE_UNIT != WATER_CAUSTIC_UNIT &&
                    WATER_RIPPLE_UNIT != SKY_CLOUD_SHADOW_UNIT,
                "the ripple unit collides with one water already binds");
+// Touch ripples' height and slopes (spec 13.4). 5 is TEXUNIT_EMISSIVE, a 2D binding point like
+// this one, and water declares nothing else there.
+#define WATER_TOUCH_UNIT 5
+_Static_assert(WATER_TOUCH_UNIT != WATER_CASCADE_UNIT && WATER_TOUCH_UNIT != WATER_PREV_UNIT &&
+                   WATER_TOUCH_UNIT != WATER_DEPTH_UNIT && WATER_TOUCH_UNIT != WATER_BED_UNIT &&
+                   WATER_TOUCH_UNIT != WATER_FOAM_PATTERN_UNIT &&
+                   WATER_TOUCH_UNIT != WATER_SHADOW_UNIT && WATER_TOUCH_UNIT != WATER_FOAM_UNIT &&
+                   WATER_TOUCH_UNIT != WATER_CAUSTIC_UNIT &&
+                   WATER_TOUCH_UNIT != WATER_RIPPLE_UNIT &&
+                   WATER_TOUCH_UNIT != TEXUNIT_SCENE_COLOR &&
+                   WATER_TOUCH_UNIT != SKY_CLOUD_SHADOW_UNIT,
+               "the touch unit collides with one water already binds");
+// The touch simulation's square: texels a side, metres a side, steps a second, and how many
+// drops one step presses in. 7 m at 256 is 2.7 cm a texel, Clearwater's.
+#define WATER_TOUCH_RES       256
+#define WATER_TOUCH_SIZE_M    7.0f
+#define WATER_TOUCH_STEP_HZ   60.0f
+#define WATER_TOUCH_MAX_DROPS 4
+// Steps with nothing new pressed in before the simulation stops running; about fifteen seconds,
+// by which Clearwater's damping has left nothing a pixel could show.
+#define WATER_TOUCH_CALM_STEPS 900
+
 // The cloud deck's sun transmittance is SKY_CLOUD_SHADOW_UNIT (sky.h), shared with the
 // catcher rather than allocated here: it is the sky's resource and neither consumer has a
 // reason to disagree about where it lands.
@@ -618,7 +640,7 @@ typedef struct Water {
      * which the surface needs to look them up; their sizes and the depth they were traced to are
      * fixed (water_caustic_constants.glsl). Engine-owned.
      */
-    GLuint caustic_tex; // R16F 2D array, one layer per level, mipped
+    GLuint caustic_tex; // RGBA16F 2D array, one layer per level, mipped
     GLuint caustic_fbo[WATER_CAUSTIC_LEVELS];
     // (G+1)^2 RGBA32F: each lattice corner's landed and source point. One for every level, which
     // trace and draw in turn.
@@ -630,6 +652,24 @@ typedef struct Water {
     bool caustic_drawn[WATER_CAUSTIC_LEVELS]; // false = skipped this frame, its window too deep
     bool caustic_ready;  // rendered this frame; false = the surface reads no caustics
     bool caustic_failed; // no program or target; never retried
+
+    /*
+     * Touch ripples (spec 13.4): a height field over WATER_TOUCH_SIZE_M round where the camera
+     * looks, stepped at WATER_TOUCH_STEP_HZ from the drops water_ripple_drop queues. Engine-owned.
+     */
+    GLuint touch_tex[2]; // RGBA16F (height, velocity), ping-pong
+    GLuint touch_fbo[2];
+    GLuint touch_slope_tex; // RGBA16F (height, dh/dx, dh/dz)
+    GLuint touch_slope_fbo;
+    int touch_current;     // which of touch_tex holds the latest step
+    float touch_origin[2]; // world xz of the square's corner
+    bool touch_placed;     // the square has been put somewhere yet
+    double touch_clock;    // the clock the last step was taken at
+    int touch_calm_steps;  // steps since the last drop; stops at WATER_TOUCH_CALM_STEPS
+    float touch_drops[WATER_TOUCH_MAX_DROPS][4]; // world x, z, radius, depth, until stepped
+    int touch_drop_count;
+    bool touch_ready;  // there is a field to read; false = the surface reads flat water
+    bool touch_failed; // no program or target; never retried
 
     // Settings. 0 off; 1 draws what the caustics multiplied the bed by, 2 the raw target on the
     // surface, 3 the target through the spectrum and the key's disc at the reference plane's
@@ -760,6 +800,21 @@ void water_fft_probe(const Water* water, struct Engine* engine);
  * rather than something the render loop may call.
  */
 void water_caustic_probe(const Water* water);
+
+/*
+ * Press a ripple into the water at world (x, z) (spec 13.4): a dimple `radius_m` across and
+ * `depth_m` deep, both in metres, pressed in at the next step and carried outward as rings.
+ * Queued, up to WATER_TOUCH_MAX_DROPS a step; more in one step are dropped. Anywhere outside
+ * the square round the view is dropped too, since nothing there is simulated.
+ */
+void water_ripple_drop(Water* water, float x, float z, float radius_m, float depth_m);
+
+/*
+ * Read the touch ripples back and print their deepest point and how far it lies from `(x, z)`,
+ * the world point they were dropped at -- a ring's radius. Stalls the pipeline once; a
+ * diagnostic, not something the render loop may call.
+ */
+void water_touch_probe(const Water* water, const struct Scene* scene, float x, float z);
 
 /*
  * The surface query (spec 13.1): where the water is over a world (x, z), on either wave model,

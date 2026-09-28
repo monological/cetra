@@ -223,6 +223,8 @@ ShaderProgram* create_water_probe_program();
 // Refracted-grid caustics (spec 13.2): where each lattice corner's light lands, then the lattice
 // drawn there additively.
 ShaderProgram* create_water_caustic_land_program();
+ShaderProgram* create_water_touch_program();
+ShaderProgram* create_water_touch_normals_program();
 ShaderProgram* create_water_caustic_program();
 // Resolves the depth cascades into the filterable moment cascades (--msm)
 ShaderProgram* create_msm_resolve_program();
