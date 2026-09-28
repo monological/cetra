@@ -597,6 +597,7 @@ void free_water(Water* water) {
     glDeleteTextures(1, &water->caustic_tex);
     glDeleteFramebuffers(WATER_CAUSTIC_LEVELS, water->caustic_fbo);
     glDeleteTextures(1, &water->caustic_land_tex);
+    glDeleteTextures(1, &water->caustic_land_per_index_tex);
     glDeleteFramebuffers(1, &water->caustic_land_fbo);
     glDeleteVertexArrays(1, &water->caustic_vao);
     glDeleteBuffers(1, &water->caustic_ebo);
@@ -2368,8 +2369,16 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
     // texelFetch, so the helper's filtering is immaterial.
     const int corners = WATER_CAUSTIC_GRID_N + 1;
     water->caustic_land_tex = create_texture_2d_float(corners, corners, GL_RGBA32F, GL_RGBA, NULL);
-    const GLenum land_status =
-        _water_attach_colour(&water->caustic_land_fbo, water->caustic_land_tex);
+    // Beside it, how each corner's landing moves with the index (spec 13.4), written by the same
+    // pass as a second target.
+    water->caustic_land_per_index_tex =
+        create_texture_2d_float(corners, corners, GL_RG32F, GL_RG, NULL);
+    _water_attach_colour(&water->caustic_land_fbo, water->caustic_land_tex);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                           water->caustic_land_per_index_tex, 0);
+    const GLenum land_buffers[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, land_buffers);
+    const GLenum land_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 
     // One concentration per colour channel per texel (spec 13.4), mipped: the surface's lookup
     // takes a coarser level the shallower the bed it lands on. A layer per window level, each
@@ -2628,6 +2637,12 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
         uniform_set_int(draw->uniforms, "causticLanded", 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, water->caustic_land_per_index_tex);
+        uniform_set_int(draw->uniforms, "causticLandedPerIndex", 1);
+        glActiveTexture(GL_TEXTURE0);
+        // One trace carries its own dispersion beside it; a band already is one colour.
+        uniform_set_int(draw->uniforms, "causticPerIndex", bands > 0 ? 0 : 1);
         uniform_set_float(draw->uniforms, "causticTargetM",
                           WATER_CAUSTIC_TARGET_M / _water_caustic_level_scale(level));
         glBindVertexArray(water->caustic_vao);
@@ -3111,9 +3126,12 @@ void water_caustic_probe(const Water* water) {
             printf("water-caustic-probe available=1 level=%d drawn=0\n", level);
             continue;
         }
-        // Each channel is its own trace (spec 13.4) and conserves light on its own, so each is
-        // reported; the extremes are over all three.
+        // Traced in bands (spec 13.4), each channel carries its colour's light and conserves it
+        // on its own, so each is reported; the extremes are over all three. Traced once, .r is
+        // the light and .gb its dispersion, and the lookup spreads .r into every channel with
+        // weights that sum to 1 in each, so all three report .r.
         const float* target = px + layer * (size_t)level;
+        const bool banded = water->caustic_bands > 0;
         double sum[3] = {0.0, 0.0, 0.0};
         float mn = 1.0e30f, mx = 0.0f;
         long count = 0;
@@ -3121,9 +3139,10 @@ void water_caustic_probe(const Water* water) {
             for (int x = lo; x < hi; x++) {
                 const float* texel = target + ((size_t)y * res + x) * 4;
                 for (int ch = 0; ch < 3; ch++) {
-                    sum[ch] += texel[ch];
-                    mn = fminf(mn, texel[ch]);
-                    mx = fmaxf(mx, texel[ch]);
+                    const float c = texel[banded ? ch : 0];
+                    sum[ch] += c;
+                    mn = fminf(mn, c);
+                    mx = fmaxf(mx, c);
                 }
                 count++;
             }

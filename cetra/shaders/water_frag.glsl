@@ -577,9 +577,9 @@ float waterCausticEdge(vec2 cuv) {
  * the whole spectrum and the whole of the key's disc delivers it.
  *
  * The target holds ONE trace, at 550 nm. Another wavelength lands on the same pattern slid by
- * `spread * dn` -- the first-order shift of a flat surface's refraction, see
- * WATER_CAUSTIC_SPECTRAL_TAPS -- so each tap reads the trace where one band of the spectrum
- * would find it and adds it in at that band's colour. That is an integral over the spectrum:
+ * the local dispersion times `dn` -- first order in the index, per point of the trace -- so each
+ * tap reads the trace where one band of the spectrum would find it and adds it in at that band's
+ * colour. That is an integral over the spectrum:
  * one index per channel was three samples of it, sharp in each channel and saturated at every
  * fold where the channels parted.
  *
@@ -596,16 +596,25 @@ float waterCausticEdge(vec2 cuv) {
  *
  * `gx`, `gy` are the level uv's screen gradients, taken by the caller in uniform flow.
  */
-vec3 waterCausticSpectral(vec2 at, int level, vec2 gx, vec2 gy, vec2 spread, float discR) {
+vec3 waterCausticSpectral(vec2 at, int level, vec2 gx, vec2 gy, float depthScale, float discR) {
     float discUv = 2.0 * discR / causticSide[level];
     gx *= max(1.0, discUv / max(length(gx), 1.0e-9));
     gy *= max(1.0, discUv / max(length(gy), 1.0e-9));
+    vec4 here = textureGrad(causticTex, vec3(waterCausticUv(at, level), float(level)), gx, gy);
     if (causticReference == 1)
-        return textureGrad(causticTex, vec3(waterCausticUv(at, level), float(level)), gx, gy).rgb;
+        return here.rgb;
+    /*
+     * Which way, and how far, THIS light moves with the index: the trace wrote each corner's own
+     * dispersion times its concentration, so over a texel .gb / .r is the dispersion of the
+     * light that is here, weighted by how much of it there is -- the facet's slope included,
+     * which the flat surface's shift left out and which decides where the colour goes. Metres
+     * at the traced depth, scaled to this point's.
+     */
+    vec2 spread = here.gb / max(here.r, 1.0e-4) * waterUnitsPerMetre * depthScale;
     vec3 sum = vec3(0.0);
     for (int i = 0; i < WATER_CAUSTIC_SPECTRAL_TAPS; i++) {
         vec2 cuv = waterCausticUv(at + spread * causticSpectrumDn[i], level);
-        sum += causticSpectrumWeight[i] * textureGrad(causticTex, vec3(cuv, float(level)), gx, gy).g;
+        sum += causticSpectrumWeight[i] * textureGrad(causticTex, vec3(cuv, float(level)), gx, gy).r;
     }
     return sum;
 }
@@ -729,15 +738,12 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
     /*
      * Where the spectrum and the key's disc put the light at THIS point's depth (spec 13.4), not
      * at the depth the pattern was traced to: both are properties of the path the light takes to
-     * get here, and a point half a metre down gets half a metre's worth of each.
-     *
-     * The refracted beam leaves the surface at theta_t from vertical, so it lands depth tan
-     * theta_t along the key's horizontal travel, and that moves with the index as
-     * -depth sin theta_t / (n cos^3 theta_t) per unit n. The disc's half-degree narrows by n
-     * going into the water and spreads over the slanted path, depth / cos theta_t long.
+     * get here, and a point half a metre down gets half a metre's worth of each. The dispersion
+     * the trace measured at its own depth grows in proportion; the disc's half-degree narrows by
+     * n going into the water and spreads over the slanted path, depth / cos theta_t long.
      */
     float cosT = max(-keyInWater.y, 0.05);
-    vec2 spread = keyInWater.xz * (-column / (waterIor * cosT * cosT * cosT));
+    float depthScale = column / traced;
     float discR = column / cosT * WATER_KEY_DISC_RADIUS / waterIor;
     vec3 c = vec3(1.0);
     for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
@@ -745,7 +751,7 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
         float keep = level == 0 ? 1.0 : fineKeep * float(causticDrawn[level]);
         vec2 gx = dFdx(cuv) * 2.0 * defocus;
         vec2 gy = dFdy(cuv) * 2.0 * defocus;
-        c = mix(c, waterCausticSpectral(at, level, gx, gy, spread, discR),
+        c = mix(c, waterCausticSpectral(at, level, gx, gy, depthScale, discR),
                 waterCausticEdge(cuv) * keep);
     }
     if (sceneDepthAvailable == 0 || bedNdc >= WATER_DEPTH_EMPTY)
@@ -1615,12 +1621,11 @@ void main() {
         vec3 keyDown = refract(-sunDir, vec3(0.0, 1.0, 0.0), 1.0 / waterIor);
         float cosT = max(-keyDown.y, 0.05);
         float depth = WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre;
-        vec2 spread = keyDown.xz * (-depth / (waterIor * cosT * cosT * cosT));
         float discR = depth / cosT * WATER_KEY_DISC_RADIUS / waterIor;
         vec3 c = vec3(0.0);
         for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++) {
             vec2 cuv = waterCausticUv(WorldPos.xz, level);
-            vec3 s = waterCausticSpectral(WorldPos.xz, level, dFdx(cuv), dFdy(cuv), spread, discR);
+            vec3 s = waterCausticSpectral(WorldPos.xz, level, dFdx(cuv), dFdy(cuv), 1.0, discR);
             bool inside = causticAvailable == 1 && causticDrawn[level] == 1 &&
                           all(greaterThanEqual(cuv, vec2(0.0))) && all(lessThanEqual(cuv, vec2(1.0)));
             if (inside)
