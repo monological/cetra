@@ -21,10 +21,8 @@ layout(triangle_strip, max_vertices = 3) out;
 in vec2 vLanded[];   // metres from the target corner
 in vec2 vSource[];   // metres from the target corner
 in float vCorner[];  // the corner's own concentration
-in vec2 vPerIndex[]; // how the corner's landing moves per unit index, metres
 
 out float gIntensity;
-out vec2 gPerIndex;
 
 // WATER_CAUSTIC_MAX, the ceiling on one cell's ratio.
 #include "water_caustic_constants.glsl"
@@ -46,7 +44,6 @@ void main() {
     for (int i = 0; i < 3; i++) {
         gl_Position = gl_in[i].gl_Position;
         gIntensity = vCorner[i] * scale;
-        gPerIndex = vPerIndex[i];
         EmitVertex();
     }
     EndPrimitive();
