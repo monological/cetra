@@ -128,6 +128,7 @@ typedef struct {
     int no_water_glitter;        // Bisect lever: drop the analytic sun lobe
     int no_water_downwell;       // Bisect lever: light submerged surfaces as though in air
     int no_water_caustic_relief; // Bisect lever: caustics ignore the bed's relief
+    int no_water_specks;         // Bisect lever: no motes suspended in the water
     int water_caustic_bands;     // Caustic traces across the spectrum: -1 = keep default
     // WaterFoamDebug (water.h), as an int since args structs here don't carry engine
     // headers. The instrument whitecap coverage is measured with; see Water.foam_debug.

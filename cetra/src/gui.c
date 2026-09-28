@@ -697,6 +697,7 @@ static void _engine_gui_panel(Engine* engine) {
             igCheckbox("Sun glitter", &water->glitter);
             igCheckbox("Light through the water", &water->downwell);
             igCheckbox("Caustic relief", &water->caustic_relief);
+            igCheckbox("Specks in the water", &water->specks);
             if (fft) {
                 igCheckbox("Foam history", &water->foam_history);
                 igSliderFloat("Foam decay", &water->foam_decay, 0.05f, 2.0f, "%.2f", 0);

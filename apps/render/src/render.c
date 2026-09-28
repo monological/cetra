@@ -195,6 +195,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
     fprintf(stderr, "      --no-water-downwell Light submerged surfaces as though in air\n");
     fprintf(stderr, "      --no-water-caustic-relief  Caustics ignore the bed's relief\n");
+    fprintf(stderr, "      --no-water-specks  No sunlit motes suspended in the water\n");
     fprintf(stderr,
             "      --water-caustic-bands N  Trace caustics in N bands of the spectrum, 0 to 16 "
             "(0 = one trace, spread)\n");
@@ -1172,6 +1173,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_downwell = 1;
         } else if (strcmp(argv[i], "--no-water-caustic-relief") == 0) {
             args->no_water_caustic_relief = 1;
+        } else if (strcmp(argv[i], "--no-water-specks") == 0) {
+            args->no_water_specks = 1;
         } else if (strcmp(argv[i], "--water-caustic-bands") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -4436,6 +4439,8 @@ int main(int argc, char** argv) {
             water->downwell = false;
         if (args.no_water_caustic_relief)
             water->caustic_relief = false;
+        if (args.no_water_specks)
+            water->specks = false;
         if (args.water_caustic_bands >= 0)
             water->caustic_bands = args.water_caustic_bands;
         water->foam_debug = args.water_foam_debug;

@@ -546,6 +546,7 @@ Water* create_water(void) {
     water->glitter = true;
     water->downwell = true;
     water->caustic_relief = true;
+    water->specks = true;
     water->foam_history = true;
     // Slow enough that a crest leaves a visible trail behind it and fast enough that open
     // water is not permanently white. The reference this is ported from calls the same
@@ -2828,6 +2829,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         sun && sun->cast_shadows && sun->shadow_map_index >= 0;
     uniform_set_int(u, "sunShadowSlot", shadows ? sun->shadow_map_index : -1);
     uniform_set_int(u, "glitterEnabled", water->glitter ? 1 : 0);
+    uniform_set_int(u, "waterSpecks", water->specks ? 1 : 0);
     uniform_set_int(u, "waterFoamDebug", water->foam_debug);
     // The caustics target, pointed at its unit whether or not it rendered this frame: a sampler
     // left on the default unit is a type mismatch against the cascade array there.
