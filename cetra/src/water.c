@@ -2430,11 +2430,48 @@ static bool _water_caustic_ready(Water* water, struct Engine* engine, ShaderProg
 }
 
 /*
- * Each colour channel's index against the authored one, red to blue (spec 13.4): Clearwater's
- * 1.3315, 1.3335 and 1.3365, taken as offsets so a scene that authors another IOR keeps its
- * own. Water's measured dispersion runs 1.331 at 650 nm to 1.337 at 450, the same spread.
+ * The visible spectrum in `count` equal bands over 400-700 nm (spec 13.4): for each, how far
+ * water's index there sits from its index at 550 nm, and how much of each of R, G and B it
+ * carries, normalised so every channel's weights sum to 1 -- so each channel of a pattern that
+ * averages 1 still does.
+ *
+ * The index is Cauchy's form, n = A + B / lambda^2, through water's measured 1.3371 at 486.1 nm
+ * and 1.3311 at 656.3 nm, which puts 404.7 nm at 1.3430 against a measured 1.3428. Offsets from
+ * 550 nm rather than absolute values, so a scene that authors another IOR keeps its own.
+ *
+ * The colour is the CIE 1931 observer by Wyman, Sloan and Shirley's multi-lobe fit, taken to
+ * linear sRGB and clamped at zero: the sRGB primaries cannot reach the spectral colours between
+ * blue and green, whose negative red is dropped rather than subtracted. An equal-energy source,
+ * since the key's own colour is applied where the pattern is used.
  */
-static const float WATER_CAUSTIC_IOR_SPREAD[3] = {-0.002f, 0.0f, 0.003f};
+static float _water_cie_lobe(float x, float mu, float s_lo, float s_hi) {
+    const float t = (x - mu) / (x < mu ? s_lo : s_hi);
+    return expf(-0.5f * t * t);
+}
+
+static void _water_caustic_spectrum(int count, float* dn, vec3* weight) {
+    const float cauchy_b =
+        (1.3371f - 1.3311f) / (1.0f / (0.4861f * 0.4861f) - 1.0f / (0.6563f * 0.6563f));
+    vec3 sum = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < count; i++) {
+        const float nm = 400.0f + ((float)i + 0.5f) * 300.0f / (float)count;
+        const float um = nm / 1000.0f;
+        dn[i] = cauchy_b * (1.0f / (um * um) - 1.0f / (0.55f * 0.55f));
+        const float x = 1.056f * _water_cie_lobe(nm, 599.8f, 37.9f, 31.0f) +
+                        0.362f * _water_cie_lobe(nm, 442.0f, 16.0f, 26.7f) -
+                        0.065f * _water_cie_lobe(nm, 501.1f, 20.4f, 26.2f);
+        const float y = 0.821f * _water_cie_lobe(nm, 568.8f, 46.9f, 40.5f) +
+                        0.286f * _water_cie_lobe(nm, 530.9f, 16.3f, 31.1f);
+        const float z = 1.217f * _water_cie_lobe(nm, 437.0f, 11.8f, 36.0f) +
+                        0.681f * _water_cie_lobe(nm, 459.0f, 26.0f, 13.8f);
+        weight[i][0] = fmaxf(0.0f, 3.2406f * x - 1.5372f * y - 0.4986f * z);
+        weight[i][1] = fmaxf(0.0f, -0.9689f * x + 1.8758f * y + 0.0415f * z);
+        weight[i][2] = fmaxf(0.0f, 0.0557f * x - 0.2040f * y + 1.0570f * z);
+        glm_vec3_add(sum, weight[i], sum);
+    }
+    for (int i = 0; i < count; i++)
+        glm_vec3_div(weight[i], sum, weight[i]);
+}
 
 /*
  * How much smaller than level 0's every length of `level` is (spec 13.3) -- window, cell and
@@ -2539,12 +2576,18 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
     glClear(GL_COLOR_BUFFER_BIT);
 
     /*
-     * Once per colour channel, each at its own index (spec 13.4): water bends blue more than
-     * red, so a line the green light focuses on lands a little either side of it in the other
-     * two, and its edges split into colour. Every channel carries the whole beam, so each
-     * averages 1 on its own and the split moves light between colours and never adds any.
+     * Traced once at 550 nm, into every channel alike, and the surface's lookup spreads it across
+     * the spectrum (spec 13.4). Under caustic_reference instead, once per band of the spectrum at
+     * that band's own index, each blended in at its own colour -- the brute-force answer the
+     * lookup's approximation is measured against. Every band carries the whole beam and every
+     * channel's weights sum to 1, so each channel averages 1 either way.
      */
-    for (int ch = 0; ch < 3; ch++) {
+    const int samples = water->caustic_reference ? WATER_CAUSTIC_REFERENCE_SAMPLES : 1;
+    float dn[WATER_CAUSTIC_REFERENCE_SAMPLES] = {0.0f};
+    vec3 colour[WATER_CAUSTIC_REFERENCE_SAMPLES] = {{1.0f, 1.0f, 1.0f}};
+    if (water->caustic_reference)
+        _water_caustic_spectrum(samples, dn, colour);
+    for (int s = 0; s < samples; s++) {
         // Every lattice corner traced once, into one texel each.
         glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_land_fbo);
         glViewport(0, 0, n + 1, n + 1);
@@ -2553,7 +2596,7 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
         uniform_set_vec2(lu, "causticGridOrigin", grid);
         uniform_set_float(lu, "causticCell", cell);
         uniform_set_vec2(lu, "causticTargetOrigin", origin);
-        uniform_set_float(lu, "waterIor", water->ior + WATER_CAUSTIC_IOR_SPREAD[ch]);
+        uniform_set_float(lu, "waterIor", water->ior + dn[s]);
         draw_fullscreen_quad(_water_quad(water));
         /*
          * Submitted before the lattice below reads it, which GL says should not be needed and
@@ -2566,14 +2609,14 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
          */
         glFlush();
 
-        // Then the lattice drawn where they landed, into this channel alone. Additive, and the
+        // Then the lattice drawn where they landed, at this band's colour. Additive, and the
         // bracket leaves culling off: a folded cell lands wound the other way and still
         // delivers its light.
         glBindFramebuffer(GL_FRAMEBUFFER, water->caustic_fbo[level]);
         glViewport(0, 0, res, res);
-        glColorMask(ch == 0, ch == 1, ch == 2, GL_FALSE);
         glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE);
+        glBlendColor(colour[s][0], colour[s][1], colour[s][2], 0.0f);
+        glBlendFunc(GL_CONSTANT_COLOR, GL_ONE);
         glUseProgram(draw->id);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, water->caustic_land_tex);
@@ -2584,7 +2627,6 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
         glDrawElements(GL_TRIANGLES, n * n * 6, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
         glDisable(GL_BLEND);
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     }
 }
 
@@ -2795,6 +2837,19 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         uniform_set_int(u, name, water->caustic_drawn[level] ? 1 : 0);
     }
     uniform_set_int(u, "waterCausticDebug", water->caustic_debug);
+    // The spectrum the lookup spreads the one trace across (spec 13.4). The reference target
+    // already holds it and is read as it stands.
+    uniform_set_int(u, "causticReference", water->caustic_reference ? 1 : 0);
+    float spectrum_dn[WATER_CAUSTIC_SPECTRAL_TAPS];
+    vec3 spectrum_w[WATER_CAUSTIC_SPECTRAL_TAPS];
+    _water_caustic_spectrum(WATER_CAUSTIC_SPECTRAL_TAPS, spectrum_dn, spectrum_w);
+    for (int i = 0; i < WATER_CAUSTIC_SPECTRAL_TAPS; i++) {
+        char name[40];
+        snprintf(name, sizeof(name), "causticSpectrumDn[%d]", i);
+        uniform_set_float(u, name, spectrum_dn[i]);
+        snprintf(name, sizeof(name), "causticSpectrumWeight[%d]", i);
+        uniform_set_vec3(u, name, spectrum_w[i]);
+    }
     /*
      * The sky's irradiance on a horizontal bed, for the caustics' key share: pi times the sky
      * radiance water_incident_light takes, since a hemisphere of radiance L delivers pi L. Both
