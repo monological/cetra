@@ -349,6 +349,10 @@ typedef struct Water {
     // 13.4), up to WATER_CAUSTIC_REFERENCE_SAMPLES; 0 = one trace, spread across the spectrum by
     // the surface's lookup. Each band costs a whole trace.
     int caustic_bands;
+    // false = the caustics ignore the bed's relief. On, a point's brightness against its
+    // neighbourhood stands in for its height (spec 13.4): proud points shift the pattern and gaps
+    // take less of the key.
+    bool caustic_relief;
     // false = no analytic sun lobe, which is every frame before spec 11.42. Live on both
     // wave models: its width comes from the slope the surface stopped resolving, and the
     // Gerstner path reports that from its dropped octaves.

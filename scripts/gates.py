@@ -8824,6 +8824,13 @@ WATER_CAUSTIC_SPECTRUM_MEAN_TOL = 0.02  # relative, per channel
 # The spread's colour RMS over the traced spectrum's: measured 1.08 on this sea and 0.91 on a
 # calm one, and 0 with no dispersion at all.
 WATER_CAUSTIC_SPECTRUM_CHROMA = (0.7, 1.4)
+# water-caustic-relief (spec 13.4). The bed's relief is read off its brightness against its
+# neighbourhood, so on the fixture's flat-coloured bed it must leave every uniform patch alone
+# -- the wedge's own face, inside the box -- and act only where two materials meet, the wedge's
+# edges, which moved 9,641 px when measured.
+WATER_CAUSTIC_RELIEF_FLAT_BOX = (0.40, 0.62, 0.60, 0.90)
+WATER_CAUSTIC_RELIEF_FLAT_MAX = 1
+WATER_CAUSTIC_RELIEF_EDGE_MIN_PX = 2000
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -10106,6 +10113,9 @@ def run_water_gate(workdir):
                       spectrum carries the same light per channel as 16 traced bands, and about
                       as much colour. Not where the colour sits, which no single trace matches
                       at these depths -- see WATER_CAUSTIC_SPECTRUM_FLAGS.
+      water-caustic-relief the bed's relief, read off its brightness, shapes the caustics only
+                      where the bed has some: against --no-water-caustic-relief, a uniform patch
+                      of the fixture's flat bed does not move and its material edges do.
       water-downwell  a submerged surface is lit through the water (spec 13.4): with and
                       without --no-water-downwell, dry pixels are identical, and every
                       submerged row's per-channel ratio is (1 - F) exp(-sigma d / cos)
@@ -10866,6 +10876,28 @@ def run_water_gate(workdir):
               f"(want {lo}..{hi})")
         if not ok:
             failures.append("water-caustic-spectrum")
+
+    # The bed's relief on the caustics (spec 13.4): nothing on a featureless patch, something at
+    # a brightness edge.
+    relief_on = os.path.join(workdir, "water_relief_on.ppm")
+    relief_off = os.path.join(workdir, "water_relief_off.ppm")
+    err = render(scene, relief_on, WATER_PIN + WATER_NO_CATCHER)
+    if not err:
+        err = render(scene, relief_off, WATER_PIN + WATER_NO_CATCHER + ["--no-water-caustic-relief"])
+    if err:
+        print(f"  water-caustic-relief ERROR render failed: {err.strip()[-200:]}")
+        failures.append("water-caustic-relief")
+    else:
+        moved, _ = compare(relief_on, relief_off)
+        rw, rh, ron_pix = _read_ppm(relief_on)
+        _, _, roff_pix = _read_ppm(relief_off)
+        flat = _water_box_max_delta(ron_pix, roff_pix, rw, rh, WATER_CAUSTIC_RELIEF_FLAT_BOX)
+        ok = flat <= WATER_CAUSTIC_RELIEF_FLAT_MAX and moved >= WATER_CAUSTIC_RELIEF_EDGE_MIN_PX
+        print(f"  water-caustic-relief {'PASS' if ok else 'FAIL'}  featureless patch moves "
+              f"{flat} (want <={WATER_CAUSTIC_RELIEF_FLAT_MAX}); {moved} px moved at the edges "
+              f"(want >={WATER_CAUSTIC_RELIEF_EDGE_MIN_PX})")
+        if not ok:
+            failures.append("water-caustic-relief")
 
     # A submerged surface is lit through the water (spec 13.4). Dry pixels must not move at
     # all, each submerged row's three channels must imply one depth, and that depth must not
