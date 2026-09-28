@@ -4123,6 +4123,9 @@ PK_SCENE = "purkinje_fixture.cscn"
 #                  neighbour's ABSOLUTE radiance, which moves that neighbour's
 #                  rod weight. With bloom on, purkinje-ladder reads the bloom
 #                  radius rather than the mesopic ramp.
+#   --no-glare     for --no-bloom's reason: the diffraction star (spec 13.4) is a
+#                  second halo, and its threshold is on EXPOSED radiance, so at 4x
+#                  exposure it reaches rungs it did not at 1x.
 #   --no-ssao      LOAD-BEARING TOO, and less obvious: aoFactor MULTIPLIES the
 #                  radiance the local ramp reads (tonemap_frag's composite), and
 #                  the ramp's slope is ~76 codes per stop, so a 0.97 AO factor is
@@ -4134,7 +4137,8 @@ PK_SCENE = "purkinje_fixture.cscn"
 # overriding it with -E 1.0 in every arm is how beach_fixture's `waves: fft` and
 # water_fixture's sun both came to be authored and unexercised. Arms that need a
 # different exposure (purkinje-absolute) pass -E explicitly and it wins.
-PK_PIN = ["--no-auto-exposure", "--no-dither", "--no-vignette", "--no-bloom", "--no-ssao"]
+PK_PIN = ["--no-auto-exposure", "--no-dither", "--no-vignette", "--no-bloom", "--no-glare",
+          "--no-ssao"]
 
 # The shipped ramp, restated so the Python twin can evaluate it. HELD BY
 # purkinje-agree, which evaluates this copy against the rendered debug view --
@@ -12472,7 +12476,10 @@ ORTHO_DOF_SIZE = ["-W", "800", "-H", "600"]
 # about the target's 1.0 over a 4.37 height, inset a third to stay clear of
 # the blur bleeding in from the edge.
 ORTHO_DOF_BOX = (0.38, 0.38, 0.62, 0.62)
-ORTHO_DOF_FLAGS = ["--no-bloom", "--no-ssao", "--no-ssr", "--no-auto-exposure", "-E", "1.0"]
+# --no-glare with --no-bloom: the diffraction star (spec 13.4) lays a veil over the
+# panel that no depth of field can blur, and halved how far refocusing moved it.
+ORTHO_DOF_FLAGS = ["--no-bloom", "--no-glare", "--no-ssao", "--no-ssr", "--no-auto-exposure",
+                   "-E", "1.0"]
 ORTHO_DOF_ON = ["--dof", "--dof-focus", "6", "--dof-range", "1.5", "--dof-max-coc", "8"]
 # A focused panel is not byte-identical to the no-DoF frame even when the CoC is
 # 0: the pass gathers at half resolution and resamples back, which the
@@ -19677,8 +19684,10 @@ def run_emissive_gate(workdir):
     # difference out of the quad and across the frame, asymmetrically, into every
     # band this group reads. Without it the residual these arms measure is part
     # panel placement and part glow, and the bar absorbs an effect nobody has
-    # separated.
-    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-bloom"]
+    # separated. --no-glare for the same reason: the diffraction star (spec 13.4)
+    # spreads the brighter quad across 1.15 of the frame height, and moved the
+    # left band 32% on its own.
+    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-bloom", "--no-glare"]
 
     # The derived twin: the quad carries the authored light's radiance, the
     # authored light is gone, and a light_overrides entry gives the panel the
@@ -23291,7 +23300,11 @@ def run_clearcoat_gate(workdir):
 
     lit = os.path.join(workdir, "clearcoat_lit.ppm")
     off = os.path.join(workdir, "clearcoat_off.ppm")
-    err = render(scene, lit, framing) or render(scene, off, framing + ["--no-clearcoat"])
+    # --no-glare on both: the diffraction star (spec 13.4) carries the coated
+    # sphere's highlight across the frame onto the uncoated control, so the
+    # control moved with the coat for a reason that is not the coat.
+    pair = framing + ["--no-glare"]
+    err = render(scene, lit, pair) or render(scene, off, pair + ["--no-clearcoat"])
     if err:
         print("  clearcoat-off ERROR while rendering the lit pair")
         failures.append("clearcoat-off")
