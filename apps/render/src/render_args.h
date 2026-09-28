@@ -97,37 +97,37 @@ typedef struct {
     // this or it falls out of the map, and no other lever reaches the field.
     int shadow_center_mode;
     float shadow_center[3];
-    int csm_debug;               // Tint fragments by selected cascade
-    int no_springs;              // Disable spring-bone secondary motion
-    int no_alpha_jitter;         // Disable the jittered alpha lookup (spec 11.101 diagnostic)
-    int no_ssao;                 // Disable screen-space ambient occlusion
-    int ssao_debug;              // Show the raw SSAO buffer
-    int spec_occ_mode;           // PostFXSpecOccMode override (-1 = keep engine default)
-    int spec_occ_debug;          // Show the AO visibility the scene is multiplied by
-    int bent_debug;              // Show the bent normal from the AO chain
-    int debug_purkinje;          // Show the rod weight (total, local gate, global gate)
-    int no_ao_edge_filter;       // Disable the depth-aware AO blur (allow silhouette bleed)
-    int ssgi;                    // Enable screen-space GI (indirect diffuse)
-    int ssgi_debug;              // Show the raw gathered GI radiance
-    int probe;                   // Enable the local reflection probe
-    int probe_pos_set;           // --probe-pos given
-    float probe_pos[3];          // Probe capture position override
-    int probe_scene;             // Capture the scene meshes too (interiors)
-    int probe_debug;             // Show the raw capture as the background
-    int probe_set_res;           // Probe atlas row-0 tile size (0 = default)
-    int probe_set_probe;         // Print the probe-set diagnostic every N frames (0 = off)
-    int decal_probe;             // Print the decal diagnostic every N frames (0 = off)
-    int probe_set_debug;         // Draw the probe atlas over the frame
-    int gi_volume;               // Enable the DDGI irradiance probe volume
-    int gi_probes[3];            // Probe grid counts (0,0,0 = default)
-    int water;                   // Enable the water surface (spec 11.32)
-    float water_level;           // Still-water plane, world Y (-9999 = keep default)
-    float water_extent;          // Half-size of the shoaling bed's domain (0 = keep default)
-    int water_waves;             // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
-    int no_water_caustics;       // Bisect lever: drop the surface's light focusing
-    int no_water_glitter;        // Bisect lever: drop the analytic sun lobe
-    int no_water_downwell;       // Bisect lever: light submerged surfaces as though in air
-    int water_caustic_reference; // Caustics traced per band of the spectrum (the check)
+    int csm_debug;           // Tint fragments by selected cascade
+    int no_springs;          // Disable spring-bone secondary motion
+    int no_alpha_jitter;     // Disable the jittered alpha lookup (spec 11.101 diagnostic)
+    int no_ssao;             // Disable screen-space ambient occlusion
+    int ssao_debug;          // Show the raw SSAO buffer
+    int spec_occ_mode;       // PostFXSpecOccMode override (-1 = keep engine default)
+    int spec_occ_debug;      // Show the AO visibility the scene is multiplied by
+    int bent_debug;          // Show the bent normal from the AO chain
+    int debug_purkinje;      // Show the rod weight (total, local gate, global gate)
+    int no_ao_edge_filter;   // Disable the depth-aware AO blur (allow silhouette bleed)
+    int ssgi;                // Enable screen-space GI (indirect diffuse)
+    int ssgi_debug;          // Show the raw gathered GI radiance
+    int probe;               // Enable the local reflection probe
+    int probe_pos_set;       // --probe-pos given
+    float probe_pos[3];      // Probe capture position override
+    int probe_scene;         // Capture the scene meshes too (interiors)
+    int probe_debug;         // Show the raw capture as the background
+    int probe_set_res;       // Probe atlas row-0 tile size (0 = default)
+    int probe_set_probe;     // Print the probe-set diagnostic every N frames (0 = off)
+    int decal_probe;         // Print the decal diagnostic every N frames (0 = off)
+    int probe_set_debug;     // Draw the probe atlas over the frame
+    int gi_volume;           // Enable the DDGI irradiance probe volume
+    int gi_probes[3];        // Probe grid counts (0,0,0 = default)
+    int water;               // Enable the water surface (spec 11.32)
+    float water_level;       // Still-water plane, world Y (-9999 = keep default)
+    float water_extent;      // Half-size of the shoaling bed's domain (0 = keep default)
+    int water_waves;         // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
+    int no_water_caustics;   // Bisect lever: drop the surface's light focusing
+    int no_water_glitter;    // Bisect lever: drop the analytic sun lobe
+    int no_water_downwell;   // Bisect lever: light submerged surfaces as though in air
+    int water_caustic_bands; // Caustic traces across the spectrum: -1 = keep default
     // WaterFoamDebug (water.h), as an int since args structs here don't carry engine
     // headers. The instrument whitecap coverage is measured with; see Water.foam_debug.
     int water_foam_debug;

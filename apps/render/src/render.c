@@ -194,8 +194,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
     fprintf(stderr, "      --no-water-downwell Light submerged surfaces as though in air\n");
-    fprintf(stderr, "      --water-caustic-reference Trace caustics per band of the spectrum "
-                    "(slow; the check on the spread)\n");
+    fprintf(stderr,
+            "      --water-caustic-bands N  Trace caustics in N bands of the spectrum, 0 to 16 "
+            "(0 = one trace, spread)\n");
     fprintf(stderr, "      --water-foam-debug N  Foam as a binary mask: 1 the crest band after\n");
     fprintf(stderr, "                         the erosion, 2 before it, 3 breaking alone.\n");
     fprintf(stderr,
@@ -475,6 +476,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // -1 = unset, so `--water-waves gerstner` can override a scene file that authored
     // fft. A 0 sentinel would make the Gerstner half of the flag unreachable.
     args->water_waves = -1;
+    args->water_caustic_bands = -1;
     args->specular_aa = -1.0f;     // -1 = keep the engine default
     args->ssr_strength = -1.0f;    // -1 = keep the engine default
     args->ssr_jitter = -1.0f;      // -1 = keep the engine default
@@ -1167,8 +1169,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_glitter = 1;
         } else if (strcmp(argv[i], "--no-water-downwell") == 0) {
             args->no_water_downwell = 1;
-        } else if (strcmp(argv[i], "--water-caustic-reference") == 0) {
-            args->water_caustic_reference = 1;
+        } else if (strcmp(argv[i], "--water-caustic-bands") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            char* end = NULL;
+            long bands = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end != '\0' || bands < 0 || bands > 16) {
+                fprintf(stderr, "Error: --water-caustic-bands wants 0 to 16, got '%s'\n", argv[i]);
+                return -1;
+            }
+            args->water_caustic_bands = (int)bands;
         } else if (strcmp(argv[i], "--water-foam-debug") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -4419,8 +4431,8 @@ int main(int argc, char** argv) {
             water->glitter = false;
         if (args.no_water_downwell)
             water->downwell = false;
-        if (args.water_caustic_reference)
-            water->caustic_reference = true;
+        if (args.water_caustic_bands >= 0)
+            water->caustic_bands = args.water_caustic_bands;
         water->foam_debug = args.water_foam_debug;
         water->caustic_debug = args.water_caustic_debug;
         if (args.no_water_surf)

@@ -2469,8 +2469,11 @@ static void _water_caustic_spectrum(int count, float* dn, vec3* weight) {
         weight[i][2] = fmaxf(0.0f, 0.0557f * x - 0.2040f * y + 1.0570f * z);
         glm_vec3_add(sum, weight[i], sum);
     }
+    // A channel no band reaches -- blue, with a single band at 550 nm -- takes every band
+    // equally rather than a division by zero.
     for (int i = 0; i < count; i++)
-        glm_vec3_div(weight[i], sum, weight[i]);
+        for (int c = 0; c < 3; c++)
+            weight[i][c] = sum[c] > 0.0f ? weight[i][c] / sum[c] : 1.0f / (float)count;
 }
 
 /*
@@ -2582,10 +2585,14 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
      * lookup's approximation is measured against. Every band carries the whole beam and every
      * channel's weights sum to 1, so each channel averages 1 either way.
      */
-    const int samples = water->caustic_reference ? WATER_CAUSTIC_REFERENCE_SAMPLES : 1;
+    const int bands = water->caustic_bands < 0 ? 0
+                      : water->caustic_bands > WATER_CAUSTIC_REFERENCE_SAMPLES
+                          ? WATER_CAUSTIC_REFERENCE_SAMPLES
+                          : water->caustic_bands;
+    const int samples = bands > 0 ? bands : 1;
     float dn[WATER_CAUSTIC_REFERENCE_SAMPLES] = {0.0f};
     vec3 colour[WATER_CAUSTIC_REFERENCE_SAMPLES] = {{1.0f, 1.0f, 1.0f}};
-    if (water->caustic_reference)
+    if (bands > 0)
         _water_caustic_spectrum(samples, dn, colour);
     for (int s = 0; s < samples; s++) {
         // Every lattice corner traced once, into one texel each.
@@ -2839,7 +2846,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_int(u, "waterCausticDebug", water->caustic_debug);
     // The spectrum the lookup spreads the one trace across (spec 13.4). The reference target
     // already holds it and is read as it stands.
-    uniform_set_int(u, "causticReference", water->caustic_reference ? 1 : 0);
+    uniform_set_int(u, "causticReference", water->caustic_bands > 0 ? 1 : 0);
     float spectrum_dn[WATER_CAUSTIC_SPECTRAL_TAPS];
     vec3 spectrum_w[WATER_CAUSTIC_SPECTRAL_TAPS];
     _water_caustic_spectrum(WATER_CAUSTIC_SPECTRAL_TAPS, spectrum_dn, spectrum_w);
