@@ -12,8 +12,9 @@
 
 uniform float waterIor;
 uniform vec3 waterAbsorption; // extinction per world unit, per channel
-// 1 while a sea is bound to this program; 0, the default, leaves every surface in air.
-uniform int waterPresent;
+// 1 = a surface under the level is lit through the water above it: a sea is drawn and its
+// downwell switch is on. 0 leaves every surface in air.
+uniform int waterDownwell;
 
 /*
  * How much weaker the sky's diffuse light gets per unit of extinction, against a collimated
@@ -27,9 +28,16 @@ uniform int waterPresent;
  */
 const float WATER_SKY_DOWNWELL_PER_EXTINCTION = 1.0;
 
-// How far below the still surface `y` is, in world units; 0 above it, or with no sea.
+/*
+ * How far below the still surface `y` is, in world units; 0 above it, or with no sea.
+ *
+ * The level everywhere, not only inside `waterExtent`: that is the shoaling bed's domain, and
+ * the sea runs on past it to the horizon -- forest's shelf and tree's open water both lie
+ * outside it. A dry pit sunk below the level is lit as though flooded; no scene in this tree has
+ * one, and one that does needs the sea told where it ends, which Water does not know.
+ */
 float waterDepthBelow(float y) {
-    return waterPresent == 1 ? max(waterLevel - y, 0.0) : 0.0;
+    return waterDownwell == 1 ? max(waterLevel - y, 0.0) : 0.0;
 }
 
 /*

@@ -41,9 +41,7 @@ uniform int finalize; // 1 on the last stage only; folds in the fftshift and the
 uniform float boundGain;
 uniform float boundVar;
 
-vec2 complexMul(vec2 a, vec2 b) {
-    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
+#include "complex.glsl"
 
 // Both halves of the RGBA carry a complex number, and both take the same rotation.
 vec4 butterfly(vec4 a, vec4 b, vec2 twiddle) {

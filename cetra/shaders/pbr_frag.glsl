@@ -1858,6 +1858,14 @@ void main() {
     // that reads it is an exact 1. Local lights are left alone -- one sitting in the water is
     // as close to the surface it lights as it ever was.
     float submerged = waterDepthBelow(WorldPos.y);
+    /*
+     * And the sky's light, weakened the same way, applied where the ENVIRONMENT is looked up --
+     * the irradiance and prefiltered maps and the authored ambient -- so every term built from
+     * them, the subsurface tap included, inherits it once. Not the GI volume or a probe: their
+     * captures lit what they saw through this same program, water included, and would pay the
+     * column twice. Exactly 1 in air.
+     */
+    vec3 skyDown = waterDownwellSky(submerged);
 
     // LTC tables (spec 9.2). Both lookups depend only on this fragment's
     // roughness and view angle, so they hoist out of the light loop: the
@@ -2307,7 +2315,7 @@ void main() {
         // incident radiance, E/pi -- so this is a straight substitution and the
         // albedo multiply below is unchanged.
         vec3 irradiance = giEnabled > 0 ? giSampleIrradiance(WorldPos, N, V)
-                                        : texture(irradianceMap, N).rgb;
+                                        : texture(irradianceMap, N).rgb * skyDown;
         vec3 diffuse = irradiance * albedoMap;
 
         // The environment's strength knob, and 1.0 when there is no environment
@@ -2361,10 +2369,12 @@ void main() {
                                                                         -ViewPos.z)),
                                  WorldPos, R, roughnessMap);
             prefilteredColor =
-                probes.rgb + (1.0 - probes.a) *
-                                 textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
+                probes.rgb +
+                (1.0 - probes.a) *
+                    textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb * skyDown;
         } else {
-            prefilteredColor = textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb;
+            prefilteredColor =
+                textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb * skyDown;
         }
         // Reuses the brdf fetched before the light loop (same coordinates).
         // brdf.y is the split-sum's f90 = 1 lobe; KHR_materials_specular
@@ -2413,7 +2423,7 @@ void main() {
             vec3 Rc = reflect(-V, Nc);
             float ccF = fresnelSchlickRoughness(NcdotVi, vec3(0.04), ccR).r * clearcoat;
             vec2 ccBrdf = texture(brdfLUT, vec2(NcdotVi, ccR)).rg;
-            vec3 ccPre = textureLod(prefilteredMap, Rc, ccR * maxReflectionLOD).rgb;
+            vec3 ccPre = textureLod(prefilteredMap, Rc, ccR * maxReflectionLOD).rgb * skyDown;
             vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
             // The coat dims BOTH shares (it sits over the whole surface); its
             // own lobe is specular, so it joins ambSpec when splitting.
@@ -2437,7 +2447,8 @@ void main() {
         // already hold their unsheened values -- so it needs no else arm.
 #if CETRA_HAS(PBR_FEAT_SHEEN)
         if (sheenActive) {
-            vec3 sheenPre = textureLod(charliePrefilteredMap, R, sheenRough * maxCharlieLOD).rgb;
+            vec3 sheenPre =
+                textureLod(charliePrefilteredMap, R, sheenRough * maxCharlieLOD).rgb * skyDown;
             // Sheen dims BOTH shares (same layer-over-base convention as the
             // coat); the sheen lobe itself is specular.
             if (splitAmbientSpec > 0) {
@@ -2463,14 +2474,7 @@ void main() {
         // grew as exposure closed, and auto-exposure -- which meters absolute
         // radiance -- chased it (spec 10.1 phase 5). No constant satisfies both,
         // because the term was never physical. A real emitter is.
-        ambient = ambientRadiance * albedoMap * aoMap * (1.0 - transmissionEff);
-    }
-    // The sky's light, weakened by the water over this surface (spec 13.4). Both halves of the
-    // environment arrive from above it, so both pay for the same column.
-    if (submerged > 0.0) {
-        vec3 skyDown = waterDownwellSky(submerged);
-        ambient *= skyDown;
-        ambSpec *= skyDown;
+        ambient = ambientRadiance * skyDown * albedoMap * aoMap * (1.0 - transmissionEff);
     }
 
     // Screen-space transmission (KHR_materials_transmission): the diffuse

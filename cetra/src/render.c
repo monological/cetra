@@ -547,7 +547,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // here rather than per material because it is a property of the sea and the
             // frame, and it is the same clock `time` above came from -- so the sand cannot
             // describe a different instant of the swash than the water surface draws.
-            water_bind_shore(scene ? scene->water : NULL, scene, program);
+            water_bind_sea(scene ? scene->water : NULL, scene, program);
             // Both are read only inside an OIT sub-pass, so they upload only
             // there: the warp interval the moments are stated over, and (where
             // the atlas is actually bound) the reciprocal FRAME size. The atlas

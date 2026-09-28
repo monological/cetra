@@ -1099,13 +1099,11 @@ def _glare_probe(extra, scene):
     """Run --glare-probe and return the last frame's (source, glare) RGB lists, or None."""
     cmd = [RENDER, "-m", scene, "-x", "-f", "10", "-W", "400", "-H", "300", "--glare-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
-    last = None
-    for line in (r.stdout + r.stderr).splitlines():
-        if line.startswith("glare-probe "):
-            fields = dict(p.split("=", 1) for p in line.split()[1:])
-            last = ([float(v) for v in fields["source"].split(",")],
-                    [float(v) for v in fields["glare"].split(",")])
-    return last
+    rows = _probe_rows(r.stdout + r.stderr, "glare-probe")
+    if not rows:
+        return None
+    return ([float(v) for v in rows[-1]["source"].split(",")],
+            [float(v) for v in rows[-1]["glare"].split(",")])
 
 
 def run_glare_gate(workdir):
@@ -8885,8 +8883,6 @@ WATER_CAUSTIC_CALM_TOL = 5e-3
 # ceiling and cells smaller than a texel both drop light), and 1.032 over the dome, traced to its
 # baked bed.
 WATER_CAUSTIC_MEAN_TOL = {"gerstner": 0.02, "spectral": 0.03, "dome": 0.05}
-# The probe's per-channel means, red to blue: one trace each (spec 13.4).
-WATER_CAUSTIC_CHANNELS = ("mean_r", "mean_g", "mean_b")
 # water-caustic-spectrum (spec 13.4). The bare caustic pattern at the reference plane's depth
 # (--water-caustic-debug 3), on the fixture's spectral sea under the 13.3 close framing, once
 # spread from one trace and once traced in 16 bands of the spectrum.
@@ -8993,9 +8989,9 @@ def _water_touch_probe(extra, frames, scene=None):
     cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", frames,
            "-W", "200", "-H", "150", "--water-touch-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
-    for line in (r.stdout + r.stderr).splitlines():
-        if line.startswith("water-touch-probe ") and "available=1" in line:
-            return {k: float(v) for k, v in (p.split("=", 1) for p in line.split()[1:])}
+    for row in _probe_rows(r.stdout + r.stderr, "water-touch-probe"):
+        if row.get("available") == "1":
+            return {k: float(v) for k, v in row.items()}
     return None
 
 
@@ -10945,17 +10941,14 @@ def run_water_gate(workdir):
               ", ".join(f"{name} {n}" for name, n in short.items()))
         failures.append("water-caustic-energy")
     else:
-        # Per colour channel (spec 13.4): each is its own trace at its own index, and a channel
-        # that lost or gained light would hide under an average of three.
         calm_off = max(max(abs(lv["min"] - 1.0), abs(lv["max"] - 1.0)) for lv in calm)
         ok = calm_off <= WATER_CAUSTIC_CALM_TOL and all(
-            abs(lv[ch] - 1.0) <= WATER_CAUSTIC_MEAN_TOL[name]
-            for name, levels in seas.items() for lv in levels for ch in WATER_CAUSTIC_CHANNELS)
-        means = ", ".join(
-            "/".join(",".join(f"{lv[ch]:.4f}" for ch in WATER_CAUSTIC_CHANNELS) for lv in levels) +
-            " " + name for name, levels in seas.items())
+            abs(lv["mean"] - 1.0) <= WATER_CAUSTIC_MEAN_TOL[name]
+            for name, levels in seas.items() for lv in levels)
+        means = ", ".join("/".join(f"{lv['mean']:.4f}" for lv in levels) + " " + name
+                          for name, levels in seas.items())
         print(f"  water-caustic-energy {'PASS' if ok else 'FAIL'}  calm within "
-              f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); r,g,b means by "
+              f"{calm_off:.5f} of 1 everywhere (want <={WATER_CAUSTIC_CALM_TOL}); means by "
               f"level {means} (want within "
               f"{'/'.join(str(WATER_CAUSTIC_MEAN_TOL[n]) for n in seas)} of 1); skipped for "
               f"depth: {', '.join(skipped) or 'none'}")

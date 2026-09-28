@@ -26,18 +26,19 @@
 #define GLARE_FRAME_FILL 0.75f
 // The pattern's full width over the frame's height.
 #define GLARE_PSF_SPAN 1.15f
+// What the source is stored at through the transform and restored from after it, so a glint of
+// thousands keeps its fraction bits through the transform's many additions.
+#define GLARE_SOURCE_SCALE 1.0e-3f
 
 struct Glare {
-    float* psf; // GLARE_PSF_RES^2 RGB, each channel summing to 1
+    float* psf; // GLARE_PSF_RES^2 RGB, relative within each channel
     ShaderProgram *source, *fft, *multiply, *output;
-    int frame_w, frame_h;        // what the grid and kernel were built for; 0 = not yet
-    int grid_w, grid_h;          // the transform's grid
-    int fill_w, fill_h;          // the frame's corner of it
-    GLuint rg_tex[2], rg_fbo[2]; // red and green, two complex signals a texel, ping-pong
-    GLuint b_tex[2], b_fbo[2];   // blue
-    GLuint kernel_rg, kernel_b;  // the pattern's spectrum on the grid, packed the same way
-    GLuint out_tex, out_fbo;     // the glare, the frame's shape
-    bool failed;
+    int frame_w, frame_h;    // what the grid and kernel were built for; 0 = not yet
+    int grid_w, grid_h;      // the transform's grid
+    int fill_w, fill_h;      // the frame's corner of it
+    GLuint tex[2], fbo[2];   // red + i green, and blue, two complex signals a texel, ping-pong
+    GLuint kernel;           // each channel's pattern spectrum on the grid, real, in .rgb
+    GLuint out_tex, out_fbo; // the glare, the frame's shape
 };
 
 /*
@@ -115,8 +116,12 @@ static bool _glare_fft2(float* re, float* im, int w, int h, int sign) {
 /*
  * The aperture's diffraction pattern, as the eye sees it: the power spectrum of its shape, then
  * that spectrum at eight wavelengths -- it scales with the wavelength -- each in its own colour,
- * with the far field lifted as a phone's lens flares harder than an ideal aperture. Normalised
- * per channel, so it moves light and never adds any.
+ * with the far field lifted as a phone's lens flares harder than an ideal aperture. Unnormalised:
+ * it is resampled to the grid before use, and normalised there.
+ *
+ * Its central peak is kept, as Clearwater keeps it: the star is the WHOLE image a point of light
+ * makes through this aperture, core and spikes, and the tonemap adds it over the frame at the
+ * glare's strength.
  */
 static float* _glare_build_psf(void) {
     const int n = GLARE_PSF_RES;
@@ -220,21 +225,15 @@ static float* _glare_build_psf(void) {
     }
     free(power);
 
-    double sum[3] = {0.0, 0.0, 0.0};
     for (int y = 0; y < n; y++) {
         for (int x = 0; x < n; x++) {
             const float rr = hypotf((float)x - n / 2, (float)y - n / 2);
             const float lift = 1.0f + 7.0f * fminf(1.0f, fmaxf(0.0f, (rr - 3.0f) / 30.0f));
             float* o = out + ((size_t)y * n + x) * 3;
-            for (int c = 0; c < 3; c++) {
+            for (int c = 0; c < 3; c++)
                 o[c] *= lift;
-                sum[c] += o[c];
-            }
         }
     }
-    for (size_t i = 0; i < (size_t)n * n; i++)
-        for (int c = 0; c < 3; c++)
-            out[i * 3 + c] = (float)(out[i * 3 + c] / sum[c]);
     return out;
 }
 
@@ -248,7 +247,7 @@ Glare* create_glare(void) {
     g->multiply = create_glare_multiply_program();
     g->output = create_glare_output_program();
     if (!g->psf || !g->source || !g->fft || !g->multiply || !g->output) {
-        log_error("Glare: aperture pattern or programs unavailable; glare disabled");
+        log_error("Glare: aperture pattern or programs unavailable");
         free_glare(g);
         return NULL;
     }
@@ -256,19 +255,13 @@ Glare* create_glare(void) {
 }
 
 static void _glare_free_targets(Glare* g) {
-    glDeleteTextures(2, g->rg_tex);
-    glDeleteFramebuffers(2, g->rg_fbo);
-    glDeleteTextures(2, g->b_tex);
-    glDeleteFramebuffers(2, g->b_fbo);
-    glDeleteTextures(1, &g->kernel_rg);
-    glDeleteTextures(1, &g->kernel_b);
-    glDeleteTextures(1, &g->out_tex);
-    glDeleteFramebuffers(1, &g->out_fbo);
-    memset(g->rg_tex, 0, sizeof(g->rg_tex));
-    memset(g->rg_fbo, 0, sizeof(g->rg_fbo));
-    memset(g->b_tex, 0, sizeof(g->b_tex));
-    memset(g->b_fbo, 0, sizeof(g->b_fbo));
-    g->kernel_rg = g->kernel_b = g->out_tex = g->out_fbo = 0;
+    for (int i = 0; i < 2; i++) {
+        gl_delete_texture(&g->tex[i]);
+        gl_delete_fbo(&g->fbo[i]);
+    }
+    gl_delete_texture(&g->kernel);
+    gl_delete_texture(&g->out_tex);
+    gl_delete_fbo(&g->out_fbo);
     g->frame_w = g->frame_h = 0;
 }
 
@@ -299,8 +292,9 @@ static bool _glare_target(int w, int h, GLenum format, GLuint* tex, GLuint* fbo)
  * The grid and the pattern's spectrum on it, for a frame of this shape: the frame shrunk into
  * GLARE_FRAME_FILL of the grid, and the pattern resampled so its full width spans GLARE_PSF_SPAN
  * of the frame's height, centred on the grid's origin as a convolution kernel wants, normalised
- * again after the resample and divided by the grid's size so the inverse transform needs no
- * normalising of its own.
+ * per channel so it carries the light it is handed once, and divided by the grid's size so the
+ * inverse transform needs no normalising of its own. Only the real part of its transform is kept:
+ * the pattern is symmetric about its centre, so that is all there is.
  */
 static bool _glare_build_targets(Glare* g, int frame_w, int frame_h) {
     _glare_free_targets(g);
@@ -314,7 +308,7 @@ static bool _glare_build_targets(Glare* g, int frame_w, int frame_h) {
     const size_t cells = (size_t)gw * gh;
 
     float* k = calloc(cells * 6, sizeof(float)); // re and im for each of three channels
-    float* packed = calloc(cells * 8, sizeof(float));
+    float* packed = calloc(cells * 4, sizeof(float));
     if (!k || !packed) {
         free(k);
         free(packed);
@@ -348,27 +342,19 @@ static bool _glare_build_targets(Glare* g, int frame_w, int frame_h) {
             re[i] *= norm;
         ok = _glare_fft2(re, re + cells, gw, gh, -1);
     }
-    for (size_t i = 0; i < cells && ok; i++) {
-        packed[i * 4 + 0] = k[i];
-        packed[i * 4 + 1] = k[cells + i];
-        packed[i * 4 + 2] = k[2 * cells + i];
-        packed[i * 4 + 3] = k[3 * cells + i];
-        packed[cells * 4 + i * 4 + 0] = k[4 * cells + i];
-        packed[cells * 4 + i * 4 + 1] = k[5 * cells + i];
-    }
+    for (size_t i = 0; i < cells && ok; i++)
+        for (int c = 0; c < 3; c++)
+            packed[i * 4 + c] = k[c * 2 * cells + i];
     free(k);
     if (!ok) {
         free(packed);
         return false;
     }
-    g->kernel_rg = create_texture_2d_float(gw, gh, GL_RGBA32F, GL_RGBA, packed);
-    g->kernel_b = create_texture_2d_float(gw, gh, GL_RGBA32F, GL_RGBA, packed + cells * 4);
+    g->kernel = create_texture_2d_float(gw, gh, GL_RGBA32F, GL_RGBA, packed);
     free(packed);
 
-    for (int i = 0; i < 2 && ok; i++) {
-        ok = _glare_target(gw, gh, GL_RGBA32F, &g->rg_tex[i], &g->rg_fbo[i]) &&
-             _glare_target(gw, gh, GL_RGBA32F, &g->b_tex[i], &g->b_fbo[i]);
-    }
+    for (int i = 0; i < 2 && ok; i++)
+        ok = _glare_target(gw, gh, GL_RGBA32F, &g->tex[i], &g->fbo[i]);
     if (ok) {
         ok = _glare_target(g->fill_w, g->fill_h, GL_RGBA16F, &g->out_tex, &g->out_fbo);
         // Read across the whole frame by the tonemap, so it filters.
@@ -384,10 +370,10 @@ static bool _glare_build_targets(Glare* g, int frame_w, int frame_h) {
 }
 
 /*
- * One whole 2D transform of a ping-pong pair, starting from `from`: every stage along x, then
+ * One whole 2D transform of the ping-pong pair, starting from `from`: every stage along x, then
  * every stage along y. Returns which of the pair holds the result.
  */
-static int _glare_fft(Glare* g, GLuint* tex, GLuint* fbo, int from, float sign, GLuint quad) {
+static int _glare_fft(Glare* g, int from, float sign, GLuint quad) {
     glUseProgram(g->fft->id);
     UniformManager* u = g->fft->uniforms;
     uniform_set_int(u, "glareSrc", 0);
@@ -399,9 +385,9 @@ static int _glare_fft(Glare* g, GLuint* tex, GLuint* fbo, int from, float sign, 
         uniform_set_int(u, "glareHoriz", axis == 0 ? 1 : 0);
         uniform_set_int(u, "glareHalf", len / 2);
         for (int span = 1; span < len; span <<= 1) {
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1 - src]);
+            glBindFramebuffer(GL_FRAMEBUFFER, g->fbo[1 - src]);
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, tex[src]);
+            glBindTexture(GL_TEXTURE_2D, g->tex[src]);
             uniform_set_int(u, "glareSpan", span);
             draw_fullscreen_quad(quad);
             src = 1 - src;
@@ -410,8 +396,8 @@ static int _glare_fft(Glare* g, GLuint* tex, GLuint* fbo, int from, float sign, 
     return src;
 }
 
-static void _glare_sum(GLuint tex, int w, int h, int x1, int y1, const int* channels,
-                       double* out3) {
+// The first three channels of a `w`-wide texture summed over its [0, x1) x [0, y1) corner.
+static void _glare_sum(GLuint tex, int w, int h, int x1, int y1, double* out3) {
     float* px = malloc(sizeof(float) * (size_t)w * h * 4);
     if (!px)
         return;
@@ -420,82 +406,67 @@ static void _glare_sum(GLuint tex, int w, int h, int x1, int y1, const int* chan
     for (int y = 0; y < y1; y++)
         for (int x = 0; x < x1; x++)
             for (int c = 0; c < 3; c++)
-                if (channels[c] >= 0)
-                    out3[c] += px[((size_t)y * w + x) * 4 + channels[c]];
+                out3[c] += px[((size_t)y * w + x) * 4 + c];
     free(px);
 }
 
 GLuint glare_run(Glare* g, GLuint hdr_tex, int frame_w, int frame_h, float threshold, GLuint quad,
                  bool probe) {
-    if (!g || g->failed || frame_w <= 0 || frame_h <= 0)
+    if (!g || frame_w <= 0 || frame_h <= 0)
         return 0;
     if ((frame_w != g->frame_w || frame_h != g->frame_h) &&
         !_glare_build_targets(g, frame_w, frame_h)) {
-        log_error("Glare: grid targets unavailable; glare disabled");
-        g->failed = true;
+        log_error("Glare: grid targets unavailable");
         return 0;
     }
     glDisable(GL_BLEND);
 
-    // The bright light, into the frame's corner of each pair's first grid, the rest cleared.
+    // The bright light, into the frame's corner of the grid, the rest cleared.
+    glBindFramebuffer(GL_FRAMEBUFFER, g->fbo[0]);
+    glViewport(0, 0, g->grid_w, g->grid_h);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(0, 0, g->fill_w, g->fill_h);
     glUseProgram(g->source->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, hdr_tex);
     uniform_set_int(g->source->uniforms, "hdrTex", 0);
     uniform_set_float(g->source->uniforms, "glareThreshold", threshold);
-    for (int pair = 0; pair < 2; pair++) {
-        glBindFramebuffer(GL_FRAMEBUFFER, pair == 0 ? g->rg_fbo[0] : g->b_fbo[0]);
-        glViewport(0, 0, g->grid_w, g->grid_h);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glViewport(0, 0, g->fill_w, g->fill_h);
-        uniform_set_int(g->source->uniforms, "glareChannels", pair);
-        draw_fullscreen_quad(quad);
-    }
+    uniform_set_float(g->source->uniforms, "glareSourceScale", GLARE_SOURCE_SCALE);
+    draw_fullscreen_quad(quad);
     double source[3] = {0.0, 0.0, 0.0};
-    if (probe) {
-        const int rg[3] = {0, 2, -1}, b[3] = {-1, -1, 0};
-        _glare_sum(g->rg_tex[0], g->grid_w, g->grid_h, g->fill_w, g->fill_h, rg, source);
-        _glare_sum(g->b_tex[0], g->grid_w, g->grid_h, g->fill_w, g->fill_h, b, source);
-    }
+    if (probe)
+        _glare_sum(g->tex[0], g->grid_w, g->grid_h, g->fill_w, g->fill_h, source);
 
     // Forward, times the pattern's spectrum, back.
-    int result[2];
-    for (int pair = 0; pair < 2; pair++) {
-        GLuint* tex = pair == 0 ? g->rg_tex : g->b_tex;
-        GLuint* fbo = pair == 0 ? g->rg_fbo : g->b_fbo;
-        int s = _glare_fft(g, tex, fbo, 0, -1.0f, quad);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo[1 - s]);
-        glUseProgram(g->multiply->id);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, tex[s]);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, pair == 0 ? g->kernel_rg : g->kernel_b);
-        uniform_set_int(g->multiply->uniforms, "glareSrc", 0);
-        uniform_set_int(g->multiply->uniforms, "glareKernel", 1);
-        draw_fullscreen_quad(quad);
-        result[pair] = _glare_fft(g, tex, fbo, 1 - s, 1.0f, quad);
-    }
+    const int forward = _glare_fft(g, 0, -1.0f, quad);
+    glBindFramebuffer(GL_FRAMEBUFFER, g->fbo[1 - forward]);
+    glUseProgram(g->multiply->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g->tex[forward]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, g->kernel);
+    uniform_set_int(g->multiply->uniforms, "glareSrc", 0);
+    uniform_set_int(g->multiply->uniforms, "glareKernel", 1);
+    draw_fullscreen_quad(quad);
+    const int result = _glare_fft(g, 1 - forward, 1.0f, quad);
 
     glBindFramebuffer(GL_FRAMEBUFFER, g->out_fbo);
     glViewport(0, 0, g->fill_w, g->fill_h);
     glUseProgram(g->output->id);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g->rg_tex[result[0]]);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, g->b_tex[result[1]]);
-    uniform_set_int(g->output->uniforms, "glareRedGreen", 0);
-    uniform_set_int(g->output->uniforms, "glareBlue", 1);
+    glBindTexture(GL_TEXTURE_2D, g->tex[result]);
+    uniform_set_int(g->output->uniforms, "glareResult", 0);
+    uniform_set_float(g->output->uniforms, "glareSourceScale", GLARE_SOURCE_SCALE);
     draw_fullscreen_quad(quad);
-    glActiveTexture(GL_TEXTURE0);
 
     if (probe) {
         double glare[3] = {0.0, 0.0, 0.0};
-        const int rgb[3] = {0, 1, 2};
-        _glare_sum(g->out_tex, g->fill_w, g->fill_h, g->fill_w, g->fill_h, rgb, glare);
-        // The source was stored at a thousandth, the glare restored to full scale.
-        printf("glare-probe source=%.6g,%.6g,%.6g glare=%.6g,%.6g,%.6g\n", source[0] * 1.0e3,
-               source[1] * 1.0e3, source[2] * 1.0e3, glare[0], glare[1], glare[2]);
+        _glare_sum(g->out_tex, g->fill_w, g->fill_h, g->fill_w, g->fill_h, glare);
+        // The source as stored, the glare restored to full scale.
+        printf("glare-probe source=%.6g,%.6g,%.6g glare=%.6g,%.6g,%.6g\n",
+               source[0] / GLARE_SOURCE_SCALE, source[1] / GLARE_SOURCE_SCALE,
+               source[2] / GLARE_SOURCE_SCALE, glare[0], glare[1], glare[2]);
     }
     check_gl_error("glare");
     return g->out_tex;
