@@ -118,6 +118,7 @@ uniform int waterCausticDebug;
 uniform float causticSpectrumDn[WATER_CAUSTIC_SPECTRAL_TAPS];
 uniform vec3 causticSpectrumWeight[WATER_CAUSTIC_SPECTRAL_TAPS];
 uniform int causticReference;
+uniform int causticRelief; // 1 = the bed's relief, read off its colour, shapes the caustics
 // 1 = the shoreline writes fractional coverage for alpha-to-coverage; 0 = the
 // binary cutoff, which is all a single-sample target can express.
 uniform int alphaToCoverage;
@@ -358,6 +359,17 @@ const float WATER_CAUSTIC_EDGE_FADE = 0.2;
 const float WATER_CAUSTIC_KERNEL_M = 0.5;
 
 const float PI = 3.14159265359;
+/*
+ * The bed's relief for the caustics (spec 13.4). The two screen mips its brightness is compared
+ * across -- a stone against the ground round it; how far, in metres, a point one neighbourhood's
+ * brightness above its surroundings is taken to stand, which is about a pebble; and how much of
+ * the key a gap at the darkest keeps. Clearwater's, whose own relief shading reaches 0.83 of the
+ * key at the bottom of a gap: its ambient occlusion, 0.55 to 1, through a quarter of the key.
+ */
+const float WATER_RELIEF_FINE_LOD = 1.0;
+const float WATER_RELIEF_COARSE_LOD = 4.0;
+const float WATER_RELIEF_HEIGHT_M = 0.02;
+const float WATER_RELIEF_GAP_SHADE = 0.8875;
 // The key's angular radius, radians: the sun's and the moon's are both about a quarter of a
 // degree, so one number serves whichever is the key.
 const float WATER_KEY_DISC_RADIUS = 0.00465;
@@ -679,7 +691,7 @@ float waterCausticKeyVisibility(vec3 pos, vec3 keyInWater, float column) {
  *
  * Takes screen derivatives, so it must be called in uniform control flow.
  */
-vec3 waterCaustics(vec2 uv, vec3 refrDir) {
+vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
     float bedNdc = texture(sceneDepthTex, uv).r;
     mat3 viewToWorld = transpose(mat3(view));
     vec3 sightBed = viewToWorld * (viewPosFromLinZ(uv, viewZFromNdcZ(bedNdc * 2.0 - 1.0)) -
@@ -705,6 +717,28 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
         floorY = onBed ? bedY : planeY;
     }
     vec2 at = pos.xz + keyInWater.xz * ((floorY - pos.y) / keyDown);
+    /*
+     * The bed's own relief (spec 13.4, after Clearwater), read off its colour: a stone top is
+     * lighter than the shadowed gap beside it, so the refracted bed's brightness against its own
+     * neighbourhood -- a fine mip over a coarse one -- stands in for how high this point sits.
+     * A height the depth buffer cannot give, since a textured bed is one flat triangle.
+     *
+     * Two uses. A point standing proud meets the key's refracted light a little sooner along its
+     * path, so the lookup slides back along it; and a gap is partly hidden from the key by what
+     * stands round it, so it takes less of the key's light. In screen mips, where Clearwater's
+     * are the texture's own, so the neighbourhood it compares against grows with distance.
+     */
+    float relief = 1.0;
+    if (causticRelief == 1) {
+        const vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+        float fine = dot(textureLod(sceneColorTex, refrUV, WATER_RELIEF_FINE_LOD).rgb, luma);
+        float coarse = dot(textureLod(sceneColorTex, refrUV, WATER_RELIEF_COARSE_LOD).rgb, luma);
+        relief = clamp(fine / max(coarse, 1.0e-6), 0.0, 2.0);
+        at += keyInWater.xz / -keyDown * (relief - 1.0) * WATER_RELIEF_HEIGHT_M *
+              waterUnitsPerMetre;
+    }
+    // Full light from the neighbourhood's own brightness up, so a featureless bed is untouched.
+    float gapShade = mix(WATER_RELIEF_GAP_SHADE, 1.0, smoothstep(0.25, 1.0, relief));
     float traced = max(waterLevel - floorY, 1.0e-6);
     float column = waterLevel - pos.y;
     /*
@@ -780,7 +814,9 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir) {
     vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis * waterDownwellKey(sunDir, bedDepth);
     vec3 skyIrr = causticSkyIrradiance * waterDownwellSky(bedDepth);
     vec3 keyShare = keyIrr / max(keyIrr + skyIrr, vec3(1.0e-6));
-    return 1.0 + keyShare * weight * (c - 1.0);
+    // The key's share scaled by the pattern and by how much of the key a gap sees; the sky's
+    // share untouched. Both 1 on flat, featureless water.
+    return 1.0 + keyShare * (gapShade * (1.0 + weight * (c - 1.0)) - 1.0);
 }
 
 void main() {
@@ -1265,7 +1301,7 @@ void main() {
 
         // Gated on a uniform, so the screen derivatives the lookup takes stay in uniform flow.
         if (causticAvailable == 1) {
-            causticFactor = waterCaustics(uv, refrDir);
+            causticFactor = waterCaustics(uv, refrDir, refrUV);
             bed *= causticFactor;
         }
     } else {

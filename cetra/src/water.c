@@ -545,6 +545,7 @@ Water* create_water(void) {
     water->caustics = true;
     water->glitter = true;
     water->downwell = true;
+    water->caustic_relief = true;
     water->foam_history = true;
     // Slow enough that a crest leaves a visible trail behind it and fast enough that open
     // water is not permanently white. The reference this is ported from calls the same
@@ -2847,6 +2848,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // The spectrum the lookup spreads the one trace across (spec 13.4). The reference target
     // already holds it and is read as it stands.
     uniform_set_int(u, "causticReference", water->caustic_bands > 0 ? 1 : 0);
+    uniform_set_int(u, "causticRelief", water->caustic_relief ? 1 : 0);
     float spectrum_dn[WATER_CAUSTIC_SPECTRAL_TAPS];
     vec3 spectrum_w[WATER_CAUSTIC_SPECTRAL_TAPS];
     _water_caustic_spectrum(WATER_CAUSTIC_SPECTRAL_TAPS, spectrum_dn, spectrum_w);
