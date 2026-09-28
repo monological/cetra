@@ -194,10 +194,13 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
     fprintf(stderr, "      --no-water-downwell Light submerged surfaces as though in air\n");
+    fprintf(stderr, "      --water-caustic-reference Trace caustics per band of the spectrum "
+                    "(slow; the check on the spread)\n");
     fprintf(stderr, "      --water-foam-debug N  Foam as a binary mask: 1 the crest band after\n");
     fprintf(stderr, "                         the erosion, 2 before it, 3 breaking alone.\n");
     fprintf(stderr,
-            "      --water-caustic-debug N  1 the caustic factor on the bed, 2 the raw target\n");
+            "      --water-caustic-debug N  1 the caustic factor on the bed, 2 the raw target,\n"
+            "                           3 the target through the spectrum at its traced depth\n");
     fprintf(stderr, "      --water-caustic-probe  Print the caustics target's statistics\n");
     fprintf(stderr, "      --no-water-surf    No incident wave at the shore: no run-up, no bore\n");
     fprintf(stderr, "      --no-water-foam-history  Foam from this frame's fold only\n");
@@ -1164,6 +1167,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_water_glitter = 1;
         } else if (strcmp(argv[i], "--no-water-downwell") == 0) {
             args->no_water_downwell = 1;
+        } else if (strcmp(argv[i], "--water-caustic-reference") == 0) {
+            args->water_caustic_reference = 1;
         } else if (strcmp(argv[i], "--water-foam-debug") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -1187,9 +1192,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             char* end = NULL;
             long mode = strtol(argv[i], &end, 10);
-            if (end == argv[i] || *end != '\0' || (mode < 0 || mode > 2)) {
-                fprintf(stderr, "Error: --water-caustic-debug wants 0, 1 or 2, got '%s'\n",
-                        argv[i]);
+            if (end == argv[i] || *end != '\0' || (mode < 0 || mode > 3)) {
+                fprintf(stderr, "Error: --water-caustic-debug wants 0 to 3, got '%s'\n", argv[i]);
                 return -1;
             }
             args->water_caustic_debug = (int)mode;
@@ -4415,6 +4419,8 @@ int main(int argc, char** argv) {
             water->glitter = false;
         if (args.no_water_downwell)
             water->downwell = false;
+        if (args.water_caustic_reference)
+            water->caustic_reference = true;
         water->foam_debug = args.water_foam_debug;
         water->caustic_debug = args.water_caustic_debug;
         if (args.no_water_surf)

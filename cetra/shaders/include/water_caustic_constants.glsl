@@ -62,3 +62,17 @@
 // A true focus is a singularity; this is the ceiling on one cell's concentration, and the one
 // place the pass knowingly loses energy.
 #define WATER_CAUSTIC_MAX 40.0f
+
+/*
+ * The spectrum (spec 13.4). The pattern is traced once, at 550 nm, and a different wavelength
+ * lands on the same pattern slid along the key's horizontal travel: to first order in the
+ * index, a flat surface bends every point of it the same way, and that part is five to fifteen
+ * times what a wave's slope adds. So the lookup reads the one trace at SPECTRAL_TAPS offsets,
+ * one per band of wavelengths across the visible, weighted into R, G and B by the colour-matching
+ * functions -- an integral over the spectrum where one index per channel was three samples of it.
+ *
+ * REFERENCE_SAMPLES is the brute-force check on that: as many full traces at their own indices,
+ * each blended into the target at its own colour, which is what the approximation stands in for.
+ */
+#define WATER_CAUSTIC_SPECTRAL_TAPS      8
+#define WATER_CAUSTIC_REFERENCE_SAMPLES 16
