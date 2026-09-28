@@ -808,6 +808,14 @@ ShaderProgram* create_water_caustic_land_program() {
     return create_post_program("water_caustic_land", water_caustic_land_frag_shader_str);
 }
 
+ShaderProgram* create_water_touch_program() {
+    return create_post_program("water_touch", water_touch_frag_shader_str);
+}
+
+ShaderProgram* create_water_touch_normals_program() {
+    return create_post_program("water_touch_normals", water_touch_normals_frag_shader_str);
+}
+
 ShaderProgram* create_water_caustic_program() {
     ShaderProgram* program =
         create_program_from_source("water_caustic", water_caustic_vert_shader_str,

@@ -8839,6 +8839,13 @@ WATER_SPECKS_FLAGS = WATER_PIN + WATER_NO_CATCHER + ["--water-waves", "fft", "--
                                                      "-5,1.5,5", "--cam-target", "-5,-1,1"]
 WATER_SPECKS_MIN_PX = 500
 WATER_SPECKS_MAX_FRACTION = 0.03
+# water-ripple-drop (spec 13.4). One tap into the fixture's water at frame 2, inside the square
+# the simulation places ahead of the default eye, read back at two frames: the ring must have
+# travelled outward and lost height between them, and a second run of the later frame must print
+# the same numbers -- the steps are fixed ones from the frame clock, which is the whole claim.
+WATER_RIPPLE_DROP_AT = "-2,3,2"
+WATER_RIPPLE_DROP_FRAMES = ("20", "50")
+WATER_RIPPLE_DROP_MIN_GROWTH = 1.5  # radius at the later frame over the earlier
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -8899,6 +8906,17 @@ def _water_caustic_probe(extra, scene=None):
         else:
             levels.append({k: float(v) for k, v in (p.split("=", 1) for p in parts[1:])})
     return announced, sorted(levels, key=lambda lv: lv["level"])
+
+
+def _water_touch_probe(extra, frames, scene=None):
+    """Run --water-touch-probe and return its fields as floats, or None if it declined."""
+    cmd = [RENDER, "-m", scene or asset(WATER_FIXTURE), "-x", "-f", frames,
+           "-W", "200", "-H", "150", "--water-touch-probe"] + extra
+    r = _run(cmd, capture_output=True, text=True)
+    for line in (r.stdout + r.stderr).splitlines():
+        if line.startswith("water-touch-probe ") and "available=1" in line:
+            return {k: float(v) for k, v in (p.split("=", 1) for p in line.split()[1:])}
+    return None
 
 
 def _water_probe(extra, scene=None):
@@ -10127,6 +10145,10 @@ def run_water_gate(workdir):
       water-specks    sunlit motes in the column (spec 13.4) are there and SPARSE: a floor
                       on the pixels they touch against --no-water-specks, and a ceiling on
                       the fraction, which is what a broken hash or density would blow.
+      water-ripple-drop a tap into the water (spec 13.4) becomes a ring that travels outward
+                      and fades, read through --water-touch-probe at two frames, and a repeat
+                      run of the later frame prints the same numbers: the simulation steps at
+                      a fixed rate from the frame clock.
       water-downwell  a submerged surface is lit through the water (spec 13.4): with and
                       without --no-water-downwell, dry pixels are identical, and every
                       submerged row's per-channel ratio is (1 - F) exp(-sigma d / cos)
@@ -10929,6 +10951,25 @@ def run_water_gate(workdir):
               f"(want <={WATER_SPECKS_MAX_FRACTION})")
         if not ok:
             failures.append("water-specks")
+
+    # Touch ripples (spec 13.4): a tap spreads outward and fades, the same way every run.
+    drop = WATER_PIN + ["--water-drop", WATER_RIPPLE_DROP_AT]
+    early = _water_touch_probe(drop, WATER_RIPPLE_DROP_FRAMES[0])
+    late = _water_touch_probe(drop, WATER_RIPPLE_DROP_FRAMES[1])
+    again = _water_touch_probe(drop, WATER_RIPPLE_DROP_FRAMES[1])
+    if not (early and late and again):
+        print("  water-ripple-drop FAIL  the probe declined -- no ripple field was simulated")
+        failures.append("water-ripple-drop")
+    else:
+        growth = late["radius_m"] / max(early["radius_m"], 1e-6)
+        ok = (growth >= WATER_RIPPLE_DROP_MIN_GROWTH and late["peak_m"] < early["peak_m"] and
+              late == again)
+        print(f"  water-ripple-drop {'PASS' if ok else 'FAIL'}  ring {early['radius_m']:.3f} -> "
+              f"{late['radius_m']:.3f} m = {growth:.2f}x (want >={WATER_RIPPLE_DROP_MIN_GROWTH}), "
+              f"peak {early['peak_m']:.4f} -> {late['peak_m']:.4f} m (want falling), repeat "
+              f"{'identical' if late == again else 'DIFFERS'}")
+        if not ok:
+            failures.append("water-ripple-drop")
 
     # A submerged surface is lit through the water (spec 13.4). Dry pixels must not move at
     # all, each submerged row's three channels must imply one depth, and that depth must not

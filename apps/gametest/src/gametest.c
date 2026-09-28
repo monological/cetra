@@ -1565,6 +1565,40 @@ static float grotto_depth(const Scene* scene, const vec3 p) {
     return grotto_surface_y(scene) - p[1];
 }
 
+/*
+ * A character's wake (spec 13.4): a ripple pressed in where it stands every pace it moves while
+ * the surface crosses its capsule -- wading or floating alike, since both break the surface and
+ * the animation's own band says nothing about the water. By distance rather than by time, so a
+ * character standing still leaves the water to settle.
+ */
+typedef struct {
+    float last[2];
+    bool placed;
+} GrottoWake;
+
+#define GROTTO_WAKE_PACE     (0.5f * PLAYER_SCALE) // world units between ripples
+#define GROTTO_WAKE_RADIUS_M 0.12f
+#define GROTTO_WAKE_DEPTH_M  0.03f
+
+static GrottoWake player_wake, chaser_wake;
+
+static void grotto_wake(const Scene* scene, const vec3 p, GrottoWake* w) {
+    const float depth = grotto_depth(scene, p);
+    const float reach = PLAYER_RADIUS + PLAYER_HALF_H;
+    if (!scene || !scene->water || depth <= -reach || depth >= reach) {
+        w->placed = false;
+        return;
+    }
+    const float dx = p[0] - w->last[0];
+    const float dz = p[2] - w->last[1];
+    if (w->placed && dx * dx + dz * dz < GROTTO_WAKE_PACE * GROTTO_WAKE_PACE)
+        return;
+    water_ripple_drop(scene->water, p[0], p[2], GROTTO_WAKE_RADIUS_M, GROTTO_WAKE_DEPTH_M);
+    w->last[0] = p[0];
+    w->last[1] = p[2];
+    w->placed = true;
+}
+
 // Whether a capsule centre is under the surface, at the plane itself. The
 // animation asks with a BAND instead (see PLAYER_SUBMERGE_DEPTH), because what
 // it must not do is change its mind once a second while somebody floats.
@@ -4161,6 +4195,11 @@ static void on_pre_render(Game* game, double alpha) {
     if (chaser_graph && chaser_entity)
         anim_graph_set_float(chaser_graph, "depth",
                              grotto_depth(game->scene, chaser_entity->position));
+    // Each character's wake (spec 13.4), from the same depth the graph was just handed.
+    if (player_entity)
+        grotto_wake(game->scene, player_entity->position, &player_wake);
+    if (chaser_entity)
+        grotto_wake(game->scene, chaser_entity->position, &chaser_wake);
     // The rig node moves with the character, so the ragdoll's model-to-world has
     // to follow it -- while it is active nothing else writes the node, but the
     // matrix was captured a frame before the bodies started moving.

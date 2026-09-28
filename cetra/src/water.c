@@ -602,6 +602,10 @@ void free_water(Water* water) {
     glDeleteFramebuffers(1, &water->caustic_land_fbo);
     glDeleteVertexArrays(1, &water->caustic_vao);
     glDeleteBuffers(1, &water->caustic_ebo);
+    glDeleteTextures(2, water->touch_tex);
+    glDeleteFramebuffers(2, water->touch_fbo);
+    glDeleteTextures(1, &water->touch_slope_tex);
+    glDeleteFramebuffers(1, &water->touch_slope_fbo);
     free(water);
 }
 
@@ -1945,6 +1949,15 @@ static void _water_bind_ocean(const Water* water, const struct Scene* scene,
         uniform_set_float(u, name, fft ? water->ripple_slope_var_lod[lod] : 0.0f);
     }
 
+    // The touch ripples (spec 13.4), on either model. Bound whatever the state, for the
+    // cascades' reason; `touchAvailable` is what says whether there is anything in it.
+    glActiveTexture(GL_TEXTURE0 + WATER_TOUCH_UNIT);
+    glBindTexture(GL_TEXTURE_2D, water->touch_slope_tex);
+    uniform_set_int(u, "touchField", WATER_TOUCH_UNIT);
+    uniform_set_int(u, "touchAvailable", water->touch_ready ? 1 : 0);
+    uniform_set_vec2(u, "touchOrigin", water->touch_origin);
+    uniform_set_float(u, "touchSize", WATER_TOUCH_SIZE_M * units_per_metre);
+
     // Last frame's displacement, for the spectral path's motion vectors. Only usable
     // from the third frame on: the first has nothing to copy from and the second holds
     // a copy of the first, so the count has to reach 2 before this is a real previous
@@ -2681,6 +2694,191 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
 }
 
 /*
+ * The touch ripples' two programs, when the simulation should run; the first call makes the
+ * targets, cleared to still water. A missing program or target is reported once and latches the
+ * simulation off, like the caustics.
+ */
+static bool _water_touch_ready(Water* water, struct Engine* engine, ShaderProgram** step,
+                               ShaderProgram** slope) {
+    if (water->touch_failed)
+        return false;
+    *step = engine_find_program(engine, "water_touch");
+    *slope = engine_find_program(engine, "water_touch_normals");
+    if (!*step || !*slope) {
+        log_error("Water: touch ripple programs missing; ripples disabled");
+        water->touch_failed = true;
+        return false;
+    }
+    if (water->touch_fbo[0])
+        return true;
+    const int res = WATER_TOUCH_RES;
+    GLenum status = GL_FRAMEBUFFER_COMPLETE;
+    for (int i = 0; i < 2; i++) {
+        water->touch_tex[i] = create_texture_2d_float(res, res, GL_RGBA16F, GL_RGBA, NULL);
+        const GLenum s = _water_attach_colour(&water->touch_fbo[i], water->touch_tex[i]);
+        if (s != GL_FRAMEBUFFER_COMPLETE)
+            status = s;
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    water->touch_slope_tex = create_texture_2d_float(res, res, GL_RGBA16F, GL_RGBA, NULL);
+    const GLenum s = _water_attach_colour(&water->touch_slope_fbo, water->touch_slope_tex);
+    if (s != GL_FRAMEBUFFER_COMPLETE)
+        status = s;
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("Water: touch ripple target incomplete; ripples disabled");
+        water->touch_failed = true;
+        return false;
+    }
+    return true;
+}
+
+void water_ripple_drop(Water* water, float x, float z, float radius_m, float depth_m) {
+    if (!water || water->touch_drop_count >= WATER_TOUCH_MAX_DROPS)
+        return;
+    float* d = water->touch_drops[water->touch_drop_count++];
+    d[0] = x;
+    d[1] = z;
+    d[2] = radius_m;
+    d[3] = depth_m;
+}
+
+/*
+ * Step the touch ripples up to the frame's clock (spec 13.4). Runs inside the caller's pass
+ * bracket, before anything that reads the water's shading normal -- the probe and the caustics
+ * both do.
+ *
+ * FIXED steps of 1 / WATER_TOUCH_STEP_HZ from the frame clock, not one per frame: Clearwater's
+ * constants are per step, so stepping per frame would run its rings at the frame rate's speed,
+ * and a headless run -- a fixed clock per frame -- takes the same steps every time. A frame that
+ * falls further behind than a few steps skips ahead rather than paying for all of them.
+ *
+ * The square sits ahead of the camera where the view meets the water, no further than a third of
+ * itself, so a body in the frame below the eye is inside it; it moves in whole texels, and the
+ * first step reads the field shifted by as many so the rings stay where they are in the world.
+ * After WATER_TOUCH_CALM_STEPS with nothing pressed in, it stops stepping and the surface stops
+ * reading it -- there is nothing left in it a pixel could show.
+ */
+static void _water_run_touch(Water* water, const struct Scene* scene, const struct Engine* engine,
+                             ShaderProgram* step, ShaderProgram* slope) {
+    const float upm = _water_units_per_metre(scene);
+    const float size = WATER_TOUCH_SIZE_M * upm;
+    const float texel = size / (float)WATER_TOUCH_RES;
+
+    const float* eye = engine->camera->position;
+    const float fwd[3] = {-engine->view_matrix[0][2], -engine->view_matrix[1][2],
+                          -engine->view_matrix[2][2]};
+    const float flat_len = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+    float reach = 0.0f;
+    if (fwd[1] < -1.0e-4f && eye[1] > water->level)
+        reach = fminf((water->level - eye[1]) / fwd[1] * flat_len, size / 3.0f);
+    const float ahead = flat_len > 1.0e-4f ? reach / flat_len : 0.0f;
+    float origin[2];
+    int shift[2] = {0, 0};
+    for (int k = 0; k < 2; k++) {
+        const float centre = eye[k * 2] + fwd[k * 2] * ahead;
+        origin[k] = floorf((centre - 0.5f * size) / texel) * texel;
+        if (water->touch_placed)
+            shift[k] = (int)lroundf((origin[k] - water->touch_origin[k]) / texel);
+    }
+
+    const double now = engine->render_time;
+    if (!water->touch_placed)
+        water->touch_clock = now;
+    int steps = (int)floor((now - water->touch_clock) * WATER_TOUCH_STEP_HZ);
+    water->touch_clock += (double)steps / WATER_TOUCH_STEP_HZ;
+    if (steps > 4) {
+        steps = 4;
+        water->touch_clock = now;
+    }
+    if (water->touch_drop_count > 0 && steps == 0)
+        steps = 1;
+    if (water->touch_drop_count > 0)
+        water->touch_calm_steps = 0;
+    water->touch_placed = true;
+    water->touch_origin[0] = origin[0];
+    water->touch_origin[1] = origin[1];
+    if (water->touch_calm_steps >= WATER_TOUCH_CALM_STEPS) {
+        water->touch_ready = false;
+        return;
+    }
+
+    glViewport(0, 0, WATER_TOUCH_RES, WATER_TOUCH_RES);
+    for (int s = 0; s < steps; s++) {
+        glBindFramebuffer(GL_FRAMEBUFFER, water->touch_fbo[1 - water->touch_current]);
+        glUseProgram(step->id);
+        UniformManager* u = step->uniforms;
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, water->touch_tex[water->touch_current]);
+        uniform_set_int(u, "touchPrev", 0);
+        const vec2 moved = {s == 0 ? (float)shift[0] / WATER_TOUCH_RES : 0.0f,
+                            s == 0 ? (float)shift[1] / WATER_TOUCH_RES : 0.0f};
+        uniform_set_vec2(u, "touchShift", moved);
+        const int drops = s == 0 ? water->touch_drop_count : 0;
+        uniform_set_int(u, "touchDropCount", drops);
+        for (int i = 0; i < drops; i++) {
+            char name[24];
+            snprintf(name, sizeof(name), "touchDrops[%d]", i);
+            const float* d = water->touch_drops[i];
+            uniform_set_vec4(u, name,
+                             (vec4){(d[0] - origin[0]) / size, (d[1] - origin[1]) / size,
+                                    d[2] * upm / size, d[3] * upm});
+        }
+        draw_fullscreen_quad(_water_quad(water));
+        water->touch_current = 1 - water->touch_current;
+        water->touch_calm_steps++;
+    }
+    water->touch_drop_count = 0;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, water->touch_slope_fbo);
+    glUseProgram(slope->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, water->touch_tex[water->touch_current]);
+    uniform_set_int(slope->uniforms, "touchField", 0);
+    uniform_set_float(slope->uniforms, "touchTexel", texel);
+    draw_fullscreen_quad(_water_quad(water));
+    water->touch_ready = true;
+}
+
+void water_touch_probe(const Water* water, const struct Scene* scene, float x, float z) {
+    if (!water_active(water) || !water->touch_ready) {
+        printf("water-touch-probe available=0\n");
+        return;
+    }
+    const int res = WATER_TOUCH_RES;
+    float* px = malloc((size_t)res * res * 4 * sizeof(float));
+    if (!px) {
+        printf("water-touch-probe available=0\n");
+        return;
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, water->touch_slope_tex);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, px);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    const float upm = _water_units_per_metre(scene);
+    const float size = WATER_TOUCH_SIZE_M * upm;
+    float peak = 0.0f, at = 0.0f;
+    double sum = 0.0;
+    for (int j = 0; j < res; j++) {
+        for (int i = 0; i < res; i++) {
+            const float h = px[((size_t)j * res + i) * 4];
+            sum += (double)h * h;
+            if (fabsf(h) > peak) {
+                peak = fabsf(h);
+                const float wx = water->touch_origin[0] + ((float)i + 0.5f) / res * size;
+                const float wz = water->touch_origin[1] + ((float)j + 0.5f) / res * size;
+                at = sqrtf((wx - x) * (wx - x) + (wz - z) * (wz - z));
+            }
+        }
+    }
+    free(px);
+    // Metres, so a reading does not depend on the world's scale.
+    printf("water-touch-probe available=1 peak_m=%.6f radius_m=%.4f energy=%.6e\n",
+           (double)(peak / upm), (double)(at / upm), sum / ((double)upm * upm));
+}
+
+/*
  * Advance the water's SIMULATION for the frame, before anything draws.
  *
  * Separate from water_render, and the separation is the point: the film's tips are read by the
@@ -2724,6 +2922,12 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     const WaterPassState pass = _water_pass_begin();
     if (fft)
         _water_run_spectral(water, scene, engine, (float)engine->render_time);
+    // The touch ripples on either model, before the probe and the caustics read the normal.
+    ShaderProgram *touch_step = NULL, *touch_slope = NULL;
+    if (_water_touch_ready(water, engine, &touch_step, &touch_slope)) {
+        _water_run_touch(water, scene, engine, touch_step, touch_slope);
+        check_gl_error("water touch");
+    }
     ShaderProgram* probe_prog = _water_probe_ready(water, engine);
     if (probe_prog) {
         _water_probe_pass(water, scene, engine, probe_prog, fft, (float)engine->render_time);

@@ -253,6 +253,39 @@ static CameraDrag* drag_controller = NULL;
 static Player* player = NULL;
 
 /*
+ * The walker's wake (spec 13.4): a ripple pressed in at the feet every stride while they are
+ * under the water and the eye is not -- wading, not swimming, which this walker cannot do.
+ * By distance walked rather than by time, so standing still in the shallows leaves the water
+ * to settle, and a sprint lays its rings further apart.
+ */
+#define TREE_WADE_STRIDE_M 0.35f
+#define TREE_WADE_RADIUS_M 0.12f
+#define TREE_WADE_DEPTH_M  0.03f
+
+static void wade_ripples(const Player* p, Scene* scene) {
+    static float last[2];
+    static bool placed = false;
+    if (!scene || !scene->water || !water_active(scene->water)) {
+        placed = false;
+        return;
+    }
+    const float depth = scene->water->level - p->feet[1];
+    if (depth <= 0.0f || depth >= PLAYER_EYE_HEIGHT) {
+        placed = false;
+        return;
+    }
+    const float stride = TREE_WADE_STRIDE_M * GROUND_UNITS_PER_METRE;
+    const float dx = p->feet[0] - last[0];
+    const float dz = p->feet[2] - last[1];
+    if (placed && dx * dx + dz * dz < stride * stride)
+        return;
+    water_ripple_drop(scene->water, p->feet[0], p->feet[2], TREE_WADE_RADIUS_M, TREE_WADE_DEPTH_M);
+    last[0] = p->feet[0];
+    last[1] = p->feet[2];
+    placed = true;
+}
+
+/*
  * The SHOALING BED's domain, and nothing else -- since spec 11.35 the grid is projected from
  * the frustum and reaches the horizon at any extent. So this is sized for the SHORE BAND
  * rather than for the island. Outside it the bed field reads its edge, which is open water --
@@ -755,6 +788,7 @@ void pre_render_callback(Engine* engine, Scene* scene) {
         // both are per-unit-of-time quantities that have to advance with the frame the surface
         // is about to be drawn for.
         player_update(player, engine, (float)engine->render_delta);
+        wade_ripples(player, engine_get_scene(engine));
     } else if (drag_controller && app_can_process_3d_input(engine)) {
         // Update camera - only if not hovering over GUI. Deliberately the wall
         // clock, not the frame clock: drag damping is input response.

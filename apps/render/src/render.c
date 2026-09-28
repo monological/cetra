@@ -196,6 +196,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water-downwell Light submerged surfaces as though in air\n");
     fprintf(stderr, "      --no-water-caustic-relief  Caustics ignore the bed's relief\n");
     fprintf(stderr, "      --no-water-specks  No sunlit motes suspended in the water\n");
+    fprintf(stderr, "      --water-drop x,z,frame  Press a ripple into the water at world (x, z) "
+                    "on that frame (repeatable)\n");
+    fprintf(stderr, "      --water-touch-probe  Print the ripples' deepest point and its distance "
+                    "from the first drop\n");
     fprintf(stderr,
             "      --water-caustic-bands N  Trace caustics in N bands of the spectrum, 0 to 16 "
             "(0 = one trace, spread)\n");
@@ -1217,6 +1221,27 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->water_caustic_debug = (int)mode;
         } else if (strcmp(argv[i], "--water-caustic-probe") == 0) {
             args->water_caustic_probe = 1;
+        } else if (strcmp(argv[i], "--water-touch-probe") == 0) {
+            args->water_touch_probe = 1;
+        } else if (strcmp(argv[i], "--water-drop") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (args->water_drop_count >= RENDER_WATER_DROP_MAX) {
+                fprintf(stderr, "Error: --water-drop takes at most %d\n", RENDER_WATER_DROP_MAX);
+                return -1;
+            }
+            float x, z;
+            int frame;
+            if (sscanf(argv[i], "%f,%f,%d", &x, &z, &frame) != 3 || frame < 0) {
+                fprintf(stderr, "Error: --water-drop wants x,z,frame, got '%s'\n", argv[i]);
+                return -1;
+            }
+            args->water_drop_xz[args->water_drop_count][0] = x;
+            args->water_drop_xz[args->water_drop_count][1] = z;
+            args->water_drop_frame[args->water_drop_count] = frame;
+            args->water_drop_count++;
         } else if (strcmp(argv[i], "--no-water-surf") == 0) {
             args->no_water_surf = 1;
         } else if (strcmp(argv[i], "--no-water-foam-history") == 0) {
@@ -2536,6 +2561,16 @@ static void render_frame_update(Engine* engine, float dt) {
             decal_probe_print(scene, (int)engine->total_frames, false,
                               light_cluster_decal_mask_digest(engine->light_cluster),
                               light_cluster_decal_mask_bits(engine->light_cluster));
+    }
+    // A touch ripple pressed into the water on its frame (spec 13.4), Clearwater's tap.
+    for (int i = 0; i < frame_schedule->water_drop_count; i++) {
+        if (frame_schedule->water_drop_frame[i] != (int)engine->total_frames)
+            continue;
+        Scene* scene = engine_get_scene(engine);
+        if (scene && scene->water)
+            water_ripple_drop(scene->water, frame_schedule->water_drop_xz[i][0],
+                              frame_schedule->water_drop_xz[i][1], RENDER_WATER_DROP_RADIUS_M,
+                              RENDER_WATER_DROP_DEPTH_M);
     }
 }
 
@@ -4577,6 +4612,9 @@ int main(int argc, char** argv) {
         water_fft_probe(scene->water, engine);
     if (args.water_caustic_probe)
         water_caustic_probe(scene->water);
+    // Measured from the first drop, where a ring is centred.
+    if (args.water_touch_probe && args.water_drop_count > 0)
+        water_touch_probe(scene->water, scene, args.water_drop_xz[0][0], args.water_drop_xz[0][1]);
     /*
      * --water-probe's grid, after the loop because the query answers passes late. `h=` is
      * water_probe_result on either model. On Gerstner `cpu_h=` sits beside it: the closed form,

@@ -95,6 +95,12 @@ void main() {
     OceanSurface s = oceanEvaluateAt(p, time, bed, footprint);
     float tPrev = time - uDeltaTime;
     vec3 prevWorld = oceanPreviousWorldAt(p, tPrev, bed, footprint);
+    // The touch ripples raise and lower the surface (spec 13.4). Onto the previous position
+    // too: the rings move a few centimetres a frame, which is under what TAA can use, and
+    // leaving them out of it reported their whole height as motion.
+    float touchHeight = oceanTouch(s.world.xz).x;
+    s.world.y += touchHeight;
+    prevWorld.y += touchHeight;
 
     WorldPos = s.world;
     SurfParam = p;

@@ -12,6 +12,12 @@
 // Entries in the --render-scale-at diagnostic schedule
 #define RENDER_SCALE_AT_MAX 64
 
+// --water-drop (spec 13.4): how many, and the ripple one presses in -- Clearwater's tap, 0.022 of
+// its 7 m square in radius and 7 cm deep.
+#define RENDER_WATER_DROP_MAX      8
+#define RENDER_WATER_DROP_RADIUS_M 0.154f
+#define RENDER_WATER_DROP_DEPTH_M  0.07f
+
 typedef struct {
     const char* model_path;
     const char* texture_dir;
@@ -129,7 +135,11 @@ typedef struct {
     int no_water_downwell;       // Bisect lever: light submerged surfaces as though in air
     int no_water_caustic_relief; // Bisect lever: caustics ignore the bed's relief
     int no_water_specks;         // Bisect lever: no motes suspended in the water
-    int water_caustic_bands;     // Caustic traces across the spectrum: -1 = keep default
+    int water_touch_probe;       // Print the touch ripples' peak and ring radius after the run
+    int water_drop_count;        // --water-drop entries
+    float water_drop_xz[RENDER_WATER_DROP_MAX][2];
+    int water_drop_frame[RENDER_WATER_DROP_MAX];
+    int water_caustic_bands; // Caustic traces across the spectrum: -1 = keep default
     // WaterFoamDebug (water.h), as an int since args structs here don't carry engine
     // headers. The instrument whitecap coverage is measured with; see Water.foam_debug.
     int water_foam_debug;
