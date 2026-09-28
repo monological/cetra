@@ -1140,6 +1140,22 @@ ShaderProgram* create_bloom_bright_program() {
     return create_post_program("bloom_bright", bloom_bright_frag_shader_str);
 }
 
+ShaderProgram* create_glare_source_program() {
+    return create_post_program("glare_source", glare_source_frag_shader_str);
+}
+
+ShaderProgram* create_glare_fft_program() {
+    return create_post_program("glare_fft", glare_fft_frag_shader_str);
+}
+
+ShaderProgram* create_glare_multiply_program() {
+    return create_post_program("glare_multiply", glare_multiply_frag_shader_str);
+}
+
+ShaderProgram* create_glare_output_program() {
+    return create_post_program("glare_output", glare_output_frag_shader_str);
+}
+
 ShaderProgram* create_bloom_down_program() {
     return create_post_program("bloom_downsample", bloom_downsample_frag_shader_str);
 }

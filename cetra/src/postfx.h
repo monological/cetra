@@ -296,6 +296,16 @@ typedef struct PostFX {
     GLuint flare_fbo, flare_texture; // Quarter post-res
     int flare_width, flare_height;
     ShaderProgram* flare_program;
+
+    // Diffraction glare (spec 13.4): the star an aperture draws round light brighter than
+    // `glare_threshold`, composited in the tonemap beside bloom. On by default.
+    bool glare_enabled;
+    float glare_strength;
+    float glare_threshold; // working-space radiance a point must pass to star
+    bool glare_probe;      // print the source's light against the glare's, once a frame
+    struct Glare* glare;   // engine-owned; made on first use
+    bool glare_failed;     // could not be made; never retried
+
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;

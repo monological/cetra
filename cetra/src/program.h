@@ -278,6 +278,12 @@ ShaderProgram* create_shadow_catcher_program();
 
 // Post-Processing Programs
 ShaderProgram* create_bloom_bright_program();
+// Diffraction glare (spec 13.4): the bright source, one FFT stage, the spectrum multiply and
+// the unpacking into the frame.
+ShaderProgram* create_glare_source_program();
+ShaderProgram* create_glare_fft_program();
+ShaderProgram* create_glare_multiply_program();
+ShaderProgram* create_glare_output_program();
 ShaderProgram* create_bloom_down_program();
 ShaderProgram* create_bloom_up_program();
 ShaderProgram* create_lens_flare_program();

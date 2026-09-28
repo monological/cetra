@@ -1084,6 +1084,86 @@ def _flare_separation(w, h, pix, name):
     return math.hypot(r[0] - b[0], r[1] - b[1]), t
 
 
+# The glare gate (spec 13.4). The water fixture looking into its sun, where the glitter carries
+# thousands of pixels past the threshold, and the AO fixture, where nothing reaches it.
+GLARE_BRIGHT_FLAGS = ["--water-waves", "fft", "--cam-eye", "-3,1.2,3", "--cam-target", "4,0,-4",
+                      "--no-auto-exposure", "-E", "1.0"]
+GLARE_DARK_FLAGS = ["--no-auto-exposure", "-E", "1.0"]
+# The glare's light over its source's, per channel. The pattern is normalised, so it can only
+# lose what spreads past the frame's edge: 0.98 when measured.
+GLARE_ENERGY_RANGE = (0.9, 1.02)
+GLARE_LIVE_MIN_PX = 20000
+
+
+def _glare_probe(extra, scene):
+    """Run --glare-probe and return the last frame's (source, glare) RGB lists, or None."""
+    cmd = [RENDER, "-m", scene, "-x", "-f", "10", "-W", "400", "-H", "300", "--glare-probe"] + extra
+    r = _run(cmd, capture_output=True, text=True)
+    last = None
+    for line in (r.stdout + r.stderr).splitlines():
+        if line.startswith("glare-probe "):
+            fields = dict(p.split("=", 1) for p in line.split()[1:])
+            last = ([float(v) for v in fields["source"].split(",")],
+                    [float(v) for v in fields["glare"].split(",")])
+    return last
+
+
+def run_glare_gate(workdir):
+    """The aperture's diffraction star (spec 13.4): it conserves light, it is there, and it is
+    nowhere a frame has nothing bright enough to star.
+
+      glare-energy  the glare's light over its thresholded source's, per channel, within
+                    GLARE_ENERGY_RANGE: the pattern is normalised, so the only loss is what spills
+                    past the frame's edge, and a transform that scaled, lost or doubled light --
+                    a missing normalisation, a kernel built for another grid -- lands outside it.
+      glare-live    against --no-glare the sunward frame moves at least GLARE_LIVE_MIN_PX.
+      glare-dark    a frame with nothing past the threshold is identical with and without it:
+                    the transform's rounding must not reach an 8-bit code, which is what keeps
+                    every golden without a highlight unmoved.
+    """
+    failures = []
+    water = asset(WATER_FIXTURE)
+    probed = _glare_probe(GLARE_BRIGHT_FLAGS, water)
+    if not probed:
+        print("  glare-energy FAIL  the probe printed nothing")
+        failures.append("glare-energy")
+    else:
+        source, glare = probed
+        ratios = [g / max(s, 1e-9) for s, g in zip(source, glare)]
+        lo, hi = GLARE_ENERGY_RANGE
+        ok = all(lo <= r <= hi for r in ratios) and min(source) > 0.0
+        print(f"  glare-energy {'PASS' if ok else 'FAIL'}  glare over source "
+              f"{'/'.join(f'{r:.4f}' for r in ratios)} (want {lo}..{hi})")
+        if not ok:
+            failures.append("glare-energy")
+
+    on = os.path.join(workdir, "glare_on.ppm")
+    off = os.path.join(workdir, "glare_off.ppm")
+    dark_on = os.path.join(workdir, "glare_dark_on.ppm")
+    dark_off = os.path.join(workdir, "glare_dark_off.ppm")
+    dark = asset("ao_fixture.cscn")
+    err = (render(water, on, GLARE_BRIGHT_FLAGS) or
+           render(water, off, GLARE_BRIGHT_FLAGS + ["--no-glare"]) or
+           render(dark, dark_on, GLARE_DARK_FLAGS) or
+           render(dark, dark_off, GLARE_DARK_FLAGS + ["--no-glare"]))
+    if err:
+        print(f"  glare-live   ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["glare-live", "glare-dark"]
+    moved, _ = compare(on, off)
+    ok = moved >= GLARE_LIVE_MIN_PX
+    print(f"  glare-live   {'PASS' if ok else 'FAIL'}  {moved} px against --no-glare "
+          f"(want >={GLARE_LIVE_MIN_PX})")
+    if not ok:
+        failures.append("glare-live")
+    still, _ = compare(dark_on, dark_off)
+    ok = still == 0
+    print(f"  glare-dark   {'PASS' if ok else 'FAIL'}  {still} px on a frame with nothing to "
+          f"star (want 0)")
+    if not ok:
+        failures.append("glare-dark")
+    return failures
+
+
 def run_flare_gate(workdir):
     fixture = asset("flare_fixture.cscn")
     if not os.path.exists(fixture):
@@ -26454,6 +26534,7 @@ GATE_GROUPS = [
     ("skin-area", "subsurface under an area light (spec 11.19 / B3.2):", run_skin_area_gate),
     ("hair", "hair lobes driven by the strand map (spec 11.20 / B8):", run_hair_flow_gate),
     ("flare", "lens flare and chromatic aberration (spec 11.21 / B7):", run_flare_gate),
+    ("glare", "the aperture's diffraction glare (spec 13.4):", run_glare_gate),
     ("sss-invariance", "subsurface blur (world width vs frame size):", run_sss_invariance_gate),
     ("sss-banding", "subsurface blur (kernel not visible as rings):", run_sss_banding_gate),
     ("dither", "output dither (8-bit contour bands, spec 11.24 / E1):", run_dither_gate),
