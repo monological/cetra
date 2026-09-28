@@ -452,6 +452,9 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "halo_width", flare_halo_width),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.flare", "chroma", flare_chroma),
     CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.flare", "source_lod", flare_source_lod),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.glare", "enabled", glare_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.glare", "strength", glare_strength),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.glare", "threshold", glare_threshold),
 
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ao", "enabled", ssao_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ao", "radius", ssao_radius),

@@ -10,8 +10,8 @@ out vec4 FragColor;
 // shading passes wrote under.
 #include "view.glsl"
 #include "noise.glsl"
-// Declares purkinjeAdaptTex on unit 7 -- the metering 1x1, which is why this
-// program samples 13 of 16 rather than 12.
+// Declares purkinjeAdaptTex on unit 7 -- the metering 1x1. With the glare on 13
+// (spec 13.4), this program samples 14 of 16.
 #include "purkinje.glsl"
 
 uniform sampler2D hdrTex;
@@ -23,6 +23,10 @@ uniform int bloomEnabled;
 uniform sampler2D flareTex;
 uniform float flareStrength;
 uniform int flareEnabled;
+// Diffraction glare (spec 13.4): the aperture's star round the brightest light, covering the frame.
+uniform sampler2D glareTex;
+uniform float glareStrength;
+uniform int glareEnabled;
 uniform int aoEnabled;
 uniform float aoStrength;
 uniform sampler2D normalsTex; // Resolved view-space normal .xyz + SSR marker .a
@@ -622,6 +626,9 @@ void main()
     // see bloom instead of sampling a different image.
     if (flareEnabled == 1)
         bloomAdd += flareStrength * texture(flareTex, TexCoords).rgb;
+    // The glare joins it for the same reason: light the lens spread, added before the curve.
+    if (glareEnabled == 1)
+        bloomAdd += glareStrength * texture(glareTex, TexCoords).rgb;
 
     // Chromatic aberration: a lens focuses wavelengths at slightly different
     // scales, so the channels separate along the radius and the effect vanishes

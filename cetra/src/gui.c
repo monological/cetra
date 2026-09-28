@@ -860,6 +860,12 @@ static void _engine_gui_panel(Engine* engine) {
                     fx->bloom_mips > 0 ? fx->bloom_mips - 1 : 0, "%d", 0);
         _end_effect_group();
 
+        _begin_effect_group("Diffraction Glare", &fx->glare_enabled);
+        igSliderFloat("Glare Strength", &fx->glare_strength, 0.0f, 3.0f, "%.2f", 0);
+        igSliderFloat("Glare Threshold", &fx->glare_threshold, 1.0f, 100.0f, "%.1f",
+                      ImGuiSliderFlags_Logarithmic);
+        _end_effect_group();
+
         _begin_effect_group("Ambient Occlusion (GTAO)", &fx->ssao_enabled);
         // Log scale + wide range: the AO/GI reach is a world-space distance, so
         // apps scale it to the scene (meter-scale models sit near the bottom,

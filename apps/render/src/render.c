@@ -321,6 +321,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --sss-radius <f>   SSS scatter radius (world units)\n");
     fprintf(stderr, "      --sss-color <r,g,b> SSS per-channel scatter color (e.g. 1.0,0.3,0.2)\n");
     fprintf(stderr, "      --no-bloom         Disable bloom\n");
+    fprintf(stderr, "      --no-glare         Disable the aperture's diffraction star\n");
+    fprintf(stderr, "      --glare-probe      Print the glare's light against its source's\n");
     fprintf(stderr, "      --bloom-strength <f> Bloom strength (default: engine)\n");
     fprintf(stderr, "      --bloom-threshold <f> Bloom threshold (default: engine)\n");
     fprintf(stderr, "      --fog-anisotropy <f> Fog scatter anisotropy -1..1 (implies --fog)\n");
@@ -1694,6 +1696,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
         } else if (strcmp(argv[i], "--no-bloom") == 0) {
             args->no_bloom = 1;
+        } else if (strcmp(argv[i], "--no-glare") == 0) {
+            args->no_glare = 1;
+        } else if (strcmp(argv[i], "--glare-probe") == 0) {
+            args->glare_probe = 1;
         } else if (strcmp(argv[i], "--bloom-strength") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -3367,6 +3373,9 @@ int main(int argc, char** argv) {
     }
     if (engine->postfx) {
         PostFX* fx = engine->postfx;
+        if (args.no_glare)
+            fx->glare_enabled = false;
+        fx->glare_probe = args.glare_probe != 0;
         if (args.no_bloom) {
             fx->bloom_enabled = false;
         } else if (args.bloom_enable >= 0) {

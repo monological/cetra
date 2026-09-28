@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "postfx.h"
+#include "glare.h"
 #include "lut.h"
 #include "profiler.h"
 #include "texture.h"
@@ -639,6 +640,12 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // strength drops to match
     fx->bloom_strength = 0.015f;
     fx->bloom_enabled = true;
+
+    // Clearwater's: the glare added at 0.9 before its exposure of 0.63, from light past 14 before
+    // that exposure -- 8.8 in the working space, which is already exposed.
+    fx->glare_enabled = true;
+    fx->glare_strength = 0.9f;
+    fx->glare_threshold = 8.8f;
 
     fx->flare_enabled = false;
     // Measured on the flare fixture: 0.02 is present but easy to miss, 0.06
@@ -2146,6 +2153,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->bloom_down_program);
     free_program(fx->bloom_up_program);
     free_program(fx->flare_program);
+    free_glare(fx->glare);
+    fx->glare = NULL;
     free_program(fx->tonemap_program);
     free_program(fx->spec_occ_composite_program);
     free_program(fx->gtao_program);
@@ -3752,6 +3761,19 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             if (flare_wanted)
                 flare_active = postfx_run_flare(fx);
         }
+        // The aperture's star (spec 13.4), from the frame itself rather than the bloom pyramid:
+        // it is a convolution of the light as it is, and the pyramid is already blurred.
+        GLuint glare_tex = 0;
+        if (fx->glare_enabled && fx->glare_strength > 0.0f && !fx->glare_failed) {
+            if (!fx->glare && !(fx->glare = create_glare()))
+                fx->glare_failed = true;
+            if (fx->glare) {
+                profiler_scope_begin(fx->profiler, "glare");
+                glare_tex = glare_run(fx->glare, scene_tex, fx->out_width, fx->out_height,
+                                      fx->glare_threshold, fx->quad_vao, fx->glare_probe);
+                profiler_scope_end(fx->profiler);
+            }
+        }
 
         // Composite + tone map into the target framebuffer. The quad runs at
         // the display size while sampling the supersampled HDR texture, so each
@@ -3797,7 +3819,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_3D, fx->lut_texture); // 0 when no table is loaded
         glActiveTexture(GL_TEXTURE12);
         glBindTexture(GL_TEXTURE_2D, fx->spec_occ_ready ? fx->spec_occ_texture : 0);
+        glActiveTexture(GL_TEXTURE13);
+        glBindTexture(GL_TEXTURE_2D, glare_tex);
         UniformManager* tm = fx->tonemap_program->uniforms;
+        uniform_set_int(tm, "glareTex", 13);
+        uniform_set_float(tm, "glareStrength", fx->glare_strength);
+        uniform_set_int(tm, "glareEnabled", glare_tex ? 1 : 0);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(tm, "flareTex", 8);
