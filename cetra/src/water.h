@@ -345,9 +345,10 @@ typedef struct Water {
     WaterWaveModel wave_model;
     // Refracted-grid caustics on what the surface refracts, on either wave model (spec 13.2).
     bool caustics;
-    // true = trace the caustics once per band of the spectrum rather than once and spread, the
-    // brute-force answer the spread is checked against (spec 13.4). Sixteen times the cost.
-    bool caustic_reference;
+    // How many bands of the spectrum the caustics are traced in, each at its own index (spec
+    // 13.4), up to WATER_CAUSTIC_REFERENCE_SAMPLES; 0 = one trace, spread across the spectrum by
+    // the surface's lookup. Each band costs a whole trace.
+    int caustic_bands;
     // false = no analytic sun lobe, which is every frame before spec 11.42. Live on both
     // wave models: its width comes from the slope the surface stopped resolving, and the
     // Gerstner path reports that from its dropped octaves.
