@@ -45,18 +45,26 @@ megapixel per light), but cost tracks COVERAGE rather than count -- sixteen ligh
 scene cost +0.77 ms against the +38 ms sixteen coincident ones would, because a pixel marches only
 the lights whose cluster entry reaches it. There is deliberately no per-pixel light cap),
 `--motion-blur`, `--dof`,
-`-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--tonemap <neutral|aces|agx|linear>`
+`-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--no-glare` (the aperture's diffraction star,
+on by default since spec 13.4; `--glare-probe` prints the light it carries against its source's),
+`--tonemap <neutral|aces|agx|linear>`
 (`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
 colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
 selects for a flat-colour scene; **not** `passthrough`: `render_args.h` notes the "unset" sentinel deliberately coincides
 with `POSTFX_TONEMAP_PASSTHROUGH = 0`, so it is unreachable from the CLI by design — any
 gate needing a linear read has to be written as a ratio instead, spec 11.32),
 `--water` (`--water-level <f>`, `--water-extent <f>`, `--water-waves <gerstner|fft>`,
-`--water-bed <none|dome>`, `--water-probe`, `--water-fft-probe`, `--water-caustic-debug <1|2>`
-(1 the factor the caustics multiplied the bed by, 2 the raw caustics target laid on the surface;
+`--water-bed <none|dome>`, `--water-probe`, `--water-fft-probe`, `--water-caustic-debug <1|2|3>`
+(1 the factor the caustics multiplied the bed by, 2 the raw caustics target laid on the surface,
+3 that target spread across the spectrum and the key's disc at the reference plane's depth;
 half grey where nothing is concentrated), `--water-caustic-probe` (the target's mean, min and max
-over its inner 80%, and the mean is the energy check: 1 for any sea); `--no-water`, `--no-water-caustics`,
-`--no-water-glitter`, `--no-water-foam-history`,
+over its inner 80%, per colour channel, and the mean is the energy check: 1 for any sea),
+`--water-caustic-bands <0..16>` (trace the caustics in N real bands of the spectrum rather than
+once and spread -- the reference the spread is measured against, a whole trace per band),
+`--water-drop x,z,frame` (press a ripple into the water there on that frame, repeatable) and
+`--water-touch-probe` (the ripples' deepest point and its distance from the first drop), spec
+13.4; `--no-water`, `--no-water-caustics`, `--no-water-glitter`, `--no-water-downwell`,
+`--no-water-caustic-relief`, `--no-water-specks`, `--no-water-foam-history`,
 `--no-water-coverage`, `--no-water-lod`; specs 11.32 to 11.35 and 11.42 — suppresses the shadow catcher,
 see the pass order above. Gerstner is the default and allocates nothing; `fft` is an OCEAN and adds 64
 passes a frame: three cascades at 128² and, since spec 13.3, a ripple band at 512². **Crest foam is FFT-only**, and that is by construction rather than an
@@ -65,11 +73,11 @@ so its mapping cannot compress. **Caustics run on both** since spec 13.2: they r
 light through the surface normal onto the floor, which needs a normal and not a fold. The SHORE foam band is
 not — it is selected from the shoal factor and runs on both models, which is what makes
 Gerstner the way to isolate it.
-**A scene file can author the whole surface** (`water{}`, 20 keys plus 8 in each of two nested
+**A scene file can author the whole surface** (`water{}`, 21 keys -- 13.4 added `scatterG` -- plus 8 in each of two nested
 wave trains — the 16th flat key is `farLod`, added by 11.35 for far-field filtering; specs 11.33
 phase 5, 11.35, 11.42, 11.48), and the flags override it rather than the reverse — so `--no-water`
 exists and is the only way to switch off a surface a `.cscn` asked for.
-`assets/scenes/water_fixture.cscn` authors all 36 and is the block's worked example (35 until 11.84 split the in-scatter in two). **No flag can set any
+`assets/scenes/water_fixture.cscn` authors all 37 and is the block's worked example (35 until 11.84 split the in-scatter in two, 36 until 13.4). **No flag can set any
 of the SEA STATE**, which makes a scene file the only way in and `water-seastate` the only arm on
 that path; editing any of it re-seeds the initial spectrum on the next frame, which is a CPU pass
 over three 128² grids.
