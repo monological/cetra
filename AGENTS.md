@@ -251,15 +251,21 @@ contact shadows -> GTAO + SSGI sweep -> split spec-occ composite -> the TAA seam
 (TAA at full scale; the TAAU upscaling resolve under `--render-scale`, which
 brings the render-res frame to post res) -> SSGI denoise -> SSR (hi-z) ->
 SSGI composite -> atmosphere (fog + aerial) -> SSS -> motion blur -> DoF ->
-auto-exposure metering -> bloom -> tonemap + finishing (sharpen / color-grade /
+auto-exposure metering -> bloom (+ lens flare) -> diffraction glare -> tonemap + finishing (sharpen / color-grade /
 vignette / gamma / grain) -> GUI. Everything before the seam runs at RENDER res
 (post size x `render_scale`, 1 by default), everything after composites onto a
 post-res canvas; at scale 1 the two are the same buffer. Debug render modes
 take a passthrough blit and skip the whole chain.
 
-**Defaults:** on = bloom, GTAO + specular occlusion, SSR, auto-exposure, NEUTRAL
-tonemap, normals G-buffer, OIT + moment weighting. Off (present, lazily
+**Defaults:** on = bloom, diffraction glare, GTAO + specular occlusion, SSR, auto-exposure,
+NEUTRAL tonemap, normals G-buffer, OIT + moment weighting. Off (present, lazily
 allocated) = SSGI, fog, DoF, motion blur.
+
+**The glare is on everywhere and bills only a frame's highlights** (spec 13.4, `glare.c`): the
+star an aperture draws round light past `glare_threshold`, convolved by FFT on a 512x256 grid
+(1.5 ms at 960x540), light-conserving to 0.99. A frame with nothing that bright is identical
+to `--no-glare` at 0 px, which is why only goldens with a sun glint moved when it landed.
+`engine_set_2d_preset` switches it off.
 
 **SSS is the exception in that list and used to be filed with them.** `engine->sss_enabled` is
 **true** (`engine.c:238`) where the other four are false, so it is not off -- it is INERT, because
@@ -645,7 +651,24 @@ entry there before changing anything marked with a dagger.
   **The ripple band (13.3)** is the fourth spectral band, 512² over 6 m past the short band's
   24 rad/m (`water_ripple_constants.glsl`), shading the surface and the caustic trace through
   `oceanShadingNormal` at the mip its footprint asks for, with what that mip drops handed to
-  roughness from a per-level variance predicted at seeding
+  roughness from a per-level variance predicted at seeding. **Spec 13.4 brought Clearwater's
+  better halves across**, each behind its own switch and arm:
+  - **Light reaching a submerged surface** (`include/water_light.glsl`, read by `pbr_frag` too):
+    every directional scaled by `1 - F` and Beer-Lambert along its REFRACTED path, the ambient
+    by the sky's diffuse weakening, published through `_water_publish_shore`. `water_fixture`'s
+    bed is EMISSIVE and cannot see this; `water_downwell_fixture.cscn` is the lit one.
+  - **In-scatter** as the column integral of a sun weakened with depth, Henyey-Greenstein at
+    `Water.scatter_g`, normalised against the NADIR -- an eye above water only sees the back
+    of a forward lobe, and a sphere normalisation dimmed every sea to a third.
+  - **Caustics split into the spectrum from ONE trace**, 8 taps along the first-order shift
+    weighted by CIE 1931 and blurred by the key's disc. It gets the AMOUNT of colour right and
+    not its placement; `--water-caustic-bands N` traces N real bands and is the reference.
+  - **Cubic B-spline reads** of the shading bands where magnified, the bed's **relief** read off
+    its own brightness, sunlit **specks** in the column, and **touch ripples** -- a 7 m wave
+    simulation following the view, fed by `water_ripple_drop`, on unit 5, which takes `water_frag`
+    to 14 samplers
+- **Diffraction glare:** `glare_source/fft/multiply/output_frag` + `glare.c` (spec 13.4) -- see
+  the PostFX defaults above
 - **OIT:** `oit_resolve_frag` + `include/mboit.glsl` (the absorbance moments and their
   reconstruction, shared by the generation and accumulate sub-passes)
 - **Atmosphere †:** `froxel_inject/integrate/composite_frag` + `include/froxel.glsl`, and
@@ -977,7 +1000,7 @@ feature needs before asking for a unit, ask what is already DECLARED before aski
 program, and ask whether the data belongs on the VERTEX at all before asking for either.**
 
 **`water_frag` reached the same ceiling in 11.42, and 11.45 took it back off** — it declares
-**13** -- 13.2's caustics targets on unit 3, 13.3's ripple band on 4 -- not 16, and this paragraph claimed the ceiling
+**14** -- 13.2's caustics targets on unit 3, 13.3's ripple band on 4, 13.4's touch ripples on 5 -- not 16, and this paragraph claimed the ceiling
 for three specs after it was freed. It is a
 separate ledger — a program gets sixteen, not the engine — so its units alias `pbr_frag`'s freely,
 and its tenants are chosen around a rule the material ledger never has to think about: **two sampler

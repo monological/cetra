@@ -22,7 +22,7 @@ Sky and night: [Day/night cycle](#daynight-cycle) · [The moon](#the-moon) ·
 [Atmosphere](#atmosphere)
 
 Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
-[Purkinje / scotopic shift](#purkinje--scotopic-shift)
+[Purkinje / scotopic shift](#purkinje--scotopic-shift) · [Diffraction glare](#diffraction-glare)
 
 Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profiles](#ies-profiles) ·
 [Contact shadows](#contact-shadows) · [Clustered specular probes](#clustered-specular-probes)
@@ -350,8 +350,8 @@ shadow, 15 foam (`water.h:47-90`). Two separate arrays rather than more layers o
 the two have different LIFETIMES -- the fields are this frame's render targets and the previous
 are a copy taken before they are overwritten. 11 is deliberately not `SHADOW_MAP_TEXTURE_UNIT`
 10, because two sampler TYPES against one image unit is an `INVALID_OPERATION` at draw.
-**It declares 13 since spec 13.3**: 13.2 put the caustics targets on 3 (an ARRAY since 13.3, a
-layer per level), and 13.3 put the ripple band's own array on 4.
+**It declares 14 since spec 13.4**: 13.2 put the caustics targets on 3 (an ARRAY since 13.3, a
+layer per level), 13.3 put the ripple band's own array on 4, and 13.4 the touch ripples on 5.
 
 **The ripple band (spec 13.3)** is a fourth spectral band, past the short band's 24 rad/m, in
 its own 512² transform over 6 m -- 19 more draws, 64 a frame -- because a 128 over a tile short
@@ -369,6 +369,44 @@ load-bearing**: on Apple's GL the fetch otherwise sees the texture from before t
 rendered it -- the caustics were a frame late for all of 13.2. And the key's visibility at the
 bed is averaged over a disc as wide as the waves spread the refracted key over the path down,
 so a shadow falling on the bed fades the caustics out rather than stopping them on a line.
+
+**Spec 13.4 took what Clearwater does better**, and three of the six are easy to get wrong:
+
+- **Light reaching a submerged surface is weakened on the way DOWN**, in `pbr_frag`, through
+  `include/water_light.glsl`: `1 - F` at the surface and Beer-Lambert along the key's refracted
+  path, the sky by its diffuse coefficient. Before it the bed was lit as though in air and only
+  the view path absorbed. `water_fixture`'s bed is emissive and blind to it -- `water-downwell`
+  runs on `water_downwell_fixture.cscn`, and solves the depth from each channel at two key
+  angles, which is what catches a vertical path or a missing Fresnel.
+- **The in-scatter is normalised against the nadir, not the sphere.** Both the refracted sight
+  line and the refracted sun point down, so an eye above the water only ever sees the back of a
+  forward-peaked lobe; a sphere normalisation dimmed every sea to a third, which Clearwater
+  covers with a constant of 3.2. The column is integrated exactly, where theirs samples the sun
+  at mid-depth -- an estimate that sends bottomless water to black.
+- **The caustics' colour is one trace spread across the spectrum**, and the spread gets the
+  AMOUNT right and not the PLACEMENT. At a few metres the ripples' light has crossed itself
+  before the floor and each wavelength's crossings land elsewhere; 8 traced bands against 16
+  still disagree by 0.7 of the signal. Three traces at three indices, Clearwater's way, is three
+  samples of a continuous spectrum and prints saturated speckle at every fold. A per-point
+  dispersion from the trace was tried and did not earn its second target. `--water-caustic-bands`
+  and `--water-caustic-debug 3` are the instrument, and `water-caustic-spectrum` holds the amount.
+
+The other three are plainer: a cubic B-spline read of the shading bands where they are
+magnified, the bed's relief read off its brightness against its neighbourhood, and sunlit
+specks in the column. The touch ripples are a 256² wave equation over 7 m that follows the view,
+stepped at a fixed 60 Hz from the frame clock so a headless run repeats, and read through
+`oceanShadingNormal` so the caustics refract through the rings as well.
+
+## Diffraction glare
+
+`glare.c` plus four `glare_*_frag` passes (spec 13.4, after Clearwater): the aperture's
+diffraction pattern -- the power spectrum of a round lens with flattened sides, scratches and
+dust, summed over eight wavelengths and normalised -- convolved with the frame's light past
+`glare_threshold` by FFT on a 512x256 grid, so its cost is independent of how many glints there
+are. It conserves light to 0.99 (what spills past the frame's edge is the rest), and a frame
+with nothing that bright is identical to `--no-glare`, which is what keeps goldens without a
+highlight still. Its far field is lifted eightfold, a phone lens's -- the reason its veil is as
+heavy as it is, and a choice rather than a measurement.
 
 ## Atmosphere
 
