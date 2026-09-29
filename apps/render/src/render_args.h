@@ -290,7 +290,9 @@ typedef struct {
     float sss_radius;             // SSS scatter radius override (< 0 = fixture default)
     float sss_color[3];           // SSS scatter color override (< 0 in [0] = fixture default)
     int no_bloom;                 // Disable bloom
-    int no_glare;                 // Disable the diffraction glare (spec 13.4)
+    int glare_enable;             // -1 = keep default (off); 0/1 force (--glare, scene file)
+    float glare_strength;         // -1 = keep engine default
+    float glare_threshold;        // -1 = keep engine default
     int glare_probe;              // Print the glare's light against its source's, per frame
     int bloom_enable;             // -1 = keep default; 0/1 force (scene file)
     float bloom_strength;         // -1 = keep engine default

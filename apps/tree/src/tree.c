@@ -813,6 +813,7 @@ typedef struct {
     float sun_elevation;
     float sun_azimuth;
     int no_water;      // the sea is ON here: this app's ground IS an island
+    int no_glare;      // the diffraction glare is ON here: a low sun over a glittering sea
     float water_level; // world Y of the still surface (-9999 = the default)
     // Spectral by default here. Gerstner is the A/B, and the only way to reach the
     // wavelength/amplitude/steepness/spread this app authors, which the spectral path ignores.
@@ -898,6 +899,7 @@ static void print_usage(const char* prog) {
     printf("      -c, --config <path> Restore a config snapshot dumped from a session\n");
     printf("                          (the GUI's Dump Config button writes one)\n");
     printf("      --no-water          Dry land: drop the sea around the island\n");
+    printf("      --no-glare          No diffraction star round the sun's glints\n");
     printf("      --water-level D     Still-water world Y (default %.1f)\n",
            (double)ground_shore_height());
     printf("      --gerstner-waves    Closed-form octaves instead of spectral cascades\n");
@@ -980,6 +982,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->sun_azimuth = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--no-water")) {
             a->no_water = 1;
+        } else if (!strcmp(s, "--no-glare")) {
+            a->no_glare = 1;
         } else if (!strcmp(s, "--water-level") && has_next) {
             a->water_level = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--gerstner-waves")) {
@@ -1183,6 +1187,10 @@ int main(int argc, char** argv) {
     engine_set_screenshot_path(engine, args.screenshot);
     engine->screenshot_every = args.screenshot_every;
     engine->exit_after_frames = args.frames;
+    // Off by default in the engine; this is the scene it is for -- the sun low over the sea,
+    // its glints bright enough to star.
+    if (engine->postfx)
+        engine->postfx->glare_enabled = !args.no_glare;
 
     engine_set_mouse_button_callback(engine, mouse_button_callback);
     engine_set_key_callback(engine, key_callback);

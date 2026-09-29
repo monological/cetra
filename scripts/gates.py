@@ -1092,9 +1092,10 @@ def _flare_separation(w, h, pix, name):
 
 # The glare gate (spec 13.4). The water fixture looking into its sun, where the glitter carries
 # thousands of pixels past the threshold, and the AO fixture, where nothing reaches it.
-GLARE_BRIGHT_FLAGS = ["--water-waves", "fft", "--cam-eye", "-3,1.2,3", "--cam-target", "4,0,-4",
-                      "--no-auto-exposure", "-E", "1.0"]
-GLARE_DARK_FLAGS = ["--no-auto-exposure", "-E", "1.0"]
+# --glare on both: it is off by default (spec 13.5), and these arms are about it.
+GLARE_BRIGHT_FLAGS = ["--glare", "--water-waves", "fft", "--cam-eye", "-3,1.2,3", "--cam-target",
+                      "4,0,-4", "--no-auto-exposure", "-E", "1.0"]
+GLARE_DARK_FLAGS = ["--glare", "--no-auto-exposure", "-E", "1.0"]
 # The glare's light over its source's, per channel. The pattern is normalised, so it can only
 # lose what spreads past the frame's edge: 0.999 when measured.
 GLARE_ENERGY_RANGE = (0.9, 1.02)
@@ -1133,6 +1134,9 @@ def run_glare_gate(workdir):
       glare-dark    a frame with nothing past the threshold is identical with and without it:
                     the transform's rounding must not reach an 8-bit code, which is what keeps
                     every golden without a highlight unmoved.
+      glare-scene   the glare is off by default and a scene file turns it on (spec 13.5): the
+                    sunward frame from a copy of the fixture carrying post.glare.enabled is the
+                    frame --glare renders, and not the frame without it.
     """
     failures = []
     water = asset(WATER_FIXTURE)
@@ -1180,6 +1184,26 @@ def run_glare_gate(workdir):
           f"star (want 0)")
     if not ok:
         failures.append("glare-dark")
+
+    scene = os.path.join(workdir, "glare_scene.cscn")
+    cscn_copy(water, scene,
+              lambda d: d.setdefault("post", {}).__setitem__("glare", {"enabled": True}))
+    authored = os.path.join(workdir, "glare_scene.ppm")
+    plain = os.path.join(workdir, "glare_default.ppm")
+    unflagged = [f for f in GLARE_BRIGHT_FLAGS if f != "--glare"]
+    err = render(scene, authored, unflagged) or render(water, plain, unflagged)
+    if err:
+        print(f"  glare-scene  ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["glare-scene"]
+    as_flag, _ = compare(authored, on)
+    as_default, _ = compare(authored, plain)
+    default_off, _ = compare(plain, off)
+    ok = as_flag == 0 and as_default >= GLARE_LIVE_MIN_PX and default_off == 0
+    print(f"  glare-scene  {'PASS' if ok else 'FAIL'}  scene-authored against --glare {as_flag} px "
+          f"(want 0), against the default {as_default} px (want >={GLARE_LIVE_MIN_PX}), default "
+          f"against --no-glare {default_off} px (want 0)")
+    if not ok:
+        failures.append("glare-scene")
     return failures
 
 

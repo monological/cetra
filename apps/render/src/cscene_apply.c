@@ -240,6 +240,15 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     if (args->bloom_threshold < 0.0f && cscn->has_bloom_threshold) {
         args->bloom_threshold = cscn->bloom_threshold;
     }
+    if (args->glare_enable < 0 && cscn->has_glare_enabled) {
+        args->glare_enable = cscn->glare_enabled ? 1 : 0;
+    }
+    if (args->glare_strength < 0.0f && cscn->has_glare_strength) {
+        args->glare_strength = cscn->glare_strength;
+    }
+    if (args->glare_threshold < 0.0f && cscn->has_glare_threshold) {
+        args->glare_threshold = cscn->glare_threshold;
+    }
     if (cscn->fog_enabled) {
         args->fog = 1;
     }

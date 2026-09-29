@@ -641,10 +641,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->bloom_strength = 0.015f;
     fx->bloom_enabled = true;
 
-    // All of the light past the threshold moves into the star, which is what an aperture does
-    // (spec 13.5). The threshold is Clearwater's 14 before its exposure of 0.63 -- 8.8 in the
-    // working space, which is already exposed.
-    fx->glare_enabled = true;
+    // Off unless a scene or an app asks: a star round every bright point is a look, and most
+    // scenes are not after it. Once on, all of the light past the threshold moves into it, which
+    // is what an aperture does (spec 13.5). The threshold is Clearwater's 14 before its exposure
+    // of 0.63 -- 8.8 in the working space, which is already exposed.
+    fx->glare_enabled = false;
     fx->glare_strength = 1.0f;
     fx->glare_threshold = 8.8f;
 

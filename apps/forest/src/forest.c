@@ -151,6 +151,7 @@ typedef struct ForestArgs {
     // shoreline and open sea past it. --no-island is the flat-domain terrain
     // every arm written before it measures, and it takes the sea with it.
     int no_island;
+    int glare; // the diffraction star, off by default
     // The gravel trail across the island (spec 11.68), which is also what keeps
     // props off its course. --no-trail is the ground before it.
     int no_trail;
@@ -3113,6 +3114,8 @@ static void print_usage(const char* argv0) {
     fprintf(stderr,
             "      --walk <speed>           Walk the character forward, about-face at half\n");
     fprintf(stderr, "      --no-island              Flat domain and no sea, as before 11.63\n");
+    fprintf(stderr,
+            "      --glare                  The aperture's diffraction star round bright light\n");
     fprintf(stderr, "      --no-trail               No gravel path, and no props kept off it\n");
     fprintf(stderr, "      --seed N            Terrain and scatter seed\n");
     fprintf(stderr, "      --screenshot-every N  Also save numbered frames every N frames\n");
@@ -3174,6 +3177,8 @@ int main(int argc, char** argv) {
             g_args.walk = (float)atof(argv[++i]);
         } else if (!strcmp(a, "--no-island")) {
             g_args.no_island = 1;
+        } else if (!strcmp(a, "--glare")) {
+            g_args.glare = 1;
         } else if (!strcmp(a, "--no-trail")) {
             g_args.no_trail = 1;
         } else if (!strcmp(a, "--no-lod")) {
@@ -3340,6 +3345,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     game->engine->exit_after_frames = g_args.frames;
+    if (game->engine->postfx)
+        game->engine->postfx->glare_enabled = g_args.glare != 0;
     engine_set_screenshot_path(game->engine, g_args.screenshot);
     game->engine->screenshot_every = g_args.screenshot_every;
     input_bind(&game->input, g_actions, sizeof(g_actions) / sizeof(g_actions[0]));
