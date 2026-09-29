@@ -257,15 +257,27 @@ vignette / gamma / grain) -> GUI. Everything before the seam runs at RENDER res
 post-res canvas; at scale 1 the two are the same buffer. Debug render modes
 take a passthrough blit and skip the whole chain.
 
-**Defaults:** on = bloom, diffraction glare, GTAO + specular occlusion, SSR, auto-exposure,
+**Defaults:** on = bloom, GTAO + specular occlusion, SSR, auto-exposure,
 NEUTRAL tonemap, normals G-buffer, OIT + moment weighting. Off (present, lazily
-allocated) = SSGI, fog, DoF, motion blur.
+allocated) = SSGI, fog, DoF, motion blur, diffraction glare.
 
-**The glare is on everywhere and bills only a frame's highlights** (spec 13.4, `glare.c`): the
-star an aperture draws round light past `glare_threshold`, convolved by FFT on a 512x256 grid
-(1.5 ms at 960x540), light-conserving to 0.99. A frame with nothing that bright is identical
-to `--no-glare` at 0 px, which is why only goldens with a sun glint moved when it landed.
-`engine_set_2d_preset` switches it off.
+**The glare is OFF unless something asks for it** (specs 13.4 and 13.5, `glare.c`): the star an
+aperture draws round light past `glare_threshold`, convolved by FFT on a 512x256 grid (1.5 ms
+at 960x540). A scene asks with `post.glare` in its `.cscn`, an app with
+`postfx->glare_enabled`; `apps/tree` does, for its low sun over the sea, and the render app,
+forest and gametest take `--glare`. Three things about it are easy to get backwards.
+- **It MOVES light rather than adding it.** The tonemap takes the moved light out of the pixel
+  it came from (`glare_threshold.glsl`, the one rule the source pass shares), and
+  `glare-conserves` holds the frame's total at 1.007.
+- **Only the HALO is moved.** The star is built on a grid whose cell is several frame pixels,
+  so the Airy disk -- about three quarters of the light -- is cut from the kernel and stays where
+  it was at full resolution. Moving it redrew every bright edge soft and stepped.
+- **Its source thresholds every texel BEFORE the downsample**, never after. A glint is often
+  one bright texel among dim ones, and thresholding the block's average put back 58% of what
+  the tonemap took, darkening every glint.
+
+Clearwater's 8x far-field lift is deliberately not carried: it imitates a phone lens and is no
+part of an aperture's diffraction. `engine_set_2d_preset` switches the glare off.
 
 **SSS is the exception in that list and used to be filed with them.** `engine->sss_enabled` is
 **true** (`engine.c:238`) where the other four are false, so it is not off -- it is INERT, because

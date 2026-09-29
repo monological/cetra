@@ -399,14 +399,30 @@ stepped at a fixed 60 Hz from the frame clock so a headless run repeats, and rea
 
 ## Diffraction glare
 
-`glare.c` plus four `glare_*_frag` passes (spec 13.4, after Clearwater): the aperture's
-diffraction pattern -- the power spectrum of a round lens with flattened sides, scratches and
-dust, summed over eight wavelengths and normalised -- convolved with the frame's light past
-`glare_threshold` by FFT on a 512x256 grid, so its cost is independent of how many glints there
-are. It conserves light to 0.99 (what spills past the frame's edge is the rest), and a frame
-with nothing that bright is identical to `--no-glare`, which is what keeps goldens without a
-highlight still. Its far field is lifted eightfold, a phone lens's -- the reason its veil is as
-heavy as it is, and a choice rather than a measurement.
+`glare.c` plus four `glare_*_frag` passes and `include/glare_threshold.glsl` (spec 13.4 after
+Clearwater, and spec 13.5). **Off by default**; a `.cscn` turns it on with `post.glare`, an app
+with `postfx->glare_enabled`.
+
+**How it works.** The aperture's diffraction pattern is the power spectrum of a round lens with
+flattened sides, scratches and dust. It is summed over 32 wavelengths between Clearwater's eight
+band colours, and faded to its inscribed circle. That pattern is convolved with the frame's light
+past `glare_threshold` by FFT on a 512x256 grid, so the cost does not depend on how many glints
+there are. Red and green ride one complex signal and are separated in the multiply by Hermitian
+symmetry.
+
+**It moves light rather than adding it** (13.5). The tonemap takes what the star carries away out
+of the pixel it came from, by the same threshold rule the source pass uses, and the frame's light
+is conserved to 1.007 (`glare-conserves`). A frame with nothing past the threshold is identical to
+`--no-glare`.
+
+**Three decisions that look like tuning and are not:**
+- **The Airy disk is cut from the kernel**, and its light, about three quarters, stays where it
+  was at full resolution. The grid's cell is several frame pixels, and moving the core through it
+  redrew every bright edge soft and stepped.
+- **The source thresholds every frame texel before it downsamples.** Thresholding a block's
+  average misses a lone glint, and put back 58% of what the tonemap removed.
+- **Clearwater's eightfold far-field lift is not carried.** It imitates a phone lens rather than
+  an aperture, and over a glittering sea it summed into a veil and long streaks.
 
 ## Atmosphere
 
