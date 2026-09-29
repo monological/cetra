@@ -26,6 +26,9 @@
 #define GLARE_FRAME_FILL 0.75f
 // The pattern's full width over the frame's height.
 #define GLARE_PSF_SPAN 1.15f
+// Where the pattern's fade to its edge begins, as a fraction of its half-width; it reaches zero
+// at the half-width, the largest circle the square pattern holds.
+#define GLARE_PSF_FADE 0.6f
 // What the source is stored at through the transform and restored from after it, so a glint of
 // thousands keeps its fraction bits through the transform's many additions.
 #define GLARE_SOURCE_SCALE 1.0e-3f
@@ -229,9 +232,15 @@ static float* _glare_build_psf(void) {
         for (int x = 0; x < n; x++) {
             const float rr = hypotf((float)x - n / 2, (float)y - n / 2);
             const float lift = 1.0f + 7.0f * fminf(1.0f, fmaxf(0.0f, (rr - 3.0f) / 30.0f));
+            // Faded to nothing inside the inscribed circle, so a spike trails off rather than
+            // stopping at the pattern's square edge -- which it does visibly round a source bright
+            // enough that the spikes are still lit where the stored pattern ends.
+            const float t =
+                fminf(1.0f, fmaxf(0.0f, (rr / (n / 2) - GLARE_PSF_FADE) / (1.0f - GLARE_PSF_FADE)));
+            const float fade = 1.0f - t * t * (3.0f - 2.0f * t);
             float* o = out + ((size_t)y * n + x) * 3;
             for (int c = 0; c < 3; c++)
-                o[c] *= lift;
+                o[c] *= lift * fade;
         }
     }
     return out;
