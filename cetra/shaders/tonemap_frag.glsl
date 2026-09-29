@@ -478,9 +478,9 @@ vec3 ditherPattern(vec2 p)
  *
  * The glare MOVES light (spec 13.5): the share of this pixel's light above the
  * threshold that bloomAdd's star carries away is removed here, before the
- * occlusion, so it cannot take a darkened pixel below zero. The source was
- * thresholded after a downsample and this is taken per pixel, so the two agree
- * on average rather than texel for texel.
+ * occlusion, so it cannot take a darkened pixel below zero. The star's source
+ * thresholds every texel before it downsamples, so the light taken out here and
+ * the light the star puts back agree in total, spread differently.
  */
 vec3 sceneComposite(vec2 uv, float aoFactor, vec3 bloomAdd)
 {

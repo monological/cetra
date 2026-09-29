@@ -1096,20 +1096,25 @@ GLARE_BRIGHT_FLAGS = ["--water-waves", "fft", "--cam-eye", "-3,1.2,3", "--cam-ta
                       "--no-auto-exposure", "-E", "1.0"]
 GLARE_DARK_FLAGS = ["--no-auto-exposure", "-E", "1.0"]
 # The glare's light over its source's, per channel. The pattern is normalised, so it can only
-# lose what spreads past the frame's edge: 0.98 when measured.
+# lose what spreads past the frame's edge: 0.999 when measured.
 GLARE_ENERGY_RANGE = (0.9, 1.02)
+# The frame's light the star puts back over what the tonemap takes out, per channel, per pixel
+# (spec 13.5): 1.010 when measured. Not exactly 1 because the grid's texels cover unequal
+# blocks of the frame, so the star's source is a mean of block means; a source thresholded
+# after its downsample instead of before measured 0.58.
+GLARE_CONSERVE_RANGE = (0.97, 1.03)
 GLARE_LIVE_MIN_PX = 20000
 
 
 def _glare_probe(extra, scene):
-    """Run --glare-probe and return the last frame's (source, glare) RGB lists, or None."""
+    """Run --glare-probe and return the last frame's fields as RGB lists by name, or None."""
     cmd = [RENDER, "-m", scene, "-x", "-f", "10", "-W", "400", "-H", "300", "--glare-probe"] + extra
     r = _run(cmd, capture_output=True, text=True)
     rows = _probe_rows(r.stdout + r.stderr, "glare-probe")
     if not rows:
         return None
-    return ([float(v) for v in rows[-1]["source"].split(",")],
-            [float(v) for v in rows[-1]["glare"].split(",")])
+    return {k: [float(v) for v in rows[-1][k].split(",")]
+            for k in ("source", "glare", "removed", "added")}
 
 
 def run_glare_gate(workdir):
@@ -1120,6 +1125,10 @@ def run_glare_gate(workdir):
                     GLARE_ENERGY_RANGE: the pattern is normalised, so the only loss is what spills
                     past the frame's edge, and a transform that scaled, lost or doubled light --
                     a missing normalisation, a kernel built for another grid -- lands outside it.
+      glare-conserves  the FRAME's light: what the star puts back over what the tonemap takes
+                    out of the pixels it came from, per channel, within GLARE_CONSERVE_RANGE
+                    (spec 13.5). glare-energy compares the star with its own source and cannot
+                    see a glare that adds its light on top of the frame instead of moving it.
       glare-live    against --no-glare the sunward frame moves at least GLARE_LIVE_MIN_PX.
       glare-dark    a frame with nothing past the threshold is identical with and without it:
                     the transform's rounding must not reach an 8-bit code, which is what keeps
@@ -1132,14 +1141,20 @@ def run_glare_gate(workdir):
         print("  glare-energy FAIL  the probe printed nothing")
         failures.append("glare-energy")
     else:
-        source, glare = probed
-        ratios = [g / max(s, 1e-9) for s, g in zip(source, glare)]
+        ratios = [g / max(s, 1e-9) for s, g in zip(probed["source"], probed["glare"])]
         lo, hi = GLARE_ENERGY_RANGE
-        ok = all(lo <= r <= hi for r in ratios) and min(source) > 0.0
+        ok = all(lo <= r <= hi for r in ratios) and min(probed["source"]) > 0.0
         print(f"  glare-energy {'PASS' if ok else 'FAIL'}  glare over source "
               f"{'/'.join(f'{r:.4f}' for r in ratios)} (want {lo}..{hi})")
         if not ok:
             failures.append("glare-energy")
+        ratios = [a / max(r, 1e-9) for r, a in zip(probed["removed"], probed["added"])]
+        lo, hi = GLARE_CONSERVE_RANGE
+        ok = all(lo <= r <= hi for r in ratios) and min(probed["removed"]) > 0.0
+        print(f"  glare-conserves {'PASS' if ok else 'FAIL'}  put back over taken out "
+              f"{'/'.join(f'{r:.4f}' for r in ratios)} (want {lo}..{hi})")
+        if not ok:
+            failures.append("glare-conserves")
 
     on = os.path.join(workdir, "glare_on.ppm")
     off = os.path.join(workdir, "glare_off.ppm")
