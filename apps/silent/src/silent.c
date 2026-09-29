@@ -3,19 +3,17 @@
  * street of houses outside the window that goes on into fog. Walk it in first
  * person, with a flashlight.
  *
- * Everything is procedural -- every mesh is flat-shaded boxes and prisms from
- * kit.c, every texture is baked at startup -- and aimed at the look of a
- * console-era survival horror game: few polygons, low texel density, the dirt
- * painted into the textures rather than modelled, and darkness and fog hiding
- * how little is there.
+ * Every mesh is flat-shaded boxes and prisms from kit.c, and every texture a
+ * CC0 photo scan cut down to 256 px -- aimed at the look of a console-era
+ * survival horror game: few polygons, low texel density, the dirt in the
+ * textures rather than modelled, and darkness and fog hiding how little is
+ * there.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
 #include "cetra/camera.h"
@@ -60,24 +58,24 @@
 #define EXPOSURE_DAY   0.0015f
 
 typedef struct SilentArgs {
-    int headless;
+    bool headless;
     int frames;
     const char* screenshot;
     int screenshot_every;
     int width, height;
     int seed;
-    int day;
-    int no_taa;
-    int no_grade;
+    bool day;
+    bool no_taa;
+    bool no_grade;
     float render_scale;
     int msaa;
     bool cam_eye_set, cam_target_set;
     vec3 cam_eye, cam_target;
     float fov_deg;
     const char* pad_script;
-    int trace_player;
-    int no_flicker;
-    int flashlight;
+    bool trace_player;
+    bool no_flicker;
+    bool flashlight;
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -89,8 +87,21 @@ static Lights g_lights;
 static const vec3 SPAWN_FEET = {1.5f, FLOOR_Y, 13.2f};
 static const float SPAWN_YAW = GLM_PIf; // toward -z, the street
 
-// Keys the app itself reads, beside the player's table.
-static const InputAction APP_ACTIONS[] = {
+// Every action, one table: input_bind takes a single table and borrows it. The
+// player reads the move, sprint, look and cursor rows by name (player.h); the
+// flashlight and the GUI are read here.
+static const InputAction ACTIONS[] = {
+    {"move_x",
+     {INPUT_KEY(D, 1), INPUT_KEY(A, -1), INPUT_AXIS(LEFT_X, 1), INPUT_PAD(DPAD_RIGHT, 1),
+      INPUT_PAD(DPAD_LEFT, -1)}},
+    {"move_y",
+     {INPUT_KEY(W, 1), INPUT_KEY(S, -1), INPUT_AXIS(LEFT_Y, -1), INPUT_PAD(DPAD_UP, 1),
+      INPUT_PAD(DPAD_DOWN, -1)}},
+    {"sprint", {INPUT_KEY(LEFT_SHIFT, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
+    {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(RIGHT, 1), INPUT_KEY(LEFT, -1)}},
+    {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
+    {"flashlight", {INPUT_KEY(F, 1), INPUT_PAD(Y, 1)}},
+    {"release_cursor", {INPUT_KEY(TAB, 1)}},
     {"toggle_gui", {INPUT_KEY(GRAVE_ACCENT, 1), INPUT_KEY(G, 1)}},
 };
 
@@ -103,8 +114,11 @@ static const InputAction APP_ACTIONS[] = {
 static void build_sky(Engine* engine) {
     SkyAtmosphere* sky = create_sky_atmosphere();
     IBLResources* ibl = create_ibl_resources();
-    if (!sky || !ibl)
+    if (!sky || !ibl) {
+        free_sky_atmosphere(sky);
+        free_ibl_resources(ibl);
         return;
+    }
     sky->world_units_per_km = 1000.0f;
     if (g_args.day) {
         // Overcast noon is the fog's own look; the sun is high and weak.
@@ -123,8 +137,11 @@ static void build_sky(Engine* engine) {
     }
     sky_update_moon(sky);
     sky_update_sun_dir(sky);
-    if (sky_bake_static_luts(sky, engine) != 0 || sky_bake(sky, ibl, engine) != 0)
+    if (sky_bake_static_luts(sky, engine) != 0 || sky_bake(sky, ibl, engine) != 0) {
+        free_sky_atmosphere(sky);
+        free_ibl_resources(ibl);
         return;
+    }
     g_scene->sky = sky;
     g_scene->ibl = ibl;
     g_scene->render_skybox = true;
@@ -187,9 +204,10 @@ static void build_gi(void) {
 static void build_probes(Engine* engine) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
         return;
+    enum { ROOMS = 2 };
     const struct {
         vec3 pos, lo, hi;
-    } rooms[] = {
+    } rooms[ROOMS] = {
         {{2.48f, FLOOR_Y + 1.5f, 11.9f},
          {KITCHEN_X0, FLOOR_Y, KITCHEN_Z0},
          {KITCHEN_X1, CEIL_Y, KITCHEN_Z1}},
@@ -200,9 +218,9 @@ static void build_probes(Engine* engine) {
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
         return;
-    float near_clips[2], far_clips[2];
-    const bool env_only[2] = {false, false};
-    for (int i = 0; i < 2; i++) {
+    float near_clips[ROOMS], far_clips[ROOMS];
+    const bool env_only[ROOMS] = {false};
+    for (int i = 0; i < ROOMS; i++) {
         ReflectionProbe* p = create_reflection_probe();
         if (!p)
             break;
@@ -219,7 +237,7 @@ static void build_probes(Engine* engine) {
             break;
         }
     }
-    if (set->count == 2 &&
+    if (set->count == ROOMS &&
         probe_set_capture_all(set, engine, g_scene, near_clips, far_clips, env_only, 0))
         g_scene->probe_set = set;
     else
@@ -269,14 +287,11 @@ static void on_init(Game* game) {
 
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
-    if (!mats_register(&kit, engine, g_scene))
-        return;
+    mats_register(&kit, engine, g_scene);
     house_build(&kit);
     kitchen_build(&kit, (unsigned int)g_args.seed);
-    // The tubes and the flashlight before the street's lamps: the fog beams
-    // the scene's first spot, and it should be the one in the player's hand.
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
-                 g_args.flashlight != 0);
+                 g_args.flashlight);
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
     kit_finish(&kit, "world");
     printf("silent: %d colliders\n", kit.collider_count);
@@ -391,7 +406,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;
         if (!strcmp(s, "-x") || !strcmp(s, "--headless")) {
-            a->headless = 1;
+            a->headless = true;
         } else if ((!strcmp(s, "-f") || !strcmp(s, "--frames")) && has_next) {
             a->frames = atoi(argv[++i]);
         } else if ((!strcmp(s, "-S") || !strcmp(s, "--screenshot")) && has_next) {
@@ -405,11 +420,11 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         } else if (!strcmp(s, "--seed") && has_next) {
             a->seed = atoi(argv[++i]);
         } else if (!strcmp(s, "--day")) {
-            a->day = 1;
+            a->day = true;
         } else if (!strcmp(s, "--no-taa")) {
-            a->no_taa = 1;
+            a->no_taa = true;
         } else if (!strcmp(s, "--no-grade")) {
-            a->no_grade = 1;
+            a->no_grade = true;
         } else if (!strcmp(s, "--render-scale") && has_next) {
             a->render_scale = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {
@@ -425,11 +440,11 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         } else if (!strcmp(s, "--pad-script") && has_next) {
             a->pad_script = argv[++i];
         } else if (!strcmp(s, "--trace-player")) {
-            a->trace_player = 1;
+            a->trace_player = true;
         } else if (!strcmp(s, "--no-flicker")) {
-            a->no_flicker = 1;
+            a->no_flicker = true;
         } else if (!strcmp(s, "--flashlight")) {
-            a->flashlight = 1;
+            a->flashlight = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
@@ -451,7 +466,7 @@ int main(int argc, char** argv) {
     GameConfig config = {.engine = {.title = "silent",
                                     .width = g_args.width,
                                     .height = g_args.height,
-                                    .headless = g_args.headless != 0}};
+                                    .headless = g_args.headless}};
     // One sample under TAA, headless as in the window, so a screenshot is what
     // a player sees. Not MSAA: in fog this dense the fog composite takes ONE
     // depth for a multisampled edge pixel, and where half its samples are sky
@@ -478,15 +493,7 @@ int main(int argc, char** argv) {
     engine_set_screenshot_path(game->engine, g_args.screenshot);
     game->engine->screenshot_every = g_args.screenshot_every;
 
-    // One table, the player's actions and the app's, because input_bind
-    // replaces rather than appends. Static: the binding borrows it.
-    static InputAction actions[32];
-    int n = 0;
-    for (int i = 0; i < PLAYER_ACTION_COUNT && n < 32; i++)
-        actions[n++] = PLAYER_ACTIONS[i];
-    for (size_t i = 0; i < sizeof(APP_ACTIONS) / sizeof(APP_ACTIONS[0]) && n < 32; i++)
-        actions[n++] = APP_ACTIONS[i];
-    input_bind(&game->input, actions, (size_t)n);
+    input_bind(&game->input, ACTIONS, sizeof(ACTIONS) / sizeof(ACTIONS[0]));
     if (g_args.pad_script && !input_set_pad_script(&game->input, g_args.pad_script)) {
         free_game(game);
         return 1;

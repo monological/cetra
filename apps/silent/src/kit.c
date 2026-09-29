@@ -54,64 +54,51 @@ static bool slot_ok(const Kit* kit, int mat) {
     return mat >= 0 && mat < kit->material_count;
 }
 
-void kit_quad(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d) {
+// The unnormalised normal of the triangle p0 p1 p2, counter-clockwise.
+static void corner_cross(const vec3 p0, const vec3 p1, const vec3 p2, vec3 n) {
+    vec3 e1, e2;
+    glm_vec3_sub((float*)p1, (float*)p0, e1);
+    glm_vec3_sub((float*)p2, (float*)p0, e2);
+    glm_vec3_cross(e1, e2, n);
+}
+
+/*
+ * A flat polygon of 3 or 4 corners, fanned from the first, wound to face
+ * `outward` whatever order the corners come in -- so the solids below list
+ * them in whatever order is easiest to read. The normal is taken from the
+ * corners in the order they are emitted.
+ */
+static void emit_face(Kit* kit, int mat, const vec3* in, int count, const vec3 outward) {
     if (!slot_ok(kit, mat))
         return;
-    vec3 e1, e2, n, t = {0.0f, 0.0f, 0.0f}, bt = {0.0f, 0.0f, 0.0f};
-    glm_vec3_sub((float*)b, (float*)a, e1);
-    glm_vec3_sub((float*)c, (float*)a, e2);
-    glm_vec3_cross(e1, e2, n);
+    vec3 p[4], n = {0.0f, 0.0f, 0.0f}, t = {0.0f, 0.0f, 0.0f}, bt = {0.0f, 0.0f, 0.0f};
+    corner_cross(in[0], in[1], in[2], n);
+    const bool keep = glm_vec3_dot(n, (float*)outward) >= 0.0f;
+    for (int i = 0; i < count; i++)
+        glm_vec3_copy((float*)in[keep ? i : count - 1 - i], p[i]);
+    corner_cross(p[0], p[1], p[2], n);
     if (glm_vec3_norm2(n) < 1e-12f)
         return;
     glm_vec3_normalize(n);
     face_frame(n, t, bt);
-    const unsigned int ia = face_vertex(kit, mat, a, n, t, bt);
-    const unsigned int ib = face_vertex(kit, mat, b, n, t, bt);
-    const unsigned int ic = face_vertex(kit, mat, c, n, t, bt);
-    const unsigned int id = face_vertex(kit, mat, d, n, t, bt);
-    mb_tri(&kit->builders[mat], ia, ib, ic);
-    mb_tri(&kit->builders[mat], ia, ic, id);
+    unsigned int idx[4];
+    for (int i = 0; i < count; i++)
+        idx[i] = face_vertex(kit, mat, p[i], n, t, bt);
+    for (int i = 2; i < count; i++)
+        mb_tri(&kit->builders[mat], idx[0], idx[i - 1], idx[i]);
 }
 
-void kit_tri(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c) {
-    if (!slot_ok(kit, mat))
-        return;
-    vec3 e1, e2, n, t = {0.0f, 0.0f, 0.0f}, bt = {0.0f, 0.0f, 0.0f};
-    glm_vec3_sub((float*)b, (float*)a, e1);
-    glm_vec3_sub((float*)c, (float*)a, e2);
-    glm_vec3_cross(e1, e2, n);
-    if (glm_vec3_norm2(n) < 1e-12f)
-        return;
-    glm_vec3_normalize(n);
-    face_frame(n, t, bt);
-    mb_tri(&kit->builders[mat], face_vertex(kit, mat, a, n, t, bt),
-           face_vertex(kit, mat, b, n, t, bt), face_vertex(kit, mat, c, n, t, bt));
-}
-
-// A quad whose winding is fixed from the side it should face, so the solids
-// below can list their corners in whatever order is easiest to read.
 void kit_quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d,
                      const vec3 outward) {
-    vec3 e1, e2, n;
-    glm_vec3_sub((float*)b, (float*)a, e1);
-    glm_vec3_sub((float*)c, (float*)a, e2);
-    glm_vec3_cross(e1, e2, n);
-    if (glm_vec3_dot(n, (float*)outward) >= 0.0f)
-        kit_quad(kit, mat, a, b, c, d);
-    else
-        kit_quad(kit, mat, d, c, b, a);
+    const vec3 p[4] = {
+        {a[0], a[1], a[2]}, {b[0], b[1], b[2]}, {c[0], c[1], c[2]}, {d[0], d[1], d[2]}};
+    emit_face(kit, mat, p, 4, outward);
 }
 
 void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
                     const vec3 outward) {
-    vec3 e1, e2, n;
-    glm_vec3_sub((float*)b, (float*)a, e1);
-    glm_vec3_sub((float*)c, (float*)a, e2);
-    glm_vec3_cross(e1, e2, n);
-    if (glm_vec3_dot(n, (float*)outward) >= 0.0f)
-        kit_tri(kit, mat, a, b, c);
-    else
-        kit_tri(kit, mat, c, b, a);
+    const vec3 p[3] = {{a[0], a[1], a[2]}, {b[0], b[1], b[2]}, {c[0], c[1], c[2]}};
+    emit_face(kit, mat, p, 3, outward);
 }
 
 // Turned about +Y by `yaw`, the same sense entity_set_rotation_euler turns a body.
@@ -142,6 +129,10 @@ void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw) {
 }
 
 void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, bool collide) {
+    if (mat == KIT_COLLIDER_ONLY) {
+        kit_collider(kit, centre, half, yaw);
+        return;
+    }
     vec3 corner[8];
     for (int i = 0; i < 8; i++) {
         vec3 local = {(i & 1) ? half[0] : -half[0], (i & 2) ? half[1] : -half[1],
@@ -168,47 +159,22 @@ void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, b
         kit_collider(kit, centre, half, yaw);
 }
 
-void kit_prism(Kit* kit, int mat, float x, float z, float y0, float y1, float r, int sides,
-               bool collide) {
+/*
+ * A capped prism from end0 to end1, which differ only along axis `ax`. Its
+ * section is round in the other two axes, `u` taking the cosine and `w` the
+ * sine, which fixes where the first facet falls.
+ */
+static void prism_between(Kit* kit, int mat, const vec3 end0, const vec3 end1, int ax, int u, int w,
+                          float r, int sides) {
     if (sides < 3)
         sides = 3;
-    const vec3 top_c = {x, y1, z}, bot_c = {x, y0, z};
-    for (int i = 0; i < sides; i++) {
-        const float a0 = (float)i / (float)sides * 2.0f * GLM_PIf;
-        const float a1 = (float)(i + 1) / (float)sides * 2.0f * GLM_PIf;
-        const float amid = 0.5f * (a0 + a1);
-        vec3 p0 = {x + r * cosf(a0), y0, z + r * sinf(a0)};
-        vec3 p1 = {x + r * cosf(a1), y0, z + r * sinf(a1)};
-        vec3 p2 = {p1[0], y1, p1[2]};
-        vec3 p3 = {p0[0], y1, p0[2]};
-        vec3 out = {cosf(amid), 0.0f, sinf(amid)};
-        kit_quad_facing(kit, mat, p0, p1, p2, p3, out);
-        kit_tri_facing(kit, mat, top_c, p3, p2, (vec3){0.0f, 1.0f, 0.0f});
-        kit_tri_facing(kit, mat, bot_c, p0, p1, (vec3){0.0f, -1.0f, 0.0f});
-    }
-    if (collide)
-        kit_collider(kit, (vec3){x, 0.5f * (y0 + y1), z}, (vec3){r, 0.5f * (y1 - y0), r}, 0.0f);
-}
-
-void kit_prism_lying(Kit* kit, int mat, const vec3 centre, float half_len, float r, int sides,
-                     bool along_x) {
-    if (sides < 3)
-        sides = 3;
-    // The axis the prism runs along, and the two it is round in.
-    const int ax = along_x ? 0 : 2;
-    const int u = 1, w = along_x ? 2 : 0;
-    vec3 end0, end1;
-    glm_vec3_copy((float*)centre, end0);
-    glm_vec3_copy((float*)centre, end1);
-    end0[ax] -= half_len;
-    end1[ax] += half_len;
     for (int i = 0; i < sides; i++) {
         const float a0 = (float)i / (float)sides * 2.0f * GLM_PIf;
         const float a1 = (float)(i + 1) / (float)sides * 2.0f * GLM_PIf;
         const float amid = 0.5f * (a0 + a1);
         vec3 p0, p1, p2, p3, out = {0.0f, 0.0f, 0.0f};
-        glm_vec3_copy(end0, p0);
-        glm_vec3_copy(end0, p1);
+        glm_vec3_copy((float*)end0, p0);
+        glm_vec3_copy((float*)end0, p1);
         p0[u] += r * cosf(a0);
         p0[w] += r * sinf(a0);
         p1[u] += r * cosf(a1);
@@ -228,6 +194,24 @@ void kit_prism_lying(Kit* kit, int mat, const vec3 centre, float half_len, float
     }
 }
 
+void kit_prism(Kit* kit, int mat, float x, float z, float y0, float y1, float r, int sides,
+               bool collide) {
+    prism_between(kit, mat, (vec3){x, y0, z}, (vec3){x, y1, z}, 1, 0, 2, r, sides);
+    if (collide)
+        kit_collider(kit, (vec3){x, 0.5f * (y0 + y1), z}, (vec3){r, 0.5f * (y1 - y0), r}, 0.0f);
+}
+
+void kit_prism_lying(Kit* kit, int mat, const vec3 centre, float half_len, float r, int sides,
+                     bool along_x) {
+    const int ax = along_x ? 0 : 2;
+    vec3 end0, end1;
+    glm_vec3_copy((float*)centre, end0);
+    glm_vec3_copy((float*)centre, end1);
+    end0[ax] -= half_len;
+    end1[ax] += half_len;
+    prism_between(kit, mat, end0, end1, ax, 1, along_x ? 2 : 0, r, sides);
+}
+
 // One slab of a wall layer, between `a` and `b` along the wall and `y0`..`y1`.
 static void wall_slab(Kit* kit, const KitWall* w, int mat, float offset, float thick, float a,
                       float b, float y0, float y1) {
@@ -242,24 +226,13 @@ static void wall_slab(Kit* kit, const KitWall* w, int mat, float offset, float t
         glm_vec3_copy((vec3){w->at + offset, 0.5f * (y0 + y1), mid}, centre);
         glm_vec3_copy((vec3){0.5f * thick, 0.5f * (y1 - y0), half_len}, half);
     }
-    if (mat == KIT_COLLIDER_ONLY)
-        kit_collider(kit, centre, half, 0.0f);
-    else
-        kit_box(kit, mat, centre, half, 0.0f, false);
+    kit_box(kit, mat, centre, half, 0.0f, false);
 }
 
 // The wall between openings, and under and over each one, for one layer.
-static void wall_layer(Kit* kit, const KitWall* w, int mat, float offset, float thick) {
-    // Openings in order along the wall, so the solid spans are the gaps.
-    KitOpening sorted[KIT_MAX_OPENINGS];
-    const int n = w->opening_count < KIT_MAX_OPENINGS ? w->opening_count : KIT_MAX_OPENINGS;
-    memcpy(sorted, w->openings, (size_t)n * sizeof(KitOpening));
-    for (int i = 1; i < n; i++)
-        for (int j = i; j > 0 && sorted[j].from < sorted[j - 1].from; j--) {
-            KitOpening t = sorted[j];
-            sorted[j] = sorted[j - 1];
-            sorted[j - 1] = t;
-        }
+// `sorted` holds the wall's `n` openings in order along it.
+static void wall_layer(Kit* kit, const KitWall* w, const KitOpening* sorted, int n, int mat,
+                       float offset, float thick) {
     float cursor = w->from;
     for (int i = 0; i < n; i++) {
         const KitOpening* o = &sorted[i];
@@ -272,19 +245,33 @@ static void wall_layer(Kit* kit, const KitWall* w, int mat, float offset, float 
 }
 
 void kit_wall(Kit* kit, const KitWall* w) {
+    // Openings in order along the wall, so the solid spans are the gaps.
+    KitOpening sorted[KIT_MAX_OPENINGS];
+    const int n = w->opening_count < KIT_MAX_OPENINGS ? w->opening_count : KIT_MAX_OPENINGS;
+    memcpy(sorted, w->openings, (size_t)n * sizeof(KitOpening));
+    for (int i = 1; i < n; i++)
+        for (int j = i; j > 0 && sorted[j].from < sorted[j - 1].from; j--) {
+            KitOpening t = sorted[j];
+            sorted[j] = sorted[j - 1];
+            sorted[j - 1] = t;
+        }
     const float q = 0.25f * w->thick;
     const float s = w->inner >= 0 ? 1.0f : -1.0f;
-    wall_layer(kit, w, w->mat_inner, s * q, 0.5f * w->thick);
-    wall_layer(kit, w, w->mat_outer, -s * q, 0.5f * w->thick);
+    wall_layer(kit, w, sorted, n, w->mat_inner, s * q, 0.5f * w->thick);
+    wall_layer(kit, w, sorted, n, w->mat_outer, -s * q, 0.5f * w->thick);
     // One body per span through the whole thickness, rather than one per layer:
     // two coplanar bodies meeting mid-wall buy nothing.
-    wall_layer(kit, w, KIT_COLLIDER_ONLY, 0.0f, w->thick);
+    wall_layer(kit, w, sorted, n, KIT_COLLIDER_ONLY, 0.0f, w->thick);
 }
 
 void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out) {
-    vec3 local = {a, y, d};
-    rotate_y(local, f->yaw, out);
+    kit_frame_dir(f, a, y, d, out);
     glm_vec3_add(out, (float*)f->origin, out);
+}
+
+void kit_frame_dir(const KitFrame* f, float a, float y, float d, vec3 out) {
+    const vec3 local = {a, y, d};
+    rotate_y(local, f->yaw, out);
 }
 
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,

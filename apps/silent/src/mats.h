@@ -49,10 +49,10 @@ typedef enum {
 } MatId;
 
 // Loads every surface's photo maps into the scene's pool and registers the
-// materials with the kit, slot for slot with MatId.
-bool mats_register(Kit* kit, Engine* engine, Scene* scene);
+// materials with the kit, slot for slot with MatId. The kit must be empty.
+void mats_register(Kit* kit, Engine* engine, Scene* scene);
 
-// Daytime: the lit windows and the street lamps' lenses go dark.
-void mats_lights_out(Kit* kit);
+// Daytime: the street lamps' lenses go dark.
+void mats_lamps_out(Kit* kit);
 
 #endif // _SILENT_MATS_H_

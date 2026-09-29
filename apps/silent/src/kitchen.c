@@ -28,10 +28,6 @@
 #define SINK_D0 0.10f
 #define SINK_D1 0.50f
 
-typedef KitRng Rng;
-#define rnd    kit_rnd
-#define rrange kit_rrange
-
 /*
  * Base cabinets from a0 to a1: a dark recessed plinth, the carcass, a door per
  * unit with a drawer over every other one, and bar handles. The carcass drops
@@ -104,31 +100,31 @@ static void mug(Kit* kit, const KitFrame* f, float a, float d, float y) {
  * fill to some level, which the refraction pass sees through the glass. Brown
  * glass mostly, as in any old pantry, and some clear.
  */
-static int glass(Rng* rng) {
-    return rnd(rng) < 0.6f ? MAT_GLASS_AMBER : MAT_GLASS_CLEAR;
+static int glass(KitRng* rng) {
+    return kit_rnd(rng) < 0.6f ? MAT_GLASS_AMBER : MAT_GLASS_CLEAR;
 }
 
-static int contents(Rng* rng) {
-    const float x = rnd(rng);
+static int contents(KitRng* rng) {
+    const float x = kit_rnd(rng);
     return x < 0.45f ? MAT_CONTENTS : (x < 0.75f ? MAT_CONTENTS_PALE : MAT_CONTENTS_GREEN);
 }
 
 // Filled part way, so there is empty glass above what is in it for the wall
 // to show through: that is most of what reads as glass.
-static void bottle(Kit* kit, const KitFrame* f, Rng* rng, float a, float d, float y, float h) {
+static void bottle(Kit* kit, const KitFrame* f, KitRng* rng, float a, float d, float y, float h) {
     const float r = 0.036f;
     const int g = glass(rng);
     kit_frame_prism(kit, f, g, a, d, y, y + h, r, 10);
     kit_frame_prism(kit, f, g, a, d, y + h, y + h + 0.08f, 0.013f, 8);
-    kit_frame_prism(kit, f, MAT_CONTENTS, a, d, y + 0.004f, y + h * rrange(rng, 0.15f, 0.6f),
+    kit_frame_prism(kit, f, MAT_CONTENTS, a, d, y + 0.004f, y + h * kit_rrange(rng, 0.15f, 0.6f),
                     r - 0.005f, 10);
     kit_frame_prism(kit, f, MAT_BLACK, a, d, y + h + 0.08f, y + h + 0.095f, 0.015f, 8);
 }
 
-static void jar(Kit* kit, const KitFrame* f, Rng* rng, float a, float d, float y, float r,
+static void jar(Kit* kit, const KitFrame* f, KitRng* rng, float a, float d, float y, float r,
                 float h) {
     kit_frame_prism(kit, f, glass(rng), a, d, y, y + h, r, 12);
-    kit_frame_prism(kit, f, contents(rng), a, d, y + 0.005f, y + h * rrange(rng, 0.25f, 0.7f),
+    kit_frame_prism(kit, f, contents(rng), a, d, y + 0.005f, y + h * kit_rrange(rng, 0.25f, 0.7f),
                     r - 0.006f, 12);
     kit_frame_prism(kit, f, MAT_STEEL, a, d, y + h, y + h + 0.02f, r * 0.92f, 12);
 }
@@ -141,12 +137,12 @@ static void pot(Kit* kit, const KitFrame* f, float a, float d, float y) {
  * Clutter along a counter: `count` things from the vocabulary above, spaced
  * so none overlap, and never over [skip0, skip1] -- a sink, say.
  */
-static void clutter(Kit* kit, const KitFrame* f, Rng* rng, float a0, float a1, float skip0,
+static void clutter(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1, float skip0,
                     float skip1, float y, int count) {
     float placed[16];
     int n = 0;
     for (int tries = 0; tries < 60 && n < count && n < 16; tries++) {
-        const float a = rrange(rng, a0, a1);
+        const float a = kit_rrange(rng, a0, a1);
         if (a > skip0 && a < skip1)
             continue;
         bool clear = true;
@@ -156,19 +152,20 @@ static void clutter(Kit* kit, const KitFrame* f, Rng* rng, float a0, float a1, f
         if (!clear)
             continue;
         placed[n++] = a;
-        const float d = rrange(rng, 0.15f, 0.42f);
-        switch ((int)(rnd(rng) * 6.0f)) {
+        const float d = kit_rrange(rng, 0.15f, 0.42f);
+        switch ((int)(kit_rnd(rng) * 6.0f)) {
             case 0:
-                plates(kit, f, a, d, y, 2 + (int)(rnd(rng) * 4.0f));
+                plates(kit, f, a, d, y, 2 + (int)(kit_rnd(rng) * 4.0f));
                 break;
             case 1:
                 mug(kit, f, a, d, y);
                 break;
             case 2:
-                bottle(kit, f, rng, a, d, y, rrange(rng, 0.16f, 0.24f));
+                bottle(kit, f, rng, a, d, y, kit_rrange(rng, 0.16f, 0.24f));
                 break;
             case 3:
-                jar(kit, f, rng, a, d, y, rrange(rng, 0.04f, 0.06f), rrange(rng, 0.1f, 0.18f));
+                jar(kit, f, rng, a, d, y, kit_rrange(rng, 0.04f, 0.06f),
+                    kit_rrange(rng, 0.1f, 0.18f));
                 break;
             case 4:
                 pot(kit, f, a, d, y);
@@ -183,7 +180,7 @@ static void clutter(Kit* kit, const KitFrame* f, Rng* rng, float a0, float a1, f
 
 // The window wall: counter with the sink under the window, uppers either side,
 // the backsplash, and the window's own frame and sill.
-static void window_wall(Kit* kit, Rng* rng) {
+static void window_wall(Kit* kit, KitRng* rng) {
     const KitFrame f = {{KITCHEN_X0, FLOOR_Y, KITCHEN_Z0}, 0.0f};
     const float len = KITCHEN_X1 - KITCHEN_X0;
     const float w0 = KITCHEN_WIN_X0 - KITCHEN_X0, w1 = KITCHEN_WIN_X1 - KITCHEN_X0;
@@ -249,11 +246,11 @@ static void window_wall(Kit* kit, Rng* rng) {
     jar(kit, &f, rng, len - 0.35f, 0.18f, UPPER_Y1, 0.07f, 0.2f);
 }
 
-static void fridge(Kit* kit, const KitFrame* f, Rng* rng, float a0, float a1);
+static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1);
 
 // The hall wall on the left, as you come in: the fridge, the stove under its
 // hood, and a short run to the corner.
-static void stove_wall(Kit* kit, Rng* rng) {
+static void stove_wall(Kit* kit, KitRng* rng) {
     // Along -z from just short of the doorway to where the window run's
     // counter begins.
     const float start = STOVE_RUN_Z;
@@ -301,7 +298,7 @@ static void stove_wall(Kit* kit, Rng* rng) {
 
 // The fridge: a tall rounded box with its handles, notes and photos, and a
 // bottle forgotten on top.
-static void fridge(Kit* kit, const KitFrame* f, Rng* rng, float a0, float a1) {
+static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1) {
     const float d = 0.68f, h = 1.72f;
     kit_frame_box(kit, f, MAT_ENAMEL, a0, a1, 0.0f, h, 0.0f, d, true);
     kit_frame_box(kit, f, MAT_ENAMEL, a0 + 0.03f, a1 - 0.03f, h, h + 0.04f, 0.03f, d - 0.03f,
@@ -310,9 +307,9 @@ static void fridge(Kit* kit, const KitFrame* f, Rng* rng, float a0, float a1) {
     kit_frame_prism(kit, f, MAT_STEEL, a0 + 0.06f, d + 0.035f, 1.3f, 1.55f, 0.012f, 6);
     kit_frame_prism(kit, f, MAT_STEEL, a0 + 0.06f, d + 0.035f, 0.75f, 1.1f, 0.012f, 6);
     for (int i = 0; i < 5; i++) {
-        const float w = rrange(rng, 0.09f, 0.18f), hh = rrange(rng, 0.08f, 0.22f);
-        const float a = rrange(rng, a0 + 0.12f, a1 - 0.08f - w);
-        const float y = rrange(rng, 0.5f, h - 0.1f - hh);
+        const float w = kit_rrange(rng, 0.09f, 0.18f), hh = kit_rrange(rng, 0.08f, 0.22f);
+        const float a = kit_rrange(rng, a0 + 0.12f, a1 - 0.08f - w);
+        const float y = kit_rrange(rng, 0.5f, h - 0.1f - hh);
         const int mat = (i % 3 == 2) ? MAT_BLACK : MAT_PAPER;
         kit_frame_box(kit, f, mat, a, a + w, y, y + hh, d, d + 0.003f, false);
     }
@@ -322,7 +319,7 @@ static void fridge(Kit* kit, const KitFrame* f, Rng* rng, float a0, float a1) {
 
 // The outside wall on the right: a low sideboard with open shelves of jars
 // over it.
-static void shelf_wall(Kit* kit, Rng* rng) {
+static void shelf_wall(Kit* kit, KitRng* rng) {
     const KitFrame f = {{KITCHEN_X1, FLOOR_Y, KITCHEN_Z0 + COUNTER_D}, -0.5f * GLM_PIf};
     const float s1 = 1.5f;
     base_units(kit, &f, 0.0f, s1, 0.45f, 0.0f, 0.0f, 0.0f);
@@ -334,12 +331,12 @@ static void shelf_wall(Kit* kit, Rng* rng) {
         kit_frame_box(kit, &f, MAT_WOOD, 0.05f, s1, y, y + 0.03f, 0.0f, 0.26f, false);
         kit_frame_box(kit, &f, MAT_STEEL, 0.15f, 0.18f, y - 0.12f, y, 0.0f, 0.2f, false);
         kit_frame_box(kit, &f, MAT_STEEL, s1 - 0.18f, s1 - 0.15f, y - 0.12f, y, 0.0f, 0.2f, false);
-        for (float a = 0.12f; a < s1 - 0.08f; a += rrange(rng, 0.11f, 0.2f)) {
-            if (rnd(rng) < 0.7f)
-                jar(kit, &f, rng, a, 0.13f, y + 0.03f, rrange(rng, 0.04f, 0.06f),
-                    rrange(rng, 0.12f, 0.26f));
+        for (float a = 0.12f; a < s1 - 0.08f; a += kit_rrange(rng, 0.11f, 0.2f)) {
+            if (kit_rnd(rng) < 0.7f)
+                jar(kit, &f, rng, a, 0.13f, y + 0.03f, kit_rrange(rng, 0.04f, 0.06f),
+                    kit_rrange(rng, 0.12f, 0.26f));
             else
-                bottle(kit, &f, rng, a, 0.13f, y + 0.03f, rrange(rng, 0.18f, 0.26f));
+                bottle(kit, &f, rng, a, 0.13f, y + 0.03f, kit_rrange(rng, 0.18f, 0.26f));
         }
     }
     clutter(kit, &f, rng, 0.15f, s1 - 0.15f, 0.0f, 0.0f, COUNTER_TOP, 3);
@@ -385,7 +382,7 @@ static void table(Kit* kit) {
 }
 
 void kitchen_build(Kit* kit, unsigned int seed) {
-    Rng rng = {seed * 2654435761u + 12345u};
+    KitRng rng = {seed * 2654435761u + 12345u};
     window_wall(kit, &rng);
     stove_wall(kit, &rng);
     shelf_wall(kit, &rng);

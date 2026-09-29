@@ -1,4 +1,3 @@
-
 #include "cetra/ies.h"
 #include "cetra/light.h"
 
@@ -11,22 +10,22 @@
 #define YARD_DEPTH   40.0f
 #define GROUND_DEPTH 0.4f // how thick the ground boxes are, below their tops
 
+// Relative to the repository root, where every app in this tree is run from.
+#define STREET_LAMP_IES "assets/ies/silent_street_lamp.ies"
+
 /*
  * The fog. Thick enough that the far side of the street is a suggestion at
  * night -- lit windows and lamp halos, the houses themselves mostly gone --
  * and the road's ends vanish. Extinction per metre.
  */
-// Relative to the repository root, where every app in this tree is run from.
-#define STREET_LAMP_IES "assets/ies/silent_street_lamp.ies"
-
 #define FOG_NIGHT   0.09f
 #define FOG_DAY     0.14f
 #define FOG_FEATHER 3.0f
 
+// A strip of ground the length of the street, from z0 to z1, its top at `top`.
 static void ground(Kit* kit, int mat, float z0, float z1, float top) {
-    const float y0 = top - GROUND_DEPTH;
-    kit_box(kit, mat, (vec3){0.0f, 0.5f * (y0 + top), 0.5f * (z0 + z1)},
-            (vec3){STREET_HALF_LEN, 0.5f * (top - y0), 0.5f * (z1 - z0)}, 0.0f, true);
+    kit_frame_box(kit, &KIT_WORLD, mat, -STREET_HALF_LEN, STREET_HALF_LEN, top - GROUND_DEPTH, top,
+                  z0, z1, true);
 }
 
 /*
@@ -182,14 +181,17 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
             scene->ies_library = create_ies_library();
         profile = ies_library_load(scene->ies_library, STREET_LAMP_IES);
     }
+    // Four down our side and three down the far side, one of them dead.
+    static const struct {
+        float x;
+        float side; // +1 our side of the road, -1 the far side
+        bool dead;
+    } LAMPS[] = {{-24.0f, 1.0f, false}, {-8.0f, 1.0f, false},   {8.0f, 1.0f, false},
+                 {24.0f, 1.0f, false},  {-16.0f, -1.0f, false}, {0.0f, -1.0f, false},
+                 {16.0f, -1.0f, true}};
     const float lamp_z = kerb + 1.4f;
-    lamp(kit, scene, -24.0f, lamp_z, night, false, profile);
-    lamp(kit, scene, -8.0f, lamp_z, night, false, profile);
-    lamp(kit, scene, 8.0f, lamp_z, night, false, profile);
-    lamp(kit, scene, 24.0f, lamp_z, night, false, profile);
-    lamp(kit, scene, -16.0f, -lamp_z, night, false, profile);
-    lamp(kit, scene, 0.0f, -lamp_z, night, false, profile);
-    lamp(kit, scene, 16.0f, -lamp_z, night, true, profile);
+    for (size_t i = 0; i < sizeof(LAMPS) / sizeof(LAMPS[0]); i++)
+        lamp(kit, scene, LAMPS[i].x, LAMPS[i].side * lamp_z, night, LAMPS[i].dead, profile);
 
     poles(kit);
     car(kit, 5.0f, -(kerb - 1.1f));
@@ -210,5 +212,5 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
 
     fog(scene, night);
     if (!night)
-        mats_lights_out(kit);
+        mats_lamps_out(kit);
 }
