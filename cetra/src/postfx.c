@@ -641,10 +641,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->bloom_strength = 0.015f;
     fx->bloom_enabled = true;
 
-    // Clearwater's: the glare added at 0.9 before its exposure of 0.63, from light past 14 before
-    // that exposure -- 8.8 in the working space, which is already exposed.
+    // All of the light past the threshold moves into the star, which is what an aperture does
+    // (spec 13.5). The threshold is Clearwater's 14 before its exposure of 0.63 -- 8.8 in the
+    // working space, which is already exposed.
     fx->glare_enabled = true;
-    fx->glare_strength = 0.9f;
+    fx->glare_strength = 1.0f;
     fx->glare_threshold = 8.8f;
 
     fx->flare_enabled = false;
@@ -3827,8 +3828,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, glare_tex);
         UniformManager* tm = fx->tonemap_program->uniforms;
         uniform_set_int(tm, "glareTex", 13);
-        uniform_set_float(tm, "glareStrength", fx->glare_strength);
+        uniform_set_float(tm, "glareStrength", fminf(fmaxf(fx->glare_strength, 0.0f), 1.0f));
         uniform_set_int(tm, "glareEnabled", glare_tex ? 1 : 0);
+        uniform_set_float(tm, "glareThreshold", fx->glare_threshold);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(tm, "flareTex", 8);

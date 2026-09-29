@@ -861,7 +861,7 @@ static void _engine_gui_panel(Engine* engine) {
         _end_effect_group();
 
         _begin_effect_group("Diffraction Glare", &fx->glare_enabled);
-        igSliderFloat("Glare Strength", &fx->glare_strength, 0.0f, 3.0f, "%.2f", 0);
+        igSliderFloat("Glare Strength", &fx->glare_strength, 0.0f, 1.0f, "%.2f", 0);
         igSliderFloat("Glare Threshold", &fx->glare_threshold, 1.0f, 100.0f, "%.1f",
                       ImGuiSliderFlags_Logarithmic);
         _end_effect_group();
