@@ -441,6 +441,10 @@ int main(int argc, char** argv) {
     // traced in a dark, unfogged line.
     config.engine.msaa_samples = 1;
     config.engine.taa = !g_args.no_taa;
+    // And jittered, or headless TAA integrates one sample position forever:
+    // no antialiasing, and an upscale the engine refuses. --no-taa is the
+    // exactly repeatable frame.
+    config.engine.headless_jitter = config.engine.taa;
     // The upscale rides on TAA, so a scale without it is refused by the engine.
     if (g_args.render_scale > 0.0f && !g_args.no_taa)
         config.engine.render_scale = g_args.render_scale;
