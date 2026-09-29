@@ -118,13 +118,15 @@ static bool _glare_fft2(float* re, float* im, int w, int h, int sign) {
 
 /*
  * The aperture's diffraction pattern, as the eye sees it: the power spectrum of its shape, then
- * that spectrum at eight wavelengths -- it scales with the wavelength -- each in its own colour,
- * with the far field lifted as a phone's lens flares harder than an ideal aperture. Unnormalised:
- * it is resampled to the grid before use, and normalised there.
+ * that spectrum at eight wavelengths -- it scales with the wavelength -- each in its own colour.
+ * Unnormalised: it is resampled to the grid before use, and normalised there.
  *
- * Its central peak is kept, as Clearwater keeps it: the star is the WHOLE image a point of light
- * makes through this aperture, core and spikes, and the tonemap adds it over the frame at the
- * glare's strength.
+ * NOT lifted in the far field, where Clearwater multiplies it by up to 8 to imitate a phone lens:
+ * that is no part of an aperture's diffraction, and over a glittering sea it summed into a veil
+ * and long streaks (spec 13.5).
+ *
+ * Its central peak is kept: the star is the WHOLE image a point of light makes through this
+ * aperture, core and spikes, and the tonemap moves the source's light into it.
  */
 static float* _glare_build_psf(void) {
     const int n = GLARE_PSF_RES;
@@ -231,7 +233,6 @@ static float* _glare_build_psf(void) {
     for (int y = 0; y < n; y++) {
         for (int x = 0; x < n; x++) {
             const float rr = hypotf((float)x - n / 2, (float)y - n / 2);
-            const float lift = 1.0f + 7.0f * fminf(1.0f, fmaxf(0.0f, (rr - 3.0f) / 30.0f));
             // Faded to nothing inside the inscribed circle, so a spike trails off rather than
             // stopping at the pattern's square edge -- which it does visibly round a source bright
             // enough that the spikes are still lit where the stored pattern ends.
@@ -240,7 +241,7 @@ static float* _glare_build_psf(void) {
             const float fade = 1.0f - t * t * (3.0f - 2.0f * t);
             float* o = out + ((size_t)y * n + x) * 3;
             for (int c = 0; c < 3; c++)
-                o[c] *= lift * fade;
+                o[c] *= fade;
         }
     }
     return out;
