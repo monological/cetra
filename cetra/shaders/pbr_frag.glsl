@@ -2564,8 +2564,14 @@ void main() {
     // a tight GGX spike (peak ~1.2e5 at the 0.04 roughness floor, times grazing
     // Fresnel) would otherwise store +INF, which the tonemap turns to NaN and
     // shows as black flecks tracing the highlights.
+    //
+    // `transmitted` is the one term OUTSIDE the conversion: it is the resolved
+    // scene colour, which was written pre-exposed, so it is working space
+    // already (view.glsl's contract, and water_frag keeps it the same way).
+    // Inside the product it was exposed twice -- invisible at an exposure of
+    // 1, and glass 50 times too dark at 0.02, where it rendered as black.
     vec3 color =
-        min((Lo + ambient + transmitted + emissiveMap) * preExposure, vec3(WS_SCENE_MAX));
+        min((Lo + ambient + emissiveMap) * preExposure + transmitted, vec3(WS_SCENE_MAX));
 
     // Cascade acceptance view: tint by the fragment's selected cascade so
     // split geometry and snap stability are visible (dead when csmDebug 0)
