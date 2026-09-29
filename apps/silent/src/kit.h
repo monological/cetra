@@ -88,6 +88,29 @@ void kit_prism_lying(Kit* kit, int mat, const vec3 centre, float half_len, float
 
 void kit_wall(Kit* kit, const KitWall* wall);
 
+/*
+ * A frame against a wall, for furnishing it: an origin on the floor at the
+ * wall's face, and a yaw that turns local +X ALONG the wall and local +Z OUT
+ * of it into the room. Local coordinates are (a, y, d): along, up, out.
+ * Yaw 0 is a wall you face looking -Z; the kitchen's walls are all multiples
+ * of a quarter turn.
+ */
+typedef struct KitFrame {
+    vec3 origin;
+    float yaw;
+} KitFrame;
+
+void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out);
+// The box a0..a1 along, y0..y1 up, d0..d1 out.
+void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
+                   float d0, float d1, bool collide);
+// An upright prism standing at (a, d).
+void kit_frame_prism(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
+                     float r, int sides);
+// A bar lying along the wall, from a0 to a1 at height y and distance d.
+void kit_frame_bar(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y, float d,
+                   float r);
+
 // Builds one mesh per used material under a node on the scene root.
 SceneNode* kit_finish(Kit* kit, const char* name);
 
