@@ -25,6 +25,10 @@ uniform float aerialFar; // far depth of the volume, WORLD units
 uniform float unitsPerKm;
 uniform int aerialDepth; // slice count; mirrors SKY_AERIAL_Z
 uniform int sliceIndex;
+// The deck (spec 13.7): how much of the sky is under cloud, and the overcast
+// dome's zenith radiance -- the same pair the sky-view LUT is baked with.
+uniform float overcast;
+uniform float overcastZenith;
 
 #include "atmosphere.glsl"
 #include "froxel.glsl"
@@ -96,5 +100,14 @@ void main() {
     // implementation makes the same trade: the colour of distance comes
     // overwhelmingly from the in-scatter that is ADDED, not from the
     // wavelength-dependence of what is removed.
-    FragColor = vec4(L, dot(T, vec3(0.2126, 0.7152, 0.0722)));
+    float tLum = dot(T, vec3(0.2126, 0.7152, 0.0722));
+
+    // Under a deck the air is lit by the overcast dome, not the sun, and a far
+    // enough surface must fade to the dome's HORIZON, Lz/3 -- the sky drawn
+    // right behind it -- by the same weight the sky-view LUT mixes with. Any
+    // other asymptote meets the horizon at a seam, and fading the sun's share
+    // alone would take distance to black.
+    if (overcast > 0.0)
+        L = mix(L, vec3((1.0 - tLum) * overcastZenith / 3.0), overcast);
+    FragColor = vec4(L, tLum);
 }

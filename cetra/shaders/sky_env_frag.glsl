@@ -13,6 +13,7 @@ out vec4 FragColor;
 uniform sampler2D skyViewLut;
 uniform sampler2D transmittanceLut;
 uniform vec3 sunDir; // world-space unit vector TOWARD the sun
+uniform float overcast;
 
 #include "sky_ground.glsl"
 
@@ -26,5 +27,5 @@ void main()
         return;
     }
 
-    FragColor = vec4(skyVirtualGround(dir, sunDir, r, skyViewLut, transmittanceLut), 1.0);
+    FragColor = vec4(skyVirtualGround(dir, sunDir, r, skyViewLut, transmittanceLut, overcast), 1.0);
 }

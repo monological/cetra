@@ -196,6 +196,8 @@ typedef struct {
     int night_floor;              // Night-sky floor: 1 on (implies --sky), 0 off, -1 unset
                                   // (a .cscn environment.night_floor seeds it; CLI wins)
     float night_floor_brightness; // Floor radiance scale (negative = keep the default)
+    float overcast;               // How much of the sky is under cloud, 0..1 (negative =
+                                  // keep the default); implies --sky
     float day_cycle;              // Real seconds per 24h day; 0 = frozen clock, enabled
                                   // either way. Negative = cycle off (the default)
     float time_of_day;            // Hours 0-24, solar noon at 12 (-1 = unset). Wins over
@@ -226,6 +228,7 @@ typedef struct {
     int no_moon_glow;             // Diagnostic: no aureole, the disc alone
     int moon_probe;               // Print the derived phase quantities -- the only way a
                                   // NUMERIC claim about the phase is checkable from outside
+    int sky_probe;                // Print the overcast dome and the sky bodies' lights
     float sky_disc;               // Angular DIAMETER of both sky discs (-1 = default 0.53).
                                   // Diagnostic: the moon is a few pixels at its real size,
                                   // so no arm can read its INTERIOR without this

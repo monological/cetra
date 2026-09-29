@@ -17,6 +17,7 @@ uniform sampler3D detailTex;
 uniform float coverage;
 uniform float cloudType;
 uniform float densityScale;
+uniform float overcast;
 
 #include "clouds.glsl"
 #include "sky_ground.glsl"
@@ -33,10 +34,10 @@ void main()
         // detail does not. Fixed mid-face dither (no screen pixels here).
         vec4 cloud = cloud_march(VIEW_ALTITUDE, dir, sunDir, shapeTex, detailTex, transmittanceLut,
                                  skyViewLut, 24, 4, false, coverage, cloudType, densityScale,
-                                 vec3(0.0), 0.5);
+                                 1.0 - overcast, vec3(0.0), 0.5);
         FragColor = vec4(sky * cloud.a + cloud.rgb, 1.0);
         return;
     }
 
-    FragColor = vec4(skyVirtualGround(dir, sunDir, r, skyViewLut, transmittanceLut), 1.0);
+    FragColor = vec4(skyVirtualGround(dir, sunDir, r, skyViewLut, transmittanceLut, overcast), 1.0);
 }
