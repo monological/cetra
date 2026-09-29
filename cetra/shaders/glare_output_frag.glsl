@@ -15,5 +15,5 @@ uniform float glareSourceScale;
 
 void main() {
     vec4 a = texelFetch(glareResult, ivec2(gl_FragCoord.xy), 0);
-    Glare = vec4(max(vec3(a.x, a.y, a.z), 0.0) / glareSourceScale, 1.0);
+    Glare = vec4(max(a.xyz, 0.0) / glareSourceScale, 1.0);
 }

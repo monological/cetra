@@ -293,8 +293,9 @@ static bool _glare_target(int w, int h, GLenum format, GLuint* tex, GLuint* fbo)
  * GLARE_FRAME_FILL of the grid, and the pattern resampled so its full width spans GLARE_PSF_SPAN
  * of the frame's height, centred on the grid's origin as a convolution kernel wants, normalised
  * per channel so it carries the light it is handed once, and divided by the grid's size so the
- * inverse transform needs no normalising of its own. Only the real part of its transform is kept:
- * the pattern is symmetric about its centre, so that is all there is.
+ * inverse transform needs no normalising of its own. Only the real part of its transform is kept,
+ * which is its even part: the pattern is symmetric about its centre but for the resample's last
+ * edge row, and that is all it drops.
  */
 static bool _glare_build_targets(Glare* g, int frame_w, int frame_h) {
     _glare_free_targets(g);

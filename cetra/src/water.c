@@ -1844,9 +1844,19 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene,
  *
  * `gate_wetness` is the only thing that differed and is now the parameter it always was: a lit
  * surface reads the surf height through the global wetness switch, and the sea never does.
+ *
+ * With no sea, the off state is PUBLISHED rather than left to the uniforms' defaults: programs
+ * are cached across scenes, and one that last saw a sea would otherwise go on wetting and
+ * darkening everything below a level that no longer exists. Every uniform a consumer gates on
+ * belongs in both halves.
  */
 static void _water_publish_sea(const Water* water, const struct Scene* scene, UniformManager* u,
                                bool gate_wetness) {
+    if (!water) {
+        uniform_set_float(u, "waterSurfHeight", 0.0f);
+        uniform_set_int(u, "waterDownwell", 0);
+        return;
+    }
     const float upm = _water_units_per_metre(scene);
     const bool fft = water->wave_model == WATER_WAVES_FFT;
     float hs, omega;
@@ -1866,54 +1876,17 @@ static void _water_publish_sea(const Water* water, const struct Scene* scene, Un
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
 }
 
-// The Fresnel reflectance of a dielectric at incidence cosine `cosi` into index `n`, the same
-// form as fresnelDielectric in fresnel.glsl.
-static float _water_fresnel_dielectric(float cosi, float n) {
-    cosi = fminf(fmaxf(cosi, 0.0f), 1.0f);
-    const float sint2 = (1.0f - cosi * cosi) / (n * n);
-    if (sint2 >= 1.0f)
-        return 1.0f;
-    const float cost = sqrtf(1.0f - sint2);
-    const float rs = (cosi - n * cost) / (cosi + n * cost);
-    const float rp = (n * cosi - cost) / (n * cosi + cost);
-    return 0.5f * (rs * rs + rp * rp);
-}
-
-/*
- * The key's beam once through a flat surface (spec 13.4): its direction in the water, the cosine
- * of that from vertical, and the share the surface lets through. Constant over the frame, so the
- * surface reads it rather than refracting the key again in every fragment and every helper.
- */
-static void _water_publish_key_in_water(const Water* water, const vec3 to_key, UniformManager* u) {
-    vec3 travel, in_water;
-    glm_vec3_negate_to((float*)to_key, travel);
-    glm_vec3_refract(travel, (vec3){0.0f, 1.0f, 0.0f}, 1.0f / water->ior, in_water);
-    uniform_set_vec3(u, "keyInWater", in_water);
-    // Floored for a key at the horizon, where nothing reaches the water anyway.
-    uniform_set_float(u, "keyCosT", fmaxf(-in_water[1], 0.05f));
-    uniform_set_float(u, "keyTransmit", 1.0f - _water_fresnel_dielectric(to_key[1], water->ior));
-}
-
 /*
  * The sea, for a program that is NOT the water: where its swash runs and what it does to the
  * light reaching what lies under it.
  *
  * Scalars only -- no cascades, no bed, no samplers at all, which is the property that lets a lit
  * surface ask. Called per program switch alongside the cloud shadow, so a material gets the same
- * sea the water surface is drawing at the same instant.
- *
- * With no sea, the off state is PUBLISHED rather than left to the uniforms' defaults: programs
- * are cached across scenes, and one that last saw a sea would otherwise go on wetting and
- * darkening everything below a level that no longer exists.
+ * sea the water surface is drawing at the same instant -- or no sea at all.
  */
 void water_bind_sea(const Water* water, const struct Scene* scene, ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;
-    if (!water) {
-        uniform_set_float(program->uniforms, "waterSurfHeight", 0.0f);
-        uniform_set_int(program->uniforms, "waterDownwell", 0);
-        return;
-    }
     _water_publish_sea(water, scene, program->uniforms, true);
 }
 
@@ -2457,11 +2430,11 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
  */
 static bool _water_caustic_target(Water* water) {
     const bool colour = water->caustic_bands > 0;
-    if (water->caustic_fbo[0] && colour == (water->caustic_target_bands > 0))
+    if (water->caustic_fbo[0] && colour == water->caustic_target_colour)
         return true;
     gl_delete_texture(&water->caustic_tex);
-    glDeleteFramebuffers(WATER_CAUSTIC_LEVELS, water->caustic_fbo);
-    memset(water->caustic_fbo, 0, sizeof(water->caustic_fbo));
+    for (int level = 0; level < WATER_CAUSTIC_LEVELS; level++)
+        gl_delete_fbo(&water->caustic_fbo[level]);
 
     const int res = WATER_CAUSTIC_TARGET_RES;
     glActiveTexture(GL_TEXTURE0);
@@ -2479,7 +2452,7 @@ static bool _water_caustic_target(Water* water) {
                                   level);
         complete = complete && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     }
-    water->caustic_target_bands = water->caustic_bands;
+    water->caustic_target_colour = colour;
     return complete;
 }
 
@@ -2821,6 +2794,10 @@ void water_ripple_drop(Water* water, float x, float z, float radius_m, float dep
     d[3] = depth_m;
 }
 
+// The ripple a wake lays: a hand's width across and a few centimetres deep.
+#define WATER_WAKE_RADIUS_M 0.12f
+#define WATER_WAKE_DEPTH_M  0.03f
+
 void water_wake(Water* water, WaterWake* wake, float x, float z, float pace, bool in_water) {
     if (!wake)
         return;
@@ -2848,8 +2825,8 @@ void water_wake(Water* water, WaterWake* wake, float x, float z, float pace, boo
  * constants are per step, so stepping per frame would run its rings at the frame rate's speed,
  * and a headless run -- a fixed clock per frame -- takes the same steps every time. A frame that
  * falls further behind than a few steps skips ahead rather than paying for all of them. A drop
- * pressed in on a frame with no step due takes the next step early, and the clock is advanced by
- * it, so pressing does not speed the rings up.
+ * pressed in on a frame with no step due takes the next step early, at most one step ahead of the
+ * clock, and the clock is advanced by it, so pressing does not speed the rings up.
  *
  * The square sits ahead of the camera where the view meets the water, no further than a third of
  * itself, so a body in the frame below the eye is inside it; it moves in whole texels, and only
@@ -2876,9 +2853,12 @@ static void _water_run_touch(Water* water, const struct Scene* scene, const stru
     } else if (steps > 0) {
         water->touch_clock += (double)steps / WATER_TOUCH_STEP_HZ;
     }
+    // A drop takes the next step early only when the clock is not already ahead; otherwise it
+    // waits for the clock, queued, since drops are cleared only by a step. Borrowing every frame
+    // would run the rings at the frame rate under drops arriving faster than the steps.
     if (water->touch_drop_count > 0) {
         water->touch_calm_steps = 0;
-        if (steps <= 0) {
+        if (steps == 0) {
             steps = 1;
             water->touch_clock += 1.0 / WATER_TOUCH_STEP_HZ;
         }
@@ -3111,7 +3091,6 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         glm_vec3_scale((float*)sun->color, sun->intensity, sun_radiance);
     }
     uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
-    _water_publish_key_in_water(water, sun_dir, u);
     uniform_set_int(u, "sunAvailable", sun ? 1 : 0);
     uniform_set_vec3(u, "sunRadiance", (const float*)&sun_radiance);
 
@@ -3395,7 +3374,7 @@ void water_caustic_probe(const Water* water) {
     // The whole array, which is what one glGetTexImage of it returns, read as RGBA whatever it
     // stores. One channel carries the pattern unless the caustics were traced band by band, when
     // each of three carries its own colour's share (spec 13.4).
-    const int channels = water->caustic_target_bands > 0 ? 3 : 1;
+    const int channels = water->caustic_target_colour ? 3 : 1;
     float* px = malloc(layer * WATER_CAUSTIC_LEVELS * sizeof(float));
     if (!px) {
         printf("water-caustic-probe available=0 reason=alloc\n");

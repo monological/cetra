@@ -33,5 +33,5 @@ void main() {
     float l = max(max(c.r, c.g), c.b);
     c *= max(l - glareThreshold, 0.0) / max(l, 1.0e-4);
     c = min(c, vec3(80000.0)) * glareSourceScale;
-    Packed = vec4(c.r, c.g, c.b, 0.0);
+    Packed = vec4(c, 0.0);
 }
