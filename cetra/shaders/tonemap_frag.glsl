@@ -29,6 +29,7 @@ uniform sampler2D glareTex;
 uniform float glareStrength;
 uniform int glareEnabled;
 uniform float glareThreshold;
+uniform vec3 glareHaloShare; // the share of the light past the threshold the star moves
 uniform int aoEnabled;
 uniform float aoStrength;
 uniform sampler2D normalsTex; // Resolved view-space normal .xyz + SSR marker .a
@@ -477,7 +478,8 @@ vec3 ditherPattern(vec2 p)
  * black pixel.
  *
  * The glare MOVES light (spec 13.5): the share of this pixel's light above the
- * threshold that bloomAdd's star carries away is removed here, before the
+ * threshold that bloomAdd's star carries away -- its halo; the core stays here,
+ * at full resolution -- is removed here, before the
  * occlusion, so it cannot take a darkened pixel below zero. The star's source
  * thresholds every texel before it downsamples, so the light taken out here and
  * the light the star puts back agree in total, spread differently.
@@ -486,7 +488,7 @@ vec3 sceneComposite(vec2 uv, float aoFactor, vec3 bloomAdd)
 {
     vec3 c = min(sceneTap(uv), vec3(WS_SCENE_MAX));
     if (glareEnabled == 1)
-        c -= glareStrength * glareAboveThreshold(c, glareThreshold);
+        c -= glareStrength * glareHaloShare * glareAboveThreshold(c, glareThreshold);
     return c * aoFactor + bloomAdd;
 }
 

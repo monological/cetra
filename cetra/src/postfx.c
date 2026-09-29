@@ -3831,6 +3831,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_float(tm, "glareStrength", fminf(fmaxf(fx->glare_strength, 0.0f), 1.0f));
         uniform_set_int(tm, "glareEnabled", glare_tex ? 1 : 0);
         uniform_set_float(tm, "glareThreshold", fx->glare_threshold);
+        float halo_share[3];
+        glare_halo_share(fx->glare, halo_share);
+        uniform_set_vec3(tm, "glareHaloShare", halo_share);
         uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
         uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
         uniform_set_int(tm, "flareTex", 8);
