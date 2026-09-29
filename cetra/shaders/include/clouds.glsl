@@ -125,10 +125,12 @@ float cloudSphereNear(float r0, float mu, float R)
     return tn > 0.0 ? tn : (tf > 0.0 ? tf : -1.0);
 }
 
+// `sunScale` is how much direct sun reaches the shell: 1, or less under an
+// overcast deck above it (spec 13.7).
 vec4 cloud_march(float obsAltKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampler3D detailTex,
                  sampler2D transmittanceLut, sampler2D skyViewLut, int steps, int lightSteps,
                  bool detailOn, float coverage, float cloudType, float densityScale,
-                 vec3 windOffsetKm, float dither)
+                 float sunScale, vec3 windOffsetKm, float dither)
 {
     float obsAlt = max(obsAltKm, VIEW_ALTITUDE);
     float r0 = Rg + obsAlt;
@@ -215,7 +217,7 @@ vec4 cloud_march(float obsAltKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampl
         vec3 sunT = transmittanceToSky(transmittanceLut, rS, sunDir.y);
         float beer = max(exp(-tauL), exp(-tauL * 0.25) * 0.7);
         float powder = 1.0 - 0.6 * exp(-2.0 * tauL);
-        vec3 Lsun = SUN_ILLUMINANCE * sunT * beer * phase * powder * CLOUD_MS_GAIN;
+        vec3 Lsun = SUN_ILLUMINANCE * sunT * beer * phase * powder * CLOUD_MS_GAIN * sunScale;
         vec3 Ls = Lsun + ambient * 1.5 * mix(0.4, 1.0, hf);
 
         // Energy-conserving per-step integration (Hillaire): the analytic
