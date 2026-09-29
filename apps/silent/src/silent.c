@@ -56,6 +56,8 @@ typedef struct SilentArgs {
     int seed;
     int day;
     int no_taa;
+    int no_grade;
+    float render_scale;
     int msaa;
     bool cam_eye_set, cam_target_set;
     vec3 cam_eye, cam_target;
@@ -212,12 +214,17 @@ static void build_probes(Engine* engine) {
         free_reflection_probe_set(set);
 }
 
-static void build_post(const Engine* engine, bool night) {
+static void build_post(const Engine* engine, bool night, bool grade) {
     PostFX* fx = engine->postfx;
     if (!fx)
         return;
     postfx_apply_film_look(fx);
     fx->contact_shadows_enabled = true;
+    // The film look warms the highlights; this place is green-grey, and the
+    // grade that makes it so is the LUT (tools/make_grade.py).
+    glm_vec3_one(fx->grade_gain);
+    if (grade && postfx_load_lut(fx, "assets/lut/silent_grade.cube"))
+        fx->lut_strength = 1.0f;
 
     // A thin haze everywhere -- enough to put a beam in the flashlight and a
     // halo round a lamp -- and the street's fog volumes on top of it.
@@ -288,7 +295,7 @@ static void on_init(Game* game) {
     engine->exposure.automatic = false;
     engine->exposure.multiplier = 0.02f;
 
-    build_post(engine, !g_args.day);
+    build_post(engine, !g_args.day, !g_args.no_grade);
 }
 
 static void on_update(Game* game, double dt) {
@@ -341,6 +348,9 @@ static void print_usage(const char* prog) {
     printf("      --seed N            Clutter and street seed\n");
     printf("      --day               Overcast day in the fog instead of night\n");
     printf("      --no-taa            No temporal AA: the exactly repeatable frame\n");
+    printf("      --no-grade          Without the green-grey colour grade\n");
+    printf("      --render-scale F    Render at F of the window (0.5-1) and upscale: softer,\n");
+    printf("                          lower-res, more like the consoles it imitates\n");
     printf("      --msaa N            MSAA samples\n");
     printf("      --cam-eye x,y,z     Pin the camera (a framing that can be taken twice)\n");
     printf("      --cam-target x,y,z  What the pinned camera looks at\n");
@@ -380,6 +390,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->day = 1;
         } else if (!strcmp(s, "--no-taa")) {
             a->no_taa = 1;
+        } else if (!strcmp(s, "--no-grade")) {
+            a->no_grade = 1;
+        } else if (!strcmp(s, "--render-scale") && has_next) {
+            a->render_scale = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {
             a->msaa = atoi(argv[++i]);
         } else if (!strcmp(s, "--cam-eye") && has_next) {
@@ -427,6 +441,9 @@ int main(int argc, char** argv) {
     // traced in a dark, unfogged line.
     config.engine.msaa_samples = 1;
     config.engine.taa = !g_args.no_taa;
+    // The upscale rides on TAA, so a scale without it is refused by the engine.
+    if (g_args.render_scale > 0.0f && !g_args.no_taa)
+        config.engine.render_scale = g_args.render_scale;
     if (g_args.msaa > 0)
         config.engine.msaa_samples = g_args.msaa;
 
