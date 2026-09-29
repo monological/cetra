@@ -460,6 +460,7 @@ static int trace_step = 0;
 static Sound* jump_sound = NULL;
 static Sound* spawn_sound = NULL;
 static bool audio_muted = false;
+static bool glare_on = false; // --glare: the diffraction star, off by default
 
 // The UI (spec 12.2). Declared up here rather than beside its functions because
 // on_pre_render asks whether the menu owns the pointer, and that is well above
@@ -8680,6 +8681,8 @@ int main(int argc, const char* argv[]) {
             gamepad_db = argv[++i];
         } else if (!strcmp(a, "--mute")) {
             audio_muted = true;
+        } else if (!strcmp(a, "--glare")) {
+            glare_on = true;
         } else if (!strcmp(a, "--audio-probe") && i + 1 < argc) {
             audio_probe = argv[++i];
         } else if (!strcmp(a, "--audio-file") && i + 1 < argc) {
@@ -8992,6 +8995,8 @@ int main(int argc, const char* argv[]) {
         return -1;
     }
     game->engine->exit_after_frames = frames;
+    if (game->engine->postfx)
+        game->engine->postfx->glare_enabled = glare_on;
     engine_set_screenshot_path(game->engine, screenshot);
     game->engine->screenshot_every = screenshot_every;
 

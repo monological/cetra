@@ -559,6 +559,15 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         warn_unknown_keys(bloom, bloom_known, sizeof(bloom_known) / sizeof(bloom_known[0]),
                           "post.bloom");
     }
+    const cJSON* glare = cJSON_GetObjectItemCaseSensitive(post, "glare");
+    if (cJSON_IsObject(glare)) {
+        d->has_glare_enabled = get_bool(glare, "enabled", &d->glare_enabled);
+        d->has_glare_strength = get_float(glare, "strength", &d->glare_strength);
+        d->has_glare_threshold = get_float(glare, "threshold", &d->glare_threshold);
+        static const char* const glare_known[] = {"enabled", "strength", "threshold"};
+        warn_unknown_keys(glare, glare_known, sizeof(glare_known) / sizeof(glare_known[0]),
+                          "post.glare");
+    }
     const cJSON* fog = cJSON_GetObjectItemCaseSensitive(post, "fog");
     if (cJSON_IsObject(fog)) {
         get_bool(fog, "enabled", &d->fog_enabled);
@@ -581,6 +590,7 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         "tonemap",      "exposure", "auto_exposure", "camera",
         "render_scale", "flare",    "bloom",         "chromatic_aberration",
         "fog",          "metering", "lut",           "purkinje",
+        "glare",
     };
     warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }
