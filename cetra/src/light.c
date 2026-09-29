@@ -160,12 +160,15 @@ float light_effective_intensity(const struct Light* light) {
 }
 
 float light_cull_radius(const struct Light* light) {
-    if (light->range > 0.0f)
-        return light->range;
-
+    // Before the range: a light switched off by its intensity keeps its range,
+    // and answering with it booked a light that adds nothing into every froxel
+    // it reached, spending the cluster index pool on it.
     float i_eff = light_effective_intensity(light);
     if (i_eff <= 0.0f)
         return 0.0f;
+
+    if (light->range > 0.0f)
+        return light->range;
 
     // Area panels ignore the attenuation coefficients entirely -- the LTC
     // form factor carries the falloff, and `intensity` is emitted radiance.
