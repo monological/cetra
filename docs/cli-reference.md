@@ -15,6 +15,8 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
 - [apps/forest](#appsforest) — instancing, LOD, culling, the island, erosion, streaming, origin
   shifting
+- [apps/silent](#appssilent) — the fog-street kitchen: framing, the look's A/B switches, and a
+  day mode that is parked
 - [The other apps](#the-other-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
   shapes, pcb, and why splash is not in any of this
 
@@ -766,6 +768,61 @@ SUBMISSION table is the only counter a level change moves -- `draws` and
 
 ---
 
+## apps/silent
+
+A grimy kitchen in a house on a foggy night street, walked in first person (spec 13.6). In the
+window: click to capture the mouse and Tab to release it; WASD walks, Shift hurries, and the mouse
+or the arrow keys look. **F** (or pad Y) toggles the flashlight, and **G** or backtick shows the
+debug GUI.
+
+**Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
+(default 1600x900).
+
+**The frame is one sample with jittered TAA, headless as well as windowed.** Two reasons it is not
+the engine's usual headless setup:
+- **MSAA outlines the street.** With multisampling, the fog composite takes one depth for an edge
+  pixel, and where half its samples are sky that depth is too near. Every silhouette in the street
+  comes out traced in a dark, unfogged line.
+- **Headless TAA without jitter does nothing useful.** It integrates one sample position forever,
+  so there is no antialiasing, and the engine refuses any render scale under it.
+
+So a screenshot is what a player sees. It is still exactly repeatable, because the jitter follows
+the frame index: two headless runs of the kitchen view came out 0 px apart, both with TAA and with
+`--no-taa`. The switches:
+- **`--no-taa`:** no temporal filter, and so no upscale either: full resolution, raw edges.
+- **`--msaa <n>`:** puts multisampling back, outlines and all.
+- **`--render-scale <f>`** (0.5-1, default 0.5): the upscale. It rides on TAA, so it is ignored
+  under `--no-taa`. At 0.5 the frame is softer and fine texture turns to mush in a 1:1 crop. At
+  viewing size it changes little, because 0.5 of a Retina window is still about 960x540.
+
+**Framing:** `--cam-eye x,y,z` with `--cam-target x,y,z` pins the camera, so a view can be
+photographed twice and a change A/B'd. The two go together, and one alone is ignored with a
+warning. `--fov <deg>` is the vertical field of view (default 68).
+
+**Some pinned views that have been useful** (with `-W 960 -H 540`):
+- **The kitchen towards its window:** `--fov 72 --cam-eye 2.2,1.95,13.55 --cam-target 2.2,1.25,10.1`.
+- **The street past the nearest lamp:** `--fov 70 --cam-eye -0.8,1.7,5.0 --cam-target -16,1.6,-1.5`.
+
+**Look switches**, each an A/B for one part of the picture:
+- **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
+  by `apps/silent/tools/make_grade.py`).
+- **`--no-flicker`:** keeps the failing ceiling tube steady. The flicker is a pure function of the
+  sim clock, so a headless frame catches the same instant of it every run. A frame that lands in a
+  stutter burst shows that tube dark, which reads as the room being underlit when it is not; use
+  this when comparing lighting.
+- **`--flashlight`:** starts with the torch on.
+- **`--seed <n>`:** reseeds the clutter on the counters and shelves, and the street: which windows
+  are lit, blinded or boarded.
+
+**Playing it headless:** `--pad-script <file>` replays a scripted gamepad on slot 0, in the format
+`cetra/src/game/input.h` gives, and `--trace-player` prints the player's position every 30 steps.
+That is gametest's pair, so a walk can be driven and read back with no controller.
+
+**`--day` is parked, not finished.** It gives an overcast-white street under a pinned exposure, but
+the rooms are dark. The engine's sky has no physical brightness scale and the kitchen's tubes do,
+so no single exposure serves both. What it waits on is an overcast sky in the engine, with a
+brightness scale an app can match its lights to.
+
 ## The other apps, and the AA mode each one chose
 
 Spec 11.103 asked what anti-aliasing every app should run and got a different answer four times,
@@ -776,7 +833,7 @@ which is why this section exists rather than one line saying "they inherit the d
 POSITIONAL — an unrecognised token is still taken as the path, which is the whole interface the app
 had. It runs **one sample plus TAA windowed**, the render-app policy, because every surface in it is
 a rigid mesh on the `pbr` program and so writes a motion vector. **Spec 11.109 added five**, which
-make it the one app a headless run can play: `--pad-script <file>` replays a scripted gamepad on
+made it the first app a headless run can play (`apps/silent` is the second): `--pad-script <file>` replays a scripted gamepad on
 slot 0 (the format is in `cetra/src/game/input.h`; a file that is missing or will not parse exits
 1, so a gate never mistakes an idle pad for a passing layer), `--gamepad-db <file>` adds an SDL
 controller mapping file to GLFW's bundled table (same refusal), `--trace-player` prints the
@@ -850,11 +907,11 @@ by default and all closed: **Escape** opens the pause menu, and quitting is an i
 rather than a key, which is the change every app in the tree took. `--no-ui` runs without any of
 it. `--ui-screen <name>` opens one at startup (`main`, `pause` or `settings`), because a headless
 run has no Escape key to press and a menu otherwise never appears in a capture; `--ui-focus <n>`
-then presses "down" n times through the real navigation path, which is how `menu_focus` is
-photographed with the focus somewhere other than where it lands — and because nothing is focused
-to begin with, the first press only ACQUIRES, so `2` is what reaches the second button. `-W <n>`
-and `-H <n>` set the window size, which this app had no way to state before and a golden recipe
-needs.
+then presses "down" n times through the real navigation path, which is how a capture shows the
+focus somewhere other than where it lands — and because nothing is focused to begin with, the
+first press only ACQUIRES, so `2` is what reaches the second button. `-W <n>` and `-H <n>` set the
+window size, which this app had no way to state before and a golden recipe needs. Both menu
+goldens, `menu` and `menu_focus`, were dropped in spec 13.6 for not being reliably 0 px.
 
 `--ui-probe <case>` is the headless probe the `ui` gate group reads, in the shape `--audio-probe`
 and `--anim-probe` established: it prints `ui <case> <label> <key> <numbers>` and exits. The cases
@@ -921,8 +978,8 @@ correctly an identity and there is nothing to see.
 It stood behind an `--ik-ground` flag at first, to keep it out of the two menu goldens — the
 menu is drawn over the live scene through a backdrop only 77% opaque, so the floor reads
 through it and anything in frame moves them. That traded the only demonstration of the feature
-for two unchanged reference images, which is the wrong way round: the goldens carry the fixture
-now and were re-baked for it.
+for two unchanged reference images, which is the wrong way round: the goldens carried the fixture
+from then until they were dropped in spec 13.6.
 
 The follow camera is **on by default**; `--no-follow-cam` gives back the fixed orbit about the
 world origin. It shipped behind `--follow-cam` while the camera was being settled and was turned
@@ -932,7 +989,7 @@ pinned to a point the player walks away from. The opt-out spelling matches `--no
 
 That makes the whole of spec 12.6 default-on, which is the 12.4 reasoning carried to its end —
 a flag that hides a feature from the only two pictures showing the world trades the
-demonstration for two unchanged reference images. Both menu goldens photograph this camera, so
+demonstration for two unchanged reference images. Both menu goldens photographed this camera, so
 both were re-baked for it.
 
 **The arrow keys turn it and nothing else does**, `apps/forest`'s bindings and rates — the right

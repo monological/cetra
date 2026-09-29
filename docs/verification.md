@@ -8,7 +8,7 @@ Three instruments, answering different questions:
 | instrument | asserts | blind to |
 |---|---|---|
 | `scripts/gates.py` | analytic properties — a ratio, a count, a penumbra width, whether two runs agree | anything nobody wrote an arm for; a bar too slack to fail |
-| `scripts/goldens.py` | 33 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
+| `scripts/goldens.py` | 31 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
 | a hand A/B | everything else | nothing, and that is the problem: it has no bar unless you measure one |
 
 **The one rule that governs all three: a pixel count quoted without its noise floor is not a
@@ -40,8 +40,8 @@ up as a difference. The corpus must not be re-baked off macOS.
   the math, and what only watching a real rig can settle
 - [The root-motion path](#the-root-motion-path) — what the nine 12.18 arms assert, and why the
   benefit root motion exists for cannot be measured on any asset in this tree
-- [The UI paths](#the-ui-paths) — what the `ui` group and the two menu goldens do not
-  cover: another display, a real pad through a menu, and the other two settings locations
+- [The UI paths](#the-ui-paths) — what the `ui` group does not cover: the layer's pixels,
+  another display, a real pad through a menu, and the other two settings locations
 - [The save paths](#the-save-paths) — what the `save` group asserts, why a restored world is
   deliberately not bit-exact, and the migration nobody can test until time passes
 - [The foot-planting path](#the-foot-planting-path) — what the `ik` group asserts about the
@@ -232,7 +232,8 @@ covers it either.
 | `assets/models/room.fbx`, `assets/models/c64.fbx` | no | no | room's textures point at a dead path; c64 renders fully (textured, lit) since specs 11.1 |
 | `apps/tree` | **yes** + particles | no | **NOT pixel-deterministic on the orbit path** -- measured 8,925 px run-to-run at 40 frames / 2800x1800, and 31,034 at the framing recorded above, so **measure the floor at YOUR framing before comparing anything**: it moves by a factor of three with resolution and frame count. The cause is `camera_drag_update(drag_controller, glfwGetTime())` at **`tree.c:761`** (`mouse_drag_update` until spec 12.19 renamed it) -- and that call sits in an `else if` behind `if (player)`, so **`--player` never reaches it**, never creates the drag controller (`tree.c:1200`), and takes `engine->render_delta` instead. **`--player --headless` IS 0 px** -- measured x2 at 30 frames / 400x300 (spec 11.86), which makes it tree's first pixel-comparable framing and the one to use for any A/B in this app. It is what 11.86's normal-compression numbers were taken at. Wind, grass sway and falling leaves ARE frame-index-pure (spec 11.2); the ORBIT camera is what is not. **Spec 11.32 put a sea around it, ON by default**, and 11.35 put a seabed under the sea -- both under one `--no-water` guard, because a bed with no sea over it is a plate around a dome. **Its water is SPECTRAL by default since 11.35, not Gerstner** (`tree.c:1589`; `--gerstner-waves` switches back, and the four wave params it authors are DEAD unless you pass it). So the 64-pass FFT cost (45 until spec 13.3 added the ripple band) and the FFT-only crest foam all apply to this app by default (caustics run on either model since spec 13.2), and every cascade change in 11.33 and 11.35 reaches it. No tree capture from before 11.35 compares; none from before 11.36 does either, which re-scaled the water's absorption. |
 | `apps/spores` | particles | no | deterministic headless since spec 11.2 (x3 0 px; game-loop step count is exact). Since 11.103 it also takes `--taa`, `--headless-jitter` and `--msaa`, which exist to have MEASURED a refusal rather than to be used: its particles write no motion vector, so TAA reprojects every mote through the geometry behind it and turns dots into dashes. Compare its mote field at 4x against `--taa` if you want to see it; brighten 4x, the field is dim. |
-| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; since 12.2 also `-W`/`-H` (so a golden can state the size it was baked at), `--no-ui`, `--ui-screen <name>`, `--ui-focus <n>` and `--ui-probe <case>`; the HDR path stays positional. **It is the only app with goldens that is not the render app** -- `menu` and `menu_focus` are its frames, since a menu is drawn over ITS scene. **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by every surface writing a motion vector: rigid meshes on `pbr` and, since 12.1, one skinned rig on `pbr_skinned`, whose vectors come from the previous frame's bone rows (`uPrevBoneRows`) latched once per frame. `--no-puppet` is the all-rigid frame if you need to separate them. **Re-measured with the rig on the frame (spec 12.1): still 0 px and byte-identical traces.** **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
+| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; since 12.2 also `-W`/`-H` (so a golden can state the size it was baked at), `--no-ui`, `--ui-screen <name>`, `--ui-focus <n>` and `--ui-probe <case>`; the HDR path stays positional. **It owned the only goldens that were not the render app's**, `menu` and `menu_focus`, until spec 13.6 dropped both (see "Why there are no menu goldens" under the UI paths). **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by every surface writing a motion vector: rigid meshes on `pbr` and, since 12.1, one skinned rig on `pbr_skinned`, whose vectors come from the previous frame's bone rows (`uPrevBoneRows`) latched once per frame. `--no-puppet` is the all-rigid frame if you need to separate them. **Re-measured with the rig on the frame (spec 12.1): still 0 px and byte-identical traces.** **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
+| `apps/silent` | physics + tube flicker | no | **0 px run-to-run, with its jittered TAA and without it** (spec 13.6: two runs each of the kitchen view at 60 frames, 960x540 on a 2x display). Headless it runs one sample with TAA jittered like the window, so the jitter must follow the frame index for this to hold, and it does. The flicker is a pure function of the sim clock, so a capture lands on the same instant of it every run -- but a frame that falls in a stutter burst shows the ceiling tube dark, which reads as a lighting change when comparing two configurations; `--no-flicker` takes it out. The GI volume and the reflection probes bake from frame 2, so a very early frame is still converging; at 60 frames the log reports the volume converged before the screenshot is written. No goldens and no gate arms, by decision. |
 | `assets/scenes/puppet.cscn` | no | no | **the blending instrument (spec 12.1)**, and the corpus's first rig built to be MEASURED rather than looked at: twenty-two rigid boxes, one per bone (twenty until spec 12.9 added the toes), on the `cetra_rig:` names the committed walk clip carries, a T-pose with identity rest rotations and pure-translation bind offsets -- so a wrong axis or order reads as a number in `--anim-probe`. Feet on y = 0 and centred in x/z, which makes the render app's recentre a no-op (the generator asserts it). Seven clips, all authored in closed form: `idle`, `walk` and `run` loop in COS phase so the read frame is an extreme rather than a crossing; `jump` and `wave` are one-shots that end on bind; `hold90` swings one forearm to 90 degrees and HOLDS it past the read frame (a clip that ended there would wrap to bind in exactly the frame being measured -- `skinned_cull`'s own lesson); `rest` is the bind pose as a clip, the other endpoint of the analytic midpoint blend. Every animated joint also carries a translation track holding its bind offset, because an embedded clip with rotation keys alone reads position (0,0,0) and collapses the joint onto its parent. `puppet_golden` is baked from `--anim-clip run`. |
 | `assets/models/strut_walk.fbx` | no | no | a real walk cycle, animation-only (no mesh): 52 channels, 86 ticks at 60 tps. Binds onto the puppet by EXACT name -- twenty-two channels, one per bone, with an identity retarget delta since an animation-only file carries no source skeleton -- which is what `anim-clip-loads` asserts and what a retarget delta is measured against. The unmatched 30 are fingers, a second toe joint and a head tip the puppet does not model. **How it LOOKS on the puppet is unverified**: the puppet's rest rotations are identity where a real rig's are not, so the absolute rotations land differently. That is the retarget question the puppet cannot answer -- see "The real-character path" below. |
 | `apps/shapes`, `apps/splash` | no | no | **no capture path, and none is planned** (spec 11.103). shapes keeps 4x MSAA deliberately, so there is nothing to regress; adding headless is 40-60 lines for a decision that is not changing. `apps/splash` cannot be captured at all without porting it onto `engine_run` — it draws to the default framebuffer and the engine's screenshot lives in the loop it does not use. |
@@ -698,7 +699,7 @@ doing at the time:
 
 - **The goldens are structurally blind to half this module.** A build that failed FIVE `ik` arms
   — `ik-reach`, `ik-clamp`, `ik-singular`, `ik-analytic` and `ik-plant`, every one of them by
-  exactly the same 0.08 m — passed all 33 goldens. Every gametest golden is a *planting* path,
+  exactly the same 0.08 m — passed all 33 goldens. Every gametest golden was a *planting* path,
   and planting was the half that stayed correct. The synthetic arms are the only thing in
   the tree that sees the geometric path at all.
 - **`ik-pole` is a weak arm and still is.** It passed throughout that same build while its
@@ -784,7 +785,7 @@ doing at the time:
   frame byte-identically by hand. It read **0 px on a re-run of the same binary with no
   rebuild**, as did `menu_focus`. The recorded magnitudes of 752, 672 and 675 px are small
   enough to be mistaken for noise around a real change. This one is not, and it cost most of an
-  afternoon. **Re-run first. Always.**
+  afternoon. **Re-run first. Always.** Spec 13.6 dropped both menu goldens for exactly this.
 
 - **The demo's own walk clip has no stance phase, and that is the remaining limit.** `gait()`
   swings thighs about a straight leg, so the foot never dwells and a lock has nothing to hold
@@ -817,11 +818,10 @@ worth stating plainly rather than leaving to be discovered:
   committed asset is what the generator emits, and the regeneration was verified to carry
   thirteen channels against thirteen samplers — but whether a breaststroke *reads* as one is a
   watch, and the clip shares the rig's known limitation that its walk bends no knee.
-- **The follow camera's REST pose is photographed; its ROTATION is covered by arms rather than
-  pixels.** It is on for the golden bakes, so both menu images frame the player from the rig's
-  initial aim and a regression in the placement would move them. No golden presses an arrow key
-  -- but since spec 12.19 the turning, the pitch clamp and the movement basis are asserted in the
-  `camera` group instead: `cam-pitch-clamp` saturates 12 radians of demand at each end,
+- **The follow camera is covered by arms, not pixels.** The two menu goldens framed the player
+  from the rig's initial aim until spec 13.6 dropped them, so nothing photographs its rest pose
+  now. Since spec 12.19 the turning, the pitch clamp and the movement basis are asserted in the
+  `camera` group: `cam-pitch-clamp` saturates 12 radians of demand at each end,
   `cam-basis` reads the published frame and its sentinel, and `pad-camera-relative` reads the
   scheme end to end through a scripted pad. That basis is the half that failed twice in review,
   and turning `steers_controls` off now reddens an arm by 104.85 degrees.
@@ -854,10 +854,6 @@ brings three more blind spots — two of which cost hours before they were under
   table one entry deep; four noise seeds interleaved seven taps a point cost seven million
   Fisher-Yates shuffles. One shared seed took the fill from 11.7 s to 2.7 s. No arm would
   have noticed, and the profile had to be added by hand to find it.
-- **Both menu goldens are knowingly stale.** They have been since 12.6 flipped the follow
-  camera on by default, and 12.7 moved the world under them four times over. Re-baking is
-  deferred deliberately rather than forgotten: the terrain is still being shaped, and a bake
-  of a shape still in motion is a bake that gets redone.
 
 Closing it is a watch, not a script:
 
@@ -876,8 +872,9 @@ Closing it is a watch, not a script:
 Spec 12.2's ten gate arms assert the UI where it is a pure function: `ui_layout` is
 (tree, width, height) with no GL, no clock and no input, and the input pass takes a struct of
 values rather than a device. So navigation, hit-testing, capture, the stack, wrapping, theme
-resolution and the settings round-trip are all checked with **no window and no GPU**, and the
-two menu goldens are the only place the layer's pixels are compared at all.
+resolution and the settings round-trip are all checked with **no window and no GPU** -- and
+nothing compares the layer's pixels at all. The two menu goldens that did were dropped in spec
+13.6 for not being reliably 0 px.
 
 Five things that leaves open, none of them reachable from this machine:
 
@@ -950,14 +947,14 @@ Five things that leaves open, none of them reachable from this machine:
   frame while the HUD, carrying no transition, kept drawing. The fix is a wall clock on the
   windowed side only, and it wants its own before/after rather than a late guess.
 
-One measured caution about the two menu goldens. They are `apps/gametest` frames, and that app
-is 0 px run-to-run (the row above says so, re-measured twice for 12.1). The menu recipes
-reproduce at 0 px by hand, standalone through `goldens.py --only`, and in a full 33-golden run —
-but `menu` was observed ONCE at 1212 px inside a full run and has not reproduced since. It is
-recorded here rather than explained: if it recurs, the first thing to suspect is the async
-texture upload budget (<=5/frame), which is the one part of a gametest frame that depends on
-how busy the machine is, and the fix is to give the recipe enough frames for the loads to have
-certainly landed.
+**Why there are no menu goldens.** `menu` and `menu_focus` were `apps/gametest` frames, and
+that app is 0 px run-to-run (the row above says so). The recipes reproduced at 0 px by hand and
+standalone through `goldens.py --only`, but inside full runs `menu` failed more than once --
+1212 px once, 48,886 px once -- and never reproduced on a re-run of the same binary. Spec 13.6
+dropped both. What was never explained is recorded for whoever brings one back: the first
+suspect is the async texture upload budget (<=5/frame), the one part of a gametest frame that
+depends on how busy the machine is, and a new recipe should give the loads enough frames to
+have certainly landed.
 
 ---
 
