@@ -1,4 +1,5 @@
 
+#include "cetra/ies.h"
 #include "cetra/light.h"
 
 #include "houses.h"
@@ -15,6 +16,9 @@
  * night -- lit windows and lamp halos, the houses themselves mostly gone --
  * and the road's ends vanish. Extinction per metre.
  */
+// Relative to the repository root, where every app in this tree is run from.
+#define STREET_LAMP_IES "assets/ies/silent_street_lamp.ies"
+
 #define FOG_NIGHT   0.09f
 #define FOG_DAY     0.14f
 #define FOG_FEATHER 3.0f
@@ -30,13 +34,15 @@ static void ground(Kit* kit, int mat, float z0, float z1, float top) {
  * arm and its head, the lens glowing under it, and at night a light there. A
  * dead lamp keeps its shape and loses its light.
  *
- * A POINT light, not the spot a lamp is: the fog scatters point lights and
- * only the scene's first spot (the flashlight), so a spot lamp lights its pool
- * and leaves the air round it dark -- no halo, which in fog is most of what a
- * lamp looks like. What goes upward lights nothing but fog. No shadows: a
- * point light's map is six layers of a pool of eight.
+ * A POINT light shaped by `profile`, not the spot a lamp is: the fog scatters
+ * point lights and only the scene's first spot (the flashlight), so a spot lamp
+ * lights its pool and leaves the air round it dark. The profile is what makes
+ * it a lamp rather than a bare bulb -- it sends the light down, so the fog
+ * shows a bell of lit air under the head instead of a ball round it, and the
+ * road gets the pool the air implies. No shadows: a point light's map is six
+ * layers of a pool of eight.
  */
-static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool dead) {
+static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool dead, int profile) {
     const KitFrame f = {{x, 0.0f, z}, z > 0.0f ? GLM_PIf : 0.0f};
     kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.0f, 0.5f, 0.12f, 8);
     kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.5f, 5.2f, 0.07f, 8);
@@ -56,6 +62,7 @@ static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool dead
                       .intensity = 3000.0f, // candela: an old mercury lamp
                       .range = 12.0f};
     Light* light = create_light(&desc);
+    light->ies_profile = profile;
     scene_add_light(scene, light);
 }
 
@@ -167,14 +174,22 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
     fence(kit, -34.5f, -8.0f, walk + 1.6f);
     fence(kit, 8.0f, 34.5f, walk + 1.6f);
 
+    // A missing profile logs by name and gives -1, which leaves the lamps bare
+    // bulbs rather than dark.
+    int profile = -1;
+    if (night) {
+        if (!scene->ies_library)
+            scene->ies_library = create_ies_library();
+        profile = ies_library_load(scene->ies_library, STREET_LAMP_IES);
+    }
     const float lamp_z = kerb + 1.4f;
-    lamp(kit, scene, -24.0f, lamp_z, night, false);
-    lamp(kit, scene, -8.0f, lamp_z, night, false);
-    lamp(kit, scene, 8.0f, lamp_z, night, false);
-    lamp(kit, scene, 24.0f, lamp_z, night, false);
-    lamp(kit, scene, -16.0f, -lamp_z, night, false);
-    lamp(kit, scene, 0.0f, -lamp_z, night, false);
-    lamp(kit, scene, 16.0f, -lamp_z, night, true);
+    lamp(kit, scene, -24.0f, lamp_z, night, false, profile);
+    lamp(kit, scene, -8.0f, lamp_z, night, false, profile);
+    lamp(kit, scene, 8.0f, lamp_z, night, false, profile);
+    lamp(kit, scene, 24.0f, lamp_z, night, false, profile);
+    lamp(kit, scene, -16.0f, -lamp_z, night, false, profile);
+    lamp(kit, scene, 0.0f, -lamp_z, night, false, profile);
+    lamp(kit, scene, 16.0f, -lamp_z, night, true, profile);
 
     poles(kit);
     car(kit, 5.0f, -(kerb - 1.1f));
