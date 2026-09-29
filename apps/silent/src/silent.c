@@ -208,7 +208,7 @@ static void on_init(Game* game) {
 
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
-    if (!mats_register(&kit, engine))
+    if (!mats_register(&kit, engine, g_scene))
         return;
     house_build(&kit);
     street_build(&kit);
