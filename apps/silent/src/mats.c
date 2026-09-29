@@ -42,6 +42,26 @@ typedef struct GlassSpec {
 static const GlassSpec GLASS[] = {
     {MAT_GLASS_AMBER, 0.95f, 0.1f, {0.80f, 0.50f, 0.22f}, 0.2f},
     {MAT_GLASS_CLEAR, 0.97f, 0.08f, {0.90f, 0.97f, 0.90f}, 0.5f},
+    // A window pane is THIN glass: no volume, so no bend and no absorption,
+    // only the tint and the smear.
+    {MAT_WINDOW_GLASS, 0.9f, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f},
+};
+
+/*
+ * Emitters that are decoration and not lamps: a lit window and a street lamp's
+ * lens glow, but the light they throw is authored separately (or not at all),
+ * so they are kept out of the engine's derived area panels -- which would
+ * otherwise try to fit a rectangle to every lit window on the street at once.
+ */
+typedef struct GlowSpec {
+    MatId id;
+    float colour[3];
+    float nits;
+} GlowSpec;
+
+static const GlowSpec GLOWS[] = {
+    {MAT_WINDOW_LIT, {1.0f, 0.70f, 0.40f}, 30.0f},
+    {MAT_LAMP_GLOW, {0.85f, 1.0f, 0.90f}, 4000.0f},
 };
 
 /*
@@ -91,6 +111,13 @@ static const MatSpec SPECS[MAT_COUNT] = {
     {MAT_CERAMIC, "ceramic", "concrete_wall_003", {1.0f, 1.0f, 0.97f}, 0.3f, 0.0f, 0.5f},
     {MAT_BLACK, "black_enamel", NULL, {0.03f, 0.03f, 0.03f}, 0.35f, 0.0f, 1.0f},
     {MAT_TABLE, "table_enamel", "rusty_metal_02", {0.50f, 0.58f, 0.66f}, 0.7f, 0.0f, 1.0f},
+    {MAT_WINDOW_GLASS, "window_glass", "Smear008", {0.86f, 0.92f, 0.88f}, 0.25f, 0.0f, 0.6f, true},
+    {MAT_DARK_GLASS, "dark_glass", "Smear008", {0.02f, 0.025f, 0.03f}, 0.15f, 0.0f, 0.6f, true},
+    {MAT_WINDOW_LIT, "window_lit", "fabric_pattern_05", {0.9f, 0.85f, 0.7f}, 1.0f, 0.0f, 0.5f},
+    {MAT_LAMP_GLOW, "lamp_glow", NULL, {0.9f, 0.95f, 0.9f}, 0.5f, 0.0f, 1.0f},
+    {MAT_LAMP_POST, "lamp_post", "metal_plate_02", {0.7f, 0.72f, 0.7f}, 1.0f, 0.6f, 1.0f},
+    {MAT_POLE, "utility_pole", "old_wood_floor", {0.55f, 0.52f, 0.5f}, 1.0f, 0.0f, 1.5f},
+    {MAT_CAR, "car_paint", "rusty_metal_02", {0.45f, 0.14f, 0.11f}, 0.6f, 0.0f, 1.2f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
@@ -134,5 +161,16 @@ bool mats_register(Kit* kit, Engine* engine, Scene* scene) {
         glm_vec3_copy((float*)GLASS[g].attenuation, m->attenuation_color);
         m->attenuation_distance = GLASS[g].distance;
     }
+    for (size_t g = 0; g < sizeof(GLOWS) / sizeof(GLOWS[0]); g++) {
+        Material* m = kit->materials[GLOWS[g].id];
+        glm_vec3_copy((float*)GLOWS[g].colour, m->emissive);
+        m->emissive_strength = GLOWS[g].nits;
+        m->emissive_light = 1; // decoration: never a derived panel
+    }
     return true;
+}
+
+void mats_lights_out(Kit* kit) {
+    kit->materials[MAT_WINDOW_LIT]->emissive_strength = 0.0f;
+    kit->materials[MAT_LAMP_GLOW]->emissive_strength = 0.0f;
 }

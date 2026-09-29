@@ -212,7 +212,7 @@ static void build_probes(Engine* engine) {
         free_reflection_probe_set(set);
 }
 
-static void build_post(const Engine* engine) {
+static void build_post(const Engine* engine, bool night) {
     PostFX* fx = engine->postfx;
     if (!fx)
         return;
@@ -220,13 +220,17 @@ static void build_post(const Engine* engine) {
     fx->contact_shadows_enabled = true;
 
     // A thin haze everywhere -- enough to put a beam in the flashlight and a
-    // halo round a lamp -- with the sky's own radiance as its colour.
+    // halo round a lamp -- and the street's fog volumes on top of it.
     fx->fog_enabled = true;
     fx->fog_density = 0.02f;
     fx->fog_height_falloff = 60.0f;
     fx->fog_floor_y = 0.0f;
     fx->fog_far = 60.0f;
     fx->fog_anisotropy = 0.7f;
+    // The fog's own glow, and not the sky's: the night sky's radiance is a
+    // deep navy, and fog lit by it swallows the street into black. A dim
+    // grey-green veil is what the houses fade INTO, which is what reads as fog.
+    postfx_set_fog_ambient(fx, night ? (vec3){5.0f, 5.6f, 5.2f} : (vec3){400.0f, 420.0f, 410.0f});
 }
 
 static void on_init(Game* game) {
@@ -248,9 +252,11 @@ static void on_init(Game* game) {
         return;
     house_build(&kit);
     kitchen_build(&kit, (unsigned int)g_args.seed);
-    street_build(&kit);
+    // The tubes and the flashlight before the street's lamps: the fog beams
+    // the scene's first spot, and it should be the one in the player's hand.
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight != 0);
+    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
     kit_finish(&kit, "world");
     printf("silent: %d colliders\n", kit.collider_count);
 
@@ -282,7 +288,7 @@ static void on_init(Game* game) {
     engine->exposure.automatic = false;
     engine->exposure.multiplier = 0.02f;
 
-    build_post(engine);
+    build_post(engine, !g_args.day);
 }
 
 static void on_update(Game* game, double dt) {

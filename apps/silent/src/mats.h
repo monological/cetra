@@ -35,14 +35,24 @@ typedef enum {
     MAT_CONTENTS, // what is in them
     MAT_CONTENTS_PALE,
     MAT_CONTENTS_GREEN,
-    MAT_CERAMIC, // plates and mugs
-    MAT_BLACK,   // oven door, burners, knobs
-    MAT_TABLE,   // the kitchen table's grey-blue enamel top
+    MAT_CERAMIC,      // plates and mugs
+    MAT_BLACK,        // oven door, burners, knobs
+    MAT_TABLE,        // the kitchen table's grey-blue enamel top
+    MAT_WINDOW_GLASS, // the kitchen's pane: thin, grimy, transmissive
+    MAT_DARK_GLASS,   // the street's unlit windows, and a car's
+    MAT_WINDOW_LIT,   // somebody is home: a warm curtained glow
+    MAT_LAMP_GLOW,    // a street lamp's lens
+    MAT_LAMP_POST,    // painted iron gone to rust
+    MAT_POLE,         // creosoted wood utility poles
+    MAT_CAR,          // faded maroon paint
     MAT_COUNT
 } MatId;
 
 // Loads every surface's photo maps into the scene's pool and registers the
 // materials with the kit, slot for slot with MatId.
 bool mats_register(Kit* kit, Engine* engine, Scene* scene);
+
+// Daytime: the lit windows and the street lamps' lenses go dark.
+void mats_lights_out(Kit* kit);
 
 #endif // _SILENT_MATS_H_

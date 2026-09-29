@@ -152,7 +152,7 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
                       .type = LIGHT_SPOT,
                       .color = {1.0f, 0.93f, 0.80f},
                       .intensity = lights->flashlight_candela,
-                      .range = 25.0f,
+                      .range = 18.0f,
                       .inner_cutoff = glm_rad(9.0f),
                       .outer_cutoff = glm_rad(21.0f),
                       .cast_shadows = true};

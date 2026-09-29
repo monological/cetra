@@ -1,3 +1,7 @@
+
+#include "cetra/light.h"
+
+#include "houses.h"
 #include "layout.h"
 #include "mats.h"
 #include "street.h"
@@ -6,13 +10,138 @@
 #define YARD_DEPTH   40.0f
 #define GROUND_DEPTH 0.4f // how thick the ground boxes are, below their tops
 
+/*
+ * The fog. Thick enough that the far side of the street is a suggestion at
+ * night -- lit windows and lamp halos, the houses themselves mostly gone --
+ * and the road's ends vanish. Extinction per metre.
+ */
+#define FOG_NIGHT   0.09f
+#define FOG_DAY     0.14f
+#define FOG_FEATHER 3.0f
+
 static void ground(Kit* kit, int mat, float z0, float z1, float top) {
     const float y0 = top - GROUND_DEPTH;
     kit_box(kit, mat, (vec3){0.0f, 0.5f * (y0 + top), 0.5f * (z0 + z1)},
             (vec3){STREET_HALF_LEN, 0.5f * (top - y0), 0.5f * (z1 - z0)}, 0.0f, true);
 }
 
-void street_build(Kit* kit) {
+/*
+ * A street lamp at (x, z) whose arm reaches over the road: a rusted post, the
+ * arm and its head, the lens glowing under it, and at night a spot light
+ * there. Only the two nearest the house cast shadows; the pool of shadow
+ * layers is small and the rest are behind fog. A dead lamp keeps its shape
+ * and loses its light.
+ */
+static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool shadows, bool dead) {
+    const KitFrame f = {{x, 0.0f, z}, z > 0.0f ? GLM_PIf : 0.0f};
+    kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.0f, 0.5f, 0.12f, 8);
+    kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.5f, 5.2f, 0.07f, 8);
+    kit_frame_box(kit, &f, MAT_LAMP_POST, -0.04f, 0.04f, 5.0f, 5.08f, 0.0f, 1.3f, false);
+    kit_frame_box(kit, &f, MAT_LAMP_POST, -0.18f, 0.18f, 4.92f, 5.06f, 1.1f, 1.6f, false);
+    kit_frame_box(kit, &f, dead ? MAT_BLACK : MAT_LAMP_GLOW, -0.14f, 0.14f, 4.9f, 4.92f, 1.15f,
+                  1.55f, false);
+    kit_collider(kit, (vec3){x, 1.5f, z}, (vec3){0.12f, 1.5f, 0.12f}, 0.0f);
+    if (!night || dead)
+        return;
+    vec3 pos = {0.0f, 0.0f, 0.0f}, o = {0.0f, 0.0f, 0.0f}, dir = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(&f, 0.0f, 4.86f, 1.35f, pos);
+    kit_frame_point(&f, 0.0f, 0.0f, 0.0f, o);
+    kit_frame_point(&f, 0.0f, -1.0f, 0.15f, dir);
+    glm_vec3_sub(dir, o, dir);
+    LightDesc desc = {.name = "street_lamp",
+                      .type = LIGHT_SPOT,
+                      .position = {pos[0], pos[1], pos[2]},
+                      .direction = {dir[0], dir[1], dir[2]},
+                      .color = {0.80f, 0.95f, 0.90f},
+                      .intensity = 3000.0f, // candela: an old mercury lamp
+                      .range = 12.0f,
+                      .inner_cutoff = glm_rad(25.0f),
+                      .outer_cutoff = glm_rad(55.0f),
+                      .cast_shadows = shadows};
+    Light* light = create_light(&desc);
+    scene_add_light(scene, light);
+}
+
+// Wooden utility poles down the far side, strung with two wires.
+static void poles(Kit* kit) {
+    const float z = -(ROAD_HALF_WIDTH + SIDEWALK_WIDTH + 0.6f);
+    const float xs[] = {-30.0f, -10.0f, 10.0f, 30.0f};
+    const int n = (int)(sizeof(xs) / sizeof(xs[0]));
+    for (int i = 0; i < n; i++) {
+        kit_prism(kit, MAT_POLE, xs[i], z, 0.0f, 8.5f, 0.12f, 8, true);
+        kit_box(kit, MAT_POLE, (vec3){xs[i], 8.0f, z}, (vec3){0.06f, 0.05f, 0.8f}, 0.0f, false);
+    }
+    // From the world's edge, pole to pole, to the other edge.
+    for (int i = -1; i < n; i++) {
+        const float x0 = i < 0 ? -STREET_HALF_LEN : xs[i];
+        const float x1 = i + 1 < n ? xs[i + 1] : STREET_HALF_LEN;
+        for (int w = -1; w <= 1; w += 2)
+            kit_prism_lying(kit, MAT_BLACK, (vec3){0.5f * (x0 + x1), 7.95f, z + 0.65f * (float)w},
+                            0.5f * (x1 - x0), 0.012f, 4, true);
+    }
+}
+
+// A boxy sedan parked at the far kerb, its windows dark.
+static void car(Kit* kit, float x, float z) {
+    const float y = ROAD_Y;
+    kit_box(kit, MAT_CAR, (vec3){x, y + 0.62f, z}, (vec3){2.15f, 0.3f, 0.86f}, 0.0f, true);
+    kit_box(kit, MAT_DARK_GLASS, (vec3){x - 0.25f, y + 1.13f, z}, (vec3){1.05f, 0.22f, 0.8f}, 0.0f,
+            false);
+    kit_box(kit, MAT_CAR, (vec3){x - 0.25f, y + 1.37f, z}, (vec3){1.0f, 0.03f, 0.78f}, 0.0f, false);
+    for (int i = 0; i < 4; i++) {
+        const float wx = x + ((i & 1) ? 1.35f : -1.35f);
+        const float wz = z + ((i & 2) ? 0.8f : -0.8f);
+        kit_prism_lying(kit, MAT_BLACK, (vec3){wx, y + 0.33f, wz}, 0.11f, 0.33f, 10, false);
+    }
+    // Headlamps and tail lamps, unlit.
+    kit_box(kit, MAT_CERAMIC, (vec3){x + 2.16f, y + 0.72f, z + 0.6f}, (vec3){0.02f, 0.07f, 0.14f},
+            0.0f, false);
+    kit_box(kit, MAT_CERAMIC, (vec3){x + 2.16f, y + 0.72f, z - 0.6f}, (vec3){0.02f, 0.07f, 0.14f},
+            0.0f, false);
+}
+
+// A picket-less fence along a yard's front: posts and two rails.
+static void fence(Kit* kit, float x0, float x1, float z) {
+    for (float x = x0; x <= x1 + 0.01f; x += 2.0f)
+        kit_box(kit, MAT_PORCH, (vec3){x, 0.5f, z}, (vec3){0.05f, 0.5f, 0.05f}, 0.0f, false);
+    const float mid = 0.5f * (x0 + x1), half = 0.5f * (x1 - x0);
+    kit_box(kit, MAT_PORCH, (vec3){mid, 0.75f, z}, (vec3){half, 0.04f, 0.02f}, 0.0f, false);
+    kit_box(kit, MAT_PORCH, (vec3){mid, 0.4f, z}, (vec3){half, 0.04f, 0.02f}, 0.0f, false);
+    kit_collider(kit, (vec3){mid, 0.5f, z}, (vec3){half, 0.5f, 0.06f}, 0.0f);
+}
+
+/*
+ * The fog as four overlapping boxes that together fill the street and every
+ * yard but stop at the player's house. Each box's density ramps in over the
+ * feather from every face, so where two meet they overlap by exactly one
+ * feather: one ramps down as the other ramps up and the sum stays level,
+ * where boxes merely touching would leave a trough of clear air along the seam.
+ */
+static void fog(Scene* scene, bool night) {
+    const float density = night ? FOG_NIGHT : FOG_DAY;
+    const float F = FOG_FEATHER, top = 40.0f; // high enough that the sky is fogged out too
+    const float house_gap = 6.0f, front = HOUSE_FRONT_Z - 0.5f, back = HOUSE_BACK_Z + 1.0f;
+    const float far = 45.0f, wide = 60.0f;
+    const float boxes[4][4] = {
+        // x0, x1, z0, z1
+        {-wide, wide, -far, front},                 // the street and the far side
+        {-wide, -house_gap, front - F, far},        // the yards to the left
+        {house_gap, wide, front - F, far},          // and to the right
+        {-house_gap - F, house_gap + F, back, far}, // behind the house
+    };
+    for (int i = 0; i < 4; i++) {
+        const float* b = boxes[i];
+        FogVolume v = {
+            .center = {0.5f * (b[0] + b[1]), 0.5f * top, 0.5f * (b[2] + b[3])},
+            .half_extent = {0.5f * (b[1] - b[0]), 0.5f * top + 1.0f, 0.5f * (b[3] - b[2])},
+            .density = density,
+            .feather = F,
+            .tint = {1.0f, 1.0f, 1.0f}};
+        scene_add_fog_volume(scene, &v);
+    }
+}
+
+void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
     const float kerb = ROAD_HALF_WIDTH;
     const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
     ground(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
@@ -20,6 +149,43 @@ void street_build(Kit* kit) {
     ground(kit, MAT_CONCRETE, -walk, -kerb, 0.0f);
     ground(kit, MAT_DIRT, walk, walk + YARD_DEPTH, 0.0f);
     ground(kit, MAT_DIRT, -walk - YARD_DEPTH, -walk, 0.0f);
+
+    // Our path from the sidewalk to the porch steps.
+    kit_box(kit, MAT_CONCRETE, (vec3){-0.8f, 0.01f, 0.5f * (walk + PORCH_Z0 - 0.32f)},
+            (vec3){0.55f, 0.01f, 0.5f * (PORCH_Z0 - 0.32f - walk)}, 0.0f, false);
+
+    // The neighbours: this side of the street either side of us, fronts in
+    // line with ours, and the far side facing back.
+    KitRng rng = {seed * 2246822519u + 3266489917u};
+    const float near_side[] = {-28.0f, -14.0f, 14.0f, 28.0f};
+    for (int i = 0; i < 4; i++) {
+        const KitFrame f = {{near_side[i], 0.0f, HOUSE_FRONT_Z}, GLM_PIf};
+        house_neighbour(kit, &f, &rng, night);
+    }
+    const float far_side[] = {-35.0f, -21.0f, -7.0f, 7.0f, 21.0f, 35.0f};
+    for (int i = 0; i < 6; i++) {
+        const KitFrame f = {{far_side[i], 0.0f, -HOUSE_FRONT_Z}, 0.0f};
+        house_neighbour(kit, &f, &rng, night);
+    }
+    fence(kit, -34.5f, -8.0f, walk + 1.6f);
+    fence(kit, 8.0f, 34.5f, walk + 1.6f);
+
+    const float lamp_z = kerb + 1.4f;
+    lamp(kit, scene, -24.0f, lamp_z, night, false, false);
+    lamp(kit, scene, -8.0f, lamp_z, night, true, false);
+    lamp(kit, scene, 8.0f, lamp_z, night, true, false);
+    lamp(kit, scene, 24.0f, lamp_z, night, false, false);
+    lamp(kit, scene, -16.0f, -lamp_z, night, false, false);
+    lamp(kit, scene, 0.0f, -lamp_z, night, false, false);
+    lamp(kit, scene, 16.0f, -lamp_z, night, false, true);
+
+    poles(kit);
+    car(kit, 5.0f, -(kerb - 1.1f));
+    // The mailbox at the end of our path.
+    kit_box(kit, MAT_POLE, (vec3){-1.8f, 0.55f, walk + 0.4f}, (vec3){0.04f, 0.55f, 0.04f}, 0.0f,
+            false);
+    kit_box(kit, MAT_LAMP_POST, (vec3){-1.8f, 1.18f, walk + 0.4f}, (vec3){0.1f, 0.1f, 0.24f}, 0.0f,
+            false);
 
     // The world's edge: walls the fog hides, so a walk down the street ends in
     // grey rather than off the end of the ground.
@@ -29,4 +195,8 @@ void street_build(Kit* kit) {
     kit_collider(kit, (vec3){STREET_HALF_LEN - 1.0f, h, 0.0f}, (vec3){0.5f, h, zmax}, 0.0f);
     kit_collider(kit, (vec3){0.0f, h, zmax - 1.0f}, (vec3){STREET_HALF_LEN, h, 0.5f}, 0.0f);
     kit_collider(kit, (vec3){0.0f, h, -zmax + 1.0f}, (vec3){STREET_HALF_LEN, h, 0.5f}, 0.0f);
+
+    fog(scene, night);
+    if (!night)
+        mats_lights_out(kit);
 }
