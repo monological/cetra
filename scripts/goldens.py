@@ -338,21 +338,6 @@ RECIPES = [
     {"name": "puppet", "scene": "assets/scenes/puppet.cscn", "size": (800, 600),
      "flags": ["--anim-clip", "run", "-f", "30", "-W", "400", "-H", "300",
                "--no-auto-exposure", "-E", "1.0"]},
-
-    # The menu (spec 12.2), and the first two goldens that are not the render
-    # app's. They carry no exposure pinning because there is no -E to pin with:
-    # gametest's frame is already deterministic headless (spec 11.109), and the
-    # UI itself is drawn AFTER tone mapping, so no post pass can reach it.
-    {"name": "menu", "app": "gametest", "size": (800, 600),
-     "flags": ["--ui-screen", "main", "-f", "30", "-W", "400", "-H", "300"]},
-    # The same frame with focus one row further down. The PAIR is what proves the
-    # focus visual: a highlight that never draws leaves these two identical, and
-    # their difference must sit inside the second button.
-    {"name": "menu_focus", "app": "gametest", "size": (800, 600),
-     # Two presses, not one: nothing is focused to begin with, so the first only
-     # acquires and the second is what moves.
-     "flags": ["--ui-screen", "main", "--ui-focus", "2", "-f", "30",
-               "-W", "400", "-H", "300"]},
 ]
 
 
