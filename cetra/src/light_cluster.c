@@ -481,7 +481,8 @@ static void _fill_index_pool(LightClusterContext* ctx) {
     }
 
     for (int ci = 0; ci < LC_CLUSTER_COUNT; ci++)
-        ctx->grid.clusters[ci] = (ctx->offsets[ci] << 12) | (uint32_t)ctx->counts[ci];
+        ctx->grid.clusters[ci] =
+            (ctx->offsets[ci] << LC_GRID_COUNT_BITS) | (uint32_t)ctx->counts[ci];
 }
 
 /*
