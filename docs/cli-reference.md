@@ -45,8 +45,11 @@ megapixel per light), but cost tracks COVERAGE rather than count -- sixteen ligh
 scene cost +0.77 ms against the +38 ms sixteen coincident ones would, because a pixel marches only
 the lights whose cluster entry reaches it. There is deliberately no per-pixel light cap),
 `--motion-blur`, `--dof`,
-`-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--no-glare` (the aperture's diffraction star,
-on by default since spec 13.4; `--glare-probe` prints the light it carries against its source's),
+`-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--glare` (the aperture's diffraction star,
+OFF by default since spec 13.5; `--no-glare` overrides a scene file's `post.glare`,
+`--glare-strength` is the share of the light past the threshold moved into the star, 0 to 1,
+`--glare-threshold` the working-space radiance a point must pass, and `--glare-probe` prints the
+light the star carries against its source's and the frame's light taken out against put back),
 `--tonemap <neutral|aces|agx|linear>`
 (`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
 colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
@@ -435,7 +438,9 @@ interactive and headless alike, which is how the MSAA-only grass specks came to 
 (spec 11.38); `--msaa 4` is how to reach them now. The second reason for one sample is a look
 rather than a cost: above one sample masked geometry takes the alpha-to-coverage path, and against
 near-black leaves on a sunset that traces a bright fringe round the whole canopy. Sun: `--sun-elevation` (**default 0.8 degrees, not 14**),
-`--sun-azimuth` (**193, not 235**). Water: `--no-water` (drops the sea AND the seabed together),
+`--sun-azimuth` (**193, not 235**). Glare: **on here**, where the engine leaves it off -- the low sun's
+glints over the sea are what it is for; `--no-glare` drops it (spec 13.5).
+Water: `--no-water` (drops the sea AND the seabed together),
 `--water-level`, `--gerstner-waves` (the sea is FFT by default), `--no-water-surf` (no incident
 wave at the shore — removes the bore from the GEOMETRY too, since depth-limited breaking is gated
 on the surf existing, which is what makes it the bisect lever for anything shore-shaped), and the
@@ -489,6 +494,7 @@ that reach that are the ones to know before comparing any forest capture. The gr
 falls to a shoreline past 0.72 of the half-extent and the sea is on by default, so
 `--water` is now a restatement rather than a request; `--no-island` takes both the falloff
 and the sea away and is the configuration every arm written before 11.63 measures.
+`--glare` turns on the aperture's diffraction star, which the engine leaves off (spec 13.5).
 `--terrain-extent <f>` is the domain half-width and the only way to ask what a bigger
 world costs — 16x the ground area takes the quadtree from 364 patches to 706 where the
 fixed grid goes 64 to 1024. `--no-quadtree` is the fixed tile grid, NOT an identity: a
@@ -779,6 +785,7 @@ player's pose, velocity, ground state and the move and jump the step acted on, e
 
 **Spec 12.0 added audio** — a beep on jump and spawn and a looping tone carried by the door as an
 `AUDIO_SOURCE` component, all procedural (no committed audio). `--mute` silences the master bus.
+`--glare` turns on the aperture's diffraction star, which the engine leaves off (spec 13.5).
 `--audio-probe <case>` is a headless, self-contained offline render (miniaudio's `noDevice` engine)
 that plays a fixed geometry, measures the mixed PCM and prints it, then exits — the cases are
 `onset`, `pan`, `distance`, `master` and `decode`, which the `audio` gate group reads; `decode`
