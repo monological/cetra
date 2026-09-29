@@ -5,19 +5,28 @@ sickly green-grey, and blacks that do not quite reach black, the way old film
 and old games' fog do. Applied by the tonemap after the display encode, so it
 works on display-encoded values in 0..1.
 
+Every step is linear, so the grade is one affine map clamped to 0..1: a matrix
+would do, but the tonemap's only colour stage that takes an arbitrary map is
+the LUT.
+
     python3 apps/silent/tools/make_grade.py
 """
 
 import os
+import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-OUT = os.path.join(ROOT, "assets", "lut", "silent_grade.cube")
+# The one statement of which directory an asset kind lives in.
+sys.path.insert(0, os.path.join(ROOT, "assets", "generators"))
+from fixture_paths import asset_path  # noqa: E402
+
+OUT = asset_path("silent_grade.cube")
 SIZE = 33
 
 SATURATION = 0.68           # of what was there
 TINT = (0.94, 1.0, 0.93)    # green-grey, applied everywhere
 LIFT = (0.018, 0.024, 0.020)  # the floor the blacks stop at
-CONTRAST = 1.08             # a gentle S about the middle
+CONTRAST = 1.08             # a stretch about the middle
 
 
 def grade(r, g, b):

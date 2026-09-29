@@ -22,6 +22,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 import urllib.request
 import zipfile
@@ -70,8 +71,13 @@ ACG_ZIP = "https://ambientcg.com/get?file=%s_1K-JPG.zip"
 ACG_MAPS = {"albedo": "Color", "normal": "NormalGL", "rough": "Roughness"}
 
 
-def fetch(url):
-    name = url.rsplit("/", 1)[-1]
+def fetch(url, cache_name=None):
+    """The bytes at `url`, from the cache when they are there.
+
+    Cached under `cache_name`, or the URL's last part with anything a file name
+    cannot hold on every platform replaced (ambientCG's end in `get?file=`).
+    """
+    name = cache_name or re.sub(r'[<>:"/\\|?*]', "_", url.rsplit("/", 1)[-1])
     path = os.path.join(CACHE_DIR, name)
     if not os.path.exists(path):
         req = urllib.request.Request(url, headers={"User-Agent": "cetra-silent/1.0"})
@@ -83,36 +89,28 @@ def fetch(url):
         return f.read()
 
 
-def fetch_json(url, name):
-    path = os.path.join(CACHE_DIR, name)
-    if not os.path.exists(path):
-        with open(path, "wb") as f:
-            f.write(fetch_raw(url))
-    with open(path) as f:
-        return json.load(f)
-
-
-def fetch_raw(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "cetra-silent/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return r.read()
-
-
-def open_ambientcg(name):
-    """The maps an ambientCG 1K zip holds, by this app's names; missing ones absent."""
-    data = fetch(ACG_ZIP % name)
+def open_ambientcg(name, spec):
+    """The maps an ambientCG 1K zip holds, by this app's names (missing ones
+    absent), and a line saying which."""
     out = {}
-    with zipfile.ZipFile(io.BytesIO(data)) as z:
+    with zipfile.ZipFile(io.BytesIO(fetch(ACG_ZIP % name))) as z:
         for kind, suffix in ACG_MAPS.items():
             member = "%s_1K-JPG_%s.jpg" % (name, suffix)
             if member in z.namelist():
                 out[kind] = Image.open(io.BytesIO(z.read(member)))
-    return out
+    return out, "ambientCG, maps: %s" % ", ".join(sorted(out))
 
 
-def open_map(files, key):
-    url = files[key]["1k"]["jpg"]["url"]
-    return Image.open(io.BytesIO(fetch(url)))
+def open_polyhaven(name, spec):
+    """A Poly Haven set's three maps at 1k, by this app's names, and a line
+    giving the size of what was scanned."""
+    files = json.loads(fetch(API % name, name + "_files.json"))
+    info = json.loads(fetch(INFO % name, name + "_info.json"))
+    keys = {"albedo": spec.get("diffuse", "Diffuse"), "normal": "nor_gl", "rough": "Rough"}
+    out = {kind: Image.open(io.BytesIO(fetch(files[key]["1k"]["jpg"]["url"])))
+           for kind, key in keys.items()}
+    dims = info.get("dimensions") or [0, 0]
+    return out, "%.2f x %.2f m" % (dims[0] / 1000.0, dims[1] / 1000.0)
 
 
 def albedo(img, spec):
@@ -153,6 +151,10 @@ def rough(img, spec):
     return out.resize((SIZE, SIZE), Image.Resampling.LANCZOS).convert("RGB")
 
 
+# What each kind of map goes through on its way in.
+PROCESS = {"albedo": albedo, "normal": normal, "rough": rough}
+
+
 def write_sheet(path, names):
     cols = 6
     label_h = 18
@@ -176,29 +178,11 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(CACHE_DIR, exist_ok=True)
     for name, spec in SOURCES.items():
-        if spec.get("source") == "ambientcg":
-            raw = open_ambientcg(name)
-            maps = {}
-            if "albedo" in raw:
-                maps["albedo"] = albedo(raw["albedo"], spec)
-            if "normal" in raw:
-                maps["normal"] = normal(raw["normal"], spec)
-            if "rough" in raw:
-                maps["rough"] = rough(raw["rough"], spec)
-            print("%-24s ambientCG, maps: %s" % (name, ", ".join(sorted(maps))))
-        else:
-            files = fetch_json(API % name, name + "_files.json")
-            info = fetch_json(INFO % name, name + "_info.json")
-            colour = open_map(files, spec.get("diffuse", "Diffuse"))
-            maps = {
-                "albedo": albedo(colour, spec),
-                "normal": normal(open_map(files, "nor_gl"), spec),
-                "rough": rough(open_map(files, "Rough"), spec),
-            }
-            dims = info.get("dimensions") or [0, 0]
-            print("%-24s %.2f x %.2f m" % (name, dims[0] / 1000.0, dims[1] / 1000.0))
-        for kind, img in maps.items():
-            img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        open_set = open_ambientcg if spec.get("source") == "ambientcg" else open_polyhaven
+        raw, note = open_set(name, spec)
+        print("%-24s %s" % (name, note))
+        for kind, img in raw.items():
+            img = PROCESS[kind](img, spec).transpose(Image.Transpose.FLIP_TOP_BOTTOM)
             img.save(os.path.join(OUT_DIR, "%s_%s.png" % (name, kind)))
     if args.sheet:
         write_sheet(args.sheet, [n for n in SOURCES
