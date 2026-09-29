@@ -360,8 +360,10 @@ static void print_usage(const char* prog) {
     printf("  -W, --width N           Window width (default %d)\n", DEFAULT_WIDTH);
     printf("  -H, --height N          Window height (default %d)\n", DEFAULT_HEIGHT);
     printf("      --seed N            Clutter and street seed\n");
-    printf("      --day               Overcast day in the fog instead of night\n");
-    printf("      --no-taa            No temporal AA: the exactly repeatable frame\n");
+    printf("      --day               Day in the fog instead of night (unfinished: the rooms\n");
+    printf("                          come out dark)\n");
+    printf("      --no-taa            No temporal AA, and so no upscale: full resolution, raw "
+           "edges\n");
     printf("      --no-grade          Without the green-grey colour grade\n");
     printf("      --render-scale F    Render at F of the window and upscale (0.5-1, default\n");
     printf("                          %.1f): the softer frame of the consoles it imitates\n",
@@ -458,8 +460,8 @@ int main(int argc, char** argv) {
     config.engine.msaa_samples = 1;
     config.engine.taa = !g_args.no_taa;
     // And jittered, or headless TAA integrates one sample position forever:
-    // no antialiasing, and an upscale the engine refuses. --no-taa is the
-    // exactly repeatable frame.
+    // no antialiasing, and an upscale the engine refuses. The jitter follows
+    // the frame index, so a headless run still repeats itself exactly.
     config.engine.headless_jitter = config.engine.taa;
     // The upscale rides on TAA, so a scale without it is refused by the engine.
     if (g_args.render_scale > 0.0f && !g_args.no_taa)
