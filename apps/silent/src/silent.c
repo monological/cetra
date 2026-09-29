@@ -55,7 +55,7 @@ typedef struct SilentArgs {
     int width, height;
     int seed;
     int day;
-    int taa;
+    int no_taa;
     int msaa;
     bool cam_eye_set, cam_target_set;
     vec3 cam_eye, cam_target;
@@ -340,7 +340,7 @@ static void print_usage(const char* prog) {
     printf("  -H, --height N          Window height (default %d)\n", DEFAULT_HEIGHT);
     printf("      --seed N            Clutter and street seed\n");
     printf("      --day               Overcast day in the fog instead of night\n");
-    printf("      --taa               TAA headless too (a window always has it)\n");
+    printf("      --no-taa            No temporal AA: the exactly repeatable frame\n");
     printf("      --msaa N            MSAA samples\n");
     printf("      --cam-eye x,y,z     Pin the camera (a framing that can be taken twice)\n");
     printf("      --cam-target x,y,z  What the pinned camera looks at\n");
@@ -378,8 +378,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->seed = atoi(argv[++i]);
         } else if (!strcmp(s, "--day")) {
             a->day = 1;
-        } else if (!strcmp(s, "--taa")) {
-            a->taa = 1;
+        } else if (!strcmp(s, "--no-taa")) {
+            a->no_taa = 1;
         } else if (!strcmp(s, "--msaa") && has_next) {
             a->msaa = atoi(argv[++i]);
         } else if (!strcmp(s, "--cam-eye") && has_next) {
@@ -420,12 +420,13 @@ int main(int argc, char** argv) {
                                     .width = g_args.width,
                                     .height = g_args.height,
                                     .headless = g_args.headless != 0}};
-    // A window runs one sample under TAA, which is what the grain and the
-    // dither want underneath them; headless keeps MSAA and stays repeatable.
-    if (!g_args.headless || g_args.taa) {
-        config.engine.msaa_samples = 1;
-        config.engine.taa = true;
-    }
+    // One sample under TAA, headless as in the window, so a screenshot is what
+    // a player sees. Not MSAA: in fog this dense the fog composite takes ONE
+    // depth for a multisampled edge pixel, and where half its samples are sky
+    // that depth is too near -- every silhouette in the street comes out
+    // traced in a dark, unfogged line.
+    config.engine.msaa_samples = 1;
+    config.engine.taa = !g_args.no_taa;
     if (g_args.msaa > 0)
         config.engine.msaa_samples = g_args.msaa;
 
