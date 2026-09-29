@@ -832,9 +832,12 @@ Spec 12.7 replaced the boxes with an eroded heightfield and added a lighting rig
 brings three more blind spots — two of which cost hours before they were understood:
 
 - **The clustered light budget has no arm, and its failure looks like a renderer fault.**
-  `LC_MAX_CLUSTER_INDICES` is 6144 over 3072 froxels: an average of **two** lights per
-  froxel, and it is a UBO at 12 KB against GL 4.1's 16 KB guaranteed minimum, so it cannot
-  meaningfully grow. Three lights with frustum-wide reach do not fit. 12.7's two pool panels
+  `LC_MAX_CLUSTER_INDICES` was 6144 over 3072 froxels: an average of **two** lights per
+  froxel, and three lights with frustum-wide reach did not fit. Spec 13.6 took the indices
+  from a halfword to a byte and the block to GL 4.1's guaranteed 16 KB, which is 16384
+  slots, a little over five a froxel -- and as far as a UBO can go. A light whose sphere
+  holds the camera claims every tile of every slice out to its range, so that is still
+  what spends it. 12.7's two pool panels
   were authored with `range = 0`, which `light_cull_radius` derives into the *thousands* of
   units for a 90x90 panel, so both sat in every froxel and the pool overflowed. Since 12.7 a
   starved cluster keeps the slots it was granted rather than losing every light, so the

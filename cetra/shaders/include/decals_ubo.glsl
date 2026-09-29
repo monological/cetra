@@ -27,8 +27,8 @@ layout(std140) uniform DecalBlock {
 // against UBO_DECALS_BLOCK_SIZE, which decalDesc's declaration rides.
 const int DECAL_MAX = 16;
 
-// Which decals reach this froxel. The decode is lightIndexAt's halfword unpack
-// rather than probeMaskAt's byte one, because the mask is twice as wide.
+// Which decals reach this froxel. A halfword unpack rather than probeMaskAt's
+// byte one, because the mask is twice as wide.
 uint decalMaskAt(uint ci) {
     return (decalClusterMasks[ci >> 3u][(ci >> 1u) & 3u] >> ((ci & 1u) * 16u)) & 0xFFFFu;
 }
