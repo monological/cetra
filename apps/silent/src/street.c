@@ -27,12 +27,16 @@ static void ground(Kit* kit, int mat, float z0, float z1, float top) {
 
 /*
  * A street lamp at (x, z) whose arm reaches over the road: a rusted post, the
- * arm and its head, the lens glowing under it, and at night a spot light
- * there. Only the two nearest the house cast shadows; the pool of shadow
- * layers is small and the rest are behind fog. A dead lamp keeps its shape
- * and loses its light.
+ * arm and its head, the lens glowing under it, and at night a light there. A
+ * dead lamp keeps its shape and loses its light.
+ *
+ * A POINT light, not the spot a lamp is: the fog scatters point lights and
+ * only the scene's first spot (the flashlight), so a spot lamp lights its pool
+ * and leaves the air round it dark -- no halo, which in fog is most of what a
+ * lamp looks like. What goes upward lights nothing but fog. No shadows: a
+ * point light's map is six layers of a pool of eight.
  */
-static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool shadows, bool dead) {
+static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool dead) {
     const KitFrame f = {{x, 0.0f, z}, z > 0.0f ? GLM_PIf : 0.0f};
     kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.0f, 0.5f, 0.12f, 8);
     kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.5f, 5.2f, 0.07f, 8);
@@ -43,21 +47,14 @@ static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool shad
     kit_collider(kit, (vec3){x, 1.5f, z}, (vec3){0.12f, 1.5f, 0.12f}, 0.0f);
     if (!night || dead)
         return;
-    vec3 pos = {0.0f, 0.0f, 0.0f}, o = {0.0f, 0.0f, 0.0f}, dir = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(&f, 0.0f, 4.86f, 1.35f, pos);
-    kit_frame_point(&f, 0.0f, 0.0f, 0.0f, o);
-    kit_frame_point(&f, 0.0f, -1.0f, 0.15f, dir);
-    glm_vec3_sub(dir, o, dir);
+    vec3 pos = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(&f, 0.0f, 4.8f, 1.35f, pos);
     LightDesc desc = {.name = "street_lamp",
-                      .type = LIGHT_SPOT,
+                      .type = LIGHT_POINT,
                       .position = {pos[0], pos[1], pos[2]},
-                      .direction = {dir[0], dir[1], dir[2]},
                       .color = {0.80f, 0.95f, 0.90f},
                       .intensity = 3000.0f, // candela: an old mercury lamp
-                      .range = 12.0f,
-                      .inner_cutoff = glm_rad(25.0f),
-                      .outer_cutoff = glm_rad(55.0f),
-                      .cast_shadows = shadows};
+                      .range = 12.0f};
     Light* light = create_light(&desc);
     scene_add_light(scene, light);
 }
@@ -171,13 +168,13 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
     fence(kit, 8.0f, 34.5f, walk + 1.6f);
 
     const float lamp_z = kerb + 1.4f;
-    lamp(kit, scene, -24.0f, lamp_z, night, false, false);
-    lamp(kit, scene, -8.0f, lamp_z, night, true, false);
-    lamp(kit, scene, 8.0f, lamp_z, night, true, false);
-    lamp(kit, scene, 24.0f, lamp_z, night, false, false);
-    lamp(kit, scene, -16.0f, -lamp_z, night, false, false);
-    lamp(kit, scene, 0.0f, -lamp_z, night, false, false);
-    lamp(kit, scene, 16.0f, -lamp_z, night, false, true);
+    lamp(kit, scene, -24.0f, lamp_z, night, false);
+    lamp(kit, scene, -8.0f, lamp_z, night, false);
+    lamp(kit, scene, 8.0f, lamp_z, night, false);
+    lamp(kit, scene, 24.0f, lamp_z, night, false);
+    lamp(kit, scene, -16.0f, -lamp_z, night, false);
+    lamp(kit, scene, 0.0f, -lamp_z, night, false);
+    lamp(kit, scene, 16.0f, -lamp_z, night, true);
 
     poles(kit);
     car(kit, 5.0f, -(kerb - 1.1f));
