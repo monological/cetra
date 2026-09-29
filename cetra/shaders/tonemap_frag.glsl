@@ -10,6 +10,7 @@ out vec4 FragColor;
 // shading passes wrote under.
 #include "view.glsl"
 #include "noise.glsl"
+#include "glare_threshold.glsl"
 // Declares purkinjeAdaptTex on unit 7 -- the metering 1x1. With the glare on 13
 // (spec 13.4), this program samples 14 of 16.
 #include "purkinje.glsl"
@@ -27,6 +28,7 @@ uniform int flareEnabled;
 uniform sampler2D glareTex;
 uniform float glareStrength;
 uniform int glareEnabled;
+uniform float glareThreshold;
 uniform int aoEnabled;
 uniform float aoStrength;
 uniform sampler2D normalsTex; // Resolved view-space normal .xyz + SSR marker .a
@@ -467,15 +469,25 @@ vec3 ditherPattern(vec2 p)
 }
 
 /*
- * The scene as this pass sees it, before any response curve: sanitize, occlude,
- * add lens scatter. ONE statement of that order, because three places need the
- * same one -- the composite below, the Purkinje pooling beside it, and debug
- * view 10. The sanitize is against a +INF texel from a half-float overflow
- * upstream, which both tonemap curves turn into NaN and a black pixel.
+ * The scene as this pass sees it, before any response curve: sanitize, take out
+ * what the glare moved, occlude, add lens scatter. ONE statement of that order,
+ * because three places need the same one -- the composite below, the Purkinje
+ * pooling beside it, and debug view 10. The sanitize is against a +INF texel from
+ * a half-float overflow upstream, which both tonemap curves turn into NaN and a
+ * black pixel.
+ *
+ * The glare MOVES light (spec 13.5): the share of this pixel's light above the
+ * threshold that bloomAdd's star carries away is removed here, before the
+ * occlusion, so it cannot take a darkened pixel below zero. The source was
+ * thresholded after a downsample and this is taken per pixel, so the two agree
+ * on average rather than texel for texel.
  */
 vec3 sceneComposite(vec2 uv, float aoFactor, vec3 bloomAdd)
 {
-    return min(sceneTap(uv), vec3(WS_SCENE_MAX)) * aoFactor + bloomAdd;
+    vec3 c = min(sceneTap(uv), vec3(WS_SCENE_MAX));
+    if (glareEnabled == 1)
+        c -= glareStrength * glareAboveThreshold(c, glareThreshold);
+    return c * aoFactor + bloomAdd;
 }
 
 /*
@@ -626,7 +638,8 @@ void main()
     // see bloom instead of sampling a different image.
     if (flareEnabled == 1)
         bloomAdd += flareStrength * texture(flareTex, TexCoords).rgb;
-    // The glare joins it for the same reason: light the lens spread, added before the curve.
+    // The glare joins it for the same reason: light the lens spread, added before the curve. What
+    // it spread is taken out of the pixel it came from in sceneComposite.
     if (glareEnabled == 1)
         bloomAdd += glareStrength * texture(glareTex, TexCoords).rgb;
 

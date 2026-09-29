@@ -21,6 +21,8 @@ uniform sampler2D hdrTex;
 uniform float glareThreshold;
 uniform float glareSourceScale;
 
+#include "glare_threshold.glsl"
+
 void main() {
     vec2 px = 1.0 / vec2(textureSize(hdrTex, 0));
     // The grid's texel covers four or five of the frame's; four bilinear taps a texel either
@@ -30,8 +32,6 @@ void main() {
         for (int x = 0; x < 2; x++)
             c += texture(hdrTex, TexCoords + (vec2(x, y) - 0.5) * px * 2.0).rgb;
     c *= 0.25;
-    float l = max(max(c.r, c.g), c.b);
-    c *= max(l - glareThreshold, 0.0) / max(l, 1.0e-4);
-    c = min(c, vec3(80000.0)) * glareSourceScale;
+    c = min(glareAboveThreshold(c, glareThreshold), vec3(80000.0)) * glareSourceScale;
     Packed = vec4(c, 0.0);
 }

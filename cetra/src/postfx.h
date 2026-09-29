@@ -300,7 +300,7 @@ typedef struct PostFX {
     // Diffraction glare (spec 13.4): the star an aperture draws round light brighter than
     // `glare_threshold`, composited in the tonemap beside bloom. On by default.
     bool glare_enabled;
-    float glare_strength;
+    float glare_strength;  // share of the light past the threshold moved into the star, 0..1
     float glare_threshold; // working-space radiance a point must pass to star
     bool glare_probe;      // print the source's light against the glare's, once a frame
     struct Glare* glare;   // engine-owned; made on first use
