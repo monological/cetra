@@ -49,6 +49,18 @@
 #define KITCHEN_DOOR_Z0 12.75f
 #define KITCHEN_DOOR_Z1 13.55f
 
+// The kitchen's inner faces: where the room actually is.
+#define KITCHEN_X0 (HALL_X1 + 0.5f * INT_WALL)
+#define KITCHEN_X1 (HOUSE_X1 - 0.5f * EXT_WALL)
+#define KITCHEN_Z0 (HOUSE_FRONT_Z + 0.5f * EXT_WALL)
+#define KITCHEN_Z1 (KITCHEN_BACK_Z - 0.5f * INT_WALL)
+
+// The hall wall's run, from just short of the kitchen doorway toward the
+// window wall: the fridge first, then the stove, whose centre the hood tube
+// hangs over.
+#define STOVE_RUN_Z (KITCHEN_DOOR_Z0 - 0.2f)
+#define STOVE_Z     (STOVE_RUN_Z - 1.12f)
+
 #define PORCH_X0 (-2.4f)
 #define PORCH_X1 0.8f
 #define PORCH_Z0 8.5f

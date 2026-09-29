@@ -29,6 +29,15 @@ typedef enum {
     MAT_BRICK,
     MAT_RUG,
     MAT_TOWEL,
+    MAT_PAPER,       // notes and photos on the fridge
+    MAT_GLASS_AMBER, // jars and bottles
+    MAT_GLASS_CLEAR,
+    MAT_CONTENTS, // what is in them
+    MAT_CONTENTS_PALE,
+    MAT_CONTENTS_GREEN,
+    MAT_CERAMIC, // plates and mugs
+    MAT_BLACK,   // oven door, burners, knobs
+    MAT_TABLE,   // the kitchen table's grey-blue enamel top
     MAT_COUNT
 } MatId;
 

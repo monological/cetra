@@ -281,6 +281,36 @@ void kit_wall(Kit* kit, const KitWall* w) {
     wall_layer(kit, w, KIT_COLLIDER_ONLY, 0.0f, w->thick);
 }
 
+void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out) {
+    vec3 local = {a, y, d};
+    rotate_y(local, f->yaw, out);
+    glm_vec3_add(out, (float*)f->origin, out);
+}
+
+void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
+                   float d0, float d1, bool collide) {
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, 0.5f * (a0 + a1), 0.5f * (y0 + y1), 0.5f * (d0 + d1), centre);
+    const vec3 half = {0.5f * fabsf(a1 - a0), 0.5f * fabsf(y1 - y0), 0.5f * fabsf(d1 - d0)};
+    kit_box(kit, mat, centre, half, f->yaw, collide);
+}
+
+void kit_frame_prism(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
+                     float r, int sides) {
+    vec3 p = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, a, 0.0f, d, p);
+    kit_prism(kit, mat, p[0], p[2], f->origin[1] + y0, f->origin[1] + y1, r, sides, false);
+}
+
+void kit_frame_bar(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y, float d,
+                   float r) {
+    vec3 p = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, 0.5f * (a0 + a1), y, d, p);
+    // The frames here are quarter turns, so "along the wall" is world X or Z.
+    const bool along_x = fabsf(cosf(f->yaw)) > 0.5f;
+    kit_prism_lying(kit, mat, p, 0.5f * fabsf(a1 - a0), r, 6, along_x);
+}
+
 SceneNode* kit_finish(Kit* kit, const char* name) {
     SceneNode* node = create_node();
     node_set_name(node, name);

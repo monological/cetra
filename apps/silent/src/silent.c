@@ -24,6 +24,8 @@
 #include "cetra/ibl.h"
 #include "cetra/light.h"
 #include "cetra/postfx.h"
+#include "cetra/probe.h"
+#include "cetra/probe_set.h"
 #include "cetra/scene.h"
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
@@ -34,8 +36,10 @@
 #include "cetra/game/physics.h"
 
 #include "house.h"
+#include "kitchen.h"
 #include "kit.h"
 #include "layout.h"
+#include "lights.h"
 #include "mats.h"
 #include "player.h"
 #include "street.h"
@@ -58,14 +62,17 @@ typedef struct SilentArgs {
     float fov_deg;
     const char* pad_script;
     int trace_player;
+    int no_flicker;
+    int flashlight;
 } SilentArgs;
 
 static SilentArgs g_args;
 static Scene* g_scene;
 static Player g_player;
+static Lights g_lights;
 
 // The spawn: in the kitchen, facing the window.
-static const vec3 SPAWN_FEET = {2.6f, FLOOR_Y, 12.9f};
+static const vec3 SPAWN_FEET = {1.5f, FLOOR_Y, 13.2f};
 static const float SPAWN_YAW = GLM_PIf; // toward -z, the street
 
 // Keys the app itself reads, beside the player's table.
@@ -133,26 +140,6 @@ static void build_sky(Engine* engine) {
     node_add_child(g_scene->root_node, moon_node);
 }
 
-// The kitchen's ceiling tube, until lights.c places the real fixtures.
-static void build_placeholder_tube(void) {
-    LightDesc tube = {.name = "kitchen_tube",
-                      .type = LIGHT_AREA,
-                      .position = {2.5f, CEIL_Y - 0.06f, 11.9f},
-                      .direction = {0.0f, -1.0f, 0.0f},
-                      .up = {0.0f, 0.0f, 1.0f},
-                      .color = {0.86f, 0.97f, 0.88f},
-                      .intensity = 6000.0f, // nits: a bare fluorescent tube
-                      .size = {1.2f, 0.06f},
-                      .range = 14.0f,
-                      .cast_shadows = true};
-    Light* light = create_light(&tube);
-    scene_add_light(g_scene, light);
-    SceneNode* node = create_node();
-    node_set_name(node, "kitchen_tube");
-    node_set_light(node, light);
-    node_add_child(g_scene->root_node, node);
-}
-
 /*
  * Irradiance probes over the house, so a room is lit by what it can see: the
  * tubes' light off its own walls, and not the sky, which the environment's
@@ -174,6 +161,55 @@ static void build_gi(void) {
         return;
     gi_volume_fit(gi, (vec3){-5.75f, FLOOR_Y, 8.1f}, (vec3){6.25f, CEIL_Y, 17.1f});
     g_scene->gi_volume = gi;
+}
+
+/*
+ * Reflection probes in the kitchen and the hall. Without them every metal and
+ * every wet surface indoors reflects the only environment there is, the night
+ * sky, and the hood, the sink and the floor go black. Captured once, like the
+ * irradiance probes, and after them: the two share an atlas, which the probes
+ * allocate with the volume's columns reserved.
+ */
+static void build_probes(Engine* engine) {
+    if (!g_scene->ibl || !g_scene->ibl->precomputed)
+        return;
+    const struct {
+        vec3 pos, lo, hi;
+    } rooms[] = {
+        {{2.48f, FLOOR_Y + 1.5f, 11.9f},
+         {KITCHEN_X0, FLOOR_Y, KITCHEN_Z0},
+         {KITCHEN_X1, CEIL_Y, KITCHEN_Z1}},
+        {{-0.75f, FLOOR_Y + 1.5f, 13.0f},
+         {HALL_X0 + 0.5f * INT_WALL, FLOOR_Y, HOUSE_FRONT_Z + 0.5f * EXT_WALL},
+         {HALL_X1 - 0.5f * INT_WALL, CEIL_Y, HOUSE_BACK_Z - 0.5f * EXT_WALL}},
+    };
+    ReflectionProbeSet* set = create_reflection_probe_set();
+    if (!set)
+        return;
+    float near_clips[2], far_clips[2];
+    const bool env_only[2] = {false, false};
+    for (int i = 0; i < 2; i++) {
+        ReflectionProbe* p = create_reflection_probe();
+        if (!p)
+            break;
+        glm_vec3_copy((float*)rooms[i].pos, p->position);
+        glm_vec3_copy((float*)rooms[i].lo, p->box_min);
+        glm_vec3_copy((float*)rooms[i].hi, p->box_max);
+        vec3 span;
+        glm_vec3_sub(p->box_max, p->box_min, span);
+        const float radius = 0.5f * glm_vec3_norm(span);
+        near_clips[set->count] = 0.02f;
+        far_clips[set->count] = 4.0f * radius;
+        if (!probe_set_add(set, p)) {
+            free_reflection_probe(p);
+            break;
+        }
+    }
+    if (set->count == 2 &&
+        probe_set_capture_all(set, engine, g_scene, near_clips, far_clips, env_only, 0))
+        g_scene->probe_set = set;
+    else
+        free_reflection_probe_set(set);
 }
 
 static void build_post(const Engine* engine) {
@@ -211,13 +247,14 @@ static void on_init(Game* game) {
     if (!mats_register(&kit, engine, g_scene))
         return;
     house_build(&kit);
+    kitchen_build(&kit, (unsigned int)g_args.seed);
     street_build(&kit);
+    lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
+                 g_args.flashlight != 0);
     kit_finish(&kit, "world");
     printf("silent: %d colliders\n", kit.collider_count);
 
     build_sky(engine);
-    build_placeholder_tube();
-    build_gi();
 
     ShadowSystem* ss = g_scene->shadow_system;
     if (ss) {
@@ -270,6 +307,21 @@ static void on_pre_render(Game* game, double alpha) {
     const bool pinned = g_args.cam_eye_set && g_args.cam_target_set;
     player_pre_render(&g_player, game, pinned ? &g_args.cam_eye : NULL,
                       pinned ? &g_args.cam_target : NULL);
+
+    if (input_action_pressed(&game->input, "flashlight"))
+        lights_toggle_flashlight(&g_lights);
+    vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
+    player_eye(&g_player, eye, forward);
+    lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
+
+    // The probes go in on the third frame, not at load. The tubes' panels are
+    // derived during the first frame's draw and only cast from the next, and a
+    // volume's FIRST sweep is the only one taken at full weight -- a re-arm
+    // blends into what is already there -- so it has to see the lit room.
+    if (engine->total_frames == 2 && !g_scene->gi_volume) {
+        build_gi();
+        build_probes(engine);
+    }
 }
 
 static void print_usage(const char* prog) {
@@ -289,6 +341,8 @@ static void print_usage(const char* prog) {
     printf("      --fov D             Vertical field of view, degrees (default 68)\n");
     printf("      --pad-script PATH   Replay a scripted pad on slot 0 (see input.h)\n");
     printf("      --trace-player      Print the player's position every 30 steps\n");
+    printf("      --no-flicker        Keep the failing ceiling tube steady\n");
+    printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, G shows the GUI.\n");
     printf("  -h, --help              This message\n");
@@ -334,6 +388,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->pad_script = argv[++i];
         } else if (!strcmp(s, "--trace-player")) {
             a->trace_player = 1;
+        } else if (!strcmp(s, "--no-flicker")) {
+            a->no_flicker = 1;
+        } else if (!strcmp(s, "--flashlight")) {
+            a->flashlight = 1;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
