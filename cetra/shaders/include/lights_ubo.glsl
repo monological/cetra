@@ -52,7 +52,7 @@ layout(std140) uniform ClusterBlock {
 };
 
 layout(std140) uniform ClusterIndexBlock {
-    uvec4 lightIndices[768]; // 6144 16-bit light indices, two per uint, low half first
+    uvec4 lightIndices[1024]; // 16384 8-bit light indices, four per uint, lowest byte first
 };
 
 // IES photometric profiles (spec 11.57). Its own block rather than room in
@@ -174,8 +174,7 @@ uint clusterWord(uint ci) {
 }
 
 uint lightIndexAt(uint i) {
-    uint w = lightIndices[i >> 3u][(i >> 1u) & 3u];
-    return (i & 1u) == 0u ? (w & 0xFFFFu) : (w >> 16u);
+    return (lightIndices[i >> 4u][(i >> 2u) & 3u] >> ((i & 3u) * 8u)) & 0xFFu;
 }
 
 // The froxel a screen tile and a view depth land in. The exponential-Z slicing

@@ -475,7 +475,7 @@ static void _fill_index_pool(LightClusterContext* ctx) {
                     // would run straight into its neighbour's list without this.
                     if (ctx->counts[ci] >= ctx->caps[ci])
                         continue; // starved: it keeps the lights it was granted
-                    ctx->index_pool.indices[ctx->offsets[ci] + ctx->counts[ci]] = (uint16_t)li;
+                    ctx->index_pool.indices[ctx->offsets[ci] + ctx->counts[ci]] = (uint8_t)li;
                     ctx->counts[ci]++;
                 }
     }
@@ -717,7 +717,7 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
                             (size_t)num_packed * sizeof(GpuPackedLight)));
     ubo_upload(ctx->clusters_ubo, &ctx->grid, sizeof(ctx->grid));
     ubo_upload(ctx->cluster_indices_ubo, &ctx->index_pool,
-               (GLsizeiptr)((size_t)total_indices * sizeof(uint16_t)));
+               (GLsizeiptr)((size_t)total_indices * sizeof(ctx->index_pool.indices[0])));
 
     if (!ctx->logged_first_build) {
         log_info("clustered: %d directional + %d clusterable lights, %u cluster indices",

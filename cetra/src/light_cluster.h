@@ -32,7 +32,7 @@ struct Light;
 #define LC_CLUSTER_COUNT       (LC_CLUSTER_X * LC_CLUSTER_Y * LC_CLUSTER_Z)
 #define LC_MAX_DIR_LIGHTS      4
 #define LC_MAX_CLUSTER_LIGHTS  128
-#define LC_MAX_CLUSTER_INDICES 6144
+#define LC_MAX_CLUSTER_INDICES 16384
 
 // C mirrors of the std140 blocks (lights_ubo.glsl). Every member is a 16-byte
 // row (float[4] / int32_t[4]) or packs to whole rows, so the C layout equals
@@ -77,9 +77,12 @@ typedef struct GpuClusterBlock {
 } GpuClusterBlock;
 
 typedef struct GpuClusterIndexBlock {
-    // Two 16-bit light indices per uint32 on the GPU; a little-endian uint16
-    // array IS that layout (even index = low halfword)
-    uint16_t indices[LC_MAX_CLUSTER_INDICES];
+    // Four 8-bit light indices per uint32 on the GPU; a byte array IS that
+    // layout (index 4k = lowest byte). A byte and not a halfword because the
+    // pool is a UBO held to GL 4.1's guaranteed 16 KB, where the halfword pool
+    // held 6144 -- an average of two lights per froxel, which three lights
+    // around the camera spent on their own. It caps the light count at 256.
+    uint8_t indices[LC_MAX_CLUSTER_INDICES];
 } GpuClusterIndexBlock;
 
 /*
@@ -167,6 +170,9 @@ _Static_assert(sizeof(GpuClusterBlock) == UBO_CLUSTERS_BLOCK_SIZE,
                "GpuClusterBlock must match the std140 ClusterBlock layout");
 _Static_assert(sizeof(GpuClusterIndexBlock) == UBO_CLUSTER_INDICES_BLOCK_SIZE,
                "GpuClusterIndexBlock must match the std140 ClusterIndexBlock layout");
+_Static_assert(LC_MAX_CLUSTER_LIGHTS <= 256, "a cluster light index is one byte");
+// The grid word keeps 20 bits for a cluster's offset into the pool.
+_Static_assert(LC_MAX_CLUSTER_INDICES <= (1 << 20), "the grid word's offset field is 20 bits");
 
 // Per-light cluster coverage, computed once per build (scratch)
 typedef struct LightClusterRange {

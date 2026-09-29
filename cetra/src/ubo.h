@@ -39,17 +39,18 @@
 
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
-// GL_UNIFORM_BLOCK_DATA_SIZE by ubo_validate_program_block. All under the
-// GL 4.1 guaranteed GL_MAX_UNIFORM_BLOCK_SIZE minimum of 16384.
+// GL_UNIFORM_BLOCK_DATA_SIZE by ubo_validate_program_block. None over the
+// GL 4.1 guaranteed GL_MAX_UNIFORM_BLOCK_SIZE minimum of 16384; the index pool
+// is exactly that.
 #define UBO_LIGHTS_BLOCK_SIZE          12512
 #define UBO_CLUSTERS_BLOCK_SIZE        12288
-#define UBO_CLUSTER_INDICES_BLOCK_SIZE 12288
+#define UBO_CLUSTER_INDICES_BLOCK_SIZE 16384
 // Four floats, rounded up to std140's 16-byte block granularity.
 #define UBO_VIEW_BLOCK_SIZE 16
 
 // Per-instance transforms: model, prevModel and the normal matrix, the three
 // values a draw needs per object. 64 instances x 3 mat4 x 64 B = 12288, which
-// is the same size the cluster blocks already use and comfortably inside the
+// is the same size the cluster grid block uses and comfortably inside the
 // 16 KB floor -- so a chunk is 64 instances and a longer run submits in
 // several draws.
 //
