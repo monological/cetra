@@ -49,6 +49,16 @@
 // Half the window's pixels, upscaled: the engine's floor.
 #define DEFAULT_RENDER_SCALE 0.5f
 
+/*
+ * Pinned exposure. Day's fog glows at about 400 nits where night's glows at 5,
+ * so day sits about eighty times lower, where the street is a white fog world.
+ * The rooms by day come out dark under it: the sky's radiance is on a relative
+ * scale and the tubes on a physical one, and no single pin serves both. That
+ * waits on an overcast sky with a physical brightness scale in the engine.
+ */
+#define EXPOSURE_NIGHT 0.02f
+#define EXPOSURE_DAY   0.0015f
+
 typedef struct SilentArgs {
     int headless;
     int frames;
@@ -228,10 +238,12 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     if (grade && postfx_load_lut(fx, "assets/lut/silent_grade.cube"))
         fx->lut_strength = 1.0f;
 
-    // A thin haze everywhere -- enough to put a beam in the flashlight and a
-    // halo round a lamp -- and the street's fog volumes on top of it.
+    // A thin haze everywhere at night -- enough to put a beam in the flashlight
+    // -- and the street's fog volumes on top of it. None by day: the ambient
+    // that lights the haze is not blocked by walls, so at daylight's level it
+    // fills the rooms like smoke, and the volumes carry the street on their own.
     fx->fog_enabled = true;
-    fx->fog_density = 0.02f;
+    fx->fog_density = night ? 0.02f : 0.0f;
     fx->fog_height_falloff = 60.0f;
     fx->fog_floor_y = 0.0f;
     fx->fog_far = 60.0f;
@@ -295,7 +307,7 @@ static void on_init(Game* game) {
     // Pinned: a meter would open the dark back up, which is the one thing
     // this place must not do.
     engine->exposure.automatic = false;
-    engine->exposure.multiplier = 0.02f;
+    engine->exposure.multiplier = g_args.day ? EXPOSURE_DAY : EXPOSURE_NIGHT;
 
     build_post(engine, !g_args.day, !g_args.no_grade);
 }
