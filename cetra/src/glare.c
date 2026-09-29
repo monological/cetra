@@ -421,6 +421,33 @@ static void _glare_sum(GLuint tex, int w, int h, int x1, int y1, double* out3) {
     free(px);
 }
 
+/*
+ * The mean light per pixel the tonemap takes out of `hdr_tex` for a glare at strength 1: every
+ * texel's light past `threshold`, by glare_threshold.glsl's rule, read at full resolution as the
+ * tonemap reads it. What the star adds back is the mean of the glare image, which the tonemap
+ * stretches across the same frame.
+ */
+static void _glare_removed_mean(GLuint hdr_tex, float threshold, double* out3) {
+    int w = 0, h = 0;
+    glBindTexture(GL_TEXTURE_2D, hdr_tex);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
+    float* px = w > 0 && h > 0 ? malloc(sizeof(float) * (size_t)w * h * 4) : NULL;
+    if (!px)
+        return;
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, px);
+    for (size_t i = 0; i < (size_t)w * h; i++) {
+        const float* c = px + i * 4;
+        const float l = fmaxf(fmaxf(c[0], c[1]), c[2]);
+        const float above = fmaxf(l - threshold, 0.0f) / fmaxf(l, 1.0e-4f);
+        for (int k = 0; k < 3; k++)
+            out3[k] += c[k] * above;
+    }
+    for (int k = 0; k < 3; k++)
+        out3[k] /= (double)w * h;
+    free(px);
+}
+
 GLuint glare_run(Glare* g, GLuint hdr_tex, int frame_w, int frame_h, float threshold, GLuint quad,
                  bool probe) {
     if (!g || frame_w <= 0 || frame_h <= 0)
@@ -444,6 +471,7 @@ GLuint glare_run(Glare* g, GLuint hdr_tex, int frame_w, int frame_h, float thres
     uniform_set_int(g->source->uniforms, "hdrTex", 0);
     uniform_set_float(g->source->uniforms, "glareThreshold", threshold);
     uniform_set_float(g->source->uniforms, "glareSourceScale", GLARE_SOURCE_SCALE);
+    uniform_set_vec2(g->source->uniforms, "glareFill", (vec2){(float)g->fill_w, (float)g->fill_h});
     draw_fullscreen_quad(quad);
     double source[3] = {0.0, 0.0, 0.0};
     if (probe)
@@ -474,10 +502,16 @@ GLuint glare_run(Glare* g, GLuint hdr_tex, int frame_w, int frame_h, float thres
     if (probe) {
         double glare[3] = {0.0, 0.0, 0.0};
         _glare_sum(g->out_tex, g->fill_w, g->fill_h, g->fill_w, g->fill_h, glare);
-        // The source as stored, the glare restored to full scale.
-        printf("glare-probe source=%.6g,%.6g,%.6g glare=%.6g,%.6g,%.6g\n",
+        double removed[3] = {0.0, 0.0, 0.0};
+        _glare_removed_mean(hdr_tex, threshold, removed);
+        const double fill = (double)g->fill_w * g->fill_h;
+        // The source as stored, the glare restored to full scale; then the frame's light per
+        // pixel taken out and put back.
+        printf("glare-probe source=%.6g,%.6g,%.6g glare=%.6g,%.6g,%.6g removed=%.6g,%.6g,%.6g "
+               "added=%.6g,%.6g,%.6g\n",
                source[0] / GLARE_SOURCE_SCALE, source[1] / GLARE_SOURCE_SCALE,
-               source[2] / GLARE_SOURCE_SCALE, glare[0], glare[1], glare[2]);
+               source[2] / GLARE_SOURCE_SCALE, glare[0], glare[1], glare[2], removed[0], removed[1],
+               removed[2], glare[0] / fill, glare[1] / fill, glare[2] / fill);
     }
     check_gl_error("glare");
     return g->out_tex;

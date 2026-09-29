@@ -31,7 +31,8 @@ void free_glare(Glare* glare);
  * covers the whole frame, or 0 when the pass could not run -- its targets could not be made, which
  * is reported and which a later frame of the same shape would not change. `probe` prints the light
  * the source held against the light the glare carries, per channel -- the pattern is normalised, so
- * the two differ only by what spills past the frame's edge.
+ * the two differ only by what spills past the frame's edge -- and the mean light per pixel the
+ * tonemap takes out of the frame against what the glare puts back, at strength 1.
  */
 GLuint glare_run(Glare* glare, GLuint hdr_tex, int frame_w, int frame_h, float threshold,
                  GLuint quad_vao, bool probe);
