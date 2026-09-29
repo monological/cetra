@@ -32,6 +32,12 @@
 // What the source is stored at through the transform and restored from after it, so a glint of
 // thousands keeps its fraction bits through the transform's many additions.
 #define GLARE_SOURCE_SCALE 1.0e-3f
+// Wavelengths the pattern is summed over, between Clearwater's eight band colours: enough that
+// the colour fringe is a gradient rather than eight separate rings.
+#define GLARE_PSF_BANDS 32
+// The Airy disk's first dark ring, in pattern texels: 1.22 wavelengths over the aperture's
+// diameter, and the pattern's texel is one wavelength over its side. Its light is the core.
+#define GLARE_PSF_CORE (1.22f * GLARE_PSF_RES / (2.0f * GLARE_PSF_RADIUS))
 
 struct Glare {
     float* psf; // GLARE_PSF_RES^2 RGB, relative within each channel
@@ -42,6 +48,7 @@ struct Glare {
     GLuint tex[2], fbo[2];   // red + i green, and blue, two complex signals a texel, ping-pong
     GLuint kernel;           // each channel's pattern spectrum on the grid, real, in .rgb
     GLuint out_tex, out_fbo; // the glare, the frame's shape
+    float halo_share[3];     // the pattern's light outside its core, per channel
 };
 
 /*
@@ -202,14 +209,21 @@ static float* _glare_build_psf(void) {
     }
     free(re);
 
-    // The pattern's size goes as the wavelength; eight bands across the visible, each in the
-    // colour Clearwater gives it.
+    // The pattern's size goes as the wavelength. Clearwater's eight band colours across the
+    // visible, interpolated to GLARE_PSF_BANDS wavelengths: at eight, each band's pattern is a
+    // separate scaled copy and the fringe shows as that many rings.
     const float bands[8][4] = {{440.0f, 0.10f, 0.00f, 0.85f}, {470.0f, 0.00f, 0.15f, 1.00f},
                                {500.0f, 0.00f, 0.60f, 0.55f}, {530.0f, 0.05f, 1.00f, 0.15f},
                                {560.0f, 0.45f, 0.95f, 0.00f}, {590.0f, 0.95f, 0.55f, 0.00f},
                                {620.0f, 1.00f, 0.20f, 0.00f}, {650.0f, 0.70f, 0.05f, 0.00f}};
-    for (int b = 0; b < 8; b++) {
-        const float s = bands[b][0] / 550.0f;
+    for (int b = 0; b < GLARE_PSF_BANDS; b++) {
+        const float at = 7.0f * (float)b / (float)(GLARE_PSF_BANDS - 1);
+        const int lo = at < 7.0f ? (int)at : 6;
+        const float f = at - (float)lo;
+        float colour[4];
+        for (int c = 0; c < 4; c++)
+            colour[c] = bands[lo][c] + (bands[lo + 1][c] - bands[lo][c]) * f;
+        const float s = colour[0] / 550.0f;
         for (int y = 0; y < n; y++) {
             for (int x = 0; x < n; x++) {
                 const float u = n / 2 + ((float)x - n / 2) / s;
@@ -224,7 +238,7 @@ static float* _glare_build_psf(void) {
                                   (s * s);
                 float* o = out + ((size_t)y * n + x) * 3;
                 for (int c = 0; c < 3; c++)
-                    o[c] += val * bands[b][1 + c];
+                    o[c] += val * colour[1 + c];
             }
         }
     }
@@ -302,8 +316,16 @@ static bool _glare_target(int w, int h, GLenum format, GLuint* tex, GLuint* fbo)
  * The grid and the pattern's spectrum on it, for a frame of this shape: the frame shrunk into
  * GLARE_FRAME_FILL of the grid, and the pattern resampled so its full width spans GLARE_PSF_SPAN
  * of the frame's height, centred on the grid's origin as a convolution kernel wants, normalised
- * per channel so it carries the light it is handed once, and divided by the grid's size so the
- * inverse transform needs no normalising of its own. Only the real part of its transform is kept,
+ * per channel against the WHOLE pattern, and divided by the grid's size so the inverse transform
+ * needs no normalising of its own.
+ *
+ * The core -- the Airy disk, inside the first dark ring -- is left out, and the share of the
+ * light the rest carries is kept as `halo_share`. The grid's cell is several frame pixels, so
+ * light moved through it comes back at that resolution: moving the core, which is most of the
+ * light, redrew every bright edge in the frame soft and stepped (spec 13.5). A real lens's core is
+ * as sharp as the frame, so its light stays where it is and only the halo is moved.
+ *
+ * Only the real part of its transform is kept,
  * which is its even part: the pattern is symmetric about its centre but for the resample's last
  * edge row, and that is all it drops.
  */
@@ -327,7 +349,9 @@ static bool _glare_build_targets(Glare* g, int frame_w, int frame_h) {
     }
     const int n = GLARE_PSF_RES;
     const float scale = n / (GLARE_PSF_SPAN * g->fill_h);
-    double total[3] = {0.0, 0.0, 0.0};
+    // The core's edge in grid cells, blended over a cell either side so its rim is not a ring.
+    const float core = GLARE_PSF_CORE / scale;
+    double total[3] = {0.0, 0.0, 0.0}, halo[3] = {0.0, 0.0, 0.0};
     for (int gy = -gh / 2; gy < gh / 2; gy++) {
         for (int gx = -gw / 2; gx < gw / 2; gx++) {
             const float u = n / 2 + gx * scale, v = n / 2 + gy * scale;
@@ -336,16 +360,22 @@ static bool _glare_build_targets(Glare* g, int frame_w, int frame_h) {
             const int x0 = (int)u, y0 = (int)v;
             const float fx = u - x0, fy = v - y0;
             const size_t i = (size_t)((gy + gh) % gh) * gw + (size_t)((gx + gw) % gw);
+            const float t =
+                fminf(1.0f, fmaxf(0.0f, (hypotf((float)gx, (float)gy) - core + 1.0f) / 2.0f));
+            const float outside = t * t * (3.0f - 2.0f * t);
             for (int c = 0; c < 3; c++) {
                 const float* p = g->psf + ((size_t)y0 * n + x0) * 3 + c;
                 const float val = (p[0] * (1 - fx) + p[3] * fx) * (1 - fy) +
                                   (p[n * 3] * (1 - fx) + p[n * 3 + 3] * fx) * fy;
-                k[c * 2 * cells + i] = val;
+                k[c * 2 * cells + i] = val * outside;
                 total[c] += val;
+                halo[c] += val * outside;
             }
         }
     }
     bool ok = true;
+    for (int c = 0; c < 3; c++)
+        g->halo_share[c] = (float)(halo[c] / fmax(total[c], 1e-30));
     for (int c = 0; c < 3 && ok; c++) {
         float* re = k + c * 2 * cells;
         const float norm = (float)(1.0 / ((double)cells * fmax(total[c], 1e-30)));
@@ -448,6 +478,11 @@ static void _glare_removed_mean(GLuint hdr_tex, float threshold, double* out3) {
     free(px);
 }
 
+void glare_halo_share(const Glare* g, float out[3]) {
+    for (int c = 0; c < 3; c++)
+        out[c] = g ? g->halo_share[c] : 0.0f;
+}
+
 GLuint glare_run(Glare* g, GLuint hdr_tex, int frame_w, int frame_h, float threshold, GLuint quad,
                  bool probe) {
     if (!g || frame_w <= 0 || frame_h <= 0)
@@ -504,14 +539,21 @@ GLuint glare_run(Glare* g, GLuint hdr_tex, int frame_w, int frame_h, float thres
         _glare_sum(g->out_tex, g->fill_w, g->fill_h, g->fill_w, g->fill_h, glare);
         double removed[3] = {0.0, 0.0, 0.0};
         _glare_removed_mean(hdr_tex, threshold, removed);
+        // What the star should carry and what the tonemap takes out are the halo's share of the
+        // light past the threshold; the core stays where it is.
+        for (int c = 0; c < 3; c++) {
+            source[c] *= g->halo_share[c];
+            removed[c] *= g->halo_share[c];
+        }
         const double fill = (double)g->fill_w * g->fill_h;
         // The source as stored, the glare restored to full scale; then the frame's light per
         // pixel taken out and put back.
-        printf("glare-probe source=%.6g,%.6g,%.6g glare=%.6g,%.6g,%.6g removed=%.6g,%.6g,%.6g "
-               "added=%.6g,%.6g,%.6g\n",
-               source[0] / GLARE_SOURCE_SCALE, source[1] / GLARE_SOURCE_SCALE,
-               source[2] / GLARE_SOURCE_SCALE, glare[0], glare[1], glare[2], removed[0], removed[1],
-               removed[2], glare[0] / fill, glare[1] / fill, glare[2] / fill);
+        printf("glare-probe halo=%.4f,%.4f,%.4f source=%.6g,%.6g,%.6g glare=%.6g,%.6g,%.6g "
+               "removed=%.6g,%.6g,%.6g added=%.6g,%.6g,%.6g\n",
+               g->halo_share[0], g->halo_share[1], g->halo_share[2], source[0] / GLARE_SOURCE_SCALE,
+               source[1] / GLARE_SOURCE_SCALE, source[2] / GLARE_SOURCE_SCALE, glare[0], glare[1],
+               glare[2], removed[0], removed[1], removed[2], glare[0] / fill, glare[1] / fill,
+               glare[2] / fill);
     }
     check_gl_error("glare");
     return g->out_tex;

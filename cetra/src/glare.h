@@ -37,4 +37,8 @@ void free_glare(Glare* glare);
 GLuint glare_run(Glare* glare, GLuint hdr_tex, int frame_w, int frame_h, float threshold,
                  GLuint quad_vao, bool probe);
 
+// The share of the light past the threshold, per channel, that the glare image carries away --
+// the pattern's halo; its core stays where it was. Valid once glare_run has run; 0 for NULL.
+void glare_halo_share(const Glare* glare, float out[3]);
+
 #endif
