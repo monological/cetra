@@ -6,14 +6,6 @@
 #define FLOOR_RISE 0.45f // foundation: the ground floor sits this far up
 #define STOREY_H   2.7f
 
-// A local direction taken into the world: the frame's yaw without its origin.
-static void frame_dir(const KitFrame* f, float a, float y, float d, vec3 out) {
-    vec3 o = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(f, 0.0f, 0.0f, 0.0f, o);
-    kit_frame_point(f, a, y, d, out);
-    glm_vec3_sub(out, o, out);
-}
-
 // One roof slope from the eave (d_eave) up to the ridge (d_ridge): the
 // shingled top and, a roof's thickness under it, the soffit you see from the
 // street under the overhang.
@@ -31,18 +23,19 @@ static void slope(Kit* kit, const KitFrame* f, float a0, float a1, float d_eave,
     }
     // Outward is up and toward the eave the slope falls to.
     const float run = fabsf(d_ridge - d_eave), rise = y_ridge - y_eave;
-    frame_dir(f, 0.0f, run, toward * rise, up);
+    kit_frame_dir(f, 0.0f, run, toward * rise, up);
     glm_vec3_negate_to(up, down);
     kit_quad_facing(kit, MAT_ROOF, p[0], p[1], p[2], p[3], up);
     kit_quad_facing(kit, MAT_TRIM, q[0], q[1], q[2], q[3], down);
     // The fascia board along the eave's edge.
     vec3 edge = {0.0f, 0.0f, 0.0f};
-    frame_dir(f, 0.0f, 0.0f, toward, edge);
+    kit_frame_dir(f, 0.0f, 0.0f, toward, edge);
     kit_quad_facing(kit, MAT_TRIM, p[0], p[1], q[1], q[0], edge);
 }
 
-void house_gable_roof(Kit* kit, const KitFrame* f, float w, float depth, float eave_y, float rise,
+void house_gable_roof(Kit* kit, const KitFrame* f, float w, float depth, float eave_y,
                       float overhang, int mat_gable) {
+    const float rise = ROOF_PITCH * depth;
     const float slope_k = rise / (0.5f * depth);
     const float y_tip = eave_y - slope_k * overhang; // the eave, carried out to the overhang
     const float y_ridge = eave_y + rise;
@@ -58,7 +51,7 @@ void house_gable_roof(Kit* kit, const KitFrame* f, float w, float depth, float e
         kit_frame_point(f, a, eave_y, 0.0f, p0);
         kit_frame_point(f, a, eave_y, -depth, p1);
         kit_frame_point(f, a, y_ridge, d_mid, p2);
-        frame_dir(f, side ? 1.0f : -1.0f, 0.0f, 0.0f, out);
+        kit_frame_dir(f, side ? 1.0f : -1.0f, 0.0f, 0.0f, out);
         kit_tri_facing(kit, mat_gable, p0, p1, p2, out);
     }
 }
@@ -67,7 +60,8 @@ void house_gable_roof(Kit* kit, const KitFrame* f, float w, float depth, float e
 // cross of the sash, and a frame with a sill.
 static void window(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1, float y0, float y1,
                    bool night) {
-    const bool lit = night && kit_rnd(rng) < 0.28f;
+    // Drawn by day too, so a seed builds the same street at either hour.
+    const bool lit = kit_rnd(rng) < 0.28f && night;
     const bool boarded = !lit && kit_rnd(rng) < 0.08f;
     kit_frame_box(kit, f, lit ? MAT_WINDOW_LIT : MAT_DARK_GLASS, a0, a1, y0, y1, 0.0f, 0.02f,
                   false);
@@ -106,10 +100,10 @@ void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night) {
     kit_frame_box(kit, &h, MAT_BRICK, -0.06f, w + 0.06f, 0.0f, FLOOR_RISE, -depth - 0.06f, 0.06f,
                   false);
     kit_frame_box(kit, &h, siding, 0.0f, w, FLOOR_RISE, eave, -depth, 0.0f, true);
-    house_gable_roof(kit, &h, w, depth, eave, 0.36f * depth, 0.45f, siding);
+    house_gable_roof(kit, &h, w, depth, eave, 0.45f, siding);
     if (kit_rnd(rng) < 0.6f) {
         const float c = kit_rrange(rng, 1.0f, w - 1.7f);
-        kit_frame_box(kit, &h, MAT_BRICK, c, c + 0.7f, eave, eave + 0.36f * depth + 0.9f,
+        kit_frame_box(kit, &h, MAT_BRICK, c, c + 0.7f, eave, eave + ROOF_PITCH * depth + 0.9f,
                       -0.55f * depth, -0.55f * depth + 0.7f, false);
     }
 

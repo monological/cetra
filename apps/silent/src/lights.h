@@ -11,8 +11,6 @@
 
 #include "kit.h"
 
-#define LIGHTS_MAX_TUBES 4
-
 /*
  * The kitchen's light: fluorescent tubes and the player's flashlight.
  *
@@ -23,14 +21,11 @@
  * captures leave the strip out, since the panel already carries its light.
  */
 typedef struct Lights {
-    Material* tube_materials[LIGHTS_MAX_TUBES];
-    float tube_nits[LIGHTS_MAX_TUBES];
-    int tube_count;
-    int flicker_tube; // index into the above, or -1
+    Material* flicker;  // the failing tube's strip, or NULL when none flickers
+    float flicker_nits; // and its brightness when it holds
     unsigned int seed;
 
     Light* flashlight;
-    float flashlight_candela;
     bool flashlight_on;
     vec3 flashlight_dir; // smoothed, so the beam trails the look a little
 } Lights;

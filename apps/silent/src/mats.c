@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 
 #include "cetra/material.h"
@@ -9,14 +10,14 @@
 
 /*
  * The photo sets under assets/textures/silent/, as tools/fetch_textures.py
- * leaves them: CC0 scans from Poly Haven cut down to 256 square and stored
+ * leaves them: CC0 scans from Poly Haven and ambientCG cut down to 256 square and stored
  * bottom row first, so V runs up a wall. Relative to the repository root,
  * which is where every app in this tree is run from.
  */
 #define TEXTURE_DIR "assets/textures/silent"
 
+// One surface, at its MatId's index in SPECS.
 typedef struct MatSpec {
-    MatId id;
     const char* name; // the material's own name, for the GUI's editor
     const char* set;  // the photo set's base name; NULL is a flat colour
     float tint[3];    // the albedo factor over the map
@@ -71,53 +72,52 @@ static const GlowSpec GLOWS[] = {
  * set at 0.6 m, which makes its 15 cm glazed squares.
  */
 static const MatSpec SPECS[MAT_COUNT] = {
-    {MAT_PLASTER, "plaster", "grey_plaster_02", {0.80f, 0.90f, 0.82f}, 1.0f, 0.0f, 1.4f},
-    {MAT_CEILING, "ceiling", "white_plaster_rough_02", {0.75f, 0.75f, 0.72f}, 1.0f, 0.0f, 1.5f},
-    {MAT_KITCHEN_FLOOR,
-     "kitchen_floor",
-     "worn_tile_floor",
-     {0.95f, 1.0f, 0.97f},
-     0.32f,
-     0.0f,
-     1.25f},
-    {MAT_WOOD_FLOOR, "wood_floor", "old_wood_floor", {1, 1, 1}, 0.8f, 0.0f, 2.0f},
-    {MAT_BACKSPLASH, "backsplash", "worn_tile_floor", {0.88f, 0.98f, 1.02f}, 0.45f, 0.0f, 0.6f},
-    {MAT_ENAMEL, "enamel", "rusty_metal_02", {0.88f, 0.9f, 0.84f}, 0.8f, 0.0f, 1.0f},
-    {MAT_TRIM, "trim", "concrete_wall_003", {0.82f, 0.86f, 0.80f}, 1.0f, 0.0f, 1.5f},
-    {MAT_STEEL, "steel", "Metal009", {1, 1, 1}, 1.0f, 1.0f, 0.6f},
-    {MAT_WOOD, "wood", "wood_table_worn", {1, 1, 1}, 1.0f, 0.0f, 0.8f},
-    {MAT_SIDING, "siding", "white_planks_clean", {0.78f, 0.84f, 0.82f}, 1.0f, 0.0f, 1.8f},
-    {MAT_SIDING_B, "siding_blue", "blue_painted_planks", {1, 1, 1}, 1.0f, 0.0f, 1.2f},
-    {MAT_SIDING_C, "siding_ochre", "white_planks_clean", {0.86f, 0.76f, 0.56f}, 1.0f, 0.0f, 1.8f},
-    {MAT_PORCH, "porch", "old_wood_floor", {0.75f, 0.78f, 0.8f}, 1.0f, 0.0f, 2.0f},
-    {MAT_DIRT, "yard", "grass_ground", {1, 1, 1}, 1.0f, 0.0f, 2.5f},
-    {MAT_ASPHALT, "asphalt", "asphalt_02", {1, 1, 1}, 1.0f, 0.0f, 3.0f},
-    {MAT_CONCRETE, "sidewalk", "concrete_pavement", {1, 1, 1}, 1.0f, 0.0f, 1.8f},
-    {MAT_ROOF, "roof", "roof_slates_02", {1, 1, 1}, 1.0f, 0.0f, 3.0f},
-    {MAT_BRICK, "brick", "brick_wall_006", {1, 1, 1}, 1.0f, 0.0f, 3.0f},
-    {MAT_RUG, "rug", "dirty_carpet", {1, 1, 1}, 1.0f, 0.0f, 0.6f},
-    {MAT_TOWEL, "towel", "fabric_pattern_05", {1, 1, 1}, 1.0f, 0.0f, 0.5f},
-    {MAT_PAPER, "paper", "Paper003", {0.86f, 0.80f, 0.64f}, 1.0f, 0.0f, 0.4f},
+    [MAT_PLASTER] = {"plaster", "grey_plaster_02", {0.80f, 0.90f, 0.82f}, 1.0f, 0.0f, 1.4f},
+    [MAT_CEILING] = {"ceiling", "white_plaster_rough_02", {0.75f, 0.75f, 0.72f}, 1.0f, 0.0f, 1.5f},
+    [MAT_KITCHEN_FLOOR] =
+        {"kitchen_floor", "worn_tile_floor", {0.95f, 1.0f, 0.97f}, 0.32f, 0.0f, 1.25f},
+    [MAT_WOOD_FLOOR] = {"wood_floor", "old_wood_floor", {1, 1, 1}, 0.8f, 0.0f, 2.0f},
+    [MAT_BACKSPLASH] = {"backsplash", "worn_tile_floor", {0.88f, 0.98f, 1.02f}, 0.45f, 0.0f, 0.6f},
+    [MAT_ENAMEL] = {"enamel", "rusty_metal_02", {0.88f, 0.9f, 0.84f}, 0.8f, 0.0f, 1.0f},
+    [MAT_TRIM] = {"trim", "concrete_wall_003", {0.82f, 0.86f, 0.80f}, 1.0f, 0.0f, 1.5f},
+    [MAT_STEEL] = {"steel", "Metal009", {1, 1, 1}, 1.0f, 1.0f, 0.6f},
+    [MAT_WOOD] = {"wood", "wood_table_worn", {1, 1, 1}, 1.0f, 0.0f, 0.8f},
+    [MAT_SIDING] = {"siding", "white_planks_clean", {0.78f, 0.84f, 0.82f}, 1.0f, 0.0f, 1.8f},
+    [MAT_SIDING_B] = {"siding_blue", "blue_painted_planks", {1, 1, 1}, 1.0f, 0.0f, 1.2f},
+    [MAT_SIDING_C] =
+        {"siding_ochre", "white_planks_clean", {0.86f, 0.76f, 0.56f}, 1.0f, 0.0f, 1.8f},
+    [MAT_PORCH] = {"porch", "old_wood_floor", {0.75f, 0.78f, 0.8f}, 1.0f, 0.0f, 2.0f},
+    [MAT_DIRT] = {"yard", "grass_ground", {1, 1, 1}, 1.0f, 0.0f, 2.5f},
+    [MAT_ASPHALT] = {"asphalt", "asphalt_02", {1, 1, 1}, 1.0f, 0.0f, 3.0f},
+    [MAT_CONCRETE] = {"sidewalk", "concrete_pavement", {1, 1, 1}, 1.0f, 0.0f, 1.8f},
+    [MAT_ROOF] = {"roof", "roof_slates_02", {1, 1, 1}, 1.0f, 0.0f, 3.0f},
+    [MAT_BRICK] = {"brick", "brick_wall_006", {1, 1, 1}, 1.0f, 0.0f, 3.0f},
+    [MAT_RUG] = {"rug", "dirty_carpet", {1, 1, 1}, 1.0f, 0.0f, 0.6f},
+    [MAT_TOWEL] = {"towel", "fabric_pattern_05", {1, 1, 1}, 1.0f, 0.0f, 0.5f},
+    [MAT_PAPER] = {"paper", "Paper003", {0.86f, 0.80f, 0.64f}, 1.0f, 0.0f, 0.4f},
     // Glass takes the kitchen smear's roughness and relief, so it is smudged
     // rather than perfect, and its colour from the tint; see GLASS above.
-    {MAT_GLASS_AMBER, "amber_glass", "Smear008", {0.90f, 0.62f, 0.36f}, 0.12f, 0.0f, 0.3f, true},
-    {MAT_GLASS_CLEAR, "clear_glass", "Smear008", {0.94f, 1.0f, 0.95f}, 0.12f, 0.0f, 0.3f, true},
+    [MAT_GLASS_AMBER] = {"amber_glass", "Smear008", {0.90f, 0.62f, 0.36f}, 0.12f, 0.0f, 0.3f, true},
+    [MAT_GLASS_CLEAR] = {"clear_glass", "Smear008", {0.94f, 1.0f, 0.95f}, 0.12f, 0.0f, 0.3f, true},
     // What is in the jars, off one granular scan: a red-brown sauce or spice,
     // pale grain, and something pickled.
-    {MAT_CONTENTS, "contents_red", "grass_ground", {0.46f, 0.15f, 0.07f}, 0.5f, 0.0f, 0.25f},
-    {MAT_CONTENTS_PALE, "contents_pale", "grass_ground", {1.0f, 0.86f, 0.62f}, 0.8f, 0.0f, 0.15f},
-    {MAT_CONTENTS_GREEN, "contents_green", "grass_ground", {0.42f, 0.50f, 0.20f}, 0.4f, 0.0f, 0.3f},
+    [MAT_CONTENTS] = {"contents_red", "grass_ground", {0.46f, 0.15f, 0.07f}, 0.5f, 0.0f, 0.25f},
+    [MAT_CONTENTS_PALE] =
+        {"contents_pale", "grass_ground", {1.0f, 0.86f, 0.62f}, 0.8f, 0.0f, 0.15f},
+    [MAT_CONTENTS_GREEN] =
+        {"contents_green", "grass_ground", {0.42f, 0.50f, 0.20f}, 0.4f, 0.0f, 0.3f},
     // Glazed and stained: the dirty-white wall scan at a small repeat, glossy.
-    {MAT_CERAMIC, "ceramic", "concrete_wall_003", {1.0f, 1.0f, 0.97f}, 0.3f, 0.0f, 0.5f},
-    {MAT_BLACK, "black_enamel", NULL, {0.03f, 0.03f, 0.03f}, 0.35f, 0.0f, 1.0f},
-    {MAT_TABLE, "table_enamel", "rusty_metal_02", {0.50f, 0.58f, 0.66f}, 0.7f, 0.0f, 1.0f},
-    {MAT_WINDOW_GLASS, "window_glass", "Smear008", {0.86f, 0.92f, 0.88f}, 0.25f, 0.0f, 0.6f, true},
-    {MAT_DARK_GLASS, "dark_glass", "Smear008", {0.02f, 0.025f, 0.03f}, 0.15f, 0.0f, 0.6f, true},
-    {MAT_WINDOW_LIT, "window_lit", "fabric_pattern_05", {0.9f, 0.85f, 0.7f}, 1.0f, 0.0f, 0.5f},
-    {MAT_LAMP_GLOW, "lamp_glow", NULL, {0.9f, 0.95f, 0.9f}, 0.5f, 0.0f, 1.0f},
-    {MAT_LAMP_POST, "lamp_post", "metal_plate_02", {0.7f, 0.72f, 0.7f}, 1.0f, 0.6f, 1.0f},
-    {MAT_POLE, "utility_pole", "old_wood_floor", {0.55f, 0.52f, 0.5f}, 1.0f, 0.0f, 1.5f},
-    {MAT_CAR, "car_paint", "rusty_metal_02", {0.45f, 0.14f, 0.11f}, 0.6f, 0.0f, 1.2f},
+    [MAT_CERAMIC] = {"ceramic", "concrete_wall_003", {1.0f, 1.0f, 0.97f}, 0.3f, 0.0f, 0.5f},
+    [MAT_BLACK] = {"black_enamel", NULL, {0.03f, 0.03f, 0.03f}, 0.35f, 0.0f, 1.0f},
+    [MAT_TABLE] = {"table_enamel", "rusty_metal_02", {0.50f, 0.58f, 0.66f}, 0.7f, 0.0f, 1.0f},
+    [MAT_WINDOW_GLASS] =
+        {"window_glass", "Smear008", {0.86f, 0.92f, 0.88f}, 0.25f, 0.0f, 0.6f, true},
+    [MAT_DARK_GLASS] = {"dark_glass", "Smear008", {0.02f, 0.025f, 0.03f}, 0.15f, 0.0f, 0.6f, true},
+    [MAT_WINDOW_LIT] = {"window_lit", "fabric_pattern_05", {0.9f, 0.85f, 0.7f}, 1.0f, 0.0f, 0.5f},
+    [MAT_LAMP_GLOW] = {"lamp_glow", NULL, {0.9f, 0.95f, 0.9f}, 0.5f, 0.0f, 1.0f},
+    [MAT_LAMP_POST] = {"lamp_post", "metal_plate_02", {0.7f, 0.72f, 0.7f}, 1.0f, 0.6f, 1.0f},
+    [MAT_POLE] = {"utility_pole", "old_wood_floor", {0.55f, 0.52f, 0.5f}, 1.0f, 0.0f, 1.5f},
+    [MAT_CAR] = {"car_paint", "rusty_metal_02", {0.45f, 0.14f, 0.11f}, 0.6f, 0.0f, 1.2f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
@@ -126,7 +126,11 @@ static Texture* load(TexturePool* pool, const char* set, const char* map, Textur
     return texture_load_file(pool, file, desc);
 }
 
-bool mats_register(Kit* kit, Engine* engine, Scene* scene) {
+_Static_assert(MAT_COUNT <= KIT_MAX_MATERIALS, "every MatId needs a kit slot");
+
+void mats_register(Kit* kit, Engine* engine, Scene* scene) {
+    // Registered in order into an empty kit, so the slot IS the MatId.
+    assert(kit->material_count == 0);
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     set_texture_pool_directory(scene->tex_pool, TEXTURE_DIR);
     const TextureDesc normal_desc = {
@@ -148,10 +152,7 @@ bool mats_register(Kit* kit, Engine* engine, Scene* scene) {
             material_set_roughness_tex(m,
                                        load(scene->tex_pool, s->set, "rough", texture_desc(false)));
         }
-        if (kit_material(kit, m, s->repeat_m) != (int)s->id) {
-            fprintf(stderr, "silent: material %s landed in the wrong kit slot\n", s->name);
-            return false;
-        }
+        kit_material(kit, m, s->repeat_m);
     }
     for (size_t g = 0; g < sizeof(GLASS) / sizeof(GLASS[0]); g++) {
         Material* m = kit->materials[GLASS[g].id];
@@ -167,10 +168,8 @@ bool mats_register(Kit* kit, Engine* engine, Scene* scene) {
         m->emissive_strength = GLOWS[g].nits;
         m->emissive_light = 1; // decoration: never a derived panel
     }
-    return true;
 }
 
-void mats_lights_out(Kit* kit) {
-    kit->materials[MAT_WINDOW_LIT]->emissive_strength = 0.0f;
+void mats_lamps_out(Kit* kit) {
     kit->materials[MAT_LAMP_GLOW]->emissive_strength = 0.0f;
 }

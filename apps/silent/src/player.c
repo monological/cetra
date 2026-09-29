@@ -23,21 +23,6 @@
 #define PITCH_LIMIT     1.45f
 #define MOUSE_LOOK_RATE 0.0022f // radians per pixel
 
-const InputAction PLAYER_ACTIONS[] = {
-    {"move_x",
-     {INPUT_KEY(D, 1), INPUT_KEY(A, -1), INPUT_AXIS(LEFT_X, 1), INPUT_PAD(DPAD_RIGHT, 1),
-      INPUT_PAD(DPAD_LEFT, -1)}},
-    {"move_y",
-     {INPUT_KEY(W, 1), INPUT_KEY(S, -1), INPUT_AXIS(LEFT_Y, -1), INPUT_PAD(DPAD_UP, 1),
-      INPUT_PAD(DPAD_DOWN, -1)}},
-    {"sprint", {INPUT_KEY(LEFT_SHIFT, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
-    {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(RIGHT, 1), INPUT_KEY(LEFT, -1)}},
-    {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
-    {"flashlight", {INPUT_KEY(F, 1), INPUT_PAD(Y, 1)}},
-    {"release_cursor", {INPUT_KEY(TAB, 1)}},
-};
-const int PLAYER_ACTION_COUNT = (int)(sizeof(PLAYER_ACTIONS) / sizeof(PLAYER_ACTIONS[0]));
-
 // Raw motion where the platform has it, so the desktop's acceleration curve
 // stays out of the look. Nothing captures headless: there is no pointer.
 static void set_cursor_captured(Player* p, Engine* engine, bool captured) {
@@ -108,7 +93,6 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     Engine* engine = game->engine;
     if (pin_eye && pin_target) {
         camera_rig_set_pose(p->rig, *pin_eye, *pin_target);
-        glm_vec3_copy((float*)*pin_eye, p->eye);
         return;
     }
     if (p->cursor_captured && p->skip_first_delta) {
@@ -126,17 +110,15 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
         set_cursor_captured(p, engine, false);
 
     glm_vec3_copy(p->entity->position, p->rig->anchor);
-    // At distance zero the eye IS the aim point, so it is known here, before
-    // the engine applies the rig -- which is what lets a light ride the head
-    // in the same frame rather than one behind it.
-    glm_vec3_copy(p->rig->anchor, p->eye);
-    p->eye[1] += p->rig->look_lift;
     camera_rig_update(p->rig, (float)game->sim_clock.delta,
                       input_action_value(&game->input, "look_x"),
                       input_action_value(&game->input, "look_y"));
 }
 
 void player_eye(const Player* p, vec3 eye, vec3 forward) {
-    glm_vec3_copy((float*)p->eye, eye);
+    // The rig's pose is this frame's once player_pre_render has run, before the
+    // engine applies it -- which is what lets a light ride the head in the same
+    // frame rather than one behind it.
+    glm_vec3_copy((float*)p->rig->pose.eye, eye);
     camera_rig_direction(p->rig, forward);
 }

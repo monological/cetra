@@ -3,10 +3,13 @@
 #include "layout.h"
 #include "mats.h"
 
-// Floor and ceiling slabs, one per room so each takes its own surface.
-static void slab(Kit* kit, int mat, float x0, float x1, float z0, float z1, float y0, float y1) {
-    kit_box(kit, mat, (vec3){0.5f * (x0 + x1), 0.5f * (y0 + y1), 0.5f * (z0 + z1)},
-            (vec3){0.5f * (x1 - x0), 0.5f * (y1 - y0), 0.5f * (z1 - z0)}, 0.0f, true);
+// A thin grimy pane in the middle of the front wall, filling an opening, and a
+// body through the whole thickness so nobody climbs through.
+static void pane(Kit* kit, const KitOpening* o) {
+    const vec3 c = {0.5f * (o->from + o->to), 0.5f * (o->bottom + o->top), HOUSE_FRONT_Z};
+    const float hx = 0.5f * (o->to - o->from), hy = 0.5f * (o->top - o->bottom);
+    kit_box(kit, MAT_WINDOW_GLASS, c, (vec3){hx, hy, 0.003f}, 0.0f, false);
+    kit_collider(kit, c, (vec3){hx, hy, 0.5f * EXT_WALL}, 0.0f);
 }
 
 void house_build(Kit* kit) {
@@ -31,18 +34,8 @@ void house_build(Kit* kit) {
                      {-4.1f, -2.5f, FLOOR_Y + 0.9f, FLOOR_Y + 2.1f}},
         .opening_count = 3};
     kit_wall(kit, &front);
-    // Thin grimy panes in the middle of the wall, and a body through the whole
-    // thickness so nobody climbs through.
-    const float kx = 0.5f * (KITCHEN_WIN_X0 + KITCHEN_WIN_X1);
-    const float ky = 0.5f * (KITCHEN_WIN_SILL + KITCHEN_WIN_HEAD);
-    const vec3 kh = {0.5f * (KITCHEN_WIN_X1 - KITCHEN_WIN_X0),
-                     0.5f * (KITCHEN_WIN_HEAD - KITCHEN_WIN_SILL), 0.003f};
-    kit_box(kit, MAT_WINDOW_GLASS, (vec3){kx, ky, HOUSE_FRONT_Z}, kh, 0.0f, false);
-    kit_collider(kit, (vec3){kx, ky, HOUSE_FRONT_Z}, (vec3){kh[0], kh[1], 0.5f * EXT_WALL}, 0.0f);
-    kit_box(kit, MAT_WINDOW_GLASS, (vec3){-3.3f, FLOOR_Y + 1.5f, HOUSE_FRONT_Z},
-            (vec3){0.8f, 0.6f, 0.003f}, 0.0f, false);
-    kit_collider(kit, (vec3){-3.3f, FLOOR_Y + 1.5f, HOUSE_FRONT_Z},
-                 (vec3){0.8f, 0.6f, 0.5f * EXT_WALL}, 0.0f);
+    pane(kit, &front.openings[1]); // the kitchen's
+    pane(kit, &front.openings[2]); // the front room's
 
     KitWall back = front;
     back.at = HOUSE_BACK_Z;
@@ -96,21 +89,28 @@ void house_build(Kit* kit) {
                             .mat_outer = MAT_PLASTER};
     kit_wall(kit, &kitchen_back);
 
-    // Floors: tile in the kitchen, boards everywhere else.
-    slab(kit, MAT_KITCHEN_FLOOR, HALL_X1, HOUSE_X1, HOUSE_FRONT_Z, KITCHEN_BACK_Z, 0.0f, FLOOR_Y);
-    slab(kit, MAT_WOOD_FLOOR, HALL_X1, HOUSE_X1, KITCHEN_BACK_Z, HOUSE_BACK_Z, 0.0f, FLOOR_Y);
-    slab(kit, MAT_WOOD_FLOOR, HOUSE_X0, HALL_X1, HOUSE_FRONT_Z, HOUSE_BACK_Z, 0.0f, FLOOR_Y);
+    // Floors, one slab per room so each takes its own surface: tile in the
+    // kitchen, boards everywhere else.
+    const KitFrame* w = &KIT_WORLD;
+    kit_frame_box(kit, w, MAT_KITCHEN_FLOOR, HALL_X1, HOUSE_X1, 0.0f, FLOOR_Y, HOUSE_FRONT_Z,
+                  KITCHEN_BACK_Z, true);
+    kit_frame_box(kit, w, MAT_WOOD_FLOOR, HALL_X1, HOUSE_X1, 0.0f, FLOOR_Y, KITCHEN_BACK_Z,
+                  HOUSE_BACK_Z, true);
+    kit_frame_box(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HALL_X1, 0.0f, FLOOR_Y, HOUSE_FRONT_Z,
+                  HOUSE_BACK_Z, true);
 
     // One ceiling over everything, and the same pitched roof as the
     // neighbours', its frame on the front wall's outer face so the facade runs
     // along -x as the street sees it.
-    slab(kit, MAT_CEILING, HOUSE_X0, HOUSE_X1, HOUSE_FRONT_Z, HOUSE_BACK_Z, CEIL_Y, CEIL_Y + 0.12f);
+    kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, CEIL_Y, CEIL_Y + 0.12f, HOUSE_FRONT_Z,
+                  HOUSE_BACK_Z, true);
     const KitFrame roof = {{HOUSE_X1 + corner, 0.0f, HOUSE_FRONT_Z - corner}, GLM_PIf};
-    const float depth = HOUSE_BACK_Z - HOUSE_FRONT_Z + EXT_WALL;
-    house_gable_roof(kit, &roof, HOUSE_X1 - HOUSE_X0 + EXT_WALL, depth, wall_top, 0.36f * depth,
-                     0.4f, MAT_SIDING);
+    house_gable_roof(kit, &roof, HOUSE_X1 - HOUSE_X0 + EXT_WALL,
+                     HOUSE_BACK_Z - HOUSE_FRONT_Z + EXT_WALL, wall_top, 0.4f, MAT_SIDING);
 
     // The porch, level with the floor, and one step down to the yard.
-    slab(kit, MAT_PORCH, PORCH_X0, PORCH_X1, PORCH_Z0, HOUSE_FRONT_Z, 0.0f, FLOOR_Y);
-    slab(kit, MAT_PORCH, PORCH_X0, PORCH_X1, PORCH_Z0 - 0.32f, PORCH_Z0, 0.0f, 0.5f * FLOOR_Y);
+    kit_frame_box(kit, w, MAT_PORCH, PORCH_X0, PORCH_X1, 0.0f, FLOOR_Y, PORCH_Z0, HOUSE_FRONT_Z,
+                  true);
+    kit_frame_box(kit, w, MAT_PORCH, PORCH_X0, PORCH_X1, 0.0f, 0.5f * FLOOR_Y, PORCH_Z0 - 0.32f,
+                  PORCH_Z0, true);
 }

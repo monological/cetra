@@ -27,7 +27,7 @@
 
 #define KIT_MAX_MATERIALS 64
 #define KIT_MAX_OPENINGS  6
-#define KIT_COLLIDER_ONLY (-1) // a material slot that draws nothing and collides
+#define KIT_COLLIDER_ONLY (-1) // a material slot that draws nothing and always collides
 
 typedef struct Kit {
     Material* materials[KIT_MAX_MATERIALS];
@@ -82,10 +82,8 @@ void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics);
 // until kit_finish attaches it to a mesh.
 int kit_material(Kit* kit, Material* material, float repeat_m);
 
-// A flat quad, corners counter-clockwise seen from the side it faces.
-void kit_quad(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d);
-void kit_tri(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c);
-// The same, wound to face `outward` whatever order the corners come in.
+// A flat quad or triangle, wound to face `outward` whatever order the corners
+// come in, and fanned from the first corner.
 void kit_quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d,
                      const vec3 outward);
 void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
@@ -119,7 +117,12 @@ typedef struct KitFrame {
     float yaw;
 } KitFrame;
 
+// The world itself as a frame: (a, y, d) is (x, y, z).
+static const KitFrame KIT_WORLD = {{0.0f, 0.0f, 0.0f}, 0.0f};
+
 void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out);
+// A direction turned by the frame's yaw, without its origin.
+void kit_frame_dir(const KitFrame* f, float a, float y, float d, vec3 out);
 // The box a0..a1 along, y0..y1 up, d0..d1 out.
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide);
