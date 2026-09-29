@@ -28,19 +28,9 @@
 #define SINK_D0 0.10f
 #define SINK_D1 0.50f
 
-// Repeatable clutter.
-typedef struct Rng {
-    uint32_t s;
-} Rng;
-
-static float rnd(Rng* r) {
-    r->s = r->s * 1664525u + 1013904223u;
-    return (float)(r->s >> 8) * (1.0f / 16777216.0f);
-}
-
-static float rrange(Rng* r, float lo, float hi) {
-    return lo + (hi - lo) * rnd(r);
-}
+typedef KitRng Rng;
+#define rnd    kit_rnd
+#define rrange kit_rrange
 
 /*
  * Base cabinets from a0 to a1: a dark recessed plinth, the carcass, a door per

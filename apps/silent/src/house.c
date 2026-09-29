@@ -1,4 +1,5 @@
 #include "house.h"
+#include "houses.h"
 #include "layout.h"
 #include "mats.h"
 
@@ -30,14 +31,16 @@ void house_build(Kit* kit) {
                      {-4.1f, -2.5f, FLOOR_Y + 0.9f, FLOOR_Y + 2.1f}},
         .opening_count = 3};
     kit_wall(kit, &front);
-    // The panes are glass until the glass exists: a collider now, so the
-    // window is already something the player cannot climb through.
-    kit_collider(kit,
-                 (vec3){0.5f * (KITCHEN_WIN_X0 + KITCHEN_WIN_X1),
-                        0.5f * (KITCHEN_WIN_SILL + KITCHEN_WIN_HEAD), HOUSE_FRONT_Z},
-                 (vec3){0.5f * (KITCHEN_WIN_X1 - KITCHEN_WIN_X0),
-                        0.5f * (KITCHEN_WIN_HEAD - KITCHEN_WIN_SILL), 0.5f * EXT_WALL},
-                 0.0f);
+    // Thin grimy panes in the middle of the wall, and a body through the whole
+    // thickness so nobody climbs through.
+    const float kx = 0.5f * (KITCHEN_WIN_X0 + KITCHEN_WIN_X1);
+    const float ky = 0.5f * (KITCHEN_WIN_SILL + KITCHEN_WIN_HEAD);
+    const vec3 kh = {0.5f * (KITCHEN_WIN_X1 - KITCHEN_WIN_X0),
+                     0.5f * (KITCHEN_WIN_HEAD - KITCHEN_WIN_SILL), 0.003f};
+    kit_box(kit, MAT_WINDOW_GLASS, (vec3){kx, ky, HOUSE_FRONT_Z}, kh, 0.0f, false);
+    kit_collider(kit, (vec3){kx, ky, HOUSE_FRONT_Z}, (vec3){kh[0], kh[1], 0.5f * EXT_WALL}, 0.0f);
+    kit_box(kit, MAT_WINDOW_GLASS, (vec3){-3.3f, FLOOR_Y + 1.5f, HOUSE_FRONT_Z},
+            (vec3){0.8f, 0.6f, 0.003f}, 0.0f, false);
     kit_collider(kit, (vec3){-3.3f, FLOOR_Y + 1.5f, HOUSE_FRONT_Z},
                  (vec3){0.8f, 0.6f, 0.5f * EXT_WALL}, 0.0f);
 
@@ -98,11 +101,14 @@ void house_build(Kit* kit) {
     slab(kit, MAT_WOOD_FLOOR, HALL_X1, HOUSE_X1, KITCHEN_BACK_Z, HOUSE_BACK_Z, 0.0f, FLOOR_Y);
     slab(kit, MAT_WOOD_FLOOR, HOUSE_X0, HALL_X1, HOUSE_FRONT_Z, HOUSE_BACK_Z, 0.0f, FLOOR_Y);
 
-    // One ceiling over everything, and a flat roof on it until the street's
-    // house generator gives this house the same pitched roof as its neighbours.
+    // One ceiling over everything, and the same pitched roof as the
+    // neighbours', its frame on the front wall's outer face so the facade runs
+    // along -x as the street sees it.
     slab(kit, MAT_CEILING, HOUSE_X0, HOUSE_X1, HOUSE_FRONT_Z, HOUSE_BACK_Z, CEIL_Y, CEIL_Y + 0.12f);
-    slab(kit, MAT_ROOF, HOUSE_X0 - 0.4f, HOUSE_X1 + 0.4f, HOUSE_FRONT_Z - 0.4f, HOUSE_BACK_Z + 0.4f,
-         CEIL_Y + 0.12f, CEIL_Y + 0.3f);
+    const KitFrame roof = {{HOUSE_X1 + corner, 0.0f, HOUSE_FRONT_Z - corner}, GLM_PIf};
+    const float depth = HOUSE_BACK_Z - HOUSE_FRONT_Z + EXT_WALL;
+    house_gable_roof(kit, &roof, HOUSE_X1 - HOUSE_X0 + EXT_WALL, depth, wall_top, 0.36f * depth,
+                     0.4f, MAT_SIDING);
 
     // The porch, level with the floor, and one step down to the yard.
     slab(kit, MAT_PORCH, PORCH_X0, PORCH_X1, PORCH_Z0, HOUSE_FRONT_Z, 0.0f, FLOOR_Y);

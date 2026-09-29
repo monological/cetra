@@ -62,6 +62,20 @@ typedef struct KitWall {
     int opening_count;
 } KitWall;
 
+// Repeatable placement: a seeded LCG, so one seed is always one world.
+typedef struct KitRng {
+    uint32_t s;
+} KitRng;
+
+static inline float kit_rnd(KitRng* r) {
+    r->s = r->s * 1664525u + 1013904223u;
+    return (float)(r->s >> 8) * (1.0f / 16777216.0f);
+}
+
+static inline float kit_rrange(KitRng* r, float lo, float hi) {
+    return lo + (hi - lo) * kit_rnd(r);
+}
+
 void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics);
 
 // Registers a material and returns its slot. The kit borrows the material
@@ -71,6 +85,11 @@ int kit_material(Kit* kit, Material* material, float repeat_m);
 // A flat quad, corners counter-clockwise seen from the side it faces.
 void kit_quad(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d);
 void kit_tri(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c);
+// The same, wound to face `outward` whatever order the corners come in.
+void kit_quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d,
+                     const vec3 outward);
+void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
+                    const vec3 outward);
 
 // A box turned `yaw` radians about +Y. `collide` adds a static body for it.
 void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, bool collide);

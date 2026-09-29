@@ -90,8 +90,8 @@ void kit_tri(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c) {
 
 // A quad whose winding is fixed from the side it should face, so the solids
 // below can list their corners in whatever order is easiest to read.
-static void quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d,
-                        const vec3 outward) {
+void kit_quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d,
+                     const vec3 outward) {
     vec3 e1, e2, n;
     glm_vec3_sub((float*)b, (float*)a, e1);
     glm_vec3_sub((float*)c, (float*)a, e2);
@@ -102,8 +102,8 @@ static void quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec
         kit_quad(kit, mat, d, c, b, a);
 }
 
-static void tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
-                       const vec3 outward) {
+void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
+                    const vec3 outward) {
     vec3 e1, e2, n;
     glm_vec3_sub((float*)b, (float*)a, e1);
     glm_vec3_sub((float*)c, (float*)a, e2);
@@ -161,8 +161,8 @@ void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, b
     for (int f = 0; f < 6; f++) {
         vec3 out = {0.0f, 0.0f, 0.0f};
         rotate_y(dirs[f], yaw, out);
-        quad_facing(kit, mat, corner[faces[f][0]], corner[faces[f][1]], corner[faces[f][2]],
-                    corner[faces[f][3]], out);
+        kit_quad_facing(kit, mat, corner[faces[f][0]], corner[faces[f][1]], corner[faces[f][2]],
+                        corner[faces[f][3]], out);
     }
     if (collide)
         kit_collider(kit, centre, half, yaw);
@@ -182,9 +182,9 @@ void kit_prism(Kit* kit, int mat, float x, float z, float y0, float y1, float r,
         vec3 p2 = {p1[0], y1, p1[2]};
         vec3 p3 = {p0[0], y1, p0[2]};
         vec3 out = {cosf(amid), 0.0f, sinf(amid)};
-        quad_facing(kit, mat, p0, p1, p2, p3, out);
-        tri_facing(kit, mat, top_c, p3, p2, (vec3){0.0f, 1.0f, 0.0f});
-        tri_facing(kit, mat, bot_c, p0, p1, (vec3){0.0f, -1.0f, 0.0f});
+        kit_quad_facing(kit, mat, p0, p1, p2, p3, out);
+        kit_tri_facing(kit, mat, top_c, p3, p2, (vec3){0.0f, 1.0f, 0.0f});
+        kit_tri_facing(kit, mat, bot_c, p0, p1, (vec3){0.0f, -1.0f, 0.0f});
     }
     if (collide)
         kit_collider(kit, (vec3){x, 0.5f * (y0 + y1), z}, (vec3){r, 0.5f * (y1 - y0), r}, 0.0f);
@@ -219,12 +219,12 @@ void kit_prism_lying(Kit* kit, int mat, const vec3 centre, float half_len, float
         p3[ax] = end1[ax];
         out[u] = cosf(amid);
         out[w] = sinf(amid);
-        quad_facing(kit, mat, p0, p1, p2, p3, out);
+        kit_quad_facing(kit, mat, p0, p1, p2, p3, out);
         vec3 cap_out = {0.0f, 0.0f, 0.0f};
         cap_out[ax] = 1.0f;
-        tri_facing(kit, mat, end1, p3, p2, cap_out);
+        kit_tri_facing(kit, mat, end1, p3, p2, cap_out);
         cap_out[ax] = -1.0f;
-        tri_facing(kit, mat, end0, p0, p1, cap_out);
+        kit_tri_facing(kit, mat, end0, p0, p1, cap_out);
     }
 }
 
