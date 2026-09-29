@@ -166,8 +166,9 @@ void light_set_position(Light* light, vec3 position);
 void light_set_direction(Light* light, vec3 direction);
 void light_set_up(Light* light, vec3 up);
 
-// Cull radius for a light: the authored range if set, else the distance where
-// the light falls under ~1/256 (LDR LSB at the project-standard -E 1.0).
+// Cull radius for a light: 0 if it emits nothing, whatever its range; else the
+// authored range if set, else the distance where the light falls under ~1/256
+// (LDR LSB at the project-standard -E 1.0).
 // Punctual lights solve that against their attenuation coefficients; area
 // panels ignore those entirely (the LTC form factor carries the falloff) and
 // instead invert the head-on far-field irradiance, plus half the panel
