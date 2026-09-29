@@ -46,6 +46,8 @@
 
 #define DEFAULT_WIDTH  1600
 #define DEFAULT_HEIGHT 900
+// Half the window's pixels, upscaled: the engine's floor.
+#define DEFAULT_RENDER_SCALE 0.5f
 
 typedef struct SilentArgs {
     int headless;
@@ -349,8 +351,9 @@ static void print_usage(const char* prog) {
     printf("      --day               Overcast day in the fog instead of night\n");
     printf("      --no-taa            No temporal AA: the exactly repeatable frame\n");
     printf("      --no-grade          Without the green-grey colour grade\n");
-    printf("      --render-scale F    Render at F of the window (0.5-1) and upscale: softer,\n");
-    printf("                          lower-res, more like the consoles it imitates\n");
+    printf("      --render-scale F    Render at F of the window and upscale (0.5-1, default\n");
+    printf("                          %.1f): the softer frame of the consoles it imitates\n",
+           (double)DEFAULT_RENDER_SCALE);
     printf("      --msaa N            MSAA samples\n");
     printf("      --cam-eye x,y,z     Pin the camera (a framing that can be taken twice)\n");
     printf("      --cam-target x,y,z  What the pinned camera looks at\n");
@@ -369,6 +372,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->width = DEFAULT_WIDTH;
     a->height = DEFAULT_HEIGHT;
     a->seed = 7;
+    a->render_scale = DEFAULT_RENDER_SCALE;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;

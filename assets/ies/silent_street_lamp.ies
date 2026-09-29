@@ -1,0 +1,14 @@
+IESNA:LM-63-2002
+[TEST] none: authored for apps/silent, not measured
+[LUMINAIRE] old mercury street lamp, reflector head over a refractor bowl
+[MORE] Rotationally symmetric. Brightest straight down and held to 20 degrees,
+[MORE] half that by about 42, next to nothing past 60, and nothing from 80 up:
+[MORE] a head whose reflector sends everything down, so in fog it draws a cone
+[MORE] of lit air under itself and none over. A real street luminaire throws
+[MORE] wider, along the road; this one is narrowed so the cone reads.
+TILT=NONE
+1 30000 1 19 1 1 2 0.4 0.3 0.1
+1 1 175
+0 10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180
+0
+3000 3000 2900 2600 1800 600 120 20 0 0 0 0 0 0 0 0 0 0 0
