@@ -118,6 +118,12 @@ BIN_DIR = os.environ.get("CETRA_BIN_DIR") or _default_bin_dir()
 RENDER = _bin("render")
 SCALE = 1000.0
 
+# Every pass that spreads a highlight's light across the frame after shading: bloom, and the
+# aperture's diffraction glare (spec 13.4). An arm that reads a surface on its own pins all of
+# them off, or it measures the surface plus a halo from whatever is brightest in view -- and
+# the next such pass is added here rather than found arm by arm.
+NO_HALOS = ["--no-bloom", "--no-glare"]
+
 # Every sample coordinate and every stored golden in this suite was measured
 # against a framebuffer TWICE the requested -W/-H, because that is what a HiDPI
 # context hands back. Most arms already read fractionally and do not care
@@ -588,7 +594,7 @@ def _skin_render(workdir, tag, extra):
     # side of a convex caster is in its own shadow, so shadows multiply the whole
     # band by zero. --no-bloom because bloom smears the band being measured.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-           "--no-sss", "--no-shadows", "--no-bloom", "-W", "800", "-H", "500",
+           "--no-sss", "--no-shadows", *NO_HALOS, "-W", "800", "-H", "500",
            "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
@@ -887,7 +893,7 @@ def _skin_sample(workdir, tag, dims, extra):
     # of the default output dither is a large relative step and the two legs of
     # the drift subtraction pick up independent offsets that do not cancel.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-           "--no-shadows", "--no-bloom", "--no-dither",
+           "--no-shadows", *NO_HALOS, "--no-dither",
            "-W", dims[0], "-H", dims[1], "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
@@ -1256,9 +1262,9 @@ def run_flare_gate(workdir):
     # one, "the channels separated" is all a gate can say, and a linear ramp
     # passes that identically. Bloom is off here -- it is added after the split
     # and is not itself shifted, so it would only dilute the centroids.
-    ca_off = _flare_render(workdir, "ca_off", ["--no-bloom"])
+    ca_off = _flare_render(workdir, "ca_off", NO_HALOS)
     ca_on = _flare_render(workdir, "ca_on",
-                          ["--no-bloom", "--chromatic-aberration", str(FLARE_CA_PIXELS)])
+                          [*NO_HALOS, "--chromatic-aberration", str(FLARE_CA_PIXELS)])
     if ca_off is None or ca_on is None:
         print("  flare-ca     ERROR while rendering the aberration pair")
         return fails + ["flare-ca"]
@@ -1327,7 +1333,7 @@ def run_sss_banding_gate(workdir):
     # against a 0.030 bound where the blur itself contributes 0.0142, so the
     # gate would start failing on dither amplitude rather than on kernel rings.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-           "--no-shadows", "--no-bloom", "--no-dither", "-W", "1200", "-H", "750", "-S", out]
+           "--no-shadows", *NO_HALOS, "--no-dither", "-W", "1200", "-H", "750", "-S", out]
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         print("  sss-band     ERROR while rendering the curvature fixture")
@@ -1990,7 +1996,7 @@ def _oit_render(workdir, tag, extra):
     # reason: the bands are sampled ONE pixel each, so a per-pixel LSB of dither
     # lands on them as a function of framing and doubles the worst deviation.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
-           "--no-auto-exposure", "-E", "1.0", "--no-vignette", "--no-bloom",
+           "--no-auto-exposure", "-E", "1.0", "--no-vignette", *NO_HALOS,
            "--no-ssao", "--no-ssr", "--no-dither", "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
@@ -4123,9 +4129,6 @@ PK_SCENE = "purkinje_fixture.cscn"
 #                  neighbour's ABSOLUTE radiance, which moves that neighbour's
 #                  rod weight. With bloom on, purkinje-ladder reads the bloom
 #                  radius rather than the mesopic ramp.
-#   --no-glare     for --no-bloom's reason: the diffraction star (spec 13.4) is a
-#                  second halo, and its threshold is on EXPOSED radiance, so at 4x
-#                  exposure it reaches rungs it did not at 1x.
 #   --no-ssao      LOAD-BEARING TOO, and less obvious: aoFactor MULTIPLIES the
 #                  radiance the local ramp reads (tonemap_frag's composite), and
 #                  the ramp's slope is ~76 codes per stop, so a 0.97 AO factor is
@@ -4137,8 +4140,7 @@ PK_SCENE = "purkinje_fixture.cscn"
 # overriding it with -E 1.0 in every arm is how beach_fixture's `waves: fft` and
 # water_fixture's sun both came to be authored and unexercised. Arms that need a
 # different exposure (purkinje-absolute) pass -E explicitly and it wins.
-PK_PIN = ["--no-auto-exposure", "--no-dither", "--no-vignette", "--no-bloom", "--no-glare",
-          "--no-ssao"]
+PK_PIN = ["--no-auto-exposure", "--no-dither", "--no-vignette", *NO_HALOS, "--no-ssao"]
 
 # The shipped ramp, restated so the Python twin can evaluate it. HELD BY
 # purkinje-agree, which evaluates this copy against the rendered debug view --
@@ -4494,7 +4496,7 @@ def run_purkinje_gate(workdir):
         moon_scene = os.path.join(workdir, "pk_lamp.cscn")
         cscn_copy(moon_src, moon_scene,
                   lambda d: d["environment"]["moon"].update({"size": PK_LAMP_SIZE}))
-        m_flags = ["--no-auto-exposure", "--no-dither", "--no-bloom", "--no-purkinje-noise",
+        m_flags = ["--no-auto-exposure", "--no-dither", *NO_HALOS, "--no-purkinje-noise",
                    "--no-purkinje-acuity"]
         m_off = os.path.join(workdir, "pk_moon_off.ppm")
         m_on = os.path.join(workdir, "pk_moon_on.ppm")
@@ -4875,7 +4877,7 @@ def _tsl_render(workdir, tag, extra):
     # keeps anything that could add to flat lit ground out of frame.
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "500",
            "--no-auto-exposure", "-E", "1.0", "--no-pcss", "--no-ssao", "--no-ssr",
-           "--no-bloom", "--no-dither", "--no-vignette", "-S", out] + extra
+           *NO_HALOS, "--no-dither", "--no-vignette", "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
@@ -6957,7 +6959,7 @@ MOON_DISC_SHIPPING = 0.53
 # own arm. (It also has to come off because the halo's width follows the DRAWN
 # radius, and these arms drive that to 12 degrees for measurement -- which is a
 # halo most of a frame wide, wanted by nobody.)
-MOON_DISC_FLAGS = STARS_PIN + ["--no-bloom", "--no-dither", "--no-moon-glow"]
+MOON_DISC_FLAGS = STARS_PIN + [*NO_HALOS, "--no-dither", "--no-moon-glow"]
 
 # create_sky_atmosphere's own cycle_moon_offset default. Named rather than typed
 # out, because moon-cycle's 0 px identity rests on the C and this twin agreeing
@@ -7598,7 +7600,7 @@ def run_moon_gate(workdir):
     # the disc having entered the bake. Measured 15,978 px of pure bloom before this.
     env_common = ["--sun-elevation", f"{env_sun_el:.6f}", "--sun-azimuth", f"{s_az_env:.6f}",
                   "--moon-elevation", f"{MOON_EL_ENV}", "--moon-azimuth", f"{MOON_AZ}",
-                  "--night-floor", "--no-bloom"] + STARS_PIN
+                  "--night-floor", *NO_HALOS] + STARS_PIN
     e_small, e3 = _moon_render(workdir, "env_small",
                                env_common + ["--sky-disc", str(MOON_DISC_SHIPPING)])
     e_huge, e4 = _moon_render(workdir, "env_huge",
@@ -8217,7 +8219,7 @@ def run_absorption_gate(workdir):
         return []
 
     out = os.path.join(workdir, "absorption.ppm")
-    err = render(scene, out, ["--no-auto-exposure", "-E", "1.0", "--no-bloom", "--no-dither"])
+    err = render(scene, out, ["--no-auto-exposure", "-E", "1.0", *NO_HALOS, "--no-dither"])
     if err:
         print(f"  absorb-thin  ERROR render failed: {err.strip()[-200:]}")
         return ["absorb-thin"]
@@ -8297,7 +8299,7 @@ WATER_PIN = ["--no-auto-exposure", "-E", "1.0"]
 # because each spreads light between pixels at different depths. The key and the water
 # numbers mirror the fixture's own and are what the ratio is solved against.
 WATER_DOWNWELL_FIXTURE = "water_downwell_fixture.cscn"
-WATER_DOWNWELL_FLAGS = WATER_PIN + WATER_NO_CATCHER + ["--tonemap", "linear", "--no-bloom",
+WATER_DOWNWELL_FLAGS = WATER_PIN + WATER_NO_CATCHER + ["--tonemap", "linear", *NO_HALOS,
                                                        "--no-ssao"]
 WATER_DOWNWELL_KEY = (-0.3, -0.85, -0.43)
 # The same scene under a key 33 degrees up rather than 58. The depth a row implies must not
@@ -8610,7 +8612,7 @@ WATER_COVERAGE_CAM = ["--cam-eye", "0,300,0", "--cam-target", "0,0,0",
 # patch and inflate the count -- the classifier's own docstring claims no opacity or
 # tonemap curve stands between it and the shader's selection, which this makes exactly true
 # rather than almost true.
-WATER_FOAM_DEBUG_ON = ["--water-foam-debug", "1", "--no-bloom"]
+WATER_FOAM_DEBUG_ON = ["--water-foam-debug", "1", *NO_HALOS]
 # Monahan & O'Muircheartaigh 1980: whitecap area fraction W = A * U10^B, U10 in m/s.
 WATER_MONAHAN_A = 2.95e-6
 WATER_MONAHAN_B = 3.52
@@ -8898,7 +8900,7 @@ WATER_CAUSTIC_MEAN_TOL = {"gerstner": 0.02, "spectral": 0.03, "dome": 0.05}
 # single trace reaches that, and spec 13.4 chose not to pay for more.
 WATER_CAUSTIC_SPECTRUM_FLAGS = WATER_PIN + ["--water-waves", "fft", "--cam-eye", "-5,1.5,5",
                                             "--cam-target", "-5,-1,1", "--tonemap", "linear",
-                                            "--no-bloom", "--water-caustic-debug", "3"]
+                                            *NO_HALOS, "--water-caustic-debug", "3"]
 WATER_CAUSTIC_SPECTRUM_BOX = (0.31, 0.54, 0.59, 0.83)
 WATER_CAUSTIC_SPECTRUM_MEAN_TOL = 0.02  # relative, per channel
 # The spread's colour RMS over the traced spectrum's: measured 1.08 on this sea and 0.91 on a
@@ -12417,7 +12419,7 @@ ORTHO_VIEW_CAM = _cscn_camera(MASK_FIXTURE)
 ORTHO_VIEW_NEAR_DIST = 0.6
 # Vignette is on by default and is a radial gradient that would sit in the
 # flat-quad spread either way; dither would add a code of its own.
-ORTHO_VIEW_FLAGS = ["--no-ssao", "--no-ssr", "--no-bloom", "--no-vignette", "--no-dither",
+ORTHO_VIEW_FLAGS = ["--no-ssao", "--no-ssr", *NO_HALOS, "--no-vignette", "--no-dither",
                     "--no-shadows", "--no-auto-exposure", "-E", "1.0"]
 # px between the two eyes. Broken build: 107,665. Fixed: 0, since nothing but V
 # moves and V no longer depends on the eye. A second arm reading the code
@@ -12476,10 +12478,7 @@ ORTHO_DOF_SIZE = ["-W", "800", "-H", "600"]
 # about the target's 1.0 over a 4.37 height, inset a third to stay clear of
 # the blur bleeding in from the edge.
 ORTHO_DOF_BOX = (0.38, 0.38, 0.62, 0.62)
-# --no-glare with --no-bloom: the diffraction star (spec 13.4) lays a veil over the
-# panel that no depth of field can blur, and halved how far refocusing moved it.
-ORTHO_DOF_FLAGS = ["--no-bloom", "--no-glare", "--no-ssao", "--no-ssr", "--no-auto-exposure",
-                   "-E", "1.0"]
+ORTHO_DOF_FLAGS = [*NO_HALOS, "--no-ssao", "--no-ssr", "--no-auto-exposure", "-E", "1.0"]
 ORTHO_DOF_ON = ["--dof", "--dof-focus", "6", "--dof-range", "1.5", "--dof-max-coc", "8"]
 # A focused panel is not byte-identical to the no-DoF frame even when the CoC is
 # 0: the pass gathers at half resolution and resamples back, which the
@@ -18695,7 +18694,7 @@ def _sss_tag_render(workdir, tag, scene, samples):
     """One frame. --no-bloom is REQUIRED, not tidiness -- see the gate docstring."""
     out = os.path.join(workdir, f"ssstag_{tag}.ppm")
     cmd = [RENDER, "-m", scene, "-x", "-f", "30", "-W", SSS_TAG_SIZE[0], "-H", SSS_TAG_SIZE[1],
-           "--msaa", str(samples), "--no-bloom", "-S", out]
+           "--msaa", str(samples), *NO_HALOS, "-S", out]
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None
@@ -19684,10 +19683,8 @@ def run_emissive_gate(workdir):
     # difference out of the quad and across the frame, asymmetrically, into every
     # band this group reads. Without it the residual these arms measure is part
     # panel placement and part glow, and the bar absorbs an effect nobody has
-    # separated. --no-glare for the same reason: the diffraction star (spec 13.4)
-    # spreads the brighter quad across 1.15 of the frame height, and moved the
-    # left band 32% on its own.
-    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither", "--no-bloom", "--no-glare"]
+    # separated.
+    base = ["--no-auto-exposure", "-E", "1.0", "--no-dither", *NO_HALOS]
 
     # The derived twin: the quad carries the authored light's radiance, the
     # authored light is gone, and a light_overrides entry gives the panel the
@@ -23300,10 +23297,9 @@ def run_clearcoat_gate(workdir):
 
     lit = os.path.join(workdir, "clearcoat_lit.ppm")
     off = os.path.join(workdir, "clearcoat_off.ppm")
-    # --no-glare on both: the diffraction star (spec 13.4) carries the coated
-    # sphere's highlight across the frame onto the uncoated control, so the
-    # control moved with the coat for a reason that is not the coat.
-    pair = framing + ["--no-glare"]
+    # No halos: the coated sphere's highlight would otherwise reach the uncoated
+    # control, which then moves with the coat for a reason that is not the coat.
+    pair = framing + NO_HALOS
     err = render(scene, lit, pair) or render(scene, off, pair + ["--no-clearcoat"])
     if err:
         print("  clearcoat-off ERROR while rendering the lit pair")

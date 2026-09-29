@@ -3763,7 +3763,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         }
         // The aperture's star (spec 13.4), from the frame itself rather than the bloom pyramid:
         // it is a convolution of the light as it is, and the pyramid is already blurred.
-        // A glare that cannot be built or run is latched off here, the one place that asks.
+        // A glare that cannot be built or run is latched off here, the one place that asks; glare.c
+        // has already said why.
         GLuint glare_tex = 0;
         if (fx->glare_enabled && fx->glare_strength > 0.0f && !fx->glare_failed) {
             if (!fx->glare)
@@ -3774,10 +3775,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                       fx->glare_threshold, fx->quad_vao, fx->glare_probe);
                 profiler_scope_end(fx->profiler);
             }
-            if (!glare_tex) {
-                log_error("Glare: unavailable; glare disabled");
+            if (!glare_tex)
                 fx->glare_failed = true;
-            }
         }
 
         // Composite + tone map into the target framebuffer. The quad runs at

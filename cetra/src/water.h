@@ -123,10 +123,11 @@ _Static_assert(WATER_TOUCH_UNIT != WATER_CASCADE_UNIT && WATER_TOUCH_UNIT != WAT
                    WATER_TOUCH_UNIT != TEXUNIT_SCENE_COLOR &&
                    WATER_TOUCH_UNIT != SKY_CLOUD_SHADOW_UNIT,
                "the touch unit collides with one water already binds");
-// The touch simulation's square: texels a side and how many drops one step presses in, shared
-// with the step shader; then metres a side and steps a second. 7 m at 256 is 2.7 cm a texel,
+// The touch simulation's square: texels a side, metres a side, steps a second, and how many
+// drops one step presses in (shared with the step shader). 7 m at 256 is 2.7 cm a texel,
 // Clearwater's.
 #include "../shaders/include/water_touch_constants.glsl"
+#define WATER_TOUCH_RES     256
 #define WATER_TOUCH_SIZE_M  7.0f
 #define WATER_TOUCH_STEP_HZ 60.0f
 // Steps with nothing new pressed in before the simulation stops running; about fifteen seconds,
@@ -656,7 +657,7 @@ typedef struct Water {
     // 550 nm's and its share of R, G and B. Constant, set at creation.
     float caustic_spectrum_dn[WATER_CAUSTIC_SPECTRAL_TAPS];
     vec3 caustic_spectrum_w[WATER_CAUSTIC_SPECTRAL_TAPS];
-    int caustic_target_bands; // the band count the target was made for; its format follows it
+    bool caustic_target_colour; // the target was made RGBA16F for traced bands, else R16F
 
     /*
      * Touch ripples (spec 13.4): a height field over WATER_TOUCH_SIZE_M round where the camera
@@ -822,10 +823,6 @@ typedef struct WaterWake {
     float last[2]; // world xz of the last ripple
     bool placed;   // a ripple has been laid since the body last left the water
 } WaterWake;
-
-// The ripple a wake lays: a hand's width across and a few centimetres deep.
-#define WATER_WAKE_RADIUS_M 0.12f
-#define WATER_WAKE_DEPTH_M  0.03f
 
 /*
  * Lay a body's wake: a ripple at world (x, z) every `pace` world units it moves while

@@ -31,35 +31,50 @@ const float WATER_SKY_DOWNWELL_PER_EXTINCTION = 1.0;
 /*
  * How far below the still surface `y` is, in world units; 0 above it, or with no sea.
  *
- * The level everywhere, not only inside `waterExtent`: that is the shoaling bed's domain, and
- * the sea runs on past it to the horizon -- forest's shelf and tree's open water both lie
- * outside it. A dry pit sunk below the level is lit as though flooded; no scene in this tree has
- * one, and one that does needs the sea told where it ends, which Water does not know.
+ * Measured against the level everywhere, not only inside `waterExtent`: that is the shoaling
+ * bed's domain, and the sea runs on past it to the horizon. So a dry pit sunk below the level is
+ * lit as though flooded; telling the two apart needs the sea to know where it ends, which Water
+ * does not.
  */
 float waterDepthBelow(float y) {
     return waterDownwell == 1 ? max(waterLevel - y, 0.0) : 0.0;
 }
 
 /*
- * What of a directional light's irradiance reaches `depth` below the surface, per channel:
- * the share the surface transmits, then Beer-Lambert along the REFRACTED path, which is
- * longer than the depth by 1 / cos of the refracted angle. `toLight` is the unit direction
- * toward the light.
+ * A directional light's beam once through a flat surface: its direction in the water, the cosine
+ * of that from straight down, and the share of its irradiance the surface transmits. `toLight`
+ * is the unit direction toward the light.
  *
  * Through a flat surface. The waves move where this light lands, not how much of it arrives
  * -- that is the caustics, which average 1 -- so the mean is the flat answer.
  */
+void waterKeyThroughSurface(vec3 toLight, out vec3 inWater, out float cosT, out float transmit) {
+    float cosi = max(toLight.y, 0.0);
+    transmit = 1.0 - fresnelDielectric(cosi, waterIor);
+    float sint2 = (1.0 - cosi * cosi) / (waterIor * waterIor);
+    cosT = sqrt(max(1.0 - sint2, 1.0e-4));
+    // Snell's law: the part along the surface shrinks by the index, the rest points down.
+    inWater = vec3(-toLight.x / waterIor, -cosT, -toLight.z / waterIor);
+}
+
+// What of that beam's irradiance reaches `depth` below the surface, per channel: Beer-Lambert
+// along the refracted path, longer than the depth by 1 / cosT.
+vec3 waterDownwellThrough(float transmit, float cosT, float depth) {
+    return depth > 0.0 ? transmit * exp(-waterAbsorption * depth / cosT) : vec3(1.0);
+}
+
+// The two above for one light at one point.
 vec3 waterDownwellKey(vec3 toLight, float depth) {
     if (depth <= 0.0)
         return vec3(1.0);
-    float cosi = max(toLight.y, 0.0);
-    float transmitted = 1.0 - fresnelDielectric(cosi, waterIor);
-    float sint2 = (1.0 - cosi * cosi) / (waterIor * waterIor);
-    float cost = sqrt(max(1.0 - sint2, 1.0e-4));
-    return transmitted * exp(-waterAbsorption * depth / cost);
+    vec3 inWater;
+    float cosT, transmit;
+    waterKeyThroughSurface(toLight, inWater, cosT, transmit);
+    return waterDownwellThrough(transmit, cosT, depth);
 }
 
 // What of the sky's diffuse irradiance reaches `depth` below the surface, per channel.
 vec3 waterDownwellSky(float depth) {
-    return exp(-waterAbsorption * WATER_SKY_DOWNWELL_PER_EXTINCTION * depth);
+    return depth > 0.0 ? exp(-waterAbsorption * WATER_SKY_DOWNWELL_PER_EXTINCTION * depth)
+                       : vec3(1.0);
 }

@@ -71,12 +71,6 @@ uniform sampler2D sceneDepthTex;
 uniform int sceneDepthAvailable;
 
 uniform vec3 sunDir; // toward the sun, world space
-// The key's beam once through a flat surface, worked out on the CPU once a frame (spec 13.4):
-// its direction in the water, the cosine of that from vertical, and the share of it the
-// surface lets through.
-uniform vec3 keyInWater;
-uniform float keyCosT;
-uniform float keyTransmit;
 uniform int sunAvailable;
 // Scene radiance, NOT pre-exposed, with the atmosphere's transmittance already folded into
 // it by the sky. Multiplied by preExposure where it is used; view.glsl is the authority.
@@ -404,10 +398,15 @@ float waterScatterPhase(float cosS) {
     return phaseHG(cosS, waterScatterG) + WATER_SCATTER_FLOOR;
 }
 
-// What of the key's irradiance reaches `depth` below the surface: waterDownwellKey for the one
-// light whose refracted direction and transmission the CPU hands over each frame.
+// The key's beam once through a flat surface (waterKeyThroughSurface), set at the top of main:
+// every helper below reads it, and it is the same for the whole frame.
+vec3 keyInWater;
+float keyCosT;
+float keyTransmit;
+
+// What of the key's irradiance reaches `depth` below the surface, per channel.
 vec3 waterKeyDownwell(float depth) {
-    return depth > 0.0 ? keyTransmit * exp(-waterAbsorption * depth / keyCosT) : vec3(1.0);
+    return waterDownwellThrough(keyTransmit, keyCosT, depth);
 }
 
 /*
@@ -787,15 +786,15 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
      * column is the traced depth.
      */
     float planeY = waterLevel - WATER_CAUSTIC_PLANE_M * waterUnitsPerMetre;
-    float keyDown = -keyCosT;
     float floorY = planeY;
     bool onBed = false;
+    vec2 at = pos.xz + keyInWater.xz * ((pos.y - floorY) / keyCosT);
     for (int i = 0; i < 2; i++) {
         float bedY;
-        onBed = oceanBedHeight(pos.xz + keyInWater.xz * ((floorY - pos.y) / keyDown), bedY);
+        onBed = oceanBedHeight(at, bedY);
         floorY = onBed ? bedY : planeY;
+        at = pos.xz + keyInWater.xz * ((pos.y - floorY) / keyCosT);
     }
-    vec2 at = pos.xz + keyInWater.xz * ((floorY - pos.y) / keyDown);
     /*
      * The bed's own relief (spec 13.4, after Clearwater), read off its colour: a stone top is
      * lighter than the shadowed gap beside it, so the refracted bed's brightness against its own
@@ -907,6 +906,7 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
 
 void main() {
     vec2 uv = gl_FragCoord.xy / max(screenSize, vec2(1.0));
+    waterKeyThroughSurface(sunDir, keyInWater, keyCosT, keyTransmit);
 
     // Once, at uniform control flow (waveModel and foamAvailable are both program-wide
     // uniforms, so the branches below are not divergent, but the file's convention is to

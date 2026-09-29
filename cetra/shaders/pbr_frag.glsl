@@ -326,6 +326,25 @@ uniform float iblIntensity;
 // it does NOT track exposure or light magnitude; zero means unlit is black.
 uniform vec3 ambientRadiance;
 uniform float maxReflectionLOD;
+
+/*
+ * The global environment as a submerged surface receives it (spec 13.4): every read of the
+ * irradiance, prefiltered and Charlie maps and of the authored ambient goes through these, so
+ * each is weakened by the sea above once and no new read can forget to be. Not the GI volume or
+ * a probe: their captures lit what they saw through this same program, water included, and would
+ * pay the column twice -- which is why the probe's prefilter reads `prefilteredMap` directly.
+ * `skyDown` is set at the top of main, exactly 1 in air.
+ */
+vec3 skyDown;
+vec3 envIrradiance(vec3 N) {
+    return texture(irradianceMap, N).rgb * skyDown;
+}
+vec3 envRadiance(samplerCube map, vec3 dir, float lod) {
+    return textureLod(map, dir, lod).rgb * skyDown;
+}
+vec3 envAmbient() {
+    return ambientRadiance * skyDown;
+}
 // Multi-scatter energy compensation toggle (inert unless iblEnabled)
 uniform int energyCompEnabled;
 uniform int clearcoatEnabled; // Global clearcoat lobe toggle (--no-clearcoat)
@@ -1858,14 +1877,8 @@ void main() {
     // that reads it is an exact 1. Local lights are left alone -- one sitting in the water is
     // as close to the surface it lights as it ever was.
     float submerged = waterDepthBelow(WorldPos.y);
-    /*
-     * And the sky's light, weakened the same way, applied where the ENVIRONMENT is looked up --
-     * the irradiance and prefiltered maps and the authored ambient -- so every term built from
-     * them, the subsurface tap included, inherits it once. Not the GI volume or a probe: their
-     * captures lit what they saw through this same program, water included, and would pay the
-     * column twice. Exactly 1 in air.
-     */
-    vec3 skyDown = waterDownwellSky(submerged);
+    // And the sky's light, weakened the same way, for the env* reads.
+    skyDown = waterDownwellSky(submerged);
 
     // LTC tables (spec 9.2). Both lookups depend only on this fragment's
     // roughness and view angle, so they hoist out of the light loop: the
@@ -2315,7 +2328,7 @@ void main() {
         // incident radiance, E/pi -- so this is a straight substitution and the
         // albedo multiply below is unchanged.
         vec3 irradiance = giEnabled > 0 ? giSampleIrradiance(WorldPos, N, V)
-                                        : texture(irradianceMap, N).rgb * skyDown;
+                                        : envIrradiance(N);
         vec3 diffuse = irradiance * albedoMap;
 
         // The environment's strength knob, and 1.0 when there is no environment
@@ -2371,10 +2384,10 @@ void main() {
             prefilteredColor =
                 probes.rgb +
                 (1.0 - probes.a) *
-                    textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb * skyDown;
+                    envRadiance(prefilteredMap, R, roughnessMap * maxReflectionLOD);
         } else {
             prefilteredColor =
-                textureLod(prefilteredMap, R, roughnessMap * maxReflectionLOD).rgb * skyDown;
+                envRadiance(prefilteredMap, R, roughnessMap * maxReflectionLOD);
         }
         // Reuses the brdf fetched before the light loop (same coordinates).
         // brdf.y is the split-sum's f90 = 1 lobe; KHR_materials_specular
@@ -2423,7 +2436,7 @@ void main() {
             vec3 Rc = reflect(-V, Nc);
             float ccF = fresnelSchlickRoughness(NcdotVi, vec3(0.04), ccR).r * clearcoat;
             vec2 ccBrdf = texture(brdfLUT, vec2(NcdotVi, ccR)).rg;
-            vec3 ccPre = textureLod(prefilteredMap, Rc, ccR * maxReflectionLOD).rgb * skyDown;
+            vec3 ccPre = envRadiance(prefilteredMap, Rc, ccR * maxReflectionLOD);
             vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
             // The coat dims BOTH shares (it sits over the whole surface); its
             // own lobe is specular, so it joins ambSpec when splitting.
@@ -2448,7 +2461,7 @@ void main() {
 #if CETRA_HAS(PBR_FEAT_SHEEN)
         if (sheenActive) {
             vec3 sheenPre =
-                textureLod(charliePrefilteredMap, R, sheenRough * maxCharlieLOD).rgb * skyDown;
+                envRadiance(charliePrefilteredMap, R, sheenRough * maxCharlieLOD);
             // Sheen dims BOTH shares (same layer-over-base convention as the
             // coat); the sheen lobe itself is specular.
             if (splitAmbientSpec > 0) {
@@ -2474,7 +2487,7 @@ void main() {
         // grew as exposure closed, and auto-exposure -- which meters absolute
         // radiance -- chased it (spec 10.1 phase 5). No constant satisfies both,
         // because the term was never physical. A real emitter is.
-        ambient = ambientRadiance * skyDown * albedoMap * aoMap * (1.0 - transmissionEff);
+        ambient = envAmbient() * albedoMap * aoMap * (1.0 - transmissionEff);
     }
 
     // Screen-space transmission (KHR_materials_transmission): the diffuse
