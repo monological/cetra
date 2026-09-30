@@ -41,6 +41,7 @@ Rain* create_rain(void) {
     // flashes; the rest is smoothed by the drop's own blur and the lens's. A judgement, not
     // a measurement: the energy is the same at any value.
     rain->streak_glint = 0.8f;
+    rain->streak_sheen = 0.0f;
     return rain;
 }
 
