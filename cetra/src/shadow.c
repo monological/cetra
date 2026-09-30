@@ -174,6 +174,10 @@ void free_shadow_system(ShadowSystem* system) {
     free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
     free_msm_resources(system);
     free_tsm_resources(system);
+    if (system->rain_ask_fbo) {
+        glDeleteFramebuffers(1, &system->rain_ask_fbo);
+        glDeleteBuffers(SHADOW_RAIN_ASK_LATENCY, system->rain_ask_pbo);
+    }
     free(system->caster_order);
 
     free(system);
@@ -1854,14 +1858,83 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 // microns a step, so it costs no resolution worth having.
 #include "../shaders/include/rain_constants.glsl"
 
+/*
+ * The cover at the asked point: retire the slot issued SHADOW_RAIN_ASK_LATENCY passes ago, then
+ * queue this pass's texel into it. No fence, for water's surface query's reason: mapping a slot
+ * whose read has not landed stalls rather than answering early, so the latency decides how
+ * often that happens and never what the answer is. The point's own depth is kept per slot, so
+ * a listener that moved between is answered for where it was.
+ */
+static void _rain_ask_pass(ShadowSystem* ss) {
+    if (!ss->rain_ask_set || ss->rain_layer < 0 || !ss->punctual_map_array)
+        return;
+    if (!ss->rain_ask_fbo) {
+        glGenFramebuffers(1, &ss->rain_ask_fbo);
+        glGenBuffers(SHADOW_RAIN_ASK_LATENCY, ss->rain_ask_pbo);
+        for (int i = 0; i < SHADOW_RAIN_ASK_LATENCY; i++) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, ss->rain_ask_pbo[i]);
+            glBufferData(GL_PIXEL_PACK_BUFFER, sizeof(float), NULL, GL_STREAM_READ);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+    const int slot = (int)(ss->rain_ask_passes % SHADOW_RAIN_ASK_LATENCY);
+    const float bias = RAIN_EXPOSED_BIAS / (2.0f * RAIN_OCCLUSION_REACH);
+    if (ss->rain_ask_passes >= SHADOW_RAIN_ASK_LATENCY) {
+        // Off the map, or a map texel with nothing in it, is open sky.
+        float map = 1.0f;
+        if (ss->rain_ask_issued_valid[slot]) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, ss->rain_ask_pbo[slot]);
+            const float* px =
+                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, sizeof(float), GL_MAP_READ_BIT);
+            if (px) {
+                map = *px;
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        }
+        ss->rain_ask_open = ss->rain_ask_issued_depth[slot] <= map + bias ? 1.0f : 0.0f;
+        ss->rain_ask_answered = true;
+    }
+
+    // The map fills the layer's corner, so the unfolded matrix addresses it in texels directly.
+    vec4 p;
+    glm_mat4_mulv(ss->rain_matrix,
+                  (vec4){ss->rain_ask_point[0], ss->rain_ask_point[1], ss->rain_ask_point[2], 1.0f},
+                  p);
+    const float u = p[0] * 0.5f + 0.5f, v = p[1] * 0.5f + 0.5f;
+    const bool inside = u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
+    ss->rain_ask_issued_valid[slot] = inside;
+    ss->rain_ask_issued_depth[slot] = p[2] * 0.5f + 0.5f;
+    if (inside) {
+        GLint prev_read = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ss->rain_ask_fbo);
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, ss->punctual_map_array,
+                                  0, ss->rain_layer);
+        glReadBuffer(GL_NONE);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, ss->rain_ask_pbo[slot]);
+        glReadPixels((GLint)(u * (float)RAIN_OCCLUSION_SIZE),
+                     (GLint)(v * (float)RAIN_OCCLUSION_SIZE), 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT,
+                     NULL);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prev_read);
+    }
+    ss->rain_ask_passes++;
+}
+
 void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->shadow_system)
         return;
     ShadowSystem* ss = scene->shadow_system;
     ss->rain_layer = -1;
     const Rain* rain = scene->rain;
-    if (!rain_active(rain) || !engine->camera || !(rain->occlusion_extent > 0.0f))
+    if (!rain_active(rain) || !engine->camera || !(rain->occlusion_extent > 0.0f)) {
+        // No map, so no answer -- and the ring starts over, so the first answer once it rains
+        // again is not a slot issued before it stopped.
+        ss->rain_ask_answered = false;
+        ss->rain_ask_passes = 0;
         return;
+    }
 
     // Past every light layer, and the same capacity the shadow pass asked for, so this
     // is a no-op allocation on any frame after the first. With shadows off no light
@@ -1943,7 +2016,23 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     glUseProgram(0);
     glBindVertexArray(0);
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    _rain_ask_pass(ss);
     profiler_scope_end(engine->profiler);
+}
+
+void shadow_rain_cover_ask(ShadowSystem* ss, const vec3 point) {
+    if (!ss)
+        return;
+    glm_vec3_copy((float*)point, ss->rain_ask_point);
+    ss->rain_ask_set = true;
+}
+
+bool shadow_rain_cover_answer(const ShadowSystem* ss, float* open) {
+    if (!ss || !ss->rain_ask_answered)
+        return false;
+    if (open)
+        *open = ss->rain_ask_open;
+    return true;
 }
 
 // A greyscale PPM of the map, stretched over the depths it actually holds: the whole

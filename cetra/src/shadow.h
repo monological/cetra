@@ -150,6 +150,9 @@
 // The punctual shadow array sits above the cascade array + IBL units (11-14);
 // 15 is the last valid unit (GL_MAX_TEXTURE_IMAGE_UNITS = 16).
 #define PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT 15
+// Frames between the rain's cover being asked about a point and the answer: the slots of its
+// readback ring. Three is past what a driver keeps in flight, so mapping one does not stall.
+#define SHADOW_RAIN_ASK_LATENCY 3
 
 // Forward declarations
 struct Scene;
@@ -283,6 +286,20 @@ typedef struct ShadowSystem {
     mat4 rain_lookup;
     float rain_cover_spread; // lookup-uv distance between the blocker search's taps
     float rain_uv_per_metre; // lookup uv across one metre of the map's footprint
+
+    // The cover at ONE point, for the CPU (spec 13.9): whether rain reaches a listener, read
+    // back a texel at a time through a pack-buffer ring at fixed latency, water's surface
+    // query's pattern, so the answer never waits on the GPU. Asked by shadow_rain_cover_ask,
+    // answered by shadow_rain_cover_answer; everything below is the query's own state.
+    vec3 rain_ask_point;
+    bool rain_ask_set;
+    GLuint rain_ask_fbo;
+    GLuint rain_ask_pbo[SHADOW_RAIN_ASK_LATENCY];
+    float rain_ask_issued_depth[SHADOW_RAIN_ASK_LATENCY]; // the point's own, per slot
+    bool rain_ask_issued_valid[SHADOW_RAIN_ASK_LATENCY];  // false = off the map: open sky
+    unsigned rain_ask_passes;
+    float rain_ask_open; // 1 = rain reaches it, 0 = covered
+    bool rain_ask_answered;
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
     // cascades, resolved after the depth pass and read in ONE tap where the
@@ -448,6 +465,12 @@ void render_shadow_depth_pass(struct Engine* engine, struct Scene* scene);
 // and regardless of the system's `enabled`, which switches SHADOWS off and not cover.
 // Leaves rain_layer -1 when the scene has no active rain.
 void shadow_render_rain_layer(struct Engine* engine, struct Scene* scene);
+
+// Whether the rain reaches a point, for the CPU: ask with the point every frame it matters
+// (a listener, a player), and the answer is the map's from SHADOW_RAIN_ASK_LATENCY frames ago.
+// false until one has landed or while nothing rains; `open` is 1 in the rain and 0 covered.
+void shadow_rain_cover_ask(ShadowSystem* ss, const vec3 point);
+bool shadow_rain_cover_answer(const ShadowSystem* ss, float* open);
 
 // --rain-probe's cover half: for each point, the depth the map holds along the rain and
 // the point's own, and whether the point is exposed. Writes the map as a greyscale PPM
