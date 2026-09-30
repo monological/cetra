@@ -28,6 +28,8 @@
  * the dirt baked into the vertex colours, darkest along each face's edges --
  * the gaps round a door, where a cupboard meets the floor -- which is how the
  * consoles this imitates shaded a room, and costs the renderer nothing new.
+ * Its smooth solids take the dirt where they are fixed on: a lathe at its
+ * base, a pipe at both ends.
  */
 
 #define KIT_MAX_MATERIALS 64

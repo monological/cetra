@@ -183,6 +183,20 @@ static float grime_falloff(float d, float reach) {
     return expf(-3.0f * d / reach);
 }
 
+// How far in the dirt reaches at p, as a multiple of the band: jittered per
+// vertex, so the line it leaves wanders.
+static float grime_reach(const vec3 p) {
+    return 0.4f + 1.6f * grime_hash(p, 0u);
+}
+
+// The dirt at p, given how much edge it is near: the patch field decides how
+// dirty this stretch is at all, and a sparse smudge can land anywhere.
+static float grime_amount(float strength, const vec3 p, float edge) {
+    const float patch = 0.1f + 1.8f * glm_smoothstep(0.3f, 0.7f, grime_patch(p));
+    const float smudge = GRIME_SMUDGE * fmaxf(0.0f, grime_hash(p, 0x9e3779b9u) - 0.7f) / 0.3f;
+    return glm_clamp(strength * (patch * (edge + 0.12f) + smudge), 0.0f, 1.0f);
+}
+
 /*
  * One face of a grimed box: the rectangle from c0 along edge_a and edge_b, cut
  * by grime_cuts and wound to face `outward`. On a face that stands upright,
@@ -234,18 +248,12 @@ static void emit_grimed_face(Kit* kit, int mat, const vec3 c0, const vec3 edge_a
             glm_vec3_copy((float*)c0, p);
             glm_vec3_muladds(ea, a / la, p);
             glm_vec3_muladds(eb, b / lb, p);
-            // How far in the dirt reaches here, and how dirty this stretch is.
-            const float reach = 0.4f + 1.6f * grime_hash(p, 0u);
-            const float patch = 0.1f + 1.8f * glm_smoothstep(0.3f, 0.7f, grime_patch(p));
+            const float reach = grime_reach(p);
             const float edge = weight[0] * grime_falloff(a, band_a * reach) +
                                weight[1] * grime_falloff(la - a, band_a * reach) +
                                weight[2] * grime_falloff(b, band_b * reach) +
                                weight[3] * grime_falloff(lb - b, band_b * reach);
-            const float smudge =
-                GRIME_SMUDGE * fmaxf(0.0f, grime_hash(p, 0x9e3779b9u) - 0.7f) / 0.3f;
-            const float amount =
-                glm_clamp(strength * (patch * (edge + 0.12f) + smudge), 0.0f, 1.0f);
-            row[j & 1][i] = face_vertex(kit, mat, p, n, t, bt, amount);
+            row[j & 1][i] = face_vertex(kit, mat, p, n, t, bt, grime_amount(strength, p, edge));
         }
         if (j == 0)
             continue;
@@ -407,26 +415,54 @@ typedef struct Ring {
 } Ring;
 
 /*
- * A ring about `centre` in the plane of u and w. Each vertex's normal is its
- * radial direction weighted `nr` plus `axis` weighted `na`, which is how a
- * lathe's profile tilts it; U runs round the ring `u_scale` per radian.
+ * Grime on a smooth solid gathers at its JOINTS -- where a lathe stands, both
+ * ends of a pipe -- which is where it meets whatever it is fixed to: the tap
+ * where it enters the counter, a pot where it sits on the burner, a handle
+ * where it is riveted on. The dirt needs rings to fade across, so a grimed
+ * solid is cut every GRIME_RING along its length; a clean one keeps only the
+ * rings its shape asks for.
  */
-static void make_ring(Kit* kit, int mat, Ring* ring, const vec3 centre, const vec3 axis,
-                      const vec3 u, const vec3 w, float r, float nr, float na, float u_scale,
-                      float v, int sides) {
+#define GRIME_RING 0.01f // metres
+
+// How many pieces a stretch `len` long is cut into.
+static int ring_pieces(const Kit* kit, int mat, float len) {
+    if (kit->grime[mat] <= 0.0f)
+        return 1;
+    const int n = (int)ceilf(len / GRIME_RING);
+    return n < 1 ? 1 : n > GRIME_MAX_CUTS ? GRIME_MAX_CUTS : n;
+}
+
+// Where one ring sits and how it shades.
+typedef struct RingAt {
+    vec3 centre, axis, u, w; // u takes the cosine and w the sine
+    float r;
+    float nr, na; // the normal: the radial direction weighted nr, plus the axis weighted na
+    float v;      // texture V, in repeats
+    float joint;  // metres to the solid's nearest joint
+} RingAt;
+
+// A ring of sides + 1 vertices. U runs round it `u_scale` per radian, and its
+// grime falls off from the joint over `band`.
+static void make_ring(Kit* kit, int mat, Ring* ring, const RingAt* at, float u_scale, float band,
+                      int sides) {
+    const float strength = kit->grime[mat];
     for (int j = 0; j <= sides; j++) {
         const float a = (float)j / (float)sides * 2.0f * GLM_PIf;
-        vec3 radial, t;
-        glm_vec3_scale((float*)u, cosf(a), radial);
-        glm_vec3_muladds((float*)w, sinf(a), radial);
-        glm_vec3_scale((float*)u, -sinf(a), t);
-        glm_vec3_muladds((float*)w, cosf(a), t);
-        glm_vec3_copy((float*)centre, ring->p[j]);
-        glm_vec3_muladds(radial, r, ring->p[j]);
-        glm_vec3_scale(radial, nr, ring->n[j]);
-        glm_vec3_muladds((float*)axis, na, ring->n[j]);
+        vec3 radial = {0.0f, 0.0f, 0.0f}, t = {0.0f, 0.0f, 0.0f};
+        glm_vec3_scale((float*)at->u, cosf(a), radial);
+        glm_vec3_muladds((float*)at->w, sinf(a), radial);
+        glm_vec3_scale((float*)at->u, -sinf(a), t);
+        glm_vec3_muladds((float*)at->w, cosf(a), t);
+        glm_vec3_copy((float*)at->centre, ring->p[j]);
+        glm_vec3_muladds(radial, at->r, ring->p[j]);
+        glm_vec3_scale(radial, at->nr, ring->n[j]);
+        glm_vec3_muladds((float*)at->axis, at->na, ring->n[j]);
         glm_vec3_normalize(ring->n[j]);
-        ring->idx[j] = kit_vertex(kit, mat, ring->p[j], ring->n[j], t, a * u_scale, v, 0.0f);
+        const float grime =
+            strength > 0.0f ? grime_amount(strength, ring->p[j],
+                                           grime_falloff(at->joint, band * grime_reach(ring->p[j])))
+                            : 0.0f;
+        ring->idx[j] = kit_vertex(kit, mat, ring->p[j], ring->n[j], t, a * u_scale, at->v, grime);
     }
 }
 
@@ -477,39 +513,63 @@ static bool points_ok(int count) {
  */
 static void pipe(Kit* kit, int mat, const vec3* path, int count, float r, int sides) {
     const float inv = 1.0f / kit->repeat_m[mat];
+    float total = 0.0f;
+    for (int i = 1; i < count; i++)
+        total += glm_vec3_distance((float*)path[i], (float*)path[i - 1]);
+    const float band = fminf(GRIME_BAND, 0.3f * total);
     Ring rings[2];
-    vec3 u = {0.0f, 0.0f, 0.0f}, t = {0.0f, 0.0f, 0.0f};
+    RingAt at = {.r = r, .nr = 1.0f};
+    vec3 prev = {0.0f, 0.0f, 0.0f};
     float len = 0.0f;
+    int made = 0;
     for (int i = 0; i < count; i++) {
-        const int behind = i > 0 ? i - 1 : 0, ahead = i < count - 1 ? i + 1 : count - 1;
-        glm_vec3_sub((float*)path[ahead], (float*)path[behind], t);
-        if (glm_vec3_norm2(t) < 1e-12f)
-            return;
-        glm_vec3_normalize(t);
-        if (i == 0) {
-            // Any direction off the axis starts the section; up unless the
-            // pipe sets off nearly upright.
-            const vec3 ref = {fabsf(t[1]) < 0.9f ? 0.0f : 1.0f, fabsf(t[1]) < 0.9f ? 1.0f : 0.0f,
-                              0.0f};
-            glm_vec3_cross(t, (float*)ref, u);
-        } else {
-            glm_vec3_muladds(t, -glm_vec3_dot(u, t), u);
-            len += glm_vec3_distance((float*)path[i], (float*)path[i - 1]);
-        }
-        glm_vec3_normalize(u);
-        vec3 w = {0.0f, 0.0f, 0.0f};
-        glm_vec3_cross(t, u, w);
-        Ring* ring = &rings[i & 1];
-        make_ring(kit, mat, ring, path[i], t, u, w, r, 1.0f, 0.0f, r * inv, len * inv, sides);
-        if (i == 0) {
-            vec3 back = {0.0f, 0.0f, 0.0f};
-            glm_vec3_negate_to(t, back);
-            ring_cap(kit, mat, ring, path[0], back, sides);
-        } else {
-            ring_band(kit, mat, &rings[(i - 1) & 1], ring, sides);
+        // The segment arriving at point i, cut into pieces; point 0 is one ring.
+        const int pieces =
+            i == 0 ? 1
+                   : ring_pieces(kit, mat, glm_vec3_distance((float*)path[i], (float*)path[i - 1]));
+        for (int s = i == 0 ? pieces : 1; s <= pieces; s++) {
+            if (s < pieces) {
+                // Inside a segment, a ring faces along it.
+                glm_vec3_lerp((float*)path[i - 1], (float*)path[i], (float)s / (float)pieces,
+                              at.centre);
+                glm_vec3_sub((float*)path[i], (float*)path[i - 1], at.axis);
+            } else {
+                // At a point, along the segments either side of it.
+                const int behind = i > 0 ? i - 1 : 0, ahead = i < count - 1 ? i + 1 : count - 1;
+                glm_vec3_copy((float*)path[i], at.centre);
+                glm_vec3_sub((float*)path[ahead], (float*)path[behind], at.axis);
+            }
+            if (glm_vec3_norm2(at.axis) < 1e-12f)
+                return;
+            glm_vec3_normalize(at.axis);
+            if (made == 0) {
+                // Any direction off the axis starts the section; up unless the
+                // pipe sets off nearly upright.
+                const bool upright = fabsf(at.axis[1]) >= 0.9f;
+                const vec3 ref = {upright ? 1.0f : 0.0f, upright ? 0.0f : 1.0f, 0.0f};
+                glm_vec3_cross(at.axis, (float*)ref, at.u);
+            } else {
+                glm_vec3_muladds(at.axis, -glm_vec3_dot(at.u, at.axis), at.u);
+                len += glm_vec3_distance(at.centre, prev);
+            }
+            glm_vec3_normalize(at.u);
+            glm_vec3_cross(at.axis, at.u, at.w);
+            glm_vec3_copy(at.centre, prev);
+            at.v = len * inv;
+            at.joint = fminf(len, total - len);
+            Ring* ring = &rings[made & 1];
+            make_ring(kit, mat, ring, &at, r * inv, band, sides);
+            if (made == 0) {
+                vec3 back = {0.0f, 0.0f, 0.0f};
+                glm_vec3_negate_to(at.axis, back);
+                ring_cap(kit, mat, ring, path[0], back, sides);
+            } else {
+                ring_band(kit, mat, &rings[(made - 1) & 1], ring, sides);
+            }
+            made++;
         }
     }
-    ring_cap(kit, mat, &rings[(count - 1) & 1], path[count - 1], t, sides);
+    ring_cap(kit, mat, &rings[(made - 1) & 1], path[count - 1], at.axis, sides);
 }
 
 /*
@@ -543,29 +603,44 @@ static void profile_joint(const vec2* profile, int count, int seg, int other, ve
 
 /*
  * A surface of revolution about the upright through `base`, from a profile of
- * {radius, height above base} points. Every segment is its own band, so a
- * crease costs nothing extra; a radius of 0 closes the surface on its axis.
+ * {radius, height above base} points. Every segment is its own run of bands,
+ * so a crease costs nothing extra; a radius of 0 closes the surface on its
+ * axis. It stands on its lowest point, so that is its joint.
  */
 static void lathe(Kit* kit, int mat, const vec3 base, const vec2* profile, int count, int sides) {
     const float inv = 1.0f / kit->repeat_m[mat];
-    float rmax = 0.0f, len = 0.0f;
-    for (int k = 0; k < count; k++)
+    float rmax = 0.0f, lo = profile[0][1], hi = profile[0][1], len = 0.0f;
+    for (int k = 0; k < count; k++) {
         rmax = glm_max(rmax, profile[k][0]);
-    const vec3 up = {0.0f, 1.0f, 0.0f}, x = {1.0f, 0.0f, 0.0f}, z = {0.0f, 0.0f, 1.0f};
+        lo = glm_min(lo, profile[k][1]);
+        hi = glm_max(hi, profile[k][1]);
+    }
+    const float band = fminf(GRIME_BAND, 0.3f * (hi - lo));
+    RingAt at = {.axis = {0.0f, 1.0f, 0.0f}, .u = {1.0f, 0.0f, 0.0f}, .w = {0.0f, 0.0f, 1.0f}};
     for (int k = 0; k < count - 1; k++) {
-        Ring ends[2];
-        for (int e = 0; e < 2; e++) {
-            vec2 n = {0.0f, 0.0f};
-            profile_joint(profile, count, k, e == 0 ? k - 1 : k + 1, n);
-            vec3 centre;
-            glm_vec3_copy((float*)base, centre);
-            centre[1] += profile[k + e][1];
-            make_ring(kit, mat, &ends[e], centre, up, x, z, profile[k + e][0], n[0], n[1],
-                      rmax * inv, len * inv, sides);
-            if (e == 0)
-                len += glm_vec2_distance((float*)profile[k + 1], (float*)profile[k]);
+        vec2 n0 = {0.0f, 0.0f}, n1 = {0.0f, 0.0f};
+        profile_joint(profile, count, k, k - 1, n0);
+        profile_joint(profile, count, k, k + 1, n1);
+        const float seg = glm_vec2_distance((float*)profile[k + 1], (float*)profile[k]);
+        const int pieces = ring_pieces(kit, mat, seg);
+        Ring rings[2];
+        for (int s = 0; s <= pieces; s++) {
+            const float f = (float)s / (float)pieces;
+            vec2 p = {0.0f, 0.0f}, n = {0.0f, 0.0f};
+            glm_vec2_lerp((float*)profile[k], (float*)profile[k + 1], f, p);
+            glm_vec2_lerp(n0, n1, f, n);
+            glm_vec3_copy((float*)base, at.centre);
+            at.centre[1] += p[1];
+            at.r = p[0];
+            at.nr = n[0];
+            at.na = n[1];
+            at.v = (len + f * seg) * inv;
+            at.joint = p[1] - lo;
+            make_ring(kit, mat, &rings[s & 1], &at, rmax * inv, band, sides);
+            if (s > 0)
+                ring_band(kit, mat, &rings[(s - 1) & 1], &rings[s & 1], sides);
         }
-        ring_band(kit, mat, &ends[0], &ends[1], sides);
+        len += seg;
     }
 }
 
