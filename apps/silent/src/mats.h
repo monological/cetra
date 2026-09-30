@@ -52,6 +52,8 @@ typedef enum {
     MAT_JAM,          // preserves: a dark red
     MAT_PLUM,         // and a purple nearly black
     MAT_PRUNE,        // and a brown nearly black
+    MAT_CARDS,        // photos, notes and letters: one picture, cut up by cards.h
+    MAT_CUSHION,      // a foam seat pad gone yellow
     MAT_COUNT
 } MatId;
 

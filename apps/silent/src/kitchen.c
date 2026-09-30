@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdint.h>
 
+#include "cards.h"
 #include "kitchen.h"
 #include "layout.h"
 #include "mats.h"
@@ -84,15 +85,40 @@ static void counter(Kit* kit, const KitFrame* f, int mat, float a0, float a1, fl
     kit_frame_box(kit, f, mat, a0, a1, CARCASS_TOP, COUNTER_TOP, d0, d1, false);
 }
 
-// Things on a surface at height y, in a frame: the clutter vocabulary.
+#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
+
+/*
+ * Things on a surface at height y, in a frame: the clutter vocabulary. A plate
+ * stands on a foot ring and its rim slopes up from the well; the profile runs
+ * up the outside and back in over the top, so each nests in the one below.
+ */
+static const vec2 PLATE[] = {
+    {0.0f, 0.003f},   {0.066f, 0.003f}, {0.068f, 0.0f},   {0.075f, 0.0f},  {0.079f, 0.004f},
+    {0.118f, 0.014f}, {0.12f, 0.016f},  {0.117f, 0.017f}, {0.08f, 0.009f}, {0.0f, 0.008f},
+};
+
 static void plates(Kit* kit, const KitFrame* f, float a, float d, float y, int count) {
     for (int i = 0; i < count; i++)
-        kit_frame_prism(kit, f, MAT_CERAMIC, a, d, y + 0.014f * (float)i,
-                        y + 0.014f * (float)(i + 1) - 0.002f, 0.12f, 10);
+        kit_frame_lathe(kit, f, MAT_CERAMIC, a, d, y + 0.012f * (float)i, PLATE, COUNT(PLATE), 32);
 }
 
+// A mug: open, with a wall you can see the thickness of at the lip, and a loop
+// handle on its right.
+static const vec2 MUG[] = {
+    {0.0f, 0.0f},    {0.038f, 0.0f}, {0.042f, 0.004f}, {0.042f, 0.096f},
+    {0.0405f, 0.1f}, {0.037f, 0.1f}, {0.037f, 0.012f}, {0.0f, 0.012f},
+};
+
 static void mug(Kit* kit, const KitFrame* f, float a, float d, float y) {
-    kit_frame_prism(kit, f, MAT_CERAMIC, a, d, y, y + 0.1f, 0.042f, 8);
+    kit_frame_lathe(kit, f, MAT_CERAMIC, a, d, y, MUG, COUNT(MUG), 24);
+    enum { LOOP = 9 };
+    vec3 handle[LOOP];
+    for (int i = 0; i < LOOP; i++) {
+        const float t = GLM_PIf * (0.5f - (float)i / (float)(LOOP - 1));
+        glm_vec3_copy((vec3){a + 0.039f + 0.028f * cosf(t), y + 0.052f + 0.03f * sinf(t), d},
+                      handle[i]);
+    }
+    kit_frame_pipe(kit, f, MAT_CERAMIC, handle, LOOP, 0.0055f, 10);
 }
 
 /*
@@ -128,8 +154,6 @@ static void jar(Kit* kit, const KitFrame* f, KitRng* rng, float a, float d, floa
                     r - 0.006f, 12);
     kit_frame_prism(kit, f, MAT_STEEL, a, d, y + h, y + h + 0.02f, r * 0.92f, 12);
 }
-
-#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
 
 /*
  * A stainless stockpot, 20 cm across: a base rounding into the wall, a rim
@@ -482,8 +506,39 @@ static void stove_wall(Kit* kit, KitRng* rng) {
     clutter(kit, &f, rng, s1 + 0.1f, len - 0.1f, 0.0f, 0.0f, COUNTER_TOP, 1);
 }
 
-// The fridge: a tall rounded box with its handles, notes and photos, and a
-// bottle forgotten on top.
+// A card pinned upright facing out of its wall at d, centred at (a, y) and
+// turned `tilt` radians in its own plane.
+static void pin_card(Kit* kit, const KitFrame* f, CardId card, float a, float y, float d,
+                     float tilt) {
+    const float w = CARDS[card].size[0], h = CARDS[card].size[1];
+    const float c = cosf(tilt), s = sinf(tilt);
+    const vec3 across = {w * c, w * s, 0.0f}, up = {-h * s, h * c, 0.0f};
+    const vec3 corner = {a - 0.5f * (across[0] + up[0]), y - 0.5f * (across[1] + up[1]), d};
+    kit_frame_card(kit, f, MAT_CARDS, corner, across, up, CARDS[card].uv);
+}
+
+// A card lying face up at height y, centred at (a, d) and turned `turn`
+// radians; its top is away from someone standing at +d.
+static void lay_card(Kit* kit, const KitFrame* f, CardId card, float a, float d, float y,
+                     float turn) {
+    const float w = CARDS[card].size[0], h = CARDS[card].size[1];
+    const float c = cosf(turn), s = sinf(turn);
+    const vec3 across = {w * c, 0.0f, w * s}, up = {h * s, 0.0f, -h * c};
+    const vec3 corner = {a - 0.5f * (across[0] + up[0]), y, d - 0.5f * (across[2] + up[2])};
+    kit_frame_card(kit, f, MAT_CARDS, corner, across, up, CARDS[card].uv);
+}
+
+// A round fridge magnet on a surface facing out at d.
+static void magnet(Kit* kit, const KitFrame* f, int mat, float a, float y, float d) {
+    kit_frame_pipe(kit, f, mat, (vec3[]){{a, y, d}, {a, y, d + 0.008f}}, 2, 0.011f, 16);
+}
+
+/*
+ * The fridge: a tall rounded box with its handles, and a bottle forgotten on
+ * top. Snapshots on the freezer door, and on the door below a shopping list
+ * held by a magnet with two more photos -- each a little crooked, and each a
+ * hair further out than the last, so none fights the door or another card.
+ */
 static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1) {
     const float d = 0.68f, h = 1.72f;
     kit_frame_box(kit, f, MAT_APPLIANCE, a0, a1, 0.0f, h, 0.0f, d, true);
@@ -492,13 +547,22 @@ static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1)
     kit_frame_box(kit, f, MAT_BLACK, a0 + 0.01f, a1 - 0.01f, 1.2f, 1.215f, d, d + 0.004f, false);
     kit_frame_prism(kit, f, MAT_STEEL, a0 + 0.06f, d + 0.035f, 1.3f, 1.55f, 0.012f, 6);
     kit_frame_prism(kit, f, MAT_STEEL, a0 + 0.06f, d + 0.035f, 0.75f, 1.1f, 0.012f, 6);
-    for (int i = 0; i < 5; i++) {
-        const float w = kit_rrange(rng, 0.09f, 0.18f), hh = kit_rrange(rng, 0.08f, 0.22f);
-        const float a = kit_rrange(rng, a0 + 0.12f, a1 - 0.08f - w);
-        const float y = kit_rrange(rng, 0.5f, h - 0.1f - hh);
-        const int mat = (i % 3 == 2) ? MAT_BLACK : MAT_PAPER;
-        kit_frame_box(kit, f, mat, a, a + w, y, y + hh, d, d + 0.003f, false);
-    }
+
+    const float step = 0.0008f;
+    pin_card(kit, f, CARD_PHOTO_TREE, a0 + 0.26f, 1.47f, d + step, -0.06f);
+    pin_card(kit, f, CARD_PHOTO_LAKE, a0 + 0.45f, 1.53f, d + 2.0f * step, 0.04f);
+    pin_card(kit, f, CARD_PHOTO_ROAD, a0 + 0.59f, 1.40f, d + 3.0f * step, -0.03f);
+    magnet(kit, f, MAT_PLASTIC, a0 + 0.262f, 1.505f, d + 2.0f * step);
+    magnet(kit, f, MAT_CERAMIC, a0 + 0.45f, 1.575f, d + 3.0f * step);
+    magnet(kit, f, MAT_BLACK, a0 + 0.59f, 1.46f, d + 4.0f * step);
+
+    pin_card(kit, f, CARD_PHOTO_PARK, a0 + 0.43f, 0.80f, d + step, 0.05f);
+    pin_card(kit, f, CARD_PHOTO_GARDEN, a0 + 0.50f, 0.99f, d + 2.0f * step, -0.07f);
+    pin_card(kit, f, CARD_NOTE, a0 + 0.30f, 1.03f, d + 3.0f * step, 0.03f);
+    magnet(kit, f, MAT_PLASTIC, a0 + 0.298f, 1.085f, d + 4.0f * step);
+    magnet(kit, f, MAT_BLACK, a0 + 0.44f, 1.03f, d + 3.0f * step);
+    magnet(kit, f, MAT_CERAMIC, a0 + 0.43f, 0.835f, d + 2.0f * step);
+
     bottle(kit, f, rng, a0 + 0.2f, 0.3f, h + 0.04f, 0.2f);
     jar(kit, f, rng, a0 + 0.45f, 0.35f, h + 0.04f, 0.05f, 0.12f);
 }
@@ -611,6 +675,22 @@ static void chair(Kit* kit, float x, float z, float yaw) {
     kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, -s, s, 0.0f, 0.47f, -s, s, true);
 }
 
+/*
+ * A foam pad on a chair's seat, at (x, z) turned `yaw`. Four sides on the
+ * lathe make it square, and the smooth normals round its sides over as a
+ * cushion's are; the profile sags it a little in the middle, where it is sat
+ * on. A lathe's first side lies along its frame's a, so the frame turns an
+ * eighth more to square the pad with the seat.
+ */
+static void cushion(Kit* kit, float x, float z, float yaw) {
+    static const vec2 PAD[] = {
+        {0.0f, 0.0f},     {0.23f, 0.0f},   {0.2546f, 0.012f}, {0.252f, 0.03f},
+        {0.225f, 0.043f}, {0.12f, 0.046f}, {0.0f, 0.042f},
+    };
+    const KitFrame f = {{x, FLOOR_Y, z}, yaw + 0.25f * GLM_PIf};
+    kit_frame_lathe(kit, &f, MAT_CUSHION, 0.015f, -0.01f, 0.47f, PAD, COUNT(PAD), 4);
+}
+
 // The table and its two chairs, one pushed in and one pulled out askew.
 static void table(Kit* kit) {
     const KitFrame f = {{3.2f, FLOOR_Y, 12.95f}, 0.0f};
@@ -624,11 +704,18 @@ static void table(Kit* kit) {
 
     plates(kit, &f, -0.2f, -0.1f, 0.78f, 1);
     mug(kit, &f, 0.25f, 0.15f, 0.78f);
-    const KitFrame note = {{3.55f, FLOOR_Y, 12.85f}, 0.45f};
-    kit_frame_box(kit, &note, MAT_PAPER, -0.1f, 0.1f, 0.78f, 0.782f, -0.14f, 0.14f, false);
+    // The letter, read and left on a blank sheet it came with, and a snapshot
+    // taken down off the fridge.
+    const KitFrame sheet = {{3.46f, FLOOR_Y, 12.9f}, -0.2f};
+    kit_frame_box(kit, &sheet, MAT_PAPER, -0.105f, 0.105f, 0.78f, 0.7808f, -0.1485f, 0.1485f,
+                  false);
+    // Turned half round to face the pulled-out chair, on the table's -d side.
+    lay_card(kit, &f, CARD_LETTER, 0.2f, -0.08f, 0.7812f, GLM_PIf + 0.35f);
+    lay_card(kit, &f, CARD_PHOTO_SNOW, -0.36f, 0.2f, 0.7806f, GLM_PIf - 0.5f);
 
     chair(kit, 2.38f, 12.95f, 0.5f * GLM_PIf);
     chair(kit, 3.35f, 12.12f, 0.35f);
+    cushion(kit, 3.35f, 12.12f, 0.35f + 0.12f);
 }
 
 void kitchen_build(Kit* kit, unsigned int seed) {

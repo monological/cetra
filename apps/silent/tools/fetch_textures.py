@@ -70,6 +70,9 @@ SOURCES = {
     "Cardboard003": {"source": "ambientcg", "saturation": 0.7, "gain": 0.8},
     "Paper003": {"source": "ambientcg"},
     "Smear008": {"source": "ambientcg"},
+    # A foam seat pad, from the most used of ambientCG's sponges: already
+    # yellowed and grubby, and taken a little further.
+    "Sponge002": {"source": "ambientcg", "saturation": 0.75, "gain": 0.9},
 }
 
 ACG_ZIP = "https://ambientcg.com/get?file=%s_1K-JPG.zip"

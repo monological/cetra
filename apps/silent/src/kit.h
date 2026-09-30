@@ -156,6 +156,13 @@ void kit_frame_pipe(Kit* kit, const KitFrame* f, int mat, const vec3* path, int 
 void kit_frame_lathe(Kit* kit, const KitFrame* f, int mat, float a, float d, float y,
                      const vec2* profile, int count, int sides);
 
+// A flat card from `corner` along `across` and `up`, all (a, y, d), facing
+// cross(across, up). It shows `uv` = {u0, v0, u1, v1} of its material's
+// picture, where every other face is mapped from the world: a photograph is
+// one picture, not a pattern.
+void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, const vec3 across,
+                    const vec3 up, const float uv[4]);
+
 // Builds one mesh per used material under a node on the scene root.
 SceneNode* kit_finish(Kit* kit, const char* name);
 
