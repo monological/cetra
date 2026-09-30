@@ -29,8 +29,9 @@ float specOccSplitAt(vec2 uv, vec4 aoSample, vec2 specPair)
     // is the marker's SIGN, matching what the catcher writes and the SSR
     // march reads -- its magnitude is the edge falloff, so any threshold
     // would hand part of the plane's outer ring to the specular term.
+    // Only (-1, 0) is the catcher: below -1 is wet ground (spec 13.9), a real surface.
     vec4 nrm = texture(normalsTex, uv);
-    if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0)
+    if (dot(nrm.xyz, nrm.xyz) < 0.01 || (nrm.a < 0.0 && nrm.a >= -1.0))
         return aoSample.r;
     // No lobe above the horizon anywhere in the sweep -- including every pixel
     // whose sums came from the early-outs' (0,0) neutral. Nothing to occlude,

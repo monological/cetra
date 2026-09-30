@@ -2649,6 +2649,13 @@ void main() {
     NormalOut = alphaMasked > 0
                     ? vec4(0.0, 0.0, 0.0, finalOpacity)
                     : vec4(normalize(mat3(view) * N), 0.0);
+#if CETRA_HAS(PBR_FEAT_RAIN)
+    // Wet ground traces in SSR (spec 13.9). Marked BELOW -1, as -(1 + film), so the catcher's
+    // (-1, 0) stays the catcher's; its roughness rides the aux buffer. Never on a masked
+    // surface, whose alpha is its coverage.
+    if (alphaMasked == 0 && rainFilm > RAIN_SSR_MIN_FILM)
+        NormalOut.a = -(1.0 + rainFilm);
+#endif
 
     // Auxiliary G-buffer: screen-space motion vector (.xy, un-jittered current
     // vs previous, UV units) for TAA reprojection, linear view-space Z (.z) for
