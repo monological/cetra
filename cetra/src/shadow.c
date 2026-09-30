@@ -561,6 +561,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (system->rain_layer >= 0) {
         uniform_set_mat4(u, "rainOcclusionMatrix", (const float*)system->rain_lookup);
         uniform_set_float(u, "rainCoverSpread", system->rain_cover_spread);
+        uniform_set_float(u, "rainUvPerMetre", system->rain_uv_per_metre);
     }
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
@@ -1890,7 +1891,15 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     corner[3][1] = k - 1.0f;
     glm_mat4_mul(corner, ss->rain_matrix, ss->rain_lookup);
     // The softness in metres, as lookup uv: a fraction of the extent, carried into the corner.
-    ss->rain_cover_spread = fmaxf(rain->occlusion_softness, 0.0f) / rain->occlusion_extent * k;
+    //
+    // NEVER MORE THAN A TEXEL between taps. Wider, each row of the 3x3 finds the same thin
+    // occluder at a different offset, and a lamp arm narrower than a texel -- a one-texel line
+    // in the map -- leaves three dry stripes on the pavement a tap-spacing apart. A softer edge
+    // than a texel buys needs a filtered map rather than wider taps.
+    const float texel_uv = 1.0f / (float)ss->punctual_map_size;
+    ss->rain_uv_per_metre = k / rain->occlusion_extent;
+    ss->rain_cover_spread =
+        fminf(fmaxf(rain->occlusion_softness, 0.0f) * ss->rain_uv_per_metre, texel_uv);
 
     GLint prev_viewport[4];
     glGetIntegerv(GL_VIEWPORT, prev_viewport);
