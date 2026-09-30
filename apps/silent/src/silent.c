@@ -79,6 +79,8 @@
 #define RAIN_STREAK_COUNT      6144
 #define RAIN_FALL_SCALE        0.5f
 #define RAIN_STREAK_SHEEN      1.0f
+// Wet ground at half the physical darkening: soaked, but the lamps still pool on it.
+#define RAIN_WET_DARKENING 0.5f
 
 typedef struct SilentArgs {
     bool headless;
@@ -347,6 +349,7 @@ static void on_init(Game* game) {
             g_scene->rain->streak_count = RAIN_STREAK_COUNT;
             g_scene->rain->fall_scale = RAIN_FALL_SCALE;
             g_scene->rain->streak_sheen = RAIN_STREAK_SHEEN;
+            g_scene->rain->wet_darkening = RAIN_WET_DARKENING;
             rain_settle(g_scene->rain);
         }
     }

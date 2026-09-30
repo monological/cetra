@@ -217,4 +217,6 @@ void rain_bind_surface(const Rain* rain, ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;
     uniform_set_float(program->uniforms, "rainWetness", rain ? rain->wetness : 0.0f);
+    uniform_set_float(program->uniforms, "rainDarkening",
+                      rain ? fmaxf(rain->wet_darkening, 0.0f) : 1.0f);
 }

@@ -249,6 +249,7 @@ uniform float uShoreWetness;
 #if CETRA_HAS(PBR_FEAT_RAIN)
 #include "rain_occlusion.glsl"
 uniform float rainWetness; // 0..1, how soaked the world is; see Rain.wetness
+uniform float rainDarkening; // scale on the albedo terms; 1 = physical, see Rain.wet_darkening
 uniform float uPorosity;   // Material.porosity; -1 = derive it from the roughness
 #endif
 
@@ -1579,7 +1580,7 @@ void main() {
             uPorosity >= 0.0 ? uPorosity : clamp((roughnessMap - 0.5) / 0.4, 0.0, 1.0);
         rainFilm = wet * smoothstep(RAIN_FILM_UP_MIN, RAIN_FILM_UP_FULL, Ng.y);
         wetSurface(albedoMap, roughnessMap, N, Ng, porosity * RAIN_POROSITY_DARKEN,
-                   wet * (1.0 - metallicMap), rainFilm);
+                   wet * (1.0 - metallicMap) * rainDarkening, rainFilm);
     }
 #endif
 
