@@ -68,6 +68,13 @@
 // Moderate rain, by the meteorologists' bands (rain.h): steady enough to soak the
 // street and fill its gutters, short of a downpour that would hide it.
 #define DEFAULT_RAIN_MMH 6.0f
+// The rain is art-directed here, and has to be. In fog this dense a drop refracts glowing air
+// about as bright as itself, so rain at its physical opacity shows only right under a lamp --
+// true of real rain in fog, and not what this street is for. So each streak is brighter than
+// the drops it stands for, and they are packed closer round the player, where a streak is big
+// enough to read.
+#define RAIN_STREAK_BRIGHTNESS 6.0f
+#define RAIN_STREAK_RADIUS     2.5f
 
 typedef struct SilentArgs {
     bool headless;
@@ -331,6 +338,8 @@ static void on_init(Game* game) {
         g_scene->rain = create_rain();
         if (g_scene->rain) {
             g_scene->rain->rate_mmh = g_args.rain_mmh;
+            g_scene->rain->streak_brightness = RAIN_STREAK_BRIGHTNESS;
+            g_scene->rain->streak_radius = RAIN_STREAK_RADIUS;
             rain_settle(g_scene->rain);
         }
     }

@@ -26862,6 +26862,23 @@ RAIN_TICK_FRAMES = 60
 # 5.3 m/s fall carries the dry patch 0.84 m toward the wall. The last two points of the
 # first group sit half a metre either side of the roof's footprint, where a map rendered
 # straight down gives the OPPOSITE answer -- they are what holds the direction.
+# The streak arms read the rain's LIGHT, which is only separable from the scene where there
+# is nothing behind it: the fixture's upper frame, above the wall, is bare clear colour. A
+# plain point lamp -- no profile, so the geometry alone decides its light -- sits 8 m in front
+# of the camera for the backlit case and 8 m behind it for the front-lit one, the same
+# distance either side of the rain round the camera, and a lamp of intensity 0 is the dark.
+RAIN_SKY_BOX = (0.05, 0.02, 0.95, 0.28)
+RAIN_LAMP_CD = 60.0
+RAIN_LAMP_BACK = [0.0, 3.5, 3.0]
+RAIN_LAMP_FRONT = [0.0, 3.5, 19.0]
+RAIN_LINEAR = ["--tonemap", "linear", *NO_HALOS, "--no-dither", "--no-vignette", "-E", "1"]
+# Refraction throws 85% of a drop's light into a g = 0.8 lobe, which puts about two decades
+# between looking into the light and looking away from it. A phase evaluated with its angle
+# the wrong way round lands below 1.
+RAIN_LOBE_MIN = 10.0
+# Glints move light along a streak and add none, but a streak need not hold whole cycles of
+# its pattern, so the frame's total agrees only on average over its streaks.
+RAIN_GLINT_TOL = 0.05
 RAIN_COVER_POINTS = [
     ((0.0, 0.0, -4.0), False), ((-2.0, 0.0, -4.0), False), ((2.0, 0.0, -4.0), False),
     ((0.0, 0.0, 4.0), True), ((-6.0, 0.0, 4.0), True), ((6.0, 0.0, 4.0), True),
@@ -26921,6 +26938,17 @@ def run_rain_gate(workdir):
                     which puts its six cube faces ahead of the rain in the punctual array,
                     and with shadows switched off, which leaves the rain alone in it. The
                     layer moves (6, then 0); the cover does not.
+      rain-off      a rain block at rate 0 is 0 px from the same scene with none: nothing
+                    falls, nothing is wet, and no layer is rendered.
+      rain-determinism  two runs of the fixture are 0 px apart. The drops are functions of
+                    their index and the frame's clock, so nothing may differ between runs.
+      rain-lobe     the light a lamp puts into the rain, read against bare sky: backlit, with
+                    the lamp beyond the rain, it is more than RAIN_LOBE_MIN times what the
+                    same lamp gives from behind the camera -- and nonzero there, since a
+                    fraction of every drop's light goes everywhere.
+      rain-glint    the same backlit light with every lit streak's light in glints and with
+                    none, within RAIN_GLINT_TOL: the glints redistribute it, and a pattern
+                    that added light would read as rain that brightened when it sparkled.
     """
     scene = asset(RAIN_FIXTURE)
     if not os.path.exists(scene):
@@ -27033,6 +27061,79 @@ def run_rain_gate(workdir):
     print(f"  rain-tenant {'PASS' if ok else 'FAIL'}  {detail} (want layers 6 and 0)")
     if not ok:
         failures.append("rain-tenant")
+
+    def variant(name, mutate):
+        path = os.path.join(workdir, f"rain_{name}.cscn")
+        cscn_copy(scene, path, mutate)
+        return path
+
+    def frame(name, scene_path, extra=()):
+        out = os.path.join(workdir, f"rain_{name}.ppm")
+        err = render(scene_path, out, list(extra))
+        return None if err else out
+
+    dry = variant("none", lambda s: s.pop("rain"))
+    still = variant("still", lambda s: s["rain"].update({"rate": 0.0}))
+    a, b = frame("none", dry), frame("still", still)
+    ae, pae = compare(a, b) if a and b else (sys.maxsize, 1.0)
+    ok = ae == 0
+    print(f"  rain-off {'PASS' if ok else 'FAIL'}  rate 0 against no rain block: {ae} px "
+          f"(want 0)")
+    if not ok:
+        failures.append("rain-off")
+
+    a, b = frame("run1", scene), frame("run2", scene)
+    ae, pae = compare(a, b) if a and b else (sys.maxsize, 1.0)
+    ok = ae == 0
+    print(f"  rain-determinism {'PASS' if ok else 'FAIL'}  two runs {ae} px apart (want 0)")
+    if not ok:
+        failures.append("rain-determinism")
+
+    def lamp_at(pos, cd, glint=None):
+        def mutate(s):
+            s["lights"] = [{"name": "rain_probe_lamp", "type": "point", "position": pos,
+                            "color": [1.0, 1.0, 1.0], "intensity": cd, "range": 40.0}]
+            if glint is not None:
+                s["rain"]["streakGlint"] = glint
+        return mutate
+
+    def sky_light(name, mutate):
+        path = frame(name, variant(name, mutate), RAIN_LINEAR)
+        if not path:
+            return float("nan"), 0
+        w, h, pix = _read_ppm(path)
+        x0, y0, x1, y1 = RAIN_SKY_BOX
+        peak = max(max(pix[3 * (py * w + px):3 * (py * w + px) + 3])
+                   for py in range(int(y0 * h), int(y1 * h))
+                   for px in range(int(x0 * w), int(x1 * w)))
+        return _box_luma_dense(pix, w, h, RAIN_SKY_BOX, _DISPLAY_TO_LINEAR), peak
+
+    # Glints off for the lobe: it is a claim about the phase, and a glint piles a streak's
+    # light into a few pixels, which is where an 8-bit frame clips first.
+    dark, _ = sky_light("dark", lamp_at(RAIN_LAMP_BACK, 0.0))
+    back_on, back_peak = sky_light("back", lamp_at(RAIN_LAMP_BACK, RAIN_LAMP_CD, 0.0))
+    front_on, front_peak = sky_light("front", lamp_at(RAIN_LAMP_FRONT, RAIN_LAMP_CD, 0.0))
+    back, front = back_on - dark, front_on - dark
+    ratio = back / front if front > 0 else float("inf")
+    unclipped = max(back_peak, front_peak) < 255
+    ok = front > 0 and ratio > RAIN_LOBE_MIN and unclipped
+    print(f"  rain-lobe {'PASS' if ok else 'FAIL'}  the lamp adds {back:.3e} to the sky crop "
+          f"backlit and {front:.3e} front-lit, a ratio of {ratio:.1f} (want > "
+          f"{RAIN_LOBE_MIN:g}, and front-lit above 0); peak code {max(back_peak, front_peak)} "
+          f"(want < 255, or the ratio is read off a clipped frame)")
+    if not ok:
+        failures.append("rain-lobe")
+
+    sparkle_on, sparkle_peak = sky_light("sparkle", lamp_at(RAIN_LAMP_BACK, RAIN_LAMP_CD, 1.0))
+    sparkle = sparkle_on - dark
+    drift = abs(sparkle - back) / back if back > 0 else float("inf")
+    ok = drift <= RAIN_GLINT_TOL and sparkle_peak < 255
+    print(f"  rain-glint {'PASS' if ok else 'FAIL'}  backlit rain's light {back:.4e} with no "
+          f"glints and {sparkle:.4e} with all of it in glints, {drift:.2%} apart (want <= "
+          f"{RAIN_GLINT_TOL:.0%}); peak code {sparkle_peak} (want < 255, or a clipped glint "
+          f"reads as light the pattern lost)")
+    if not ok:
+        failures.append("rain-glint")
     return failures
 
 

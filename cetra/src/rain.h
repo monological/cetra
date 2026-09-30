@@ -61,6 +61,17 @@ typedef struct Rain {
     // Width in metres of the square around the camera over which cover is known --
     // the occlusion map's footprint. Outside it every surface counts as open sky.
     float occlusion_extent;
+
+    // The streaks: `streak_count` drops in each of three nested boxes around the camera,
+    // the innermost `streak_radius` metres either way and each next one three times
+    // wider, so rain is dense at hand and thins with distance as perspective shrinks it.
+    int streak_count;
+    float streak_radius;
+    float shutter_s;         // the exposure a streak is smeared over, seconds
+    float streak_width;      // scale on each drop's own diameter as drawn; 1 = physical
+    float streak_brightness; // scale on each drop's opacity; 1 = physical
+    float streak_forward_g;  // Henyey-Greenstein asymmetry of the refracted lobe
+    float streak_glint;      // 0..1, how much of the lamp-lit light arrives as flashes
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.

@@ -154,6 +154,25 @@ typedef enum PostFXSpecOccMode {
 // the cluster grid is the upgrade this defers, not a thing it needs.
 #define POSTFX_MAX_FOG_VOLUMES 8
 
+/*
+ * What a LATE draw is handed (spec 13.9): the chain's HDR canvas, bound, at post
+ * resolution, after the temporal seam and motion blur and before depth of field -- the
+ * place for scene content that carries no motion vector a temporal filter could
+ * reproject, which TAA would otherwise smear or erase. Unreal's "after motion blur"
+ * translucency sits in the same place for the same reason.
+ *
+ * The fog the frame integrated comes with it, so what draws here can be fogged at its
+ * own depth: `fog_slices` 0 means no volume was built this frame, and
+ * froxelSampleMedium reads that as the identity.
+ */
+typedef struct PostFXLateDraw {
+    int width, height; // the canvas, which is bound as the draw framebuffer
+    GLuint fog_volume; // front-to-back (inscatter, transmittance), sampler3D
+    int fog_slices;
+    float fog_near, fog_far, fog_depth_dist;
+} PostFXLateDraw;
+typedef void (*PostFXLateDrawFunc)(void* user, const PostFXLateDraw* late);
+
 typedef struct PostFX {
     // SETTINGS throughout, in feature order, except:
     //
@@ -167,8 +186,9 @@ typedef struct PostFX {
     // BY FUNCTION: ssr_full_res (postfx_set_ssr_full_res, which reallocates
     // the reflection buffers), fog_ambient (postfx_set_fog_ambient, which also
     // takes it away from the sky), the SSS profile table (postfx_add /
-    // postfx_reset_sss_profile) and the LUT's texture, size and name
-    // (postfx_load_lut / postfx_clear_lut).
+    // postfx_reset_sss_profile), the LUT's texture, size and name
+    // (postfx_load_lut / postfx_clear_lut) and the late draw
+    // (postfx_set_late_draw).
     int width, height;             // Render size: what the scene and the pre-TAA
                                    // chain rasterize at (post size x render_scale)
     int post_width, post_height;   // Post size (display x ss_scale): the TAAU
@@ -712,6 +732,10 @@ typedef struct PostFX {
 
     // Borrowed, owned by the Engine. NULL means no pass here is timed.
     struct Profiler* profiler;
+
+    // BY FUNCTION (postfx_set_late_draw): the one late draw, NULL for none.
+    PostFXLateDrawFunc late_draw;
+    void* late_draw_user;
 } PostFX;
 
 // width/height are the display (downsample-target) size; ss_scale supersamples
@@ -886,5 +910,9 @@ void postfx_set_ssr_full_res(PostFX* fx, bool full_res);
 // value every frame. The pair in one call, because a store without the clear
 // is silently undone at the next publish.
 void postfx_set_fog_ambient(PostFX* fx, const vec3 rgb);
+
+// Install the draw that runs after the temporal seam (see PostFXLateDraw); NULL removes
+// it. One slot, because the engine is its only installer and multiplexes what it draws.
+void postfx_set_late_draw(PostFX* fx, PostFXLateDrawFunc draw, void* user);
 
 #endif // _POSTFX_H_

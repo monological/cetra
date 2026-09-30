@@ -28,6 +28,7 @@
 #include "sky.h"
 #include "water.h"
 #include "rain.h"
+#include "rain_render.h"
 #include "gi_volume.h"
 #include "probe_atlas.h"
 #include "layers_vt.h"
@@ -57,6 +58,7 @@
 static int _create_default_shaders_for_engine(Engine* engine);
 static Engine* _engine_alloc(const EngineConfig* cfg);
 static int _engine_init(Engine* engine, const EngineConfig* cfg);
+static void _engine_late_draw(void* user, const PostFXLateDraw* late);
 static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, const char* monitor);
 static int _setup_engine_msaa(Engine* engine);
 static int _setup_engine_gui(Engine* engine);
@@ -407,6 +409,7 @@ void free_engine(Engine* engine) {
 
         free_light_cluster_context(engine->light_cluster);
         free_occlusion_context(engine->occlusion);
+        free_rain_renderer(engine->rain_renderer);
         free_ubo(engine->view_ubo);
         free_ubo(engine->instance_ubo);
         free_ubo(engine->vt_pages_ubo);
@@ -1218,6 +1221,7 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     engine->postfx->exposure = &engine->exposure;
     engine->postfx->profiler = engine->profiler;
     engine->postfx->taa_enabled = cfg->taa;
+    postfx_set_late_draw(engine->postfx, _engine_late_draw, engine);
 
     // Record what init just built at, or the first frame-top sync would see
     // zeroes, decide the sizes had changed, and rebuild everything once for
@@ -2230,6 +2234,18 @@ void* engine_get_user_data(const Engine* engine) {
 void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
     if (engine)
         engine->render_clock = clock;
+}
+
+// What the engine draws after the temporal seam: the scene's rain, today. Postfx calls this
+// with its canvas bound; the renderer comes into being the first frame a scene rains.
+static void _engine_late_draw(void* user, const PostFXLateDraw* late) {
+    Engine* engine = user;
+    Scene* scene = engine_get_scene(engine);
+    if (!scene || !scene->rain || !(scene->rain->rate_mmh > 0.0f))
+        return;
+    if (!engine->rain_renderer)
+        engine->rain_renderer = create_rain_renderer();
+    rain_render_streaks(engine->rain_renderer, engine, scene, late);
 }
 
 void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user) {

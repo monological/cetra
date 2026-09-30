@@ -1010,12 +1010,39 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
         _ranged_float(rain, "rain", "puddleCoverage", 0.0f, 1.0f, &out->puddle_coverage);
     out->has_occlusion_extent =
         _ranged_float(rain, "rain", "occlusionExtent", 1.0f, 4096.0f, &out->occlusion_extent);
+    float count = 0.0f;
+    out->has_streak_count = _ranged_float(rain, "rain", "streakCount", 0.0f, 262144.0f, &count);
+    out->streak_count = (int)count;
+    out->has_streak_radius =
+        _ranged_float(rain, "rain", "streakRadius", 0.1f, 1000.0f, &out->streak_radius);
+    out->has_shutter = _ranged_float(rain, "rain", "shutter", 1e-4f, 1.0f, &out->shutter);
+    out->has_streak_width =
+        _ranged_float(rain, "rain", "streakWidth", 0.0f, 100.0f, &out->streak_width);
+    out->has_streak_brightness =
+        _ranged_float(rain, "rain", "streakBrightness", 0.0f, 1000.0f, &out->streak_brightness);
+    out->has_streak_forward_g =
+        _ranged_float(rain, "rain", "streakForwardG", -0.99f, 0.99f, &out->streak_forward_g);
+    out->has_streak_glint =
+        _ranged_float(rain, "rain", "streakGlint", 0.0f, 1.0f, &out->streak_glint);
     out->has_settled = get_bool(rain, "settled", &out->settled);
 
     static const char* const known[] = {
-        "enabled",         "rate",           "wind",
-        "wetTime",         "dryTime",        "puddleFillTime",
-        "puddleDrainTime", "puddleCoverage", "occlusionExtent",
+        "enabled",
+        "rate",
+        "wind",
+        "wetTime",
+        "dryTime",
+        "puddleFillTime",
+        "puddleDrainTime",
+        "puddleCoverage",
+        "occlusionExtent",
+        "streakCount",
+        "streakRadius",
+        "shutter",
+        "streakWidth",
+        "streakBrightness",
+        "streakForwardG",
+        "streakGlint",
         "settled",
     };
     warn_unknown_keys(rain, known, sizeof(known) / sizeof(known[0]), "rain");

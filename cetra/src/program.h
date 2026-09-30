@@ -172,6 +172,8 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode);
 #define CETRA_PROGRAM_SHAPE       "shape"
 #define CETRA_PROGRAM_XYZ         "xyz"
 #define CETRA_PROGRAM_PARTICLE    "particle"
+// Not one an app asks for: the engine registers it the first time it draws rain.
+#define CETRA_PROGRAM_RAIN "rain"
 
 // Longest "pbr_skinned-<mask>" plus its terminator, with room to spare.
 #define PBR_VARIANT_NAME_MAX 32
@@ -194,6 +196,8 @@ ShaderProgram* create_pbr_skinned_program();
 
 // Particle Program (instanced camera-facing billboards)
 ShaderProgram* create_particle_program();
+// Falling rain's streaks (spec 13.9): instanced, with no vertex data at all
+ShaderProgram* create_rain_program();
 // Particle GPU-sim UPDATE program (transform feedback; vertex-only, spec 5.2)
 ShaderProgram* create_particle_sim_program();
 // Captures windOffset itself (transform feedback; vertex-only, spec 11.54), so
