@@ -7,22 +7,6 @@
 
 #include "rain_constants.glsl"
 
-// What a fully porous, fully wet surface loses of its diffuse albedo: the top of the 25-50%
-// band Lagarde gives for natural materials. The shore's sand is 0.38 of the same scale.
-const float RAIN_POROSITY_DARKEN = 0.5;
-// Where a surface starts to hold a film and where it holds a full one, as the up component of
-// its normal: a roof pitched past about 70 degrees sheds, a road holds.
-const float RAIN_FILM_UP_MIN = 0.35;
-const float RAIN_FILM_UP_FULL = 0.85;
-// Where ground stops shedding and starts holding a puddle: within about eight degrees of
-// level, fully within three. The rim is how far below the level a puddle's edge feathers,
-// in the units of the puddle noise -- the soaked margin round standing water.
-const float RAIN_PUDDLE_FLAT_MIN = 0.99;
-const float RAIN_PUDDLE_FLAT_FULL = 0.9986;
-const float RAIN_PUDDLE_RIM = 0.06;
-// Still water: very nearly a mirror.
-const float RAIN_PUDDLE_ROUGHNESS = 0.03;
-
 uniform int rainOcclusionLayer;   // -1 = no rain this frame; every point is open sky
 uniform mat4 rainOcclusionMatrix; // world -> the map's corner of its layer
 uniform float rainCoverSpread;    // lookup-uv distance between the blocker search's taps
