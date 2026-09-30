@@ -163,6 +163,11 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
                           "environment.night_floor");
     }
 
+    // sky-mode overcast (spec 13.7): one value, how much of the sky is under
+    // cloud, so a key rather than a block -- there is nothing to enable apart
+    // from the amount, and 0 is the clear sky.
+    d->has_env_overcast = get_float(env, "overcast", &d->env_overcast);
+
     // sky-mode day/night cycle (spec 11.81). `enabled` ARMS it, exactly as in
     // the stars and night_floor blocks above -- a file describes values, a
     // flag takes actions, and letting `day_seconds` arm would have made this
@@ -204,8 +209,9 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      * arm was calibrated against the frame rather than the authoring, and nothing could
      * say so -- a --sun-elevation 26 render moves 85% of that frame.
      */
-    static const char* const known[] = {"mode", "hdr",   "probe_scene", "intensity", "ambient",
-                                        "sun",  "stars", "night_floor", "cycle",     "moon"};
+    static const char* const known[] = {"mode",    "hdr",  "probe_scene", "intensity",
+                                        "ambient", "sun",  "stars",       "night_floor",
+                                        "cycle",   "moon", "overcast"};
     warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 

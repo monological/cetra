@@ -515,6 +515,11 @@ def _read_ppm(path):
 # on the gates that scan whole frames.
 _SRGB_TO_LINEAR = [(c / 255.0 / 12.92) if c / 255.0 <= 0.04045
                    else (((c / 255.0) + 0.055) / 1.055) ** 2.4 for c in range(256)]
+# The inverse of tonemap_frag's displayEncode, which is a plain 2.2 gamma and not sRGB.
+# An arm reading an ABSOLUTE radiance through --tonemap linear decodes with this; the
+# sRGB table reads the same codes up to 2% dark, which a ratio forgives and a level
+# does not.
+_DISPLAY_TO_LINEAR = [(c / 255.0) ** 2.2 for c in range(256)]
 
 
 def _linear_luma(pix, w, h, px, py):
@@ -6719,6 +6724,302 @@ def run_nightfloor_gate(workdir):
           f"(want 0), --no-night-floor over the file {cli_px} px (want 0)")
     if not ok:
         failures.append("nightfloor-cscn")
+
+    return failures
+
+
+# --- overcast (spec 13.7): the CIE overcast dome under a deck -------------------------
+#
+# The frame arms run on the fixture's own scene file, because they turn a pixel ROW into
+# a view elevation and need the camera it states; the flag arms use the glTF like the
+# stars and floor groups. Every radiance read goes through the linear curve with the
+# halos, the dither and the vignette off, decoded by displayEncode's inverse, so a pixel
+# is OVERCAST_EXPOSURE times a radiance and a level can be held against the probe's Lz.
+OVERCAST_SCENE = "aerial_fixture.cscn"
+OVERCAST_EXPOSURE = 8.0
+OVERCAST_LINEAR = ["--tonemap", "linear", *NO_HALOS, "--no-dither", "--no-vignette",
+                   "-E", str(OVERCAST_EXPOSURE)]
+# The four the dome arm holds against the twin: two days, a low sun, and one inside
+# civil twilight, where only the faded horizon constant is left.
+OVERCAST_DOME_ELEVS = ["35", "20", "4", "-3"]
+OVERCAST_DOME_TOL = 1e-5
+# Two sky rows well clear of the ridges, which top out near 6 degrees here.
+OVERCAST_SHAPE_ELEVS = (26.0, 9.0)
+OVERCAST_SHAPE_TOL = 0.03
+# Measured 1 px at o=1 and 478,559 at o=0.5, of 480,000.
+OVERCAST_AZIMUTH_MAX_PX = 50
+OVERCAST_AZIMUTH_CONTROL_MIN_PX = 100000
+# The flat foreground, bottom of frame, where the aerial transmittance is ~0.95.
+OVERCAST_GROUND_BAND = (0.30, 0.90, 0.70, 0.98)
+OVERCAST_GROUND_TOL = 0.10
+# The far-left world edge: the ground plane's last rows and the sky directly over them.
+OVERCAST_EDGE_GROUND = (0.005, 0.62, 0.045, 0.66)
+OVERCAST_EDGE_MIN = 0.2
+# Dense enough that the far bands are all medium: measured 0.998 of the zenith there.
+OVERCAST_FOG_DENSITY = "5e-4"
+OVERCAST_FOG_BAND = (0.05, 0.55, 0.95, 0.70)
+OVERCAST_FOG_TOL = 0.02
+
+
+def _overcast_zenith(sun_el_deg):
+    """The Python twin of sky_overcast_zenith_at (sky.c): Krochmann's zenith in sky units.
+
+    (8.6 sin h + 0.123 day) kcd/m^2 over an unattenuated sun's 127.5 klux, per unit of
+    SKY_SUN_ILLUMINANCE (3), with `day` the civil-twilight ramp's complement --
+    glm_smoothstep(-8, 3, h) written out.
+    """
+    y = math.sin(math.radians(sun_el_deg))
+    t = min(max((sun_el_deg + 8.0) / 11.0, 0.0), 1.0)
+    day = t * t * (3.0 - 2.0 * t)
+    return 3.0 / 127.5 * (8.6 * max(y, 0.0) + 0.123 * day)
+
+
+def _sky_probe(scene, extra):
+    """--sky-probe's four rows keyed by tag, every value a float (a triple for zenith)."""
+    rows, _ = _probe_render(scene, "--sky-probe", "sky-probe", frames=2, extra=extra)
+    got = {}
+    for rec in rows:
+        vals = {}
+        for k, v in rec.items():
+            if k != "kind":
+                vals[k] = [float(p) for p in v.split(",")] if "," in v else float(v)
+        got[rec.get("kind")] = vals
+    return got
+
+
+def _display_band(path, box):
+    """Mean linear luma over a fractional box, decoded by displayEncode's inverse."""
+    w, h, pix = _read_ppm(path)
+    acc, n = 0.0, 0
+    for y in range(int(box[1] * h), int(box[3] * h)):
+        for x in range(int(box[0] * w), int(box[2] * w)):
+            o = (y * w + x) * 3
+            acc += (_DISPLAY_TO_LINEAR[pix[o]] + _DISPLAY_TO_LINEAR[pix[o + 1]] +
+                    _DISPLAY_TO_LINEAR[pix[o + 2]]) / 3.0
+            n += 1
+    return acc / max(n, 1)
+
+
+def _overcast_row_of(scene, el_deg, h):
+    """The frame row whose centre column looks out at `el_deg`, from the file's camera.
+
+    The centre column's ray stays in the camera's pitch plane, so its elevation is the
+    pitch plus the vertical angle off the axis -- exactly, with no roll to account for.
+    """
+    with open(scene) as fh:
+        cam = json.load(fh)["camera"]
+    eye, target = cam["eye"], cam["target"]
+    pitch = math.atan2(target[1] - eye[1], math.hypot(target[0] - eye[0], target[2] - eye[2]))
+    ndc = math.tan(math.radians(el_deg) - pitch) / math.tan(math.radians(cam["fov"]) * 0.5)
+    return int(round((1.0 - ndc) * h * 0.5 - 0.5))
+
+
+def run_overcast_gate(workdir):
+    """The overcast deck (spec 13.7): the CIE dome, and the sun it takes away.
+
+      overcast-zero     --overcast 0 is 0 px from the plain sky: the deck's clear
+                        weight is an exact 1 and its dome an exact 0, so the default
+                        path is the arithmetic it always was.
+      overcast-dome     --sky-probe's Lz at four elevations against this file's twin of
+                        Krochmann's fit, and the zenith radiance at o=1 is (7/9) Lz --
+                        the dome's horizontal irradiance over pi, which is what the fog
+                        and the water read it as.
+      overcast-shape    the sky at two elevations is E x Lz (1 + 2 sin h)/3, a LEVEL
+                        and not a ratio, so a dome missing its /3 fails as surely as
+                        one with the wrong gradient.
+      overcast-azimuth  at o=1 the frame does not know where the sun is (az 40 against
+                        220), while at o=0.5 it does. The frame-wide statement that no
+                        sun-driven term survived the deck -- the clear LUT, the sun
+                        light and the aerial's clear half all live on one side of it.
+      overcast-sun      the sun LIGHT, from the probe: half at o=0.5, zero and not
+                        casting at o=1, against a fixture whose sun casts at o=0.
+      overcast-ground   the flat foreground's IBL lift (on minus --ibl-intensity 0) is
+                        its albedo x (7/9) Lz x E. With no sun, that lift is the dome
+                        arriving through the env cube, the path this feature exists for.
+      overcast-aerial   with the IBL off nothing lights the terrain, so the world edge
+                        shows the aerial's dome term alone, (1 - T) Lz/3: above zero,
+                        and never above the horizon radiance it converges to. A term
+                        reading the zenith or the floor constant lands over the bar.
+      overcast-fog      dense fog at o=1 converges on the probe's zenith radiance -- the
+                        fog ambient the CPU march hands the medium.
+      overcast-slice    the cycle's sliced re-bake at o=0.5 is 0 px from the atomic one.
+                        Under a still sun the latched and live suns agree, so a slicer
+                        reading the live one is NOT visible here; what is, is any path
+                        that bakes the deck differently from the atomic bake.
+      overcast-cscn     the authored environment.overcast IS the flag path (0 px), and
+                        --overcast 0 beats a file that asked for a deck.
+
+    The three frame LEVELS -- shape, ground, fog -- are held against the probe's Lz from
+    the same fixture, which is what ties the C helper to the shaders: the dome is
+    computed once on the CPU and applied in four programs, and a program that applied it
+    differently would still render a plausible grey sky.
+    """
+    scene = asset(STARS_FIXTURE)
+    cscn = asset(OVERCAST_SCENE)
+    if not os.path.exists(scene) or not os.path.exists(cscn):
+        print(f"  overcast-zero SKIP  ({STARS_FIXTURE} not present)")
+        return []
+    failures = []
+
+    zero = os.path.join(workdir, "overcast_zero.ppm")
+    plain = os.path.join(workdir, "overcast_plain.ppm")
+    err = render(scene, zero, ["--overcast", "0"] + STARS_PIN) or \
+        render(scene, plain, ["--sky"] + STARS_PIN)
+    if err:
+        print(f"  overcast-zero ERROR render failed: {err.strip()[-200:]}")
+        return ["overcast-zero"]
+    px, _ = compare(zero, plain)
+    ok = px == 0
+    print(f"  overcast-zero {'PASS' if ok else 'FAIL'}  --overcast 0 vs the plain sky {px} px "
+          f"(want 0)")
+    if not ok:
+        failures.append("overcast-zero")
+
+    probes = {el: _sky_probe(scene, ["--overcast", "1", "--sun-elevation", el] + STARS_PIN)
+              for el in OVERCAST_DOME_ELEVS}
+    worst, detail = 0.0, []
+    for el, got in probes.items():
+        lz = got.get("dome", {}).get("lz", float("nan"))
+        want = _overcast_zenith(float(el))
+        zen = got.get("dome", {}).get("zenith", [float("nan")] * 3)
+        errs = [abs(lz - want) / want] + [abs(z - 7.0 / 9.0 * want) / (7.0 / 9.0 * want)
+                                          for z in zen]
+        # max() passes a NaN over silently, and a missing row is exactly a NaN here.
+        worst = float("inf") if any(math.isnan(e) for e in errs) else max([worst] + errs)
+        detail.append(f"{el}:{lz:.6g}")
+    ok = worst <= OVERCAST_DOME_TOL
+    print(f"  overcast-dome {'PASS' if ok else 'FAIL'}  Lz {' '.join(detail)}, worst relative "
+          f"error {worst:.2e} against the twin and (7/9) Lz (want <={OVERCAST_DOME_TOL})")
+    if not ok:
+        failures.append("overcast-dome")
+
+    lz20 = probes["20"].get("dome", {}).get("lz", float("nan"))
+    full = os.path.join(workdir, "overcast_full.ppm")
+    turned = os.path.join(workdir, "overcast_turned.ppm")
+    err = render(cscn, full, ["--overcast", "1"] + OVERCAST_LINEAR) or \
+        render(cscn, turned, ["--overcast", "1", "--sun-azimuth", "220"] + OVERCAST_LINEAR)
+    if err:
+        print(f"  overcast-shape ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["overcast-shape"]
+    _, h, _ = _read_ppm(full)
+    worst, detail = 0.0, []
+    for el in OVERCAST_SHAPE_ELEVS:
+        row = _overcast_row_of(cscn, el, h) / h
+        got = _display_band(full, (0.4, row - 2.0 / h, 0.6, row + 3.0 / h))
+        want = OVERCAST_EXPOSURE * lz20 * (1.0 + 2.0 * math.sin(math.radians(el))) / 3.0
+        worst = max(worst, abs(got / want - 1.0))
+        detail.append(f"{el:g}deg {got:.4f}/{want:.4f}")
+    ok = worst <= OVERCAST_SHAPE_TOL
+    print(f"  overcast-shape {'PASS' if ok else 'FAIL'}  sky against E Lz (1+2 sin h)/3: "
+          f"{', '.join(detail)} (want within {OVERCAST_SHAPE_TOL:.0%})")
+    if not ok:
+        failures.append("overcast-shape")
+
+    half = os.path.join(workdir, "overcast_half.ppm")
+    half_turned = os.path.join(workdir, "overcast_half_turned.ppm")
+    err = render(cscn, half, ["--overcast", "0.5"] + OVERCAST_LINEAR) or \
+        render(cscn, half_turned, ["--overcast", "0.5", "--sun-azimuth", "220"] + OVERCAST_LINEAR)
+    if err:
+        print(f"  overcast-azimuth ERROR render failed: {err.strip()[-200:]}")
+        failures.append("overcast-azimuth")
+    else:
+        full_px, _ = compare(full, turned)
+        half_px, _ = compare(half, half_turned)
+        ok = full_px <= OVERCAST_AZIMUTH_MAX_PX and half_px >= OVERCAST_AZIMUTH_CONTROL_MIN_PX
+        print(f"  overcast-azimuth {'PASS' if ok else 'FAIL'}  sun turned 180 degrees: {full_px} px "
+              f"at o=1 (want <={OVERCAST_AZIMUTH_MAX_PX}), {half_px} px at o=0.5 (want "
+              f">={OVERCAST_AZIMUTH_CONTROL_MIN_PX}: the fixture can see the sun)")
+        if not ok:
+            failures.append("overcast-azimuth")
+
+    sun = {o: _sky_probe(scene, ["--overcast", o, "--sun-elevation", "20"] + STARS_PIN)
+           .get("sun-light", {}) for o in ("0", "0.5")}
+    sun["1"] = probes["20"].get("sun-light", {})
+    i0 = sun["0"].get("intensity", 0.0)
+    ok = (i0 > 0.0 and sun["0"].get("casts") == 1.0
+          and abs(sun["0.5"].get("intensity", -1.0) - 0.5 * i0) <= 1e-6 * i0
+          and sun["1"].get("intensity") == 0.0 and sun["1"].get("casts") == 0.0)
+    print(f"  overcast-sun {'PASS' if ok else 'FAIL'}  intensity {i0:g} / "
+          f"{sun['0.5'].get('intensity')} / {sun['1'].get('intensity')} at o=0/0.5/1, casts "
+          f"{sun['0'].get('casts')}/{sun['1'].get('casts')} at 0/1 (want half, then 0 and "
+          f"not casting)")
+    if not ok:
+        failures.append("overcast-sun")
+
+    dark = os.path.join(workdir, "overcast_noibl.ppm")
+    err = render(cscn, dark, ["--overcast", "1", "--ibl-intensity", "0"] + OVERCAST_LINEAR)
+    if err:
+        print(f"  overcast-ground ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["overcast-ground"]
+    with open(scene) as fh:
+        mats = {m["name"]: m for m in json.load(fh)["materials"]}
+    albedo = sum(mats["aerial_ground"]["pbrMetallicRoughness"]["baseColorFactor"][:3]) / 3.0
+    lift = _display_band(full, OVERCAST_GROUND_BAND) - _display_band(dark, OVERCAST_GROUND_BAND)
+    want = albedo * 7.0 / 9.0 * lz20 * OVERCAST_EXPOSURE
+    ok = abs(lift / want - 1.0) <= OVERCAST_GROUND_TOL
+    print(f"  overcast-ground {'PASS' if ok else 'FAIL'}  foreground IBL lift {lift:.4f} against "
+          f"albedo x (7/9) Lz x E {want:.4f} (want within {OVERCAST_GROUND_TOL:.0%})")
+    if not ok:
+        failures.append("overcast-ground")
+
+    edge = _display_band(dark, OVERCAST_EDGE_GROUND) / (OVERCAST_EXPOSURE * lz20 / 3.0)
+    ok = OVERCAST_EDGE_MIN <= edge <= 1.0
+    print(f"  overcast-aerial {'PASS' if ok else 'FAIL'}  unlit world edge {edge:.3f} of the "
+          f"horizon radiance Lz/3 (want {OVERCAST_EDGE_MIN}..1: the aerial's (1 - T) share)")
+    if not ok:
+        failures.append("overcast-aerial")
+
+    fog = os.path.join(workdir, "overcast_fog.ppm")
+    err = render(cscn, fog, ["--overcast", "1", "--fog", "--fog-density", OVERCAST_FOG_DENSITY]
+                 + OVERCAST_LINEAR, frames=CLOUDSHADOW_FRAMES)
+    if err:
+        print(f"  overcast-fog ERROR render failed: {err.strip()[-200:]}")
+        failures.append("overcast-fog")
+    else:
+        zen = probes["20"].get("dome", {}).get("zenith", [float("nan")])[0]
+        ratio = _display_band(fog, OVERCAST_FOG_BAND) / (OVERCAST_EXPOSURE * zen)
+        ok = abs(ratio - 1.0) <= OVERCAST_FOG_TOL
+        print(f"  overcast-fog {'PASS' if ok else 'FAIL'}  far bands under dense fog {ratio:.4f} "
+              f"of E x the probe's zenith (want within {OVERCAST_FOG_TOL:.0%})")
+        if not ok:
+            failures.append("overcast-fog")
+
+    base = ["--overcast", "0.5", "--sun-elevation", "12", "--sun-azimuth", "40"] + STARS_PIN
+    sliced = os.path.join(workdir, "overcast_sliced.ppm")
+    atomic = os.path.join(workdir, "overcast_atomic.ppm")
+    err = render(scene, sliced, base + ["--cycle-rebake-at", "2"], frames=60) or \
+        render(scene, atomic, base, frames=60)
+    if err:
+        print(f"  overcast-slice ERROR render failed: {err.strip()[-200:]}")
+        failures.append("overcast-slice")
+    else:
+        px, _ = compare(sliced, atomic)
+        ok = px == 0
+        print(f"  overcast-slice {'PASS' if ok else 'FAIL'}  sliced re-bake vs atomic {px} px "
+              f"(want 0)")
+        if not ok:
+            failures.append("overcast-slice")
+
+    authored = os.path.join(workdir, "overcast_cscn.cscn")
+    cscn_copy(cscn, authored, lambda d: d["environment"].update({"overcast": 0.6}))
+    a_file = os.path.join(workdir, "overcast_cscn_file.ppm")
+    a_flag = os.path.join(workdir, "overcast_cscn_flag.ppm")
+    a_off = os.path.join(workdir, "overcast_cscn_off.ppm")
+    a_plain = os.path.join(workdir, "overcast_cscn_plain.ppm")
+    err = render(authored, a_file, []) or render(cscn, a_flag, ["--overcast", "0.6"]) or \
+        render(authored, a_off, ["--overcast", "0"]) or render(cscn, a_plain, [])
+    if err:
+        print(f"  overcast-cscn ERROR render failed: {err.strip()[-200:]}")
+        return failures + ["overcast-cscn"]
+    flag_px, _ = compare(a_file, a_flag)
+    off_px, _ = compare(a_off, a_plain)
+    moved, _ = compare(a_file, a_plain)
+    ok = flag_px == 0 and off_px == 0 and moved > 0
+    print(f"  overcast-cscn {'PASS' if ok else 'FAIL'}  authored vs flag {flag_px} px (want 0), "
+          f"--overcast 0 over the file {off_px} px (want 0), the deck itself {moved} px "
+          f"(want >0)")
+    if not ok:
+        failures.append("overcast-cscn")
 
     return failures
 
@@ -26548,6 +26849,8 @@ GATE_GROUPS = [
      run_stars_gate),
     ("night-floor", "the night-sky floor lighting the world (spec 11.80):",
      run_nightfloor_gate),
+    ("overcast", "the overcast deck: CIE dome, sun taken away, fog and IBL (spec 13.7):",
+     run_overcast_gate),
     ("cycle", "the day/night clock and its sliced env re-bake (spec 11.81):",
      run_cycle_gate),
     ("moon", "the moon: disc, derived phase, terminator and a second casting light "
