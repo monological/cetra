@@ -167,6 +167,7 @@ void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
     uniform_set_float(u, "streakBrightness", rain->streak_brightness);
     uniform_set_float(u, "forwardG", rain->streak_forward_g);
     uniform_set_float(u, "glintShare", glm_clamp(rain->streak_glint, 0.0f, 1.0f));
+    uniform_set_float(u, "sheen", fmaxf(rain->streak_sheen, 0.0f));
 
     // The cover first: the binder leaves another unit active.
     bind_shadow_maps_to_program(scene->shadow_system, program);

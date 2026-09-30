@@ -191,6 +191,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
     fprintf(stderr, "      --rain <mm/h>      Rain at this rate, already soaked (spec 13.9)\n");
     fprintf(stderr, "      --no-rain          Drop the rain a scene file asked for\n");
+    fprintf(stderr, "      --rain-sheen <f>   How much brighter than its surroundings a drop\n"
+                    "                         reads (0 = physical: only lit rain shows)\n");
     fprintf(stderr, "      --rain-probe       Print the rain's physics, schedule and state\n");
     fprintf(stderr, "      --rain-probe-at <x,y,z>  With --rain-probe: whether this point is\n"
                     "                         under cover (repeatable, up to 16)\n");
@@ -583,6 +585,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // "unset" value has to sit outside every plausible one rather than at zero.
     args->water_level = -9999.0f;
     args->rain_rate = -1.0f;        // -1 = keep the scene file's (0 is a legal rate)
+    args->rain_sheen = -1.0f;       // -1 = keep the scene file's
     args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
     args->spec_occ_mode = -1;       // -1 = keep the engine default
     args->import_scale = 1.0f;      // 1 = none
@@ -1198,6 +1201,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
         } else if (strcmp(argv[i], "--no-rain") == 0) {
             args->no_rain = 1;
+        } else if (strcmp(argv[i], "--rain-sheen") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 100.0f, &args->rain_sheen) != 0)
+                return -1;
         } else if (strcmp(argv[i], "--rain-probe") == 0) {
             args->rain_probe = 1;
         } else if (strcmp(argv[i], "--rain-probe-at") == 0) {
@@ -4563,6 +4569,8 @@ int main(int argc, char** argv) {
             rain_settle(scene->rain);
         }
     }
+    if (scene->rain && args.rain_sheen >= 0.0f)
+        scene->rain->streak_sheen = args.rain_sheen;
 
     if (args.no_water) {
         free_water(scene->water);

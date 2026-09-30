@@ -585,6 +585,8 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
         rain->streak_forward_g = r->streak_forward_g;
     if (r->has_streak_glint)
         rain->streak_glint = r->streak_glint;
+    if (r->has_streak_sheen)
+        rain->streak_sheen = r->streak_sheen;
     if (!r->has_settled || r->settled)
         rain_settle(rain);
     free_rain(scene->rain);

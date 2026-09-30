@@ -72,6 +72,10 @@ typedef struct Rain {
     float streak_brightness; // scale on each drop's opacity; 1 = physical
     float streak_forward_g;  // Henyey-Greenstein asymmetry of the refracted lobe
     float streak_glint;      // 0..1, how much of the lamp-lit light arrives as flashes
+    // How much brighter than what it refracts a drop reads: 0 = physical, where rain in the
+    // dark shows only where light hits it; 2 = three times its surroundings, so it shows
+    // everywhere there is anything to catch. A look, not a measurement.
+    float streak_sheen;
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.

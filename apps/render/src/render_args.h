@@ -154,6 +154,7 @@ typedef struct {
     int no_water;               // Drop a water surface a scene file asked for
     float rain_rate;            // Rain in mm/h (spec 13.9); negative = keep the scene file's
     int no_rain;                // Drop the rain a scene file asked for
+    float rain_sheen;           // Rain.streak_sheen; negative = keep the scene file's
     int rain_probe;             // Print the rain's physics, an integration schedule and state
     float rain_probe_at[16][3]; // --rain-probe-at points whose cover the probe reports
     int rain_probe_at_count;

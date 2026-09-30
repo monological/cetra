@@ -258,6 +258,8 @@ typedef struct CSceneRain {
     float streak_forward_g;
     bool has_streak_glint;
     float streak_glint;
+    bool has_streak_sheen;
+    float streak_sheen;
     // false = the world starts dry and wets as the scene runs; absent = already soaked
     bool has_settled;
     bool settled;
