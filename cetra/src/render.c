@@ -14,6 +14,8 @@
 #include "wind.h"
 #include "gi_volume.h"
 #include "water.h"
+#include "rain.h"
+#include "rain_render.h"
 #include "program.h"
 #include "uniform.h"
 #include "shader.h"
@@ -241,6 +243,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // Shore wetness (0 = never wetted). Per material switch for the same reason wind is:
     // a material that did not ask for it resets the uniform and the shader early-outs.
     uniform_set_float(u, "uShoreWetness", material->shore_wetness);
+    uniform_set_float(u, "uPorosity", material->porosity);
     // Stochastic albedo sampling (0 = a plain lookup). The table goes up whenever the scale
     // does rather than being cached per material: it is 768 bytes, where deciding whether to
     // skip it would need per-program state this call deliberately does not keep.
@@ -548,6 +551,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // frame, and it is the same clock `time` above came from -- so the sand cannot
             // describe a different instant of the swash than the water surface draws.
             water_bind_sea(scene ? scene->water : NULL, scene, program);
+            // And how soaked the world is, for the same reason and on the same switch.
+            rain_bind_surface(scene ? scene->rain : NULL, program);
             // Both are read only inside an OIT sub-pass, so they upload only
             // there: the warp interval the moments are stated over, and (where
             // the atlas is actually bound) the reciprocal FRAME size. The atlas
@@ -787,12 +792,15 @@ static unsigned _material_pbr_features(const Engine* engine, const Material* mat
     return mask;
 }
 
-// The two bits no material can answer for. A decal belongs to no material at
-// all, and whether a scene has an area light is a fact about the light list.
+// The three bits no material can answer for. A decal belongs to no material at
+// all, whether a scene has an area light is a fact about the light list, and
+// whether it rains -- or is still wet from it -- is a fact about the sky.
 static unsigned _scene_pbr_features(const Scene* scene) {
     unsigned mask = 0;
     if (scene->decal_count > 0)
         mask |= PBR_FEAT_DECALS;
+    if (rain_active(scene->rain))
+        mask |= PBR_FEAT_RAIN;
     for (size_t i = 0; i < scene->light_count; ++i) {
         if (scene->lights[i] && scene->lights[i]->type == LIGHT_AREA) {
             mask |= PBR_FEAT_AREA;

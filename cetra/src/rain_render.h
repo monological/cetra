@@ -33,4 +33,11 @@ void free_rain_renderer(RainRenderer* renderer);
 void rain_render_streaks(RainRenderer* renderer, struct Engine* engine, struct Scene* scene,
                          const struct PostFXLateDraw* late);
 
+struct Rain;
+struct ShaderProgram;
+// How soaked the world is, for a lit-surface program. NULL publishes 0, the dry state, and
+// must: programs are cached across scenes, so a dry scene after a wet one would otherwise
+// inherit its wetness.
+void rain_bind_surface(const struct Rain* rain, struct ShaderProgram* program);
+
 #endif // _RAIN_RENDER_H_

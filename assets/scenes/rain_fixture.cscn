@@ -45,6 +45,14 @@
    -1.5
   ]
  },
+ "materials": {
+  "rain_porous": {
+   "porosity": 1.0
+  },
+  "rain_sealed": {
+   "porosity": 0.0
+  }
+ },
  "camera": {
   "eye": [
    0.0,

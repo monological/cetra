@@ -160,6 +160,9 @@ scene_desc = {
         }
     ],
     "rain": {"rate": RATE_MMH, "wind": WIND},
+    # Stated rather than derived from the roughness, which is the same on both halves: the
+    # pair exists to isolate porosity, so each half says what it is.
+    "materials": {"rain_porous": {"porosity": 1.0}, "rain_sealed": {"porosity": 0.0}},
     "camera": {"eye": [0.0, 2.4, 11.0], "target": [0.0, 1.2, -4.0], "fov": 55},
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }

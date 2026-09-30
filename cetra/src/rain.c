@@ -29,6 +29,7 @@ Rain* create_rain(void) {
     // the frame, and a 1024-texel map spent over it is 9.4 cm a texel -- under the
     // overhang of an eave.
     rain->occlusion_extent = 96.0f;
+    rain->occlusion_softness = 0.25f;
     // Real rain is about 900 drops a cubic metre at 10 mm/h; this draws some 30 in the
     // nearest box, and the rest of it is the medium's to carry (the fog, phase 7). The
     // shutter is a camera's 1/60 s, which streaks a 2 mm drop over 11 cm.
