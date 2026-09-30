@@ -65,6 +65,9 @@ typedef struct Rain {
     // Width in metres of the square around the camera over which cover is known --
     // the occlusion map's footprint. Outside it every surface counts as open sky.
     float occlusion_extent;
+    // Metres over which a surface goes from dry under cover to wet in the open: the soft
+    // edge of the dry patch under an eave, where wind and splash carry the rain in a little.
+    float occlusion_softness;
 
     // The streaks: `streak_count` drops in each of three nested boxes around the camera,
     // the innermost `streak_radius` metres either way and each next one three times

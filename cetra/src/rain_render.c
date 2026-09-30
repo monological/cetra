@@ -212,3 +212,9 @@ void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
     check_gl_error("rain streaks");
     profiler_scope_end(engine->profiler);
 }
+
+void rain_bind_surface(const Rain* rain, ShaderProgram* program) {
+    if (!program || !program->uniforms)
+        return;
+    uniform_set_float(program->uniforms, "rainWetness", rain ? rain->wetness : 0.0f);
+}

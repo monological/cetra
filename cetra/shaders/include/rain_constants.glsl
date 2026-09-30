@@ -25,6 +25,11 @@
 // open sky. The map stores the surface nearest the sky, so a point ON it compares equal.
 #define RAIN_OCCLUSION_REACH 250.0f
 #define RAIN_EXPOSED_BIAS 0.02f
+// How far off a surface, along its normal, its cover is asked for, in metres: a texel of the
+// map (9.4 cm at the default extent) and a little over. Asked AT the surface, a wall the rain
+// strikes at a grazing angle compares against its own depth quantised across a texel it
+// spans a third of a metre of, and shadows itself in stripes.
+#define RAIN_NORMAL_OFFSET 0.12f
 
 // The share of the light a drop scatters that it scatters by REFRACTION, into a forward lobe;
 // the rest -- external reflection and the internal bounces -- goes everywhere. Geometric

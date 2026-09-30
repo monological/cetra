@@ -243,6 +243,15 @@ uniform float time;
 // 0 = this material is never wetted, whatever the sea does. See Material.shore_wetness.
 uniform float uShoreWetness;
 
+// Rain (spec 13.9): the second source of water on a surface. Its cover is a layer of the
+// punctual shadow array declared above, so it declares no sampler, and only a variant that
+// carries the bit declares the rest -- a scene without rain compiles the source it always did.
+#if CETRA_HAS(PBR_FEAT_RAIN)
+#include "rain_occlusion.glsl"
+uniform float rainWetness; // 0..1, how soaked the world is; see Rain.wetness
+uniform float uPorosity;   // Material.porosity; -1 = derive it from the roughness
+#endif
+
 /*
  * By-example stochastic albedo (spec 11.46). Declares no sampler of its own -- it re-reads
  * albedoTex, whose contents a material opting in has had transformed -- and keeps its inverse
@@ -276,21 +285,11 @@ uniform float uShoreWetness;
 // surface-map decode a decal's optional relief map shares.
 #include "decals_ubo.glsl"
 
+// What water does to a surface, for the shore below and the rain after it.
+#include "wet_surface.glsl"
 // Open porosity of sand that the swash fills, from Lagarde's 25-50% band for natural
 // materials. What the diffuse albedo loses when the pores are full.
 const float SHORE_POROSITY = 0.38;
-// Lekner-Dorf internal reflection as a power on the albedo: saturating, so a channel the dry
-// sand already absorbs is absorbed more, which is the cool-warm shift a wet beach has.
-const float SHORE_DARKEN_POWER = 0.55;
-// What a full film smooths the surface to, and the F0 of the air/water interface it puts in
-// front of it. Water is LESS reflective than sand at normal incidence; the shine is the
-// roughness, not the Fresnel.
-const float SHORE_WET_ROUGHNESS = 0.12;
-const float SHORE_WET_F0 = 0.02;
-// How far a full film flattens the normal toward the geometric one. Not 1: a drained sheet
-// still follows the sand it is lying on, and taking the normal all the way to flat reads as
-// a decal of water rather than water on a beach.
-const float SHORE_FLATTEN = 0.75;
 // Stranded whitewater. Bright and rough -- entrained air, not a wet surface.
 const float SHORE_FOAM_ALBEDO = 0.86;
 const float SHORE_FOAM_ROUGHNESS = 0.85;
@@ -1543,44 +1542,8 @@ void main() {
             float amount = uShoreWetness * inRange;
             float wet = sw.wet * amount;
             float film = sw.film * amount;
-
-            /*
-             * POROSITY DARKENING (Lagarde). Water filling the pores raises the effective
-             * refractive index between the grains, so less light escapes back out: the
-             * diffuse albedo drops by the open porosity that got filled. 0.38 sits inside
-             * the 25-50% band that work gives for natural materials.
-             *
-             * A tint multiply was the obvious alternative and is wrong twice over -- it does
-             * not saturate, and it makes wet sand a colour rather than a darker version of
-             * whatever colour the sand already is.
-             */
-            albedoMap *= 1.0 - SHORE_POROSITY * wet;
-
-            /*
-             * THE HUE SHIFT, and not by Beer-Lambert. Water's absorption is
-             * (0.0035, 0.0004, 0) per cm, so a film 0.1-1 mm thick transmits exp(-0.0007) --
-             * 0.9993, which is nothing. This session shipped and reverted exactly that
-             * mistake once already on the sea's capillary slope term.
-             *
-             * What actually reddens wet sand is Lekner-Dorf internal reflection: light that
-             * scatters inside the grain bed is reflected back INTO it at the water surface
-             * instead of escaping, so it makes more passes through the sand's own pigment.
-             * A power law on the albedo is the saturating form of that -- a channel the dry
-             * sand already absorbs gets absorbed more -- and it composes with the porosity
-             * term above rather than fighting it.
-             */
-            albedoMap = pow(albedoMap, vec3(1.0 + SHORE_DARKEN_POWER * wet));
-
-            /*
-             * The film makes the surface SMOOTH, which is why it looks shinier -- not more
-             * reflective. An air/water interface is F0 0.02 against sand's 0.04, so the
-             * reflectance actually falls; what rises is how tightly it is concentrated.
-             */
-            roughnessMap = clamp(mix(roughnessMap, SHORE_WET_ROUGHNESS, film), 0.04, 1.0);
+            wetSurface(albedoMap, roughnessMap, N, normalize(Normal), SHORE_POROSITY, wet, film);
             shoreFilm = film;
-            // A drained sheet reads as a sheet: the ripples the normal map carries are under
-            // the water, not on it.
-            N = normalize(mix(N, normalize(Normal), film * SHORE_FLATTEN));
 
             /*
              * Whitewater the tongue stranded. It is drawn HERE rather than by the water
@@ -1593,6 +1556,31 @@ void main() {
             roughnessMap = clamp(mix(roughnessMap, SHORE_FOAM_ROUGHNESS, foam), 0.04, 1.0);
         }
     }
+
+#if CETRA_HAS(PBR_FEAT_RAIN)
+    /*
+     * WET FROM THE RAIN (spec 13.9): the same water as the swash's, from the sky.
+     *
+     * How wet is the world's integrated state times this point's cover, read off the
+     * occlusion map a little way out along the surface normal. Everything the rain reaches
+     * wets, walls included; only what faces UP holds a film, because a wall sheds its water
+     * as fast as it arrives.
+     *
+     * A metal's albedo is its reflectance, not a diffuse colour water can darken, so the
+     * porosity and hue terms fade out with the metalness and a wet metal only takes the film.
+     */
+    float rainFilm = 0.0;
+    if (rainWetness > 0.0) {
+        vec3 Ng = normalize(Normal);
+        float wet = rainWetness * rainExposureSoft(WorldPos + Ng * RAIN_NORMAL_OFFSET);
+        // Rough is porous, the Lagarde mapping: gloss 0.5 and above is sealed, 0.1 fully open.
+        float porosity =
+            uPorosity >= 0.0 ? uPorosity : clamp((roughnessMap - 0.5) / 0.4, 0.0, 1.0);
+        rainFilm = wet * smoothstep(RAIN_FILM_UP_MIN, RAIN_FILM_UP_FULL, Ng.y);
+        wetSurface(albedoMap, roughnessMap, N, Ng, porosity * RAIN_POROSITY_DARKEN,
+                   wet * (1.0 - metallicMap), rainFilm);
+    }
+#endif
 
     /*
      * DECALS, the second half: the surface a mark makes, rather than its colour.
@@ -1685,7 +1673,10 @@ void main() {
     // 0.02 against a dielectric's 0.04 -- so wet sand reflects LESS at normal incidence, not
     // more. What makes it read shiny is the roughness drop above, which concentrates the
     // same energy instead of adding any.
-    iorF0 = mix(iorF0, SHORE_WET_F0, shoreFilm);
+    iorF0 = mix(iorF0, WET_F0, shoreFilm);
+#if CETRA_HAS(PBR_FEAT_RAIN)
+    iorF0 = mix(iorF0, WET_F0, rainFilm);
+#endif
     vec3 F0 = vec3(iorF0);
     // KHR_materials_specular re-parameterizes the DIELECTRIC Fresnel, per the
     // spec's exact form (10.8): f0 = min(iorF0 * specularColor, 1) * specular

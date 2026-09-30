@@ -281,6 +281,7 @@ typedef struct ShadowSystem {
     int rain_layer;
     mat4 rain_matrix;
     mat4 rain_lookup;
+    float rain_cover_spread; // lookup-uv distance between a surface's soft cover taps
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
     // cascades, resolved after the depth pass and read in ONE tap where the

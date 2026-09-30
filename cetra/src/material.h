@@ -211,6 +211,11 @@ typedef struct Material {
     // 0 = the surface never darkens, whatever the sea does.
     float shore_wetness;
 
+    // How much of the surface is open pores for rain to fill (spec 13.9), 0..1: a porous
+    // surface darkens as it wets, a sealed one only takes a film. -1 = derive it from the
+    // roughness, rough being porous (Lagarde).
+    float porosity;
+
     /*
      * Stochastic albedo sampling (see include/stochastic.glsl), in UV units per lattice cell.
      * 0 = a plain lookup, which is every material that has not asked.

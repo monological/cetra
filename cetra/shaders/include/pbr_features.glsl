@@ -33,11 +33,15 @@
 // unlayered material links the whole four-layer triplanar blend and carries a
 // LayerSurface across the light loop to reach a branch it never takes.
 #define PBR_FEAT_LAYERS   32
+// Whether the SCENE rains (spec 13.9): the wet-surface terms and the cover lookup. A
+// scene bit like DECALS and AREA -- every material in a wet world is wet -- and it
+// declares no sampler, since the cover is a layer of the punctual array.
+#define PBR_FEAT_RAIN     64
 
 // The union, written out rather than OR-ed together, because an expression here
 // would have to parse identically in C, GLSL and the Python that reads this file
 // for scripts/gates.py. A literal is the only form all three agree on.
-#define PBR_FEAT_ALL 63
+#define PBR_FEAT_ALL 127
 
 // The mask this compilation carries, and the test for a bit in it.
 //
