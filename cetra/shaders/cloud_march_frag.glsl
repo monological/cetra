@@ -74,5 +74,5 @@ void main()
         }
     }
 
-    FragColor = result;
+    FragColor = vec4(min(result.rgb, vec3(SKY_STORE_FP16_MAX)), result.a);
 }

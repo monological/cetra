@@ -24,11 +24,12 @@
 // SKY_SUN_ILLUMINANCE, a relative scale on which a noon zenith is a couple of
 // units, and `radiance_scale` carries that into nits. At SKY_PHOTOMETRIC_SCALE
 // an unattenuated sun delivers SKY_SUN_KLUX klux, which is where lights
-// authored in nits, candela and lux already sit. atmosphere.glsl mirrors the
-// first.
-#define SKY_SUN_ILLUMINANCE   3.0f
-#define SKY_SUN_KLUX          127.5f
+// authored in nits, candela and lux already sit.
+#include "../shaders/include/sky_constants.glsl"
 #define SKY_PHOTOMETRIC_SCALE (SKY_SUN_KLUX * 1000.0f / SKY_SUN_ILLUMINANCE)
+// The range radiance_scale is taken within, wherever it arrives from.
+#define SKY_RADIANCE_SCALE_MIN 1e-6f
+#define SKY_RADIANCE_SCALE_MAX 1e9f
 
 #define SKY_TRANSMITTANCE_W   256
 #define SKY_TRANSMITTANCE_H   64
@@ -202,15 +203,17 @@ typedef struct SkyAtmosphere {
     float night_floor_brightness; // scale on the baked radiance (1 = default)
 
     // How much of the sky is under cloud (spec 13.7), taken clamped to 0..1: 0
-    // the clear sky, 1 a deck with no direct sun at all, lit as the CIE
+    // the clear sky, 1 an overcast with no direct sun at all, lit as the CIE
     // standard overcast dome. Baked into the sky-view LUT like the night floor,
     // so it takes the same re-bake chain.
     float overcast;
 
-    // Nits per unit of the sky's relative scale (spec 13.7): 1 keeps the
-    // relative sky, SKY_PHOTOMETRIC_SCALE sets it beside photometric lights.
-    // Everything the SUN drives takes it, so it is baked like overcast; the
-    // night floor, the stars and the moon are absolute and do not.
+    // Nits per unit of the sky's relative scale (spec 13.7), taken clamped to
+    // SKY_RADIANCE_SCALE_MIN..MAX: 1 keeps the relative sky,
+    // SKY_PHOTOMETRIC_SCALE sets it beside photometric lights. Everything the
+    // SUN drives takes it, so it is baked like overcast; the night floor, the
+    // stars and the moon are absolute and do not. A change of UNITS rather than
+    // of look: a scene-captured probe is shot once, so set it before one is.
     float radiance_scale;
 
     // The day/night cycle (spec 11.81). One clock: cycle_hour (0-24, solar
@@ -321,7 +324,8 @@ typedef struct SkyAtmosphere {
     struct Light* sun_light;
     // Key-light intensity at full elevation on the relative scale; the light is
     // this times radiance_scale. SKY_SUN_ILLUMINANCE is the value at which the
-    // light and the sky agree, and what a photometric sky wants.
+    // light and the sky agree, and what a photometric sky wants. The moon's
+    // light is a fraction of this same base WITHOUT the scale.
     float sun_base_intensity;
 
     // World units per kilometre. The atmosphere model is in km (Rg/Rt in
@@ -440,15 +444,19 @@ void sky_apply_sun_to_light(SkyAtmosphere* sky);
 // `overcast` as it takes effect: clamped to 0..1.
 float sky_overcast_amount(const SkyAtmosphere* sky);
 
-// The overcast dome's zenith radiance at the current sun, times radiance_scale
+// `radiance_scale` as it takes effect: clamped to SKY_RADIANCE_SCALE_MIN..MAX.
+float sky_radiance_scale(const SkyAtmosphere* sky);
+
+// The overcast dome's zenith radiance at the current sun, on the sky's scale
 // (spec 13.7): the Lz of the CIE overcast sky's L = Lz (1 + 2 cos theta) / 3,
 // whatever `overcast` is set to.
 float sky_overcast_zenith(const SkyAtmosphere* sky);
 
-// Upload what the overcast deck does, for a sun at sin(elevation) sun_y, to a
-// program that includes sky_deck.glsl (spec 13.7). The program must be in use.
-// The only way the deck reaches a shader, so the model has one owner.
-void sky_bind_deck(const SkyAtmosphere* sky, ShaderProgram* program, float sun_y);
+// Upload what the sky emits -- the overcast's share and the radiance scale --
+// for a sun at sin(elevation) sun_y, to a program that includes
+// sky_emission.glsl (spec 13.7). The program must be in use. The only way
+// either setting reaches a shader, so the model has one owner.
+void sky_bind_emission(const SkyAtmosphere* sky, ShaderProgram* program, float sun_y);
 
 // The moon's brightness as a fraction of a full moon's, from the current sun
 // and moon directions. 1 at full, ~0.09 at quarter, ~0 at new -- a real moon

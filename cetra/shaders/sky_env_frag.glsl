@@ -26,5 +26,7 @@ void main()
         return;
     }
 
-    FragColor = vec4(skyVirtualGround(dir, sunDir, r, skyViewLut, transmittanceLut), 1.0);
+    FragColor = vec4(min(skyVirtualGround(dir, sunDir, r, skyViewLut, transmittanceLut),
+                         vec3(SKY_STORE_FP16_MAX)),
+                     1.0);
 }

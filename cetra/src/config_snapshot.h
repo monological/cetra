@@ -54,6 +54,11 @@ typedef struct ConfigSnapshotSource {
     // that is a measured RMSE 0.0063 on raiden rather than a theoretical one.
     bool no_texture_compression;
     bool texture_compress_colour;
+    // --sky-scale (spec 13.7), 0 = not set. Here as well as in the sky.radiance_scale
+    // row because it changes the sky's UNITS: a scene-captured probe is shot at load and
+    // never again, so a scale that lands after it leaves every reflection of the sky
+    // tens of thousands of times off, reproduced faithfully.
+    float sky_scale;
     // Window size. Filled by the writer from the live engine and ignored on the
     // way in; a reader takes them from the parsed block. 0 = not recorded.
     int width, height;

@@ -1375,10 +1375,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--sky-scale") == 0) {
-            if (i + 1 < argc && strcmp(argv[i + 1], "photometric") == 0) {
+            if (i + 1 < argc && strcasecmp(argv[i + 1], "photometric") == 0) {
                 args->sky_scale = SKY_PHOTOMETRIC_SCALE;
                 i++;
-            } else if (_ranged_arg(argc, argv, &i, 1e-6f, 1e9f, &args->sky_scale) != 0) {
+            } else if (_ranged_arg(argc, argv, &i, SKY_RADIANCE_SCALE_MIN, SKY_RADIANCE_SCALE_MAX,
+                                   &args->sky_scale) != 0) {
                 return -1;
             }
             args->sky = 1;
@@ -3063,6 +3064,9 @@ int main(int argc, char** argv) {
         // after the only chance to bake, and refuses itself when it finds none.
         if (!args.clouds && src->clouds)
             args.clouds = 1;
+        // And the sky's units, before any probe is shot under them.
+        if (args.sky_scale <= 0.0f && src->sky_scale > 0.0f)
+            args.sky_scale = src->sky_scale;
         // Same shape, same reason: the block encode is a one-shot at LOAD, so
         // this is the only point at which a restore can still change it.
         if (!args.no_texture_compression && src->no_texture_compression)
@@ -4634,6 +4638,7 @@ int main(int argc, char** argv) {
         .no_texture_compression = args.no_texture_compression != 0,
         .texture_compress_colour = args.texture_compress_colour != 0,
         .clouds = args.clouds != 0,
+        .sky_scale = args.sky_scale > 0.0f ? args.sky_scale : 0.0f,
     });
 
     /*

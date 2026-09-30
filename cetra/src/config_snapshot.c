@@ -913,6 +913,7 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src) {
     _source.clouds = src->clouds;
     _source.no_texture_compression = src->no_texture_compression;
     _source.texture_compress_colour = src->texture_compress_colour;
+    _source.sky_scale = src->sky_scale;
     // No width/height: the writer takes those from the live engine, which is the
     // only place that knows what the window ended up as.
     _source_set = true;
@@ -1062,6 +1063,8 @@ static void _write_source(cJSON* root, const Engine* engine) {
         cJSON_AddBoolToObject(src, "clouds", _source.clouds);
         cJSON_AddBoolToObject(src, "no_texture_compression", _source.no_texture_compression);
         cJSON_AddBoolToObject(src, "texture_compress_colour", _source.texture_compress_colour);
+        if (_source.sky_scale > 0.0f)
+            json_add_float(src, "sky_scale", _source.sky_scale);
     }
     if (engine) {
         cJSON_AddNumberToObject(src, "width", engine->win_width);
@@ -1709,6 +1712,8 @@ bool config_snapshot_read_source(const char* path, const ConfigSnapshotSource** 
         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "no_texture_compression"));
     _read_back.texture_compress_colour =
         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(src, "texture_compress_colour"));
+    const cJSON* sky_scale = cJSON_GetObjectItemCaseSensitive(src, "sky_scale");
+    _read_back.sky_scale = cJSON_IsNumber(sky_scale) ? (float)sky_scale->valuedouble : 0.0f;
     _read_back.width = json_int_or(src, "width", 0);
     _read_back.height = json_int_or(src, "height", 0);
 

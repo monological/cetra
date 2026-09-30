@@ -27,7 +27,7 @@ uniform int aerialDepth; // slice count; mirrors SKY_AERIAL_Z
 uniform int sliceIndex;
 
 #include "atmosphere.glsl"
-#include "sky_deck.glsl"
+#include "sky_emission.glsl"
 #include "froxel.glsl"
 
 // 16 is enough because the integrand is smooth over a single cell's span -- the
@@ -73,7 +73,7 @@ void main() {
         vec3 sunT = transmittanceToSky(transmittanceLut, r, mu_s);
         vec3 single = sunT * (atm.rayleigh * phaseR + vec3(atm.mie * phaseM));
         // Psi is stored per unit sun illuminance (see sky_multiscatter_frag), so
-        // it is scaled by the same SUN_ILLUMINANCE as the single-scatter term --
+        // it is scaled by the same SKY_SUN_ILLUMINANCE as the single-scatter term --
         // applied once to the sum below, exactly as sky_view_frag does it.
         // Scaling only one of the two silently dims multiple scattering, which
         // makes distant surfaces diverge from the sky drawn behind them.
@@ -87,9 +87,9 @@ void main() {
         L += T * (single + multi) / max(atm.extinction, vec3(1e-6)) * (vec3(1.0) - stepT);
         T *= stepT;
     }
-    // Scaled once at the end, and bounded against fp16 overflow on the way into
-    // an RGBA16F volume -- both exactly as sky_view_frag does it.
-    L = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(deckStoreMax));
+    // Scaled once at the end, with the sun's scatter held under its ceiling --
+    // both exactly as sky_view_frag does it.
+    L = min(L * SKY_SUN_ILLUMINANCE * skySunScale, vec3(skyScatterMax));
 
     // Transmittance collapses to a scalar because the composite folds this in
     // with glBlendFunc(GL_ONE, GL_SRC_ALPHA) -- one factor for the whole scene
@@ -99,10 +99,10 @@ void main() {
     // wavelength-dependence of what is removed.
     float tLum = dot(T, vec3(0.2126, 0.7152, 0.0722));
 
-    // Under a deck the air is lit by the overcast dome, not the sun, and a far
+    // Under an overcast the air is lit by the dome, not the sun, and a far
     // enough surface must fade to the dome's HORIZON -- the sky drawn right
     // behind it. Any other asymptote meets the horizon at a seam, and fading the
     // sun's share alone would take distance to black.
-    L += (1.0 - tLum) * deckDome(0.0);
-    FragColor = vec4(L, tLum);
+    L += (1.0 - tLum) * skyDome(0.0);
+    FragColor = vec4(min(L, vec3(SKY_STORE_FP16_MAX)), tLum);
 }

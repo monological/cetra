@@ -28,7 +28,7 @@
 // is data-dependent, where implicit derivatives are undefined.
 #include "atmosphere.glsl"
 #include "sky_lut.glsl"
-#include "sky_deck.glsl"
+#include "sky_emission.glsl"
 
 const float CLOUD_BOTTOM_KM = 1.5;
 const float CLOUD_TOP_KM = 4.0;
@@ -216,7 +216,7 @@ vec4 cloud_march(float obsAltKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampl
         vec3 sunT = transmittanceToSky(transmittanceLut, rS, sunDir.y);
         float beer = max(exp(-tauL), exp(-tauL * 0.25) * 0.7);
         float powder = 1.0 - 0.6 * exp(-2.0 * tauL);
-        vec3 Lsun = SUN_ILLUMINANCE * sunT * beer * phase * powder * CLOUD_MS_GAIN * deckSunScale;
+        vec3 Lsun = SKY_SUN_ILLUMINANCE * sunT * beer * phase * powder * CLOUD_MS_GAIN * skySunScale;
         vec3 Ls = Lsun + ambient * 1.5 * mix(0.4, 1.0, hf);
 
         // Energy-conserving per-step integration (Hillaire): the analytic
@@ -233,7 +233,5 @@ vec4 cloud_march(float obsAltKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampl
     S *= tailFade;
     T = mix(1.0, T, tailFade);
 
-    // Both callers store this in fp16, the march target and the env cube, and
-    // the ambient alone is half again the sky it samples.
-    return vec4(min(S, vec3(deckStoreMax)), T);
+    return vec4(S, T);
 }

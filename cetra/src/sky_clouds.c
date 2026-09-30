@@ -397,7 +397,7 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     uniform_set_float(um, "coverage", c->coverage);
     uniform_set_float(um, "cloudType", c->cloud_type);
     uniform_set_float(um, "densityScale", c->density);
-    sky_bind_deck(sky, c->march_program, sky->sun_dir[1]);
+    sky_bind_emission(sky, c->march_program, sky->sun_dir[1]);
     uniform_set_int(um, "temporal", temporal);
     uniform_set_int(um, "frameIndex", frame % 4096);
     uniform_set_mat4(um, "prevView", (float*)c->prev_view);
